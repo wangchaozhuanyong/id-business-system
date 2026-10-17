@@ -169,10 +169,10 @@ export class RechargeController {
   @Post('jobs/:id/confirm')
   confirm(
     @Param('id') id: string,
-    @Body('nonce') nonce: unknown,
+    @Body() input: unknown,
     @CurrentUser() operator: AuthenticatedUser
   ) {
-    return this.service.confirm(id, nonce, operator);
+    return this.service.confirm(id, input, operator);
   }
   @Post('jobs/:id/details')
   submitDetails(

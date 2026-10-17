@@ -454,6 +454,39 @@ describe('本机任务持久化边界', () => {
         : {
             id: sourceJobId,
             ownerId: operator.id,
+            accountKey: 'a'.repeat(64),
+            plan: 'plus',
+            action: 'bitbrowser',
+            result: {
+              payment_attempted: true,
+              payment_status: 'unknown',
+              connection_api_key: 'original-mac',
+              connection_connector_key: 'original-assistant'
+            }
+          }
+    );
+    await expect(
+      service.recheck({ id, sourceJobId, plan: 'plus', windowName: '另一台电脑' }, operator)
+    ).rejects.toThrow('请切换到原任务');
+    await expect(
+      service.recheck(
+        { id, sourceJobId, plan: 'plus', windowName: 'Windows只读复查', directMode: true },
+        operator
+      )
+    ).resolves.toMatchObject({
+      transport: 'web_direct',
+      mode: 'recheck',
+      connectorUrl: '',
+      connectorToken: ''
+    });
+    expect(settings.runtime).toHaveBeenLastCalledWith(operator.id, false, true, undefined);
+
+    repository.findJob.mockImplementation((_tx, jobId) =>
+      jobId === id
+        ? null
+        : {
+            id: sourceJobId,
+            ownerId: operator.id,
             plan: 'plus',
             action: 'bitbrowser',
             result: { recheck_only: true, payment_attempted: true, payment_status: 'unknown' }

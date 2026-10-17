@@ -162,7 +162,8 @@ export class RechargeRepository {
     plan: string,
     excludeId: string,
     unpaidRecoveryIdentifier?: string,
-    unidentifiedSourceJobId?: string
+    unidentifiedSourceJobId?: string,
+    expiredCheckoutIdentifiers: string[] = []
   ) {
     let cursor: string | undefined;
     for (let page = 0; page < 30; page += 1) {
@@ -183,7 +184,13 @@ export class RechargeRepository {
         assertUnpaidCheckoutRecoverySources(jobs, ownerId, accountKey, plan);
       } else {
         const identifier = findOriginalRechargeCheckout(
-          jobs.filter((job) => !isClosedCycleDocument(job.result, accountKey)),
+          jobs.filter(
+            (job) =>
+              !isClosedCycleDocument(job.result, accountKey) &&
+              !expiredCheckoutIdentifiers.includes(
+                String(rechargeCheckoutIdentifier(job.result as Record<string, unknown>))
+              )
+          ),
           ownerId,
           accountKey,
           plan,
@@ -493,6 +500,7 @@ export class RechargeRepository {
       ownerId: string;
       allowCheckoutReplacement?: boolean;
       allowResolvedDeclineReplacement?: boolean;
+      allowExpiredCheckoutReplacement?: boolean;
       allowCycleReplacement?: boolean;
       cycleOrigin?: object;
     }
@@ -574,6 +582,7 @@ export class RechargeRepository {
       throw new ConflictException('升级原单类型不可更换');
     const replacingUnpaidCheckout =
       replacingResolvedDecline ||
+      input.allowExpiredCheckoutReplacement === true ||
       (input.allowCheckoutReplacement === true &&
         input.fileKey.endsWith('.json') &&
         !input.fileKey.startsWith('payments/') &&

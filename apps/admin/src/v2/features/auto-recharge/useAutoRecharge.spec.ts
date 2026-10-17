@@ -10,7 +10,6 @@ import type {
 } from './contracts';
 import type { BankChatgptAccount } from './bank-recharge-api';
 import type { RechargeProxyItem } from './recharge-proxy-api';
-import { RechargeConnectorError } from './connector-transport';
 import { useAutoRecharge } from './useAutoRecharge';
 import { clearV2SessionDrafts, useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { DirectBrowserError } from './bitbrowser-direct-api';
@@ -72,11 +71,27 @@ const mock = vi.hoisted(() => ({
   directHandles: vi.fn(),
   directSubmitCode: vi.fn(),
   directCancel: vi.fn(),
+  startDirectPayment: vi.fn(),
+  paymentControls: new Map<string, Record<string, unknown>>(),
+  paymentOwns: vi.fn(),
+  paymentCancel: vi.fn(),
+  paymentSubmitCode: vi.fn(),
   callbackUrl: vi.fn((id: string) => `https://admin.example/api/local/${id}`),
   confirmResolution: vi.fn()
 }));
 
 vi.mock('./recharge-login-code', () => ({ automaticLoginCode: mock.automaticLoginCode }));
+vi.mock('./direct-payment-task', async () => {
+  const { shallowReactive } = await import('vue');
+  mock.paymentControls = shallowReactive(mock.paymentControls);
+  return {
+    startDirectPayment: mock.startDirectPayment,
+    directPaymentControls: mock.paymentControls,
+    ownsDirectPayment: mock.paymentOwns,
+    cancelDirectPayment: mock.paymentCancel,
+    submitDirectPaymentCode: mock.paymentSubmitCode
+  };
+});
 
 vi.mock('./bitbrowser-direct-api', async (original) => ({
   ...(await original<typeof import('./bitbrowser-direct-api')>()),
@@ -321,6 +336,10 @@ function fillForm() {
 beforeEach(() => {
   clearV2SessionDrafts();
   vi.clearAllMocks();
+  mock.paymentControls.clear();
+  mock.startDirectPayment.mockReset().mockResolvedValue(undefined);
+  mock.paymentOwns.mockReturnValue(false);
+  mock.paymentCancel.mockReset().mockResolvedValue(undefined);
   mock.queryIndex = 0;
   bankAccounts.value = { items: [] };
   mock.accountIdentity.mockResolvedValue({ email: 'registered@example.com' });
@@ -432,12 +451,13 @@ beforeEach(() => {
   mock.recheckBitBrowser.mockResolvedValue({
     id: '33333333-3333-4333-8333-333333333333',
     mode: 'recheck',
-    connectorUrl: settings.connectorUrl,
-    connectorToken: launch.connectorToken,
+    transport: 'web_direct',
+    connectorUrl: '',
+    connectorToken: '',
     agentToken: launch.agentToken,
     bitBrowser: launch.bitBrowser
   });
-  mock.resolveNoBankRequest.mockResolvedValue(resolutionLaunch);
+  mock.resolveNoBankRequest.mockResolvedValue({ id: resolutionLaunch.id, alreadyResolved: true });
   mock.confirmResolution.mockResolvedValue('confirm');
   mock.connectorStart.mockResolvedValue({ ok: true, accepted: true });
   mock.connectorStatus.mockResolvedValue({ ok: true, done: false, waitingForUser: false });
@@ -564,14 +584,14 @@ describe('比特浏览器充值入口', () => {
     await flow.start();
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
   });
-  it('切换模式清除另一种连接结果，迟到检测不能覆盖新模式状态', async () => {
+  it('登录与充值共用比特直连，切换模式保留检测且不访问充值助手', async () => {
     flow.operationMode.value = 'open_browser';
     await flow.testConnector();
     expect(flow.connectorStatus.value).toBe('online');
     flow.operationMode.value = 'payment';
-    expect(flow.connectorStatus.value).toBe('unknown');
+    expect(flow.connectorStatus.value).toBe('online');
     let complete!: (value: unknown) => void;
-    mock.connectorCatalog.mockImplementationOnce(
+    mock.directCatalog.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           complete = resolve;
@@ -582,8 +602,9 @@ describe('比特浏览器充值入口', () => {
     flow.operationMode.value = 'open_browser';
     complete({ groups: [{ name: settings.groupName }], tags: [{ name: settings.tagName }] });
     await check;
-    expect(flow.connectorStatus.value).toBe('unknown');
-    expect(flow.connectorMessage.value).toBe('尚未检测比特浏览器本地接口');
+    expect(flow.connectorStatus.value).toBe('online');
+    expect(flow.connectorMessage.value).toContain('直连');
+    expect(mock.connectorCatalog).not.toHaveBeenCalled();
   });
   it('默认仅为比特充值，载入 JSON 自动识别邮箱、窗名与可复用地址', () => {
     expect(flow.operationMode.value).toBe('payment');
@@ -631,6 +652,7 @@ describe('比特浏览器充值入口', () => {
     expect(mock.preparePaymentCard).not.toHaveBeenCalled();
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
     expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.startDirectPayment).not.toHaveBeenCalled();
   });
   it('无地址时在姓名就绪后自动生成并填写明细，不改变菲律宾代理和币种', async () => {
     addresses.value.items = [];
@@ -843,7 +865,7 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canStart.value).toBe(true);
     await flow.start();
     expect(mock.startBitBrowser.mock.calls[0]![0].expectedEmail).toBe('replacement@example.com');
-    expect(mock.connectorStart.mock.calls[0]![2].sessionJson).toBe(replacement);
+    expect(mock.startDirectPayment.mock.calls[0]![0].credential.sessionJson).toBe(replacement);
   });
   it('同账号新授权也替换旧授权，仅登录直连拿到最新会话', async () => {
     const original = JSON.parse(directSessionJson()) as Record<string, unknown>;
@@ -967,28 +989,34 @@ describe('比特浏览器充值入口', () => {
     flow.details.value.cvc = '123';
     expect(flow.canStart.value).toBe(true);
   });
-  it('启动仅调用本机路径；服务器任务只收到资料引用，秘密只交本机', async () => {
+  it('网页直连充值；服务器任务只收到资料引用，付款秘密只交当前网页控制器', async () => {
     fillForm();
     await flow.start();
     expect(mock.startBitBrowser).toHaveBeenCalledOnce();
     const input = mock.startBitBrowser.mock.calls[0]![0];
-    expect(input).toMatchObject({ manualPaymentConfirmation: true, authorizeSinglePayment: true });
+    expect(input).toMatchObject({
+      directMode: true,
+      manualPaymentConfirmation: true,
+      authorizeSinglePayment: true
+    });
     expect(input).not.toHaveProperty('sessionJson');
     expect(input).not.toHaveProperty('details');
     expect(input).not.toHaveProperty('maxAmount');
     expect(input).not.toHaveProperty('maxAmountMinor');
     expect(JSON.stringify(input)).not.toContain('5555555555554444');
-    expect(mock.connectorStart.mock.calls[0]![2]).toMatchObject({
-      sessionJson: sessionJson(),
-      details: { cvc: '123' },
-      safety: { manualPaymentConfirmation: true }
+    expect(mock.startDirectPayment.mock.calls[0]![0]).toMatchObject({
+      credential: { sessionJson: sessionJson() },
+      payment: { cvc: '123' },
+      launch: { safety: { manualPaymentConfirmation: true } }
     });
-    expect(mock.connectorStart.mock.calls[0]![2].safety).toEqual({
-      lockedCurrency: 'USD',
+    expect(mock.startDirectPayment.mock.calls[0]![0].launch.safety).toEqual({
+      lockedCurrency: 'PHP',
       authorizeSinglePayment: true,
       manualPaymentConfirmation: true
     });
     expect(mock.startServer).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.connectorHealth).not.toHaveBeenCalled();
   });
   it('旧启动回执的金额限制字段不再传给本机，币种和人工确认保护保留', async () => {
     mock.startBitBrowser.mockResolvedValue({
@@ -997,8 +1025,8 @@ describe('比特浏览器充值入口', () => {
     });
     fillForm();
     await flow.start();
-    expect(mock.connectorStart.mock.calls[0]![2].safety).toEqual({
-      lockedCurrency: 'USD',
+    expect(mock.startDirectPayment.mock.calls[0]![0].launch.safety).toEqual({
+      lockedCurrency: 'PHP',
       authorizeSinglePayment: true,
       manualPaymentConfirmation: true
     });
@@ -1009,14 +1037,14 @@ describe('比特浏览器充值入口', () => {
     [true, false],
     [true, true]
   ])(
-    '周期协议只在API=%s与原助手=%s同时支持并得到launch回传时启用，原最终付款确认保持',
-    async (apiReady, helperReady) => {
+    '网页内置周期协议按API=%s与launch回传协商，旧助手能力=%s不影响最终付款确认',
+    async (apiReady, legacyHelperReady) => {
       fillForm();
       if (apiReady) jobs.value.subscriptionCycleProtocol = 1;
-      mock.connectorCatalog.mockResolvedValueOnce({
+      mock.directCatalog.mockResolvedValueOnce({
         groups: [{ id: 'g', name: settings.groupName }],
         tags: [{ id: 't', name: settings.tagName }],
-        connectorCapabilities: helperReady ? ['next-subscription-cycle-v1'] : []
+        connectorCapabilities: legacyHelperReady ? ['next-subscription-cycle-v1'] : []
       });
       mock.startBitBrowser.mockImplementationOnce(async (input) => ({
         ...structuredClone(launch),
@@ -1025,9 +1053,9 @@ describe('比特浏览器充值入口', () => {
       }));
       await flow.start();
       const apiInput = mock.startBitBrowser.mock.calls[0]?.[0];
-      const helperInput = mock.connectorStart.mock.calls[0]?.[2];
-      expect(apiInput?.subscriptionCycleProtocol).toBe(apiReady && helperReady ? 1 : undefined);
-      expect(helperInput?.subscriptionCycleProtocol).toBe(apiReady && helperReady ? 1 : undefined);
+      const helperInput = mock.startDirectPayment.mock.calls[0]?.[0].launch;
+      expect(apiInput?.subscriptionCycleProtocol).toBe(apiReady ? 1 : undefined);
+      expect(helperInput?.subscriptionCycleProtocol).toBe(apiReady ? 1 : undefined);
       expect(apiInput).toMatchObject({
         manualPaymentConfirmation: true,
         authorizeSinglePayment: true
@@ -1038,17 +1066,19 @@ describe('比特浏览器充值入口', () => {
       });
     }
   );
-  it('启动API未回传周期协议时不向助手冒充三方协议已匹配', async () => {
+  it('启动API未回传周期协议时不向网页控制器冒充三方协议已匹配', async () => {
     fillForm();
     jobs.value.subscriptionCycleProtocol = 1;
-    mock.connectorCatalog.mockResolvedValueOnce({
+    mock.directCatalog.mockResolvedValueOnce({
       groups: [{ id: 'g', name: settings.groupName }],
       tags: [{ id: 't', name: settings.tagName }],
       connectorCapabilities: ['next-subscription-cycle-v1']
     });
     await flow.start();
     expect(mock.startBitBrowser.mock.calls[0]?.[0].subscriptionCycleProtocol).toBe(1);
-    expect(mock.connectorStart.mock.calls[0]?.[2].subscriptionCycleProtocol).toBeUndefined();
+    expect(
+      mock.startDirectPayment.mock.calls[0]?.[0].launch.subscriptionCycleProtocol
+    ).toBeUndefined();
   });
   it('待返回姓名核实完成后，卡准备、任务账单姓名和本机详情均使用已验证姓名', async () => {
     let release!: (value: unknown) => void;
@@ -1067,7 +1097,9 @@ describe('比特浏览器充值入口', () => {
     expect(flow.details.value.name).toBe('Verified Synthetic Owner');
     expect(mock.preparePaymentCard.mock.calls[0]?.[0].name).toBe('Verified Synthetic Owner');
     expect(mock.startBitBrowser.mock.calls[0]?.[0].billingName).toBe('Verified Synthetic Owner');
-    expect(mock.connectorStart.mock.calls[0]?.[2].details.name).toBe('Verified Synthetic Owner');
+    expect(mock.startDirectPayment.mock.calls[0]?.[0].payment.name).toBe(
+      'Verified Synthetic Owner'
+    );
   });
   it('姓名匹配自动回填原卡账单地址后，最终任务引用与页面地址一致且不改变账号、方案和币种', async () => {
     const linked = {
@@ -1105,7 +1137,7 @@ describe('比特浏览器充值入口', () => {
       lockedCurrency: originalCurrency,
       expectedEmail: originalEmail
     });
-    expect(mock.connectorStart.mock.calls[0]?.[2].address).toMatchObject({
+    expect(mock.startDirectPayment.mock.calls[0]?.[0].launch.address).toMatchObject({
       id: linked.id,
       line1: linked.line1
     });
@@ -1139,6 +1171,7 @@ describe('比特浏览器充值入口', () => {
       expect(mock.preparePaymentCard).not.toHaveBeenCalled();
       expect(mock.startBitBrowser).not.toHaveBeenCalled();
       expect(mock.connectorStart).not.toHaveBeenCalled();
+      expect(mock.startDirectPayment).not.toHaveBeenCalled();
       expect(flow.busy.value).toBe(false);
       expect(flow.error.value).toContain('核实期间已变化');
     }
@@ -1189,6 +1222,7 @@ describe('比特浏览器充值入口', () => {
     expect(mock.preparePaymentCard).not.toHaveBeenCalled();
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
     expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.startDirectPayment).not.toHaveBeenCalled();
     expect(flow.error.value).toBe('新身份充值提示');
     expect(flow.busy.value).toBe(true);
     expect(refresh).toHaveBeenCalledTimes(reads);
@@ -1211,6 +1245,7 @@ describe('比特浏览器充值入口', () => {
     await starting;
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
     expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.startDirectPayment).not.toHaveBeenCalled();
     expect(flow.busy.value).toBe(false);
     expect(flow.error.value).toContain('连接配置已变化');
     expect(flow.details.value.cvc).toBe('123');
@@ -1259,11 +1294,11 @@ describe('比特浏览器充值入口', () => {
       useSavedCredentials: true
     });
     expect(mock.loginCredential).not.toHaveBeenCalled();
-    expect(mock.connectorStart.mock.calls[0]![2].login).toEqual({
+    expect(mock.startDirectPayment.mock.calls[0]![0].credential.login).toEqual({
       email: savedLogin.email,
       password: savedLogin.password
     });
-    expect(mock.connectorStart.mock.calls[0]![2].login).not.toHaveProperty('totp');
+    expect(mock.startDirectPayment.mock.calls[0]![0].credential.login).not.toHaveProperty('totp');
   });
   it('无密码账号使用邮箱验证码启动，历史 Go 和未知套餐仍先核对官网', async () => {
     fillForm();
@@ -1287,7 +1322,7 @@ describe('比特浏览器充值入口', () => {
       ownedProfile
     }));
     await flow.start();
-    expect(mock.connectorStart.mock.calls[0]![2].ownedProfile).toEqual(ownedProfile);
+    expect(mock.startDirectPayment.mock.calls[0]![0].launch.ownedProfile).toEqual(ownedProfile);
     expect(mock.startBitBrowser.mock.calls[0]![0]).not.toHaveProperty('ownedProfile');
   });
   it('账户资料读取迟到不能覆盖已切换账号的邮箱', async () => {
@@ -1309,20 +1344,28 @@ describe('比特浏览器充值入口', () => {
     await nextTick();
     expect(flow.selectedBankAccountEmail.value).toBe('registered@example.com');
   });
-  it('连接失败且明确未接收时安全结束，付款资料保留', async () => {
+  it('网页控制器明确未接收时安全结束原任务，不重发且保留付款资料', async () => {
     fillForm();
-    mock.connectorStart.mockRejectedValueOnce(new Error('fixture disconnected'));
-    mock.connectorStatus.mockRejectedValueOnce(new RechargeConnectorError('missing'));
+    mock.startDirectPayment.mockRejectedValueOnce(
+      new Error('fixture browser controller unavailable')
+    );
     await flow.start();
     expect(mock.abandonUnreceivedBitBrowser).toHaveBeenCalledOnce();
     expect(flow.details.value.number).toBe('5555555555554444');
-    expect(flow.error.value).toContain('安全结束');
+    expect(flow.error.value).toContain('fixture browser controller unavailable');
+    expect(mock.startDirectPayment).toHaveBeenCalledOnce();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
   });
-  it('启动响应丢失且本机已经接收，不重发同一任务', async () => {
+  it('网页已接收但列表还未回读时不重发同一任务或释放付款锁', async () => {
     fillForm();
-    mock.connectorStart.mockRejectedValueOnce(new Error('fixture lost response'));
+    mock.startDirectPayment.mockImplementationOnce(async (input) => {
+      mock.paymentControls.set(input.launch.id, { pending: false });
+    });
     await flow.start();
-    expect(mock.connectorStart).toHaveBeenCalledOnce();
+    await flow.start();
+    expect(mock.startDirectPayment).toHaveBeenCalledOnce();
+    expect(mock.startBitBrowser).toHaveBeenCalledOnce();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
     expect(mock.abandonUnreceivedBitBrowser).not.toHaveBeenCalled();
     expect(flow.error.value).toBe('');
   });
@@ -1343,6 +1386,77 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canStart.value).toBe(false);
     expect(flow.canRecheck.value).toBe(true);
     expect(flow.workflowMessage.value).toContain('禁止重新付款');
+  });
+  it('旧助手原单也由网页只读复查，不读取55322或重新发送卡资料', async () => {
+    fillForm();
+    const source = job('unknown', {
+      transport: 'official_browser',
+      checkout_identifier: 'oaics_historical',
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      payment_status: 'unknown'
+    });
+    jobs.value.items = [source];
+    flow.selectJob(source.id);
+    expect(flow.canRecheck.value).toBe(true);
+    await flow.recheck();
+    expect(mock.recheckBitBrowser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directMode: true,
+        sourceJobId: source.id,
+        plan: source.plan
+      })
+    );
+    expect(mock.startDirectPayment).toHaveBeenCalledOnce();
+    expect(mock.startDirectPayment.mock.calls[0]![0]).toMatchObject({
+      recheck: source.result,
+      payment: { number: '', cvc: '' },
+      launch: { transport: 'web_direct' }
+    });
+    expect(mock.preparePaymentCard).not.toHaveBeenCalled();
+    expect(mock.connectorHealth).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(flow.error.value).toBe('');
+  });
+  it('旧原单复查回执未启用网页协议时不降级给助手或重新建单', async () => {
+    fillForm();
+    jobs.value.items = [
+      job('unknown', {
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        payment_status: 'unknown'
+      })
+    ];
+    mock.recheckBitBrowser.mockResolvedValueOnce({ ...launch, mode: 'recheck' });
+    await flow.recheck(jobs.value.items[0]);
+    expect(mock.recheckBitBrowser).toHaveBeenCalledOnce();
+    expect(mock.startDirectPayment).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    expect(flow.error.value).toContain('不会新建订单或重复付款');
+  });
+  it('旧原单确认未收到银行请求由服务端处理，保留原单和核验绑定且不访问助手', async () => {
+    const source = job('unknown', {
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      confirmation_requests_sent: 1,
+      payment_status: 'unknown',
+      resolution_verification_job_id: resolutionLaunch.verificationJobId
+    });
+    jobs.value.items = [source];
+    flow.selectJob(source.id);
+    expect(flow.canResolveNoBankRequest.value).toBe(true);
+    await flow.resolveNoBankRequest();
+    expect(mock.confirmResolution).toHaveBeenCalledOnce();
+    expect(mock.resolveNoBankRequest).toHaveBeenCalledWith(source.id, {
+      directMode: true,
+      confirmNoBankRequest: true,
+      verificationJobId: resolutionLaunch.verificationJobId
+    });
+    expect(mock.connectorHealth).not.toHaveBeenCalled();
+    expect(mock.connectorStart).not.toHaveBeenCalled();
+    expect(mock.startDirectPayment).not.toHaveBeenCalled();
+    expect(flow.error.value).toBe('');
   });
   it('查看旧失败单不限制其他账号，切回同账号才限制新付款，仍允许仅登录', async () => {
     fillForm();

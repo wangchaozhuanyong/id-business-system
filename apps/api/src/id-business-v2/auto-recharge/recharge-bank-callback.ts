@@ -103,6 +103,7 @@ export function mergeRechargeCallbackResult(
   );
   return toV2JsonDocument({
     ...mergeRechargePaymentFacts(previous, workerReport),
+    ...(previous.transport === 'web_direct' ? { transport: 'web_direct' } : {}),
     ...(firstVerifiedAt ? { first_session_verified_at: firstVerifiedAt } : {}),
     ...loginMail,
     ...(job.action === 'server'

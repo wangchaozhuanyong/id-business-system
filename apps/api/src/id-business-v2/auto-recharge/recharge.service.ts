@@ -1,3 +1,10 @@
+import { authorizeExpiredCheckoutReplacement } from './recharge-expired-checkout';
+import {
+  assertDirectRechargeReport,
+  confirmDirectRechargeRequest,
+  completeDirectRechargeControl,
+  persistDirectRechargeObservation
+} from './recharge-direct-payment';
 import { resolveDeclinedRecharge } from './recharge-declined-resolution';
 import { reviewRechargeJobs } from './recharge-review';
 import {
@@ -214,11 +221,15 @@ export class RechargeService {
     throw new ConflictException('服务器付款资料提交已停用，请在比特浏览器充值页面操作');
   }
 
-  async confirm(id: string, nonce: unknown, operator: AuthenticatedUser): Promise<{ id: string }> {
-    void id;
-    void nonce;
-    void operator;
-    throw new ConflictException('付款确认必须通过所属本机充值助手执行');
+  async confirm(id: string, value: unknown, operator: AuthenticatedUser) {
+    return confirmDirectRechargeRequest({
+      id,
+      value,
+      operator,
+      repository: this.repository,
+      transactions: this.transactions,
+      audit: this.audit
+    });
   }
   handoffFrame(id: string, operator: AuthenticatedUser) {
     return readRechargeHandoff(id, operator, { repository: this.repository });
@@ -293,6 +304,24 @@ export class RechargeService {
             repository: this.repository,
             audit: this.audit,
             cards: this.bankCards
+          });
+        }
+        if (['direct_quote', 'direct_unexpected_payment'].includes(String(input.type))) {
+          return completeDirectRechargeControl({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit
+          });
+        }
+        if (input.type === 'replace_expired_checkout') {
+          return authorizeExpiredCheckoutReplacement({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit
           });
         }
         if (input.type === 'restore') {
@@ -395,6 +424,8 @@ export class RechargeService {
           throw new ConflictException('已结束任务不能再写入执行事件');
         }
         const report = safeDocument(input.result);
+        assertDirectRechargeReport(job, report);
+        await persistDirectRechargeObservation({ tx, job, report, repository: this.repository });
         for (const key of Object.keys(report))
           if (key.startsWith('connection_')) delete report[key];
         await retainOrReplaceRechargeBrowserProfile({

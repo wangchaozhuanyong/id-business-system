@@ -389,6 +389,15 @@ test('form wait budget keeps shared controls and the full payment connector regr
   ])
     assert.ok(tests.includes(name), name);
 });
+test('expired unpaid checkout repair retains native and one-shot replacement regressions', () => {
+  const paths = ['native_checkout.py', 'expired_checkout.py', 'test_expired_checkout.py'].map(
+    (name) => `apps/api/src/id-business-v2/auto-recharge/worker/${name}`
+  );
+  const connector = recordGuardCommands('recharge', paths, 'connector');
+  const tests = connector.find((row) => row.includes('unittest'));
+  for (const name of ['test_expired_checkout', 'test_native_checkout', 'test_payment'])
+    assert.ok(tests.includes(name), name);
+});
 const readonlyMetadataPaths = [
   'scripts/production-release/online-recharge-component-readonly.py',
   'scripts/production-release/online-recharge-component-readonly.test.py'

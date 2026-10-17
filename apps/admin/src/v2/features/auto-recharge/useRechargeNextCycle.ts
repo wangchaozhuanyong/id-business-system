@@ -5,6 +5,7 @@ import { getApiErrorMessage } from '@/api/client';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { rechargeApi, rechargeConnectorApi } from './api';
 import type { V2RechargeJob } from './contracts';
+import { ownsDirectPayment } from './direct-payment-task';
 
 export function useRechargeNextCycle(
   job: Ref<V2RechargeJob | undefined>,
@@ -61,6 +62,8 @@ export function useRechargeNextCycle(
       const id = job.value!.id;
       const digest = review.value!.reviewDigest;
       const epoch = jobEpoch.value;
+      if (job.value?.result.transport === 'web_direct')
+        return { id, digest, epoch, supported: ownsDirectPayment(id) };
       const access = await rechargeApi.bitBrowserAccess(id, { signal });
       try {
         if (signal.aborted || epoch !== sessionCoordinator.identityEpoch.value)
@@ -144,7 +147,7 @@ export function useRechargeNextCycle(
         return;
       dialogOpen.value = false;
       message.value =
-        '旧周期核实已提交，助手将再次读取当前订阅；后续仍须核对官网报价并确认本次付款。';
+        '旧周期核实已提交，执行页面将再次读取当前订阅；后续仍须核对官网报价并确认本次付款。';
       refresh();
     } catch (cause) {
       if (

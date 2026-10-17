@@ -5,7 +5,7 @@ import {
   Injectable
 } from '@nestjs/common';
 import { Optional } from '@nestjs/common';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
@@ -30,6 +30,7 @@ import { RechargeNameService } from './recharge-name.service';
 import { resolveLocalRechargeCard } from './recharge-card-billing';
 import { SHARED_CARD_SCOPES } from '../bank-card-pool/public-api';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeCardService } from './bank-recharge-card.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { bankRechargeEmail } from './bank-recharge-validation';
 import { hash, object, uuidPattern } from './recharge-validation';
@@ -41,14 +42,10 @@ import {
 import {
   validateRechargeBitBrowserOpenStart,
   validateRechargeBitBrowserRecheckStart,
-  validateRechargeBitBrowserStart,
-  validateRechargeNoBankRequest
+  validateRechargeBitBrowserStart
 } from './recharge-local-validation';
-import {
-  isFreeAccountVerification,
-  resolvedUnknownPayment,
-  unknownPaymentCanBeResolved
-} from './recharge-resolution';
+import { startUnknownPaymentResolution } from './recharge-resolution';
+import { directRechargeAuthorized } from './recharge-direct-payment';
 
 @Injectable()
 export class RechargeLocalService {
@@ -62,7 +59,8 @@ export class RechargeLocalService {
     @Optional() private readonly bankAccounts?: BankRechargeAccountService,
     @Optional() private readonly encryption?: FieldEncryptionService,
     @Optional() private readonly proxies?: RechargeProxyService,
-    @Optional() private readonly names?: RechargeNameService
+    @Optional() private readonly names?: RechargeNameService,
+    @Optional() private readonly bankCards?: BankRechargeCardService
   ) {}
 
   async start(value: unknown, operator: AuthenticatedUser) {
@@ -74,7 +72,7 @@ export class RechargeLocalService {
     const runtime = await this.settings.runtime(
       operator.id,
       Boolean(selectedProxy),
-      false,
+      input.directMode === true,
       input.connectionProfileId
     );
     const agentToken = randomBytes(32).toString('hex');
@@ -146,7 +144,8 @@ export class RechargeLocalService {
           result: toV2JsonDocument({
             ...runtime.connectionMetadata,
             ...(input.subscriptionCycleProtocol === 1 ? { client_cycle_protocol: 1 } : {}),
-            status: 'waiting_local_connector',
+            ...(input.directMode ? { transport: 'web_direct', mode: 'payment' } : {}),
+            status: input.directMode ? 'waiting_browser' : 'waiting_local_connector',
             stage: 'connector_dispatch',
             addressId: address.id,
             window_name: input.windowName,
@@ -188,9 +187,10 @@ export class RechargeLocalService {
       ...(input.subscriptionCycleProtocol === 1 ? { subscriptionCycleProtocol: 1 as const } : {}),
       id: result.job.id,
       mode: 'payment' as const,
+      ...(input.directMode ? { transport: 'web_direct' as const } : {}),
       ...(result.ownedProfile ? { ownedProfile: result.ownedProfile } : {}),
-      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
-      connectorToken: runtime.connectorToken,
+      connectorUrl: input.directMode ? '' : normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
+      connectorToken: input.directMode ? '' : runtime.connectorToken,
       agentToken,
       ...(input.useSavedCredentials && result.account
         ? { savedLogin: this.bankAccounts!.savedLogin(result.account) }
@@ -290,7 +290,7 @@ export class RechargeLocalService {
     const runtime = await this.settings.runtime(
       operator.id,
       false,
-      false,
+      input.directMode === true,
       input.connectionProfileId
     );
     const agentToken = randomBytes(32).toString('hex');
@@ -323,7 +323,8 @@ export class RechargeLocalService {
         ) {
           throw new ConflictException('该记录不能只读复查原订单');
         }
-        assertOriginalRechargeConnection(sourceResult, runtime.connectionMetadata);
+        if (!input.directMode)
+          assertOriginalRechargeConnection(sourceResult, runtime.connectionMetadata);
         const upgrade = rechargeUpgradeRecheckBinding(sourceResult, source.plan);
         if (sourceResult.operation === 'subscription_upgrade' && !upgrade)
           throw new ConflictException('原升级操作绑定不完整，不能复查');
@@ -340,7 +341,8 @@ export class RechargeLocalService {
           leaseUntil: new Date(Date.now() + 45 * 60000),
           result: toV2JsonDocument({
             ...runtime.connectionMetadata,
-            status: 'waiting_local_connector',
+            ...(input.directMode ? { transport: 'web_direct', mode: 'recheck' } : {}),
+            status: input.directMode ? 'waiting_browser' : 'waiting_local_connector',
             stage: 'connector_dispatch',
             window_name: input.windowName,
             recheck_only: true,
@@ -376,109 +378,26 @@ export class RechargeLocalService {
     return {
       id: job.id,
       mode: 'recheck' as const,
+      ...(input.directMode ? { transport: 'web_direct' as const } : {}),
       ...(job.upgradeIdentifier ? { upgradeIdentifier: job.upgradeIdentifier } : {}),
-      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
-      connectorToken: runtime.connectorToken,
+      connectorUrl: input.directMode ? '' : normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
+      connectorToken: input.directMode ? '' : runtime.connectorToken,
       agentToken,
       bitBrowser: localBitBrowserLaunchOptions(runtime)
     };
   }
 
-  async resolveNoBankRequest(sourceId: string, value: unknown, operator: AuthenticatedUser) {
-    if (!uuidPattern.test(sourceId)) throw new BadRequestException('原任务编号无效');
-    const input = validateRechargeNoBankRequest(value);
-    const runtime = await this.settings.runtime(operator.id);
-    const id = randomUUID();
-    const agentToken = randomBytes(32).toString('hex');
-    const prepared = await this.transactions.execute(
-      async (tx) => {
-        await this.repository.lock(tx);
-        const source = await this.repository.findJob(tx, sourceId);
-        if (!source || source.ownerId !== operator.id) {
-          throw new ForbiddenException('无权处理此付款记录');
-        }
-        if (resolvedUnknownPayment(source)) {
-          return {
-            alreadyResolved: true as const,
-            id: String(object(source.result).resolution_job_id)
-          };
-        }
-        if (!unknownPaymentCanBeResolved(source)) {
-          throw new ConflictException('该记录不是可处理的付款结果未知记录');
-        }
-        if (await this.repository.findRunningJob(tx, operator.id)) {
-          throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
-        }
-        const verification = await this.repository.findJob(tx, input.verificationJobId);
-        if (!verification || !isFreeAccountVerification(source, verification)) {
-          throw new ConflictException('找不到该账号付款后的 Free 状态核验记录');
-        }
-        const sourceResult = object(source.result);
-        const checkoutIdentifier = String(sourceResult.checkout_identifier);
-        assertOriginalRechargeConnection(object(source.result), runtime.connectionMetadata);
-        const created = await this.repository.createJob(tx, {
-          id,
-          ownerId: operator.id,
-          plan: source.plan,
-          action: 'bitbrowser',
-          state: 'running',
-          accountKey: source.accountKey,
-          nonceHash: hash(agentToken),
-          leaseUntil: new Date(Date.now() + 5 * 60000),
-          result: toV2JsonDocument({
-            ...runtime.connectionMetadata,
-            status: 'waiting_local_connector',
-            stage: 'connector_dispatch',
-            resolution_only: true,
-            source_job_id: source.id,
-            verification_job_id: verification.id,
-            checkout_identifier: checkoutIdentifier,
-            target_plan: source.plan,
-            payment_attempted: false,
-            confirmation_requests_sent: 0,
-            payment_requests_sent: 0,
-            ...runtime.connectionMetadata
-          })
-        });
-        await this.audit.append(tx, {
-          userId: operator.id,
-          module: 'id_business_v2',
-          action: 'id_business_v2.auto_recharge.payment_resolution.start',
-          objectType: 'recharge_job',
-          objectId: source.id,
-          afterData: {
-            resolutionJobId: created.id,
-            verificationJobId: verification.id,
-            plan: source.plan,
-            confirmation: 'confirmed_no_bank_request'
-          },
-          remark: '创建银行卡未收到付款请求的历史记录处理任务'
-        });
-        return {
-          alreadyResolved: false as const,
-          id: created.id,
-          plan: source.plan,
-          accountKey: source.accountKey!,
-          checkoutIdentifier,
-          sourceJobId: source.id,
-          verificationJobId: verification.id
-        };
-      },
-      { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
-    );
-    if (prepared.alreadyResolved) return prepared;
-    return {
-      id: prepared.id,
-      plan: prepared.plan,
-      accountKey: prepared.accountKey,
-      checkoutIdentifier: prepared.checkoutIdentifier,
-      sourceJobId: prepared.sourceJobId,
-      verificationJobId: prepared.verificationJobId,
-      mode: 'resolve_unknown_payment' as const,
-      connectorUrl: normalizeV2RechargeConnectorUrl(runtime.connectorUrl),
-      connectorToken: runtime.connectorToken,
-      agentToken
-    };
+  resolveNoBankRequest(sourceId: string, value: unknown, operator: AuthenticatedUser) {
+    return startUnknownPaymentResolution({
+      sourceId,
+      value,
+      operator,
+      repository: this.repository,
+      transactions: this.transactions,
+      audit: this.audit,
+      settings: this.settings,
+      cards: this.bankCards
+    });
   }
 
   confirmNextCycle(id: string, value: unknown, operator: AuthenticatedUser) {
@@ -560,10 +479,14 @@ export class RechargeLocalService {
         if (job.state === 'finished') throw new ConflictException('本次任务已经结束');
         // The first cancellation fixes the deadline; subsequent requests cannot extend it.
         if (current.status === 'cancelling') return { id };
-        if (current.payment_attempted === true || Number(current.payment_requests_sent) > 0) {
+        if (
+          directRechargeAuthorized(job) ||
+          current.payment_attempted === true ||
+          Number(current.payment_requests_sent) > 0
+        ) {
           throw new ConflictException('官网付款请求已发出，只能查看原单结果');
         }
-        const directLogin = current.mode === 'open_browser' && current.transport === 'web_direct';
+        const directLogin = current.transport === 'web_direct';
         if (directLogin && Number(current.confirmation_requests_sent ?? 0) > 0)
           throw new ConflictException('官网付款请求已发出，只能查看原单结果');
         await this.repository.updateJob(tx, id, {
@@ -578,6 +501,7 @@ export class RechargeLocalService {
             payment_requests_sent: 0
           })
         });
+        if (directLogin) await this.names?.releaseUnreceivedCard(tx, id);
         await this.audit.append(tx, {
           userId: operator.id,
           module: 'id_business_v2',
@@ -585,12 +509,12 @@ export class RechargeLocalService {
           objectType: 'recharge_job',
           objectId: id,
           remark: directLogin
-            ? '停止网页直连登录任务，保留窗口供手动检查'
+            ? '停止网页直连任务并释放未付款的银行卡占用，保留窗口供手动检查'
             : '停止本机比特浏览器充值任务'
         });
         return { id };
       },
-      { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
+      { changedScopes: SHARED_CARD_SCOPES, requestId: id, operator, retryMode: 'none' }
     );
   }
 }

@@ -1,4 +1,3 @@
-import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
 import { computed, nextTick, onScopeDispose, reactive, ref, toRefs, watch } from 'vue';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import type {
@@ -15,7 +14,7 @@ import type {
 import { getApiErrorMessage } from '@/api/client';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
-import { rechargeApi, rechargeCallbackUrl, rechargeConnectorApi } from './api';
+import { rechargeApi, rechargeConnectorApi } from './api';
 import { RechargeConnectorError } from './connector-transport';
 import {
   rechargeDetailsReady,
@@ -41,6 +40,13 @@ import { isApiError } from '@/api/apiError';
 import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { useRechargePaymentStart } from './useRechargePaymentStart';
+import {
+  cancelDirectPayment,
+  directPaymentControls,
+  ownsDirectPayment,
+  startDirectPayment,
+  submitDirectPaymentCode
+} from './direct-payment-task';
 import { accountReferenceFromJson, paymentBlockedForAccount } from './recharge-availability';
 
 const activeStates = new Set([
@@ -112,7 +118,7 @@ function registrationEmail(value: unknown): string {
 function settingsReady(
   settings: V2RechargeBitBrowserSettings | undefined,
   selectedProxy = false,
-  directMode = false
+  directMode = true
 ) {
   return Boolean(
     settings?.localApiTokenConfigured &&
@@ -216,7 +222,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const paymentCardLoading = ref(false);
   const resettingPaymentFields = ref(false);
   const connectorStatus = ref<ConnectorStatus>('unknown');
-  const connectorMessage = ref('尚未检测本机连接器');
+  const connectorMessage = ref('尚未检测比特浏览器本地接口');
   const localAccess = ref<{ connectorUrl: string; connectorToken: string } | null>(null);
   let disposed = false;
   let importGeneration = 0;
@@ -287,13 +293,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     connectorStatus,
     connectorMessage,
     ref(false),
-    computed(() => operationMode.value === 'open_browser')
+    ref(true)
   );
   const directTaskDisplay = ref<V2RechargeJob>();
   let directCancelling = false;
   let openStartGeneration = 0;
   let openStartPending = false;
   let clearPendingOpenCredential: (() => void) | undefined;
+  let directRecheckController: AbortController | undefined;
   const directOpen = useBitBrowserDirectOpen(
     refresh,
     (message) => {
@@ -305,6 +312,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     sessionCoordinator.identityEpoch,
     () => {
       directTaskDisplay.value = undefined;
+      directRecheckController?.abort();
       openStartGeneration++;
       clearPendingOpenCredential?.();
       clearPendingOpenCredential = undefined;
@@ -459,7 +467,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     settingsReady(
       settingsQuery.data.value,
       operationMode.value === 'payment' && Boolean(selectedProxyId.value),
-      operationMode.value === 'open_browser'
+      true
     )
   );
   const formLocked = computed(
@@ -640,6 +648,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       !formLocked.value &&
       !active.value &&
       !directOpen.running.value &&
+      !directPaymentControls.size &&
       !paymentRetryBlocked.value &&
       query.phase.value === 'ready'
   );
@@ -649,6 +658,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       !formLocked.value &&
       !active.value &&
       !directOpen.running.value &&
+      !directPaymentControls.size &&
       query.phase.value === 'ready'
   );
   const canCancel = computed(() => {
@@ -710,7 +720,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       job.result.resolution_verification_job_id &&
       !busy.value &&
       !active.value &&
-      settingsQuery.data.value?.connectorTokenConfigured &&
       query.phase.value === 'ready'
     );
   });
@@ -721,7 +730,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       ['login_code_required', 'login_email_code_required'].includes(
         String(selected.value.result.stage)
       ) &&
-      (selected.value.result.transport !== 'web_direct' || directOpen.owns(selected.value.id))
+      (selected.value.result.transport !== 'web_direct' ||
+        directOpen.owns(selected.value.id) ||
+        ownsDirectPayment(selected.value.id))
   );
   const autoCodeBusy = ref(false);
   const autoCodeFailureJobId = ref('');
@@ -748,7 +759,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       selected.value.result.stage !== 'next_subscription_cycle_review' &&
       selected.value.result.cycle_review?.status !== 'awaiting_previous_cycle_confirmation' &&
       !needsCode.value &&
-      (selected.value.result.transport !== 'web_direct' || directOpen.owns(selected.value.id))
+      (selected.value.result.transport !== 'web_direct' ||
+        directOpen.owns(selected.value.id) ||
+        ownsDirectPayment(selected.value.id))
   );
   const resumeActionLabel = computed(() =>
     selected.value?.result.transport === 'web_direct'
@@ -1350,9 +1363,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   }
 
   function selectJob(id: string) {
-    if (directOpen.running.value) {
+    if (directOpen.running.value || directPaymentControls.size) {
       error.value =
-        '当前网页仍在执行登录任务，请先完成或停止原任务，再切换执行记录；历史记录仍可在抽屉中查看。';
+        '当前网页仍在执行任务，请先完成或停止原任务，再切换执行记录；历史记录仍可在抽屉中查看。';
       return;
     }
     currentId.value = id;
@@ -1371,6 +1384,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (disposed) return;
       launch = await rechargeApi.recheckBitBrowser({
         id,
+        directMode: true,
         connectionProfileId: settingsQuery.data.value?.connectionProfileId ?? null,
         sourceJobId: source.id,
         plan: source.plan,
@@ -1378,26 +1392,33 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       });
       currentId.value = id;
       rememberPaymentSave();
-      localAccess.value = {
-        connectorUrl: launch.connectorUrl,
-        connectorToken: launch.connectorToken
-      };
-      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
-        id,
-        mode: launch.mode,
-        plan: source.plan,
-        ...(launch.upgradeIdentifier ? { upgradeIdentifier: launch.upgradeIdentifier } : {}),
-        windowName: windowName.value.trim(),
-        ...(await localCredential()),
-        bitBrowser: launch.bitBrowser,
-        callbackUrl: rechargeCallbackUrl(id),
-        agentToken: launch.agentToken
-      });
-      connectorStatus.value = 'online';
-      connectorMessage.value = '本机连接器已接收只读复查';
+      {
+        if (launch.transport !== 'web_direct')
+          throw new Error('网页只读复查协议未就绪，请更新网站后重试。');
+        localAccess.value = null;
+        await startDirectPayment({
+          launch,
+          plan: source.plan,
+          credential: await localCredential(),
+          payment: { ...emptyDetails(), cvc: '' },
+          recheck: source.result,
+          windowName: windowName.value.trim(),
+          accountId: loginMethod.value === 'password' ? selectedBankAccountId.value : undefined,
+          signal: (directRecheckController = new AbortController()).signal,
+          refresh,
+          reportError: (message) => {
+            if (!disposed) error.value = message;
+          }
+        });
+        connectorStatus.value = 'online';
+        connectorMessage.value = '网页已开始只读复查原单';
+        return;
+      }
     } catch (cause) {
+      if (launch?.transport === 'web_direct')
+        await rechargeApi.abandonUnreceivedBitBrowser(id).catch(() => undefined);
       error.value = launch
-        ? '本机连接器接收结果不明确，不会新建订单或重复付款。'
+        ? '原单只读复查接收结果待核实，本次不会新建订单或重复付款。'
         : getApiErrorMessage(cause);
     } finally {
       await refresh();
@@ -1420,13 +1441,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     }
     busy.value = true;
     error.value = '';
-    let launch: V2RechargeBitBrowserResolutionLaunch | null = null;
     try {
-      const saved = settingsQuery.data.value;
-      if (!saved?.connectorTokenConfigured) throw new Error('请先保存本机连接密钥。');
-      await rechargeConnectorApi.health(normalizeV2RechargeConnectorUrl(saved.connectorUrl));
       if (disposed) return;
       const response = await rechargeApi.resolveNoBankRequest(source.id, {
+        directMode: true,
         confirmNoBankRequest: true,
         verificationJobId
       });
@@ -1434,43 +1452,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         connectorMessage.value = '历史付款记录已经处理';
         return;
       }
-      launch = response;
-      currentId.value = launch.id;
-      localAccess.value = {
-        connectorUrl: launch.connectorUrl,
-        connectorToken: launch.connectorToken
-      };
-      await rechargeConnectorApi.start(launch.connectorUrl, launch.connectorToken, {
-        id: launch.id,
-        mode: launch.mode,
-        plan: launch.plan,
-        accountKey: launch.accountKey,
-        checkoutIdentifier: launch.checkoutIdentifier,
-        sourceJobId: launch.sourceJobId,
-        verificationJobId: launch.verificationJobId,
-        callbackUrl: rechargeCallbackUrl(launch.id),
-        agentToken: launch.agentToken
-      });
-      connectorStatus.value = 'online';
-      connectorMessage.value = '银行卡未收到付款请求的确认已处理';
+      throw new Error('网页历史记录处理协议未就绪，请刷新网站后核实原任务。');
     } catch (cause) {
-      if (launch) {
-        try {
-          await rechargeConnectorApi.status(launch.connectorUrl, launch.connectorToken, launch.id);
-          connectorStatus.value = 'online';
-          connectorMessage.value = '本机连接器已接收处理任务';
-          error.value = '';
-        } catch {
-          try {
-            await rechargeApi.abandonUnreceivedBitBrowser(launch.id);
-            error.value = '本机连接器未接收处理任务，请重新操作。';
-          } catch {
-            error.value = '本机连接器接收结果待核验，请刷新原任务。';
-          }
-        }
-      } else {
-        error.value = getApiErrorMessage(cause);
-      }
+      error.value = getApiErrorMessage(cause);
     } finally {
       await refresh();
       busy.value = false;
@@ -1482,7 +1466,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     if (!job) throw new Error('当前没有可操作的本机任务');
     if (job.result.transport === 'web_direct')
       throw new Error(
-        '此登录任务由原网页直连执行，请回到启动任务的网页查看；本页不会通过连接器重复操作。'
+        '此任务由原网页直连执行，请回到启动任务的网页查看；本页不会通过连接器重复操作。'
       );
     if (!localAccess.value) localAccess.value = await rechargeApi.bitBrowserAccess(job.id);
     return { job, ...localAccess.value };
@@ -1493,6 +1477,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     busy.value = true;
     error.value = '';
     try {
+      if (selected.value && ownsDirectPayment(selected.value.id)) return;
       if (selected.value && directOpen.owns(selected.value.id)) {
         // 网页直连持续核对原窗口，无连接器可恢复；下方 finally 刷新当前核对结果。
         return;
@@ -1533,6 +1518,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     error.value = '';
     autoCodeController?.abort();
     try {
+      if (selected.value && ownsDirectPayment(selected.value.id)) {
+        submitDirectPaymentCode(selected.value.id, loginCode.value.trim());
+        loginCode.value = '';
+        return;
+      }
       if (selected.value && directOpen.owns(selected.value.id)) {
         directOpen.submitCode(selected.value.id, loginCode.value.trim());
         autoCodeSubmittedJobId.value = selected.value.id;
@@ -1663,7 +1653,14 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     ],
     ([jobId]) => {
       autoCodeController?.abort();
-      if (!jobId || disposed || directOpen.owns(jobId) || !automaticCodeReady.value) return;
+      if (
+        !jobId ||
+        disposed ||
+        directOpen.owns(jobId) ||
+        ownsDirectPayment(jobId) ||
+        !automaticCodeReady.value
+      )
+        return;
       const attempt = `${jobId}:${selected.value?.result.login_challenge_id ?? ''}`;
       if (autoCodeAttempted.has(attempt)) return;
       autoCodeAttempted.add(attempt);
@@ -1682,6 +1679,13 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     const id = selected.value.id;
     directCancelling = directOpen.owns(id);
     try {
+      if (
+        selected.value.result.transport === 'web_direct' &&
+        selected.value.result.mode !== 'open_browser'
+      ) {
+        await cancelDirectPayment(id);
+        return;
+      }
       if (
         selected.value.result.mode === 'open_browser' &&
         selected.value.result.transport === 'web_direct'
@@ -1745,6 +1749,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
 
   onScopeDispose(() => {
     disposed = true;
+    directRecheckController?.abort();
     autoCodeController?.abort();
     importGeneration++;
     paymentCardGeneration++;
