@@ -20,6 +20,11 @@ DISPLAY = '626620f09b9fc27e32cc1d3e8a93cb1c51513387'
 WORKER = 'apps/api/src/id-business-v2/auto-registration/worker/'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine/'
 SCHEMA = 'apps/api/prisma-mysql/schema.prisma'
+DECLARATION_ORDER_ONLY_PATHS = (
+    'id-business-v2/online-recharge/order-sync.service.d.ts',
+    'id-business-v2/online-recharge/persistence/order-sync.repository.d.ts',
+    'id-business-v2/online-recharge/persistence/tasks.repository.d.ts',
+    'id-business-v2/online-recharge/tasks.service.d.ts')
 
 
 def load(path):
@@ -209,6 +214,24 @@ def runtime_worker_map(c):
     return rows
 
 
+def verify_declaration_delta(c, before, after, old, new):
+    changed = {n for n in old.keys() | new.keys() if old.get(n) != new.get(n)}
+    print(json.dumps({'compiledDeclarationChanges': sorted(changed)}, sort_keys=True), flush=True)
+    need(c.get('declarationOrderOnlyPaths') == list(DECLARATION_ORDER_ONLY_PATHS),
+         'DECLARATION_ORDER_SCOPE_CHANGED')
+    semantic = set(c['apiDeclarationPaths'])
+    need(semantic <= changed <= semantic | set(DECLARATION_ORDER_ONLY_PATHS),
+         'API_DECLARATION_SCOPE_CHANGED')
+    ordered = b'"needs_review" | "not_applicable"'
+    canonical = b'"not_applicable" | "needs_review"'
+    for name in DECLARATION_ORDER_ONLY_PATHS:
+        old_raw, new_raw = (before / name).read_bytes(), (after / name).read_bytes()
+        need(digest(old_raw) == old[name] and digest(new_raw) == new[name]
+             and old_raw.replace(ordered, canonical) == new_raw.replace(ordered, canonical),
+             'DECLARATION_ORDER_CONTENT_CHANGED')
+    return changed
+
+
 def check_api():
     c = ensure_prepared()
     before, after = OUT / 'baseline', OUT / 'candidate'
@@ -218,8 +241,7 @@ def check_api():
     old, new = inventory(before / 'apps/api/dist'), inventory(after / 'apps/api/dist')
     js = lambda rows: {n: value for n, value in rows.items() if n.endswith('.js')}
     need(signature(js(old)) == c['baseline']['inventory']['apiJavascript'] and js(old) == js(new), 'API_JAVASCRIPT_CHANGED')
-    changed = {n for n in old.keys() | new.keys() if old.get(n) != new.get(n)}
-    need(changed == set(c['apiDeclarationPaths']), 'API_DECLARATION_SCOPE_CHANGED')
+    changed = verify_declaration_delta(c, before / 'apps/api/dist', after / 'apps/api/dist', old, new)
     worker = runtime_worker_map(c)
     need(all(digest((before / WORKER / name).read_bytes()) == value for name, value in worker.items()), 'BASE_WORKER_SOURCE_CHANGED')
     run('npm', 'run', 'typecheck', '--workspace', '@apple-business/api', cwd=after)
@@ -231,7 +253,8 @@ def check_api():
     # Published images retain historical incremental declaration/map inventory.
     # No dist file is needed for a type-only source change: inherit every live
     # dist byte, while proving all compiled JS matches live and the only fresh
-    # compilation delta is the approved declaration.
+    # semantic compilation delta is the approved declaration; four fixed
+    # consumers may only reorder the same two literal union members.
     receipt = {'status': 'PASS', 'apiModules': {}, 'apiJavascriptDelta': [],
                'compiledDeclarationDelta': {n: new[n] for n in sorted(changed)},
                'compiledBeforeApi': signature(old), 'compiledAfterApi': signature(new),

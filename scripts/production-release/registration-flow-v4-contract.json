@@ -337,10 +337,10 @@
     "registration-protocol-repair-contract.json"
   ],
   "controlHashes": {
-    "registration-flow-v4-build.py": "946822d256ece71e3dcda748fdeb3e888018af28e3fd11e380ccadfe98fee2dd",
+    "registration-flow-v4-build.py": "68235f85c619681cd196aa8b62fc7d30abc77f8b6ea9fb16d9fb935957072cbf",
     "registration-flow-v4-release.py": "99048b246b1cf95a2c7be130b9eec11c82a266ea1d1448a999194101cfb01b54",
     "registration-flow-v4-dispatch.py": "fd0df9c20c872250aa0825917fc20cbf6e2bb2a807b232cb4d6e54bf3dc633c7",
-    "registration-flow-v4-release.test.py": "c4e53e7fab4d3e5631c7e7d3a6a7359035692751fe4749f95a7f3b5c35265fc4",
+    "registration-flow-v4-release.test.py": "19f25094438e021e91b58c99ffef7f30cc6177bd4632203df2966607f29bc59a",
     "registration-parity-diagnostics-release.py": "f5d3d6e3d5ee539a965cbbfa4401beee3e209c2258886ea7239ae667a13e3eb8",
     "registration-parity-diagnostics-dispatch.py": "c16f8a09a7a08771faa1071910a05a077d3c4e368f6a4938d3c8cec8cca74a8c",
     "registration-closure-release.py": "0d2daaeff0a35e1e11666ace39560273fdc83ff9e5718cb244337c8b0f851274",
@@ -608,10 +608,10 @@
     "scripts/ci-recharge-scope.test.mjs": "01b76c0f678ba7d26bef5dbf60a7b590d78facc54a8649d889ca33e7735caf31",
     "scripts/ci-recharge-check.mjs": "52672464ab5b61d12f6234c1ecef61bf4eac78eb77d1d6f0bff77e91e39e1dda",
     "scripts/ci-recharge-check.test.mjs": "9bc9abba3217c068fd7bac67ae8f4f4784bda8799237fa964d04f1410a408d02",
-    "scripts/production-release/registration-flow-v4-build.py": "946822d256ece71e3dcda748fdeb3e888018af28e3fd11e380ccadfe98fee2dd",
+    "scripts/production-release/registration-flow-v4-build.py": "68235f85c619681cd196aa8b62fc7d30abc77f8b6ea9fb16d9fb935957072cbf",
     "scripts/production-release/registration-flow-v4-dispatch.py": "fd0df9c20c872250aa0825917fc20cbf6e2bb2a807b232cb4d6e54bf3dc633c7",
     "scripts/production-release/registration-flow-v4-release.py": "99048b246b1cf95a2c7be130b9eec11c82a266ea1d1448a999194101cfb01b54",
-    "scripts/production-release/registration-flow-v4-release.test.py": "c4e53e7fab4d3e5631c7e7d3a6a7359035692751fe4749f95a7f3b5c35265fc4"
+    "scripts/production-release/registration-flow-v4-release.test.py": "19f25094438e021e91b58c99ffef7f30cc6177bd4632203df2966607f29bc59a"
   },
   "roleSourceCommits": {
     "api": "8df81dca0f08ebdebe6b01b942b033053b8a5c3b",
@@ -676,5 +676,11 @@
     "apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py": "e38b3dd48b3e9d50b87a637681b89f70d0ebe7104132d0ef2fb448036c8af7ec",
     "apps/api/src/id-business-v2/auto-registration/worker/test_flow_contract_unit.py": "53410cf3de35c8b37cfc2022428931c9b139f7f39cbf04d889ea4a1866407627"
   },
-  "pendingEvidence": []
+  "pendingEvidence": [],
+  "declarationOrderOnlyPaths": [
+    "id-business-v2/online-recharge/order-sync.service.d.ts",
+    "id-business-v2/online-recharge/persistence/order-sync.repository.d.ts",
+    "id-business-v2/online-recharge/persistence/tasks.repository.d.ts",
+    "id-business-v2/online-recharge/tasks.service.d.ts"
+  ]
 }

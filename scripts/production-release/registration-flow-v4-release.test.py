@@ -190,6 +190,36 @@ class ProtocolRepairControls(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 r.verify_contract(c)
 
+    def test_fixed_declarations_only_permit_the_exact_equivalent_literal_union_order(self):
+        c = self.ready()
+        original = b'export declare class Example { status: "needs_review" | "not_applicable"; value: number; }\n'
+        reordered = original.replace(b'"needs_review" | "not_applicable"', b'"not_applicable" | "needs_review"')
+        with tempfile.TemporaryDirectory(prefix='declaration-order-', dir=self.temporary_parent()) as name:
+            before, after = Path(name) / 'before', Path(name) / 'after'
+            paths = (*c['apiDeclarationPaths'], *b.DECLARATION_ORDER_ONLY_PATHS)
+            for directory, replacement in ((before, original), (after, reordered)):
+                for relative in paths:
+                    target = directory / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(replacement)
+            with patch('sys.stdout', new=io.StringIO()):
+                self.assertEqual(b.verify_declaration_delta(c, before, after, b.inventory(before), b.inventory(after)),
+                                 set(paths))
+                for relative in b.DECLARATION_ORDER_ONLY_PATHS:
+                    (after / relative).write_bytes(original)
+                self.assertEqual(b.verify_declaration_delta(c, before, after, b.inventory(before), b.inventory(after)),
+                                 set(c['apiDeclarationPaths']))
+                target = after / b.DECLARATION_ORDER_ONLY_PATHS[0]
+                for invalid in (reordered.replace(b'value: number', b'value: string'),
+                                reordered.replace(b'"needs_review";', b'"needs_review" | "extra";')):
+                    target.write_bytes(invalid)
+                    with self.assertRaisesRegex(RuntimeError, 'DECLARATION_ORDER_CONTENT_CHANGED'):
+                        b.verify_declaration_delta(c, before, after, b.inventory(before), b.inventory(after))
+                target.write_bytes(original)
+                (after / 'unreviewed.d.ts').write_bytes(original)
+                with self.assertRaisesRegex(RuntimeError, 'API_DECLARATION_SCOPE_CHANGED'):
+                    b.verify_declaration_delta(c, before, after, b.inventory(before), b.inventory(after))
+
     def test_runtime_inventory_or_account_evidence_cannot_be_omitted(self):
         for slot in ('api', 'apiJavascript', 'worker', 'admin', 'engine', 'prisma'):
             c = self.ready()
