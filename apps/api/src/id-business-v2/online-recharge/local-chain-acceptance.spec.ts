@@ -272,7 +272,7 @@ function fixture() {
     permissions: ['id_business_v2.online_recharge.read', 'id_business_v2.online_recharge.manage']
   } as unknown as AuthenticatedUser;
   const session = JSON.stringify({
-    accessToken: `fixture.${Buffer.from(JSON.stringify({ exp: 4102444800, 'https://api.openai.com/auth': { chatgpt_account_id: accountId } })).toString('base64url')}.unused`,
+    accessToken: `fixture.${Buffer.from(JSON.stringify({ exp: 4102444800, 'https://api.openai.com/auth': { chatgpt_account_id: accountId, chatgpt_user_id: accountId } })).toString('base64url')}.unused`,
     user: { id: accountId, email: 'chain-fixture@example.invalid' },
     sessionToken: 'synthetic-only-session-token',
     expires: '2100-01-01T00:00:00Z'
@@ -496,7 +496,7 @@ function fixture() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('本地后端链路验收（隔离存储，无官网、银行或数据库连接）', () => {
-  it.each(['success', 'recover', 'unknown', 'readiness', 'prepared'] as const)(
+  it.each(['success', 'recover', 'unknown', 'readiness', 'prepared', 'refresh'] as const)(
     '真实Chromium任务子进程与实际API服务图贯通：%s',
     async (scene) => {
       type BrowserAcceptance = {
@@ -518,6 +518,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
             task: Row;
             cardFields: string;
             billingFields: string;
+            sessionRefresh?: 'same-account' | 'wrong-account';
             outputDir?: string;
             diagnosticDelay?: { stage: 'verify'; milliseconds: number };
             rpc: (method: string, args: Row) => Promise<unknown>;
@@ -531,49 +532,55 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         recover: 'legacy-placeholders',
         unknown: 'legacy-stable-nested',
         readiness: 'standard',
-        prepared: 'prepared-visible-shadow'
+        prepared: 'prepared-visible-shadow',
+        refresh: 'standard'
       }[scene];
       const billingFields = {
         success: 'legacy-names',
         recover: 'legacy-collapsed',
         unknown: 'legacy-testids',
         readiness: 'standard',
-        prepared: 'standard'
+        prepared: 'standard',
+        refresh: 'standard'
       }[scene];
-      const actual = await harness.runSyntheticRecharge(scene === 'prepared' ? 'success' : scene, {
-        task: claim,
-        cardFields,
-        billingFields,
-        outputDir: resolve(
-          process.cwd(),
-          '../../.runtime/online-checkout-repair-20261018',
-          `api-${scene}-${claim.id}`
-        ),
-        ...(scene === 'recover'
-          ? { diagnosticDelay: { stage: 'verify' as const, milliseconds: 350 } }
-          : {}),
-        rpc: async (method, args) => {
-          expect(args).toMatchObject({
-            taskId: claim.id,
-            leaseId: claim.leaseId,
-            leaseVersion: claim.leaseVersion
-          });
-          // Network/browser allocation is the explicit synthetic boundary. All
-          // card, payment, billing, task and order RPCs below use real services.
-          if (method === 'getActiveProxy')
-            return { proxy_url: 'http://proxy-fixture.invalid:8080' };
-          const result = await f.rpc(method, claim, args);
-          return method === 'getRuntimeConfig'
-            ? {
-                ...(result as Row),
-                checkoutMode: 'api',
-                headful: false,
-                hcaptcha: {},
-                telegram: {}
-              }
-            : result;
+      const actual = await harness.runSyntheticRecharge(
+        ['prepared', 'refresh'].includes(scene) ? 'success' : scene,
+        {
+          task: claim,
+          cardFields,
+          billingFields,
+          ...(scene === 'refresh' ? { sessionRefresh: 'same-account' as const } : {}),
+          outputDir: resolve(
+            process.cwd(),
+            '../../.runtime/online-checkout-repair-20261018',
+            `api-${scene}-${claim.id}`
+          ),
+          ...(scene === 'recover'
+            ? { diagnosticDelay: { stage: 'verify' as const, milliseconds: 350 } }
+            : {}),
+          rpc: async (method, args) => {
+            expect(args).toMatchObject({
+              taskId: claim.id,
+              leaseId: claim.leaseId,
+              leaseVersion: claim.leaseVersion
+            });
+            // Network/browser allocation is the explicit synthetic boundary. All
+            // card, payment, billing, task and order RPCs below use real services.
+            if (method === 'getActiveProxy')
+              return { proxy_url: 'http://proxy-fixture.invalid:8080' };
+            const result = await f.rpc(method, claim, args);
+            return method === 'getRuntimeConfig'
+              ? {
+                  ...(result as Row),
+                  checkoutMode: 'api',
+                  headful: false,
+                  hcaptcha: {},
+                  telegram: {}
+                }
+              : result;
+          }
         }
-      });
+      );
       expect(actual.failure).toBe('');
       expect(actual.metrics).toMatchObject({
         checkoutCreations: 1,
@@ -594,6 +601,14 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         unexpectedNetwork: 0
       });
       expect(actual.metrics.formReadFailures).toEqual([]);
+      if (scene === 'refresh') {
+        expect(actual.metrics).toMatchObject({
+          loginCookieVerified: 1,
+          refreshedAuthResponses: 1,
+          originalBearerRequests: 0
+        });
+        expect(actual.metrics.refreshedBearerRequests).toBeGreaterThanOrEqual(2);
+      }
       if (scene === 'prepared') {
         expect(actual.metrics).toMatchObject({
           loginCookieVerified: 1,
@@ -621,7 +636,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           }
         });
       }
-      if (scene === 'readiness' || scene === 'prepared')
+      if (['readiness', 'prepared', 'refresh'].includes(scene))
         expect(actual.result.result).toMatchObject({
           success: true,
           confirmedPaid: true,
@@ -671,7 +686,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
         expect(f.row(claim)).toMatchObject({ status: 'succeeded', confirmedPaid: true });
         expect(f.storage.rows('onlineRechargeBill')).toHaveLength(1);
         expect(f.storage.rows('idBusinessV2BankRechargeOrder')).toHaveLength(1);
-        if (scene === 'readiness' || scene === 'prepared') {
+        if (['readiness', 'prepared', 'refresh'].includes(scene)) {
           const bill = f.storage.rows('onlineRechargeBill')[0]!;
           expect(bill).toMatchObject({
             taskId: claim.id,

@@ -343,6 +343,34 @@ export function isOnlineCheckoutPreparedFieldsOnly(paths) {
     )
   );
 }
+export const onlineSessionRefreshScope = 'ONLINE_SESSION_REFRESH';
+const sessionRefreshEngineRequired = [
+  'SOURCE_MANIFEST.json',
+  'upstream/session-auth.js',
+  'upstream/subscription-check.js',
+  'test/regressions.test.cjs',
+  'test/recharge-flow-acceptance.test.cjs'
+];
+const sessionRefreshRequired = [
+  ...sessionRefreshEngineRequired.map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  ),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+const sessionRefreshOptional = [
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+  ...checkoutNavigationReadyControls
+];
+export function isOnlineSessionRefreshOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    sessionRefreshRequired.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) => sessionRefreshRequired.includes(path) || sessionRefreshOptional.includes(path)
+    )
+  );
+}
 const checkoutLoadParentRpcRequired = [
   'SOURCE_MANIFEST.json',
   'rpc.cjs',
@@ -455,7 +483,8 @@ export function isOnlineSettingsOnly(paths) {
     isOnlineCheckoutLoadRecoveryOnly(paths) ||
     isOnlineCheckoutNavigationReadyOnly(paths) ||
     isOnlineCoreParityOnly(paths) ||
-    isOnlineCheckoutPreparedFieldsOnly(paths)
+    isOnlineCheckoutPreparedFieldsOnly(paths) ||
+    isOnlineSessionRefreshOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -509,15 +538,22 @@ export function onlineSettingsCommands(part, paths) {
   const checkoutNavigationReady = isOnlineCheckoutNavigationReadyOnly(paths);
   const coreParity = isOnlineCoreParityOnly(paths);
   const checkoutPreparedFields = isOnlineCheckoutPreparedFieldsOnly(paths);
+  const sessionRefresh = isOnlineSessionRefreshOnly(paths);
   const checkoutLoadBusiness =
-    checkoutLoadRecovery || checkoutNavigationReady || coreParity || checkoutPreparedFields;
-  const checkoutEngineRequired = checkoutPreparedFields
-    ? checkoutPreparedFieldsEngineRequired
-    : coreParity
-      ? coreParityEngineRequired
-      : checkoutNavigationReady
-        ? checkoutNavigationReadyEngineRequired
-        : checkoutLoadRecoveryEngineRequired;
+    checkoutLoadRecovery ||
+    checkoutNavigationReady ||
+    coreParity ||
+    checkoutPreparedFields ||
+    sessionRefresh;
+  const checkoutEngineRequired = sessionRefresh
+    ? sessionRefreshEngineRequired
+    : checkoutPreparedFields
+      ? checkoutPreparedFieldsEngineRequired
+      : coreParity
+        ? coreParityEngineRequired
+        : checkoutNavigationReady
+          ? checkoutNavigationReadyEngineRequired
+          : checkoutLoadRecoveryEngineRequired;
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
   const npm = (...args) => ['npm', ...args];
@@ -725,7 +761,7 @@ export function onlineSettingsCommands(part, paths) {
             "const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';",
             "const files = readdirSync(root).filter(name => name.endsWith('.test.cjs')).sort().map(name => root + '/' + name);",
             "if (!files.length) throw new Error('Missing online engine regression files');",
-            `const result = spawnSync(process.execPath, ['--test', '--test-concurrency=${checkoutPreparedFields ? 1 : 2}', ...files], { stdio: 'inherit' });`,
+            `const result = spawnSync(process.execPath, ['--test', '--test-concurrency=${checkoutPreparedFields || sessionRefresh ? 1 : 2}', ...files], { stdio: 'inherit' });`,
             'if (result.error) throw result.error;',
             'process.exit(result.status ?? 1);'
           ].join('\n')

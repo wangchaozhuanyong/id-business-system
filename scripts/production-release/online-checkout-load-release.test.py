@@ -41,12 +41,11 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(len(after) - len(before), 0)
         self.assertEqual({name for name in after if before.get(name) != after[name]}, p.FILES)
         self.assertEqual(p.FILES, {
-            'SOURCE_MANIFEST.json', 'checkout-form.cjs', 'safe-media.cjs',
-            'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/index.js',
-            'upstream/stripe-payment.js', 'test/checkout-form.test.cjs',
-            'test/checkout-navigation.test.cjs', 'test/checkout-recovery.test.cjs',
-            'test/media-browser.test.cjs', 'test/recharge-flow-acceptance.test.cjs'})
-        self.assertEqual(len(p.FILES), 12)
+            'SOURCE_MANIFEST.json', 'upstream/session-auth.js', 'upstream/subscription-check.js',
+            'test/regressions.test.cjs',
+            'test/recharge-flow-acceptance.test.cjs'})
+        self.assertEqual(len(p.FILES), 5)
+        self.assertEqual(len(set(before) - p.FILES), 97)
         self.assertEqual(p.ADDED, set())
         self.assertEqual(set(p.PRESERVED), {'api', 'admin', 'mysql', 'caddy', 'media-resolver',
                                           'auto-recharge', 'auto-registration'})
@@ -54,15 +53,20 @@ class ContractTests(unittest.TestCase):
     def test_previous_rpc_task_payment_guard_and_loading_sources_are_preserved_without_repackaging(self):
         for name in ('rpc.cjs', 'test/rpc-response.test.cjs', 'task-runner.cjs', 'worker.cjs',
                      'upstream/payment-retry.js', 'payment-limit.cjs', 'checkout-recovery.cjs',
-                     'test/checkout-page-loading.test.cjs'):
+                     'test/checkout-page-loading.test.cjs', 'checkout-form.cjs', 'safe-media.cjs',
+                     'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/index.js',
+                     'upstream/stripe-payment.js', 'test/checkout-form.test.cjs',
+                     'test/checkout-navigation.test.cjs', 'test/checkout-recovery.test.cjs',
+                     'test/media-browser.test.cjs'):
             self.assertNotIn(name, p.FILES)
             self.assertEqual(self.c['beforeEngineFiles'][name], self.c['afterEngineFiles'][name])
         self.assertEqual(len(self.c['beforeEngineFiles']), 102)
         self.assertEqual(len(self.c['afterEngineFiles']), 102)
 
     def test_the_previous_published_source_is_fixed_and_cannot_be_replaced_by_the_old_baseline(self):
-        self.assertEqual(self.c['sourceBaseCommit'], '3f8f2bb4978e3a839c82d2ecc73857449d4b94d3')
-        for commit in ('4e0037a458330f58914eebeccd2a2d892c8405b0',
+        self.assertEqual(self.c['sourceBaseCommit'], '9ccc464613615f95d54f2adf63bd573b80adaa0e')
+        for commit in ('3f8f2bb4978e3a839c82d2ecc73857449d4b94d3',
+                       '4e0037a458330f58914eebeccd2a2d892c8405b0',
                        'a0e633a610ff67400cc2fa8bd2926148a2479ecd',
                        '6da10d2e4bd9de6df145899648e234000f84b72b', 'd' * 40, '', None):
             with self.subTest(commit=commit), self.assertRaisesRegex(RuntimeError, 'SOURCE_BASE_INVALID'):
@@ -84,7 +88,7 @@ class ContractTests(unittest.TestCase):
             changed['runtimeSources'][name] = 'a' * 64
             with self.assertRaisesRegex(RuntimeError, 'SOURCE_SCOPE_CHANGED'):
                 p.validate_contract(changed)
-        self.c['runtimeSources'].pop(p.ENGINE + '/checkout-form.cjs')
+        self.c['runtimeSources'].pop(p.ENGINE + '/upstream/session-auth.js')
         with self.assertRaisesRegex(RuntimeError, 'SOURCE_SCOPE_CHANGED'):
             p.validate_contract(self.c)
 
@@ -170,8 +174,9 @@ class ArtifactTests(unittest.TestCase):
 
     def test_previous_artifact_scope_and_old_original_source_cannot_be_reused(self):
         files = {**self.files}
-        files.pop('engine/test/checkout-navigation.test.cjs')
-        files['engine/rpc.cjs'] = self.c['beforeEngineFiles']['rpc.cjs']
+        files.pop('engine/upstream/session-auth.js')
+        files['engine/test/checkout-navigation.test.cjs'] = self.c['beforeEngineFiles'][
+            'test/checkout-navigation.test.cjs']
         with self.assertRaisesRegex(RuntimeError, 'NATIVE_PROOF_CHANGED'):
             p.verify_proof({**self.proof, 'files': files}, self.plan, self.c, files)
         old = {**self.proof, 'beforeEngineFiles': {
@@ -269,7 +274,7 @@ class SourceBindingTests(unittest.TestCase):
                 self.builder.freeze_sources()
 
     def test_runtime_or_validation_source_hash_change_is_not_silently_refrozen(self):
-        for group, name in (('runtimeSources', p.ENGINE + '/checkout-form.cjs'),
+        for group, name in (('runtimeSources', p.ENGINE + '/upstream/session-auth.js'),
                             ('validationSources', 'docs/ONLINE_RECHARGE.md')):
             changed = copy.deepcopy(self.c)
             changed[group][name] = 'a' * 64

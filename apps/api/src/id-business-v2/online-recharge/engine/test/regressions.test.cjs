@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const vm = require('node:vm');
 const outcomes = require('../outcomes.cjs');
 const rpc = require('../rpc.cjs');
 const security = require('../security.cjs');
@@ -34,6 +35,302 @@ test.afterEach(() => {
   credentialClient.setRequesterForTest(null);
   rpc.clearTask();
   security.clearSecrets();
+});
+const sessionBearer = (accountId = 'fixture-account', userId = 'fixture-user', revision = 'old') =>
+  `synthetic.${Buffer.from(
+    JSON.stringify({
+      'https://api.openai.com/auth': { chatgpt_account_id: accountId, chatgpt_user_id: userId },
+      'https://api.openai.com/profile': { email: 'fixture@example.invalid' },
+      jti: revision
+    })
+  ).toString('base64url')}.synthetic`;
+async function sessionInstallFixture({
+  status = 200,
+  body,
+  headers = {},
+  original = {},
+  failure
+} = {}) {
+  const filename = path.resolve(__dirname, '../upstream/session-auth.js');
+  const source = await fs.readFile(filename, 'utf8');
+  const module = { exports: {} };
+  const logs = [];
+  vm.runInNewContext(
+    source,
+    {
+      module,
+      exports: module.exports,
+      Buffer,
+      process: { env: {} },
+      performance,
+      console: {
+        log: (...items) => logs.push(items.join(' ')),
+        warn: (...items) => logs.push(items.join(' '))
+      },
+      require: (name) => require(path.resolve(path.dirname(filename), name))
+    },
+    { filename }
+  );
+  const session = {
+    accessToken: sessionBearer(),
+    sessionToken: 'synthetic-cookie-only',
+    user: { id: 'fixture-user', email: 'fixture@example.invalid', name: 'Original' },
+    account: { id: 'fixture-account' },
+    expires: '2030-01-01T00:00:00.000Z',
+    ...original
+  };
+  const calls = { cookies: [], routes: [], scripts: [], realSessionRequests: 0 };
+  const context = {
+    newPage: async () => ({
+      goto: async (url) => {
+        if (url.endsWith('/api/auth/session')) {
+          calls.realSessionRequests++;
+          if (failure) throw failure;
+        }
+        return { status: () => status, headers: () => headers };
+      },
+      evaluate: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+      close: async () => {}
+    }),
+    addCookies: async (cookies) => calls.cookies.push(...cookies),
+    cookies: async () => calls.cookies,
+    addInitScript: async (script, payload) => calls.scripts.push({ script, payload }),
+    route: async (pattern, handler) => calls.routes.push({ pattern, handler })
+  };
+  return {
+    api: module.exports,
+    context,
+    session,
+    calls,
+    logs,
+    install: () => module.exports.installChatGptSession(context, JSON.stringify(session))
+  };
+}
+test('verified Cookie refresh replaces the stale bearer in session, fetch and routed requests', async () => {
+  const refreshed = sessionBearer('fixture-account', 'fixture-user', 'refreshed');
+  const body = {
+    accessToken: refreshed,
+    user: { id: 'fixture-user', name: 'Verified' },
+    account: { id: 'fixture-account' },
+    expires: '2031-01-01T00:00:00.000Z'
+  };
+  const f = await sessionInstallFixture({ body });
+  const installed = await f.install();
+  assert.equal(installed.cookieVerified, true);
+  assert.equal(installed.sessionData.accessToken, refreshed);
+  assert.equal(installed.sessionData.user.name, 'Verified');
+  assert.equal(installed.sessionData.expires, body.expires);
+  assert.equal(installed.sessionData.sessionToken, f.session.sessionToken);
+  assert.equal(f.calls.realSessionRequests, 1);
+  assert.equal(f.calls.scripts[0].payload.accessToken, refreshed);
+  let routedHeaders;
+  await f.calls.routes.at(-1).handler({
+    request: () => ({
+      url: () => 'https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27',
+      resourceType: () => 'fetch',
+      headers: () => ({})
+    }),
+    continue: async (options) => {
+      routedHeaders = options?.headers;
+    }
+  });
+  assert.equal(routedHeaders.Authorization, `Bearer ${refreshed}`);
+  let routedSession;
+  await f.calls.routes[0].handler({
+    fulfill: async (options) => {
+      routedSession = JSON.parse(options.body);
+    }
+  });
+  assert.equal(routedSession.accessToken, refreshed);
+  const window = {
+    fetch: async () => {
+      throw new Error('Synthetic fixture forbids network');
+    }
+  };
+  vm.runInNewContext(
+    `(${f.calls.scripts[0].script.toString()})(${JSON.stringify(f.calls.scripts[0].payload)})`,
+    {
+      window,
+      localStorage: { setItem() {} },
+      Response
+    }
+  );
+  assert.equal((await (await window.fetch('/api/auth/session')).json()).accessToken, refreshed);
+  assert.equal(f.logs.join('\n').includes(refreshed), false);
+  assert.equal(security.redactText(refreshed).includes(refreshed), false);
+});
+test('refreshed Cookie credentials cannot switch account, user or discard identity binding', async () => {
+  const good = {
+    accessToken: sessionBearer('fixture-account', 'fixture-user', 'refreshed'),
+    user: { id: 'fixture-user' },
+    account: { id: 'fixture-account' }
+  };
+  for (const body of [
+    { ...good, accessToken: sessionBearer('other-account', 'fixture-user', 'refreshed') },
+    { ...good, accessToken: sessionBearer('fixture-account', 'other-user', 'refreshed') },
+    { ...good, accessToken: sessionBearer('', 'fixture-user', 'refreshed') },
+    { ...good, accessToken: sessionBearer('fixture-account', '', 'refreshed') },
+    { ...good, account: { id: 'other-account' } },
+    { ...good, user: { id: 'other-user' } }
+  ]) {
+    const f = await sessionInstallFixture({ body });
+    await assert.rejects(
+      f.install,
+      (error) =>
+        error.code === 'ACCOUNT_MISMATCH' &&
+        !/fixture-account|fixture-user|synthetic\./.test(error.message)
+    );
+    assert.equal(f.calls.scripts.length, 0);
+    assert.equal(f.calls.routes.length, 0);
+  }
+  const inconsistent = await sessionInstallFixture({
+    body: good,
+    original: { account: { id: 'other-account' } }
+  });
+  await assert.rejects(inconsistent.install, (error) => error.code === 'ACCOUNT_MISMATCH');
+  const inconsistentUser = await sessionInstallFixture({
+    body: good,
+    original: { user: { id: 'other-user' } }
+  });
+  await assert.rejects(inconsistentUser.install, (error) => error.code === 'ACCOUNT_MISMATCH');
+  const unbound = await sessionInstallFixture({
+    body: good,
+    original: { accessToken: 'opaque-synthetic-token', user: null, account: null }
+  });
+  await assert.rejects(unbound.install, (error) => error.code === 'ACCOUNT_MISMATCH');
+});
+test('same or missing fresh bearer retains the original session fields', async () => {
+  for (const accessToken of [undefined, sessionBearer()]) {
+    const f = await sessionInstallFixture({
+      body: {
+        ...(accessToken ? { accessToken } : {}),
+        user: { id: 'fixture-user', name: 'Changed' },
+        expires: '2031-01-01T00:00:00.000Z'
+      }
+    });
+    const installed = await f.install();
+    assert.equal(installed.cookieVerified, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(installed.sessionData)), {
+      ...f.session,
+      authProvider: 'google-oauth2'
+    });
+  }
+});
+test('Cookie identity is never accepted from a forbidden response or challenge page', async () => {
+  const body = {
+    accessToken: sessionBearer('fixture-account', 'fixture-user', 'refreshed'),
+    user: { id: 'fixture-user' }
+  };
+  const unauthorized = await sessionInstallFixture({ status: 401, body });
+  await assert.rejects(unauthorized.install, (error) => error.code === 'SESSION_INVALID');
+  for (const response of [
+    { status: 403 },
+    { status: 429 },
+    { status: 500 },
+    { status: 200, headers: { 'cf-mitigated': 'challenge' } }
+  ]) {
+    const f = await sessionInstallFixture({ ...response, body });
+    const installed = await f.install();
+    assert.equal(installed.cookieVerified, false);
+    assert.equal(installed.sessionData.accessToken, f.session.accessToken);
+  }
+});
+test('ambiguous HTTP 200 bodies stay unverified while an exact empty session is rejected', async () => {
+  for (const body of [
+    { error: 'temporary_failure' },
+    {
+      error: 'refresh_failed',
+      accessToken: sessionBearer('fixture-account', 'fixture-user', 'untrusted'),
+      user: { id: 'fixture-user' }
+    },
+    [],
+    '<html>temporary failure</html>'
+  ]) {
+    const f = await sessionInstallFixture({ body });
+    const installed = await f.install();
+    assert.equal(installed.cookieVerified, false);
+    assert.equal(installed.sessionData.accessToken, f.session.accessToken);
+  }
+  const empty = await sessionInstallFixture({ body: {} });
+  await assert.rejects(empty.install, (error) => error.code === 'SESSION_INVALID');
+});
+test('Cookie probe timeout retains the original credential without manufacturing verification', async () => {
+  const f = await sessionInstallFixture({
+    failure: Object.assign(new Error('synthetic_timeout'), { name: 'TimeoutError' })
+  });
+  const installed = await f.install();
+  assert.equal(installed.cookieVerified, false);
+  assert.equal(installed.sessionData.accessToken, f.session.accessToken);
+  assert.equal(f.calls.realSessionRequests, 1);
+});
+test('independent subscription and renewal preserve an authentication identity rejection', async () => {
+  const filename = path.resolve(__dirname, '../upstream/subscription-check.js');
+  const module = { exports: {} };
+  let mismatches = 0,
+    resourcesClosed = 0;
+  const page = { close: async () => {} };
+  const context = {
+    newPage: async () => page,
+    close: async () => {
+      resourcesClosed++;
+    }
+  };
+  vm.runInNewContext(await fs.readFile(filename, 'utf8'), {
+    module,
+    exports: module.exports,
+    process: { env: {} },
+    Buffer,
+    URL,
+    AbortController,
+    require: (name) => {
+      if (name.startsWith('node:')) return require(name);
+      if (name === 'playwright') return { request: {} };
+      if (name === '../rpc.cjs') return { taskSignal: () => undefined, wasSubmitted: () => false };
+      if (name === './session-auth')
+        return {
+          extractProfileFromToken: () => ({ accountId: 'fixture-account' }),
+          installChatGptSession: async () => {
+            mismatches++;
+            throw Object.assign(new Error('Synthetic identity rejection'), {
+              code: 'ACCOUNT_MISMATCH'
+            });
+          }
+        };
+      if (name === './playwright-proxy')
+        return {
+          preparePlaywrightProxy: async () => ({
+            cleanup: async () => {
+              resourcesClosed++;
+            }
+          })
+        };
+      if (name === './browser-runtime')
+        return {
+          connectTaskBrowser: async () => ({
+            browser: { newContext: async () => context },
+            realUserAgent: 'Synthetic'
+          }),
+          closeTaskBrowser: async () => {
+            resourcesClosed++;
+          }
+        };
+      if (name === './human-verification')
+        return { prepareVerificationPage: async () => {}, disposeVerificationPage: async () => {} };
+      throw new Error('Synthetic authentication fixture forbids other dependencies');
+    }
+  });
+  const options = { sessionRaw: 'synthetic-session', allowBrowserFallback: true };
+  for (const operation of ['querySubscriptionBySession', 'cancelAutoRenew', 'resumeAutoRenew']) {
+    const result = await module.exports[operation](sessionBearer(), options);
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, 'ACCOUNT_MISMATCH');
+    assert.equal(result.statusCode, 409);
+    assert.match(result.error, /身份|账号|用户/);
+    assert.doesNotMatch(result.error, /网络|fixture-account|synthetic-session/);
+    assert.notEqual(result.resultUnknown, true);
+  }
+  assert.equal(mismatches, 3);
+  assert.equal(resourcesClosed, 9);
 });
 test('authentication redirect never proves payment', () => {
   assert.equal(outcomes.isVerifiedPaymentRedirect('https://chatgpt.com/auth/login'), false);

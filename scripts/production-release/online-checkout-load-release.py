@@ -1,4 +1,4 @@
-"""Finite engine-only core compatibility repair. No API/Admin replacement or payment."""
+"""Finite engine-only session refresh repair. No API/Admin replacement or payment."""
 import datetime
 import hashlib
 import importlib.util
@@ -13,12 +13,9 @@ HERE = Path(__file__).resolve().parent
 SCOPE = 'ONLINE_CHECKOUT_LOAD_RECOVERY'
 CONTRACT_FILE = 'online-checkout-load-contract.json'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
-SOURCE_BASE = '3f8f2bb4978e3a839c82d2ecc73857449d4b94d3'
-FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'safe-media.cjs',
-    'upstream/chatgpt.js', 'upstream/human-verification.js', 'upstream/index.js',
-    'upstream/stripe-payment.js',
-    'test/checkout-form.test.cjs', 'test/checkout-navigation.test.cjs',
-    'test/checkout-recovery.test.cjs', 'test/media-browser.test.cjs',
+SOURCE_BASE = '9ccc464613615f95d54f2adf63bd573b80adaa0e'
+FILES = frozenset(('SOURCE_MANIFEST.json', 'upstream/session-auth.js', 'upstream/subscription-check.js',
+    'test/regressions.test.cjs',
     'test/recharge-flow-acceptance.test.cjs'))
 ADDED = frozenset()
 VALIDATION = frozenset(('apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
