@@ -1,0 +1,97 @@
+name: Registration Flow V4
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact independently verified deployed predecessor
+        required: true
+        type: string
+      publish:
+        description: Publish once after isolated validation
+        default: false
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify finite preservation and source admission controls
+        run: python3 -B scripts/production-release/registration-flow-v4-release.test.py
+      - name: Reconstruct the exact published components and reviewed repair
+        run: python3 -B scripts/production-release/registration-flow-v4-build.py prepare
+      - name: Verify unchanged API JavaScript and isolated encrypted persistence
+        run: python3 -B scripts/production-release/registration-flow-v4-build.py check-api
+      - name: Verify both task interfaces and retained published assets
+        run: python3 -B scripts/production-release/registration-flow-v4-build.py check-admin
+      - name: Package only validated Worker and Admin with inherited API dist
+        run: python3 -B scripts/production-release/registration-flow-v4-build.py package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registration-flow-v4-20261017-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/registration-flow-v4-20261017/registration-flow-v4-20261017-artifact.tar.gz
+            .deploy/registration-flow-v4-20261017/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: inputs.publish && github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+      REGISTRATION_FLOW_V4_20261017: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure the existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-registration-flow-v4-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/registration-flow-v4-dispatch.py
+      - name: Preserve native publication receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: registration-flow-v4-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/registration-flow-v4-20261017/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

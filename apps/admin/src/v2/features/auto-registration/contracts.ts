@@ -46,6 +46,10 @@ export type AppleMailboxSyncStatus =
 
 export type AppleMailboxRegistrationStage =
   | 'queued'
+  | 'ip_check'
+  | 'mailbox'
+  | 'initialization'
+  | 'authorize'
   | 'sentinel'
   | 'signup'
   | 'password'
@@ -64,6 +68,7 @@ export interface AppleMailboxFailure {
   errorKind:
     | 'http_rejected'
     | 'network_error'
+    | 'evidence_storage_error'
     | 'unknown'
     | 'account_creation_failed'
     | 'user_exists';
@@ -276,13 +281,46 @@ export interface AppleMailboxFlowObservation {
   responseDetails?: AppleMailboxFlowResponseDetails;
   sentinelDetails?: AppleMailboxFlowSentinelDetails;
 }
-export interface AppleMailboxFlowEvidence {
-  version: 1 | 2 | 3;
+export interface AppleMailboxFlowAttempt {
+  sequence: number;
+  stage: 'authorize' | 'sentinel' | 'signup' | 'password';
+  outcome: 'response' | 'network_error' | 'evidence_storage_error';
+  observedAt: string;
+  observation: AppleMailboxFlowObservation | null;
+  responseClass:
+    | 'verification_required'
+    | 'structured_rejection'
+    | 'rate_limited'
+    | 'unclassified'
+    | 'not_applicable';
+  deviceCookieBefore: 'present' | 'absent' | 'not_observed';
+  deviceCookieAfter: 'present' | 'absent' | 'not_observed';
+}
+export interface AppleMailboxFlowConfigurationSummary {
+  clientIdMatchesFrozenDefault: boolean | null;
+  authUrlMatchesFrozenDefault: boolean | null;
+  tokenUrlMatchesFrozenDefault: boolean | null;
+  redirectUriMatchesFrozenDefault: boolean | null;
+  scopeMatchesFrozenDefault: boolean | null;
+  proxyPresent: boolean | null;
+  proxySource: 'default' | 'system' | 'explicit' | 'not_recorded';
+}
+export interface AppleMailboxFlowEvidenceBase {
   authorize?: AppleMailboxFlowObservation;
   sentinel?: AppleMailboxFlowObservation;
   signup?: AppleMailboxFlowObservation;
   password?: AppleMailboxFlowObservation;
 }
+export type AppleMailboxFlowEvidence = AppleMailboxFlowEvidenceBase &
+  (
+    | { version: 1 | 2 | 3 }
+    | {
+        version: 4;
+        attempts: AppleMailboxFlowAttempt[];
+        attemptsTruncated: boolean;
+        configurationSummary: AppleMailboxFlowConfigurationSummary | null;
+      }
+  );
 
 export interface AppleMailboxTask {
   flowEvidence?: AppleMailboxFlowEvidence;

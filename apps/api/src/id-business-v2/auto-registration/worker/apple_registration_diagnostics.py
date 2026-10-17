@@ -4,12 +4,19 @@ from functools import wraps
 import time
 from types import FunctionType, MethodType
 
-STAGES = {"queued", "sentinel", "signup", "password", "verification_code", "verification_validate",
+STAGES = {"queued", "ip_check", "mailbox", "initialization", "authorize", "sentinel", "signup", "password", "verification_code", "verification_validate",
           "create_account", "workspace", "select_workspace", "redirect", "oauth",
           "identity", "account_save", "sync"}
-ERROR_KINDS = {"http_rejected", "network_error", "unknown", "account_creation_failed", "user_exists"}
+ERROR_KINDS = {"http_rejected", "network_error", "evidence_storage_error", "unknown", "account_creation_failed", "user_exists"}
 OFFICIAL_CODES = {"account_creation_failed", "user_exists"}
 PUBLIC_FIELDS = {"proxySource", "proxyId", "mailboxSelection", "firstFailure"}
+
+
+class EvidenceStorageError(ValueError):
+    """A closed diagnostic error; never carry SQL, exception text or payloads."""
+    def __init__(self, http_status=None):
+        super().__init__("注册安全证据保存失败，已停止；请核对原任务")
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
 
 
 class ObservedClient:
@@ -58,6 +65,29 @@ class RegistrationDiagnostics:
         self.active = None
 
     def request(self, original, *args, **kwargs):
+        if self.active is None:
+            return original(*args, **kwargs)
+        try:
+            response = self.capture(original, *args, **kwargs)
+        except EvidenceStorageError:
+            raise
+        except Exception:
+            self.record_status(None)
+            raise
+        self.record_status(getattr(response, "status_code", None))
+        return response
+
+    def record_status(self, status):
+        status = status if type(status) is int and 100 <= status <= 599 else None
+        try:
+            if not self.store.update_task(self.task_uuid, lastHttpStatus=status):
+                raise EvidenceStorageError(status)
+        except Exception:
+            if self.active is not None:
+                self.active["errorKind"] = "evidence_storage_error"
+            raise EvidenceStorageError(status) from None
+
+    def capture(self, original, *args, **kwargs):
         """Keep only status and a recognized structured code, never content."""
         observation = self.active
         if observation is None:
@@ -65,9 +95,11 @@ class RegistrationDiagnostics:
         observation.update(httpStatus=None, errorKind="unknown")
         try:
             response = original(*args, **kwargs)
+        except EvidenceStorageError as error:
+            observation.update(httpStatus=error.http_status, errorKind="evidence_storage_error")
+            raise
         except Exception:
             observation["errorKind"] = "network_error"
-            self.store.update_task(self.task_uuid, lastHttpStatus=None)
             raise
         status = getattr(response, "status_code", None)
         status = status if type(status) is int and 100 <= status <= 599 else None
@@ -82,7 +114,6 @@ class RegistrationDiagnostics:
                     observation["errorKind"] = code
             except Exception:
                 pass
-        self.store.update_task(self.task_uuid, lastHttpStatus=status)
         return response
 
     def observe_session(self, engine, session=None):
@@ -142,19 +173,33 @@ class RegistrationDiagnostics:
             # These integration methods already write their own stage and lease
             # guard. In particular password's checkpoint must stay inside the
             # original method's existing failure handling.
-            if not owns_stage:
-                if not self.store.update_task(self.task_uuid, stage=stage, lastHttpStatus=None):
-                    raise ValueError("任务占用已变化，不能继续执行")
             previous = self.active
             observation = {"stage": stage, "httpStatus": None, "errorKind": "unknown", "started": time.monotonic()}
             self.active = observation
             try:
+                if getattr(engine, "_apple_evidence_storage_failed", False):
+                    raise EvidenceStorageError()
+                if not owns_stage:
+                    try:
+                        if not self.store.update_task(self.task_uuid, stage=stage, lastHttpStatus=None):
+                            raise EvidenceStorageError()
+                    except Exception:
+                        raise EvidenceStorageError() from None
                 self.observe_session(engine)
                 result = original(*args, **kwargs)
                 self.observe_session(engine)
+                if observation["errorKind"] == "evidence_storage_error":
+                    engine._apple_evidence_storage_failed = True
                 if failed(result):
                     self.failure(observation)
                 return result
+            except EvidenceStorageError as error:
+                engine._apple_evidence_storage_failed = True
+                observation.update(errorKind="evidence_storage_error")
+                if error.http_status is not None:
+                    observation["httpStatus"] = error.http_status
+                self.failure(observation)
+                raise
             except Exception:
                 self.failure(observation)
                 raise
@@ -164,11 +209,11 @@ class RegistrationDiagnostics:
 
     def install(self, engine):
         specifications = {
-            "_check_ip_location": ("queued", lambda result: not result[0]),
-            "_create_email": ("queued", lambda result: not result),
-            "_init_session": ("queued", lambda result: not result),
-            "_start_oauth": ("queued", lambda result: not result),
-            "_get_device_id": ("queued", lambda result: not result),
+            "_check_ip_location": ("ip_check", lambda result: not result[0]),
+            "_create_email": ("mailbox", lambda result: not result),
+            "_init_session": ("initialization", lambda result: not result),
+            "_start_oauth": ("authorize", lambda result: not result),
+            "_get_device_id": ("authorize", lambda result: not result),
             "_check_sentinel": ("sentinel", lambda result: not result),
             "_submit_signup_form": ("signup", lambda result: not getattr(result, "success", True)),
             "_register_password": ("password", lambda result: not result[0]),
@@ -200,7 +245,7 @@ class RegistrationDiagnostics:
                 # Upstream may replace its session during its own device retry.
                 # A response from the discarded session must not identify the
                 # outcome of an unobserved request on the new one.
-                if self.active is not None:
+                if self.active is not None and not getattr(engine, "_apple_evidence_storage_failed", False):
                     self.active.update(httpStatus=None, errorKind="unknown")
                 return result
             client.close = close

@@ -287,7 +287,7 @@ describe('注册任务流程证据的封闭中文展示', () => {
     expect(iframeFlowRows(evidence)).toEqual(rows);
   });
   it('兼容没有证据的旧任务，有新结构时明确区分尚未观察阶段', () => {
-    for (const value of [undefined, null, {}, { version: 4 }, { version: '2' }, []]) {
+    for (const value of [undefined, null, {}, { version: 5 }, { version: '2' }, []]) {
       expect(appleMailboxFlowEvidenceRows(value)).toEqual([]);
       expect(iframeFlowRows(value)).toEqual([]);
     }
@@ -661,4 +661,197 @@ describe('注册任务流程证据的封闭中文展示', () => {
     expect(JSON.stringify(appleMailboxFlowEvidenceRows(malformedDigest))).not.toContain(secret);
     expect(iframeFlowRows(malformedDigest)).toEqual(appleMailboxFlowEvidenceRows(malformedDigest));
   });
+});
+
+const flowV4Attempt = (extra: Record<string, unknown> = {}) => ({
+  sequence: 1,
+  stage: 'authorize',
+  outcome: 'response',
+  observedAt: '2026-10-17T00:00:00Z',
+  observation: flowObservation,
+  responseClass: 'unclassified',
+  deviceCookieBefore: 'absent',
+  deviceCookieAfter: 'present',
+  ...extra
+});
+const flowV4 = (attempts: unknown[], extra: Record<string, unknown> = {}) => ({
+  version: 4,
+  attempts,
+  attemptsTruncated: false,
+  configurationSummary: {
+    clientIdMatchesFrozenDefault: true,
+    authUrlMatchesFrozenDefault: false,
+    tokenUrlMatchesFrozenDefault: true,
+    redirectUriMatchesFrozenDefault: true,
+    scopeMatchesFrozenDefault: true,
+    proxyPresent: true,
+    proxySource: 'system'
+  },
+  ...extra
+});
+
+describe('第四版注册请求过程', () => {
+  it('按请求序号保留重复阶段和设备标记变化，摘要不能覆盖早先拒绝', () => {
+    const value = flowV4(
+      [
+        flowV4Attempt({
+          observation: {
+            ...flowObservation,
+            httpStatus: 403,
+            decision: 'rejected',
+            reason: 'http_status'
+          },
+          responseClass: 'verification_required'
+        }),
+        flowV4Attempt({ sequence: 2, deviceCookieBefore: 'present' })
+      ],
+      { authorize: flowObservation }
+    );
+    const rows = appleMailboxFlowEvidenceRows(value);
+    expect(rows[0]?.detail).toContain('授权入口：与原版不同');
+    expect(rows[1]?.title).toBe('第 1 次 · 授权入口');
+    expect(rows[1]?.detail).toContain('响应状态 403');
+    expect(rows[1]?.detail).toContain('官网要求额外验证');
+    expect(rows[1]?.detail).toContain('设备标记：请求前不存在，请求后存在');
+    expect(rows[2]?.detail).toContain('设备标记：请求前存在，请求后存在');
+    expect(rows[2]?.title).toBe('第 2 次 · 授权入口');
+    expect(iframeFlowRows(value)).toEqual(rows);
+  });
+  it('网络失败作为最后一条独立观察，绝不复用上一次成功响应', () => {
+    const value = flowV4(
+      [
+        flowV4Attempt(),
+        flowV4Attempt({
+          sequence: 2,
+          outcome: 'network_error',
+          observation: null,
+          responseClass: 'not_applicable',
+          deviceCookieAfter: 'not_observed'
+        })
+      ],
+      { authorize: flowObservation }
+    );
+    const rows = appleMailboxFlowEvidenceRows(value),
+      last = rows.at(-1)!;
+    expect(last.status).toBe('网络请求失败');
+    expect(last.detail).toContain('本次未取得响应');
+    expect(last.detail).not.toContain('响应状态 200');
+    expect(last.detail).not.toContain('已确认继续');
+    expect(iframeFlowRows(value)).toEqual(rows);
+  });
+  it('保留最近32条和原序号，说明省略历史而不丢掉最后网络失败', () => {
+    const attempts = Array.from({ length: 40 }, (_, i) => flowV4Attempt({ sequence: i + 9 }));
+    attempts[39] = flowV4Attempt({
+      sequence: 48,
+      outcome: 'network_error',
+      observation: null,
+      responseClass: 'not_applicable'
+    });
+    const value = flowV4(attempts, { attemptsTruncated: true }),
+      rows = appleMailboxFlowEvidenceRows(value);
+    expect(rows).toHaveLength(34);
+    expect(rows[1]?.status).toBe('仅保留最近 32 次请求');
+    expect(rows[2]?.title).toBe('第 17 次 · 授权入口');
+    expect(rows.at(-1)?.title).toBe('第 48 次 · 授权入口');
+    expect(rows.at(-1)?.status).toBe('网络请求失败');
+    expect(iframeFlowRows(value)).toEqual(rows);
+  });
+  it('配置、分类、序号和设备标记仅输出封闭标签，不回显恶意字段', () => {
+    const secret = 'secret-fixture<script>alert(1)</script>';
+    const value = flowV4(
+      [
+        flowV4Attempt({
+          sequence: secret,
+          stage: secret,
+          outcome: secret,
+          responseClass: secret,
+          deviceCookieBefore: secret,
+          deviceCookieAfter: secret,
+          observation: { raw: secret }
+        })
+      ],
+      {
+        configurationSummary: Object.fromEntries(
+          [
+            'clientIdMatchesFrozenDefault',
+            'authUrlMatchesFrozenDefault',
+            'tokenUrlMatchesFrozenDefault',
+            'redirectUriMatchesFrozenDefault',
+            'scopeMatchesFrozenDefault',
+            'proxyPresent',
+            'proxySource',
+            'raw'
+          ].map((k) => [k, secret])
+        )
+      }
+    );
+    const rows = appleMailboxFlowEvidenceRows(value),
+      text = JSON.stringify(rows);
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain('<script>');
+    expect(text).toContain('请求序号待核对');
+    expect(text).toContain('请求阶段待核对');
+    expect(text).toContain('代理来源：待核对');
+    expect(iframeFlowRows(value)).toEqual(rows);
+  });
+  it('证据存储失败与初始化和授权入口失败使用明确中文阶段', () => {
+    const value = flowV4([
+      flowV4Attempt({
+        outcome: 'evidence_storage_error',
+        observation: null,
+        responseClass: 'not_applicable'
+      })
+    ]);
+    const rows = appleMailboxFlowEvidenceRows(value);
+    expect(rows.at(-1)?.status).toBe('流程证据保存失败');
+    expect(iframeFlowRows(value)).toEqual(rows);
+    for (const [stage, title] of [
+      ['ip_check', '注册出口检查'],
+      ['mailbox', '准备注册邮箱'],
+      ['initialization', '注册初始化'],
+      ['authorize', '授权入口']
+    ] as const) {
+      expect(
+        appleMailboxDiagnostic({
+          firstFailure: {
+            stage,
+            errorKind: 'evidence_storage_error',
+            httpStatus: null,
+            elapsedMs: 0,
+            observedAt: '2026-10-17T00:00:00Z'
+          }
+        })
+      ).toContain(`首次失败：${title} · 流程证据保存失败`);
+    }
+    expect(appleMailboxFlowEvidenceRows(flowV4([])).at(-1)?.detail).toContain(
+      '不推断已进入授权入口'
+    );
+  });
+});
+
+it.each([
+  ['structured_rejection', '官网明确拒绝'],
+  ['verification_required', '官网要求额外验证'],
+  ['rate_limited', '请求受到限制']
+])('v4分类%s会停止，即使兼容观察仍为接受', (responseClass, label) => {
+  const value = flowV4([
+    flowV4Attempt({
+      responseClass,
+      observation: { ...flowObservation, httpStatus: 200, decision: 'accepted' }
+    })
+  ]);
+  const rows = appleMailboxFlowEvidenceRows(value);
+  expect(rows.at(-1)?.status).toBe('已停止，等待核对');
+  expect(rows.at(-1)?.detail).toContain(label);
+  expect(iframeFlowRows(value)).toEqual(rows);
+});
+
+it('v4未知响应分类不能借用兼容观察显示已确认继续', () => {
+  const value = flowV4([
+    flowV4Attempt({ responseClass: 'secret-fixture-class', observation: flowObservation })
+  ]);
+  const rows = appleMailboxFlowEvidenceRows(value);
+  expect(rows.at(-1)?.status).toBe('响应判断待核对');
+  expect(JSON.stringify(rows)).not.toContain('secret-fixture-class');
+  expect(iframeFlowRows(value)).toEqual(rows);
 });

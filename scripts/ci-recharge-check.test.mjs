@@ -57,6 +57,14 @@ import {
   onlinePreflightReceiptFixGuardBinding,
   onlineBuildProofReuseCommands,
   onlinePreflightReceiptFixGuardPaths,
+  registrationFlowV4Base,
+  registrationFlowV4Tree,
+  registrationFlowV4Contract,
+  registrationFlowV4Applications,
+  registrationFlowV4Acceptance,
+  registrationFlowV4Paths,
+  registrationFlowV4Commands,
+  registrationFlowV4SupportSources,
   registrationProtocolRepairBase,
   registrationProtocolRepairTree,
   registrationProtocolRepairContract,
@@ -117,6 +125,43 @@ test('registration protocol preflight control repair runs only the finite contro
       recordGuardCommands('ci-only', registrationProtocolRepairControlPaths, 'guards', {
         ...options,
         failCommand: registrationProtocolRepairControlCommands.guards[0].join(' ')
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+});
+
+test('registration flow v4 dispatches its four finite parts and blocks local candidate checks', () => {
+  const options = {
+    base: registrationFlowV4Base,
+    flowV4Fixture: true,
+    cloud: true
+  };
+  for (const part of ['guards', 'api', 'admin', 'release-controls']) {
+    assert.deepEqual(recordGuardCommands('recharge', registrationFlowV4Paths, part, options), [
+      ...registrationFlowV4Commands[part],
+      ['process-exit', 0]
+    ]);
+  }
+  for (const part of ['api', 'admin']) {
+    assert.throws(
+      () =>
+        recordGuardCommands('recharge', registrationFlowV4Paths, part, {
+          ...options,
+          cloud: false
+        }),
+      /require isolated CI/
+    );
+  }
+  assert.throws(
+    () => recordGuardCommands('recharge', registrationFlowV4Paths, 'migration', options),
+    /Unsupported registration flow v4/
+  );
+  const failCommand = registrationFlowV4Commands.guards[0].join(' ');
+  assert.throws(
+    () =>
+      recordGuardCommands('recharge', registrationFlowV4Paths, 'guards', {
+        ...options,
+        failCommand
       }),
     /SYNTHETIC_COMMAND_FAILURE/
   );
@@ -979,7 +1024,8 @@ function recordGuardCommands(
     parityFixture = false,
     browserFixture = false,
     restoreFixture = false,
-    protocolRepairFixture = false
+    protocolRepairFixture = false,
+    flowV4Fixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -1040,6 +1086,31 @@ function recordGuardCommands(
     buildSupportHashes: {
       'scripts/production-release/registration-closure-release.py': 'a'.repeat(64)
     }
+  };
+  const v4Hashes = Object.fromEntries(
+    registrationFlowV4Paths
+      .filter((name) => name !== registrationFlowV4Contract)
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  const v4Contract = {
+    version: 1,
+    scope: 'REGISTRATION_FLOW_V4_20261017',
+    name: 'registration-flow-v4-20261017',
+    frozen: true,
+    admission: 'VERIFIED',
+    migration: null,
+    businessActions: 0,
+    pendingEvidence: [],
+    sourceBaseline: registrationFlowV4Base,
+    sourceBaselineTree: registrationFlowV4Tree,
+    expectedGitChanges: [...registrationFlowV4Paths],
+    applicationPaths: [...registrationFlowV4Applications],
+    sources: Object.fromEntries(
+      registrationFlowV4Applications.map((name) => [name, v4Hashes[name]])
+    ),
+    validationSources: { [registrationFlowV4Acceptance]: v4Hashes[registrationFlowV4Acceptance] },
+    validationSupportSources: registrationFlowV4SupportSources,
+    reviewedFileHashes: v4Hashes
   };
   const script = `
     import childProcess from 'node:child_process';
@@ -1128,7 +1199,9 @@ function recordGuardCommands(
             'const sourceDigest=name=>contract.reviewedFileHashes[name]??prior.sources[name]??prior.validationSources[name]??prior.validationSupportSources[name]??prior.buildSupportHashes[name]??prior.controlHashes[name.replace("scripts/production-release/","")]??null;' +
             'return realScope.registrationProtocolRepairPreservationAdmission(paths,{...options,contract,repairBaseContract:prior,repairSourcePaths:realScope.registrationProtocolRepairPreservationPaths,sourceDigest},realScope.registrationProtocolRepairPreservationProjection(contract));}'
           : '';
-        const source = 'export * from ' + JSON.stringify(scopeUrl) + ';' + repairFixtureSource +
+        const v4FixtureSource = ${JSON.stringify(flowV4Fixture)}
+          ? 'export function isRegistrationFlowV4Only(paths,options){const contract=' + ${JSON.stringify(JSON.stringify(v4Contract))} + ';return realScope.isRegistrationFlowV4Only(paths,{...options,contract,sourceDigest:name=>contract.reviewedFileHashes[name]??contract.validationSupportSources[name]??null});}' : '';
+        const source = (repairFixtureSource ? '' : 'import * as realScope from ' + JSON.stringify(scopeUrl) + ';') + 'export * from ' + JSON.stringify(scopeUrl) + ';' + repairFixtureSource + v4FixtureSource +
           'export function canResumeCombinedGuard(base) {' +
           'globalThis.guardTestCalls.push(["resume-helper", base]);' +
           'return process.env.GUARD_TEST_RESUME === "true"; }' +
@@ -1150,6 +1223,7 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationFlowV4Base + '^{tree}')}) return ${JSON.stringify(registrationFlowV4Tree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairPreservationBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairPreservationTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairControlBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairControlTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationProtocolRepairBase + '^{tree}')}) return ${JSON.stringify(registrationProtocolRepairTree + '\n')};

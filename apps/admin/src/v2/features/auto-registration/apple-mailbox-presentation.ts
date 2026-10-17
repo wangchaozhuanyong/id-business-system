@@ -122,6 +122,10 @@ export function appleMailboxDiagnostic(
   if (!record) return '';
   const stages: Record<string, string> = {
     queued: '等待执行',
+    ip_check: '注册出口检查',
+    mailbox: '准备注册邮箱',
+    initialization: '注册初始化',
+    authorize: '授权入口',
     sentinel: '注册前置校验',
     signup: '提交注册表单',
     verification_code: '邮箱验证码',
@@ -161,6 +165,7 @@ export function appleMailboxDiagnostic(
   const errors = {
     http_rejected: '服务返回失败',
     network_error: '网络请求异常',
+    evidence_storage_error: '流程证据保存失败',
     unknown: '执行结果待核对',
     account_creation_failed: '官网返回账号创建失败',
     user_exists: '官网提示已有账号，需核验身份'
@@ -273,18 +278,155 @@ export function appleMailboxMarkError(input: AppleMailboxMarkInput) {
 }
 
 /** Only closed labels and bounded status numbers reach the task detail. */
-export function appleMailboxFlowEvidenceRows(value: unknown) {
+export function appleMailboxFlowEvidenceRows(
+  value: unknown
+): Array<{ stage: string; title: string; status: string; detail: string }> {
   if (
     !value ||
     typeof value !== 'object' ||
     Array.isArray(value) ||
     !('version' in value) ||
-    (value.version !== 1 && value.version !== 2 && value.version !== 3)
+    (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4)
   )
     return [];
   const evidence = value as Record<string, unknown>;
   const label = (labels: Record<string, string>, item: unknown, fallback: string) =>
     typeof item === 'string' && Object.hasOwn(labels, item) ? labels[item]! : fallback;
+
+  if (evidence.version === 4) {
+    const rows: Array<{ stage: string; title: string; status: string; detail: string }> = [];
+    const summary = evidence.configurationSummary;
+    const config =
+      summary && typeof summary === 'object' && !Array.isArray(summary)
+        ? (summary as Record<string, unknown>)
+        : {};
+    const matches = (item: unknown) =>
+      item === true ? '与原版一致' : item === false ? '与原版不同' : '未记录';
+    rows.push({
+      stage: 'configuration',
+      title: '本次配置核对',
+      status: '仅显示核对结果，不显示配置值',
+      detail: [
+        `客户端标识：${matches(config.clientIdMatchesFrozenDefault)}`,
+        `授权入口：${matches(config.authUrlMatchesFrozenDefault)}`,
+        `授权凭据入口：${matches(config.tokenUrlMatchesFrozenDefault)}`,
+        `回调地址：${matches(config.redirectUriMatchesFrozenDefault)}`,
+        `授权范围：${matches(config.scopeMatchesFrozenDefault)}`,
+        config.proxyPresent === true
+          ? '注册代理：已配置'
+          : config.proxyPresent === false
+            ? '注册代理：未配置'
+            : '注册代理：未记录',
+        label(
+          {
+            default: '代理来源：系统默认',
+            system: '代理来源：代理目录',
+            explicit: '代理来源：手工配置',
+            not_recorded: '代理来源：未记录'
+          },
+          config.proxySource,
+          '代理来源：待核对'
+        )
+      ].join(' · ')
+    });
+    const attempts = Array.isArray(evidence.attempts) ? evidence.attempts.slice(-32) : [];
+    if (
+      evidence.attemptsTruncated === true ||
+      (Array.isArray(evidence.attempts) && evidence.attempts.length > 32)
+    )
+      rows.push({
+        stage: 'truncated',
+        title: '较早请求已省略',
+        status: '仅保留最近 32 次请求',
+        detail: '以下保留原请求序号；首次失败仍以上方任务记录为准。'
+      });
+    for (const [index, candidate] of attempts.entries()) {
+      const attempt =
+        candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+          ? (candidate as Record<string, unknown>)
+          : {};
+      const stage =
+        typeof attempt.stage === 'string' &&
+        ['authorize', 'sentinel', 'signup', 'password'].includes(attempt.stage)
+          ? attempt.stage
+          : '';
+      const sequence =
+        Number.isSafeInteger(attempt.sequence) && Number(attempt.sequence) > 0
+          ? `第 ${attempt.sequence} 次`
+          : '请求序号待核对';
+      const observation =
+        attempt.outcome === 'response' && stage
+          ? appleMailboxFlowEvidenceRows({ version: 3, [stage]: attempt.observation }).find(
+              (row) => row.stage === stage
+            )
+          : null;
+      const presence = (item: unknown) =>
+        label({ present: '存在', absent: '不存在', not_observed: '未检查' }, item, '待核对');
+      rows.push({
+        stage: 'attempt-' + index,
+        title:
+          sequence +
+          ' · ' +
+          label(
+            {
+              authorize: '授权入口',
+              sentinel: '注册前置校验',
+              signup: '提交注册邮箱',
+              password: '提交注册密码'
+            },
+            stage,
+            '请求阶段待核对'
+          ),
+        status:
+          attempt.outcome === 'response'
+            ? attempt.responseClass === 'verification_required' ||
+              attempt.responseClass === 'structured_rejection' ||
+              attempt.responseClass === 'rate_limited'
+              ? '已停止，等待核对'
+              : attempt.responseClass === 'unclassified'
+                ? observation?.status || '响应待核对'
+                : '响应判断待核对'
+            : label(
+                { network_error: '网络请求失败', evidence_storage_error: '流程证据保存失败' },
+                attempt.outcome,
+                '执行结果待核对'
+              ),
+        detail: [
+          attempt.outcome === 'response'
+            ? observation?.detail || '未取得可核对的响应证据'
+            : label(
+                {
+                  network_error: '本次未取得响应，不能沿用上一次响应判断结果',
+                  evidence_storage_error: '本次流程证据未能保存，执行已停止'
+                },
+                attempt.outcome,
+                '本次执行资料待核对'
+              ),
+          label(
+            {
+              verification_required: '响应判断：官网要求额外验证',
+              structured_rejection: '响应判断：官网明确拒绝',
+              rate_limited: '响应判断：请求受到限制',
+              unclassified: '响应判断：尚未归类',
+              not_applicable: '响应判断：无响应可供判断'
+            },
+            attempt.responseClass,
+            '响应判断：待核对'
+          ),
+          `设备标记：请求前${presence(attempt.deviceCookieBefore)}，请求后${presence(attempt.deviceCookieAfter)}`
+        ].join(' · ')
+      });
+    }
+    if (!attempts.length)
+      rows.push({
+        stage: 'attempts-empty',
+        title: '请求过程尚未记录',
+        status: '暂无请求观察',
+        detail: '请以上方实际失败步骤为准，不推断已进入授权入口或提交密码。'
+      });
+    return rows;
+  }
+
   return (
     [
       ['authorize', '授权入口'],

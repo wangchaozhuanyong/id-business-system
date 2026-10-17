@@ -83,6 +83,9 @@ NAMESPACE = {"__name__": __name__, "Any": Any, "Dict": Dict, "Optional": Optiona
     "observation_for_version": flow.observation_for_version,
     "validate_flow_evidence": flow.validate_flow_evidence,
     "validate_observation": flow.validate_observation, "RegistrationDiagnostics": diagnostics.RegistrationDiagnostics,
+    "EvidenceStorageError": diagnostics.EvidenceStorageError,
+    **{name: getattr(flow, name) for name in ("append_attempt", "attempt_evidence", "configuration_summary",
+       "device_cookie_presence", "new_flow_evidence", "response_admitted", "response_classification", "validate_configuration_summary")},
     "STAGES": diagnostics.STAGES, "ERROR_KINDS": diagnostics.ERROR_KINDS, "now_iso": now_iso,
     "TASK_PREFIX": "id.apple-task.",
     "PUBLIC_FIELDS": {"firstFailure", "stage", "lastHttpStatus"},
@@ -90,8 +93,8 @@ NAMESPACE = {"__name__": __name__, "Any": Any, "Dict": Dict, "Optional": Optiona
     "context_authorization_only": lambda integration, task: bool(integration.contexts.get(task, {}).get("authorizationOnly")),
     "OPENAI_API_ENDPOINTS": ENDPOINTS,
     "OPENAI_PAGE_TYPES": {"EMAIL_OTP_VERIFICATION": "email_otp_verification", "PASSWORD_REGISTRATION": "password"}}
-definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"record_flow_evidence", "record_failure"},
-    "AppleMailboxIntegration": {"guard_session", "observe_engine", "task"}}, NAMESPACE)
+definitions(HERE / "apple_mailboxes.py", {"RegistrationFacts": {"record_flow_evidence", "record_failure", "record_configuration_summary"},
+    "AppleMailboxIntegration": {"guard_session", "observe_engine", "observe_flow_request", "task"}}, NAMESPACE)
 definitions(HERE.parent / "upstream/src/core/register.py", {"SignupFormResult": None, "RegistrationResult": None,
     "RegistrationEngine": {"run", "_get_device_id", "_check_sentinel", "_submit_signup_form", "_register_password"}}, NAMESPACE)
 
@@ -241,7 +244,7 @@ class FlowEvidenceTests(unittest.TestCase):
         self.assertEqual(calls[2][2]["headers"], {"referer": "https://auth.openai.com/create-account/password",
             "accept": "application/json", "content-type": "application/json"})
         flow_value = integration.store.data["flowEvidence"]
-        self.assertEqual(set(flow_value), {"version", "authorize", "sentinel", "signup", "password"})
+        self.assertEqual(set(flow_value), {"version", "attempts", "attemptsTruncated", "configurationSummary", "authorize", "sentinel", "signup", "password"})
         self.assertEqual(flow_value["signup"]["pageKind"], "new_account")
         self.assertEqual(flow_value["password"]["decision"], "rejected")
         self.assertEqual(integration.store.data["firstFailure"]["errorKind"], "account_creation_failed")
@@ -268,7 +271,7 @@ class FlowEvidenceTests(unittest.TestCase):
                     self.assertFalse(engine.run().success)
                     self.assertEqual([url for url, *_ in calls], [ENDPOINTS["sentinel"], ENDPOINTS["signup"]])
                     evidence = integration.store.data["flowEvidence"]["signup"]
-                    self.assertEqual(integration.store.data["flowEvidence"]["version"], 3)
+                    self.assertEqual(integration.store.data["flowEvidence"]["version"], 4)
                     self.assertEqual(evidence["pageKind"], "new_account" if page == "password" else "existing_account")
                     self.assertEqual((evidence["decision"], evidence["reason"]), ("rejected", "upstream_error"))
                     self.assertEqual(evidence["responseDetails"]["errorSignal"], signal)
@@ -360,7 +363,7 @@ class FlowEvidenceTests(unittest.TestCase):
         self.assertTrue(store.record_flow_evidence(TASK, "password", flow.observation(FakeResponse(400), "password")))
         self.assertEqual(store.data["flowEvidence"]["version"], 1)
         self.assertEqual(store.data["flowEvidence"]["signup"], old_signup)
-        self.assertEqual(set(store.data["flowEvidence"]["password"]), flow.FIELDS)
+        self.assertNotIn("password", store.data["flowEvidence"])
         self.assertEqual(store.data["firstFailure"], original_failure)
         self.assertEqual(store.writes, 0)
 
@@ -448,7 +451,7 @@ class FlowEvidenceTests(unittest.TestCase):
         self.assertEqual(store.data["firstFailure"], original)
         self.assertEqual(store.data["syncPayload"], {"fingerprint": "fixture-only"})
         self.assertEqual(store.data["syncStatus"], "not_started")
-        self.assertEqual(set(store.data["flowEvidence"]), {"version", "authorize", "signup", "password"})
+        self.assertEqual(set(store.data["flowEvidence"]), {"version", "attempts", "attemptsTruncated", "configurationSummary", "authorize", "signup", "password"})
         self.assertNotIn("flowEvidence", store.record)
         self.assertEqual(store.writes, 0)
         store.record_failure(TASK, "signup", "unknown", 200, 99)

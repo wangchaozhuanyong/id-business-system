@@ -81,6 +81,144 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
+export const registrationFlowV4Base = '8df81dca0f08ebdebe6b01b942b033053b8a5c3b';
+export const registrationFlowV4Tree = '7052cfbe3bcfdf64f8909fdb0c0263355ff7c16c';
+export const registrationFlowV4Contract =
+  'scripts/production-release/registration-flow-v4-contract.json';
+export const registrationFlowV4Applications = Object.freeze([
+  ...[
+    'apple-mailbox-presentation.spec.ts',
+    'apple-mailbox-presentation.ts',
+    'contracts.ts',
+    'V2AppleMailboxes.vue'
+  ].map((name) => 'apps/admin/src/v2/features/auto-registration/' + name),
+  'apps/api/src/id-business-v2/auto-registration/apple-mailboxes.types.ts',
+  ...[
+    'apple_mailboxes.py',
+    'apple_registration_diagnostics.py',
+    'flow_evidence.py',
+    'id-workspace.js',
+    'id-workspace.css',
+    'release_safety.py',
+    'test_apple_mailboxes.py',
+    'test_flow_evidence.py',
+    'test_registration_parity_unit.py',
+    'test_release_safety.py',
+    'test_flow_v4_unit.py',
+    'precondition_diagnostics.py',
+    'test_precondition_diagnostics.py'
+  ].map((name) => 'apps/api/src/id-business-v2/auto-registration/worker/' + name)
+]);
+export const registrationFlowV4SupportSources = Object.freeze({
+  'scripts/check-v2-module-architecture.mjs':
+    '0abe913ace9e319c6ac6f0764efaea76b17c1a06bce018259fbc805765ab5383',
+  'apps/api/src/id-business-v2/auto-registration/worker/test_registration_closed_loop_unit.py':
+    'e38b3dd48b3e9d50b87a637681b89f70d0ebe7104132d0ef2fb448036c8af7ec',
+  'apps/api/src/id-business-v2/auto-registration/worker/test_flow_contract_unit.py':
+    '53410cf3de35c8b37cfc2022428931c9b139f7f39cbf04d889ea4a1866407627'
+});
+export const registrationFlowV4Acceptance =
+  'scripts/acceptance-v2-registration-parity-diagnostics.mjs';
+export const registrationFlowV4Paths = Object.freeze([
+  ...registrationFlowV4Applications,
+  registrationFlowV4Acceptance,
+  '.github/workflows/registration-flow-v4-validation.yml',
+  'docs/V2_TASKS.md',
+  'docs/AUTO_REGISTRATION_FLOW_V4_20261017.md',
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => 'scripts/ci-recharge-' + name
+  ),
+  ...['build.py', 'contract.json', 'dispatch.py', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/registration-flow-v4-' + name
+  )
+]);
+export const registrationFlowV4Parts = Object.freeze([
+  'guards',
+  'api',
+  'admin',
+  'release-controls'
+]);
+
+/** One exact adapter repair; its contract cannot widen the reviewed source boundary. */
+export function isRegistrationFlowV4Only(paths, options = {}) {
+  const sameKeys = (left, right) =>
+    Array.isArray(left) &&
+    left.length === new Set(left).size &&
+    left.length === right.length &&
+    left.every((name) => right.includes(name));
+  const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
+  if (
+    options?.base !== registrationFlowV4Base ||
+    options?.baseTree !== registrationFlowV4Tree ||
+    !sameKeys(paths, registrationFlowV4Paths)
+  )
+    return false;
+  try {
+    const contract =
+      options.contract ??
+      JSON.parse(
+        readFileSync(new URL('../' + registrationFlowV4Contract, import.meta.url), 'utf8')
+      );
+    const sourceDigest =
+      options.sourceDigest ??
+      ((name) => {
+        const target = new URL('../' + name, import.meta.url);
+        const stat = lstatSync(target);
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unexpected repair source');
+        return createHash('sha256').update(readFileSync(target)).digest('hex');
+      });
+    const reviewedPaths = registrationFlowV4Paths.filter(
+      (name) => name !== registrationFlowV4Contract
+    );
+    if (
+      !object(contract) ||
+      contract.version !== 1 ||
+      contract.scope !== 'REGISTRATION_FLOW_V4_20261017' ||
+      contract.name !== 'registration-flow-v4-20261017' ||
+      contract.admission !== 'VERIFIED' ||
+      contract.frozen !== true ||
+      contract.migration !== null ||
+      contract.businessActions !== 0 ||
+      !Array.isArray(contract.pendingEvidence) ||
+      contract.pendingEvidence.length !== 0 ||
+      contract.sourceBaseline !== registrationFlowV4Base ||
+      contract.sourceBaselineTree !== registrationFlowV4Tree ||
+      !sameKeys(contract.expectedGitChanges, registrationFlowV4Paths) ||
+      !sameKeys(contract.applicationPaths, registrationFlowV4Applications) ||
+      !object(contract.sources) ||
+      !sameKeys(Object.keys(contract.sources), registrationFlowV4Applications) ||
+      !object(contract.validationSources) ||
+      !sameKeys(Object.keys(contract.validationSources), [registrationFlowV4Acceptance]) ||
+      !object(contract.validationSupportSources) ||
+      !sameKeys(
+        Object.keys(contract.validationSupportSources),
+        Object.keys(registrationFlowV4SupportSources)
+      ) ||
+      !object(contract.reviewedFileHashes) ||
+      !sameKeys(Object.keys(contract.reviewedFileHashes), reviewedPaths) ||
+      typeof sourceDigest !== 'function'
+    )
+      return false;
+    return (
+      Object.entries({ ...contract.sources, ...contract.validationSources }).every(
+        ([name, digest]) => digest === contract.reviewedFileHashes[name]
+      ) &&
+      Object.entries(registrationFlowV4SupportSources).every(
+        ([name, digest]) =>
+          contract.validationSupportSources[name] === digest && sourceDigest(name) === digest
+      ) &&
+      reviewedPaths.every(
+        (name) =>
+          typeof contract.reviewedFileHashes[name] === 'string' &&
+          /^[a-f0-9]{64}$/.test(contract.reviewedFileHashes[name]) &&
+          sourceDigest(name) === contract.reviewedFileHashes[name]
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const registrationProtocolRepairBase = '0222adf9d5225669b73e8e8f9ec711564eb6163a';
 export const registrationProtocolRepairTree = '0d8319bcfc032b8f4e38a99642be0819cbfa7c85';
 export const registrationProtocolRepairContract =
@@ -533,6 +671,42 @@ export function isRegistrationProtocolRepairPreservationOnly(paths, options = {}
   );
 }
 
+const registrationFlowV4Formatted = registrationFlowV4Paths.filter((name) =>
+  /\.(?:[cm]?js|json|yml|md|ts|vue|css)$/.test(name)
+);
+const registrationFlowV4ControlTest = [
+  'python3',
+  '-B',
+  'scripts/production-release/registration-flow-v4-release.test.py'
+];
+export const registrationFlowV4Commands = Object.freeze({
+  guards: [
+    registrationFlowV4ControlTest,
+    ['node', '--test', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-check.test.mjs'],
+    ['npm', 'exec', '--', 'prettier', '--check', ...registrationFlowV4Formatted],
+    [
+      'npm',
+      'exec',
+      '--',
+      'eslint',
+      ...registrationFlowV4Formatted.filter((name) => /\.(?:[cm]?js|ts|vue)$/.test(name))
+    ],
+    ...[
+      'admin-ui',
+      'v2-ui-language',
+      'v2-color-contrast',
+      'v2-table-standard',
+      'v2-loading-standard',
+      'v2-module-architecture',
+      'v2-isolation'
+    ].map((name) => ['npm', 'run', 'check:' + name])
+  ],
+  api: [['python3', '-B', 'scripts/production-release/registration-flow-v4-build.py', 'check-api']],
+  admin: [
+    ['python3', '-B', 'scripts/production-release/registration-flow-v4-build.py', 'check-admin']
+  ],
+  'release-controls': [registrationFlowV4ControlTest]
+});
 const registrationProtocolRepairFormatted = registrationProtocolRepairPaths.filter((name) =>
   /\.(?:[cm]?js|json|yml|md|ts|vue)$/.test(name)
 );
@@ -800,6 +974,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationFlowV4Only(paths, context)) return false;
   if (isRegistrationProtocolRepairPreservationOnly(paths, context)) return false;
   if (isRegistrationProtocolRepairControlRepair(paths, context)) return false;
   if (isRegistrationProtocolRepairOnly(paths, context)) return false;
@@ -1594,6 +1769,9 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationFlowV4Only(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (paths.includes(registrationFlowV4Contract)) return 'full';
   if (isRegistrationProtocolRepairPreservationOnly(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isRegistrationProtocolRepairControlRepair(paths, context))
@@ -2133,6 +2311,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationFlowV4Only(paths, context)) return [...registrationFlowV4Parts];
   if (isRegistrationProtocolRepairPreservationOnly(paths, context)) return ['guards'];
   if (isRegistrationProtocolRepairControlRepair(paths, context)) return ['guards'];
   if (isRegistrationProtocolRepairOnly(paths, context)) return [...registrationProtocolRepairParts];
