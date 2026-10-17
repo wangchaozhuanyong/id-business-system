@@ -838,7 +838,24 @@ for (const code of [
       url: () => embeddedUrl
     };
     const phase = checkoutPhaseFixture(page, Service);
-    await assert.rejects(phase.pending, { code, checkoutCreationState: 'accepted' });
+    let failure;
+    await assert.rejects(phase.pending, (error) => {
+      failure = error;
+      assert.equal(error.code, code);
+      assert.equal(error.checkoutCreationState, 'accepted');
+      return true;
+    });
+    for (const state of [
+      [false, false],
+      [true, false],
+      [false, true]
+    ]) {
+      const result = publicCheckoutFailure(failure, ...state);
+      assert.equal(result.checkoutOpenDiagnostics.code, code);
+      assert.equal(result.resultUnknown, state.some(Boolean));
+      assert.equal(result.success, false);
+      if (state.some(Boolean)) assert.doesNotMatch(result.error, /未提交付款|未.*提交支付/);
+    }
     assert.equal(apiCalls, 1);
     assert.equal(phase.uiCalls(), 0);
     assert.equal(verificationOptions.requireCheckoutReady, true);
@@ -911,6 +928,252 @@ function publicCheckoutFailure(error, submitted = false, confirmed = false) {
   });
   return require('../security.cjs').sanitizeResult(result);
 }
+
+test('checkout diagnostics retain exact reload failure enums and reject reload states or unknown codes', () => {
+  const Service = checkoutServiceFixture();
+  for (const suffix of [
+    'TIMEOUT',
+    'PAYMENT_STARTED',
+    'ALREADY_ATTEMPTED',
+    'NOT_REQUIRED',
+    'ORIGINAL_CHANGED',
+    'STATE_UNAVAILABLE',
+    'FAILED',
+    'PAGE_CLOSED',
+    'GUARD_UNAVAILABLE',
+    'FRAME_WRITE_UNPROVEN'
+  ]) {
+    const code = `CHECKOUT_RELOAD_${suffix}`;
+    const diagnostics = Service.safeCheckoutOpenDiagnostics({
+      stage: 'readiness',
+      reason: 'check_failed',
+      code
+    });
+    assert.equal(diagnostics.code, code);
+    const result = publicCheckoutFailure(
+      {
+        code,
+        checkoutCreationState: 'accepted',
+        checkoutOpenDiagnostics: diagnostics
+      },
+      true
+    );
+    assert.equal(result.checkoutOpenDiagnostics.code, code);
+    assert.equal(result.resultUnknown, true);
+    assert.equal(result.success, false);
+    assert.doesNotMatch(result.error, /未提交付款|未.*提交支付/);
+  }
+  for (const suffix of ['READONLY', 'READY', 'NOT_ATTEMPTED', 'UNREGISTERED_PRIVATE']) {
+    const diagnostics = Service.safeCheckoutOpenDiagnostics({
+      stage: 'readiness',
+      reason: 'check_failed',
+      code: `CHECKOUT_RELOAD_${suffix}`
+    });
+    assert.equal(diagnostics.code, undefined);
+  }
+});
+
+const diagnosticControl = (fields) => ({
+  tag: 'input',
+  role: null,
+  fields,
+  required: false,
+  readOnly: false
+});
+const diagnosticInspection = (complete = true) => ({
+  complete,
+  framesChecked: 1,
+  framesSkipped: 0,
+  framesFailed: complete ? 0 : 1,
+  readAttempts: complete ? 1 : 2,
+  contentLoadFailed: false,
+  timedOut: false,
+  pageClosed: false,
+  aborted: false
+});
+for (const [name, code, controls, inspection, count] of [
+  ['unmatched', 'CHECKOUT_FORM_NOT_READY', [diagnosticControl([])], diagnosticInspection(), 0],
+  [
+    'ambiguous',
+    'CHECKOUT_CONTROL_AMBIGUOUS',
+    [diagnosticControl(['number']), diagnosticControl(['number'])],
+    diagnosticInspection(),
+    2
+  ],
+  [
+    'not editable after matching',
+    'CHECKOUT_FORM_NOT_READY',
+    [diagnosticControl(['number'])],
+    diagnosticInspection(),
+    1
+  ],
+  [
+    'read failed',
+    'CHECKOUT_CONTROL_READ_FAILED',
+    [],
+    { ...diagnosticInspection(false), readPhase: 'frame_scan' },
+    0
+  ]
+]) {
+  test(`controlled checkout form diagnostics survive opening and the final task result: ${name}`, async () => {
+    const Service = checkoutServiceFixture({
+      verification: {
+        cleared: false,
+        checkoutNotReady: true,
+        code,
+        missing: ['number'],
+        controls,
+        inspection
+      }
+    });
+    let creations = 0;
+    const page = {
+      context: () => ({
+        request: {
+          post: async () => {
+            creations++;
+            return {
+              status: () => 200,
+              text: async () =>
+                JSON.stringify({
+                  checkout_session_id: embeddedSource.checkoutId,
+                  processor_entity: embeddedSource.processorEntity
+                })
+            };
+          }
+        }
+      }),
+      goto: async () => ({ status: () => 200 }),
+      url: () => embeddedUrl,
+      isClosed: () => false
+    };
+    let error;
+    await assert.rejects(
+      Service.openApiCheckout(page, {
+        accessToken: 'synthetic',
+        planType: 'pro_20x',
+        country: 'PH',
+        currency: 'PHP'
+      }),
+      (caught) => {
+        error = caught;
+        return true;
+      }
+    );
+    const expected = {
+      stage: 'readiness',
+      reason: 'not_ready',
+      code,
+      missing: ['number'],
+      controls,
+      candidateCounts: [{ field: 'number', count }],
+      inspection
+    };
+    assert.deepEqual(JSON.parse(JSON.stringify(error.checkoutOpenDiagnostics)), expected);
+    const result = publicCheckoutFailure(error);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics)), expected);
+    assert.equal(result.success, false);
+    assert.equal(result.resultUnknown, false);
+    assert.equal(creations, 1);
+    assert.match(result.error, new RegExp(`卡号候选：${count}`));
+    for (const state of [
+      [true, false],
+      [false, true]
+    ]) {
+      const unknown = publicCheckoutFailure(error, ...state);
+      assert.equal(unknown.resultUnknown, true);
+      assert.equal(unknown.success, false);
+      assert.deepEqual(JSON.parse(JSON.stringify(unknown.checkoutOpenDiagnostics)), expected);
+      assert.doesNotMatch(unknown.error, /未提交付款|未.*提交支付/);
+    }
+  });
+}
+
+test('controlled checkout form diagnostics reject unknown data and preserve only bounded semantic metadata', () => {
+  const Service = checkoutServiceFixture();
+  const raw = {
+    stage: 'readiness',
+    reason: 'not_ready',
+    code: 'CHECKOUT_CONTROL_READ_FAILED',
+    missing: ['number', 'cvc', 'number', 'PRIVATE_SENTINEL', { value: 'PRIVATE_SENTINEL' }],
+    controls: [
+      {
+        tag: 'input',
+        role: 'combobox',
+        fields: ['number', 'cvc', 'number', 'PRIVATE_SENTINEL'],
+        required: true,
+        readOnly: false,
+        value: 'PRIVATE_SENTINEL',
+        selector: 'PRIVATE_SENTINEL',
+        label: 'PRIVATE_SENTINEL',
+        scope: 'PRIVATE_SENTINEL',
+        url: 'https://private.invalid/token',
+        token: 'PRIVATE_SENTINEL'
+      },
+      { tag: 'PRIVATE_SENTINEL', fields: ['number'] }
+    ],
+    candidateCounts: [{ field: 'number', count: 99999999 }],
+    inspection: {
+      ...diagnosticInspection(false),
+      readPhase: 'candidate_eligibility',
+      selector: 'PRIVATE_SENTINEL',
+      url: 'https://private.invalid/token',
+      framesSkipped: -1,
+      framesFailed: 'PRIVATE_SENTINEL',
+      readAttempts: 99999999,
+      timedOut: 'PRIVATE_SENTINEL',
+      arbitrary: { token: 'PRIVATE_SENTINEL' }
+    },
+    value: 'PRIVATE_SENTINEL',
+    session: 'PRIVATE_SENTINEL',
+    url: 'https://private.invalid/token',
+    token: 'PRIVATE_SENTINEL'
+  };
+  const expected = {
+    stage: 'readiness',
+    reason: 'not_ready',
+    code: 'CHECKOUT_CONTROL_READ_FAILED',
+    missing: ['number', 'cvc'],
+    controls: [
+      { tag: 'input', role: 'combobox', fields: ['number', 'cvc'], required: true, readOnly: false }
+    ],
+    candidateCounts: [
+      { field: 'number', count: 1 },
+      { field: 'cvc', count: 1 }
+    ],
+    inspection: {
+      complete: false,
+      framesChecked: 1,
+      contentLoadFailed: false,
+      pageClosed: false,
+      aborted: false,
+      readPhase: 'candidate_eligibility'
+    }
+  };
+  const clean = Service.safeCheckoutOpenDiagnostics(raw);
+  assert.deepEqual(JSON.parse(JSON.stringify(clean)), expected);
+  const taskResult = publicCheckoutFailure({
+    code: 'CHECKOUT_FORM_NOT_READY',
+    checkoutCreationState: 'accepted',
+    checkoutOpenDiagnostics: raw
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(taskResult.checkoutOpenDiagnostics)), expected);
+  assert.doesNotMatch(
+    JSON.stringify(taskResult),
+    /PRIVATE_SENTINEL|private\.invalid|selector|"value"|token|session/
+  );
+  const rejected = Service.safeCheckoutOpenDiagnostics({
+    ...raw,
+    code: 'PRIVATE_SENTINEL',
+    controls: 'PRIVATE_SENTINEL',
+    inspection: { readPhase: 'https://private.invalid/token', framesChecked: Infinity }
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(rejected)), {
+    stage: 'readiness',
+    reason: 'not_ready',
+    missing: ['number', 'cvc']
+  });
+});
 
 test('public failure retains only controlled checkout stage diagnostics and keeps payment uncertainty', () => {
   const error = {

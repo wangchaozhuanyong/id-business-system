@@ -394,9 +394,11 @@ test('child error clears its maximum execution timer as well as heartbeat timers
 
 for (const [operation, payload] of [
   ['subscription', {}],
-  ['renewal', { action: 'check' }]
+  ['renewal', { action: 'check' }],
+  ['renewal', { action: 'enable' }],
+  ['renewal', { action: 'disable' }]
 ]) {
-  test(`${operation} read-only query reserves and releases one existing browser slot`, async () => {
+  test(`${operation} ${payload.action || 'query'} reserves and releases one existing browser slot`, async () => {
     const f = fixture();
     f.task.operation = operation;
     f.task.payload = payload;

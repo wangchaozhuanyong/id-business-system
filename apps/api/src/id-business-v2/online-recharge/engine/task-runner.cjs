@@ -42,7 +42,9 @@ async function execute(task, cfg) {
         });
       const method = payload.action === 'enable' ? 'resumeAutoRenew' : 'cancelAutoRenew';
       const result = await require('./upstream/subscription-check')[method](token, {
-        timezoneOffsetMin: payload.timezoneOffsetMin ?? 480
+        timezoneOffsetMin: payload.timezoneOffsetMin ?? 480,
+        sessionRaw: task.session,
+        allowBrowserFallback: true
       });
       if (result.resultUnknown || (!result.ok && wasSubmitted()))
         throw new ResultUnknownError('续费变更结果未能确认');

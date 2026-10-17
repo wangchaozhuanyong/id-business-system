@@ -412,15 +412,67 @@ const CHECKOUT_OPEN_REASONS = new Set([
     'timeout', 'http_error', 'original_changed', 'session_required',
     'cancelled', 'network_error', 'page_closed', 'not_ready', 'check_failed'
 ]);
+const CHECKOUT_FORM_DIAGNOSTIC_CODES = new Set([
+    'CHECKOUT_CARD_NOT_READY', 'CHECKOUT_FORM_NOT_READY', 'CHECKOUT_CONTROL_AMBIGUOUS',
+    'CHECKOUT_CONTROL_READ_FAILED', 'CHECKOUT_PAGE_CLOSED', 'CHECKOUT_FORM_ABORTED',
+    'CHECKOUT_FORM_TIMEOUT', 'CHECKOUT_FORM_DATA_MISSING', 'CHECKOUT_CONTENT_LOAD_FAILED',
+    'CHECKOUT_RELOAD_TIMEOUT', 'CHECKOUT_RELOAD_PAYMENT_STARTED', 'CHECKOUT_RELOAD_ALREADY_ATTEMPTED',
+    'CHECKOUT_RELOAD_NOT_REQUIRED', 'CHECKOUT_RELOAD_ORIGINAL_CHANGED', 'CHECKOUT_RELOAD_STATE_UNAVAILABLE',
+    'CHECKOUT_RELOAD_FAILED', 'CHECKOUT_RELOAD_PAGE_CLOSED', 'CHECKOUT_RELOAD_GUARD_UNAVAILABLE',
+    'CHECKOUT_RELOAD_FRAME_WRITE_UNPROVEN'
+]);
+const CHECKOUT_FORM_DIAGNOSTIC_FIELDS = new Set([
+    'number', 'expiry', 'month', 'year', 'cvc', 'name', 'country', 'line1', 'city', 'postal', 'state'
+]);
+const CHECKOUT_FORM_READ_PHASES = new Set([
+    'frame_scan', 'candidate_handles', 'candidate_eligibility', 'value', 'control_read'
+]);
 
 function safeCheckoutOpenDiagnostics(value) {
-    if (!value || !CHECKOUT_OPEN_STAGES.has(value.stage) || !CHECKOUT_OPEN_REASONS.has(value.reason)) return undefined;
-    return {
-        stage: value.stage,
-        reason: value.reason,
-        ...(value.reason === 'http_error' && Number.isInteger(value.httpStatus)
-            && value.httpStatus >= 400 && value.httpStatus <= 599 ? { httpStatus: value.httpStatus } : {})
-    };
+    try {
+        if (!value || !CHECKOUT_OPEN_STAGES.has(value.stage) || !CHECKOUT_OPEN_REASONS.has(value.reason)) return undefined;
+        const result = {
+            stage: value.stage,
+            reason: value.reason,
+            ...(value.reason === 'http_error' && Number.isInteger(value.httpStatus)
+                && value.httpStatus >= 400 && value.httpStatus <= 599 ? { httpStatus: value.httpStatus } : {})
+        };
+        if (!['readiness', 'final_check'].includes(value.stage)) return result;
+        if (CHECKOUT_FORM_DIAGNOSTIC_CODES.has(value.code)) result.code = value.code;
+        if (Array.isArray(value.missing))
+            result.missing = [...new Set(value.missing.slice(0, 64).filter(field => CHECKOUT_FORM_DIAGNOSTIC_FIELDS.has(field)))];
+        if (Array.isArray(value.controls) && value.controls.length <= 128) {
+            result.controls = value.controls
+                .filter(control => control && ['input', 'select', 'textarea', 'other'].includes(control.tag))
+                .map(control => ({
+                    tag: control.tag,
+                    role: control.role === 'combobox' ? 'combobox' : null,
+                    fields: Array.isArray(control.fields)
+                        ? [...new Set(control.fields.slice(0, 64).filter(field => CHECKOUT_FORM_DIAGNOSTIC_FIELDS.has(field)))] : [],
+                    ...(typeof control.required === 'boolean' ? { required: control.required } : {}),
+                    ...(typeof control.readOnly === 'boolean' ? { readOnly: control.readOnly } : {})
+                }));
+            const fields = [...new Set([...(result.missing || []), ...result.controls.flatMap(control => control.fields)])];
+            if (fields.length) result.candidateCounts = fields.map(field => ({
+                field, count: result.controls.filter(control => control.fields.includes(field)).length
+            }));
+        }
+        if (value.inspection && typeof value.inspection === 'object' && !Array.isArray(value.inspection)) {
+            const inspection = {};
+            for (const key of ['complete', 'contentLoadFailed', 'timedOut', 'pageClosed', 'aborted'])
+                if (typeof value.inspection[key] === 'boolean') inspection[key] = value.inspection[key];
+            for (const key of ['framesChecked', 'framesSkipped', 'framesFailed'])
+                if (Number.isInteger(value.inspection[key]) && value.inspection[key] >= 0 && value.inspection[key] <= 10000)
+                    inspection[key] = value.inspection[key];
+            if ([1, 2].includes(value.inspection.readAttempts)) inspection.readAttempts = value.inspection.readAttempts;
+            if (CHECKOUT_FORM_READ_PHASES.has(value.inspection.readPhase)) inspection.readPhase = value.inspection.readPhase;
+            if (Object.keys(inspection).length) result.inspection = inspection;
+        }
+        return result;
+    } catch (_) {
+        // Optional diagnostics cannot replace the original task failure.
+        return undefined;
+    }
 }
 
 function checkoutOpenError(reason, httpStatus) {
@@ -522,13 +574,19 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                 : captchaResult.checkoutNotReady
                     ? 'Checkout 支付表单未能加载，请检查网络或稍后重试'
                     : buildCaptchaRequiredError();
-            throw Object.assign(new Error(err), {
-                code: captchaResult.code,
-                checkoutOpenReason: captchaResult.code === 'VERIFICATION_TIMEOUT' || /_TIMEOUT$/.test(captchaResult.code || '') ? 'timeout'
+            const checkoutOpenReason = captchaResult.code === 'VERIFICATION_TIMEOUT' || /_TIMEOUT$/.test(captchaResult.code || '') ? 'timeout'
                     : ['VERIFICATION_CANCELLED', 'CHECKOUT_FORM_ABORTED'].includes(captchaResult.code) ? 'cancelled'
                         : ['VERIFICATION_PAGE_CLOSED', 'CHECKOUT_PAGE_CLOSED'].includes(captchaResult.code) ? 'page_closed'
                             : captchaResult.sessionRequired ? 'session_required'
-                                : captchaResult.checkoutNotReady ? 'not_ready' : 'check_failed'
+                                : captchaResult.checkoutNotReady ? 'not_ready' : 'check_failed';
+            throw Object.assign(new Error(err), {
+                code: captchaResult.code,
+                checkoutOpenReason,
+                checkoutOpenDiagnostics: safeCheckoutOpenDiagnostics({
+                    stage, reason: checkoutOpenReason, code: captchaResult.code,
+                    missing: captchaResult.missing, controls: captchaResult.controls,
+                    inspection: captchaResult.inspection
+                })
             });
         }
 
@@ -561,7 +619,10 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                 : error.code === 'VERIFICATION_CANCELLED' ? 'cancelled'
                     : page.isClosed?.() ? 'page_closed'
                         : stage === 'navigation' ? 'network_error' : 'check_failed');
-        const checkoutOpenDiagnostics = safeCheckoutOpenDiagnostics({ stage, reason, httpStatus: error.httpStatus });
+        const checkoutOpenDiagnostics = safeCheckoutOpenDiagnostics({
+            ...safeCheckoutOpenDiagnostics(error.checkoutOpenDiagnostics),
+            stage, reason, code: error.code, httpStatus: error.httpStatus
+        });
         const reasons = {
             timeout: '原结账页打开检查超时',
             http_error: '官网结账页返回 HTTP 错误',

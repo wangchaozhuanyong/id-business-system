@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runInNewContext } = require('node:vm');
+const { chromium } = require('../upstream/node_modules/playwright');
+const { openPricingCheckout } = require('../upstream/pricing-checkout');
 
 // Evaluate the actual readonly helper without importing the payment executor.
 const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
@@ -153,3 +155,89 @@ for (const currency of ['JPY', null]) {
     assert.equal(cardOrPaymentCalls, 0);
   });
 }
+
+test('actual UI checkout preserves legacy Pro selection and deferred exact tiers without payment', async (t) => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-background-networking',
+      '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'
+    ]
+  });
+  t.after(() => browser.close());
+  for (const scenario of [
+    { name: 'legacy exact 20x without top-half', legacy: true },
+    { name: 'deferred exact Pro 200' },
+    { name: 'deferred wrong checkout tier', wrong: true },
+    { name: 'deferred ambiguous checkout tier', ambiguous: true }
+  ]) {
+    await t.test(scenario.name, async () => {
+      const context = await browser.newContext({ serviceWorkers: 'block' });
+      const page = await context.newPage();
+      const stats = { pricing: 0, checkout: 0, writes: 0, unexpected: 0 };
+      const checkoutUrl = 'https://chatgpt.com/checkout/openai_fixture/cs_test_proUiContract';
+      const target = '<input type="radio" aria-label="200" value="chatgptpro">';
+      const options = scenario.wrong
+        ? '<button id="chatgptpro" role="radio" value="chatgptprolite">100</button>'
+        : target + (scenario.ambiguous ? target : '');
+      await context.route('**/*', async (route) => {
+        const request = route.request();
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+          stats.writes++;
+          return route.abort('blockedbyclient');
+        }
+        if (request.url() === 'https://chatgpt.com/') {
+          stats.pricing++;
+          const controls = scenario.legacy
+            ? '<div role="group" aria-label="Pro plan"><button role="radio" aria-label="20x" aria-checked="false" onclick="this.setAttribute(\'aria-checked\',\'true\')">20x</button></div>'
+            : '<section data-testid="pro-pricing-modal-column-top-half"><h2>Pro</h2></section>';
+          return route.fulfill({
+            contentType: 'text/html; charset=utf-8',
+            body: `<!doctype html><meta charset="utf-8"><main>
+            <h2>ChatGPT Plus</h2><p>Philippines ₱ 9990</p>${controls}
+            <button data-testid="select-plan-button-pro-upgrade" onclick="location.href='${checkoutUrl}'">Upgrade to Pro</button>
+            </main>`
+          });
+        }
+        if (request.url() === checkoutUrl) {
+          stats.checkout++;
+          return route.fulfill({
+            contentType: 'text/html; charset=utf-8',
+            body: `<!doctype html><meta charset="utf-8"><main>
+            <div role="radiogroup" aria-label="Pro usage">${options}</div>
+            <button onclick="fetch('/fixture-submit-payment',{method:'POST'})">Subscribe</button>
+            </main>`
+          });
+        }
+        stats.unexpected++;
+        return route.abort('blockedbyclient');
+      });
+      if (context.routeWebSocket) await context.routeWebSocket('**/*', (socket) => socket.close());
+      try {
+        const opening = openPricingCheckout(page, {
+          region: 'PH',
+          planType: 'pro_20x',
+          operation: 'initial',
+          debugOnly: false
+        });
+        if (scenario.wrong || scenario.ambiguous)
+          await assert.rejects(opening, scenario.wrong ? /档位标识不匹配/ : /数字档位不唯一/);
+        else {
+          const result = await opening;
+          assert.equal(result.kind, 'checkout');
+          assert.equal(result.pricingRegionVerified, true);
+          assert.equal(
+            await page.getByRole('radio', { name: '200', exact: true }).isChecked(),
+            true
+          );
+        }
+        assert.equal(stats.pricing, 1);
+        assert.equal(stats.checkout, 1, 'deferred selection must reach the actual Checkout gate');
+        assert.equal(stats.writes, 0, 'UI opening and tier confirmation must never pay');
+        assert.equal(stats.unexpected, 0);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+});

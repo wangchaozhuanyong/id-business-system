@@ -267,13 +267,85 @@ test('a permanently empty payment region fails strict readiness without an extra
   await assert.rejects(start(), (error) => {
     assert.equal(error.code, 'CHECKOUT_FORM_NOT_READY');
     assert.equal(error.checkoutCreationState, 'accepted');
-    assert.deepEqual(error.checkoutOpenDiagnostics, { stage: 'readiness', reason: 'not_ready' });
+    assert.equal(error.checkoutOpenDiagnostics.stage, 'readiness');
+    assert.equal(error.checkoutOpenDiagnostics.reason, 'not_ready');
+    assert.equal(error.checkoutOpenDiagnostics.code, 'CHECKOUT_FORM_NOT_READY');
+    assert.deepEqual(error.checkoutOpenDiagnostics.missing, ['number']);
+    assert.deepEqual(error.checkoutOpenDiagnostics.candidateCounts, [
+      { field: 'number', count: 0 }
+    ]);
+    assert.equal(error.checkoutOpenDiagnostics.inspection.complete, true);
     return true;
   });
   assert.equal(stats.verifications, 1);
   assert.equal(stats.domContentLoaded, 0);
   stoppedWithoutPayment(stats);
 });
+
+for (const scenario of [
+  { label: 'unmatched', fields: '<input name="ordinary">', candidates: 0 },
+  {
+    label: 'ambiguous',
+    fields: number + number,
+    candidates: 2,
+    code: 'CHECKOUT_CONTROL_AMBIGUOUS'
+  },
+  {
+    label: 'readonly excluded',
+    fields: '<label>Card number<input autocomplete="cc-number" readonly></label>',
+    candidates: 0
+  },
+  { label: 'read failure', fields: number, candidates: 0, readFailure: true }
+]) {
+  test(`real browser readiness diagnostics retain ${scenario.label} without payment`, async (t) => {
+    const { page, stats, start } = await fixture(t, {
+      fields: scenario.fields,
+      pendingModule: true,
+      maxWaitMs: 4500,
+      readyWaitMs: 1000
+    });
+    if (scenario.readFailure) {
+      const frame = page.mainFrame();
+      const locator = frame.locator.bind(frame);
+      frame.locator = (selector, ...args) => {
+        const result = locator(selector, ...args);
+        if (selector === 'input,select,textarea,[role="combobox"]') {
+          result.evaluateAll = async () => {
+            throw new Error('SYNTHETIC_PRIVATE_READ_FAILURE');
+          };
+        }
+        return result;
+      };
+      t.after(() => {
+        frame.locator = locator;
+      });
+    }
+    await assert.rejects(start(), (error) => {
+      assert.equal(error.checkoutCreationState, 'accepted');
+      const diagnostics = error.checkoutOpenDiagnostics;
+      assert.equal(diagnostics.stage, 'readiness');
+      assert.equal(diagnostics.reason, 'not_ready');
+      assert.deepEqual(diagnostics.missing, ['number']);
+      assert.deepEqual(diagnostics.candidateCounts, [
+        { field: 'number', count: scenario.candidates }
+      ]);
+      if (scenario.readFailure) {
+        assert.equal(diagnostics.code, 'CHECKOUT_CONTROL_READ_FAILED');
+        assert.equal(diagnostics.inspection.complete, false);
+        assert.equal(diagnostics.inspection.readPhase, 'frame_scan');
+        assert.ok(diagnostics.inspection.framesFailed > 0);
+      } else {
+        // Readiness reports actual matching candidates. It does not infer why
+        // a readonly/disabled field was excluded from its snapshot.
+        assert.equal(diagnostics.code, scenario.code || 'CHECKOUT_FORM_NOT_READY');
+        assert.equal(diagnostics.inspection.complete, true);
+      }
+      assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE|selector|value|https|credential/);
+      return true;
+    });
+    stoppedWithoutPayment(stats);
+  });
+}
 
 test('navigation and readiness consume the same deadline rather than restarting the opening budget', async (t) => {
   const { stats, start } = await fixture(t, {

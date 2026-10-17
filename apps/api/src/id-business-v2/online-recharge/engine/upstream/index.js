@@ -21,8 +21,8 @@ const path = require('path');
  * 3. 创建 Stripe Checkout Session（根据 plan_type）
  * 4. 打开 Stripe Checkout 页面
  * 5. 使用 payment-retry.js（executePaymentWithRetry）完成信用卡支付
- *    - 自动从卡池分配卡片
- *    - 支持表单重试 + 换卡重试（最多 3 张卡）
+ *    - 使用任务预检固定的单张银行卡
+ *    - 保留原单与提交保护，付款提交后不换卡或再次提交
  *    - 自动选取免税地址
  *    - 记录账单信息
  * 6. 检测支付结果：成功则继续，失败则标记 payment_failed
@@ -586,7 +586,9 @@ async function run(runOptions = {}) {
             const confirmation = paymentResult.confirmation;
             if (!confirmation.verified) return { ...paymentResult, success: false, resultUnknown: true, confirmedPaid: false, confirmation };
             const cancellationEmail = loginInfo.email ? loginInfo.email : email;
-            const cancellationResult = await require('./upgrade-checkout').applyPostPaymentRenewalPolicy(operation, accessToken, cancellationEmail, cancelAutoRenew);
+            const cancellationResult = await require('./upgrade-checkout').applyPostPaymentRenewalPolicy(operation, accessToken, cancellationEmail, cancelAutoRenew, {
+                page, browserContext: context, signal: taskSignal?.()
+            });
             if (cancellationResult) {
                 if (cancellationResult.ok) console.log(`✅ [订阅] ${cancellationResult.data.message}`);
                 else console.warn(`⚠️ [订阅] 支付成功，但取消自动续费失败: ${cancellationResult.error}`);
@@ -633,8 +635,20 @@ async function run(runOptions = {}) {
             ? require('./chatgpt').safeCheckoutOpenDiagnostics(e.checkoutOpenDiagnostics) : undefined;
         const openStageLabels = { navigation: '支付页面导航', login: '登录核验', readiness: '支付控件检查', final_check: '结账页最终核验' };
         const openReasonLabels = { timeout: '超过本次期限', http_error: '收到异常响应', original_changed: '发现原结账单页面变化', session_required: '未通过', cancelled: '已取消', network_error: '网络请求未完成', check_failed: '未通过', page_closed: '页面已关闭', not_ready: '尚未就绪' };
+        const fieldLabels = { number: '卡号', expiry: '有效期', month: '有效月份', year: '有效年份', cvc: '安全码', name: '账单姓名', country: '国家', line1: '街道', city: '城市', postal: '邮编', state: '州/省' };
+        const readPhaseLabels = { frame_scan: '页面扫描', candidate_handles: '候选控件获取', candidate_eligibility: '控件可交互性检查', value: '填写结果回读', control_read: '控件读取' };
+        const numberCandidates = checkoutOpenDiagnostics?.candidateCounts?.find(item => item.field === 'number');
+        const inspection = checkoutOpenDiagnostics?.inspection;
+        const diagnosticDetails = [
+            checkoutOpenDiagnostics?.missing?.length ? `未就绪字段：${checkoutOpenDiagnostics.missing.map(field => fieldLabels[field]).join('、')}` : '',
+            numberCandidates ? `卡号候选：${numberCandidates.count}` : '',
+            typeof inspection?.framesChecked === 'number' ? `已检查页面数：${inspection.framesChecked}` : '',
+            inspection?.complete === false ? '控件读取未完成' : '',
+            inspection?.framesFailed > 0 ? `读取失败页面数：${inspection.framesFailed}` : '',
+            inspection?.readPhase ? `读取阶段：${readPhaseLabels[inspection.readPhase]}` : ''
+        ].filter(Boolean).join('；');
         const checkoutFailureMessage = checkoutOpenDiagnostics
-            ? `原结账单已创建，${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}；已停止后续操作`
+            ? `原结账单已创建，${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}；已停止后续操作${diagnosticDetails ? `（${diagnosticDetails}）` : ''}`
             : resultUnknown && checkoutFailure ? '结账单检查未完成，付款结果待核对；已停止后续操作' : checkoutFailure;
         return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics ? { errorCode: checkoutFailure ? e.code : 'CHECKOUT_OPEN_FAILED' } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), error: checkoutFailureMessage || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {

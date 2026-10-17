@@ -1,4 +1,4 @@
-"""Source-bound engine delta packaging; publication is a separate operation."""
+"""Source-bound core compatibility engine delta; publication remains separate."""
 import hashlib
 import importlib.util
 import json

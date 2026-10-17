@@ -20,6 +20,8 @@ import {
   onlineCheckoutLoadRecoveryScope,
   isOnlineCheckoutNavigationReadyOnly,
   onlineCheckoutNavigationReadyScope,
+  isOnlineCoreParityOnly,
+  onlineCoreParityScope,
   onlineSettingsCommands
 } from './ci-online-settings-scope.mjs';
 
@@ -777,6 +779,113 @@ const checkoutNavigationReadyControls = [
   'scripts/ci-online-settings-scope.test.mjs',
   'scripts/ci-recharge-scope.mjs'
 ];
+const coreParitySources = [
+  ...[
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'task-runner.cjs',
+    'test/checkout-form.test.cjs',
+    'test/checkout-navigation.test.cjs',
+    'test/checkout-recovery.test.cjs',
+    'test/debug-checkout.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs',
+    'test/renewal-state.test.cjs',
+    'test/upgrade-checkout.test.cjs',
+    'test/worker-heartbeat.test.cjs',
+    'upstream/chatgpt.js',
+    'upstream/index.js',
+    'upstream/pricing-checkout.js',
+    'upstream/subscription-check.js',
+    'upstream/test/pricing-checkout.test.js',
+    'upstream/upgrade-checkout.js',
+    'worker.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+
+test('core parity admits exactly twenty-one core paths and only the seven reviewed controls', () => {
+  assert.equal(onlineCoreParityScope, 'ONLINE_CORE_PARITY');
+  assert.equal(coreParitySources.length, 21);
+  assert.equal(new Set(coreParitySources).size, 21);
+  for (let mask = 0; mask < 128; mask++) {
+    const paths = [
+      ...coreParitySources,
+      ...checkoutNavigationReadyControls.filter((_, index) => mask & (1 << index))
+    ];
+    assert.equal(isOnlineCoreParityOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(isOnlineCheckoutNavigationReadyOnly(paths), false);
+    assert.equal(isOnlineCheckoutLoadRecoveryOnly(paths), false);
+    assert.equal(isOnlineCheckoutLoadParentRpcOnly(paths), false);
+    assert.equal(isOnlineCheckoutCsRecoveryOnly(paths), false);
+    assert.equal(checkMode(paths, 'unchanged', 'unchanged'), 'recharge');
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  }
+  for (const old of [checkoutNavigationReadySources, checkoutLoadRecoverySources])
+    assert.equal(isOnlineCoreParityOnly(old), false);
+});
+
+test('core parity rejects every missing core, duplicate and adjacent business or control path', () => {
+  const complete = [...coreParitySources, ...checkoutNavigationReadyControls];
+  const rejected = (paths) => {
+    assert.equal(isOnlineCoreParityOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), false);
+    assert.equal(isOnlineSettingsControlsOnly(paths), false);
+    assert.equal(checkMode(paths, '', ''), 'full');
+    assert.throws(() => onlineSettingsCommands('guards', paths));
+  };
+  for (const required of coreParitySources) rejected(complete.filter((path) => path !== required));
+  for (const path of complete) rejected([...complete, path]);
+  for (const extra of [
+    '.github/workflows/online-checkout-load-validation.yml',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/production-release/online-checkout-load-unreviewed.py',
+    'scripts/production-release/online-checkout-cs-release.py',
+    'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js',
+    'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+    'apps/api/src/id-business-v2/online-recharge/unreviewed.spec.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json'
+  ])
+    rejected([...complete, extra]);
+});
+
+test('core parity keeps the complete engine, API local-chain and existing guard commands', () => {
+  const paths = [...coreParitySources, ...checkoutNavigationReadyControls];
+  for (const part of ['api', 'online-engine'])
+    assert.deepEqual(
+      onlineSettingsCommands(part, paths),
+      onlineSettingsCommands(part, checkoutLoadRecoverySources)
+    );
+  assert.throws(() => onlineSettingsCommands('admin', paths), /Admin/);
+  const guards = onlineSettingsCommands('guards', paths).flat();
+  for (const name of [
+    'scripts/production-release/online-checkout-load-release.test.py',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-prisma-runtime-boundary',
+    'check:v2-concurrency-standard',
+    'check:v2-decimal-standard'
+  ])
+    assert.ok(guards.includes(name), name);
+  for (const path of checkoutNavigationReadyControls.slice(0, 4)) {
+    assert.equal(isOnlineSettingsOnly([path]), false);
+    assert.equal(isOnlineSettingsControlsOnly([path]), true);
+    assert.deepEqual(selectedParts([path]), ['guards']);
+  }
+});
 
 test('navigation readiness admits its exact seventeen core paths with only seven reviewed controls', () => {
   assert.equal(onlineCheckoutNavigationReadyScope, 'ONLINE_CHECKOUT_NAVIGATION_READY');
@@ -1112,7 +1221,8 @@ test('load-recovery commands prepare fixed Chromium for only the new API spec an
 
 for (const [name, paths] of [
   ['load-recovery', checkoutLoadRecoverySources],
-  ['navigation readiness', checkoutNavigationReadySources]
+  ['navigation readiness', checkoutNavigationReadySources],
+  ['core parity', coreParitySources]
 ])
   test(`${name} source verification executes every fingerprint and rejects incomplete or tampered manifests`, () => {
     const command = onlineSettingsCommands('guards', paths).find((args) =>

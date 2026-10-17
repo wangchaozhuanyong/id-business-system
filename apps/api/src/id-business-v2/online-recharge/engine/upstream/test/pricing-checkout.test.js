@@ -102,6 +102,34 @@ const createProCheckoutPage = ({ count = 1, visible = true } = {}) => {
     };
 };
 
+const createLegacyProPricingPage = ({ tier = '20x', groups = 1, ctas = 1 } = {}) => {
+    const missing = { count: async () => 0 };
+    let checked = false;
+    const radio = {
+        count: async () => 1, isVisible: async () => true,
+        click: async () => { checked = true; },
+        getAttribute: async () => String(checked)
+    };
+    const group = {
+        count: async () => groups, isVisible: async () => true,
+        getByRole: (role, options) => role === 'radio'
+            ? options?.name === tier ? radio : options?.name ? missing : { count: async () => 1 }
+            : missing
+    };
+    const cta = { count: async () => ctas, isVisible: async () => true };
+    return {
+        page: {
+            getByTestId: (id) => id === 'select-plan-button-pro-upgrade' ? cta : missing,
+            getByRole: (role, options) => {
+                if (role === 'radio') throw new Error('禁止全页选择档位');
+                return role === 'group' && options?.name?.test('Pro plan') ? group : missing;
+            },
+            evaluate: async () => [], waitForTimeout: async () => {}
+        },
+        selected: () => checked
+    };
+};
+
 const createPricingPageOpening = ({ switchFails = false } = {}) => {
     const source = fs.readFileSync(path.join(__dirname, '../pricing-checkout.js'), 'utf8');
     const start = source.indexOf('async function waitForPricingPage(');
@@ -327,6 +355,27 @@ describe('pricing checkout plan button', () => {
         }
     });
 
+    it('retains legacy 5x and 20x controls in one explicit Pro group without the top-half marker', async () => {
+        for (const [plan, tier] of [['pro_5x', '5x'], ['pro_20x', '20x']]) {
+            const fixture = createLegacyProPricingPage({ tier });
+            await expect(selectProVariantOnPricingPage(fixture.page, plan)).resolves.toBe(true);
+            await expect(getUniqueVisiblePlanButton(fixture.page, plan, { requireProCard: true }))
+                .resolves.toMatchObject({ plan, testId: 'select-plan-button-pro-upgrade' });
+            expect(fixture.selected()).toBe(true);
+        }
+    });
+
+    it('requires the legacy explicit Pro group and unique stable CTA, and keeps Pro 500 bounded', async () => {
+        for (const setup of [{ groups: 0 }, { groups: 2 }, { ctas: 0 }, { ctas: 2 }]) {
+            const fixture = createLegacyProPricingPage(setup);
+            await expect(selectProVariantOnPricingPage(fixture.page, 'pro_20x')).rejects.toThrow(/Pro|套餐按钮/);
+            expect(fixture.selected()).toBe(false);
+        }
+        const fixture = createLegacyProPricingPage({ tier: '500' });
+        await expect(selectProVariantOnPricingPage(fixture.page, 'pro_500')).rejects.toThrow('Pro 卡片');
+        expect(fixture.selected()).toBe(false);
+    });
+
     it('rejects multiple groups, duplicate target radios, missing cards and duplicate cards before clicking', async () => {
         for (const setup of [
             { groupCount: 2 }, { radioCount: 2 }, { cardCount: 0 }, { cardCount: 2 },
@@ -395,12 +444,12 @@ describe('pricing checkout plan button', () => {
         expect(fixture.calls).toEqual(['navigate', 'authenticated', 'personal']);
     });
 
-    it('defers selection only for debug when the unique Pro card has no radios or groups', async () => {
+    it('defers selection to exact Checkout confirmation when the unique Pro card has no radios or groups', async () => {
         const fixture = createProPricingPage({ tier: '500', radioCount: 0, groupCount: 0 });
-        await expect(selectProVariantOnPricingPage(fixture.page, 'pro_500', { debugOnly: true }))
-            .resolves.toEqual({ deferredToCheckout: true });
+        for (const debugOnly of [false, true])
+            await expect(selectProVariantOnPricingPage(fixture.page, 'pro_500', { debugOnly }))
+                .resolves.toEqual({ deferredToCheckout: true });
         expect(fixture.calls.clicked).toBe(0);
-        await expect(selectProVariantOnPricingPage(fixture.page, 'pro_500')).rejects.toThrow('Pro 档位按钮数量异常');
     });
 
     it('never defers ambiguous, partial or differently tiered Pro controls even during debug', async () => {
@@ -413,9 +462,11 @@ describe('pricing checkout plan button', () => {
             { groupCount: 0, radioCount: 0, cardCount: 0 },
             { groupCount: 0, radioCount: 0, cardCount: 2 }
         ]) {
-            const fixture = createProPricingPage({ tier: '500', ...setup });
-            await expect(selectProVariantOnPricingPage(fixture.page, 'pro_500', { debugOnly: true })).rejects.toThrow(/Pro/);
-            expect(fixture.calls.clicked).toBe(0);
+            for (const debugOnly of [false, true]) {
+                const fixture = createProPricingPage({ tier: '500', ...setup });
+                await expect(selectProVariantOnPricingPage(fixture.page, 'pro_500', { debugOnly })).rejects.toThrow(/Pro/);
+                expect(fixture.calls.clicked).toBe(0);
+            }
         }
     });
 
