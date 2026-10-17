@@ -420,6 +420,7 @@ async function fixture(context, state) {
   const configTargets = [];
   const queuedTasks = [];
   const detailRequests = [];
+  const dispatchedCodeIds = new Set();
   const completedTasks = new Map([[task.id, task]]);
   function queueTask(operation, result, extra = {}) {
     const id =
@@ -585,6 +586,7 @@ async function fixture(context, state) {
           ? []
           : (rows[section] ?? []).map((row) => ({
               ...row,
+              ...(section === 'cdks' ? { dispatched: dispatchedCodeIds.has(row.id) } : {}),
               ...(section === 'jobs' && state.awaitingReview
                 ? { status: 'awaiting_review', progress: 95, message: '合成原单待核对' }
                 : {}),
@@ -629,7 +631,12 @@ async function fixture(context, state) {
       return ok({ ...completed, events: [{ message: '合成事件' }] });
     }
     if (action === 'start') return ok({ ...task, status: 'queued' });
-    if (action === 'reveal') return ok({ number: '4111111111111111' });
+    if (action === 'reveal')
+      return ok(section === 'cdks' ? { code: 'SYNTHETIC-CDK' } : { number: '4111111111111111' });
+    if (section === 'cdks' && action === 'dispatch') {
+      for (const id of req.postDataJSON()?.ids ?? []) dispatchedCodeIds.add(id);
+      return ok({ success: true });
+    }
     if (['import', 'update', 'create'].includes(action)) {
       if (state.saveDelay) await new Promise((done) => setTimeout(done, state.saveDelayMs ?? 500));
       if (state.saveFail)
@@ -649,7 +656,8 @@ async function fixture(context, state) {
     configTargets,
     rechecks,
     queuedTasks,
-    detailRequests
+    detailRequests,
+    dispatchedCodeIds
   };
 }
 try {
@@ -837,7 +845,7 @@ try {
     .getByRole('button', { name: '新增地址', exact: true })
     .click();
   assert.equal(await street.inputValue(), '合成关闭保留');
-  await navigate(page, '/v2/online-recharge/cards');
+  await navigate(page, '/v2/account-settings/bank-cards');
   await navigate(page, '/v2/online-recharge/addresses');
   await page
     .locator('.v2-page-context')
@@ -879,7 +887,7 @@ try {
   assert.equal(await street.inputValue(), '', '保存成功未清理已提交草稿');
   report.lifecycle.push({ case: 'successful-save-clears-only-submitted-snapshot', result: 'PASS' });
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
-  await navigate(page, '/v2/online-recharge/cards');
+  await navigate(page, '/v2/account-settings/bank-cards');
   await page
     .locator('.v2-page-context')
     .getByRole('button', { name: '导入银行卡', exact: true })
@@ -894,7 +902,7 @@ try {
   assert.equal(await raw.inputValue(), '', '卡片安全码间接进入了关闭草稿');
   await raw.fill('4111111111111111|12/29|123|SYNTHETIC');
   await navigate(page, '/v2/online-recharge/addresses');
-  await navigate(page, '/v2/online-recharge/cards');
+  await navigate(page, '/v2/account-settings/bank-cards');
   await page
     .locator('.v2-page-context')
     .getByRole('button', { name: '导入银行卡', exact: true })
@@ -902,6 +910,29 @@ try {
   assert.equal(await raw.inputValue(), '', '卡片安全码间接进入了切页草稿');
   report.lifecycle.push({ case: 'card-import-cvc-volatile', result: 'PASS' });
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  const beforeCopy = network.writes.length;
+  await page.getByRole('button', { name: '复制卡号', exact: true }).first().click();
+  await page.getByRole('status').filter({ hasText: '卡号已复制' }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '4111111111111111');
+  assert.deepEqual(network.writes.slice(beforeCopy), ['cards/reveal']);
+  assert.equal(await page.locator('.el-drawer:visible,.el-dialog:visible').count(), 0);
+  report.lifecycle.push({
+    case: 'card-direct-copy-without-reason-or-result-window',
+    result: 'PASS'
+  });
+  await navigate(page, '/v2/online-recharge/cdks');
+  const beforeCodeCopy = network.writes.length;
+  await page.getByRole('button', { name: '复制兑换码', exact: true }).first().click();
+  await page.getByRole('status').filter({ hasText: '已复制并标记出库' }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'SYNTHETIC-CDK');
+  assert.deepEqual(network.writes.slice(beforeCodeCopy), ['cdks/reveal', 'cdks/dispatch']);
+  assert.equal(network.dispatchedCodeIds.has(taskId), true);
+  assert.equal(await page.locator('.el-drawer:visible,.el-dialog:visible').count(), 0);
+  report.lifecycle.push({
+    case: 'cdk-direct-copy-and-dispatch-without-reason-window',
+    result: 'PASS'
+  });
   await navigate(page, '/v2/online-recharge/config');
   for (const label of [
     '检测求解器',
@@ -1117,7 +1148,12 @@ try {
     await router.push('/v2/dashboard');
     await router.push('/v2/online-recharge/cards');
   });
-  assert.ok(!page.url().includes('/v2/online-recharge/cards'), '导航权限守卫未拦截员工');
+  assert.ok(
+    !['/v2/online-recharge/cards', '/v2/account-settings/bank-cards'].includes(
+      new URL(page.url()).pathname
+    ),
+    '导航权限守卫未拦截员工'
+  );
   state.actor = administrator;
   await switchFixtureIdentity(page, false);
   await navigate(page, '/v2/online-recharge/addresses');
@@ -1137,7 +1173,7 @@ try {
     .getByRole('dialog', { name: '操作结果', exact: true })
     .getByRole('button', { name: '关闭', exact: true })
     .click();
-  await navigate(page, '/v2/online-recharge/cards');
+  await navigate(page, '/v2/account-settings/bank-cards');
   assert.equal(await page.getByRole('button', { name: '复制卡号', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '导入银行卡', exact: true }).count(), 0);
   report.lifecycle.push({
