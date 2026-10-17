@@ -935,16 +935,22 @@ class AppleMailboxIntegration:
 
     def observe_flow_request(self, engine, task_uuid, session, slot, original, *args, **kwargs):
         """Observe one original transport call without changing its arguments."""
+        def storage_error(status=None):
+            halt = getattr(engine, "_apple_halt_transport", None)
+            if callable(halt):
+                halt("evidence_storage_error", status)
+            raise EvidenceStorageError(status) from None
+
         if getattr(engine, "_apple_evidence_storage_failed", False):
-            raise EvidenceStorageError()
+            storage_error()
         diagnostics = getattr(engine, "_apple_diagnostics", None)
         before = device_cookie_presence(session)
         evidence, response_class = None, "not_applicable"
         try:
             response = (diagnostics.capture(original, *args, **kwargs)
                         if diagnostics is not None else original(*args, **kwargs))
-        except EvidenceStorageError:
-            raise
+        except EvidenceStorageError as error:
+            storage_error(error.http_status)
         except Exception:
             try:
                 if not self.store.record_flow_evidence(task_uuid, slot, None, outcome="network_error",
@@ -961,7 +967,7 @@ class AppleMailboxIntegration:
                         device_cookie_after=device_cookie_presence(session), observed_transport=True)
                 except Exception:
                     pass
-                raise EvidenceStorageError() from None
+                storage_error()
             raise
         evidence = observation(response, slot)
         response_class = response_classification(response, slot, evidence)
@@ -979,7 +985,18 @@ class AppleMailboxIntegration:
                     response_class=response_class, device_cookie_before=before, device_cookie_after=after, observed_transport=True)
             except Exception:
                 pass
-            raise EvidenceStorageError(evidence["httpStatus"]) from None
+            storage_error(evidence["httpStatus"])
+        if response_class in {"verification_required", "structured_rejection", "rate_limited"}:
+            # Escape the original device/HTTP retry catches only after the
+            # response and its safe evidence have both been observed.
+            if diagnostics is not None and diagnostics.active is not None:
+                code = evidence.get("responseDetails", {}).get("errorKind")
+                if code in {"account_creation_failed", "user_exists"}:
+                    diagnostics.active["errorKind"] = code
+            halt = getattr(engine, "_apple_halt_transport", None)
+            if callable(halt):
+                halt("http_rejected", evidence["httpStatus"])
+            raise ValueError("官网明确拒绝本次流程，已停止后续请求；请核对任务诊断")
         return response, evidence, response_class
 
     def guard_session(self, engine, task_uuid, session):
@@ -990,10 +1007,19 @@ class AppleMailboxIntegration:
         original_request = getattr(session, "request", None)
         endpoints = importlib.import_module("src.core.register").OPENAI_API_ENDPOINTS
 
+        def ensure_active():
+            state = getattr(engine, "_apple_transport_stop_state", None)
+            halt = getattr(engine, "_apple_halt_transport", None)
+            if state is not None and callable(halt):
+                halt(*state)
+            if getattr(engine, "_apple_evidence_storage_failed", False):
+                if callable(halt):
+                    halt("evidence_storage_error")
+                raise EvidenceStorageError()
+
         if callable(original_request):
             def request(method, url, *args, **kwargs):
-                if getattr(engine, "_apple_evidence_storage_failed", False):
-                    raise EvidenceStorageError()
+                ensure_active()
                 if url != endpoints["sentinel"] or not isinstance(method, str) or method.upper() != "POST":
                     return original_request(method, url, *args, **kwargs)
                 engine._apple_sentinel_evidence = None
@@ -1009,8 +1035,7 @@ class AppleMailboxIntegration:
             session.request = request
 
         def get(url, *args, **kwargs):
-            if getattr(engine, "_apple_evidence_storage_failed", False):
-                raise EvidenceStorageError()
+            ensure_active()
             diagnostics = getattr(engine, "_apple_diagnostics", None)
             start = getattr(engine, "oauth_start", None)
             if start is not None and url == getattr(start, "auth_url", None):
@@ -1022,8 +1047,7 @@ class AppleMailboxIntegration:
                     if diagnostics is not None else original_get(url, *args, **kwargs))
 
         def post(url, *args, **kwargs):
-            if getattr(engine, "_apple_evidence_storage_failed", False):
-                raise EvidenceStorageError()
+            ensure_active()
             # Every replacement session keeps the same pre-submission durable
             # guard. Request bodies and response text never enter diagnostics.
             if url == endpoints["register"]:
@@ -1077,6 +1101,49 @@ class AppleMailboxIntegration:
     def observe_engine(self, engine, provider):
         context = provider.context
         task_uuid = context["taskUuid"]
+
+        class TransportStopped(BaseException):
+            # Instance-local control flow, never a public exception or record.
+            # BaseException escapes only the upstream broad retry catches; the
+            # engine-step boundaries below immediately normalize it again.
+            def __init__(self, kind, http_status):
+                super().__init__("注册流程已停止")
+                self.kind, self.http_status = kind, http_status
+
+        def halt_transport(kind, http_status=None):
+            if kind not in {"http_rejected", "evidence_storage_error"}:
+                raise ValueError("注册停止原因无效")
+            status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+            state = getattr(engine, "_apple_transport_stop_state", None)
+            if state is None:
+                state = engine._apple_transport_stop_state = (kind, status)
+            if state[0] == "evidence_storage_error":
+                engine._apple_evidence_storage_failed = True
+            diagnostics = getattr(engine, "_apple_diagnostics", None)
+            if diagnostics is not None and diagnostics.active is not None:
+                diagnostics.active["httpStatus"] = state[1]
+                if state[0] == "evidence_storage_error":
+                    diagnostics.active["errorKind"] = state[0]
+                elif diagnostics.active.get("errorKind") not in {"account_creation_failed", "user_exists"}:
+                    # Keep the existing firstFailure meaning for HTTP 200;
+                    # its explicit refusal remains in v4 responseClass.
+                    diagnostics.active["errorKind"] = "http_rejected" if state[1] is not None and state[1] >= 400 else "unknown"
+            raise TransportStopped(*state)
+
+        def normalize_transport_stop(original, check_stopped=True):
+            def call(*args, **kwargs):
+                try:
+                    state = getattr(engine, "_apple_transport_stop_state", None)
+                    if check_stopped and state is not None:
+                        halt_transport(*state)
+                    return original(*args, **kwargs)
+                except TransportStopped as error:
+                    if error.kind == "evidence_storage_error":
+                        raise EvidenceStorageError(error.http_status) from None
+                    raise ValueError("官网明确拒绝本次流程，已停止后续请求；请核对任务诊断") from None
+            return call
+
+        engine._apple_halt_transport = halt_transport
         if hasattr(engine, "oauth_manager") and context.get("email"):
             self.store.configuration_checkpoint(task_uuid, engine.oauth_manager.client_id, engine.proxy_url)
             try:
@@ -1292,6 +1359,12 @@ class AppleMailboxIntegration:
 
             engine.save_to_database = save
 
+        # None of the private stop signals may escape into the task runner.
+        # Ordinary exceptions retain their original retry/return contracts.
+        for name in ("_check_ip_location", "_get_device_id", "_check_sentinel", "_submit_signup_form", "_register_password", "run"):
+            original = getattr(engine, name, None)
+            if callable(original):
+                setattr(engine, name, normalize_transport_stop(original, check_stopped=name != "run"))
         diagnostic_store = DeferredDiagnosticsStore(self.store, context) if context.get("generic") else self.store
         engine._apple_diagnostics = RegistrationDiagnostics(diagnostic_store, task_uuid)
         engine._apple_diagnostics.install(engine)

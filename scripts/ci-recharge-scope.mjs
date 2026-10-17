@@ -81,6 +81,137 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
+export const registrationTerminalStopBase = 'a92ea492754781f0b84011321a65b684617e7ce2';
+export const registrationTerminalStopTree = '6e346195950ef727705c5ef7d181e96a037ed046';
+export const registrationTerminalStopContract =
+  'scripts/production-release/registration-terminal-stop-contract.json';
+export const registrationTerminalStopApplications = Object.freeze(
+  ['apple_mailboxes.py', 'test_flow_v4_unit.py'].map(
+    (name) => 'apps/api/src/id-business-v2/auto-registration/worker/' + name
+  )
+);
+export const registrationTerminalStopPaths = Object.freeze([
+  ...registrationTerminalStopApplications,
+  'docs/V2_TASKS.md',
+  'docs/AUTO_REGISTRATION_TERMINAL_STOP_20261017.md',
+  '.github/workflows/registration-terminal-stop-validation.yml',
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => 'scripts/ci-recharge-' + name
+  ),
+  ...['build.py', 'contract.json', 'dispatch.py', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/registration-terminal-stop-' + name
+  )
+]);
+export const registrationTerminalStopParts = Object.freeze(['guards', 'api', 'release-controls']);
+
+export function isRegistrationTerminalStopOnly(paths, options = {}) {
+  const sameKeys = (left, right) =>
+    Array.isArray(left) &&
+    left.length === new Set(left).size &&
+    left.length === right.length &&
+    left.every((name) => right.includes(name));
+  const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
+  if (
+    options?.base !== registrationTerminalStopBase ||
+    options?.baseTree !== registrationTerminalStopTree ||
+    !sameKeys(paths, registrationTerminalStopPaths)
+  )
+    return false;
+  try {
+    const c =
+      options.contract ??
+      JSON.parse(
+        readFileSync(new URL('../' + registrationTerminalStopContract, import.meta.url), 'utf8')
+      );
+    const sourceDigest =
+      options.sourceDigest ??
+      ((name) => {
+        const target = new URL('../' + name, import.meta.url),
+          stat = lstatSync(target);
+        if (!stat.isFile() || stat.isSymbolicLink())
+          throw new Error('Unexpected terminal stop source');
+        return createHash('sha256').update(readFileSync(target)).digest('hex');
+      });
+    const reviewed = registrationTerminalStopPaths.filter(
+      (name) => name !== registrationTerminalStopContract
+    );
+    if (
+      !object(c) ||
+      c.version !== 1 ||
+      c.scope !== 'REGISTRATION_TERMINAL_STOP_20261017' ||
+      c.name !== 'registration-terminal-stop-20261017' ||
+      c.admission !== 'VERIFIED' ||
+      c.frozen !== true ||
+      c.migration !== null ||
+      c.businessActions !== 0 ||
+      !sameKeys(c.pendingEvidence, []) ||
+      c.sourceBaseline !== registrationTerminalStopBase ||
+      c.sourceBaselineTree !== registrationTerminalStopTree ||
+      !sameKeys(c.expectedGitChanges, registrationTerminalStopPaths) ||
+      !sameKeys(c.applicationPaths, registrationTerminalStopApplications) ||
+      !object(c.sources) ||
+      !sameKeys(Object.keys(c.sources), registrationTerminalStopApplications) ||
+      !object(c.validationSources) ||
+      !sameKeys(Object.keys(c.validationSources), []) ||
+      !object(c.workerFiles) ||
+      !sameKeys(Object.keys(c.workerFiles), ['apple_mailboxes.py']) ||
+      !sameKeys(c.apiJavascriptDelta, []) ||
+      !sameKeys(c.apiRuntimeDelta, []) ||
+      !sameKeys(c.adminDelta, []) ||
+      !object(c.reviewedFileHashes) ||
+      !sameKeys(Object.keys(c.reviewedFileHashes), reviewed) ||
+      typeof sourceDigest !== 'function'
+    )
+      return false;
+    return (
+      Object.entries(c.sources).every(([name, hash]) => c.reviewedFileHashes[name] === hash) &&
+      c.workerFiles['apple_mailboxes.py'] === c.sources[registrationTerminalStopApplications[0]] &&
+      reviewed.every(
+        (name) =>
+          typeof c.reviewedFileHashes[name] === 'string' &&
+          /^[a-f0-9]{64}$/.test(c.reviewedFileHashes[name]) &&
+          sourceDigest(name) === c.reviewedFileHashes[name]
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+const registrationTerminalStopControlTest = [
+  'python3',
+  '-B',
+  'scripts/production-release/registration-terminal-stop-release.test.py'
+];
+const registrationTerminalStopFormatted = registrationTerminalStopPaths.filter((name) =>
+  /\.(?:[cm]?js|json|yml|md)$/.test(name)
+);
+export const registrationTerminalStopCommands = Object.freeze({
+  guards: [
+    registrationTerminalStopControlTest,
+    ['node', '--test', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-check.test.mjs'],
+    ['npm', 'exec', '--', 'prettier', '--check', ...registrationTerminalStopFormatted],
+    [
+      'npm',
+      'exec',
+      '--',
+      'eslint',
+      ...registrationTerminalStopFormatted.filter((name) => /\.mjs$/.test(name))
+    ],
+    ['npm', 'run', 'check:v2-module-architecture'],
+    ['npm', 'run', 'check:v2-isolation']
+  ],
+  api: [
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/registration-terminal-stop-build.py',
+      'check-worker'
+    ]
+  ],
+  'release-controls': [registrationTerminalStopControlTest]
+});
+
 export const registrationFlowV4Base = '8df81dca0f08ebdebe6b01b942b033053b8a5c3b';
 export const registrationFlowV4Tree = '7052cfbe3bcfdf64f8909fdb0c0263355ff7c16c';
 export const registrationFlowV4Contract =
@@ -974,6 +1105,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRegistrationTerminalStopOnly(paths, context)) return false;
   if (isRegistrationFlowV4Only(paths, context)) return false;
   if (isRegistrationProtocolRepairPreservationOnly(paths, context)) return false;
   if (isRegistrationProtocolRepairControlRepair(paths, context)) return false;
@@ -1769,6 +1901,9 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRegistrationTerminalStopOnly(paths, context))
+    return oldSchema === newSchema ? 'recharge' : 'full';
+  if (paths.includes(registrationTerminalStopContract)) return 'full';
   if (isRegistrationFlowV4Only(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes(registrationFlowV4Contract)) return 'full';
@@ -2311,6 +2446,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRegistrationTerminalStopOnly(paths, context)) return [...registrationTerminalStopParts];
   if (isRegistrationFlowV4Only(paths, context)) return [...registrationFlowV4Parts];
   if (isRegistrationProtocolRepairPreservationOnly(paths, context)) return ['guards'];
   if (isRegistrationProtocolRepairControlRepair(paths, context)) return ['guards'];

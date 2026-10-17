@@ -34,6 +34,14 @@ import {
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
   adminHtmlCachePaths,
+  isRegistrationTerminalStopOnly,
+  registrationTerminalStopBase,
+  registrationTerminalStopTree,
+  registrationTerminalStopContract,
+  registrationTerminalStopApplications,
+  registrationTerminalStopPaths,
+  registrationTerminalStopParts,
+  registrationTerminalStopCommands,
   isRegistrationFlowV4Only,
   registrationFlowV4Base,
   registrationFlowV4Tree,
@@ -98,6 +106,131 @@ import {
   registrationBrowserAcceptance,
   registrationBrowserParts
 } from './ci-registration-browser-scope.mjs';
+
+function terminalStopFixture() {
+  const hashes = Object.fromEntries(
+    registrationTerminalStopPaths
+      .filter((name) => name !== registrationTerminalStopContract)
+      .map((name) => [name, 'a'.repeat(64)])
+  );
+  return {
+    base: registrationTerminalStopBase,
+    baseTree: registrationTerminalStopTree,
+    sourceDigest: (name) => hashes[name] ?? null,
+    contract: {
+      version: 1,
+      scope: 'REGISTRATION_TERMINAL_STOP_20261017',
+      name: 'registration-terminal-stop-20261017',
+      frozen: true,
+      admission: 'VERIFIED',
+      migration: null,
+      businessActions: 0,
+      pendingEvidence: [],
+      sourceBaseline: registrationTerminalStopBase,
+      sourceBaselineTree: registrationTerminalStopTree,
+      expectedGitChanges: [...registrationTerminalStopPaths],
+      applicationPaths: [...registrationTerminalStopApplications],
+      sources: Object.fromEntries(
+        registrationTerminalStopApplications.map((name) => [name, hashes[name]])
+      ),
+      workerFiles: { 'apple_mailboxes.py': hashes[registrationTerminalStopApplications[0]] },
+      validationSources: {},
+      apiRuntimeDelta: [],
+      apiJavascriptDelta: [],
+      adminDelta: [],
+      reviewedFileHashes: hashes
+    }
+  };
+}
+
+test('registration terminal stop admits only the exact reviewed Worker successor', () => {
+  const context = terminalStopFixture(),
+    paths = [...registrationTerminalStopPaths];
+  assert.equal(paths.length, 14);
+  assert.equal(isRegistrationTerminalStopOnly(paths, context), true);
+  assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'recharge');
+  assert.equal(checkMode(paths, 'old', 'new', undefined, context), 'full');
+  assert.deepEqual(selectedParts(paths, undefined, context), [...registrationTerminalStopParts]);
+  assert.equal(needsOnlineRechargeCiBuild(paths, context), false);
+  for (const changed of [
+    paths.slice(1),
+    [...paths, paths[0]],
+    [...paths, 'package-lock.json'],
+    [...paths, 'apps/api/prisma-mysql/schema.prisma'],
+    [...paths, 'apps/admin/src/v2/features/auto-registration/contracts.ts'],
+    [...paths, 'apps/api/src/id-business-v2/auto-registration/upstream/src/core/register.py']
+  ]) {
+    assert.equal(isRegistrationTerminalStopOnly(changed, context), false);
+    assert.equal(checkMode(changed, 'same', 'same', undefined, context), 'full');
+  }
+  for (const override of [
+    { base: '0'.repeat(40) },
+    { baseTree: '0'.repeat(40) },
+    { sourceDigest: null },
+    { sourceDigest: () => 'b'.repeat(64) },
+    {
+      sourceDigest: () => {
+        throw new Error('SYNTHETIC_READ_FAILURE');
+      }
+    }
+  ]) {
+    assert.equal(isRegistrationTerminalStopOnly(paths, { ...context, ...override }), false);
+  }
+  for (const name of paths.filter((name) => name !== registrationTerminalStopContract)) {
+    assert.equal(
+      isRegistrationTerminalStopOnly(paths, {
+        ...context,
+        sourceDigest: (candidate) =>
+          candidate === name ? 'b'.repeat(64) : context.sourceDigest(candidate)
+      }),
+      false
+    );
+  }
+});
+
+test('registration terminal stop rejects draft, altered scope and extra runtime payload', () => {
+  for (const override of [
+    { version: 2 },
+    { frozen: false },
+    { admission: 'DRAFT' },
+    { migration: 'migration.sql' },
+    { businessActions: 1 },
+    { pendingEvidence: ['missing'] },
+    { scope: 'OTHER' },
+    { name: 'other' },
+    { sourceBaseline: '0'.repeat(40) },
+    { apiRuntimeDelta: ['module.js'] },
+    { apiJavascriptDelta: ['module.js'] },
+    { adminDelta: ['index.html'] },
+    { validationSources: { 'other.mjs': 'a'.repeat(64) } },
+    { workerFiles: { 'workspace.py': 'a'.repeat(64) } },
+    { reviewedFileHashes: {} },
+    { sources: {} },
+    { expectedGitChanges: [] }
+  ]) {
+    const context = terminalStopFixture();
+    Object.assign(context.contract, override);
+    assert.equal(isRegistrationTerminalStopOnly(registrationTerminalStopPaths, context), false);
+    assert.equal(
+      checkMode(registrationTerminalStopPaths, 'same', 'same', undefined, context),
+      'full'
+    );
+  }
+  assert.deepEqual(registrationTerminalStopCommands.api, [
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/registration-terminal-stop-build.py',
+      'check-worker'
+    ]
+  ]);
+  assert.equal(
+    registrationTerminalStopCommands.guards.some((command) =>
+      command.join(' ').includes('check:admin-ui')
+    ),
+    false
+  );
+});
 
 function flowV4Fixture() {
   const hashes = Object.fromEntries(
