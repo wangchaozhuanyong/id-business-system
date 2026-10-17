@@ -1,4 +1,9 @@
 const applicationPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/api.ts',
+  'apps/admin/src/v2/features/online-recharge/api.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/useOnlineTask.ts',
+  'apps/admin/src/v2/features/online-recharge/useOnlineTask.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
   'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
   'apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue',
   'apps/admin/src/v2/features/online-recharge/sections.ts',
@@ -74,6 +79,11 @@ const applicationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/plan-region.ts'
 ]);
 const controlPaths = Object.freeze([
+  '.github/workflows/online-checkout-retest-validation.yml',
+  'scripts/production-release/online-checkout-retest-build.py',
+  'scripts/production-release/online-checkout-retest-contract.json',
+  'scripts/production-release/online-checkout-retest-release.py',
+  'scripts/production-release/online-checkout-retest-release.test.py',
   'scripts/production-release/online-browser-display-auth-release.py',
   'scripts/production-release/online-browser-display-auth-release.test.py',
   '.github/workflows/online-checkout-validation.yml',
@@ -117,6 +127,12 @@ const checkoutRequired = [
   'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
 ];
+const retestRequired = [
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/subscription-check.js',
+  'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+  'apps/admin/src/v2/features/online-recharge/useOnlineTask.ts'
+];
 const displayRuntimeRequired = [
   'worker.cjs',
   'test/runtime-main.test.cjs',
@@ -134,6 +150,7 @@ export function isOnlineSettingsOnly(paths) {
     new Set(paths).size === paths.length &&
     (required.every((path) => paths.includes(path)) ||
       checkoutRequired.every((path) => paths.includes(path)) ||
+      retestRequired.every((path) => paths.includes(path)) ||
       fixtureRepair ||
       (displayRuntimeRequired.every((path) => paths.includes(path)) &&
         paths.every(
@@ -185,6 +202,9 @@ export function onlineSettingsCommands(part, paths) {
       ['python3', '-B', 'scripts/production-release/online-settings-release.test.py'],
       ...(paths.some((path) => path.includes('online-checkout-'))
         ? [['python3', '-B', 'scripts/production-release/online-checkout-release.test.py']]
+        : []),
+      ...(paths.some((path) => path.includes('online-checkout-retest-'))
+        ? [['python3', '-B', 'scripts/production-release/online-checkout-retest-release.test.py']]
         : []),
       ...(paths.some((path) => path.includes('online-browser-display-auth-'))
         ? [

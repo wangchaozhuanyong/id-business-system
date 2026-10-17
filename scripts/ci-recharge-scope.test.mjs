@@ -338,6 +338,9 @@ const registrationSalesPaths = [
   'apps/api/src/id-business-v2/auto-recharge/bank-recharge.controller.ts'
 ];
 const registrationAdvancedPaths = [
+  // Progress cancellation advances the client; historical recovery retains its pinned bytes.
+  'apps/admin/src/v2/features/online-recharge/api.ts',
+  'apps/admin/src/v2/features/online-recharge/api.spec.ts',
   'apps/admin/src/v2/features/customers/useCustomersPage.ts',
   'apps/api/src/id-business-v2/auto-recharge/recharge.module.ts',
   'apps/api/src/id-business-v2/auto-recharge/bank-recharge-mysql.integration.spec.ts',
