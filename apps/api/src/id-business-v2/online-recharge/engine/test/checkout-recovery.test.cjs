@@ -512,7 +512,10 @@ function checkoutServiceFixture(options = {}) {
       if (name === './mysql-store')
         return { resolvePlanName: () => options.planName ?? 'chatgptpro' };
       if (name === './region-config') return { getRegionConfig: () => ({ currency: 'PHP' }) };
-      if (name === './session-auth') return {};
+      if (name === './session-auth')
+        return {
+          assertChatGptLoggedIn: async () => {}
+        };
       if (name === './auth-page-detect')
         return {
           isCheckoutLoginGate: async () => options.loginGate === true,
@@ -521,10 +524,17 @@ function checkoutServiceFixture(options = {}) {
         };
       if (name === './human-verification')
         return {
-          clearHumanVerification: async () => ({ cleared: false, checkoutNotReady: true }),
+          clearHumanVerification: async (_, verificationOptions) => {
+            options.onVerification?.(verificationOptions);
+            return options.verification || { cleared: false, checkoutNotReady: true };
+          },
+          isCloudflareWallPage: async () => false,
+          isCheckoutPaymentReady: async () => false,
           buildCaptchaRequiredError: () => 'Synthetic verification not ready'
         };
       if (name === '../checkout-recovery.cjs') return recovery;
+      if (name === './verification-runtime') return require('../upstream/verification-runtime');
+      if (name === '../rpc.cjs') return require('../rpc.cjs');
       throw new Error('Unexpected fixture import ' + name);
     }
   });
@@ -757,6 +767,87 @@ function checkoutPhaseFixture(page, Service) {
   return { pending, uiCalls: () => uiCalls };
 }
 
+test('the official hosted opener defers strict card readiness until payment-method selection', async () => {
+  let verificationOptions,
+    apiCalls = 0;
+  const Service = checkoutServiceFixture({
+    verification: { cleared: true },
+    onVerification: (options) => {
+      verificationOptions = options;
+    }
+  });
+  const page = {
+    context: () => ({
+      request: {
+        post: async () => {
+          apiCalls++;
+          return { status: () => 200, text: async () => JSON.stringify({ url: hostedUrl }) };
+        }
+      }
+    }),
+    goto: async () => ({ status: () => 200 }),
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    title: async () => 'Synthetic page',
+    innerText: async () => 'Credit or debit card',
+    url: () => hostedUrl
+  };
+  const phase = checkoutPhaseFixture(page, Service);
+  await phase.pending;
+  assert.equal(apiCalls, 1);
+  assert.equal(phase.uiCalls(), 0);
+  assert.equal(verificationOptions.requireCheckoutReady, false);
+  assert.equal(verificationOptions.checkCheckoutLoad, true);
+  assert.equal(verificationOptions.allowCheckoutReload, true);
+});
+
+for (const code of [
+  'CHECKOUT_CONTENT_LOAD_FAILED',
+  'CHECKOUT_FORM_NOT_READY',
+  'CHECKOUT_RELOAD_TIMEOUT'
+]) {
+  test(`accepted checkout retains ${code} and never falls back to creating a UI checkout`, async () => {
+    let verificationOptions,
+      apiCalls = 0;
+    const Service = checkoutServiceFixture({
+      verification: { cleared: false, checkoutNotReady: true, code },
+      onVerification: (options) => {
+        verificationOptions = options;
+      }
+    });
+    const page = {
+      context: () => ({
+        request: {
+          post: async () => {
+            apiCalls++;
+            return {
+              status: () => 200,
+              text: async () =>
+                JSON.stringify({
+                  checkout_session_id: embeddedSource.checkoutId,
+                  processor_entity: embeddedSource.processorEntity
+                })
+            };
+          }
+        }
+      }),
+      goto: async () => ({ status: () => 200 }),
+      waitForLoadState: async () => {},
+      waitForTimeout: async () => {},
+      title: async () => 'Synthetic page',
+      url: () => embeddedUrl
+    };
+    const phase = checkoutPhaseFixture(page, Service);
+    await assert.rejects(phase.pending, { code, checkoutCreationState: 'accepted' });
+    assert.equal(apiCalls, 1);
+    assert.equal(phase.uiCalls(), 0);
+    assert.equal(verificationOptions.requireCheckoutReady, true);
+    assert.equal(verificationOptions.allowCheckoutReload, true);
+    assert.equal(typeof verificationOptions.isSubmitted, 'function');
+    assert.deepEqual(recovery.officialCheckoutForPage(page), embeddedSource);
+  });
+}
+
 for (const failure of ['navigation timeout', 'login gate', 'page verification']) {
   test(`an accepted API checkout followed by ${failure} never creates another UI checkout`, async () => {
     const Service = checkoutServiceFixture({ loginGate: failure === 'login gate' });
@@ -782,6 +873,7 @@ for (const failure of ['navigation timeout', 'login gate', 'page verification'])
         openedUrl = url;
         if (failure === 'navigation timeout')
           throw Object.assign(new Error('Synthetic navigation timeout'), { name: 'TimeoutError' });
+        return { status: () => 200 };
       },
       waitForLoadState: async () => {},
       waitForTimeout: async () => {},
@@ -799,6 +891,143 @@ for (const failure of ['navigation timeout', 'login gate', 'page verification'])
     assert.deepEqual(recovery.officialCheckoutForPage(page), embeddedSource);
   });
 }
+
+function publicCheckoutFailure(error, submitted = false, confirmed = false) {
+  const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
+  const start = source.indexOf('        // 用 exitCode');
+  const end = source.indexOf('\n    } finally {', start);
+  assert.ok(start > 0 && end > start);
+  const Service = checkoutServiceFixture();
+  const result = runInNewContext('(function(){' + source.slice(start, end) + '})()', {
+    e: error,
+    lastPaymentResult: null,
+    paymentSucceeded: false,
+    wasSubmitted: () => submitted,
+    require(name) {
+      if (name === './chatgpt') return Service;
+      if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => confirmed };
+      throw new Error('Unexpected result projection import');
+    }
+  });
+  return require('../security.cjs').sanitizeResult(result);
+}
+
+test('public failure retains only controlled checkout stage diagnostics and keeps payment uncertainty', () => {
+  const error = {
+    code: 'CHECKOUT_OPEN_FAILED',
+    checkoutCreationState: 'accepted',
+    message: 'PRIVATE_SENTINEL https://private.invalid/token',
+    checkoutOpenDiagnostics: {
+      stage: 'navigation',
+      reason: 'http_error',
+      httpStatus: 503,
+      url: 'https://private.invalid/token',
+      token: 'PRIVATE_SENTINEL'
+    }
+  };
+  const result = publicCheckoutFailure(error, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics)), {
+    stage: 'navigation',
+    reason: 'http_error',
+    httpStatus: 503
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_OPEN_FAILED');
+  assert.equal(result.success, false);
+  assert.equal(result.resultUnknown, true);
+  assert.match(result.error, /支付页面导航收到异常响应/);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_SENTINEL|private\.invalid|token/);
+});
+
+test('accepted checkout form failure reaches the public result without arbitrary diagnostic text', () => {
+  const result = publicCheckoutFailure({
+    code: 'CHECKOUT_FORM_NOT_READY',
+    checkoutCreationState: 'accepted',
+    checkoutOpenDiagnostics: { stage: 'readiness', reason: 'not_ready', httpStatus: 200 }
+  });
+  assert.equal(result.resultUnknown, false);
+  assert.equal(result.errorCode, 'CHECKOUT_OPEN_FAILED');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics)), {
+    stage: 'readiness',
+    reason: 'not_ready'
+  });
+  assert.match(result.error, /支付控件检查尚未就绪/);
+  for (const diagnostics of [
+    { stage: 'PRIVATE_SENTINEL', reason: 'timeout' },
+    { stage: 'navigation', reason: 'PRIVATE_SENTINEL' },
+    { stage: 'navigation', reason: { value: 'timeout' } }
+  ]) {
+    const rejected = publicCheckoutFailure({
+      code: 'CHECKOUT_OPEN_FAILED',
+      checkoutOpenDiagnostics: diagnostics
+    });
+    assert.equal(rejected.checkoutOpenDiagnostics, undefined);
+    assert.doesNotMatch(JSON.stringify(rejected), /PRIVATE_SENTINEL/);
+  }
+});
+
+for (const diagnostics of [undefined, { stage: 'PRIVATE_SENTINEL', reason: 'timeout' }]) {
+  test(`checkout failure with ${diagnostics ? 'invalid' : 'missing'} diagnostics cannot claim no payment after submission`, () => {
+    for (const code of [
+      'CHECKOUT_RECOVERY_INVALID',
+      'CHECKOUT_RECOVERY_UNSUPPORTED',
+      'CHECKOUT_CREATION_UNKNOWN',
+      'CHECKOUT_CREATION_REJECTED',
+      'CHECKOUT_OPEN_FAILED'
+    ]) {
+      for (const state of [
+        [true, false],
+        [false, true]
+      ]) {
+        const result = publicCheckoutFailure(
+          { code, checkoutCreationState: 'accepted', checkoutOpenDiagnostics: diagnostics },
+          ...state
+        );
+        assert.equal(result.resultUnknown, true);
+        assert.equal(result.success, false);
+        assert.match(result.error, /付款结果待核对/);
+        assert.doesNotMatch(result.error, /未提交付款|未.*提交付款|未.*提交支付|PRIVATE_SENTINEL/);
+      }
+    }
+  });
+}
+
+test('an unfinished checkout page close goes directly to task context cleanup before diagnostics or lease propagation', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
+  const start = source.indexOf('    } catch (e) {\n        if (e.checkoutOpenCleanupFailed');
+  const end = source.indexOf('\n    } finally {', start);
+  assert.ok(start > 0 && end > start);
+  for (const code of ['CHECKOUT_OPEN_FAILED', 'LEASE_LOST']) {
+    const calls = [];
+    const Service = checkoutServiceFixture();
+    const pending = runInNewContext(
+      '(async function(){' + source.slice(start + '    } catch (e) {'.length, end) + '})()',
+      {
+        e: { code, checkoutOpenCleanupFailed: true },
+        page: {},
+        context: { close: async () => calls.push('context-close') },
+        taskSignal: () => undefined,
+        console: { error: () => {} },
+        captureDebugScreenshot: async () => {
+          calls.push('screenshot');
+          throw new Error('No screenshot may delay cleanup');
+        },
+        lastPaymentResult: null,
+        paymentSucceeded: false,
+        wasSubmitted: () => false,
+        require(name) {
+          if (name === './human-verification')
+            return { disposeVerificationPage: () => calls.push('dispose') };
+          if (name === './chatgpt') return Service;
+          if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => false };
+          throw new Error('Unexpected cleanup import');
+        }
+      }
+    );
+    if (code === 'LEASE_LOST') await assert.rejects(pending, { code });
+    else assert.equal((await pending).success, false);
+    assert.deepEqual(calls, ['dispose', 'context-close']);
+  }
+});
 
 for (const status of ['network unknown', 400, 500]) {
   test(`a sent checkout POST with ${status} does not trigger another UI creation`, async () => {

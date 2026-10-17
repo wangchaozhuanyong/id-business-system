@@ -377,24 +377,14 @@ async function activateSubscription({ page, accessToken, planType, cdkCode, emai
 /**
  * 判断 Checkout 页面是否已正常加载（避免 body 里 incidental "404" 误报）
  */
-async function assertCheckoutPageReady(page) {
+async function assertCheckoutPageReady(page, { requireCardReady = true } = {}) {
     const { isCloudflareWallPage, isCheckoutPaymentReady } = require('./human-verification');
     const currentUrl = page.url();
-    const pageText = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
+    const pageText = String(await page.innerText('body', { timeout: 8000 }).catch(() => '') || '');
     const title = String(await page.title().catch(() => '') || '');
 
     if (await isCloudflareWallPage(page)) {
         throw new Error('Checkout 页面仍被 Cloudflare 人机验证拦截');
-    }
-
-    if (await isCheckoutPaymentReady(page)) {
-        return currentUrl;
-    }
-
-    const checkoutReady = /Configure your plan|Subscribe|Plus plan|Pro plan|Due today|Card number|Expiration date|Security code|Monthly subscription/i.test(pageText);
-
-    if (checkoutReady) {
-        return currentUrl;
     }
 
     if (/Page not found|could not be found|Something went wrong|contact the merchant/i.test(pageText)) {
@@ -409,11 +399,52 @@ async function assertCheckoutPageReady(page) {
         throw new Error(`支付链接无效 (404): ${currentUrl.slice(0, 120)}`);
     }
 
-    throw new Error(`无法确认 Checkout 支付表单已加载: ${currentUrl.slice(0, 120)}`);
+    if (!requireCardReady && ['pay.openai.com', 'checkout.stripe.com'].includes(new URL(currentUrl).hostname)) {
+        require('../checkout-recovery.cjs').quoteIdForUrl(currentUrl);
+        return currentUrl;
+    }
+    if (await isCheckoutPaymentReady(page)) return currentUrl;
+    throw Object.assign(new Error('无法确认 Checkout 支付表单已加载'), { code: 'CHECKOUT_FORM_NOT_READY' });
+}
+
+const CHECKOUT_OPEN_STAGES = new Set(['navigation', 'login', 'readiness', 'final_check']);
+const CHECKOUT_OPEN_REASONS = new Set([
+    'timeout', 'http_error', 'original_changed', 'session_required',
+    'cancelled', 'network_error', 'page_closed', 'not_ready', 'check_failed'
+]);
+
+function safeCheckoutOpenDiagnostics(value) {
+    if (!value || !CHECKOUT_OPEN_STAGES.has(value.stage) || !CHECKOUT_OPEN_REASONS.has(value.reason)) return undefined;
+    return {
+        stage: value.stage,
+        reason: value.reason,
+        ...(value.reason === 'http_error' && Number.isInteger(value.httpStatus)
+            && value.httpStatus >= 400 && value.httpStatus <= 599 ? { httpStatus: value.httpStatus } : {})
+    };
+}
+
+function checkoutOpenError(reason, httpStatus) {
+    return Object.assign(new Error('原结账页打开检查未完成'), {
+        checkoutOpenReason: reason,
+        ...(Number.isInteger(httpStatus) ? { httpStatus } : {})
+    });
+}
+
+function assertOriginalCheckoutPage(page, originalUrl, originalQuoteId, recovery) {
+    let current, expected;
+    try {
+        current = new URL(page.url());
+        expected = new URL(originalUrl);
+        const quoteId = recovery.quoteIdForUrl(current.href, recovery.officialCheckoutForPage(page));
+        if (quoteId === originalQuoteId && current.origin === expected.origin
+            && current.pathname.replace(/\/$/, '') === expected.pathname.replace(/\/$/, '')) return;
+    } catch (_) { /* Identity errors stop this opener; a redirect cannot become a new original. */ }
+    throw checkoutOpenError('original_changed');
 }
 
 /**
- * 通过 API 注入 billing_details 创建 Checkout，并打开 chatgpt.com/checkout
+ * 通过 API 注入 billing_details 创建 Checkout，并打开 chatgpt.com/checkout。
+ * 文档提交只表示开始加载；原单身份、登录与真实控件仍须在同一期限内核实。
  */
 async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true }) {
     const { assertChatGptLoggedIn } = require('./session-auth');
@@ -427,62 +458,126 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
     console.log(`🧭 [步骤] 正在通过 API 创建 Checkout (country=${region}, currency=${billingCurrency}, plan=${planType})...`);
 
     const gpt = new ChatGPTService(page.context().request, token);
-    require('../checkout-recovery.cjs').rememberOfficialCheckout(page, null);
+    const recovery = require('../checkout-recovery.cjs');
+    recovery.rememberOfficialCheckout(page, null);
     const checkout = await gpt.createCheckoutSession(planType, region, billingCurrency, planNameOverride);
     if (!checkout.checkoutUrl) {
         throw Object.assign(new Error('API 创建 Checkout 失败，未取得可核实的原单来源'),
             { code: checkout.errorCode || 'CHECKOUT_CREATION_UNKNOWN', checkoutCreationState: checkout.creationState || 'unknown' });
     }
 
+    let budget;
+    let stage = 'navigation';
     try {
         const url = checkout.checkoutUrl;
-        require('../checkout-recovery.cjs').rememberOfficialCheckout(page, checkout.checkoutSource);
-        console.log(`🔗 [步骤] 正在打开支付链接: ${url.slice(0, 120)}...`);
+        recovery.rememberOfficialCheckout(page, checkout.checkoutSource);
+        console.log('🔗 [步骤] 正在打开已创建的原结账单...');
 
         if (!verifyPage) {
             console.log('✅ [步骤] Checkout Session 已创建（跳过页面打开验证）');
             return { checkoutUrl: url, sessionId: checkout.sessionId };
         }
 
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
-        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
-        await page.waitForTimeout(2000);
-
-        const { hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
-        if (await isCheckoutLoginGate(page) || await hasVisibleLoginChrome(page)) {
-            const title = await page.title().catch(() => '');
-            console.error(`[Checkout] 打开后仍为未登录 UI url=${page.url().slice(0, 100)} title=${title}`);
-            throw new Error(buildSessionNotLoggedInError('Checkout 支付页'));
-        }
-
-        const { clearHumanVerification, buildCaptchaRequiredError } = require('./human-verification');
-        const captchaResult = await clearHumanVerification(page, {
-            phase: 'checkout-open',
+        const ownerSignal = require('../rpc.cjs').taskSignal();
+        const { createVerificationBudget } = require('./verification-runtime');
+        budget = createVerificationBudget({
             maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000),
-            maxBypassRounds: 6,
-            requireCheckoutReady: true,
-            checkoutReadyWaitMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 60000)
+            signal: ownerSignal
         });
+        const run = (operation) => { budget.assert(); return budget.run(operation()); };
+        const originalQuoteId = recovery.quoteIdForUrl(url, recovery.officialCheckoutForPage(page));
+        const response = await run(() => page.goto(url, { waitUntil: 'commit', timeout: budget.timeout(90000) }));
+        if (!response || typeof response.status !== 'function') throw checkoutOpenError('check_failed');
+        const status = response.status();
+        if (!Number.isInteger(status) || status < 200 || status >= 400)
+            throw checkoutOpenError(status >= 400 && status <= 599 ? 'http_error' : 'check_failed', status);
+        budget.assert();
+        assertOriginalCheckoutPage(page, url, originalQuoteId, recovery);
+
+        stage = 'login';
+        const { hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
+        if (await run(() => isCheckoutLoginGate(page)) || await run(() => hasVisibleLoginChrome(page)))
+            throw checkoutOpenError('session_required');
+
+        stage = 'readiness';
+        const { clearHumanVerification, buildCaptchaRequiredError } = require('./human-verification');
+        // Hosted Checkout can require selecting Card before it creates card fields.
+        // Detect load errors now; stripe-payment performs strict readiness after selection.
+        const hostedCheckout = ['pay.openai.com', 'checkout.stripe.com'].includes(new URL(page.url()).hostname);
+        const captchaResult = await run(() => clearHumanVerification(page, {
+            phase: 'checkout-open',
+            maxWaitMs: budget.remaining(),
+            deadlineAt: budget.deadlineAt,
+            signal: ownerSignal,
+            maxBypassRounds: 6,
+            requireCheckoutReady: !hostedCheckout,
+            checkCheckoutLoad: true,
+            allowCheckoutReload: true,
+            isSubmitted: () => require('../rpc.cjs').wasSubmitted(),
+            checkoutReadyWaitMs: Math.min(budget.remaining(), Number(process.env.CHECKOUT_READY_WAIT_MS || 60000))
+        }));
         if (!captchaResult.cleared) {
             const err = captchaResult.sessionRequired
                 ? (captchaResult.message || buildSessionNotLoggedInError('Checkout 支付页'))
                 : captchaResult.checkoutNotReady
                     ? 'Checkout 支付表单未能加载，请检查网络或稍后重试'
                     : buildCaptchaRequiredError();
-            throw new Error(err);
+            throw Object.assign(new Error(err), {
+                code: captchaResult.code,
+                checkoutOpenReason: captchaResult.code === 'VERIFICATION_TIMEOUT' || /_TIMEOUT$/.test(captchaResult.code || '') ? 'timeout'
+                    : ['VERIFICATION_CANCELLED', 'CHECKOUT_FORM_ABORTED'].includes(captchaResult.code) ? 'cancelled'
+                        : ['VERIFICATION_PAGE_CLOSED', 'CHECKOUT_PAGE_CLOSED'].includes(captchaResult.code) ? 'page_closed'
+                            : captchaResult.sessionRequired ? 'session_required'
+                                : captchaResult.checkoutNotReady ? 'not_ready' : 'check_failed'
+            });
         }
 
-        const currentUrl = await assertCheckoutPageReady(page);
-
-        await assertChatGptLoggedIn(page, 'Checkout');
-        console.log(`✅ [步骤] Checkout 页面已打开: ${currentUrl.slice(0, 100)}...`);
+        stage = 'final_check';
+        const currentUrl = await run(() => assertCheckoutPageReady(page, { requireCardReady: !hostedCheckout }));
+        await run(() => assertChatGptLoggedIn(page, 'Checkout'));
+        budget.assert();
+        assertOriginalCheckoutPage(page, url, originalQuoteId, recovery);
+        console.log('✅ [步骤] 原结账单的页面和付款控件检查已完成');
         return { checkoutUrl: currentUrl, sessionId: checkout.sessionId };
     } catch (error) {
+        const openingInterrupted = budget?.signal.aborted || error.name === 'TimeoutError'
+            || ['LEASE_LOST', 'VERIFICATION_TIMEOUT', 'VERIFICATION_CANCELLED', 'CHECKOUT_FORM_ABORTED'].includes(error.code)
+            || ['timeout', 'cancelled'].includes(error.checkoutOpenReason);
+        if (openingInterrupted && !page.isClosed?.()) {
+            // Racing a promise does not cancel Chromium's native navigation. Close
+            // only this task page before the caller can release a late response.
+            try { await page.close({ runBeforeUnload: false }); } catch (_) { /* Check the actual target state below. */ }
+            if (!page.isClosed?.()) {
+                error.checkoutOpenCleanupFailed = true;
+                console.error('[Checkout] 本任务结账页关闭未确认，须完成任务上下文清理');
+            }
+        }
         if (error.code === 'LEASE_LOST') throw Object.assign(error, { checkoutCreationState: 'accepted' });
-        const code = ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED'].includes(error.code)
+        const loadingFailure = /^CHECKOUT_(?:RELOAD_|CONTENT_LOAD_FAILED|FORM_|CONTROL_|CARD_|PAGE_CLOSED)/.test(error.code || '');
+        const code = loadingFailure || ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED'].includes(error.code)
             ? error.code : 'CHECKOUT_OPEN_FAILED';
-        throw Object.assign(new Error('原结账单已创建，页面打开或验证未完成；未另建结账单'),
-            { code, checkoutCreationState: 'accepted' });
+        const reason = error.checkoutOpenReason
+            || (error.name === 'TimeoutError' || error.code === 'VERIFICATION_TIMEOUT' ? 'timeout'
+                : error.code === 'VERIFICATION_CANCELLED' ? 'cancelled'
+                    : page.isClosed?.() ? 'page_closed'
+                        : stage === 'navigation' ? 'network_error' : 'check_failed');
+        const checkoutOpenDiagnostics = safeCheckoutOpenDiagnostics({ stage, reason, httpStatus: error.httpStatus });
+        const reasons = {
+            timeout: '原结账页打开检查超时',
+            http_error: '官网结账页返回 HTTP 错误',
+            original_changed: '结账页已离开原单',
+            session_required: '原结账页需要重新登录',
+            cancelled: '原结账页打开检查已取消',
+            network_error: '原结账页导航网络请求未完成',
+            page_closed: '原结账页已关闭',
+            not_ready: '原结账页的付款控件尚未加载',
+            check_failed: '原结账页打开或验证未完成'
+        };
+        throw Object.assign(new Error(`${reasons[reason] || reasons.check_failed}；未另建结账单`),
+            { code, checkoutCreationState: 'accepted', checkoutOpenDiagnostics,
+                ...(error.checkoutOpenCleanupFailed ? { checkoutOpenCleanupFailed: true } : {}) });
+    } finally {
+        budget?.dispose();
     }
 }
 
@@ -493,3 +588,5 @@ module.exports.openApiCheckout = openApiCheckout;
 module.exports.createHostedCheckoutLink = createHostedCheckoutLink;
 module.exports.buildCheckoutPayload = buildCheckoutPayload;
 module.exports.formatApiErrorDetail = formatApiErrorDetail;
+
+module.exports.safeCheckoutOpenDiagnostics = safeCheckoutOpenDiagnostics;

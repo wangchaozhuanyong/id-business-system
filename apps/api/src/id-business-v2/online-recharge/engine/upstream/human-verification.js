@@ -152,47 +152,59 @@ async function waitForHcaptchaSolverTarget(page, phase, timeoutMs = 20000) {
 
 const CHECKOUT_CAPTCHA_TEXT_RE = /one more step|select the checkbox below|i am human|are you a human/i;
 
+/** Share rendered challenge evidence; stale DOM and empty widget mounts are not walls. */
+async function visibleVerificationDom(page) {
+    return page.evaluate(({ patterns, checkoutPattern }) => {
+        const shown = (element, bounds = true) => {
+            if (!element) return false;
+            for (let node = element; node; node = node.parentElement || node.getRootNode()?.host) {
+                const style = node.ownerDocument.defaultView.getComputedStyle(node);
+                if (node.hidden || node.inert || node.getAttribute('aria-hidden') === 'true'
+                    || style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility)
+                    || Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
+            }
+            if (!bounds) return true;
+            const box = element.getBoundingClientRect();
+            return box.width > 4 && box.height > 4;
+        };
+        const text = [];
+        if (document.body) {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.nodeValue.trim() || !shown(node.parentElement, false)) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                const box = range.getBoundingClientRect();
+                if (box.width > 0 && box.height > 0) text.push(node.nodeValue);
+            }
+        }
+        const body = text.join(' ').replace(/\s+/g, ' ').trim();
+        const cfFrames = document.querySelectorAll('iframe[src*="challenges.cloudflare"], iframe[src*="turnstile"], iframe[title*="Cloudflare" i]');
+        const mounts = document.querySelectorAll('.cf-turnstile, #challenge-running, #challenge-stage, [id*="turnstile"]');
+        const controls = '[role="checkbox"], input[type="checkbox"], canvas, img';
+        const challengeControl = [...mounts].some(mount => shown(mount)
+            && [mount, ...mount.querySelectorAll(controls)].some(control => control.matches(controls) && shown(control)
+                && !control.matches(':disabled') && control.getAttribute('aria-disabled') !== 'true'
+                && control.getAttribute('aria-checked') !== 'true' && control.checked !== true));
+        return {
+            blockingText: patterns.some(pattern => new RegExp(pattern, 'i').test(body)),
+            checkoutCaptchaText: new RegExp(checkoutPattern, 'i').test(body),
+            hasVerify: /verify you are human|i am human|select the checkbox/i.test(body),
+            hasCfBrand: /cloudflare/i.test(body),
+            hasCheckoutUi: /card number|configure your plan|subscribe|billing address|支付|订阅/i.test(body),
+            hasChallengeEl: [...cfFrames].some(frame => shown(frame)) || challengeControl
+        };
+    }, { patterns: BLOCKING_TEXT_PATTERNS.map(pattern => pattern.source), checkoutPattern: CHECKOUT_CAPTCHA_TEXT_RE.source });
+}
+
 /** 从 body / 可见节点判断 Checkout hCaptcha 弹层 */
 async function hasCheckoutCaptchaOverlayText(page) {
     if (!/checkout/i.test(page.url() || '')) {
         return false;
     }
     try {
-        return await page.evaluate(() => {
-            const normalize = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-            const captchaRe = /one more step|select the checkbox below|i am human|are you a human/i;
-            const body = normalize(document.body?.innerText);
-            if (captchaRe.test(body)) {
-                return true;
-            }
-            const nodes = document.querySelectorAll('div, p, span, h1, h2, h3, [role="dialog"], section, article');
-            for (const el of nodes) {
-                if (!(el instanceof HTMLElement)) continue;
-                const style = window.getComputedStyle(el);
-                if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
-                    continue;
-                }
-                const rect = el.getBoundingClientRect();
-                if (rect.width < 8 || rect.height < 8) continue;
-                const text = normalize(el.innerText);
-                if (!text || text.length > 320) continue;
-                if (captchaRe.test(text)) {
-                    return true;
-                }
-            }
-            const iframes = document.querySelectorAll('iframe');
-            for (const iframe of iframes) {
-                const src = String(iframe.getAttribute('src') || '').toLowerCase();
-                const title = String(iframe.getAttribute('title') || '').toLowerCase();
-                if (!src.includes('hcaptcha') && !title.includes('hcaptcha')) continue;
-                if (src.includes('hcaptcha-invisible') || src.includes('hcaptchainvisible')) continue;
-                const rect = iframe.getBoundingClientRect();
-                if (rect.width > 40 && rect.height > 20) {
-                    return true;
-                }
-            }
-            return false;
-        });
+        if ((await visibleVerificationDom(page)).checkoutCaptchaText) return true;
+        return (await inspectCaptchaFrames(page)).some(item => item.raster || !item.checked);
     } catch (_) {
         return false;
     }
@@ -213,13 +225,6 @@ async function hasAnyCheckoutCaptchaSignal(page) {
     }
     if (await hasVisiblePostSubmitHcaptchaWidget(page)) {
         return true;
-    }
-    for (const re of [/one more step/i, /select the checkbox/i, /i am human/i]) {
-        try {
-            if (await page.getByText(re).first().isVisible({ timeout: 300 })) {
-                return true;
-            }
-        } catch (_) { /* next */ }
     }
     return false;
 }
@@ -247,72 +252,10 @@ async function isCheckoutOverlayCaptchaVisible(page) {
 }
 
 async function isBlockingHumanVerificationVisible(page) {
-    if (await isCheckoutOverlayCaptchaVisible(page)) {
-        return true;
-    }
-
-    const textPatterns = [
-        /one more step/i,
-        /select the checkbox below/i,
-        /i am human/i,
-        /are you a human/i,
-        /verify you are human/i,
-        /performing security verification/i,
-        /just a moment/i,
-        /checking your browser/i
-    ];
-    for (const re of textPatterns) {
-        try {
-            if (await page.getByText(re).first().isVisible({ timeout: 400 })) {
-                return true;
-            }
-        } catch (_) { /* next */ }
-    }
-
-    const bodyText = String(await page.textContent('body', { timeout: 3000 }).catch(() => '') || '');
-    if (/one more step|select the checkbox below|i am human/i.test(bodyText)) {
-        return true;
-    }
-    if (BLOCKING_TEXT_PATTERNS.some((re) => re.test(bodyText))) {
-        return true;
-    }
-
-    const captchaSelectors = [
-        'iframe[src*="hcaptcha.com"][src*="frame=checkbox"]',
-        'iframe[src*="hcaptcha.com"][src*="frame=challenge"]',
-        'div:has-text("One more step") iframe',
-        'div:has-text("I am human") iframe',
-        'iframe[src*="challenges.cloudflare"]',
-        'iframe[src*="turnstile"]',
-        'iframe[title*="Cloudflare" i]',
-        '.cf-turnstile',
-        '#challenge-running',
-        '#challenge-stage',
-        'div:has-text("Verify you are human") iframe'
-    ];
-    for (const sel of captchaSelectors) {
-        try {
-            if (await page.locator(sel).first().isVisible({ timeout: 400 })) {
-                return true;
-            }
-        } catch (_) { /* next */ }
-    }
-
+    const info = await visibleVerificationDom(page);
+    if (info.blockingText || info.hasChallengeEl) return true;
     for (const item of await inspectCaptchaFrames(page)) {
         if (item.raster || !item.checked) return true;
-    }
-
-    // 支付表单在弹层背后仍可见 — 不能据此判定「无验证」
-    if (/checkout/i.test(page.url() || '')) {
-        return false;
-    }
-
-    if (await isCheckoutPaymentReady(page)) {
-        return false;
-    }
-
-    if (/configure your plan|card number|due today|subscribe now|billing address/i.test(bodyText)) {
-        return false;
     }
     return false;
 }
@@ -324,21 +267,7 @@ async function isHumanVerificationVisible(page) {
 /** Cloudflare 全页拦截（OpenAI logo + Verify you are human） */
 async function isCloudflareWallPage(page) {
     try {
-        const info = await page.evaluate(() => {
-            const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
-            const lower = text.toLowerCase();
-            const hasVerify = lower.includes('verify you are human')
-                || lower.includes('i am human')
-                || lower.includes('select the checkbox');
-            const hasCfBrand = lower.includes('cloudflare');
-            const hasCheckoutUi = /card number|configure your plan|subscribe|billing address|支付|订阅/i.test(text);
-            const hasChallengeEl = Boolean(
-                document.querySelector(
-                    'iframe[src*="challenges.cloudflare"], iframe[src*="turnstile"], .cf-turnstile, #challenge-running, #challenge-stage, [id*="turnstile"]'
-                )
-            );
-            return { hasVerify, hasCfBrand, hasCheckoutUi, hasChallengeEl, textSample: text.slice(0, 280) };
-        });
+        const info = await visibleVerificationDom(page);
         if (info.hasChallengeEl) {
             return true;
         }
@@ -352,59 +281,15 @@ async function isCloudflareWallPage(page) {
     return false;
 }
 
-/** Checkout 支付表单是否已真正加载（不仅是 URL 对了） */
-async function hasVisibleStripeCardInputs(page) {
-    const iframeCount = await page.locator('iframe').count().catch(() => 0);
-    for (let i = 0; i < iframeCount; i += 1) {
-        const src = await page.locator('iframe').nth(i).getAttribute('src').catch(() => '') || '';
-        if (isInvisibleStripeHcaptchaUrl(src)) {
-            continue;
-        }
-        const fl = page.frameLocator('iframe').nth(i);
-        try {
-            const input = fl.locator('input:not([type="hidden"])').first();
-            if (await input.isVisible({ timeout: 500 })) {
-                return true;
-            }
-        } catch (_) { /* next iframe */ }
-    }
-    return false;
-}
-
-async function isCheckoutPaymentReady(page) {
-    if (await hasVisibleStripeCardInputs(page)) {
-        return true;
-    }
-
-    const probes = [
-        () => page.getByText(/^Card number$/i).first().isVisible({ timeout: 1200 }),
-        () => page.getByText(/Configure your plan/i).first().isVisible({ timeout: 1200 }),
-        () => page.getByText(/Due today/i).first().isVisible({ timeout: 1200 }),
-        () => page.getByText(/Plus plan|Pro plan|Monthly subscription/i).first().isVisible({ timeout: 1200 }),
-        () => page.getByRole('button', { name: /subscribe|订阅|pay/i }).first().isVisible({ timeout: 1200 }),
-        () => page.locator('input[autocomplete="cc-number"]').first().isVisible({ timeout: 1200 })
-    ];
-    for (const probe of probes) {
-        if (await probe().catch(() => false)) {
-            return true;
-        }
-    }
-
-    for (const frame of page.frames()) {
-        if (isInvisibleStripeHcaptchaUrl(frame.url())) {
-            continue;
-        }
-        if (!/js\.stripe\.com|stripe\.com|elements-inner/i.test(frame.url())) {
-            continue;
-        }
-        try {
-            const input = frame.locator('input[autocomplete="cc-number"], input[name="cardnumber"], input[name="number"]').first();
-            if (await input.isVisible({ timeout: 500 })) {
-                return true;
-            }
-        } catch (_) { /* next frame */ }
-    }
-    return false;
+/** The same semantic controls decide readiness and perform the eventual fill. */
+async function isCheckoutPaymentReady(page, options = {}) {
+    const form = require('../checkout-form.cjs');
+    if (await form.checkoutPageLoadFailed(page, { deadline: options.deadline || Date.now() + 2000, signal: options.signal })) return false;
+    const result = await form.inspectCardReadiness(page, {
+        deadline: options.deadline || Date.now() + 2000,
+        signal: options.signal
+    });
+    return result.ready;
 }
 
 async function waitForCheckoutPaymentReady(page, timeoutMs = 60000) {
@@ -417,7 +302,7 @@ async function waitForCheckoutPaymentReady(page, timeoutMs = 60000) {
         if (isHardLoginRedirectUrl(url) && !isCheckoutPageUrl(url)) {
             return 'login_redirect';
         }
-        if (await isCheckoutPaymentReady(page)) {
+        if (await isCheckoutPaymentReady(page, { deadline: Math.min(deadline, Date.now() + 2000) })) {
             return true;
         }
         await page.waitForTimeout(800);
@@ -428,24 +313,20 @@ async function waitForCheckoutPaymentReady(page, timeoutMs = 60000) {
     return false;
 }
 
-async function isVerificationCleared(page, options = {}) {
-    const pageUrl = page.url() || '';
-    if (/redirect_status=succeeded/i.test(pageUrl) || /checkout\/verify/i.test(pageUrl)) {
-        return true;
-    }
+function checkoutReadinessRequired(pageUrl, explicit) {
+    // Completion URLs only preserve post-submit defaults; they neither override
+    // a visible challenge nor replace an explicitly requested card-control check.
+    return explicit ?? (/checkout/i.test(pageUrl) && !/redirect_status=succeeded|checkout\/verify/i.test(pageUrl));
+}
 
-    const requireCheckoutReady = options.requireCheckoutReady
-        ?? /checkout/i.test(pageUrl);
+async function isVerificationCleared(page, options = {}) {
+    const requireCheckoutReady = checkoutReadinessRequired(page.url() || '', options.requireCheckoutReady);
 
     if (await hasAnyCheckoutCaptchaSignal(page)) {
         return false;
     }
     if (await isCheckoutOverlayCaptchaVisible(page)) {
         return false;
-    }
-
-    if (requireCheckoutReady && await isCheckoutPaymentReady(page)) {
-        return true;
     }
 
     if (await isBlockingHumanVerificationVisible(page)) {
@@ -966,29 +847,71 @@ async function clearHumanVerification(page, options = {}) {
     let state = verificationState(page) || { revision: 0 };
     const budget = createVerificationBudget({ ...options, signal: options.signal || state.signal });
     const phase = options.phase || 'page';
-    const requireCheckoutReady = options.requireCheckoutReady ?? /checkout/i.test(page.url() || '');
+    const requireCheckoutReady = checkoutReadinessRequired(page.url() || '', options.requireCheckoutReady);
+    const checkCheckoutLoad = requireCheckoutReady || options.checkCheckoutLoad === true;
+    const checkoutDeadline = Date.now() + Math.min(budget.remaining(),
+        Math.max(1, Number(options.checkoutReadyWaitMs) || 60000));
+    const form = checkCheckoutLoad ? require('../checkout-form.cjs') : null;
+    const recovery = checkCheckoutLoad && options.allowCheckoutReload === true
+        ? require('../checkout-recovery.cjs') : null;
+    const reloadOptions = { deadlineAt: budget.deadlineAt, signal: budget.signal,
+        ownerSignal: recovery ? options.signal || state.signal || require('../rpc.cjs').taskSignal() : undefined,
+        isSubmitted: options.isSubmitted || (() => require('../rpc.cjs').wasSubmitted()) };
     const maxRounds = Math.max(1, Math.min(4, Number(options.maxBypassRounds) || 4));
     const attempted = new Set();
     const clicked = new WeakSet();
     let rounds = 0, lastCode = 'VERIFICATION_NOT_READY', platformUsed = false, solverDiagnostics = {}, completedKey = null;
+    let checkoutWaiting = false, readiness = null;
     const unknown = (code, retryable = false) => ({ cleared: false, captchaRequired: true,
         code, retryable, rounds, diagnostics: { state: lastCode, revision: state.revision, ...solverDiagnostics } });
+    const checkoutFailure = (code) => ({ cleared: false, captchaRequired: false,
+        checkoutNotReady: true, code, rounds,
+        missing: readiness?.missing || ['number'], controls: readiness?.controls || [],
+        ...(readiness?.inspection ? { inspection: readiness.inspection } : {}),
+        diagnostics: { state: code,
+            ...(readiness?.inspection ? { inspection: readiness.inspection } : {}),
+            ...(recovery ? recovery.originalCheckoutReloadDiagnostics(page) : {}) } });
+    const pendingCheckoutCode = () => !readiness || readiness.code === 'CHECKOUT_CARD_NOT_READY'
+        ? 'CHECKOUT_FORM_NOT_READY' : readiness.code;
     try {
         state = await budget.run(prepareVerificationPage(page, { signal: options.signal || budget.signal }));
         while (budget.remaining() > 0) {
             budget.assert();
-            if (page.isClosed?.()) return unknown('VERIFICATION_PAGE_CLOSED');
+            if (page.isClosed?.()) return checkCheckoutLoad
+                ? checkoutFailure('CHECKOUT_PAGE_CLOSED') : unknown('VERIFICATION_PAGE_CLOSED');
             if (await budget.run(isCheckoutLoginGate(page)) || await budget.run(hasVisibleLoginChrome(page)))
                 return { ...unknown('SESSION_INVALID'), sessionRequired: true, message: buildSessionNotLoggedInError('验证页面') };
+            if (checkCheckoutLoad && await budget.run(form.checkoutPageLoadFailed(page, { deadline: Date.now() + budget.remaining(), signal: budget.signal }))) {
+                checkoutWaiting = true;
+                if (!recovery) return checkoutFailure('CHECKOUT_CONTENT_LOAD_FAILED');
+                await budget.run(recovery.reloadOriginalCheckout(page, reloadOptions));
+                continue;
+            }
             const frames = await budget.run(inspectCaptchaFrames(page));
             const images = frames.filter((item) => item.raster
                 && item.prompts.some((prompt) => !isCheckboxInstruction(prompt)));
             const boxes = frames.filter((item) => ['checkbox', 'turnstile'].includes(item.kind)
                 && item.checkboxCount === 1 && !item.checked);
+            if (images.length || boxes.length) checkoutWaiting = false;
             if (images.length > 1 || boxes.length > 1) return unknown('VERIFICATION_FRAME_AMBIGUOUS');
             if (!frames.some((item) => item.raster || !item.checked)
-                && await budget.run(isVerificationCleared(page, { requireCheckoutReady })))
-                return { cleared: true, rounds, via: state.passed ? 'verified-response' : 'page-readback' };
+                && await budget.run(isVerificationCleared(page, { requireCheckoutReady: false }))) {
+                if (!requireCheckoutReady)
+                    return { cleared: true, rounds, via: state.passed ? 'verified-response' : 'page-readback' };
+                checkoutWaiting = true;
+                if (readiness && Date.now() >= checkoutDeadline)
+                    return checkoutFailure(pendingCheckoutCode());
+                readiness = await budget.run(form.inspectCardReadiness(page, {
+                    deadline: Math.min(checkoutDeadline, Date.now() + 2000), signal: budget.signal
+                }));
+                if (readiness.ready && !await budget.run(form.checkoutPageLoadFailed(page, { deadline: Math.min(checkoutDeadline, Date.now() + budget.remaining()), signal: budget.signal }))) {
+                    const reload = recovery?.originalCheckoutReloadDiagnostics(page);
+                    if (reload?.reloadAttempts && reload.code !== 'CHECKOUT_RELOAD_READY')
+                        await budget.run(recovery.finishOriginalCheckoutReload(page, reloadOptions));
+                    return { cleared: true, rounds, via: state.passed ? 'verified-response' : 'page-readback' };
+                }
+                if (Date.now() >= checkoutDeadline) return checkoutFailure(pendingCheckoutCode());
+            }
             if (state.error && !['VERIFICATION_CHALLENGE_REJECTED'].includes(state.error))
                 return unknown(state.error, ['VERIFICATION_NETWORK_UNAVAILABLE', 'VERIFICATION_PROVIDER_UNAVAILABLE', 'VERIFICATION_RATE_LIMITED'].includes(state.error));
             if (images.length === 1) {
@@ -1028,9 +951,15 @@ async function clearHumanVerification(page, options = {}) {
             }
             await budget.wait(500);
         }
-        return unknown('VERIFICATION_TIMEOUT', true);
+        return checkoutWaiting ? checkoutFailure(pendingCheckoutCode()) : unknown('VERIFICATION_TIMEOUT', true);
     } catch (error) {
         if (error?.code === 'LEASE_LOST') throw error;
+        if (/^CHECKOUT_[A-Z0-9_]+$/.test(error?.code || '')) return checkoutFailure(error.code);
+        if (checkoutWaiting && error?.code === 'VERIFICATION_TIMEOUT')
+            return checkoutFailure(pendingCheckoutCode());
+        if (checkCheckoutLoad && page.isClosed?.()) return checkoutFailure('CHECKOUT_PAGE_CLOSED');
+        if (checkoutWaiting && error?.code === 'VERIFICATION_CANCELLED')
+            return checkoutFailure('CHECKOUT_FORM_ABORTED');
         return unknown(page.isClosed?.() ? 'VERIFICATION_PAGE_CLOSED' : controlledVerificationCode(error?.code),
             error?.code === 'VERIFICATION_TIMEOUT');
     } finally { budget.dispose(); }

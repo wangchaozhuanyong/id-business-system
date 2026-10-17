@@ -190,6 +190,120 @@ export function isOnlineCheckoutCsRecoveryControlsOnly(paths) {
     paths.every((path) => checkoutCsRecoveryOptional.includes(path))
   );
 }
+export const onlineCheckoutLoadRecoveryScope = 'ONLINE_CHECKOUT_LOAD_RECOVERY';
+const checkoutLoadRecoveryEngineRequired = [
+  'SOURCE_MANIFEST.json',
+  'checkout-form.cjs',
+  'checkout-recovery.cjs',
+  'rpc.cjs',
+  'test/checkout-form.test.cjs',
+  'test/checkout-load-recovery.test.cjs',
+  'test/checkout-page-loading.test.cjs',
+  'test/checkout-recovery.test.cjs',
+  'test/recharge-flow-acceptance.test.cjs',
+  'test/rpc-response.test.cjs',
+  'test/verification-state.test.cjs',
+  'upstream/chatgpt.js',
+  'upstream/human-verification.js',
+  'upstream/stripe-payment.js'
+];
+const checkoutLoadRecoveryRequired = [
+  ...checkoutLoadRecoveryEngineRequired.map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  ),
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts'
+];
+const checkoutLoadRecoveryReleaseControls = [
+  '.github/workflows/online-checkout-load-validation.yml',
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-load-' + name
+  )
+];
+const checkoutLoadRecoveryOptional = [
+  ...checkoutLoadRecoveryReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+];
+export const onlineCheckoutNavigationReadyScope = 'ONLINE_CHECKOUT_NAVIGATION_READY';
+const checkoutNavigationReadyEngineRequired = [
+  'SOURCE_MANIFEST.json',
+  'checkout-form.cjs',
+  'checkout-recovery.cjs',
+  'safe-media.cjs',
+  'test/checkout-form.test.cjs',
+  'test/checkout-load-recovery.test.cjs',
+  'test/checkout-navigation.test.cjs',
+  'test/checkout-recovery.test.cjs',
+  'test/recharge-flow-acceptance.test.cjs',
+  'test/regressions.test.cjs',
+  'test/safe-media-finish.test.cjs',
+  'test/verification-state.test.cjs',
+  'upstream/chatgpt.js',
+  'upstream/human-verification.js',
+  'upstream/index.js'
+];
+const checkoutNavigationReadyRequired = [
+  ...checkoutNavigationReadyEngineRequired.map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  ),
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+  'docs/ONLINE_RECHARGE.md'
+];
+const checkoutNavigationReadyControls = [
+  ...['build.py', 'contract.json', 'release.py', 'release.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-load-' + name
+  ),
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs'
+];
+export function isOnlineCheckoutNavigationReadyOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    checkoutNavigationReadyRequired.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        checkoutNavigationReadyRequired.includes(path) ||
+        checkoutNavigationReadyControls.includes(path)
+    )
+  );
+}
+const checkoutLoadParentRpcRequired = [
+  'SOURCE_MANIFEST.json',
+  'rpc.cjs',
+  'test/rpc-response.test.cjs'
+].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
+export function isOnlineCheckoutLoadParentRpcOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    checkoutLoadParentRpcRequired.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        checkoutLoadParentRpcRequired.includes(path) || checkoutLoadRecoveryOptional.includes(path)
+    )
+  );
+}
+export function isOnlineCheckoutLoadRecoveryOnly(paths) {
+  return (
+    isOnlineCheckoutLoadParentRpcOnly(paths) ||
+    (new Set(paths).size === paths.length &&
+      checkoutLoadRecoveryRequired.every((path) => paths.includes(path)) &&
+      paths.every(
+        (path) =>
+          checkoutLoadRecoveryRequired.includes(path) || checkoutLoadRecoveryOptional.includes(path)
+      ))
+  );
+}
+export function isOnlineCheckoutLoadRecoveryControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((path) => checkoutLoadRecoveryReleaseControls.includes(path)) &&
+    paths.every((path) => checkoutLoadRecoveryOptional.includes(path))
+  );
+}
 export const onlineSettingsPaths = Object.freeze([
   ...applicationPaths,
   ...controlPaths,
@@ -265,7 +379,9 @@ export function isOnlineSettingsOnly(paths) {
   if (
     isOnlineSettingsTestsOnly(paths) ||
     isOnlineLegacyCloseOnly(paths) ||
-    isOnlineCheckoutCsRecoveryOnly(paths)
+    isOnlineCheckoutCsRecoveryOnly(paths) ||
+    isOnlineCheckoutLoadRecoveryOnly(paths) ||
+    isOnlineCheckoutNavigationReadyOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -290,6 +406,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCheckoutLoadRecoveryControlsOnly(paths)) return true;
   if (isOnlineCheckoutCsRecoveryControlsOnly(paths)) return true;
   return (
     paths.some(
@@ -312,6 +429,14 @@ export function onlineSettingsCommands(part, paths) {
   const legacyClose = isOnlineLegacyCloseOnly(paths);
   const checkoutCsRecovery = isOnlineCheckoutCsRecoveryOnly(paths);
   const checkoutCsControls = isOnlineCheckoutCsRecoveryControlsOnly(paths);
+  const checkoutLoadRecovery = isOnlineCheckoutLoadRecoveryOnly(paths);
+  const checkoutLoadParentRpc = isOnlineCheckoutLoadParentRpcOnly(paths);
+  const checkoutLoadControls = isOnlineCheckoutLoadRecoveryControlsOnly(paths);
+  const checkoutNavigationReady = isOnlineCheckoutNavigationReadyOnly(paths);
+  const checkoutLoadBusiness = checkoutLoadRecovery || checkoutNavigationReady;
+  const checkoutEngineRequired = checkoutNavigationReady
+    ? checkoutNavigationReadyEngineRequired
+    : checkoutLoadRecoveryEngineRequired;
   if (!isOnlineSettingsOnly(paths) && !controlsOnly)
     throw new Error('Unsupported online settings scope');
   const npm = (...args) => ['npm', ...args];
@@ -335,6 +460,49 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (checkoutLoadBusiness || checkoutLoadControls)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-checkout-load-release.test.py'],
+        ...(checkoutLoadBusiness
+          ? [
+              ...[
+                'check:v2-module-architecture',
+                'check:v2-isolation',
+                'check:v2-prisma-runtime-boundary',
+                'check:v2-concurrency-standard',
+                'check:v2-decimal-standard'
+              ].map((name) => npm('run', name)),
+              [
+                'node',
+                '--input-type=module',
+                '-e',
+                [
+                  "import assert from 'node:assert/strict';",
+                  "import { readFileSync } from 'node:fs';",
+                  "import { createHash } from 'node:crypto';",
+                  "import { resolve, sep, isAbsolute, win32 } from 'node:path';",
+                  "const root = resolve('apps/api/src/id-business-v2/online-recharge/engine');",
+                  "const manifest = JSON.parse(readFileSync(resolve(root, 'SOURCE_MANIFEST.json'), 'utf8'));",
+                  "assert.equal(manifest.repository, 'https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git');",
+                  "assert.equal(manifest.commit, 'ba6cf96312a6953e62edb9d74299d438d12549df');",
+                  'const rows = manifest.files;',
+                  'assert.ok(Array.isArray(rows) && rows.length > 0);',
+                  'assert.equal(new Set(rows.map(row => row.path)).size, rows.length);',
+                  `for (const required of ${JSON.stringify(checkoutEngineRequired.filter((name) => name !== 'SOURCE_MANIFEST.json'))}) assert.ok(rows.some(row => row.path === required), required);`,
+                  'for (const row of rows) {',
+                  "  assert.ok(typeof row.path === 'string' && row.path.length > 0 && !isAbsolute(row.path) && !win32.isAbsolute(row.path));",
+                  "  assert.ok(row.path.split(/[\\\\/]/).every(part => part && part !== '.' && part !== '..'));",
+                  '  const file = resolve(root, row.path);',
+                  '  assert.ok(file.startsWith(root + sep) && /^[a-f0-9]{64}$/.test(row.adaptedSha256));',
+                  "  assert.equal(createHash('sha256').update(readFileSync(file)).digest('hex'), row.adaptedSha256, row.path);",
+                  '}',
+                  "console.log('Online checkout load source fingerprints passed.');"
+                ].join('\n')
+              ]
+            ]
+          : [])
+      ];
     if (checkoutCsRecovery || checkoutCsControls)
       return [
         ...controls,
@@ -437,6 +605,59 @@ export function onlineSettingsCommands(part, paths) {
   if (controlsOnly) throw new Error('Unsupported controls-only check');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
+  if (checkoutLoadBusiness) {
+    const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
+    const browser = [
+      npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),
+      ['node', upstream + '/node_modules/playwright/cli.js', 'install', '--with-deps', 'chromium']
+    ];
+    if (part === 'admin') throw new Error('Unsupported checkout load recovery Admin check');
+    if (checkoutLoadParentRpc && part === 'api')
+      throw new Error('Unsupported checkout load parent RPC API check');
+    if (part === 'api')
+      return [
+        npm('run', 'prisma:mysql:generate'),
+        shared,
+        npm('run', 'typecheck', '--workspace', '@apple-business/api'),
+        ...browser,
+        npm(
+          'run',
+          'test',
+          '--workspace',
+          '@apple-business/api',
+          '--',
+          'src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts'
+        )
+      ];
+    if (part === 'online-engine')
+      return [
+        npm('ci', '--ignore-scripts', '--no-audit', '--no-fund'),
+        ...browser,
+        ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg', 'xvfb', 'xauth'],
+        [
+          'node',
+          '--input-type=module',
+          '-e',
+          [
+            "import { readdirSync } from 'node:fs';",
+            "import { spawnSync } from 'node:child_process';",
+            "const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';",
+            "const files = readdirSync(root).filter(name => name.endsWith('.test.cjs')).sort().map(name => root + '/' + name);",
+            "if (!files.length) throw new Error('Missing online engine regression files');",
+            "const result = spawnSync(process.execPath, ['--test', '--test-concurrency=2', ...files], { stdio: 'inherit' });",
+            'if (result.error) throw result.error;',
+            'process.exit(result.status ?? 1);'
+          ].join('\n')
+        ],
+        npm(
+          '--prefix',
+          'apps/api/src/id-business-v2/online-recharge/engine',
+          'run',
+          'test:upstream'
+        )
+      ];
+    throw new Error('Unsupported checkout load recovery check part');
+  }
   if (checkoutCsRecovery && part === 'admin')
     throw new Error('Unsupported checkout CS recovery Admin check');
   if (checkoutCsRecovery && part === 'api')

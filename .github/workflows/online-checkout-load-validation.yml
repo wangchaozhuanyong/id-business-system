@@ -1,0 +1,44 @@
+name: Online Checkout Load Recovery Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify finite source contract and engine-only publication controls
+        run: |
+          python3 -B scripts/production-release/online-checkout-load-build.py --check
+          python3 -B scripts/production-release/online-checkout-load-release.test.py
+      - name: Reuse authenticated identical-tree Quality validation and package only the engine delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/online-checkout-load-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-checkout-load-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-checkout-load/online-checkout-load-artifact.tar.gz
+            .deploy/online-checkout-load/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
