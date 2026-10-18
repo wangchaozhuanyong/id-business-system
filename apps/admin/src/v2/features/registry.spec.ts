@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(47);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(46);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,7 +58,7 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(47);
+    expect(v2FeatureRegistry).toHaveLength(46);
   });
 
   it('keeps the removed registration names module retired', () => {
