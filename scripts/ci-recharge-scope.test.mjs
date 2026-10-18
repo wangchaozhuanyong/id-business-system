@@ -7206,3 +7206,27 @@ test('query network repair keeps all four checks and rejects an unrelated core p
     'full'
   );
 });
+import {
+  isBitbrowserBillingControlsOnly as finiteBillingOnly,
+  bitbrowserBillingControlPaths as finiteBillingPaths,
+  isCiOnly as finiteBillingCiOnly,
+  selectedParts as finiteBillingParts,
+  needsOnlineRechargeCiBuild as finiteBillingNeedsEngine
+} from './ci-recharge-scope.mjs';
+
+test('finite BitBrowser publication controls reuse unchanged application checks', () => {
+  assert.equal(finiteBillingOnly(finiteBillingPaths), true);
+  assert.equal(finiteBillingCiOnly(finiteBillingPaths), true);
+  assert.deepEqual(finiteBillingParts(finiteBillingPaths), ['guards']);
+  assert.equal(finiteBillingNeedsEngine(finiteBillingPaths), false);
+  for (const extra of [
+    'apps/admin/src/v2/features/auto-recharge/recharge-form.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+    'scripts/production-release/bitbrowser-billing-dispatch.py'
+  ]) {
+    assert.equal(finiteBillingOnly([...finiteBillingPaths, extra]), false);
+  }
+  assert.equal(finiteBillingOnly([]), false);
+  assert.equal(finiteBillingOnly(['scripts/ci-recharge-scope.mjs']), false);
+});

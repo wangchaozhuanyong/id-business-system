@@ -2990,3 +2990,19 @@ test('terminal contract entry repair dispatches controls without rerunning uncha
       );
   });
 });
+test('finite BitBrowser control checks retain immutable base and real guard commands', () => {
+  const source = readFileSync(new URL('./ci-recharge-check.mjs', import.meta.url), 'utf8');
+  const block = source.slice(
+    source.indexOf('// BEGIN finite BitBrowser publication control checks'),
+    source.indexOf('// END finite BitBrowser publication control checks')
+  );
+  assert.ok(block.includes('bitbrowserBillingControlTree'));
+  assert.ok(!block.includes('rejectRetiredRegistrationExecution()'));
+  assert.ok(source.includes('rejectRetiredRegistrationCommand(file, args)'));
+  assert.ok(block.includes('bitbrowser-billing-release.test.py'));
+  assert.ok(block.includes('bitbrowser-billing-build.py'));
+  assert.ok(block.includes('format:check'));
+  assert.ok(block.includes("npm('run', 'lint')"));
+  assert.ok(block.includes("part !== 'guards'"));
+  assert.ok(!block.includes('migrate deploy'));
+});
