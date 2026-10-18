@@ -222,11 +222,34 @@ function safeControls(items) {
     fields: Object.keys(rules).filter((key) => score(meta, key) > 0)
   }));
 }
-function elementRendered(element, { control = false, reason = false, snapshot = false } = {}) {
+function elementRendered(
+  element,
+  { control = false, interaction = false, reason = false, snapshot = false } = {}
+) {
   // Computed visibility on the target already includes inheritance. A visible
   // child may legally override a hidden ancestor; the other exclusions below
   // still apply to the whole composed ancestor chain, including shadow hosts.
-  function rejection(target, isControl) {
+  let visibleModals;
+  function containsComposed(parent, child) {
+    for (let node = child; node; node = node.parentElement || node.getRootNode()?.host)
+      if (node === parent) return true;
+    return false;
+  }
+  function paintStack(doc, x, y) {
+    const visited = new Set(),
+      stack = [];
+    function collect(root) {
+      if (visited.has(root)) return;
+      visited.add(root);
+      for (const node of root.elementsFromPoint(x, y)) {
+        if (node.shadowRoot) collect(node.shadowRoot);
+        if (!stack.includes(node)) stack.push(node);
+      }
+    }
+    collect(doc);
+    return stack;
+  }
+  function rejection(target, isControl, interactive = isControl || interaction, checkModal = true) {
     if (isControl) {
       if (target.matches(':disabled')) return 'disabled';
       if (target.readOnly && target.getAttribute('role') !== 'combobox') return 'readonly';
@@ -251,7 +274,10 @@ function elementRendered(element, { control = false, reason = false, snapshot = 
       const style = node.ownerDocument.defaultView.getComputedStyle(node);
       if (node.hidden) return 'hidden';
       if (node.inert) return 'inert';
-      if (node.getAttribute('aria-hidden') === 'true') return 'aria_hidden';
+      // ARIA controls the accessibility tree, not rendering or interactivity.
+      // Keep it for text probes; actual fields/frames use physical eligibility
+      // plus the same modal and hit-test checks before writing and readback.
+      if (!interactive && node.getAttribute('aria-hidden') === 'true') return 'aria_hidden';
       if (isControl && node.getAttribute('aria-disabled') === 'true') return 'aria_disabled';
       if (style.display === 'none') return 'display_none';
       if (Number(style.opacity) === 0) return 'opacity_zero';
@@ -260,7 +286,52 @@ function elementRendered(element, { control = false, reason = false, snapshot = 
     const style = target.ownerDocument.defaultView.getComputedStyle(target);
     if (['hidden', 'collapse'].includes(style.visibility)) return 'visibility_hidden';
     const box = target.getBoundingClientRect();
-    return box.width > 0 && box.height > 0 ? null : 'zero_geometry';
+    if (box.width <= 0 || box.height <= 0) return 'zero_geometry';
+    if (interactive && checkModal) {
+      if (!visibleModals) {
+        visibleModals = [];
+        const roots = [target.ownerDocument];
+        for (const root of roots) {
+          for (const node of root.querySelectorAll('*'))
+            if (node.shadowRoot) roots.push(node.shadowRoot);
+          for (const modal of root.querySelectorAll('dialog[open],[aria-modal="true"]'))
+            if (
+              (modal.matches(':modal') || modal.getAttribute('aria-modal') === 'true') &&
+              !rejection(modal, false, true, false)
+            )
+              visibleModals.push(modal);
+        }
+      }
+      const owners = visibleModals.filter((modal) => containsComposed(modal, target));
+      for (const modal of visibleModals) {
+        if (containsComposed(modal, target)) continue;
+        const behindOwner = owners.some((owner) => {
+          const doc = target.ownerDocument,
+            view = doc.defaultView,
+            rect = owner.getBoundingClientRect();
+          const x = (Math.max(0, rect.left) + Math.min(view.innerWidth, rect.right)) / 2,
+            y = (Math.max(0, rect.top) + Math.min(view.innerHeight, rect.bottom)) / 2;
+          const stack = paintStack(doc, x, y),
+            ownerIndex = stack.findIndex((node) => containsComposed(owner, node)),
+            modalIndex = stack.findIndex((node) => containsComposed(modal, node));
+          if (ownerIndex >= 0 && modalIndex > ownerIndex) return true;
+          // The top native dialog's backdrop intercepts the whole viewport,
+          // including a previous dialog that is still :modal beneath it.
+          if (owner.matches(':modal') && modal.matches(':modal')) {
+            const other = modal.getBoundingClientRect();
+            const hit = paintStack(
+              doc,
+              Math.max(0, Math.min(view.innerWidth - 1, other.left + other.width / 2)),
+              Math.max(0, Math.min(view.innerHeight - 1, other.top + other.height / 2))
+            )[0];
+            return hit && containsComposed(owner, hit);
+          }
+          return false;
+        });
+        if (!behindOwner) return 'modal_background';
+      }
+    }
+    return null;
   }
   if (!snapshot) {
     const rejected = rejection(element, control);
@@ -357,7 +428,7 @@ async function frameVisible(frame, deadline, signal, inspection) {
     const owner = await within(() => current.frameElement(), deadline, signal);
     try {
       const reason = await within(
-        () => owner.evaluate(elementRendered, { reason: true }),
+        () => owner.evaluate(elementRendered, { reason: true, interaction: true }),
         deadline,
         signal
       );
@@ -441,7 +512,7 @@ async function readControlsOnce(page, deadline, state) {
                   : null;
         const el = attribute
           ? root.locator(
-              `${meta.tag}[${attribute[0]}=${JSON.stringify(attribute[1])}]:visible:not(:disabled,[inert],[inert] *,[aria-hidden="true"],[aria-hidden="true"] *,[readonly]:not([role="combobox"]))`
+              `${meta.tag}[${attribute[0]}=${JSON.stringify(attribute[1])}]:visible:not(:disabled,[inert],[inert] *,[readonly]:not([role="combobox"]))`
             )
           : meta.label
             ? root.getByLabel(meta.label, { exact: true })
@@ -532,6 +603,184 @@ async function readWithin(
     throw error;
   }
 }
+function interactionPoint(element, child) {
+  // Pure DOM observation: never click (including Playwright trial clicks), focus,
+  // dispatch an event, or change an upstream attribute to prove eligibility.
+  const doc = element.ownerDocument,
+    win = doc.defaultView,
+    box = element.getBoundingClientRect();
+  const width = win.innerWidth,
+    height = win.innerHeight;
+  let x, y;
+  if (child) {
+    // Axis-aligned scale/translation has a deterministic content-box mapping.
+    // Perspective/rotation/skew/zoom cannot be proved by a bounding rectangle.
+    for (let node = element; node; node = node.parentElement || node.getRootNode()?.host) {
+      const style = win.getComputedStyle(node);
+      if (
+        (style.perspective && style.perspective !== 'none') ||
+        (style.rotate && !['none', '0deg'].includes(style.rotate)) ||
+        (style.zoom && !['normal', '1'].includes(style.zoom))
+      )
+        return { reason: 'unsupported_transform' };
+      if (style.scale && style.scale !== 'none')
+        if (
+          style.scale
+            .split(/\s+/)
+            .some((part) => !Number.isFinite(Number(part)) || Number(part) <= 0)
+        )
+          return { reason: 'unsupported_transform' };
+      if (style.transform && style.transform !== 'none') {
+        const matrix = new win.DOMMatrixReadOnly(style.transform);
+        if (
+          !matrix.is2D ||
+          matrix.a <= 0 ||
+          matrix.d <= 0 ||
+          Math.abs(matrix.b) > 1e-8 ||
+          Math.abs(matrix.c) > 1e-8
+        )
+          return { reason: 'unsupported_transform' };
+      }
+    }
+    const style = win.getComputedStyle(element);
+    if (
+      !element.offsetWidth ||
+      !element.offsetHeight ||
+      !child.width ||
+      !child.height ||
+      ['paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'].some(
+        (key) => parseFloat(style[key]) !== 0
+      )
+    )
+      return { reason: 'unsupported_geometry' };
+    x =
+      box.left +
+      ((element.clientLeft + (child.x * element.clientWidth) / child.width) * box.width) /
+        element.offsetWidth;
+    y =
+      box.top +
+      ((element.clientTop + (child.y * element.clientHeight) / child.height) * box.height) /
+        element.offsetHeight;
+  } else {
+    const left = Math.max(0, box.left),
+      right = Math.min(width, box.right),
+      top = Math.max(0, box.top),
+      bottom = Math.min(height, box.bottom);
+    if (right <= left || bottom <= top) return { reason: 'outside_viewport' };
+    x = (left + right) / 2;
+    y = (top + bottom) / 2;
+  }
+  if (x < 0 || y < 0 || x >= width || y >= height) return { reason: 'outside_viewport' };
+  let hit = doc.elementFromPoint(x, y);
+  while (hit?.shadowRoot?.elementFromPoint) {
+    const inner = hit.shadowRoot.elementFromPoint(x, y);
+    if (!inner || inner === hit) break;
+    hit = inner;
+  }
+  for (let node = hit; node; node = node.parentElement || node.getRootNode()?.host)
+    if (node === element) return { x, y, width, height };
+  return { reason: 'occluded' };
+}
+async function candidateInteraction(item, handle, key, deadline, state) {
+  const blocked = (reason) => {
+    if (state.inspection) {
+      state.inspection.interactionRejectCounts ||= {};
+      state.inspection.interactionRejectCounts[reason] =
+        (state.inspection.interactionRejectCounts[reason] || 0) + 1;
+    }
+    return failure(
+      'CHECKOUT_CONTROL_BLOCKED',
+      `${labels[key]}当前被遮挡或无法核实交互，未继续填写`,
+      [key]
+    );
+  };
+  const readPoint = async () => {
+    if (
+      !(await readWithin(
+        () => handle.evaluate(elementRendered, { control: true }),
+        deadline,
+        state.signal
+      ))
+    )
+      return { reason: 'control_ineligible' };
+    let point = await readWithin(() => handle.evaluate(interactionPoint), deadline, state.signal);
+    for (
+      let frame = item.frame;
+      !point.reason && frame.parentFrame();
+      frame = frame.parentFrame()
+    ) {
+      const owner = await within(() => frame.frameElement(), deadline, state.signal);
+      try {
+        if (
+          !(await readWithin(
+            () => owner.evaluate(elementRendered, { interaction: true }),
+            deadline,
+            state.signal
+          ))
+        )
+          return { reason: 'frame_ineligible' };
+        point = await readWithin(
+          () => owner.evaluate(interactionPoint, point),
+          deadline,
+          state.signal
+        );
+      } finally {
+        owner.dispose().catch(() => {});
+      }
+    }
+    return point;
+  };
+  let point = await readPoint();
+  if (point.reason && ['outside_viewport', 'occluded'].includes(point.reason)) {
+    timeout(deadline, state.signal);
+    try {
+      await within(
+        () =>
+          handle.scrollIntoViewIfNeeded({
+            timeout: Math.min(500, timeout(deadline, state.signal))
+          }),
+        deadline,
+        state.signal
+      );
+    } catch {
+      timeout(deadline, state.signal);
+      throw blocked('scroll_unavailable');
+    }
+    // Scrolling can mount duplicates, replace a field or open a dialog. Never
+    // use the pre-scroll semantic snapshot to choose the field after that action.
+    await within(
+      () =>
+        handle.evaluate(
+          (node) =>
+            new Promise((resolve) =>
+              node.ownerDocument.defaultView.requestAnimationFrame(() => resolve())
+            )
+        ),
+      deadline,
+      state.signal
+    );
+    const { items, inspection } = await readControlsOnce(item.frame.page(), deadline, state);
+    if (inspectionCode(inspection))
+      throw failure(inspectionCode(inspection), '结账控件读取未完成', [key]);
+    const matches = candidatesFor(items, key);
+    if (matches.length > 1)
+      throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}有多个可见候选，未继续填写`, [
+        key
+      ]);
+    if (
+      matches.length !== 1 ||
+      matches[0].frame !== item.frame ||
+      !(await readWithin(
+        () => matches[0].el.evaluateAll((nodes, original) => nodes.includes(original), handle),
+        deadline,
+        state.signal
+      ))
+    )
+      throw blocked('page_changed');
+    point = await readPoint();
+  }
+  if (point.reason) throw blocked(point.reason);
+}
 async function uniqueCandidate(items, key, deadline, state) {
   const matches = candidatesFor(items, key);
   if (matches.length > 1)
@@ -563,6 +812,7 @@ async function uniqueCandidate(items, key, deadline, state) {
         throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}无法唯一定位，未继续填写`, [
           key
         ]);
+      await candidateInteraction(item, eligible[0], key, deadline, state);
       state.handles ||= new Set();
       state.handles.add(eligible[0]);
       return { ...item, el: eligible[0] };
@@ -951,6 +1201,7 @@ function failedResult(page, error, deadline, state) {
     'CHECKOUT_FORM_TIMEOUT',
     'CHECKOUT_CONTROL_READ_FAILED',
     'CHECKOUT_CONTROL_AMBIGUOUS',
+    'CHECKOUT_CONTROL_BLOCKED',
     'CHECKOUT_FORM_DATA_MISSING',
     'CHECKOUT_CONTENT_LOAD_FAILED'
   ]);
@@ -960,7 +1211,11 @@ function failedResult(page, error, deadline, state) {
   if (code === 'CHECKOUT_CONTROL_READ_FAILED')
     inspection.framesFailed = Math.max(1, inspection.framesFailed);
   if (inspectionCode(inspection)) inspection.complete = false;
-  const specific = ['CHECKOUT_CONTROL_AMBIGUOUS', 'CHECKOUT_FORM_DATA_MISSING'].includes(code);
+  const specific = [
+    'CHECKOUT_CONTROL_AMBIGUOUS',
+    'CHECKOUT_CONTROL_BLOCKED',
+    'CHECKOUT_FORM_DATA_MISSING'
+  ].includes(code);
   const pending = [...(state.pending || [])];
   return {
     ok: false,

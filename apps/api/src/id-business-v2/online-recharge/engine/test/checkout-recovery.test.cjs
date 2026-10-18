@@ -996,10 +996,11 @@ test('safe exclusion counts survive the original opening result and show Chinese
   const Service = checkoutServiceFixture();
   const inspection = {
     ...diagnosticInspection(),
-    framesSkipped: 2,
-    frameSkipCounts: { visibility_hidden: 1, inert: 1 },
+    framesSkipped: 3,
+    frameSkipCounts: { visibility_hidden: 1, inert: 1, modal_background: 1 },
     controlCounts: { scanned: 5, eligible: 2, locatable: 1, recognized: 0 },
-    controlRejectCounts: { readonly: 1, disabled: 2, no_locator: 1 }
+    controlRejectCounts: { readonly: 1, disabled: 2, no_locator: 1 },
+    interactionRejectCounts: { occluded: 1, page_changed: 1, unsupported_transform: 1 }
   };
   const diagnostic = Service.safeCheckoutOpenDiagnostics({
     stage: 'readiness',
@@ -1019,11 +1020,15 @@ test('safe exclusion counts survive the original opening result and show Chinese
     JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics.inspection)),
     inspection
   );
-  assert.match(result.error, /跳过页面数：2/);
+  assert.match(result.error, /跳过页面数：3/);
   assert.match(result.error, /可见性隐藏1/);
   assert.match(result.error, /扫描控件数：5/);
   assert.match(result.error, /只读控件1/);
   assert.match(result.error, /缺少定位标识1/);
+  assert.match(result.error, /弹窗背景1/);
+  assert.match(result.error, /交互停止原因：控件被遮挡1/);
+  assert.match(result.error, /滚动后控件变化1/);
+  assert.match(result.error, /页面变换无法核实1/);
   assert.doesNotMatch(result.error, /no_locator|readonly|visibility_hidden/);
 });
 
@@ -1042,13 +1047,20 @@ test('exclusion diagnostics reject unknown keys, raw data and unbounded or nonin
         recognized: true,
         token: 'PRIVATE'
       },
-      controlRejectCounts: { no_locator: 3, readonly: null, disabled: Infinity, value: 'PRIVATE' }
+      controlRejectCounts: { no_locator: 3, readonly: null, disabled: Infinity, value: 'PRIVATE' },
+      interactionRejectCounts: {
+        occluded: 2,
+        unsupported_geometry: 10001,
+        value: 'PRIVATE',
+        token: 1
+      }
     }
   });
   assert.deepEqual(JSON.parse(JSON.stringify(result.inspection)), {
     frameSkipCounts: { inert: 2 },
     controlCounts: { scanned: 10000 },
-    controlRejectCounts: { no_locator: 3 }
+    controlRejectCounts: { no_locator: 3 },
+    interactionRejectCounts: { occluded: 2 }
   });
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|token|url|value/);
 });

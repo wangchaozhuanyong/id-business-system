@@ -33,6 +33,8 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
+  onlineCheckoutActionabilityPaths,
+  onlineCheckoutActionabilityControls,
   onlineQueryDeadlinePaths,
   onlineQueryDeadlineControls,
   onlineQueryNetworkPaths,
@@ -7130,6 +7132,44 @@ test('fresh Session subscription preflight selects only Admin and cannot hide pa
     'scripts/production-release/online-session-preflight-arbitrary.py'
   ])
     assert.equal(checkMode([...paths, extra], schema, schema), 'full', extra);
+});
+
+test('checkout actionability selects finite engine checks and cannot hide neighboring changes', () => {
+  const sources = [...onlineCheckoutActionabilityPaths, 'docs/ONLINE_RECHARGE.md'];
+  const paths = [...sources, ...onlineCheckoutActionabilityControls];
+  for (const candidate of [sources, paths]) {
+    assert.equal(checkMode(candidate, 'same', 'same'), 'recharge');
+    assert.deepEqual(selectedParts(candidate), ['guards', 'online-engine']);
+    assert.equal(needsOnlineRechargeCiBuild(candidate), false);
+    assert.equal(checkMode(candidate, 'before', 'after'), 'full');
+  }
+  const controls = onlineCheckoutActionabilityControls.filter(
+    (path) => !path.startsWith('scripts/ci-')
+  );
+  assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(controls), false);
+  for (const missing of sources)
+    assert.equal(
+      checkMode(
+        sources.filter((path) => path !== missing),
+        'same',
+        'same'
+      ),
+      'full',
+      missing
+    );
+  assert.equal(checkMode([...paths, paths[0]], 'same', 'same'), 'full');
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'apps/admin/src/v2/features/online-recharge/sections.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    'scripts/production-release/online-query-deadline-build.py',
+    'scripts/ci-recharge-check.mjs'
+  ])
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full', extra);
 });
 
 test('query deadline repair selects only guards and engine without narrowing unrelated edits', () => {
