@@ -3737,13 +3737,7 @@
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
   "expectedCurrent": "b8c37f1262a42398a43a1acd3ff4504d17c1bed8",
   "migrationPerformed": false,
-  "preservedServices": [
-    "mysql",
-    "caddy",
-    "media-resolver",
-    "auto-recharge",
-    "auto-registration"
-  ],
+  "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge", "auto-registration"],
   "reconstruction": {
     "apiOverlayReview": "a1e65b996b0c527a562a14c470b5c7650a00bd25",
     "apiSourceCommit": "17591a4e0d02efb55ad2443d586d6b6913895efb",
@@ -4034,12 +4028,7 @@
       "apps/admin/src/v2/features/online-recharge/sections.ts": "80e23113f1cb2309899b3aac87a76aed846575acc97026e00949dfb18e60ccd5"
     }
   },
-  "requiredQualityParts": [
-    "guards",
-    "api",
-    "admin",
-    "online-engine"
-  ],
+  "requiredQualityParts": ["guards", "api", "admin", "online-engine"],
   "reviewBase": "320b5281b27b1e5c0fda1b6abfcbe87f16ff9dde",
   "reviewedControlSources": {
     "scripts/ci-online-settings-scope.mjs": "383c9fc9f0ea968d7295c58c3b645558daf9139e67dc43eccf413918e8e8496e",
@@ -4068,11 +4057,7 @@
     "docs/ONLINE_RECHARGE.md": "8caa17d0a5b5092f2031ba3a63d373ce9f6083e7706ed79cadf5c7aaa6d1116a",
     "docs/V2_TASKS.md": "9b2d322efbe1bc1684402f6a45f168a4c14f17e904024ed887ad30c389292f33"
   },
-  "updatedServices": [
-    "api",
-    "admin",
-    "online-recharge"
-  ],
+  "updatedServices": ["api", "admin", "online-recharge"],
   "version": 1,
   "workflowSha256": "878cc7e5882f305339d91edc338e42482ffa2659947354dbcb6114d80064a373"
 }
