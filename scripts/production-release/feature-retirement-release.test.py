@@ -556,6 +556,70 @@ class NativeTests(Fixture):
         d.compose.assert_not_called(); d.run.assert_not_called(); h.fresh_scoped_backup.assert_not_called()
 
 
+class AuditProtectionTests(Fixture):
+    def rows(self):
+        result = []
+        for event, migration in [('DELETE', '20261002123500_routine_audit_retention_exception'),
+                                 ('UPDATE', '20260830182500_mysql_trigger_service_definers')]:
+            raw = (ROOT / 'apps/api/prisma-mysql/migrations' / migration / 'migration.sql').read_text()
+            name = 'idv2_audit_log_no_' + ('delete' if event == 'DELETE' else 'update')
+            body = raw.split('CREATE TRIGGER `' + name + '`', 1)[1].split('FOR EACH ROW', 1)[1]
+            body = body.split('END;', 1)[0] + 'END' if event == 'DELETE' else body.split(';', 1)[0]
+            result.append({'event': event, 'timing': 'BEFORE', 'statement': body})
+        return result
+
+    def driver(self, rows):
+        d = Mock()
+        d.current_job_database.return_value = 'fixture_db'
+        d.compose.return_value = json.dumps(rows)
+        return d
+
+    def test_exact_audit_metadata_matches_original_guards_without_host_sources(self):
+        directory = self.base / 'releases/old'
+        self.assertFalse((directory / 'apps/api/prisma-mysql/migrations').exists())
+        d = self.driver(self.rows())
+        result = m.audit_trigger_protection(d, directory)
+        self.assertRegex(result, r'^[a-f0-9]{64}$')
+        command = d.compose.call_args.args[-1]
+        self.assertIn('information_schema.TRIGGERS', command)
+        for mutation in ('DROP ', 'ALTER ', 'INSERT ', 'LOCK TABLES', 'CREATE '):
+            self.assertNotIn(mutation, command)
+        d.run.assert_not_called()
+
+    def test_changed_missing_duplicate_or_weakened_guards_are_rejected(self):
+        rows = self.rows()
+        cases = [rows[:1], rows + [rows[0]], [rows[0], rows[0]],
+                 [{**rows[0], 'statement': 'DO 0'}, rows[1]],
+                 [{**rows[0], 'timing': 'AFTER'}, rows[1]],
+                 [{**rows[0], 'extra': True}, rows[1]]]
+        for value in cases:
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, 'AUDIT_PROTECTION_CHANGED'):
+                m.audit_trigger_protection(self.driver(value), self.base / 'releases/old')
+
+    def test_invalid_database_stops_before_metadata_query(self):
+        d = self.driver(self.rows()); d.current_job_database.return_value = 'unreviewed;db'
+        with self.assertRaisesRegex(RuntimeError, 'AUDIT_DATABASE_INVALID'):
+            m.audit_trigger_protection(d, self.base / 'releases/old')
+        d.compose.assert_not_called()
+
+    def test_original_audit_barrier_still_takes_same_connection_read_lock_without_host_migrations(self):
+        spec = importlib.util.spec_from_file_location('retirement_guard_fixture', ROOT / 'scripts/production-release/api-admin-scope.py')
+        scope = importlib.util.module_from_spec(spec); spec.loader.exec_module(scope)
+        scope.workspace_audit_protection = m.audit_trigger_protection
+        d = self.driver(self.rows())
+        d.service_state.return_value = identity('mysql')
+        api = {'startedAt': '2026-10-17T23:00:00.000Z'}
+        with patch.object(scope, 'workspace_api_identity', return_value=api):
+            barrier = scope.WorkspaceAuditBarrier(d, self.base / 'releases/old')
+            with patch.object(scope.subprocess, 'Popen') as process, patch.object(barrier, 'send') as send, patch.object(barrier, 'check_idle') as check:
+                barrier.acquire()
+                process.assert_called_once()
+                self.assertIn('LOCK TABLES audit_logs READ', send.call_args.args[0])
+                check.assert_called_once()
+                self.assertIsNotNone(barrier.process)
+                barrier.process = None
+
+
 class SwitchBarrierTests(Fixture):
     def switch_fixture(self):
         events = []

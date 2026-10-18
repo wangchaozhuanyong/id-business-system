@@ -83,7 +83,7 @@ export function isFeatureRetirementOnly(paths, context = {}) {
 
 // This continuation changes only publication controls after a pre-switch failure.
 // The accepted main tree already passed all application and MySQL checks.
-export const retirementPermissionsBase = 'd78e1e3248d7fe0add951b6db1c739c646b62041';
+export const retirementPermissionsBase = '79484464ec1c4f46a88072cf4b60926157bbaee6';
 export const retirementPermissionsPaths = Object.freeze([
   contractPath,
   'scripts/production-release/feature-retirement-release.py',
@@ -107,9 +107,9 @@ export function isFeatureRetirementPermissionsRepair(paths, context = {}) {
     const allowedControls = retirementPermissionsPaths.filter((name) => name !== contractPath);
     if (
       digest(read('scripts/production-release/feature-retirement-release.py')) !==
-        'db6331f1c7f8631d0a7d1e2fc7f190d21455147ffde6076035b4ee2508772042' ||
+        '35e0c05885c23b0ebb113c2b940cbfbe767d84d208aaa6b472a76fef9f5a9c4e' ||
       digest(read('scripts/production-release/feature-retirement-release.test.py')) !==
-        'b00ca74a64a43da8ff6b0f769f750f43994af01723297d38f78bc36d349946d0'
+        'f6612dfca9c0c8c968eb18316548df50c4e0982c1871a6616a4f1b10a21277a1'
     )
       return false;
     for (const [name, expected] of Object.entries(after.controlSources ?? {})) {
