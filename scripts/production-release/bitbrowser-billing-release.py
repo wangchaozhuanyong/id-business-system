@@ -10,10 +10,13 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
 SCOPE = 'BITBROWSER_BILLING_QUOTE_REPAIR_20261018'
-CURRENT = '3d045eb34406a6f83ee41b15f4a43c612dbcce83'
+CURRENT = '827ede8b4f32bd43f699413d9630d094bdd33a4c'
+SOURCE_BASE = '3d045eb34406a6f83ee41b15f4a43c612dbcce83'
 PUBLISHED_BUILD = '8fef357efc8f2d94bdc5175de427db0c621e32ac'
 CONTRACT_FILE = 'bitbrowser-billing-contract.json'
 WORKFLOW = '.github/workflows/bitbrowser-billing-validation.yml'
+CI_CONTROLS = frozenset('scripts/ci-recharge-' + name for name in
+    ('scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'))
 SERVICES = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'online-recharge')
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge')
 API_SOURCES = frozenset('apps/api/src/id-business-v2/auto-recharge/' + name + '.ts' for name in (
@@ -58,7 +61,7 @@ def valid_inventory(value, empty=False):
 
 def validate_contract(c):
     need(c.get('version') == 1 and c.get('scope') == SCOPE and c.get('expectedCurrent') == CURRENT
-        and c.get('reviewBase') == CURRENT and re.fullmatch('[a-f0-9]{40}', c.get('sourceReviewCommit', ''))
+        and c.get('reviewBase') == SOURCE_BASE and re.fullmatch('[a-f0-9]{40}', c.get('sourceReviewCommit', ''))
         and c.get('migrationPerformed') is False and c.get('businessActions') == 0,
         'CONTRACT_IDENTITY_INVALID')
     sources = c.get('sources')
@@ -77,6 +80,7 @@ def validate_contract(c):
             for n in API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')}
         and set(c.get('sharedFiles', [])) == SHARED, 'OUTPUT_SCOPE_INVALID')
     need(valid_inventory(c.get('controlPins')) and set(c['controlPins']) == CONTROLS
+        and valid_inventory(c.get('ciControlPins')) and set(c['ciControlPins']) == CI_CONTROLS
         and re.fullmatch('[a-f0-9]{64}', c.get('workflowSha256', ''))
         and re.fullmatch('[a-f0-9]{64}', c.get('predecessorProofSha256', ''))
         and valid_inventory(c.get('publishedAdminFiles')), 'CONTROL_SCOPE_INVALID')

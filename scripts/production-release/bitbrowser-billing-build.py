@@ -29,7 +29,7 @@ def git(*args):
 def freeze(path, source):
     p = load('bitbrowser-billing-release.py')
     source = git('rev-parse', source + '^{commit}').decode().strip()
-    sources = git('diff', '--name-only', p.CURRENT, source).decode().splitlines()
+    sources = git('diff', '--name-only', p.SOURCE_BASE, source).decode().splitlines()
     previous = json.loads((HERE / 'online-query-network-contract.json').read_bytes())
     # Its native proof is independently tied to the published API/Admin build.
     proof_path = Path(path).parent / 'predecessor-artifact/build-proof.json'
@@ -38,11 +38,12 @@ def freeze(path, source):
     p.need(proof['commit'] == p.PUBLISHED_BUILD and proof['scope'] == 'ONLINE_QUERY_NETWORK_REPAIR'
         and proof['contractSha256'] == p.sha((HERE / 'online-query-network-contract.json').read_bytes()),
         'PREDECESSOR_PROOF_INVALID')
-    c = {'version': 1, 'scope': p.SCOPE, 'expectedCurrent': p.CURRENT, 'reviewBase': p.CURRENT,
+    c = {'version': 1, 'scope': p.SCOPE, 'expectedCurrent': p.CURRENT, 'reviewBase': p.SOURCE_BASE,
         'sourceReviewCommit': source, 'sources': {n: p.sha(git('show', source + ':' + n)) for n in sources},
         'apiModules': sorted(n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
             for n in p.API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')),
         'sharedFiles': sorted(p.SHARED), 'controlPins': {n: p.sha((HERE / n).read_bytes()) for n in p.CONTROLS},
+        'ciControlPins': {n: p.sha((ROOT / n).read_bytes()) for n in p.CI_CONTROLS},
         'workflowSha256': p.sha((ROOT / p.WORKFLOW).read_bytes()),
         'qualityWorkflowSha256': p.sha((ROOT / '.github/workflows/quality.yml').read_bytes()),
         'predecessorProofSha256': p.sha(proof_raw), 'publishedAdminFiles': proof['adminFiles'],
@@ -58,7 +59,7 @@ def freeze(path, source):
 def check(c):
     p = load('bitbrowser-billing-release.py')
     p.validate_contract(c)
-    p.need(set(git('diff', '--name-only', p.CURRENT, c['sourceReviewCommit']).decode().splitlines())
+    p.need(set(git('diff', '--name-only', p.SOURCE_BASE, c['sourceReviewCommit']).decode().splitlines())
         == set(c['sources']), 'REVIEW_SCOPE_CHANGED')
     for name, expected in c['sources'].items():
         path = ROOT / name
@@ -67,16 +68,20 @@ def check(c):
     for name, expected in c['controlPins'].items():
         p.need((HERE / name).is_file() and not (HERE / name).is_symlink()
             and p.sha((HERE / name).read_bytes()) == expected, 'CONTROL_CHANGED')
+    for name, expected in c['ciControlPins'].items():
+        p.need((ROOT / name).is_file() and not (ROOT / name).is_symlink()
+            and p.sha((ROOT / name).read_bytes()) == expected, 'CI_CONTROL_CHANGED')
     p.need(p.sha((ROOT / p.WORKFLOW).read_bytes()) == c['workflowSha256']
         and p.sha((ROOT / '.github/workflows/quality.yml').read_bytes()) == c['qualityWorkflowSha256']
         and p.sha((HERE / 'online-query-network-contract.json').read_bytes()) == c['reconstructionContractSha256'],
         'WORKFLOW_OR_RECONSTRUCTION_CHANGED')
     p.need(not git('diff', p.CURRENT, 'HEAD', '--', 'apps/api/prisma-mysql/', 'package.json',
         'package-lock.json', 'apps/api/package.json', 'apps/admin/package.json').strip(), 'DEPENDENCY_OR_SCHEMA_CHANGED')
-    public_controls = {p.WORKFLOW, *['scripts/production-release/bitbrowser-billing-' + suffix
+    public_controls = {p.WORKFLOW, *p.CI_CONTROLS, *['scripts/production-release/bitbrowser-billing-' + suffix
         for suffix in ('build.py', 'release.py', 'dispatch.py', 'release.test.py', 'contract.json')]}
     changed = set(git('diff', '--name-only', p.CURRENT, 'HEAD').decode().splitlines())
-    p.need(changed <= set(c['sources']) | public_controls and set(c['sources']) <= changed,
+    p.need(git('merge-base', p.CURRENT, 'HEAD').decode().strip() == p.CURRENT
+        and changed <= public_controls,
         'FINITE_SELECTION_CHANGED')
     return p
 
@@ -107,9 +112,9 @@ def reconstruct():
     overlay(api, {n: v for n, v in retirement['sources'].items()
         if n.startswith(('apps/api/', 'packages/shared/'))}, c['expectedCurrent'])
     overlay(api, {n: v for n, v in c['sources'].items()
-        if n.startswith(('apps/api/', 'packages/shared/')) and '/engine/' not in n}, p.CURRENT)
+        if n.startswith(('apps/api/', 'packages/shared/')) and '/engine/' not in n}, p.SOURCE_BASE)
     overlay(admin, {n: v for n, v in c['sources'].items()
-        if n.startswith(('apps/admin/', 'packages/shared/'))}, p.CURRENT)
+        if n.startswith(('apps/admin/', 'packages/shared/'))}, p.SOURCE_BASE)
     return api, admin
 
 

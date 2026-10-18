@@ -43,6 +43,16 @@ class FiniteBillingControls(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'CONTRACT_IDENTITY'):
             p.validate_contract(self.c)
 
+    def test_review_origin_and_ci_control_scope_cannot_follow_runtime_drift(self):
+        self.assertNotEqual(p.CURRENT, p.SOURCE_BASE)
+        self.c['reviewBase'] = p.CURRENT
+        with self.assertRaisesRegex(RuntimeError, 'CONTRACT_IDENTITY'):
+            p.validate_contract(self.c)
+        self.c['reviewBase'] = p.SOURCE_BASE
+        self.c['ciControlPins']['scripts/unknown.mjs'] = 'a' * 64
+        with self.assertRaisesRegex(RuntimeError, 'CONTROL_SCOPE'):
+            p.validate_contract(self.c)
+
     def test_unknown_source_and_payment_engine_rejected(self):
         for name in ('apps/api/src/id-business-v2/online-recharge/tasks.service.ts', '../escape',
                      'apps/api/prisma-mysql/schema.prisma'):

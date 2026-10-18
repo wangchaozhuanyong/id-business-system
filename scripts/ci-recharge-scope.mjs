@@ -1136,6 +1136,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserBillingControlsOnly(paths)) return false;
   if (isFeatureRetirementPermissionsRepair(paths, context)) return false;
   if (isFeatureRetirementOnly(paths, context)) return false;
   if (isRegistrationTerminalStopOnly(paths, context)) return false;
@@ -1777,7 +1778,26 @@ export function isReleaseArtifactRetentionOnly(paths) {
   );
 }
 
+export const bitbrowserBillingControlBase = '827ede8b4f32bd43f699413d9630d094bdd33a4c';
+export const bitbrowserBillingControlTree = '2901a6da7f2dc5ac8a83b5e193e176b735cd735e';
+export const bitbrowserBillingControlPaths = Object.freeze([
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => `scripts/production-release/bitbrowser-billing-${name}`
+  ),
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  )
+]);
+export function isBitbrowserBillingControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.some((name) => name.startsWith('scripts/production-release/bitbrowser-billing-')) &&
+    paths.every((name) => bitbrowserBillingControlPaths.includes(name))
+  );
+}
+
 export function isCiOnly(paths) {
+  if (isBitbrowserBillingControlsOnly(paths)) return true;
   if (paths.includes(rechargePricingProfile))
     return paths.every((path) => rechargePricingControls.has(path));
   if (hasRegistrationOnboardingScope(paths))
@@ -2467,6 +2487,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isBitbrowserBillingControlsOnly(paths)) return ['guards'];
   if (isRegistrationTerminalStopOnly(paths, context))
     return context?.base === registrationTerminalStopRepairBase
       ? [...registrationTerminalStopRepairParts]
