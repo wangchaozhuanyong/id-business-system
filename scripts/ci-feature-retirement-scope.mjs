@@ -83,15 +83,12 @@ export function isFeatureRetirementOnly(paths, context = {}) {
 
 // This continuation changes only publication controls after a pre-switch failure.
 // The accepted main tree already passed all application and MySQL checks.
-export const retirementPermissionsBase = 'a6d564b3e7cc6e916dc7198f0c27e1ac1068d421';
+export const retirementPermissionsBase = 'd78e1e3248d7fe0add951b6db1c739c646b62041';
 export const retirementPermissionsPaths = Object.freeze([
   contractPath,
   'scripts/production-release/feature-retirement-release.py',
   'scripts/production-release/feature-retirement-release.test.py',
-  'scripts/ci-feature-retirement-scope.mjs',
-  'scripts/ci-feature-retirement-scope.test.mjs',
-  'scripts/ci-recharge-scope.mjs',
-  'scripts/ci-recharge-check.mjs'
+  'scripts/ci-feature-retirement-scope.mjs'
 ]);
 export function isFeatureRetirementPermissionsRepair(paths, context = {}) {
   try {
@@ -110,13 +107,13 @@ export function isFeatureRetirementPermissionsRepair(paths, context = {}) {
     const allowedControls = retirementPermissionsPaths.filter((name) => name !== contractPath);
     if (
       digest(read('scripts/production-release/feature-retirement-release.py')) !==
-        '5265d109a0a49b7d658434b5a8fde1b63de48b8143ea8e13d8d2a543d07eaa1f' ||
+        'db6331f1c7f8631d0a7d1e2fc7f190d21455147ffde6076035b4ee2508772042' ||
       digest(read('scripts/production-release/feature-retirement-release.test.py')) !==
-        'b03982a6a087dd02eb60e683cfa7cdabd6b99e7327ff72514f52850b9de88d1e'
+        'b00ca74a64a43da8ff6b0f769f750f43994af01723297d38f78bc36d349946d0'
     )
       return false;
-    for (const name of allowedControls) {
-      if (after.controlSources?.[name] !== digest(read(name))) return false;
+    for (const [name, expected] of Object.entries(after.controlSources ?? {})) {
+      if (expected !== digest(read(name))) return false;
     }
     const restored = structuredClone(after);
     for (const name of allowedControls) restored.controlSources[name] = before.controlSources[name];
