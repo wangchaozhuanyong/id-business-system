@@ -1064,6 +1064,94 @@ test('exclusion diagnostics reject unknown keys, raw data and unbounded or nonin
   });
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE|token|url|value/);
 });
+
+test('original reload rejection diagnostics survive the accepted checkout failure without raw request data', async () => {
+  const loading = {
+    reloadAttempts: 1,
+    blockedWrites: 1,
+    code: 'CHECKOUT_RELOAD_READONLY',
+    blockedRequestDiagnostics: [
+      { operation: 'STRIPE_INIT_SAME_CHECKOUT', reason: 'UNKNOWN_PARAMETER', count: 1 }
+    ]
+  };
+  const originalDiagnostics = recovery.originalCheckoutReloadDiagnostics;
+  recovery.originalCheckoutReloadDiagnostics = () => ({ ...loading, url: 'PRIVATE_REQUEST' });
+  try {
+    const Service = checkoutServiceFixture({
+      verification: { cleared: false, checkoutNotReady: true, code: 'CHECKOUT_FORM_NOT_READY' }
+    });
+    const page = {
+      context: () => ({
+        request: {
+          post: async () => ({
+            status: () => 200,
+            text: async () =>
+              JSON.stringify({
+                checkout_session_id: embeddedSource.checkoutId,
+                processor_entity: embeddedSource.processorEntity
+              })
+          })
+        }
+      }),
+      goto: async () => ({ status: () => 200 }),
+      waitForLoadState: async () => {},
+      waitForTimeout: async () => {},
+      title: async () => 'Synthetic page',
+      url: () => embeddedUrl
+    };
+    await assert.rejects(checkoutPhaseFixture(page, Service).pending, (error) => {
+      const result = publicCheckoutFailure(error);
+      assert.deepEqual(JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics.loading)), loading);
+      assert.match(result.error, /原单恢复次数：1/);
+      assert.match(result.error, /受保护恢复拦截请求数：1/);
+      assert.doesNotMatch(JSON.stringify(result), /PRIVATE_REQUEST/);
+      assert.equal(result.success, false);
+      assert.equal(result.resultUnknown, false);
+      return true;
+    });
+  } finally {
+    recovery.originalCheckoutReloadDiagnostics = originalDiagnostics;
+  }
+});
+
+test('checkout opening drops invalid loading diagnostics and all loading data outside readiness stages', () => {
+  const Service = checkoutServiceFixture();
+  const loading = {
+    reloadAttempts: 1,
+    blockedWrites: 1,
+    code: 'CHECKOUT_RELOAD_READONLY',
+    blockedRequestDiagnostics: [
+      { operation: 'STRIPE_INIT_SAME_CHECKOUT', reason: 'UNKNOWN_PARAMETER', count: 1 }
+    ]
+  };
+  for (const invalid of [
+    { ...loading, reloadAttempts: 0 },
+    { ...loading, blockedWrites: 10001 },
+    { ...loading, code: 'PRIVATE_RESPONSE' },
+    {
+      ...loading,
+      blockedRequestDiagnostics: [{ ...loading.blockedRequestDiagnostics[0], url: 'PRIVATE' }]
+    }
+  ]) {
+    assert.equal(
+      Service.safeCheckoutOpenDiagnostics({
+        stage: 'readiness',
+        reason: 'not_ready',
+        loading: invalid
+      }).loading,
+      undefined
+    );
+  }
+  assert.equal(
+    Service.safeCheckoutOpenDiagnostics({
+      stage: 'navigation',
+      reason: 'timeout',
+      loading
+    }).loading,
+    undefined
+  );
+});
+
 for (const [name, code, controls, inspection, count] of [
   ['unmatched', 'CHECKOUT_FORM_NOT_READY', [diagnosticControl([])], diagnosticInspection(), 0],
   [

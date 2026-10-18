@@ -494,6 +494,56 @@ export function isOnlinePendingFeaturesControlsOnly(paths) {
     )
   );
 }
+export const onlineCheckoutInitializationScope = 'ONLINE_CHECKOUT_INITIALIZATION';
+export const onlineCheckoutInitializationPaths = Object.freeze(
+  [
+    'SOURCE_MANIFEST.json',
+    'checkout-recovery.cjs',
+    'upstream/session-auth.js',
+    'upstream/stripe-payment.js',
+    'upstream/chatgpt.js',
+    'upstream/index.js',
+    'test/checkout-recovery.test.cjs',
+    'test/session-routing-browser.test.cjs',
+    'test/checkout-card-preparation.test.cjs',
+    'test/checkout-reload-request-diagnostics.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name)
+);
+const initializationDocumentation = ['docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'];
+const initializationReleaseControls = [
+  '.github/workflows/online-checkout-initialization-validation.yml',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-checkout-initialization-' + name
+  )
+];
+export const onlineCheckoutInitializationControls = Object.freeze([
+  ...initializationReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlineCheckoutInitializationOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    [...onlineCheckoutInitializationPaths, ...initializationDocumentation].every((name) =>
+      paths.includes(name)
+    ) &&
+    paths.every(
+      (name) =>
+        onlineCheckoutInitializationPaths.includes(name) ||
+        onlineCheckoutInitializationControls.includes(name) ||
+        initializationDocumentation.includes(name)
+    )
+  );
+}
+export function isOnlineCheckoutInitializationControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((name) => initializationReleaseControls.includes(name)) &&
+    paths.every((name) => onlineCheckoutInitializationControls.includes(name))
+  );
+}
 export const onlineCheckoutActionabilityScope = 'ONLINE_CHECKOUT_ACTIONABILITY';
 export const onlineCheckoutActionabilityPaths = Object.freeze(
   [
@@ -776,6 +826,7 @@ export function isOnlineLegacyCloseOnly(paths) {
 }
 export function isOnlineSettingsOnly(paths) {
   if (
+    isOnlineCheckoutInitializationOnly(paths) ||
     isOnlineCheckoutActionabilityOnly(paths) ||
     isOnlineSettingsTestsOnly(paths) ||
     isOnlineLegacyCloseOnly(paths) ||
@@ -815,6 +866,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCheckoutInitializationControlsOnly(paths)) return true;
   if (isOnlineCheckoutActionabilityControlsOnly(paths)) return true;
   if (isOnlineQueryDeadlineControlsOnly(paths)) return true;
   if (isOnlineQueryNetworkControlsOnly(paths)) return true;
@@ -839,6 +891,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const initialization = isOnlineCheckoutInitializationOnly(paths);
+  const initializationControls = isOnlineCheckoutInitializationControlsOnly(paths);
   const checkoutActionability = isOnlineCheckoutActionabilityOnly(paths);
   const checkoutActionabilityControls = isOnlineCheckoutActionabilityControlsOnly(paths);
   const queryDeadline = isOnlineQueryDeadlineOnly(paths);
@@ -906,6 +960,18 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (initialization || initializationControls)
+      return [
+        ...controls,
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-checkout-initialization-release.test.py'
+        ],
+        ...(initialization
+          ? ['check:v2-module-architecture', 'check:v2-isolation'].map((name) => npm('run', name))
+          : [])
+      ];
     if (checkoutActionability || checkoutActionabilityControls)
       return [
         ...controls,
@@ -1155,6 +1221,8 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (controlsOnly) throw new Error('Unsupported controls-only check');
+  if (initialization && part !== 'online-engine')
+    throw new Error('Unsupported checkout initialization check part');
   if (checkoutActionability && part !== 'online-engine')
     throw new Error('Unsupported checkout actionability check part');
   if (queryDeadline && part !== 'online-engine')
@@ -1177,7 +1245,7 @@ export function onlineSettingsCommands(part, paths) {
       npm('run', 'build', '--workspace', '@apple-business/admin')
     ];
   }
-  if (checkoutActionability || queryNetwork || queryDeadline) {
+  if (initialization || checkoutActionability || queryNetwork || queryDeadline) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
     const browser = [
       npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),

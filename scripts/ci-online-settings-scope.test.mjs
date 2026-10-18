@@ -6,6 +6,11 @@ import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
+  onlineCheckoutInitializationScope,
+  onlineCheckoutInitializationPaths,
+  onlineCheckoutInitializationControls,
+  isOnlineCheckoutInitializationOnly,
+  isOnlineCheckoutInitializationControlsOnly,
   onlineCheckoutActionabilityScope,
   onlineCheckoutActionabilityPaths,
   onlineCheckoutActionabilityControls,
@@ -57,6 +62,53 @@ import {
   onlineSessionPreflightPaths,
   onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
+
+test('initialization narrows only its complete ten-file engine delta and two task documents', () => {
+  const sources = [
+    ...onlineCheckoutInitializationPaths,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(onlineCheckoutInitializationScope, 'ONLINE_CHECKOUT_INITIALIZATION');
+  assert.equal(onlineCheckoutInitializationPaths.length, 10);
+  assert.equal(onlineCheckoutInitializationControls.length, 9);
+  for (const paths of [sources, [...sources, ...onlineCheckoutInitializationControls]]) {
+    assert.equal(isOnlineCheckoutInitializationOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+    const guards = JSON.stringify(onlineSettingsCommands('guards', paths));
+    assert.match(guards, /online-checkout-initialization-release\.test\.py/);
+    const engine = JSON.stringify(onlineSettingsCommands('online-engine', paths));
+    assert.match(engine, /readdirSync/);
+    assert.doesNotMatch(engine, /prisma|@apple-business\/api|@apple-business\/admin/);
+    assert.throws(
+      () => onlineSettingsCommands('api', paths),
+      /Unsupported checkout initialization/
+    );
+    assert.throws(
+      () => onlineSettingsCommands('admin', paths),
+      /Unsupported checkout initialization/
+    );
+  }
+  for (const missing of sources) {
+    const paths = sources.filter((name) => name !== missing);
+    assert.equal(isOnlineCheckoutInitializationOnly(paths), false);
+    assert.equal(checkMode(paths, 'same', 'same'), 'full');
+  }
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/admin/src/v2/features/online-recharge/api.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs',
+    'scripts/production-release/online-checkout-initialization-arbitrary.py'
+  ])
+    assert.equal(checkMode([...sources, extra], 'same', 'same'), 'full');
+  assert.equal(isOnlineCheckoutInitializationOnly([...sources, sources[0]]), false);
+  const controls = [...onlineCheckoutInitializationControls];
+  assert.equal(isOnlineCheckoutInitializationControlsOnly(controls), true);
+  assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+});
 
 const actionabilitySources = [...onlineCheckoutActionabilityPaths, 'docs/ONLINE_RECHARGE.md'];
 
