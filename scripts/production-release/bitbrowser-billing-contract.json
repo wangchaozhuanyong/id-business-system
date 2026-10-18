@@ -480,7 +480,7 @@
     "v2/checkout-diagnostic.d.ts",
     "v2/checkout-diagnostic.js"
   ],
-  "sourceReviewCommit": "72771316a047b412a2a70406ecb7c8720bef49b5",
+  "sourceReviewCommit": "d9a2dc207e66fd5e7b302952a98bd8bce0ace32b",
   "sources": {
     "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue": "a8e5e86ba76eb24897e1bffc49123d163132e71a89e24d7859299f45f2ae35c3",
     "apps/admin/src/v2/features/auto-recharge/RechargeResult.vue": "c59cf326d407680de2f0b2ffebc1a9a56d4e48bf6fba3b9ff66933c04c1057dc",
@@ -545,7 +545,7 @@
     "packages/shared/src/index.ts": "c6f235cc39d4de5c43188a197b8a32db32ae0302d1d90db64f2c4fd2774f3b8b",
     "packages/shared/src/v2/auto-recharge.ts": "b4caefff4da559f3872ab7ecb0550c8645514800f797b623da2a43b8e20574a0",
     "packages/shared/src/v2/checkout-diagnostic.ts": "73ab8c858fa09d3e2f792db89e1f2dc30533f1ad32b69e26ab0495fd4100835b",
-    "scripts/acceptance-v2-auto-recharge.mjs": "fd518710ca56970fd165291cf4e7a15da24e548bd6d0a6ebf664002c1fac17b5"
+    "scripts/acceptance-v2-auto-recharge.mjs": "f9ce454aac32008b3654466c29578f02f3ceba8e522d94b2bf369182c1d283cd"
   },
   "version": 1,
   "workflowSha256": "d146f3f7d50b13ce845f73b9b2d93535a8ea04567474aebc90aa8acbce299a90"
