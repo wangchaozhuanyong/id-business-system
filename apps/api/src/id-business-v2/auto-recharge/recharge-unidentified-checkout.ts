@@ -434,6 +434,269 @@ export function unidentifiedCheckoutPredecessorJobIds(
   return [previous.id];
 }
 
+function recoveredDiscoveryStoppedBeforePayment(result: Record<string, unknown>) {
+  const stage = String(result.stage ?? '');
+  if (
+    !['payment_preparation', 'quote_read', 'quote_validation', 'payment_confirmation'].includes(
+      stage
+    )
+  )
+    return false;
+  if (result.status === 'cancelled')
+    return result.reason === 'operation_cancelled' && result.cancellation_confirmed === true;
+  if (result.status !== 'blocked') return false;
+  const reasons: Record<string, readonly string[]> = {
+    payment_preparation: [
+      'official_payment_field_not_ready',
+      'ambiguous_official_payment_field',
+      'invalid_payment_field',
+      'payment_form_changed',
+      'billing_fields_incomplete',
+      'billing_fields_changed',
+      'direct_payment_preparation_timeout'
+    ],
+    quote_read: [
+      'direct_payment_quote_read_failed',
+      'official_read_session_failed',
+      'official_read_response_too_large',
+      'official_read_response_invalid',
+      'official_read_timeout',
+      'official_read_network_failed',
+      'official_read_failed',
+      'direct_payment_preparation_timeout'
+    ],
+    quote_validation: [
+      'direct_payment_quote_period_unverified',
+      'direct_payment_quote_tax_unverified',
+      'direct_payment_quote_amount_mismatch',
+      'direct_payment_quote_billing_mismatch',
+      'official_checkout_quote_unavailable',
+      'official_checkout_quote_binding_unverified',
+      'payment_currency_mismatch',
+      'unsupported_payment_quote',
+      'payment_quote_incomplete',
+      'billing_fields_incomplete',
+      'billing_fields_changed',
+      'payment_quote_changed',
+      'direct_payment_preparation_timeout'
+    ],
+    payment_confirmation: ['payment_quote_changed', 'billing_fields_changed']
+  };
+  return (
+    reasons[stage]!.includes(String(result.reason)) ||
+    (stage === 'quote_validation' &&
+      /^official_billing_(?:country|state|city|line1|line2|postal_code|name)_mismatch$/.test(
+        String(result.reason)
+      ))
+  );
+}
+
+/** 已发现原单只延续同一编号；完整重验服务端标记摘要和零付款发现链，不授予发现或建单资格。 */
+export function recoveredCheckoutPredecessor(
+  jobs: RecoverySource[],
+  current: RecoverySource,
+  record: RecoveryRecord,
+  records: RecoveryRecord[],
+  profileId: string
+): { sourceJobId: string; predecessorJobIds: string[] } | undefined {
+  const document = object(record.document),
+    currentResult = object(current.result),
+    identifier = document.checkout_identifier;
+  if (
+    current.action !== 'bitbrowser' ||
+    current.state !== 'running' ||
+    currentResult.transport !== 'web_direct' ||
+    currentResult.mode === 'open_browser' ||
+    currentResult.recheck_only === true ||
+    currentResult.resolution_only === true ||
+    currentResult.payment_requests_sent !== 0 ||
+    currentResult.request_attempt_key !== undefined ||
+    !zeroPayment(currentResult) ||
+    Boolean(currentResult.payment_outcome) ||
+    ![undefined, 0].includes(currentResult.checkout_requests_sent as never) ||
+    (currentResult.checkout_identifier !== undefined &&
+      currentResult.checkout_identifier !== identifier) ||
+    document.status !== 'checkout_created' ||
+    document.checkout_outcome !== 'created' ||
+    document.checkout_recovered_from_original !== true ||
+    document.payment_attempted !== false ||
+    document.payment_requests_sent !== 0 ||
+    document.confirmation_requests_sent !== 0 ||
+    document.request_attempt_key !== undefined ||
+    !zeroPayment(document) ||
+    Boolean(document.payment_outcome) ||
+    typeof identifier !== 'string' ||
+    !checkoutPattern.test(identifier) ||
+    typeof document.processor_entity !== 'string' ||
+    !/^[a-z][a-z0-9_]{0,40}$/.test(document.processor_entity) ||
+    !current.accountKey ||
+    record.ownerId !== current.ownerId ||
+    record.accountKey !== current.accountKey ||
+    record.fileKey !== rootKey(current.accountKey, current.plan) ||
+    !Number.isSafeInteger(record.revision) ||
+    record.revision < 3 ||
+    !(current.createdAt instanceof Date) ||
+    !Number.isFinite(current.createdAt.getTime()) ||
+    hasUnresolvedUnidentifiedCheckoutPayment(records, current.ownerId, current.accountKey)
+  )
+    return undefined;
+  // 只逆转网页发现原单时实际改动的字段；摘要不匹配时不尝试补字段或猜测旧版本。
+  const marker: Record<string, unknown> = {
+    ...document,
+    status: 'checkout_attempted',
+    checkout_outcome: 'unknown'
+  };
+  for (const key of [
+    'checkout_identifier',
+    'processor_entity',
+    'checkout_recovered_from_original',
+    'payment_attempted',
+    'payment_requests_sent',
+    'confirmation_requests_sent'
+  ])
+    delete marker[key];
+  const markerRecord = { ...record, revision: record.revision - 1, document: marker };
+  const source = findUnidentifiedCheckoutSource(
+    jobs,
+    current.ownerId,
+    current.accountKey,
+    current.plan,
+    profileId,
+    markerRecord,
+    records
+  );
+  if (!source) return undefined;
+  const raw = object(source.result),
+    binding = object(raw._checkout_replacement_binding_v1),
+    authorization = object(raw._expired_checkout_replacement_v1),
+    digest = rechargeDocumentDigest(marker);
+  const archive = records.find(
+    (item) =>
+      item.fileKey.startsWith('history/') &&
+      object(item.document).kind === 'expired_checkout' &&
+      object(item.document).source_job_id === source.id
+  );
+  if (
+    !archive ||
+    raw.checkout_identifier === identifier ||
+    document.processor_entity !== raw.processor_entity ||
+    // 旧版本只有 consumed 授权中的同一不可写 markerDigest；存在第二指针时不得忽略错值。
+    (Object.hasOwn(raw, '_checkout_replacement_binding_v1') &&
+      (binding.retiredIdentifier !== raw.checkout_identifier ||
+        binding.markerRevision !== markerRecord.revision ||
+        binding.markerDigest !== digest)) ||
+    authorization.consumed !== true ||
+    authorization.checkoutIdentifier !== raw.checkout_identifier ||
+    authorization.fileKey !== record.fileKey ||
+    authorization.revision !== record.revision - 2 ||
+    authorization.documentDigest !== marker.retry_of ||
+    authorization.archiveFileKey !== archive.fileKey ||
+    authorization.markerDigest !== digest ||
+    rechargeDocumentDigest(authorization.proof) !==
+      rechargeDocumentDigest(marker.expired_checkout_replacement)
+  )
+    return undefined;
+  const discoveries = jobs.filter((item) => {
+    const r = object(item.result);
+    return (
+      item.ownerId === current.ownerId &&
+      item.accountKey === current.accountKey &&
+      item.action === 'bitbrowser' &&
+      item.state === 'finished' &&
+      item.plan === current.plan &&
+      item.id !== source.id &&
+      r.checkout_recovered_from_original === true &&
+      (!(item.createdAt instanceof Date) ||
+        !Number.isFinite(item.createdAt.getTime()) ||
+        !(item.updatedAt instanceof Date) ||
+        !Number.isFinite(item.updatedAt.getTime()) ||
+        !(source.createdAt instanceof Date) ||
+        item.updatedAt.getTime() >= source.createdAt.getTime())
+    );
+  });
+  if (discoveries.length !== 1) return undefined;
+  const discovered = discoveries[0]!,
+    result = object(discovered.result);
+  if (
+    !uuid.test(discovered.id) ||
+    !recoveredDiscoveryStoppedBeforePayment(result) ||
+    result.transport !== 'web_direct' ||
+    result.mode !== 'payment' ||
+    result.recheck_only === true ||
+    result.resolution_only === true ||
+    result.account_matched !== true ||
+    result.current_plan !== 'free' ||
+    result.current_plan_before !== 'free' ||
+    result.target_plan !== current.plan ||
+    result.browser_profile_id !== profileId ||
+    result.checkout_identifier !== identifier ||
+    result.processor_entity !== document.processor_entity ||
+    result.payment_attempted !== false ||
+    result.checkout_requests_sent !== 0 ||
+    result.payment_requests_sent !== 0 ||
+    result.confirmation_requests_sent !== 0 ||
+    result.request_attempt_key !== undefined ||
+    !zeroPayment(result) ||
+    !(source.updatedAt instanceof Date) ||
+    !(discovered.createdAt instanceof Date) ||
+    !(discovered.updatedAt instanceof Date) ||
+    !Number.isFinite(discovered.createdAt.getTime()) ||
+    !Number.isFinite(discovered.updatedAt.getTime()) ||
+    discovered.createdAt.getTime() <= source.updatedAt.getTime() ||
+    discovered.updatedAt.getTime() < discovered.createdAt.getTime() ||
+    discovered.updatedAt.getTime() >= current.createdAt.getTime()
+  )
+    return undefined;
+  // 即使尚未来得及形成付款账本，同套餐任务上的付款事实也不能因旧来源豁免而被越过。
+  if (
+    jobs.some((item) => {
+      if (
+        item.ownerId !== current.ownerId ||
+        item.accountKey !== current.accountKey ||
+        item.plan !== current.plan
+      )
+        return false;
+      const r = object(item.result);
+      return (
+        (r.payment_attempted !== undefined && r.payment_attempted !== false) ||
+        [
+          'payment_requests_sent',
+          'confirmation_requests_sent',
+          'card_tokenization_requests_sent'
+        ].some((key) => r[key] !== undefined && r[key] !== 0) ||
+        ![undefined, 'not_attempted', 'unpaid'].includes(r.payment_status as never) ||
+        r.request_attempt_key !== undefined ||
+        [
+          'payment_result_unknown',
+          'payment_failed',
+          'paid_pending_activation',
+          'subscription_activated'
+        ].includes(String(r.status)) ||
+        ((!(item.createdAt instanceof Date) ||
+          !Number.isFinite(item.createdAt.getTime()) ||
+          (source.updatedAt instanceof Date &&
+            item.createdAt.getTime() > source.updatedAt.getTime())) &&
+          r.checkout_identifier !== undefined &&
+          r.checkout_identifier !== identifier &&
+          r.checkout_identifier !== raw.checkout_identifier) ||
+        Boolean(
+          r.manual_confirmation_accepted || r.payment_evidence || r.payment_record_write_failed
+        ) ||
+        Boolean(r.payment_outcome || r.operation || r.upgrade_identifier)
+      );
+    })
+  )
+    return undefined;
+  const predecessorJobIds = unidentifiedCheckoutPredecessorJobIds(
+    jobs,
+    source,
+    markerRecord,
+    records,
+    profileId
+  );
+  return predecessorJobIds.length === 1 ? { sourceJobId: source.id, predecessorJobIds } : undefined;
+}
+
 /** 网页在请求前保存的标记本身不是零付款证明，必须另有严格核实的来源任务。 */
 export function isUnidentifiedCheckoutMarker(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;

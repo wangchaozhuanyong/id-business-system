@@ -565,48 +565,124 @@ export async function runDirectPayment(
     }
     operation = 'payment_form';
     await hooks.progress('payment_preparation', report);
+    const nativeCheckout = !checkoutId.startsWith('cs_');
+    if (nativeCheckout)
+      observer.trackNativeBilling(checkoutId, entity, plan, launch.safety.lockedCurrency);
     const billingSnapshot = await step('payment_form', () =>
       fillDirectPaymentForm(session, details, deadline)
     );
-    const quote = async () => {
+    const billingDetails = { ...details, state: billingSnapshot.state };
+    if (nativeCheckout) await waitDirectPayment(session.signal, 750);
+    const assertNativeVersion = (version: number) => {
+      try {
+        observer.assertNativeBillingVersion(version);
+      } catch {
+        throw new DirectPaymentDiagnosticError('quote_validation', 'billing_fields_changed');
+      }
+    };
+    const quote = async (expectedNativeVersion?: number) => {
       operation = 'quote_read';
-      const currentPage = await page();
-      if (
-        currentPage.checkoutId !== checkoutId ||
-        currentPage.entity !== entity ||
-        currentPage.kind === 'official_error'
-      )
-        throw new DirectPaymentDiagnosticError('quote_read', 'existing_checkout_unavailable', {
-          ...(currentPage.kind === 'official_error' ? { page_state: 'official_error' } : {})
-        });
-      const raw = await step('quote_read', () =>
-        read(`/backend-api/payments/checkout/${entity}/${checkoutId}`)
-      );
-      const tierVerified =
-        !plan.startsWith('pro-') ||
-        (
-          await session.evaluate<PageState>(
-            directPaymentPageExpression(plan, 'verify_tier', checkoutId)
+      const quoteDeadline = Math.min(deadline, Date.now() + 10_000);
+      let awaitingNativeVersion: number | undefined;
+      let lastError: unknown;
+      while (Date.now() < quoteDeadline) {
+        remaining();
+        const native = nativeCheckout ? observer.nativeBilling(billingDetails) : undefined;
+        if (expectedNativeVersion !== undefined) assertNativeVersion(expectedNativeVersion);
+        // Address changes are debounced by the official page. A response body is still in flight
+        // until its safe projection is parsed; older successful responses cannot bypass this gate.
+        if (
+          native &&
+          (native.pending ||
+            Date.now() - native.changedAt < 750 ||
+            (native.observed && (!native.document || native.error)) ||
+            (awaitingNativeVersion === native.version && !native.observed))
+        ) {
+          if (native.error)
+            lastError = new DirectPaymentDiagnosticError(
+              'quote_validation',
+              /(?:address|country|email)/.test(native.error)
+                ? 'direct_payment_quote_billing_mismatch'
+                : 'official_checkout_quote_unavailable'
+            );
+          await waitDirectPayment(session.signal, 100);
+          continue;
+        }
+        const raw = await step('quote_read', () =>
+          read(`/backend-api/payments/checkout/${entity}/${checkoutId}`)
+        );
+        if (native) {
+          const current = paymentObject(raw.checkout_session ?? raw);
+          if (
+            current.checkout_session_id !== checkoutId ||
+            current.processor_entity !== entity ||
+            current.plan_name !== directOfficialPlans[plan] ||
+            current.status !== 'open' ||
+            current.payment_status !== 'unpaid'
           )
-        ).kind === 'tier_ready';
-      const currentBilling = await step('payment_form', () =>
-        verifyDirectPaymentForm(session, details, deadline)
-      );
-      if (currentBilling.state !== billingSnapshot.state) throw new Error('billing_fields_changed');
-      await observer.settle();
-      return step('quote_validation', () =>
-        verifyDirectCheckoutQuote(
-          raw,
-          checkoutId,
-          entity,
-          plan,
-          { ...details, state: billingSnapshot.state },
-          currentPage.text ?? '',
-          launch.safety.lockedCurrency,
-          observer.stripeQuotes.get(checkoutId),
-          tierVerified,
-          true
+            throw new Error('官网原单状态或套餐未核实。');
+        }
+        const tierVerified =
+          !plan.startsWith('pro-') ||
+          (
+            await session.evaluate<PageState>(
+              directPaymentPageExpression(plan, 'verify_tier', checkoutId)
+            )
+          ).kind === 'tier_ready';
+        const currentBilling = await step('payment_form', () =>
+          verifyDirectPaymentForm(session, details, deadline)
+        );
+        if (currentBilling.state !== billingSnapshot.state)
+          throw new Error('billing_fields_changed');
+        const currentPage = await page();
+        if (
+          currentPage.checkoutId !== checkoutId ||
+          currentPage.entity !== entity ||
+          currentPage.kind === 'official_error'
         )
+          throw new DirectPaymentDiagnosticError('quote_read', 'existing_checkout_unavailable', {
+            ...(currentPage.kind === 'official_error' ? { page_state: 'official_error' } : {})
+          });
+        await observer.settle();
+        if (native) assertNativeVersion(native.version);
+        try {
+          const verified = await step('quote_validation', () =>
+            verifyDirectCheckoutQuote(
+              native?.document ?? raw,
+              checkoutId,
+              entity,
+              plan,
+              billingDetails,
+              currentPage.text ?? '',
+              launch.safety.lockedCurrency,
+              observer.stripeQuotes.get(checkoutId),
+              tierVerified,
+              true
+            )
+          );
+          if (native) assertNativeVersion(native.version);
+          return { ...verified, nativeBillingVersion: native?.version };
+        } catch (error) {
+          // A stale GET is never accepted as current billing. Allow a delayed native update to
+          // arrive within this read-only budget; without it the original strict mismatch fails.
+          const reason = error instanceof DirectPaymentDiagnosticError ? error.facts.reason : '';
+          if (
+            !native ||
+            native.observed ||
+            expectedNativeVersion !== undefined ||
+            !/^(?:official_billing_[a-z0-9_]+_mismatch|official_checkout_quote_unavailable)$/.test(
+              reason
+            )
+          )
+            throw error;
+          awaitingNativeVersion = native.version;
+          lastError = error;
+          await waitDirectPayment(session.signal, 100);
+        }
+      }
+      throw (
+        lastError ??
+        new DirectPaymentDiagnosticError('quote_validation', 'official_checkout_quote_unavailable')
       );
     };
     let verified: Awaited<ReturnType<typeof quote>> | undefined;
@@ -622,6 +698,7 @@ export async function runDirectPayment(
       }
     }
     if (!verified) throw last;
+    const nativeBillingVersion = verified.nativeBillingVersion;
     finalQuote = verified.quote;
     report = {
       ...report,
@@ -646,6 +723,7 @@ export async function runDirectPayment(
     const preflight = () =>
       step('confirmation', async () => {
         session.signal.throwIfAborted();
+        if (nativeBillingVersion !== undefined) assertNativeVersion(nativeBillingVersion);
         if (observer.failure || observer.confirmationRequests)
           throw new Error('原窗口已发生付款操作，需核实原单；本次不会重复提交。');
         const freshIdentity = await identity();
@@ -655,7 +733,7 @@ export async function runDirectPayment(
         );
         if (currentBilling.state !== billingSnapshot.state)
           throw new Error('billing_fields_changed');
-        if (JSON.stringify(await quote()) !== original)
+        if (JSON.stringify(await quote(nativeBillingVersion)) !== original)
           throw new Error('账单资料或官网报价已变化，请重新核价。');
       });
     operation = 'confirmation';
@@ -663,6 +741,7 @@ export async function runDirectPayment(
     session.signal.throwIfAborted();
     await preflight();
     operation = 'confirmation';
+    if (nativeBillingVersion !== undefined) assertNativeVersion(nativeBillingVersion);
     observer.arm();
     const submitted = await session.evaluate<PageState>(
       directPaymentPageExpression(plan, 'confirm', checkoutId)

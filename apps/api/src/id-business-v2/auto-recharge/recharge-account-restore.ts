@@ -19,6 +19,7 @@ import {
   isUnidentifiedCheckoutMarker,
   unidentifiedCheckoutSourceResult,
   unidentifiedCheckoutPredecessorJobIds,
+  recoveredCheckoutPredecessor,
   hasUnresolvedUnidentifiedCheckoutPayment
 } from './recharge-unidentified-checkout';
 
@@ -150,7 +151,7 @@ export async function restoreRechargeAccount(input: {
     (unidentifiedResult.browser_profile_id === ownedProfile.profileId ||
       unidentifiedSource.id !== ownedProfile.sourceJobId)
   );
-  const predecessorJobIds =
+  let predecessorJobIds =
     unidentifiedRecovery && unidentifiedSource && unidentifiedRecord && ownedProfile
       ? unidentifiedCheckoutPredecessorJobIds(
           unidentifiedHistory,
@@ -160,6 +161,41 @@ export async function restoreRechargeAccount(input: {
           ownedProfile.profileId
         )
       : [];
+  let historicalRecoverySourceId = unidentifiedRecovery ? unidentifiedSource?.id : undefined;
+  const recoveredRecord = records.find(
+    (record) =>
+      record.fileKey === `${accountKey}${job.plan === 'plus' ? '' : `-${job.plan}`}.json` &&
+      object(record.document).status === 'checkout_created' &&
+      object(record.document).checkout_recovered_from_original === true &&
+      object(record.document).expired_checkout_replacement !== undefined
+  );
+  if (
+    recoveredRecord &&
+    job.action === 'bitbrowser' &&
+    currentResult.mode !== 'open_browser' &&
+    currentResult.recheck_only !== true &&
+    currentResult.resolution_only !== true &&
+    !pendingCycleMarker
+  ) {
+    const history = await repository.finishedJobsForUnidentifiedCheckout(
+      tx,
+      job.ownerId,
+      accountKey,
+      job.id
+    );
+    const recovered =
+      ownedProfile &&
+      recoveredCheckoutPredecessor(
+        history,
+        boundJob,
+        recoveredRecord,
+        records,
+        ownedProfile.profileId
+      );
+    if (!recovered) throw new ConflictException('已发现原单的恢复来源尚未完整核实，禁止创建新订单');
+    historicalRecoverySourceId = recovered.sourceJobId;
+    predecessorJobIds = recovered.predecessorJobIds;
+  }
   if (job.action === 'bitbrowser' && currentResult.recheck_only === true) {
     const source =
       typeof currentResult.source_job_id === 'string'
@@ -210,7 +246,7 @@ export async function restoreRechargeAccount(input: {
       job.plan,
       job.id,
       undefined,
-      unidentifiedRecovery ? unidentifiedSource?.id : undefined,
+      historicalRecoverySourceId,
       expiredCheckoutIdentifiers,
       predecessorJobIds
     );
