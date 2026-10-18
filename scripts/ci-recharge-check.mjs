@@ -1,3 +1,4 @@
+import { isFeatureRetirementPermissionsRepair } from './ci-feature-retirement-scope.mjs';
 import {
   rejectRetiredRegistrationCommand,
   rejectRetiredRegistrationExecution
@@ -804,6 +805,29 @@ if (
   }
 }
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
+
+// No application, schema or dependency input changed from the accepted main tree.
+if (part === 'guards' && isFeatureRetirementPermissionsRepair(changed)) {
+  run('python3', ['-B', 'scripts/production-release/feature-retirement-release.test.py']);
+  run('python3', ['-B', 'scripts/production-release/feature-retirement-build.test.py']);
+  run('python3', ['-B', 'scripts/production-release/feature-retirement-dispatch.test.py']);
+  run('node', [
+    '--test',
+    'scripts/ci-feature-retirement-scope.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/git-readiness.test.mjs'
+  ]);
+  const controls = changed.filter((name) => /\.(mjs|json)$/.test(name));
+  npm('exec', '--', 'prettier', '--check', ...controls);
+  npm('exec', '--', 'eslint', ...controls.filter((name) => name.endsWith('.mjs')));
+  npm('run', 'git:readiness');
+  console.log(
+    'Exact retirement directory-permission control repair PASS; accepted application tree unchanged.'
+  );
+  process.exit(0);
+}
+
 const onlineEngine = () => {
   const directory = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
   npm('ci', '--prefix', directory, '--ignore-scripts', '--no-audit', '--no-fund');

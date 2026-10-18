@@ -354,6 +354,11 @@ class ConfigurationTests(Fixture):
         self.assertIn('rm -rf -- /app/apps/api/src/id-business-v2/auto-registration', api)
         self.assertIn('/opt/id-registration', api)
         self.assertIn('COPY shared/ /app/packages/shared/dist/', api)
+        permissions = 'RUN find /app/apps/api/dist /app/packages/shared/dist -type d -exec chmod 755 {} +'
+        self.assertIn(permissions, api)
+        self.assertLess(api.index('COPY shared/'), api.index(permissions))
+        self.assertLess(api.index(permissions), api.index('USER node'))
+        self.assertNotIn('chmod -R', api)
         self.assertNotIn('npm ', api)
         self.assertNotIn('pip ', api)
         admin = m.image_dockerfile('admin', 'admin:pinned', {'User': '101'}, proof, self.plan, self.c)
