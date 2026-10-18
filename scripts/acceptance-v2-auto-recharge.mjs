@@ -579,7 +579,8 @@ try {
             total: 1
           });
         if (path.endsWith('/auto-recharge/addresses')) {
-          assert.equal(url.searchParams.get('status'), 'unused');
+          // The recharge selector requests unused rows; address management also reads all rows.
+          assert.ok([null, 'unused'].includes(url.searchParams.get('status')));
           return success(route, {
             items: [address],
             total: 1,
