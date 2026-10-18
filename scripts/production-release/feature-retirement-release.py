@@ -661,7 +661,8 @@ def image_dockerfile(role, reference, original, proof, plan, c=None):
         deleted += ['/app/packages/shared/dist/' + n for n in proof['sharedDeletedModules']]
         need(all(safe_name(n) for n in proof['apiDeletedModules']) and all(safe_name(n) for n in proof['sharedDeletedModules']), 'IMAGE_DELETION_INVALID')
         lines += ['RUN rm -rf -- ' + ' '.join(shlex.quote(n) for n in (*RETIRED_ROOTS, *deleted)),
-                  'COPY modules/ /app/apps/api/dist/', 'COPY shared/ /app/packages/shared/dist/']
+                  'COPY modules/ /app/apps/api/dist/', 'COPY shared/ /app/packages/shared/dist/',
+                  'RUN find /app/apps/api/dist /app/packages/shared/dist -type d -exec chmod 755 {} +']
     else:
         retired = (c or {}).get('retiredAdminAssets', {})
         need(hash_map(retired), 'RETIRED_ADMIN_SCOPE_INVALID')
