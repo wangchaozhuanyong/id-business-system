@@ -1,0 +1,68 @@
+name: Online Checkout Actionability Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify finite source contract and engine-only publication controls
+        run: |
+          python3 -B scripts/production-release/online-checkout-actionability-build.py --check
+          python3 -B scripts/production-release/online-checkout-actionability-release.test.py
+      - name: Setup isolated Node 22 runtime for required headful launcher evidence
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - name: Install frozen browser dependencies and virtual display
+        run: |
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          node apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules/playwright/cli.js install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends xvfb xauth
+      - name: Require Ubuntu Node 22 headful launcher parity before packaging
+        env:
+          ENGINE_ROOT: ${{ github.workspace }}/apps/api/src/id-business-v2/online-recharge/engine
+          PARITY_OUTPUT_ROOT: ${{ github.workspace }}/.runtime/online-checkout-actionability-ci/node22-launcher-profiles
+          PARITY_HEADFUL: '1'
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.runtime/online-checkout-actionability-ci"
+          xvfb-run -a node scripts/production-release/online-checkout-actionability-parity.cjs > "$GITHUB_WORKSPACE/.runtime/online-checkout-actionability-ci/node22-parity.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-checkout-actionability-node22-parity-${{ github.sha }}-${{ github.run_attempt }}
+          path: .runtime/online-checkout-actionability-ci/node22-parity.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Reuse authenticated identical-tree Quality validation and package only the engine delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/online-checkout-actionability-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-checkout-actionability-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-checkout-actionability/online-checkout-actionability-artifact.tar.gz
+            .deploy/online-checkout-actionability/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

@@ -379,6 +379,7 @@ function checkoutHtml(checkoutId, scene, billingFields, cardFields) {
         if(!entries.some(entry=>entry.isIntersecting)||window.cardMounts)return;
         window.cardMounts++;
         const card=document.createElement('iframe');
+        card.setAttribute('aria-hidden','true');
         card.style.cssText='width:900px;height:190px;visibility:visible';
         card.src='https://js.stripe.com/fixture-card?session=${checkoutId}';
         document.querySelector('#fixture-card-host').append(card);
@@ -1038,7 +1039,7 @@ async function fixtureChild(
       if (cardFields === 'legacy-stable-nested') metrics.cardFrameDocuments++;
       return route.fulfill({
         contentType: 'text/html',
-        body: `<html><body>${cardFields === 'prepared-visible-shadow' ? '<div id="fixture-shadow-host"></div>' : fields}<script>
+        body: `<html><body>${cardFields === 'prepared-visible-shadow' ? '<div id="fixture-shadow-host" aria-hidden="true"></div>' : fields}<script>
         const fieldRoot=${cardFields === 'prepared-visible-shadow' ? `document.querySelector('#fixture-shadow-host').attachShadow({mode:'open'})` : 'document'};
         ${cardFields === 'prepared-visible-shadow' ? `fieldRoot.innerHTML=${JSON.stringify(fields)};` : ''}
         const publish=()=>parent.postMessage({type:'fixture-card-ready',ready:Array.from(fieldRoot.querySelectorAll('input')).every(input=>Boolean(input.value))},'${parentOrigin}');
@@ -1361,7 +1362,7 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         cardFields: 'prepared-visible-shadow',
         outputDir: path.join(repairOutputRoot, `full-flow-${randomUUID().slice(0, 8)}`)
       },
-      'prepared native card with visible frame and shadow labels'
+      'prepared native card with physically visible ARIA-marked frame and shadow fields'
     ],
     [
       'success',

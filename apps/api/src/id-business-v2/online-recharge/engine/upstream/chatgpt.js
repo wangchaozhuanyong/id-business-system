@@ -414,7 +414,7 @@ const CHECKOUT_OPEN_REASONS = new Set([
 ]);
 const CHECKOUT_FORM_DIAGNOSTIC_CODES = new Set([
     'CHECKOUT_CARD_NOT_READY', 'CHECKOUT_FORM_NOT_READY', 'CHECKOUT_CONTROL_AMBIGUOUS',
-    'CHECKOUT_CONTROL_READ_FAILED', 'CHECKOUT_PAGE_CLOSED', 'CHECKOUT_FORM_ABORTED',
+    'CHECKOUT_CONTROL_READ_FAILED', 'CHECKOUT_CONTROL_BLOCKED', 'CHECKOUT_PAGE_CLOSED', 'CHECKOUT_FORM_ABORTED',
     'CHECKOUT_FORM_TIMEOUT', 'CHECKOUT_FORM_DATA_MISSING', 'CHECKOUT_CONTENT_LOAD_FAILED',
     'CHECKOUT_RELOAD_TIMEOUT', 'CHECKOUT_RELOAD_PAYMENT_STARTED', 'CHECKOUT_RELOAD_ALREADY_ATTEMPTED',
     'CHECKOUT_RELOAD_NOT_REQUIRED', 'CHECKOUT_RELOAD_ORIGINAL_CHANGED', 'CHECKOUT_RELOAD_STATE_UNAVAILABLE',
@@ -467,11 +467,13 @@ function safeCheckoutOpenDiagnostics(value) {
             if ([1, 2].includes(value.inspection.readAttempts)) inspection.readAttempts = value.inspection.readAttempts;
             if (CHECKOUT_FORM_READ_PHASES.has(value.inspection.readPhase)) inspection.readPhase = value.inspection.readPhase;
             const visibilityReasons = ['zero_geometry', 'hidden', 'inert', 'aria_hidden', 'display_none',
-                'visibility_hidden', 'opacity_zero', 'content_visibility_hidden'];
+                'visibility_hidden', 'opacity_zero', 'content_visibility_hidden', 'modal_background'];
             const countGroups = {
                 frameSkipCounts: visibilityReasons,
                 controlCounts: ['scanned', 'eligible', 'locatable', 'recognized'],
-                controlRejectCounts: [...visibilityReasons, 'aria_disabled', 'disabled', 'readonly', 'excluded_type', 'no_locator']
+                controlRejectCounts: [...visibilityReasons, 'aria_disabled', 'disabled', 'readonly', 'excluded_type', 'no_locator'],
+                interactionRejectCounts: ['occluded', 'outside_viewport', 'unsupported_transform', 'unsupported_geometry',
+                    'control_ineligible', 'frame_ineligible', 'scroll_unavailable', 'page_changed']
             };
             for (const [group, keys] of Object.entries(countGroups)) {
                 const raw = value.inspection[group];
