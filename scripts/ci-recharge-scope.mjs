@@ -43,6 +43,7 @@ import {
   isOnlineSessionRefreshOnly,
   isOnlineLoginVisibilityOnly,
   isOnlineAuthStabilityOnly,
+  isOnlineSessionPreflightOnly,
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
@@ -2487,6 +2488,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isSharedBankCardControlsOnly(paths)) return ['guards'];
   if (isSharedBankCardOnly(paths)) return [...sharedBankCardParts];
   if (isOnlineLegacyCloseOnly(paths)) return ['guards', 'api'];
+  if (isOnlineSessionPreflightOnly(paths)) return ['guards', 'admin'];
   if (isOnlineSettingsTestsOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineSettingsControlsOnly(paths)) return ['guards'];
   if (isOnlineCheckoutLoadParentRpcOnly(paths)) return ['guards', 'online-engine'];

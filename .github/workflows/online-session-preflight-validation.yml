@@ -1,0 +1,48 @@
+name: Online Session Subscription Preflight Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify finite Admin-only sources and publication controls
+        run: |
+          python3 -B scripts/production-release/online-session-preflight-build.py --check
+          python3 -B scripts/production-release/online-session-preflight-release.test.py
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Reuse identical-tree Quality validation and reproduce published Admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/online-session-preflight-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-session-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-session-preflight/online-session-preflight-artifact.tar.gz
+            .deploy/online-session-preflight/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
