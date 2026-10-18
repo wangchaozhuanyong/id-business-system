@@ -1,0 +1,121 @@
+name: BitBrowser Billing and Quote Repair Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: ci-billing-${{ github.run_id }}-${{ github.run_attempt }}
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: id_business_v2_employee_connections_flow_${{ github.run_id }}
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit
+      - name: Verify finite source and release protections
+        run: |
+          python3 -B scripts/production-release/bitbrowser-billing-build.py --check
+          python3 -B scripts/production-release/bitbrowser-billing-release.test.py
+      - name: Verify address rotation, success receipt and order deduplication in isolated MySQL
+        env:
+          DATABASE_URL: mysql://root:ci-billing-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:${{ job.services.mysql.ports[3306] }}/id_business_v2_employee_connections_flow_${{ github.run_id }}
+          V2_RECHARGE_TEST_DATABASE_URL: mysql://root:ci-billing-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:${{ job.services.mysql.ports[3306] }}/id_business_v2_employee_connections_flow_${{ github.run_id }}
+        run: |
+          npm run build --workspace @apple-business/shared
+          npm run prisma:mysql:generate --workspace @apple-business/api
+          npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
+          mkdir -p .runtime/bitbrowser-billing
+          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-billing.mysql.integration.spec.ts src/id-business-v2/auto-recharge/recharge-callback-receipts.mysql.integration.spec.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/bitbrowser-billing/mysql-vitest.json"
+      - name: Preserve native MySQL result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-billing-mysql-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .runtime/bitbrowser-billing/mysql-vitest.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Reproduce exact published runtime and build the finite overlay
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/bitbrowser-billing-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-billing-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/bitbrowser-billing/recharge-checkout-artifact.tar.gz
+            .deploy/bitbrowser-billing/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-billing-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/bitbrowser-billing-dispatch.py
+      - name: Preserve publication receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-billing-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/bitbrowser-billing-publication/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

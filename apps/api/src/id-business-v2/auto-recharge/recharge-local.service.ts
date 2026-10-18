@@ -114,6 +114,8 @@ export class RechargeLocalService {
           throw new ConflictException('所选 ChatGPT 账号与本次登录邮箱不一致');
         }
         const card = await resolveLocalRechargeCard(tx, input, this.names);
+        if (address.status !== 'unused')
+          throw new ConflictException('每笔新充值请选择未使用的账单地址');
         const accountKey = account?.officialAccountKey;
         const ownedProfile = accountKey
           ? await this.repository.retainedProfileForAccount(

@@ -7,9 +7,7 @@ import { getApiErrorMessage } from '@/api/client';
 export function useRechargeNameMatch(
   details: Ref<V2RechargeDetails>,
   selectedCardId: Ref<string>,
-  locked: Ref<boolean>,
-  onAddress: (value: string | null, expectedManualRevision?: number) => void,
-  readManualAddressRevision?: () => number
+  locked: Ref<boolean>
 ) {
   const loading = ref(false);
   const error = ref('');
@@ -37,7 +35,6 @@ export function useRechargeNameMatch(
     const revision = ++generation;
     matchingNumber = number;
     const originalName = details.value.name;
-    const manualAddressRevision = readManualAddressRevision?.();
     loading.value = true;
     error.value = '';
     const work = (async () => {
@@ -49,7 +46,6 @@ export function useRechargeNameMatch(
           lastMatchedNumber = number;
           confirmed.value = result.confirmed;
           selectedCardId.value = result.cardId ?? '';
-          onAddress(result.billingAddressId, manualAddressRevision);
           if (result.confirmed || details.value.name === originalName || !details.value.name) {
             details.value.name = result.name;
             matchedName = result.name;
@@ -80,7 +76,6 @@ export function useRechargeNameMatch(
       confirmed.value = false;
       if (previous && number !== previous) {
         selectedCardId.value = '';
-        onAddress(null);
         if (details.value.name === matchedName) details.value.name = '';
       }
       if (!locked.value) void match();

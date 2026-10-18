@@ -169,9 +169,9 @@ describe('网页直连官方支付表单', () => {
       new Input('cc-number')
     ]);
     f.frames.push(untrusted);
-    expect(
-      await fillDirectPaymentForm(f.session, { ...details }, Date.now() + 2000)
-    ).toBeUndefined();
+    expect(await fillDirectPaymentForm(f.session, { ...details }, Date.now() + 2000)).toEqual({
+      state: details.state
+    });
     for (const field of [
       'number',
       'expiry',
@@ -187,12 +187,30 @@ describe('网页直连官方支付表单', () => {
       expect(f.fields[field].events).toEqual(['input', 'change']);
     }
     expect(untrusted.evaluate).not.toHaveBeenCalled();
-    await expect(
-      verifyDirectPaymentForm(f.session, details, Date.now() + 2000)
-    ).resolves.toBeUndefined();
+    await expect(verifyDirectPaymentForm(f.session, details, Date.now() + 2000)).resolves.toEqual({
+      state: details.state
+    });
     const responses = await Promise.all(f.root.evaluate.mock.results.map((item) => item.value));
     expect(JSON.stringify(responses)).not.toContain(details.number);
     expect(JSON.stringify(responses)).not.toContain(details.cvc);
+  });
+  it('核实州名后返回官网下拉选项代码，切换到其他州仍拒绝', async () => {
+    const f = fixture();
+    const state = new Select('address-level1', [
+      { value: 'OR', textContent: 'Oregon' },
+      { value: 'CA', textContent: 'California' }
+    ]);
+    f.billingNodes.splice(f.billingNodes.indexOf(f.fields.state), 1, state);
+    const entered = { ...details, state: 'Oregon' };
+    const snapshot = await fillDirectPaymentForm(f.session, entered, Date.now() + 2000);
+    expect(snapshot).toEqual({ state: 'OR' });
+    expect(state.value).toBe('OR');
+    expect(JSON.stringify(snapshot)).not.toContain(details.number);
+    expect(JSON.stringify(snapshot)).not.toContain(details.cvc);
+    state.value = 'CA';
+    await expect(verifyDirectPaymentForm(f.session, entered, Date.now() + 2000)).rejects.toThrow(
+      'billing_fields_changed'
+    );
   });
 
   it('任何卡片字段重复时，第一次写入前停止', async () => {

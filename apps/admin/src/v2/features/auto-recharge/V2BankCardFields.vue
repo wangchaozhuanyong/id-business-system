@@ -15,7 +15,7 @@
       <el-input
         v-model="form.billingName"
         maxlength="120"
-        placeholder="选填；留空则充值时从姓名库匹配"
+        placeholder="选填；留空则充值时自动生成姓名，旧卡沿用原姓名"
       />
     </el-form-item>
     <el-form-item label="银行卡卡号" prop="number" :required="!editing">

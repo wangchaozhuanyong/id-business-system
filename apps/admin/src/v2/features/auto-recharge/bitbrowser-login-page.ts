@@ -184,8 +184,7 @@ export async function inspectLoginPage(
         (Number.isSafeInteger(context?.sessionReadBudgetMs) && context!.sessionReadBudgetMs! > 0
           ? Math.min(10_000, context!.sessionReadBudgetMs!)
           : 10_000);
-      const readSignal = () =>
-        AbortSignal.timeout(Math.max(1, Math.min(5000, readDeadline - Date.now())));
+      const readSignal = () => AbortSignal.timeout(Math.max(1, readDeadline - Date.now()));
       const sessionPath =
         readingJsonSession && context?.refreshSession
           ? '/api/auth/session?refresh=true&reason=token_expired&method=GET&path=%2Fapi%2Fauth%2Fsession'
@@ -231,6 +230,15 @@ export async function inspectLoginPage(
           },
           signal: readSignal()
         });
+        if (check.status === 401)
+          return {
+            kind: 'expired' as const,
+            tokenRejected: true as const,
+            refreshFailed: context?.refreshSession === true,
+            email: String(session.user.email),
+            userId: String(session.user.id),
+            accountId
+          };
         if (check.ok) {
           const data = await check.json();
           const node = data?.accounts?.[accountId];
@@ -307,11 +315,19 @@ export function loginPageExpression(
 export type LoginPageState = Awaited<ReturnType<typeof inspectLoginPage>>;
 
 /** Positive UI evidence is separate from the read-only server identity check. */
-export function inspectLoggedInPage() {
+export function inspectLoggedInPage(allowCheckout = false) {
   if (location.protocol !== 'https:' || location.hostname !== 'chatgpt.com')
     return { kind: 'page_loading' as const };
   if (/Just a moment|Verify.*human|安全验证|请稍候/i.test(document.title))
     return { kind: 'manual' as const };
+  if (
+    allowCheckout &&
+    /^\/checkout\/[a-z][a-z0-9_]{0,40}\/((?:oaics|cs)_[A-Za-z0-9_]{1,200})\/?$/.test(
+      location.pathname
+    ) &&
+    document.body?.innerText.trim()
+  )
+    return { kind: 'page_ready' as const };
   const visible = (node: HTMLElement) => {
     const style = getComputedStyle(node);
     return (
@@ -368,8 +384,8 @@ export function inspectLoggedInPage() {
   return { kind: ready ? ('page_ready' as const) : ('page_loading' as const) };
 }
 
-export function loggedInPageExpression() {
-  return `(${inspectLoggedInPage.toString()})()`;
+export function loggedInPageExpression(allowCheckout = false) {
+  return `(${inspectLoggedInPage.toString()})(${JSON.stringify(allowCheckout)})`;
 }
 
 /** Uses the actual window proxy; only controlled classifications leave the page. */

@@ -27,7 +27,7 @@ export function expiredCheckoutProof(value: unknown) {
   if (
     Object.keys(proof).some((key) => !proofKeys.includes(key)) ||
     typeof proof.checkout_identifier !== 'string' ||
-    !/^oaics_[A-Za-z0-9_]{1,200}$/.test(proof.checkout_identifier) ||
+    !/^(?:oaics_[A-Za-z0-9_]{1,200}|cs_[A-Za-z0-9_]{1,180})$/.test(proof.checkout_identifier) ||
     typeof proof.processor_entity !== 'string' ||
     !/^[a-z][a-z0-9_]{0,40}$/.test(proof.processor_entity) ||
     typeof proof.target_plan !== 'string' ||

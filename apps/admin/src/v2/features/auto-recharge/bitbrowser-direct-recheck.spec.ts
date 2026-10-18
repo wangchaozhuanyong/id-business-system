@@ -97,6 +97,42 @@ beforeEach(() => {
   );
 });
 describe('网页只读复查原付款', () => {
+  it.each([
+    { reason: 'official_read_token_invalid', status: 401, expected: 'official_read_token_invalid' },
+    { reason: 'official_read_timeout', status: 0, expected: 'official_read_timeout' },
+    {
+      reason: 'untrusted-private-message',
+      status: 403,
+      expected: 'direct_payment_existing_checkout_read_failed'
+    }
+  ])(
+    '只读读取失败保留安全分类和状态，不保存响应正文：$expected',
+    async ({ reason, status, expected }) => {
+      mock.evaluate.mockResolvedValue({
+        ok: false,
+        status,
+        reason,
+        data: { secret: 'private-body' }
+      });
+      await expect(
+        runDirectPaymentRecheck(
+          browser,
+          'plus',
+          { checkout_identifier: sid },
+          restored,
+          mock.persist
+        )
+      ).rejects.toMatchObject({
+        facts: {
+          stage: 'original_payment_recheck',
+          reason: expected,
+          ...(status ? { http_status: status } : {})
+        }
+      });
+      expect(mock.close).toHaveBeenCalledOnce();
+      expect(mock.persist).not.toHaveBeenCalled();
+    }
+  );
   it('原单明确paid及目标订阅一致才确认开通，全程只有GET读取', async () => {
     const result = await runDirectPaymentRecheck(
       browser,

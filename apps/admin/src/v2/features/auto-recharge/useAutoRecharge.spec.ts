@@ -606,16 +606,92 @@ describe('比特浏览器充值入口', () => {
     expect(flow.connectorMessage.value).toContain('直连');
     expect(mock.connectorCatalog).not.toHaveBeenCalled();
   });
-  it('默认仅为比特充值，载入 JSON 自动识别邮箱、窗名与可复用地址', () => {
+  it('新充值默认按未使用地址分配，不继续选已使用或停用地址', () => {
     expect(flow.operationMode.value).toBe('payment');
     flow.updateJsonInput(sessionJson());
     expect(flow.details.value.email).toBe('registered@example.com');
     expect(flow.windowName.value).toBe('ChatGPT-registered');
     expect(flow.selectedAddressId.value).toBe(address.id);
     addresses.value.items = [{ ...address, status: 'used' }];
-    expect(flow.selectedAddress.value?.status).toBe('used');
+    expect(flow.selectedAddress.value).toBeUndefined();
+    expect(flow.availableAddresses.value).toEqual([]);
     addresses.value.items = [{ ...address, status: 'disabled' }];
     expect(flow.availableAddresses.value).toEqual([]);
+  });
+
+  it('已用地址刷新后，新充值自动选择创建最早的未使用地址，不受列表返回顺序影响', () => {
+    const first = { ...address, createdAt: '2026-10-01T00:00:00Z' };
+    const second = { ...address, id: 'next-address', createdAt: '2026-10-02T00:00:00Z' };
+    const third = { ...address, id: 'last-address', createdAt: '2026-10-03T00:00:00Z' };
+    addresses.value.items = [third, second, first];
+    expect(flow.selectedAddressId.value).toBe(first.id);
+    addresses.value.items = [
+      third,
+      second,
+      { ...first, status: 'used', usedAt: '2026-10-04T00:00:00Z' }
+    ];
+    expect(flow.availableAddresses.value.map((item) => item.id)).toEqual([second.id, third.id]);
+    expect(flow.selectedAddressId.value).toBe(second.id);
+  });
+
+  it('同一卡新充值仍选下一条未使用地址，不被历史姓名匹配或选卡响应改回已用地址', async () => {
+    const next = { ...address, id: 'next-address', createdAt: '2026-10-02T00:00:00Z' };
+    addresses.value.items = [{ ...address, status: 'used', usedAt: '2026-10-01T00:00:00Z' }, next];
+    mock.managedCardDetail.mockResolvedValueOnce({
+      allowedPlans: ['plus'],
+      id: 'card-a',
+      status: 'active',
+      number: '5555555555554444',
+      expiry: '12/30',
+      billingName: 'Historic Person',
+      billingAddressId: address.id
+    });
+    mock.matchCardName.mockResolvedValueOnce({
+      name: 'Historic Person',
+      confirmed: true,
+      cardId: 'bound-card',
+      billingAddressId: address.id
+    });
+    await flow.selectSavedCard('card-a');
+    await flow.nameMatch.ensureReady();
+    expect(flow.details.value.name).toBe('Historic Person');
+    expect(flow.selectedAddressId.value).toBe(next.id);
+    expect(flow.availableAddresses.value.map((item) => item.id)).toEqual([next.id]);
+  });
+
+  it('执行中的地址被标记已用时保留原表单，任务结束后才转到下一条未使用地址', () => {
+    const next = { ...address, id: 'next-address', createdAt: '2026-10-02T00:00:00Z' };
+    addresses.value.items = [address, next];
+    jobs.value.items = [job('running', { payment_attempted: true, payment_requests_sent: 1 })];
+    addresses.value.items = [{ ...address, status: 'used', usedAt: '2026-10-01T00:00:00Z' }, next];
+    expect(flow.selectedAddressId.value).toBe(address.id);
+    jobs.value.items = [job('finished', { payment_attempted: true, payment_requests_sent: 1 })];
+    expect(flow.selectedAddressId.value).toBe(next.id);
+  });
+  it('明确付款前取消显示已停止，不再提示充值失败；未知付款继续保留核对提示', async () => {
+    jobs.value.items = [
+      job('finished', {
+        status: 'cancelled',
+        cancellation_confirmed: true,
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0
+      })
+    ];
+    flow.selectJob('job-fixture');
+    await nextTick();
+    expect(flow.workflowMessage.value).toBe('本次任务已停止，未提交付款；填写资料已保留。');
+    jobs.value.items = [
+      job('finished', {
+        status: 'cancelled',
+        cancellation_confirmed: true,
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        payment_status: 'unknown'
+      })
+    ];
+    expect(flow.workflowMessage.value).not.toContain('未提交付款');
+    expect(flow.workflowMessage.value).toContain('只读复查原订单');
   });
   it('无唯一账号邮箱或非法 JSON 不能启动，错误不回显授权内容', () => {
     fillForm();
@@ -654,37 +730,41 @@ describe('比特浏览器充值入口', () => {
     expect(mock.connectorStart).not.toHaveBeenCalled();
     expect(mock.startDirectPayment).not.toHaveBeenCalled();
   });
-  it('无地址时在姓名就绪后自动生成并填写明细，不改变菲律宾代理和币种', async () => {
-    addresses.value.items = [];
-    const generated = {
-      ...address,
-      id: 'generated',
-      line1: '100 Main St',
-      city: 'Nashua',
-      state: 'New Hampshire',
-      postalCode: '03060'
-    };
-    mock.generateAddresses.mockResolvedValueOnce({ count: 1, items: [generated] });
-    (mock.addressesQuery.refresh as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-      addresses.value.items = [generated];
-    });
-    fillForm();
-    await flow.nameMatch.ensureReady();
-    await vi.waitFor(() => expect(flow.selectedAddressId.value).toBe('generated'));
-    expect(mock.generateAddresses).toHaveBeenCalledExactlyOnceWith(1);
-    expect(flow.selectedAddressId.value).toBe('generated');
-    expect(flow.details.value).toMatchObject({
-      country: 'US',
-      line1: '100 Main St',
-      city: 'Nashua',
-      state: 'New Hampshire',
-      postal_code: '03060'
-    });
-    expect(flow.selectedProxyCountryCode.value).toBe('PH');
-    expect(flow.lockedCurrency.value).toBe('PHP');
-    expect(mock.startBitBrowser).not.toHaveBeenCalled();
-  });
-  it('仅登录模式或已有历史地址绑定时不生成账单资料', async () => {
+  it.each(['empty', 'all_used'])(
+    '无未使用地址时自动生成并填写明细，不改变代理和币种：%s',
+    async (state) => {
+      addresses.value.items =
+        state === 'empty' ? [] : [{ ...address, status: 'used', usedAt: '2026-10-01T00:00:00Z' }];
+      const generated = {
+        ...address,
+        id: 'generated',
+        line1: '100 Main St',
+        city: 'Nashua',
+        state: 'New Hampshire',
+        postalCode: '03060'
+      };
+      mock.generateAddresses.mockResolvedValueOnce({ count: 1, items: [generated] });
+      (mock.addressesQuery.refresh as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+        addresses.value.items = [generated];
+      });
+      fillForm();
+      await flow.nameMatch.ensureReady();
+      await vi.waitFor(() => expect(flow.selectedAddressId.value).toBe('generated'));
+      expect(mock.generateAddresses).toHaveBeenCalledExactlyOnceWith(1);
+      expect(flow.selectedAddressId.value).toBe('generated');
+      expect(flow.details.value).toMatchObject({
+        country: 'US',
+        line1: '100 Main St',
+        city: 'Nashua',
+        state: 'New Hampshire',
+        postal_code: '03060'
+      });
+      expect(flow.selectedProxyCountryCode.value).toBe('PH');
+      expect(flow.lockedCurrency.value).toBe('PHP');
+      expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    }
+  );
+  it('仅登录模式不生成地址；切回充值后旧卡的历史地址不阻止生成未使用地址', async () => {
     flow.operationMode.value = 'open_browser';
     addresses.value.items = [];
     fillForm();
@@ -702,8 +782,8 @@ describe('比特浏览器充值入口', () => {
     await flow.nameMatch.ensureReady();
     await nextTick();
     await nextTick();
-    expect(flow.canGenerateAddress.value).toBe(false);
-    expect(mock.generateAddresses).not.toHaveBeenCalled();
+    expect(flow.canGenerateAddress.value).toBe(true);
+    await vi.waitFor(() => expect(mock.generateAddresses).toHaveBeenCalledOnce());
     expect(flow.selectedAddress.value).toBeUndefined();
   });
   it('手工选择地址后，迟到的生成结果不能覆盖选择', async () => {
@@ -728,7 +808,7 @@ describe('比特浏览器充值入口', () => {
     await request;
     expect(flow.selectedAddressId.value).toBe(address.id);
   });
-  it('旧卡绑定地址缺失时清除之前自动选择的地址，禁止借用另一条地址继续', async () => {
+  it('旧卡历史地址缺失不妨碍新充值选择最早未使用地址，原姓名继续保留', async () => {
     mock.matchCardName.mockResolvedValueOnce({
       name: 'Historic Person',
       confirmed: true,
@@ -738,10 +818,11 @@ describe('比特浏览器充值入口', () => {
     fillForm();
     await flow.nameMatch.ensureReady();
     await nextTick();
-    expect(flow.selectedAddress.value).toBeUndefined();
-    expect(flow.details.value.line1).toBe('');
-    expect(flow.canGenerateAddress.value).toBe(false);
-    expect(flow.canStart.value).toBe(false);
+    expect(flow.selectedAddress.value?.id).toBe(address.id);
+    expect(flow.details.value.line1).toBe(address.line1);
+    expect(flow.details.value.name).toBe('Historic Person');
+    expect(flow.canGenerateAddress.value).toBe(true);
+    expect(flow.canStart.value).toBe(true);
     expect(mock.generateAddresses).not.toHaveBeenCalled();
   });
   it('姓名匹配等待和失败时显示自动填写状态，不要求手填姓名', async () => {
@@ -1101,11 +1182,12 @@ describe('比特浏览器充值入口', () => {
       'Verified Synthetic Owner'
     );
   });
-  it('姓名匹配自动回填原卡账单地址后，最终任务引用与页面地址一致且不改变账号、方案和币种', async () => {
+  it('姓名匹配只回填原卡姓名，新任务与网页控制器均使用当前未使用地址', async () => {
     const linked = {
       ...address,
       id: '88888888-8888-4888-8888-888888888888',
-      line1: 'Verified Billing Avenue'
+      line1: 'Historic Billing Avenue',
+      status: 'used' as const
     };
     addresses.value.items = [address, linked];
     let release!: (value: unknown) => void;
@@ -1113,7 +1195,7 @@ describe('比特浏览器充值入口', () => {
     mock.startBitBrowser.mockImplementationOnce(async (input) => ({
       ...structuredClone(launch),
       id: input.id,
-      address: { ...launch.address, id: linked.id, line1: linked.line1 }
+      address: { ...launch.address, id: address.id, line1: address.line1 }
     }));
     fillForm();
     const originalPlan = flow.plan.value;
@@ -1128,18 +1210,18 @@ describe('比特浏览器充值入口', () => {
       billingAddressId: linked.id
     });
     await starting;
-    expect(flow.selectedAddressId.value).toBe(linked.id);
-    expect(flow.details.value.line1).toBe(linked.line1);
+    expect(flow.selectedAddressId.value).toBe(address.id);
+    expect(flow.details.value.line1).toBe(address.line1);
     expect(mock.startBitBrowser.mock.calls[0]?.[0]).toMatchObject({
-      addressId: linked.id,
+      addressId: address.id,
       billingName: 'Verified Synthetic Owner',
       plan: originalPlan,
       lockedCurrency: originalCurrency,
       expectedEmail: originalEmail
     });
     expect(mock.startDirectPayment.mock.calls[0]?.[0].launch.address).toMatchObject({
-      id: linked.id,
-      line1: linked.line1
+      id: address.id,
+      line1: address.line1
     });
     expect(mock.startBitBrowser).toHaveBeenCalledOnce();
   });
@@ -1638,6 +1720,20 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canStartOpen.value).toBe(false);
     expect(mock.jobOptions?.getRevalidateAt?.(jobs.value)).toBeGreaterThan(Date.now());
     expect(flow.workflowMessage.value).toContain('核对金额');
+  });
+  it('本页拥有网页付款任务时显示核价确认，不误报其他网页的登录任务', () => {
+    mock.paymentOwns.mockReturnValue(true);
+    jobs.value.items = [
+      job('awaiting_confirmation', { transport: 'web_direct', quote_digest: 'fixture-digest' })
+    ];
+    expect(flow.workflowMessage.value).toContain('核对金额');
+    expect(flow.workflowMessage.value).not.toContain('原网页');
+  });
+  it('本页拥有正在运行的网页付款任务时显示当前执行状态', () => {
+    mock.paymentOwns.mockReturnValue(true);
+    jobs.value.items = [job('running', { transport: 'web_direct', mode: 'payment' })];
+    expect(flow.workflowMessage.value).toContain('核实官网状态');
+    expect(flow.workflowMessage.value).not.toContain('原网页');
   });
   it('已是目标套餐说明无需重复付款', () => {
     jobs.value.items = [

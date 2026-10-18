@@ -1,10 +1,22 @@
 import type { VerifiedPaymentBrowser } from './bitbrowser-payment-session';
+import type { V2CheckoutDiagnostic } from '@apple-business/shared';
+import {
+  CHECKOUT_ERROR_BODY_LIMIT,
+  checkoutErrorDiagnostic
+} from './bitbrowser-checkout-diagnostic';
 import { paymentObject, type PaymentDocument } from './bitbrowser-payment-evidence';
+import {
+  stripeQuoteCheckout,
+  stripeQuoteDocument,
+  type StripeQuoteDocument
+} from './bitbrowser-stripe-quote';
 
 /** Observes responses; it never intercepts, rewrites, or resends browser traffic. */
 export class DirectPaymentObserver {
   checkout?: PaymentDocument;
   preview?: PaymentDocument;
+  stripeQuotes = new Map<string, StripeQuoteDocument>();
+  private stripeVersions = new Map<string, number>();
   evidence?: {
     kind: 'payment_intent' | 'invoice' | 'checkout_session';
     identifier: string;
@@ -17,6 +29,14 @@ export class DirectPaymentObserver {
   onUnexpected?: (facts: PaymentDocument) => Promise<void>;
   paymentStatus: 'unknown' | 'paid' | 'declined' | 'requires_action' = 'unknown';
   checkoutRequests = 0;
+  checkoutFailure?: {
+    reason:
+      | 'official_checkout_http_failed'
+      | 'official_checkout_response_invalid'
+      | 'official_checkout_network_failed';
+    http_status?: number;
+    diagnostics?: { checkout_error: V2CheckoutDiagnostic };
+  };
   confirmationRequests = 0;
   failure = '';
   private armed = false;
@@ -32,6 +52,9 @@ export class DirectPaymentObserver {
       status: number;
       data: PaymentDocument;
       confirmation: boolean;
+      checkoutIndex?: number;
+      responseTooLarge?: boolean;
+      stripeVersion?: number;
     }
   >();
   private pending = new Set<Promise<void>>();
@@ -62,7 +85,7 @@ export class DirectPaymentObserver {
           /^\/backend-api\/(?:payments\/checkout|subscriptions\/update)(?:\/|$)/.test(url.pathname);
         const stripe =
           url.origin === 'https://api.stripe.com' &&
-          /^\/v1\/(?:payment_intents\/pi_[A-Za-z0-9]+(?:\/confirm)?|invoices\/in_[A-Za-z0-9]+|3ds2\/(?:authenticate|challenge_complete))$/.test(
+          /^\/v1\/(?:payment_pages\/cs_[A-Za-z0-9_]+(?:\/(?:init|update|confirm))?|payment_intents\/pi_[A-Za-z0-9]+(?:\/confirm)?|invoices\/in_[A-Za-z0-9]+|3ds2\/(?:authenticate|challenge_complete))$/.test(
             url.pathname
           );
         if (!official && !stripe) return;
@@ -101,19 +124,28 @@ export class DirectPaymentObserver {
           this.checkoutRequests++;
           if (!accountMatches) this.fail('checkout_account_unverified');
         }
+        const stripeConfirmation = stripe
+          ? /^\/v1\/payment_pages\/(cs_[A-Za-z0-9_]+)\/confirm$/.exec(url.pathname)
+          : null;
+        if (stripeConfirmation) accountMatches = stripeConfirmation[1] === this.expected.checkoutId;
         let confirmation = false;
         if (
-          official &&
           request.method === 'POST' &&
-          ['/backend-api/payments/checkout/confirm', '/backend-api/subscriptions/update'].includes(
-            url.pathname
-          )
+          (stripeConfirmation ||
+            (official &&
+              [
+                '/backend-api/payments/checkout/confirm',
+                '/backend-api/subscriptions/update'
+              ].includes(url.pathname)))
         ) {
           this.confirmationRequests++;
           if (this.confirmationRequests > 1) this.fail('duplicate_payment_observed');
           if (!this.armed) this.fail('unexpected_payment_observed');
           if (!accountMatches) this.fail('payment_account_binding_changed');
-          if (url.pathname === '/backend-api/payments/checkout/confirm') {
+          if (stripeConfirmation) {
+            if (!this.expected.checkoutId || stripeConfirmation[1] !== this.expected.checkoutId)
+              this.fail('payment_order_binding_changed');
+          } else if (url.pathname === '/backend-api/payments/checkout/confirm') {
             if (!this.expected.checkoutId || data.checkout_session_id !== this.expected.checkoutId)
               this.fail('payment_order_binding_changed');
           } else if (
@@ -130,10 +162,12 @@ export class DirectPaymentObserver {
               confirmation_requests_sent: Math.min(this.confirmationRequests, 10)
             };
             if (
-              typeof data.checkout_session_id === 'string' &&
-              /^(?:oaics|cs)_[A-Za-z0-9_]{1,200}$/.test(data.checkout_session_id)
+              typeof (stripeConfirmation?.[1] ?? data.checkout_session_id) === 'string' &&
+              /^(?:oaics|cs)_[A-Za-z0-9_]{1,200}$/.test(
+                String(stripeConfirmation?.[1] ?? data.checkout_session_id)
+              )
             )
-              observed.checkout_identifier = data.checkout_session_id;
+              observed.checkout_identifier = stripeConfirmation?.[1] ?? data.checkout_session_id;
             const pending = this.onUnexpected(observed).catch(() =>
               this.fail('unexpected_payment_persistence_failed')
             );
@@ -141,22 +175,49 @@ export class DirectPaymentObserver {
             void pending.finally(() => this.pending.delete(pending));
           }
         }
+        const stripeId = stripe ? stripeQuoteCheckout(url.pathname) : undefined;
+        const stripeVersion = stripeId ? (this.stripeVersions.get(stripeId) ?? 0) + 1 : undefined;
+        if (stripeId && stripeVersion) {
+          this.stripeVersions.set(stripeId, stripeVersion);
+          this.stripeQuotes.delete(stripeId);
+        }
         this.request.set(key, {
           path: url.pathname,
           method: String(request.method),
           session,
           status: 0,
           data,
-          confirmation
+          confirmation,
+          ...(official &&
+          request.method === 'POST' &&
+          url.pathname === '/backend-api/payments/checkout'
+            ? { checkoutIndex: Math.min(this.checkoutRequests, 10) }
+            : {}),
+          stripeVersion
         });
       }
       if (method === 'Network.responseReceived') {
         const item = this.request.get(key);
-        if (item) item.status = Number(paymentObject(params.response).status);
+        if (item) {
+          const response = paymentObject(params.response);
+          item.status = Number(response.status);
+          const headers = paymentObject(response.headers);
+          const length = Object.entries(headers).find(
+            ([key]) => key.toLowerCase() === 'content-length'
+          )?.[1];
+          if (Number(length) > CHECKOUT_ERROR_BODY_LIMIT) item.responseTooLarge = true;
+        }
       }
-      if (method === 'Network.loadingFailed') this.request.delete(key);
+      if (method === 'Network.loadingFailed') {
+        const item = this.request.get(key);
+        if (item?.path === '/backend-api/payments/checkout' && item.method === 'POST')
+          this.checkoutFailure = { reason: 'official_checkout_network_failed' };
+        this.request.delete(key);
+      }
       if (method === 'Network.loadingFinished' && this.request.has(key)) {
         const item = this.request.get(key)!;
+        if (Number(params.encodedDataLength) > CHECKOUT_ERROR_BODY_LIMIT)
+          item.responseTooLarge = true;
         this.request.delete(key);
         const promise = this.read(String(params.requestId), item).catch(() => undefined);
         this.pending.add(promise);
@@ -189,24 +250,80 @@ export class DirectPaymentObserver {
       status: number;
       data: PaymentDocument;
       confirmation: boolean;
+      checkoutIndex?: number;
+      responseTooLarge?: boolean;
+      stripeVersion?: number;
     }
   ) {
+    const checkout = item.path === '/backend-api/payments/checkout' && item.method === 'POST';
+    if (checkout && (item.status < 200 || item.status >= 300)) {
+      const failure: NonNullable<DirectPaymentObserver['checkoutFailure']> = {
+        reason: 'official_checkout_http_failed',
+        ...(Number.isInteger(item.status) && item.status >= 100 && item.status <= 599
+          ? { http_status: item.status }
+          : {}),
+        diagnostics: {
+          checkout_error: {
+            request_index: item.checkoutIndex,
+            body_state: 'reading',
+            attribution: 'unclassified'
+          } as V2CheckoutDiagnostic
+        }
+      };
+      this.checkoutFailure = failure;
+      // Keep the observed HTTP failure even when the bounded body read fails or the page detaches.
+      let diagnostic: V2CheckoutDiagnostic;
+      if (this.closed || !this.ownsSession(item.session)) diagnostic = { body_state: 'detached' };
+      else if (item.responseTooLarge) diagnostic = { body_state: 'oversized' };
+      else {
+        try {
+          const body = await this.browser.cdp.command(
+            'Network.getResponseBody',
+            { requestId },
+            item.session,
+            3000
+          );
+          diagnostic =
+            this.closed || !this.ownsSession(item.session)
+              ? { body_state: 'detached' }
+              : checkoutErrorDiagnostic(body);
+        } catch {
+          diagnostic = { body_state: 'unavailable' };
+        }
+      }
+      // An older response cannot overwrite a later failure (no request is retried here).
+      if (this.checkoutFailure === failure)
+        failure.diagnostics!.checkout_error = {
+          request_index: item.checkoutIndex,
+          attribution: 'unclassified',
+          ...diagnostic
+        };
+      return;
+    }
     const body = await this.browser.cdp.command(
       'Network.getResponseBody',
       { requestId },
       item.session
     );
-    if (
-      this.closed ||
-      !this.ownsSession(item.session) ||
-      typeof body.body !== 'string' ||
-      body.body.length > 100000 ||
-      body.base64Encoded
-    )
+    if (this.closed || !this.ownsSession(item.session)) return;
+    let raw: PaymentDocument;
+    try {
+      if (typeof body.body !== 'string' || body.body.length > 100000 || body.base64Encoded)
+        throw new Error();
+      raw = paymentObject(JSON.parse(body.body));
+    } catch {
+      if (checkout) this.checkoutFailure = { reason: 'official_checkout_response_invalid' };
       return;
-    const raw = paymentObject(JSON.parse(body.body));
+    }
     if (item.status < 200 || item.status >= 300) return;
-    if (item.path === '/backend-api/payments/checkout' && item.method === 'POST') {
+    const stripeId = stripeQuoteCheckout(item.path);
+    if (stripeId) {
+      if (item.stripeVersion !== this.stripeVersions.get(stripeId)) return;
+      const quote = stripeQuoteDocument(raw, stripeId);
+      if (quote) this.stripeQuotes.set(stripeId, quote);
+      return;
+    }
+    if (checkout) {
       const value = paymentObject(raw.checkout_session ?? raw);
       if (
         !this.failure &&
@@ -215,16 +332,20 @@ export class DirectPaymentObserver {
         )
       )
         this.checkout = value;
+      else if (!this.failure)
+        this.checkoutFailure = { reason: 'official_checkout_response_invalid' };
     }
     if (item.path === '/backend-api/subscriptions/update/preview') this.preview = raw;
     if (
       item.path === '/backend-api/payments/checkout/confirm' ||
-      item.path === '/backend-api/subscriptions/update'
+      item.path === '/backend-api/subscriptions/update' ||
+      /^\/v1\/payment_pages\/cs_[A-Za-z0-9_]+\/confirm$/.test(item.path)
     ) {
       if (!item.confirmation || this.failure) return;
       if (
-        raw.checkout_session_id !== undefined &&
-        raw.checkout_session_id !== this.expected.checkoutId
+        (raw.checkout_session_id !== undefined &&
+          raw.checkout_session_id !== this.expected.checkoutId) ||
+        (raw.session_id !== undefined && raw.session_id !== this.expected.checkoutId)
       ) {
         this.fail('payment_order_binding_changed');
         return;
@@ -363,6 +484,8 @@ export class DirectPaymentObserver {
     this.closed = true;
     this.remove();
     this.request.clear();
+    this.stripeQuotes.clear();
+    this.stripeVersions.clear();
     this.receipts = [];
   }
 }

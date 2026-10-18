@@ -27,7 +27,7 @@ import { useRechargeNameMatch } from './useRechargeNameMatch';
 import { useRechargeAddressGeneration } from './useRechargeAddressGeneration';
 import { bankRechargeApi } from './bank-recharge-api';
 import { canSelectRechargeAccount } from './recharge-account-options';
-import { currencyOptions } from './recharge-presentation';
+import { currencyOptions, isUnpaidCancelledRecharge } from './recharge-presentation';
 import { proxyCountryCurrencies } from './recharge-proxy-options';
 import { useRechargeProxyRegion } from './useRechargeProxyRegion';
 import { rechargeHistoryPaymentBlocked } from './recharge-callback-diagnostics';
@@ -162,7 +162,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     loginMethod: 'json' as 'json' | 'password',
     selectedBankAccountId: '',
     selectedPaymentCardId: '',
-    selectedCardBillingAddressId: '',
     manualAddressSelectionRevision: 0,
     selectedBankAccountEmail: '',
     jsonInput: '',
@@ -189,12 +188,12 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   delete restored.loginEmail;
   delete restored.loginPassword;
   delete restored.maxAmount;
+  delete restored.selectedCardBillingAddressId;
   const {
     operationMode,
     loginMethod,
     selectedBankAccountId,
     selectedPaymentCardId,
-    selectedCardBillingAddressId,
     manualAddressSelectionRevision,
     selectedBankAccountEmail,
     jsonInput,
@@ -254,8 +253,18 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     scope: 'auto-recharge',
     key: () => 'auto-recharge-unused-addresses',
     keepPreviousData: true,
-    query: ({ signal }) =>
-      rechargeApi.listAddresses({ page: 1, pageSize: 2000, status: 'all' }, { signal })
+    query: async ({ signal }) => {
+      const [inventory, unused] = await Promise.all([
+        rechargeApi.listAddresses({ page: 1, pageSize: 2000, status: 'all' }, { signal }),
+        rechargeApi.listAddresses({ page: 1, pageSize: 2000, status: 'unused' }, { signal })
+      ]);
+      return {
+        ...inventory,
+        items: [
+          ...new Map([...unused.items, ...inventory.items].map((item) => [item.id, item])).values()
+        ]
+      };
+    }
   });
   const bankAccountsQuery = useV2ModuleQuery({
     moduleKey: 'chatgpt-accounts',
@@ -336,7 +345,13 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() =>
     (addressQuery.data.value?.items ?? [])
-      .filter((item) => item.status !== 'disabled')
+      .filter(
+        (item) =>
+          item.status === 'unused' ||
+          (item.status === 'used' &&
+            (active.value || formLocked.value) &&
+            item.id === selectedAddressId.value)
+      )
       .sort(
         (a, b) =>
           (a.usedAt ?? '').localeCompare(b.usedAt ?? '') ||
@@ -375,7 +390,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     paymentCardLoading.value = Boolean(id);
     if (!id) return;
     details.value.cvc = '';
-    const addressRevision = manualAddressSelectionRevision.value;
     error.value = '';
     try {
       const selectedPlan = plan.value;
@@ -402,15 +416,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (card.billingName) details.value.name = card.billingName;
       // 卡号监听会清除旧选择；完整资料写入后再登记本次卡号对应的编号。
       selectedPaymentCardId.value = id;
-      selectedCardBillingAddressId.value = card.billingAddressId ?? '';
-      if (card.billingAddressId && manualAddressSelectionRevision.value === addressRevision) {
-        addressSource.value = 'library';
-        selectedAddressId.value = availableAddresses.value.some(
-          (item) => item.id === card.billingAddressId
-        )
-          ? card.billingAddressId
-          : '';
-      }
     } catch (cause) {
       if (!disposed && generation === paymentCardGeneration && selectedPaymentCardId.value === id) {
         selectedPaymentCardId.value = '';
@@ -420,7 +425,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       if (generation === paymentCardGeneration) paymentCardLoading.value = false;
     }
   }
-  watch(selectedPaymentCardId, () => (selectedCardBillingAddressId.value = ''), { flush: 'sync' });
   function markAddressSelectionManual() {
     manualAddressSelectionRevision.value++;
   }
@@ -533,26 +537,13 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const nameMatch = useRechargeNameMatch(
     details,
     ref(''),
-    computed(() => formLocked.value || active.value || operationMode.value !== 'payment'),
-    (addressId, expectedManualRevision) => {
-      selectedCardBillingAddressId.value = addressId ?? '';
-      if (addressId && expectedManualRevision === manualAddressSelectionRevision.value) {
-        addressSource.value = 'library';
-        selectedAddressId.value = availableAddresses.value.some(
-          (address) => address.id === addressId
-        )
-          ? addressId
-          : '';
-      }
-    },
-    () => manualAddressSelectionRevision.value
+    computed(() => formLocked.value || active.value || operationMode.value !== 'payment')
   );
   const canGenerateAddress = computed(
     () =>
       operationMode.value === 'payment' &&
       !formLocked.value &&
       !active.value &&
-      !selectedCardBillingAddressId.value &&
       !nameMatch.loading.value &&
       !nameMatch.error.value
   );
@@ -570,7 +561,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     context: () => [
       details.value.number.replace(/[ -]/g, ''),
       selectedPaymentCardId.value,
-      selectedCardBillingAddressId.value,
       manualAddressSelectionRevision.value,
       operationMode.value,
       formLocked.value,
@@ -803,9 +793,10 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     if (
       job?.result.transport === 'web_direct' &&
       activeStates.has(job.state) &&
-      !directOpen.owns(job.id)
+      !directOpen.owns(job.id) &&
+      !ownsDirectPayment(job.id)
     )
-      return '此登录任务由原网页直连执行。本页可停止本次登录并解锁资料；继续核对需回到原网页。';
+      return '此任务由原网页直连执行。本页可停止任务并解锁资料；继续核对需回到原网页。';
     if (job?.result.status === 'cancelling') return '正在停止执行并清理本次窗口，请稍候。';
     if (needsCode.value && autoCodeSubmittedJobId.value === job?.id)
       return '2FA 验证码已提交，正在等待官网确认。';
@@ -826,7 +817,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     if (job?.state === 'awaiting_human_verification')
       return '比特浏览器正在等待人工验证；完成官网或银行验证后点击继续。';
     if (job?.state === 'running' && job.result.transport === 'web_direct')
-      return '网页正在登录并核对官网账号，请保留当前管理页面。';
+      return '网页正在连接比特浏览器并核实官网状态，请保留当前管理页面。';
     if (job?.state === 'running')
       return job.action === 'server'
         ? '服务器正在执行，本任务最多提交一次付款。'
@@ -868,11 +859,18 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         return '官网已核实该账号已是目标套餐，本次未提交付款。';
       if (job.result.status === 'subscription_activated')
         return '付款与套餐生效均已核实；可继续为同一账号选择下一套餐。';
+      if (isUnpaidCancelledRecharge(job) && !paymentRetryBlocked.value)
+        return '本次任务已停止，未提交付款；填写资料已保留。';
+      if (
+        job.result.payment_status === 'unknown' &&
+        (job.result.payment_attempted === true || Number(job.result.payment_requests_sent) > 0)
+      )
+        return '本次付款已有提交记录，请只读复查原订单；填写资料已保留。';
       return paymentRetryBlocked.value
         ? '本次付款已有提交记录，请只读复查原订单；填写资料已保留。'
         : '本次充值未成功，填写资料已保留；修正原因后可再次执行。';
     }
-    if (!currentSettingsReady.value) return '请先完成比特浏览器设置和本机充值助手的连接配置。';
+    if (!currentSettingsReady.value) return '请先完成当前电脑的比特浏览器直连设置。';
     if (!credentialReady.value)
       return loginMethod.value === 'json'
         ? '粘贴授权 JSON 后会自动载入账号邮箱。'
@@ -940,7 +938,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   watch(
     [
       selectedAddressId,
-      selectedCardBillingAddressId,
       availableAddresses,
       operationMode,
       addressSource,
@@ -952,9 +949,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       let address = selectedAddress.value;
       if (!address) {
         if (addressQuery.phase.value !== 'ready' || addressQuery.error.value) return;
-        address = selectedCardBillingAddressId.value
-          ? availableAddresses.value.find((item) => item.id === selectedCardBillingAddressId.value)
-          : availableAddresses.value[0];
+        address = availableAddresses.value[0];
         const nextId = address?.id ?? '';
         if (selectedAddressId.value !== nextId) {
           selectedAddressId.value = nextId;
@@ -1774,7 +1769,6 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     availableAddresses,
     selectedAddress,
     selectedAddressId,
-    selectedCardBillingAddressId,
     addressSource,
     markAddressSelectionManual,
     selected,

@@ -335,6 +335,7 @@ describe('同账号原比特窗口保留', () => {
       {
         requireAvailable: vi.fn().mockResolvedValue({
           id: addressId,
+          status: 'unused',
           line1: 'Synthetic address',
           country: 'US',
           city: 'Portland',

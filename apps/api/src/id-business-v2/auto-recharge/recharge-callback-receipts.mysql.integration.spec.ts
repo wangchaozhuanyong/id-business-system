@@ -75,7 +75,7 @@ suite('本机回执真实MySQL并发和回滚', () => {
     };
   };
 
-  const fixture = async () => {
+  const fixture = async (direct = false) => {
     const id = randomUUID();
     const addressId = randomUUID();
     const accountKey = hash(randomUUID());
@@ -96,6 +96,7 @@ suite('本机回执真实MySQL并发和回滚', () => {
         leaseUntil: new Date(Date.now() + 45 * 60000),
         result: {
           mode: 'payment',
+          ...(direct ? { transport: 'web_direct', locked_currency: 'USD' } : {}),
           account_matched: true,
           addressId,
           checkout_identifier: checkout,
@@ -171,6 +172,62 @@ suite('本机回执真实MySQL并发和回滚', () => {
   });
   afterAll(async () => {
     await prisma?.$disconnect();
+  });
+
+  it('网页直连经单次报价确认后，合成成功回执只写一条待补全订单和一次地址使用', async () => {
+    const f = await fixture(true);
+    const prepared = (await f.callback({
+      type: 'direct_quote',
+      result: {
+        ...f.report(),
+        status: 'quote_ready',
+        billing_fingerprint: hash('synthetic-full-billing-' + f.id),
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0,
+        payment_status: 'not_attempted'
+      }
+    })) as { nonce: string; quote_digest: string };
+    expect(prepared.nonce).toMatch(/^[a-f0-9]{64}$/);
+    const confirmation = {
+      nonce: prepared.nonce,
+      quoteDigest: prepared.quote_digest,
+      checkoutIdentifier: f.checkout
+    };
+    await expect(service.confirm(f.id, confirmation, operator)).resolves.toMatchObject({
+      paymentAllowed: true
+    });
+    await expect(service.confirm(f.id, confirmation, operator)).rejects.toThrow('已使用');
+    expect(
+      await prisma.idBusinessV2BankRechargeOrder.count({ where: { rechargeJobId: f.id } })
+    ).toBe(0);
+    const success = {
+      type: 'finished',
+      result: { ...f.report(true), quote_digest: prepared.quote_digest }
+    };
+    await Promise.all([f.callback(success), f.callback(success)]);
+    ({ local, service } = create());
+    await f.callback(success);
+    const orders = await prisma.idBusinessV2BankRechargeOrder.findMany({
+      where: { rechargeJobId: f.id }
+    });
+    expect(orders).toHaveLength(1);
+    expect(orders[0]).toMatchObject({
+      source: 'automatic',
+      channel: 'bitbrowser',
+      status: 'pending_details',
+      plan: 'plus',
+      checkoutIdentifier: f.checkout,
+      paymentEvidenceId: f.checkout,
+      chargeCurrencyCode: 'USD',
+      openedAt: null,
+      dueAt: null
+    });
+    expect(orders[0]!.chargeAmount?.toString()).toBe('20');
+    expect(await prisma.idBusinessV2RechargeAddressUse.count({ where: { jobId: f.id } })).toBe(1);
+    expect(
+      await prisma.idBusinessV2RechargeAddress.findUniqueOrThrow({ where: { id: f.addressId } })
+    ).toMatchObject({ status: 'used' });
   });
 
   it('并发成功终态只建一个订单、一次地址使用、一条审计，重启后精确重放零重复副作用', async () => {
