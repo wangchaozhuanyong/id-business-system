@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   V2CheckoutDiagnostic,
   V2RechargeBrowserRestore,
@@ -12,6 +12,7 @@ import { directPaymentControls, startDirectPayment } from './direct-payment-task
 import type { DirectLoginHooks } from './bitbrowser-direct-login';
 import { ApiError } from '@/api/apiError';
 import { directPaymentDocumentDigest } from './bitbrowser-payment-evidence';
+import type { NativeBillingObservation } from './bitbrowser-native-quote';
 
 const mock = vi.hoisted(() => ({
   evaluate: vi.fn(),
@@ -27,6 +28,7 @@ const mock = vi.hoisted(() => ({
   close: vi.fn(),
   fill: vi.fn(),
   verifyForm: vi.fn(),
+  wait: vi.fn(),
   upgrade: vi.fn(),
   verifyQuote: vi.fn(),
   nextCycle: vi.fn(),
@@ -51,6 +53,9 @@ const mock = vi.hoisted(() => ({
     failure: '',
     linkedIntent: '',
     bind: vi.fn(),
+    trackNativeBilling: vi.fn(),
+    nativeBilling: vi.fn<() => NativeBillingObservation>(),
+    assertNativeBillingVersion: vi.fn(),
     arm: vi.fn(),
     settle: vi.fn(),
     close: vi.fn(),
@@ -71,7 +76,7 @@ vi.mock('./bitbrowser-payment-session', () => ({
     close: mock.close,
     ownsSession: () => true
   }),
-  waitDirectPayment: async () => {}
+  waitDirectPayment: mock.wait
 }));
 vi.mock('./bitbrowser-payment-form', () => ({
   fillDirectPaymentForm: mock.fill,
@@ -282,6 +287,18 @@ function fixture(
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  let now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  mock.wait.mockReset().mockImplementation(async (_signal: AbortSignal, ms = 200) => {
+    now += ms;
+  });
+  mock.observer.nativeBilling.mockReset().mockReturnValue({
+    version: 0,
+    pending: false,
+    observed: false,
+    changedAt: 0
+  });
+  mock.observer.assertNativeBillingVersion.mockReset();
   mock.observer.checkout = undefined;
   mock.observer.checkoutFailure = undefined;
   mock.observer.evidence = undefined;
@@ -297,6 +314,152 @@ beforeEach(() => {
   mock.verifyForm.mockReset().mockResolvedValue({ state: details.state });
   mock.nextCycle.mockReset().mockResolvedValue(undefined);
   mock.upgrade.mockReset().mockResolvedValue({ status: 'synthetic_upgrade' });
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe('原生结账的当前账单计税屏障', () => {
+  const nativeDocument = { checkout_session_id: newId, synthetic_latest_tax_response: true };
+  const nativeState = (overrides: Partial<NativeBillingObservation> = {}) => ({
+    version: 2,
+    observed: true,
+    pending: false,
+    changedAt: 0,
+    document: nativeDocument,
+    ...overrides
+  });
+  it('旧GET账单不同，等待迟到且已完成的当前税响应后才完成核价', async () => {
+    const f = fixture();
+    const started = Date.now();
+    const wait = mock.wait.getMockImplementation()!;
+    let state: NativeBillingObservation = nativeState({
+      version: 1,
+      observed: false,
+      document: undefined
+    });
+    mock.observer.nativeBilling.mockImplementation(() => state);
+    mock.observer.assertNativeBillingVersion.mockImplementation((version: number) => {
+      if (state.version !== version || state.pending) throw new Error('billing_fields_changed');
+    });
+    mock.wait.mockImplementation(async (signal: AbortSignal, ms = 200) => {
+      await wait(signal, ms);
+      const elapsed = Date.now() - started;
+      if (elapsed >= 1600) state = nativeState({ changedAt: started + 1300 });
+      else if (elapsed >= 1300)
+        state = nativeState({ pending: true, document: undefined, changedAt: started + 1300 });
+    });
+    mock.verifyQuote.mockImplementation(async (data) => {
+      if (data !== nativeDocument) throw new Error('official_billing_line1_mismatch');
+      return { quote, billing_fingerprint: 'b'.repeat(64) };
+    });
+    f.confirm.mockRejectedValueOnce(new Error('synthetic_stop_before_payment'));
+    await expect(f.run()).rejects.toThrow();
+    expect(mock.observer.trackNativeBilling).toHaveBeenCalledWith(newId, entity, 'plus', 'USD');
+    expect(mock.verifyQuote.mock.calls[0]?.[0]).not.toBe(nativeDocument);
+    expect(mock.verifyQuote.mock.lastCall?.[0]).toBe(nativeDocument);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2050);
+    expect(f.confirm).toHaveBeenCalledOnce();
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.observer.arm).not.toHaveBeenCalled();
+  });
+  it('完全没有当前税响应时，旧GET账单不一致仍拒绝，不能以可见表单代替', async () => {
+    const f = fixture();
+    mock.verifyQuote.mockRejectedValue(new Error('official_billing_line1_mismatch'));
+    await expect(f.run()).rejects.toThrow('地址第一行');
+    expect(mock.verifyQuote).toHaveBeenCalledTimes(3);
+    expect(f.confirm).not.toHaveBeenCalled();
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.observer.confirmationRequests).toBe(0);
+  });
+  it.each([
+    { pending: true, document: undefined },
+    { document: undefined, error: 'native_billing_response_address_mismatch' },
+    { error: 'native_billing_request_email_mismatch' }
+  ])('已出现但未核实的更新不回退到GET：%o', async (observation) => {
+    const f = fixture();
+    mock.observer.nativeBilling.mockReturnValue(nativeState(observation));
+    await expect(f.run()).rejects.toThrow();
+    expect(mock.verifyQuote).not.toHaveBeenCalled();
+    expect(f.confirm).not.toHaveBeenCalled();
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.observer.confirmationRequests).toBe(0);
+  });
+  it('税响应正确仍须独立核对GET订单的当前套餐和未付款状态', async () => {
+    const f = fixture();
+    const evaluate = mock.evaluate.getMockImplementation()!;
+    mock.observer.nativeBilling.mockReturnValue(nativeState());
+    mock.evaluate.mockImplementation(async (expression: string) => {
+      if (expression === `read:/backend-api/payments/checkout/${entity}/${newId}`)
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            checkout_session_id: newId,
+            processor_entity: entity,
+            plan_name: 'chatgptplusplan',
+            status: 'open',
+            payment_status: 'paid'
+          }
+        };
+      return evaluate(expression);
+    });
+    await expect(f.run()).rejects.toThrow();
+    expect(mock.verifyQuote).not.toHaveBeenCalled();
+    expect(f.confirm).not.toHaveBeenCalled();
+    expect(f.events).not.toContain('payment_clicked');
+  });
+  it('人工确认返回后出现新的地址更新，即使金额相同也使原确认失效', async () => {
+    const f = fixture();
+    let state = nativeState();
+    mock.observer.nativeBilling.mockImplementation(() => state);
+    mock.observer.assertNativeBillingVersion.mockImplementation((version: number) => {
+      if (state.version !== version || state.pending) throw new Error('billing_fields_changed');
+    });
+    f.confirm.mockImplementationOnce(async (_report, preflight) => {
+      await preflight();
+      f.events.push('confirmation_consumed');
+      state = nativeState({ version: 3, pending: true, document: undefined });
+    });
+    await expect(f.run()).rejects.toThrow('账单资料已变化');
+    expect(f.events).toContain('confirmation_consumed');
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.observer.confirmationRequests).toBe(0);
+    expect(mock.observer.arm).not.toHaveBeenCalled();
+  });
+  it('采样表单和GET期间到达新更新，不接受采样前的旧版本', async () => {
+    const f = fixture();
+    const started = Date.now();
+    const wait = mock.wait.getMockImplementation()!;
+    let state = nativeState({ version: 1 });
+    let changed = false;
+    mock.observer.nativeBilling.mockImplementation(() => state);
+    mock.observer.assertNativeBillingVersion.mockImplementation((version: number) => {
+      if (state.version !== version || state.pending) throw new Error('billing_fields_changed');
+    });
+    mock.verifyForm.mockImplementation(async () => {
+      if (!changed) {
+        changed = true;
+        state = nativeState({
+          version: 2,
+          pending: true,
+          document: undefined,
+          changedAt: Date.now()
+        });
+      }
+      return { state: details.state };
+    });
+    mock.wait.mockImplementation(async (signal: AbortSignal, ms = 200) => {
+      await wait(signal, ms);
+      if (changed && Date.now() - started >= 1600)
+        state = nativeState({ version: 2, changedAt: started + 800 });
+    });
+    f.confirm.mockRejectedValueOnce(new Error('synthetic_stop_before_payment'));
+    await expect(f.run()).rejects.toThrow();
+    expect(mock.verifyQuote).toHaveBeenCalledOnce();
+    expect(mock.observer.assertNativeBillingVersion).toHaveBeenCalledWith(1);
+    expect(mock.observer.assertNativeBillingVersion).toHaveBeenCalledWith(2);
+    expect(f.confirm).toHaveBeenCalledOnce();
+    expect(f.events).not.toContain('payment_clicked');
+  });
 });
 
 describe('套餐准备动作只触发一次并等待迟到状态', () => {
