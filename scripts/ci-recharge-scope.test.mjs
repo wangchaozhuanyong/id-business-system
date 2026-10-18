@@ -7527,3 +7527,54 @@ test('finite followup controls require frozen source tree and exactly ten contro
     false
   );
 });
+
+test('finite followup PR and same-tree main CLI emit both final check_parts entries', () => {
+  for (const base of [finiteFollowupCommit, 'b'.repeat(40)]) {
+    for (const eventName of ['pull_request', 'push']) {
+      const { result, writes, gitCalls } = recordScopeClassification(
+        finiteFollowupPaths,
+        {},
+        eventName,
+        { base, baseTree: finiteFollowupTree }
+      );
+      assert.equal(result.mode, 'ci-only');
+      assert.deepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(result.onlineCiBuild, false);
+      assert.equal(result.reuseMain, eventName === 'push');
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+      assert.ok(gitCalls.some((args) => args.join(' ') === 'rev-parse ' + base + '^{tree}'));
+    }
+  }
+  for (const eventName of ['pull_request', 'push']) {
+    for (const { paths, baseTree } of [
+      { paths: finiteFollowupPaths, baseTree: finiteHistoryTree },
+      { paths: finiteFollowupPaths, baseTree: 'a'.repeat(40) },
+      ...finiteFollowupPaths.map((missing) => ({
+        paths: finiteFollowupPaths.filter((name) => name !== missing),
+        baseTree: finiteFollowupTree
+      })),
+      ...[
+        'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+        'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts',
+        'scripts/production-release/bitbrowser-history-contract.json'
+      ].map((extra) => ({ paths: [...finiteFollowupPaths, extra], baseTree: finiteFollowupTree }))
+    ]) {
+      const { result, writes } = recordScopeClassification(paths, {}, eventName, {
+        base: 'b'.repeat(40),
+        baseTree
+      });
+      assert.equal(result.mode, 'full');
+      assert.notDeepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        ),
+        false
+      );
+    }
+  }
+});

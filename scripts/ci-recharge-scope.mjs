@@ -5456,7 +5456,8 @@ async function main() {
   const checkParts =
     mode === 'ci-only' &&
     (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
-      isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext))
+      isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
+      isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext))
       ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)
       : mode === 'ci-only' || mode === 'audit-retention'
         ? ['guards']
