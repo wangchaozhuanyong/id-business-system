@@ -1,6 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { runInNewContext } = require('node:vm');
 const rpc = require('../rpc.cjs');
 const { execute } = require('../task-runner.cjs');
 const hcaptcha = require('../upstream/hcaptcha-solver');
@@ -147,4 +150,163 @@ test('host login, password failure and MFA failure dispatch original safe notifi
   await assert.rejects(() =>
     execute({ operation: 'notification', payload: { event: 'send_login_otp' } }, cfg)
   );
+});
+
+function queryModeDispatchFixture() {
+  const observed = [];
+  const primaryFailure = {
+    ok: false,
+    errorCode: 'SESSION_INVALID',
+    compareDiagnostics: [
+      { httpStatus: 200, accountFactsPresent: true, accountIdentityMatches: true }
+    ]
+  };
+  const record =
+    (kind) =>
+    async (...args) => {
+      observed.push({ kind, args });
+      return primaryFailure;
+    };
+  const module = { exports: {} };
+  runInNewContext(fs.readFileSync(path.join(__dirname, '../task-runner.cjs'), 'utf8'), {
+    module,
+    require(name) {
+      if (name.startsWith('node:')) return require(name);
+      if (name === './security.cjs') return {};
+      if (name === './rpc.cjs') return { wasSubmitted: () => false, recordKnownOutcome() {} };
+      if (name === './upstream/mysql-store') return {};
+      if (name === './upstream/session-auth')
+        return { extractAccessTokenFromRaw: () => 'synthetic-mode-token' };
+      if (name === './upstream/subscription-check')
+        return {
+          querySubscriptionBySession: record('subscription'),
+          resumeAutoRenew: record('renewal-enable'),
+          cancelAutoRenew: record('renewal-disable')
+        };
+      if (name === './upstream/index') return { run: record('payment') };
+      if (name === './confirmation.cjs') return { recheck: record('recheck') };
+      if (name === './third-party.cjs') return { executeThirdParty: record('third-party') };
+      throw new Error(`Unexpected isolated dispatch import: ${name}`);
+    }
+  });
+  return { execute: module.exports.execute, observed, primaryFailure };
+}
+
+test('only an explicit standalone subscription forwards comparison mode and preserves its primary failure', async () => {
+  const f = queryModeDispatchFixture();
+  for (const mode of ['transport_compare', undefined, 'unsupported']) {
+    const result = await f.execute(
+      {
+        operation: 'subscription',
+        session: 'synthetic-session',
+        payload: { queryTransportMode: mode }
+      },
+      {}
+    );
+    const call = f.observed.at(-1);
+    assert.equal(call.kind, 'subscription');
+    assert.equal(call.args[1].queryTransportMode, mode === 'transport_compare' ? mode : undefined);
+    assert.equal(result, f.primaryFailure);
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, 'SESSION_INVALID');
+  }
+});
+
+for (const [operation, action, expected] of [
+  ['renewal', 'check', 'subscription'],
+  ['renewal', 'enable', 'renewal-enable'],
+  ['renewal', 'disable', 'renewal-disable'],
+  ['recharge', undefined, 'payment'],
+  ['debug', undefined, 'payment']
+])
+  test(`${operation}/${action || 'run'} does not forward comparison mode into its execution options`, async () => {
+    const f = queryModeDispatchFixture();
+    await f.execute(
+      {
+        operation,
+        session: 'synthetic-session',
+        payload: { queryTransportMode: 'transport_compare', action }
+      },
+      {}
+    );
+    const call = f.observed[0];
+    assert.equal(call.kind, expected);
+    const options = expected === 'payment' ? call.args[0] : call.args[1];
+    assert.equal(Object.hasOwn(options, 'queryTransportMode'), false);
+    assert.equal(f.observed.length, 1);
+  });
+
+test('original-order subscription recheck stays in reconciliation and does not receive comparison options', async () => {
+  const f = queryModeDispatchFixture();
+  const result = await f.execute(
+    {
+      operation: 'subscription',
+      session: 'synthetic-session',
+      payload: {
+        recheckTaskId: 'synthetic-original-order',
+        queryTransportMode: 'transport_compare'
+      }
+    },
+    {}
+  );
+  assert.equal(f.observed.length, 1);
+  assert.equal(f.observed[0].kind, 'recheck');
+  assert.equal(Object.hasOwn(f.observed[0].args[2], 'queryTransportMode'), false);
+  assert.equal(result, f.primaryFailure);
+});
+
+test('third-party recharge never invokes subscription comparison or forwards it as provider options', async () => {
+  const f = queryModeDispatchFixture();
+  await f.execute(
+    {
+      operation: 'recharge',
+      provider: 'third_party',
+      payload: { queryTransportMode: 'transport_compare' }
+    },
+    {}
+  );
+  assert.equal(f.observed.length, 1);
+  assert.equal(f.observed[0].kind, 'third-party');
+  assert.equal(Object.hasOwn(f.observed[0].args[2], 'queryTransportMode'), false);
+});
+
+test('successful comparison facts never become subscription confirmation or payment authorization', async () => {
+  const module = { exports: {} };
+  runInNewContext(fs.readFileSync(path.join(__dirname, '../confirmation.cjs'), 'utf8'), {
+    module,
+    process: { env: {} },
+    require(name) {
+      if (name.startsWith('node:')) return require(name);
+      if (name === './plans.cjs') return require('../plans.cjs');
+      if (name === './upstream/session-auth')
+        return { extractProfileFromToken: () => ({ accountId: 'synthetic-account' }) };
+      throw new Error(`Unexpected isolated confirmation import: ${name}`);
+    }
+  });
+  let queryCalls = 0;
+  const result = {
+    ok: false,
+    errorCode: 'NETWORK_TIMEOUT',
+    compareDiagnostics: [
+      { httpStatus: 200, accountFactsPresent: true, accountIdentityMatches: true }
+    ],
+    data: {
+      upstreamAccountId: 'synthetic-account',
+      hasActiveSubscription: false,
+      rawPlan: 'free'
+    }
+  };
+  const confirmation = module.exports.evaluateSubscription('pro_20x', 'synthetic-account', result);
+  assert.equal(confirmation.verified, false);
+  assert.equal(confirmation.querySucceeded, false);
+  const preflight = await module.exports.preflightPayment('pro_20x', 'synthetic-mode-token', {
+    query: async () => {
+      queryCalls++;
+      return result;
+    }
+  });
+  assert.equal(preflight.allowed, false);
+  assert.equal(preflight.alreadyActive, false);
+  assert.equal(preflight.confirmation.queryErrorCode, 'NETWORK_TIMEOUT');
+  assert.equal(queryCalls, 1);
 });

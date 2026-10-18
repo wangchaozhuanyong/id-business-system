@@ -46,7 +46,8 @@ import {
   sanitize,
   session,
   text,
-  activeTaskStatuses
+  activeTaskStatuses,
+  assertQueryTransportModeInput
 } from '../validation';
 
 @Injectable()
@@ -267,6 +268,12 @@ export class OnlineRechargeTasksRepository {
     integrationSource?: string
   ) {
     const input = object(raw);
+    const queryTransportMode = assertQueryTransportModeInput(
+      input,
+      operator,
+      operation,
+      integrationSource
+    );
     const sessionData = ['recharge', 'debug', 'subscription', 'renewal'].includes(operation)
       ? session(input.session, requireFullSession)
       : null;
@@ -379,6 +386,7 @@ export class OnlineRechargeTasksRepository {
       if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
         throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
+      if (queryTransportMode) payload.queryTransportMode = queryTransportMode;
       if (operation === 'recharge' && !settings.gptApiEnabled) payload.checkoutRecoveryVersion = 1;
       if (integrationSource) payload.integrationSource = integrationSource;
       if (input.paymentLimit !== undefined) {
@@ -515,7 +523,8 @@ export class OnlineRechargeTasksRepository {
       await this.repository.log(tx, 'tasks.create', operator, row.id, {
         operation,
         plan: selectedPlan,
-        provider: row.provider
+        provider: row.provider,
+        ...(queryTransportMode ? { queryTransportMode } : {})
       });
       return { row, taskToken: token, reused: false };
     });
@@ -979,7 +988,10 @@ export class OnlineRechargeTasksRepository {
             {
               session: this.encryption.decrypt(row.sessionEncrypted),
               plan: row.plan,
-              action: action === 'subscription' ? 'check' : action
+              action: action === 'subscription' ? 'check' : action,
+              ...(input.queryTransportMode === 'transport_compare'
+                ? { queryTransportMode: 'transport_compare' }
+                : {})
             },
             operator,
             action === 'subscription' ? 'subscription' : 'renewal'

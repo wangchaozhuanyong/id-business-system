@@ -31,7 +31,10 @@ async function execute(task, cfg) {
       return require('./upstream/subscription-check').querySubscriptionBySession(token, {
         timezoneOffsetMin: payload.timezoneOffsetMin ?? 480,
         sessionRaw: task.session,
-        allowBrowserFallback: true
+        allowBrowserFallback: true,
+        ...(payload.queryTransportMode === 'transport_compare'
+          ? { queryTransportMode: 'transport_compare' }
+          : {})
       });
     case 'renewal': {
       if (payload.action === 'check')

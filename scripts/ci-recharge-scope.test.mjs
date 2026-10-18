@@ -33,6 +33,8 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
+  onlineQueryNetworkPaths,
+  onlineQueryNetworkControls,
   onlineSessionPreflightPaths,
   onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
@@ -7126,4 +7128,18 @@ test('fresh Session subscription preflight selects only Admin and cannot hide pa
     'scripts/production-release/online-session-preflight-arbitrary.py'
   ])
     assert.equal(checkMode([...paths, extra], schema, schema), 'full', extra);
+});
+
+test('query network repair keeps all four checks and rejects an unrelated core payment edit', () => {
+  const paths = [...onlineQueryNetworkPaths, ...onlineQueryNetworkControls];
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  assert.equal(
+    checkMode(
+      [...paths, 'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js'],
+      'same',
+      'same'
+    ),
+    'full'
+  );
 });

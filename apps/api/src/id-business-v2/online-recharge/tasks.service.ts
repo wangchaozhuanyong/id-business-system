@@ -4,7 +4,7 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import { ONLINE_RECHARGE_PERMISSION, type OnlineRechargeOperation } from './contracts';
 import { OnlineRechargeTasksRepository } from './persistence/tasks.repository';
 import { assertOnlineSensitive } from './assets.service';
-import { object, session } from './validation';
+import { assertQueryTransportModeInput, object, session } from './validation';
 
 @Injectable()
 export class OnlineRechargeTasksService {
@@ -41,6 +41,8 @@ export class OnlineRechargeTasksService {
     integrationSource?: string
   ) {
     const input = object(raw);
+    if (Object.hasOwn(input, 'queryTransportMode'))
+      throw new BadRequestException('网络对照仅支持管理员在会话管理中发起独立订阅查询');
     if (['recharge', 'debug', 'subscription', 'renewal'].includes(operation))
       session(input.session, full);
     if (input.recheckTaskId && (!operator || input.action !== 'recheck'))
@@ -55,6 +57,12 @@ export class OnlineRechargeTasksService {
       !operator.permissions.includes(ONLINE_RECHARGE_PERMISSION.manage)
     )
       throw new ForbiddenException('没有执行任务操作的权限');
-    return this.tasks.action(section, action, object(raw), operator);
+    const input = object(raw);
+    if (Object.hasOwn(input, 'queryTransportMode')) {
+      if (section !== 'sessions' || action !== 'subscription')
+        throw new BadRequestException('网络对照仅支持独立订阅查询，不能携带原单或付款资料');
+      assertQueryTransportModeInput(input, operator, 'subscription');
+    }
+    return this.tasks.action(section, action, input, operator);
   }
 }

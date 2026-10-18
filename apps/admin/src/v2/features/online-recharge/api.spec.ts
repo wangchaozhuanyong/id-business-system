@@ -46,20 +46,44 @@ describe('配置检测与执行器请求合同', () => {
   it('新会话订阅查询只使用原订阅动作，会话不进入可恢复草稿或充值参数', async () => {
     const action = topActions.sessions?.find((item) => item.key === 'subscription');
     expect(action?.label).toBe('查询订阅');
-    expect(action?.fields).toHaveLength(1);
+    expect(action?.fields).toHaveLength(2);
     expect(action?.fields?.[0]).toMatchObject({
       key: 'session',
       required: true,
       transient: true,
       type: 'textarea'
     });
-    expect(initialFields(action?.fields)).toEqual({});
+    expect(initialFields(action?.fields)).toEqual({ queryTransportMode: '' });
+    const filters: OnlineQuery = { page: 1, pageSize: 20, keyword: '', status: '' };
+    expect(onlineActionPayload(filters, initialFields(action?.fields))).not.toHaveProperty(
+      'queryTransportMode'
+    );
     const session = '{"accessToken":"synthetic-session-not-a-real-credential"}';
     const result = await onlineApi.action('sessions', action!.key, { session });
     expect(client.post.mock.calls).toEqual([
       ['/id-business-v2/online-recharge/admin/sessions/subscription', { session }]
     ]);
     expect(result).toMatchObject({ id: 'test-job', status: 'queued', progress: 0 });
+  });
+  it('只读查询诊断显式选择且只发送给订阅动作，不混入充值入口', async () => {
+    const diagnostic = topActions.sessions?.[0]?.fields?.find(
+      (field) => field.key === 'queryTransportMode'
+    );
+    expect(diagnostic?.options).toContainEqual({
+      value: 'transport_compare',
+      label: '只读对照诊断'
+    });
+    expect(topActions.jobs?.[0]?.fields?.some((field) => field.key === 'queryTransportMode')).toBe(
+      false
+    );
+    await onlineApi.action('sessions', 'subscription', {
+      session: 'synthetic-session',
+      queryTransportMode: 'transport_compare'
+    });
+    expect(client.post).toHaveBeenCalledWith(
+      '/id-business-v2/online-recharge/admin/sessions/subscription',
+      { session: 'synthetic-session', queryTransportMode: 'transport_compare' }
+    );
   });
   it('新会话查询失败原样报告，不回退发起充值或其他动作', async () => {
     client.post.mockRejectedValueOnce(new Error('会话已过期，请重新获取'));

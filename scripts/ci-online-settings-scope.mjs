@@ -494,6 +494,56 @@ export function isOnlinePendingFeaturesControlsOnly(paths) {
     )
   );
 }
+export const onlineQueryNetworkScope = 'ONLINE_QUERY_NETWORK_REPAIR';
+export const onlineQueryNetworkPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+  'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
+  'apps/admin/src/v2/features/online-recharge/api.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/auditPresentation.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/sections.ts',
+  'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+  'apps/api/src/id-business-v2/online-recharge/validation.ts',
+  'apps/api/src/id-business-v2/online-recharge/query-transport-mode.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/dispatch.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/query-network-browser.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/subscription-check.js',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+const queryNetworkReleaseControls = [
+  '.github/workflows/online-query-network-validation.yml',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-query-network-' + name
+  )
+];
+export const onlineQueryNetworkControls = Object.freeze([
+  ...queryNetworkReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlineQueryNetworkOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    onlineQueryNetworkPaths.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) => onlineQueryNetworkPaths.includes(path) || onlineQueryNetworkControls.includes(path)
+    )
+  );
+}
+export function isOnlineQueryNetworkControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((path) => queryNetworkReleaseControls.includes(path)) &&
+    paths.every(
+      (path) => onlineQueryNetworkControls.includes(path) || documentationPaths.includes(path)
+    )
+  );
+}
 export const onlineSessionPreflightScope = 'ONLINE_SESSION_SUBSCRIPTION_PREFLIGHT';
 export const onlineSessionPreflightPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/sections.ts',
@@ -652,7 +702,8 @@ export function isOnlineSettingsOnly(paths) {
     isOnlineLoginVisibilityOnly(paths) ||
     isOnlineAuthStabilityOnly(paths) ||
     isOnlinePendingFeaturesOnly(paths) ||
-    isOnlineSessionPreflightOnly(paths)
+    isOnlineSessionPreflightOnly(paths) ||
+    isOnlineQueryNetworkOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -677,6 +728,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineQueryNetworkControlsOnly(paths)) return true;
   if (isOnlineSessionPreflightControlsOnly(paths)) return true;
   if (isOnlinePendingFeaturesControlsOnly(paths)) return true;
   if (isOnlineCheckoutLoadRecoveryControlsOnly(paths)) return true;
@@ -698,6 +750,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const queryNetwork = isOnlineQueryNetworkOnly(paths);
+  const queryNetworkControls = isOnlineQueryNetworkControlsOnly(paths);
   const sessionPreflight = isOnlineSessionPreflightOnly(paths);
   const sessionPreflightControls = isOnlineSessionPreflightControlsOnly(paths);
   const pendingFeatures = isOnlinePendingFeaturesOnly(paths);
@@ -759,6 +813,24 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (queryNetwork || queryNetworkControls)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-query-network-release.test.py'],
+        ...(queryNetwork
+          ? [
+              ...[
+                'check:admin-ui',
+                'check:v2-ui-language',
+                'check:v2-color-contrast',
+                'check:v2-table-standard',
+                'check:v2-loading-standard',
+                'check:v2-module-architecture',
+                'check:v2-isolation'
+              ].map((name) => npm('run', name))
+            ]
+          : [])
+      ];
     if (sessionPreflight || sessionPreflightControls)
       return [
         ...controls,
@@ -987,6 +1059,77 @@ export function onlineSettingsCommands(part, paths) {
       npm('run', 'typecheck', '--workspace', '@apple-business/admin'),
       npm('run', 'build', '--workspace', '@apple-business/admin')
     ];
+  }
+  if (queryNetwork) {
+    const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
+    const browser = [
+      npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),
+      ['node', upstream + '/node_modules/playwright/cli.js', 'install', '--with-deps', 'chromium']
+    ];
+    if (part === 'api')
+      return [
+        npm('run', 'prisma:mysql:generate'),
+        shared,
+        npm('run', 'typecheck', '--workspace', '@apple-business/api'),
+        ...browser,
+        npm(
+          'run',
+          'test',
+          '--workspace',
+          '@apple-business/api',
+          '--',
+          'src/id-business-v2/online-recharge'
+        ),
+        npm('run', 'build', '--workspace', '@apple-business/api')
+      ];
+    if (part === 'admin')
+      return [
+        shared,
+        npm(
+          'run',
+          'test',
+          '--workspace',
+          '@apple-business/admin',
+          '--',
+          'src/v2/features/online-recharge'
+        ),
+        npm('run', 'typecheck', '--workspace', '@apple-business/admin'),
+        npm('run', 'build', '--workspace', '@apple-business/admin')
+      ];
+    if (part === 'online-engine')
+      return [
+        npm('ci', '--ignore-scripts', '--no-audit', '--no-fund'),
+        ...browser,
+        ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg', 'xvfb', 'xauth'],
+        [
+          'node',
+          '--input-type=module',
+          '-e',
+          [
+            "import { readdirSync } from 'node:fs';",
+            "import { spawnSync } from 'node:child_process';",
+            "const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';",
+            "const files = readdirSync(root).filter(name => name.endsWith('.test.cjs')).sort().map(name => root + '/' + name);",
+            "if (!files.length) throw new Error('Missing online engine regression files');",
+            "const fixture = root + '/query-network-browser.test.cjs';",
+            "if (!files.includes(fixture)) throw new Error('Missing query network browser regression file');",
+            'let status = 0;',
+            'for (const group of [[fixture], files.filter(file => file !== fixture)].filter(group => group.length)) {',
+            "  const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...group], { stdio: 'inherit' });",
+            '  if (result.error) throw result.error;',
+            '  status = result.status ?? 1;',
+            '  if (status !== 0) break;',
+            '}',
+            'process.exit(status);'
+          ].join('\n')
+        ],
+        npm(
+          '--prefix',
+          'apps/api/src/id-business-v2/online-recharge/engine',
+          'run',
+          'test:upstream'
+        )
+      ];
   }
   if (pendingFeatures) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';

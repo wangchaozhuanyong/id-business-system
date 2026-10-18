@@ -6,6 +6,11 @@ import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
+  onlineQueryNetworkScope,
+  onlineQueryNetworkPaths,
+  onlineQueryNetworkControls,
+  isOnlineQueryNetworkOnly,
+  isOnlineQueryNetworkControlsOnly,
   onlineSettingsPaths,
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
@@ -42,6 +47,117 @@ import {
   onlineSessionPreflightPaths,
   onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
+
+test('query network repair requires the complete finite source set and four affected checks', () => {
+  const paths = [...onlineQueryNetworkPaths, ...onlineQueryNetworkControls];
+  assert.equal(onlineQueryNetworkScope, 'ONLINE_QUERY_NETWORK_REPAIR');
+  assert.equal(onlineQueryNetworkPaths.length, 17);
+  assert.equal(isOnlineQueryNetworkOnly(paths), true);
+  assert.equal(isOnlineSettingsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  const guards = onlineSettingsCommands('guards', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(guards, /online-query-network-release\.test\.py/);
+  for (const check of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(guards.includes(check), check);
+  const api = onlineSettingsCommands('api', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(
+    api,
+    /engine\/upstream\/node_modules\/playwright\/cli\.js install --with-deps chromium/
+  );
+  assert.match(api, /src\/id-business-v2\/online-recharge/);
+  const engine = onlineSettingsCommands('online-engine', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(engine, /--test-concurrency=1/);
+});
+
+test('query engine verifies its browser fixture first and executes each remaining test once', () => {
+  const command = onlineSettingsCommands('online-engine', [
+    ...onlineQueryNetworkPaths,
+    ...onlineQueryNetworkControls
+  ]).find((args) => args.at(-1).includes?.('Missing query network browser regression file'));
+  assert.ok(command && command[0] === 'node');
+  const source = command.at(-1).replace(/^import .+;$/gm, '');
+  const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';
+  const fixture = 'query-network-browser.test.cjs';
+  const execute = (files, statuses = [0, 0], error) => {
+    const observed = { calls: [], exits: [] };
+    runInNewContext(source, {
+      readdirSync: (path) => {
+        assert.equal(path, root);
+        return files;
+      },
+      spawnSync: (file, args, options) => {
+        observed.calls.push({ file, args: Array.from(args), inherit: options.stdio });
+        return { status: statuses[observed.calls.length - 1], error };
+      },
+      process: { execPath: '/synthetic/node', exit: (code) => observed.exits.push(code) }
+    });
+    return observed;
+  };
+  const result = execute(['z.test.cjs', fixture, 'README.md', 'a.test.cjs']);
+  assert.deepEqual(result.calls, [
+    {
+      file: '/synthetic/node',
+      args: ['--test', '--test-concurrency=1', root + '/' + fixture],
+      inherit: 'inherit'
+    },
+    {
+      file: '/synthetic/node',
+      args: ['--test', '--test-concurrency=1', root + '/a.test.cjs', root + '/z.test.cjs'],
+      inherit: 'inherit'
+    }
+  ]);
+  assert.deepEqual(result.exits, [0]);
+  assert.equal(execute([fixture]).calls.length, 1);
+  const failedFixture = execute([fixture, 'a.test.cjs'], [2]);
+  assert.equal(failedFixture.calls.length, 1);
+  assert.deepEqual(failedFixture.exits, [2]);
+  assert.deepEqual(execute([fixture, 'a.test.cjs'], [0, 3]).exits, [3]);
+  assert.deepEqual(execute([fixture], [null]).exits, [1]);
+  assert.throws(() => execute([fixture], [0], new Error('spawn failed')), /spawn failed/);
+  assert.throws(() => execute(['a.test.cjs']), /Missing query network browser regression file/);
+  assert.throws(() => execute(['README.md']), /Missing online engine regression files/);
+});
+
+test('query diagnostic controls cannot narrow unrelated payment, authentication or dependency edits', () => {
+  const paths = [...onlineQueryNetworkPaths, ...onlineQueryNetworkControls];
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/v2/features/auto-registration/V2AutoRegistrationView.vue',
+    'scripts/production-release/online-query-network-arbitrary.py',
+    'package-lock.json'
+  ]) {
+    assert.equal(isOnlineQueryNetworkOnly([...paths, extra]), false, extra);
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full', extra);
+  }
+  assert.equal(isOnlineQueryNetworkOnly(paths.slice(1)), false);
+  assert.equal(isOnlineQueryNetworkOnly([...paths, paths[0]]), false);
+  assert.equal(checkMode(paths, 'old-schema', 'new-schema'), 'full');
+  const controls = onlineQueryNetworkControls.filter((path) => !path.startsWith('scripts/ci-'));
+  assert.equal(isOnlineQueryNetworkControlsOnly(controls), true);
+  assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(
+    onlineSettingsCommands('guards', controls).some((args) => args.includes('check:admin-ui')),
+    false
+  );
+});
 
 test('Session preflight admits only its four reviewed sources and nine finite controls', () => {
   assert.equal(onlineSessionPreflightScope, 'ONLINE_SESSION_SUBSCRIPTION_PREFLIGHT');
