@@ -37,18 +37,15 @@ class ProxyResultIdentityControls(unittest.TestCase):
         OUTPUT.mkdir(parents=True, exist_ok=True)
         cls.contract = json.loads((HERE / 'proxy-result-identity-contract.json').read_bytes())
 
-    def test_contract_has_only_four_sources_one_asset_and_current_published_baseline(self):
+    def test_historical_contract_remains_readable_but_its_registration_asset_is_removed(self):
         c = self.contract
         self.assertEqual(c['expectedCurrent'], '7c3c102c98539d33cb379ef018427371ba750cb7')
-        self.assertEqual(c['manifestSha256'], '6798629151c06e1d8aca0599e32c4aabfd6f74b7e82ca7605b71cc8b2e4a70fc')
         self.assertEqual((len(c['sources']), len(c['engineFiles']), len(c['beforeEngineFiles'])), (4, 3, 82))
-        self.assertEqual(set(c['engineFiles']), {'security.cjs', 'test/proxy-result-identity.test.cjs', 'SOURCE_MANIFEST.json'})
         self.assertEqual(c['apiStaticPath'], 'apps/api/src/id-business-v2/auto-registration/worker/id-workspace.js')
-        self.assertNotIn(c['testFile'], c['beforeEngineFiles'])
+        self.assertFalse((ROOT / c['apiStaticPath']).exists())
         self.assertEqual(c['accountCount'], 20)
         self.assertEqual(len(c['protectedMigrations']), 3)
-        for name, expected in c['sources'].items():
-            self.assertEqual(r.digest((ROOT / name).read_bytes()), expected)
+
 
     def test_migration_and_account_receipt_runs_only_fixed_reads_with_bound_names(self):
         c = self.contract
@@ -278,60 +275,23 @@ vm.runInNewContext(input.source,{require(name){if(name==='fs')return fakefs;if(n
                 with self.assertRaisesRegex(RuntimeError, 'ARTIFACT_PATH_INVALID'):
                     r.extract_payload(raw.getvalue(), Path(directory) / 'content')
 
-    def test_actual_payload_sources_manifest_and_consumer_fixtures_are_exact(self):
-        c = self.contract
-        plan = {name: 'exact-' + name for name in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256')}
-        plan['controlSources'] = {'proxy-result-identity-release.py': 'reviewed'}
-        proof = {**plan, 'version': 1, 'scope': r.SCOPE, 'sources': c['sources'], 'validationSources': c['validationSources'],
-                 'beforeEngineFiles': c['beforeEngineFiles'], 'afterEngineFiles': {**c['beforeEngineFiles'], **c['engineFiles']},
-                 'fixtureFiles': c['fixtureFiles'], 'baselineNative': c['baselineNative'], 'migrationPerformed': False,
-                 'updatedServices': ['api', 'online-recharge'], 'businessActions': 0}
-        r.verify_identity(proof, plan, c)
-        for field in ('sources', 'validationSources', 'beforeEngineFiles', 'afterEngineFiles', 'fixtureFiles', 'migrationPerformed', 'updatedServices'):
-            changed = copy.deepcopy(proof)
-            changed[field] = 'foreign'
-            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'PROOF_INVALID'):
-                r.verify_identity(changed, plan, c)
-        fixture = b'synthetic consumer fixture'
-        fixture_contract = {**c, 'fixtureFiles': {'fixture.js': r.digest(fixture)}}
-        fixture_proof = {**proof, 'fixtureFiles': fixture_contract['fixtureFiles']}
-        with tempfile.TemporaryDirectory(dir=OUTPUT) as name:
-            payload = Path(name)
-            for relative in c['engineFiles']:
-                path = payload / 'engine' / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes((ROOT / b.ENGINE / relative).read_bytes())
-            (payload / 'api-static').mkdir()
-            (payload / 'api-static/id-workspace.js').write_bytes((ROOT / c['apiStaticPath']).read_bytes())
-            (payload / 'fixtures/api').mkdir(parents=True)
-            (payload / 'fixtures/api/fixture.js').write_bytes(fixture)
-            r.verify_proof(fixture_proof, plan, fixture_contract, payload, h)
-            (payload / 'engine/foreign.cjs').write_text('foreign')
-            with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_SCOPE_CHANGED'):
-                r.verify_proof(fixture_proof, plan, fixture_contract, payload, h)
+    def test_historical_joint_build_and_dispatch_refuse_before_any_side_effect(self):
+        for script in ('proxy-result-identity-build.py', 'proxy-result-identity-dispatch.py'):
+            with self.subTest(script=script):
+                result = subprocess.run(['python3', '-B', str(HERE / script)], cwd=ROOT,
+                                        capture_output=True, text=True, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Automatic registration has been removed', result.stderr)
 
-    def test_workflow_and_controller_keep_finite_scope_and_no_migration(self):
+
+    def test_retired_workflow_has_no_build_cloud_or_publication_authority(self):
         workflow = (ROOT / '.github/workflows/proxy-result-identity-validation.yml').read_text()
-        source = (HERE / 'proxy-result-identity-release.py').read_text()
-        self.assertIn('default: false', workflow)
-        self.assertIn('group: id-business-v2-production-release', workflow)
-        self.assertIn('cancel-in-progress: false', workflow)
-        self.assertIn('inputs.commit == github.sha', workflow)
-        self.assertIn('npm ci --ignore-scripts --no-audit --no-fund', workflow)
-        self.assertIn('--workspace-js=$GITHUB_WORKSPACE/.deploy/proxy-result-identity/api-static/id-workspace.js', workflow)
-        self.assertEqual(r.PRESERVED, ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'auto-registration'))
-        self.assertNotIn("'migrate',", source)
-        self.assertNotIn('migrate deploy', source)
-        self.assertNotIn('COPY . ', source)
-        self.assertLess(source.index('fence.acquire()'), source.index("fence.stop(before['api'], grace=30)"))
-        self.assertLess(source.index("fence.stop(before['api'], grace=30)"), source.index("fence.stop(before['online-recharge'], grace=45)"))
-        self.assertLess(source.index("fence.stop(before['online-recharge'], grace=45)"), source.index("d.wait_healthy(target, 'api')"))
-        self.assertLess(source.index("d.wait_healthy(target, 'api')"), source.index("'--force-recreate', 'online-recharge'"))
-        self.assertIn('NEEDS_FORWARD_DIAGNOSIS', source)
-        self.assertNotIn('rollback(', source)
-        self.assertIn("digest(proof_raw) == plan['buildProofSha256']", source)
-        self.assertIn('READBACK_SOURCE_CHANGED', source)
-        self.assertIn('READBACK_CONTROL_CHANGED', source)
+        self.assertIn('Automatic registration has been removed', workflow)
+        self.assertIn('exit 1', workflow)
+        self.assertNotIn('configure-aws-credentials', workflow)
+        self.assertNotIn('npm ci', workflow)
+        self.assertNotIn('proxy-result-identity-dispatch.py', workflow)
+        self.assertNotIn('proxy-result-identity-build.py', workflow)
 
 
 if __name__ == '__main__':

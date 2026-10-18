@@ -1671,7 +1671,10 @@ class IsolationTests(unittest.TestCase):
     def test_real_compose_parser_accepts_only_the_reviewed_production_delta(self):
         with directories() as (old, new):
             old_compose = subprocess.check_output(['git', 'show', scope.BASELINE_COMMIT + ':docker-compose.aws-mysql.yml'], cwd=ROOT)
-            new_compose = (ROOT / 'docker-compose.aws-mysql.yml').read_bytes()
+            # This parser case proves the original ONLINE admission, before
+            # automatic-registration retirement changed the current Compose.
+            new_compose = subprocess.check_output(['git', 'show',
+                REVIEWED_APPLICATION_TEMPLATE_COMMIT + ':docker-compose.aws-mysql.yml'], cwd=ROOT)
             import re
             keys = set(re.findall(r'\$\{([A-Z0-9_]+)', (old_compose + new_compose).decode()))
             values = {key: 'synthetic_fixture_value' for key in keys}

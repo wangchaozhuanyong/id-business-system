@@ -17,7 +17,6 @@ import { ALLOW_DURING_PASSWORD_RESET_KEY, IS_PUBLIC_KEY } from './auth.decorator
 import { AuthAvailabilityMonitor } from './auth-availability.monitor';
 import type { AuthenticatedUser, JwtPayload } from './auth.types';
 import { readBrowserSessionToken } from './browser-session-cookie';
-import { resolveRegistrationWorkspaceSession } from './registration-workspace-session';
 
 interface RequestWithAuthHeader {
   method?: string;
@@ -61,12 +60,7 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      await this.activateLocalSession(
-        request,
-        credentials.token,
-        allowDuringPasswordReset,
-        credentials.workspaceUserId
-      );
+      await this.activateLocalSession(request, credentials.token, allowDuringPasswordReset);
       this.availabilityMonitor.recordAvailable();
       return true;
     } catch (error) {
@@ -87,13 +81,9 @@ export class JwtAuthGuard implements CanActivate {
   private async activateLocalSession(
     request: RequestWithAuthHeader,
     token: string,
-    allowDuringPasswordReset: boolean | undefined,
-    workspaceUserId?: string
+    allowDuringPasswordReset: boolean | undefined
   ) {
     const payload = await this.verifyLocalToken(token);
-    if (workspaceUserId !== undefined && payload.sub !== workspaceUserId) {
-      throw authHttpError(HttpStatus.UNAUTHORIZED, 'AUTH_INVALID', '登录状态无效，请重新登录。');
-    }
     const active = await this.checkActiveSession(() =>
       this.securityService.isAccessTokenActive(token)
     );
@@ -176,10 +166,6 @@ export class JwtAuthGuard implements CanActivate {
     if (type === 'Bearer' && token) return { token };
     const browserSessionToken = readBrowserSessionToken(request);
     if (browserSessionToken) return { token: browserSessionToken };
-    const workspaceSession = resolveRegistrationWorkspaceSession(request);
-    if (workspaceSession) {
-      return { token: workspaceSession.accessToken, workspaceUserId: workspaceSession.userId };
-    }
     if (!request.originalUrl?.startsWith('/api/realtime/events')) return undefined;
 
     const queryToken = request.query?.accessToken;

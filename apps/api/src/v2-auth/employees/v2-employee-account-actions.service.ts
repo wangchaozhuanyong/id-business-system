@@ -155,7 +155,6 @@ export class V2EmployeeAccountActionsService {
       orders,
       accounts,
       cards,
-      registrationJobs,
       businessTotpAccounts,
       relayJobs,
       runningRelayJobs
@@ -177,9 +176,6 @@ export class V2EmployeeAccountActionsService {
       client.idBusinessV2Order.count({ where: { createdByUserId: id } }),
       client.idBusinessV2Account.count({ where: { createdByUserId: id } }),
       client.idBusinessV2GiftCard.count({ where: { createdByUserId: id } }),
-      client.idBusinessV2RegistrationJob.count({
-        where: { ownerId: id, state: { notIn: ['completed', 'cancelled'] } }
-      }),
       client.idBusinessV2TotpAccount.count({ where: { userId: id } }),
       client.idBusinessV2RelayJob.count({ where: { userId: id } }),
       client.idBusinessV2RelayJob.count({
@@ -221,8 +217,6 @@ export class V2EmployeeAccountActionsService {
       records.filter(({ document }) => hasUnknownPayment(document)).length +
       unknownJobsWithoutLedger;
     const blockers: string[] = [];
-    if (registrationJobs)
-      blockers.push(`仍有 ${registrationJobs} 个未结束的注册任务，请处理或取消后再删除。`);
     if (pendingJobs) blockers.push(`仍有 ${pendingJobs} 个未结束的充值任务，请处理完成后再删除。`);
     if (runningRelayJobs)
       blockers.push(`仍有 ${runningRelayJobs} 个中转脚本任务正在执行，请等待执行结束后再删除。`);

@@ -33,7 +33,7 @@ function setup() {
 }
 
 describe('充值代理 IP', () => {
-  it('隐藏邮箱注册复用目录连接方式并使用独立审计，不公开完整代理', async () => {
+  it('充值保留 SOCKS5 目录连接与脱敏审计，注册代理入口已移除', async () => {
     const f = setup();
     f.repository.findInTransaction.mockResolvedValue({
       id,
@@ -45,7 +45,8 @@ describe('充值代理 IP', () => {
       urlHash: 'masked-hash',
       urlEncrypted: 'encrypted:socks5://fixture-user:fixture-pass@proxy.example.test:1080'
     });
-    expect(await f.service.forRegistration(id, operator)).toMatchObject({
+    expect('forRegistration' in f.service).toBe(false);
+    expect(await f.service.forCharge(id, operator, 'US')).toMatchObject({
       mode: 'static',
       type: 'socks5',
       host: 'proxy.example.test',
@@ -55,11 +56,11 @@ describe('充值代理 IP', () => {
     });
     expect(f.audit.append).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ action: 'id_business_v2.auto_registration.proxy.use' })
+      expect.objectContaining({ action: 'id_business_v2.auto_recharge.proxy.use' })
     );
     expect(JSON.stringify(f.audit.append.mock.calls)).not.toContain('fixture-pass');
     f.repository.findInTransaction.mockResolvedValue(null);
-    await expect(f.service.forRegistration(id, operator)).rejects.toThrow('已停用');
+    await expect(f.service.forCharge(id, operator, 'US')).rejects.toThrow('已停用');
   });
   it('提取链接可指定 SOCKS5，直连链接拒绝不一致的协议', async () => {
     const f = setup();

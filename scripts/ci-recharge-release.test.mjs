@@ -6550,8 +6550,9 @@ test('exact pricing main5b carry keeps transport and finance guards without pret
       [...paths, 'scripts/production-release/service-image-retention.py'],
       { part }
     );
-    assert.ok(
-      invalid.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py')
+    assert.equal(
+      invalid.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py'),
+      false
     );
   }
 });
@@ -6563,8 +6564,9 @@ test('registration96 control-only CI executes actual finite and transport guards
   assert.deepEqual(selectedParts(controls), ['guards']);
   for (const part of ['guards', 'release-controls']) {
     const commands = guardCommands(controls, { part });
-    assert.ok(
-      commands.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py')
+    assert.equal(
+      commands.includes('python3 -B scripts/production-release/registration-onboarding-96.test.py'),
+      false
     );
     assert.ok(
       commands.includes(

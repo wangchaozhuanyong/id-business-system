@@ -47,6 +47,7 @@ import {
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
+import { isFeatureRetirementOnly } from './ci-feature-retirement-scope.mjs';
 import {
   isOnlineProxyCountryOnly,
   isOnlineProxyCountryValidationOnly,
@@ -1130,6 +1131,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isFeatureRetirementOnly(paths, context)) return false;
   if (isRegistrationTerminalStopOnly(paths, context)) return false;
   if (isRegistrationFlowV4Only(paths, context)) return false;
   if (isRegistrationProtocolRepairPreservationOnly(paths, context)) return false;
@@ -2183,19 +2185,6 @@ export function adminCheckCommands(mode, paths) {
       '--built',
       '--quote-stages'
     ]);
-  if (
-    paths.some(
-      (path) =>
-        path.startsWith('apps/admin/src/v2/features/auto-registration/') ||
-        path === 'apps/admin/src/v2/features/auto-recharge/V2ChatgptAccountsView.vue' ||
-        path === 'scripts/acceptance-v2-registration-inventory-ui.mjs'
-    )
-  )
-    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-registration-inventory-ui.mjs']);
-  if (paths.includes('scripts/acceptance-v2-registration-native-ui.mjs')) {
-    commands.push(['run', 'auto-registration:setup']);
-    commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-registration-native-ui.mjs']);
-  }
   if (
     paths.some(
       (path) =>

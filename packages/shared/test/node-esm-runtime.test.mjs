@@ -222,6 +222,18 @@ test('换汇扣费计算使用十进制且币种中文目录完整', async () =>
     );
 });
 
+test('退役自动注册不再参与实时范围，共享邮箱和充值范围保留', async () => {
+  const { V2_DATA_SCOPES, isV2DataScope, expandV2DataScopes } = await import('../dist/index.js');
+  assert.equal(V2_DATA_SCOPES.includes('auto-registration'), false);
+  assert.equal(isV2DataScope('auto-registration'), false);
+  assert.equal(isV2DataScope('auto-recharge'), true);
+  assert.equal(isV2DataScope('vendure-mailbox'), true);
+  const scopes = expandV2DataScopes(['auto-recharge', 'vendure-mailbox']);
+  assert.equal(scopes.includes('auto-recharge'), true);
+  assert.equal(scopes.includes('vendure-mailbox'), true);
+  assert.equal(scopes.includes('auto-registration'), false);
+});
+
 test('普通订单币种契约与持久化兼容映射一致，财务扩展币种保持独立', async () => {
   const {
     V2_ORDER_RECEIPT_CURRENCIES,

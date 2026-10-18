@@ -172,7 +172,7 @@ describe('充值复用现有邮箱授权', () => {
     ).toBeNull();
   });
 
-  it('排除已确认邮件，同时保留注册邮件过滤规则', async () => {
+  it('排除已确认邮件，同时保留安全邮件过滤规则', async () => {
     const f = fixture();
     expect(
       await f.service.rechargeCode(

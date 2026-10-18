@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   calculateFinanceExchange,
   financeCurrencyLabel,
+  type V2FinanceExchange,
   type V2FinanceExchangeWrite
 } from '@apple-business/shared';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -43,6 +44,10 @@ import {
 
 @Injectable()
 export class IdBusinessV2FinanceExchangesService {
+  private readonly createsInFlight = new Map<
+    string,
+    { fingerprint: string; execution: Promise<V2FinanceExchange> }
+  >();
   constructor(
     private readonly repository: IdBusinessV2FinanceExchangeRepository,
     private readonly transactions: V2CommandTransactionManager,
@@ -132,28 +137,27 @@ export class IdBusinessV2FinanceExchangesService {
     operator?: AuthenticatedUser
   ) {
     const reason = normalizeFinanceText(dto.manualRateReason, '人工汇率原因', 500);
-    const [source, target] = await Promise.all([
-      this.fx.resolve({
-        currency: input.sourceCurrency,
-        occurredAt: input.occurredAt,
-        fxRateSnapshotId: dto.sourceFxSnapshotId,
-        manualRate: dto.sourceFxRateToCny
-          ? normalizeFinanceRate(dto.sourceFxRateToCny, input.sourceCurrency)
-          : null,
-        manualReason: reason,
-        operator
-      }),
-      this.fx.resolve({
-        currency: input.targetCurrency,
-        occurredAt: input.occurredAt,
-        fxRateSnapshotId: dto.targetFxSnapshotId,
-        manualRate: dto.targetFxRateToCny
-          ? normalizeFinanceRate(dto.targetFxRateToCny, input.targetCurrency)
-          : null,
-        manualReason: reason,
-        operator
-      })
-    ]);
+    // Manual snapshots share scope-version rows; resolve them in request order.
+    const source = await this.fx.resolve({
+      currency: input.sourceCurrency,
+      occurredAt: input.occurredAt,
+      fxRateSnapshotId: dto.sourceFxSnapshotId,
+      manualRate: dto.sourceFxRateToCny
+        ? normalizeFinanceRate(dto.sourceFxRateToCny, input.sourceCurrency)
+        : null,
+      manualReason: reason,
+      operator
+    });
+    const target = await this.fx.resolve({
+      currency: input.targetCurrency,
+      occurredAt: input.occurredAt,
+      fxRateSnapshotId: dto.targetFxSnapshotId,
+      manualRate: dto.targetFxRateToCny
+        ? normalizeFinanceRate(dto.targetFxRateToCny, input.targetCurrency)
+        : null,
+      manualReason: reason,
+      operator
+    });
     return { source, target };
   }
   async quote(dto: V2FinanceExchangeWrite, operator?: AuthenticatedUser) {
@@ -190,6 +194,32 @@ export class IdBusinessV2FinanceExchangesService {
       .digest('hex');
   }
   async create(
+    dto: V2FinanceExchangeWrite,
+    operator?: AuthenticatedUser,
+    correctionOfId?: string,
+    reason?: string
+  ): Promise<V2FinanceExchange> {
+    const input = this.normalize(dto);
+    const key = normalizeFinanceIdempotencyKey(dto.idempotencyKey, 'finance_exchange');
+    const fingerprint = this.fingerprint(dto, input, correctionOfId, reason);
+    const pendingKey = JSON.stringify([operator?.id ?? null, key]);
+    const pending = this.createsInFlight.get(pendingKey);
+    if (pending) {
+      if (pending.fingerprint !== fingerprint)
+        throw new ConflictException('幂等键已用于不同换汇资料');
+      return { ...(await pending.execution) };
+    }
+    const execution = this.createOnce({ ...dto }, operator, correctionOfId, reason);
+    this.createsInFlight.set(pendingKey, { fingerprint, execution });
+    try {
+      return await execution;
+    } finally {
+      if (this.createsInFlight.get(pendingKey)?.execution === execution)
+        this.createsInFlight.delete(pendingKey);
+    }
+  }
+
+  private async createOnce(
     dto: V2FinanceExchangeWrite,
     operator?: AuthenticatedUser,
     correctionOfId?: string,

@@ -94,48 +94,22 @@ test('auto-recharge worker pins its fingerprint engine and keeps legacy browser 
   assert.doesNotMatch(worker, /ports:/u);
 });
 
-test('registration and recharge run in separate bounded workers with one image build', () => {
+test('recharge keeps its bounded worker after registration retirement', () => {
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
   const recharge = composeService(compose, 'auto-recharge');
-  const registration = composeService(compose, 'auto-registration');
   const api = composeService(compose, 'api');
 
-  assert.match(recharge, /image: &browser-worker-image \$\{AUTO_RECHARGE_WORKER_IMAGE:/u);
   assert.match(recharge, /build:/u);
   assert.match(recharge, /AUTO_RECHARGE_WORKER_ROLE: recharge/u);
-  assert.match(registration, /image: \*browser-worker-image/u);
-  assert.match(registration, /AUTO_RECHARGE_WORKER_ROLE: registration/u);
-  assert.doesNotMatch(registration, /build:/u);
-  for (const [worker, network] of [
-    [recharge, 'recharge'],
-    [registration, 'registration']
-  ]) {
-    assert.match(worker, /init: true/u);
-    assert.match(worker, /read_only: true/u);
-    assert.match(worker, /no-new-privileges:true/u);
-    assert.match(worker, /cap_drop:\s+- ALL/u);
-    assert.match(worker, /\/tmp:rw,noexec,nosuid,nodev,size=512m/u);
-    assert.match(worker, /shm_size: 256m/u);
-    assert.match(worker, /pids_limit: 512/u);
-    assert.match(worker, /mem_limit: 1g/u);
-    assert.match(worker, /memswap_limit: 1536m/u);
-    assert.match(
-      worker,
-      new RegExp(`networks:\\s+- ${network}-control\\s+- ${network}-egress`, 'u')
-    );
-    assert.doesNotMatch(worker, /ports:|volumes:|pid:|ipc:|network_mode:|container_name:/u);
-  }
+  assert.match(recharge, /networks:\s+- recharge-control\s+- recharge-egress/u);
   assert.match(api, /AUTO_RECHARGE_WORKER_URL: http:\/\/auto-recharge:8051/u);
-  assert.match(api, /AUTO_REGISTRATION_WORKER_URL: http:\/\/auto-registration:8051/u);
-  assert.match(api, /- recharge-control\s+- registration-control/u);
-  assert.match(compose, /registration-control:\s+internal: true/u);
+  assert.doesNotMatch(
+    compose,
+    /^ {2}auto-registration:|registration-control:|registration-egress:|AUTO_REGISTRATION_WORKER_URL/mu
+  );
   for (const path of ['.env.example', '.env.aws.production.example']) {
     assert.match(readProjectFile(path), /^AUTO_RECHARGE_WORKER_ROLE=recharge$/mu);
     assert.doesNotMatch(readProjectFile(path), /AUTO_REGISTRATION_WORKER_URL/u);
-    assert.match(
-      readProjectFile(path),
-      /^AUTO_RECHARGE_WORKER_IMAGE=id-business-v2-auto-recharge:local$/mu
-    );
   }
 });
 
@@ -188,21 +162,19 @@ test('production Compose enforces the API and migration container boundaries', (
   }
 });
 
-test('registration runtime is packaged outside its writable persistent data volume', () => {
+test('registration runtime is removed while its historical volume is retained', () => {
   const dockerfile = readProjectFile('apps/api/Dockerfile.mysql');
-  const runtime = dockerfile.split(/ AS runtime\s*\n/u).at(-1);
   const compose = readProjectFile('docker-compose.aws-mysql.yml');
-  const api = compose.split(/\n {2}api:\n/u)[1].split(/\n {2}admin:\n/u)[0];
+  const api = composeService(compose, 'api');
 
-  assert.match(runtime, /apt-get install[^\n]*python3/u);
-  assert.match(runtime, /COPY --from=registration-dependencies \/opt\/id-registration\/venv/u);
-  assert.match(runtime, /\/app\/apps\/api\/src\/id-business-v2\/auto-registration/u);
-  assert.match(runtime, /\/app\/apps\/admin\/src\/v2\/styles\/base\.css/u);
-  assert.match(runtime, /chown node:node \/app\/\.runtime/u);
-  assert.match(api, /read_only: true/u);
-  assert.match(api, /auto_registration_data:\/app\/\.runtime\/auto-registration/u);
+  assert.doesNotMatch(
+    dockerfile,
+    /registration-dependencies|id-registration|auto-registration|python3/u
+  );
+  assert.doesNotMatch(api, /auto_registration_data|auto-registration/u);
   assert.match(compose, /^ {2}auto_registration_data:$/mu);
-  assert.doesNotMatch(api, /\/opt\/id-registration/u);
+  assert.match(api, /online_recharge_data:\/app\/\.runtime\/online-recharge/u);
+  assert.match(api, /read_only: true/u);
 });
 
 test('media resolver is an isolated, bounded and non-root sidecar', () => {

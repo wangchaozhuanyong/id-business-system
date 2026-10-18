@@ -61,21 +61,9 @@ describe('admin security headers', () => {
     expect(source).toMatch(/X-Frame-Options(?::|\s)\s*DENY/);
   });
 
-  it('proxies the registration workspace to the API before the ordinary admin fallback', () => {
-    const workspacePath = '/api/id-business-v2/auto-registration/workspace';
-    const paths = /@registrationWorkspace\s+path\s+([^\n]+)/
-      .exec(caddyConfig)?.[1]
-      ?.trim()
-      .split(/\s+/);
-    expect(paths).toEqual([workspacePath, `${workspacePath}/*`]);
-
-    const workspaceHandler = caddyHandlerBody('@registrationWorkspace');
-    expect(workspaceHandler).toBeDefined();
-    expect(workspaceHandler).toMatch(/\breverse_proxy\s+api:3000\s*\{/);
-    expect(workspaceHandler).toMatch(/\bflush_interval\s+-1\b/);
-    expect(workspaceHandler).not.toMatch(/handle_path|strip_prefix|\brewrite\b/);
-    expect(workspaceHandler).not.toMatch(/Content-Security-Policy|X-Frame-Options/);
-
+  it('has no retired registration proxy exception and retains ordinary admin protection', () => {
+    expect(caddyConfig).not.toContain('@registrationWorkspace');
+    expect(caddyConfig).not.toContain('/auto-registration/workspace');
     const adminHandler = caddyHandlerBody('');
     expect(adminHandler).toMatch(/\breverse_proxy\s+admin:80\b/);
     expect(adminHandler).toContain("frame-src 'self'");
@@ -83,9 +71,6 @@ describe('admin security headers', () => {
     expect(adminHandler).toMatch(/X-Frame-Options\s+DENY/);
     expect(caddyConfig.match(/Content-Security-Policy/g)).toHaveLength(1);
     expect(caddyConfig.match(/X-Frame-Options/g)).toHaveLength(1);
-    expect(caddyConfig.indexOf('handle @registrationWorkspace')).toBeLessThan(
-      caddyConfig.search(/\bhandle\s*\{/)
-    );
   });
 
   it('limits API and window control connections to the same origin and loopback hosts', () => {

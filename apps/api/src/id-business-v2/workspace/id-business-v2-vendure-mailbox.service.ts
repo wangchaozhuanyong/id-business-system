@@ -31,12 +31,7 @@ import type {
 } from './dto/id-business-v2-vendure-mailbox.dto';
 import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
 import { ensureVendureAccountAliases } from './id-business-v2-vendure-account-import';
-import { registrationMail } from './registration-mail';
-import {
-  assertRegistrationMailboxEmail,
-  registrationMailboxAuthorizationValid,
-  loadRegistrationMailboxSummaries
-} from './registration-mailbox-summaries';
+import { mailboxAuthorizationValid } from './mailbox-verification';
 import { paginateVendureMailboxes, vendureMailboxIncludes } from './vendure-mailbox-list';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -79,11 +74,11 @@ export class IdBusinessV2VendureMailboxService {
     }
   }
 
-  async registrationMailbox(aliasId: string, operator: AuthenticatedUser) {
+  async verificationMailbox(aliasId: string, operator: AuthenticatedUser) {
     this.requireAdmin(operator);
     const aliases = await this.client.virtualEmails();
     const alias = aliases.find((item) => item.id === aliasId);
-    if (!alias || alias.status !== 'ACTIVE' || !registrationMailboxAuthorizationValid(alias))
+    if (!alias || alias.status !== 'ACTIVE' || !mailboxAuthorizationValid(alias))
       throw new ConflictException('所选邮箱未启用或查询授权已失效');
     const primary = (await this.client.primaryAccounts()).find(
       (item) => item.id === alias.primaryAccountId
@@ -91,33 +86,6 @@ export class IdBusinessV2VendureMailboxService {
     if (!primary || primary.status !== 'ACTIVE')
       throw new ConflictException('所属主邮箱当前不可用');
     return { email: alias.aliasEmail, queryCode: alias.buyerQueryCode };
-  }
-
-  async aliasAddress(aliasId: string, operator: AuthenticatedUser) {
-    this.requireAdmin(operator);
-    const id = this.id(aliasId);
-    const alias = (await this.client.virtualEmails()).find((item) => item.id === id);
-    if (!alias) throw new ConflictException('隐藏邮箱不存在或已移除，请刷新列表');
-    return { email: this.email(alias.aliasEmail), updatedAt: alias.updatedAt };
-  }
-
-  async registrationMailboxSummaries(operator: AuthenticatedUser) {
-    this.requireAdmin(operator);
-    return loadRegistrationMailboxSummaries(this.client);
-  }
-
-  async registrationCode(
-    aliasId: string,
-    since: Date,
-    previousId: string | null,
-    operator: AuthenticatedUser,
-    expectedEmail?: string
-  ) {
-    const mailbox = await this.registrationMailbox(aliasId, operator);
-    assertRegistrationMailboxEmail(mailbox.email, expectedEmail);
-    const result = await this.client.publicQuery(mailbox.queryCode);
-    if (!result.success) throw new ServiceUnavailableException('邮件查询暂时不可用，请重试');
-    return registrationMail(result.items, mailbox.email, since, previousId, aliasId);
   }
 
   async listPrimary(dto: ListIdBusinessV2VendureMailboxDto, operator?: AuthenticatedUser) {

@@ -110,30 +110,6 @@ services:
       - recharge-control
       - recharge-egress
 
-  auto-registration:
-    image: *browser-worker-image
-    restart: unless-stopped
-    init: true
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=512m
-    shm_size: 256m
-    pids_limit: 512
-    mem_limit: 1g
-    memswap_limit: 1536m
-    logging: *default-logging
-    environment:
-      AUTO_RECHARGE_WORKER_ROLE: registration
-      AUTO_RECHARGE_WORKER_TOKEN: ${AUTO_RECHARGE_WORKER_TOKEN:?set AUTO_RECHARGE_WORKER_TOKEN}
-      AUTO_RECHARGE_CALLBACK_URL: http://api:3000/api/id-business-v2/auto-recharge/internal
-    networks:
-      - registration-control
-      - registration-egress
-
   online-recharge:
     build:
       context: apps/api/src/id-business-v2/online-recharge/engine
@@ -182,7 +158,6 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     volumes:
-      - auto_registration_data:/app/.runtime/auto-registration
       - online_recharge_data:/app/.runtime/online-recharge
     logging: *default-logging
     environment:
@@ -193,7 +168,6 @@ services:
       ONLINE_RECHARGE_ARTIFACT_DIR: /app/.runtime/online-recharge/artifacts
       AUTO_RECHARGE_WORKER_TOKEN: ${AUTO_RECHARGE_WORKER_TOKEN:?set AUTO_RECHARGE_WORKER_TOKEN}
       AUTO_RECHARGE_WORKER_URL: http://auto-recharge:8051
-      AUTO_REGISTRATION_WORKER_URL: http://auto-registration:8051
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:?set APP_PUBLIC_URL}
       GOOGLE_DRIVE_SYNC_FOLDER_ID: ${GOOGLE_DRIVE_SYNC_FOLDER_ID:-}
       CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN}
@@ -241,7 +215,6 @@ services:
       - default
       - media-egress
       - recharge-control
-      - registration-control
 
   admin:
     build:
@@ -278,6 +251,7 @@ services:
 volumes:
   mysql_data:
   online_recharge_data:
+  # Retired registration data is retained for historical backup recovery only.
   auto_registration_data:
   caddy_data:
   caddy_config:
@@ -286,7 +260,4 @@ networks:
   recharge-control:
     internal: true
   recharge-egress:
-  registration-control:
-    internal: true
-  registration-egress:
   media-egress:

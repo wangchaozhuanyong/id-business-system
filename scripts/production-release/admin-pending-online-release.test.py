@@ -546,7 +546,12 @@ class ConfirmProjectionTests(unittest.TestCase):
         p = a.projection_module(); cls.p = p
         cls.baseline, cls.online = git_files(p.BASELINE_COMMIT), git_files(p.ONLINE_COMMIT)
         cls.candidate = dict(cls.control_source)
-        for name in (*a.CONFIRM_FILES, *a.CONFIRM_CONTROLS, *a.CONFIRM_DOCS):
+        # Confirm the completed 568e publication against its immutable two-file
+        # overlay. Later recharge fixes in the checkout are separate publications.
+        published = git_files('568e9390a304a36edba86823d5d5b31e5506763b')
+        for name in a.CONFIRM_FILES:
+            cls.candidate[name] = published[name]
+        for name in (*a.CONFIRM_CONTROLS, *a.CONFIRM_DOCS):
             cls.candidate[name] = ((ROOT / name).read_bytes(), '100644')
 
     def project(self, candidate=None, predecessor=None, control_source=None):

@@ -98,6 +98,66 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit
 
+      - name: Build shared test runtime
+        run: npm run build --workspace @apple-business/shared
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Validate MySQL Prisma schema
+        run: npm run prisma:mysql:validate
+
+      - name: Verify data governance workflow on MySQL
+        run: npm run acceptance:v2-data-governance
+
+      - name: Verify financial integrity on disposable MySQL
+        run: npm run acceptance:v2-financial-integrity
+
+      - name: Verify rollback, deletion and restore integrity on MySQL
+        run: npm run acceptance:v2-rollback-integrity
+
+      - name: Verify bounded retirement API build without production access
+        run: |
+          set -Eeuo pipefail
+          if [[ ! -f scripts/production-release/feature-retirement-contract.json ]]; then exit 0; fi
+          if ! node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          import { isFeatureRetirementOnly } from './scripts/ci-feature-retirement-scope.mjs';
+          const c = JSON.parse(readFileSync('scripts/production-release/feature-retirement-contract.json'));
+          const paths = execFileSync('git', ['diff', '--name-only', c.reviewBase, 'HEAD'], { encoding: 'utf8' }).trim().split('\n');
+          process.exit(isFeatureRetirementOnly(paths) ? 0 : 1);
+          NODE
+          then exit 0; fi
+          python3 -B - <<'PYCODE'
+          import importlib.util,json,os
+          from pathlib import Path
+          path=Path('scripts/production-release/feature-retirement-build.py').resolve()
+          spec=importlib.util.spec_from_file_location('retirement_api_ci',path)
+          b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
+          b.need(os.environ.get('GITHUB_ACTIONS')=='true' and Path(os.environ['GITHUB_WORKSPACE']).resolve()==b.ROOT, 'NATIVE_CI_REQUIRED')
+          c=json.loads(b.CONTRACT.read_bytes());b.verify_sources(c)
+          root=b.ROOT/'.runtime/feature-retirement-api-ci';b.need(not root.exists(), 'CI_OUTPUT_EXISTS');root.mkdir(parents=True)
+          archive=b.git('archive',c['apiSourceBaseline']);outputs={}
+          for variant in ('baseline','candidate'):
+              context=root/variant;b.extract_source(archive,context)
+              if variant=='candidate':b.overlay_sources(context,c['sources'],'api')
+              b.run('npm','ci','--ignore-scripts','--no-audit','--no-fund',cwd=context)
+              b.run('npm','run','build','--workspace','@apple-business/shared',cwd=context)
+              b.run('npm','run','prisma:mysql:generate','--workspace','@apple-business/api',cwd=context)
+              b.run('npm','run','build','--workspace','@apple-business/api',cwd=context)
+              outputs[variant]=b.inventory(context/'apps/api/dist')
+          before,after=outputs['baseline'],outputs['candidate']
+          allowed={n.removesuffix('.js')+x for n in c['apiModules'] for x in b.OUTPUT_SUFFIXES}
+          differences={n for n in before.keys()|after.keys() if before.get(n)!=after.get(n)}
+          omitted={n:{'baselineSha256':before.get(n),'compiledSha256':after.get(n)} for n in sorted(differences-allowed-{'tsconfig.build.tsbuildinfo'})}
+          diagnostic={'compiledBaselineFiles':{n:before.get(n) for n in c['apiBaselineFiles']},'omittedDeclarations':omitted}
+          (root/'comparison.json').write_text(json.dumps(diagnostic,sort_keys=True,indent=2)+'\n')
+          print('RETIREMENT_API_BUILD_DIAGNOSTIC='+json.dumps(diagnostic,sort_keys=True,separators=(',',':')),flush=True)
+          b.output_delta(before,after,c['apiBaselineFiles'],c['apiModules'],'API',c['apiCompiledBaselineFiles'],c['omittedApiDeclarations'])
+          print('RETIREMENT_API_BUILD_VERIFIED_NO_DATABASE_OR_PRODUCTION_ACCESS')
+          PYCODE
+
       - name: Verify affected release entry and maintenance controls
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
@@ -122,21 +182,6 @@ jobs:
 
       - name: Install Chromium for layout acceptance
         run: npx playwright install chromium
-
-      - name: Verify open-source registration adapter
-        env:
-          CHECK_BASE: ${{ needs.change-scope.outputs.base }}
-        run: |
-          set -Eeuo pipefail
-          if [[ -n "$(git diff --name-only "$CHECK_BASE" HEAD -- apps/api/src/id-business-v2/auto-registration/ apps/api/Dockerfile.mysql)" ]]; then
-            npm run auto-registration:setup
-            .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_workspace.py'
-            .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_apple_mailboxes.py'
-            .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_release_safety.py'
-            .runtime/auto-registration/venv/bin/python -B -m unittest discover -s apps/api/src/id-business-v2/auto-registration/worker -p 'test_upload_compat.py'
-            node --test apps/api/src/id-business-v2/auto-registration/worker/test_payment_browser.mjs
-            .runtime/auto-registration/venv/bin/python -B apps/api/src/id-business-v2/auto-registration/worker/acceptance_runtime.py
-          fi
 
       - name: Check formatting
         run: npm run format:check
@@ -213,23 +258,13 @@ jobs:
       - name: Check cloud independence
         run: npm run check:cloud-independence
 
-      - name: Generate Prisma client
-        run: npm run prisma:generate
-
-      - name: Validate MySQL Prisma schema
-        run: npm run prisma:mysql:validate
-
-      - name: Verify data governance workflow on MySQL
-        run: npm run acceptance:v2-data-governance
-
-      - name: Verify financial integrity on disposable MySQL
-        run: npm run acceptance:v2-financial-integrity
-
-      - name: Verify rollback, deletion and restore integrity on MySQL
-        run: npm run acceptance:v2-rollback-integrity
-
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Install frozen ONLINE browser test dependencies
+        run: |
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          node apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules/playwright/cli.js install --with-deps chromium
 
       - name: Test
         run: npm run test
@@ -257,7 +292,9 @@ jobs:
           fi
 
       - name: Check Git readiness
-        run: npm run git:readiness
+        run: |
+          node --test scripts/git-readiness.test.mjs
+          npm run git:readiness
 
   recharge:
     if: needs.change-scope.outputs.mode != 'full' && needs.change-scope.outputs.reuse_main != 'true'
