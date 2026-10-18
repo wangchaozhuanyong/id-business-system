@@ -18,6 +18,7 @@ import {
   isUnidentifiedUnpaidCheckout,
   isUnidentifiedCheckoutMarker,
   unidentifiedCheckoutSourceResult,
+  unidentifiedCheckoutPredecessorJobIds,
   hasUnresolvedUnidentifiedCheckoutPayment
 } from './recharge-unidentified-checkout';
 
@@ -91,8 +92,9 @@ export async function restoreRechargeAccount(input: {
     unidentifiedRecord && ownedProfile
       ? await repository.findJob(tx, ownedProfile.sourceJobId)
       : null;
+  let unidentifiedHistory: IdBusinessV2RechargeJob[] = [];
   if (unidentifiedRecord && ownedProfile && unidentifiedSource) {
-    const history = await repository.finishedJobsForUnidentifiedCheckout(
+    unidentifiedHistory = await repository.finishedJobsForUnidentifiedCheckout(
       tx,
       job.ownerId,
       accountKey,
@@ -100,7 +102,7 @@ export async function restoreRechargeAccount(input: {
     );
     unidentifiedSource =
       findUnidentifiedCheckoutSource(
-        history,
+        unidentifiedHistory,
         job.ownerId,
         accountKey,
         job.plan,
@@ -148,6 +150,16 @@ export async function restoreRechargeAccount(input: {
     (unidentifiedResult.browser_profile_id === ownedProfile.profileId ||
       unidentifiedSource.id !== ownedProfile.sourceJobId)
   );
+  const predecessorJobIds =
+    unidentifiedRecovery && unidentifiedSource && unidentifiedRecord && ownedProfile
+      ? unidentifiedCheckoutPredecessorJobIds(
+          unidentifiedHistory,
+          unidentifiedSource,
+          unidentifiedRecord,
+          records,
+          ownedProfile.profileId
+        )
+      : [];
   if (job.action === 'bitbrowser' && currentResult.recheck_only === true) {
     const source =
       typeof currentResult.source_job_id === 'string'
@@ -199,9 +211,8 @@ export async function restoreRechargeAccount(input: {
       job.id,
       undefined,
       unidentifiedRecovery ? unidentifiedSource?.id : undefined,
-      ...(expiredCheckoutIdentifiers.length
-        ? ([expiredCheckoutIdentifiers] as const)
-        : ([] as const))
+      expiredCheckoutIdentifiers,
+      predecessorJobIds
     );
     if (
       persistedIdentifier &&

@@ -99,10 +99,44 @@ export function unidentifiedCheckoutSourceResult(
   records: RecoveryRecord[],
   profileId: string
 ): Record<string, unknown> | undefined {
-  const raw = object(source.result);
+  const raw = object(source.result),
+    marker = object(markerRecord.document);
+  // 当前网页标记必须先绑定本次来源，旧无编号任务不能绕过归属、窗口和时间核验。
+  if (
+    marker.status === 'checkout_attempted' &&
+    (!isUnidentifiedCheckoutMarker(marker) ||
+      source.action !== 'bitbrowser' ||
+      source.state !== 'finished' ||
+      raw.mode === 'open_browser' ||
+      raw.recheck_only === true ||
+      raw.resolution_only === true ||
+      !uuid.test(source.id) ||
+      !source.accountKey ||
+      !/^[a-f0-9]{64}$/.test(source.accountKey) ||
+      markerRecord.ownerId !== source.ownerId ||
+      markerRecord.accountKey !== source.accountKey ||
+      markerRecord.fileKey !== rootKey(source.accountKey, source.plan) ||
+      !Number.isSafeInteger(markerRecord.revision) ||
+      markerRecord.revision < 0 ||
+      (Object.hasOwn(marker, 'account_key') && marker.account_key !== source.accountKey) ||
+      marker.target_plan !== source.plan ||
+      marker.plan !== officialPlans[source.plan] ||
+      (raw.target_plan ?? 'plus') !== source.plan ||
+      raw.transport !== 'web_direct' ||
+      raw.http_status !== 400 ||
+      raw.browser_profile_id !== profileId ||
+      !/^[a-f0-9]{32}$/.test(profileId) ||
+      !(source.createdAt instanceof Date) ||
+      !(source.updatedAt instanceof Date) ||
+      !Number.isFinite(source.createdAt.getTime()) ||
+      !Number.isFinite(source.updatedAt.getTime()) ||
+      Number(marker.created_at) < Math.floor(source.createdAt.getTime() / 1000) ||
+      Number(marker.created_at) > Math.floor(source.updatedAt.getTime() / 1000) ||
+      source.createdAt.getTime() > source.updatedAt.getTime())
+  )
+    return undefined;
   if (isUnidentifiedUnpaidCheckout(raw)) return raw;
-  const marker = object(markerRecord.document),
-    proof = object(marker.expired_checkout_replacement),
+  const proof = object(marker.expired_checkout_replacement),
     identifier = raw.checkout_identifier;
   const candidate = { ...raw };
   delete candidate.checkout_identifier;
@@ -122,7 +156,8 @@ export function unidentifiedCheckoutSourceResult(
     markerRecord.fileKey !== rootKey(source.accountKey, source.plan) ||
     !Number.isSafeInteger(markerRecord.revision) ||
     markerRecord.revision < 2 ||
-    marker.account_key !== source.accountKey ||
+    // 旧网页标记未发送该冗余字段；显式值仍须精确一致，归属和完整归档证明不可省略。
+    (Object.hasOwn(marker, 'account_key') && marker.account_key !== source.accountKey) ||
     marker.target_plan !== source.plan ||
     marker.plan !== officialPlans[source.plan] ||
     raw.target_plan !== source.plan ||
@@ -352,6 +387,51 @@ export function findUnidentifiedCheckoutSource<T extends RecoverySource>(
     current = [...parents][0]!;
   }
   return source;
+}
+
+/** 完整退役归档后的原窗口发现，可识别唯一、已通过零付款窗口链的更早来源。 */
+export function unidentifiedCheckoutPredecessorJobIds(
+  jobs: RecoverySource[],
+  source: RecoverySource,
+  markerRecord: RecoveryRecord,
+  records: RecoveryRecord[],
+  profileId: string
+): string[] {
+  if (
+    !source.accountKey ||
+    !checkoutPattern.test(String(object(source.result).checkout_identifier ?? '')) ||
+    !unidentifiedCheckoutSourceResult(source, markerRecord, records, profileId) ||
+    hasUnresolvedUnidentifiedCheckoutPayment(records, source.ownerId, source.accountKey) ||
+    !(source.createdAt instanceof Date) ||
+    !Number.isFinite(source.createdAt.getTime())
+  )
+    return [];
+  // 不剪裁历史或自行拼接登录链；存在第二个未知来源或冲突窗口链时仍不给豁免。
+  const previous = findUnidentifiedCheckoutSource(
+    jobs,
+    source.ownerId,
+    source.accountKey,
+    source.plan,
+    profileId
+  );
+  const result = object(previous?.result);
+  if (
+    !previous ||
+    previous.id === source.id ||
+    !uuid.test(previous.id) ||
+    !isUnidentifiedUnpaidCheckout(result) ||
+    result.mode === 'open_browser' ||
+    result.recheck_only === true ||
+    result.resolution_only === true ||
+    !(previous.createdAt instanceof Date) ||
+    !(previous.updatedAt instanceof Date) ||
+    !Number.isFinite(previous.createdAt.getTime()) ||
+    !Number.isFinite(previous.updatedAt.getTime()) ||
+    previous.createdAt.getTime() > previous.updatedAt.getTime() ||
+    previous.updatedAt.getTime() >= source.createdAt.getTime()
+  )
+    return [];
+  return [previous.id];
 }
 
 /** 网页在请求前保存的标记本身不是零付款证明，必须另有严格核实的来源任务。 */

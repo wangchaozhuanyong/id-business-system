@@ -201,7 +201,8 @@ export class RechargeRepository {
     excludeId: string,
     unpaidRecoveryIdentifier?: string,
     unidentifiedSourceJobId?: string,
-    expiredCheckoutIdentifiers: string[] = []
+    expiredCheckoutIdentifiers: string[] = [],
+    unidentifiedPredecessorJobIds: string[] = []
   ) {
     let cursor: string | undefined;
     for (let page = 0; page < 30; page += 1) {
@@ -224,6 +225,13 @@ export class RechargeRepository {
         const identifier = findOriginalRechargeCheckout(
           jobs.filter((job) => {
             if (isClosedCycleDocument(job.result, accountKey)) return false;
+            if (
+              unidentifiedSourceJobId &&
+              expiredCheckoutIdentifiers.length &&
+              unidentifiedPredecessorJobIds.includes(job.id) &&
+              isUnidentifiedUnpaidCheckout(job.result)
+            )
+              return false;
             if (
               !expiredCheckoutIdentifiers.length ||
               (job.id === unidentifiedSourceJobId && isUnidentifiedUnpaidCheckout(job.result))
