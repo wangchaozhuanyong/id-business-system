@@ -212,6 +212,37 @@ function queryWithoutUnrelatedProbe(overrides = {}) {
   return module.exports.querySubscriptionBySession;
 }
 
+function ownedQuery(f, { onLogin = () => {}, onContext = () => {}, onCleanup = () => {} } = {}) {
+  return queryWithoutUnrelatedProbe({
+    './session-auth': {
+      extractProfileFromToken: () => ({ accountId }),
+      installChatGptSession: async (context) => {
+        assert.equal(context, f.context);
+        return { cookieVerified: true, sessionData: { accessToken: token } };
+      },
+      bootstrapChatGptSession: async (page) => {
+        onLogin();
+        await page.goto(origin);
+        return { session: { accessToken: token } };
+      }
+    },
+    './browser-runtime': {
+      connectTaskBrowser: async () => ({
+        browser: {
+          newContext: async () => {
+            onContext();
+            return f.context;
+          }
+        }
+      }),
+      closeTaskBrowser: async () => {}
+    },
+    './playwright-proxy': {
+      preparePlaywrightProxy: async () => ({ cleanup: async () => onCleanup() })
+    }
+  });
+}
+
 test('real Chromium auth 200 does not authorize a business 401 or any checkout', async (t) => {
   const f = await fixture(t, (_request, response) => {
     response.writeHead(401);
@@ -389,37 +420,10 @@ test('a same-context original-request comparison success cannot authorize a fail
     assert.ok(options.timeout <= 20000);
     return { status: () => 200, text: async () => JSON.stringify(accountBody) };
   };
-  const query = queryWithoutUnrelatedProbe({
-    './session-auth': {
-      extractProfileFromToken: () => ({ accountId }),
-      installChatGptSession: async (context) => {
-        assert.equal(context, f.context);
-        return { cookieVerified: true, sessionData: { accessToken: token } };
-      },
-      bootstrapChatGptSession: async (page) => {
-        logins++;
-        await page.goto(origin);
-        return { session: { accessToken: token } };
-      }
-    },
-    './browser-runtime': {
-      connectTaskBrowser: async () => ({
-        browser: {
-          newContext: async () => {
-            contexts++;
-            return f.context;
-          }
-        }
-      }),
-      closeTaskBrowser: async () => {}
-    },
-    './playwright-proxy': {
-      preparePlaywrightProxy: async () => ({
-        cleanup: async () => {
-          cleaned++;
-        }
-      })
-    }
+  const query = ownedQuery(f, {
+    onLogin: () => logins++,
+    onContext: () => contexts++,
+    onCleanup: () => cleaned++
   });
   const result = await query(token, {
     sessionRaw: 'synthetic-isolated-session',
@@ -518,5 +522,82 @@ test('a real Chromium evaluate queued before lease loss never dispatches a late 
   assert.equal(sibling.isClosed(), false, 'Other pages in the browser context remain open');
   assert.equal(await sibling.evaluate(() => 1), 1);
   assert.equal(browser.isConnected(), true, 'The shared browser remains available');
+  noPayment(f.seen);
+});
+
+test('a complete Chromium response remains valid when headers and body together need more than ten seconds', async (t) => {
+  const f = await fixture(t, (_request, response, _record, later) => {
+    later(8650, () => {
+      response.writeHead(200);
+      response.flushHeaders();
+      later(3000, () => response.end(JSON.stringify(accountBody)));
+    });
+  });
+  const result = await querySubscriptionBySession(token, {
+    page: f.page,
+    browserContext: f.context
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.diagnostics.length, 1);
+  const observation = result.diagnostics[0];
+  assert.equal(observation.httpStatus, 200);
+  assert.equal(observation.responseBodyCompleted, true);
+  assert.ok(observation.elapsedMs > 10000 && observation.elapsedMs < 20000);
+  assert.ok(observation.headersElapsedMs >= 8000);
+  assert.ok(observation.bodyElapsedMs >= 2500);
+  assert.equal(f.seen.accountRequests.length, 1);
+  noPayment(f.seen);
+});
+
+test('exclusive diagnostic queries perform one primary GET then one comparison after a transient failure', async (t) => {
+  const f = await fixture(t, () => assert.fail('The intercepted reset cannot reach the listener'), {
+    routeError: 'connectionreset'
+  });
+  let comparisons = 0;
+  f.context.request.get = async () => {
+    comparisons++;
+    return { status: () => 200, text: async () => JSON.stringify(accountBody) };
+  };
+  const result = await ownedQuery(f)(token, {
+    sessionRaw: 'synthetic-isolated-session',
+    allowBrowserFallback: true,
+    queryTransportMode: 'transport_compare'
+  });
+  assert.equal(result.ok, false, 'A comparison must not authorize the failed primary read');
+  assert.equal(result.diagnostics.length, 1);
+  assert.equal(f.seen.originalRequests.length, 1);
+  assert.equal(comparisons, 1);
+  assert.equal(result.compareDiagnostics[0].accountIdentityMatches, true);
+  noPayment(f.seen);
+});
+
+test('a supplied context retains its transient retry even when comparison is requested', async (t) => {
+  const f = await fixture(t, () => assert.fail('The intercepted reset cannot reach the listener'), {
+    routeError: 'connectionreset'
+  });
+  const result = await queryWithoutUnrelatedProbe()(token, {
+    page: f.page,
+    browserContext: f.context,
+    queryTransportMode: 'transport_compare'
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostics.length, 2);
+  assert.equal(f.seen.originalRequests.length, 2);
+  assert.equal(result.compareDiagnostics[0].skippedReason, 'shared_context');
+  assert.equal(f.page.isClosed(), false);
+  noPayment(f.seen);
+});
+
+test('a shorter caller deadline is not extended to start an incomplete comparison', async (t) => {
+  const f = await fixture(t, (_request, response) => response.end(JSON.stringify(accountBody)));
+  const result = await ownedQuery(f)(token, {
+    sessionRaw: 'synthetic-isolated-session',
+    allowBrowserFallback: true,
+    queryTransportMode: 'transport_compare',
+    deadlineAt: performance.now() + 10000
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.compareDiagnostics[0].skippedReason, 'deadline_exhausted');
+  assert.equal(f.seen.accountRequests.length, 1);
   noPayment(f.seen);
 });
