@@ -9,6 +9,7 @@ import {
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeService } from './recharge.service';
 import { hash } from './recharge-validation';
+import { rechargeDocumentDigest } from './recharge-callback-receipts';
 
 const url = process.env.V2_RECHARGE_TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
@@ -31,7 +32,7 @@ suite('付款可用性真实 MySQL 归属、互斥及审计事务', () => {
   afterAll(async () => {
     await prisma?.$disconnect();
   });
-  async function fixture(paymentStatus = 'declined') {
+  async function fixture(paymentStatus = 'declined', resultPatch: Record<string, unknown> = {}) {
     const ownerId = randomUUID(),
       accountKey = hash(randomUUID()),
       sourceId = randomUUID();
@@ -62,14 +63,15 @@ suite('付款可用性真实 MySQL 归属、互斥及审计事务', () => {
         createdAt: new Date(Date.now() - 60000),
         updatedAt: new Date(Date.now() - 30000),
         leaseUntil: new Date(Date.now() - 20000),
-        result: {
+        result: toV2JsonDocument({
           window_name: '核对窗口-' + sourceId,
           payment_attempted: true,
           payment_requests_sent: 1,
           confirmation_requests_sent: 1,
           payment_status: paymentStatus,
-          checkout_identifier: checkout
-        }
+          checkout_identifier: checkout,
+          ...resultPatch
+        })
       }
     });
     const verification = await prisma.idBusinessV2RechargeJob.create({
@@ -205,6 +207,123 @@ suite('付款可用性真实 MySQL 归属、互斥及审计事务', () => {
     await expect(service().resolveDeclined(f.source.id, f.input, f.operator)).rejects.toThrow(
       '需要付款之后'
     );
+    expect(await prisma.idBusinessV2RechargeJob.count({ where: { ownerId: f.ownerId } })).toBe(2);
+  });
+  it('网页直连原单人工验证失败声明并发重放仅处理一次，保留原未知付款和次数', async () => {
+    const f = await fixture('unknown', {
+      transport: 'web_direct',
+      reason: 'unexpected_payment_observed',
+      _direct_unexpected_payment_v1: { observed: true, observedRequests: 1 }
+    });
+    const original = f.source.result as Record<string, unknown>;
+    const input = {
+      ...f.input,
+      verificationFailureObservation: {
+        checkoutIdentifier: String(original.checkout_identifier),
+        officialMessage: 'payment_method_verification_failed'
+      }
+    };
+    const results = await Promise.all([
+      service().resolveDeclined(f.source.id, input, f.operator),
+      service().resolveDeclined(f.source.id, input, f.operator)
+    ]);
+    expect(results[0]!.id).toBe(results[1]!.id);
+    const source = await repository.byId(f.source.id);
+    expect(source?.result).toMatchObject({
+      ...original,
+      operator_resolution: 'confirmed_verification_failed_no_charge',
+      resolution_basis: 'operator_observed_official_failure'
+    });
+    const records = await repository.records(prisma as never, f.accountKey);
+    expect(records.find((r) => r.fileKey.startsWith('payments/'))?.document).toMatchObject({
+      payment_status: 'unknown',
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      confirmation_requests_sent: 1,
+      operator_resolution: 'confirmed_verification_failed_no_charge',
+      resolution_basis: 'operator_observed_official_failure'
+    });
+    expect(await prisma.idBusinessV2RechargeJob.count({ where: { ownerId: f.ownerId } })).toBe(3);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          objectId: f.source.id,
+          action: 'id_business_v2.auto_recharge.verification_failure_resolution.complete'
+        }
+      })
+    ).toBe(1);
+  });
+  it('同档新结算原单完整归档与替换原子提交，失败回滚且重放仅留一份归档', async () => {
+    const f = await fixture('unknown', {
+      transport: 'web_direct',
+      reason: 'official_payment_method_verification_failed'
+    });
+    await service().resolveDeclined(f.source.id, f.input, f.operator);
+    const before = await repository.records(prisma as never, f.accountKey);
+    const checkout = before.find((record) => record.fileKey === `${f.accountKey}.json`)!;
+    const archiveKey = `history/${rechargeDocumentDigest(checkout.document)}.json`;
+    const input = {
+      accountKey: f.accountKey,
+      ownerId: f.ownerId,
+      fileKey: checkout.fileKey,
+      revision: checkout.revision,
+      allowResolvedDeclineReplacement: true,
+      document: {
+        account_key: f.accountKey,
+        target_plan: 'plus',
+        status: 'checkout_attempted',
+        stage: 'checkout_create',
+        checkout_outcome: 'unknown',
+        payment_status: 'not_attempted',
+        retry_of: rechargeDocumentDigest(checkout.document)
+      }
+    };
+    const transactions = new V2CommandTransactionManager(prisma);
+    await expect(
+      transactions.execute(
+        async (tx) => {
+          await repository.lock(tx);
+          await repository.saveRecord(tx, input);
+          throw new Error('synthetic-post-archive-audit-failure');
+        },
+        { changedScopes: ['auto-recharge'], requestId: randomUUID(), retryMode: 'none' }
+      )
+    ).rejects.toThrow('synthetic-post-archive-audit-failure');
+    expect(await repository.records(prisma as never, f.accountKey)).toEqual(before);
+    await transactions.execute(
+      async (tx) => {
+        await repository.lock(tx);
+        const first = await repository.saveRecord(tx, input);
+        const replay = await repository.saveRecord(tx, input);
+        expect(replay).toMatchObject({ revision: first.revision, replayed: true });
+      },
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), retryMode: 'none' }
+    );
+    const after = await repository.records(prisma as never, f.accountKey);
+    expect(after.filter((record) => record.fileKey === archiveKey)).toHaveLength(1);
+    expect(after.find((record) => record.fileKey === archiveKey)?.document).toEqual(
+      checkout.document
+    );
+    expect(after.find((record) => record.fileKey.startsWith('payments/'))).toEqual(
+      before.find((record) => record.fileKey.startsWith('payments/'))
+    );
+  });
+  it('网页直连人工处理审计失败时账本、原任务与处理任务全部回滚', async () => {
+    const f = await fixture('unknown', {
+      transport: 'web_direct',
+      reason: 'official_payment_method_verification_failed'
+    });
+    const before = await repository.records(prisma as never, f.accountKey);
+    class FailingAudit extends V2TransactionalAuditService {
+      override append(): never {
+        throw new Error('synthetic-verification-audit-failure');
+      }
+    }
+    await expect(
+      service(new FailingAudit()).resolveDeclined(f.source.id, f.input, f.operator)
+    ).rejects.toThrow('synthetic-verification-audit-failure');
+    expect(await repository.records(prisma as never, f.accountKey)).toEqual(before);
+    expect(await repository.byId(f.source.id)).toEqual(f.source);
     expect(await prisma.idBusinessV2RechargeJob.count({ where: { ownerId: f.ownerId } })).toBe(2);
   });
 });

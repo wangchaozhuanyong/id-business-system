@@ -1,4 +1,7 @@
-import { declinedResolutionEligible } from './recharge-noncharge-proof';
+import {
+  declinedResolutionEligible,
+  verificationFailureResolutionEligible
+} from './recharge-noncharge-proof';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { normalizeV2RechargeConnectorUrl } from '@apple-business/shared';
@@ -50,7 +53,7 @@ export function unknownPaymentCanBeResolved(job: RechargeResolutionJob) {
     !result.payment_evidence &&
     result.status !== 'subscription_activated' &&
     result.payment_outcome !== 'subscription_activated' &&
-    result.operator_resolution !== 'confirmed_no_bank_request' &&
+    result.operator_resolution === undefined &&
     typeof result.checkout_identifier === 'string' &&
     checkoutPattern.test(result.checkout_identifier)
   );
@@ -90,14 +93,38 @@ export function withResolutionVerification<T extends Record<string, unknown>>(
   job: RechargeResolutionJob,
   jobs: RechargeResolutionJob[]
 ) {
-  if (!unknownPaymentCanBeResolved(job) && !declinedResolutionEligible(job)) return result;
+  const verificationFailure = verificationFailureResolutionEligible(job);
+  if (!unknownPaymentCanBeResolved(job) && !declinedResolutionEligible(job) && !verificationFailure)
+    return result;
   const verification = jobs.find(
     (candidate) =>
       isFreeAccountVerification(job, candidate) &&
-      (!declinedResolutionEligible(job) ||
-        candidate.createdAt.getTime() > (job.updatedAt ?? job.createdAt).getTime())
+      (!(declinedResolutionEligible(job) || verificationFailure) ||
+        candidate.createdAt.getTime() > (job.updatedAt ?? job.createdAt).getTime()) &&
+      (!verificationFailure ||
+        (object(candidate.result).recheck_only !== true &&
+          object(candidate.result).resolution_only !== true))
   );
-  return verification ? { ...result, resolution_verification_job_id: verification.id } : result;
+  if (!verification) return result;
+  return {
+    ...result,
+    resolution_verification_job_id: verification.id,
+    ...(verificationFailure
+      ? {
+          payment_verification_resolution: {
+            basis:
+              object(job.result).reason === 'official_payment_method_verification_failed'
+                ? ('captured_official_failure' as const)
+                : ('operator_observation_required' as const),
+            checkoutIdentifier: String(object(job.result).checkout_identifier),
+            verificationJobId: verification.id,
+            verifiedAt: verification.createdAt.toISOString(),
+            accountMatched: true as const,
+            currentPlan: 'free' as const
+          }
+        }
+      : {})
+  };
 }
 
 export async function startUnknownPaymentResolution(input: {

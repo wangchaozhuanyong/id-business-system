@@ -183,6 +183,11 @@ export async function runDirectPaymentRecheck(
       } else if (original.payment_status === 'unpaid')
         Object.assign(report, { payment_status: 'unknown', checkout_status: original.status });
     }
+    if (
+      report.payment_status === 'unknown' &&
+      [source.reason, record?.reason].includes('official_payment_method_verification_failed')
+    )
+      report.reason = 'official_payment_method_verification_failed';
     const activated = report.payment_status === 'paid' && directPlanMatches(plan, current, tier);
     const result: PaymentDocument = {
       ...report,

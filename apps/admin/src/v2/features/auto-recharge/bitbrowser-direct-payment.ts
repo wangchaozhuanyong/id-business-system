@@ -24,6 +24,9 @@ import {
   officialPaymentRead,
   paymentObject,
   paymentHash,
+  directPaymentDocumentDigest,
+  resolvedDirectVerificationPayment,
+  resolvedDirectVerificationCheckout,
   type PaymentDocument
 } from './bitbrowser-payment-evidence';
 export interface DirectPaymentHooks {
@@ -33,15 +36,38 @@ export interface DirectPaymentHooks {
   confirm: (report: PaymentDocument, preflight: () => Promise<void>) => Promise<void>;
   attempted: () => boolean;
   unexpected: (result: PaymentDocument) => Promise<void>;
+  checkoutAttempted?: () => void;
 }
 type PageState = {
   kind: string;
+  preparationAction?: 'open_menu' | 'select_personal';
   text?: string;
   url?: string;
   checkoutId?: string;
   entity?: string;
 };
 export { directPlanMatches } from './bitbrowser-payment-evidence';
+/** A new checkout marker invalidates only the page-memory binding to its predecessor. */
+export function clearDirectCheckoutBinding(report: PaymentDocument): PaymentDocument {
+  const bindingFields = new Set([
+    'checkout_identifier',
+    'processor_entity',
+    'payment_intent_identifier',
+    'checkout_status',
+    'checkout_recovered_from_original',
+    'checkout_link_available',
+    'quote',
+    'initial_quote',
+    'quote_authority',
+    'quote_digest',
+    'quote_stage',
+    'final_quote_verified',
+    'billing_fingerprint',
+    'confirmation_expires_at',
+    'nonce'
+  ]);
+  return Object.fromEntries(Object.entries(report).filter(([key]) => !bindingFields.has(key)));
+}
 export async function runDirectPayment(
   browser: VerifiedPaymentBrowser,
   launch: V2RechargeBitBrowserLaunch,
@@ -92,6 +118,7 @@ export async function runDirectPayment(
     });
   };
   let replacement: { proof: PaymentDocument; retryOf: string } | undefined;
+  let resolvedCheckoutRetryOf: string | undefined;
   let finalQuote: V2RechargeQuote | undefined;
   let deadline = Date.now() + 120_000;
   let cycleMarker: PaymentDocument | undefined;
@@ -130,6 +157,25 @@ export async function runDirectPayment(
       throw new Error('官网操作标记未持久化，本次已停止。');
     revision = Number(saved.revision);
     document = next;
+    if (
+      next.status === 'checkout_attempted' &&
+      next.stage === 'checkout_create' &&
+      next.checkout_outcome === 'unknown' &&
+      next.payment_status === 'not_attempted' &&
+      next.account_key === key &&
+      next.target_plan === plan &&
+      next.checkout_identifier === undefined &&
+      next.processor_entity === undefined &&
+      next.payment_attempted !== true &&
+      Number(next.payment_requests_sent ?? 0) === 0 &&
+      Number(next.confirmation_requests_sent ?? 0) === 0 &&
+      !hooks.attempted() &&
+      observer.confirmationRequests === 0
+    ) {
+      report = clearDirectCheckoutBinding(report);
+      finalQuote = undefined;
+      hooks.checkoutAttempted?.();
+    }
   };
   const identity = () =>
     step('identity', async () => {
@@ -157,12 +203,25 @@ export async function runDirectPayment(
         payment_status: 'not_attempted'
       };
     operation = 'existing_checkout_binding';
+    const resolvedPaymentRows = new Set<PaymentDocument>();
+    for (const item of rows) {
+      const value = paymentObject(item.document);
+      if (
+        Number.isSafeInteger(item.revision) &&
+        Number(item.revision) > 0 &&
+        rows.filter((candidate) => candidate.fileKey === item.fileKey).length === 1 &&
+        resolvedDirectVerificationPayment(value, key) &&
+        item.fileKey === `payments/${await paymentHash(String(value.checkout_identifier))}.json`
+      )
+        resolvedPaymentRows.add(item);
+    }
     if (
       rows.some((item) => {
         const value = paymentObject(item.document);
         const payment =
           !String(item.fileKey).startsWith('history/') &&
-          (value.payment_attempted === true ||
+          (String(item.fileKey).startsWith('payments/') ||
+            value.payment_attempted === true ||
             Number(value.confirmation_requests_sent) > 0 ||
             Number(value.payment_requests_sent) > 0 ||
             value.operation === 'subscription_upgrade' ||
@@ -171,7 +230,7 @@ export async function runDirectPayment(
           value.payment_status === 'paid' &&
           value.status === 'subscription_activated' &&
           Boolean(value.payment_evidence);
-        return payment && !completed;
+        return payment && !completed && !resolvedPaymentRows.has(item);
       })
     )
       throw new Error('该账号历史付款或升级结果仍待核实，本次仅允许复查原单。');
@@ -209,11 +268,20 @@ export async function runDirectPayment(
         return (
           String(item.fileKey).startsWith('payments/') &&
           value.payment_attempted === true &&
-          value.payment_status !== 'paid'
+          value.payment_status !== 'paid' &&
+          !resolvedPaymentRows.has(item)
         );
       })
     )
       throw new Error('该账号历史付款结果仍待核实，本次仅允许复查原单。');
+    if (
+      !cycle &&
+      !checkoutId &&
+      [...resolvedPaymentRows].some(
+        (item) => String(paymentObject(item.document).target_plan ?? 'plus') === plan
+      )
+    )
+      throw new Error('人工核实付款的原结算账本缺失，本次不会新建订单。');
     if (hooks.restored?.unidentifiedCheckoutRecovery === true) {
       const owned = hooks.restored.ownedProfile;
       if (
@@ -265,6 +333,31 @@ export async function runDirectPayment(
         confirmation_requests_sent: 0
       });
       report = { ...report, checkout_recovered_from_original: true };
+    }
+    const resolvedCurrentPayments = [...resolvedPaymentRows].filter(
+      (item) => paymentObject(item.document).checkout_identifier === checkoutId
+    );
+    if (
+      document.operator_resolution === 'confirmed_verification_failed_no_charge' ||
+      resolvedCurrentPayments.length
+    ) {
+      if (
+        hooks.restored?.unidentifiedCheckoutRecovery ||
+        !row ||
+        !Number.isSafeInteger(revision) ||
+        revision < 1 ||
+        resolvedCurrentPayments.length !== 1 ||
+        !resolvedDirectVerificationCheckout(
+          document,
+          resolvedCurrentPayments[0]!.document,
+          key,
+          plan
+        )
+      )
+        throw new Error('人工核实原单与付款账本绑定不一致，本次不会新建订单。');
+      resolvedCheckoutRetryOf = await directPaymentDocumentDigest(document);
+      checkoutId = '';
+      entity = '';
     }
     if (checkoutId) {
       if (
@@ -324,17 +417,23 @@ export async function runDirectPayment(
         entity = '';
       } else if (old.status !== 'open' || old.payment_status !== 'unpaid')
         throw new Error('原单存在付款或未明确状态，本次仅允许复查。');
-    } else if (Object.keys(document).length)
+    } else if (Object.keys(document).length && !resolvedCheckoutRetryOf)
       throw new Error('存在未核实的建单记录，本次不会重复创建订单。');
     if (!checkoutId) {
       operation = 'plan_selection';
       await hooks.progress('plan_selection');
       let prepared = false;
+      // Preparation clicks are single-use for this run; slow UI updates only consume its existing budget.
+      const preparation = { menuRequested: false, personalRequested: false };
       while (Date.now() < deadline) {
         remaining();
         const state = await session.evaluate<PageState>(
-          directPaymentPageExpression(plan, 'prepare')
+          directPaymentPageExpression(plan, 'prepare', undefined, { ...preparation })
         );
+        if (state.kind === 'menu_opened') {
+          if (state.preparationAction === 'open_menu') preparation.menuRequested = true;
+          if (state.preparationAction === 'select_personal') preparation.personalRequested = true;
+        }
         if (state.kind === 'plan_ready') {
           prepared = true;
           break;
@@ -353,6 +452,7 @@ export async function runDirectPayment(
         stage: 'checkout_create',
         plan: directOfficialPlans[plan],
         target_plan: plan,
+        account_key: key,
         account_matched: true,
         current_plan_before: 'free',
         checkout_outcome: 'unknown',
@@ -361,6 +461,7 @@ export async function runDirectPayment(
         ...(replacement
           ? { retry_of: replacement.retryOf, expired_checkout_replacement: replacement.proof }
           : {}),
+        ...(resolvedCheckoutRetryOf ? { retry_of: resolvedCheckoutRetryOf } : {}),
         ...(cycleMarker ? { next_cycle_grant: cycleMarker } : {})
       });
       await hooks.progress('checkout_create');

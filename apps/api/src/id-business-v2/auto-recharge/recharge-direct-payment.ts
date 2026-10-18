@@ -14,6 +14,7 @@ import { rechargeDocumentDigest } from './recharge-callback-receipts';
 import { mergeRechargeCallbackResult } from './recharge-bank-callback';
 import { rechargeOperationIdentifier } from './recharge-upgrade-protocol';
 import { assertFinalQuote, hash, object, safeDocument, uuidPattern } from './recharge-validation';
+import { assertReplacementCheckoutReport } from './recharge-expired-checkout';
 
 const privateKey = '_direct_confirmation_v1';
 const observationKey = '_direct_unexpected_payment_v1';
@@ -58,8 +59,17 @@ export function directRechargeObserved(job: Pick<IdBusinessV2RechargeJob, 'resul
 
 export function assertDirectRechargeReport(
   job: IdBusinessV2RechargeJob,
-  report: Record<string, unknown>
+  report: Record<string, unknown>,
+  replacementCheckoutCreated = false,
+  ledgerReport = false
 ) {
+  assertReplacementCheckoutReport(
+    job,
+    report,
+    replacementCheckoutCreated,
+    directRechargeObserved(job) || directRechargeAuthorized(job),
+    ledgerReport
+  );
   if (!isDirectRechargePayment(job)) return;
   const previous = object(job.result);
   if (directRechargeObserved(job)) {

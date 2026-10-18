@@ -603,15 +603,54 @@ describe('API原窗口归属与当前官网身份双核验', () => {
       )
     ).toBe(false);
     expect(mock.command.mock.calls.some(([method]) => method === 'Network.setCookies')).toBe(false);
-    expect(
-      mock.command.mock.calls.filter(([method]) => method === 'Network.getCookies')
-    ).toHaveLength(1);
+    expect(mock.command.mock.calls.some(([method]) => method === 'Network.getCookies')).toBe(false);
     expect(mock.command.mock.calls.some(([method]) => method === 'Network.deleteCookies')).toBe(
       false
     );
   });
-  it.each(['identity', 'expired'])(
-    '核对原窗口账号后使用新 JSON 替换旧会话并只刷新一次：%s',
+  it('官网已核实同一账号时保留当前有效会话，不用字节不同的JSON会话覆盖或刷新', async () => {
+    const ownedProfile = await owned();
+    mock.evaluate.mockResolvedValue(identity);
+    const command = mock.command.getMockImplementation()!;
+    mock.command.mockImplementation((method, ...args) =>
+      method === 'Network.getCookies'
+        ? Promise.resolve({
+            cookies: [
+              {
+                name: '__Secure-next-auth.session-token',
+                domain: '.chatgpt.com',
+                path: '/',
+                value: 'different-active-session'
+              }
+            ]
+          })
+        : command(method, ...args)
+    );
+    const progress = vi.fn();
+    expect(
+      await runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+        restore: async () => ({ ownedProfile }),
+        progress,
+        code: vi.fn()
+      })
+    ).toMatchObject({ account_matched: true, status: 'session_ready', payment_requests_sent: 0 });
+    expect(
+      mock.command.mock.calls.some(([method]) =>
+        [
+          'Network.getCookies',
+          'Network.deleteCookies',
+          'Network.setCookies',
+          'Page.reload'
+        ].includes(method)
+      )
+    ).toBe(false);
+    expect(progress).not.toHaveBeenCalledWith(
+      'session_restore',
+      expect.objectContaining({ session_refresh_count: 1 })
+    );
+  });
+  it.each(['expired'])(
+    '核对原窗口账号且明确过期后恢复输入JSON会话并只刷新一次：%s',
     async (kind) => {
       vi.useFakeTimers();
       const ownedProfile = await owned();

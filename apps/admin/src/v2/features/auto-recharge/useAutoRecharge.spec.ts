@@ -1540,7 +1540,37 @@ describe('比特浏览器充值入口', () => {
     expect(mock.startDirectPayment).not.toHaveBeenCalled();
     expect(flow.error.value).toBe('');
   });
-  it('查看旧失败单不限制其他账号，切回同账号才限制新付款，仍允许仅登录', async () => {
+  it('未选择历史任务时也明确提示同账号付款保护，避免一直显示正在确认任务状态', async () => {
+    fillForm();
+    await choosePasswordAccount();
+    jobs.value.items = [
+      {
+        ...job('finished', {
+          payment_attempted: true,
+          payment_requests_sent: 1,
+          payment_status: 'unknown'
+        }),
+        chatgptAccountId: 'account-fixture',
+        availability: {
+          execution: 'released',
+          payment: 'unknown',
+          accountPaymentRestricted: true,
+          canInspect: true
+        }
+      }
+    ];
+    expect(flow.selected.value).toBeUndefined();
+    expect(flow.canStart.value).toBe(false);
+    expect(flow.canStartOpen.value).toBe(true);
+    expect(flow.workflowMessage.value).toContain('本账号存在待核实的历史付款');
+    expect(flow.workflowMessage.value).toContain('暂不能发起新充值');
+    expect(flow.workflowMessage.value).not.toContain('正在确认任务状态');
+    await flow.start();
+    expect(mock.startDirectPayment).not.toHaveBeenCalled();
+    flow.operationMode.value = 'open_browser';
+    expect(flow.workflowMessage.value).toContain('打开比特浏览器并自动登录');
+  });
+  it('查看旧失败单不限制其他账号，切回同账号才限制发起新充值，仍允许仅登录', async () => {
     fillForm();
     await choosePasswordAccount();
     expect(flow.canStart.value).toBe(true);
@@ -1569,6 +1599,56 @@ describe('比特浏览器充值入口', () => {
     expect(flow.canStartOpen.value).toBe(true);
     expect(flow.details.value.number).toBe('5555555555554444');
     expect(flow.details.value.cvc).toBe('123');
+  });
+  it('人工核实验证失败后保留原付款事实并允许新核价，另一未知原单仍会阻止执行', async () => {
+    fillForm();
+    await choosePasswordAccount();
+    const original = {
+      ...job('finished', {
+        status: 'payment_result_unknown',
+        reason: 'unexpected_payment_detected',
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        confirmation_requests_sent: 1,
+        payment_status: 'unknown',
+        operator_resolution: 'confirmed_verification_failed_no_charge',
+        resolution_verification_job_id: 'verification-fixture'
+      }),
+      chatgptAccountId: 'account-fixture',
+      availability: {
+        execution: 'released' as const,
+        payment: 'resolved' as const,
+        accountPaymentRestricted: false,
+        canInspect: true
+      }
+    };
+    const originalFacts = JSON.stringify(original.result);
+    jobs.value.items = [original];
+    flow.selectJob(original.id);
+    expect(flow.canStart.value).toBe(true);
+    expect(flow.canStartOpen.value).toBe(true);
+    expect(flow.canRecheck.value).toBe(false);
+    expect(flow.canResolveNoBankRequest.value).toBe(false);
+    expect(flow.workflowMessage.value).toContain('原任务和付款次数已保留');
+    expect(JSON.stringify(jobs.value.items[0]!.result)).toBe(originalFacts);
+    jobs.value.items.push({
+      ...job('finished', {
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        payment_status: 'unknown'
+      }),
+      id: 'another-unknown',
+      chatgptAccountId: 'account-fixture',
+      availability: {
+        execution: 'released',
+        payment: 'unknown',
+        accountPaymentRestricted: true,
+        canInspect: true
+      }
+    });
+    expect(flow.canStart.value).toBe(false);
+    await flow.start();
+    expect(mock.startDirectPayment).not.toHaveBeenCalled();
   });
   it('目标升级已核实但付款未知时只提示只读复查，保留原付款锁', async () => {
     fillForm();

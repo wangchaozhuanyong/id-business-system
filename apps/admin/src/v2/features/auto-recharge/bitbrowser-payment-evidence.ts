@@ -21,6 +21,84 @@ export function directPlanMatches(plan: V2RechargePlan, current: string, tier?: 
 export type PaymentDocument = Record<string, unknown>;
 export const paymentObject = (value: unknown): PaymentDocument =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as PaymentDocument) : {};
+const resolutionKeys = [
+  'operator_resolution',
+  'resolution_basis',
+  'resolution_job_id',
+  'source_job_id',
+  'verification_job_id',
+  'resolved_at'
+] as const;
+const resolutionUuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+function resolvedVerificationMetadata(value: PaymentDocument) {
+  return (
+    value.operator_resolution === 'confirmed_verification_failed_no_charge' &&
+    ['captured_official_failure', 'operator_observed_official_failure'].includes(
+      String(value.resolution_basis)
+    ) &&
+    ['resolution_job_id', 'source_job_id', 'verification_job_id'].every(
+      (key) => typeof value[key] === 'string' && resolutionUuid.test(value[key])
+    ) &&
+    new Set([value.resolution_job_id, value.source_job_id, value.verification_job_id]).size === 3 &&
+    typeof value.resolved_at === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,6})?Z$/.test(value.resolved_at) &&
+    Number.isFinite(Date.parse(value.resolved_at))
+  );
+}
+/** Only the server-bound resolution permits skipping this one historical payment. */
+export function resolvedDirectVerificationPayment(value: unknown, accountKey: string) {
+  const payment = paymentObject(value);
+  return (
+    /^[a-f0-9]{64}$/.test(accountKey) &&
+    payment.account_key === accountKey &&
+    resolvedVerificationMetadata(payment) &&
+    typeof payment.checkout_identifier === 'string' &&
+    /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/.test(payment.checkout_identifier) &&
+    Object.hasOwn(directOfficialPlans, String(payment.target_plan ?? 'plus')) &&
+    payment.operation !== 'subscription_upgrade' &&
+    !payment.upgrade_identifier &&
+    payment.payment_attempted === true &&
+    payment.payment_status === 'unknown' &&
+    payment.payment_requests_sent === 1 &&
+    payment.confirmation_requests_sent === 1 &&
+    !payment.payment_evidence &&
+    payment.status !== 'subscription_activated' &&
+    ![
+      'subscription_activated',
+      'paid_pending_activation',
+      'paid_tier_pending_verification'
+    ].includes(String(payment.payment_outcome))
+  );
+}
+/** The untouched checkout and resolved payment must name the exact same manual resolution. */
+export function resolvedDirectVerificationCheckout(
+  value: unknown,
+  paymentValue: unknown,
+  accountKey: string,
+  plan: V2RechargePlan
+) {
+  const checkout = paymentObject(value),
+    payment = paymentObject(paymentValue);
+  return (
+    resolvedDirectVerificationPayment(payment, accountKey) &&
+    resolvedVerificationMetadata(checkout) &&
+    resolutionKeys.every((key) => checkout[key] === payment[key]) &&
+    checkout.checkout_identifier === payment.checkout_identifier &&
+    String(checkout.target_plan ?? 'plus') === plan &&
+    String(payment.target_plan ?? 'plus') === plan &&
+    (checkout.account_key === undefined || checkout.account_key === accountKey) &&
+    (checkout.plan === undefined || checkout.plan === directOfficialPlans[plan]) &&
+    checkout.payment_status === 'not_attempted' &&
+    checkout.payment_attempted === false &&
+    checkout.payment_requests_sent === 0 &&
+    checkout.confirmation_requests_sent === 0 &&
+    !checkout.payment_evidence &&
+    checkout.operation !== 'subscription_upgrade' &&
+    !checkout.upgrade_identifier &&
+    checkout.status !== 'subscription_activated' &&
+    checkout.payment_outcome !== 'subscription_activated'
+  );
+}
 export function directPaymentMoney(currency: string, minor: unknown): V2RechargeMoney {
   if (
     !/^[A-Z]{3}$/.test(currency) ||
@@ -152,6 +230,22 @@ export async function paymentFingerprint(value: object) {
 export async function paymentHash(value: string) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (part) => part.toString(16).padStart(2, '0')).join('');
+}
+/** Matches the server ledger digest used for compare-and-swap replacement. */
+export async function directPaymentDocumentDigest(value: unknown) {
+  const canonical = (item: unknown, parent?: string): unknown => {
+    if (Array.isArray(item)) return item.map((value) => canonical(value));
+    if (!item || typeof item !== 'object') return item;
+    return Object.fromEntries(
+      Object.entries(item)
+        .filter(
+          ([key, value]) => value !== undefined && !(parent === 'network' && key === 'observedAt')
+        )
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, canonical(value, key)])
+    );
+  };
+  return paymentHash(JSON.stringify(canonical(value)) ?? 'undefined');
 }
 
 export function billingValues(value: unknown, name: unknown) {

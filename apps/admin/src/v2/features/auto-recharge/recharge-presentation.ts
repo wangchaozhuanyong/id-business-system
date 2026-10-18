@@ -189,6 +189,8 @@ const labels: Record<string, string> = {
   payment_result_unknown: '付款结果待核验',
   payment_decline_resolved: '拒付原单已核实结束',
   confirmed_declined_no_charge: '已核实拒付且银行无扣款',
+  payment_verification_resolved: '验证失败原单已人工核实处理',
+  confirmed_verification_failed_no_charge: '已核实验证失败且银行无扣款或待入账',
   payment_unknown_resolved: '历史付款锁已处理',
   payment_unknown_resolution: '正在处理历史付款记录',
   verification_required: '官网或银行验证尚未完成',
@@ -456,6 +458,8 @@ export const selectionStepLabels = {
   verify_plan: '再次核对套餐'
 };
 export function quotePlaceholder(job: V2RechargeJob): string {
+  if (job.result.operator_resolution === 'confirmed_verification_failed_no_charge')
+    return '验证失败原单已核实结束';
   if (job.result.operator_resolution === 'confirmed_no_bank_request') return '历史记录已处理';
   if (
     job.result.reason === 'account_has_other_payment_attempt' ||
@@ -480,6 +484,8 @@ export function quotePlaceholder(job: V2RechargeJob): string {
 export function subscriptionLabel(job: V2RechargeJob): string {
   const result = job.result;
   if (result.mode === 'open_browser') return '未执行开通（仅登录模式）';
+  if (result.operator_resolution === 'confirmed_verification_failed_no_charge')
+    return '核验时为免费版，未确认开通';
   if (result.operator_resolution === 'confirmed_no_bank_request') return '尚未开通';
   if (result.payment_outcome || result.subscription_status)
     return statusLabel(result.payment_outcome || result.subscription_status);
@@ -494,6 +500,19 @@ export function subscriptionLabel(job: V2RechargeJob): string {
 }
 export function statusLabel(value: unknown) {
   return typeof value === 'string' ? (labels[value] ?? '待核验') : '未知';
+}
+
+function resolvedRechargeLabel(job: V2RechargeJob): string | undefined {
+  if (job.availability?.payment !== 'resolved') return;
+  if (job.result.operator_resolution === 'confirmed_verification_failed_no_charge')
+    return statusLabel('payment_verification_resolved');
+  if (job.result.operator_resolution === 'confirmed_declined_no_charge')
+    return statusLabel('payment_decline_resolved');
+  return '原单已核实处理';
+}
+
+export function rechargeHistoryStatusLabel(job: V2RechargeJob): string {
+  return resolvedRechargeLabel(job) ?? statusLabel(job.result.status || job.state);
 }
 
 export function officialCurrentPlanLabel(job: V2RechargeJob) {
@@ -539,6 +558,8 @@ export function accountVerificationLabel(job: V2RechargeJob): string {
 }
 
 export function executionStageLabel(job: V2RechargeJob): string {
+  const resolved = resolvedRechargeLabel(job);
+  if (resolved) return resolved;
   if (job.state === 'finished' && job.result.reason) {
     if (job.result.stage === 'browser_control_connect') return '比特窗口控制连接未完成';
     if (job.result.stage === 'official_page_readiness') return '官网账号已核实，页面就绪检查未完成';
@@ -626,6 +647,8 @@ export function paymentFailureLabel(value: unknown): string {
 }
 
 function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: string): string {
+  if (job.result.payment_verification_resolution && job.availability?.payment === 'unknown')
+    return '请核对该原单的官网验证失败提示和银行流水，再使用“核实验证失败并结束原单”；原付款尝试和次数会保留。';
   if (reason === 'original_checkout_identifier_unverified')
     return '请保留历史建单记录和原官网窗口，先核实原单结果；不要重复建单或付款。';
   if (
@@ -732,6 +755,7 @@ export function isUnpaidCancelledRecharge(job: V2RechargeJob) {
 
 export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback | null {
   if (isUnpaidCancelledRecharge(job)) return null;
+  if (job.result.operator_resolution === 'confirmed_verification_failed_no_charge') return null;
   if (job.result.operator_resolution === 'confirmed_no_bank_request') return null;
   const paymentFailure =
     typeof job.result.payment_failure_reason === 'string'
@@ -893,6 +917,8 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
 
 export function paymentStatusLabel(job: V2RechargeJob): string {
   if (job.result.mode === 'open_browser') return '未发起付款（仅登录模式）';
+  if (job.result.operator_resolution === 'confirmed_verification_failed_no_charge')
+    return '本人已核实验证失败且银行无扣款或待入账';
   if (job.result.operator_resolution === 'confirmed_no_bank_request')
     return '已确认银行卡未收到付款请求';
   if (job.result.payment_status) return statusLabel(job.result.payment_status);

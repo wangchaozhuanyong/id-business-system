@@ -1,6 +1,9 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
-import type { V2RechargeBrowserRestore } from '@apple-business/shared';
+import type {
+  V2RechargeBrowserRestore,
+  V2RechargeResolveDeclinedInput
+} from '@apple-business/shared';
 import { connectorRequest, requireConnectorHealth } from './connector-transport';
 import type {
   ImportV2RechargeAddressesResult,
@@ -39,10 +42,12 @@ export const rechargeApi = {
       challengeId?: string;
     }>(http.post(`${base}/${id}/login-code`, input, { signal: options.signal }));
   },
-  resolveDeclined(id: string, verificationJobId: string) {
+  resolveDeclined(id: string, input: string | V2RechargeResolveDeclinedInput) {
+    const body: V2RechargeResolveDeclinedInput =
+      typeof input === 'string' ? { confirmNoDebit: true, verificationJobId: input } : input;
     return withV2QueryInvalidation(
       request<{ id: string; alreadyResolved: boolean }>(
-        http.post(`${base}/${id}/resolve-declined`, { confirmNoDebit: true, verificationJobId })
+        http.post(`${base}/${id}/resolve-declined`, body)
       ),
       'auto-recharge'
     );

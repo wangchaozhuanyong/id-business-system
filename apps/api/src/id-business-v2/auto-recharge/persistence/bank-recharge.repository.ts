@@ -9,6 +9,10 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import { buildV2StringArrayContainsFilter } from '../../runtime/public-api';
 import type { AccountSubscriptionState } from '../bank-recharge-account-subscription';
+import {
+  resolvedDeclinedPayment,
+  resolvedVerificationFailureRecheck
+} from '../recharge-noncharge-proof';
 
 export type BankRechargeOrderFeeUpdate = Prisma.IdBusinessV2BankRechargeOrderUncheckedUpdateInput;
 
@@ -153,9 +157,19 @@ export class BankRechargeRepository {
         OR: [{ chatgptAccountId: accountId }, ...(accountKey ? [{ accountKey }] : [])],
         action: { in: ['prepare', 'flow', 'bitbrowser', 'server'] }
       },
-      select: { id: true, ownerId: true, result: true }
+      select: {
+        id: true,
+        ownerId: true,
+        accountKey: true,
+        plan: true,
+        action: true,
+        state: true,
+        createdAt: true,
+        updatedAt: true,
+        result: true
+      }
     });
-    const unresolved = jobs.filter(({ result }) => {
+    let unresolved = jobs.filter(({ result }) => {
       if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
       const report = result as Record<string, unknown>;
       const attempted =
@@ -167,9 +181,24 @@ export class BankRechargeRepository {
           report.status === 'subscription_activated' &&
           report.payment_outcome === 'subscription_activated') ||
         report.payment_status === 'declined' ||
-        report.operator_resolution === 'confirmed_no_bank_request';
+        report.operator_resolution === 'confirmed_no_bank_request' ||
+        resolvedDeclinedPayment(report);
       return attempted && !closed;
     });
+    const rechecks = unresolved.filter((job) => {
+      const result = job.result as Record<string, unknown> | null;
+      return job.accountKey && result?.recheck_only === true;
+    });
+    if (rechecks.length) {
+      const records = await tx.idBusinessV2RechargeRecord.findMany({
+        where: {
+          OR: rechecks.map(({ accountKey, ownerId }) => ({ accountKey: accountKey!, ownerId })),
+          fileKey: { startsWith: 'payments/' }
+        },
+        select: { ownerId: true, accountKey: true, fileKey: true, document: true }
+      });
+      unresolved = unresolved.filter((job) => !resolvedVerificationFailureRecheck(job, records));
+    }
     if (!unresolved.length) return false;
     // 只读复查保留原任务的未知历史；严格核验后生成的原任务订单证明付款已闭合。
     const verifiedOrders = await tx.idBusinessV2BankRechargeOrder.findMany({

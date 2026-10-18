@@ -6,7 +6,11 @@ import { toV2JsonDocument } from '../runtime/public-api';
 import type { RechargeRepository } from './persistence/recharge.repository';
 import { object, uuidPattern } from './recharge-validation';
 import { isFreeAccountVerification } from './recharge-resolution';
-import { hasDeclineResolution, resolvedDeclinedPayment } from './recharge-noncharge-proof';
+import {
+  declinedResolutionEligible,
+  resolvedDeclinedPayment,
+  verificationFailureResolutionEligible
+} from './recharge-noncharge-proof';
 
 export async function resolveDeclinedRecharge(
   tx: V2CommandTransaction,
@@ -22,7 +26,10 @@ export async function resolveDeclinedRecharge(
     input.confirmNoDebit !== true ||
     typeof input.verificationJobId !== 'string' ||
     !uuidPattern.test(input.verificationJobId) ||
-    Object.keys(input).some((key) => !['confirmNoDebit', 'verificationJobId'].includes(key))
+    Object.keys(input).some(
+      (key) =>
+        !['confirmNoDebit', 'verificationJobId', 'verificationFailureObservation'].includes(key)
+    )
   )
     throw new BadRequestException('请提供原单核验记录并确认银行没有扣款或待入账交易');
   await repository.lock(tx);
@@ -31,27 +38,34 @@ export async function resolveDeclinedRecharge(
   const before = object(source.result);
   if (resolvedDeclinedPayment(before))
     return { id: String(before.resolution_job_id), alreadyResolved: true };
-  if (
-    source.action !== 'bitbrowser' ||
-    source.state !== 'finished' ||
-    !source.accountKey ||
-    before.recheck_only === true ||
-    before.operation === 'subscription_upgrade' ||
-    before.payment_status !== 'declined' ||
-    before.payment_attempted !== true ||
-    before.confirmation_requests_sent !== 1 ||
-    before.payment_evidence ||
-    hasDeclineResolution(before) ||
-    typeof before.checkout_identifier !== 'string' ||
-    !/^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/.test(before.checkout_identifier)
-  )
-    throw new ConflictException(
-      '只有已明确拒付且原订单完整的任务可以核实结束；未知付款不能使用此入口'
-    );
+  const verificationFailure = verificationFailureResolutionEligible(source);
+  if (!declinedResolutionEligible(source) && !verificationFailure)
+    throw new ConflictException('只有明确拒付或符合支付方式验证失败人工核实条件的完整原单可以结束');
+  const capturedFailure = before.reason === 'official_payment_method_verification_failed';
+  let observedFailure = false;
+  if (input.verificationFailureObservation !== undefined) {
+    const observation = object(input.verificationFailureObservation);
+    if (
+      !verificationFailure ||
+      Object.keys(observation).length !== 2 ||
+      Object.keys(observation).some(
+        (key) => !['checkoutIdentifier', 'officialMessage'].includes(key)
+      ) ||
+      observation.checkoutIdentifier !== before.checkout_identifier ||
+      observation.officialMessage !== 'payment_method_verification_failed'
+    )
+      throw new BadRequestException('请仅确认本人在该原单看到的官网支付方式验证失败提示');
+    observedFailure = true;
+  }
+  if (verificationFailure && !capturedFailure && !observedFailure)
+    throw new ConflictException('原任务未记录官网验证失败，需要本人对绑定原单明确声明观察结果');
   const verification = await repository.findJob(tx, input.verificationJobId);
   if (
     !verification ||
     !isFreeAccountVerification(source, verification) ||
+    (verificationFailure &&
+      (object(verification.result).recheck_only === true ||
+        object(verification.result).resolution_only === true)) ||
     verification.createdAt.getTime() <= source.updatedAt.getTime()
   )
     throw new ConflictException('需要付款之后同一账号的官网免费版状态核验记录');
@@ -60,22 +74,32 @@ export async function resolveDeclinedRecharge(
   const id = randomUUID(),
     now = new Date();
   const resolution = {
-    operator_resolution: 'confirmed_declined_no_charge',
+    operator_resolution: verificationFailure
+      ? ('confirmed_verification_failed_no_charge' as const)
+      : ('confirmed_declined_no_charge' as const),
+    ...(verificationFailure
+      ? {
+          resolution_basis: capturedFailure
+            ? ('captured_official_failure' as const)
+            : ('operator_observed_official_failure' as const)
+        }
+      : {}),
     resolved_at: now.toISOString(),
     resolution_job_id: id,
     source_job_id: source.id,
     verification_job_id: verification.id
   };
   await repository.resolveUnknownPaymentRecords(tx, {
-    accountKey: source.accountKey,
-    checkoutIdentifier: before.checkout_identifier,
+    accountKey: source.accountKey!,
+    checkoutIdentifier: String(before.checkout_identifier),
     plan: source.plan,
     ownerId: source.ownerId,
     resolutionJobId: id,
     sourceJobId: source.id,
     verificationJobId: verification.id,
     resolvedAt: now.toISOString(),
-    kind: 'confirmed_declined_no_charge'
+    kind: resolution.operator_resolution,
+    ...(resolution.resolution_basis ? { resolutionBasis: resolution.resolution_basis } : {})
   });
   await repository.createJob(tx, {
     id,
@@ -88,28 +112,44 @@ export async function resolveDeclinedRecharge(
     result: toV2JsonDocument({
       ...resolution,
       resolution_only: true,
-      status: 'payment_decline_resolved',
+      status: verificationFailure ? 'payment_verification_resolved' : 'payment_decline_resolved',
       payment_attempted: false,
       confirmation_requests_sent: 0,
       payment_requests_sent: 0
     })
   });
   await repository.updateJob(tx, source.id, {
-    result: toV2JsonDocument({ ...before, ...resolution, status: 'payment_decline_resolved' })
+    result: toV2JsonDocument({
+      ...before,
+      ...resolution,
+      ...(!verificationFailure ? { status: 'payment_decline_resolved' } : {})
+    })
   });
   await audit.append(tx, {
     userId: operator.id,
     module: 'id_business_v2',
-    action: 'id_business_v2.auto_recharge.decline_resolution.complete',
+    action: verificationFailure
+      ? 'id_business_v2.auto_recharge.verification_failure_resolution.complete'
+      : 'id_business_v2.auto_recharge.decline_resolution.complete',
     objectType: 'recharge_job',
     objectId: source.id,
-    afterData: {
+    afterData: toV2JsonDocument({
       resolutionJobId: id,
       verificationJobId: verification.id,
       bankNoDebitConfirmed: true,
+      ...(verificationFailure
+        ? {
+            checkoutIdentifier: String(before.checkout_identifier),
+            resolutionBasis: resolution.resolution_basis,
+            officialFailureCaptured: capturedFailure,
+            operatorObservedOfficialFailure: observedFailure
+          }
+        : {}),
       originalPaymentFactsPreserved: true
-    },
-    remark: '核对官网拒付、原单和 Free 状态后，由本人确认银行无扣款或待入账交易；保留原付款尝试'
+    }),
+    remark: verificationFailure
+      ? '核对绑定原单及付款后免费状态，由本人确认官网支付方式验证失败且银行无扣款或待入账；原付款事实保持不变'
+      : '核对官网拒付、原单和 Free 状态后，由本人确认银行无扣款或待入账交易；保留原付款尝试'
   });
   return { id, alreadyResolved: false };
 }

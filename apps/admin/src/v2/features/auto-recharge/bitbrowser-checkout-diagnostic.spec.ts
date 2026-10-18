@@ -2,10 +2,41 @@ import { describe, expect, it } from 'vitest';
 import { sanitizeV2CheckoutDiagnostic } from '@apple-business/shared';
 import {
   CHECKOUT_ERROR_BODY_LIMIT,
-  checkoutErrorDiagnostic
+  checkoutErrorDiagnostic,
+  checkoutDiagnosticSummary
 } from './bitbrowser-checkout-diagnostic';
 
 describe('建单失败正文仅在内存分类', () => {
+  it('识别实机人工点击也返回的异常活动拒绝，回显官网提示且不猜测限制原因', () => {
+    const output = checkoutErrorDiagnostic({
+      body: '{"detail":"Our systems have detected unusual activity. Please try again later."}'
+    });
+    expect(output).toEqual({
+      body_state: 'parsed_json',
+      code_present: false,
+      param_present: false,
+      categories: ['unusual_activity'],
+      attribution: 'message_pattern'
+    });
+    expect(sanitizeV2CheckoutDiagnostic(output)).toEqual(output);
+    expect(checkoutDiagnosticSummary(output)).toBe(
+      '官网提示：检测到异常活动，请稍后再试。触发该限制的具体原因尚未明确；本次不自动重试建单。'
+    );
+  });
+  it('异常活动分类不保存附带的账号或凭据，也不把泛化的 activity 当成异常活动', () => {
+    const output = checkoutErrorDiagnostic({
+      body: JSON.stringify({
+        error: {
+          message: 'Our systems have detected unusual activity. PRIVATE_TOKEN buyer@example.test'
+        }
+      })
+    });
+    expect(output.categories).toEqual(['unusual_activity']);
+    expect(JSON.stringify(output)).not.toMatch(/PRIVATE_TOKEN|buyer@example/);
+    expect(
+      checkoutErrorDiagnostic({ body: '{"detail":"Activity is unavailable"}' }).categories
+    ).toEqual([]);
+  });
   it.each([
     [{ body: 'x'.repeat(CHECKOUT_ERROR_BODY_LIMIT + 1) }, 'oversized'],
     [{ body: 'private-base64', base64Encoded: true }, 'base64'],

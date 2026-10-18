@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { rechargeDocumentDigest } from './recharge-callback-receipts';
+import { resolvedDeclinedCheckout, resolvedDeclinedPayment } from './recharge-noncharge-proof';
+
 /** 仅允许在原窗口发现未识别结算，不授予新建单或付款能力。 */
 export function isUnidentifiedUnpaidCheckout(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -42,7 +46,230 @@ type RecoverySource = {
   state: string;
   plan: string;
   result: unknown;
+  createdAt?: Date;
+  updatedAt?: Date;
 };
+
+type RecoveryRecord = {
+  ownerId: string;
+  accountKey?: string;
+  fileKey: string;
+  revision: number;
+  document: unknown;
+};
+const object = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const checkoutPattern = /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/;
+const officialPlans: Record<string, string> = {
+  go: 'chatgptgoplan',
+  plus: 'chatgptplusplan',
+  'pro-5x': 'chatgptprolite',
+  'pro-20x': 'chatgptpro',
+  'pro-500': 'chatgptpromax'
+};
+// 兼容原执行器保存的显示名；精确沿用现有套餐标签，不从金额或部分名称推断。
+const archivedPlanLabels: Record<string, string> = {
+  go: 'ChatGPT Go',
+  plus: 'ChatGPT Plus',
+  'pro-5x': 'ChatGPT Pro（标准）',
+  'pro-20x': 'ChatGPT Pro（更多使用额度）',
+  'pro-500': 'ChatGPT Pro（最高使用额度）'
+};
+const rootKey = (accountKey: string, plan: string) =>
+  `${accountKey}${plan === 'plus' ? '' : `-${plan}`}.json`;
+const zeroPayment = (r: Record<string, unknown>) =>
+  r.payment_status === 'not_attempted' &&
+  r.payment_attempted !== true &&
+  ['payment_requests_sent', 'confirmation_requests_sent', 'card_tokenization_requests_sent'].every(
+    (key) => r[key] === undefined || r[key] === 0
+  ) &&
+  !r.manual_confirmation_accepted &&
+  !r.payment_evidence &&
+  !r.payment_record_write_failed &&
+  !r.operation &&
+  !r.upgrade_identifier;
+
+/** 只派生旧版本回执的资格；完整同源归档证明已退役的编号不再作为当前绑定。 */
+export function unidentifiedCheckoutSourceResult(
+  source: RecoverySource,
+  markerRecord: RecoveryRecord,
+  records: RecoveryRecord[],
+  profileId: string
+): Record<string, unknown> | undefined {
+  const raw = object(source.result);
+  if (isUnidentifiedUnpaidCheckout(raw)) return raw;
+  const marker = object(markerRecord.document),
+    proof = object(marker.expired_checkout_replacement),
+    identifier = raw.checkout_identifier;
+  const candidate = { ...raw };
+  delete candidate.checkout_identifier;
+  if (
+    !isUnidentifiedUnpaidCheckout(candidate) ||
+    !isUnidentifiedCheckoutMarker(marker) ||
+    source.action !== 'bitbrowser' ||
+    source.state !== 'finished' ||
+    raw.mode === 'open_browser' ||
+    raw.recheck_only === true ||
+    raw.resolution_only === true ||
+    !uuid.test(source.id) ||
+    !source.accountKey ||
+    !/^[a-f0-9]{64}$/.test(source.accountKey) ||
+    markerRecord.ownerId !== source.ownerId ||
+    markerRecord.accountKey !== source.accountKey ||
+    markerRecord.fileKey !== rootKey(source.accountKey, source.plan) ||
+    !Number.isSafeInteger(markerRecord.revision) ||
+    markerRecord.revision < 2 ||
+    marker.account_key !== source.accountKey ||
+    marker.target_plan !== source.plan ||
+    marker.plan !== officialPlans[source.plan] ||
+    raw.target_plan !== source.plan ||
+    raw.transport !== 'web_direct' ||
+    raw.http_status !== 400 ||
+    raw.browser_profile_id !== profileId ||
+    !/^[a-f0-9]{32}$/.test(profileId) ||
+    typeof identifier !== 'string' ||
+    !checkoutPattern.test(identifier) ||
+    !(source.createdAt instanceof Date) ||
+    !(source.updatedAt instanceof Date) ||
+    !Number.isFinite(source.createdAt.getTime()) ||
+    !Number.isFinite(source.updatedAt.getTime()) ||
+    Number(marker.created_at) < Math.floor(source.createdAt.getTime() / 1000) ||
+    Number(marker.created_at) > Math.floor(source.updatedAt.getTime() / 1000) ||
+    source.createdAt.getTime() > source.updatedAt.getTime() ||
+    Object.keys(proof).length !== 6 ||
+    ![
+      'checkout_identifier',
+      'processor_entity',
+      'target_plan',
+      'account_key',
+      'status',
+      'payment_status'
+    ].every((key) => Object.hasOwn(proof, key)) ||
+    proof.checkout_identifier !== identifier ||
+    proof.processor_entity !== raw.processor_entity ||
+    typeof proof.processor_entity !== 'string' ||
+    !/^[a-z][a-z0-9_]{0,40}$/.test(proof.processor_entity) ||
+    proof.account_key !== source.accountKey ||
+    proof.target_plan !== source.plan ||
+    proof.status !== 'expired' ||
+    proof.payment_status !== 'unpaid' ||
+    typeof marker.retry_of !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(marker.retry_of)
+  )
+    return undefined;
+  const archives = records.filter((record) => {
+    const archive = object(record.document);
+    return (
+      record.fileKey.startsWith('history/') &&
+      archive.kind === 'expired_checkout' &&
+      archive.source_job_id === source.id
+    );
+  });
+  if (archives.length !== 1) return undefined;
+  const record = archives[0]!,
+    archive = object(record.document),
+    archived = object(archive.document);
+  if (
+    record.ownerId !== source.ownerId ||
+    record.accountKey !== source.accountKey ||
+    record.revision !== 1 ||
+    archive.source_file_key !== markerRecord.fileKey ||
+    archive.source_revision !== markerRecord.revision - 1 ||
+    rechargeDocumentDigest(archive.proof) !== rechargeDocumentDigest(proof) ||
+    archived.checkout_identifier !== identifier ||
+    archived.processor_entity !== proof.processor_entity ||
+    (archived.target_plan ?? 'plus') !== source.plan ||
+    (archived.plan !== undefined &&
+      archived.plan !== officialPlans[source.plan] &&
+      archived.plan !== archivedPlanLabels[source.plan]) ||
+    (archived.account_key !== undefined && archived.account_key !== source.accountKey) ||
+    !zeroPayment(archived) ||
+    marker.retry_of !== rechargeDocumentDigest(archive.document) ||
+    record.fileKey !==
+      `history/${rechargeDocumentDigest({
+        accountKey: source.accountKey,
+        fileKey: markerRecord.fileKey,
+        revision: archive.source_revision,
+        document: archive.document,
+        proof: archive.proof
+      })}.json`
+  )
+    return undefined;
+  return candidate;
+}
+
+/** 已处理付款只复用完整服务端凭据和精确原单绑定，其他付款仍阻止未知原单发现。 */
+export function hasUnresolvedUnidentifiedCheckoutPayment(
+  records: RecoveryRecord[],
+  ownerId: string,
+  accountKey: string
+): boolean {
+  return records.some((record) => {
+    if (!record.fileKey.startsWith('payments/')) return false;
+    const payment = object(record.document),
+      identifier = payment.checkout_identifier,
+      plan = String(payment.target_plan ?? 'plus');
+    const roots = records.filter((item) => item.fileKey === rootKey(accountKey, plan));
+    const root = roots[0],
+      checkout = object(root?.document);
+    const metadata = [
+      'operator_resolution',
+      'resolution_basis',
+      'resolved_at',
+      'resolution_job_id',
+      'source_job_id',
+      'verification_job_id'
+    ];
+    return !(
+      record.ownerId === ownerId &&
+      record.accountKey === accountKey &&
+      Number.isSafeInteger(record.revision) &&
+      record.revision > 0 &&
+      resolvedDeclinedPayment(payment) &&
+      payment.operator_resolution === 'confirmed_verification_failed_no_charge' &&
+      payment.account_key === accountKey &&
+      typeof identifier === 'string' &&
+      checkoutPattern.test(identifier) &&
+      record.fileKey === `payments/${createHash('sha256').update(identifier).digest('hex')}.json` &&
+      Object.hasOwn(officialPlans, plan) &&
+      !payment.operation &&
+      !payment.upgrade_identifier &&
+      payment.status !== 'subscription_activated' &&
+      ![
+        'subscription_activated',
+        'paid_pending_activation',
+        'paid_tier_pending_verification'
+      ].includes(String(payment.payment_outcome)) &&
+      metadata
+        .filter((key) => key.endsWith('_job_id'))
+        .every((key) => uuid.test(String(payment[key]))) &&
+      new Set([payment.resolution_job_id, payment.source_job_id, payment.verification_job_id])
+        .size === 3 &&
+      Number.isFinite(Date.parse(String(payment.resolved_at))) &&
+      roots.length === 1 &&
+      root?.ownerId === ownerId &&
+      root.accountKey === accountKey &&
+      Number.isSafeInteger(root.revision) &&
+      root.revision > 0 &&
+      resolvedDeclinedCheckout(checkout) &&
+      metadata.every((key) => checkout[key] === payment[key]) &&
+      checkout.checkout_identifier === identifier &&
+      String(checkout.target_plan ?? 'plus') === plan &&
+      (checkout.plan === undefined || checkout.plan === officialPlans[plan]) &&
+      (checkout.account_key === undefined || checkout.account_key === accountKey) &&
+      checkout.payment_attempted === false &&
+      checkout.payment_requests_sent === 0 &&
+      checkout.confirmation_requests_sent === 0 &&
+      !checkout.operation &&
+      !checkout.upgrade_identifier &&
+      checkout.status !== 'subscription_activated' &&
+      checkout.payment_outcome !== 'subscription_activated'
+    );
+  });
+}
 
 /** 登录记录不是建单来源；替换窗口须有完整的归属链和独立的官网身份核实。 */
 export function findUnidentifiedCheckoutSource<T extends RecoverySource>(
@@ -50,7 +277,9 @@ export function findUnidentifiedCheckoutSource<T extends RecoverySource>(
   ownerId: string,
   accountKey: string,
   plan: string,
-  profileId: string
+  profileId: string,
+  markerRecord?: RecoveryRecord,
+  records: RecoveryRecord[] = []
 ): T | undefined {
   const object = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value)
@@ -66,7 +295,11 @@ export function findUnidentifiedCheckoutSource<T extends RecoverySource>(
       job.state === 'finished'
   );
   const sources = owned.filter(
-    (job) => job.plan === plan && isUnidentifiedUnpaidCheckout(job.result)
+    (job) =>
+      job.plan === plan &&
+      (markerRecord
+        ? Boolean(unidentifiedCheckoutSourceResult(job, markerRecord, records, profileId))
+        : isUnidentifiedUnpaidCheckout(job.result))
   );
   if (sources.length !== 1 || !profile(profileId)) return undefined;
   const source = sources[0]!;

@@ -12,6 +12,7 @@ import {
   rechargeIssueFeedback,
   rechargeCallbackDiagnostics,
   statusLabel,
+  rechargeHistoryStatusLabel,
   subscriptionLabel,
   paymentStatusLabel,
   proxyAttemptLabel
@@ -685,6 +686,120 @@ describe('recharge stage presentation', () => {
     expect(quotePlaceholder(resolved)).toBe('历史记录已处理');
     expect(paymentStatusLabel(resolved)).toBe('已确认银行卡未收到付款请求');
     expect(subscriptionLabel(resolved)).toBe('尚未开通');
+  });
+  it('验证失败原单人工核实后保留旧未知事实，表现不再误报银行拒付或正在确认', () => {
+    const resolved = job({
+      action: 'bitbrowser',
+      result: {
+        status: 'payment_result_unknown',
+        reason: 'unexpected_payment_observed',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        confirmation_requests_sent: 0,
+        operator_resolution: 'confirmed_verification_failed_no_charge'
+      }
+    });
+    const before = structuredClone(resolved.result);
+    expect(statusLabel('payment_verification_resolved')).toBe('验证失败原单已人工核实处理');
+    expect(statusLabel('confirmed_verification_failed_no_charge')).toContain('无扣款或待入账');
+    expect(paymentStatusLabel(resolved)).toContain('本人已核实');
+    expect(paymentStatusLabel(resolved)).not.toMatch(/银行拒付|未收到付款请求|未尝试付款/);
+    expect(quotePlaceholder(resolved)).toBe('验证失败原单已核实结束');
+    expect(subscriptionLabel(resolved)).toBe('核验时为免费版，未确认开通');
+    expect(rechargeIssueFeedback(resolved)).toBeNull();
+    expect(resolved.result).toEqual(before);
+    const unresolved = job({
+      ...resolved,
+      result: { ...resolved.result, operator_resolution: undefined }
+    });
+    expect(rechargeIssueFeedback(unresolved)).not.toBeNull();
+    expect(paymentStatusLabel(unresolved)).toBe('结果待核验');
+  });
+  it.each([
+    ['confirmed_verification_failed_no_charge', false, '验证失败原单已人工核实处理'],
+    ['confirmed_declined_no_charge', false, '拒付原单已核实结束'],
+    [undefined, true, '原单已核实处理']
+  ] as const)(
+    '已处理可用性派生源记录及同源只读记录的阶段和最近列表标签，不改历史事实 %s/%s',
+    (marker, recheck, expected) => {
+      const resolved = job({
+        action: 'bitbrowser',
+        availability: {
+          execution: 'released',
+          payment: 'resolved',
+          accountPaymentRestricted: false,
+          canInspect: true
+        },
+        result: {
+          stage: 'payment_result',
+          status: 'payment_result_unknown',
+          reason: 'unexpected_payment_observed',
+          payment_status: 'unknown',
+          payment_attempted: true,
+          payment_requests_sent: recheck ? 0 : 1,
+          confirmation_requests_sent: recheck ? 0 : 1,
+          ...(marker ? { operator_resolution: marker } : {}),
+          ...(recheck ? { recheck_only: true, source_job_id: 'source-fixture' } : {})
+        }
+      });
+      const before = structuredClone(resolved);
+      expect(executionStageLabel(resolved)).toBe(expected);
+      expect(rechargeHistoryStatusLabel(resolved)).toBe(expected);
+      expect(resolved).toEqual(before);
+    }
+  );
+  it('其他未知付款和缺少已处理可用性的标记仍保留原阶段与待核验标签', () => {
+    for (const marker of [undefined, 'confirmed_verification_failed_no_charge'] as const) {
+      const pending = job({
+        action: 'bitbrowser',
+        availability: {
+          execution: 'released',
+          payment: 'unknown',
+          accountPaymentRestricted: true,
+          canInspect: true
+        },
+        result: {
+          stage: 'payment_result',
+          status: 'payment_result_unknown',
+          payment_status: 'unknown',
+          ...(marker ? { operator_resolution: marker } : {})
+        }
+      });
+      expect(executionStageLabel(pending)).toBe('正在确认原单付款结果');
+      expect(rechargeHistoryStatusLabel(pending)).toBe('付款结果待核验');
+      expect(rechargeHistoryStatusLabel({ ...pending, availability: undefined })).toBe(
+        '付款结果待核验'
+      );
+    }
+  });
+  it('可人工核实的验证失败原单指向处理入口，其他未知付款仍要求只读复查', () => {
+    const pending = job({
+      action: 'bitbrowser',
+      availability: {
+        execution: 'released',
+        payment: 'unknown',
+        accountPaymentRestricted: true,
+        canInspect: true
+      },
+      result: {
+        reason: 'unexpected_payment_observed',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        payment_verification_resolution: {
+          basis: 'operator_observation_required',
+          checkoutIdentifier: 'oaics_fixture',
+          verificationJobId: '00000000-0000-4000-8000-000000000001',
+          verifiedAt: '2026-10-18T12:42:00.000Z',
+          accountMatched: true,
+          currentPlan: 'free'
+        }
+      }
+    });
+    expect(rechargeIssueFeedback(pending)?.action).toContain('核实验证失败并结束原单');
+    expect(rechargeIssueFeedback(pending)?.action).not.toContain('银行卡没有收到请求');
+    delete pending.result.payment_verification_resolution;
+    expect(rechargeIssueFeedback(pending)?.action).toContain('只读复查原订单');
   });
   it('shows a specific Chinese reason for the observed old Plus failure', () => {
     expect(statusLabel('official_plus_option_not_found')).toBe('未找到官网 Plus 选项');

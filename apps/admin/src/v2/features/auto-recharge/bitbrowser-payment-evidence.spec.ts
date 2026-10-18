@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { V2RechargeDetails } from './contracts';
 import { DirectPaymentObserver } from './bitbrowser-payment-observer';
@@ -5,13 +6,146 @@ import type { VerifiedPaymentBrowser } from './bitbrowser-payment-session';
 import { createDirectPaymentSession } from './bitbrowser-payment-session';
 import {
   billingValues,
+  directPaymentDocumentDigest,
   directPaymentMoney,
   officialPaymentRead,
   parseDirectVisibleQuote,
+  resolvedDirectVerificationCheckout,
+  resolvedDirectVerificationPayment,
   verifyNativeDirectQuote
 } from './bitbrowser-payment-evidence';
 
 const sid = 'oaics_synthetic';
+const resolutionAccountKey = 'a'.repeat(64);
+const verificationResolution = {
+  operator_resolution: 'confirmed_verification_failed_no_charge',
+  resolution_basis: 'operator_observed_official_failure',
+  resolution_job_id: '11111111-1111-4111-8111-111111111111',
+  source_job_id: '22222222-2222-4222-8222-222222222222',
+  verification_job_id: '33333333-3333-4333-8333-333333333333',
+  resolved_at: '2026-10-18T12:00:00.000Z'
+};
+function resolvedPaymentDocument() {
+  return {
+    ...verificationResolution,
+    account_key: resolutionAccountKey,
+    checkout_identifier: sid,
+    target_plan: 'plus',
+    payment_attempted: true,
+    confirmation_requests_sent: 1,
+    payment_requests_sent: 1,
+    payment_status: 'unknown'
+  };
+}
+function resolvedCheckoutDocument() {
+  return {
+    ...verificationResolution,
+    checkout_identifier: sid,
+    target_plan: 'plus',
+    payment_attempted: false,
+    payment_requests_sent: 0,
+    confirmation_requests_sent: 0,
+    payment_status: 'not_attempted'
+  };
+}
+
+describe('人工核实验证失败账本严格绑定', () => {
+  it.each(['captured_official_failure', 'operator_observed_official_failure'])(
+    '%s 仅识别同账号、同原单、单次付款的服务端处理标记且不改写原账本',
+    (basis) => {
+      const payment = { ...resolvedPaymentDocument(), resolution_basis: basis };
+      const checkout = { ...resolvedCheckoutDocument(), resolution_basis: basis };
+      const before = JSON.stringify({ payment, checkout });
+      expect(resolvedDirectVerificationPayment(payment, resolutionAccountKey)).toBe(true);
+      expect(
+        resolvedDirectVerificationCheckout(checkout, payment, resolutionAccountKey, 'plus')
+      ).toBe(true);
+      expect(JSON.stringify({ payment, checkout })).toBe(before);
+    }
+  );
+  it.each([
+    { operator_resolution: undefined },
+    { operator_resolution: 'confirmed_no_bank_request' },
+    { resolution_basis: undefined },
+    { resolution_basis: 'untrusted' },
+    { resolution_job_id: 'invalid' },
+    { source_job_id: undefined },
+    { verification_job_id: '22222222-2222-4222-8222-222222222222' },
+    { resolved_at: 'not-a-date' },
+    { account_key: 'b'.repeat(64) },
+    { checkout_identifier: '' },
+    { target_plan: 'unsupported' },
+    { payment_attempted: false },
+    { payment_requests_sent: 0 },
+    { payment_requests_sent: 2 },
+    { payment_requests_sent: '1' },
+    { confirmation_requests_sent: 0 },
+    { confirmation_requests_sent: 2 },
+    { payment_status: 'requires_action' },
+    { payment_status: 'paid' },
+    { payment_evidence: { identifier: 'pi_Paid' } },
+    { operation: 'subscription_upgrade' },
+    { upgrade_identifier: 'upg_Unexpected' },
+    { status: 'subscription_activated' },
+    { payment_outcome: 'paid_pending_activation' }
+  ])('缺失、伪造或存在付款风险的原payment不解除保护 %j', (patch) => {
+    expect(
+      resolvedDirectVerificationPayment(
+        { ...resolvedPaymentDocument(), ...patch },
+        resolutionAccountKey
+      )
+    ).toBe(false);
+  });
+  it.each([
+    { source_job_id: '44444444-4444-4444-8444-444444444444' },
+    { resolution_job_id: '44444444-4444-4444-8444-444444444444' },
+    { verification_job_id: '44444444-4444-4444-8444-444444444444' },
+    { resolved_at: '2026-10-18T12:01:00.000Z' },
+    { resolution_basis: 'captured_official_failure' },
+    { checkout_identifier: 'oaics_other' },
+    { account_key: 'b'.repeat(64) },
+    { target_plan: 'go' },
+    { plan: 'chatgptgoplan' },
+    { payment_attempted: true },
+    { confirmation_requests_sent: 1 },
+    { payment_requests_sent: 1 },
+    { payment_requests_sent: undefined },
+    { payment_evidence: { identifier: 'pi_Paid' } }
+  ])('根checkout与已核实payment不完全绑定时不能替换 %j', (patch) => {
+    expect(
+      resolvedDirectVerificationCheckout(
+        { ...resolvedCheckoutDocument(), ...patch },
+        resolvedPaymentDocument(),
+        resolutionAccountKey,
+        'plus'
+      )
+    ).toBe(false);
+  });
+  it('新单retry摘要与服务端递归规范一致，仅忽略network.observedAt', async () => {
+    const value = {
+      z: 3,
+      a: { b: 2, a: 1 },
+      network: { observedAt: 'volatile', country: 'PH' },
+      list: [{ b: 2, a: 1 }],
+      omitted: undefined
+    };
+    const expected = createHash('sha256')
+      .update(
+        JSON.stringify({
+          a: { a: 1, b: 2 },
+          list: [{ a: 1, b: 2 }],
+          network: { country: 'PH' },
+          z: 3
+        })
+      )
+      .digest('hex');
+    expect(await directPaymentDocumentDigest(value)).toBe(expected);
+    expect(await directPaymentDocumentDigest({ ...value, observedAt: 'preserved' })).not.toBe(
+      expected
+    );
+    expect(await directPaymentDocumentDigest({ ...value, a: { a: 1, b: 9 } })).not.toBe(expected);
+  });
+});
 const details: V2RechargeDetails = {
   number: '4242424242424242',
   expiry: '12/39',
@@ -550,6 +684,37 @@ describe('付款观测只采纳唯一授权原单的官网证据', () => {
       expect(f.observer.confirmationRequests).toBe(0);
     }
   );
+
+  it('官网异常活动 HTTP400 被动回传分类，不重试建单或发起付款', async () => {
+    const f = fixture(false);
+    await f.response(
+      '/backend-api/payments/checkout',
+      { detail: 'Our systems have detected unusual activity. Please try again later.' },
+      { method: 'POST', status: 400 }
+    );
+    expect(f.observer.checkoutFailure).toMatchObject({
+      reason: 'official_checkout_http_failed',
+      http_status: 400,
+      diagnostics: {
+        checkout_error: {
+          request_index: 1,
+          body_state: 'parsed_json',
+          categories: ['unusual_activity'],
+          attribution: 'message_pattern'
+        }
+      }
+    });
+    expect(f.observer.checkoutRequests).toBe(1);
+    expect(f.observer.confirmationRequests).toBe(0);
+    expect(f.observer.checkout).toBeUndefined();
+    expect(f.cdp.command).toHaveBeenCalledExactlyOnceWith(
+      'Network.getResponseBody',
+      { requestId: '1' },
+      'owned',
+      3000
+    );
+    expect(JSON.stringify(f.observer)).not.toContain('Our systems');
+  });
 
   it('HTTP400记录受控代码和参数，未识别的正文不会变成推断根因', async () => {
     const f = fixture(false);
