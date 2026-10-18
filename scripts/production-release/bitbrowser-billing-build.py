@@ -113,6 +113,15 @@ def reconstruct():
     return api, admin
 
 
+def reviewed_projection(commit, c):
+    p = load('bitbrowser-billing-release.py')
+    p.need(commit == c['sourceReviewCommit'], 'REVIEW_COMMIT_CHANGED')
+    # GitHub squash merges rewrite ancestry; frozen file bytes retain review identity.
+    for name, expected in c['sources'].items():
+        p.need(p.sha(git('show', commit + ':' + name)) == expected
+            == p.sha(git('show', 'HEAD:' + name)), 'REVIEW_SOURCE_PROJECTION_CHANGED')
+
+
 def quality(commit, *, reviewed_source=False):
     p = load('bitbrowser-billing-release.py')
     response = json.loads(subprocess.check_output(['gh', 'api',
@@ -122,7 +131,7 @@ def quality(commit, *, reviewed_source=False):
         and r['path'] == '.github/workflows/quality.yml' and r['conclusion'] == 'success']
     p.need(bool(rows), 'MAIN_QUALITY_NOT_PASSED')
     if reviewed_source:
-        p.need(git('merge-base', commit, 'HEAD').decode().strip() == commit, 'REVIEW_SOURCE_NOT_ANCESTOR')
+        reviewed_projection(commit, json.loads(CONTRACT.read_bytes()))
         jobs = json.loads(subprocess.check_output(['gh', 'api',
             'repos/wangchaozhuanyong/id-business-system/actions/runs/' + str(rows[0]['id']) + '/jobs?per_page=100'], cwd=ROOT))
         p.need(any(j['name'] == 'full-quality' and j['conclusion'] == 'success' for j in jobs['jobs']),

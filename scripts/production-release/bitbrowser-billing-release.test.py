@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('billing_release_test', HERE / 'bitbrowser-billing-release.py')
@@ -21,6 +22,21 @@ class FiniteBillingControls(unittest.TestCase):
         self.assertEqual(p.PRESERVED, ('mysql', 'caddy', 'media-resolver', 'auto-recharge'))
         self.assertNotIn('auto-registration', p.SERVICES)
         self.assertNotIn('online-recharge', p.PRESERVED)
+
+    def test_squash_merge_requires_identical_reviewed_source_bytes(self):
+        spec = importlib.util.spec_from_file_location('billing_build_test', HERE / 'bitbrowser-billing-build.py')
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        content = b'reviewed source'
+        contract = {'sourceReviewCommit': 'a' * 40, 'sources': {'apps/admin/src/v2/example.ts': p.sha(content)}}
+        with patch.object(build, 'git', return_value=content):
+            build.reviewed_projection('a' * 40, contract)
+            with self.assertRaisesRegex(RuntimeError, 'REVIEW_COMMIT_CHANGED'):
+                build.reviewed_projection('b' * 40, contract)
+        for rows in ((content, b'changed candidate'), (b'changed review', content)):
+            with patch.object(build, 'git', side_effect=rows):
+                with self.assertRaisesRegex(RuntimeError, 'REVIEW_SOURCE_PROJECTION_CHANGED'):
+                    build.reviewed_projection('a' * 40, contract)
 
     def test_wrong_predecessor_rejected(self):
         self.c['expectedCurrent'] = 'a' * 40

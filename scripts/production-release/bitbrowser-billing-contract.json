@@ -184,10 +184,10 @@
   },
   "businessActions": 0,
   "controlPins": {
-    "bitbrowser-billing-build.py": "30cd6d9652b99112bc0b56cc3b8c018c487433e6d4cb6744da3b0c8054739271",
+    "bitbrowser-billing-build.py": "b7b45e9854baad46b5016855f15bd02263fe79fcde749810489b5faf14d6c911",
     "bitbrowser-billing-dispatch.py": "2da2eb75ab4f08e7b2945273689e80952ecfb3e2ebf03d00f5238d771fc43268",
     "bitbrowser-billing-release.py": "9ee6121427b3df8c517fade48b39891abf608486e3a9d8606821ad6193f28e52",
-    "bitbrowser-billing-release.test.py": "e9fad52f1238c946768ca64a72a22cb9288d5a611ecd965a7fa74a0f66f2ef9d",
+    "bitbrowser-billing-release.test.py": "6eb49e9ad319ccdd8bcc4cb7c81ec8dc27e90b94cf36f3dc045c27718190cbce",
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
