@@ -5425,7 +5425,9 @@ async function main() {
     }
   }
   const checkParts =
-    mode === 'ci-only' && hasBankCardDeletePolicyProof(paths, grantHelperSnapshot)
+    mode === 'ci-only' &&
+    (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
+      isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext))
       ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)
       : mode === 'ci-only' || mode === 'audit-retention'
         ? ['guards']

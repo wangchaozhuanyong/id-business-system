@@ -3089,7 +3089,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
         if (args[0] === 'cat-file') return '';
         if (args[0] === 'diff') return (options.historical && args[2] === proof.testedTree
           ? options.changed : paths).join('\\n') + '\\n';
-        if (args[0] === 'rev-parse') return tree + '\\n';
+        if (args[0] === 'rev-parse') return (args[1] === process.env.BASE_SHA + '^{tree}'
+          ? options.baseTree ?? tree : tree) + '\\n';
         if (args[0] === 'merge-tree') return proof.testedTree + '\\n';
         if (args[0] === 'show' && args[1].endsWith(':' + process.env.SCOPE_TEST_HELPER)) {
           const source = args[1].startsWith('HEAD:') ? snapshot?.after : snapshot?.before;
@@ -3174,7 +3175,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
           GITHUB_STEP_SUMMARY: root + '/.runtime/online-recharge-ci-synthetic-summary',
           GITHUB_REPOSITORY: 'fixture/id-business',
           GITHUB_SHA: 'c'.repeat(40),
-          BASE_SHA: 'a'.repeat(40),
+          BASE_SHA: options.base ?? 'a'.repeat(40),
           SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
           SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance
         }
@@ -7282,6 +7283,58 @@ test('finite history controls reuse application QA only over their exact ten fil
     finiteHistoryOnly([...finiteHistoryPaths.slice(1), finiteHistoryPaths[1]], context),
     false
   );
+});
+
+test('finite history PR and same-tree main CLI publish both final control matrix entries', () => {
+  for (const base of [finiteHistoryCommit, 'b'.repeat(40)]) {
+    for (const eventName of ['pull_request', 'push']) {
+      const { result, writes, gitCalls } = recordScopeClassification(
+        finiteHistoryPaths,
+        {},
+        eventName,
+        { base, baseTree: finiteHistoryTree }
+      );
+      assert.equal(result.mode, 'ci-only');
+      assert.deepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(result.onlineCiBuild, false);
+      assert.equal(result.reuseMain, eventName === 'push');
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+      assert.ok(gitCalls.some((args) => args.join(' ') === 'rev-parse ' + base + '^{tree}'));
+    }
+  }
+  for (const eventName of ['pull_request', 'push']) {
+    for (const { paths, baseTree } of [
+      { paths: finiteHistoryPaths, baseTree: 'a'.repeat(40) },
+      ...finiteHistoryPaths.map((missing) => ({
+        paths: finiteHistoryPaths.filter((name) => name !== missing),
+        baseTree: finiteHistoryTree
+      })),
+      {
+        paths: [
+          ...finiteHistoryPaths,
+          'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts'
+        ],
+        baseTree: finiteHistoryTree
+      }
+    ]) {
+      const { result, writes } = recordScopeClassification(paths, {}, eventName, {
+        base: 'b'.repeat(40),
+        baseTree
+      });
+      assert.equal(result.mode, 'full');
+      assert.notDeepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        ),
+        false
+      );
+    }
+  }
 });
 
 test('finite recovery controls reuse reviewed business QA only over the exact frozen tree', () => {

@@ -140,8 +140,8 @@
   "ciControlPins": {
     "scripts/ci-recharge-check.mjs": "b0a23158f79a2fdb042a05170a6cbec158dc2188f1b72961e85e952b9b490206",
     "scripts/ci-recharge-check.test.mjs": "b2f71dd66bbd7329158b40ff34ed9349c49e6b6ebe6fe06f1f5e00488fd0ca94",
-    "scripts/ci-recharge-scope.mjs": "b3d186f301b020c7e224fc6ff3c6bd1f30eb3ddbc69c444f638459ce8dc17ba9",
-    "scripts/ci-recharge-scope.test.mjs": "c525529bf938fd18e163c44c9f4f9a0bffbec53f002cd237330310898c0a64ee"
+    "scripts/ci-recharge-scope.mjs": "1e86ea3bff1787016318263e21190b0e37c8b24d3903967b056f8f7c09291ab1",
+    "scripts/ci-recharge-scope.test.mjs": "14bc39bb06e9922a9adb62e91a8c46cbd92fb9469fa8cd767a5fdd9934e17830"
   },
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
