@@ -28,7 +28,8 @@ def fixture_contract():
     c = {**old, 'scope': p.SCOPE, 'expectedCurrent': p.CURRENT, 'reviewBase': p.SOURCE_BASE,
         'sourceReviewCommit': 'b' * 40, 'sources': sources,
         'apiModules': sorted(name.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
-            for name in p.API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')),
+            for name in p.API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')) + sorted(p.DECLARATIONS),
+        'declarationOutputs': copy.deepcopy(p.DECLARATIONS),
         'sharedFiles': sorted(p.SHARED), 'controlPins': {name: 'c' * 64 for name in p.CONTROLS},
         'predecessorProofSha256': p.PREDECESSOR_PROOF,
         'mysqlTestSources': {name: sources.get(name, 'd' * 64) for name in p.MYSQL_FILES}}
@@ -38,6 +39,8 @@ def fixture_contract():
         'proofs': {'recharge-checkout-build-proof.json': p.PREDECESSOR_PROOF},
         'apiBaselineFiles': {**{'apps/api/dist/' + name: 'e' * 64 for name in c['apiModules']},
             **{'packages/shared/dist/' + name: 'e' * 64 for name in p.SHARED}}}
+    c['baseline']['apiBaselineFiles'].update({'apps/api/dist/' + n: pin['runtimeBefore']
+        for n, pin in p.DECLARATIONS.items()})
     return c
 
 
@@ -58,8 +61,8 @@ class FiniteRecoveryControls(unittest.TestCase):
         self.assertEqual(p.CURRENT, p.PUBLISHED_BUILD)
         self.assertEqual(len(p.API_SOURCES), 13)
         self.assertEqual(len(self.c['sources']), 45)
-        self.assertEqual(len(self.c['apiModules']), 39)
-        self.assertEqual(len(self.c['baseline']['apiBaselineFiles']), 45)
+        self.assertEqual(len(self.c['apiModules']), 40)
+        self.assertEqual(len(self.c['baseline']['apiBaselineFiles']), 46)
         self.assertEqual(p.PRESERVED, ('mysql', 'caddy', 'media-resolver', 'auto-recharge'))
         self.assertNotIn('online-recharge', p.PRESERVED)
         self.assertNotIn('auto-registration', p.SERVICES)
@@ -104,7 +107,7 @@ class FiniteRecoveryControls(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'OUTPUT_SCOPE'):
             p.validate_contract(changed)
 
-    def test_baseline_must_pin_all_39_api_and_six_shared_outputs(self):
+    def test_baseline_must_pin_39_api_one_derived_declaration_and_six_shared_outputs(self):
         for action in ('missing', 'extra', 'invalid'):
             changed = copy.deepcopy(self.c)
             if action == 'missing':
@@ -115,6 +118,35 @@ class FiniteRecoveryControls(unittest.TestCase):
                 changed['baseline']['apiBaselineFiles'][next(iter(changed['baseline']['apiBaselineFiles']))] = 'wrong'
             with self.assertRaisesRegex(RuntimeError, 'BASELINE'):
                 p.validate_contract(changed)
+
+    def test_derived_declaration_hashes_cannot_be_widened_or_changed(self):
+        for update in ({'id-business-v2/other.d.ts': {'before': 'a' * 64, 'after': 'b' * 64}},
+            {name: {**pin, 'after': 'f' * 64} for name, pin in p.DECLARATIONS.items()}):
+            changed = copy.deepcopy(self.c)
+            changed['declarationOutputs'] = update
+            with self.assertRaisesRegex(RuntimeError, 'OUTPUT_SCOPE'):
+                p.validate_contract(changed)
+        changed = copy.deepcopy(self.c)
+        name = next(iter(p.DECLARATIONS))
+        changed['baseline']['apiBaselineFiles']['apps/api/dist/' + name] = 'f' * 64
+        with self.assertRaisesRegex(RuntimeError, 'BASELINE'):
+            p.validate_contract(changed)
+
+    def test_compiled_delta_accepts_only_the_exact_derived_declaration(self):
+        spec = importlib.util.spec_from_file_location('recovery_delta_build', HERE / 'bitbrowser-recovery-build.py')
+        build = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build)
+        before = {n: pin['before'] for n, pin in p.DECLARATIONS.items()}
+        after = {n: pin['after'] for n, pin in p.DECLARATIONS.items()}
+        build.verify_api_delta(before, after, self.c)
+        for name in ('unreviewed.d.ts', 'unreviewed.js'):
+            with self.assertRaisesRegex(RuntimeError, 'UNSELECTED_API_OUTPUT_CHANGED'):
+                build.verify_api_delta(before, {**after, name: 'a' * 64}, self.c)
+        for side in ('before', 'after'):
+            changed_before, changed_after = copy.deepcopy(before), copy.deepcopy(after)
+            (changed_before if side == 'before' else changed_after)[next(iter(p.DECLARATIONS))] = 'f' * 64
+            with self.assertRaisesRegex(RuntimeError, 'DECLARATION_PROJECTION_CHANGED'):
+                build.verify_api_delta(changed_before, changed_after, self.c)
 
     def test_control_and_ci_file_sets_are_closed(self):
         for field in ('controlPins', 'ciControlPins'):
@@ -182,6 +214,7 @@ class FiniteRecoveryControls(unittest.TestCase):
             'apiModules': {name: 'a' * 64 for name in self.c['apiModules']},
             'sharedFiles': {name: 'b' * 64 for name in p.SHARED},
             'adminFiles': {'index.html': 'c' * 64}, 'files': {}}
+        proof['apiModules'].update({n: pin['after'] for n, pin in p.DECLARATIONS.items()})
         class Helper:
             @staticmethod
             def file_inventory(_path):

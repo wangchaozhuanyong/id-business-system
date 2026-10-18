@@ -91,7 +91,10 @@ import {
   registrationProtocolRepairPreservationPaths,
   bitbrowserRecoveryControlPaths,
   bitbrowserRecoverySourceReviewCommit,
-  bitbrowserRecoverySourceReviewTree
+  bitbrowserRecoverySourceReviewTree,
+  bitbrowserRecoveryControlRepairBase,
+  bitbrowserRecoveryControlRepairTree,
+  bitbrowserRecoveryControlRepairPaths
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -3089,6 +3092,85 @@ test('finite recovery controls run real guards and closed release checks without
       assert.equal(
         fallback.some((row) =>
           row.includes('scripts/production-release/bitbrowser-recovery-release.test.py')
+        ),
+        false
+      );
+    } catch (error) {
+      assert.match(String(error.stderr ?? error), /Automatic registration has been removed/);
+    }
+  }
+});
+
+test('finite recovery declaration control repair runs only reviewed release guards', () => {
+  const options = {
+    base: bitbrowserRecoveryControlRepairBase,
+    baseTree: bitbrowserRecoveryControlRepairTree
+  };
+  const calls = recordGuardCommands(
+    'ci-only',
+    bitbrowserRecoveryControlRepairPaths,
+    'guards',
+    options
+  );
+  const original = recordGuardCommands('ci-only', bitbrowserRecoveryControlPaths, 'guards', {
+    base: bitbrowserRecoverySourceReviewCommit,
+    baseTree: bitbrowserRecoverySourceReviewTree
+  });
+  assert.deepEqual(calls, original);
+  for (const part of [
+    'api',
+    'admin',
+    'release-controls',
+    'migration',
+    'connector',
+    'online-engine'
+  ])
+    assert.throws(
+      () => recordGuardCommands('ci-only', bitbrowserRecoveryControlRepairPaths, part, options),
+      /Unsupported finite BitBrowser recovery control check/
+    );
+  assert.throws(
+    () =>
+      recordGuardCommands('ci-only', bitbrowserRecoveryControlRepairPaths, 'guards', {
+        ...options,
+        failCommand: 'python3 -B scripts/production-release/bitbrowser-recovery-build.py --check'
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+  for (const invalid of [
+    { paths: bitbrowserRecoveryControlRepairPaths, options: { ...options, base: 'b'.repeat(40) } },
+    {
+      paths: bitbrowserRecoveryControlRepairPaths,
+      options: { ...options, baseTree: bitbrowserRecoverySourceReviewTree }
+    },
+    { paths: bitbrowserRecoveryControlRepairPaths.slice(1), options },
+    {
+      paths: [
+        ...bitbrowserRecoveryControlRepairPaths,
+        '.github/workflows/bitbrowser-recovery-validation.yml'
+      ],
+      options
+    },
+    {
+      paths: [
+        ...bitbrowserRecoveryControlRepairPaths,
+        'scripts/production-release/bitbrowser-recovery-dispatch.py'
+      ],
+      options
+    },
+    {
+      paths: [
+        ...bitbrowserRecoveryControlRepairPaths,
+        'apps/api/src/id-business-v2/auto-recharge/recharge-cycle-ledger.ts'
+      ],
+      options
+    }
+  ]) {
+    try {
+      const fallback = recordGuardCommands('ci-only', invalid.paths, 'guards', invalid.options);
+      assert.equal(
+        fallback.some((row) =>
+          row.includes('scripts/production-release/bitbrowser-recovery-build.py')
         ),
         false
       );

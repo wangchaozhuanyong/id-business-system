@@ -40,7 +40,8 @@ def freeze(path, source):
     c = {'version': 1, 'scope': p.SCOPE, 'expectedCurrent': p.CURRENT, 'reviewBase': p.SOURCE_BASE,
         'sourceReviewCommit': source, 'sources': {n: p.sha(git('show', source + ':' + n)) for n in sources},
         'apiModules': sorted(n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
-            for n in p.API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')),
+            for n in p.API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')) + sorted(p.DECLARATIONS),
+        'declarationOutputs': p.DECLARATIONS,
         'sharedFiles': sorted(p.SHARED), 'controlPins': {n: p.sha((HERE / n).read_bytes()) for n in p.CONTROLS},
         'ciControlPins': {n: p.sha((ROOT / n).read_bytes()) for n in p.CI_CONTROLS},
         'mysqlTestSources': {n: p.sha(git('show', source + ':' + n)) for n in p.MYSQL_FILES},
@@ -165,6 +166,21 @@ def mysql(c, identity):
     return report
 
 
+def verify_api_delta(before, after, c):
+    p = load('bitbrowser-recovery-release.py')
+    actual_delta = {n for n in set(before) | set(after)
+        if before.get(n) != after.get(n)}
+    extra = {n: {'before': before.get(n),
+        'after': after.get(n)} for n in sorted(actual_delta - set(c['apiModules']) - {'tsconfig.build.tsbuildinfo'})}
+    if extra:
+        print('UNSELECTED_API_OUTPUT=' + json.dumps(extra, sort_keys=True), flush=True)
+    p.need(all(before.get(name) == pin['before']
+        and after.get(name) == pin['after']
+        for name, pin in c['declarationOutputs'].items()), 'DECLARATION_PROJECTION_CHANGED')
+    p.need(actual_delta <= set(c['apiModules']) | {'tsconfig.build.tsbuildinfo'},
+        'UNSELECTED_API_OUTPUT_CHANGED')
+
+
 def main():
     c = json.loads(CONTRACT.read_bytes())
     p = check(c)
@@ -198,10 +214,7 @@ def main():
             outputs[role + '-' + variant] = {'api': inventory(context / ('apps/' + role + '/dist')),
                 'shared': inventory(context / 'packages/shared/dist')}
     p.need(outputs['admin-baseline']['api'] == c['publishedAdminFiles'], 'BASE_ADMIN_NOT_REPRODUCED')
-    actual_delta = {n for n in set(outputs['api-baseline']['api']) | set(outputs['api-candidate']['api'])
-        if outputs['api-baseline']['api'].get(n) != outputs['api-candidate']['api'].get(n)}
-    p.need(actual_delta <= set(c['apiModules']) | {'tsconfig.build.tsbuildinfo'},
-        'UNSELECTED_API_OUTPUT_CHANGED')
+    verify_api_delta(outputs['api-baseline']['api'], outputs['api-candidate']['api'], c)
     declaration_differences = []
     for name, expected in c['baseline']['apiBaselineFiles'].items():
         files = outputs['api-baseline']['api' if name.startswith('apps/api/') else 'shared']

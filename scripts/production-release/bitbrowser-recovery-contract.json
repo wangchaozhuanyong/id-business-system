@@ -38,7 +38,8 @@
     "id-business-v2/auto-recharge/recharge-resolution.js.map",
     "id-business-v2/auto-recharge/recharge-unidentified-checkout.d.ts",
     "id-business-v2/auto-recharge/recharge-unidentified-checkout.js",
-    "id-business-v2/auto-recharge/recharge-unidentified-checkout.js.map"
+    "id-business-v2/auto-recharge/recharge-unidentified-checkout.js.map",
+    "id-business-v2/auto-recharge/recharge-cycle-ledger.d.ts"
   ],
   "baseline": {
     "apiBaselineFiles": {
@@ -54,6 +55,7 @@
       "apps/api/dist/id-business-v2/auto-recharge/recharge-availability.d.ts": "8780e5fb1661115a58b169864398e09c9689d5c991aa1f1eb350bd6f9cf30b93",
       "apps/api/dist/id-business-v2/auto-recharge/recharge-availability.js": "2686beef567db6ef6a64fca4b839b941821ed622655e2e83f43a0f2b9ad3c1b5",
       "apps/api/dist/id-business-v2/auto-recharge/recharge-availability.js.map": "33de151ba20fb38126c67573d556a151911bde8ecfae29008073b87bd409c108",
+      "apps/api/dist/id-business-v2/auto-recharge/recharge-cycle-ledger.d.ts": "d87b548747da52c2667d619eb0fe439e75abf84f05418684c637c5d9ec477a16",
       "apps/api/dist/id-business-v2/auto-recharge/recharge-declined-resolution.d.ts": "6f020deab9353aaeacfbf7fbeb74ab4bb4267630dab58ba15f93ed9ce610102f",
       "apps/api/dist/id-business-v2/auto-recharge/recharge-declined-resolution.js": "41b2f599f3c833dd8ee270379f77100a70e4a71b73993959463ba3d25d5b0bb7",
       "apps/api/dist/id-business-v2/auto-recharge/recharge-declined-resolution.js.map": "9902eb10cdf36fcbfdffa137a46930201ea0f9374248c022b3eb159e65727ea3",
@@ -99,7 +101,7 @@
     },
     "current": "/opt/id-business-v2/releases/20261018T110726Z-5b5114815433-recharge-checkout",
     "databaseWrites": 0,
-    "freeBytes": 22430638080,
+    "freeBytes": 22431440896,
     "manifestSha256": "33726fcb68725fd1c088f693e7f7cab1268f2f2b625247accf5e7a8d7a1061e6",
     "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
     "preservedAdminInventory": {
@@ -212,10 +214,10 @@
   },
   "businessActions": 0,
   "ciControlPins": {
-    "scripts/ci-recharge-check.mjs": "556bdca085d07d6b887e9e7bd687c1d0062c4de83d39e273ce6de304de34937b",
-    "scripts/ci-recharge-check.test.mjs": "78787bab9ab02d10fcfd234f2a4ae9cde2ca2309d9f6ad0d77ef53954ce33fd3",
-    "scripts/ci-recharge-scope.mjs": "7a0e994d9508b5c0043bab8edac50234b46231a8d9142002c3905ebfd76e7d69",
-    "scripts/ci-recharge-scope.test.mjs": "df2ece33c93a9959da1059a45bec80f47b428d2abf76d88a800fd1eede601795"
+    "scripts/ci-recharge-check.mjs": "0f3c1db5b1384145ff31718aedccd9272fed8a145daa7419336bbd29ef5df5c0",
+    "scripts/ci-recharge-check.test.mjs": "f51e6860a9457dd64b61381a7daebe5ca2f78d8e72c2c42b134bb32a6c252028",
+    "scripts/ci-recharge-scope.mjs": "3ddbd2ed12c023beed1b66552ba95163c078ceafdc34afa53c0d83e60f8c23e1",
+    "scripts/ci-recharge-scope.test.mjs": "9ad1d4b5c3b99d292ddf6c598afdd7c128ab61c19ec32b491030447272ce603a"
   },
   "controlPins": {
     "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",
@@ -223,10 +225,10 @@
     "bitbrowser-billing-dispatch.py": "2da2eb75ab4f08e7b2945273689e80952ecfb3e2ebf03d00f5238d771fc43268",
     "bitbrowser-billing-release.py": "5599578f3f795d8d010dbddcd60e320cac0b3735aa7169f3b735109f84549c87",
     "bitbrowser-billing-release.test.py": "a584812278ab8824cdba5397641651dae5cb7ab26b2cd98d12ad64055991567a",
-    "bitbrowser-recovery-build.py": "0d6f6e4e8ccabd0e7c979590f10840d6fcebf0e276a248a28d9180a0c8ed7e4c",
+    "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-dispatch.py": "c3e6fcf6b3d10c0fc0116f4f2e24f314b376eec7db723e4edb8f29043d92a16b",
-    "bitbrowser-recovery-release.py": "feae0ac157f2210044c0cc5ef19d3c9b5968aa9899ebc452aa9d508972b6591c",
-    "bitbrowser-recovery-release.test.py": "d3f43e81e402e3ad971a684c698515dcdabb6e2f746f4a39fcdb561de5379f2f",
+    "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
+    "bitbrowser-recovery-release.test.py": "0be563630bdcf7b9a247a83ba75f2381597bfcf8261203603cf34dd5930ad7f8",
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
@@ -235,6 +237,13 @@
     "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
     "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
     "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852"
+  },
+  "declarationOutputs": {
+    "id-business-v2/auto-recharge/recharge-cycle-ledger.d.ts": {
+      "after": "12406996df9639cfdb69f5e4d387a1782e2fdc52cfe0ac266a35ef715a0ef104",
+      "before": "61881088392ba1e96d48d435a577758caa2e576b8e479a07a6dd6aa96c835ce3",
+      "runtimeBefore": "d87b548747da52c2667d619eb0fe439e75abf84f05418684c637c5d9ec477a16"
+    }
   },
   "engineHealth": {
     "activeTasks": 0,
