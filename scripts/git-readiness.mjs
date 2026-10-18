@@ -32,7 +32,8 @@ const secretPatterns = [
   { name: 'GitHub token', pattern: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g },
   { name: 'AWS access key', pattern: /\bAKIA[0-9A-Z]{16}\b/g },
   { name: 'Google API key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g },
-  { name: 'Bot API token', pattern: /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/g },
+  // A date suffix inside a Docker repository name is not a standalone bot ID.
+  { name: 'Bot API token', pattern: /(?<![A-Za-z0-9_-])\d{6,12}:[A-Za-z0-9_-]{30,}\b/g },
   {
     name: 'Private key',
     pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/g
