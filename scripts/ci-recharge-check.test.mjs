@@ -2997,7 +2997,8 @@ test('finite BitBrowser control checks retain immutable base and real guard comm
     source.indexOf('// END finite BitBrowser publication control checks')
   );
   assert.ok(block.includes('bitbrowserBillingControlTree'));
-  assert.ok(block.includes('rejectRetiredRegistrationExecution()'));
+  assert.ok(!block.includes('rejectRetiredRegistrationExecution()'));
+  assert.ok(source.includes('rejectRetiredRegistrationCommand(file, args)'));
   assert.ok(block.includes('bitbrowser-billing-release.test.py'));
   assert.ok(block.includes('bitbrowser-billing-build.py'));
   assert.ok(block.includes('format:check'));

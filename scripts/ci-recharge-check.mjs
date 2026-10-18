@@ -175,7 +175,6 @@ if (
     bitbrowserBillingControlTree &&
   isBitbrowserBillingControlsOnly(changed)
 ) {
-  rejectRetiredRegistrationExecution();
   if (part !== 'guards') throw new Error('Unsupported finite BitBrowser publication control check');
   npm('run', 'format:check');
   npm('run', 'lint');
