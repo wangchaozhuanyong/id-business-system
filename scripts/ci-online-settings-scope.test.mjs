@@ -6,6 +6,11 @@ import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
+  onlineCheckoutActionabilityScope,
+  onlineCheckoutActionabilityPaths,
+  onlineCheckoutActionabilityControls,
+  isOnlineCheckoutActionabilityOnly,
+  isOnlineCheckoutActionabilityControlsOnly,
   onlineQueryDeadlineScope,
   onlineQueryDeadlinePaths,
   onlineQueryDeadlineControls,
@@ -52,6 +57,223 @@ import {
   onlineSessionPreflightPaths,
   onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
+
+const actionabilitySources = [...onlineCheckoutActionabilityPaths, 'docs/ONLINE_RECHARGE.md'];
+
+test('checkout actionability requires exactly eight engine files and its reviewed documentation', () => {
+  assert.equal(onlineCheckoutActionabilityScope, 'ONLINE_CHECKOUT_ACTIONABILITY');
+  assert.deepEqual(
+    [...onlineCheckoutActionabilityPaths].sort(),
+    [
+      'SOURCE_MANIFEST.json',
+      'checkout-form.cjs',
+      'upstream/chatgpt.js',
+      'upstream/index.js',
+      'test/checkout-form.test.cjs',
+      'test/checkout-recovery.test.cjs',
+      'test/recharge-flow-acceptance.test.cjs',
+      'test/checkout-interaction.test.cjs'
+    ]
+      .map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name)
+      .sort()
+  );
+  assert.equal(onlineCheckoutActionabilityControls.length, 10);
+  assert.equal(new Set(onlineCheckoutActionabilityControls).size, 10);
+  for (const controls of [
+    [],
+    ...onlineCheckoutActionabilityControls.map((path) => [path]),
+    onlineCheckoutActionabilityControls
+  ]) {
+    const paths = [...actionabilitySources, ...controls];
+    assert.equal(isOnlineCheckoutActionabilityOnly(paths), true);
+    assert.equal(isOnlineCheckoutActionabilityControlsOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  }
+  for (const missing of actionabilitySources) {
+    const paths = actionabilitySources.filter((path) => path !== missing);
+    assert.equal(isOnlineCheckoutActionabilityOnly(paths), false, missing);
+    assert.equal(isOnlineSettingsOnly(paths), false, missing);
+    assert.equal(checkMode(paths, 'same', 'same'), 'full', missing);
+  }
+});
+
+test('checkout actionability controls select only the finite publisher guards', () => {
+  const releases = onlineCheckoutActionabilityControls.filter(
+    (path) => !path.startsWith('scripts/ci-')
+  );
+  assert.equal(releases.length, 6);
+  for (const paths of [
+    ...releases.map((path) => [path]),
+    releases,
+    onlineCheckoutActionabilityControls
+  ]) {
+    assert.equal(isOnlineCheckoutActionabilityOnly(paths), false);
+    assert.equal(isOnlineCheckoutActionabilityControlsOnly(paths), true);
+    assert.equal(isOnlineSettingsControlsOnly(paths), true);
+    assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    const guards = onlineSettingsCommands('guards', paths);
+    assert.deepEqual(
+      guards.filter((args) => args[0] === 'python3'),
+      [
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-checkout-actionability-release.test.py'
+        ]
+      ]
+    );
+    assert.equal(
+      guards.some((args) => args.some((arg) => arg.startsWith?.('check:'))),
+      false
+    );
+    assert.throws(() => onlineSettingsCommands('online-engine', paths), /controls-only/);
+  }
+  for (const paths of [
+    [],
+    onlineCheckoutActionabilityControls.filter((path) => path.startsWith('scripts/ci-')),
+    [...onlineCheckoutActionabilityControls, 'docs/ONLINE_RECHARGE.md']
+  ])
+    assert.equal(isOnlineCheckoutActionabilityControlsOnly(paths), false);
+});
+
+test('checkout actionability cannot narrow partial, duplicate or unrelated runtime changes', () => {
+  const paths = [...actionabilitySources, ...onlineCheckoutActionabilityControls];
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/subscription-check.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
+    '.github/workflows/online-query-deadline-validation.yml',
+    'scripts/production-release/online-checkout-actionability-arbitrary.py',
+    'scripts/ci-recharge-check.mjs',
+    'docs/V2_TASKS.md'
+  ])
+    for (const candidate of [
+      [...paths, extra],
+      [...onlineCheckoutActionabilityControls, extra]
+    ]) {
+      assert.equal(isOnlineCheckoutActionabilityOnly(candidate), false, extra);
+      assert.equal(isOnlineCheckoutActionabilityControlsOnly(candidate), false, extra);
+      assert.equal(isOnlineSettingsOnly(candidate), false, extra);
+      assert.equal(isOnlineSettingsControlsOnly(candidate), false, extra);
+      assert.equal(checkMode(candidate, 'same', 'same'), 'full', extra);
+      assert.throws(
+        () => onlineSettingsCommands('guards', candidate),
+        /Unsupported online settings/
+      );
+    }
+  for (const candidate of [
+    [...paths, paths[0]],
+    [...onlineCheckoutActionabilityControls, onlineCheckoutActionabilityControls[0]]
+  ]) {
+    assert.equal(isOnlineCheckoutActionabilityOnly(candidate), false);
+    assert.equal(isOnlineCheckoutActionabilityControlsOnly(candidate), false);
+    assert.equal(checkMode(candidate, 'same', 'same'), 'full');
+  }
+});
+
+test('checkout actionability reuses engine checks and adds only its Linux headful parity tail', () => {
+  const paths = [...actionabilitySources, ...onlineCheckoutActionabilityControls];
+  const guards = onlineSettingsCommands('guards', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(guards, /online-checkout-actionability-release\.test\.py/);
+  assert.match(guards, /check:v2-module-architecture/);
+  assert.match(guards, /check:v2-isolation/);
+  assert.doesNotMatch(guards, /check:admin-ui|check:v2-ui-language|online-query-deadline-release/);
+  const baseline = onlineSettingsCommands('online-engine', onlineQueryDeadlinePaths);
+  const commands = onlineSettingsCommands('online-engine', paths);
+  assert.deepEqual(commands.slice(0, -1), baseline);
+  assert.equal(commands.at(-2).at(-1), 'test:upstream');
+  assert.equal(commands.at(-1)[0], 'node');
+  assert.match(commands.at(-1).at(-1), /ACTIONABILITY_LINUX_PARITY_REQUIRED/);
+  assert.equal(
+    baseline.some((args) =>
+      args.some((arg) => arg.includes('ACTIONABILITY_LINUX_PARITY_REQUIRED'))
+    ),
+    false
+  );
+  for (const part of ['api', 'admin', 'migration'])
+    assert.throws(
+      () => onlineSettingsCommands(part, paths),
+      /Unsupported checkout actionability check part/
+    );
+});
+
+test('checkout parity hook pins project-owned paths and fails on non-Linux or launcher failure', () => {
+  const hook = onlineSettingsCommands('online-engine', actionabilitySources).at(-1);
+  const source = hook.at(-1).replace(/^import .+;$/gm, '');
+  const project = resolve('/synthetic/actionability-project');
+  const execute = ({ platform = 'linux', status = 0, error } = {}) => {
+    const observed = { calls: [], exits: [] };
+    runInNewContext(source, {
+      resolve: (...args) => resolve(project, ...args),
+      spawnSync: (file, args, options) => {
+        observed.calls.push({
+          file,
+          args: Array.from(args),
+          stdio: options.stdio,
+          env: { ...options.env }
+        });
+        return { status, error };
+      },
+      process: {
+        platform,
+        execPath: '/synthetic/node',
+        env: {
+          RETAINED_FIXTURE_FLAG: '1',
+          ENGINE_ROOT: '/unreviewed/engine',
+          PARITY_OUTPUT_ROOT: '/unreviewed/output',
+          PARITY_HEADFUL: '0'
+        },
+        exit: (code) => observed.exits.push(code)
+      }
+    });
+    return observed;
+  };
+  assert.deepEqual(execute(), {
+    calls: [
+      {
+        file: 'xvfb-run',
+        args: [
+          '-a',
+          '/synthetic/node',
+          resolve(project, 'scripts/production-release/online-checkout-actionability-parity.cjs')
+        ],
+        stdio: 'inherit',
+        env: {
+          RETAINED_FIXTURE_FLAG: '1',
+          ENGINE_ROOT: resolve(project, 'apps/api/src/id-business-v2/online-recharge/engine'),
+          PARITY_OUTPUT_ROOT: resolve(
+            project,
+            '.runtime/online-checkout-actionability-ci/pr-launcher-profiles'
+          ),
+          PARITY_HEADFUL: '1'
+        }
+      }
+    ],
+    exits: [0]
+  });
+  assert.deepEqual(execute({ status: 7 }).exits, [7]);
+  assert.deepEqual(execute({ status: null }).exits, [1]);
+  assert.throws(() => execute({ platform: 'darwin' }), /ACTIONABILITY_LINUX_PARITY_REQUIRED/);
+  assert.throws(
+    () => execute({ error: new Error('Synthetic failure') }),
+    /ACTIONABILITY_PARITY_PROCESS_FAILED/
+  );
+});
 
 test('query deadline repair requires the complete finite source set and engine checks', () => {
   assert.equal(onlineQueryDeadlineScope, 'ONLINE_QUERY_DEADLINE_REPAIR');

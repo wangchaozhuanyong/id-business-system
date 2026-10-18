@@ -494,6 +494,53 @@ export function isOnlinePendingFeaturesControlsOnly(paths) {
     )
   );
 }
+export const onlineCheckoutActionabilityScope = 'ONLINE_CHECKOUT_ACTIONABILITY';
+export const onlineCheckoutActionabilityPaths = Object.freeze(
+  [
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'upstream/chatgpt.js',
+    'upstream/index.js',
+    'test/checkout-form.test.cjs',
+    'test/checkout-recovery.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs',
+    'test/checkout-interaction.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name)
+);
+const checkoutActionabilityDocumentation = ['docs/ONLINE_RECHARGE.md'];
+const checkoutActionabilityReleaseControls = [
+  '.github/workflows/online-checkout-actionability-validation.yml',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json', 'parity.cjs'].map(
+    (name) => 'scripts/production-release/online-checkout-actionability-' + name
+  )
+];
+export const onlineCheckoutActionabilityControls = Object.freeze([
+  ...checkoutActionabilityReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlineCheckoutActionabilityOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    onlineCheckoutActionabilityPaths.every((name) => paths.includes(name)) &&
+    checkoutActionabilityDocumentation.every((name) => paths.includes(name)) &&
+    paths.every(
+      (name) =>
+        onlineCheckoutActionabilityPaths.includes(name) ||
+        onlineCheckoutActionabilityControls.includes(name) ||
+        checkoutActionabilityDocumentation.includes(name)
+    )
+  );
+}
+export function isOnlineCheckoutActionabilityControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((name) => checkoutActionabilityReleaseControls.includes(name)) &&
+    paths.every((name) => onlineCheckoutActionabilityControls.includes(name))
+  );
+}
 export const onlineQueryDeadlineScope = 'ONLINE_QUERY_DEADLINE_REPAIR';
 export const onlineQueryDeadlinePaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/upstream/subscription-check.js',
@@ -729,6 +776,7 @@ export function isOnlineLegacyCloseOnly(paths) {
 }
 export function isOnlineSettingsOnly(paths) {
   if (
+    isOnlineCheckoutActionabilityOnly(paths) ||
     isOnlineSettingsTestsOnly(paths) ||
     isOnlineLegacyCloseOnly(paths) ||
     isOnlineCheckoutCsRecoveryOnly(paths) ||
@@ -767,6 +815,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCheckoutActionabilityControlsOnly(paths)) return true;
   if (isOnlineQueryDeadlineControlsOnly(paths)) return true;
   if (isOnlineQueryNetworkControlsOnly(paths)) return true;
   if (isOnlineSessionPreflightControlsOnly(paths)) return true;
@@ -790,6 +839,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const checkoutActionability = isOnlineCheckoutActionabilityOnly(paths);
+  const checkoutActionabilityControls = isOnlineCheckoutActionabilityControlsOnly(paths);
   const queryDeadline = isOnlineQueryDeadlineOnly(paths);
   const queryDeadlineControls = isOnlineQueryDeadlineControlsOnly(paths);
   const queryNetwork = isOnlineQueryNetworkOnly(paths);
@@ -855,6 +906,18 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (checkoutActionability || checkoutActionabilityControls)
+      return [
+        ...controls,
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-checkout-actionability-release.test.py'
+        ],
+        ...(checkoutActionability
+          ? ['check:v2-module-architecture', 'check:v2-isolation'].map((name) => npm('run', name))
+          : [])
+      ];
     if (queryDeadline || queryDeadlineControls)
       return [
         ...controls,
@@ -1092,6 +1155,8 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (controlsOnly) throw new Error('Unsupported controls-only check');
+  if (checkoutActionability && part !== 'online-engine')
+    throw new Error('Unsupported checkout actionability check part');
   if (queryDeadline && part !== 'online-engine')
     throw new Error('Unsupported query deadline check part');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
@@ -1112,7 +1177,7 @@ export function onlineSettingsCommands(part, paths) {
       npm('run', 'build', '--workspace', '@apple-business/admin')
     ];
   }
-  if (queryNetwork || queryDeadline) {
+  if (checkoutActionability || queryNetwork || queryDeadline) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
     const browser = [
       npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),
@@ -1180,7 +1245,27 @@ export function onlineSettingsCommands(part, paths) {
           'apps/api/src/id-business-v2/online-recharge/engine',
           'run',
           'test:upstream'
-        )
+        ),
+        ...(checkoutActionability
+          ? [
+              [
+                'node',
+                '--input-type=module',
+                '-e',
+                [
+                  "import { spawnSync } from 'node:child_process';",
+                  "import { resolve } from 'node:path';",
+                  "if (process.platform !== 'linux') throw new Error('ACTIONABILITY_LINUX_PARITY_REQUIRED');",
+                  "const engine = resolve('apps/api/src/id-business-v2/online-recharge/engine');",
+                  "const output = resolve('.runtime/online-checkout-actionability-ci/pr-launcher-profiles');",
+                  "const script = resolve('scripts/production-release/online-checkout-actionability-parity.cjs');",
+                  "const result = spawnSync('xvfb-run', ['-a', process.execPath, script], {stdio:'inherit', env:{...process.env, ENGINE_ROOT:engine, PARITY_OUTPUT_ROOT:output, PARITY_HEADFUL:'1'}});",
+                  "if (result.error) throw new Error('ACTIONABILITY_PARITY_PROCESS_FAILED');",
+                  'process.exit(result.status ?? 1);'
+                ].join('\n')
+              ]
+            ]
+          : [])
       ];
   }
   if (pendingFeatures) {

@@ -151,7 +151,6 @@ test('visibility override does not relax other card control or iframe exclusions
   const cases = [
     ['hidden', '<section hidden style="display:block">'],
     ['inert', '<section inert>'],
-    ['aria_hidden', '<section aria-hidden="true">'],
     ['display_none', '<section style="display:none">'],
     ['opacity_zero', '<section style="opacity:0">'],
     ['content_visibility_hidden', '<section style="content-visibility:hidden">']
@@ -905,7 +904,6 @@ test('readiness excludes hidden and inert iframe ancestors, including nested fra
     iframe(cardHtml).replace('<iframe', '<iframe hidden'),
     `<section style="display:none">${iframe(iframe(cardHtml))}</section>`,
     `<section inert>${iframe(iframe(cardHtml))}</section>`,
-    `<section aria-hidden="true">${iframe(cardHtml)}</section>`,
     `<section style="opacity:0">${iframe(cardHtml)}</section>`
   ]) {
     const page = await pageFor(t, html);
