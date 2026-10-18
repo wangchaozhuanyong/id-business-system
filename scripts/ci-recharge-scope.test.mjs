@@ -7223,6 +7223,66 @@ import {
   bitbrowserRecoveryControlRepairTree as finiteRecoveryRepairTree,
   bitbrowserRecoveryControlRepairPaths as finiteRecoveryRepairPaths
 } from './ci-recharge-scope.mjs';
+import {
+  isBitbrowserHistoryControlsOnly as finiteHistoryOnly,
+  bitbrowserHistoryControlPaths as finiteHistoryPaths,
+  bitbrowserHistorySourceReviewCommit as finiteHistoryCommit,
+  bitbrowserHistorySourceReviewTree as finiteHistoryTree
+} from './ci-recharge-scope.mjs';
+
+test('finite history controls reuse application QA only over their exact ten files and source base', () => {
+  const context = { base: finiteHistoryCommit, baseTree: finiteHistoryTree };
+  assert.equal(finiteHistoryPaths.length, 10);
+  assert.equal(finiteHistoryOnly(finiteHistoryPaths, context), true);
+  assert.equal(finiteHistoryOnly(finiteHistoryPaths, { ...context, base: 'b'.repeat(40) }), true);
+  assert.equal(finiteBillingCiOnly(finiteHistoryPaths, context), true);
+  assert.equal(checkMode(finiteHistoryPaths, 'same', 'same', undefined, context), 'ci-only');
+  assert.deepEqual(finiteBillingParts(finiteHistoryPaths, undefined, context), [
+    'guards',
+    'release-controls'
+  ]);
+  assert.equal(finiteBillingNeedsEngine(finiteHistoryPaths, context), false);
+  assert.equal(checkMode(finiteHistoryPaths, 'before', 'after', undefined, context), 'full');
+  for (const invalid of [
+    undefined,
+    { base: finiteHistoryCommit },
+    { ...context, base: 'main' },
+    { ...context, base: 'b'.repeat(39) },
+    { ...context, baseTree: 'a'.repeat(40) },
+    { base: finiteRecoveryCommit, baseTree: finiteRecoveryTree }
+  ]) {
+    assert.equal(finiteHistoryOnly(finiteHistoryPaths, invalid), false);
+    assert.equal(checkMode(finiteHistoryPaths, 'same', 'same', undefined, invalid), 'full');
+  }
+  for (const missing of finiteHistoryPaths) {
+    const paths = finiteHistoryPaths.filter((name) => name !== missing);
+    assert.equal(finiteHistoryOnly(paths, context), false, missing);
+    assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'full', missing);
+  }
+  for (const extra of [
+    'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+    'apps/admin/src/v2/features/auto-recharge/recharge-form.ts',
+    'packages/shared/src/v2/checkout-diagnostic.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'scripts/production-release/bitbrowser-recovery-release.py',
+    'scripts/production-release/bitbrowser-history-unreviewed.py'
+  ]) {
+    assert.equal(finiteHistoryOnly([...finiteHistoryPaths, extra], context), false, extra);
+    assert.equal(
+      checkMode([...finiteHistoryPaths, extra], 'same', 'same', undefined, context),
+      'full',
+      extra
+    );
+  }
+  assert.equal(finiteHistoryOnly([], context), false);
+  assert.equal(
+    finiteHistoryOnly([...finiteHistoryPaths.slice(1), finiteHistoryPaths[1]], context),
+    false
+  );
+});
 
 test('finite recovery controls reuse reviewed business QA only over the exact frozen tree', () => {
   const context = { base: finiteRecoveryCommit, baseTree: finiteRecoveryTree };

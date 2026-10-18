@@ -1,0 +1,142 @@
+name: BitBrowser History Pagination Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: ci-history-${{ github.run_id }}-${{ github.run_attempt }}
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: id_business_v2_employee_connections_flow_${{ github.run_id }}
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit
+      - name: Verify finite source and release protections
+        run: |
+          python3 -B scripts/production-release/bitbrowser-history-build.py --check
+          python3 -B scripts/production-release/bitbrowser-history-release.test.py
+      - name: Verify unchanged payment locks and availability in isolated MySQL
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+          MYSQL_ROOT_PASSWORD: ci-history-${{ github.run_id }}-${{ github.run_attempt }}
+          DATABASE_URL: mysql://root:ci-history-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:${{ job.services.mysql.ports[3306] }}/id_business_v2_employee_connections_flow_${{ github.run_id }}
+          V2_RECHARGE_TEST_DATABASE_URL: mysql://root:ci-history-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:${{ job.services.mysql.ports[3306] }}/id_business_v2_employee_connections_flow_${{ github.run_id }}
+        run: |
+          npm run build --workspace @apple-business/shared
+          npm run prisma:mysql:generate --workspace @apple-business/api
+          npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
+          mkdir -p .runtime/bitbrowser-history
+          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/bitbrowser-history/availability-vitest.json"
+          direct_database="id_business_v2_recharge_direct_fixture_${GITHUB_RUN_ID}"
+          docker exec "$MYSQL_CONTAINER" mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE $direct_database;"
+          export DATABASE_URL="${DATABASE_URL%/*}/$direct_database"
+          export V2_RECHARGE_TEST_DATABASE_URL="$DATABASE_URL"
+          export RECHARGE_DIRECT_MYSQL_TEST=1
+          npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
+          npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-direct-payment.mysql.integration.spec.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/bitbrowser-history/direct-vitest.json"
+          python3 - <<'PYREPORT'
+          import json,pathlib
+          root=pathlib.Path('.runtime/bitbrowser-history')
+          reports=[json.loads((root/name).read_bytes()) for name in ('availability-vitest.json','direct-vitest.json')]
+          assert all(r['success'] is True for r in reports)
+          assert [r['numTotalTests'] for r in reports] == [10,8]
+          out={name:sum(r[name] for r in reports) for name in ('numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','numFailedTestSuites','numPendingTestSuites')}
+          assert out['numTotalTests'] == out['numPassedTests'] == 18
+          assert all(out[k] == 0 for k in ('numFailedTests','numPendingTests','numTodoTests','numFailedTestSuites','numPendingTestSuites'))
+          out.update(success=True,testResults=[row for report in reports for row in report['testResults']])
+          (root/'mysql-vitest.json').write_text(json.dumps(out,sort_keys=True)+'\n')
+          PYREPORT
+      - name: Preserve native MySQL result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-history-mysql-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .runtime/bitbrowser-history/*-vitest.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Reproduce exact published runtime and build the finite overlay
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/bitbrowser-history-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-history-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/bitbrowser-history/bitbrowser-history-artifact.tar.gz
+            .deploy/bitbrowser-history/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-history-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/bitbrowser-history-dispatch.py
+      - name: Preserve publication receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-history-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/bitbrowser-history-publication/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

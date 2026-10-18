@@ -157,7 +157,9 @@ import {
   isBitbrowserRecoveryControlsOnly,
   bitbrowserRecoverySourceReviewTree,
   bitbrowserRecoveryControlRepairBase,
-  bitbrowserRecoveryControlRepairTree
+  bitbrowserRecoveryControlRepairTree,
+  isBitbrowserHistoryControlsOnly,
+  bitbrowserHistorySourceReviewTree
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -234,6 +236,42 @@ if (
   process.exit(0);
 }
 // END finite BitBrowser recovery publication control checks
+// BEGIN finite BitBrowser history publication control checks
+if (
+  mode === 'ci-only' &&
+  isBitbrowserHistoryControlsOnly(changed, {
+    base,
+    baseTree: bitbrowserHistorySourceReviewTree
+  }) &&
+  isBitbrowserHistoryControlsOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!['guards', 'release-controls'].includes(part))
+    throw new Error('Unsupported finite BitBrowser history control check');
+  if (part === 'guards') {
+    npm('run', 'format:check');
+    npm('run', 'lint');
+    for (const name of [
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ])
+      npm('run', name);
+    run('node', [
+      '--test',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+  } else {
+    run('python3', ['-B', 'scripts/production-release/bitbrowser-history-release.test.py']);
+    run('python3', ['-B', 'scripts/production-release/bitbrowser-history-build.py', '--check']);
+  }
+  process.exit(0);
+}
+// END finite BitBrowser history publication control checks
 if (
   mode === 'ci-only' &&
   base === registrationProtocolRepairPreservationBase &&
