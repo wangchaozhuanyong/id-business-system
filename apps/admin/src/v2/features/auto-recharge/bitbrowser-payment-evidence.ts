@@ -8,6 +8,16 @@ export const directOfficialPlans: Record<V2RechargePlan, string> = {
   'pro-20x': 'chatgptpro',
   'pro-500': 'chatgptpromax'
 };
+export function directPlanMatches(plan: V2RechargePlan, current: string, tier?: number) {
+  return plan === 'go'
+    ? current === 'go'
+    : plan === 'plus'
+      ? current === 'plus'
+      : plan === 'pro-500'
+        ? current === 'promax'
+        : current === 'pro' && tier === (plan === 'pro-5x' ? 5 : 20);
+}
+
 export type PaymentDocument = Record<string, unknown>;
 export const paymentObject = (value: unknown): PaymentDocument =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as PaymentDocument) : {};
@@ -80,7 +90,7 @@ export function parseDirectVisibleQuote(
   const patterns = {
     today:
       /^(?:Total due today|Due today|Total today|Amount due today|今日应付(?:金额)?|今天应付|今日总计|今天支付)(?:\s|$|:|：)/i,
-    tax: /^(?:Tax|Taxes|Estimated tax|预估税费|税费|税金|增值税(?:\s*\(VAT\))?|VAT)(?:\s*\(\s*\d+(?:\.\d+)?%\s*\))?(?:\s|$|:|：)/i,
+    tax: /^(?:Tax|Taxes|Estimated tax|预估税费|税费|税额|税金|增值税(?:\s*\(VAT\))?|VAT)(?:\s*\(\s*\d+(?:\.\d+)?%\s*\))?(?:\s|$|:|：)/i,
     renewal: /^(?:Then|Renews|Renewal|续费)(?:\s|$|:|：)/i
   };
   const monthly = /\/\s*(?:month|月)(?!\w)|per\s+month\b|\bmonthly\b|每月|每个月|按月|月付/i;
@@ -137,12 +147,13 @@ export function parseDirectVisibleQuote(
 }
 export async function paymentFingerprint(value: object) {
   const sorted = Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(JSON.stringify(sorted))
-  );
+  return paymentHash(JSON.stringify(sorted));
+}
+export async function paymentHash(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (part) => part.toString(16).padStart(2, '0')).join('');
 }
+
 export function billingValues(value: unknown, name: unknown) {
   const address = paymentObject(value);
   const normalized: Record<string, string> = {};
@@ -175,11 +186,12 @@ export async function verifyNativeDirectQuote(
     session.checkout_session_id !== checkoutId ||
     session.processor_entity !== entity ||
     session.plan_name !== directOfficialPlans[plan] ||
-    state.id !== checkoutId ||
     session.status !== 'open' ||
     session.payment_status !== 'unpaid'
   )
     throw new Error('官网原单状态或套餐未核实。');
+  if (!Object.keys(state).length) throw new Error('official_checkout_quote_unavailable');
+  if (state.id !== checkoutId) throw new Error('official_checkout_quote_binding_unverified');
   const currency = String(state.currency ?? '').toUpperCase();
   if (currency !== lockedCurrency) throw new Error('官网付款币种与锁定币种不一致。');
   const items = state.lineItems;
@@ -202,8 +214,8 @@ export async function verifyNativeDirectQuote(
   const billing = paymentObject(state.billingAddress);
   const actual = billingValues(billing.address, billing.name);
   const expected = billingValues(details, details.name);
-  if (JSON.stringify(actual) !== JSON.stringify(expected))
-    throw new Error('官网重新计税的账单资料与本次填写不一致。');
+  for (const field of ['country', 'state', 'city', 'line1', 'line2', 'postal_code', 'name'])
+    if (actual[field] !== expected[field]) throw new Error(`official_billing_${field}_mismatch`);
   const fingerprint = await paymentFingerprint({
     ...expected,
     card_last4: details.number.slice(-4),
@@ -234,8 +246,15 @@ export function officialPaymentRead(
       const sessionResponse = await fetch('/api/auth/session', {
         credentials: 'same-origin',
         cache: 'no-store',
+        redirect: 'error',
         signal: controller.signal
       });
+      if (!sessionResponse.ok)
+        return {
+          ok: false,
+          status: sessionResponse.status,
+          reason: 'official_read_session_failed'
+        };
       const session = await sessionResponse.json();
       if (
         !sessionResponse.ok ||
@@ -243,10 +262,12 @@ export function officialPaymentRead(
         session.user?.id !== expected.userId ||
         String(session.user?.email ?? '').toLowerCase() !== expected.email.toLowerCase()
       )
-        return { ok: false, status: 401 };
+        return { ok: false, status: 401, reason: 'official_read_identity_mismatch' };
       const token = session.accessToken ?? session.access_token;
-      if (typeof token !== 'string') return { ok: false, status: 401 };
+      if (typeof token !== 'string')
+        return { ok: false, status: 401, reason: 'official_read_token_invalid' };
       const encoded = token.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/');
+      if (!encoded) return { ok: false, status: 401, reason: 'official_read_token_invalid' };
       const claims = JSON.parse(atob(encoded));
       if (
         claims['https://api.openai.com/auth']?.chatgpt_account_id !== expected.accountId ||
@@ -254,11 +275,12 @@ export function officialPaymentRead(
         !Number.isFinite(claims.exp) ||
         claims.exp * 1000 <= Date.now()
       )
-        return { ok: false, status: 401 };
+        return { ok: false, status: 401, reason: 'official_read_token_invalid' };
       const response = await fetch(relative, {
         method: 'GET',
         credentials: 'same-origin',
         cache: 'no-store',
+        redirect: 'error',
         signal: controller.signal,
         headers: { authorization: 'Bearer ' + token, 'chatgpt-account-id': expected.accountId }
       });
@@ -266,7 +288,19 @@ export function officialPaymentRead(
       const raw = await response.text();
       return raw.length <= 65000
         ? { ok: true, status: response.status, data: JSON.parse(raw) }
-        : { ok: false, status: 0 };
+        : { ok: false, status: 0, reason: 'official_read_response_too_large' };
+    } catch (cause) {
+      return {
+        ok: false,
+        status: 0,
+        reason: controller.signal.aborted
+          ? 'official_read_timeout'
+          : cause instanceof SyntaxError
+            ? 'official_read_response_invalid'
+            : cause instanceof TypeError
+              ? 'official_read_network_failed'
+              : 'official_read_failed'
+      };
     } finally {
       clearTimeout(timer);
     }

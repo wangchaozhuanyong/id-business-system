@@ -1,5 +1,8 @@
 import { resolvedDeclinedPayment, resolvedDeclinedCheckout } from '../recharge-noncharge-proof';
-import { isUnidentifiedUnpaidCheckout } from '../recharge-unidentified-checkout';
+import {
+  isUnidentifiedUnpaidCheckout,
+  isUnidentifiedCheckoutMarker
+} from '../recharge-unidentified-checkout';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
@@ -246,7 +249,11 @@ export class RechargeRepository {
     )
       throw new ConflictException('原订单记录未核实，禁止创建新订单');
     const document = record.document as Record<string, unknown>;
-    if (allowUnidentified && identifiers.length === 0 && isUnidentifiedUnpaidCheckout(document))
+    if (
+      allowUnidentified &&
+      identifiers.length === 0 &&
+      (isUnidentifiedUnpaidCheckout(document) || isUnidentifiedCheckoutMarker(document))
+    )
       return undefined;
     const identifier = rechargeCheckoutIdentifier(document);
     if (!identifier || (document.target_plan ?? 'plus') !== plan)

@@ -5,7 +5,15 @@ export function isUnidentifiedUnpaidCheckout(value: unknown): boolean {
   const zero = (n: unknown) => n === undefined || n === null || n === 0;
   return (
     r.status === 'blocked' &&
-    r.reason === 'checkout_unknown_write' &&
+    (r.reason === 'checkout_unknown_write' ||
+      (r.transport === 'web_direct' &&
+        ['official_checkout_http_failed', 'official_payment_form_load_failed'].includes(
+          String(r.reason)
+        ) &&
+        r.http_status === 400 &&
+        r.payment_attempted === false &&
+        r.payment_requests_sent === 0 &&
+        r.confirmation_requests_sent === 0)) &&
     r.stage === 'checkout_create' &&
     r.account_matched === true &&
     r.payment_status === 'not_attempted' &&
@@ -111,4 +119,34 @@ export function findUnidentifiedCheckoutSource<T extends RecoverySource>(
     current = [...parents][0]!;
   }
   return source;
+}
+
+/** 网页在请求前保存的标记本身不是零付款证明，必须另有严格核实的来源任务。 */
+export function isUnidentifiedCheckoutMarker(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const r = value as Record<string, unknown>;
+  return (
+    r.status === 'checkout_attempted' &&
+    r.stage === 'checkout_create' &&
+    r.checkout_outcome === 'unknown' &&
+    r.transport === 'official_browser' &&
+    r.account_matched === true &&
+    r.current_plan_before === 'free' &&
+    r.payment_status === 'not_attempted' &&
+    typeof r.run_id === 'string' &&
+    /^[a-f0-9]{32}$/.test(r.run_id) &&
+    Number.isSafeInteger(r.created_at) &&
+    Number(r.created_at) > 0 &&
+    [
+      'checkout_identifier',
+      'payment_evidence',
+      'manual_confirmation_accepted',
+      'upgrade_identifier',
+      'operation',
+      'payment_attempted',
+      'payment_requests_sent',
+      'confirmation_requests_sent',
+      'card_tokenization_requests_sent'
+    ].every((k) => r[k] === undefined || r[k] === null || r[k] === false || r[k] === 0)
+  );
 }

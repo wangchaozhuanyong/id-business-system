@@ -217,7 +217,6 @@
                   :generating="addressGeneration.generating.value"
                   :generation-error="addressGeneration.error.value"
                   :can-generate="canGenerateAddress"
-                  :address-bound="Boolean(selectedCardBillingAddressId)"
                   :loading="
                     addressQuery.phase.value === 'initial-loading' ||
                     addressQuery.phase.value === 'refreshing'
@@ -386,7 +385,6 @@ const {
   availableAddresses,
   selectedAddress,
   selectedAddressId,
-  selectedCardBillingAddressId,
   markAddressSelectionManual,
   addressSource,
   selected,

@@ -185,6 +185,28 @@
             <dt>最后失败原因</dt>
             <dd>{{ failureReasonLabel(job.result.last_reason) }}</dd>
           </template>
+          <template
+            v-if="
+              typeof job.result.confirmation_requests_sent === 'number' &&
+              Number.isInteger(job.result.confirmation_requests_sent) &&
+              job.result.confirmation_requests_sent >= 0 &&
+              job.result.confirmation_requests_sent <= 10
+            "
+          >
+            <dt>官网付款确认请求</dt>
+            <dd>{{ job.result.confirmation_requests_sent }} 次</dd>
+          </template>
+          <template
+            v-if="
+              typeof job.result.http_status === 'number' &&
+              Number.isInteger(job.result.http_status) &&
+              job.result.http_status >= 100 &&
+              job.result.http_status <= 599
+            "
+          >
+            <dt>失败步骤状态码</dt>
+            <dd>{{ job.result.http_status }}</dd>
+          </template>
           <template v-if="callbackDiagnostic.operation">
             <dt>失败回传操作</dt>
             <dd>{{ callbackDiagnostic.operation }}</dd>
@@ -236,7 +258,7 @@
         网页会直接连接当前电脑的比特浏览器并登录官网，完成后保留窗口供手动操作。
       </p>
       <p v-else>
-        本机充值助手连接比特浏览器，核实账号与当前套餐，取得开通或升级报价后等待你确认付款。
+        网页直连当前电脑的比特浏览器，核实账号与当前套餐，取得开通或升级报价后等待你确认付款。
       </p>
     </div>
   </div>

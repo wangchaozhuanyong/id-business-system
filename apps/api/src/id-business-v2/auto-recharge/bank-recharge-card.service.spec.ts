@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BankRechargeCardService } from './bank-recharge-card.service';
+import type { Prisma } from '@prisma/client';
 
 const cardId = '123e4567-e89b-42d3-a456-426614174000';
 const number = '5555555555554444';
 
 function setup() {
-  const tx = {};
+  const tx = {} as Prisma.TransactionClient;
   const repository = {
     create: vi.fn().mockResolvedValue({
       id: cardId,
@@ -16,6 +17,7 @@ function setup() {
     }),
     findByNumberHash: vi.fn().mockResolvedValue(null),
     findInTransaction: vi.fn().mockResolvedValue(null),
+    update: vi.fn(),
     hasOrders: vi.fn().mockResolvedValue(null),
     delete: vi.fn().mockResolvedValue({ id: cardId })
   };
@@ -45,10 +47,76 @@ function setup() {
       removeLegacyData: vi.fn()
     } as never
   );
-  return { service, repository, transactions, audit, encryption };
+  return { service, repository, transactions, audit, encryption, tx };
 }
 
 describe('银行卡管理', () => {
+  it('同一卡的新任务可以换地址，但仍校验卡号和已确认姓名', async () => {
+    const { service, repository, tx } = setup();
+    repository.findInTransaction.mockResolvedValue({
+      id: cardId,
+      numberHash: `hash:${number}`,
+      billingNameEncrypted: 'encrypted:Historic Person',
+      billingAddressId: cardId
+    });
+    const nextAddress = '223e4567-e89b-42d3-a456-426614174000';
+    await expect(
+      service.assertRechargeCard(tx, cardId, number, 'USD', 'Historic Person', nextAddress)
+    ).resolves.toMatchObject({ billingAddressId: cardId });
+    await expect(
+      service.assertRechargeCard(tx, cardId, number, 'USD', 'Other Person', nextAddress)
+    ).rejects.toThrow('账单姓名');
+    await expect(
+      service.assertRechargeCard(
+        tx,
+        cardId,
+        '4111111111111111',
+        'USD',
+        'Historic Person',
+        nextAddress
+      )
+    ).rejects.toThrow('卡号不匹配');
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
+  it('新地址的成功回执不会覆盖卡片首次地址，也不会被误判账单冲突', async () => {
+    const { service, repository, audit, tx } = setup();
+    repository.findInTransaction.mockResolvedValue({
+      id: cardId,
+      billingNameEncrypted: 'encrypted:Historic Person',
+      billingAddressId: cardId
+    });
+    await expect(
+      service.bindVerifiedBilling(
+        tx,
+        cardId,
+        'encrypted:Historic Person',
+        '223e4567-e89b-42d3-a456-426614174000',
+        'operator-id',
+        'new-job'
+      )
+    ).resolves.toBe(true);
+    expect(repository.update).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+    await expect(
+      service.bindVerifiedBilling(
+        tx,
+        cardId,
+        'encrypted:Other Person',
+        '223e4567-e89b-42d3-a456-426614174000',
+        'operator-id',
+        'new-job'
+      )
+    ).resolves.toBe(false);
+    expect(audit.append).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'id_business_v2.bank_recharge.card.billing_conflict'
+      })
+    );
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('批量导入先验证，成功时在同一事务加密且审计不含卡号', async () => {
     const { service, repository, transactions, audit } = setup();
     const operator = { id: 'operator-id' } as never;

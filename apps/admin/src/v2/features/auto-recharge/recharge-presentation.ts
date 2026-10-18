@@ -1,5 +1,7 @@
 import type { V2RechargeJob } from './contracts';
 import type { BankRechargeOrderStatus } from './bank-recharge-api';
+import { directPaymentDiagnosticLabels } from './bitbrowser-payment-diagnostics';
+import { checkoutDiagnosticSummary } from './bitbrowser-checkout-diagnostic';
 import {
   rechargeCallbackDiagnostics,
   rechargeCallbackFailureSummary,
@@ -112,6 +114,8 @@ const labels: Record<string, string> = {
   bitbrowser_recovery_timeout: '自动恢复已达到总等待上限，原窗口资料保留，本次未付款',
   bitbrowser_owned_profile_missing: '无法确认原窗口已删除，请检查比特浏览器连接和窗口资料',
   bitbrowser_owned_profile_unverified: '原窗口归属或身份未能确认，已停止操作',
+  official_login_token_rejected: '官网拒绝当前访问凭据，单次刷新后仍未通过；本次未建单或付款',
+  bitbrowser_original_checkout_unavailable: '原窗口中未找到唯一结账标签，本次未重复建单或付款',
   owned_recharge_window_unavailable: '无法核对原窗口或安全重建，请检查比特浏览器和原任务',
   owned_recharge_profile_conflict: '当前窗口与该账号原窗口绑定不一致，已停止操作',
   proxy_probe_unverified: '代理出口或官网连通性未能确认，原窗口保留',
@@ -147,6 +151,8 @@ const labels: Record<string, string> = {
   bitbrowser_cleanup_unverified: '未能确认失败窗口已安全清理，已停止重建，请在比特浏览器检查该窗口',
   session_verified: '账户核对通过',
   existing_checkout_read: '读取原结算',
+  existing_checkout_binding: '核对原结算账号与套餐',
+  expired_checkout_authorization: '核实过期未付款原单的替换资格',
   existing_checkout_rebuilding: '旧结算不可用，正在创建新结算',
   plan_selection: '选择官网套餐',
   checkout_create: '准备创建官方结算',
@@ -154,6 +160,9 @@ const labels: Record<string, string> = {
   checkout_wait: '等待官方结算响应',
   payment_preparation: '正在填写银行卡和账单资料',
   quote_read: '读取官方报价',
+  quote_validation: '核对官网金额与完整账单',
+  subscription_check: '核实官网账号与当前订阅',
+  subscription_upgrade: '准备官网套餐升级',
   quote_waiting: '报价页仍在加载',
   quote_page_refreshing: '正在刷新当前报价页',
   quote_ready: '已取得官方报价',
@@ -603,7 +612,12 @@ const paymentUnknownReasons = new Set([
 
 export function failureReasonLabel(value: unknown): string {
   if (typeof value !== 'string') return '系统未收到具体失败原因';
-  return labels[value] ?? '系统未识别到具体失败原因';
+  return (
+    labels[value] ??
+    (Object.hasOwn(directPaymentDiagnosticLabels, value)
+      ? directPaymentDiagnosticLabels[value as keyof typeof directPaymentDiagnosticLabels]
+      : '系统未识别到具体失败原因')
+  );
 }
 
 export function paymentFailureLabel(value: unknown): string {
@@ -612,8 +626,19 @@ export function paymentFailureLabel(value: unknown): string {
 }
 
 function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: string): string {
-  if (['checkout_unknown_write', 'checkout_response_plan_unverified'].includes(String(reason)))
-    return '请保留已打开的官网结算窗口和本次记录；修复连接器后核验并接续原结算，避免重复创建。本次未提交付款。';
+  if (reason === 'original_checkout_identifier_unverified')
+    return '请保留历史建单记录和原官网窗口，先核实原单结果；不要重复建单或付款。';
+  if (
+    [
+      'checkout_unknown_write',
+      'checkout_response_plan_unverified',
+      'official_checkout_http_failed',
+      'official_checkout_response_invalid',
+      'official_checkout_network_failed',
+      'official_payment_form_load_failed'
+    ].includes(String(reason))
+  )
+    return '请保留官网窗口和本次记录，核实官网提示及建单结果后再接续原结算；不要重复建单。本次未提交付款。';
   if (reason === 'owned_recharge_window_unavailable')
     return '请检查比特浏览器本地接口和原任务绑定的窗口；窗口无法确认时停止复查，保留原单和付款保护。不要新建替代订单或重新付款。';
   if (reason === 'official_payment_method_verification_failed')
@@ -689,7 +714,24 @@ function issueAction(job: V2RechargeJob, reason?: string, paymentFailure?: strin
   return '请根据上述原因修正资料或设置后重新开始；本次未提交付款。';
 }
 
+export function isUnpaidCancelledRecharge(job: V2RechargeJob) {
+  const r = job.result;
+  return (
+    job.state === 'finished' &&
+    r.status === 'cancelled' &&
+    r.cancellation_confirmed === true &&
+    r.payment_attempted === false &&
+    r.payment_requests_sent === 0 &&
+    r.confirmation_requests_sent === 0 &&
+    !r.manual_confirmation_accepted &&
+    !r.payment_evidence &&
+    !r.request_attempt_key &&
+    !['paid', 'unknown', 'requires_action'].includes(String(r.payment_status))
+  );
+}
+
 export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback | null {
+  if (isUnpaidCancelledRecharge(job)) return null;
   if (job.result.operator_resolution === 'confirmed_no_bank_request') return null;
   const paymentFailure =
     typeof job.result.payment_failure_reason === 'string'
@@ -717,6 +759,18 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
   }
   const callbackDiagnostic = rechargeCallbackDiagnostics(job);
   const callbackSummary = rechargeCallbackFailureSummary(job);
+  if (
+    reason &&
+    !Object.hasOwn(labels, reason) &&
+    !Object.hasOwn(directPaymentDiagnosticLabels, reason) &&
+    job.result.payment_attempted === true &&
+    (job.state === 'unknown' || job.result.status === 'payment_result_unknown')
+  )
+    return {
+      title: '付款结果待核验',
+      message: '本次付款已有提交记录，官网或银行尚未返回可确认的最终结果。',
+      action: '请在原窗口核对官网或银行验证，再只读复查原订单；不要重新提交付款。'
+    };
   if (reason) {
     if (
       reason === 'durable_state_unavailable' &&
@@ -782,18 +836,31 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
       quote_incomplete: '官网报价字段不完整，无法安全确认今日应付金额',
       network_error: browserFailureLabel(job.result.error_type, job.result.browser_error_code)
     };
+    const httpStatus = job.result.http_status;
+    const reasonMessage =
+      failureReasonLabel(reason) +
+      (Object.hasOwn(directPaymentDiagnosticLabels, reason) &&
+      typeof httpStatus === 'number' &&
+      Number.isInteger(httpStatus) &&
+      httpStatus >= 400 &&
+      httpStatus <= 599
+        ? `（HTTP ${httpStatus}）`
+        : '') +
+      checkoutDiagnosticSummary(job.result.diagnostics?.checkout_error);
     return {
       title: job.result.user_action_required === true ? '需要你处理' : '本次未完成原因',
       message: callbackDiagnostic.businessReason
         ? `${callbackDiagnostic.businessReason}。${callbackSummary}`
         : callbackSummary
-          ? `${failureReasonLabel(reason)}。${callbackSummary}`
-          : typeof job.result.page_state === 'string' && pageMessages[job.result.page_state]
-            ? pageMessages[job.result.page_state]!
-            : ['session_network_error', 'browser_operation_failed'].includes(reason) &&
-                job.result.browser_error_code
-              ? browserFailureLabel(job.result.error_type, job.result.browser_error_code)
-              : failureReasonLabel(reason),
+          ? `${reasonMessage}。${callbackSummary}`
+          : Object.hasOwn(directPaymentDiagnosticLabels, reason)
+            ? reasonMessage
+            : typeof job.result.page_state === 'string' && pageMessages[job.result.page_state]
+              ? pageMessages[job.result.page_state]!
+              : ['session_network_error', 'browser_operation_failed'].includes(reason) &&
+                  job.result.browser_error_code
+                ? browserFailureLabel(job.result.error_type, job.result.browser_error_code)
+                : reasonMessage,
       action: issueAction(job, reason)
     };
   }

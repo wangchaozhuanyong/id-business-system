@@ -15,6 +15,10 @@ import { runDirectPayment } from './bitbrowser-direct-payment';
 import { runDirectPaymentRecheck } from './bitbrowser-direct-recheck';
 import { paymentObject, type PaymentDocument } from './bitbrowser-payment-evidence';
 import { DirectBrowserError } from './bitbrowser-direct-api';
+import {
+  DirectPaymentDiagnosticError,
+  directPaymentOperation
+} from './bitbrowser-payment-diagnostics';
 
 interface PaymentControl {
   id: string;
@@ -28,6 +32,7 @@ interface PaymentControl {
   code?: (code: DirectLoginCode) => void;
 }
 function paymentError(cause: unknown) {
+  if (cause instanceof DirectPaymentDiagnosticError) return cause.message;
   if (cause instanceof DirectBrowserError) return cause.message;
   const internal = cause instanceof Error ? cause.message : '';
   const known: Record<string, string> = {
@@ -194,7 +199,9 @@ export async function startDirectPayment(input: {
       } catch (cause) {
         const message = paymentError(cause);
         setControl({ pending: false, message });
-        rejectApproval?.(new Error(message));
+        rejectApproval?.(
+          cause instanceof DirectPaymentDiagnosticError ? cause : new Error(message)
+        );
         rejectApproval = undefined;
         approve = undefined;
         input.reportError(message);
@@ -233,13 +240,15 @@ export async function startDirectPayment(input: {
           ownedProfile: 'ownedProfile' in launch ? launch.ownedProfile : undefined,
           progress,
           restore: async (accountKey) => {
-            restored = (await callback({
-              type: 'restore',
-              accountKey,
-              ...('subscriptionCycleProtocol' in launch && launch.subscriptionCycleProtocol
-                ? { subscriptionCycleProtocol: launch.subscriptionCycleProtocol }
-                : {})
-            })) as unknown as V2RechargeBrowserRestore;
+            restored = (await directPaymentOperation('existing_checkout_binding', () =>
+              callback({
+                type: 'restore',
+                accountKey,
+                ...('subscriptionCycleProtocol' in launch && launch.subscriptionCycleProtocol
+                  ? { subscriptionCycleProtocol: launch.subscriptionCycleProtocol }
+                  : {})
+              })
+            )) as unknown as V2RechargeBrowserRestore;
             return restored;
           },
           code: (challenge) =>
@@ -262,14 +271,13 @@ export async function startDirectPayment(input: {
           ready: async (browser) => {
             const remove = browser.cdp.onClose(() => controller.abort());
             try {
-              if (input.recheck)
-                return await runDirectPaymentRecheck(
-                  browser,
-                  plan,
-                  input.recheck,
-                  restored,
-                  callback
+              if (input.recheck) {
+                const source = input.recheck;
+                await progress('original_payment_recheck', { recheck_only: true });
+                return await directPaymentOperation('recheck', () =>
+                  runDirectPaymentRecheck(browser, plan, source, restored, callback)
                 );
+              }
               return await runDirectPayment(
                 browser,
                 launch as V2RechargeBitBrowserLaunch,
@@ -372,14 +380,21 @@ export async function startDirectPayment(input: {
     } catch (cause) {
       if (!acknowledged) rejected(cause);
       const message = paymentError(cause);
-      if (!input.signal.aborted) input.reportError(message);
+      const cancelled = controller.signal.aborted && !attempted && !authorizationUncertain;
+      if (!input.signal.aborted && !cancelled) input.reportError(message);
       if (!ended) {
-        const cancelled = controller.signal.aborted && !attempted;
+        const diagnostic =
+          cause instanceof DirectPaymentDiagnosticError
+            ? cause.facts
+            : cause instanceof DirectBrowserError
+              ? { reason: cause.reason }
+              : undefined;
         await callback(
           {
             type: 'finished',
             result: {
               ...lastReport,
+              ...diagnostic,
               status:
                 attempted || authorizationUncertain
                   ? 'payment_result_unknown'
@@ -391,7 +406,10 @@ export async function startDirectPayment(input: {
                   ? 'payment_result_unknown'
                   : cancelled
                     ? 'operation_cancelled'
-                    : 'direct_payment_preparation_failed',
+                    : (diagnostic?.reason ?? 'direct_payment_preparation_failed'),
+              ...(diagnostic && (attempted || authorizationUncertain)
+                ? { last_reason: diagnostic.reason }
+                : {}),
               payment_attempted: input.recheck ? true : attempted,
               payment_status: input.recheck || attempted ? 'unknown' : 'not_attempted',
               ...(cancelled ? { cancellation_confirmed: true } : {})

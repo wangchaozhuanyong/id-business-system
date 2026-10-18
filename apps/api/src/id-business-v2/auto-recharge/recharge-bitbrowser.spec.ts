@@ -226,6 +226,7 @@ describe('本机任务持久化边界', () => {
     const addressRepository = {
       requireAvailable: vi.fn().mockResolvedValue({
         id: addressId,
+        status: 'unused',
         line1: '1221 SW Fourth Avenue',
         country: 'US',
         city: 'Portland',
@@ -293,6 +294,55 @@ describe('本机任务持久化边界', () => {
     expect(JSON.stringify(repository.createJob.mock.calls)).not.toContain('fixture-password');
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain('fixture-password');
     expect(result.agentToken).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each([
+    { status: 'used', binding: null, error: '未使用' },
+    { status: 'used', binding: addressId, error: '未使用' },
+    { status: 'unused', binding: sourceJobId, error: null }
+  ])('每笔新充值拒绝已用地址，同一卡允许改用未使用地址：%j', async ({ status, binding, error }) => {
+    const repository = {
+      lock: vi.fn(),
+      findJob: vi.fn().mockResolvedValue(null),
+      findRunningJob: vi.fn().mockResolvedValue(null),
+      createJob: vi.fn().mockImplementation((_tx, data) => ({ id: data.id }))
+    };
+    const service = new RechargeLocalService(
+      repository as never,
+      {
+        requireAvailable: vi.fn().mockResolvedValue({ id: addressId, status, country: 'US' })
+      } as never,
+      {
+        runtime: vi.fn().mockResolvedValue({
+          localApiUrl: 'http://127.0.0.1:54345',
+          localApiToken: 'synthetic-api-token',
+          groupName: 'synthetic-group',
+          tagName: 'synthetic-tag',
+          proxyType: 'http',
+          dynamicProxyUrl: ''
+        })
+      } as never,
+      {} as never,
+      { execute: vi.fn(async (work) => work({})) } as never,
+      { append: vi.fn() } as never,
+      undefined,
+      { encrypt: vi.fn().mockReturnValue('synthetic-encrypted-name') } as never,
+      undefined,
+      {
+        localCard: vi.fn().mockResolvedValue({ id: sourceJobId, billingAddressId: binding })
+      } as never
+    );
+    const launch = service.start(
+      { ...startInput(), cardId: sourceJobId, billingName: 'Synthetic Person', directMode: true },
+      operator
+    );
+    if (error) {
+      await expect(launch).rejects.toThrow(error);
+      expect(repository.createJob).not.toHaveBeenCalled();
+    } else {
+      await expect(launch).resolves.toMatchObject({ id });
+      expect(repository.createJob).toHaveBeenCalledOnce();
+    }
   });
 
   it('回调密钥错误时不处理执行结果', async () => {

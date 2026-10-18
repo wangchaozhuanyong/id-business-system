@@ -4,6 +4,9 @@ import type { DirectLoginHooks } from './bitbrowser-direct-login';
 import type { DirectPaymentHooks } from './bitbrowser-direct-payment';
 import type { VerifiedPaymentBrowser } from './bitbrowser-payment-session';
 import { directPaymentControls, startDirectPayment } from './direct-payment-task';
+import { DirectPaymentDiagnosticError } from './bitbrowser-payment-diagnostics';
+import { DirectBrowserError } from './bitbrowser-direct-api';
+import { ApiError } from '@/api/apiError';
 
 const mocks = vi.hoisted(() => ({
   callback: vi.fn(),
@@ -122,6 +125,85 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 describe('网页充值持久单次授权', () => {
+  it('只读查单失败记录查单阶段和安全原因，不误写会话恢复或付款准备失败', async () => {
+    input.recheck = { checkout_identifier: sid };
+    mocks.recheck.mockRejectedValue(new Error('官网原结账单绑定未核实。'));
+    await startDirectPayment(input);
+    await complete();
+    expect(finished().at(-1)).toMatchObject({
+      stage: 'original_payment_recheck',
+      reason: 'existing_checkout_unverified',
+      payment_requests_sent: 0,
+      payment_status: 'unknown'
+    });
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.grant).not.toHaveBeenCalled();
+    expect(mocks.clicked).not.toHaveBeenCalled();
+  });
+  it('付款前主动停止只回传安全取消，不显示付款失败或申请付款授权', async () => {
+    await startDirectPayment(input);
+    await pending();
+    await directPaymentControls.get(id)!.cancel();
+    await complete();
+    expect(input.reportError).not.toHaveBeenCalled();
+    expect(finished().at(-1)).toMatchObject({
+      status: 'cancelled',
+      reason: 'operation_cancelled',
+      cancellation_confirmed: true,
+      payment_attempted: false,
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0
+    });
+    expect(mocks.grant).not.toHaveBeenCalled();
+    expect(mocks.clicked).not.toHaveBeenCalled();
+  });
+
+  it('恢复阶段缺失原订单编号时回显真实冲突，禁止进入官网建单或付款', async () => {
+    mocks.callback.mockImplementation(async (_id, _token, body) => {
+      if (body.type === 'restore')
+        throw new ApiError('原订单编号未核实，禁止创建新订单', {
+          kind: 'conflict',
+          code: 'CONFLICT',
+          status: 409,
+          retryable: false
+        });
+      return { ok: true };
+    });
+    mocks.login.mockImplementation(
+      async (_settings, _credential, _name, _signal, hooks: DirectLoginHooks) => {
+        await hooks.restore!('a'.repeat(64));
+        throw new Error('should not continue');
+      }
+    );
+    await startDirectPayment(input);
+    await complete();
+    expect(finished().at(-1)).toMatchObject({
+      status: 'blocked',
+      reason: 'original_checkout_identifier_unverified',
+      stage: 'existing_checkout_binding',
+      http_status: 409,
+      payment_attempted: false,
+      payment_requests_sent: 0
+    });
+    expect(input.reportError).toHaveBeenCalledWith(expect.stringContaining('历史建单记录'));
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.grant).not.toHaveBeenCalled();
+    expect(mocks.clicked).not.toHaveBeenCalled();
+  });
+  it('新窗口登录失败保留受控登录原因，不落成笼统付款准备错误', async () => {
+    mocks.login.mockRejectedValueOnce(new DirectBrowserError('official_login_not_verified'));
+    await startDirectPayment(input);
+    await complete();
+    expect(finished().at(-1)).toMatchObject({
+      status: 'blocked',
+      reason: 'official_login_not_verified',
+      payment_attempted: false,
+      payment_requests_sent: 0
+    });
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.grant).not.toHaveBeenCalled();
+    expect(mocks.clicked).not.toHaveBeenCalled();
+  });
   it('人工确认前零付款，授权成功后只执行一次并清空本次秘密', async () => {
     await startDirectPayment(input);
     await pending();
@@ -201,6 +283,24 @@ describe('网页充值持久单次授权', () => {
     await pending();
     await directPaymentControls.get(id)!.confirm();
     await complete();
+    expect(mocks.grant).not.toHaveBeenCalled();
+    expect(mocks.clicked).not.toHaveBeenCalled();
+  });
+  it('人工确认前的受控核价失败保留阶段和原因，不被审批等待层换成普通错误', async () => {
+    mocks.verify.mockRejectedValue(
+      new DirectPaymentDiagnosticError('quote_validation', 'payment_currency_mismatch')
+    );
+    await startDirectPayment(input);
+    await pending();
+    await directPaymentControls.get(id)!.confirm();
+    await complete();
+    expect(finished().at(-1)).toMatchObject({
+      stage: 'quote_validation',
+      reason: 'payment_currency_mismatch',
+      status: 'blocked',
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0
+    });
     expect(mocks.grant).not.toHaveBeenCalled();
     expect(mocks.clicked).not.toHaveBeenCalled();
   });

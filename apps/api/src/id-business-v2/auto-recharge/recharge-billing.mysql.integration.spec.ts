@@ -9,6 +9,9 @@ import { RechargeAddressRepository } from './persistence/recharge-address.reposi
 import { RechargeNameRepository } from './persistence/recharge-name.repository';
 import { RechargeService } from './recharge.service';
 import { RechargeNameService } from './recharge-name.service';
+import { BankRechargeCardService } from './bank-recharge-card.service';
+import { BankRechargeCardRepository } from './persistence/bank-recharge-card.repository';
+import { finalizeRechargeCardBilling } from './recharge-card-billing';
 
 const url = process.env.V2_RECHARGE_TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
@@ -93,6 +96,35 @@ suite('比特账单生成真实MySQL事务与归属', () => {
       await prisma.idBusinessV2RechargeAddress.count({ where: { ownerId: f.operator.id } })
     ).toBe(0);
   });
+
+  it('超过一页已用历史时仍在分页前选出最早未使用地址', async () => {
+    const f = await fixture();
+    const oldestId = randomUUID();
+    await prisma.idBusinessV2RechargeAddress.createMany({
+      data: [
+        {
+          id: oldestId,
+          ownerId: f.operator.id,
+          line1: 'Synthetic oldest ' + oldestId,
+          status: 'unused',
+          createdAt: new Date('2020-01-01T00:00:00Z')
+        },
+        ...Array.from({ length: 2000 }, (_, index) => ({
+          ownerId: f.operator.id,
+          line1: 'Synthetic used ' + oldestId + ' ' + index,
+          status: 'used',
+          usedAt: new Date('2026-10-01T00:00:00Z'),
+          createdAt: new Date('2026-10-01T00:00:00Z')
+        }))
+      ]
+    });
+    const query = { page: 1, pageSize: 2000, keyword: '' };
+    const recent = await f.addresses.list(f.operator.id, { ...query, status: 'all' });
+    expect(recent.items).toHaveLength(2000);
+    expect(recent.items.some((item) => item.id === oldestId)).toBe(false);
+    const unused = await f.addresses.list(f.operator.id, { ...query, status: 'unused' });
+    expect(unused.items.map((item) => item.id)).toEqual([oldestId]);
+  });
   it('两批并发生成各有独立编号，不消费其他操作人或停用的地址', async () => {
     const f = await fixture();
     const old = await prisma.idBusinessV2RechargeAddress.create({
@@ -110,6 +142,115 @@ suite('比特账单生成真实MySQL事务与归属', () => {
     expect(
       (await prisma.idBusinessV2RechargeAddress.findUniqueOrThrow({ where: { id: old.id } })).status
     ).toBe('disabled');
+  });
+  it('同一卡两笔合成成功分别消费下一条地址，卡片首次地址和两笔任务历史均保留', async () => {
+    const f = await fixture();
+    await prisma.idBusinessV2BankRechargeCurrency.upsert({
+      where: { code: 'USD' },
+      create: { code: 'USD', name: '美元', minorUnits: 2, active: true },
+      update: {}
+    });
+    const transactions = new V2CommandTransactionManager(prisma);
+    const audit = new V2TransactionalAuditService();
+    const cards = new BankRechargeCardService(
+      new BankRechargeCardRepository(prisma),
+      {} as never,
+      transactions,
+      audit,
+      encryption,
+      new SharedBankCardRepository(prisma, encryption, transactions, audit)
+    );
+    await f.service.generateAddresses({ count: 2 }, f.operator);
+    const card = await transactions.execute(
+      (tx) =>
+        f.names.prepareCard(
+          tx,
+          {
+            number: '4000000000009995',
+            expiry: '12/39',
+            name: 'Synthetic Owner',
+            currencyCode: 'USD'
+          },
+          f.operator
+        ),
+      {
+        changedScopes: ['auto-recharge', 'online-recharge'],
+        requestId: randomUUID(),
+        operator: f.operator
+      }
+    );
+    const consumed: string[] = [];
+    const jobIds: string[] = [];
+    for (let index = 0; index < 2; index++) {
+      const candidate = (
+        await f.addresses.list(f.operator.id, {
+          page: 1,
+          pageSize: 1,
+          keyword: '',
+          status: 'unused'
+        })
+      ).items[0]!;
+      consumed.push(candidate.id);
+      const job = await prisma.idBusinessV2RechargeJob.create({
+        data: {
+          id: randomUUID(),
+          ownerId: f.operator.id,
+          cardId: card.id,
+          action: 'bitbrowser',
+          state: 'finished',
+          plan: 'plus',
+          leaseUntil: new Date(0),
+          billingNameEncrypted: encryption.encrypt('Synthetic Owner'),
+          result: { addressId: candidate.id, status: 'subscription_activated' }
+        }
+      });
+      jobIds.push(job.id);
+      await transactions.execute(
+        async (tx) => {
+          await finalizeRechargeCardBilling(tx, job, { cardId: card.id }, cards, f.names);
+          await f.addresses.markUsed(tx, f.operator.id, candidate.id, job.id);
+        },
+        {
+          changedScopes: ['auto-recharge', 'online-recharge'],
+          requestId: randomUUID(),
+          operator: f.operator
+        }
+      );
+    }
+    expect(new Set(consumed).size).toBe(2);
+    expect(
+      (await prisma.idBusinessV2BankRechargeCard.findUniqueOrThrow({ where: { id: card.id } }))
+        .billingAddressId
+    ).toBe(consumed[0]);
+    const uses = await prisma.idBusinessV2RechargeAddressUse.findMany({
+      where: { jobId: { in: jobIds } }
+    });
+    expect(uses).toHaveLength(2);
+    expect(uses.map((item) => item.addressId).sort()).toEqual([...consumed].sort());
+    for (const [index, jobId] of jobIds.entries()) {
+      const stored = await prisma.idBusinessV2RechargeJob.findUniqueOrThrow({
+        where: { id: jobId }
+      });
+      expect(stored.result).toMatchObject({ addressId: consumed[index] });
+    }
+    expect(
+      (
+        await f.addresses.list(f.operator.id, {
+          page: 1,
+          pageSize: 1,
+          keyword: '',
+          status: 'unused'
+        })
+      ).total
+    ).toBe(0);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          userId: f.operator.id,
+          action: 'id_business_v2.bank_recharge.card.billing_conflict'
+        }
+      })
+    ).toBe(0);
   });
   it('同一卡并发匹配只保留一个加密姓名，不依赖姓名池', async () => {
     const f = await fixture();

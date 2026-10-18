@@ -125,6 +125,7 @@ export const v2Routes: RouteRecordRaw[] = [
         redirect: '/v2/dashboard'
       },
       ...Object.entries({
+        'auto-recharge/names': '/v2/auto-recharge',
         'auto-recharge/chatgpt-accounts': '/v2/account-settings/chatgpt-accounts',
         'auto-recharge/mailbox': '/v2/account-settings/mailbox',
         'auto-recharge/proxies': '/v2/account-settings/proxies',

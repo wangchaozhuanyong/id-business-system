@@ -19,6 +19,10 @@ interface NodeState {
   matches: boolean;
   select: boolean;
   optionMatches: number;
+  stateCode?: string;
+}
+interface BillingSnapshot {
+  state: string;
 }
 interface DocumentResult {
   ok: boolean;
@@ -40,7 +44,7 @@ const billing: Field[] = [
   'postal_code'
 ];
 
-/** This self-contained function runs inside one verified frame; no field value is returned. */
+/** Runs in one verified frame. Only a selected state code may leave the frame. */
 export function directPaymentFieldOperation(operation: Operation): DocumentResult {
   if (
     typeof operation.deadline !== 'number' ||
@@ -137,7 +141,14 @@ export function directPaymentFieldOperation(operation: Operation): DocumentResul
           Array.from(node.selectedOptions).some((option) =>
             valueMatches(option.textContent ?? '')
           )),
-      optionMatches: options.length
+      optionMatches: options.length,
+      ...(field === 'state' &&
+      select &&
+      node.selectedOptions.length === 1 &&
+      /^[A-Za-z]{2,3}$/.test(node.value) &&
+      (valueMatches(node.value) || valueMatches(node.selectedOptions[0]!.textContent ?? ''))
+        ? { stateCode: node.value }
+        : {})
     };
   });
   if (operation.mode === 'inspect') return { ok: true, nodes: states };
@@ -334,7 +345,7 @@ export async function fillDirectPaymentForm(
   session: DirectPaymentSession,
   details: V2RechargeDetails,
   deadline: number
-): Promise<void> {
+): Promise<BillingSnapshot> {
   validate(details);
   // Observe every card field before the first write, including independent OOPIF sessions.
   while (true) {
@@ -401,20 +412,21 @@ export async function fillDirectPaymentForm(
   }
   for (const frame of (await bounded(session, deadline, () => session.frames())).filter(trusted))
     await operation(frame, { mode: 'preferences' }, session, deadline);
-  await verifyDirectPaymentForm(session, details, deadline);
+  return verifyDirectPaymentForm(session, details, deadline);
 }
 
 export async function verifyDirectPaymentForm(
   session: DirectPaymentSession,
   details: V2RechargeDetails,
   deadline: number
-): Promise<void> {
+): Promise<BillingSnapshot> {
   validate(details);
   for (const field of cards) {
     const target = await one(session, field, details[field], deadline, true);
     if (!target?.node.matches) throw new Error('payment_form_changed');
   }
   const scope = await billingScope(session, details, deadline);
+  let state = details.state;
   for (const field of billing) {
     const target = await one(
       session,
@@ -425,9 +437,15 @@ export async function verifyDirectPaymentForm(
       scope
     );
     if (target && !target.node.matches) throw new Error('billing_fields_changed');
+    if (field === 'state' && target?.node.stateCode !== undefined) {
+      if (!target.node.select || !/^[A-Za-z]{2,3}$/.test(target.node.stateCode))
+        throw new Error('billing_fields_changed');
+      state = target.node.stateCode;
+    }
     const outside = (await locate(session, field, details[field], deadline)).filter(
       (item) => item.frame.id !== scope && new URL(item.frame.url).hostname === 'chatgpt.com'
     );
     if (outside.length) throw new Error('billing_fields_changed');
   }
+  return { state };
 }

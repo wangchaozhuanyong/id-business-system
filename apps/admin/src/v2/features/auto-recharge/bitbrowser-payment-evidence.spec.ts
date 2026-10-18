@@ -89,6 +89,18 @@ describe('直连金额与完整官网报价证据', () => {
       renewal_interval: 'monthly'
     });
   });
+  it('读取官网实测中文税额与独立金额行，仍要求明确月续费', () => {
+    const text =
+      'Go 套餐\n按月订阅订阅\nPHP 267.86\n税额 (0%)\nPHP 0.00\n今日应付金额\nPHP 267.86\n将按 每月 自动续订，直至取消。将按 PHP 267.86/月 收费。';
+    expect(parseDirectVisibleQuote(text, 'PHP', 'go')).toMatchObject({
+      today: { currency: 'PHP', amount_minor: 26786 },
+      tax: { amount_minor: 0 },
+      renewal: { amount_minor: 26786 },
+      renewal_interval: 'monthly'
+    });
+    expect(() => parseDirectVisibleQuote(text.replace('/月', '/年'), 'PHP', 'go')).toThrow();
+    expect(() => parseDirectVisibleQuote(text + '\n税额 (12%)\nPHP 32.14', 'PHP', 'go')).toThrow();
+  });
   it.each([
     'Total due today USD 20.00\nRenews USD 20.00 / month',
     'Total due today USD 20.00\nTax USD 0.00\nRenews USD 20.00',
@@ -109,6 +121,14 @@ describe('直连金额与完整官网报价证据', () => {
     expect(JSON.stringify(result)).not.toContain(details.number);
     expect(result).not.toHaveProperty('cvc');
     expect(await verify({ checkout_session: document() })).toEqual(result);
+  });
+  it('原单接口缺少计税明细时独立报告，不凭可见金额放行', async () => {
+    const { checkout_state: _state, ...withoutState } = document();
+    void _state;
+    await expect(verify(withoutState)).rejects.toThrow('official_checkout_quote_unavailable');
+    const mismatch = document();
+    mismatch.checkout_state.id = 'cs_other';
+    await expect(verify(mismatch)).rejects.toThrow('official_checkout_quote_binding_unverified');
   });
   it.each([
     [
@@ -238,6 +258,11 @@ describe('直连金额与完整官网报价证据', () => {
     expect(() => billingValues({ ...details, postal_code: '' }, details.name)).toThrow();
     expect(() => billingValues(details, '')).toThrow();
   });
+  it('账单差异只报告字段分类，不输出官网或输入的具体值', async () => {
+    const data = document();
+    data.checkout_state.billingAddress.address.state = 'OR';
+    await expect(verify(data)).rejects.toThrow('official_billing_state_mismatch');
+  });
   it('卡尾号、有效期或完整地址变化改变指纹；安全码不进入指纹', async () => {
     const initial = await verify(document());
     expect(
@@ -285,11 +310,16 @@ describe('原窗口官网读取绑定', () => {
       accessToken: 'synthetic.' + payload + '.synthetic'
     };
   }
-  async function read(auth: ReturnType<typeof session>) {
+  async function read(auth: ReturnType<typeof session>, failure?: Error) {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(auth), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(document()), { status: 200 }));
+    if (failure)
+      fetch
+        .mockReset()
+        .mockResolvedValueOnce(new Response(JSON.stringify(auth), { status: 200 }))
+        .mockRejectedValueOnce(failure);
     vi.stubGlobal('location', new URL('https://chatgpt.com/checkout/openai_llc/' + sid));
     vi.stubGlobal('fetch', fetch);
     const result = await new Function(`return (${officialPaymentRead(identity, path)});`)();
@@ -302,6 +332,16 @@ describe('原窗口官网读取绑定', () => {
     expect(fetch.mock.calls[1]?.[0]).toBe(path);
     expect(fetch.mock.calls[1]?.[1]).toMatchObject({ method: 'GET', credentials: 'same-origin' });
     expect(fetch.mock.calls[1]?.[1]).not.toHaveProperty('body');
+  });
+  it.each([
+    [new TypeError('synthetic-private-value'), 'official_read_network_failed'],
+    [new SyntaxError('synthetic-private-value'), 'official_read_response_invalid'],
+    [new Error('synthetic-private-value'), 'official_read_failed']
+  ])('官网读取异常只返回受控诊断，不回传异常正文', async (failure, reason) => {
+    const { result, fetch } = await read(session(), failure as Error);
+    expect(result).toEqual({ ok: false, status: 0, reason });
+    expect(JSON.stringify(result)).not.toContain('synthetic-private-value');
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
   it.each([undefined, null, 'future', -1, 0])(
     '缺失或无效expiry不能成为官网读取权限：%s',
@@ -354,7 +394,7 @@ describe('付款观测只采纳唯一授权原单的官网证据', () => {
     let handler:
       | ((method: string, params: Record<string, unknown>, session?: string) => void)
       | undefined;
-    const bodies = new Map<string, object>();
+    const bodies = new Map<string, object | string>();
     const ownedSessions = new Set(['owned', 'owned-child']);
     let requestId = 0;
     const cdp = {
@@ -365,7 +405,10 @@ describe('付款观测只采纳唯一授权原单的官网证据', () => {
         };
       }),
       command: vi.fn(async (_method, params: { requestId: string }) => ({
-        body: JSON.stringify(bodies.get(params.requestId)),
+        body:
+          typeof bodies.get(params.requestId) === 'string'
+            ? bodies.get(params.requestId)
+            : JSON.stringify(bodies.get(params.requestId)),
         base64Encoded: false
       }))
     };
@@ -389,7 +432,7 @@ describe('付款观测只采纳唯一授权原单的官网证据', () => {
     if (armed) observer.arm();
     async function response(
       path: string,
-      body: object,
+      body: object | string,
       options: {
         method?: string;
         data?: object;
@@ -397,6 +440,9 @@ describe('付款观测只采纳唯一授权原单的官网证据', () => {
         status?: number;
         accountId?: string;
         stripe?: boolean;
+        loadingFailed?: boolean;
+        encodedDataLength?: number;
+        contentLength?: number;
       } = {}
     ) {
       const id = String(++requestId);
@@ -420,10 +466,20 @@ describe('付款观测只采纳唯一授权原单的官网证据', () => {
       );
       handler?.(
         'Network.responseReceived',
-        { requestId: id, response: { status: options.status ?? 200 } },
+        {
+          requestId: id,
+          response: {
+            status: options.status ?? 200,
+            headers: { 'content-length': options.contentLength }
+          }
+        },
         session
       );
-      handler?.('Network.loadingFinished', { requestId: id }, session);
+      handler?.(
+        options.loadingFailed ? 'Network.loadingFailed' : 'Network.loadingFinished',
+        { requestId: id, encodedDataLength: options.encodedDataLength },
+        session
+      );
       await observer.settle();
     }
     const confirm = (intent = 'pi_Synthetic1', options: Parameters<typeof response>[2] = {}) =>
@@ -456,6 +512,284 @@ describe('付款观测只采纳唯一授权原单的官网证据', () => {
       detach: (session: string) => ownedSessions.delete(session)
     };
   }
+
+  it.each([400, 401, 403, 429, 500])(
+    '建单HTTP %s有界读取，只保留安全诊断且不暴露响应正文',
+    async (status) => {
+      const f = fixture();
+      await f.response(
+        '/backend-api/payments/checkout',
+        { secret: 'private-body' },
+        {
+          method: 'POST',
+          status
+        }
+      );
+      expect(f.observer.checkoutFailure).toEqual({
+        reason: 'official_checkout_http_failed',
+        http_status: status,
+        diagnostics: {
+          checkout_error: {
+            request_index: 1,
+            body_state: 'parsed_json',
+            attribution: 'unclassified',
+            code_present: false,
+            param_present: false,
+            categories: []
+          }
+        }
+      });
+      expect(f.cdp.command).toHaveBeenCalledExactlyOnceWith(
+        'Network.getResponseBody',
+        { requestId: '1' },
+        'owned',
+        3000
+      );
+      expect(JSON.stringify(f.observer)).not.toContain('private-body');
+      expect(f.observer.checkout).toBeUndefined();
+      expect(f.observer.confirmationRequests).toBe(0);
+    }
+  );
+
+  it('HTTP400记录受控代码和参数，未识别的正文不会变成推断根因', async () => {
+    const f = fixture(false);
+    await f.response(
+      '/backend-api/payments/checkout',
+      {
+        error: {
+          code: 'invalid_request_error',
+          param: 'plan_name',
+          message: 'Unsupported plan PRIVATE_TOKEN'
+        },
+        sessionToken: 'PRIVATE_TOKEN'
+      },
+      { method: 'POST', status: 400 }
+    );
+    expect(f.observer.checkoutFailure?.diagnostics?.checkout_error).toEqual({
+      request_index: 1,
+      body_state: 'parsed_json',
+      code: 'invalid_request_error',
+      param: 'plan_name',
+      code_present: true,
+      param_present: true,
+      categories: ['plan_validation'],
+      attribution: 'structured_code'
+    });
+    expect(JSON.stringify(f.observer)).not.toContain('PRIVATE_TOKEN');
+    expect(f.observer.checkoutRequests).toBe(1);
+    expect(f.observer.confirmationRequests).toBe(0);
+  });
+
+  it.each(['body_unavailable', 'page_detached'] as const)(
+    'HTTP拒绝不会被%s覆盖或重试',
+    async (mode) => {
+      const f = fixture(false);
+      f.cdp.command.mockImplementationOnce(async () => {
+        if (mode === 'page_detached') f.detach('owned');
+        else throw new Error('PRIVATE_BODY');
+        return { body: '{"code":"invalid_plan"}', base64Encoded: false };
+      });
+      await f.response('/backend-api/payments/checkout', {}, { method: 'POST', status: 400 });
+      expect(f.observer.checkoutFailure).toMatchObject({
+        reason: 'official_checkout_http_failed',
+        http_status: 400,
+        diagnostics: {
+          checkout_error: {
+            body_state: mode === 'page_detached' ? 'detached' : 'unavailable',
+            attribution: 'unclassified'
+          }
+        }
+      });
+      expect(f.cdp.command).toHaveBeenCalledTimes(1);
+      expect(f.observer.checkoutRequests).toBe(1);
+      expect(f.observer.confirmationRequests).toBe(0);
+    }
+  );
+
+  it.each(['encodedDataLength', 'contentLength'] as const)('超过%s边界不读取正文', async (key) => {
+    const f = fixture(false);
+    await f.response(
+      '/backend-api/payments/checkout',
+      { code: 'invalid_plan' },
+      {
+        method: 'POST',
+        status: 400,
+        [key]: 32769
+      }
+    );
+    expect(f.observer.checkoutFailure).toMatchObject({
+      reason: 'official_checkout_http_failed',
+      http_status: 400,
+      diagnostics: {
+        checkout_error: { request_index: 1, body_state: 'oversized', attribution: 'unclassified' }
+      }
+    });
+    expect(f.cdp.command).not.toHaveBeenCalled();
+    expect(f.observer.checkoutRequests).toBe(1);
+    expect(f.observer.confirmationRequests).toBe(0);
+  });
+
+  it('延迟读取时保留HTTP失败，关闭后不能采纳迟到正文', async () => {
+    const f = fixture(false);
+    let finish!: (value: { body: string; base64Encoded: boolean }) => void;
+    f.cdp.command.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const pending = f.response(
+      '/backend-api/payments/checkout',
+      {},
+      { method: 'POST', status: 400 }
+    );
+    expect(f.observer.checkoutFailure?.diagnostics?.checkout_error.body_state).toBe('reading');
+    f.observer.close();
+    finish({ body: '{"code":"invalid_plan","secret":"PRIVATE"}', base64Encoded: false });
+    await pending;
+    expect(f.observer.checkoutFailure?.diagnostics?.checkout_error).toEqual({
+      request_index: 1,
+      body_state: 'detached',
+      attribution: 'unclassified'
+    });
+    expect(JSON.stringify(f.observer)).not.toContain('PRIVATE');
+  });
+
+  it('只保留所属窗口 CS 最新的 Stripe 计税响应；失败请求使旧报价立即失效', async () => {
+    const f = fixture(false);
+    const stripe = {
+      id: 'ppage_Synthetic',
+      object: 'checkout.session',
+      session_id: 'cs_Synthetic',
+      mode: 'subscription',
+      currency: 'php',
+      client_secret: 'DO_NOT_RETAIN',
+      total_summary: { due: 2000 },
+      customer: { address: {} }
+    };
+    await f.response('/v1/payment_pages/cs_Synthetic/init', stripe, {
+      stripe: true,
+      method: 'POST'
+    });
+    expect(f.observer.stripeQuotes.get('cs_Synthetic')?.due).toBe(2000);
+    expect(JSON.stringify([...f.observer.stripeQuotes])).not.toContain('DO_NOT_RETAIN');
+    await f.response('/v1/payment_pages/cs_Synthetic/update', stripe, {
+      stripe: true,
+      status: 500
+    });
+    expect(f.observer.stripeQuotes.has('cs_Synthetic')).toBe(false);
+    await f.response('/v1/payment_pages/cs_Synthetic', stripe, {
+      stripe: true,
+      session: 'unowned'
+    });
+    expect(f.observer.stripeQuotes.size).toBe(0);
+    await f.response(
+      '/v1/payment_pages/cs_Synthetic',
+      { ...stripe, session_id: 'cs_other' },
+      { stripe: true }
+    );
+    expect(f.observer.stripeQuotes.size).toBe(0);
+    await f.response('/v1/payment_pages/cs_Synthetic', stripe, { stripe: true });
+    f.observer.close();
+    expect(f.observer.stripeQuotes.size).toBe(0);
+    expect(f.observer.confirmationRequests).toBe(0);
+  });
+
+  it('晚到的旧税额不能覆盖后发请求，后发失败也不能复活旧报价', async () => {
+    const f = fixture(false);
+    const stripe = {
+      id: 'ppage_Synthetic',
+      object: 'checkout.session',
+      session_id: 'cs_Synthetic',
+      mode: 'subscription',
+      currency: 'php',
+      total_summary: { due: 2000 }
+    };
+    let finishOld!: (body: { body: string; base64Encoded: boolean }) => void;
+    f.cdp.command.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        })
+    );
+    const old = f.response('/v1/payment_pages/cs_Synthetic', stripe, { stripe: true });
+    const current = f.response('/v1/payment_pages/cs_Synthetic/update', stripe, {
+      stripe: true,
+      status: 500
+    });
+    finishOld({ body: JSON.stringify(stripe), base64Encoded: false });
+    await Promise.all([old, current]);
+    expect(f.observer.stripeQuotes.size).toBe(0);
+  });
+
+  it('Stripe CS 确认路径也只采纳已授权原单的一次请求和同单付款凭据', async () => {
+    const f = fixture(false);
+    f.observer.bind('cs_Synthetic', 2000, 'USD');
+    f.observer.arm();
+    await f.response(
+      '/v1/payment_pages/cs_Synthetic/confirm',
+      {
+        object: 'checkout.session',
+        session_id: 'cs_Synthetic',
+        payment_intent: { id: 'pi_Synthetic1', status: 'requires_action' }
+      },
+      { method: 'POST', stripe: true }
+    );
+    expect(f.observer.confirmationRequests).toBe(1);
+    expect(f.observer.paymentStatus).toBe('requires_action');
+    await f.success();
+    expect(f.observer.paymentStatus).toBe('paid');
+    expect(f.observer.evidence?.identifier).toBe('pi_Synthetic1');
+  });
+
+  it.each(['unarmed', 'other_checkout', 'response_mismatch', 'duplicate'])(
+    'Stripe CS %s 不能当成正常授权付款',
+    async (kind) => {
+      const f = fixture(false);
+      f.observer.bind('cs_Synthetic', 2000, 'USD');
+      if (kind !== 'unarmed') f.observer.arm();
+      const unexpected = vi.fn(async () => {});
+      f.observer.onUnexpected = unexpected;
+      const path = `/v1/payment_pages/${kind === 'other_checkout' ? 'cs_Other' : 'cs_Synthetic'}/confirm`;
+      const body = {
+        object: 'checkout.session',
+        session_id: kind === 'response_mismatch' ? 'cs_Other' : 'cs_Synthetic',
+        payment_intent: {
+          id: 'pi_Synthetic1',
+          status: 'succeeded',
+          amount_received: 2000,
+          currency: 'usd'
+        }
+      };
+      await f.response(path, body, { method: 'POST', stripe: true });
+      if (kind === 'duplicate') await f.response(path, body, { method: 'POST', stripe: true });
+      expect(f.observer.failure).not.toBe('');
+      expect(f.observer.evidence).toBeUndefined();
+      if (kind === 'unarmed')
+        expect(unexpected).toHaveBeenCalledWith(
+          expect.objectContaining({
+            checkout_identifier: 'cs_Synthetic',
+            confirmation_requests_sent: 1
+          })
+        );
+    }
+  );
+  it.each(['<html>private-body</html>', { message: 'private-body' }])(
+    '无法解析建单响应时不保留正文：%j',
+    async (body) => {
+      const f = fixture();
+      await f.response('/backend-api/payments/checkout', body, { method: 'POST' });
+      expect(f.observer.checkoutFailure).toEqual({ reason: 'official_checkout_response_invalid' });
+      expect(f.observer.checkout).toBeUndefined();
+    }
+  );
+  it('建单连接失败仍保留未知结果，不伪装成未发出请求', async () => {
+    const f = fixture();
+    await f.response('/backend-api/payments/checkout', {}, { method: 'POST', loadingFailed: true });
+    expect(f.observer.checkoutRequests).toBe(1);
+    expect(f.observer.checkoutFailure).toEqual({ reason: 'official_checkout_network_failed' });
+    expect(f.observer.checkout).toBeUndefined();
+  });
 
   it('唯一原单确认关联唯一PI，再验证付款金额和币种', async () => {
     const f = fixture();

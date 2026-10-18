@@ -118,7 +118,10 @@ export class RechargeAddressRepository {
     const [items, total, unused, used, disabled] = await this.prisma.$transaction([
       this.prisma.idBusinessV2RechargeAddress.findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy:
+          query.status === 'unused'
+            ? [{ createdAt: 'asc' }, { id: 'asc' }]
+            : [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize
       }),

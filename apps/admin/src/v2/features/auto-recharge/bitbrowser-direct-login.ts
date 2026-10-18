@@ -18,7 +18,10 @@ import {
   type inspectOfficialProxy,
   type inspectLoggedInPage
 } from './bitbrowser-login-page';
-import type { V2RechargeOwnedBrowserProfile } from '@apple-business/shared';
+import type {
+  V2RechargeBrowserRestore,
+  V2RechargeOwnedBrowserProfile
+} from '@apple-business/shared';
 import type { VerifiedPaymentBrowser } from './bitbrowser-payment-session';
 import { isV2TotpCodeCurrent } from '@/v2/components/workspace/totp';
 
@@ -29,7 +32,14 @@ export type DirectLoginCode = string | { token: string; expiresAt: string };
 export interface DirectLoginHooks {
   progress: (stage: string, extra?: Record<string, unknown>) => Promise<void>;
   code: (challenge: RechargeLoginChallenge) => Promise<DirectLoginCode>;
-  restore?: (accountKey: string) => Promise<{ ownedProfile?: V2RechargeOwnedBrowserProfile }>;
+  restore?: (
+    accountKey: string
+  ) => Promise<
+    Pick<
+      V2RechargeBrowserRestore,
+      'ownedProfile' | 'originalCheckoutIdentifier' | 'unidentifiedCheckoutRecovery'
+    >
+  >;
   accountKey?: string;
   ownedProfile?: V2RechargeOwnedBrowserProfile;
   /** Payment execution keeps this verified owned connection until its result is recorded. */
@@ -108,6 +118,8 @@ export async function runDirectLogin(
     | undefined;
   try {
     let ownedProfile: V2RechargeOwnedBrowserProfile | undefined;
+    let discoverOriginalCheckout = false;
+    let originalCheckoutIdentifier: string | undefined;
     let expectedAccountKey = hooks.accountKey ?? hooks.ownedProfile?.accountKey;
     if (expected.accountId && (hooks.restore || expectedAccountKey)) {
       const digest = await crypto.subtle.digest(
@@ -124,7 +136,12 @@ export async function runDirectLogin(
     if (expectedAccountKey && hooks.restore) {
       if (!/^[a-f0-9]{64}$/.test(expectedAccountKey))
         throw new DirectBrowserError('bitbrowser_owned_profile_unverified');
-      ownedProfile = (await hooks.restore(expectedAccountKey)).ownedProfile;
+      const restored = await hooks.restore(expectedAccountKey);
+      ownedProfile = restored.ownedProfile;
+      discoverOriginalCheckout = restored.unidentifiedCheckoutRecovery === true;
+      originalCheckoutIdentifier = restored.originalCheckoutIdentifier;
+      if (discoverOriginalCheckout && (!ownedProfile || originalCheckoutIdentifier))
+        throw new DirectBrowserError('bitbrowser_owned_profile_unverified');
       if (
         ownedProfile &&
         (ownedProfile.accountKey !== expectedAccountKey ||
@@ -152,6 +169,8 @@ export async function runDirectLogin(
         if (detail?.id !== undefined && detail?.id !== null)
           throw new DirectBrowserError('bitbrowser_owned_profile_unverified');
         if (await directBrowserProfileExists(api, ownedProfile.profileId, remaining))
+          throw new DirectBrowserError('bitbrowser_owned_profile_missing');
+        if (discoverOriginalCheckout)
           throw new DirectBrowserError('bitbrowser_owned_profile_missing');
         replacedProfileId = ownedProfile.profileId;
         await hooks.progress('bitbrowser_profile_missing_confirmed', {
@@ -270,6 +289,11 @@ export async function runDirectLogin(
     let pageReadyDeadline: number | undefined;
     let expiredDeadline: number | undefined;
     let sessionRefreshRequested = false;
+    let tokenRejected = false;
+    const sessionTokenFailure = () =>
+      new DirectBrowserError(
+        tokenRejected ? 'official_login_token_rejected' : 'access_token_expired'
+      );
     let suppliedSessionChecked = false;
     let officialTargetId = '';
     const injectCookies = async (onlyIfChanged = false) => {
@@ -399,7 +423,31 @@ export async function runDirectLogin(
         targetId: string;
         url: string;
       }[];
+      const originalPages = targets?.filter((target) => {
+        if (target.type !== 'page') return false;
+        try {
+          const url = new URL(target.url);
+          const match =
+            /^\/checkout\/[a-z][a-z0-9_]{0,40}\/((?:oaics|cs)_[A-Za-z0-9_]{1,200})\/?$/.exec(
+              url.pathname
+            );
+          return (
+            url.origin === 'https://chatgpt.com' &&
+            !url.username &&
+            !url.password &&
+            Boolean(match) &&
+            (!originalCheckoutIdentifier || match?.[1] === originalCheckoutIdentifier)
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (discoverOriginalCheckout && originalPages?.length !== 1)
+        throw new DirectBrowserError('bitbrowser_original_checkout_unavailable');
       const page =
+        ((discoverOriginalCheckout || originalCheckoutIdentifier) && originalPages?.length === 1
+          ? originalPages[0]
+          : undefined) ??
         targets?.find((target) => target.type === 'page' && target.targetId === officialTargetId) ??
         targets?.find(
           (target) => target.type === 'page' && /^https:\/\/chatgpt\.com(?:\/|$)/.test(target.url)
@@ -470,10 +518,19 @@ export async function runDirectLogin(
         sessionId
       );
       if (expected.token && !ownedProfile && attempts === 1) await injectCookies();
+      const officialPage =
+        page && /^https:\/\/chatgpt\.com(?:\/|$)/.test(page.url) ? new URL(page.url) : undefined;
+      // Pricing dialogs hide the composer. Reusing them would wait forever for home-page UI.
+      const paymentNeedsHome =
+        hooks.ready &&
+        !discoverOriginalCheckout &&
+        !(originalCheckoutIdentifier && originalPages?.length === 1) &&
+        officialPage &&
+        (officialPage.pathname !== '/' || Boolean(officialPage.hash));
       const navigation =
         page &&
         /^https:\/\/chatgpt\.com(?:\/|$)/.test(page.url) &&
-        !(hooks.ready && /^https:\/\/chatgpt\.com\/checkout\//.test(page.url)) &&
+        !paymentNeedsHome &&
         !(expected.token && !ownedProfile && attempts === 1)
           ? {}
           : await cdp.command(
@@ -560,6 +617,7 @@ export async function runDirectLogin(
           throw new DirectBrowserError('proxy_probe_unverified');
       }
       if (
+        discoverOriginalCheckout ||
         credential.login ||
         directProfileOptions(settings).proxyMethod !== 3 ||
         settings.browserOptions?.sessionRetryLimit === 0 ||
@@ -672,7 +730,7 @@ export async function runDirectLogin(
         expiredDeadline !== undefined &&
         Date.now() >= expiredDeadline
       )
-        throw new DirectBrowserError('access_token_expired');
+        throw sessionTokenFailure();
       assertJsonPhase();
       let state: LoginPageState;
       try {
@@ -757,11 +815,11 @@ export async function runDirectLogin(
         expiredDeadline !== undefined &&
         Date.now() >= expiredDeadline
       )
-        throw new DirectBrowserError('access_token_expired');
+        throw sessionTokenFailure();
       if (state.kind === 'expired') {
-        if ('refreshFailed' in state && state.refreshFailed)
-          throw new DirectBrowserError('access_token_expired');
-        if (credential.login) throw new DirectBrowserError('access_token_expired');
+        if ('tokenRejected' in state && state.tokenRejected) tokenRejected = true;
+        if ('refreshFailed' in state && state.refreshFailed) throw sessionTokenFailure();
+        if (credential.login) throw sessionTokenFailure();
         expiredDeadline ??= Math.min(automaticDeadline, Date.now() + 15_000);
       }
       if (state.kind === 'session_error')
@@ -806,7 +864,9 @@ export async function runDirectLogin(
           try {
             ui = await activeCdp.evaluate<ReturnType<typeof inspectLoggedInPage>>(
               sessionId,
-              loggedInPageExpression(),
+              loggedInPageExpression(
+                discoverOriginalCheckout || Boolean(originalCheckoutIdentifier)
+              ),
               Math.min(
                 remaining(),
                 manualStarted === undefined ? pageBudgetDeadline() - Date.now() : Infinity

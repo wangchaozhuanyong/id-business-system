@@ -478,6 +478,71 @@ describe('网页直连比特浏览器的输入和读取边界', () => {
     });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+  it('慢会话读取可使用剩余的十秒总预算，不在五秒处反复取消', async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    try {
+      vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+      vi.stubGlobal('document', { readyState: 'loading', title: 'ChatGPT' });
+      const claims = btoa(
+        JSON.stringify({
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' }
+        })
+      );
+      let reads = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_path, options) =>
+            new Promise((resolve, reject) => {
+              const session = reads++ === 0;
+              const timer = setTimeout(
+                () =>
+                  resolve(
+                    new Response(
+                      JSON.stringify(
+                        session
+                          ? {
+                              user: { id: 'fixture-user', email: 'user@example.com' },
+                              accessToken: `fixture.${claims}.signature`
+                            }
+                          : {
+                              accounts: {
+                                'fixture-account': {
+                                  account: { account_id: 'fixture-account', plan_type: 'free' }
+                                }
+                              }
+                            }
+                      )
+                    )
+                  ),
+                session ? 6000 : 2000
+              );
+              options.signal.addEventListener(
+                'abort',
+                () => {
+                  clearTimeout(timer);
+                  reject(new Error('timeout'));
+                },
+                { once: true }
+              );
+            })
+        )
+      );
+      const result = inspectLoginPage('inspect', '', { sessionOnly: true });
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(await result).toMatchObject({ kind: 'identity', accountId: 'fixture-account' });
+      expect(timeout.mock.calls.map(([ms]) => ms)).toEqual([10000, 4000]);
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
   it('JSON核验仍停在官网真人验证页，不提前请求会话', async () => {
     vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
     vi.stubGlobal('document', { readyState: 'loading', title: 'Just a moment' });
@@ -791,4 +856,61 @@ describe('网页直连比特浏览器的输入和读取边界', () => {
     expect(isLoginPaymentWrite('GET', 'https://chatgpt.com/api/auth/session')).toBe(false);
     expect(isLoginPaymentWrite('POST', 'https://auth.openai.com/login')).toBe(false);
   });
+});
+
+describe('owned checkout readiness', () => {
+  it.each([
+    ['/checkout/openai_llc/oaics_synthetic', true, 'page_ready'],
+    ['/checkout/openai_llc/oaics_synthetic', false, 'page_loading'],
+    ['/#pricing', true, 'page_loading'],
+    ['/checkout/openai_llc/not_a_checkout', true, 'page_loading']
+  ])('permits only the explicitly restored checkout: %s %s', (pathname, allowed, kind) => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com', pathname });
+    vi.stubGlobal('document', {
+      title: 'ChatGPT',
+      body: { innerText: '配置你的套餐' },
+      querySelectorAll: () => []
+    });
+    expect(inspectLoggedInPage(allowed as boolean)).toEqual({ kind });
+  });
+});
+
+describe('official account check rejects a still-unexpired token', () => {
+  it.each([false, true])(
+    '401 requests at most the explicit refresh, refreshed=%s',
+    async (refreshed) => {
+      vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+      vi.stubGlobal('document', { readyState: 'loading', title: 'ChatGPT' });
+      const claims = btoa(
+        JSON.stringify({
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' }
+        })
+      );
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              user: { id: 'fixture-user', email: 'user@example.com' },
+              accessToken: `fixture.${claims}.signature`
+            })
+          )
+        )
+        .mockResolvedValueOnce(new Response('{}', { status: 401 }));
+      vi.stubGlobal('fetch', fetch);
+      expect(
+        await inspectLoginPage('inspect', '', { sessionOnly: true, refreshSession: refreshed })
+      ).toEqual({
+        kind: 'expired',
+        tokenRejected: true,
+        refreshFailed: refreshed,
+        email: 'user@example.com',
+        userId: 'fixture-user',
+        accountId: 'fixture-account'
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch.mock.calls.every(([, options]) => !options.body && !options.method)).toBe(true);
+    }
+  );
 });

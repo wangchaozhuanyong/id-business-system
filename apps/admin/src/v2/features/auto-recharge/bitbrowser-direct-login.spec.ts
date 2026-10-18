@@ -285,6 +285,40 @@ describe('仅登录窗口失败不会转成长时间的假验证等待', () => {
 });
 
 describe('JSON会话核实后同步官网登录界面', () => {
+  it.each([
+    'https://chatgpt.com/#pricing',
+    'https://chatgpt.com/pricing',
+    'https://chatgpt.com/checkout/openai_llc/oaics_synthetic'
+  ])('充值复用%s时先回主页，避免套餐弹层遮住输入框导致登录等待', async (url) => {
+    const command = mock.command.getMockImplementation()!;
+    mock.command.mockImplementation(async (method, ...args) =>
+      method === 'Target.getTargets'
+        ? { targetInfos: [{ type: 'page', targetId: 'page', url }] }
+        : command(method, ...args)
+    );
+    mock.evaluate.mockResolvedValue(identity);
+    const ready = vi.fn(async () => ({ status: 'synthetic-ready' }));
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('account-fixture'));
+    const ownedProfile = {
+      sourceJobId: 'source-job',
+      profileId: 'a'.repeat(32),
+      accountKey: Array.from(new Uint8Array(hash), (part) =>
+        part.toString(16).padStart(2, '0')
+      ).join('')
+    };
+    const result = await runDirectLogin(
+      settings,
+      credential(),
+      '测试窗口',
+      new AbortController().signal,
+      { progress: vi.fn(), code: vi.fn(), ready, restore: async () => ({ ownedProfile }) }
+    );
+    expect(result).toEqual({ status: 'synthetic-ready' });
+    expect(mock.command.mock.calls.filter(([method]) => method === 'Page.navigate')).toEqual([
+      ['Page.navigate', { url: 'https://chatgpt.com/' }, 'session', expect.any(Number)]
+    ]);
+    expect(ready).toHaveBeenCalledOnce();
+  });
   const run = (signal = new AbortController().signal) =>
     runDirectLogin(settings, credential(), '测试窗口', signal, {
       progress: vi.fn(),
@@ -2013,4 +2047,169 @@ describe('账号自动登录按官网挑战选择凭据', () => {
     expect(actions.filter((action) => action === 'email_login')).toHaveLength(1);
     expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
   });
+});
+
+describe('restore original checkout without destroying its tab', () => {
+  it.each(['discovery', 'known'])(
+    'keeps the %s checkout and reaches payment readiness without a composer',
+    async (kind) => {
+      const digest = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode('account-fixture')
+      );
+      const accountKey = Array.from(new Uint8Array(digest), (n) =>
+        n.toString(16).padStart(2, '0')
+      ).join('');
+      const base = mock.command.getMockImplementation()!;
+      mock.command.mockImplementation(async (method, ...args) =>
+        method === 'Target.getTargets'
+          ? {
+              targetInfos: [
+                { type: 'page', targetId: 'home', url: 'https://chatgpt.com/' },
+                {
+                  type: 'page',
+                  targetId: 'checkout',
+                  url: 'https://chatgpt.com/checkout/openai_llc/oaics_synthetic'
+                }
+              ]
+            }
+          : base(method, ...args)
+      );
+      mock.evaluate.mockResolvedValue(identity);
+      const ready = vi.fn(async () => ({ status: 'synthetic-ready' }));
+      await runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+        code: vi.fn(),
+        progress: vi.fn(),
+        ready,
+        restore: async () => ({
+          ownedProfile: { sourceJobId: 'source', profileId: 'a'.repeat(32), accountKey },
+          ...(kind === 'discovery'
+            ? { unidentifiedCheckoutRecovery: true as const }
+            : { originalCheckoutIdentifier: 'oaics_synthetic' })
+        })
+      });
+      expect(mock.command).toHaveBeenCalledWith('Target.attachToTarget', {
+        targetId: 'checkout',
+        flatten: true
+      });
+      expect(
+        mock.command.mock.calls.filter(([method]) =>
+          ['Page.navigate', 'Target.createTarget'].includes(method)
+        )
+      ).toEqual([]);
+      expect(mock.ui).toHaveBeenCalledWith(
+        'session',
+        expect.stringContaining(')(true)'),
+        expect.any(Number)
+      );
+      expect(ready).toHaveBeenCalledOnce();
+    }
+  );
+  it.each([0, 2])(
+    'does not invent a new checkout target when %s candidates exist',
+    async (count) => {
+      const digest = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode('account-fixture')
+      );
+      const accountKey = Array.from(new Uint8Array(digest), (n) =>
+        n.toString(16).padStart(2, '0')
+      ).join('');
+      const base = mock.command.getMockImplementation()!;
+      mock.command.mockImplementation(async (method, ...args) =>
+        method === 'Target.getTargets'
+          ? {
+              targetInfos: Array.from({ length: count }, (_, i) => ({
+                type: 'page',
+                targetId: String(i),
+                url: `https://chatgpt.com/checkout/openai_llc/oaics_synthetic${i}`
+              }))
+            }
+          : base(method, ...args)
+      );
+      const ready = vi.fn();
+      await expect(
+        runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+          code: vi.fn(),
+          progress: vi.fn(),
+          ready,
+          restore: async () => ({
+            ownedProfile: { sourceJobId: 'source', profileId: 'a'.repeat(32), accountKey },
+            unidentifiedCheckoutRecovery: true
+          })
+        })
+      ).rejects.toMatchObject({ reason: 'bitbrowser_original_checkout_unavailable' });
+      expect(ready).not.toHaveBeenCalled();
+      expect(
+        mock.command.mock.calls.filter(([method]) =>
+          ['Page.navigate', 'Target.createTarget'].includes(method)
+        )
+      ).toEqual([]);
+    }
+  );
+});
+
+it('known checkout without a matching open tab still clears a pricing dialog before readiness', async () => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('account-fixture'));
+  const accountKey = Array.from(new Uint8Array(digest), (n) =>
+    n.toString(16).padStart(2, '0')
+  ).join('');
+  const base = mock.command.getMockImplementation()!;
+  mock.command.mockImplementation(async (method, ...args) =>
+    method === 'Target.getTargets'
+      ? { targetInfos: [{ type: 'page', targetId: 'page', url: 'https://chatgpt.com/#pricing' }] }
+      : base(method, ...args)
+  );
+  mock.evaluate.mockResolvedValue(identity);
+  const ready = vi.fn(async () => ({ status: 'synthetic-ready' }));
+  await runDirectLogin(settings, credential(), '测试窗口', new AbortController().signal, {
+    code: vi.fn(),
+    progress: vi.fn(),
+    ready,
+    restore: async () => ({
+      ownedProfile: { sourceJobId: 'source', profileId: 'a'.repeat(32), accountKey },
+      originalCheckoutIdentifier: 'oaics_known'
+    })
+  });
+  expect(mock.command).toHaveBeenCalledWith(
+    'Page.navigate',
+    { url: 'https://chatgpt.com/' },
+    'session',
+    expect.any(Number)
+  );
+  expect(ready).toHaveBeenCalledOnce();
+});
+
+describe('account-check 401 refresh handling', () => {
+  it.each([true, false])(
+    'refreshes once and re-verifies identity, recovered=%s',
+    async (recovered) => {
+      vi.useFakeTimers();
+      mock.evaluate
+        .mockResolvedValueOnce({ kind: 'expired', tokenRejected: true })
+        .mockResolvedValue(
+          recovered ? identity : { kind: 'expired', tokenRejected: true, refreshFailed: true }
+        );
+      const progress = vi.fn();
+      const pending = runDirectLogin(
+        settings,
+        credential(),
+        '测试窗口',
+        new AbortController().signal,
+        { progress, code: vi.fn() }
+      ).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(1000);
+      if (recovered)
+        expect(await pending).toMatchObject({ status: 'session_ready', account_matched: true });
+      else expect(await pending).toMatchObject({ reason: 'official_login_token_rejected' });
+      expect(
+        mock.evaluate.mock.calls.filter(([, expression]) =>
+          expression.includes('"refreshSession":true')
+        )
+      ).toHaveLength(1);
+      expect(mock.post.mock.calls.filter(([path]) => path === '/browser/open')).toHaveLength(1);
+      expect(mock.post.mock.calls.some(([path]) => path === '/browser/close')).toBe(false);
+      expect(progress.mock.calls.some(([stage]) => stage === 'verification_required')).toBe(false);
+    }
+  );
 });
