@@ -101,6 +101,28 @@ const labels: Record<string, string> = {
   querySucceeded: '订阅查询成功',
   queryError: '订阅查询失败原因',
   queryErrorCode: '订阅查询结果',
+  diagnostics: '查询网络诊断',
+  queryDiagnostics: '订阅查询网络诊断',
+  compareDiagnostics: '只读对照结果（不替代订阅核验）',
+  transport: '读取方式',
+  phase: '查询阶段',
+  attempt: '读取次数',
+  elapsedMs: '总耗时（毫秒）',
+  httpStatus: '官网响应状态码',
+  statusCode: '查询响应状态码',
+  networkCode: '网络结果',
+  requestIssued: '请求已发出',
+  responseHeadersReceived: '已收到响应头',
+  responseBodyCompleted: '响应体已读取完成',
+  headersElapsedMs: '等待响应头（毫秒）',
+  bodyElapsedMs: '读取响应体（毫秒）',
+  responseElapsedMs: '等待完整响应（毫秒）',
+  timeoutSource: '停止原因',
+  failurePhase: '停止位置',
+  cancellationConfirmed: '请求停止已确认',
+  accountFactsPresent: '已取得账号资料',
+  accountIdentityMatches: '账号身份一致',
+  skippedReason: '未执行对照的原因',
   errorCode: '失败原因',
   paymentVerified: '付款证据已核实',
   paymentEvidence: '原单付款证据',
@@ -294,6 +316,44 @@ const entries = computed(() => {
     }));
 });
 function displayValue(key: string, value: unknown): string {
+  if (key === 'networkCode') {
+    if (value == null) return '—';
+    const meanings: Record<string, string> = {
+      ETIMEDOUT: '读取超时',
+      ECONNRESET: '连接被重置',
+      ECONNREFUSED: '连接被拒绝',
+      ENOTFOUND: '域名未找到',
+      EAI_AGAIN: '域名暂时无法解析',
+      ECONNABORTED: '连接已中止',
+      'net::ERR_TIMED_OUT': '浏览器读取超时',
+      'net::ERR_CONNECTION_RESET': '浏览器连接被重置',
+      'net::ERR_PROXY_CONNECTION_FAILED': '代理连接失败',
+      'net::ERR_TUNNEL_CONNECTION_FAILED': '代理隧道连接失败',
+      'net::ERR_ABORTED': '浏览器请求已取消',
+      'net::ERR_FAILED': '浏览器网络读取失败'
+    };
+    return meanings[String(value)] ?? '网络读取未完成';
+  }
+  if (['transport', 'phase', 'timeoutSource', 'failurePhase', 'skippedReason'].includes(key)) {
+    const meanings: Record<string, string> = {
+      'browser-page': '当前已登录浏览器',
+      'proxy-request': '任务代理请求',
+      'context-request-compare': '同一会话的只读对照',
+      account_check: '读取账号订阅',
+      request_dispatch: '发送请求',
+      response_headers: '等待官网响应头',
+      response_body: '读取官网响应体',
+      request_complete: '等待官网完整响应',
+      attempt_deadline: '单次读取到期',
+      query_deadline: '查询总期限到期',
+      lease_lost: '任务执行权已失效',
+      browser_abort: '浏览器请求已取消',
+      shared_context: '当前浏览器由其他流程共用',
+      cancellation_unconfirmed: '前次请求尚未确认停止',
+      deadline_exhausted: '剩余时间不足'
+    };
+    return value == null ? '—' : (meanings[String(value)] ?? '本次未能确认');
+  }
   if (key === 'paymentEvidence' && record(value).verified !== true)
     return '尚未取得绑定原单的付款证据';
   if (key === 'code' && /^(VLM_|VERIFICATION_)/.test(String(value)))
@@ -327,7 +387,13 @@ function displayValue(key: string, value: unknown): string {
     'paymentVerified',
     'verified',
     'observedPlan',
-    'tierVerified'
+    'tierVerified',
+    'requestIssued',
+    'responseHeadersReceived',
+    'responseBodyCompleted',
+    'cancellationConfirmed',
+    'accountFactsPresent',
+    'accountIdentityMatches'
   ].includes(key)
     ? onlineLabel(value)
     : String(value ?? '—');

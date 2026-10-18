@@ -18,7 +18,7 @@
       @submit.prevent="submit"
     >
       <el-form-item
-        v-for="field in action.fields ?? []"
+        v-for="field in fields"
         :key="field.key"
         :label="field.label"
         :prop="field.key"
@@ -107,6 +107,11 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; saved: [Record<string, unknown>] }>();
 const authStore = useAuthStore();
+const fields = computed(() =>
+  (props.action.fields ?? []).filter(
+    (field) => field.key !== 'queryTransportMode' || authStore.user?.roles.includes('admin')
+  )
+);
 const draft = useV2FormDraft<Record<string, FormValue>>(
   `online-recharge/${props.section}/actions`,
   () => ({})
@@ -131,8 +136,8 @@ watch(
     clearTemporary();
     if (!open) return;
     error.value = '';
-    const initial = initialFields(props.action.fields);
-    for (const field of props.action.fields ?? [])
+    const initial = initialFields(fields.value);
+    for (const field of fields.value)
       if (!field.transient && props.row?.[field.key] !== undefined)
         initial[field.key] = props.row[field.key] as FormValue;
     draft.open(
@@ -140,7 +145,7 @@ watch(
       initial,
       props.row?.updatedAt
     );
-    for (const field of props.action.fields ?? [])
+    for (const field of fields.value)
       if (field.transient) temporary[field.key] = field.initial ?? '';
   },
   { immediate: true }
@@ -154,11 +159,11 @@ function setValue(field: OnlineField, input: FormValue) {
 }
 const formRef = ref<FormInstance>();
 const formModel = computed(() =>
-  Object.fromEntries((props.action.fields ?? []).map((field) => [field.key, value(field.key)]))
+  Object.fromEntries(fields.value.map((field) => [field.key, value(field.key)]))
 );
 const formRules = computed<FormRules>(() =>
   Object.fromEntries(
-    (props.action.fields ?? [])
+    fields.value
       .filter((field) => field.required)
       .map((field) => [
         field.key,
@@ -179,9 +184,7 @@ async function loadFile(field: OnlineField, event: Event) {
 }
 function actionBody() {
   const body: Record<string, unknown> = {
-    ...Object.fromEntries(
-      (props.action.fields ?? []).map((field) => [field.key, value(field.key)])
-    ),
+    ...Object.fromEntries(fields.value.map((field) => [field.key, value(field.key)])),
     ...(props.row ? { id: props.row.id, version: draft.version.value } : {})
   };
   if (props.action.key === 'import') {
@@ -219,6 +222,7 @@ function actionBody() {
   }
   delete body.paymentLimitCurrency;
   delete body.paymentLimitAmount;
+  if (body.queryTransportMode === '') delete body.queryTransportMode;
   return body;
 }
 async function submit() {

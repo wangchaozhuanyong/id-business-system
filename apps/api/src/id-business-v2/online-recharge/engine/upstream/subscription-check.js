@@ -2,6 +2,7 @@
 
 const { request: playwrightRequest } = require('playwright');
 const { performance } = require('node:perf_hooks');
+const { randomUUID } = require('node:crypto');
 const { setTimeout, clearTimeout } = require('node:timers');
 const { extractProfileFromToken } = require('./session-auth');
 const { preparePlaywrightProxy } = require('./playwright-proxy');
@@ -330,41 +331,104 @@ function queryBudget(options) {
         signal, diagnostics: [], attempts: 0 };
 }
 function checkBudget(budget) {
-    if (budget.signal?.aborted) throw Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' });
+    if (budget.signal?.aborted) throw Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST', timeoutSource: 'lease_lost' });
     if (performance.now() >= budget.deadlineAt)
-        throw Object.assign(new Error('订阅查询已到期限'), { code: 'NETWORK_TIMEOUT', networkCode: 'ETIMEDOUT' });
+        throw Object.assign(new Error('订阅查询已到期限'), {
+            code: 'NETWORK_TIMEOUT', networkCode: 'ETIMEDOUT', timeoutSource: 'query_deadline'
+        });
     return Math.max(1, Math.ceil(budget.deadlineAt - performance.now()));
 }
-async function boundedQuery(operation, budget, phase) {
+async function boundedQuery(operation, budget, phase, onHalt) {
     const remaining = checkBudget(budget);
-    let timer, onAbort;
+    let timer, onAbort, haltedError;
     const halted = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error('订阅查询已到期限'), {
-            code: 'NETWORK_TIMEOUT', networkCode: 'ETIMEDOUT', phase
-        })), remaining);
-        onAbort = () => reject(Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' }));
+        timer = setTimeout(() => {
+            haltedError = Object.assign(new Error('订阅查询已到期限'), {
+                code: 'NETWORK_TIMEOUT', networkCode: 'ETIMEDOUT', phase,
+                timeoutSource: budget.timeoutSource || 'query_deadline'
+            });
+            reject(haltedError);
+        }, remaining);
+        onAbort = () => {
+            haltedError = Object.assign(new Error('任务已停止'), {
+                code: 'LEASE_LOST', phase, timeoutSource: 'lease_lost'
+            });
+            reject(haltedError);
+        };
         budget.signal?.addEventListener('abort', onAbort, { once: true });
+        if (budget.signal?.aborted) onAbort();
     });
-    try { return await Promise.race([Promise.resolve().then(operation), halted]); }
-    catch (error) { if (!error.phase) error.phase = phase; throw error; }
+    try { return await Promise.race([Promise.resolve().then(() => {
+        if (haltedError) throw haltedError;
+        return operation();
+    }), halted]); }
+    catch (error) {
+        if (error === haltedError && onHalt) {
+            try { error.cancellationConfirmed = await onHalt(error) === true; }
+            catch (_) { error.cancellationConfirmed = false; }
+            if (!error.cancellationConfirmed) error.cancelUnconfirmed = true;
+        }
+        if (!error.phase) error.phase = phase;
+        throw error;
+    }
     finally { clearTimeout(timer); budget.signal?.removeEventListener('abort', onAbort); }
+}
+function emptyReadObservation() {
+    return { requestIssued: false, responseHeadersReceived: false, responseBodyCompleted: false };
+}
+function mergeReadObservation(target, source) {
+    if (!source || typeof source !== 'object') return;
+    for (const key of ['requestIssued', 'responseHeadersReceived', 'responseBodyCompleted'])
+        if (source[key] === true) target[key] = true;
+    for (const key of ['headersElapsedMs', 'bodyElapsedMs'])
+        if (Number.isSafeInteger(source[key]) && source[key] >= 0 && source[key] <= 180000) target[key] = source[key];
+    if (Number.isSafeInteger(source.httpStatus) && source.httpStatus >= 100 && source.httpStatus <= 599)
+        target.httpStatus = source.httpStatus;
+}
+function readFailurePhase(observation) {
+    return !observation.requestIssued ? 'request_dispatch'
+        : !observation.responseHeadersReceived ? 'response_headers' : 'response_body';
+}
+async function settledWithin(pending, timeoutMs = 1000) {
+    let timer;
+    try {
+        return await Promise.race([Promise.resolve(pending).then(() => true, () => true),
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
+    } finally { clearTimeout(timer); }
 }
 async function queryGet(read, budget, transport) {
     const maximum = budget.maxAttempts === 1 ? 1 : 2;
     while (budget.attempts < maximum) {
         const started = performance.now(), attempt = ++budget.attempts;
+        const control = { observation: emptyReadObservation(), cancel: undefined };
+        let pending;
         try {
             const timeoutMs = Math.min(10000, checkBudget(budget));
-            const attemptBudget = { ...budget, deadlineAt: Math.min(budget.deadlineAt, started + timeoutMs) };
-            const value = await boundedQuery(() => read(timeoutMs), attemptBudget, 'account_check');
+            const attemptBudget = { ...budget, deadlineAt: Math.min(budget.deadlineAt, started + 10000),
+                timeoutSource: budget.deadlineAt <= started + 10000 ? 'query_deadline' : 'attempt_deadline' };
+            control.timeoutSource = attemptBudget.timeoutSource;
+            const value = await boundedQuery(() => {
+                pending = Promise.resolve().then(() => read(timeoutMs, control));
+                return pending;
+            }, attemptBudget, 'account_check', async error => {
+                if (typeof control.cancel !== 'function') return await settledWithin(pending);
+                const acknowledged = await control.cancel(error);
+                return acknowledged === true && await settledWithin(pending);
+            });
+            checkBudget(budget);
             budget.diagnostics.push({ transport, phase: 'account_check', httpStatus: value.status,
-                attempt, elapsedMs: Math.round(performance.now() - started) });
+                ...control.observation, attempt, elapsedMs: Math.round(performance.now() - started) });
             return value;
         } catch (error) {
-            if (error.code === 'LEASE_LOST') throw error;
             const code = transportCode(error);
             budget.diagnostics.push({ transport, phase: 'account_check', networkCode: code,
+                ...control.observation, failurePhase: readFailurePhase(control.observation),
+                ...(['attempt_deadline', 'query_deadline', 'lease_lost', 'browser_abort'].includes(error.timeoutSource)
+                    ? { timeoutSource: error.timeoutSource } : {}),
+                ...(typeof error.cancellationConfirmed === 'boolean'
+                    ? { cancellationConfirmed: error.cancellationConfirmed } : {}),
                 attempt, elapsedMs: Math.round(performance.now() - started) });
+            if (error.code === 'LEASE_LOST' || error.cancelUnconfirmed) throw error;
             if (attempt >= maximum || !['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN',
                 'net::ERR_CONNECTION_RESET', 'net::ERR_TIMED_OUT', 'net::ERR_NETWORK_CHANGED'].includes(code)) throw error;
             await boundedQuery(() => new Promise((resolve) => setTimeout(resolve, Math.min(500, checkBudget(budget)))), budget, 'retry_wait');
@@ -378,33 +442,147 @@ function officialPage(page) {
 }
 async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
     if (!officialPage(page)) throw Object.assign(new Error('订阅查询页面来源不符'), { code: 'NETWORK_UNAVAILABLE' });
-    return queryGet(async (timeoutMs) => {
+    return queryGet(async (timeoutMs, control) => {
+        const readId = randomUUID();
+        const url = buildCheckUrl(timezoneOffsetMin);
         let observed;
+        const issued = request => {
+            if (request.url() === url && request.method?.() === 'GET') control.observation.requestIssued = true;
+        };
         const failed = (request) => {
-            if (request.url() !== buildCheckUrl(timezoneOffsetMin)) return;
+            if (request.url() !== url) return;
             const code = String(request.failure()?.errorText || '').match(/\bnet::ERR_[A-Z_]+\b/)?.[0];
             if (code) observed = code;
         };
+        page.on?.('request', issued);
         page.on?.('requestfailed', failed);
+        control.cancel = async error => {
+            if (error?.code === 'LEASE_LOST') {
+                // Renderer-side cancellation would queue behind an already
+                // queued read. Close only this task's page at the browser
+                // boundary so a lost lease cannot dispatch that late GET.
+                if (page.isClosed?.()) return true;
+                const closing = page.close({ runBeforeUnload: false });
+                return await settledWithin(closing) && page.isClosed?.() === true;
+            }
+            const cancellation = page.evaluate(async ({ readId }) => {
+                const reads = globalThis.__ID_BUSINESS_SUBSCRIPTION_READS__ ||= new Map();
+                const entry = reads.get(readId);
+                // A queued evaluate must observe the cancellation before dispatching.
+                if (!entry) { reads.set(readId, { cancelled: true }); return { settled: true }; }
+                entry.controller?.abort();
+                if (entry.done) await entry.done;
+                return { settled: true, observation: entry.observation };
+            }, { readId }).then(result => {
+                mergeReadObservation(control.observation, result?.observation);
+                return result?.settled === true;
+            }, () => page.isClosed?.() === true);
+            let timer;
+            try { return await Promise.race([cancellation, new Promise(resolve => {
+                timer = setTimeout(() => resolve(false), 1000);
+            })]); }
+            finally { clearTimeout(timer); }
+        };
         try {
-            const result = await page.evaluate(async ({ url, token, timeoutMs }) => {
+            const result = await page.evaluate(async ({ url, token, timeoutMs, readId, timeoutSource, dispatchDeadline }) => {
                 if (location.origin !== 'https://chatgpt.com') return { status: 0, readError: 'ORIGIN_MISMATCH' };
-                const control = new AbortController(), timer = setTimeout(() => control.abort(), timeoutMs);
+                const reads = globalThis.__ID_BUSINESS_SUBSCRIPTION_READS__ ||= new Map();
+                if (reads.get(readId)?.cancelled) { reads.delete(readId); return { status: 0, readError: 'CANCELLED' }; }
+                if (Date.now() >= dispatchDeadline) return { status: 0, readError: 'ETIMEDOUT', timeoutSource };
+                const control = new AbortController(), started = performance.now();
+                const observation = { requestIssued: false, responseHeadersReceived: false, responseBodyCompleted: false };
+                const entry = { controller: control, observation, done: undefined };
+                reads.set(readId, entry);
+                let timedOut = false;
+                const timer = setTimeout(() => { timedOut = true; control.abort(); }, timeoutMs);
                 try {
-                    const response = await fetch(url, { method: 'GET', credentials: 'include', cache: 'no-store',
-                        redirect: 'error', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: control.signal });
-                    const text = await response.text();
-                    return { status: response.status, text: text.length <= 512 * 1024 ? text : null };
-                } catch (error) { return { status: 0, readError: error.name === 'AbortError' ? 'ETIMEDOUT' : 'NETWORK' }; }
-                finally { clearTimeout(timer); }
-            }, { url: buildCheckUrl(timezoneOffsetMin), token: accessToken, timeoutMs });
+                    entry.done = (async () => {
+                        try {
+                            const response = await fetch(url, { method: 'GET', credentials: 'include', cache: 'no-store',
+                                redirect: 'error', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: control.signal });
+                            observation.responseHeadersReceived = true;
+                            observation.httpStatus = response.status;
+                            observation.headersElapsedMs = Math.round(performance.now() - started);
+                            const bodyStarted = performance.now(), text = await response.text();
+                            observation.responseBodyCompleted = true;
+                            observation.bodyElapsedMs = Math.round(performance.now() - bodyStarted);
+                            return { status: response.status, text: text.length <= 512 * 1024 ? text : null, observation };
+                        } catch (error) {
+                            if (observation.responseHeadersReceived && !observation.responseBodyCompleted)
+                                observation.bodyElapsedMs = Math.max(0,
+                                    Math.round(performance.now() - started) - observation.headersElapsedMs);
+                            return { status: observation.httpStatus || 0,
+                                readError: error.name === 'AbortError' ? 'ETIMEDOUT' : 'NETWORK', observation,
+                                ...(error.name === 'AbortError' ? { timeoutSource: timedOut ? timeoutSource : 'browser_abort' } : {}) };
+                        }
+                    })();
+                    return await entry.done;
+                } finally { clearTimeout(timer); reads.delete(readId); }
+            }, { url, token: accessToken, timeoutMs, readId, timeoutSource: control.timeoutSource,
+                dispatchDeadline: Date.now() + timeoutMs });
+            mergeReadObservation(control.observation, result.observation);
             if (result.readError) throw Object.assign(new Error('页面订阅读取未完成'), {
-                networkCode: observed || (result.readError === 'ETIMEDOUT' ? 'ETIMEDOUT' : 'UNKNOWN')
+                networkCode: result.readError === 'ETIMEDOUT'
+                    && ['attempt_deadline', 'query_deadline'].includes(result.timeoutSource)
+                    ? 'ETIMEDOUT' : observed || 'UNKNOWN',
+                timeoutSource: result.timeoutSource,
+                ...(result.readError === 'ETIMEDOUT' ? { cancellationConfirmed: true } : {})
             });
             if (result.text === null) throw Object.assign(new Error('订阅响应超过限制'), { code: 'RESPONSE_TOO_LARGE' });
             return { status: result.status, data: normalizeResponseBody(result.text), via: 'browser-page' };
-        } finally { page.off?.('requestfailed', failed); }
+        } finally { page.off?.('request', issued); page.off?.('requestfailed', failed); }
     }, budget, 'browser-page');
+}
+async function compareContextRead(context, accessToken, timezoneOffsetMin, budget) {
+    const started = performance.now(), observation = emptyReadObservation();
+    const diagnostic = { transport: 'context-request-compare', phase: 'account_check', attempt: 1 };
+    let pending;
+    try {
+        const timeoutMs = Math.min(20000, checkBudget(budget));
+        const attemptBudget = { ...budget, deadlineAt: Math.min(budget.deadlineAt, started + 20000),
+            timeoutSource: budget.deadlineAt <= started + 20000 ? 'query_deadline' : 'attempt_deadline' };
+        const read = async () => {
+            observation.requestIssued = true;
+            const response = await context.request.get(buildCheckUrl(timezoneOffsetMin), {
+                timeout: timeoutMs, maxRedirects: 0, headers: buildCheckHeaders(accessToken)
+            });
+            observation.responseHeadersReceived = true;
+            observation.responseBodyCompleted = true;
+            observation.httpStatus = response.status();
+            // APIRequestContext resolves after buffering the body; it cannot
+            // reveal time to headers separately from time to the complete response.
+            observation.responseElapsedMs = Math.round(performance.now() - started);
+            const text = await response.text();
+            const body = text.length <= 512 * 1024 ? normalizeResponseBody(text) : null;
+            const observed = body?.accounts?.default?.account?.account_id;
+            const accountFactsPresent = observation.httpStatus === 200 && typeof observed === 'string'
+                && observed.length > 0 && typeof body?.accounts?.default?.entitlement?.has_active_subscription === 'boolean';
+            const expected = extractProfileFromToken(accessToken).accountId;
+            return { accountFactsPresent,
+                accountIdentityMatches: accountFactsPresent && Boolean(expected) && observed === expected };
+        };
+        const facts = await boundedQuery(() => {
+            pending = Promise.resolve().then(read);
+            return pending;
+        }, attemptBudget, 'account_check', async () => {
+            // A comparison is permitted only in an exclusively owned context:
+            // APIRequestContext has no per-request abort, so close that context.
+            const closing = context.close();
+            return await settledWithin(closing) && await settledWithin(pending);
+        });
+        checkBudget(budget);
+        return { ...diagnostic, ...observation, ...facts,
+            elapsedMs: Math.round(performance.now() - started) };
+    } catch (error) {
+        if (error.code === 'LEASE_LOST') throw error;
+        return { ...diagnostic, ...observation, networkCode: transportCode(error),
+            failurePhase: 'request_complete', responseElapsedMs: Math.round(performance.now() - started),
+            ...(['attempt_deadline', 'query_deadline', 'lease_lost', 'browser_abort'].includes(error.timeoutSource)
+                ? { timeoutSource: error.timeoutSource } : {}),
+            ...(typeof error.cancellationConfirmed === 'boolean'
+                ? { cancellationConfirmed: error.cancellationConfirmed } : {}),
+            elapsedMs: Math.round(performance.now() - started) };
+    }
 }
 async function prepareQueryPage(context, budget) {
     const page = await boundedQuery(() => context.newPage(), budget, 'page_create');
@@ -417,7 +595,7 @@ async function prepareQueryPage(context, budget) {
 async function closeQueryPage(page) {
     if (!page) return;
     await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
-    await page.close().catch(() => {});
+    if (!page.isClosed?.()) await page.close().catch(() => {});
 }
 async function withRenewalBrowserContext(accessToken, options, operation) {
     const budget = queryBudget(options);
@@ -468,6 +646,24 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
 async function fetchAccountCheck(accessToken, options = {}) {
     const budget = queryBudget(options);
     let cleanup = async () => {}, ownedContext, session, ownedPage, requestContext, verifiedCookie = false;
+    let compareDiagnostics;
+    const compare = async (page, error) => {
+        if (options.queryTransportMode !== 'transport_compare') return;
+        if (error?.code === 'LEASE_LOST' || budget.signal?.aborted) return;
+        if (error?.cancelUnconfirmed) {
+            compareDiagnostics = [{ transport: 'context-request-compare', skippedReason: 'cancellation_unconfirmed' }];
+            return;
+        }
+        if (!ownedContext || ownedContext !== page?.context?.()) {
+            compareDiagnostics = [{ transport: 'context-request-compare', skippedReason: 'shared_context' }];
+            return;
+        }
+        if (performance.now() >= budget.deadlineAt) {
+            compareDiagnostics = [{ transport: 'context-request-compare', skippedReason: 'query_deadline' }];
+            return;
+        }
+        compareDiagnostics = [await compareContextRead(ownedContext, accessToken, options.timezoneOffsetMin, budget)];
+    };
     try {
         let page = options.page;
         const context = options.browserContext || page?.context?.();
@@ -510,8 +706,12 @@ async function fetchAccountCheck(accessToken, options = {}) {
                     code: result.code || 'HUMAN_VERIFICATION_REQUIRED', diagnostics: result.diagnostics
                 });
             }
-            const result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget);
-            return { ...result, diagnostics: budget.diagnostics };
+            let result;
+            try { result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget); }
+            catch (error) { await compare(page, error); throw error; }
+            await compare(page);
+            return { ...result, diagnostics: budget.diagnostics,
+                ...(compareDiagnostics ? { compareDiagnostics } : {}) };
         }
         // Token-only callers retain the explicit task-proxy transport; browser callers never
         // silently leave their Chromium network stack or change the resolved proxy.
@@ -562,6 +762,7 @@ async function fetchAccountCheck(accessToken, options = {}) {
         }
         const bootstrapDiagnostics = safeBootstrapDiagnostics(error.bootstrapDiagnostics);
         return { status: 0, errorCode: queryErrorCode(error), data: null, diagnostics: budget.diagnostics,
+            ...(compareDiagnostics ? { compareDiagnostics } : {}),
             ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}),
             verificationDiagnostics: safeVerificationDiagnostics(error.diagnostics),
             failure: { phase: ['account_check', 'session_install', 'session_bootstrap', 'navigation', 'proxy_prepare',
@@ -909,6 +1110,7 @@ async function querySubscriptionBySession(accessToken, options = {}) {
         };
     }
 
+    const comparison = response.compareDiagnostics ? { compareDiagnostics: response.compareDiagnostics } : {};
     if (response.errorCode) {
         const messages = {
             HUMAN_VERIFICATION_REQUIRED: '官网需要人工验证，请完成验证后再查询',
@@ -922,7 +1124,7 @@ async function querySubscriptionBySession(accessToken, options = {}) {
         const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403, ACCOUNT_MISMATCH: 409,
             SESSION_NOT_CONFIRMED: 503, SESSION_BOOTSTRAP_FAILED: 502 };
         const bootstrapDiagnostics = safeBootstrapDiagnostics(response.bootstrapDiagnostics);
-        return { ok: false, errorCode: response.errorCode,
+        return { ok: false, ...comparison, errorCode: response.errorCode,
             statusCode: statuses[response.errorCode] || (/TIMEOUT$/.test(response.errorCode) ? 504
                 : /^(?:VERIFICATION_|VLM_)/.test(response.errorCode) ? 503 : 502),
             error: messages[response.errorCode] || '官网验证未完成，本次订阅查询未取得有效结果', diagnostics: response.diagnostics,
@@ -932,18 +1134,18 @@ async function querySubscriptionBySession(accessToken, options = {}) {
     const body = normalizeResponseBody(response.data);
     if (response.status !== 200) {
         const mapped = mapCheckError(response.status, body);
-        return { ok: false, ...mapped, diagnostics: response.diagnostics };
+        return { ok: false, ...mapped, ...comparison, diagnostics: response.diagnostics };
     }
 
     if (!body || typeof body !== 'object' || Array.isArray(body) ||
         typeof body.accounts?.default?.account?.account_id !== 'string' ||
         typeof body.accounts?.default?.entitlement?.has_active_subscription !== 'boolean') {
-        return { ok: false, statusCode: 502, errorCode: 'UPSTREAM_INVALID_RESPONSE',
+        return { ok: false, ...comparison, statusCode: 502, errorCode: 'UPSTREAM_INVALID_RESPONSE',
             error: '官网订阅响应缺少有效账号或订阅状态', diagnostics: response.diagnostics };
     }
 
     return {
-        ok: true,
+        ok: true, ...comparison,
         data: parseAccountCheckResponse(body, profile), diagnostics: response.diagnostics
     };
 }

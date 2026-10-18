@@ -6,7 +6,8 @@ const identity = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   epoch: { value: 0 }
 }));
-vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 'synthetic-owner' } }) }));
+const actor = vi.hoisted(() => ({ user: { id: 'synthetic-owner', roles: ['admin'] } }));
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => actor }));
 vi.mock('@/auth/sessionCoordinator', () => ({
   sessionCoordinator: {
     identityEpoch: identity.epoch,
@@ -66,6 +67,7 @@ const unmounts: (() => void)[] = [];
 afterEach(() => {
   unmounts.splice(0).forEach((unmount) => unmount());
   clearV2SessionDrafts();
+  actor.user.roles = ['admin'];
 });
 
 function mountDrawer(section: OnlineSection, field: 'session' | 'cvc') {
@@ -92,12 +94,18 @@ function mountDrawer(section: OnlineSection, field: 'session' | 'cvc') {
         setupState: {
           value: (key: string) => FormValue;
           setValue: (field: OnlineField, value: FormValue) => void;
+          actionBody: () => Record<string, unknown>;
         };
       }
     ).setupState;
   return {
     open,
     action,
+    body: () => state().actionBody(),
+    async setField(field: OnlineField, value: FormValue) {
+      state().setValue(field, value);
+      await nextTick();
+    },
     read: () => state().value(field),
     async fill(value: string) {
       state().setValue(action.value.fields![0], value);
@@ -105,6 +113,40 @@ function mountDrawer(section: OnlineSection, field: 'session' | 'cvc') {
     }
   };
 }
+
+describe('订阅查询诊断的表单提交', () => {
+  const mode: OnlineField = {
+    key: 'queryTransportMode',
+    label: '查询诊断',
+    type: 'select'
+  };
+  it('普通查询不发送空诊断参数，管理员选择后才提交', async () => {
+    const drawer = mountDrawer('sessions', 'session');
+    drawer.action.value = {
+      ...drawer.action.value,
+      key: 'subscription',
+      fields: [{ key: 'session', label: '会话资料', transient: true }, mode]
+    };
+    await nextTick();
+    await drawer.fill('{"accessToken":"synthetic-token"}');
+    expect(drawer.body()).not.toHaveProperty('queryTransportMode');
+    await drawer.setField(mode, 'transport_compare');
+    expect(drawer.body()).toMatchObject({ queryTransportMode: 'transport_compare' });
+  });
+  it('普通员工即使残留同名草稿，也不显示或提交管理员诊断选项', async () => {
+    actor.user.roles = ['staff'];
+    const drawer = mountDrawer('sessions', 'session');
+    drawer.action.value = {
+      ...drawer.action.value,
+      key: 'subscription',
+      fields: [{ key: 'session', label: '会话资料', transient: true }, mode]
+    };
+    await nextTick();
+    await drawer.fill('{"accessToken":"synthetic-token"}');
+    await drawer.setField(mode, 'transport_compare');
+    expect(drawer.body()).not.toHaveProperty('queryTransportMode');
+  });
+});
 
 describe.each([
   ['checkout-debug', 'session', '{"accessToken":"synthetic-token-not-a-real-credential"}'],

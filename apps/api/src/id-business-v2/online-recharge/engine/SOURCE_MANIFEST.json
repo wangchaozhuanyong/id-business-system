@@ -180,9 +180,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "56e78f1c0c91a8d5270df21e1b2304a019ecf32f65b4ce2f6a26954a8bcc6af2",
+      "adaptedSha256": "24487f671062674876d0047a5255e6ad2320e2517d1531bd6bcbac97ab9830d2",
       "changed": true,
-      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
+      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization."
     },
     {
       "path": "test/checkout-cs-browser.test.cjs",
@@ -264,9 +264,9 @@
     {
       "path": "test/dispatch.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "bd1d7b3057baea74e8c8aeef6143bb1f77709179c3c433a8fb8556e7537e141e",
+      "adaptedSha256": "e2ecc55d1a8222f42a772304d438adb912546c33a24a4724ac6048b5c24acde3",
       "changed": true,
-      "reason": "Synthetic dispatch regression includes the strict proxy detection adapter."
+      "reason": "Synthetic dispatch regression includes the strict proxy detection adapter. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization."
     },
     {
       "path": "test/media-browser.test.cjs",
@@ -642,9 +642,9 @@
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "a7e467eb23be4b72036a3ac98bef63a0be1985d25dfb87d7042158d676f03d40",
+      "adaptedSha256": "b08bb21f467deef64b17e3e099d7d69464cf807a6d79509bd0c7aada459ae2a7",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization."
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -715,6 +715,13 @@
       "adaptedSha256": "fd60766c034e38a5dbcc1ea6c7f7b2b11398a13f6b89f1d6e6844ed0533f33b8",
       "changed": true,
       "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
+    },
+    {
+      "path": "test/query-network-browser.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "reason": "Real Chromium synthetic network-phase, cancellation, late-response and zero-payment regression coverage; localhost-only fixtures.",
+      "adaptedSha256": "78dcb5971b740a0f5c9303876a33a5502cab1d901d13a5f5622f507704dac7f1"
     }
   ],
   "dependencySecurityPatches": [

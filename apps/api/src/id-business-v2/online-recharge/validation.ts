@@ -1,5 +1,48 @@
-import { BadRequestException } from '@nestjs/common';
-import { ONLINE_RECHARGE_PLANS, type OnlineRechargePlan } from './contracts';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import {
+  ONLINE_RECHARGE_PLANS,
+  type OnlineRechargeOperation,
+  type OnlineRechargePlan
+} from './contracts';
+
+const QUERY_TRANSPORT_INPUT_KEYS = new Set([
+  'queryTransportMode',
+  'session',
+  'plan',
+  'action',
+  'id',
+  'ids',
+  'version',
+  'page',
+  'pageSize',
+  'keyword',
+  'status',
+  'dispatched',
+  'sortOrder',
+  'region',
+  'startDate',
+  'endDate'
+]);
+
+export function assertQueryTransportModeInput(
+  input: Record<string, unknown>,
+  operator: AuthenticatedUser | undefined,
+  operation: OnlineRechargeOperation,
+  integrationSource?: string
+): 'transport_compare' | undefined {
+  if (!Object.hasOwn(input, 'queryTransportMode')) return undefined;
+  if (!operator?.roles.includes('admin')) throw new ForbiddenException('网络对照仅允许管理员执行');
+  if (
+    input.queryTransportMode !== 'transport_compare' ||
+    operation !== 'subscription' ||
+    integrationSource !== undefined ||
+    (Object.hasOwn(input, 'action') && input.action !== 'check') ||
+    Object.getOwnPropertyNames(input).some((key) => !QUERY_TRANSPORT_INPUT_KEYS.has(key))
+  )
+    throw new BadRequestException('网络对照仅支持独立订阅查询，不能携带原单或付款资料');
+  return 'transport_compare';
+}
 
 export interface OnlineRechargePaymentLimit {
   currency: string;

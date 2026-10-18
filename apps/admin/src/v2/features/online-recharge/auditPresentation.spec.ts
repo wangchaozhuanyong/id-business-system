@@ -82,6 +82,43 @@ function resultState(result: unknown) {
 }
 
 describe('线上代充审计发现的结果展示', () => {
+  it('展示超时发生的网络阶段与只读对照，过滤原始响应和凭据', () => {
+    const state = resultState({
+      ok: false,
+      errorCode: 'NETWORK_TIMEOUT',
+      diagnostics: [
+        {
+          transport: 'browser-page',
+          phase: 'account_check',
+          requestIssued: true,
+          responseHeadersReceived: true,
+          responseBodyCompleted: false,
+          failurePhase: 'response_body',
+          timeoutSource: 'attempt_deadline',
+          networkCode: 'ETIMEDOUT',
+          headersElapsedMs: 18,
+          bodyElapsedMs: 82,
+          cancellationConfirmed: true,
+          rawResponse: 'PRIVATE_RAW_RESPONSE',
+          authorization: 'PRIVATE_AUTHORIZATION'
+        }
+      ],
+      compareDiagnostics: [{ skippedReason: 'shared_context' }]
+    });
+    const network = state.entries.find((entry) => entry.label === '查询网络诊断')?.value;
+    expect(network).toContain('读取方式：当前已登录浏览器');
+    expect(network).toContain('请求已发出：是');
+    expect(network).toContain('已收到响应头：是');
+    expect(network).toContain('响应体已读取完成：否');
+    expect(network).toContain('停止位置：读取官网响应体');
+    expect(network).toContain('停止原因：单次读取到期');
+    expect(network).toContain('网络结果：读取超时');
+    expect(network).not.toMatch(/PRIVATE_|response_body|ETIMEDOUT/);
+    expect(state.entries).toContainEqual({
+      label: '只读对照结果（不替代订阅核验）',
+      value: '未执行对照的原因：当前浏览器由其他流程共用'
+    });
+  });
   it('充值开始语音事件在运行日志展示准确的中文阶段', () => {
     expect(onlineCell({ id: 'start-event', stage: 'recharge_started' }, 'stage')).toBe(
       '充值开始执行'

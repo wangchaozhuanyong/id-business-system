@@ -259,6 +259,16 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
         {
           ...session,
           help: '填写最新完整的 Session JSON，仅核验登录和订阅，不提交充值或付款；会话资料不进入页面草稿，关闭或离页后清除。'
+        },
+        {
+          key: 'queryTransportMode',
+          label: '查询诊断',
+          type: 'select',
+          options: [
+            { value: '', label: '普通查询' },
+            { value: 'transport_compare', label: '只读对照诊断' }
+          ],
+          help: '查询失败时可对照同一代理下的读取结果；诊断不付款，也不会代替本次订阅核验。'
         }
       ]
     }
@@ -417,5 +427,7 @@ export function onlineActionPayload(filters: OnlineQuery, values: Record<string,
   const selectedFilters = Object.fromEntries(
     Object.entries(filters).filter(([, value]) => value !== '' && value != null)
   );
-  return { ...selectedFilters, ...values };
+  const payload = { ...selectedFilters, ...values };
+  if (payload.queryTransportMode === '') delete payload.queryTransportMode;
+  return payload;
 }

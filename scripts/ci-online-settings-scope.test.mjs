@@ -6,6 +6,11 @@ import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
+  onlineQueryNetworkScope,
+  onlineQueryNetworkPaths,
+  onlineQueryNetworkControls,
+  isOnlineQueryNetworkOnly,
+  isOnlineQueryNetworkControlsOnly,
   onlineSettingsPaths,
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
@@ -42,6 +47,68 @@ import {
   onlineSessionPreflightPaths,
   onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
+
+test('query network repair requires the complete finite source set and four affected checks', () => {
+  const paths = [...onlineQueryNetworkPaths, ...onlineQueryNetworkControls];
+  assert.equal(onlineQueryNetworkScope, 'ONLINE_QUERY_NETWORK_REPAIR');
+  assert.equal(onlineQueryNetworkPaths.length, 17);
+  assert.equal(isOnlineQueryNetworkOnly(paths), true);
+  assert.equal(isOnlineSettingsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  const guards = onlineSettingsCommands('guards', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(guards, /online-query-network-release\.test\.py/);
+  for (const check of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(guards.includes(check), check);
+  const api = onlineSettingsCommands('api', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(
+    api,
+    /engine\/upstream\/node_modules\/playwright\/cli\.js install --with-deps chromium/
+  );
+  assert.match(api, /src\/id-business-v2\/online-recharge/);
+  const engine = onlineSettingsCommands('online-engine', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(engine, /--test-concurrency=1/);
+});
+
+test('query diagnostic controls cannot narrow unrelated payment, authentication or dependency edits', () => {
+  const paths = [...onlineQueryNetworkPaths, ...onlineQueryNetworkControls];
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    'apps/api/src/auth/auth.service.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/v2/features/auto-registration/V2AutoRegistrationView.vue',
+    'scripts/production-release/online-query-network-arbitrary.py',
+    'package-lock.json'
+  ]) {
+    assert.equal(isOnlineQueryNetworkOnly([...paths, extra]), false, extra);
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full', extra);
+  }
+  assert.equal(isOnlineQueryNetworkOnly(paths.slice(1)), false);
+  assert.equal(isOnlineQueryNetworkOnly([...paths, paths[0]]), false);
+  assert.equal(checkMode(paths, 'old-schema', 'new-schema'), 'full');
+  const controls = onlineQueryNetworkControls.filter((path) => !path.startsWith('scripts/ci-'));
+  assert.equal(isOnlineQueryNetworkControlsOnly(controls), true);
+  assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(
+    onlineSettingsCommands('guards', controls).some((args) => args.includes('check:admin-ui')),
+    false
+  );
+});
 
 test('Session preflight admits only its four reviewed sources and nine finite controls', () => {
   assert.equal(onlineSessionPreflightScope, 'ONLINE_SESSION_SUBSCRIPTION_PREFLIGHT');
