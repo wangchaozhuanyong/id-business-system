@@ -32,13 +32,16 @@ def raw_contract():
 
 def contract():
     c = raw_contract()
+    # The root re-freezes the real contract after this bounded control repair.
+    # Keep the new integration field explicit in in-memory unit fixtures only.
+    c.setdefault('mainIntegrationBase', p.MAIN_BASE)
     if c.get('frozen') is True:
         return c
     # These are explicitly synthetic unit-test digests, not future source pins.
     # No generated fixture is persisted; freeze() supplies all real bindings.
     c.update(frozen=True, admission='FROZEN_REVIEWED_SOURCE', pendingBindings=[],
-        sourceReviewCommit=p.SOURCE_BASE,
-        sourceReviewTag='online-checkout-actionability-source-review-' + p.SOURCE_BASE[:12])
+        sourceReviewCommit=p.SOURCE_REVIEW,
+        sourceReviewTag='online-checkout-actionability-source-review-' + p.SOURCE_REVIEW[:12])
     c['afterEngineFiles'] = {**c['beforeEngineFiles'], **{
         name: p.sha(('SYNTHETIC_UNIT_TEST_ONLY:' + name).encode()) for name in p.FILES}}
     c['runtimeSources'] = {p.ENGINE + '/' + name: c['afterEngineFiles'][name] for name in p.FILES}
@@ -232,6 +235,53 @@ class SwitchTests(unittest.TestCase):
         b = load('online-checkout-actionability-build.py')
         with patch.object(b, 'check', return_value=p), patch.dict('os.environ', {'GITHUB_ACTIONS': 'false'}):
             with self.assertRaisesRegex(RuntimeError, 'NATIVE_BUILD_REQUIRED'): b.main()
+
+
+class MainIntegrationTests(unittest.TestCase):
+    def test_main_base_cannot_replace_production_or_review_base(self):
+        self.assertEqual(p.MAIN_BASE, '28d59e1c69f287314ea507c156986ec338545b91')
+        self.assertEqual(p.SOURCE_BASE, p.REVIEW_BASE)
+        self.assertNotEqual(p.MAIN_BASE, p.SOURCE_BASE)
+        self.assertEqual(p.SOURCE_REVIEW, '4ce2844b726ac8dc607a050c1f6cb5d38da2333f')
+        p.validate_contract(contract())
+        for key, value in (('mainIntegrationBase', p.SOURCE_BASE), ('sourceBaseCommit', p.MAIN_BASE),
+            ('reviewBase', p.MAIN_BASE), ('sourceReviewCommit', p.MAIN_BASE)):
+            c = contract(); c[key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'CONTRACT_IDENTITY_INVALID'):
+                p.validate_contract(c)
+
+    def test_main_selection_rejects_foreign_files_and_wrong_ancestry(self):
+        b = load('online-checkout-actionability-build.py'); c = contract()
+        expected = set(c['runtimeSources']) | set(c['validationSources']) | set(p.PUBLIC_CONTROLS)
+        self.assertEqual(len(expected), 19)
+        def git_fixture(extra=False, ancestor=True):
+            def git(*args):
+                if args[0] == 'merge-base': return ((p.MAIN_BASE if ancestor else p.SOURCE_BASE) + '\n').encode()
+                self.assertEqual(args, ('diff', '--name-only', p.MAIN_BASE, 'candidate'))
+                return ('\n'.join(sorted(expected | ({'apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue'} if extra else set()))) + '\n').encode()
+            return git
+        with patch.object(b, 'git', side_effect=git_fixture()): b.verify_main_selection(c, 'candidate')
+        with patch.object(b, 'git', side_effect=git_fixture(extra=True)):
+            with self.assertRaisesRegex(RuntimeError, 'FINITE_SELECTION_CHANGED'): b.verify_main_selection(c, 'candidate')
+        with patch.object(b, 'git', side_effect=git_fixture(ancestor=False)):
+            with self.assertRaisesRegex(RuntimeError, 'MAIN_INTEGRATION_BASE_CHANGED'): b.verify_main_selection(c, 'candidate')
+
+    def test_explicit_review_requires_annotated_tag_and_identical_bytes(self):
+        b = load('online-checkout-actionability-build.py')
+        for invalid in (None, 'HEAD', p.MAIN_BASE):
+            with self.subTest(review=invalid), self.assertRaisesRegex(RuntimeError, 'SOURCE_REVIEW_SELECTION_INVALID'):
+                b.verify_source_review(invalid)
+        with patch.object(b, 'git', return_value=b'commit\n'):
+            with self.assertRaisesRegex(RuntimeError, 'REVIEW_TAG_CHANGED'): b.verify_source_review(p.SOURCE_REVIEW)
+        expected = {p.ENGINE + '/' + name for name in p.FILES} | set(p.VALIDATION) | set(p.REVIEW_CONTROLS)
+        def git(*args):
+            if args[0] == 'cat-file': return b'tag\n'
+            if args[0] == 'rev-parse': return (p.SOURCE_REVIEW + '\n').encode()
+            if args[0] == 'diff': return ('\n'.join(sorted(expected)) + '\n').encode()
+            self.assertEqual(args[0], 'show')
+            return b'SYNTHETIC_REVIEWED_BYTE_MISMATCH'
+        with patch.object(b, 'git', side_effect=git):
+            with self.assertRaisesRegex(RuntimeError, 'REVIEWED_SOURCE_CHANGED'): b.verify_source_review(p.SOURCE_REVIEW)
 
 
 if __name__ == '__main__':

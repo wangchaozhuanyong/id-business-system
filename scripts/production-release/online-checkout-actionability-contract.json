@@ -3979,10 +3979,10 @@
   "businessActions": 0,
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-    "online-checkout-actionability-build.py": "ee4a3bfee42d9a73f3c5664f02ce33121a2ffaf3d1886373c2575d51a70d960d",
+    "online-checkout-actionability-build.py": "22f572ddfa952b375ab62f2e8a976cbda89fea0ea612bd90caae560dbc282b6f",
     "online-checkout-actionability-parity.cjs": "6b7ae035f1fca3f7fbd929e6fa60972d5d43f04e82f132230dfc2bcb66ce6088",
-    "online-checkout-actionability-release.py": "f19f0577b3b658d158b4bc9a58f60c200f7a586aca2611553ac81bd44a6b5435",
-    "online-checkout-actionability-release.test.py": "a5804b27b2618957c04f74ee3d50317593e5c0e99df587fdc94acf91ab6004ba",
+    "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
+    "online-checkout-actionability-release.test.py": "271add54ce5080ad3e1a20400697361af3ddf63392da8a78a79efdbf7025c827",
     "online-checkout-load-release.py": "50f9608895bf0072c38a2549a8db70c941316339c3a4626b179ca8b016078374",
     "online-checkout-release.py": "a20b33e15d05e7c01ddefd92ebce91c0587c0ccc09a5cd7a4cb019ebee6e0b39",
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
@@ -4003,20 +4003,11 @@
   },
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
   "frozen": true,
+  "mainIntegrationBase": "28d59e1c69f287314ea507c156986ec338545b91",
   "migrationPerformed": false,
   "pendingBindings": [],
-  "preservedServices": [
-    "api",
-    "admin",
-    "mysql",
-    "caddy",
-    "media-resolver",
-    "auto-recharge"
-  ],
-  "requiredQualityParts": [
-    "guards",
-    "online-engine"
-  ],
+  "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
+  "requiredQualityParts": ["guards", "online-engine"],
   "reviewBase": "3d045eb34406a6f83ee41b15f4a43c612dbcce83",
   "reviewedControlSources": {
     "scripts/ci-online-settings-scope.mjs": "4bcd7704ad57a949c2a8e1c935106a1f0059632a873f91511d14329b34f51ce2",
@@ -4039,9 +4030,7 @@
   "sourceReviewCommit": "4ce2844b726ac8dc607a050c1f6cb5d38da2333f",
   "sourceReviewTag": "online-checkout-actionability-source-review-4ce2844b726a",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-  "updatedServices": [
-    "online-recharge"
-  ],
+  "updatedServices": ["online-recharge"],
   "upstreamSource": {
     "commit": "ba6cf96312a6953e62edb9d74299d438d12549df",
     "repository": "https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git"

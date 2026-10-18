@@ -13,7 +13,9 @@ ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
 SCOPE = 'ONLINE_CHECKOUT_ACTIONABILITY'
 SOURCE_BASE = '3d045eb34406a6f83ee41b15f4a43c612dbcce83'
-REVIEW_BASE = SOURCE_BASE
+REVIEW_BASE = '3d045eb34406a6f83ee41b15f4a43c612dbcce83'
+SOURCE_REVIEW = '4ce2844b726ac8dc607a050c1f6cb5d38da2333f'
+MAIN_BASE = '28d59e1c69f287314ea507c156986ec338545b91'
 CONTRACT_FILE = 'online-checkout-actionability-contract.json'
 WORKFLOW = '.github/workflows/online-checkout-actionability-validation.yml'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
@@ -78,7 +80,8 @@ def validate_contract(c, *, require_baseline=True):
     need(c.get('frozen') is True and c.get('admission') == 'FROZEN_REVIEWED_SOURCE'
         and c.get('pendingBindings') == [] and c.get('upstreamSource') == UPSTREAM_SOURCE, 'SOURCE_NOT_FROZEN')
     need(c.get('version') == 1 and c.get('scope') == SCOPE and c.get('sourceBaseCommit') == SOURCE_BASE
-        and c.get('reviewBase') == REVIEW_BASE and c.get('engineRoot') == ENGINE
+        and c.get('reviewBase') == REVIEW_BASE and c.get('mainIntegrationBase') == MAIN_BASE
+        and c.get('engineRoot') == ENGINE and c.get('sourceReviewCommit') == SOURCE_REVIEW
         and re.fullmatch('[a-f0-9]{40}', c.get('sourceReviewCommit', ''))
         and c.get('sourceReviewTag') == 'online-checkout-actionability-source-review-' + c['sourceReviewCommit'][:12]
         and c.get('requiredQualityParts') == list(QUALITY_PARTS)

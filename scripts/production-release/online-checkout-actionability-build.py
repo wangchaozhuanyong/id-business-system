@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -32,18 +33,45 @@ def tracked_inventory(commit, prefix):
         for name in git('ls-tree', '-r', '--name-only', commit, '--', prefix).decode().splitlines()}
 
 
-def freeze(baseline_path):
+def verify_source_review(source_review):
     p = publisher()
+    p.need(type(source_review) is str and re.fullmatch('[a-f0-9]{40}', source_review)
+        and source_review == p.SOURCE_REVIEW, 'SOURCE_REVIEW_SELECTION_INVALID')
+    tag = 'refs/tags/online-checkout-actionability-source-review-' + source_review[:12]
+    p.need(git('cat-file', '-t', tag).decode().strip() == 'tag'
+        and git('rev-parse', tag + '^{commit}').decode().strip() == source_review, 'REVIEW_TAG_CHANGED')
+    expected = {p.ENGINE + '/' + name for name in p.FILES} | set(p.VALIDATION) | set(p.REVIEW_CONTROLS)
+    p.need(len(expected) == 13 and set(git('diff', '--name-only', p.REVIEW_BASE,
+        source_review).decode().splitlines()) == expected, 'REVIEW_SCOPE_CHANGED')
+    for name in expected:
+        path = ROOT / name
+        p.need(path.is_file() and not path.is_symlink()
+            and p.sha(path.read_bytes()) == p.sha(git('show', source_review + ':' + name)), 'REVIEWED_SOURCE_CHANGED')
+    return source_review
+
+
+def verify_main_selection(c, commit):
+    p = publisher()
+    p.need(c.get('mainIntegrationBase') == p.MAIN_BASE
+        and git('merge-base', p.MAIN_BASE, commit).decode().strip() == p.MAIN_BASE, 'MAIN_INTEGRATION_BASE_CHANGED')
+    expected = set(c['runtimeSources']) | set(c['validationSources']) | set(p.PUBLIC_CONTROLS)
+    p.need(len(expected) == 19 and set(git('diff', '--name-only', p.MAIN_BASE,
+        commit).decode().splitlines()) == expected, 'FINITE_SELECTION_CHANGED')
+
+
+def freeze(baseline_path, source_review):
+    p = publisher()
+    review = verify_source_review(source_review)
     manifest = json.loads((ROOT / p.ENGINE / 'SOURCE_MANIFEST.json').read_bytes())
     p.need({key: manifest.get(key) for key in ('repository', 'commit')} == p.UPSTREAM_SOURCE, 'SOURCE_ORIGIN_CHANGED')
     after = {row['path']: row['adaptedSha256'] for row in manifest['files']}
     p.need(len(after) == len(manifest['files']) and all(p.sha((ROOT / p.ENGINE / name).read_bytes()) == digest
         for name, digest in after.items()), 'SOURCE_MANIFEST_CHANGED')
     after['SOURCE_MANIFEST.json'] = p.sha((ROOT / p.ENGINE / 'SOURCE_MANIFEST.json').read_bytes())
-    review = git('rev-parse', 'HEAD').decode().strip()
     changed = set(git('diff', '--name-only', p.REVIEW_BASE, review).decode().splitlines())
     c = {'version': 1, 'frozen': True, 'admission': 'FROZEN_REVIEWED_SOURCE', 'pendingBindings': [],
         'upstreamSource': p.UPSTREAM_SOURCE, 'scope': p.SCOPE, 'sourceBaseCommit': p.SOURCE_BASE, 'reviewBase': p.REVIEW_BASE,
+        'mainIntegrationBase': p.MAIN_BASE,
         'sourceReviewCommit': review, 'sourceReviewTag': 'online-checkout-actionability-source-review-' + review[:12],
         'engineRoot': p.ENGINE, 'requiredQualityParts': list(p.QUALITY_PARTS),
         'runtimeSources': {p.ENGINE + '/' + name: after[name] for name in sorted(p.FILES)},
@@ -114,8 +142,7 @@ def main():
         and os.environ.get('GITHUB_SHA') == commit and os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
         and os.environ.get('GITHUB_REPOSITORY') == 'wangchaozhuanyong/id-business-system'
         and not OUT.exists() and not git('status', '--porcelain', '--untracked-files=no').strip(), 'NATIVE_BUILD_REQUIRED')
-    p.need(set(git('diff', '--name-only', p.SOURCE_BASE, 'HEAD').decode().splitlines()) ==
-        set(c['runtimeSources']) | set(c['validationSources']) | set(p.PUBLIC_CONTROLS), 'FINITE_SELECTION_CHANGED')
+    verify_main_selection(c, commit)
     p.need(tracked_inventory('HEAD', p.ENGINE) == c['afterEngineFiles']
         and tracked_inventory(p.SOURCE_BASE, p.ENGINE) == c['beforeEngineFiles'], 'TRACKED_ENGINE_CHANGED')
     parity_path = ROOT / '.runtime/online-checkout-actionability-ci/node22-parity.json'
@@ -155,15 +182,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--freeze', action='store_true')
     parser.add_argument('--baseline')
+    parser.add_argument('--source-review')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     if args.freeze:
         publisher().need(args.baseline and not args.check, 'FREEZE_ARGUMENTS_INVALID')
-        freeze(args.baseline)
+        freeze(args.baseline, args.source_review)
     elif args.check:
-        publisher().need(not args.baseline, 'ARGUMENTS_INVALID')
+        publisher().need(not args.baseline and not args.source_review, 'ARGUMENTS_INVALID')
         check(json.loads(CONTRACT.read_bytes()))
         print(json.dumps({'status': 'ONLINE_CHECKOUT_ACTIONABILITY_SOURCE_VERIFIED', 'businessActions': 0}))
     else:
-        publisher().need(not args.baseline, 'ARGUMENTS_INVALID')
+        publisher().need(not args.baseline and not args.source_review, 'ARGUMENTS_INVALID')
         main()
