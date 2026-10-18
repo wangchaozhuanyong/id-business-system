@@ -1,8 +1,16 @@
-name: BitBrowser History Pagination Release
+name: BitBrowser Finite Recharge Release
 
 on:
   workflow_dispatch:
     inputs:
+      recipe:
+        description: Frozen finite release recipe
+        required: true
+        type: choice
+        default: history-20261019
+        options:
+          - history-20261019
+          - followup-20261019
       commit:
         description: Exact reviewed main commit
         required: true
@@ -24,7 +32,9 @@ jobs:
   validate:
     if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
+    env:
+      BITBROWSER_RELEASE_RECIPE: ${{ inputs.recipe }}
     services:
       mysql:
         image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
@@ -116,6 +126,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       AWS_REGION: ap-northeast-1
+      BITBROWSER_RELEASE_RECIPE: ${{ inputs.recipe }}
       RELEASE_COMMIT: ${{ inputs.commit }}
       EXPECTED_CURRENT: ${{ inputs.expected_current }}
     steps:

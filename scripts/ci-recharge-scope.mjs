@@ -1136,6 +1136,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserFollowupControlsOnly(paths, context)) return false;
   if (isBitbrowserHistoryControlsOnly(paths, context)) return false;
   if (isBitbrowserRecoveryControlsOnly(paths, context)) return false;
   if (isBitbrowserBillingControlsOnly(paths)) return false;
@@ -1862,7 +1863,32 @@ export function isBitbrowserHistoryControlsOnly(paths, context) {
   );
 }
 
+export const bitbrowserFollowupSourceReviewCommit = '1f22456050e5a712405b3dff37dc43b55e778a92';
+export const bitbrowserFollowupSourceReviewTree = '1cd6a7ef64033e3abf542a759e1e23175159b008';
+export const bitbrowserFollowupControlPaths = Object.freeze([
+  '.github/workflows/bitbrowser-history-validation.yml',
+  ...['build.py', 'release.py', 'dispatch.py', 'release.test.py'].map(
+    (name) => `scripts/production-release/bitbrowser-history-${name}`
+  ),
+  'scripts/production-release/bitbrowser-followup-contract.json',
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  )
+]);
+export function isBitbrowserFollowupControlsOnly(paths, context) {
+  return (
+    /^[a-f0-9]{40}$/.test(bitbrowserFollowupSourceReviewCommit) &&
+    /^[a-f0-9]{40}$/.test(bitbrowserFollowupSourceReviewTree) &&
+    /^[a-f0-9]{40}$/.test(context?.base ?? '') &&
+    context?.baseTree === bitbrowserFollowupSourceReviewTree &&
+    paths.length === bitbrowserFollowupControlPaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((name) => bitbrowserFollowupControlPaths.includes(name))
+  );
+}
+
 export function isCiOnly(paths, context) {
+  if (isBitbrowserFollowupControlsOnly(paths, context)) return true;
   if (isBitbrowserHistoryControlsOnly(paths, context)) return true;
   if (isBitbrowserRecoveryControlsOnly(paths, context)) return true;
   if (isBitbrowserBillingControlsOnly(paths)) return true;
@@ -2022,6 +2048,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isBitbrowserFollowupControlsOnly(paths, context))
+    return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isBitbrowserHistoryControlsOnly(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isBitbrowserRecoveryControlsOnly(paths, context))
@@ -2559,6 +2587,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isBitbrowserFollowupControlsOnly(paths, context)) return ['guards', 'release-controls'];
   if (isBitbrowserHistoryControlsOnly(paths, context)) return ['guards', 'release-controls'];
   if (isBitbrowserRecoveryControlsOnly(paths, context)) return ['guards'];
   if (isBitbrowserBillingControlsOnly(paths)) return ['guards'];
@@ -5427,7 +5456,8 @@ async function main() {
   const checkParts =
     mode === 'ci-only' &&
     (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
-      isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext))
+      isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
+      isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext))
       ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)
       : mode === 'ci-only' || mode === 'audit-retention'
         ? ['guards']

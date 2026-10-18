@@ -3278,3 +3278,88 @@ test('finite history controls separate guards from closed release checks and pro
     }
   }
 });
+
+import {
+  bitbrowserFollowupControlPaths,
+  bitbrowserFollowupSourceReviewCommit,
+  bitbrowserFollowupSourceReviewTree
+} from './ci-recharge-scope.mjs';
+
+test('finite followup control runner requires frozen inputs and propagates every release failure', () => {
+  const frozen = /^[a-f0-9]{40}$/.test(bitbrowserFollowupSourceReviewCommit);
+  const options = {
+    base: bitbrowserFollowupSourceReviewCommit,
+    baseTree: bitbrowserFollowupSourceReviewTree
+  };
+  const releaseCommands = [
+    ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/bitbrowser-history-build.py',
+      '--recipe',
+      'followup-20261019',
+      '--check'
+    ]
+  ];
+  if (frozen) {
+    assert.deepEqual(
+      recordGuardCommands('ci-only', bitbrowserFollowupControlPaths, 'release-controls', options),
+      [...releaseCommands, ['process-exit', 0]]
+    );
+    const guards = recordGuardCommands(
+      'ci-only',
+      bitbrowserFollowupControlPaths,
+      'guards',
+      options
+    );
+    for (const name of [
+      'format:check',
+      'lint',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ])
+      assert.ok(guards.some((row) => row.join(' ') === 'npm run ' + name));
+    for (const command of releaseCommands)
+      assert.throws(
+        () =>
+          recordGuardCommands('ci-only', bitbrowserFollowupControlPaths, 'release-controls', {
+            ...options,
+            failCommand: command.join(' ')
+          }),
+        /SYNTHETIC_COMMAND_FAILURE/
+      );
+    for (const part of ['api', 'admin', 'migration', 'online-engine'])
+      assert.throws(
+        () => recordGuardCommands('ci-only', bitbrowserFollowupControlPaths, part, options),
+        /Unsupported finite BitBrowser followup control check/
+      );
+  }
+  // Application source or a different source tree must never enter this control-only path.
+  for (const invalid of [
+    { paths: bitbrowserFollowupControlPaths, options: { ...options, baseTree: 'a'.repeat(40) } },
+    {
+      paths: [
+        ...bitbrowserFollowupControlPaths,
+        'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts'
+      ],
+      options
+    },
+    ...bitbrowserFollowupControlPaths.map((n) => ({
+      paths: bitbrowserFollowupControlPaths.filter((p) => p !== n),
+      options
+    }))
+  ]) {
+    try {
+      const commands = recordGuardCommands('ci-only', invalid.paths, 'guards', invalid.options);
+      assert.equal(
+        commands.some((row) => row.includes('followup-20261019')),
+        false
+      );
+    } catch (error) {
+      assert.doesNotMatch(String(error), /Unsupported finite BitBrowser followup control check/);
+    }
+  }
+});

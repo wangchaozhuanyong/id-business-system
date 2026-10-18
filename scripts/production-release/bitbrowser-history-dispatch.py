@@ -18,6 +18,14 @@ REPO = 'wangchaozhuanyong/id-business-system'
 INSTANCE = 'i-05836da38606e633c'
 SCOPE = 'BITBROWSER_HISTORY_PAGINATION_20261019'
 CURRENT = 'fe27681e1ef06b14616276dff33c3febeea47579'
+RECIPE = os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019')
+CONTRACT_FILE = 'bitbrowser-history-contract.json'
+if RECIPE == 'followup-20261019':
+    CURRENT = '02a348a6c6b252968bc63ccb38c7d2b82e0e0c66'
+    SCOPE = 'BITBROWSER_FOLLOWUP_ACCEPTANCE_20261019'
+    CONTRACT_FILE = 'bitbrowser-followup-contract.json'
+elif RECIPE != 'history-20261019':
+    raise RuntimeError('BITBROWSER_HISTORY_RECIPE_INVALID')
 
 
 def need(value, code):
@@ -66,7 +74,7 @@ def prepare():
     with tarfile.open(fileobj=io.BytesIO(bundle)) as archive:
         raw = archive.extractfile('payload/build-proof.json').read()
     proof = json.loads(raw)
-    c_raw = (HERE / 'bitbrowser-history-contract.json').read_bytes()
+    c_raw = (HERE / CONTRACT_FILE).read_bytes()
     c = json.loads(c_raw)
     identity['tree'] = execute('git', 'rev-parse', 'HEAD^{tree}').decode().strip()
     need(all(proof[k] == v for k, v in identity.items()) and proof['contractSha256'] == sha(c_raw)
@@ -89,16 +97,17 @@ def prepare():
     spec = importlib.util.spec_from_file_location('history_native_release', HERE / 'bitbrowser-history-release.py')
     p = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(p)
+    p.select_recipe(RECIPE)
     p.validate_contract(c)
     p.verify_mysql(proof['isolatedMysqlVerification'], identity, c)
-    controls = {**c['controlPins'], 'bitbrowser-history-contract.json': sha(c_raw)}
+    controls = {**c['controlPins'], CONTRACT_FILE: sha(c_raw)}
     need(all(sha((HERE / n).read_bytes()) == v for n, v in controls.items()), 'CONTROLS_CHANGED')
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('比特自动充值历史分页有限修复构建。只更新 API；不提交付款。\n')
+    notes.write_text('比特自动充值有限修复构建；更新范围以冻结契约为准，不提交付款。\n')
     tag = 'bitbrowser-history-' + commit
     execute('gh', 'release', 'create', tag, str(bundle_path), '--target', commit,
         '--title', 'BitBrowser history pagination ' + commit[:12], '--notes-file', str(notes), '--prerelease')
-    plan = {**identity, 'contractSha256': sha(c_raw), 'controlSources': controls,
+    plan = {**identity, 'recipe': RECIPE, 'contractSha256': sha(c_raw), 'controlSources': controls,
         'artifactSha256': declared, 'buildProofSha256': sha(raw),
         'qualityVerification': proof['qualityVerification'], 'isolatedMysqlVerification': proof['isolatedMysqlVerification'],
         'artifactUrl': 'https://github.com/' + REPO + '/releases/download/' + tag + '/bitbrowser-history-artifact.tar.gz'}
@@ -125,7 +134,8 @@ try:
   else:path.write_bytes(raw)
  spec=importlib.util.spec_from_file_location('history_release',directory/'bitbrowser-history-release.py')
  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
- c=json.loads((directory/'bitbrowser-history-contract.json').read_bytes())
+ module.select_recipe(plan.get('recipe','history-20261019'))
+ c=json.loads((directory/module.CONTRACT_FILE).read_bytes())
  print(json.dumps(module.release(plan,c),sort_keys=True))
 except Exception as error:
  code=str(error) if re.fullmatch('(?:BITBROWSER_HISTORY|BITBROWSER_RECOVERY|RECHARGE_CHECKOUT|RECHARGE_RECORD|RECHARGE_AVAILABILITY|ONLINE_QUERY_NETWORK)_[A-Z0-9_]+',str(error)) else 'BITBROWSER_HISTORY_REMOTE_OPERATION_FAILED'
