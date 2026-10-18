@@ -7463,3 +7463,67 @@ test('finite BitBrowser publication controls reuse unchanged application checks'
   assert.equal(finiteBillingOnly([]), false);
   assert.equal(finiteBillingOnly(['scripts/ci-recharge-scope.mjs']), false);
 });
+
+import {
+  isBitbrowserFollowupControlsOnly as finiteFollowupOnly,
+  bitbrowserFollowupControlPaths as finiteFollowupPaths,
+  bitbrowserFollowupSourceReviewCommit as finiteFollowupCommit,
+  bitbrowserFollowupSourceReviewTree as finiteFollowupTree
+} from './ci-recharge-scope.mjs';
+
+test('finite followup controls require frozen source tree and exactly ten controls', () => {
+  const context = { base: finiteFollowupCommit, baseTree: finiteFollowupTree };
+  const frozen =
+    /^[a-f0-9]{40}$/.test(finiteFollowupCommit) && /^[a-f0-9]{40}$/.test(finiteFollowupTree);
+  assert.equal(finiteFollowupPaths.length, 10);
+  assert.equal(finiteFollowupOnly(finiteFollowupPaths, context), frozen);
+  if (frozen) {
+    assert.equal(checkMode(finiteFollowupPaths, 'same', 'same', undefined, context), 'ci-only');
+    assert.deepEqual(finiteBillingParts(finiteFollowupPaths, undefined, context), [
+      'guards',
+      'release-controls'
+    ]);
+    assert.equal(finiteBillingNeedsEngine(finiteFollowupPaths, context), false);
+    assert.equal(checkMode(finiteFollowupPaths, 'old', 'new', undefined, context), 'full');
+  }
+  for (const invalid of [
+    undefined,
+    { ...context, base: 'main' },
+    { ...context, baseTree: finiteHistoryTree },
+    { ...context, baseTree: 'a'.repeat(40) },
+    { ...context, base: 'a'.repeat(39) }
+  ]) {
+    assert.equal(finiteFollowupOnly(finiteFollowupPaths, invalid), false);
+  }
+  for (const missing of finiteFollowupPaths)
+    assert.equal(
+      finiteFollowupOnly(
+        finiteFollowupPaths.filter((n) => n !== missing),
+        context
+      ),
+      false
+    );
+  for (const extra of [
+    'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+    'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts',
+    'packages/shared/src/index.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'scripts/production-release/bitbrowser-history-contract.json',
+    '.github/workflows/quality.yml'
+  ])
+    assert.equal(finiteFollowupOnly([...finiteFollowupPaths, extra], context), false, extra);
+  assert.equal(finiteFollowupOnly([], context), false);
+  assert.equal(
+    finiteFollowupOnly([...finiteFollowupPaths.slice(1), finiteFollowupPaths[1]], context),
+    false
+  );
+  assert.equal(
+    finiteHistoryOnly(finiteFollowupPaths, {
+      base: finiteHistoryCommit,
+      baseTree: finiteHistoryTree
+    }),
+    false
+  );
+});

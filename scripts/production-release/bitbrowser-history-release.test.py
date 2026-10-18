@@ -226,5 +226,129 @@ class HistoryControls(unittest.TestCase):
         self.assertNotIn('prune', text)
 
 
+
+class FollowupControls(unittest.TestCase):
+    def setUp(self):
+        p.select_recipe(p.FOLLOWUP)
+        self.c = json.loads((HERE / 'bitbrowser-followup-contract.json').read_bytes())
+        if self.c.get('status') != 'FROZEN':
+            self.c.update(status='FROZEN', sourceReviewCommit='b' * 40, sourceReviewTree='d' * 40,
+                sources={n: 'a' * 64 for n in p.APPLICATION}, apiModules=sorted(p.MODULES),
+                updatedServices=list(p.UPDATED), reboundServices=['online-recharge'], preservedServices=list(p.PRESERVED),
+                controlPins={n: 'c' * 64 for n in p.CONTROLS}, ciControlPins={n: 'd' * 64 for n in p.CI_CONTROLS},
+                mysqlTestSources={n: 'e' * 64 for n in p.MYSQL_FILES}, workflowSha256='f' * 64,
+                qualityWorkflowSha256='f' * 64, sqlFenceHelperSha256='c' * 64, engineHealth=p.ENGINE)
+            self.c['controlPins']['bitbrowser-recovery-contract.json'] = p.PREDECESSOR_CONTRACT
+            self.c['controlPins']['bitbrowser-history-contract.json'] = p.LEGACY_CONTRACT_SHA
+
+    def tearDown(self):
+        p.select_recipe('history-20261019')
+
+    def test_followup_recipe_is_exactly_two_api_and_three_admin_modules(self):
+        p.validate_contract(self.c)
+        self.assertEqual(len(p.API_SOURCES), 2)
+        self.assertEqual(len(p.MODULES), 6)
+        self.assertEqual(len(p.FOLLOWUP_ADMIN), 3)
+        self.assertEqual(len(p.APPLICATION), 9)
+        self.assertEqual(p.UPDATED, ('api', 'admin'))
+        self.assertEqual(p.CURRENT, p.FOLLOWUP_CURRENT)
+        self.assertEqual(p.sha((HERE / 'bitbrowser-history-contract.json').read_bytes()), p.LEGACY_CONTRACT_SHA)
+        self.assertEqual(p.sha((HERE / 'bitbrowser-recovery-contract.json').read_bytes()), p.PREDECESSOR_CONTRACT)
+
+    def test_draft_old_recipe_old_proof_old_image_and_repository_edits_are_rejected(self):
+        for update in ({'status': 'DRAFT_SOURCE_REVIEW_PENDING'}, {'recipe': 'history-20261019'},
+            {'predecessorProofSha256': p.ADMIN_PROOF}, {'expectedCurrent': p.ADMIN_BUILD},
+            {'updatedServices': ['api']}, {'adminBuildCommit': p.CURRENT}):
+            with self.subTest(update=update), self.assertRaises(RuntimeError):
+                p.validate_contract({**self.c, **update})
+        for name in ('apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+            'packages/shared/src/index.ts', 'apps/api/prisma-mysql/schema.prisma'):
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                p.validate_contract({**self.c, 'sources': {**self.c['sources'], name: 'a' * 64}})
+        for role in ('api', 'admin'):
+            bad = copy.deepcopy(self.c)
+            bad['baseline']['services'][role]['image'] = 'sha256:' + 'a' * 64
+            with self.assertRaisesRegex(RuntimeError, 'FOLLOWUP_PROVENANCE'):
+                p.validate_contract(bad)
+
+    def test_api_delta_keeps_previously_published_repository_and_all_shared(self):
+        before = self.c['publishedApiModules']
+        shared = self.c['publishedSharedFiles']
+        after = {**before, next(n for n in p.MODULES if n.endswith('.js')): 'f' * 64}
+        b.verify_delta(before, after, shared, shared, self.c, p)
+        repository = 'id-business-v2/auto-recharge/persistence/recharge.repository.js'
+        with self.assertRaisesRegex(RuntimeError, 'UNSELECTED_API_OUTPUT'):
+            b.verify_delta(before, {**after, repository: 'f' * 64}, shared, shared, self.c, p)
+        with self.assertRaisesRegex(RuntimeError, 'SHARED_OUTPUT'):
+            b.verify_delta(before, after, shared, {}, self.c, p)
+
+    def test_admin_input_must_reproduce_published_fe_not_current_main(self):
+        expected = self.c['publishedAdminFiles']
+        b.verify_followup_admin(expected, {'x': 'a'}, {'x': 'a'}, self.c, p)
+        with self.assertRaisesRegex(RuntimeError, 'BASE_ADMIN_NOT_REPRODUCED'):
+            b.verify_followup_admin({**expected, 'unrelated.js': 'f' * 64}, {}, {}, self.c, p)
+        with self.assertRaisesRegex(RuntimeError, 'SHARED_OUTPUT'):
+            b.verify_followup_admin(expected, {'x': 'a'}, {'x': 'b'}, self.c, p)
+
+    def test_admin_overlay_retains_all_historical_files_and_rejects_extras(self):
+        before = {'index.html': 'a' * 64, 'assets/old.js': 'b' * 64}
+        candidate = {'index.html': 'c' * 64, 'assets/new.js': 'd' * 64}
+        baseline = {'count': len(before), 'sha256': p.sha(p.canonical(before))}
+        union = {**before, **candidate}
+        self.assertEqual(p.verify_admin_merge(before, candidate, union, baseline)['count'], 3)
+        for bad in (candidate, {**union, 'unreviewed.js': 'a' * 64}, {**union, 'assets/old.js': 'a' * 64}):
+            with self.assertRaisesRegex(RuntimeError, 'ADMIN_HISTORY_CHANGED'):
+                p.verify_admin_merge(before, candidate, bad, baseline)
+
+    def test_source_quality_requires_guards_api_admin_or_full_success(self):
+        rows = [{'name': 'recharge (' + n + ')', 'conclusion': 'success'} for n in ('guards', 'api', 'admin')]
+        b.require_quality_jobs(rows, p)
+        for bad in (rows[:2], [*rows[:2], {'name': 'recharge (admin)', 'conclusion': 'skipped'}]):
+            with self.assertRaisesRegex(RuntimeError, 'SOURCE_API_QUALITY'):
+                b.require_quality_jobs(bad, p)
+
+    def test_followup_proof_rejects_missing_admin_baseline_extra_source_and_foreign_payload(self):
+        identity = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '12', 'workflowRunAttempt': '1', 'contractSha256': 'e' * 64}
+        mysql = {**identity, 'scope': 'OWNED_EMPTY_DATABASE', 'runtime': 'github-actions-mysql-service',
+            'testFiles': self.c['mysqlTestSources'], 'testsTotal': 18, 'testsPassed': 18, 'testsSkipped': 0,
+            'testsTodo': 0, 'productionActions': 0, 'reportSha256': 'd' * 64}
+        proof = {**identity, 'version': 1, 'recipe': p.FOLLOWUP, 'scope': p.SCOPE,
+            'sources': self.c['sources'], 'controlSources': self.c['controlPins'],
+            'baselineModulesReproduced': self.c['baseline']['apiModules'], 'predecessorProofSha256': p.FOLLOWUP_PROOF,
+            'baselineSharedUnchanged': True, 'baselineAdminReproduced': True,
+            'baselineAdminFiles': self.c['publishedAdminFiles'], 'adminFiles': self.c['publishedAdminFiles'],
+            'migrationPerformed': False, 'businessActions': 0, 'updatedServices': list(p.UPDATED),
+            'qualityVerification': {}, 'isolatedMysqlVerification': mysql,
+            'apiModules': {n: 'a' * 64 for n in p.MODULES}}
+        files = {**{'source/' + n: v for n, v in self.c['sources'].items()},
+            **{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
+            **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()}}
+        proof['files'] = files
+        class Helper:
+            @staticmethod
+            def file_inventory(_path):
+                return files.copy()
+        p.verify_proof(proof, proof, self.c, HERE, Helper)
+        for key, value in (('baselineAdminReproduced', False), ('baselineAdminFiles', {}),
+            ('adminFiles', {'index.html': 'a' * 64}), ('recipe', 'history-20261019')):
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'ADMIN_BUILD_PROOF'):
+                p.verify_proof({**proof, key: value}, proof, self.c, HERE, Helper)
+        for name in ('shared/other.js', 'api/modules/id-business-v2/auto-recharge/persistence/recharge.repository.js',
+            'source/apps/api/src/id-business-v2/online-recharge/other.ts'):
+            files[name] = 'f' * 64
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'PAYLOAD_CHANGED'):
+                p.verify_proof(proof, proof, self.c, HERE, Helper)
+            files.pop(name)
+
+    def test_recipe_selector_is_closed_and_restores_legacy_identity(self):
+        for name in ('followup', '../bitbrowser-followup-contract.json', 'other', ''):
+            with self.assertRaisesRegex(RuntimeError, 'RECIPE_INVALID'):
+                p.select_recipe(name)
+        p.select_recipe('history-20261019')
+        self.assertEqual(p.CURRENT, p.ADMIN_BUILD)
+        self.assertEqual(len(p.MODULES), 9)
+        self.assertEqual(p.UPDATED, ('api',))
+
+
 if __name__ == '__main__':
     unittest.main()
