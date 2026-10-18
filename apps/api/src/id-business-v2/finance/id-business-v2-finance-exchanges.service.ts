@@ -132,28 +132,27 @@ export class IdBusinessV2FinanceExchangesService {
     operator?: AuthenticatedUser
   ) {
     const reason = normalizeFinanceText(dto.manualRateReason, '人工汇率原因', 500);
-    const [source, target] = await Promise.all([
-      this.fx.resolve({
-        currency: input.sourceCurrency,
-        occurredAt: input.occurredAt,
-        fxRateSnapshotId: dto.sourceFxSnapshotId,
-        manualRate: dto.sourceFxRateToCny
-          ? normalizeFinanceRate(dto.sourceFxRateToCny, input.sourceCurrency)
-          : null,
-        manualReason: reason,
-        operator
-      }),
-      this.fx.resolve({
-        currency: input.targetCurrency,
-        occurredAt: input.occurredAt,
-        fxRateSnapshotId: dto.targetFxSnapshotId,
-        manualRate: dto.targetFxRateToCny
-          ? normalizeFinanceRate(dto.targetFxRateToCny, input.targetCurrency)
-          : null,
-        manualReason: reason,
-        operator
-      })
-    ]);
+    // Manual snapshots share scope-version rows; resolve them in request order.
+    const source = await this.fx.resolve({
+      currency: input.sourceCurrency,
+      occurredAt: input.occurredAt,
+      fxRateSnapshotId: dto.sourceFxSnapshotId,
+      manualRate: dto.sourceFxRateToCny
+        ? normalizeFinanceRate(dto.sourceFxRateToCny, input.sourceCurrency)
+        : null,
+      manualReason: reason,
+      operator
+    });
+    const target = await this.fx.resolve({
+      currency: input.targetCurrency,
+      occurredAt: input.occurredAt,
+      fxRateSnapshotId: dto.targetFxSnapshotId,
+      manualRate: dto.targetFxRateToCny
+        ? normalizeFinanceRate(dto.targetFxRateToCny, input.targetCurrency)
+        : null,
+      manualReason: reason,
+      operator
+    });
     return { source, target };
   }
   async quote(dto: V2FinanceExchangeWrite, operator?: AuthenticatedUser) {
