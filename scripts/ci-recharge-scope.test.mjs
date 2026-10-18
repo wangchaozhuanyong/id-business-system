@@ -3089,7 +3089,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
         if (args[0] === 'cat-file') return '';
         if (args[0] === 'diff') return (options.historical && args[2] === proof.testedTree
           ? options.changed : paths).join('\\n') + '\\n';
-        if (args[0] === 'rev-parse') return tree + '\\n';
+        if (args[0] === 'rev-parse') return (args[1] === process.env.BASE_SHA + '^{tree}'
+          ? options.baseTree ?? tree : tree) + '\\n';
         if (args[0] === 'merge-tree') return proof.testedTree + '\\n';
         if (args[0] === 'show' && args[1].endsWith(':' + process.env.SCOPE_TEST_HELPER)) {
           const source = args[1].startsWith('HEAD:') ? snapshot?.after : snapshot?.before;
@@ -3174,7 +3175,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
           GITHUB_STEP_SUMMARY: root + '/.runtime/online-recharge-ci-synthetic-summary',
           GITHUB_REPOSITORY: 'fixture/id-business',
           GITHUB_SHA: 'c'.repeat(40),
-          BASE_SHA: 'a'.repeat(40),
+          BASE_SHA: options.base ?? 'a'.repeat(40),
           SCOPE_TEST_HELPER: productionDatabaseAccessHelper,
           SCOPE_TEST_ACCEPTANCE: productionDatabaseAccessAcceptance
         }
@@ -7223,6 +7224,118 @@ import {
   bitbrowserRecoveryControlRepairTree as finiteRecoveryRepairTree,
   bitbrowserRecoveryControlRepairPaths as finiteRecoveryRepairPaths
 } from './ci-recharge-scope.mjs';
+import {
+  isBitbrowserHistoryControlsOnly as finiteHistoryOnly,
+  bitbrowserHistoryControlPaths as finiteHistoryPaths,
+  bitbrowserHistorySourceReviewCommit as finiteHistoryCommit,
+  bitbrowserHistorySourceReviewTree as finiteHistoryTree
+} from './ci-recharge-scope.mjs';
+
+test('finite history controls reuse application QA only over their exact ten files and source base', () => {
+  const context = { base: finiteHistoryCommit, baseTree: finiteHistoryTree };
+  assert.equal(finiteHistoryPaths.length, 10);
+  assert.equal(finiteHistoryOnly(finiteHistoryPaths, context), true);
+  assert.equal(finiteHistoryOnly(finiteHistoryPaths, { ...context, base: 'b'.repeat(40) }), true);
+  assert.equal(finiteBillingCiOnly(finiteHistoryPaths, context), true);
+  assert.equal(checkMode(finiteHistoryPaths, 'same', 'same', undefined, context), 'ci-only');
+  assert.deepEqual(finiteBillingParts(finiteHistoryPaths, undefined, context), [
+    'guards',
+    'release-controls'
+  ]);
+  assert.equal(finiteBillingNeedsEngine(finiteHistoryPaths, context), false);
+  assert.equal(checkMode(finiteHistoryPaths, 'before', 'after', undefined, context), 'full');
+  for (const invalid of [
+    undefined,
+    { base: finiteHistoryCommit },
+    { ...context, base: 'main' },
+    { ...context, base: 'b'.repeat(39) },
+    { ...context, baseTree: 'a'.repeat(40) },
+    { base: finiteRecoveryCommit, baseTree: finiteRecoveryTree }
+  ]) {
+    assert.equal(finiteHistoryOnly(finiteHistoryPaths, invalid), false);
+    assert.equal(checkMode(finiteHistoryPaths, 'same', 'same', undefined, invalid), 'full');
+  }
+  for (const missing of finiteHistoryPaths) {
+    const paths = finiteHistoryPaths.filter((name) => name !== missing);
+    assert.equal(finiteHistoryOnly(paths, context), false, missing);
+    assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'full', missing);
+  }
+  for (const extra of [
+    'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+    'apps/admin/src/v2/features/auto-recharge/recharge-form.ts',
+    'packages/shared/src/v2/checkout-diagnostic.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'scripts/production-release/bitbrowser-recovery-release.py',
+    'scripts/production-release/bitbrowser-history-unreviewed.py'
+  ]) {
+    assert.equal(finiteHistoryOnly([...finiteHistoryPaths, extra], context), false, extra);
+    assert.equal(
+      checkMode([...finiteHistoryPaths, extra], 'same', 'same', undefined, context),
+      'full',
+      extra
+    );
+  }
+  assert.equal(finiteHistoryOnly([], context), false);
+  assert.equal(
+    finiteHistoryOnly([...finiteHistoryPaths.slice(1), finiteHistoryPaths[1]], context),
+    false
+  );
+});
+
+test('finite history PR and same-tree main CLI publish both final control matrix entries', () => {
+  for (const base of [finiteHistoryCommit, 'b'.repeat(40)]) {
+    for (const eventName of ['pull_request', 'push']) {
+      const { result, writes, gitCalls } = recordScopeClassification(
+        finiteHistoryPaths,
+        {},
+        eventName,
+        { base, baseTree: finiteHistoryTree }
+      );
+      assert.equal(result.mode, 'ci-only');
+      assert.deepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(result.onlineCiBuild, false);
+      assert.equal(result.reuseMain, eventName === 'push');
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+      assert.ok(gitCalls.some((args) => args.join(' ') === 'rev-parse ' + base + '^{tree}'));
+    }
+  }
+  for (const eventName of ['pull_request', 'push']) {
+    for (const { paths, baseTree } of [
+      { paths: finiteHistoryPaths, baseTree: 'a'.repeat(40) },
+      ...finiteHistoryPaths.map((missing) => ({
+        paths: finiteHistoryPaths.filter((name) => name !== missing),
+        baseTree: finiteHistoryTree
+      })),
+      {
+        paths: [
+          ...finiteHistoryPaths,
+          'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts'
+        ],
+        baseTree: finiteHistoryTree
+      }
+    ]) {
+      const { result, writes } = recordScopeClassification(paths, {}, eventName, {
+        base: 'b'.repeat(40),
+        baseTree
+      });
+      assert.equal(result.mode, 'full');
+      assert.notDeepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        ),
+        false
+      );
+    }
+  }
+});
 
 test('finite recovery controls reuse reviewed business QA only over the exact frozen tree', () => {
   const context = { base: finiteRecoveryCommit, baseTree: finiteRecoveryTree };

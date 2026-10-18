@@ -94,7 +94,10 @@ import {
   bitbrowserRecoverySourceReviewTree,
   bitbrowserRecoveryControlRepairBase,
   bitbrowserRecoveryControlRepairTree,
-  bitbrowserRecoveryControlRepairPaths
+  bitbrowserRecoveryControlRepairPaths,
+  bitbrowserHistoryControlPaths,
+  bitbrowserHistorySourceReviewCommit,
+  bitbrowserHistorySourceReviewTree
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -3176,6 +3179,102 @@ test('finite recovery declaration control repair runs only reviewed release guar
       );
     } catch (error) {
       assert.match(String(error.stderr ?? error), /Automatic registration has been removed/);
+    }
+  }
+});
+
+test('finite history controls separate guards from closed release checks and propagate failure', () => {
+  const options = {
+    base: bitbrowserHistorySourceReviewCommit,
+    baseTree: bitbrowserHistorySourceReviewTree
+  };
+  assert.deepEqual(
+    recordGuardCommands('ci-only', bitbrowserHistoryControlPaths, 'guards', options),
+    [
+      ['npm', 'run', 'format:check'],
+      ['npm', 'run', 'lint'],
+      ...[
+        'check:v2-module-architecture',
+        'check:v2-isolation',
+        'check:v2-concurrency-standard',
+        'check:v2-prisma-runtime-boundary'
+      ].map((name) => ['npm', 'run', name]),
+      [
+        'node',
+        '--test',
+        'scripts/ci-recharge-scope.test.mjs',
+        'scripts/ci-recharge-check.test.mjs'
+      ],
+      ['process-exit', 0]
+    ]
+  );
+  const releaseCommands = [
+    ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
+    ['python3', '-B', 'scripts/production-release/bitbrowser-history-build.py', '--check']
+  ];
+  assert.deepEqual(
+    recordGuardCommands('ci-only', bitbrowserHistoryControlPaths, 'release-controls', options),
+    [...releaseCommands, ['process-exit', 0]]
+  );
+  assert.deepEqual(
+    recordGuardCommands('ci-only', bitbrowserHistoryControlPaths, 'release-controls', {
+      ...options,
+      base: 'b'.repeat(40)
+    }),
+    [...releaseCommands, ['process-exit', 0]]
+  );
+  for (const part of ['api', 'admin', 'migration', 'connector', 'online-engine'])
+    assert.throws(
+      () => recordGuardCommands('ci-only', bitbrowserHistoryControlPaths, part, options),
+      /Unsupported finite BitBrowser history control check/
+    );
+  for (const command of releaseCommands)
+    assert.throws(
+      () =>
+        recordGuardCommands('ci-only', bitbrowserHistoryControlPaths, 'release-controls', {
+          ...options,
+          failCommand: command.join(' ')
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
+  for (const invalid of [
+    { mode: 'full', paths: bitbrowserHistoryControlPaths, options },
+    {
+      mode: 'ci-only',
+      paths: bitbrowserHistoryControlPaths,
+      options: { ...options, base: 'main' }
+    },
+    {
+      mode: 'ci-only',
+      paths: bitbrowserHistoryControlPaths,
+      options: { ...options, baseTree: 'a'.repeat(40) }
+    },
+    ...bitbrowserHistoryControlPaths.map((missing) => ({
+      mode: 'ci-only',
+      paths: bitbrowserHistoryControlPaths.filter((name) => name !== missing),
+      options
+    })),
+    {
+      mode: 'ci-only',
+      paths: [
+        ...bitbrowserHistoryControlPaths,
+        'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts'
+      ],
+      options
+    }
+  ]) {
+    try {
+      const fallback = recordGuardCommands(invalid.mode, invalid.paths, 'guards', invalid.options);
+      for (const command of releaseCommands)
+        assert.equal(
+          fallback.some((row) => row.includes(command[2])),
+          false
+        );
+    } catch (error) {
+      assert.match(
+        String(error.stderr ?? error),
+        /Automatic registration has been removed|Missing diff base/
+      );
     }
   }
 });
