@@ -399,6 +399,28 @@ def sqlite_idle(d, directory, c, scope=None):
     return fingerprint(value)
 
 
+def audit_trigger_protection(d, directory):
+    """Verify the unchanged immutable audit guards without host migration files."""
+    database = d.current_job_database(directory)
+    need(isinstance(database, str) and re.fullmatch(r'[A-Za-z0-9_]{1,64}', database), 'AUDIT_DATABASE_INVALID')
+    query = ("SELECT JSON_ARRAYAGG(JSON_OBJECT('event',EVENT_MANIPULATION,'timing',ACTION_TIMING,"
+             "'statement',ACTION_STATEMENT)) FROM information_schema.TRIGGERS "
+             "WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='audit_logs'")
+    raw = d.compose(directory, 'exec', '-e', 'MYSQL_DATABASE=' + database, '-T', 'mysql', 'sh', '-c',
+                    'mysql --batch --raw --skip-column-names -u root --password="$MYSQL_ROOT_PASSWORD" '
+                    '"$MYSQL_DATABASE" -e "' + query + '"', timeout=20)
+    rows = closed_json(raw.encode())
+    expected = {'DELETE': '8c994e78089280c0b613f0d0aa9f71f44c14e037a1c692defb0518e7c5cf624c',
+                'UPDATE': '9fcb6a54e7130c78daf76b672c60131bb44cb39c4de1c24ebe5d65e60755a81c'}
+    need(type(rows) is list and len(rows) == 2 and all(
+         type(row) is dict and set(row) == {'event', 'timing', 'statement'}
+         and row['timing'] == 'BEFORE' and isinstance(row['statement'], str)
+         for row in rows), 'AUDIT_PROTECTION_CHANGED')
+    observed = {row['event']: digest(' '.join(row['statement'].split()).rstrip(';').encode()) for row in rows}
+    need(observed == expected, 'AUDIT_PROTECTION_CHANGED')
+    return fingerprint(observed)
+
+
 def baseline(d, c, h):
     previous = (BASE / 'current').resolve()
     need(previous == Path(c['current']) and previous.parent == BASE / 'releases' and not previous.is_symlink(), 'CURRENT_CHANGED')
@@ -433,6 +455,7 @@ def baseline(d, c, h):
     d.assert_no_active_registration(previous)
     h.engine_idle(d, states['online-recharge'], c)
     sqlite_hash = sqlite_idle(d, previous, c)
+    audit_trigger_protection(d, previous)
     receipt = {'version': 1, 'current': str(previous), 'manifestSha256': digest(raw), 'services': states,
                'configurationSha256': c['configurationSha256'], 'runtimeConfigurationSha256': c['runtimeConfigurationSha256'],
                'apiInventorySha256': fingerprint(api), 'sharedInventorySha256': fingerprint(shared),
@@ -847,6 +870,7 @@ def readback(plan, c, d, h):
     h.engine_idle(d, after['online-recharge'], c, wait_connected=True)
     d.assert_no_active_recharge(target)
     need(sqlite_idle(d, target, c) == plan['runtimeBaseline']['sqliteSafetySha256'], 'READBACK_SQLITE_CHANGED')
+    audit_trigger_protection(d, target)
     public_smoke(proof)
     return {'status': 'FEATURE_RETIREMENT_READBACK_VERIFIED', 'mode': 'readback', 'commit': plan['commit'],
             'tree': plan['tree'], 'images': receipt['images'], 'retiredServices': ['auto-registration'],
@@ -864,6 +888,7 @@ def switch_services(d, c, previous, target, before, h, baseline_receipt, images,
     # This private helper instance retains the original SQL fence/rebind implementation,
     # while its binding validator supports the pinned physical formal-volume names.
     scope.online_binding = lambda selected, directory, states=None: online_binding(selected, directory, c, states)
+    scope.workspace_audit_protection = audit_trigger_protection
     audit = scope.WorkspaceAuditBarrier(d, previous)
     # Historical terminal failures are not active work. The same-connection READ
     # lock blocks new audited dispatch; SQLite summary and leases prove idleness.
