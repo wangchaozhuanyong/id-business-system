@@ -1054,6 +1054,7 @@ try {
     await form.getByLabel('窗口名称', { exact: true }).fill('充值离线验收');
     assert.equal(await form.getByLabel('最高付款', { exact: true }).count(), 0);
     assert.equal(await page.getByText(/付款安全上限|付款上限设置/).count(), 0);
+    await waitFor(() => addressQueries.size === 2);
     assert.deepEqual([...addressQueries].sort(), ['all', 'unused'], '必须同时读取历史和未使用地址');
     await page
       .getByRole('combobox', { name: '选择真实账单地址' })
