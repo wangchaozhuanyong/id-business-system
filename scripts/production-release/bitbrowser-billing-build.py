@@ -35,7 +35,7 @@ def freeze(path, source):
     proof_path = Path(path).parent / 'predecessor-artifact/build-proof.json'
     proof_raw = proof_path.read_bytes()
     proof = json.loads(proof_raw)
-    p.need(proof['commit'] == p.CURRENT and proof['scope'] == 'ONLINE_QUERY_NETWORK_REPAIR'
+    p.need(proof['commit'] == p.PUBLISHED_BUILD and proof['scope'] == 'ONLINE_QUERY_NETWORK_REPAIR'
         and proof['contractSha256'] == p.sha((HERE / 'online-query-network-contract.json').read_bytes()),
         'PREDECESSOR_PROOF_INVALID')
     c = {'version': 1, 'scope': p.SCOPE, 'expectedCurrent': p.CURRENT, 'reviewBase': p.CURRENT,
@@ -172,7 +172,7 @@ def main():
         overlay(candidate, {n: v for n, v in c['sources'].items()
             if n.startswith(('apps/' + role + '/', 'packages/shared/'))}, c['sourceReviewCommit'])
         for variant, context in (('baseline', before), ('candidate', candidate)):
-            env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + (p.CURRENT if variant == 'baseline' else commit)}
+            env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + (p.PUBLISHED_BUILD if variant == 'baseline' else commit)}
             commands = [('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
                 ('npm', 'run', 'build', '--workspace', '@apple-business/shared')]
             if role == 'api':

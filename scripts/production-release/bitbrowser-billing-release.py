@@ -10,7 +10,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
 SCOPE = 'BITBROWSER_BILLING_QUOTE_REPAIR_20261018'
-CURRENT = '8fef357efc8f2d94bdc5175de427db0c621e32ac'
+CURRENT = '3d045eb34406a6f83ee41b15f4a43c612dbcce83'
+PUBLISHED_BUILD = '8fef357efc8f2d94bdc5175de427db0c621e32ac'
 CONTRACT_FILE = 'bitbrowser-billing-contract.json'
 WORKFLOW = '.github/workflows/bitbrowser-billing-validation.yml'
 SERVICES = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'online-recharge')
@@ -159,7 +160,7 @@ def release(plan, c):
         need(str(previous) == b['current'], 'CURRENT_CHANGED')
         raw = (previous / 'release-manifest.json').read_bytes()
         need(sha(raw) == b['manifestSha256'] and json.loads(raw)['commit'] == CURRENT, 'MANIFEST_CHANGED')
-        need(sha((previous / 'online-checkout-build-proof.json').read_bytes()) == c['predecessorProofSha256'],
+        need(all(sha((previous / name).read_bytes()) == digest for name, digest in b['proofs'].items()),
             'PREDECESSOR_PROOF_CHANGED')
         need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
         normalizer = Path(b['backupNormalizerPath'])

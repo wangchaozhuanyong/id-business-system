@@ -64,16 +64,16 @@
     "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
     "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
     "businessActions": 0,
-    "commit": "8fef357efc8f2d94bdc5175de427db0c621e32ac",
+    "commit": "3d045eb34406a6f83ee41b15f4a43c612dbcce83",
     "configurationSha256": {
       ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-      "compose.release.json": "0020f86446d53e8a49cc413d939669bfe21b4ef070040be627983d19b2ad058e",
+      "compose.release.json": "1d06b9722893d16dc51f2e060108af3301b814b6be5a4cd017099cc0746af53e",
       "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
     },
-    "current": "/opt/id-business-v2/releases/20261018T073834Z-8fef357efc8f-online-checkout",
+    "current": "/opt/id-business-v2/releases/20261018T085150Z-3d045eb34406-online-query-deadline",
     "databaseWrites": 0,
-    "freeBytes": 22628737024,
-    "manifestSha256": "ba9d13d68d94a120cef3062b88c9cb0b8fbab289d660ee37a49f0fd7b244e072",
+    "freeBytes": 22574137344,
+    "manifestSha256": "c91a8cc268ce452441bd9e42452731cecffad4be83df0a2f877f3f69de31c3b9",
     "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
     "preservedAdminInventory": {
       "count": 3427,
@@ -90,6 +90,7 @@
       "online-checkout-cs-build-proof.json": "f689d9f9f2b47bd49f81bd909fd2c5750bace1cc70f9b5cdd610f78c9902dd2f",
       "online-checkout-load-build-proof.json": "dd0d256b84bd5959fa45128bebba5e942d62c7613bc9217588615050b7966ead",
       "online-legacy-close-build-proof.json": "cee6476432a5656c5192ed1d8b5eea8ffeb44c69099b860c284e8f6567a71e6c",
+      "online-query-deadline-build-proof.json": "bbac77e102503fff78252d84f84da54d0ead372f40c02e73e7d42fa15099377e",
       "online-session-preflight-build-proof.json": "3c2fc9c546614f04448e86389d9c4b7bd0430170f955c1bd8f95f984869a137b",
       "online-settings-build-proof.json": "84b179d3110df73871178ef470bbb76513f6a9a58f8c8d9780f68fdacb5d68b1",
       "recharge-checkout-build-proof.json": "62ed7d268d395aefc34aebf53fa1131f89bf32f5b5511d2a0bdbcaa7bf3e4814",
@@ -170,12 +171,12 @@
         "status": "running"
       },
       "online-recharge": {
-        "containerId": "94a929237989094bc634d6abb17c65e1d9572b3542fc2b04d267d738fe8b68f8",
+        "containerId": "406331309d9beac31df842afd252954eb636ead68522a7ea8d2fd1f181edfdc7",
         "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
         "health": "healthy",
-        "image": "sha256:b31d2916a51ff8c9ad7907096da83f854144eddee210ede2f6a160bff8de8d6a",
-        "reference": "id-business-v2-online-checkout:8fef357efc8f2d94bdc5175de427db0c621e32ac-39100291753-online-recharge",
-        "startedAtSha256": "19ec33c5001b5782ec93bbfe96ed2260be16f713d717a0c5e27bf52d3ffa7224",
+        "image": "sha256:b48835e40338e9999155ff21000a8ebf6aa3ea8c4c8b36ba1e9b9a8d02cf717c",
+        "reference": "id-business-v2-online-query-deadline:3d045eb34406a6f83ee41b15f4a43c612dbcce83-39112938990",
+        "startedAtSha256": "7171cff9574adaea43eef9605148bdb8583cd936b1ae677e3286b7a3c56da285",
         "status": "running"
       }
     },
@@ -183,9 +184,9 @@
   },
   "businessActions": 0,
   "controlPins": {
-    "bitbrowser-billing-build.py": "742442aeae2e0a2845c444b0d4891ecd8a4756273c106beb99e002e3b34f9e70",
+    "bitbrowser-billing-build.py": "30cd6d9652b99112bc0b56cc3b8c018c487433e6d4cb6744da3b0c8054739271",
     "bitbrowser-billing-dispatch.py": "2da2eb75ab4f08e7b2945273689e80952ecfb3e2ebf03d00f5238d771fc43268",
-    "bitbrowser-billing-release.py": "a13375125300084efb9d28c58779a6a07b2a141226bb959fedb186cab3136025",
+    "bitbrowser-billing-release.py": "9ee6121427b3df8c517fade48b39891abf608486e3a9d8606821ad6193f28e52",
     "bitbrowser-billing-release.test.py": "e9fad52f1238c946768ca64a72a22cb9288d5a611ecd965a7fa74a0f66f2ef9d",
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
@@ -203,7 +204,7 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "8fef357efc8f2d94bdc5175de427db0c621e32ac",
+  "expectedCurrent": "3d045eb34406a6f83ee41b15f4a43c612dbcce83",
   "migrationPerformed": false,
   "predecessorProofSha256": "07a2daa01e2c019e53cf3aadb9434918a76397a3f8819648af53f22f0fd07814",
   "publishedAdminFiles": {
@@ -470,7 +471,7 @@
   },
   "qualityWorkflowSha256": "03c7d2386b7f5a36a5125cbe450832f7a17ef327adad02f34453389682048387",
   "reconstructionContractSha256": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
-  "reviewBase": "8fef357efc8f2d94bdc5175de427db0c621e32ac",
+  "reviewBase": "3d045eb34406a6f83ee41b15f4a43c612dbcce83",
   "scope": "BITBROWSER_BILLING_QUOTE_REPAIR_20261018",
   "sharedFiles": [
     "index.d.ts",
@@ -480,7 +481,7 @@
     "v2/checkout-diagnostic.d.ts",
     "v2/checkout-diagnostic.js"
   ],
-  "sourceReviewCommit": "f8e1b72bb66837a58934f2ce606fb19413f2ea0c",
+  "sourceReviewCommit": "9dffb3e25fb67f86df3d829dabd98bdcf4ca9218",
   "sources": {
     "apps/admin/src/v2/composables/useV2ModuleQuery.spec.ts": "5b652bb12f8b04f15ce8cb1ddc5ae9992afddc47751aa32cd3cbdcfc85f38e64",
     "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue": "a8e5e86ba76eb24897e1bffc49123d163132e71a89e24d7859299f45f2ae35c3",
