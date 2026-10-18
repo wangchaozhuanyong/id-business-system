@@ -6,6 +6,7 @@ const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { generateKeyPairSync } = require('node:crypto');
 const { createRequire } = require('node:module');
 const { once } = require('node:events');
 const { performance } = require('node:perf_hooks');
@@ -42,26 +43,18 @@ test.after(async () => {
 // This synthetic key never leaves process memory. The listener is loopback-only;
 // every official-domain request is fulfilled or rewritten before network access.
 function certificate() {
-  return execFileSync(
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const key = privateKey.export({ format: 'pem', type: 'pkcs8' });
+  const version = execFileSync('openssl', ['version'], { encoding: 'utf8' });
+  // OpenSSL accepts "-" as stdin; macOS LibreSSL instead needs its read-only
+  // stdin descriptor. Neither path creates a key file or reopens stdout.
+  const keyInput = version.startsWith('LibreSSL ') ? '/dev/stdin' : '-';
+  const cert = execFileSync(
     'openssl',
-    [
-      'req',
-      '-x509',
-      '-newkey',
-      'rsa:2048',
-      '-nodes',
-      '-sha256',
-      '-days',
-      '1',
-      '-subj',
-      '/CN=localhost',
-      '-keyout',
-      '/dev/stdout',
-      '-out',
-      '/dev/stdout'
-    ],
-    { stdio: ['ignore', 'pipe', 'ignore'] }
+    ['req', '-new', '-x509', '-key', keyInput, '-sha256', '-days', '1', '-subj', '/CN=localhost'],
+    { input: key, stdio: ['pipe', 'pipe', 'ignore'] }
   );
+  return { key, cert };
 }
 
 const tls = certificate();
@@ -78,7 +71,7 @@ async function fixture(t, handleAccountCheck, { routeError, cookieId = accountId
     failures: []
   };
   const timers = new Set();
-  const server = https.createServer({ key: tls, cert: tls }, (request, response) => {
+  const server = https.createServer(tls, (request, response) => {
     if (request.method !== 'GET') seen.mutationRequests++;
     if (/checkout|payment|subscribe/.test(request.url)) seen.checkoutRequests++;
     const record = {

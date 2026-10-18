@@ -721,7 +721,7 @@
       "originalSha256": null,
       "changed": true,
       "reason": "Real Chromium synthetic network-phase, cancellation, late-response and zero-payment regression coverage; localhost-only fixtures.",
-      "adaptedSha256": "78dcb5971b740a0f5c9303876a33a5502cab1d901d13a5f5622f507704dac7f1"
+      "adaptedSha256": "b92239986b73f984b0d28f490b079835543c4defc26e065a6115dc7344f80649"
     }
   ],
   "dependencySecurityPatches": [
