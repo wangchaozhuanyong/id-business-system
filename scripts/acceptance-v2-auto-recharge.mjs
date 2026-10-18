@@ -186,6 +186,7 @@ try {
       ])
     );
     let profileSaves = 0;
+    const addressQueries = new Set();
     let localReachable = true,
       apiStarts = 0,
       onlyLoginStarts = 0,
@@ -579,8 +580,10 @@ try {
             total: 1
           });
         if (path.endsWith('/auto-recharge/addresses')) {
-          // The recharge selector requests unused rows; address management also reads all rows.
-          assert.ok([null, 'unused'].includes(url.searchParams.get('status')));
+          // Historical rows and new-charge candidates use separate explicit queries.
+          const status = url.searchParams.get('status');
+          assert.ok(['all', 'unused'].includes(status), '地址查询必须明确区分历史与未使用资料');
+          addressQueries.add(status);
           return success(route, {
             items: [address],
             total: 1,
@@ -1051,6 +1054,8 @@ try {
     await form.getByLabel('窗口名称', { exact: true }).fill('充值离线验收');
     assert.equal(await form.getByLabel('最高付款', { exact: true }).count(), 0);
     assert.equal(await page.getByText(/付款安全上限|付款上限设置/).count(), 0);
+    await waitFor(() => addressQueries.size === 2);
+    assert.deepEqual([...addressQueries].sort(), ['all', 'unused'], '必须同时读取历史和未使用地址');
     await page
       .getByRole('combobox', { name: '选择真实账单地址' })
       .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
