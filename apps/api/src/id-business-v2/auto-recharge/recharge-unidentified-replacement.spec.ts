@@ -160,7 +160,7 @@ function fixture() {
       .fn()
       .mockResolvedValue({ sourceJobId: sourceId, profileId, accountKey: key }),
     findJob: vi.fn().mockResolvedValue(source),
-    finishedJobsForAccount: vi.fn().mockResolvedValue([source]),
+    finishedJobsForUnidentifiedCheckout: vi.fn().mockResolvedValue([source]),
     updateJob: vi.fn(),
     restoreCheckoutIdentifier: actual.restoreCheckoutIdentifier,
     originalCheckoutForAccount: actual.originalCheckoutForAccount
@@ -352,15 +352,17 @@ describe('unidentified checkout after an archived expired replacement', () => {
     const other = structuredClone(f.source);
     other.id = '66666666-6666-4666-8666-666666666666';
     delete other.result.checkout_identifier;
-    f.repository.finishedJobsForAccount.mockResolvedValue([f.source, other]);
+    f.repository.finishedJobsForUnidentifiedCheckout.mockResolvedValue([f.source, other]);
     f.tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([f.source, other]);
     await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
     expect(f.repository.updateJob).not.toHaveBeenCalled();
   });
 
-  it('does not infer unique source from a truncated 30-row history', async () => {
+  it('does not infer unique source when the complete history query fails', async () => {
     const f = fixture();
-    f.repository.finishedJobsForAccount.mockResolvedValue(Array(30).fill(f.source));
+    f.repository.finishedJobsForUnidentifiedCheckout.mockRejectedValue(
+      new Error('原结算历史尚未完整核验，禁止恢复原窗口')
+    );
     await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
     expect(f.repository.updateJob).not.toHaveBeenCalled();
   });

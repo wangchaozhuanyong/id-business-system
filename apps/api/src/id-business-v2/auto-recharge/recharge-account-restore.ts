@@ -92,20 +92,22 @@ export async function restoreRechargeAccount(input: {
       ? await repository.findJob(tx, ownedProfile.sourceJobId)
       : null;
   if (unidentifiedRecord && ownedProfile && unidentifiedSource) {
-    const history = await repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
-    // 现有查询最多30条；不能把截断历史当作唯一来源的证明。
+    const history = await repository.finishedJobsForUnidentifiedCheckout(
+      tx,
+      job.ownerId,
+      accountKey,
+      job.id
+    );
     unidentifiedSource =
-      history.length < 30
-        ? (findUnidentifiedCheckoutSource(
-            history,
-            job.ownerId,
-            accountKey,
-            job.plan,
-            ownedProfile.profileId,
-            unidentifiedRecord,
-            records
-          ) ?? null)
-        : null;
+      findUnidentifiedCheckoutSource(
+        history,
+        job.ownerId,
+        accountKey,
+        job.plan,
+        ownedProfile.profileId,
+        unidentifiedRecord,
+        records
+      ) ?? null;
   }
   const unidentifiedResult =
     unidentifiedSource && unidentifiedRecord && ownedProfile

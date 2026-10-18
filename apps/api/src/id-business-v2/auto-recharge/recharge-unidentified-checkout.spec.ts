@@ -51,7 +51,7 @@ function fixture() {
       .fn()
       .mockResolvedValue({ sourceJobId: sourceId, profileId, accountKey }),
     findJob: vi.fn().mockResolvedValue(previous),
-    finishedJobsForAccount: vi.fn().mockResolvedValue([previous]),
+    finishedJobsForUnidentifiedCheckout: vi.fn().mockResolvedValue([previous]),
     updateJob: vi.fn(),
     restoreCheckoutIdentifier: actual.restoreCheckoutIdentifier,
     originalCheckoutForAccount: actual.originalCheckoutForAccount
@@ -217,7 +217,7 @@ describe('unidentified original checkout discovery', () => {
       profileId,
       accountKey
     });
-    repository.finishedJobsForAccount.mockResolvedValue([loggedIn, previous] as never);
+    repository.finishedJobsForUnidentifiedCheckout.mockResolvedValue([loggedIn, previous] as never);
     const result = await restoreRechargeAccount(input as never);
     expect(result.unidentifiedCheckoutRecovery).toBe(true);
     expect(result.originalCheckoutIdentifier).toBeUndefined();
@@ -241,7 +241,7 @@ describe('unidentified original checkout discovery', () => {
       profileId: latest,
       accountKey
     });
-    repository.finishedJobsForAccount.mockResolvedValue(history as never);
+    repository.finishedJobsForUnidentifiedCheckout.mockResolvedValue(history as never);
     const result = await restoreRechargeAccount(input as never);
     expect(result.unidentifiedCheckoutRecovery).toBe(true);
     expect(result.ownedProfile?.profileId).toBe(latest);
@@ -289,15 +289,13 @@ describe('unidentified original checkout discovery', () => {
     ).toBeUndefined();
   });
 
-  it('rejects truncated history instead of assuming a unique checkout source', async () => {
-    const { input, previous, repository } = fixture();
+  it('rejects when the complete checkout history cannot be verified', async () => {
+    const { input, repository } = fixture();
     const loggedIn = login(loginId, profileId);
     repository.findJob.mockResolvedValue(loggedIn as never);
-    repository.finishedJobsForAccount.mockResolvedValue([
-      loggedIn,
-      previous,
-      ...Array(28).fill(loggedIn)
-    ]);
+    repository.finishedJobsForUnidentifiedCheckout.mockRejectedValue(
+      new Error('原结算历史尚未完整核验，禁止恢复原窗口')
+    );
     await expect(restoreRechargeAccount(input as never)).rejects.toThrow();
     expect(repository.updateJob).not.toHaveBeenCalled();
   });
