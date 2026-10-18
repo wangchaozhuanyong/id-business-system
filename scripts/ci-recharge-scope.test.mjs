@@ -7217,7 +7217,11 @@ import {
   isBitbrowserRecoveryControlsOnly as finiteRecoveryOnly,
   bitbrowserRecoveryControlPaths as finiteRecoveryPaths,
   bitbrowserRecoverySourceReviewCommit as finiteRecoveryCommit,
-  bitbrowserRecoverySourceReviewTree as finiteRecoveryTree
+  bitbrowserRecoverySourceReviewTree as finiteRecoveryTree,
+  isBitbrowserRecoveryControlRepair as finiteRecoveryRepair,
+  bitbrowserRecoveryControlRepairBase as finiteRecoveryRepairBase,
+  bitbrowserRecoveryControlRepairTree as finiteRecoveryRepairTree,
+  bitbrowserRecoveryControlRepairPaths as finiteRecoveryRepairPaths
 } from './ci-recharge-scope.mjs';
 
 test('finite recovery controls reuse reviewed business QA only over the exact frozen tree', () => {
@@ -7268,6 +7272,64 @@ test('finite recovery controls reuse reviewed business QA only over the exact fr
   assert.equal(finiteRecoveryOnly([], context), false);
   assert.equal(
     finiteRecoveryOnly([...finiteRecoveryPaths.slice(1), finiteRecoveryPaths[1]], context),
+    false
+  );
+});
+
+test('finite recovery declaration control repair admits only its exact eight files and baseline', () => {
+  const context = { base: finiteRecoveryRepairBase, baseTree: finiteRecoveryRepairTree };
+  assert.equal(finiteRecoveryRepairPaths.length, 8);
+  assert.equal(finiteRecoveryRepair(finiteRecoveryRepairPaths, context), true);
+  assert.equal(finiteRecoveryOnly(finiteRecoveryRepairPaths, context), true);
+  assert.equal(finiteBillingCiOnly(finiteRecoveryRepairPaths, context), true);
+  assert.equal(checkMode(finiteRecoveryRepairPaths, 'same', 'same', undefined, context), 'ci-only');
+  assert.deepEqual(finiteBillingParts(finiteRecoveryRepairPaths, undefined, context), ['guards']);
+  assert.equal(finiteBillingNeedsEngine(finiteRecoveryRepairPaths, context), false);
+  assert.equal(checkMode(finiteRecoveryRepairPaths, 'before', 'after', undefined, context), 'full');
+  for (const invalid of [
+    undefined,
+    { base: finiteRecoveryRepairBase },
+    { ...context, base: 'b'.repeat(40) },
+    { ...context, base: finiteRecoveryCommit },
+    { ...context, baseTree: finiteRecoveryTree },
+    { ...context, baseTree: 'a'.repeat(40) }
+  ]) {
+    assert.equal(finiteRecoveryRepair(finiteRecoveryRepairPaths, invalid), false);
+    assert.equal(checkMode(finiteRecoveryRepairPaths, 'same', 'same', undefined, invalid), 'full');
+  }
+  for (const missing of finiteRecoveryRepairPaths) {
+    const paths = finiteRecoveryRepairPaths.filter((p) => p !== missing);
+    assert.equal(finiteRecoveryRepair(paths, context), false);
+    assert.equal(checkMode(paths, 'same', 'same', undefined, context), 'full');
+  }
+  for (const extra of [
+    '.github/workflows/bitbrowser-recovery-validation.yml',
+    'scripts/production-release/bitbrowser-recovery-dispatch.py',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-cycle-ledger.ts',
+    'apps/admin/src/v2/features/auto-recharge/recharge-form.ts',
+    'packages/shared/src/v2/checkout-diagnostic.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'scripts/production-release/bitbrowser-billing-release.py'
+  ]) {
+    assert.equal(
+      finiteRecoveryRepair([...finiteRecoveryRepairPaths, extra], context),
+      false,
+      extra
+    );
+    assert.equal(
+      checkMode([...finiteRecoveryRepairPaths, extra], 'same', 'same', undefined, context),
+      'full',
+      extra
+    );
+  }
+  assert.equal(finiteRecoveryRepair(finiteRecoveryPaths, context), false);
+  assert.equal(
+    finiteRecoveryRepair(
+      [...finiteRecoveryRepairPaths.slice(1), finiteRecoveryRepairPaths[1]],
+      context
+    ),
     false
   );
 });

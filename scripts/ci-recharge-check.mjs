@@ -155,7 +155,9 @@ import {
   bitbrowserBillingControlBase,
   bitbrowserBillingControlTree,
   isBitbrowserRecoveryControlsOnly,
-  bitbrowserRecoverySourceReviewTree
+  bitbrowserRecoverySourceReviewTree,
+  bitbrowserRecoveryControlRepairBase,
+  bitbrowserRecoveryControlRepairTree
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -202,7 +204,10 @@ if (
   mode === 'ci-only' &&
   isBitbrowserRecoveryControlsOnly(changed, {
     base,
-    baseTree: bitbrowserRecoverySourceReviewTree
+    baseTree:
+      base === bitbrowserRecoveryControlRepairBase
+        ? bitbrowserRecoveryControlRepairTree
+        : bitbrowserRecoverySourceReviewTree
   }) &&
   isBitbrowserRecoveryControlsOnly(changed, {
     base,

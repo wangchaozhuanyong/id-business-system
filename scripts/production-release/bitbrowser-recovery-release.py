@@ -27,6 +27,10 @@ API_SOURCES = frozenset('apps/api/src/id-business-v2/auto-recharge/' + name + '.
     'recharge-direct-payment', 'recharge-expired-checkout', 'recharge-ledger-callback',
     'recharge-ledger-metadata', 'recharge-local.service', 'recharge-noncharge-proof',
     'recharge-resolution', 'recharge-unidentified-checkout'))
+DECLARATIONS = {'id-business-v2/auto-recharge/recharge-cycle-ledger.d.ts': {
+    'runtimeBefore': 'd87b548747da52c2667d619eb0fe439e75abf84f05418684c637c5d9ec477a16',
+    'before': '61881088392ba1e96d48d435a577758caa2e576b8e479a07a6dd6aa96c835ce3',
+    'after': '12406996df9639cfdb69f5e4d387a1782e2fdc52cfe0ac266a35ef715a0ef104'}}
 SHARED = frozenset(name + suffix for name in ('index', 'v2/auto-recharge', 'v2/checkout-diagnostic')
     for suffix in ('.js', '.d.ts'))
 CONTROLS = frozenset(('bitbrowser-billing-release.py', 'bitbrowser-billing-build.py',
@@ -82,7 +86,8 @@ def validate_contract(c):
         for name in sources), 'SOURCE_SCOPE_INVALID')
     need({n for n in sources if n.startswith('apps/api/') and not n.endswith('.spec.ts')} == API_SOURCES
         and set(c.get('apiModules', [])) == {n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
-            for n in API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')}
+            for n in API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')} | set(DECLARATIONS)
+        and c.get('declarationOutputs') == DECLARATIONS
         and set(c.get('sharedFiles', [])) == SHARED, 'OUTPUT_SCOPE_INVALID')
     need(valid_inventory(c.get('controlPins')) and set(c['controlPins']) == CONTROLS
         and c['controlPins']['bitbrowser-billing-contract.json'] == PREDECESSOR_CONTRACT
@@ -102,6 +107,8 @@ def validate_contract(c):
         and re.fullmatch('[a-f0-9]{64}', b.get('manifestSha256', ''))
         and b.get('proofs', {}).get('recharge-checkout-build-proof.json') == PREDECESSOR_PROOF
         and valid_inventory(b.get('apiBaselineFiles'))
+        and all(b['apiBaselineFiles'].get('apps/api/dist/' + name) == pin['runtimeBefore']
+            for name, pin in DECLARATIONS.items())
         and set(b['apiBaselineFiles']) == {
             *('apps/api/dist/' + name for name in c['apiModules']),
             *('packages/shared/dist/' + name for name in SHARED)}
@@ -138,7 +145,9 @@ def verify_proof(proof, plan, c, payload, h):
     verify_mysql(proof.get('isolatedMysqlVerification'), plan, c)
     need(valid_inventory(proof.get('apiModules')) and set(proof['apiModules']) == set(c['apiModules'])
         and valid_inventory(proof.get('sharedFiles')) and set(proof['sharedFiles']) == SHARED
-        and valid_inventory(proof.get('adminFiles')), 'PAYLOAD_SCOPE_INVALID')
+        and valid_inventory(proof.get('adminFiles'))
+        and all(proof['apiModules'].get(name) == pin['after'] for name, pin in DECLARATIONS.items()),
+        'PAYLOAD_SCOPE_INVALID')
     expected = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
         **{'api/shared/' + n: v for n, v in proof['sharedFiles'].items()},
         **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()},

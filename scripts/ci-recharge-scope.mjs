@@ -1810,13 +1810,33 @@ export const bitbrowserRecoveryControlPaths = Object.freeze([
     (name) => `scripts/ci-recharge-${name}`
   )
 ]);
+export const bitbrowserRecoveryControlRepairBase = 'b3b9591ad3824cc6126411307f140c334e62de85';
+export const bitbrowserRecoveryControlRepairTree = 'e6ad993fd88dbf2fd476bd8645ef8bc5227617c3';
+export const bitbrowserRecoveryControlRepairPaths = Object.freeze([
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => `scripts/production-release/bitbrowser-recovery-${name}`
+  ),
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  )
+]);
+export function isBitbrowserRecoveryControlRepair(paths, context) {
+  return (
+    context?.base === bitbrowserRecoveryControlRepairBase &&
+    context?.baseTree === bitbrowserRecoveryControlRepairTree &&
+    paths.length === bitbrowserRecoveryControlRepairPaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((name) => bitbrowserRecoveryControlRepairPaths.includes(name))
+  );
+}
 export function isBitbrowserRecoveryControlsOnly(paths, context) {
   return (
-    /^[a-f0-9]{40}$/.test(context?.base ?? '') &&
-    context?.baseTree === bitbrowserRecoverySourceReviewTree &&
-    paths.length === bitbrowserRecoveryControlPaths.length &&
-    new Set(paths).size === paths.length &&
-    paths.every((name) => bitbrowserRecoveryControlPaths.includes(name))
+    (/^[a-f0-9]{40}$/.test(context?.base ?? '') &&
+      context?.baseTree === bitbrowserRecoverySourceReviewTree &&
+      paths.length === bitbrowserRecoveryControlPaths.length &&
+      new Set(paths).size === paths.length &&
+      paths.every((name) => bitbrowserRecoveryControlPaths.includes(name))) ||
+    isBitbrowserRecoveryControlRepair(paths, context)
   );
 }
 
