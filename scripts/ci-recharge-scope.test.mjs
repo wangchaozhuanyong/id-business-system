@@ -33,6 +33,8 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
+  onlineQueryDeadlinePaths,
+  onlineQueryDeadlineControls,
   onlineQueryNetworkPaths,
   onlineQueryNetworkControls,
   onlineSessionPreflightPaths,
@@ -7128,6 +7130,27 @@ test('fresh Session subscription preflight selects only Admin and cannot hide pa
     'scripts/production-release/online-session-preflight-arbitrary.py'
   ])
     assert.equal(checkMode([...paths, extra], schema, schema), 'full', extra);
+});
+
+test('query deadline repair selects only guards and engine without narrowing unrelated edits', () => {
+  const paths = [...onlineQueryDeadlinePaths, ...onlineQueryDeadlineControls];
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const controls = onlineQueryDeadlineControls.filter((path) => !path.startsWith('scripts/ci-'));
+  assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(controls), false);
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'apps/admin/src/v2/features/online-recharge/sections.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js',
+    'scripts/production-release/online-query-network-build.py'
+  ])
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full', extra);
 });
 
 test('query network repair keeps all four checks and rejects an unrelated core payment edit', () => {

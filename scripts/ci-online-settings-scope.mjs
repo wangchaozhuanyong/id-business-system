@@ -494,6 +494,44 @@ export function isOnlinePendingFeaturesControlsOnly(paths) {
     )
   );
 }
+export const onlineQueryDeadlineScope = 'ONLINE_QUERY_DEADLINE_REPAIR';
+export const onlineQueryDeadlinePaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/subscription-check.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/query-network-browser.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/renewal-state.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'docs/ONLINE_RECHARGE.md'
+]);
+const queryDeadlineReleaseControls = [
+  '.github/workflows/online-query-deadline-validation.yml',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-query-deadline-' + name
+  )
+];
+export const onlineQueryDeadlineControls = Object.freeze([
+  ...queryDeadlineReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlineQueryDeadlineOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    onlineQueryDeadlinePaths.every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        onlineQueryDeadlinePaths.includes(path) || onlineQueryDeadlineControls.includes(path)
+    )
+  );
+}
+export function isOnlineQueryDeadlineControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((path) => queryDeadlineReleaseControls.includes(path)) &&
+    paths.every((path) => onlineQueryDeadlineControls.includes(path))
+  );
+}
 export const onlineQueryNetworkScope = 'ONLINE_QUERY_NETWORK_REPAIR';
 export const onlineQueryNetworkPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
@@ -703,7 +741,8 @@ export function isOnlineSettingsOnly(paths) {
     isOnlineAuthStabilityOnly(paths) ||
     isOnlinePendingFeaturesOnly(paths) ||
     isOnlineSessionPreflightOnly(paths) ||
-    isOnlineQueryNetworkOnly(paths)
+    isOnlineQueryNetworkOnly(paths) ||
+    isOnlineQueryDeadlineOnly(paths)
   )
     return true;
   const databaseTest = 'apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts';
@@ -728,6 +767,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineQueryDeadlineControlsOnly(paths)) return true;
   if (isOnlineQueryNetworkControlsOnly(paths)) return true;
   if (isOnlineSessionPreflightControlsOnly(paths)) return true;
   if (isOnlinePendingFeaturesControlsOnly(paths)) return true;
@@ -750,6 +790,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const queryDeadline = isOnlineQueryDeadlineOnly(paths);
+  const queryDeadlineControls = isOnlineQueryDeadlineControlsOnly(paths);
   const queryNetwork = isOnlineQueryNetworkOnly(paths);
   const queryNetworkControls = isOnlineQueryNetworkControlsOnly(paths);
   const sessionPreflight = isOnlineSessionPreflightOnly(paths);
@@ -813,6 +855,14 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (queryDeadline || queryDeadlineControls)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-query-deadline-release.test.py'],
+        ...(queryDeadline
+          ? ['check:v2-module-architecture', 'check:v2-isolation'].map((name) => npm('run', name))
+          : [])
+      ];
     if (queryNetwork || queryNetworkControls)
       return [
         ...controls,
@@ -1042,6 +1092,8 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (controlsOnly) throw new Error('Unsupported controls-only check');
+  if (queryDeadline && part !== 'online-engine')
+    throw new Error('Unsupported query deadline check part');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
   if (sessionPreflight) {
@@ -1060,7 +1112,7 @@ export function onlineSettingsCommands(part, paths) {
       npm('run', 'build', '--workspace', '@apple-business/admin')
     ];
   }
-  if (queryNetwork) {
+  if (queryNetwork || queryDeadline) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
     const browser = [
       npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),

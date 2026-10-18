@@ -12,6 +12,8 @@ const CANCEL_SUBSCRIPTION_URL = 'https://chatgpt.com/backend-api/subscriptions/c
 const RESUME_SUBSCRIPTION_URL = 'https://chatgpt.com/backend-api/subscriptions/resume';
 const BILLING_PAGE_URL = 'https://chatgpt.com/account/manage';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
+// Match the pinned upstream's full-response GET limit without extending the task deadline.
+const ACCOUNT_CHECK_ATTEMPT_MS = 20000;
 const ACCOUNT_MISMATCH_MESSAGE = '官网会话账号或用户与原任务不一致，已停止后续操作';
 const BOOTSTRAP_FAILURE_MESSAGES = {
     SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
@@ -403,9 +405,9 @@ async function queryGet(read, budget, transport) {
         const control = { observation: emptyReadObservation(), cancel: undefined };
         let pending;
         try {
-            const timeoutMs = Math.min(10000, checkBudget(budget));
-            const attemptBudget = { ...budget, deadlineAt: Math.min(budget.deadlineAt, started + 10000),
-                timeoutSource: budget.deadlineAt <= started + 10000 ? 'query_deadline' : 'attempt_deadline' };
+            const timeoutMs = Math.min(ACCOUNT_CHECK_ATTEMPT_MS, checkBudget(budget));
+            const attemptBudget = { ...budget, deadlineAt: Math.min(budget.deadlineAt, started + ACCOUNT_CHECK_ATTEMPT_MS),
+                timeoutSource: budget.deadlineAt <= started + ACCOUNT_CHECK_ATTEMPT_MS ? 'query_deadline' : 'attempt_deadline' };
             control.timeoutSource = attemptBudget.timeoutSource;
             const value = await boundedQuery(() => {
                 pending = Promise.resolve().then(() => read(timeoutMs, control));
@@ -658,8 +660,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
             compareDiagnostics = [{ transport: 'context-request-compare', skippedReason: 'shared_context' }];
             return;
         }
-        if (performance.now() >= budget.deadlineAt) {
-            compareDiagnostics = [{ transport: 'context-request-compare', skippedReason: 'query_deadline' }];
+        if (budget.deadlineAt - performance.now() < ACCOUNT_CHECK_ATTEMPT_MS) {
+            compareDiagnostics = [{ transport: 'context-request-compare', skippedReason: 'deadline_exhausted' }];
             return;
         }
         compareDiagnostics = [await compareContextRead(ownedContext, accessToken, options.timezoneOffsetMin, budget)];
@@ -706,6 +708,9 @@ async function fetchAccountCheck(accessToken, options = {}) {
                     code: result.code || 'HUMAN_VERIFICATION_REQUIRED', diagnostics: result.diagnostics
                 });
             }
+            // One primary read plus one complete comparison, only for this task's
+            // exclusive diagnostic context. Normal and borrowed contexts retain a retry.
+            if (ownedContext && options.queryTransportMode === 'transport_compare') budget.maxAttempts = 1;
             let result;
             try { result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget); }
             catch (error) { await compare(page, error); throw error; }

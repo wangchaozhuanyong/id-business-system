@@ -291,7 +291,7 @@ function queryFixture({
           evaluate: async (fn, args) => {
             assert.match(String(fn), /method: 'GET'/);
             assert.match(String(fn), /credentials: 'include'/);
-            assert.ok(args.timeoutMs <= 10000);
+            assert.ok(args.timeoutMs <= 20000);
             effects.requests.push({ context, page, args, transport: 'browser-page' });
             await onRead?.(args);
             const nextFailure = failures.shift() || failure;
