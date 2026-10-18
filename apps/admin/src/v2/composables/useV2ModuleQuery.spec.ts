@@ -60,84 +60,84 @@ it('shares module-aware prime, get and fetch while preserving independent refere
   const key = 'shared-parameters';
   primeV2Query({ scope: 'auto-recharge', key, data: 'reference' });
   primeV2Query({ moduleKey: 'bank-recharge-cards', scope: 'auto-recharge', key, data: 'cards' });
-  const readNames = vi.fn(async () => 'names');
+  const readAddresses = vi.fn(async () => 'addresses');
   await fetchV2Query({
-    moduleKey: 'auto-recharge-names',
+    moduleKey: 'auto-recharge-addresses',
     scope: 'auto-recharge',
     key,
-    query: readNames
+    query: readAddresses
   });
-  const readCachedNames = vi.fn(async () => 'unexpected-network');
-  const names = mountModuleQuery({
-    moduleKey: 'auto-recharge-names',
+  const readCachedAddresses = vi.fn(async () => 'unexpected-network');
+  const addresses = mountModuleQuery({
+    moduleKey: 'auto-recharge-addresses',
     scope: 'auto-recharge',
     key,
-    query: readCachedNames
+    query: readCachedAddresses
   });
   try {
-    await names.query.ensureFresh();
-    expect(names.query.data.value).toBe('names');
-    expect(readCachedNames).not.toHaveBeenCalled();
+    await addresses.query.ensureFresh();
+    expect(addresses.query.data.value).toBe('addresses');
+    expect(readCachedAddresses).not.toHaveBeenCalled();
     expect(getV2QueryData('auto-recharge', key)).toBe('reference');
     expect(getV2QueryData('auto-recharge', key, { moduleKey: 'bank-recharge-cards' })).toBe(
       'cards'
     );
-    expect(getV2QueryData('auto-recharge', key, { moduleKey: 'auto-recharge-names' })).toBe(
-      'names'
+    expect(getV2QueryData('auto-recharge', key, { moduleKey: 'auto-recharge-addresses' })).toBe(
+      'addresses'
     );
     primeV2Query({
-      moduleKey: 'auto-recharge-names',
+      moduleKey: 'auto-recharge-addresses',
       scope: 'auto-recharge',
       key,
-      data: 'updated-names'
+      data: 'updated-addresses'
     });
-    expect(names.query.data.value).toBe('updated-names');
+    expect(addresses.query.data.value).toBe('updated-addresses');
     expect(getV2QueryData('auto-recharge', key)).toBe('reference');
-    expect(readNames).toHaveBeenCalledTimes(1);
+    expect(readAddresses).toHaveBeenCalledTimes(1);
   } finally {
-    names.app.unmount();
+    addresses.app.unmount();
   }
 });
 
 it('refreshes both modules on a shared scope event without invalidating an unrelated scope', async () => {
   vi.useFakeTimers();
   let cardsVersion = 0,
-    namesVersion = 0;
+    addressesVersion = 0;
   const readCards = vi.fn(async () => `cards-${++cardsVersion}`);
-  const readNames = vi.fn(async () => `names-${++namesVersion}`);
+  const readAddresses = vi.fn(async () => `addresses-${++addressesVersion}`);
   const cards = mountModuleQuery({
     moduleKey: 'bank-recharge-cards',
     scope: 'auto-recharge',
     key: 'page-1',
     query: readCards
   });
-  const names = mountModuleQuery({
-    moduleKey: 'auto-recharge-names',
+  const addresses = mountModuleQuery({
+    moduleKey: 'auto-recharge-addresses',
     scope: 'auto-recharge',
     key: 'page-1',
-    query: readNames
+    query: readAddresses
   });
   try {
-    await Promise.all([cards.query.ensureFresh(), names.query.ensureFresh()]);
+    await Promise.all([cards.query.ensureFresh(), addresses.query.ensureFresh()]);
     primeV2Query({ moduleKey: 'customers', scope: 'customers', key: 'page-1', data: 'unrelated' });
     invalidateV2Queries('auto-recharge');
     await vi.advanceTimersByTimeAsync(100);
     expect(readCards).toHaveBeenCalledTimes(2);
-    expect(readNames).toHaveBeenCalledTimes(2);
+    expect(readAddresses).toHaveBeenCalledTimes(2);
     expect(cards.query.data.value).toBe('cards-2');
-    expect(names.query.data.value).toBe('names-2');
+    expect(addresses.query.data.value).toBe('addresses-2');
     expect(getV2QueryData('customers', 'page-1', { moduleKey: 'customers' })).toBe('unrelated');
   } finally {
     cards.app.unmount();
-    names.app.unmount();
+    addresses.app.unmount();
   }
 });
 
 it('clears both module caches on identity change and rejects previous-identity late responses', async () => {
   const cardsRead = deferred<string>(),
-    namesRead = deferred<string>();
+    addressesRead = deferred<string>();
   const readCards = vi.fn(() => cardsRead.promise),
-    readNames = vi.fn(() => namesRead.promise);
+    readAddresses = vi.fn(() => addressesRead.promise);
   const key = 'identity-race';
   const cards = mountModuleQuery({
     moduleKey: 'bank-recharge-cards',
@@ -145,18 +145,18 @@ it('clears both module caches on identity change and rejects previous-identity l
     key,
     query: readCards
   });
-  const names = mountModuleQuery({
-    moduleKey: 'auto-recharge-names',
+  const addresses = mountModuleQuery({
+    moduleKey: 'auto-recharge-addresses',
     scope: 'auto-recharge',
     key,
-    query: readNames
+    query: readAddresses
   });
   try {
-    const waits = [cards.query.ensureFresh(), names.query.ensureFresh()];
-    await vi.waitFor(() => expect(readNames).toHaveBeenCalledTimes(1));
+    const waits = [cards.query.ensureFresh(), addresses.query.ensureFresh()];
+    await vi.waitFor(() => expect(readAddresses).toHaveBeenCalledTimes(1));
     sessionCoordinator.clearLocalSession({ reason: 'identity-switched' });
     expect(cards.query.data.value).toBeUndefined();
-    expect(names.query.data.value).toBeUndefined();
+    expect(addresses.query.data.value).toBeUndefined();
     primeV2Query({
       moduleKey: 'bank-recharge-cards',
       scope: 'auto-recharge',
@@ -164,28 +164,28 @@ it('clears both module caches on identity change and rejects previous-identity l
       data: 'current-cards'
     });
     primeV2Query({
-      moduleKey: 'auto-recharge-names',
+      moduleKey: 'auto-recharge-addresses',
       scope: 'auto-recharge',
       key,
-      data: 'current-names'
+      data: 'current-addresses'
     });
-    namesRead.resolve('old-names');
+    addressesRead.resolve('old-addresses');
     cardsRead.resolve('old-cards');
     await Promise.all(waits);
     expect(cards.query.data.value).toBe('current-cards');
-    expect(names.query.data.value).toBe('current-names');
-    expect(getV2QueryData('auto-recharge', key, { moduleKey: 'auto-recharge-names' })).toBe(
-      'current-names'
+    expect(addresses.query.data.value).toBe('current-addresses');
+    expect(getV2QueryData('auto-recharge', key, { moduleKey: 'auto-recharge-addresses' })).toBe(
+      'current-addresses'
     );
   } finally {
     cards.app.unmount();
-    names.app.unmount();
+    addresses.app.unmount();
     cardsRead.resolve('old-cards');
-    namesRead.resolve('old-names');
+    addressesRead.resolve('old-addresses');
   }
 });
 
-it('reads names independently after bank cards cache the same filters and pagination', async () => {
+it('reads addresses independently after bank cards cache the same filters and pagination', async () => {
   const key = createV2QueryKey({ page: 1, pageSize: 20, keyword: '', status: '' });
   const cards = mountModuleQuery({
     moduleKey: 'bank-recharge-cards',
@@ -193,67 +193,69 @@ it('reads names independently after bank cards cache the same filters and pagina
     key,
     query: async () => ({ items: [{ last4: '8000', status: 'disabled' }], total: 7 })
   });
-  const readNames = vi.fn(async () => ({
-    items: [{ sequence: 1, name: '合成姓名' }],
+  const readAddresses = vi.fn(async () => ({
+    items: [{ id: 'synthetic-address', line1: '合成地址' }],
     total: 1000
   }));
-  let names: ReturnType<typeof mountModuleQuery<Awaited<ReturnType<typeof readNames>>>> | undefined;
+  let addresses:
+    | ReturnType<typeof mountModuleQuery<Awaited<ReturnType<typeof readAddresses>>>>
+    | undefined;
   try {
     await cards.query.ensureFresh();
-    names = mountModuleQuery({
-      moduleKey: 'auto-recharge-names',
+    addresses = mountModuleQuery({
+      moduleKey: 'auto-recharge-addresses',
       scope: 'auto-recharge',
       key,
-      query: readNames
+      query: readAddresses
     });
-    await names.query.ensureFresh();
-    expect(readNames).toHaveBeenCalledTimes(1);
-    expect(names.query.data.value).toEqual({
-      items: [{ sequence: 1, name: '合成姓名' }],
+    await addresses.query.ensureFresh();
+    expect(readAddresses).toHaveBeenCalledTimes(1);
+    expect(addresses.query.data.value).toEqual({
+      items: [{ id: 'synthetic-address', line1: '合成地址' }],
       total: 1000
     });
     expect(cards.query.data.value?.total).toBe(7);
-    expect(names.query.requestedKey.value).toBe(key);
-    expect(names.query.displayedKey.value).toBe(key);
+    expect(addresses.query.requestedKey.value).toBe(key);
+    expect(addresses.query.displayedKey.value).toBe(key);
   } finally {
-    names?.app.unmount();
+    addresses?.app.unmount();
     cards.app.unmount();
   }
 });
 
 it('does not deduplicate in-flight reads across modules with identical keys', async () => {
   const cardsRead = deferred<string>(),
-    namesRead = deferred<string>();
+    addressesRead = deferred<string>();
   const readCards = vi.fn(() => cardsRead.promise),
-    readNames = vi.fn(() => namesRead.promise);
+    readAddresses = vi.fn(() => addressesRead.promise);
   const cards = mountModuleQuery({
     moduleKey: 'bank-recharge-cards',
     scope: 'auto-recharge',
     key: 'same',
     query: readCards
   });
-  const names = mountModuleQuery({
-    moduleKey: 'auto-recharge-names',
+  const addresses = mountModuleQuery({
+    moduleKey: 'auto-recharge-addresses',
     scope: 'auto-recharge',
     key: 'same',
-    query: readNames
+    query: readAddresses
   });
   try {
     await vi.waitFor(() => expect(readCards).toHaveBeenCalledTimes(1));
-    expect(readNames).toHaveBeenCalledTimes(1);
-    namesRead.resolve('names');
-    await names.query.ensureFresh();
-    expect(names.query.data.value).toBe('names');
+    expect(readAddresses).toHaveBeenCalledTimes(1);
+    addressesRead.resolve('addresses');
+    await addresses.query.ensureFresh();
+    expect(addresses.query.data.value).toBe('addresses');
     expect(cards.query.data.value).toBeUndefined();
     cardsRead.resolve('cards');
     await cards.query.ensureFresh();
     expect(cards.query.data.value).toBe('cards');
-    expect(names.query.data.value).toBe('names');
+    expect(addresses.query.data.value).toBe('addresses');
   } finally {
     cards.app.unmount();
-    names.app.unmount();
+    addresses.app.unmount();
     cardsRead.resolve('cards');
-    namesRead.resolve('names');
+    addressesRead.resolve('addresses');
   }
 });
 
@@ -265,7 +267,7 @@ it('keeps same-module request sharing when one consumer unmounts', async () => {
     return pending.promise;
   });
   const options = {
-    moduleKey: 'auto-recharge-names' as const,
+    moduleKey: 'auto-recharge-addresses' as const,
     scope: 'auto-recharge' as const,
     key: 'same',
     query: read
@@ -276,13 +278,13 @@ it('keeps same-module request sharing when one consumer unmounts', async () => {
     await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
     first.app.unmount();
     expect(signal.aborted).toBe(false);
-    pending.resolve('names');
+    pending.resolve('addresses');
     await second.query.ensureFresh();
-    expect(second.query.data.value).toBe('names');
+    expect(second.query.data.value).toBe('addresses');
     expect(read).toHaveBeenCalledTimes(1);
   } finally {
     second.app.unmount();
-    pending.resolve('names');
+    pending.resolve('addresses');
   }
 });
 

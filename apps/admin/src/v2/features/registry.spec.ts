@@ -43,7 +43,7 @@ describe('V2 feature registry', () => {
     });
     try {
       const runtime = await import('./runtimeRegistry');
-      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(47);
+      expect(runtime.v2RuntimeFeatureRegistry).toHaveLength(46);
       expect(runtime.getV2RuntimeModuleDefinition('accounts')?.loadView).toBeTypeOf('function');
     } finally {
       vi.doUnmock('@/v2/features/tableSchemas');
@@ -58,13 +58,24 @@ describe('V2 feature registry', () => {
 
     expect(new Set(keys).size).toBe(keys.length);
     expect(new Set(routes).size).toBe(routes.length);
-    expect(v2FeatureRegistry).toHaveLength(47);
+    expect(v2FeatureRegistry).toHaveLength(46);
   });
 
   it('keeps the removed registration names module retired', () => {
     expect(getV2RuntimeModuleDefinition('registration-names')).toBeUndefined();
     expect(
       v2FeatureRegistry.some((feature) => feature.route === '/v2/auto-registration/names')
+    ).toBe(false);
+  });
+  it('retires the recharge names page from runtime lookup, navigation and page search metadata', () => {
+    expect(getV2RuntimeModuleDefinition('auto-recharge-names')).toBeUndefined();
+    expect(v2FeatureRegistry.some((feature) => feature.route === '/v2/auto-recharge/names')).toBe(
+      false
+    );
+    expect(
+      v2NavigationSections
+        .flatMap((section) => section.items)
+        .some((feature) => feature.key === 'auto-recharge-names')
     ).toBe(false);
   });
 
@@ -131,12 +142,12 @@ describe('V2 feature registry', () => {
     });
     expect(
       v2NavigationSections.find((section) => section.key === 'auto-recharge')?.items
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     expect(
       v2NavigationSections
         .find((section) => section.key === 'auto-recharge')
         ?.items.map((item) => item.key)
-    ).toEqual(['auto-recharge', 'auto-recharge-addresses', 'auto-recharge-names']);
+    ).toEqual(['auto-recharge', 'auto-recharge-addresses']);
     expect(v2FeatureRegistry.find((feature) => feature.key === 'vendure-mailbox')).toMatchObject({
       title: '邮件验证码查询',
       route: '/v2/account-settings/mailbox',

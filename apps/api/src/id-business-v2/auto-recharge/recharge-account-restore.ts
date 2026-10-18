@@ -15,7 +15,8 @@ import { cycleContext, readCycleState } from './recharge-cycle-state';
 import { unpaidCheckoutRecoveryIdentifier } from './recharge-checkout-recovery';
 import {
   findUnidentifiedCheckoutSource,
-  isUnidentifiedUnpaidCheckout
+  isUnidentifiedUnpaidCheckout,
+  isUnidentifiedCheckoutMarker
 } from './recharge-unidentified-checkout';
 
 export async function restoreRechargeAccount(input: {
@@ -82,7 +83,7 @@ export async function restoreRechargeAccount(input: {
       Number.isSafeInteger(r.revision) &&
       r.revision >= 0 &&
       (object(r.document).target_plan ?? 'plus') === job.plan &&
-      isUnidentifiedUnpaidCheckout(r.document)
+      (isUnidentifiedUnpaidCheckout(r.document) || isUnidentifiedCheckoutMarker(r.document))
   );
   let unidentifiedSource =
     unidentifiedRecord && ownedProfile
@@ -125,6 +126,14 @@ export async function restoreRechargeAccount(input: {
     unidentifiedSource.action === 'bitbrowser' &&
     unidentifiedSource.state === 'finished' &&
     isUnidentifiedUnpaidCheckout(unidentifiedSource.result) &&
+    (!isUnidentifiedCheckoutMarker(unidentifiedRecord.document) ||
+      (object(unidentifiedSource.result).transport === 'web_direct' &&
+        object(unidentifiedSource.result).http_status === 400 &&
+        object(unidentifiedSource.result).browser_profile_id === ownedProfile.profileId &&
+        Number(object(unidentifiedRecord.document).created_at) >=
+          Math.floor(unidentifiedSource.createdAt.getTime() / 1000) &&
+        Number(object(unidentifiedRecord.document).created_at) <=
+          Math.floor(unidentifiedSource.updatedAt.getTime() / 1000))) &&
     (object(unidentifiedSource.result).target_plan ?? 'plus') === job.plan &&
     (object(unidentifiedSource.result).browser_profile_id === ownedProfile.profileId ||
       unidentifiedSource.id !== ownedProfile.sourceJobId)

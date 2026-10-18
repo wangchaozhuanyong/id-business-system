@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   authorizeExpiredCheckoutReplacement,
   consumeExpiredCheckoutMarker,
+  expiredCheckoutProof,
   validateExpiredCheckoutMarker
 } from './recharge-expired-checkout';
 import { safeDocument, hash } from './recharge-validation';
@@ -20,9 +21,9 @@ const proof = {
   payment_status: 'unpaid'
 };
 
-function fixture() {
+function fixture(identifier = checkout) {
   const original = {
-    checkout_identifier: checkout,
+    checkout_identifier: identifier,
     processor_entity: 'openai_llc',
     target_plan: 'plus',
     status: 'quote',
@@ -56,8 +57,8 @@ function fixture() {
   const callback = {
     type: 'replace_expired_checkout',
     accountKey,
-    checkoutIdentifier: checkout,
-    proof
+    checkoutIdentifier: identifier,
+    proof: { ...proof, checkout_identifier: identifier }
   };
   const input = () => ({ tx: {} as never, job: job as never, repository: repository as never });
   const authorize = (value = callback) =>
@@ -75,7 +76,7 @@ function fixture() {
     payment_requests_sent: 0,
     confirmation_requests_sent: 0,
     retry_of: 'b'.repeat(64),
-    expired_checkout_replacement: proof
+    expired_checkout_replacement: callback.proof
   };
   const validate = (document = marker, revision = record.revision) =>
     validateExpiredCheckoutMarker({
@@ -87,6 +88,21 @@ function fixture() {
 }
 
 describe('官网已过期未付款原单的一次替换资格', () => {
+  it('Stripe cs 原单同样先归档，再核验一次新建标记', async () => {
+    const identifier = 'cs_live_synthetic_expired';
+    const f = fixture(identifier);
+    const grant = await f.authorize();
+    expect(grant).toMatchObject({ replacementAuthorized: true, checkoutIdentifier: identifier });
+    expect(f.repository.createCycleArchive).toHaveBeenCalledOnce();
+    expect(f.record.document.checkout_identifier).toBe(identifier);
+    await expect(f.validate({ ...f.marker, retry_of: grant.retryOf })).resolves.toBeDefined();
+  });
+  it.each(['cs_', 'cs_live_bad?secret=private', 'upg_synthetic', `cs_${'a'.repeat(181)}`])(
+    '不接受无效 Stripe 原单编号：%s',
+    (identifier) => {
+      expect(() => expiredCheckoutProof({ ...proof, checkout_identifier: identifier })).toThrow();
+    }
+  );
   it('授权与新建标记之间出现付款事实或未知账本时，原资格立即失效', async () => {
     const changed = fixture();
     await changed.authorize();

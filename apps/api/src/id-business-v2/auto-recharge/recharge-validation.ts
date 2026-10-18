@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   V2_RECHARGE_PLANS,
+  sanitizeV2CheckoutDiagnostic,
   type V2RechargeDetailsSubmission,
   type V2RechargeQuote,
   type V2RechargeStart
@@ -620,6 +621,8 @@ export function safeDocument(value: unknown): Record<string, unknown> {
   if (input.diagnostics !== undefined) {
     const diagnostic = object(input.diagnostics);
     const clean: Record<string, unknown> = {};
+    if (diagnostic.checkout_error !== undefined)
+      clean.checkout_error = sanitizeV2CheckoutDiagnostic(diagnostic.checkout_error);
     const enums: Record<string, string[]> = {
       step: [
         'open_menu',

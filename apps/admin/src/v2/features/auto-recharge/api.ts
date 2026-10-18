@@ -107,12 +107,15 @@ export const rechargeApi = {
     input: object,
     options: ApiRequestOptions = {}
   ) {
-    return request<Partial<V2RechargeBrowserRestore> & { ok?: true }>(
+    const result = request<Partial<V2RechargeBrowserRestore> & { ok?: true }>(
       http.post(`/id-business-v2/auto-recharge/local/${id}`, input, {
         headers: { 'X-Recharge-Local': agentToken },
         signal: options.signal
       })
     );
+    return 'type' in input && input.type === 'finished'
+      ? withV2QueryInvalidation(result, 'auto-recharge')
+      : result;
   },
   recheckBitBrowser(input: V2RechargeBitBrowserRecheckStart) {
     return request<V2RechargeBitBrowserRecheckLaunch>(
@@ -164,18 +167,27 @@ export const rechargeApi = {
     );
   },
   generateAddresses(count = 10) {
-    return request<{ count: number; items: V2RechargeAddress[] }>(
-      http.post('/id-business-v2/auto-recharge/addresses/generate', { count })
+    return withV2QueryInvalidation(
+      request<{ count: number; items: V2RechargeAddress[] }>(
+        http.post('/id-business-v2/auto-recharge/addresses/generate', { count })
+      ),
+      'auto-recharge'
     );
   },
   importAddresses(streets: string[]) {
-    return request<ImportV2RechargeAddressesResult>(
-      http.post('/id-business-v2/auto-recharge/addresses/import', { streets })
+    return withV2QueryInvalidation(
+      request<ImportV2RechargeAddressesResult>(
+        http.post('/id-business-v2/auto-recharge/addresses/import', { streets })
+      ),
+      'auto-recharge'
     );
   },
   updateAddressStatus(id: string, status: V2RechargeAddressStatus) {
-    return request<V2RechargeAddress>(
-      http.patch(`/id-business-v2/auto-recharge/addresses/${id}/status`, { status })
+    return withV2QueryInvalidation(
+      request<V2RechargeAddress>(
+        http.patch(`/id-business-v2/auto-recharge/addresses/${id}/status`, { status })
+      ),
+      'auto-recharge'
     );
   }
 };

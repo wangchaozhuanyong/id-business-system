@@ -20,6 +20,27 @@ function authorizationClient() {
 }
 
 describe('auto recharge address service', () => {
+  it.each(['unused', 'all'] as const)('地址分配顺序由服务端分页前排序：%s', async (status) => {
+    const model = { findMany: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(0) };
+    const prisma = {
+      ...authorizationClient(),
+      idBusinessV2RechargeAddress: model,
+      $transaction: vi.fn(async (reads) => Promise.all(reads))
+    };
+    const repository = new RechargeAddressRepository(prisma as never);
+    await repository.list(operator.id, { page: 1, pageSize: 2000, keyword: '', status });
+    expect(model.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy:
+          status === 'unused'
+            ? [{ createdAt: 'asc' }, { id: 'asc' }]
+            : [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: 0,
+        take: 2000
+      })
+    );
+  });
+
   it('generates an owned batch with aggregate audit in the same transaction', async () => {
     const tx = {};
     const items = [{ id: 'new-address', status: 'unused', ownerId: operator.id }];

@@ -49,14 +49,11 @@
   <p v-if="source === 'library' && error" class="recharge-error" role="alert">
     {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
   </p>
-  <p v-else-if="addressBound && !selectedAddress" class="recharge-error" role="alert">
-    这张卡的绑定地址不可用，请到地址管理核对原地址；系统不会自动替换。
-  </p>
   <p v-else-if="source === 'library' && !addresses.length" class="recharge-note" role="status">
     暂无可用地址，输入银行卡后自动生成，也可点击“一键生成并使用”。
   </p>
-  <p v-if="addressBound && selectedAddress" class="recharge-note">
-    这张卡已有绑定账单地址，系统沿用原资料。
+  <p v-if="addresses.length" class="recharge-note">
+    每笔新充值按添加顺序使用下一条未使用地址，同一卡也会换新地址；原任务恢复保留原地址。
   </p>
   <p class="recharge-note">生成地址为模板，请在付款前核对。地址不会改变代理国家或付款币种。</p>
   <dl v-if="selectedAddress" class="recharge-fixed-address">
@@ -103,7 +100,6 @@ const props = defineProps<{
   generating?: boolean;
   generationError?: string;
   canGenerate?: boolean;
-  addressBound?: boolean;
 }>();
 const nameLoading = computed(() => props.nameMatch?.loading.value ?? false);
 const nameError = computed(() => props.nameMatch?.error.value ?? '');

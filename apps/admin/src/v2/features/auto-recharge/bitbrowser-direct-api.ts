@@ -25,6 +25,8 @@ const messages = {
     '无法确认比特窗口实际使用的内核版本，本次已停止登录。请更新客户端后重试。',
   official_login_email_mismatch: '官网已登录账号与本次选择不一致，本次已停止。',
   official_login_not_verified: '未能确认官网账号登录成功，请检查原窗口后重试。',
+  official_login_token_rejected:
+    '官网拒绝了当前访问凭据，单次会话刷新后仍未通过，请更新授权 JSON；本次未建单或付款。',
   access_token_expired:
     '官网接受了会话，但返回的访问令牌已过期，请更新有效授权后重试；本次未付款。',
   official_login_network_failed: '代理或网络连接失败，自动恢复已停止，请检查原窗口后重试。',
@@ -34,6 +36,8 @@ const messages = {
   bitbrowser_owned_profile_missing:
     '无法确认原比特窗口已删除，本次未重建，请检查比特浏览器连接和窗口资料。',
   bitbrowser_owned_profile_unverified: '无法确认原比特窗口属于本次账号，本次已停止。',
+  bitbrowser_original_checkout_unavailable:
+    '原窗口中未找到唯一结账标签，请保留目标原单后再执行。本次未重复建单或付款。',
   proxy_probe_unverified: '无法确认代理可正常访问官网，本次已停止，请检查原窗口。',
   bitbrowser_profile_close_unverified: '无法确认失败窗口已关闭，本次已停止，未重新打开窗口。',
   invalid_session_json: '授权 JSON 缺少有效的会话、用户或账号资料，请重新授权。'

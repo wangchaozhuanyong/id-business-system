@@ -96,7 +96,7 @@
             >
           </div>
           <p class="recharge-settings-note">
-            配置仅归本人使用。不同员工可在不同电脑同时执行；同一本机助手每次执行一笔任务。
+            配置仅归本人使用。不同员工可在不同电脑同时执行；同一连接每次执行一笔任务。
           </p>
         </fieldset>
         <RechargeProxyOptions

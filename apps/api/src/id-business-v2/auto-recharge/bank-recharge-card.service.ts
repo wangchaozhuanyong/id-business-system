@@ -185,9 +185,7 @@ export class BankRechargeCardService {
     ) {
       throw new ConflictException('账单姓名与该卡已核实的账单资料不一致');
     }
-    if (card.billingAddressId && card.billingAddressId !== addressId) {
-      throw new ConflictException('账单地址与该卡已核实的地址不一致');
-    }
+    bankRechargeId(addressId, '账单地址编号');
     return card;
   }
 
@@ -202,10 +200,8 @@ export class BankRechargeCardService {
     const card = await this.repository.findInTransaction(tx, cardId);
     if (!card) return false;
     if (
-      (card.billingNameEncrypted &&
-        this.encryption.decrypt(card.billingNameEncrypted) !==
-          this.encryption.decrypt(nameEncrypted)) ||
-      (card.billingAddressId && card.billingAddressId !== addressId)
+      card.billingNameEncrypted &&
+      this.encryption.decrypt(card.billingNameEncrypted) !== this.encryption.decrypt(nameEncrypted)
     ) {
       await this.audit.append(tx, {
         userId: operatorId,
@@ -218,6 +214,7 @@ export class BankRechargeCardService {
       });
       return false;
     }
+    // 新任务允许轮换地址；卡片保留首次核实地址，逐任务地址由任务与使用记录保存。
     if (card.billingNameEncrypted && card.billingAddressId) return true;
     await this.repository.update(tx, cardId, {
       ...(!card.billingNameEncrypted ? { billingNameEncrypted: nameEncrypted } : {}),

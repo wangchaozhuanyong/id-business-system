@@ -1,4 +1,3 @@
-import { autoRechargeNamesFeature } from '@/v2/features/auto-recharge/names-manifest';
 import { onlineRechargeFeatures } from '@/v2/features/online-recharge/manifest';
 import { autoRechargeFeature } from '@/v2/features/auto-recharge/manifest';
 import { chatgptAccountsFeature } from '@/v2/features/auto-recharge/chatgpt-accounts-manifest';
@@ -41,7 +40,6 @@ export const v2FeatureRegistry: readonly V2FeatureManifest[] = [
   rechargeProxiesFeature,
   bankRechargeOrdersFeature,
   autoRechargeAddressesFeature,
-  autoRechargeNamesFeature,
   ...onlineRechargeFeatures,
   renewalWorkbenchFeature,
   orderEntryFeature,

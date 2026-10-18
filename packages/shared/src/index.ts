@@ -252,3 +252,4 @@ export * from './v2/bank-recharge-period.js';
 export * from './v2/vendure-mailbox.js';
 
 export * from './v2/finance-exchange.js';
+export * from './v2/checkout-diagnostic.js';

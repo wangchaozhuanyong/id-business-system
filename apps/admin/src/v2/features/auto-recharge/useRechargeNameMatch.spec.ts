@@ -20,9 +20,8 @@ function setup(initial: Partial<V2RechargeDetails> = {}, locked = ref(false)) {
     postal_code: '',
     ...initial
   });
-  const selected = ref(''),
-    onAddress = vi.fn();
-  const matcher = scope.run(() => useRechargeNameMatch(details, selected, locked, onAddress))!;
+  const selected = ref('');
+  const matcher = scope.run(() => useRechargeNameMatch(details, selected, locked))!;
   return { scope, details, selected, matcher };
 }
 describe('输入银行卡自动匹配姓名', () => {

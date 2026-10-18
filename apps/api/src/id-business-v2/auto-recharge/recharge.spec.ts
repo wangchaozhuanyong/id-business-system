@@ -318,6 +318,44 @@ describe('recharge input and durable evidence', () => {
       })
     ).toEqual({ diagnostics: { available_plans: ['plus'] } });
   });
+  it('keeps only closed checkout-error facts without raw responses or credentials', () => {
+    const checkout_error = {
+      request_index: 1,
+      body_state: 'parsed_json',
+      code: 'invalid_request_error',
+      param: 'plan_name',
+      code_present: true,
+      param_present: true,
+      categories: ['plan_validation'],
+      attribution: 'structured_code'
+    };
+    expect(
+      safeDocument({
+        diagnostics: {
+          checkout_error: {
+            ...checkout_error,
+            response: 'PRIVATE',
+            cookie: 'PRIVATE',
+            message: 'PRIVATE'
+          }
+        }
+      })
+    ).toEqual({ diagnostics: { checkout_error } });
+    expect(
+      safeDocument({
+        diagnostics: {
+          checkout_error: {
+            request_index: 100,
+            body_state: 'PRIVATE',
+            code: 'secret_like_a_code',
+            param: 'sessionToken',
+            categories: ['PRIVATE', 'region', 'region'],
+            attribution: 'PRIVATE'
+          }
+        }
+      })
+    ).toEqual({ diagnostics: { checkout_error: { categories: ['region'] } } });
+  });
   it.each(['plus', 'pro-500'] as const)(
     'keeps controlled %s quote and original-order fields',
     (plan) => {

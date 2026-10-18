@@ -56,6 +56,16 @@ describe('V2 route navigation state', () => {
     vi.mocked(markV2RoutePrefetch).mockClear();
     resetV2RouteNavigationState();
   });
+  it('redirects old recharge name bookmarks to the recharge form without a names page loader', () => {
+    const children = v2Routes[0]!.children!;
+    const oldRoute = children.find((route) => route.path === 'auto-recharge/names');
+    expect(oldRoute?.component).toBeUndefined();
+    expect(typeof oldRoute?.redirect).toBe('function');
+    expect(
+      (oldRoute!.redirect as (to: unknown) => unknown)({ query: { page: '2' }, hash: '#detail' })
+    ).toEqual({ path: '/v2/auto-recharge', query: { page: '2' }, hash: '#detail' });
+    expect(children.some((route) => route.name === 'v2-auto-recharge-names')).toBe(false);
+  });
 
   it('does not expose or prefetch the retired automatic registration route', async () => {
     const children = v2Routes[0]!.children!;

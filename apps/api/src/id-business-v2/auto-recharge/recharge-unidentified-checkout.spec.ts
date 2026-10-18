@@ -354,3 +354,62 @@ describe('unidentified original checkout discovery', () => {
     });
   });
 });
+
+describe('web direct failed checkout marker discovery', () => {
+  const marker = () => ({
+    status: 'checkout_attempted',
+    stage: 'checkout_create',
+    checkout_outcome: 'unknown',
+    transport: 'official_browser',
+    account_matched: true,
+    current_plan_before: 'free',
+    payment_status: 'not_attempted',
+    run_id: 'd'.repeat(32),
+    created_at: 1000,
+    target_plan: 'plus',
+    plan: 'chatgptplusplan'
+  });
+  function webFixture() {
+    const f = fixture();
+    Object.assign(f.previous.result, {
+      transport: 'web_direct',
+      reason: 'official_checkout_http_failed',
+      http_status: 400
+    });
+    Object.assign(f.previous, { createdAt: new Date(999000), updatedAt: new Date(1001000) });
+    f.records[0]!.document = marker();
+    return f;
+  }
+  it('joins exact HTTP400 source facts to its earlier marker without inventing counts', async () => {
+    const f = webFixture();
+    const before = structuredClone(f.records[0]!.document);
+    expect((await restoreRechargeAccount(f.input as never)).unidentifiedCheckoutRecovery).toBe(
+      true
+    );
+    expect(f.records[0]!.document).toEqual(before);
+  });
+  it.each([
+    'missing-count',
+    'payment',
+    'accepted',
+    'different-profile',
+    'old-marker',
+    'future-marker',
+    'missing-source',
+    'unknown-http'
+  ])('rejects %s', async (kind) => {
+    const f = webFixture();
+    if (kind === 'missing-count')
+      delete (f.previous.result as Record<string, unknown>).checkout_requests_sent;
+    if (kind === 'payment') f.previous.result.payment_requests_sent = 1;
+    if (kind === 'accepted')
+      Object.assign(f.previous.result, { manual_confirmation_accepted: true });
+    if (kind === 'different-profile') f.previous.result.browser_profile_id = 'f'.repeat(32);
+    if (kind === 'old-marker') f.records[0]!.document.created_at = 998;
+    if (kind === 'future-marker') f.records[0]!.document.created_at = 1002;
+    if (kind === 'missing-source') f.repository.findJob.mockResolvedValue(null as never);
+    if (kind === 'unknown-http') Object.assign(f.previous.result, { http_status: 500 });
+    await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
+    expect(f.repository.updateJob).not.toHaveBeenCalled();
+  });
+});

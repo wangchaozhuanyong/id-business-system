@@ -217,6 +217,7 @@ export interface V2RechargeResult {
   checkout_request_plan_state?: 'matched' | 'missing' | 'unsupported';
   checkout_recovered_from_original?: boolean;
   diagnostics?: {
+    checkout_error?: import('./checkout-diagnostic').V2CheckoutDiagnostic;
     step?:
       | 'open_menu'
       | 'pricing_page'
@@ -615,6 +616,8 @@ export interface V2RechargeOwnedBrowserProfile {
 }
 
 export interface V2RechargeBrowserRestore {
+  /** 仅在已归属原窗口查找结账单；不得新建单、替换窗口或重复付款。 */
+  unidentifiedCheckoutRecovery?: true;
   subscriptionCycleProtocol?: 1;
   nextCycleContext?: V2RechargeNextCycleContext;
   records: unknown[];

@@ -11,6 +11,10 @@ import {
   type PaymentDocument
 } from './bitbrowser-payment-evidence';
 import { directPlanMatches } from './bitbrowser-direct-payment';
+import {
+  DirectPaymentDiagnosticError,
+  directOfficialReadReason
+} from './bitbrowser-payment-diagnostics';
 
 async function rawKey(value: string) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
@@ -27,11 +31,16 @@ export async function runDirectPaymentRecheck(
   const { session, close } = await createDirectPaymentSession(browser);
   const read = async (path: string) => {
     session.signal.throwIfAborted();
-    const response = await session.evaluate<{ ok: boolean; data?: unknown }>(
-      officialPaymentRead(browser.identity, path),
-      16000
-    );
-    if (!response.ok) throw new Error('官网原单只读复查未完成，请保留原付款记录。');
+    const response = await session.evaluate<{
+      ok: boolean;
+      data?: unknown;
+      status?: number;
+      reason?: unknown;
+    }>(officialPaymentRead(browser.identity, path), 16000);
+    if (!response.ok)
+      throw new DirectPaymentDiagnosticError('recheck', directOfficialReadReason(response.reason), {
+        http_status: response.status
+      });
     return paymentObject(response.data);
   };
   try {

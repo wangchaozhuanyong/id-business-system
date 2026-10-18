@@ -17,6 +17,7 @@ import {
   proxyAttemptLabel
 } from './recharge-presentation';
 import type { V2RechargeJob } from './contracts';
+import { directPaymentDiagnosticLabels } from './bitbrowser-payment-diagnostics';
 
 const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   id: 'test',
@@ -29,6 +30,163 @@ const job = (overrides: Partial<V2RechargeJob> = {}): V2RechargeJob => ({
   ...overrides
 });
 describe('recharge stage presentation', () => {
+  it('建单拒绝信息显示受控原因或明确未归因，绝不显示正文、秘密或内部字段名', () => {
+    const feedback = (checkout_error: object) =>
+      rechargeIssueFeedback(
+        job({
+          action: 'bitbrowser',
+          result: {
+            reason: 'official_checkout_http_failed',
+            http_status: 400,
+            payment_attempted: false,
+            payment_status: 'not_attempted',
+            diagnostics: { checkout_error: checkout_error as never }
+          }
+        })
+      )?.message ?? '';
+    expect(
+      feedback({ code: 'invalid_request_error', param: 'plan_name', body: 'PRIVATE' })
+    ).toContain('官网拒绝信息：请求参数被拒绝。涉及字段：套餐。');
+    expect(feedback({ body_state: 'parsed_json', attribution: 'unclassified' })).toContain(
+      '仍无法归因'
+    );
+    expect(feedback({ categories: ['region'], attribution: 'message_pattern' })).toContain(
+      '尚未证实根因'
+    );
+    expect(feedback({ code: 'PRIVATE', param: 'sessionToken', body: 'PRIVATE' })).not.toMatch(
+      /PRIVATE|sessionToken|plan_name/
+    );
+  });
+  it('明确未付款的主动取消不显示失败卡片，付款或授权未知仍展示核对原因', () => {
+    const cancelled = job({
+      result: {
+        status: 'cancelled',
+        reason: 'operation_cancelled',
+        cancellation_confirmed: true,
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0,
+        payment_status: 'not_attempted'
+      }
+    });
+    expect(rechargeIssueFeedback(cancelled)).toBeNull();
+    for (const risk of [
+      { payment_attempted: true },
+      { payment_requests_sent: 1 },
+      { confirmation_requests_sent: 1 },
+      { manual_confirmation_accepted: true },
+      { request_attempt_key: 'synthetic-attempt' },
+      { payment_status: 'unknown' }
+    ]) {
+      expect(
+        rechargeIssueFeedback({ ...cancelled, result: { ...cancelled.result, ...risk } })
+      ).not.toBeNull();
+    }
+  });
+  it('官网表单加载失败的具体提示和 HTTP 状态不被通用错误页文案覆盖', () => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        action: 'bitbrowser',
+        result: {
+          reason: 'official_payment_form_load_failed',
+          page_state: 'official_error',
+          http_status: 400,
+          payment_status: 'not_attempted',
+          payment_attempted: false
+        }
+      })
+    );
+    expect(feedback?.message).toContain('无法加载付款表单');
+    expect(feedback?.message).toContain('HTTP 400');
+    expect(feedback?.message).not.toContain('返回了结算错误页');
+  });
+  it('无编号的历史建单冲突引导核实原单，不误导重试网络或银行卡', () => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        action: 'bitbrowser',
+        result: {
+          status: 'blocked',
+          reason: 'original_checkout_identifier_unverified',
+          stage: 'existing_checkout_binding',
+          payment_attempted: false,
+          payment_requests_sent: 0
+        }
+      })
+    );
+    expect(feedback?.message).toContain('缺少可核实的订单编号');
+    expect(feedback?.action).toContain('先核实原单结果');
+    expect(feedback?.action).toContain('不要重复建单或付款');
+    expect(feedback?.action).not.toContain('修复连接器');
+  });
+  it.each([
+    'official_checkout_http_failed',
+    'official_checkout_response_invalid',
+    'official_checkout_network_failed',
+    'official_payment_form_load_failed'
+  ])('官网建单失败 %s 不无依据归因到连接器或银行卡', (reason) => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        action: 'bitbrowser',
+        result: {
+          status: 'blocked',
+          reason,
+          stage: 'checkout_create',
+          payment_attempted: false,
+          payment_requests_sent: 0
+        }
+      })
+    );
+    expect(feedback?.action).toContain('核实官网提示及建单结果');
+    expect(feedback?.action).toContain('不要重复建单');
+    expect(feedback?.action).not.toContain('修复连接器');
+    expect(feedback?.action).not.toContain('银行卡');
+  });
+  it.each([400, 503, '400', 600, '400 secret-response'])(
+    '历史官网失败回显仅保留有效数字 HTTP 状态：%s',
+    (http_status) => {
+      const feedback = rechargeIssueFeedback(
+        job({
+          action: 'bitbrowser',
+          result: { reason: 'official_checkout_http_failed', http_status }
+        })
+      );
+      if (typeof http_status === 'number' && http_status < 600)
+        expect(feedback?.message).toContain(`HTTP ${http_status}`);
+      else expect(feedback?.message).not.toContain('HTTP');
+      expect(feedback?.message).not.toContain('secret-response');
+    }
+  );
+  it('历史付款已有提交记录但原因未识别时，明确显示待核实与禁止重付', () => {
+    const feedback = rechargeIssueFeedback(
+      job({
+        state: 'unknown',
+        result: {
+          status: 'payment_result_unknown',
+          reason: 'legacy_unclassified_payment',
+          payment_attempted: true
+        }
+      })
+    );
+    expect(feedback?.title).toBe('付款结果待核验');
+    expect(feedback?.message).toContain('已有提交记录');
+    expect(feedback?.message).not.toContain('系统未识别');
+    expect(feedback?.action).toContain('不要重新提交付款');
+  });
+  it('网页付款准备失败显示受控原因并保留实际阶段', () => {
+    for (const reason of Object.keys(directPaymentDiagnosticLabels)) {
+      expect(failureReasonLabel(reason)).not.toContain('系统未识别');
+      expect(failureReasonLabel(reason)).not.toMatch(/^[a-z_]+$/);
+    }
+    expect(executionStageLabel(job({ result: { stage: 'existing_checkout_binding' } }))).toBe(
+      '核对原结算账号与套餐'
+    );
+    expect(
+      executionStageLabel(job({ result: { stage: 'expired_checkout_authorization' } }))
+    ).toContain('过期未付款');
+    expect(executionStageLabel(job({ result: { stage: 'quote_validation' } }))).toContain(
+      '完整账单'
+    );
+  });
   it('结算识别失败不会被误报为回传失败或银行卡拒付', () => {
     const current = job({
       action: 'bitbrowser',
@@ -880,4 +1038,10 @@ describe('recharge stage presentation', () => {
     });
     expect(rechargeIssueFeedback(failure)).toBeNull();
   });
+});
+
+it('missing checkout tab is not presented as a different account owner', () => {
+  expect(failureReasonLabel('bitbrowser_original_checkout_unavailable')).toBe(
+    '原窗口中未找到唯一结账标签，本次未重复建单或付款'
+  );
 });
