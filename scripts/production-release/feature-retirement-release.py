@@ -514,6 +514,20 @@ def retirement_compose(text):
                 continue
         output.append(line)
     need(counts == {'mount': 1, 'env': 1, 'network': 1}, 'COMPOSE_API_REMOVAL_CHANGED')
+    # The registration mount can be the only base entry; the ONLINE mount may
+    # exist solely in the preserved override. Compose rejects a null volumes key.
+    service = None
+    for index, line in enumerate(output):
+        match = re.match(r'^  ([A-Za-z0-9_-]+):(?:\s|$)', line)
+        if match:
+            service = match[1]
+        if re.match(r'^\S', line):
+            service = None
+        if service == 'api' and re.fullmatch(r'    volumes:[ \t]*\n?', line):
+            following = next((value for value in output[index + 1:]
+                              if value.strip() and not value.lstrip().startswith('#')), '')
+            if not following.startswith('      '):
+                output[index] = '    volumes: []\n'
     result = remove_blocks(''.join(output), 'volumes', {'auto_registration_data'})
     # The removed declaration must not be referenced by another service, profile,
     # or YAML anchor. Fail closed rather than deleting a still-shared volume.
@@ -661,7 +675,8 @@ def image_dockerfile(role, reference, original, proof, plan, c=None):
         deleted += ['/app/packages/shared/dist/' + n for n in proof['sharedDeletedModules']]
         need(all(safe_name(n) for n in proof['apiDeletedModules']) and all(safe_name(n) for n in proof['sharedDeletedModules']), 'IMAGE_DELETION_INVALID')
         lines += ['RUN rm -rf -- ' + ' '.join(shlex.quote(n) for n in (*RETIRED_ROOTS, *deleted)),
-                  'COPY modules/ /app/apps/api/dist/', 'COPY shared/ /app/packages/shared/dist/']
+                  'COPY modules/ /app/apps/api/dist/', 'COPY shared/ /app/packages/shared/dist/',
+                  'RUN find /app/apps/api/dist /app/packages/shared/dist -type d -exec chmod 755 {} +']
     else:
         retired = (c or {}).get('retiredAdminAssets', {})
         need(hash_map(retired), 'RETIRED_ADMIN_SCOPE_INVALID')
@@ -932,8 +947,10 @@ def release(plan, c, d, h=None):
             expected = {role: expected_inventory(before[role], proof[role + 'Modules'], proof[role + 'DeletedModules']) for role in ('api', 'shared')}
             expected['admin'] = expected_inventory(before['admin'], proof['adminFiles'], c.get('retiredAdminAssets', {}))
             need(not any(n.startswith('id-business-v2/auto-registration/') for n in expected['api']), 'RETIRED_COMPILED_FILES_REMAIN')
+            progress('build_images')
             images = build_images(d, h, payload, proof, plan, before['states'], stage, c)
             image_states = {n: {'reference': v['reference']} for n, v in images.items()}
+            progress('verify_image_contents')
             verify_contents(d, image_states, proof, expected, image=True)
             stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
             target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-feature-retirement')
@@ -949,9 +966,11 @@ def release(plan, c, d, h=None):
             caddy_path.chmod(0o644)
             override = retirement_override(closed_json((previous / 'compose.release.json').read_bytes()), images, target)
             write_json(target / 'compose.release.json', override)
+            progress('validate_compose')
             rendered_before = closed_json(d.compose(previous, 'config', '--format', 'json').encode())
             rendered_after = closed_json(d.compose(target, 'config', '--format', 'json').encode())
             verify_rendered(rendered_before, rendered_after, images, previous, target)
+            progress('validate_caddy')
             # Validate the exact new Caddy configuration using the unchanged edge image.
             domains = [v for v in before['rows']['caddy']['Config'].get('Env', []) if v.startswith('APP_DOMAIN=')]
             need(len(domains) == 1 and re.fullmatch(r'APP_DOMAIN=[A-Za-z0-9.*_-]+', domains[0]), 'CADDY_DOMAIN_INVALID')

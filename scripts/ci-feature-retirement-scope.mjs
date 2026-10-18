@@ -80,3 +80,58 @@ export function isFeatureRetirementOnly(paths, context = {}) {
     return false;
   }
 }
+
+// This continuation changes only publication controls after a pre-switch failure.
+// The accepted main tree already passed all application and MySQL checks.
+export const retirementPermissionsBase = 'd78e1e3248d7fe0add951b6db1c739c646b62041';
+export const retirementPermissionsPaths = Object.freeze([
+  contractPath,
+  'scripts/production-release/feature-retirement-release.py',
+  'scripts/production-release/feature-retirement-release.test.py',
+  'scripts/ci-feature-retirement-scope.mjs'
+]);
+export function isFeatureRetirementPermissionsRepair(paths, context = {}) {
+  try {
+    if (!samePaths(paths, retirementPermissionsPaths)) return false;
+    const read =
+      context.readFile ?? ((name) => readFileSync(new URL('../' + name, import.meta.url)));
+    const before =
+      context.baselineContract ??
+      JSON.parse(
+        execFileSync('git', ['show', retirementPermissionsBase + ':' + contractPath], {
+          cwd: root,
+          encoding: 'utf8'
+        })
+      );
+    const after = JSON.parse(read(contractPath).toString());
+    const allowedControls = retirementPermissionsPaths.filter((name) => name !== contractPath);
+    if (
+      digest(read('scripts/production-release/feature-retirement-release.py')) !==
+        'db6331f1c7f8631d0a7d1e2fc7f190d21455147ffde6076035b4ee2508772042' ||
+      digest(read('scripts/production-release/feature-retirement-release.test.py')) !==
+        'b00ca74a64a43da8ff6b0f769f750f43994af01723297d38f78bc36d349946d0'
+    )
+      return false;
+    for (const [name, expected] of Object.entries(after.controlSources ?? {})) {
+      if (expected !== digest(read(name))) return false;
+    }
+    const restored = structuredClone(after);
+    for (const name of allowedControls) restored.controlSources[name] = before.controlSources[name];
+    if (JSON.stringify(restored) !== JSON.stringify(before)) return false;
+    const changed =
+      context.changedFromPermissionsBase ??
+      (() =>
+        execFileSync(
+          'git',
+          ['diff', '--name-only', '--no-renames', retirementPermissionsBase, 'HEAD'],
+          { cwd: root, encoding: 'utf8' }
+        )
+          .trim()
+          .split('\n')
+          .filter(Boolean));
+    if (!samePaths(paths, changed())) return false;
+    return (context.verifySource ?? verifySource)() === true;
+  } catch {
+    return false;
+  }
+}

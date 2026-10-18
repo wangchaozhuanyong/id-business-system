@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
-import { isFeatureRetirementOnly } from './ci-feature-retirement-scope.mjs';
+import {
+  isFeatureRetirementOnly,
+  isFeatureRetirementPermissionsRepair,
+  retirementPermissionsPaths,
+  retirementPermissionsBase
+} from './ci-feature-retirement-scope.mjs';
 import { checkMode, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 
 const contractPath = 'scripts/production-release/feature-retirement-contract.json';
@@ -106,6 +111,81 @@ test('source verification must succeed exactly and exceptions fail closed', () =
   );
   assert.equal(
     isFeatureRetirementOnly(c.allowedPaths, { readFile: () => Buffer.from('{') }),
+    false
+  );
+});
+
+const permissionsBaseline = JSON.parse(
+  execFileSync('git', ['show', retirementPermissionsBase + ':' + contractPath], {
+    encoding: 'utf8'
+  })
+);
+const permissionsContext = (value = c, overrides = {}) =>
+  context(value, {
+    baselineContract: permissionsBaseline,
+    changedFromPermissionsBase: () => [...retirementPermissionsPaths],
+    ...overrides
+  });
+test('exact directory permission control repair retains the accepted application inputs', () => {
+  assert.equal(
+    isFeatureRetirementPermissionsRepair(retirementPermissionsPaths, permissionsContext()),
+    true
+  );
+  assert.equal(
+    checkMode(retirementPermissionsPaths, '', '', undefined, permissionsContext()),
+    'ci-only'
+  );
+  assert.equal(needsOnlineRechargeCiBuild(retirementPermissionsPaths, permissionsContext()), false);
+});
+test('permission repair refuses unrelated source, omitted controls and changed build boundaries', () => {
+  for (const paths of [
+    retirementPermissionsPaths.slice(1),
+    [...retirementPermissionsPaths, 'apps/api/src/main.ts'],
+    [...retirementPermissionsPaths, contractPath]
+  ]) {
+    assert.equal(isFeatureRetirementPermissionsRepair(paths, permissionsContext()), false);
+  }
+  for (const mutate of [
+    (v) => (v.sources[Object.keys(v.sources)[0]] = '0'.repeat(64)),
+    (v) => (v.backupCreated = true),
+    (v) => (v.expectedCurrent = '0'.repeat(40)),
+    (v) => (v.databaseVerification = {})
+  ]) {
+    const value = structuredClone(c);
+    mutate(value);
+    assert.equal(
+      isFeatureRetirementPermissionsRepair(retirementPermissionsPaths, permissionsContext(value)),
+      false
+    );
+  }
+});
+test('permission repair fails closed on controller, checked-out tree or complete source proof drift', () => {
+  for (const name of [
+    'scripts/production-release/feature-retirement-release.py',
+    'scripts/ci-recharge-check.mjs'
+  ]) {
+    assert.equal(
+      isFeatureRetirementPermissionsRepair(
+        retirementPermissionsPaths,
+        permissionsContext(c, {
+          readFile: (p) => (p === name ? Buffer.from('unreviewed') : context().readFile(p))
+        })
+      ),
+      false
+    );
+  }
+  assert.equal(
+    isFeatureRetirementPermissionsRepair(
+      retirementPermissionsPaths,
+      permissionsContext(c, { changedFromPermissionsBase: () => ['unrelated'] })
+    ),
+    false
+  );
+  assert.equal(
+    isFeatureRetirementPermissionsRepair(
+      retirementPermissionsPaths,
+      permissionsContext(c, { verifySource: () => false })
+    ),
     false
   );
 });

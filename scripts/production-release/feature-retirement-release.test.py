@@ -3,6 +3,8 @@ import copy
 import importlib.util
 import io
 import json
+import os
+import subprocess
 from pathlib import Path
 import tarfile
 import tempfile
@@ -280,6 +282,31 @@ class ConfigurationTests(Fixture):
         self.assertIn('network_mode: service:api', result)
         self.assertIn('image: mysql:pinned', result)
 
+    def test_only_registration_base_mount_leaves_an_empty_list(self):
+        source = COMPOSE.replace('      - online_recharge_data:/app/.runtime/online-recharge\n', '')
+        result = m.retirement_compose(source)
+        self.assertIn('    volumes: []\n    environment:', result)
+        self.assertNotIn('auto_registration_data', result)
+        self.assertIn('  online_recharge_data:', result)
+        self.assertIn('image: mysql:pinned', result)
+
+    @unittest.skipUnless(os.environ.get('GITHUB_ACTIONS') == 'true', 'Compose schema validation runs only in remote CI; no local Docker')
+    def test_remote_compose_config_preserves_overlay_mount_after_base_retirement(self):
+        source = COMPOSE.replace('      - online_recharge_data:/app/.runtime/online-recharge\n', '')
+        base = self.root / 'compose-base.yml'
+        overlay = self.root / 'compose-overlay.json'
+        base.write_text(m.retirement_compose(source))
+        overlay.write_text(json.dumps({'services': {'api': {'volumes': ['online_recharge_data:/app/.runtime/online-recharge']}}}))
+        result = subprocess.run(['docker', 'compose', '-f', str(base), '-f', str(overlay), 'config', '--format', 'json'], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        value = json.loads(result.stdout)
+        mounts = value['services']['api']['volumes']
+        self.assertEqual(len(mounts), 1)
+        self.assertEqual(mounts[0]['source'], 'online_recharge_data')
+        self.assertEqual(mounts[0]['target'], '/app/.runtime/online-recharge')
+        self.assertNotIn('auto-registration', value['services'])
+        self.assertNotIn('auto_registration_data', value.get('volumes', {}))
+
     def test_changed_or_missing_old_compose_refuses_heuristics(self):
         for text in (COMPOSE.replace('AUTO_REGISTRATION_WORKER_URL: http://auto-registration:8051',
                                      'AUTO_REGISTRATION_WORKER_URL: http://other:8051'),
@@ -354,6 +381,11 @@ class ConfigurationTests(Fixture):
         self.assertIn('rm -rf -- /app/apps/api/src/id-business-v2/auto-registration', api)
         self.assertIn('/opt/id-registration', api)
         self.assertIn('COPY shared/ /app/packages/shared/dist/', api)
+        permissions = 'RUN find /app/apps/api/dist /app/packages/shared/dist -type d -exec chmod 755 {} +'
+        self.assertIn(permissions, api)
+        self.assertLess(api.index('COPY shared/'), api.index(permissions))
+        self.assertLess(api.index(permissions), api.index('USER node'))
+        self.assertNotIn('chmod -R', api)
         self.assertNotIn('npm ', api)
         self.assertNotIn('pip ', api)
         admin = m.image_dockerfile('admin', 'admin:pinned', {'User': '101'}, proof, self.plan, self.c)

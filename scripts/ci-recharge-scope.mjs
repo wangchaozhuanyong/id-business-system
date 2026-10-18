@@ -47,7 +47,10 @@ import {
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
-import { isFeatureRetirementOnly } from './ci-feature-retirement-scope.mjs';
+import {
+  isFeatureRetirementOnly,
+  isFeatureRetirementPermissionsRepair
+} from './ci-feature-retirement-scope.mjs';
 import {
   isOnlineProxyCountryOnly,
   isOnlineProxyCountryValidationOnly,
@@ -1131,6 +1134,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isFeatureRetirementPermissionsRepair(paths, context)) return false;
   if (isFeatureRetirementOnly(paths, context)) return false;
   if (isRegistrationTerminalStopOnly(paths, context)) return false;
   if (isRegistrationFlowV4Only(paths, context)) return false;
@@ -1928,6 +1932,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isFeatureRetirementPermissionsRepair(paths, context)) return 'ci-only';
   if (isRegistrationTerminalStopOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
   if (paths.includes(registrationTerminalStopContract)) return 'full';
