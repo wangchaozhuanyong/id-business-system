@@ -185,7 +185,7 @@
   "controlPins": {
     "bitbrowser-billing-build.py": "742442aeae2e0a2845c444b0d4891ecd8a4756273c106beb99e002e3b34f9e70",
     "bitbrowser-billing-dispatch.py": "2da2eb75ab4f08e7b2945273689e80952ecfb3e2ebf03d00f5238d771fc43268",
-    "bitbrowser-billing-release.py": "cb43bd08f10d434fb479c24859237ada01f7ee2ba1225c30da6ee69523e0619e",
+    "bitbrowser-billing-release.py": "a13375125300084efb9d28c58779a6a07b2a141226bb959fedb186cab3136025",
     "bitbrowser-billing-release.test.py": "e9fad52f1238c946768ca64a72a22cb9288d5a611ecd965a7fa74a0f66f2ef9d",
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
@@ -480,8 +480,9 @@
     "v2/checkout-diagnostic.d.ts",
     "v2/checkout-diagnostic.js"
   ],
-  "sourceReviewCommit": "d9a2dc207e66fd5e7b302952a98bd8bce0ace32b",
+  "sourceReviewCommit": "f8e1b72bb66837a58934f2ce606fb19413f2ea0c",
   "sources": {
+    "apps/admin/src/v2/composables/useV2ModuleQuery.spec.ts": "5b652bb12f8b04f15ce8cb1ddc5ae9992afddc47751aa32cd3cbdcfc85f38e64",
     "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue": "a8e5e86ba76eb24897e1bffc49123d163132e71a89e24d7859299f45f2ae35c3",
     "apps/admin/src/v2/features/auto-recharge/RechargeResult.vue": "c59cf326d407680de2f0b2ffebc1a9a56d4e48bf6fba3b9ff66933c04c1057dc",
     "apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue": "815939712d9515592a677d127113192a3d0bcb8b3abc0d0bccffc3c9e3f5ba4a",

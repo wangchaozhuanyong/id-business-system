@@ -61,10 +61,11 @@ def validate_contract(c):
         and c.get('migrationPerformed') is False and c.get('businessActions') == 0,
         'CONTRACT_IDENTITY_INVALID')
     sources = c.get('sources')
-    need(valid_inventory(sources) and len(sources) == 64 and all(
+    need(valid_inventory(sources) and len(sources) == 65 and all(
         name.startswith(('apps/admin/src/v2/features/auto-recharge/',
             'apps/api/src/id-business-v2/auto-recharge/')) or name in (
                 'apps/admin/src/v2/features/registry.ts', 'apps/admin/src/v2/features/registry.spec.ts',
+                'apps/admin/src/v2/composables/useV2ModuleQuery.spec.ts',
                 'apps/admin/src/v2/router/routes.ts', 'apps/admin/src/v2/router/routes.spec.ts',
                 'packages/shared/src/index.ts', 'packages/shared/src/v2/auto-recharge.ts',
                 'packages/shared/src/v2/checkout-diagnostic.ts', 'docs/V2_TASKS.md', 'docs/V2_PRODUCT_SCOPE.md',
