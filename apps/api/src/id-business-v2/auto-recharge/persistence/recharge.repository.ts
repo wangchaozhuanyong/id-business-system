@@ -4,6 +4,7 @@ import {
   isUnidentifiedCheckoutMarker
 } from '../recharge-unidentified-checkout';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { isDeepStrictEqual } from 'node:util';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import { toV2JsonDocument, type V2CommandTransaction } from '../../runtime/public-api';
@@ -419,9 +420,19 @@ export class RechargeRepository {
       sourceJobId: string;
       verificationJobId: string;
       resolvedAt: string;
-      kind?: 'confirmed_declined_no_charge';
+      kind?: 'confirmed_declined_no_charge' | 'confirmed_verification_failed_no_charge';
+      resolutionBasis?: 'captured_official_failure' | 'operator_observed_official_failure';
     }
   ) {
+    const verificationFailure = input.kind === 'confirmed_verification_failed_no_charge';
+    if (
+      verificationFailure
+        ? !['captured_official_failure', 'operator_observed_official_failure'].includes(
+            String(input.resolutionBasis)
+          )
+        : input.resolutionBasis !== undefined
+    )
+      throw new ConflictException('历史付款处理依据无效');
     const records = await this.records(tx, input.accountKey);
     const checkoutFileKey = `${input.accountKey}${
       input.plan === 'plus' ? '' : `-${input.plan}`
@@ -447,7 +458,8 @@ export class RechargeRepository {
       String(paymentDocument.target_plan ?? 'plus') !== input.plan ||
       paymentDocument.payment_attempted !== true ||
       Number(paymentDocument.confirmation_requests_sent) !== 1 ||
-      paymentDocument.payment_status !== (input.kind ? 'declined' : 'unknown') ||
+      paymentDocument.payment_status !==
+        (input.kind === 'confirmed_declined_no_charge' ? 'declined' : 'unknown') ||
       paymentDocument.payment_evidence ||
       checkoutDocument.payment_evidence
     ) {
@@ -461,10 +473,23 @@ export class RechargeRepository {
         paymentDocument.operation === 'subscription_upgrade')
     )
       throw new ConflictException('原结算状态不支持安全结束，请保留原单继续核实');
+    if (
+      verificationFailure &&
+      (payments[0]!.fileKey !== `payments/${hash(input.checkoutIdentifier)}.json` ||
+        paymentDocument.payment_requests_sent !== 1 ||
+        (checkoutDocument.payment_requests_sent !== undefined &&
+          checkoutDocument.payment_requests_sent !== 0) ||
+        checkoutDocument.operation === 'subscription_upgrade' ||
+        checkoutDocument.status === 'subscription_activated' ||
+        paymentDocument.status === 'subscription_activated' ||
+        paymentDocument.payment_outcome === 'subscription_activated')
+    )
+      throw new ConflictException('原单付款请求不唯一或存在开通事实，不能结束保护');
     if (input.kind && paymentDocument.confirmation_requests_sent !== 1)
       throw new ConflictException('拒付原单的付款次数未核实');
     const resolution = {
       operator_resolution: input.kind ?? 'confirmed_no_bank_request',
+      ...(verificationFailure ? { resolution_basis: input.resolutionBasis } : {}),
       resolved_at: input.resolvedAt,
       resolution_job_id: input.resolutionJobId,
       source_job_id: input.sourceJobId,
@@ -473,7 +498,8 @@ export class RechargeRepository {
     const resolutionMatches = (document: Record<string, unknown>) =>
       Object.entries(resolution).every(([key, value]) => document[key] === value);
     const hasDifferentResolution = (document: Record<string, unknown>) =>
-      document.operator_resolution !== undefined && !resolutionMatches(document);
+      Object.keys(resolution).some((key) => document[key] !== undefined) &&
+      !resolutionMatches(document);
     if (hasDifferentResolution(checkoutDocument) || hasDifferentResolution(paymentDocument)) {
       throw new ConflictException('历史付款记录已经由其他任务处理');
     }
@@ -538,6 +564,24 @@ export class RechargeRepository {
       replacement.payment_status === 'not_attempted' &&
       typeof replacement.retry_of === 'string' &&
       /^[a-f0-9]{64}$/.test(replacement.retry_of);
+    const replacingVerifiedFailure =
+      replacingResolvedDecline &&
+      before?.operator_resolution === 'confirmed_verification_failed_no_charge';
+    if (
+      replacingVerifiedFailure &&
+      (replacement.retry_of !== rechargeDocumentDigest(before) ||
+        String(replacement.target_plan ?? 'plus') !== String(before.target_plan ?? 'plus') ||
+        input.fileKey !==
+          `${input.accountKey}${before.target_plan === undefined || before.target_plan === 'plus' ? '' : `-${String(before.target_plan)}`}.json` ||
+        replacement.account_key !== input.accountKey ||
+        replacement.payment_attempted === true ||
+        replacement.payment_evidence ||
+        (replacement.payment_requests_sent !== undefined &&
+          replacement.payment_requests_sent !== 0) ||
+        (replacement.confirmation_requests_sent !== undefined &&
+          replacement.confirmation_requests_sent !== 0))
+    )
+      throw new ConflictException('已核实原单仅能按同账号、同套餐和原单摘要开始新结算');
     const next: Record<string, unknown> = {
       ...(input.document as Record<string, unknown>),
       ...preserveRechargeResolutionMetadata(
@@ -641,12 +685,42 @@ export class RechargeRepository {
       }
     }
     const revision = input.revision + 1;
+    if (replacingVerifiedFailure && previous) {
+      const digest = rechargeDocumentDigest(previous.document);
+      const archiveKey = { accountKey: input.accountKey, fileKey: `history/${digest}.json` };
+      const archived = await tx.idBusinessV2RechargeRecord.findUnique({
+        where: { accountKey_fileKey: archiveKey }
+      });
+      if (
+        archived &&
+        (archived.ownerId !== input.ownerId ||
+          archived.accountKey !== input.accountKey ||
+          rechargeDocumentDigest(archived.document) !== digest ||
+          !isDeepStrictEqual(archived.document, previous.document))
+      )
+        throw new ConflictException('已核实原单的历史归档发生冲突，不能覆盖原结算');
+      if (!archived)
+        await this.createCycleArchive(
+          tx,
+          { accountKey: input.accountKey, ownerId: input.ownerId },
+          archiveKey.fileKey,
+          previous.document
+        );
+    }
     await tx.idBusinessV2RechargeRecord.upsert({
       where: { accountKey_fileKey: key },
       create: { ...key, ownerId: input.ownerId, document, revision },
       update: { document, revision }
     });
-    return { revision };
+    return {
+      revision,
+      ...(replacingVerifiedFailure || input.allowExpiredCheckoutReplacement === true
+        ? { checkoutMarkerDigest: rechargeDocumentDigest(document) }
+        : {}),
+      ...(replacingVerifiedFailure
+        ? { replacedVerificationCheckout: String(before.checkout_identifier) }
+        : {})
+    };
   }
 
   createCycleArchive(...args: Parameters<typeof createCycleArchive>) {

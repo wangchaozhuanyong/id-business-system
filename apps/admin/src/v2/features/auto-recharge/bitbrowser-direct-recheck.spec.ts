@@ -195,6 +195,88 @@ describe('网页只读复查原付款', () => {
     expect(result.payment_evidence).toBeUndefined();
     expect(mock.persist).not.toHaveBeenCalled();
   });
+  it.each(['原任务', '匹配原付款账本'])(
+    '%s的官网验证失败提示在未知结果复查后仍保留',
+    async (origin) => {
+      current = 'free';
+      original.payment_status = 'unpaid';
+      original.status = 'open';
+      const source: Record<string, unknown> = { checkout_identifier: sid };
+      const reason = 'official_payment_method_verification_failed';
+      const row = restored.records[0] as { document: Record<string, unknown> };
+      if (origin === '原任务') source.reason = reason;
+      else Object.assign(row.document, { reason });
+      const before = structuredClone(restored.records);
+      const result = await runDirectPaymentRecheck(browser, 'plus', source, restored, mock.persist);
+      expect(result).toMatchObject({
+        status: 'payment_result_unknown',
+        reason,
+        checkout_status: 'open',
+        current_plan: 'free',
+        payment_status: 'unknown',
+        payment_attempted: true,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0,
+        repeated_payment: 'blocked'
+      });
+      expect(mock.evaluate.mock.calls.map(([path]) => path)).toEqual([
+        '/backend-api/accounts/check/v4-2023-04-27',
+        `/backend-api/payments/checkout/openai_llc/${sid}`
+      ]);
+      expect(mock.persist).not.toHaveBeenCalled();
+      expect(restored.records).toEqual(before);
+    }
+  );
+  it('不继承任意失败正文或字段，也不借用其他原单的验证失败提示', async () => {
+    original.payment_status = 'unpaid';
+    const source = {
+      checkout_identifier: sid,
+      reason: 'synthetic-private-reason',
+      payment_failure_reason: 'synthetic-private-body',
+      accessToken: 'synthetic-private-token'
+    };
+    const row = restored.records[0] as { document: Record<string, unknown> };
+    Object.assign(row.document, {
+      reason: 'synthetic-private-reason',
+      last_reason: 'synthetic-private-detail'
+    });
+    restored.records.push({
+      fileKey: `payments/${key('oaics_Other')}.json`,
+      revision: 1,
+      document: {
+        checkout_identifier: 'oaics_Other',
+        reason: 'official_payment_method_verification_failed'
+      }
+    });
+    const result = await runDirectPaymentRecheck(browser, 'plus', source, restored, mock.persist);
+    expect(result.status).toBe('payment_result_unknown');
+    for (const field of ['reason', 'last_reason', 'payment_failure_reason', 'accessToken'])
+      expect(result).not.toHaveProperty(field);
+    expect(JSON.stringify(result)).not.toContain('synthetic-private');
+    expect(mock.persist).not.toHaveBeenCalled();
+  });
+  it.each(['free', 'plus'])('官网paid的新证据不会被旧失败提示盖过：当前%s', async (plan) => {
+    current = plan;
+    const reason = 'official_payment_method_verification_failed';
+    const row = restored.records[0] as { document: Record<string, unknown> };
+    Object.assign(row.document, { reason });
+    const result = await runDirectPaymentRecheck(
+      browser,
+      'plus',
+      { checkout_identifier: sid, reason },
+      restored,
+      mock.persist
+    );
+    expect(result).toMatchObject({
+      status: plan === 'plus' ? 'subscription_activated' : 'paid_pending_activation',
+      payment_status: 'paid',
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0,
+      payment_evidence: { kind: 'checkout_session', identifier: sid }
+    });
+    expect(result).not.toHaveProperty('reason');
+    expect(mock.persist).toHaveBeenCalledOnce();
+  });
   it.each(['不同原单', '不同金额', '不同账号'])('%s拒绝，不改变任何订单', async (scenario) => {
     if (scenario === '不同原单') original.checkout_session_id = 'oaics_Other';
     else if (scenario === '不同金额')

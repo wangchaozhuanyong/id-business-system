@@ -37,6 +37,7 @@ export const V2_CHECKOUT_ERROR_PARAMS = [
 ] as const;
 export const V2_CHECKOUT_ERROR_CATEGORIES = [
   'authentication',
+  'unusual_activity',
   'rate_limit',
   'promotion',
   'existing_subscription',

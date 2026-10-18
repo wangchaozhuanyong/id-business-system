@@ -2,7 +2,15 @@
   <div class="recharge-result">
     <template v-if="job">
       <p class="recharge-status" role="status">
-        {{ statusLabel(job.state === 'confirming' ? job.state : job.result.status || job.state) }}
+        {{
+          statusLabel(
+            verificationResolved
+              ? 'payment_verification_resolved'
+              : job.state === 'confirming'
+                ? job.state
+                : job.result.status || job.state
+          )
+        }}
       </p>
       <template v-if="job.result.mode !== 'open_browser'">
         <p v-if="job.result.initial_quote" class="recharge-quote-title">
@@ -61,7 +69,7 @@
           <dd>
             {{
               job.availability.accountPaymentRestricted
-                ? '仅限制本账号新付款；可仅登录、只读核对原单或处理其他账号。'
+                ? '限制本账号发起新充值；仅登录、只读查单和其他账号仍可操作。'
                 : '历史记录不占执行名额；新付款仍需官网核价和人工确认。'
             }}
           </dd>
@@ -126,6 +134,9 @@
         role="status"
       >
         已确认银行卡未收到付款请求；原付款尝试记录和确认次数已保留，历史付款锁已解除。
+      </p>
+      <p v-else-if="verificationResolved" class="recharge-note" role="status">
+        原单已由本人核实处理，原任务与付款次数已保留；后续充值须重新核价确认。
       </p>
       <p v-if="proxyProgress" class="recharge-note" role="status">{{ proxyProgress }}</p>
       <p v-else-if="job.result.quote_wait_seconds" class="recharge-note" role="status">
@@ -298,6 +309,11 @@ function operationLabel(job: V2RechargeJob) {
   return job.result.account_matched ? '开通（以官网核实为准）' : '等待官网核实';
 }
 const issue = computed(() => (props.job ? rechargeIssueFeedback(props.job) : null));
+const verificationResolved = computed(
+  () =>
+    props.job?.result.operator_resolution === 'confirmed_verification_failed_no_charge' &&
+    props.job.availability?.payment === 'resolved'
+);
 const callbackDiagnostic = computed<Partial<ReturnType<typeof rechargeCallbackDiagnostics>>>(() =>
   props.job ? rechargeCallbackDiagnostics(props.job) : {}
 );

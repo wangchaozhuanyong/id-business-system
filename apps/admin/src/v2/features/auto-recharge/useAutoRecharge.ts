@@ -678,9 +678,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       (job.result.payment_attempted === true ||
         Number(job.result.payment_requests_sent ?? 0) === 1) &&
       job.result.recheck_only !== true &&
-      !['confirmed_no_bank_request', 'confirmed_declined_no_charge'].includes(
-        String(job.result.operator_resolution)
-      ) &&
+      !job.result.operator_resolution &&
       job.result.status !== 'subscription_activated' &&
       job.result.payment_outcome !== 'subscription_activated' &&
       credentialReady.value &&
@@ -706,7 +704,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       hasSingleHistoricalRequest &&
       job.result.payment_status === 'unknown' &&
       !job.result.payment_evidence &&
-      job.result.operator_resolution !== 'confirmed_no_bank_request' &&
+      !job.result.operator_resolution &&
       job.result.resolution_verification_job_id &&
       !busy.value &&
       !active.value &&
@@ -848,6 +846,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         ? '本账号原单结果待核验，禁止重新付款；可仅登录、只读查单或处理其他账号。'
         : '原任务执行租约已结束，不继续占执行名额；付款风险按当前账号单独核对。';
     if (job?.state === 'finished') {
+      if (
+        job.result.operator_resolution === 'confirmed_verification_failed_no_charge' &&
+        job.availability?.payment === 'resolved'
+      )
+        return '验证失败原单已由本人核实处理，原任务和付款次数已保留；可重新核价并确认下一笔充值。';
       if (rechargeHistoryPaymentBlocked(job))
         return '历史付款或订阅结果待核实，本次充值已暂停；请查看最近执行记录并只读复查原订单，填写资料已保留。';
       if (job.result.mode === 'open_browser') {
@@ -877,6 +880,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         : '请从 ChatGPT 账号资料中选择已保存登录密码的账号。';
     if (operationMode.value === 'open_browser')
       return '核对窗口名称后，点击即可打开比特浏览器并自动登录。';
+    if (paymentRetryBlocked.value)
+      return '本账号存在待核实的历史付款，暂不能发起新充值；请在“最近执行记录”只读复查原单。仅登录和其他账号仍可操作。';
     if (nameMatch.loading.value) return '正在填写银行卡账单姓名，请稍候。';
     if (nameMatch.error.value) return '账单姓名匹配失败，请在账单姓名处重试。';
     if (addressGeneration.generating.value) return '正在生成并填写账单地址，请稍候。';
@@ -985,7 +990,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         if (
           definitelyNotAttempted ||
           result.payment_status === 'declined' ||
-          result.operator_resolution === 'confirmed_no_bank_request'
+          result.operator_resolution === 'confirmed_no_bank_request' ||
+          (result.operator_resolution === 'confirmed_verification_failed_no_charge' &&
+            paymentJob.availability?.payment === 'resolved')
         ) {
           // 已确认结束只释放回执追踪；失败资料和未知付款保护仍由各自状态管理。
           execution.settledJobId = paymentJob.id;

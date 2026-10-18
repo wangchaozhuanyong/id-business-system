@@ -796,7 +796,9 @@ export async function runDirectLogin(
         )
           throw new DirectBrowserError('official_login_email_mismatch');
         suppliedSessionChecked = true;
-        if (await injectCookies(true)) {
+        // An identity-matched live session may have rotated since the JSON was copied.
+        // A different cookie does not prove that the supplied session is newer or usable.
+        if (state.kind === 'expired' && (await injectCookies(true))) {
           canInjectOnUnauthenticated = false;
           pageReadyDeadline = automaticDeadline;
           expiredDeadline = undefined;

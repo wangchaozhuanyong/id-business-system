@@ -44,6 +44,7 @@ export function checkoutDiagnosticSummary(value: unknown): string {
   };
   const categories = {
     authentication: '身份验证',
+    unusual_activity: '官网检测到异常活动',
     rate_limit: '请求频率',
     promotion: '优惠条件',
     existing_subscription: '已有订阅',
@@ -57,7 +58,11 @@ export function checkoutDiagnosticSummary(value: unknown): string {
   const parts: string[] = [];
   if (clean.code) parts.push(`官网拒绝信息：${codes[clean.code]}。`);
   if (clean.param) parts.push(`涉及字段：${params[clean.param]}。`);
-  if (!clean.code && clean.categories?.length)
+  if (clean.categories?.includes('unusual_activity'))
+    parts.push(
+      '官网提示：检测到异常活动，请稍后再试。触发该限制的具体原因尚未明确；本次不自动重试建单。'
+    );
+  else if (!clean.code && clean.categories?.length)
     parts.push(
       `正文线索：${clean.categories.map((key) => categories[key]).join('、')}；尚未证实根因。`
     );
@@ -126,6 +131,7 @@ export function checkoutErrorDiagnostic(body: {
   const patterns = {
     authentication:
       /(?:unauthenticated|unauthorized|invalid.{0,20}(?:token|session)|session expired)/i,
+    unusual_activity: /\b(?:our systems have )?detected unusual activity\b|检测到异常活动/i,
     rate_limit: /rate.{0,10}limit|too many requests/i,
     promotion: /promot|promo|discount/i,
     existing_subscription: /already.{0,30}subscr|subscr.{0,30}already|active subscription/i,

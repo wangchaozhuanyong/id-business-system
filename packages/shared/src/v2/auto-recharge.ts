@@ -51,6 +51,25 @@ export interface V2RechargeQuote {
   renewal_interval: string | null;
 }
 
+export interface V2RechargeResolveDeclinedInput {
+  confirmNoDebit: true;
+  verificationJobId: string;
+  verificationFailureObservation?: {
+    checkoutIdentifier: string;
+    officialMessage: 'payment_method_verification_failed';
+  };
+}
+
+/** 由服务端根据原任务和付款后官网核验生成；不代表银行无扣款已得到确认。 */
+export interface V2RechargePaymentVerificationResolution {
+  basis: 'captured_official_failure' | 'operator_observation_required';
+  checkoutIdentifier: string;
+  verificationJobId: string;
+  verifiedAt: string;
+  accountMatched: true;
+  currentPlan: 'free';
+}
+
 export const V2_RECHARGE_SUBSCRIPTION_CYCLE_PROTOCOL = 1 as const;
 export const V2_RECHARGE_SUBSCRIPTION_CYCLE_CAPABILITY = 'next-subscription-cycle-v1';
 
@@ -261,12 +280,17 @@ export interface V2RechargeResult {
   network?: { ip: string | null; country: string | null; observedAt: string };
   payment_status?: string;
   payment_outcome?: string;
-  operator_resolution?: 'confirmed_no_bank_request';
+  operator_resolution?:
+    | 'confirmed_no_bank_request'
+    | 'confirmed_declined_no_charge'
+    | 'confirmed_verification_failed_no_charge';
+  resolution_basis?: 'captured_official_failure' | 'operator_observed_official_failure';
   resolved_at?: string;
   resolution_job_id?: string;
   source_job_id?: string;
   verification_job_id?: string;
   resolution_verification_job_id?: string;
+  payment_verification_resolution?: V2RechargePaymentVerificationResolution;
   resolution_only?: boolean;
   subscription_status?: string;
   recheck_plan?: V2RechargePlan;

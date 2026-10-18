@@ -16,7 +16,9 @@ import { unpaidCheckoutRecoveryIdentifier } from './recharge-checkout-recovery';
 import {
   findUnidentifiedCheckoutSource,
   isUnidentifiedUnpaidCheckout,
-  isUnidentifiedCheckoutMarker
+  isUnidentifiedCheckoutMarker,
+  unidentifiedCheckoutSourceResult,
+  hasUnresolvedUnidentifiedCheckoutPayment
 } from './recharge-unidentified-checkout';
 
 export async function restoreRechargeAccount(input: {
@@ -89,12 +91,7 @@ export async function restoreRechargeAccount(input: {
     unidentifiedRecord && ownedProfile
       ? await repository.findJob(tx, ownedProfile.sourceJobId)
       : null;
-  if (
-    unidentifiedRecord &&
-    ownedProfile &&
-    unidentifiedSource &&
-    !isUnidentifiedUnpaidCheckout(unidentifiedSource.result)
-  ) {
+  if (unidentifiedRecord && ownedProfile && unidentifiedSource) {
     const history = await repository.finishedJobsForAccount(tx, job.ownerId, accountKey, job.id);
     // 现有查询最多30条；不能把截断历史当作唯一来源的证明。
     unidentifiedSource =
@@ -104,10 +101,21 @@ export async function restoreRechargeAccount(input: {
             job.ownerId,
             accountKey,
             job.plan,
-            ownedProfile.profileId
+            ownedProfile.profileId,
+            unidentifiedRecord,
+            records
           ) ?? null)
         : null;
   }
+  const unidentifiedResult =
+    unidentifiedSource && unidentifiedRecord && ownedProfile
+      ? unidentifiedCheckoutSourceResult(
+          unidentifiedSource,
+          unidentifiedRecord,
+          records,
+          ownedProfile.profileId
+        )
+      : undefined;
   const unidentifiedRecovery = Boolean(
     unidentifiedRecord &&
     ownedProfile &&
@@ -119,23 +127,23 @@ export async function restoreRechargeAccount(input: {
     currentResult.resolution_only !== true &&
     currentResult.payment_requests_sent === 0 &&
     !currentResult.manual_confirmation_accepted &&
-    !records.some((r) => r.fileKey.startsWith('payments/')) &&
+    !hasUnresolvedUnidentifiedCheckoutPayment(records, job.ownerId, accountKey) &&
     unidentifiedSource.ownerId === job.ownerId &&
     unidentifiedSource.accountKey === accountKey &&
     unidentifiedSource.plan === job.plan &&
     unidentifiedSource.action === 'bitbrowser' &&
     unidentifiedSource.state === 'finished' &&
-    isUnidentifiedUnpaidCheckout(unidentifiedSource.result) &&
+    unidentifiedResult &&
     (!isUnidentifiedCheckoutMarker(unidentifiedRecord.document) ||
-      (object(unidentifiedSource.result).transport === 'web_direct' &&
-        object(unidentifiedSource.result).http_status === 400 &&
-        object(unidentifiedSource.result).browser_profile_id === ownedProfile.profileId &&
+      (unidentifiedResult.transport === 'web_direct' &&
+        unidentifiedResult.http_status === 400 &&
+        unidentifiedResult.browser_profile_id === ownedProfile.profileId &&
         Number(object(unidentifiedRecord.document).created_at) >=
           Math.floor(unidentifiedSource.createdAt.getTime() / 1000) &&
         Number(object(unidentifiedRecord.document).created_at) <=
           Math.floor(unidentifiedSource.updatedAt.getTime() / 1000))) &&
-    (object(unidentifiedSource.result).target_plan ?? 'plus') === job.plan &&
-    (object(unidentifiedSource.result).browser_profile_id === ownedProfile.profileId ||
+    (unidentifiedResult.target_plan ?? 'plus') === job.plan &&
+    (unidentifiedResult.browser_profile_id === ownedProfile.profileId ||
       unidentifiedSource.id !== ownedProfile.sourceJobId)
   );
   if (job.action === 'bitbrowser' && currentResult.recheck_only === true) {

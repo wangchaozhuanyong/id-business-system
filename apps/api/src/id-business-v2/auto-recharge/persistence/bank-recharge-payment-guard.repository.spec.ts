@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BankRechargeRepository } from './bank-recharge.repository';
+import { hash } from '../recharge-validation';
 
 const accountKey = 'a'.repeat(64);
 const accountId = 'synthetic-account';
@@ -17,10 +18,11 @@ const verified = {
   source: 'automatic',
   verifiedAt: new Date('2026-10-09T00:00:00Z')
 };
-function fixture(jobs: unknown[], orders: unknown[] = []) {
+function fixture(jobs: unknown[], orders: unknown[] = [], records: unknown[] = []) {
   return {
     idBusinessV2RechargeJob: { findMany: vi.fn().mockResolvedValue(jobs) },
-    idBusinessV2BankRechargeOrder: { findMany: vi.fn().mockResolvedValue(orders) }
+    idBusinessV2BankRechargeOrder: { findMany: vi.fn().mockResolvedValue(orders) },
+    idBusinessV2RechargeRecord: { findMany: vi.fn().mockResolvedValue(records) }
   };
 }
 describe('同一账号跨套餐付款结果保护', () => {
@@ -117,5 +119,128 @@ describe('同一账号跨套餐付款结果保护', () => {
         accountKey
       )
     ).toBe(true);
+  });
+  it('完整人工核实标记仅结束对应原单，保留另一笔未知付款保护', async () => {
+    const result = {
+      payment_status: 'unknown',
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      confirmation_requests_sent: 1,
+      operator_resolution: 'confirmed_verification_failed_no_charge',
+      resolution_basis: 'operator_observed_official_failure',
+      resolved_at: '2026-10-18T12:00:00Z',
+      resolution_job_id: '33333333-3333-4333-8333-333333333333',
+      source_job_id: sourceJobId,
+      verification_job_id: '22222222-2222-4222-8222-222222222222'
+    };
+    const repository = new BankRechargeRepository({} as never);
+    expect(
+      await repository.hasUnresolvedRechargePayment(
+        fixture([{ ...unknown, result }]) as never,
+        accountId,
+        accountKey
+      )
+    ).toBe(false);
+    expect(
+      await repository.hasUnresolvedRechargePayment(
+        fixture([
+          { ...unknown, result },
+          { ...unknown, id: 'another-source' }
+        ]) as never,
+        accountId,
+        accountKey
+      )
+    ).toBe(true);
+    expect(
+      await repository.hasUnresolvedRechargePayment(
+        fixture([{ ...unknown, result: { ...result, resolution_basis: undefined } }]) as never,
+        accountId,
+        accountKey
+      )
+    ).toBe(true);
+  });
+  it('同一Go原单多个只读复查历史按严格匹配账本派生闭合，其他未知任务仍保持保护', async () => {
+    const result = {
+      ...unknown.result,
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      confirmation_requests_sent: 1,
+      operator_resolution: 'confirmed_verification_failed_no_charge',
+      resolution_basis: 'operator_observed_official_failure',
+      resolved_at: '2026-10-18T12:00:00Z',
+      resolution_job_id: '33333333-3333-4333-8333-333333333333',
+      source_job_id: sourceJobId,
+      verification_job_id: '22222222-2222-4222-8222-222222222222'
+    };
+    const source = { ...unknown, result };
+    const recheck = {
+      id: '44444444-4444-4444-8444-444444444444',
+      ownerId,
+      accountKey,
+      plan: 'go',
+      action: 'bitbrowser',
+      state: 'finished',
+      createdAt: new Date('2026-10-18T11:00:00Z'),
+      updatedAt: new Date('2026-10-18T11:01:00Z'),
+      result: {
+        transport: 'web_direct',
+        recheck_only: true,
+        source_job_id: sourceJobId,
+        checkout_identifier: 'cs_go_original',
+        payment_attempted: true,
+        payment_status: 'unknown',
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0
+      }
+    };
+    const records = [
+      {
+        ownerId,
+        accountKey,
+        fileKey: 'payments/' + hash('cs_go_original') + '.json',
+        document: {
+          ...result,
+          account_key: accountKey,
+          checkout_identifier: 'cs_go_original',
+          target_plan: 'go'
+        }
+      }
+    ];
+    const history = [source, recheck, { ...recheck, id: '55555555-5555-4555-8555-555555555555' }];
+    const before = JSON.stringify(history);
+    const tx = fixture(history, [], records);
+    const repository = new BankRechargeRepository({} as never);
+    expect(await repository.hasUnresolvedRechargePayment(tx as never, accountId, accountKey)).toBe(
+      false
+    );
+    expect(tx.idBusinessV2BankRechargeOrder.findMany).not.toHaveBeenCalled();
+    expect(JSON.stringify(history)).toBe(before);
+    for (const patch of [
+      { source_job_id: '66666666-6666-4666-8666-666666666666' },
+      { checkout_identifier: 'cs_other' },
+      { recheck_only: false },
+      { payment_evidence: { identifier: 'paid' } },
+      { payment_status: 'paid' },
+      { payment_requests_sent: 1 }
+    ]) {
+      expect(
+        await repository.hasUnresolvedRechargePayment(
+          fixture(
+            [
+              ...history,
+              {
+                ...recheck,
+                id: '77777777-7777-4777-8777-777777777777',
+                result: { ...recheck.result, ...patch }
+              }
+            ],
+            [],
+            records
+          ) as never,
+          accountId,
+          accountKey
+        )
+      ).toBe(true);
+    }
   });
 });

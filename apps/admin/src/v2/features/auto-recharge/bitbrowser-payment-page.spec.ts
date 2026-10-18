@@ -9,6 +9,8 @@ class Node {
   children: Node[] = [];
   proCard = false;
   titlebar = false;
+  blockedAncestor = false;
+  pointerEvents = 'auto';
   label?: Node;
   constructor(
     public textContent = '',
@@ -25,7 +27,12 @@ class Node {
   }
   closest(selector: string) {
     if (selector === 'header[data-app-shell-titlebar="true"]') return this.titlebar ? this : null;
-    return selector === 'label' ? (this.label ?? null) : this.proCard ? this : null;
+    if (selector === 'label') return this.label ?? null;
+    if (selector === '[data-testid="pro-pricing-modal-column-top-half"]')
+      return this.proCard ? this : null;
+    if (selector === '[inert],[aria-hidden="true"],[aria-disabled="true"],[aria-busy="true"]')
+      return this.blockedAncestor ? this : null;
+    return null;
   }
   querySelectorAll() {
     return this.children;
@@ -49,7 +56,10 @@ function setup(
   vi.stubGlobal('location', new URL(url));
   vi.stubGlobal('HTMLInputElement', Radio);
   vi.stubGlobal('HTMLAnchorElement', Anchor);
-  vi.stubGlobal('getComputedStyle', () => ({ visibility: 'visible' }));
+  vi.stubGlobal('getComputedStyle', (node: Node) => ({
+    visibility: 'visible',
+    pointerEvents: node.pointerEvents
+  }));
   vi.stubGlobal('document', {
     body: { innerText: text },
     getElementById: (id: string) => nodes.find((node) => node.attrs.id === id),
@@ -80,6 +90,93 @@ function proGroup() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('直连官网套餐与付款按钮边界', () => {
+  it('优先采用开源流程相同的稳定套餐标识，仍核对准确文案且只点击一次', () => {
+    const plus = new Node('升级至 Plus');
+    plus.attrs['data-testid'] = 'select-plan-button-plus-upgrade';
+    const duplicateText = new Node('升级至 Plus');
+    setup([duplicateText, plus], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_ready');
+    expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('submitted');
+    expect(plus.clicks).toBe(1);
+    expect(duplicateText.clicks).toBe(0);
+  });
+  it.each(['disabled', 'duplicate', 'wrong-label'])(
+    '稳定套餐标识%s时不降级去点击其他同名控件',
+    (kind) => {
+      const plus = new Node(kind === 'wrong-label' ? '立即付款' : '升级至 Plus');
+      plus.attrs['data-testid'] = 'select-plan-button-plus-upgrade';
+      if (kind === 'disabled') plus.disabled = true;
+      const other = new Node('升级至 Plus');
+      if (kind === 'duplicate') other.attrs['data-testid'] = plus.attrs['data-testid']!;
+      setup([plus, other], 'https://chatgpt.com/#pricing');
+      expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_unavailable');
+      expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('plan_unavailable');
+      expect(plus.clicks + other.clicks).toBe(0);
+    }
+  );
+  it.each(['ancestor', 'pointer-events'])('套餐区域%s不可交互时只等待，不触发DOM点击', (kind) => {
+    const plus = new Node('Get Plus');
+    if (kind === 'ancestor') plus.blockedAncestor = true;
+    else plus.pointerEvents = 'none';
+    setup([plus], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_unavailable');
+    expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('plan_unavailable');
+    expect(plus.clicks).toBe(0);
+    plus.blockedAncestor = false;
+    plus.pointerEvents = 'auto';
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_ready');
+    expect(plus.clicks).toBe(0);
+  });
+  it('个人页签尚未选中时，即使Plus按钮仍可见也不建单；准备阶段只切个人页签', () => {
+    const personal = new Node('个人', 'radio');
+    personal.attrs['aria-checked'] = 'false';
+    const plus = new Node('升级至 Plus');
+    setup([personal, plus], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('plan_unavailable');
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('menu_opened');
+    expect(personal.clicks).toBe(1);
+    expect(plus.clicks).toBe(0);
+    personal.attrs['aria-checked'] = 'true';
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_ready');
+    personal.attrs['aria-checked'] = 'false';
+    expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('plan_unavailable');
+    expect(plus.clicks).toBe(0);
+  });
+  it('原生个人radio可以用checked确认，原生和ARIA矛盾时不建单', () => {
+    const personal = new Radio('个人');
+    personal.checked = true;
+    const plus = new Node('升级至 Plus');
+    setup([personal, plus], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_ready');
+    personal.attrs['aria-checked'] = 'false';
+    expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('plan_unavailable');
+    expect(plus.clicks).toBe(0);
+    delete personal.attrs['aria-checked'];
+    personal.checked = false;
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('menu_opened');
+    expect(personal.clicks).toBe(1);
+  });
+  it('个人页签忙碌或禁用不能被当作不存在，再点击其旁边的Plus按钮', () => {
+    const personal = new Node('个人', 'radio');
+    personal.attrs['aria-checked'] = 'true';
+    personal.blockedAncestor = true;
+    const plus = new Node('升级至 Plus');
+    setup([personal, plus], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_unavailable');
+    personal.blockedAncestor = false;
+    personal.disabled = true;
+    expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('plan_unavailable');
+    expect(plus.clicks).toBe(0);
+  });
+  it('Pro档位组忙碌时等待，不按不存在处理并点击组外的建单按钮', () => {
+    const f = proGroup();
+    f.group.blockedAncestor = true;
+    const pro = new Node('Get Pro');
+    setup([f.group, pro], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('pro-5x', 'prepare').kind).toBe('tier_loading');
+    expect(inspectDirectPaymentPage('pro-5x', 'create').kind).toBe('tier_loading');
+    expect(pro.clicks).toBe(0);
+  });
   it('最终核价只读取当前 Pro 档位，变化后不能自动选回或继续付款', () => {
     const f = proGroup();
     setup([f.group]);
@@ -182,13 +279,71 @@ describe('直连官网套餐与付款按钮边界', () => {
     expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('menu_opened');
     expect(upgrade.clicks).toBe(1);
   });
+  it('升级菜单迟到时多轮准备只打开一次，个人页签迟到时只切换一次', () => {
+    const preparation = { menuRequested: false, personalRequested: false };
+    const upgrade = new Node('Upgrade');
+    setup([upgrade], 'https://chatgpt.com/');
+    expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation)).toEqual({
+      kind: 'menu_opened',
+      preparationAction: 'open_menu'
+    });
+    preparation.menuRequested = true;
+    for (let read = 0; read < 4; read++)
+      expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation).kind).toBe(
+        'preparation_waiting'
+      );
+    const personal = new Node('Personal', 'tab');
+    personal.attrs['aria-selected'] = 'false';
+    const plus = new Node('Get Plus');
+    setup([upgrade, personal, plus], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation)).toEqual({
+      kind: 'menu_opened',
+      preparationAction: 'select_personal'
+    });
+    preparation.personalRequested = true;
+    for (let read = 0; read < 4; read++)
+      expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation).kind).toBe(
+        'preparation_waiting'
+      );
+    expect(inspectDirectPaymentPage('plus', 'create').kind).toBe('plan_unavailable');
+    personal.attrs['aria-selected'] = 'true';
+    expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation).kind).toBe(
+      'plan_ready'
+    );
+    expect([upgrade.clicks, personal.clicks, plus.clicks]).toEqual([1, 1, 0]);
+  });
+  it('一次准备动作的等待标记不绕过忙碌、禁用或选中状态核对', () => {
+    const preparation = { menuRequested: true, personalRequested: true };
+    const personal = new Node('个人', 'tab');
+    personal.attrs['aria-selected'] = 'true';
+    const plus = new Node('Get Plus');
+    setup([personal, plus], 'https://chatgpt.com/#pricing');
+    personal.blockedAncestor = true;
+    expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation).kind).toBe(
+      'plan_unavailable'
+    );
+    personal.blockedAncestor = false;
+    plus.disabled = true;
+    plus.attrs['data-testid'] = 'select-plan-button-plus-upgrade';
+    expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation).kind).toBe(
+      'plan_unavailable'
+    );
+    plus.disabled = false;
+    expect(inspectDirectPaymentPage('plus', 'prepare', undefined, preparation).kind).toBe(
+      'plan_ready'
+    );
+    expect(personal.clicks + plus.clicks).toBe(0);
+  });
   it('首页侧栏和标题栏同时提供升级入口时，只打开唯一标题栏菜单', () => {
     const sidebar = new Node('升级订阅');
     const header = new Node('升级订阅');
     header.titlebar = true;
     const pay = new Node('立即订阅');
     setup([sidebar, header, pay], 'https://chatgpt.com/');
-    expect(inspectDirectPaymentPage('go', 'prepare')).toEqual({ kind: 'menu_opened' });
+    expect(inspectDirectPaymentPage('go', 'prepare')).toEqual({
+      kind: 'menu_opened',
+      preparationAction: 'open_menu'
+    });
     expect(header.clicks).toBe(1);
     expect(sidebar.clicks + pay.clicks).toBe(0);
     expect(inspectDirectPaymentPage('go', 'create').kind).toBe('plan_unavailable');

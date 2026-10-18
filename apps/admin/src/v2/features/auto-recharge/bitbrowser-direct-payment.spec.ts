@@ -11,9 +11,18 @@ import { runDirectPayment } from './bitbrowser-direct-payment';
 import { directPaymentControls, startDirectPayment } from './direct-payment-task';
 import type { DirectLoginHooks } from './bitbrowser-direct-login';
 import { ApiError } from '@/api/apiError';
+import { directPaymentDocumentDigest } from './bitbrowser-payment-evidence';
 
 const mock = vi.hoisted(() => ({
   evaluate: vi.fn(),
+  pageExpression: vi.fn<
+    (
+      plan: string,
+      action: string,
+      checkout?: string,
+      preparation?: { menuRequested: boolean; personalRequested: boolean }
+    ) => string
+  >((_plan, action) => 'page:' + action),
   command: vi.fn(),
   close: vi.fn(),
   fill: vi.fn(),
@@ -78,7 +87,7 @@ vi.mock('./bitbrowser-payment-observer', () => ({
 vi.mock('./bitbrowser-direct-upgrade', () => ({ runDirectSubscriptionUpgrade: mock.upgrade }));
 vi.mock('./bitbrowser-direct-cycle', () => ({ prepareDirectNextCycle: mock.nextCycle }));
 vi.mock('./bitbrowser-payment-page', () => ({
-  directPaymentPageExpression: (_plan: string, action: string) => 'page:' + action
+  directPaymentPageExpression: mock.pageExpression
 }));
 vi.mock('./bitbrowser-payment-evidence', async (original) => ({
   ...(await original<typeof import('./bitbrowser-payment-evidence')>()),
@@ -288,6 +297,298 @@ beforeEach(() => {
   mock.verifyForm.mockReset().mockResolvedValue({ state: details.state });
   mock.nextCycle.mockReset().mockResolvedValue(undefined);
   mock.upgrade.mockReset().mockResolvedValue({ status: 'synthetic_upgrade' });
+});
+
+describe('套餐准备动作只触发一次并等待迟到状态', () => {
+  it('多轮等待保持动作标记，迟到页面就绪后只建单一次并停在付款前', async () => {
+    const f = fixture({ noRecord: true });
+    const evaluate = mock.evaluate.getMockImplementation()!;
+    let reads = 0;
+    const actions: string[] = [];
+    mock.evaluate.mockImplementation(async (expression: string) => {
+      if (expression !== 'page:prepare') return evaluate(expression);
+      reads++;
+      const preparation = mock.pageExpression.mock.lastCall?.[3] as
+        | { menuRequested: boolean; personalRequested: boolean }
+        | undefined;
+      if (!preparation?.menuRequested) {
+        actions.push('open_menu');
+        return { kind: 'menu_opened', preparationAction: 'open_menu' };
+      }
+      if (reads < 4) return { kind: 'preparation_waiting' };
+      if (!preparation.personalRequested) {
+        actions.push('select_personal');
+        return { kind: 'menu_opened', preparationAction: 'select_personal' };
+      }
+      return { kind: reads < 8 ? 'preparation_waiting' : 'plan_ready' };
+    });
+    f.confirm.mockRejectedValueOnce(new Error('synthetic_stop_before_payment'));
+    await expect(f.run()).rejects.toThrow();
+    expect(reads).toBe(8);
+    expect(actions).toEqual(['open_menu', 'select_personal']);
+    expect(f.events.filter((event) => event === 'create_clicked')).toHaveLength(1);
+    expect(f.confirm).toHaveBeenCalledOnce();
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.observer.confirmationRequests).toBe(0);
+    expect(mock.observer.arm).not.toHaveBeenCalled();
+    expect(mock.pageExpression.mock.calls.filter((call) => call[1] === 'prepare')[0]?.[3]).toEqual({
+      menuRequested: false,
+      personalRequested: false
+    });
+  });
+  it('迟到状态始终未完成时沿用原120秒预算，且不建单或付款', async () => {
+    const f = fixture({ noRecord: true });
+    const evaluate = mock.evaluate.getMockImplementation()!;
+    let time = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => time);
+    const actions: string[] = [];
+    let reads = 0;
+    mock.evaluate.mockImplementation(async (expression: string) => {
+      if (expression !== 'page:prepare') return evaluate(expression);
+      reads++;
+      time += 20_000;
+      const preparation = mock.pageExpression.mock.lastCall?.[3] as
+        | { menuRequested: boolean; personalRequested: boolean }
+        | undefined;
+      if (!preparation?.menuRequested) {
+        actions.push('open_menu');
+        return { kind: 'menu_opened', preparationAction: 'open_menu' };
+      }
+      if (!preparation.personalRequested) {
+        actions.push('select_personal');
+        return { kind: 'menu_opened', preparationAction: 'select_personal' };
+      }
+      return { kind: 'preparation_waiting' };
+    });
+    try {
+      await expect(f.run()).rejects.toThrow();
+      expect(reads).toBe(6);
+      expect(actions).toEqual(['open_menu', 'select_personal']);
+      expect(f.callback).not.toHaveBeenCalled();
+      expect(f.events).not.toContain('create_clicked');
+      expect(f.events).not.toContain('payment_clicked');
+      expect(mock.fill).not.toHaveBeenCalled();
+      expect(f.confirm).not.toHaveBeenCalled();
+      expect(mock.observer.checkoutRequests + mock.observer.confirmationRequests).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
+describe('人工核实验证失败原单后的正常入口', () => {
+  const resolution = {
+    operator_resolution: 'confirmed_verification_failed_no_charge',
+    resolution_basis: 'operator_observed_official_failure',
+    resolution_job_id: '22222222-2222-4222-8222-222222222222',
+    source_job_id: '33333333-3333-4333-8333-333333333333',
+    verification_job_id: '44444444-4444-4444-8444-444444444444',
+    resolved_at: '2026-10-18T12:00:00.000Z'
+  };
+  function history(plan: V2RechargePlan) {
+    const payment = {
+      ...resolution,
+      account_key: accountKey,
+      target_plan: plan,
+      checkout_identifier: oldId,
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      confirmation_requests_sent: 1,
+      payment_status: 'unknown'
+    };
+    const checkout = {
+      ...resolution,
+      target_plan: plan,
+      checkout_identifier: oldId,
+      processor_entity: entity,
+      checkout_outcome: 'created',
+      payment_attempted: false,
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0,
+      payment_status: 'not_attempted'
+    };
+    return {
+      checkout: {
+        fileKey: `${accountKey}${plan === 'plus' ? '' : '-' + plan}.json`,
+        revision: 7,
+        document: checkout
+      },
+      payment: {
+        fileKey: `payments/${createHash('sha256').update(oldId).digest('hex')}.json`,
+        revision: 4,
+        document: payment
+      }
+    };
+  }
+  async function stopAtFinalQuote(f: ReturnType<typeof fixture>) {
+    // The confirmation hook displays the quote; no payment authorization endpoint is invoked.
+    f.confirm.mockImplementationOnce(async () => {
+      throw new Error('synthetic_stop_before_confirmation');
+    });
+    await expect(f.run()).rejects.toThrow();
+    expect(f.confirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        final_quote_verified: true,
+        checkout_identifier: newId,
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0
+      }),
+      expect.any(Function)
+    );
+    expect(mock.fill).toHaveBeenCalledOnce();
+    expect(mock.verifyQuote).toHaveBeenCalledOnce();
+    expect(f.events.filter((event) => event === 'create_clicked')).toHaveLength(1);
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.observer.arm).not.toHaveBeenCalled();
+    expect(mock.observer.confirmationRequests).toBe(0);
+    expect(mock.grant).not.toHaveBeenCalled();
+  }
+  it('Go已人工核实后可从正常入口创建Plus并完成最终核价，不改Go账本且零付款确认', async () => {
+    const f = fixture({ noRecord: true });
+    const previous = history('go');
+    f.restored.records.push(previous.checkout, previous.payment);
+    const before = JSON.stringify(f.restored.records);
+    await stopAtFinalQuote(f);
+    expect(JSON.stringify(f.restored.records)).toBe(before);
+    expect(
+      f.callback.mock.calls.every(([input]) => 'type' in input && input.type === 'ledger')
+    ).toBe(true);
+    expect(f.callback.mock.calls[0]![0]).toMatchObject({
+      revision: 0,
+      fileKey: `${accountKey}.json`,
+      document: { status: 'checkout_attempted', target_plan: 'plus' }
+    });
+    const marker = f.callback.mock.calls[0]![0] as { document: Record<string, unknown> };
+    expect(marker.document.retry_of).toBeUndefined();
+  });
+  it('同套餐按绑定的人工核实原单写新CAS标记后只建一张新单，旧revision和付款事实保留', async () => {
+    const f = fixture({ status: 'open' });
+    const previous = history('plus');
+    f.restored.records = [previous.checkout, previous.payment];
+    f.restored.originalCheckoutIdentifier = oldId;
+    const before = JSON.stringify(f.restored.records);
+    const retryOf = await directPaymentDocumentDigest(previous.checkout.document);
+    const save = f.callback.getMockImplementation()!;
+    f.callback.mockImplementation(async (input) => {
+      const command = input as Record<string, unknown>;
+      const document = command.document as Record<string, unknown> | undefined;
+      if (command.type === 'ledger' && document?.status === 'checkout_attempted') {
+        // Match the real server CAS contract; a transport mock must not approve an unbound marker.
+        expect(command.revision).toBe(previous.checkout.revision);
+        expect(document.account_key).toBe(accountKey);
+        expect(document.retry_of).toBe(retryOf);
+        expect(document.target_plan).toBe(previous.checkout.document.target_plan);
+      }
+      return save(input);
+    });
+    await stopAtFinalQuote(f);
+    expect(JSON.stringify(f.restored.records)).toBe(before);
+    expect(f.events.indexOf('new_marker')).toBeLessThan(f.events.indexOf('create_clicked'));
+    const marker = f.callback.mock.calls[0]![0] as { document: Record<string, unknown> };
+    expect(marker).toMatchObject({
+      type: 'ledger',
+      fileKey: `${accountKey}.json`,
+      revision: 7,
+      document: {
+        status: 'checkout_attempted',
+        stage: 'checkout_create',
+        checkout_outcome: 'unknown',
+        payment_status: 'not_attempted',
+        account_key: accountKey,
+        retry_of: retryOf
+      }
+    });
+    expect(marker.document).not.toHaveProperty('operator_resolution');
+    expect(marker.document).not.toHaveProperty('checkout_identifier');
+    expect(marker.document).not.toHaveProperty('expired_checkout_replacement');
+    expect(f.events).not.toContain('expired_authorized');
+  });
+  it('新CAS标记被拒绝后不点击建单、不重发，也不改写原付款账本', async () => {
+    const f = fixture();
+    const previous = history('plus');
+    f.restored.records = [previous.checkout, previous.payment];
+    const before = JSON.stringify(f.restored.records);
+    f.callback.mockRejectedValueOnce(new Error('synthetic CAS conflict'));
+    await expect(f.run()).rejects.toThrow();
+    expect(f.callback).toHaveBeenCalledOnce();
+    expect(f.events).not.toContain('create_clicked');
+    expect(mock.observer.checkoutRequests).toBe(0);
+    expect(mock.fill).not.toHaveBeenCalled();
+    expect(f.confirm).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.restored.records)).toBe(before);
+  });
+  it.each([
+    'missing-marker',
+    'wrong-account',
+    'wrong-file',
+    'duplicate-row',
+    'wrong-basis',
+    'invalid-resolution',
+    'two-requests',
+    'missing-counters',
+    'paid-evidence',
+    'other-unknown'
+  ])('不同套餐遇到%s仍在新建/填卡/确认前停止', async (kind) => {
+    const f = fixture({ noRecord: true });
+    const previous = history('go');
+    f.restored.records = [previous.checkout, previous.payment];
+    const payment = previous.payment.document as Record<string, unknown>;
+    if (kind === 'missing-marker') delete payment.operator_resolution;
+    else if (kind === 'wrong-account') payment.account_key = 'f'.repeat(64);
+    else if (kind === 'wrong-file') previous.payment.fileKey = `payments/${'f'.repeat(64)}.json`;
+    else if (kind === 'duplicate-row') f.restored.records.push({ ...previous.payment });
+    else if (kind === 'wrong-basis') payment.resolution_basis = 'untrusted';
+    else if (kind === 'invalid-resolution') payment.resolution_job_id = 'not-a-uuid';
+    else if (kind === 'two-requests') payment.payment_requests_sent = 2;
+    else if (kind === 'missing-counters') {
+      delete payment.payment_attempted;
+      delete payment.payment_requests_sent;
+      delete payment.confirmation_requests_sent;
+    } else if (kind === 'paid-evidence') payment.payment_evidence = { identifier: 'pi_Paid' };
+    else
+      f.restored.records.push({
+        fileKey: `payments/${'e'.repeat(64)}.json`,
+        revision: 1,
+        document: {
+          account_key: accountKey,
+          checkout_identifier: 'oaics_other_unknown',
+          target_plan: 'pro-20x',
+          payment_attempted: true,
+          payment_requests_sent: 1,
+          confirmation_requests_sent: 1,
+          payment_status: 'unknown'
+        }
+      });
+    const before = JSON.stringify(f.restored.records);
+    await expect(f.run()).rejects.toThrow();
+    expect(f.callback).not.toHaveBeenCalled();
+    expect(mock.fill).not.toHaveBeenCalled();
+    expect(f.confirm).not.toHaveBeenCalled();
+    expect(f.events).not.toContain('create_clicked');
+    expect(f.events).not.toContain('payment_clicked');
+    expect(JSON.stringify(f.restored.records)).toBe(before);
+  });
+  it.each(['missing-root', 'wrong-source', 'wrong-verification', 'wrong-checkout', 'bad-revision'])(
+    '同套餐%s无法确认完整绑定时不放宽新建',
+    async (kind) => {
+      const f = fixture();
+      const previous = history('plus');
+      f.restored.records =
+        kind === 'missing-root' ? [previous.payment] : [previous.checkout, previous.payment];
+      const checkout = previous.checkout.document as Record<string, unknown>;
+      if (kind === 'wrong-source') checkout.source_job_id = '55555555-5555-4555-8555-555555555555';
+      if (kind === 'wrong-verification')
+        checkout.verification_job_id = '55555555-5555-4555-8555-555555555555';
+      if (kind === 'wrong-checkout') checkout.checkout_identifier = 'oaics_unmatched';
+      if (kind === 'bad-revision') previous.checkout.revision = 0;
+      await expect(f.run()).rejects.toThrow();
+      expect(f.callback).not.toHaveBeenCalled();
+      expect(f.events).not.toContain('create_clicked');
+      expect(mock.fill).not.toHaveBeenCalled();
+      expect(f.confirm).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('网页充值执行器原单与单次付款契约', () => {
@@ -938,4 +1239,204 @@ describe('owned unidentified checkout recovery', () => {
       expect.objectContaining({ type: 'replace_expired_checkout' })
     );
   });
+});
+
+describe('真实runner与task新建标记ACK边界', () => {
+  function setup(
+    options: {
+      resolved?: boolean;
+      refusal?: boolean;
+      ackFailure?: 'reject' | 'revision';
+      paymentObserved?: boolean;
+    } = {}
+  ) {
+    const f = fixture();
+    if (options.resolved) {
+      const row = f.restored.records[0] as { document: Record<string, unknown> };
+      const resolution = {
+        operator_resolution: 'confirmed_verification_failed_no_charge',
+        resolution_basis: 'operator_observed_official_failure',
+        resolution_job_id: '22222222-2222-4222-8222-222222222222',
+        source_job_id: '33333333-3333-4333-8333-333333333333',
+        verification_job_id: '44444444-4444-4444-8444-444444444444',
+        resolved_at: '2026-10-18T12:00:00.000Z'
+      };
+      Object.assign(row.document, resolution);
+      f.restored.records.push({
+        fileKey: `payments/${createHash('sha256').update(oldId).digest('hex')}.json`,
+        revision: 3,
+        document: {
+          ...resolution,
+          account_key: accountKey,
+          target_plan: 'plus',
+          checkout_identifier: oldId,
+          payment_status: 'unknown',
+          payment_attempted: true,
+          confirmation_requests_sent: 1,
+          payment_requests_sent: 1
+        }
+      });
+    }
+    const before = JSON.stringify(f.restored.records);
+    const evaluate = mock.evaluate.getMockImplementation()!;
+    if (options.refusal)
+      mock.evaluate.mockImplementation(async (expression: string) => {
+        const result = await evaluate(expression);
+        if (expression === 'page:create') {
+          mock.observer.checkout = undefined;
+          mock.observer.checkoutFailure = {
+            reason: 'official_checkout_http_failed',
+            http_status: 400
+          };
+        }
+        return result;
+      });
+    mock.login.mockImplementation(
+      async (_settings, _credential, _name, _signal, hooks: DirectLoginHooks) => {
+        await hooks.restore!(accountKey);
+        await hooks.progress('existing_checkout_read', {
+          checkout_identifier: oldId,
+          processor_entity: entity,
+          quote: { historical_quote: true },
+          payment_intent_identifier: 'pi_OldSynthetic',
+          initial_quote: { historical_quote: true },
+          quote_authority: 'official_checkout_response',
+          billing_fingerprint: 'f'.repeat(64),
+          first_session_verified_at: '2026-10-18T00:00:00.000Z'
+        });
+        return hooks.ready!(f.browser);
+      }
+    );
+    mock.apiCallback.mockImplementation(async (_id, _token, body) => {
+      if (body.type === 'restore') return f.restored;
+      if (body.type === 'replace_expired_checkout') return f.callback(body);
+      if (body.type === 'ledger') {
+        if (body.document.status === 'checkout_attempted') {
+          if (options.ackFailure === 'reject') throw new Error('synthetic marker refused');
+          if (options.ackFailure === 'revision') return { revision: body.revision };
+        }
+        const receipt = await f.callback(body);
+        if (body.document.status === 'checkout_attempted' && options.paymentObserved)
+          mock.observer.confirmationRequests = 1;
+        return receipt;
+      }
+      // Stop at the displayed, verified final quote; never create a payment authorization.
+      if (body.type === 'direct_quote') throw new Error('synthetic hold before payment');
+      return { ok: true };
+    });
+    return {
+      ...f,
+      before,
+      finished: () =>
+        mock.apiCallback.mock.calls.find(([, , body]) => body.type === 'finished')?.[2].result,
+      async start() {
+        await startDirectPayment({
+          launch: f.launch,
+          plan: 'plus',
+          credential: { sessionJson: 'synthetic-fixture' },
+          payment: { ...details },
+          windowName: '合成新单绑定回归',
+          signal: f.browser.signal,
+          refresh: vi.fn().mockResolvedValue(undefined),
+          reportError: vi.fn()
+        });
+        await vi.waitFor(() => expect(directPaymentControls.has(f.launch.id)).toBe(false));
+      }
+    };
+  }
+  it.each([false, true])(
+    '过期/人工同档=%s新标记ACK后400保留真实拒绝但无旧单或报价复活',
+    async (resolved) => {
+      const f = setup({ resolved, refusal: true });
+      await f.start();
+      const result = f.finished();
+      expect(result).toMatchObject({
+        status: 'blocked',
+        reason: 'official_checkout_http_failed',
+        stage: 'checkout_create',
+        http_status: 400,
+        checkout_requests_sent: 1,
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0,
+        first_session_verified_at: '2026-10-18T00:00:00.000Z'
+      });
+      for (const field of [
+        'checkout_identifier',
+        'processor_entity',
+        'payment_intent_identifier',
+        'quote',
+        'initial_quote',
+        'quote_authority',
+        'billing_fingerprint'
+      ])
+        expect(result).not.toHaveProperty(field);
+      expect(f.events.filter((event) => event === 'create_clicked')).toHaveLength(1);
+      expect(JSON.stringify(f.restored.records)).toBe(f.before);
+      expect(mock.fill).not.toHaveBeenCalled();
+      expect(mock.grant).not.toHaveBeenCalled();
+      expect(f.events).not.toContain('payment_clicked');
+    }
+  );
+  it('新单成功出现后只绑定新ID和新最终报价，旧初始报价不恢复', async () => {
+    const f = setup();
+    await f.start();
+    const report = mock.apiCallback.mock.calls.find(
+      ([, , body]) => body.type === 'direct_quote'
+    )?.[2].result;
+    expect(report).toMatchObject({
+      checkout_identifier: newId,
+      processor_entity: entity,
+      quote,
+      quote_authority: 'official_checkout_response',
+      final_quote_verified: true,
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0
+    });
+    expect(report).not.toHaveProperty('initial_quote');
+    expect(report.quote).not.toHaveProperty('historical_quote');
+    expect(f.finished()).toMatchObject({ checkout_identifier: newId, quote });
+    expect(JSON.stringify(f.restored.records)).toBe(f.before);
+    expect(mock.grant).not.toHaveBeenCalled();
+    expect(f.events).not.toContain('payment_clicked');
+  });
+  it('ACK返回期间观察到付款时保留真实原单与付款计数，不清绑定或继续建单', async () => {
+    const f = setup({ paymentObserved: true });
+    await f.start();
+    expect(f.finished()).toMatchObject({
+      status: 'payment_result_unknown',
+      checkout_identifier: oldId,
+      processor_entity: entity,
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      confirmation_requests_sent: 1
+    });
+    expect(f.events).not.toContain('create_clicked');
+    expect(f.events).not.toContain('payment_clicked');
+    expect(JSON.stringify(f.restored.records)).toBe(f.before);
+    expect(mock.grant).not.toHaveBeenCalled();
+  });
+  it.each(['reject', 'revision'] as const)(
+    '新标记ACK%s时不清旧绑定且不点击或重发',
+    async (ackFailure) => {
+      const f = setup({ ackFailure });
+      await f.start();
+      expect(f.finished()).toMatchObject({
+        checkout_identifier: oldId,
+        processor_entity: entity,
+        payment_intent_identifier: 'pi_OldSynthetic',
+        quote: { historical_quote: true },
+        initial_quote: { historical_quote: true },
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0
+      });
+      expect(
+        mock.apiCallback.mock.calls.filter(([, , body]) => body.type === 'ledger')
+      ).toHaveLength(1);
+      expect(f.events).not.toContain('create_clicked');
+      expect(f.events).not.toContain('payment_clicked');
+      expect(JSON.stringify(f.restored.records)).toBe(f.before);
+      expect(mock.grant).not.toHaveBeenCalled();
+    }
+  );
 });

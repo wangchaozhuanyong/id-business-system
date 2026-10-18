@@ -2,7 +2,10 @@ import {
   hasVerifiedRechargePayment,
   rechargeOperationIdentifier
 } from './recharge-upgrade-protocol';
-import { resolvedDeclinedPayment } from './recharge-noncharge-proof';
+import {
+  resolvedDeclinedPayment,
+  resolvedVerificationFailureRecheck
+} from './recharge-noncharge-proof';
 import type { IdBusinessV2RechargeJob } from '@prisma/client';
 import type { V2RechargeAvailability } from '@apple-business/shared';
 import { hash, object } from './recharge-validation';
@@ -47,7 +50,12 @@ export function rechargeAvailability(
       (evidence.kind === 'payment_intent' &&
         /^pi_[A-Za-z0-9]{1,180}$/.test(String(evidence.identifier))));
   let payment: V2RechargeAvailability['payment'];
-  if (resolvedUnknownPayment(job) || resolvedDeclinedPayment(result)) payment = 'resolved';
+  if (
+    resolvedUnknownPayment(job) ||
+    resolvedDeclinedPayment(result) ||
+    resolvedVerificationFailureRecheck(job, records)
+  )
+    payment = 'resolved';
   else if (result.payment_status === 'paid' && verifiedEvidence)
     payment = hasVerifiedRechargePayment(result, job) ? 'completed' : 'paid_pending';
   else if (result.payment_status === 'declined' && !result.payment_evidence) payment = 'declined';

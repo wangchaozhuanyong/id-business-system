@@ -356,6 +356,29 @@ describe('recharge input and durable evidence', () => {
       })
     ).toEqual({ diagnostics: { checkout_error: { categories: ['region'] } } });
   });
+  it('retains unusual-activity classification across persistence without the raw refusal', () => {
+    expect(
+      safeDocument({
+        diagnostics: {
+          checkout_error: {
+            body_state: 'parsed_json',
+            categories: ['unusual_activity'],
+            attribution: 'message_pattern',
+            message: 'PRIVATE',
+            response: 'PRIVATE'
+          }
+        }
+      })
+    ).toEqual({
+      diagnostics: {
+        checkout_error: {
+          body_state: 'parsed_json',
+          categories: ['unusual_activity'],
+          attribution: 'message_pattern'
+        }
+      }
+    });
+  });
   it.each(['plus', 'pro-500'] as const)(
     'keeps controlled %s quote and original-order fields',
     (plan) => {

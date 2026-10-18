@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 
 const resolutionKeys = [
   'operator_resolution',
+  'resolution_basis',
   'resolved_at',
   'resolution_job_id',
   'source_job_id',

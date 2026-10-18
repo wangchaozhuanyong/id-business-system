@@ -11,7 +11,7 @@ import { runDirectLogin, type DirectLoginCode } from './bitbrowser-direct-login'
 import type { DirectLoginCredential } from './bitbrowser-direct-credential';
 import { automaticLoginCode } from './recharge-login-code';
 import { directOperationDeadline } from './recharge-direct-lifecycle';
-import { runDirectPayment } from './bitbrowser-direct-payment';
+import { clearDirectCheckoutBinding, runDirectPayment } from './bitbrowser-direct-payment';
 import { runDirectPaymentRecheck } from './bitbrowser-direct-recheck';
 import { paymentObject, type PaymentDocument } from './bitbrowser-payment-evidence';
 import { DirectBrowserError } from './bitbrowser-direct-api';
@@ -287,6 +287,9 @@ export async function startDirectPayment(input: {
                   restored,
                   callback,
                   progress,
+                  checkoutAttempted: () => {
+                    lastReport = clearDirectCheckoutBinding(lastReport);
+                  },
                   attempted: () => attempted,
                   unexpected: async (report) => {
                     unexpectedObserved = true;

@@ -18,7 +18,10 @@ import {
 } from './recharge-direct-payment';
 import {
   validateExpiredCheckoutMarker,
-  consumeExpiredCheckoutMarker
+  consumeExpiredCheckoutMarker,
+  resetResolvedCheckoutBinding,
+  validateReplacementCheckoutCreated,
+  bindReplacementCheckoutCreated
 } from './recharge-expired-checkout';
 import { consumeNextCycleMarker } from './recharge-cycle-ledger';
 
@@ -42,7 +45,10 @@ export async function completeRechargeLedgerCallback(input: {
   )
     throw new BadRequestException('原订单记录无效');
   const document = safeDocument(callback.document);
-  assertDirectRechargeReport(job, document);
+  const replacementCreated =
+    !input.factsOnly &&
+    (await validateReplacementCheckoutCreated({ tx, job, callback, document, repository }));
+  assertDirectRechargeReport(job, document, replacementCreated, true);
   const expiredReplacement =
     !input.factsOnly &&
     (await validateExpiredCheckoutMarker({ tx, job, callback, document, repository }));
@@ -55,7 +61,11 @@ export async function completeRechargeLedgerCallback(input: {
       repository,
       audit
     });
-    if (consumed) return consumed;
+    if (consumed)
+      return {
+        revision: consumed.revision,
+        ...(consumed.replayed ? { replayed: true as const } : {})
+      };
   }
   if (
     !input.factsOnly &&
@@ -90,8 +100,27 @@ export async function completeRechargeLedgerCallback(input: {
       Number(object(job.result).payment_requests_sent ?? 0) === 0 &&
       Number(object(job.result).confirmation_requests_sent ?? 0) === 0
   });
-  if (saved.replayed) return saved;
-  if (expiredReplacement) await consumeExpiredCheckoutMarker({ tx, job, document, repository });
+  if (saved.replayed) return { revision: saved.revision, replayed: true as const };
+  if (expiredReplacement)
+    await consumeExpiredCheckoutMarker({
+      tx,
+      job,
+      document,
+      repository,
+      markerDigest: saved.checkoutMarkerDigest
+    });
+  else if (saved.replacedVerificationCheckout)
+    await resetResolvedCheckoutBinding({
+      tx,
+      job,
+      document,
+      repository,
+      retiredIdentifier: saved.replacedVerificationCheckout,
+      revision: saved.revision,
+      markerDigest: saved.checkoutMarkerDigest!
+    });
+  else if (replacementCreated)
+    await bindReplacementCheckoutCreated({ tx, job, document, repository });
   const paymentResult = callback.fileKey.startsWith('payments/')
     ? projectRechargePaymentRecord(job, callback.fileKey, document)
     : null;
@@ -124,5 +153,5 @@ export async function completeRechargeLedgerCallback(input: {
     },
     remark: '官网请求标记或原单核验结果已持久化'
   });
-  return saved;
+  return { revision: saved.revision };
 }

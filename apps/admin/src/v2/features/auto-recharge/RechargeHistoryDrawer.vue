@@ -9,7 +9,7 @@
   >
     <p v-if="reviewBusy" class="recharge-note" role="status">正在保存拒付核实，请完成后再关闭。</p>
     <p class="recharge-note">
-      失败记录不会继续占执行名额；历史付款保护只限制相关账号的新付款。仅登录、查单和其他账号仍可操作。
+      失败记录不会继续占执行名额；历史付款保护限制相关账号发起新充值。仅登录、只读查单和其他账号仍可操作。
     </p>
     <AppButton :disabled="reviewBusy || busy" @click="reviewOpen = !reviewOpen">{{
       reviewOpen ? '收起全部记录核对' : '分页核对全部执行记录'
@@ -33,7 +33,7 @@
           :class="{ 'is-selected': historyId === job.id }"
           @click="select(job.id)"
         >
-          {{ planLabels[job.plan] }} · {{ statusLabel(job.result.status || job.state) }}
+          {{ planLabels[job.plan] }} · {{ rechargeHistoryStatusLabel(job) }}
           <small>{{ formatV2DateTime(job.createdAt) }}</small>
         </button>
       </li>
@@ -63,7 +63,7 @@ import RechargePaymentReview from './RechargePaymentReview.vue';
 import type { V2RechargeJob } from './contracts';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import RechargeResult from './RechargeResult.vue';
-import { planLabels, statusLabel } from './recharge-presentation';
+import { planLabels, rechargeHistoryStatusLabel } from './recharge-presentation';
 
 const model = defineModel<boolean>({ required: true });
 const props = defineProps<{

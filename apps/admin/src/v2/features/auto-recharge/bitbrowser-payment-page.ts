@@ -4,14 +4,22 @@ import type { V2RechargePlan } from './contracts';
 export function inspectDirectPaymentPage(
   plan: V2RechargePlan,
   action: 'prepare' | 'create' | 'tier' | 'verify_tier' | 'confirm' | 'inspect',
-  expectedCheckout?: string
+  expectedCheckout?: string,
+  preparation?: { menuRequested?: boolean; personalRequested?: boolean }
 ) {
   if (location.origin !== 'https://chatgpt.com') return { kind: 'untrusted' };
   if (!document.body) return { kind: 'loading' };
-  const visible = (node: Element) =>
-    node.getClientRects().length > 0 &&
-    getComputedStyle(node).visibility !== 'hidden' &&
-    !node.matches(':disabled,[aria-disabled="true"]');
+  const rendered = (node: Element) =>
+    node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden';
+  const visible = (node: Element) => {
+    const style = getComputedStyle(node);
+    return (
+      rendered(node) &&
+      style.pointerEvents !== 'none' &&
+      !node.matches(':disabled,[aria-disabled="true"]') &&
+      !node.closest('[inert],[aria-hidden="true"],[aria-disabled="true"],[aria-busy="true"]')
+    );
+  };
   const controls = () =>
     [...document.querySelectorAll<HTMLElement>('button,a,[role="button"]')].filter(visible);
   const text = document.body.innerText.slice(0, 30000);
@@ -82,7 +90,7 @@ export function inspectDirectPaymentPage(
       'pro-500': /Max usage|最高使用额度/i
     };
     const groups = [...document.querySelectorAll<HTMLElement>('[role="radiogroup"],[role="group"]')]
-      .filter(visible)
+      .filter(rendered)
       .filter(
         (node) =>
           /Pro|套餐档位/i.test(
@@ -97,6 +105,7 @@ export function inspectDirectPaymentPage(
     if (groups.length > 1) return { kind: 'ambiguous_tier' };
     const group = groups.length === 1 ? groups[0] : undefined;
     if (group) {
+      if (!visible(group)) return { kind: 'tier_loading' };
       const allRadios = [
         ...group.querySelectorAll<HTMLElement>('[role="radio"],input[type="radio"]')
       ].filter(
@@ -139,30 +148,66 @@ export function inspectDirectPaymentPage(
       return { kind: 'tier_unverified' };
   }
   if (['tier', 'verify_tier'].includes(action)) return { kind: 'tier_ready' };
+  const personal = [...document.querySelectorAll<HTMLElement>('[role="radio"],[role="tab"]')]
+    .filter(rendered)
+    .filter((node) =>
+      /^(?:Personal|个人|切换以改为个人套餐)$/.test(
+        node.getAttribute('aria-label') ?? node.textContent?.trim() ?? ''
+      )
+    );
+  if (personal.length > 1) return { kind: 'plan_unavailable', count: 0 };
+  if (personal.length === 1) {
+    const node = personal[0]!;
+    if (!visible(node)) return { kind: 'plan_unavailable', count: 0 };
+    const states = [node.getAttribute('aria-selected'), node.getAttribute('aria-checked')].filter(
+      (state) => state !== null
+    );
+    const native = node instanceof HTMLInputElement ? node.checked : undefined;
+    if (
+      states.some((state) => !['true', 'false'].includes(state)) ||
+      new Set(states).size > 1 ||
+      (native !== undefined && states.some((state) => (state === 'true') !== native))
+    )
+      return { kind: 'plan_unavailable', count: 0 };
+    const selected = native ?? (states.length ? states[0] === 'true' : undefined);
+    if (selected !== true) {
+      if (action === 'prepare' && selected === false) {
+        if (preparation?.personalRequested === true) return { kind: 'preparation_waiting' };
+        node.click();
+        return { kind: 'menu_opened', preparationAction: 'select_personal' };
+      }
+      return { kind: 'plan_unavailable', count: 0 };
+    }
+  }
   const pattern =
     plan === 'plus'
       ? /^(?:Get Plus|Upgrade to Plus|Get ChatGPT Plus|获取\s*Plus|升级至\s*Plus|升级到\s*Plus|订阅\s*Plus|获得\s*Plus)$/i
       : plan === 'go'
         ? /^(?:Get Go|Try Go|Upgrade to Go|Get ChatGPT Go|获取\s*Go|试用\s*Go|升级至\s*Go|升级到\s*Go|订阅\s*Go|获得\s*Go)$/i
         : /^(?:Upgrade to Pro|Get Pro|升级至\s*Pro|升级到\s*Pro|获取\s*Pro(?:\s*版本)?)$/i;
-  const candidates = controls().filter((node) => pattern.test((node.textContent ?? '').trim()));
+  const testId =
+    plan === 'plus'
+      ? 'select-plan-button-plus-upgrade'
+      : pro
+        ? 'select-plan-button-pro-upgrade'
+        : undefined;
+  const identified = testId
+    ? [...document.querySelectorAll<HTMLElement>('button,a,[role="button"]')].filter(
+        (node) => node.getAttribute('data-testid') === testId
+      )
+    : [];
+  if (
+    identified.length &&
+    (identified.length !== 1 ||
+      !visible(identified[0]!) ||
+      !pattern.test((identified[0]!.textContent ?? '').trim()))
+  )
+    return { kind: 'plan_unavailable', count: identified.length };
+  const candidates = identified.length
+    ? identified
+    : controls().filter((node) => pattern.test((node.textContent ?? '').trim()));
   if (candidates.length !== 1) {
     if (action === 'prepare') {
-      const personal = [...document.querySelectorAll<HTMLElement>('[role="radio"],[role="tab"]')]
-        .filter(visible)
-        .filter((node) =>
-          /^(?:Personal|个人|切换以改为个人套餐)$/.test(
-            node.getAttribute('aria-label') ?? node.textContent?.trim() ?? ''
-          )
-        );
-      if (
-        personal.length === 1 &&
-        personal[0]!.getAttribute('aria-selected') !== 'true' &&
-        personal[0]!.getAttribute('aria-checked') !== 'true'
-      ) {
-        personal[0]!.click();
-        return { kind: 'menu_opened' };
-      }
       const upgrade = controls().filter((node) =>
         /^(?:Upgrade|Upgrade plan|升级|升级套餐|升级订阅)$/.test((node.textContent ?? '').trim())
       );
@@ -173,8 +218,9 @@ export function inspectDirectPaymentPage(
       );
       const menu = titlebar.length === 1 ? titlebar : upgrade;
       if (menu.length === 1) {
+        if (preparation?.menuRequested === true) return { kind: 'preparation_waiting' };
         menu[0]!.click();
-        return { kind: 'menu_opened' };
+        return { kind: 'menu_opened', preparationAction: 'open_menu' };
       }
     }
     return { kind: 'plan_unavailable', count: candidates.length };
@@ -188,6 +234,7 @@ export function inspectDirectPaymentPage(
 export const directPaymentPageExpression = (
   plan: V2RechargePlan,
   action: Parameters<typeof inspectDirectPaymentPage>[1],
-  expectedCheckout?: string
+  expectedCheckout?: string,
+  preparation?: Parameters<typeof inspectDirectPaymentPage>[3]
 ) =>
-  `(${inspectDirectPaymentPage.toString()})(${JSON.stringify(plan)},${JSON.stringify(action)},${JSON.stringify(expectedCheckout)})`;
+  `(${inspectDirectPaymentPage.toString()})(${JSON.stringify(plan)},${JSON.stringify(action)},${JSON.stringify(expectedCheckout)},${JSON.stringify(preparation)})`;

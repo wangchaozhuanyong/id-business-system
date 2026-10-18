@@ -26,7 +26,10 @@ vi.mock('./api', () => ({
   }
 }));
 vi.mock('./bitbrowser-direct-login', () => ({ runDirectLogin: mocks.login }));
-vi.mock('./bitbrowser-direct-payment', () => ({ runDirectPayment: mocks.run }));
+vi.mock('./bitbrowser-direct-payment', async (original) => ({
+  ...(await original<typeof import('./bitbrowser-direct-payment')>()),
+  runDirectPayment: mocks.run
+}));
 vi.mock('./bitbrowser-direct-recheck', () => ({ runDirectPaymentRecheck: mocks.recheck }));
 const id = 'synthetic-direct-job';
 const sid = 'oaics_SyntheticCheckout';
@@ -125,6 +128,90 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 describe('网页充值持久单次授权', () => {
+  it('收到新建标记ACK后清内存旧绑定，后续400不能从lastReport复活旧原单或报价', async () => {
+    const old = {
+      checkout_identifier: sid,
+      processor_entity: 'openai_llc',
+      payment_intent_identifier: 'pi_OldSynthetic',
+      quote: { historical: true },
+      initial_quote: { historical: true },
+      quote_authority: 'official_checkout_response',
+      quote_digest: 'd'.repeat(64),
+      billing_fingerprint: 'e'.repeat(64),
+      confirmation_expires_at: '2026-10-17T00:00:00.000Z',
+      final_quote_verified: true,
+      quote_stage: 'final',
+      first_session_verified_at: '2026-10-18T00:00:00.000Z',
+      account_matched: true,
+      payment_attempted: false,
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0
+    };
+    const before = structuredClone(old);
+    mocks.run.mockImplementationOnce(
+      async (_browser, _launch, _plan, _payment, hooks: DirectPaymentHooks) => {
+        await hooks.progress('existing_checkout_read', old);
+        hooks.checkoutAttempted?.();
+        await hooks.progress('checkout_create');
+        throw new DirectPaymentDiagnosticError('checkout_create', 'official_checkout_http_failed', {
+          http_status: 400
+        });
+      }
+    );
+    await startDirectPayment(input);
+    await complete();
+    const result = finished().at(-1);
+    expect(result).toMatchObject({
+      stage: 'checkout_create',
+      reason: 'official_checkout_http_failed',
+      http_status: 400,
+      first_session_verified_at: old.first_session_verified_at,
+      account_matched: true,
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0
+    });
+    for (const field of [
+      'checkout_identifier',
+      'processor_entity',
+      'payment_intent_identifier',
+      'quote',
+      'initial_quote',
+      'quote_authority',
+      'quote_digest',
+      'billing_fingerprint',
+      'confirmation_expires_at',
+      'final_quote_verified',
+      'quote_stage'
+    ])
+      expect(result).not.toHaveProperty(field);
+    expect(old).toEqual(before);
+    expect(mocks.grant).not.toHaveBeenCalled();
+    expect(mocks.clicked).not.toHaveBeenCalled();
+  });
+  it('未收到受控新建ACK时失败仍保留原报告，不因阶段名擅自清旧绑定', async () => {
+    mocks.run.mockImplementationOnce(
+      async (_browser, _launch, _plan, _payment, hooks: DirectPaymentHooks) => {
+        await hooks.progress('existing_checkout_read', {
+          checkout_identifier: sid,
+          processor_entity: 'openai_llc',
+          quote: { original: true },
+          quote_authority: 'official_checkout_response'
+        });
+        await hooks.progress('checkout_create');
+        throw new Error('synthetic_marker_not_acknowledged');
+      }
+    );
+    await startDirectPayment(input);
+    await complete();
+    expect(finished().at(-1)).toMatchObject({
+      checkout_identifier: sid,
+      processor_entity: 'openai_llc',
+      quote: { original: true },
+      quote_authority: 'official_checkout_response'
+    });
+    expect(mocks.grant).not.toHaveBeenCalled();
+    expect(mocks.clicked).not.toHaveBeenCalled();
+  });
   it('只读查单失败记录查单阶段和安全原因，不误写会话恢复或付款准备失败', async () => {
     input.recheck = { checkout_identifier: sid };
     mocks.recheck.mockRejectedValue(new Error('官网原结账单绑定未核实。'));
