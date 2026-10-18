@@ -45,14 +45,13 @@ test.after(async () => {
 function certificate() {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const key = privateKey.export({ format: 'pem', type: 'pkcs8' });
-  const version = execFileSync('openssl', ['version'], { encoding: 'utf8' });
-  // OpenSSL accepts "-" as stdin; macOS LibreSSL instead needs its read-only
-  // stdin descriptor. Neither path creates a key file or reopens stdout.
-  const keyInput = version.startsWith('LibreSSL ') ? '/dev/stdin' : '-';
+  // Node's child stdio can be a socket, which Linux cannot reopen as a file.
+  // A fixed shell pipeline gives OpenSSL a real OS pipe for its read-only key
+  // input. The key is supplied only through stdin; no key file is created.
   const cert = execFileSync(
-    'openssl',
-    ['req', '-new', '-x509', '-key', keyInput, '-sha256', '-days', '1', '-subj', '/CN=localhost'],
-    { input: key, stdio: ['pipe', 'pipe', 'ignore'] }
+    '/bin/sh',
+    ['-c', 'cat | openssl req -new -x509 -key /dev/stdin -sha256 -days 1 -subj /CN=localhost'],
+    { input: key, stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 }
   );
   return { key, cert };
 }

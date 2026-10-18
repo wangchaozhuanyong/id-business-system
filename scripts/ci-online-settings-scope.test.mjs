@@ -84,6 +84,55 @@ test('query network repair requires the complete finite source set and four affe
   assert.match(engine, /--test-concurrency=1/);
 });
 
+test('query engine verifies its browser fixture first and executes each remaining test once', () => {
+  const command = onlineSettingsCommands('online-engine', [
+    ...onlineQueryNetworkPaths,
+    ...onlineQueryNetworkControls
+  ]).find((args) => args.at(-1).includes?.('Missing query network browser regression file'));
+  assert.ok(command && command[0] === 'node');
+  const source = command.at(-1).replace(/^import .+;$/gm, '');
+  const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';
+  const fixture = 'query-network-browser.test.cjs';
+  const execute = (files, statuses = [0, 0], error) => {
+    const observed = { calls: [], exits: [] };
+    runInNewContext(source, {
+      readdirSync: (path) => {
+        assert.equal(path, root);
+        return files;
+      },
+      spawnSync: (file, args, options) => {
+        observed.calls.push({ file, args: Array.from(args), inherit: options.stdio });
+        return { status: statuses[observed.calls.length - 1], error };
+      },
+      process: { execPath: '/synthetic/node', exit: (code) => observed.exits.push(code) }
+    });
+    return observed;
+  };
+  const result = execute(['z.test.cjs', fixture, 'README.md', 'a.test.cjs']);
+  assert.deepEqual(result.calls, [
+    {
+      file: '/synthetic/node',
+      args: ['--test', '--test-concurrency=1', root + '/' + fixture],
+      inherit: 'inherit'
+    },
+    {
+      file: '/synthetic/node',
+      args: ['--test', '--test-concurrency=1', root + '/a.test.cjs', root + '/z.test.cjs'],
+      inherit: 'inherit'
+    }
+  ]);
+  assert.deepEqual(result.exits, [0]);
+  assert.equal(execute([fixture]).calls.length, 1);
+  const failedFixture = execute([fixture, 'a.test.cjs'], [2]);
+  assert.equal(failedFixture.calls.length, 1);
+  assert.deepEqual(failedFixture.exits, [2]);
+  assert.deepEqual(execute([fixture, 'a.test.cjs'], [0, 3]).exits, [3]);
+  assert.deepEqual(execute([fixture], [null]).exits, [1]);
+  assert.throws(() => execute([fixture], [0], new Error('spawn failed')), /spawn failed/);
+  assert.throws(() => execute(['a.test.cjs']), /Missing query network browser regression file/);
+  assert.throws(() => execute(['README.md']), /Missing online engine regression files/);
+});
+
 test('query diagnostic controls cannot narrow unrelated payment, authentication or dependency edits', () => {
   const paths = [...onlineQueryNetworkPaths, ...onlineQueryNetworkControls];
   for (const extra of [

@@ -1111,8 +1111,16 @@ export function onlineSettingsCommands(part, paths) {
             "const root = 'apps/api/src/id-business-v2/online-recharge/engine/test';",
             "const files = readdirSync(root).filter(name => name.endsWith('.test.cjs')).sort().map(name => root + '/' + name);",
             "if (!files.length) throw new Error('Missing online engine regression files');",
-            "const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...files], { stdio: 'inherit' });",
-            'if (result.error) throw result.error; process.exit(result.status ?? 1);'
+            "const fixture = root + '/query-network-browser.test.cjs';",
+            "if (!files.includes(fixture)) throw new Error('Missing query network browser regression file');",
+            'let status = 0;',
+            'for (const group of [[fixture], files.filter(file => file !== fixture)].filter(group => group.length)) {',
+            "  const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...group], { stdio: 'inherit' });",
+            '  if (result.error) throw result.error;',
+            '  status = result.status ?? 1;',
+            '  if (status !== 0) break;',
+            '}',
+            'process.exit(status);'
           ].join('\n')
         ],
         npm(
