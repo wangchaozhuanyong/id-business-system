@@ -51,7 +51,7 @@ function fixture() {
       .fn()
       .mockResolvedValue({ sourceJobId: sourceId, profileId, accountKey }),
     findJob: vi.fn().mockResolvedValue(previous),
-    finishedJobsForAccount: vi.fn().mockResolvedValue([previous]),
+    finishedJobsForUnidentifiedCheckout: vi.fn().mockResolvedValue([previous]),
     updateJob: vi.fn(),
     restoreCheckoutIdentifier: actual.restoreCheckoutIdentifier,
     originalCheckoutForAccount: actual.originalCheckoutForAccount
@@ -217,7 +217,7 @@ describe('unidentified original checkout discovery', () => {
       profileId,
       accountKey
     });
-    repository.finishedJobsForAccount.mockResolvedValue([loggedIn, previous] as never);
+    repository.finishedJobsForUnidentifiedCheckout.mockResolvedValue([loggedIn, previous] as never);
     const result = await restoreRechargeAccount(input as never);
     expect(result.unidentifiedCheckoutRecovery).toBe(true);
     expect(result.originalCheckoutIdentifier).toBeUndefined();
@@ -241,7 +241,7 @@ describe('unidentified original checkout discovery', () => {
       profileId: latest,
       accountKey
     });
-    repository.finishedJobsForAccount.mockResolvedValue(history as never);
+    repository.finishedJobsForUnidentifiedCheckout.mockResolvedValue(history as never);
     const result = await restoreRechargeAccount(input as never);
     expect(result.unidentifiedCheckoutRecovery).toBe(true);
     expect(result.ownedProfile?.profileId).toBe(latest);
@@ -289,15 +289,13 @@ describe('unidentified original checkout discovery', () => {
     ).toBeUndefined();
   });
 
-  it('rejects truncated history instead of assuming a unique checkout source', async () => {
-    const { input, previous, repository } = fixture();
+  it('rejects when the complete checkout history cannot be verified', async () => {
+    const { input, repository } = fixture();
     const loggedIn = login(loginId, profileId);
     repository.findJob.mockResolvedValue(loggedIn as never);
-    repository.finishedJobsForAccount.mockResolvedValue([
-      loggedIn,
-      previous,
-      ...Array(28).fill(loggedIn)
-    ]);
+    repository.finishedJobsForUnidentifiedCheckout.mockRejectedValue(
+      new Error('原结算历史尚未完整核验，禁止恢复原窗口')
+    );
     await expect(restoreRechargeAccount(input as never)).rejects.toThrow();
     expect(repository.updateJob).not.toHaveBeenCalled();
   });
@@ -377,6 +375,7 @@ describe('web direct failed checkout marker discovery', () => {
       http_status: 400
     });
     Object.assign(f.previous, { createdAt: new Date(999000), updatedAt: new Date(1001000) });
+    Object.assign(f.records[0]!, { accountKey });
     f.records[0]!.document = marker();
     return f;
   }
@@ -388,6 +387,35 @@ describe('web direct failed checkout marker discovery', () => {
     );
     expect(f.records[0]!.document).toEqual(before);
   });
+  it.each(['old-time', 'future-time', 'wrong-profile', 'legacy-transport', 'wrong-http'])(
+    'excludes %s raw legacy noise before checking whether the current marker has one source',
+    (kind) => {
+      const f = webFixture();
+      const noise = structuredClone(f.previous);
+      noise.id = '77777777-7777-4777-8777-777777777777';
+      if (kind === 'old-time') Object.assign(noise, { updatedAt: new Date(998000) });
+      if (kind === 'future-time') Object.assign(noise, { createdAt: new Date(1002000) });
+      if (kind === 'wrong-profile') noise.result.browser_profile_id = 'e'.repeat(32);
+      if (kind === 'legacy-transport')
+        Object.assign(noise.result, {
+          reason: 'checkout_unknown_write',
+          transport: 'official_browser'
+        });
+      if (kind === 'wrong-http')
+        Object.assign(noise.result, { reason: 'checkout_unknown_write', http_status: 500 });
+      expect(
+        findUnidentifiedCheckoutSource(
+          [noise, f.previous],
+          'owner',
+          accountKey,
+          'plus',
+          profileId,
+          f.records[0],
+          f.records
+        )
+      ).toBe(f.previous);
+    }
+  );
   it.each([
     'missing-count',
     'payment',
@@ -396,7 +424,12 @@ describe('web direct failed checkout marker discovery', () => {
     'old-marker',
     'future-marker',
     'missing-source',
-    'unknown-http'
+    'unknown-http',
+    'null-marker-account',
+    'wrong-marker-account',
+    'missing-record-account',
+    'wrong-record-account',
+    'wrong-record-file'
   ])('rejects %s', async (kind) => {
     const f = webFixture();
     if (kind === 'missing-count')
@@ -409,6 +442,12 @@ describe('web direct failed checkout marker discovery', () => {
     if (kind === 'future-marker') f.records[0]!.document.created_at = 1002;
     if (kind === 'missing-source') f.repository.findJob.mockResolvedValue(null as never);
     if (kind === 'unknown-http') Object.assign(f.previous.result, { http_status: 500 });
+    if (kind === 'null-marker-account') f.records[0]!.document.account_key = null;
+    if (kind === 'wrong-marker-account') f.records[0]!.document.account_key = 'c'.repeat(64);
+    if (kind === 'missing-record-account') Reflect.deleteProperty(f.records[0]!, 'accountKey');
+    if (kind === 'wrong-record-account')
+      Object.assign(f.records[0]!, { accountKey: 'c'.repeat(64) });
+    if (kind === 'wrong-record-file') f.records[0]!.fileKey = `${accountKey}-go.json`;
     await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
     expect(f.repository.updateJob).not.toHaveBeenCalled();
   });

@@ -4,7 +4,9 @@ import { restoreRechargeAccount } from './recharge-account-restore';
 import { RechargeRepository } from './persistence/recharge.repository';
 import { rechargeDocumentDigest } from './recharge-callback-receipts';
 import {
+  findUnidentifiedCheckoutSource,
   hasUnresolvedUnidentifiedCheckoutPayment,
+  unidentifiedCheckoutPredecessorJobIds,
   unidentifiedCheckoutSourceResult
 } from './recharge-unidentified-checkout';
 
@@ -160,7 +162,7 @@ function fixture() {
       .fn()
       .mockResolvedValue({ sourceJobId: sourceId, profileId, accountKey: key }),
     findJob: vi.fn().mockResolvedValue(source),
-    finishedJobsForAccount: vi.fn().mockResolvedValue([source]),
+    finishedJobsForUnidentifiedCheckout: vi.fn().mockResolvedValue([source]),
     updateJob: vi.fn(),
     restoreCheckoutIdentifier: actual.restoreCheckoutIdentifier,
     originalCheckoutForAccount: actual.originalCheckoutForAccount
@@ -193,6 +195,51 @@ function fixture() {
     tx,
     input: { tx, repository, job, callback: { accountKey: key } }
   };
+}
+
+function legacyPredecessorFixture() {
+  const f = fixture();
+  delete f.marker.document.account_key;
+  f.marker.revision = 6;
+  f.archive.document.source_revision = 5;
+  Object.assign(f.archived, { plan: 'ChatGPT Plus' });
+  f.marker.document.retry_of = rechargeDocumentDigest(f.archived);
+  f.archive.fileKey = f.archiveKey();
+  const old = structuredClone(f.source);
+  old.id = '66666666-6666-4666-8666-666666666666';
+  old.createdAt = new Date(1000);
+  old.updatedAt = new Date(2000);
+  Object.assign(old.result, {
+    reason: 'checkout_unknown_write',
+    browser_profile_id: 'e'.repeat(32)
+  });
+  delete old.result.checkout_identifier;
+  delete old.result.transport;
+  delete old.result.http_status;
+  const login = {
+    ...f.source,
+    id: '77777777-7777-4777-8777-777777777777',
+    plan: 'go',
+    createdAt: new Date(3000),
+    updatedAt: new Date(4000),
+    result: {
+      mode: 'open_browser',
+      status: 'session_ready',
+      account_matched: true,
+      browser_profile_id: profileId,
+      browser_profile_missing_confirmed: true,
+      replaced_browser_profile_id: old.result.browser_profile_id,
+      payment_attempted: false,
+      payment_status: 'not_attempted',
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0,
+      checkout_requests_sent: 0
+    } as Record<string, unknown>
+  };
+  const history = [f.source, login, old];
+  f.repository.finishedJobsForUnidentifiedCheckout.mockResolvedValue(history);
+  f.tx.idBusinessV2RechargeJob.findMany.mockResolvedValue(history);
+  return { ...f, old, login, history };
 }
 
 describe('unidentified checkout after an archived expired replacement', () => {
@@ -240,6 +287,107 @@ describe('unidentified checkout after an archived expired replacement', () => {
     expect(result).not.toHaveProperty('originalCheckoutIdentifier');
     expect(f.marker.document.plan).toBe('chatgptplusplan');
     expect({ source: f.source, records: f.records }).toEqual(before);
+  });
+
+  it('accepts the unchanged old wire marker without its redundant account key only with complete server proof', async () => {
+    const f = fixture();
+    delete f.marker.document.account_key;
+    f.marker.revision = 6;
+    f.archive.document.source_revision = 5;
+    Object.assign(f.archived, { plan: 'ChatGPT Plus' });
+    f.marker.document.retry_of = rechargeDocumentDigest(f.archived);
+    f.archive.fileKey = f.archiveKey();
+    const before = structuredClone({ source: f.source, records: f.records });
+    expect((await restoreRechargeAccount(f.input as never)).unidentifiedCheckoutRecovery).toBe(
+      true
+    );
+    expect(f.marker.document).not.toHaveProperty('account_key');
+    expect({ source: f.source, records: f.records }).toEqual(before);
+  });
+
+  it('selects the source bound to the current wire marker instead of an unrelated legacy unidentified task', () => {
+    const f = fixture();
+    delete f.marker.document.account_key;
+    f.marker.revision = 6;
+    f.archive.document.source_revision = 5;
+    f.archive.fileKey = f.archiveKey();
+    const old = structuredClone(f.source);
+    old.id = '66666666-6666-4666-8666-666666666666';
+    old.createdAt = new Date(1000);
+    old.updatedAt = new Date(2000);
+    Object.assign(old.result, {
+      reason: 'checkout_unknown_write',
+      browser_profile_id: 'e'.repeat(32)
+    });
+    delete old.result.checkout_identifier;
+    delete old.result.transport;
+    delete old.result.http_status;
+    const before = structuredClone({ source: f.source, old, records: f.records });
+    expect(
+      findUnidentifiedCheckoutSource(
+        [f.source, old],
+        'owner',
+        key,
+        'plus',
+        profileId,
+        f.marker,
+        f.records
+      )
+    ).toBe(f.source);
+    expect({ source: f.source, old, records: f.records }).toEqual(before);
+  });
+
+  it.each([
+    'null-key',
+    'undefined-key',
+    'wrong-key',
+    'missing-record-account',
+    'wrong-record-account',
+    'wrong-record-owner',
+    'missing-archive',
+    'duplicate-archive',
+    'archive-proof-account',
+    'archive-source-revision',
+    'marker-proof-account',
+    'retry-digest',
+    'old-time',
+    'future-time',
+    'wrong-profile',
+    'payment'
+  ])('rejects missing-key wire compatibility with %s and keeps original facts', async (kind) => {
+    const f = fixture();
+    delete f.marker.document.account_key;
+    if (kind === 'null-key') f.marker.document.account_key = null;
+    if (kind === 'undefined-key') f.marker.document.account_key = undefined;
+    if (kind === 'wrong-key') f.marker.document.account_key = 'c'.repeat(64);
+    if (kind === 'missing-record-account') Reflect.deleteProperty(f.marker, 'accountKey');
+    if (kind === 'wrong-record-account') f.marker.accountKey = 'c'.repeat(64);
+    if (kind === 'wrong-record-owner') f.marker.ownerId = 'other';
+    if (kind === 'missing-archive') f.records.splice(1, 1);
+    if (kind === 'duplicate-archive') f.records.push(structuredClone(f.archive));
+    if (kind === 'archive-proof-account')
+      f.archive.document.proof = { ...f.proof, account_key: 'c'.repeat(64) };
+    if (kind === 'archive-source-revision') f.archive.document.source_revision = 0;
+    if (kind === 'marker-proof-account')
+      f.marker.document.expired_checkout_replacement = { ...f.proof, account_key: 'c'.repeat(64) };
+    if (kind === 'retry-digest') f.marker.document.retry_of = 'e'.repeat(64);
+    if (kind === 'old-time') f.marker.document.created_at = 998;
+    if (kind === 'future-time') f.marker.document.created_at = 1002;
+    if (kind === 'wrong-profile') f.source.result.browser_profile_id = 'e'.repeat(32);
+    if (kind === 'payment') f.source.result.payment_requests_sent = 1;
+    const before = structuredClone({ source: f.source, records: f.records });
+    await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
+    expect(f.repository.updateJob).not.toHaveBeenCalled();
+    expect({ source: f.source, records: f.records }).toEqual(before);
+  });
+
+  it('does not derive a retired identifier from a marker stored under another plan file', () => {
+    const f = fixture();
+    delete f.marker.document.account_key;
+    f.marker.fileKey = `${key}-go.json`;
+    expect(
+      unidentifiedCheckoutSourceResult(f.source, f.marker, f.records, profileId)
+    ).toBeUndefined();
   });
 
   it.each([
@@ -352,17 +500,101 @@ describe('unidentified checkout after an archived expired replacement', () => {
     const other = structuredClone(f.source);
     other.id = '66666666-6666-4666-8666-666666666666';
     delete other.result.checkout_identifier;
-    f.repository.finishedJobsForAccount.mockResolvedValue([f.source, other]);
+    f.repository.finishedJobsForUnidentifiedCheckout.mockResolvedValue([f.source, other]);
     f.tx.idBusinessV2RechargeJob.findMany.mockResolvedValue([f.source, other]);
     await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
     expect(f.repository.updateJob).not.toHaveBeenCalled();
   });
 
-  it('does not infer unique source from a truncated 30-row history', async () => {
+  it('does not infer unique source when the complete history query fails', async () => {
     const f = fixture();
-    f.repository.finishedJobsForAccount.mockResolvedValue(Array(30).fill(f.source));
+    f.repository.finishedJobsForUnidentifiedCheckout.mockRejectedValue(
+      new Error('原结算历史尚未完整核验，禁止恢复原窗口')
+    );
     await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
     expect(f.repository.updateJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('strict archived source with a proven earlier zero-payment predecessor', () => {
+  it('restores the complete mixed history without changing either source or any ledger document', async () => {
+    const f = legacyPredecessorFixture();
+    const before = structuredClone({ history: f.history, records: f.records });
+    expect(
+      unidentifiedCheckoutPredecessorJobIds(f.history, f.source, f.marker, f.records, profileId)
+    ).toEqual([f.old.id]);
+    const restored = await restoreRechargeAccount(f.input as never);
+    expect(restored).toMatchObject({
+      unidentifiedCheckoutRecovery: true,
+      ownedProfile: { sourceJobId: f.source.id, profileId }
+    });
+    expect(restored).not.toHaveProperty('originalCheckoutIdentifier');
+    expect(f.repository.updateJob).toHaveBeenCalledExactlyOnceWith(f.tx, f.input.job.id, {
+      accountKey: key,
+      result: { ...f.input.job.result, browser_profile_id: profileId }
+    });
+    expect({ history: f.history, records: f.records }).toEqual(before);
+    expect(f.old.result).toMatchObject({
+      checkout_requests_sent: 1,
+      payment_requests_sent: 0,
+      confirmation_requests_sent: 0,
+      payment_status: 'not_attempted'
+    });
+    expect(restored).not.toHaveProperty('predecessorJobIds');
+  });
+
+  it.each([
+    'later-source',
+    'overlapping-source',
+    'same-boundary-source',
+    'invalid-time',
+    'payment',
+    'confirmation',
+    'manual-confirmation',
+    'missing-login-chain',
+    'unverified-login',
+    'conflicting-login-parent',
+    'another-unknown-source',
+    'current-simultaneous-source',
+    'tampered-archive',
+    'missing-archive',
+    'unresolved-payment',
+    'current-without-retired-id'
+  ])('keeps mixed-history restore blocked for %s', async (kind) => {
+    const f = legacyPredecessorFixture();
+    if (kind === 'later-source') {
+      f.old.createdAt = new Date(1002000);
+      f.old.updatedAt = new Date(1003000);
+    }
+    if (kind === 'overlapping-source') f.old.updatedAt = new Date(1000000);
+    if (kind === 'same-boundary-source') f.old.updatedAt = f.source.createdAt;
+    if (kind === 'invalid-time') f.old.updatedAt = new Date(NaN);
+    if (kind === 'payment') f.old.result.payment_requests_sent = 1;
+    if (kind === 'confirmation') f.old.result.confirmation_requests_sent = 1;
+    if (kind === 'manual-confirmation') f.old.result.manual_confirmation_accepted = true;
+    if (kind === 'missing-login-chain') delete f.login.result.replaced_browser_profile_id;
+    if (kind === 'unverified-login') f.login.result.account_matched = false;
+    if (kind === 'conflicting-login-parent') {
+      const other = structuredClone(f.login);
+      other.id = '88888888-8888-4888-8888-888888888888';
+      other.result.replaced_browser_profile_id = 'f'.repeat(32);
+      f.history.push(other as never);
+    }
+    if (kind === 'another-unknown-source' || kind === 'current-simultaneous-source') {
+      const other = structuredClone(kind === 'another-unknown-source' ? f.old : f.source);
+      other.id = '88888888-8888-4888-8888-888888888888';
+      delete other.result.checkout_identifier;
+      f.history.push(other);
+    }
+    if (kind === 'tampered-archive') f.archive.document.source_revision = 4;
+    if (kind === 'missing-archive') f.records.splice(1, 1);
+    if (kind === 'unresolved-payment') delete f.payment.document.operator_resolution;
+    if (kind === 'current-without-retired-id') delete f.source.result.checkout_identifier;
+    const before = structuredClone({ history: f.history, records: f.records });
+    // Even when a candidate is excluded for payment facts, the unchanged historical guard rejects it.
+    await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
+    expect(f.repository.updateJob).not.toHaveBeenCalled();
+    expect({ history: f.history, records: f.records }).toEqual(before);
   });
 });
 

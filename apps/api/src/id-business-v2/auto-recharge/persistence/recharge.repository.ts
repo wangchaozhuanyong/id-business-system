@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import { toV2JsonDocument, type V2CommandTransaction } from '../../runtime/public-api';
-import type { Prisma } from '@prisma/client';
+import type { IdBusinessV2RechargeJob, Prisma } from '@prisma/client';
 import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
 import { hash, object } from '../recharge-validation';
 import { isRechargeUpgrade } from '../recharge-upgrade-protocol';
@@ -114,6 +114,40 @@ export class RechargeRepository {
     });
   }
 
+  async finishedJobsForUnidentifiedCheckout(
+    tx: V2CommandTransaction,
+    ownerId: string,
+    accountKey: string,
+    excludeId: string
+  ) {
+    const history: IdBusinessV2RechargeJob[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    // 唯一建单来源和窗口替换链必须以完整历史核实，不能使用列表的截断结果。
+    for (let page = 0; page < 30; page += 1) {
+      const jobs = await tx.idBusinessV2RechargeJob.findMany({
+        where: {
+          ownerId,
+          accountKey,
+          action: 'bitbrowser',
+          state: 'finished',
+          id: { not: excludeId }
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 30,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
+      });
+      for (const job of jobs) {
+        if (seen.has(job.id)) throw new ConflictException('原结算历史存在重复记录，禁止恢复原窗口');
+        seen.add(job.id);
+        history.push(job);
+      }
+      if (jobs.length < 30) return history;
+      cursor = jobs.at(-1)!.id;
+    }
+    throw new ConflictException('原结算历史尚未完整核验，禁止恢复原窗口');
+  }
+
   async retainedProfileForAccount(
     tx: V2CommandTransaction,
     ownerId: string,
@@ -167,7 +201,8 @@ export class RechargeRepository {
     excludeId: string,
     unpaidRecoveryIdentifier?: string,
     unidentifiedSourceJobId?: string,
-    expiredCheckoutIdentifiers: string[] = []
+    expiredCheckoutIdentifiers: string[] = [],
+    unidentifiedPredecessorJobIds: string[] = []
   ) {
     let cursor: string | undefined;
     for (let page = 0; page < 30; page += 1) {
@@ -190,6 +225,13 @@ export class RechargeRepository {
         const identifier = findOriginalRechargeCheckout(
           jobs.filter((job) => {
             if (isClosedCycleDocument(job.result, accountKey)) return false;
+            if (
+              unidentifiedSourceJobId &&
+              expiredCheckoutIdentifiers.length &&
+              unidentifiedPredecessorJobIds.includes(job.id) &&
+              isUnidentifiedUnpaidCheckout(job.result)
+            )
+              return false;
             if (
               !expiredCheckoutIdentifiers.length ||
               (job.id === unidentifiedSourceJobId && isUnidentifiedUnpaidCheckout(job.result))
