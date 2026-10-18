@@ -7213,6 +7213,64 @@ import {
   selectedParts as finiteBillingParts,
   needsOnlineRechargeCiBuild as finiteBillingNeedsEngine
 } from './ci-recharge-scope.mjs';
+import {
+  isBitbrowserRecoveryControlsOnly as finiteRecoveryOnly,
+  bitbrowserRecoveryControlPaths as finiteRecoveryPaths,
+  bitbrowserRecoverySourceReviewCommit as finiteRecoveryCommit,
+  bitbrowserRecoverySourceReviewTree as finiteRecoveryTree
+} from './ci-recharge-scope.mjs';
+
+test('finite recovery controls reuse reviewed business QA only over the exact frozen tree', () => {
+  const context = { base: finiteRecoveryCommit, baseTree: finiteRecoveryTree };
+  assert.equal(finiteRecoveryPaths.length, 10);
+  assert.equal(finiteRecoveryOnly(finiteRecoveryPaths, context), true);
+  assert.equal(finiteBillingCiOnly(finiteRecoveryPaths, context), true);
+  assert.equal(checkMode(finiteRecoveryPaths, 'same', 'same', undefined, context), 'ci-only');
+  assert.deepEqual(finiteBillingParts(finiteRecoveryPaths, undefined, context), ['guards']);
+  assert.equal(finiteBillingNeedsEngine(finiteRecoveryPaths, context), false);
+  // A squash merge changes the commit identity while preserving the tested source tree.
+  assert.equal(finiteRecoveryOnly(finiteRecoveryPaths, { ...context, base: 'b'.repeat(40) }), true);
+  assert.equal(checkMode(finiteRecoveryPaths, 'before', 'after', undefined, context), 'full');
+  for (const invalid of [
+    undefined,
+    { base: finiteRecoveryCommit },
+    { ...context, base: 'main' },
+    { ...context, baseTree: 'a'.repeat(40) }
+  ]) {
+    assert.equal(finiteRecoveryOnly(finiteRecoveryPaths, invalid), false);
+    assert.equal(checkMode(finiteRecoveryPaths, 'same', 'same', undefined, invalid), 'full');
+  }
+  for (const missing of finiteRecoveryPaths)
+    assert.equal(
+      finiteRecoveryOnly(
+        finiteRecoveryPaths.filter((p) => p !== missing),
+        context
+      ),
+      false
+    );
+  for (const extra of [
+    'apps/admin/src/v2/features/auto-recharge/recharge-form.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts',
+    'packages/shared/src/v2/checkout-diagnostic.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'scripts/production-release/bitbrowser-billing-release.py',
+    'scripts/production-release/bitbrowser-recovery-unreviewed.py'
+  ]) {
+    assert.equal(finiteRecoveryOnly([...finiteRecoveryPaths, extra], context), false, extra);
+    assert.equal(
+      checkMode([...finiteRecoveryPaths, extra], 'same', 'same', undefined, context),
+      'full',
+      extra
+    );
+  }
+  assert.equal(finiteRecoveryOnly([], context), false);
+  assert.equal(
+    finiteRecoveryOnly([...finiteRecoveryPaths.slice(1), finiteRecoveryPaths[1]], context),
+    false
+  );
+});
 
 test('finite BitBrowser publication controls reuse unchanged application checks', () => {
   assert.equal(finiteBillingOnly(finiteBillingPaths), true);
