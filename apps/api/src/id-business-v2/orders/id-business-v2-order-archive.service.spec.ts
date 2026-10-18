@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { describe, expect, it, vi } from 'vitest';
 import { PERMISSIONS_KEY } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import type { V2CommandTransaction } from '../runtime/public-api';
+import { V2CommandTransactionManager, type V2CommandTransaction } from '../runtime/public-api';
 import { IdBusinessV2OrderArchiveService } from './id-business-v2-order-archive.service';
 import { IdBusinessV2OrderBalanceReturnService } from './id-business-v2-order-balance-return.service';
 import { IdBusinessV2OrderCompletionService } from './id-business-v2-order-completion.service';
@@ -126,6 +126,27 @@ describe('IdBusinessV2OrderArchiveService', () => {
     const f = fixture();
     const first = await f.service.archive(id, f.dto, actor);
     expect(await f.service.archive(id, f.dto, actor)).toEqual({ ...first, idempotentReplay: true });
+    expect(f.repository.updateOrder).toHaveBeenCalledTimes(1);
+    expect(f.repository.appendAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays through the real transaction manager without a second scope bump or event', async () => {
+    const f = fixture();
+    const upsert = vi.fn().mockResolvedValue({});
+    const transaction = vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+      work({ idBusinessV2ScopeVersion: { upsert } })
+    );
+    const publishCommittedChangeBestEffort = vi.fn();
+    const manager = new V2CommandTransactionManager(
+      { $transaction: transaction } as never,
+      { publishCommittedChangeBestEffort } as never
+    );
+    const service = new IdBusinessV2OrderArchiveService(f.repository as never, manager);
+    const first = await service.archive(id, f.dto, actor);
+    expect(await service.archive(id, f.dto, actor)).toEqual({ ...first, idempotentReplay: true });
+    expect(transaction).toHaveBeenCalledTimes(2);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(publishCommittedChangeBestEffort).toHaveBeenCalledTimes(1);
     expect(f.repository.updateOrder).toHaveBeenCalledTimes(1);
     expect(f.repository.appendAudit).toHaveBeenCalledTimes(1);
   });

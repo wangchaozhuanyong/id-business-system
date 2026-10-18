@@ -98,6 +98,24 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit
 
+      - name: Build shared test runtime
+        run: npm run build --workspace @apple-business/shared
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Validate MySQL Prisma schema
+        run: npm run prisma:mysql:validate
+
+      - name: Verify data governance workflow on MySQL
+        run: npm run acceptance:v2-data-governance
+
+      - name: Verify financial integrity on disposable MySQL
+        run: npm run acceptance:v2-financial-integrity
+
+      - name: Verify rollback, deletion and restore integrity on MySQL
+        run: npm run acceptance:v2-rollback-integrity
+
       - name: Verify affected release entry and maintenance controls
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
@@ -197,21 +215,6 @@ jobs:
 
       - name: Check cloud independence
         run: npm run check:cloud-independence
-
-      - name: Generate Prisma client
-        run: npm run prisma:generate
-
-      - name: Validate MySQL Prisma schema
-        run: npm run prisma:mysql:validate
-
-      - name: Verify data governance workflow on MySQL
-        run: npm run acceptance:v2-data-governance
-
-      - name: Verify financial integrity on disposable MySQL
-        run: npm run acceptance:v2-financial-integrity
-
-      - name: Verify rollback, deletion and restore integrity on MySQL
-        run: npm run acceptance:v2-rollback-integrity
 
       - name: Typecheck
         run: npm run typecheck

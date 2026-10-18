@@ -42,7 +42,12 @@ export class IdBusinessV2OrderArchiveService {
     dto: ArchiveIdBusinessV2OrderDto,
     action: ArchiveAction,
     operator?: AuthenticatedUser
-  ) {
+  ): Promise<{
+    idempotentReplay: boolean;
+    id: string;
+    archivedAt: string | null;
+    updatedAt: string;
+  }> {
     const id = normalizeUuid(idValue, '订单');
     if (
       !dto ||
@@ -73,7 +78,11 @@ export class IdBusinessV2OrderArchiveService {
       )
       .digest('hex');
 
-    return this.transactions.execute(
+    const replaySignal = new Error('Existing order archive command replay');
+    let replayOutcome:
+      | { id: string; archivedAt: string | null; updatedAt: string; idempotentReplay: boolean }
+      | undefined;
+    const execution = this.transactions.execute(
       async (tx, context) => {
         if (!(await this.repository.lockOrderId(tx, id)))
           throw new NotFoundException('订单不存在或已删除');
@@ -90,7 +99,10 @@ export class IdBusinessV2OrderArchiveService {
           ) {
             throw new ConflictException('幂等键已用于其他归档确认内容');
           }
-          return { ...data.outcome, idempotentReplay: true };
+          // End the read-only replay before the transaction manager increments
+          // scope versions or publishes a change for a command that wrote nothing.
+          replayOutcome = { ...data.outcome, idempotentReplay: true };
+          throw replaySignal;
         }
         const order = await this.repository.findOrderInTransaction(tx, id);
         if (!order || order.deletedAt) throw new NotFoundException('订单不存在或已删除');
@@ -145,5 +157,9 @@ export class IdBusinessV2OrderArchiveService {
       },
       { changedScopes: ['orders'], requestId: randomUUID(), operator, retryMode: 'none' }
     );
+    return execution.catch((error: unknown) => {
+      if (error === replaySignal && replayOutcome) return replayOutcome;
+      throw error;
+    });
   }
 }

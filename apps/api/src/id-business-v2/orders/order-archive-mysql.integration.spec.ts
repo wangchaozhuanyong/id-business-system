@@ -573,6 +573,14 @@ suite('ordinary order archive/restore real MySQL preservation', () => {
     const afterArchive = await order(fixtures[0]!.id);
     const replay = await archive.archive(fixtures[0]!.id, firstCommand, actor);
     expect(replay).toEqual({ ...firstOutcome, idempotentReplay: true });
+    const concurrentReplays = await Promise.all([
+      archive.archive(fixtures[0]!.id, firstCommand, actor),
+      archive.archive(fixtures[0]!.id, firstCommand, actor)
+    ]);
+    expect(concurrentReplays).toEqual([
+      { ...firstOutcome, idempotentReplay: true },
+      { ...firstOutcome, idempotentReplay: true }
+    ]);
     expect(await order(fixtures[0]!.id)).toEqual(afterArchive);
     expect(await prisma.auditLog.count()).toBe(audits);
     expect(await prisma.idBusinessV2ScopeVersion.findMany({ orderBy: { scope: 'asc' } })).toEqual(
