@@ -63,3 +63,62 @@ describe('exchange quote snapshot transaction order', () => {
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 });
+
+function createFixture() {
+  const repository = { replayRead: vi.fn().mockResolvedValue(null) };
+  const resolve = vi.fn(async ({ currency }: { currency: string }) => ({
+    id: `${currency}-snapshot`,
+    currency,
+    rateToCny: '1',
+    source: 'manual'
+  }));
+  const result = { id: 'posted-exchange', status: 'posted' };
+  const transactions = { execute: vi.fn().mockResolvedValue(result) };
+  const instance = new IdBusinessV2FinanceExchangesService(
+    repository as never,
+    transactions as never,
+    { resolve } as never,
+    {} as never,
+    {} as never
+  );
+  return { instance, repository, resolve, transactions, result };
+}
+
+describe('same-command exchange create coordination before snapshot writes', () => {
+  it('shares identical concurrent submissions before quoting or entering the posting transaction', async () => {
+    const f = createFixture();
+    const results = await Promise.all([f.instance.create(input), f.instance.create({ ...input })]);
+    expect(results).toEqual([f.result, f.result]);
+    expect(f.repository.replayRead).toHaveBeenCalledTimes(1);
+    expect(f.resolve).toHaveBeenCalledTimes(2);
+    expect(f.transactions.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a changed payload on the pending key without a second quote or posting', async () => {
+    const f = createFixture();
+    const first = f.instance.create(input);
+    await expect(f.instance.create({ ...input, targetAmount: '8' })).rejects.toThrow(
+      '幂等键已用于不同换汇资料'
+    );
+    await expect(first).resolves.toEqual(f.result);
+    expect(f.repository.replayRead).toHaveBeenCalledTimes(1);
+    expect(f.transactions.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates one failed attempt to both callers and releases it for an explicit later call', async () => {
+    const f = createFixture();
+    const failure = new Error('synthetic storage unavailable');
+    f.repository.replayRead.mockRejectedValueOnce(failure);
+    expect(
+      await Promise.allSettled([f.instance.create(input), f.instance.create({ ...input })])
+    ).toEqual([
+      { status: 'rejected', reason: failure },
+      { status: 'rejected', reason: failure }
+    ]);
+    expect(f.repository.replayRead).toHaveBeenCalledTimes(1);
+    expect(f.transactions.execute).not.toHaveBeenCalled();
+    await expect(f.instance.create({ ...input })).resolves.toEqual(f.result);
+    expect(f.repository.replayRead).toHaveBeenCalledTimes(2);
+    expect(f.transactions.execute).toHaveBeenCalledTimes(1);
+  });
+});

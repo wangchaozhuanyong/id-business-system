@@ -7,7 +7,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const contractPath = 'scripts/production-release/feature-retirement-contract.json';
 const verifierPath = 'scripts/production-release/feature-retirement-build.py';
 const workflowPath = '.github/workflows/feature-retirement-validation.yml';
-const sourceHash = '08ee6ef89e94ad97faa928f0eaabd9b12bd0a71a134588af5485923a114413af';
+const sourceHash = '4c8dff6c4b1875ba3ef2bdef618bac6e6e0a8eb2c61a4805a2e875e20aac9647';
 const verifierHash = '82293f9bbb3c4341f75ac9eb2075ffac52c4855862a55500b82e700ef3f0c489';
 const workflowHash = '7c5fb7c5f845ef94a9ddd117f5002b8d33bc0f3155c254c1acf6a340e5308c64';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
