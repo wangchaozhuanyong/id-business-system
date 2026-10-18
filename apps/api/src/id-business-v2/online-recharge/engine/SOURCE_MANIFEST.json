@@ -362,9 +362,9 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "87f7ba0842b6b4076160c189de92ee0964560a15c654fa05b6579b89cb9469a4",
+      "adaptedSha256": "b42d752231484ddf231a61abdaea373bb345bcf27c3f5dcb895ab38b4fff5916",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. Keep renewal browser query fixture aligned with the pinned upstream 20-second complete-response limit."
     },
     {
       "path": "test/rpc-response.test.cjs",
@@ -642,9 +642,9 @@
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "b08bb21f467deef64b17e3e099d7d69464cf807a6d79509bd0c7aada459ae2a7",
+      "adaptedSha256": "f88083289b9e79e53cb4ea70db31c36c9e50c756768d121a395029b66b8b5c87",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. Match the pinned upstream 20-second complete-response GET limit within unchanged overall deadlines; exclusive diagnostics use one primary read and reserve one complete comparison without authorizing payments."
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -720,8 +720,8 @@
       "path": "test/query-network-browser.test.cjs",
       "originalSha256": null,
       "changed": true,
-      "reason": "Real Chromium synthetic network-phase, cancellation, late-response and zero-payment regression coverage; localhost-only fixtures.",
-      "adaptedSha256": "829321913aed706111d1230d056496247689dd00cf250cf5ebba796c5be22780"
+      "reason": "Real Chromium synthetic network-phase, cancellation, late-response and zero-payment regression coverage; localhost-only fixtures. Cover slow streamed complete responses across the former ten-second limit, exclusive comparison scheduling, shared-context retries and shorter caller deadlines with zero payment requests.",
+      "adaptedSha256": "0b0220d60d897ad092496ce2bc1da4080f93ebba4f3d67e7f282a9c908d84f8d"
     }
   ],
   "dependencySecurityPatches": [

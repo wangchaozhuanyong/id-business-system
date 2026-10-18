@@ -6,6 +6,11 @@ import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
+  onlineQueryDeadlineScope,
+  onlineQueryDeadlinePaths,
+  onlineQueryDeadlineControls,
+  isOnlineQueryDeadlineOnly,
+  isOnlineQueryDeadlineControlsOnly,
   onlineQueryNetworkScope,
   onlineQueryNetworkPaths,
   onlineQueryNetworkControls,
@@ -47,6 +52,125 @@ import {
   onlineSessionPreflightPaths,
   onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
+
+test('query deadline repair requires the complete finite source set and engine checks', () => {
+  assert.equal(onlineQueryDeadlineScope, 'ONLINE_QUERY_DEADLINE_REPAIR');
+  assert.equal(onlineQueryDeadlinePaths.length, 5);
+  assert.equal(onlineQueryDeadlineControls.length, 9);
+  assert.equal(new Set(onlineQueryDeadlinePaths).size, 5);
+  assert.equal(new Set(onlineQueryDeadlineControls).size, 9);
+  for (const controls of [[], onlineQueryDeadlineControls]) {
+    const paths = [...onlineQueryDeadlinePaths, ...controls];
+    assert.equal(isOnlineQueryDeadlineOnly(paths), true);
+    assert.equal(isOnlineQueryDeadlineControlsOnly(paths), false);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+    assert.equal(checkMode(paths, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  }
+  for (const missing of onlineQueryDeadlinePaths)
+    assert.equal(
+      isOnlineQueryDeadlineOnly(onlineQueryDeadlinePaths.filter((path) => path !== missing)),
+      false
+    );
+  const paths = [...onlineQueryDeadlinePaths, ...onlineQueryDeadlineControls];
+  const guards = onlineSettingsCommands('guards', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(guards, /online-query-deadline-release\.test\.py/);
+  assert.match(guards, /check:v2-module-architecture/);
+  assert.match(guards, /check:v2-isolation/);
+  assert.doesNotMatch(guards, /check:admin-ui|check:v2-ui-language|online-query-network-release/);
+  assert.deepEqual(
+    onlineSettingsCommands('online-engine', paths),
+    onlineSettingsCommands('online-engine', [
+      ...onlineQueryNetworkPaths,
+      ...onlineQueryNetworkControls
+    ])
+  );
+  for (const part of ['api', 'admin', 'migration'])
+    assert.throws(
+      () => onlineSettingsCommands(part, paths),
+      /Unsupported query deadline check part/
+    );
+});
+
+test('query deadline controls-only checks select only the new finite publisher', () => {
+  const releases = onlineQueryDeadlineControls.filter((path) => !path.startsWith('scripts/ci-'));
+  for (const controls of [
+    ...releases.map((path) => [path]),
+    releases,
+    onlineQueryDeadlineControls
+  ]) {
+    assert.equal(isOnlineQueryDeadlineOnly(controls), false);
+    assert.equal(isOnlineQueryDeadlineControlsOnly(controls), true);
+    assert.equal(isOnlineSettingsControlsOnly(controls), true);
+    assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+    assert.equal(checkMode(controls, 'before', 'after'), 'full');
+    assert.deepEqual(selectedParts(controls), ['guards']);
+    const commands = onlineSettingsCommands('guards', controls);
+    assert.deepEqual(
+      commands.filter((args) => args[0] === 'python3'),
+      [['python3', '-B', 'scripts/production-release/online-query-deadline-release.test.py']]
+    );
+    assert.equal(
+      commands.some((args) => args.some((arg) => arg.startsWith?.('check:'))),
+      false
+    );
+    assert.throws(() => onlineSettingsCommands('online-engine', controls), /controls-only/);
+  }
+  assert.equal(isOnlineQueryDeadlineOnly([]), false);
+  assert.equal(isOnlineQueryDeadlineControlsOnly([]), false);
+  assert.equal(
+    isOnlineQueryDeadlineControlsOnly(
+      onlineQueryDeadlineControls.filter((path) => path.startsWith('scripts/ci-'))
+    ),
+    false
+  );
+});
+
+test('query deadline cannot narrow API, Admin, schema, dependency or neighboring engine edits', () => {
+  const paths = [...onlineQueryDeadlinePaths, ...onlineQueryDeadlineControls];
+  const controls = onlineQueryDeadlineControls;
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/validation.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineActionDrawer.vue',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/prisma-mysql/migrations/unreviewed/migration.sql',
+    'package.json',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    '.github/workflows/online-query-network-validation.yml',
+    'scripts/production-release/online-query-deadline-arbitrary.py',
+    'docs/V2_TASKS.md'
+  ]) {
+    for (const candidate of [
+      [...paths, extra],
+      [...controls, extra]
+    ]) {
+      assert.equal(isOnlineQueryDeadlineOnly(candidate), false, extra);
+      assert.equal(isOnlineQueryDeadlineControlsOnly(candidate), false, extra);
+      assert.equal(isOnlineSettingsOnly(candidate), false, extra);
+      assert.equal(isOnlineSettingsControlsOnly(candidate), false, extra);
+      assert.equal(checkMode(candidate, 'same', 'same'), 'full', extra);
+      assert.throws(
+        () => onlineSettingsCommands('guards', candidate),
+        /Unsupported online settings/
+      );
+    }
+  }
+  for (const candidate of [
+    [...paths, paths[0]],
+    [...controls, controls[0]]
+  ]) {
+    assert.equal(isOnlineQueryDeadlineOnly(candidate), false);
+    assert.equal(isOnlineQueryDeadlineControlsOnly(candidate), false);
+    assert.equal(checkMode(candidate, 'same', 'same'), 'full');
+  }
+});
 
 test('query network repair requires the complete finite source set and four affected checks', () => {
   const paths = [...onlineQueryNetworkPaths, ...onlineQueryNetworkControls];
