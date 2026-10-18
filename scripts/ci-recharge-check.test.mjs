@@ -88,7 +88,10 @@ import {
   registrationProtocolRepairControlCommands,
   registrationProtocolRepairPreservationBase,
   registrationProtocolRepairPreservationTree,
-  registrationProtocolRepairPreservationPaths
+  registrationProtocolRepairPreservationPaths,
+  bitbrowserRecoveryControlPaths,
+  bitbrowserRecoverySourceReviewCommit,
+  bitbrowserRecoverySourceReviewTree
 } from './ci-recharge-scope.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -1090,6 +1093,7 @@ function recordGuardCommands(
     repository = '',
     event = '',
     base = 'a'.repeat(40),
+    baseTree = '',
     readonlyBaseSource = '',
     readonlyCurrentSource = null,
     cacheConfiguration = null,
@@ -1327,6 +1331,8 @@ function recordGuardCommands(
     }});
     childProcess.execFileSync = (file, args) => {
       if (file === 'git') {
+        if (args.join(' ') === 'rev-parse ' + process.env.GUARD_TEST_BASE + '^{tree}' && process.env.GUARD_TEST_BASE_TREE)
+          return process.env.GUARD_TEST_BASE_TREE + '\\n';
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationTerminalStopBase + '^{tree}')}) return ${JSON.stringify(registrationTerminalStopTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationTerminalStopRepairBase + '^{tree}')}) return ${JSON.stringify(registrationTerminalStopRepairTree + '\n')};
         if (args.join(' ') === ${JSON.stringify('rev-parse ' + registrationFlowV4Base + '^{tree}')}) return ${JSON.stringify(registrationFlowV4Tree + '\n')};
@@ -1382,6 +1388,7 @@ function recordGuardCommands(
         GUARD_TEST_BUILD_RESUME: buildResume ? 'true' : '',
         GUARD_TEST_FAIL_COMMAND: failCommand,
         GUARD_TEST_BASE: base,
+        GUARD_TEST_BASE_TREE: baseTree,
         GUARD_TEST_PART: part,
         GUARD_TEST_PATHS: JSON.stringify(paths)
       }
@@ -3005,4 +3012,88 @@ test('finite BitBrowser control checks retain immutable base and real guard comm
   assert.ok(block.includes("npm('run', 'lint')"));
   assert.ok(block.includes("part !== 'guards'"));
   assert.ok(!block.includes('migrate deploy'));
+});
+
+test('finite recovery controls run real guards and closed release checks without business actions', () => {
+  const options = {
+    base: bitbrowserRecoverySourceReviewCommit,
+    baseTree: bitbrowserRecoverySourceReviewTree
+  };
+  const calls = recordGuardCommands('ci-only', bitbrowserRecoveryControlPaths, 'guards', options);
+  assert.deepEqual(calls, [
+    ['npm', 'run', 'format:check'],
+    ['npm', 'run', 'lint'],
+    ...[
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ].map((name) => ['npm', 'run', name]),
+    ['node', '--test', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-check.test.mjs'],
+    ['python3', '-B', 'scripts/production-release/bitbrowser-recovery-release.test.py'],
+    ['python3', '-B', 'scripts/production-release/bitbrowser-recovery-build.py', '--check'],
+    ['process-exit', 0]
+  ]);
+  assert.deepEqual(
+    recordGuardCommands('ci-only', bitbrowserRecoveryControlPaths, 'guards', {
+      ...options,
+      base: 'b'.repeat(40)
+    }),
+    calls
+  );
+  for (const part of [
+    'api',
+    'admin',
+    'release-controls',
+    'migration',
+    'connector',
+    'online-engine'
+  ])
+    assert.throws(
+      () => recordGuardCommands('ci-only', bitbrowserRecoveryControlPaths, part, options),
+      /Unsupported finite BitBrowser recovery control check/
+    );
+  assert.throws(
+    () =>
+      recordGuardCommands('ci-only', bitbrowserRecoveryControlPaths, 'guards', {
+        ...options,
+        failCommand: 'python3 -B scripts/production-release/bitbrowser-recovery-build.py --check'
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
+  for (const invalid of [
+    { mode: 'full', paths: bitbrowserRecoveryControlPaths, options },
+    {
+      mode: 'ci-only',
+      paths: bitbrowserRecoveryControlPaths,
+      options: { ...options, baseTree: 'a'.repeat(40) }
+    },
+    { mode: 'ci-only', paths: bitbrowserRecoveryControlPaths.slice(1), options },
+    {
+      mode: 'ci-only',
+      paths: [
+        ...bitbrowserRecoveryControlPaths,
+        'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts'
+      ],
+      options
+    }
+  ]) {
+    try {
+      const fallback = recordGuardCommands(invalid.mode, invalid.paths, 'guards', invalid.options);
+      assert.equal(
+        fallback.some((row) =>
+          row.includes('scripts/production-release/bitbrowser-recovery-build.py')
+        ),
+        false
+      );
+      assert.equal(
+        fallback.some((row) =>
+          row.includes('scripts/production-release/bitbrowser-recovery-release.test.py')
+        ),
+        false
+      );
+    } catch (error) {
+      assert.match(String(error.stderr ?? error), /Automatic registration has been removed/);
+    }
+  }
 });

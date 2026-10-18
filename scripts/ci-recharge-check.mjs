@@ -153,7 +153,9 @@ import {
   registrationTerminalStopCommands,
   isBitbrowserBillingControlsOnly,
   bitbrowserBillingControlBase,
-  bitbrowserBillingControlTree
+  bitbrowserBillingControlTree,
+  isBitbrowserRecoveryControlsOnly,
+  bitbrowserRecoverySourceReviewTree
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -195,6 +197,38 @@ if (
   process.exit(0);
 }
 // END finite BitBrowser publication control checks
+// BEGIN finite BitBrowser recovery publication control checks
+if (
+  mode === 'ci-only' &&
+  isBitbrowserRecoveryControlsOnly(changed, {
+    base,
+    baseTree: bitbrowserRecoverySourceReviewTree
+  }) &&
+  isBitbrowserRecoveryControlsOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (part !== 'guards') throw new Error('Unsupported finite BitBrowser recovery control check');
+  npm('run', 'format:check');
+  npm('run', 'lint');
+  for (const name of [
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-concurrency-standard',
+    'check:v2-prisma-runtime-boundary'
+  ])
+    npm('run', name);
+  run('node', [
+    '--test',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ]);
+  run('python3', ['-B', 'scripts/production-release/bitbrowser-recovery-release.test.py']);
+  run('python3', ['-B', 'scripts/production-release/bitbrowser-recovery-build.py', '--check']);
+  process.exit(0);
+}
+// END finite BitBrowser recovery publication control checks
 if (
   mode === 'ci-only' &&
   base === registrationProtocolRepairPreservationBase &&

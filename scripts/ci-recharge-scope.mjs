@@ -1136,6 +1136,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserRecoveryControlsOnly(paths, context)) return false;
   if (isBitbrowserBillingControlsOnly(paths)) return false;
   if (isFeatureRetirementPermissionsRepair(paths, context)) return false;
   if (isFeatureRetirementOnly(paths, context)) return false;
@@ -1796,7 +1797,31 @@ export function isBitbrowserBillingControlsOnly(paths) {
   );
 }
 
-export function isCiOnly(paths) {
+// This successor can reuse the completed business QA only over its exact reviewed tree.
+// The frozen contract is validated separately before any control-only check succeeds.
+export const bitbrowserRecoverySourceReviewCommit = 'faea152b038c7ddb1a3199070f9dc7ffb5583c36';
+export const bitbrowserRecoverySourceReviewTree = 'f658d6742cdb611089730377623107eb69aedaaf';
+export const bitbrowserRecoveryControlPaths = Object.freeze([
+  '.github/workflows/bitbrowser-recovery-validation.yml',
+  ...['build.py', 'release.py', 'dispatch.py', 'release.test.py', 'contract.json'].map(
+    (name) => `scripts/production-release/bitbrowser-recovery-${name}`
+  ),
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  )
+]);
+export function isBitbrowserRecoveryControlsOnly(paths, context) {
+  return (
+    /^[a-f0-9]{40}$/.test(context?.base ?? '') &&
+    context?.baseTree === bitbrowserRecoverySourceReviewTree &&
+    paths.length === bitbrowserRecoveryControlPaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((name) => bitbrowserRecoveryControlPaths.includes(name))
+  );
+}
+
+export function isCiOnly(paths, context) {
+  if (isBitbrowserRecoveryControlsOnly(paths, context)) return true;
   if (isBitbrowserBillingControlsOnly(paths)) return true;
   if (paths.includes(rechargePricingProfile))
     return paths.every((path) => rechargePricingControls.has(path));
@@ -1954,6 +1979,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isBitbrowserRecoveryControlsOnly(paths, context))
+    return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isFeatureRetirementPermissionsRepair(paths, context)) return 'ci-only';
   if (isRegistrationTerminalStopOnly(paths, context))
     return oldSchema === newSchema ? 'recharge' : 'full';
@@ -2093,7 +2120,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
       paths.every((path) => path === productionDatabaseAccessHelper || isCiOnly([path]))
       ? 'ci-only'
       : 'full';
-  if (isCiOnly(paths)) return 'ci-only';
+  if (isCiOnly(paths, context)) return 'ci-only';
   if (isMailboxOnly(paths)) return 'mailbox';
   if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
   if (isAdminOnly(paths)) return 'admin';
@@ -2487,6 +2514,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isBitbrowserRecoveryControlsOnly(paths, context)) return ['guards'];
   if (isBitbrowserBillingControlsOnly(paths)) return ['guards'];
   if (isRegistrationTerminalStopOnly(paths, context))
     return context?.base === registrationTerminalStopRepairBase
