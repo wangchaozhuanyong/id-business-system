@@ -76,8 +76,8 @@ const address = {
   city: 'Seattle',
   state: 'WA',
   postalCode: '98101',
-  status: 'used',
-  usedAt: timestamp,
+  status: 'unused',
+  usedAt: null,
   createdAt: timestamp,
   updatedAt: timestamp
 };
@@ -578,14 +578,16 @@ try {
             ],
             total: 1
           });
-        if (path.endsWith('/auto-recharge/addresses'))
+        if (path.endsWith('/auto-recharge/addresses')) {
+          assert.equal(url.searchParams.get('status'), 'unused');
           return success(route, {
             items: [address],
             total: 1,
             page: 1,
             pageSize: 2000,
-            totals: { unused: 0, used: 1, disabled: 0 }
+            totals: { unused: 1, used: 0, disabled: 0 }
           });
+        }
         if (path.endsWith('/auto-recharge/bitbrowser-settings')) {
           if (!connectionAcceptance) return success(route, settings);
           if (request.method() === 'PUT') {
