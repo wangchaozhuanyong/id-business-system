@@ -758,8 +758,10 @@ async function installChatGptSession(context, sessionRaw) {
             await route.abort();
             return;
         }
-        if (/\/api\/auth\/(session|csrf)/.test(url)) {
-            await route.continue();
+        if (isOfficialSessionUrl(url) && /^\/api\/auth\/(session|csrf)$/.test(new URL(url).pathname)) {
+            // This last-registered route runs first. Continue would bypass the
+            // dedicated official Session/CSRF handlers registered above.
+            await route.fallback();
             return;
         }
         await route.continue();

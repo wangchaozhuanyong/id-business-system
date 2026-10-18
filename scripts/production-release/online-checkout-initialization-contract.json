@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "scope": "ONLINE_CHECKOUT_INITIALIZATION",
+  "frozen": false,
+  "admission": "DRAFT_NOT_PUBLISHABLE",
+  "pendingBindings": [
+    "reviewed-source-commit-and-annotated-tag",
+    "verified-current-seven-service-production-baseline",
+    "reviewed-source-and-control-fingerprints"
+  ],
+  "expectedCurrent": "5b51148154339b9695fea846eb59ce1ee45fbfff",
+  "engineSourceBase": "827ede8b4f32bd43f699413d9630d094bdd33a4c",
+  "reviewBase": "5b51148154339b9695fea846eb59ce1ee45fbfff",
+  "sourceReviewCommit": null,
+  "sourceReviewTag": null,
+  "baseline": null,
+  "runtimeSources": null,
+  "validationSources": null,
+  "reviewedControlSources": null,
+  "controlPins": null,
+  "workflowSha256": null,
+  "beforeEngineFiles": null,
+  "afterEngineFiles": null,
+  "updatedServices": ["online-recharge"],
+  "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
+  "migrationPerformed": false,
+  "businessActions": 0
+}

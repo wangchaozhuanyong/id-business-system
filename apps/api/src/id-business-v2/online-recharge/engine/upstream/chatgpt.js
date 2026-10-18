@@ -438,6 +438,8 @@ function safeCheckoutOpenDiagnostics(value) {
                 && value.httpStatus >= 400 && value.httpStatus <= 599 ? { httpStatus: value.httpStatus } : {})
         };
         if (!['readiness', 'final_check'].includes(value.stage)) return result;
+        const loading = require('../checkout-recovery.cjs').sanitizeOriginalCheckoutReloadDiagnostics(value.loading);
+        if (loading) result.loading = loading;
         if (CHECKOUT_FORM_DIAGNOSTIC_CODES.has(value.code)) result.code = value.code;
         if (Array.isArray(value.missing))
             result.missing = [...new Set(value.missing.slice(0, 64).filter(field => CHECKOUT_FORM_DIAGNOSTIC_FIELDS.has(field)))];
@@ -640,6 +642,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                         : stage === 'navigation' ? 'network_error' : 'check_failed');
         const checkoutOpenDiagnostics = safeCheckoutOpenDiagnostics({
             ...safeCheckoutOpenDiagnostics(error.checkoutOpenDiagnostics),
+            loading: require('../checkout-recovery.cjs').originalCheckoutReloadDiagnostics(page),
             stage, reason, code: error.code, httpStatus: error.httpStatus
         });
         const reasons = {
