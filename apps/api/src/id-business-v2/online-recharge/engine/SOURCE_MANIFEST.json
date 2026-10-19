@@ -54,16 +54,16 @@
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "74811ee9378cae418277a5c56d379dc7002bff3681ba3cf8ac574351c1f94dcd",
+      "adaptedSha256": "38b4be9bd6d866707e078e2e660ee0d0941dc96f5140f52726690100779b01f6",
       "changed": true,
       "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Share rendered eligibility across scanning and preparation; respect descendant visibility overrides and same-tree shadow labels; retain bounded exclusion counters without raw DOM or field values. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions."
     },
     {
       "path": "checkout-recovery.cjs",
       "originalSha256": null,
-      "adaptedSha256": "73cdc1fcd28a8a016c3690c6383beaa2cd230b876567cd3ec5ea00686eb26f4a",
+      "adaptedSha256": "2bdabc723dceacc20c6f36906b15561e863dc055451bfd6919262b908db230f8",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Keep all request-admission functions unchanged; collect bounded original-reload rejection operation/reason counters and export a strict credential-free diagnostics projection."
     },
     {
       "path": "confirmation.cjs",
@@ -194,7 +194,7 @@
     {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "330a66c72fd2ca5348171962d0f46c7d5e524e460aa8bcbb68a47dcf79f9f453",
+      "adaptedSha256": "7216dd11bb30a28424f6c0ef4d853307fdfa107f4e9a544b88bf2dff53c9bc29",
       "changed": true,
       "reason": "Real Chromium regression coverage for semantic embedded fields, readback, deadline and payment limits.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Regression coverage for prepared native checkout, rendered eligibility, same-tree shadow fields, passive masked recording and safe rejection diagnostics. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions."
     },
@@ -250,9 +250,9 @@
     {
       "path": "test/checkout-recovery.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b698599e0275a60fa4bcf3dad22d2b5db35a49d4310eca456f6e0aae6bb5d47a",
+      "adaptedSha256": "3d8088085c62e62c98526ecd10929a36e88a0a3b61e2f8cb463a54f4665bef99",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Regression coverage for prepared native checkout, rendered eligibility, same-tree shadow fields, passive masked recording and safe rejection diagnostics. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Regression coverage for prepared native checkout, rendered eligibility, same-tree shadow fields, passive masked recording and safe rejection diagnostics. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Verify original-reload diagnostics survive accepted-checkout and result projection; reject unbounded/raw diagnostics and retain zero duplicate payment."
     },
     {
       "path": "test/credentials-main.test.cjs",
@@ -355,16 +355,16 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "430a29c6dbede8e6db969e61f68f34424f0a7b3e97fd2a9c8802ae2b3d89dcae",
+      "adaptedSha256": "b94aa9a86b38e12bbe6ad25e132c01ef5f0155fa5f9c9655bbd6854086126da8",
       "changed": true,
-      "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions."
+      "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-19 Prove the restored guest refresh in the production task child: same homepage Page, exactly one reload, one checkout and one payment action, bound payment and tier evidence, one bill/card count and renewal cleanup; isolated synthetic transport only. 2026-10-19 Assert the controlled task outcome before auth metrics; report only status, controlled error code and whitelisted bootstrap diagnosis fields on failure."
     },
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "909315a61d46c8e097563c93c0929c0b4a15a37bb8c9ac5dee6e45fdbc4e9897",
+      "adaptedSha256": "eb478cd1dac60f066797761b323a49caadef74d7b87a68238a82899f925c6fa1",
       "changed": true,
-      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock."
+      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation. 2026-10-19 Use routed real official-origin pages for existing late-verification browser fixtures; retain guest rejection after the one reload and the seventy-three-test total."
     },
     {
       "path": "test/renewal-recheck.test.cjs",
@@ -467,9 +467,9 @@
     {
       "path": "upstream/auth-page-detect.js",
       "originalSha256": "32d6fae901ccd9b7831b35e99560973eebf8629ea8b0038602ea0a020f346fc3",
-      "adaptedSha256": "52587b771158665561f4c6276ba2423c1da1053a1886c78cdc459879e648fb41",
-      "changed": false,
-      "reason": "冻结原版保持不变。 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
+      "adaptedSha256": "ce15056bc7a12b7c0e94eaefd985cd843d05c02878bc4349e8e717a1ab41005c",
+      "changed": true,
+      "reason": "冻结原版保持不变。 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-19 Match login and checkout navigation by parsed actual HTTP(S) hostname/path, never query/fragment text; preserve genuine login stops and exact official HTTPS checkout recognition. This removes independently reproduced false route aborts, not a claimed fix for live Cloudflare challenges."
     },
     {
       "path": "upstream/browser-pool-client.js",
@@ -523,9 +523,9 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "5ad501f333cbbeaf8014854ed2e33553528289088a9d5ec78e45468f0a67bc76",
+      "adaptedSha256": "f30ca99d6b07eca7eb6b0383fc1c5cebf88d4eae7bf26d1f89d34c3674ef2e63",
       "changed": true,
-      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Prepare the card section before strict original-checkout readiness and preserve bounded exclusion diagnostics through the opening result. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions."
+      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Prepare the card section before strict original-checkout readiness and preserve bounded exclusion diagnostics through the opening result. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Carry strictly projected original-reload rejection diagnostics through the existing accepted-checkout failure result; never create or submit another checkout."
     },
     {
       "path": "upstream/chile-money.js",
@@ -565,16 +565,16 @@
     {
       "path": "upstream/human-verification.js",
       "originalSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
-      "adaptedSha256": "89d3db930159d3cfe9e04075df7b3d48c3526c4dc85752ae5e15a48b7b3af442",
+      "adaptedSha256": "6ca8e13af6369d79ea962fcce6c57417747d42c78bc56c4d77d7637c52a9fdd5",
       "changed": true,
-      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Perform caller-supplied card-section preparation before readiness inspection within the original opening deadline; retain verification and payment guards."
+      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Perform caller-supplied card-section preparation before readiness inspection within the original opening deadline; retain verification and payment guards. 2026-10-19 Exclude ordinary conversation/composer text from verification wording while retaining actual challenge instructions, dialogs and controls."
     },
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "0e755a10a941de3ef89887eb4160ae70ba41f7f65585c04b2c7ee45c08bf0fd8",
+      "adaptedSha256": "5a4cd299fa54915ce9a39b47bb8cc9ee2326a2bc902cad3c00a101f1ce21595e",
       "changed": true,
-      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Present bounded frame/control exclusion counts using Chinese reason labels without sensitive data. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions."
+      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Present bounded frame/control exclusion counts using Chinese reason labels without sensitive data. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Show original reload and blocked request counts in the existing Chinese failure summary; preserve payment uncertainty."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -642,16 +642,16 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "547c6801b16f93c145d1e01c2378023eb188728b7c98f0621edc11a298fc20d3",
+      "adaptedSha256": "9f2b9683b6eccaf23dbba1201b6f05bbe0bfad80c30c181d30ac826815a98f8d",
       "changed": true,
-      "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
+      "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Delegate only exact official Session/CSRF routes to existing specialized handlers through fallback; retain login blocking and all ordinary request headers. 2026-10-19 Restore the frozen upstream single normal guest-homepage refresh after verification; constrain it to the same official homepage, original task deadline and lease cancellation; require logged-in UI after refresh and never reload a visible challenge. 2026-10-19 Classify structured Session responses before incidental profile text; constrain compatibility to canonical official GETs, preserve native writes, Request validation, cancellation and single RequestInit evaluation. 2026-10-19 Reobserve stale guest-only verification verdicts and late guest hydration within the unchanged shared UI and overall deadlines; require the same exact official homepage before recovery succeeds, without additional refresh, verification or payment actions. 2026-10-19 Preserve known login-redirect diagnostics at all exact-homepage recovery fences; checkout and third-party pages remain rejected as navigation failures."
     },
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "24907e1b21350be2fe95a36e4aee796d17490272349891c805e7e339898bee60",
+      "adaptedSha256": "37134d91f9ff46485da9b6a3186c7b9d4804ae6c8d7b9329fbe747cf76570ff5",
       "changed": true,
-      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. 2026-10-18 Scroll only the unique eligible card label under the existing task deadline before readiness; no preparation click or additional payment attempt."
+      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. 2026-10-18 Scroll only the unique eligible card label under the existing task deadline before readiness; no preparation click or additional payment attempt. 2026-10-18 Prefer a unique accessible card label, then a unique physically rendered ARIA-hidden label only for bounded lazy-mount preparation; assert cancellation before starting reads."
     },
     {
       "path": "upstream/subscription-check.js",
@@ -729,6 +729,55 @@
       "adaptedSha256": "fd60766c034e38a5dbcc1ea6c7f7b2b11398a13f6b89f1d6e6844ed0533f33b8",
       "changed": true,
       "reason": "Forward the existing private XAUTHORITY file path with DISPLAY to headed task children; retain the restricted environment allowlist.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
+    },
+    {
+      "path": "test/session-routing-browser.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "772026591581fc85912b539fad4008777a636b8aa4c6be02b6783449d81eabf8",
+      "changed": true,
+      "reason": "Synthetic real routing and XHR-to-lazy-card readiness integration across actual native, standalone and pool launchers, DNS fenced and zero checkout/payment writes. 2026-10-19 Real isolated Chromium proves quoted login destinations do not cancel normal document navigation or a synthetic challenge resource; genuine authentication stops remain. 2026-10-19 Real isolated fetch/XHR regressions preserve authentication write responses, exact GET paths, URL/Request inputs, method overrides, single RequestInit evaluation and native failures."
+    },
+    {
+      "path": "test/auth-navigation.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "0dbca0ebbf12555f3c197aa8ad0ac3286b29fbd924d816dac6632b80abb6b727",
+      "changed": true,
+      "reason": "2026-10-19 Regress parsed navigation against quoted query/fragment destinations, lookalike origins, real authentication paths and noncanonical checkout URLs."
+    },
+    {
+      "path": "test/checkout-card-preparation.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "00d94af3b5b61031f997f95824a59d3b5f4eea467bb214b5f80c226002e19324",
+      "changed": true,
+      "reason": "Synthetic browser coverage for ARIA-visible lazy card mounting, accessible priority, ambiguity, hidden labels, cancellation and the shared deadline."
+    },
+    {
+      "path": "test/checkout-reload-request-diagnostics.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "861251e2f13a5348e4a59aed9731dabf37ae47696b435e8e2b8eb900a64afe5a",
+      "changed": true,
+      "reason": "Offline actual parent/recursive CDP and child route refusal diagnostics, unchanged request whitelist, finite privacy-safe counters and strict projection."
+    },
+    {
+      "path": "test/upstream-session-transition.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "4a289e61073cdba9c24fa55a0e2dc1d57fe0b10f34aebbeb57f8cade8b2c5878",
+      "changed": true,
+      "reason": "2026-10-19 Real isolated Chromium regressions for the frozen guest-homepage transition, verified-cookie empty-shell rejection, cancellation during pending reload and late completion, exact homepage and visible-challenge boundaries. 2026-10-19 Cover stale guest verdicts, late guest UI at both final reads and navigation during recovery with real isolated Chromium; retain the sixteen-test total and all cancellation, challenge, origin and budget rejection cases."
+    },
+    {
+      "path": "test/session-probe.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "reason": "2026-10-19 Offline original Session probe classification: incidental JSON profile wording, explicit challenge response, HTTP failures and unconditional page cleanup.",
+      "adaptedSha256": "543b66baff8e509542bc33019c4abc3bbe4a2dc005c0788e6d07768eeb6c600b"
+    },
+    {
+      "path": "test/login-evidence-browser.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "reason": "2026-10-19 Real isolated Chromium distinguishes ordinary conversation/composer quotations from actual verification pages, dialogs, controls and hidden residue; zero network requests.",
+      "adaptedSha256": "2d97ab72f0081c98f13d840eea16d67580f315d2833a7d29faeadbb616edf54a"
     }
   ],
   "dependencySecurityPatches": [

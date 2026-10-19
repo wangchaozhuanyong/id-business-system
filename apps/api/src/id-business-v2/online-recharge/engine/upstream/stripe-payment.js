@@ -212,13 +212,25 @@ async function prepareCheckoutCardSection(page, options = {}) {
         signal: options.signal
     });
     try {
+        budget.assert();
         const labels = page.getByText(/^Card number$/i);
         const count = await budget.run(labels.count());
         const visible = [];
+        const { elementRendered } = require('../checkout-form.cjs');
         for (let index = 0; index < count; index++) {
             budget.assert();
             const label = labels.nth(index);
-            if (await budget.run(label.evaluate(require('../checkout-form.cjs').elementRendered))) visible.push(label);
+            if (await budget.run(label.evaluate(elementRendered))) visible.push(label);
+        }
+        // Prefer accessible text. Some providers hide a physically rendered
+        // lazy-mount label from the accessibility tree; it remains a safe scroll
+        // target only when there is no accessible candidate and no ambiguity.
+        if (!visible.length) {
+            for (let index = 0; index < count; index++) {
+                budget.assert();
+                const label = labels.nth(index);
+                if (await budget.run(label.evaluate(elementRendered, { interaction: true }))) visible.push(label);
+            }
         }
         if (visible.length !== 1) return;
         budget.assert();

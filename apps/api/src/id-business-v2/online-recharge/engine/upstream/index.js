@@ -651,6 +651,7 @@ async function run(runOptions = {}) {
         const readPhaseLabels = { frame_scan: '页面扫描', candidate_handles: '候选控件获取', candidate_eligibility: '控件可交互性检查', value: '填写结果回读', control_read: '控件读取' };
         const numberCandidates = checkoutOpenDiagnostics?.candidateCounts?.find(item => item.field === 'number');
         const inspection = checkoutOpenDiagnostics?.inspection;
+        const loading = checkoutOpenDiagnostics?.loading;
         const rejectionLabels = { zero_geometry: '没有显示尺寸', hidden: '隐藏属性', inert: '禁止交互',
             aria_hidden: '辅助功能隐藏', display_none: '未显示', visibility_hidden: '可见性隐藏',
             opacity_zero: '完全透明', content_visibility_hidden: '内容隐藏', aria_disabled: '辅助功能禁用',
@@ -674,7 +675,9 @@ async function run(runOptions = {}) {
             interactionReasons ? `交互停止原因：${interactionReasons}` : '',
             inspection?.complete === false ? '控件读取未完成' : '',
             inspection?.framesFailed > 0 ? `读取失败页面数：${inspection.framesFailed}` : '',
-            inspection?.readPhase ? `读取阶段：${readPhaseLabels[inspection.readPhase]}` : ''
+            inspection?.readPhase ? `读取阶段：${readPhaseLabels[inspection.readPhase]}` : '',
+            loading?.reloadAttempts ? `原单恢复次数：${loading.reloadAttempts}` : '',
+            loading?.blockedWrites ? `受保护恢复拦截请求数：${loading.blockedWrites}` : ''
         ].filter(Boolean).join('；');
         const checkoutFailureMessage = checkoutOpenDiagnostics
             ? `原结账单已创建，${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}；已停止后续操作${diagnosticDetails ? `（${diagnosticDetails}）` : ''}`

@@ -1,0 +1,74 @@
+name: Online Checkout Initialization Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SESSION_ROUTING_HEADFUL: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify frozen finite contract and publication controls
+        run: |
+          python3 -B scripts/production-release/online-checkout-initialization-build.py --check
+          python3 -B scripts/production-release/online-checkout-initialization-release.test.py
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - name: Install frozen browser runtime and virtual display
+        run: |
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          node apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules/playwright/cli.js install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends xvfb xauth
+      - name: Run actual initialization regressions through all three launchers
+        run: |
+          set -euo pipefail
+          report_root="$GITHUB_WORKSPACE/.runtime/online-checkout-initialization-ci"
+          mkdir -p "$report_root"
+          for mode in native standalone pool; do
+            SESSION_ROUTING_BROWSER_MODE="$mode" xvfb-run -a node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/session-routing-browser.test.cjs | tee "$report_root/session-routing-$mode.tap"
+          done
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/checkout-card-preparation.test.cjs | tee "$report_root/card-preparation.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/login-evidence-browser.test.cjs | tee "$report_root/login-evidence-browser.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/session-probe.test.cjs | tee "$report_root/session-probe.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/upstream-session-transition.test.cjs | tee "$report_root/upstream-session-transition.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/auth-navigation.test.cjs | tee "$report_root/auth-navigation.tap"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-checkout-initialization-linux-${{ github.sha }}-${{ github.run_attempt }}
+          path: .runtime/online-checkout-initialization-ci/*.tap
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Reuse authenticated identical-tree Quality evidence and build the finite artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/production-release/online-checkout-initialization-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-checkout-initialization-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-checkout-initialization/online-checkout-initialization-artifact.tar.gz
+            .deploy/online-checkout-initialization/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

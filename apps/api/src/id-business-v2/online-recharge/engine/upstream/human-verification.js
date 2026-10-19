@@ -168,10 +168,13 @@ async function visibleVerificationDom(page) {
             return box.width > 4 && box.height > 4;
         };
         const text = [];
+        const ordinaryChat = '[data-message-author-role],[data-testid^="conversation-turn"],'
+            + '#prompt-textarea,[contenteditable="true"]';
         if (document.body) {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
             for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-                if (!node.nodeValue.trim() || !shown(node.parentElement, false)) continue;
+                if (!node.nodeValue.trim() || !shown(node.parentElement, false)
+                    || node.parentElement.closest(ordinaryChat)) continue;
                 const range = document.createRange();
                 range.selectNodeContents(node);
                 const box = range.getBoundingClientRect();
