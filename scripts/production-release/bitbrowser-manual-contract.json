@@ -102,8 +102,8 @@
   "businessActions": 0,
   "ciControlPins": {
     "scripts/ci-bitbrowser-manual-controls.mjs": "d778a69cde5e7c55521f109127921810dc65227528320f5257451e5e3ad887b4",
-    "scripts/ci-bitbrowser-manual-controls.test.mjs": "10c4809c6673bea5383408e45e1717178909442cc95ad6f4f82599b1009c9132",
-    "scripts/ci-recharge-check.mjs": "948de529536a9f98e6c12249441ac553ab06b07bd0a0850eb6211c7976e717c4",
+    "scripts/ci-bitbrowser-manual-controls.test.mjs": "c9258ea0d763796a32353b2c0c7d689a4767b0db3ea566580fb4706abba2339f",
+    "scripts/ci-recharge-check.mjs": "5f1edc7d9a1d850fd2797a11f0b15a881a7410c0c7907cd91ff4bc895d9d593a",
     "scripts/ci-recharge-scope.mjs": "aa3580038fe31c91d28c7cd5926568222cfc542c3e36c6f1b6b4d4d093de3de4"
   },
   "controlPins": {

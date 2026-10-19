@@ -51,7 +51,10 @@ test('test fixture alone requires API tests rather than a rebuilt unchanged ONLI
 
 test('finite publisher tests preserve source, payload, shared runtime and original activation guards', () => {
   const source = readFileSync('scripts/ci-recharge-check.mjs', 'utf8');
-  assert.match(source, /part === 'release-controls' && isManualSettlementCandidate\(changed\)/);
+  assert.match(
+    source,
+    /\['guards', 'release-controls'\]\.includes\(part\) && isManualSettlementCandidate\(changed\)/
+  );
   assert.match(source, /bitbrowser-manual-build\.py', '--check'/);
   assert.match(source, /bitbrowser-manual-release\.test\.py/);
   const scope = readFileSync('scripts/ci-recharge-scope.mjs', 'utf8');

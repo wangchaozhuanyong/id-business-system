@@ -204,7 +204,28 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
 // Business quality stays full. Only unchanged historical publishers are excluded
 // from this finite publisher's control step; the Python check verifies all frozen
 // source/control/CI hashes before the matching publication tests run.
-if (part === 'release-controls' && isManualSettlementCandidate(changed)) {
+if (['guards', 'release-controls'].includes(part) && isManualSettlementCandidate(changed)) {
+  if (part === 'guards') {
+    const files = changed.filter((name) => existsSync(name));
+    const formatted = files.filter((name) => /\.(?:[cm]?js|ts|vue|css|json|md|yml)$/.test(name));
+    const linted = files.filter((name) => /\.(?:mjs|ts|vue)$/.test(name));
+    if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
+    if (linted.length) npm('exec', '--', 'eslint', ...linted);
+    for (const name of [
+      'check:admin-ui',
+      'check:v2-ui-language',
+      'check:v2-color-contrast',
+      'check:v2-table-standard',
+      'check:v2-loading-standard',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-decimal-standard',
+      'check:v2-timezone-standard',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ])
+      npm('run', name);
+  }
   run('python3', ['-B', 'scripts/production-release/bitbrowser-manual-build.py', '--check']);
   run('node', [
     '--test',
