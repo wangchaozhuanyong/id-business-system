@@ -7578,3 +7578,71 @@ test('finite followup PR and same-tree main CLI emit both final check_parts entr
     }
   }
 });
+
+import {
+  isBitbrowserEntryStartControlsOnly as finiteEntryOnly,
+  bitbrowserEntryStartControlPaths as finiteEntryPaths,
+  bitbrowserEntryStartSourceReviewCommit as finiteEntryCommit,
+  bitbrowserEntryStartSourceReviewTree as finiteEntryTree
+} from './ci-recharge-scope.mjs';
+
+test('finite entry-start controls retain exactly ten controls and both real CLI matrix entries', () => {
+  const context = { base: finiteEntryCommit, baseTree: finiteEntryTree };
+  assert.equal(finiteEntryPaths.length, 10);
+  assert.equal(finiteEntryOnly(finiteEntryPaths, context), true);
+  assert.deepEqual(finiteBillingParts(finiteEntryPaths, undefined, context), [
+    'guards',
+    'release-controls'
+  ]);
+  for (const base of [finiteEntryCommit, 'b'.repeat(40)]) {
+    for (const eventName of ['pull_request', 'push']) {
+      const { result, writes } = recordScopeClassification(finiteEntryPaths, {}, eventName, {
+        base,
+        baseTree: finiteEntryTree
+      });
+      assert.equal(result.mode, 'ci-only');
+      assert.deepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(result.onlineCiBuild, false);
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+    }
+  }
+  for (const eventName of ['pull_request', 'push']) {
+    for (const { paths, baseTree } of [
+      { paths: finiteEntryPaths, baseTree: finiteFollowupTree },
+      { paths: finiteEntryPaths, baseTree: 'a'.repeat(40) },
+      ...finiteEntryPaths.map((missing) => ({
+        paths: finiteEntryPaths.filter((n) => n !== missing),
+        baseTree: finiteEntryTree
+      })),
+      ...[
+        'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+        'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts',
+        'scripts/production-release/bitbrowser-followup-contract.json',
+        'scripts/production-release/bitbrowser-history-contract.json',
+        'packages/shared/src/index.ts'
+      ].map((extra) => ({ paths: [...finiteEntryPaths, extra], baseTree: finiteEntryTree }))
+    ]) {
+      const { result, writes } = recordScopeClassification(paths, {}, eventName, {
+        base: 'b'.repeat(40),
+        baseTree
+      });
+      assert.equal(result.mode, 'full');
+      assert.notDeepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        ),
+        false
+      );
+    }
+  }
+  assert.equal(finiteEntryOnly(finiteEntryPaths, { ...context, base: 'main' }), false);
+  assert.equal(
+    finiteEntryOnly([...finiteEntryPaths.slice(1), finiteEntryPaths[1]], context),
+    false
+  );
+});

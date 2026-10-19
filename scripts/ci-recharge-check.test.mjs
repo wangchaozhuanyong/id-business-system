@@ -3363,3 +3363,60 @@ test('finite followup control runner requires frozen inputs and propagates every
     }
   }
 });
+
+import {
+  bitbrowserEntryStartControlPaths,
+  bitbrowserEntryStartSourceReviewCommit,
+  bitbrowserEntryStartSourceReviewTree
+} from './ci-recharge-scope.mjs';
+
+test('finite entry-start runner executes both closed control commands and retains failure propagation', () => {
+  const options = {
+    base: bitbrowserEntryStartSourceReviewCommit,
+    baseTree: bitbrowserEntryStartSourceReviewTree
+  };
+  const commands = [
+    ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/bitbrowser-history-build.py',
+      '--recipe',
+      'entry-start-20261019',
+      '--check'
+    ]
+  ];
+  assert.deepEqual(
+    recordGuardCommands('ci-only', bitbrowserEntryStartControlPaths, 'release-controls', options),
+    [...commands, ['process-exit', 0]]
+  );
+  const guards = recordGuardCommands(
+    'ci-only',
+    bitbrowserEntryStartControlPaths,
+    'guards',
+    options
+  );
+  for (const name of [
+    'format:check',
+    'lint',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-concurrency-standard',
+    'check:v2-prisma-runtime-boundary'
+  ])
+    assert.ok(guards.some((row) => row.join(' ') === 'npm run ' + name));
+  for (const command of commands)
+    assert.throws(
+      () =>
+        recordGuardCommands('ci-only', bitbrowserEntryStartControlPaths, 'release-controls', {
+          ...options,
+          failCommand: command.join(' ')
+        }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
+  for (const part of ['api', 'admin', 'migration', 'online-engine'])
+    assert.throws(
+      () => recordGuardCommands('ci-only', bitbrowserEntryStartControlPaths, part, options),
+      /Unsupported finite BitBrowser entry-start control check/
+    );
+});
