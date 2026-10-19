@@ -99,9 +99,14 @@ class FencedRecovery(unittest.TestCase):
             def legacy(driver, helper, *_args):
                 return helper.engine_idle(driver, snapshot()['online-recharge'], c, wait_connected=True)
             error = None; value = None
+            def stop(_driver, candidate):
+                self.assertEqual(candidate['containerId'], expected['containerId'])
+                self.assertEqual(candidate['image'], expected['image'])
+                self.assertIn('startedAtSha256', candidate)
+                trace.append('stop'); return 'STOPPED'
             with patch.object(p, 'BASE', base), patch.object(p, 'load', return_value=original), \
                 patch.object(p.LEGACY, 'verify_runtime', side_effect=legacy), \
-                patch.object(p, 'quiet_candidate', side_effect=lambda *_args: trace.append('stop')):
+                patch.object(p, 'quiet_candidate', side_effect=stop):
                 try: value = p.resume_failed_selection(plan, c, control, expected)
                 except Exception as caught: error = caught
             return SimpleNamespace(value=value, error=error, trace=trace,

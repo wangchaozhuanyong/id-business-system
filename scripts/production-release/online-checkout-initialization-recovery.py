@@ -99,6 +99,7 @@ def resume_failed_selection(plan, c, control, expected):
                 'expected': expected, 'businessActions': 0}, output, sort_keys=True)
         fence = p.sql_fence_class(c)(d, Path(c['baseline']['current']))
         started = False
+        candidate = None
         run = d.run
         cleanup = False
         def bounded_run(*args, **kwargs):
@@ -117,6 +118,7 @@ def resume_failed_selection(plan, c, control, expected):
                 after = h.snapshot(d, target)
                 need(after['online-recharge']['containerId'] == expected['containerId']
                     and after['online-recharge']['image'] == image, 'RECOVERY_SERVICE_CHANGED')
+                candidate = after['online-recharge']
                 if after['online-recharge']['health'] == 'healthy': break
                 need(after['online-recharge']['status'] == 'running' and time.monotonic() < deadline, 'RECOVERY_NOT_HEALTHY')
                 time.sleep(1)
@@ -131,7 +133,12 @@ def resume_failed_selection(plan, c, control, expected):
             cleanup = True
             quiet = 'NOT_STARTED'
             try:
-                if started: quiet = quiet_candidate(d, {'containerId': expected['containerId'], 'image': image})
+                if started:
+                    if candidate is None:
+                        candidate = h.snapshot(d, target)['online-recharge']
+                    need(candidate['containerId'] == expected['containerId'] and candidate['image'] == image,
+                        'RECOVERY_SERVICE_CHANGED')
+                    quiet = quiet_candidate(d, candidate)
             except Exception:
                 quiet = 'UNCONFIRMED'
             manifest['status'] = 'SWITCH_FAILED'
