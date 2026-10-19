@@ -1136,6 +1136,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return false;
@@ -2095,6 +2096,55 @@ export function bitbrowserBoundedHoldNativeDeclarationsCommands(part) {
   return bitbrowserBoundedHoldMysqlRepairCommands(part);
 }
 
+export const bitbrowserBoundedHoldSelectedNativeStatus = 'FROZEN_SELECTED_NATIVE';
+export const bitbrowserBoundedHoldSelectedNativeBase = '049117ef8d585d621aed655ea1b32c9a2aff6fd0';
+export const bitbrowserBoundedHoldSelectedNativeTree = 'd9c39abbe557922d86c4c6f1e39d4576ffe5ceb4';
+const bitbrowserBoundedHoldSelectedNativeScripts = Object.freeze(
+  ['build.py', 'release.py', 'release.test.py'].map(
+    (name) => `scripts/production-release/bitbrowser-history-${name}`
+  )
+);
+export const bitbrowserBoundedHoldSelectedNativePaths = Object.freeze([
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  ),
+  ...bitbrowserBoundedHoldSelectedNativeScripts,
+  bitbrowserBoundedHoldControlContract
+]);
+export function bitbrowserBoundedHoldSelectedNativeShape(paths) {
+  return (
+    paths.length === bitbrowserBoundedHoldSelectedNativePaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((name) => bitbrowserBoundedHoldSelectedNativePaths.includes(name))
+  );
+}
+export function bitbrowserBoundedHoldSelectedNativeCandidate(paths) {
+  return (
+    bitbrowserBoundedHoldSelectedNativeScripts.every((name) => paths.includes(name)) &&
+    paths.every((name) => bitbrowserBoundedHoldSelectedNativePaths.includes(name))
+  );
+}
+export function matchBitbrowserBoundedHoldSelectedNative(paths, context, status) {
+  return (
+    status === 'FROZEN_SELECTED_NATIVE' &&
+    context?.base === bitbrowserBoundedHoldSelectedNativeBase &&
+    context?.baseTree === bitbrowserBoundedHoldSelectedNativeTree &&
+    bitbrowserBoundedHoldSelectedNativeShape(paths)
+  );
+}
+export function isBitbrowserBoundedHoldSelectedNativeOnly(paths, context) {
+  return matchBitbrowserBoundedHoldSelectedNative(
+    paths,
+    context,
+    bitbrowserBoundedHoldSelectedNativeStatus
+  );
+}
+export function bitbrowserBoundedHoldSelectedNativeCommands(part) {
+  if (!['guards', 'release-controls'].includes(part))
+    throw new Error('Unsupported finite BitBrowser selected-native control check');
+  return bitbrowserBoundedHoldMysqlRepairCommands(part);
+}
+
 // Only this reviewed source path set is admitted; source hashes remain bound by QA.
 // It never admits a directory wildcard or a schema/migration change.
 export const bitbrowserBoundedHoldSourceStatus = 'FROZEN_SOURCE_PATHS';
@@ -2211,6 +2261,7 @@ export function bitbrowserBoundedHoldCheckCommands(part, paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context)) return true;
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context)) return true;
   if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return true;
   if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return true;
@@ -2376,6 +2427,11 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (bitbrowserBoundedHoldSelectedNativeShape(paths))
+    return isBitbrowserBoundedHoldSelectedNativeOnly(paths, context) &&
+      bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema)
+      ? 'ci-only'
+      : 'full';
   if (bitbrowserBoundedHoldNativeDeclarationsShape(paths))
     return isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context) &&
       bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema)
@@ -2390,6 +2446,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
     return bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema) ? 'ci-only' : 'full';
   if (isBitbrowserBoundedHoldSourceOnly(paths, context))
     return bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (bitbrowserBoundedHoldSelectedNativeCandidate(paths)) return 'full';
   if (bitbrowserBoundedHoldNativeDeclarationsCandidate(paths)) return 'full';
   if (hasBitbrowserBoundedHoldMysqlRepairScope(paths)) return 'full';
   if (isBitbrowserExistingAddressControlsOnly(paths, context))
@@ -2935,6 +2992,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context))
+    return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context))
     return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return ['guards', 'release-controls'];
@@ -5815,6 +5874,7 @@ async function main() {
     (bitbrowserBoundedHoldSourceShape(paths) ||
       bitbrowserBoundedHoldControlsShape(paths) ||
       bitbrowserBoundedHoldMysqlRepairShape(paths) ||
+      bitbrowserBoundedHoldSelectedNativeCandidate(paths) ||
       bitbrowserBoundedHoldNativeDeclarationsCandidate(paths) ||
       hasBitbrowserBoundedHoldMysqlRepairScope(paths))
       ? [...parts]
@@ -5823,6 +5883,7 @@ async function main() {
             isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserEntryStartControlsOnly(paths, proxyIdentityContext) ||
+            isBitbrowserBoundedHoldSelectedNativeOnly(paths, proxyIdentityContext) ||
             isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, proxyIdentityContext) ||
             isBitbrowserBoundedHoldMysqlRepairOnly(paths, proxyIdentityContext) ||
             isBitbrowserBoundedHoldControlsOnly(paths, proxyIdentityContext) ||

@@ -90,6 +90,19 @@ BOUNDED_PROOF = 'e284ca254334424c8bfeca2ca07da5df75eb0740468fcea4ddc970b7b4b83bb
 ADDRESS_CONTRACT_SHA = '61b090c8ac0b83ce13f713a62804666c92c22304fe4ea9442b6ccc29b441803c'
 BOUNDED_ADMIN_IMAGE = 'sha256:5546f18f4f37b3343f9fddc9d07cba0724dd2a4f79ba8eb7ae76cb7706575631'
 BOUNDED_API_INVENTORY = {'count': 1761, 'sha256': '4d1d653397205ae7e28c4c5cd7c6e2e18ff2a8104a0827e9940d53198638c891'}
+BOUNDED_NATIVE_DECLARATIONS = {
+    'id-business-v2/auto-recharge/recharge-callback-receipts.d.ts': {
+        'local': '5a22ca4954c575175031d33dba46e8c623d4891fd341f29478384e1fc3b3351e',
+        'native': '4bb65eaae6f13d587b755c9a83689ad310e279a2b37609943582ccdb9f75134d'},
+    'id-business-v2/auto-recharge/recharge-card-billing.d.ts': {
+        'local': '116316a06bda3daa8b087193434a78fd810c2922ad03713e488343f2010b2f5a',
+        'native': 'b83d073a0868a7a7c11a9b55d33e2dbd5a8d3068887e420a4d06058f0022275a'},
+    'id-business-v2/auto-recharge/recharge-name.service.d.ts': {
+        'local': '69dbe7ac23ba53575c069461da385ed2308a5eefa5b335584f23a7ec4b3a0603',
+        'native': '94e6d3590aee68059ac95c27c2c457867f45f89420f6bd05f7e5c104c2f35bdd'},
+    'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts': {
+        'local': '2f90de58b8d67271e1ac79bc528f71262eeb492c276a6982310754585005fabd',
+        'native': 'af6b1f075a7a8ffd43580f0a3bea989d461a28b1dd6a15a43d95e8fa710c1265'}}
 BOUNDED_APPLICATION = frozenset(('apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue', 'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.spec.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.spec.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts', 'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts', 'apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-payment-hold.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-terminal-failure.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-capacity.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-hold.ts', 'apps/api/src/id-business-v2/bank-card-pool/public-api.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-capacity.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-management.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-recovery.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-settlement.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.card-capacity.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'))
 BOUNDED_PRODUCTION = frozenset(('apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue', 'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts', 'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts', 'apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-terminal-failure.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-capacity.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-hold.ts', 'apps/api/src/id-business-v2/bank-card-pool/public-api.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'))
 BOUNDED_MODULES = frozenset(('id-business-v2/auto-recharge/bank-recharge-card.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-card.service.js', 'id-business-v2/auto-recharge/bank-recharge-card.service.js.map', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js.map', 'id-business-v2/auto-recharge/persistence/recharge.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge.repository.js', 'id-business-v2/auto-recharge/persistence/recharge.repository.js.map', 'id-business-v2/auto-recharge/recharge-callback-lease.d.ts', 'id-business-v2/auto-recharge/recharge-callback-lease.js', 'id-business-v2/auto-recharge/recharge-callback-lease.js.map', 'id-business-v2/auto-recharge/recharge-callback-receipts.d.ts', 'id-business-v2/auto-recharge/recharge-callback-receipts.js', 'id-business-v2/auto-recharge/recharge-callback-receipts.js.map', 'id-business-v2/auto-recharge/recharge-card-billing.d.ts', 'id-business-v2/auto-recharge/recharge-card-billing.js', 'id-business-v2/auto-recharge/recharge-card-billing.js.map', 'id-business-v2/auto-recharge/recharge-declined-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-declined-resolution.js', 'id-business-v2/auto-recharge/recharge-declined-resolution.js.map', 'id-business-v2/auto-recharge/recharge-direct-payment.d.ts', 'id-business-v2/auto-recharge/recharge-direct-payment.js', 'id-business-v2/auto-recharge/recharge-direct-payment.js.map', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js.map', 'id-business-v2/auto-recharge/recharge-local.service.js', 'id-business-v2/auto-recharge/recharge-local.service.js.map', 'id-business-v2/auto-recharge/recharge-name.service.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js.map', 'id-business-v2/auto-recharge/recharge-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-resolution.js', 'id-business-v2/auto-recharge/recharge-resolution.js.map', 'id-business-v2/auto-recharge/recharge-retired-callback.js', 'id-business-v2/auto-recharge/recharge-retired-callback.js.map', 'id-business-v2/auto-recharge/recharge-terminal-failure.d.ts', 'id-business-v2/auto-recharge/recharge-terminal-failure.js', 'id-business-v2/auto-recharge/recharge-terminal-failure.js.map', 'id-business-v2/auto-recharge/recharge.service.js', 'id-business-v2/auto-recharge/recharge.service.js.map', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js.map', 'id-business-v2/bank-card-pool/public-api.d.ts', 'id-business-v2/bank-card-pool/public-api.js', 'id-business-v2/bank-card-pool/public-api.js.map', 'id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts', 'id-business-v2/online-recharge/persistence/worker.repository.js', 'id-business-v2/online-recharge/persistence/worker.repository.js.map'))
@@ -299,6 +312,32 @@ def reviewed_current_digest(c, name, digest):
     return digest
 
 
+def native_selected_declaration_evidence():
+    return {'workflowRunId': '39222086690', 'workflowRunAttempt': '1',
+        'parentCommit': BOUNDED_CURRENT, 'parentApiImage': ADDRESS_API_IMAGE,
+        'apiInventory': BOUNDED_API_INVENTORY,
+        'parentInvocationSha256': 'a45721ff68a2e04bafe71cd454ebb8057fdf37f94a61b5cdbee0fa41bb15bee6',
+        'parentReportSha256': 'da45cd5c97bf08872a35b7241d37dd0ea4125418cb3481df9ccc8e27b7afe4d5',
+        'differences': copy.deepcopy(BOUNDED_NATIVE_DECLARATIONS)}
+
+
+def verify_bounded_local_native(c):
+    local, native = c.get('localCompiledBefore'), c.get('baseline', {}).get('apiModules')
+    need(inventory(local) and inventory(native) and len(local) == len(native) == 42 and set(local) == set(native)
+        and set(BOUNDED_NATIVE_DECLARATIONS) <= set(native) <= MODULES
+        and {n for n in native if local[n] != native[n]} == set(BOUNDED_NATIVE_DECLARATIONS)
+        and all(local[n] == pair['local'] and native[n] == pair['native']
+            for n, pair in BOUNDED_NATIVE_DECLARATIONS.items())
+        and c.get('nativeSelectedDeclarationEvidence') == native_selected_declaration_evidence(),
+        'BOUNDED_LOCAL_NATIVE_BASELINE_INVALID')
+
+
+def reproduced_baseline(c):
+    # The compiler reproduces local declaration bytes. Parent capture separately
+    # authenticates native bytes; hydration must never replace this local proof.
+    return c['localCompiledBefore'] if RECIPE == BOUNDED else c['baseline']['apiModules']
+
+
 def validate_bounded_contract(c):
     allowed = {n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
         for n in API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')} | BOUNDED_PROPAGATED
@@ -337,6 +376,7 @@ def validate_bounded_contract(c):
         and c.get('parentVerifiedBaseline', {}).get('commit') == ADDRESS_CURRENT
         and re.fullmatch('[a-f0-9]{64}', c.get('parentVerifiedSealSha256', '')),
         'BOUNDED_BASELINE_INVALID')
+    verify_bounded_local_native(c)
     repair = c.get('mysqlTestInputRepair')
     need(c['sources'].get(MYSQL_REPAIR_PATH) == MYSQL_REPAIR_OLD_SHA
         and (repair == mysql_test_input_repair() and c['mysqlTestSources'][MYSQL_REPAIR_PATH] == MYSQL_REPAIR_NEW_SHA
@@ -556,7 +596,7 @@ def verify_proof(proof, plan, c, payload, h):
     need(all(proof.get(n) == plan.get(n) for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt',
         'contractSha256', 'qualityVerification', 'isolatedMysqlVerification'))
         and proof.get('version') == 1 and proof.get('scope') == SCOPE and proof.get('sources') == c['sources']
-        and proof.get('controlSources') == c['controlPins'] and proof.get('baselineModulesReproduced') == c['baseline']['apiModules']
+        and proof.get('controlSources') == c['controlPins'] and proof.get('baselineModulesReproduced') == reproduced_baseline(c)
         and proof.get('predecessorProofSha256') == PREDECESSOR_PROOF
         and proof.get('baselineSharedUnchanged') is True and proof.get('migrationPerformed') is False
         and proof.get('businessActions') == 0 and proof.get('updatedServices') == list(UPDATED)

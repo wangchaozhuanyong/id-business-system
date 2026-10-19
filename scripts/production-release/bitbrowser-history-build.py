@@ -676,7 +676,7 @@ def bounded_overlay(context, sources, source, p):
 
 def verify_bounded_delta(before, after, shared_before, shared_after, c, p):
     selected = set(c['apiModules'])
-    baseline = c['baseline']['apiModules']
+    baseline = c['localCompiledBefore']
     absent = set(c['absentApiModules'])
     p.need(selected == set(baseline) | absent and not set(baseline) & absent
         and {n: before.get(n) for n in baseline} == baseline
@@ -710,6 +710,24 @@ def bounded_freeze(parent_dir, source, delta_path):
         'BOUNDED_LOCAL_DELTA_INVALID')
     selected = p.BOUNDED_MODULES
     p.need(set(delta['apiModules']) == selected | p.BOUNDED_ORDER_ONLY, 'BOUNDED_LOCAL_DELTA_INVALID')
+    local_before = {n: v for n, v in delta['baselineModules'].items() if n in selected}
+    native_before = {**local_before, **{n: pair['native'] for n, pair in p.BOUNDED_NATIVE_DECLARATIONS.items()}}
+    # Freeze only from the already authenticated, failed parent receipt. The
+    # next capture still re-authenticates all 1761 files and all 42 native hashes.
+    evidence = p.native_selected_declaration_evidence()
+    receipt_path = ROOT / ('.runtime/real-payment-acceptance-20261019/bounded-hold-20261019/native-'
+        + evidence['workflowRunId'] + '/parent/parent-invocation.json')
+    receipt_raw = receipt_path.read_bytes(); receipt = json.loads(receipt_raw)
+    report = json.loads(receipt['StandardOutputContent'])
+    p.need(p.sha(receipt_raw) == evidence['parentInvocationSha256']
+        and p.sha(p.canonical(report)) == evidence['parentReportSha256']
+        and receipt['Status'] == 'Failed' and receipt['ResponseCode'] == 1
+        and report['status'] == 'FAILED' and report['mode'] == 'parent'
+        and report['code'] == 'BITBROWSER_HISTORY_BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH'
+        and report['apiInventory'] == p.BOUNDED_API_INVENTORY
+        and report['databaseWrites'] == report['businessActions'] == 0
+        and report['selectedBefore'] == {n: {'expected': local_before[n], 'actual': native_before[n]} for n in local_before},
+        'BOUNDED_NATIVE_DECLARATION_EVIDENCE_CHANGED')
     c = {'version': 1, 'status': 'FROZEN', 'recipe': p.BOUNDED, 'scope': p.SCOPE,
         'expectedCurrent': p.CURRENT, 'reviewBase': p.CURRENT, 'sourceReviewCommit': source,
         'sourceReviewTree': git('rev-parse', source + '^{tree}').decode().strip(),
@@ -730,7 +748,8 @@ def bounded_freeze(parent_dir, source, delta_path):
         'parentVerifiedBaseline': preflight['runtimeBaseline']['verifiedBaseline'],
         'parentVerifiedSealSha256': preflight['runtimeBaseline']['entryParentSealSha256'],
         'sqlFenceHelperSha256': p.sha((HERE / 'api-admin-scope.py').read_bytes()),
-        'baseline': {'commit': p.CURRENT, 'apiModules': {n: v for n, v in delta['baselineModules'].items() if n in selected}},
+        'baseline': {'commit': p.CURRENT, 'apiModules': native_before},
+        'localCompiledBefore': local_before, 'nativeSelectedDeclarationEvidence': evidence,
         'declarationOrderOnly': {n: {'before': delta['baselineModules'][n], 'after': delta['candidateModules'][n]}
             for n in sorted(p.BOUNDED_ORDER_ONLY)},
         'parentNative': {'commit': p.CURRENT, 'tree': p.BOUNDED_TREE, 'proofSha256': p.BOUNDED_PROOF,
@@ -826,7 +845,8 @@ def bounded_main(c):
                 h.file_inventory(context / 'packages/shared/dist'))
     verify_bounded_delta(*[outputs['api-' + v][0] for v in ('baseline', 'candidate')],
         *[outputs['api-' + v][1] for v in ('baseline', 'candidate')], c, p)
-    p.need(capture['apiModules'] == {n: outputs['api-baseline'][0][n] for n in c['baseline']['apiModules']},
+    p.need(capture['apiModules'] == c['baseline']['apiModules']
+        and {n: outputs['api-baseline'][0][n] for n in c['localCompiledBefore']} == c['localCompiledBefore'],
         'BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH')
     verify_followup_admin(outputs['admin-baseline'][0], outputs['admin-baseline'][1], outputs['admin-candidate'][1], c, p)
     payload = OUT / 'payload'
@@ -845,7 +865,7 @@ def bounded_main(c):
         'adminFiles': h.file_inventory(payload / 'admin/html'), 'baselineAdminReproduced': True,
         'baselineAdminFiles': c['publishedAdminFiles'], 'files': h.file_inventory(payload), 'qualityVerification': qa,
         'isolatedMysqlVerification': mysql_evidence, 'nativeParentCapture': capture,
-        'baselineModulesReproduced': c['baseline']['apiModules'], 'predecessorProofSha256': p.BOUNDED_PROOF,
+        'baselineModulesReproduced': c['localCompiledBefore'], 'predecessorProofSha256': p.BOUNDED_PROOF,
         'baselineSharedUnchanged': True, 'updatedServices': list(p.UPDATED), 'migrationPerformed': False, 'businessActions': 0}
     if c.get('mysqlTestInputRepair'):
         proof['mysqlTestInputRepair'] = c['mysqlTestInputRepair']
