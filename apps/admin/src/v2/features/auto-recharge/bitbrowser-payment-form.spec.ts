@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { V2RechargeDetails } from './contracts';
 import type { DirectPaymentFrame, DirectPaymentSession } from './bitbrowser-payment-session';
-import { fillDirectPaymentForm, verifyDirectPaymentForm } from './bitbrowser-payment-form';
+import {
+  directPaymentFieldOperation,
+  fillDirectPaymentForm,
+  verifyDirectPaymentForm
+} from './bitbrowser-payment-form';
 
 class Input {
   private current = '';
@@ -275,6 +279,164 @@ describe('网页直连官方支付表单', () => {
     expect(f.fields.line1.autocomplete).toBe('disabled');
     f.fields.line1.value = 'Changed Street';
     await expect(verifyDirectPaymentForm(f.session, details, Date.now() + 5)).rejects.toThrow();
+  });
+
+  it('重入已有原单时重新填写唯一精确同值的 disabled-autocomplete 街道并触发计税事件', async () => {
+    const f = fixture();
+    f.fields.line1.afterBlur = () => {
+      f.fields.line1.autocomplete = 'disabled';
+    };
+    await fillDirectPaymentForm(f.session, details, Date.now() + 1000);
+    expect(f.fields.line1.autocomplete).toBe('disabled');
+    await expect(fillDirectPaymentForm(f.session, details, Date.now() + 1000)).resolves.toEqual({
+      state: details.state
+    });
+    expect(f.fields.line1.writes).toBe(2);
+    expect(f.fields.line1.events).toEqual(['input', 'change', 'input', 'change']);
+    expect(f.fields.number.writes).toBe(2);
+    expect(f.fields.city.writes).toBe(2);
+  });
+
+  it.each(['value-changed', 'duplicate', 'readOnly', 'disabled', 'hidden'])(
+    'disabled-autocomplete 街道填写前重核变化时拒绝：%s',
+    async (change) => {
+      const f = fixture();
+      f.fields.line1.autocomplete = 'disabled';
+      f.fields.line1.value = details.line1;
+      f.fields.line1.writes = 0;
+      const evaluate = f.root.evaluate.getMockImplementation()!;
+      let expectedWrites = 0;
+      f.root.evaluate.mockImplementation(async (expression) => {
+        if (expression.includes('"mode":"fill"') && expression.includes('"field":"line1"')) {
+          if (change === 'value-changed') {
+            f.fields.line1.value = 'Other Existing Street';
+            expectedWrites = f.fields.line1.writes;
+          }
+          if (change === 'duplicate') f.billingNodes.push(new Input('disabled', details.line1));
+          if (change === 'readOnly') f.fields.line1.readOnly = true;
+          if (change === 'disabled') f.fields.line1.disabled = true;
+          if (change === 'hidden') f.fields.line1.hidden = true;
+        }
+        return evaluate(expression);
+      });
+      await expect(fillDirectPaymentForm(f.session, details, Date.now() + 1000)).rejects.toThrow(
+        'payment_form_changed'
+      );
+      expect(f.fields.line1.writes).toBe(expectedWrites);
+      expect(f.fields.line1.events).toEqual([]);
+      if (change === 'value-changed') expect(f.fields.line1.value).toBe('Other Existing Street');
+    }
+  );
+
+  it.each(['unmatched', 'duplicate'])('不猜选现有 disabled-autocomplete 街道：%s', async (kind) => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.fields.line1.autocomplete = 'disabled';
+    f.fields.line1.value = kind === 'unmatched' ? 'Other Street' : details.line1;
+    f.fields.line1.writes = 0;
+    if (kind === 'duplicate') f.billingNodes.push(new Input('disabled', details.line1));
+    const pending = expect(
+      fillDirectPaymentForm(f.session, details, Date.now() + 50)
+    ).rejects.toThrow('official_payment_field_not_ready');
+    await vi.advanceTimersByTimeAsync(51);
+    await pending;
+    expect(f.fields.line1.writes).toBe(0);
+    expect(f.fields.line1.events).toEqual([]);
+  });
+
+  it.each(['empty', 'duplicate'])(
+    '页面内填写重核也拒绝非唯一或空值的 disabled-autocomplete 备用选择：%s',
+    async (kind) => {
+      const f = fixture();
+      f.fields.line1.autocomplete = 'disabled';
+      f.fields.line1.value = kind === 'empty' ? '' : details.line1;
+      f.fields.line1.writes = 0;
+      if (kind === 'duplicate') f.billingNodes.push(new Input('disabled', details.line1));
+      const operation = {
+        mode: 'fill',
+        field: 'line1',
+        value: kind === 'empty' ? '' : details.line1,
+        index: 0,
+        expectedCount: kind === 'empty' ? 1 : 2,
+        deadline: Date.now() + 1000
+      };
+      await expect(
+        f.root.evaluate(`(${directPaymentFieldOperation.toString()})(${JSON.stringify(operation)})`)
+      ).resolves.toEqual({ ok: false, nodes: [] });
+      expect(f.fields.line1.writes).toBe(0);
+      expect(f.fields.line1.events).toEqual([]);
+    }
+  );
+
+  it('disabled-autocomplete 备用街道仅在已选账单 frame 填写，其他官网 frame 的同值仍拒绝通过', async () => {
+    const f = fixture();
+    f.fields.line1.autocomplete = 'disabled';
+    f.fields.line1.value = details.line1;
+    f.fields.line1.writes = 0;
+    const outsideStreet = new Input('disabled', details.line1);
+    f.frames.push(
+      frame('outside-billing', 'https://chatgpt.com/checkout/openai_llc/oaics_synthetic', [
+        outsideStreet
+      ])
+    );
+    await expect(fillDirectPaymentForm(f.session, details, Date.now() + 1000)).rejects.toThrow(
+      'billing_fields_changed'
+    );
+    expect(f.fields.line1.writes).toBe(1);
+    expect(outsideStreet.writes).toBe(0);
+    expect(outsideStreet.events).toEqual([]);
+  });
+
+  it('备用街道 inspect 后 frame 已导航外站，fill 页面内重核拒绝', async () => {
+    const f = fixture();
+    f.fields.line1.autocomplete = 'disabled';
+    f.fields.line1.value = details.line1;
+    f.fields.line1.writes = 0;
+    const moved = frame(
+      'moved-billing',
+      f.root.url,
+      f.billingNodes,
+      'https://other.example.invalid/'
+    );
+    const evaluate = f.root.evaluate.getMockImplementation()!;
+    f.root.evaluate.mockImplementation(async (expression) =>
+      expression.includes('"mode":"fill"') && expression.includes('"field":"line1"')
+        ? moved.evaluate(expression)
+        : evaluate(expression)
+    );
+    await expect(fillDirectPaymentForm(f.session, details, Date.now() + 1000)).rejects.toThrow(
+      'payment_form_changed'
+    );
+    expect(f.fields.line1.writes).toBe(0);
+    expect(f.fields.line1.events).toEqual([]);
+  });
+
+  it('备用街道填写命令迟到超过截止时间后不能写入', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.fields.line1.autocomplete = 'disabled';
+    f.fields.line1.value = details.line1;
+    f.fields.line1.writes = 0;
+    const evaluate = f.root.evaluate.getMockImplementation()!;
+    let finish: (() => void) | undefined;
+    f.root.evaluate.mockImplementation(async (expression) => {
+      if (expression.includes('"mode":"fill"') && expression.includes('"field":"line1"'))
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      return evaluate(expression);
+    });
+    const pending = expect(
+      fillDirectPaymentForm(f.session, details, Date.now() + 100)
+    ).rejects.toThrow('official_payment_field_not_ready');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(finish).toBeTypeOf('function');
+    await vi.advanceTimersByTimeAsync(100);
+    await pending;
+    finish!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.fields.line1.writes).toBe(0);
+    expect(f.fields.line1.events).toEqual([]);
   });
 
   it('官网未索取邮箱及空的可选地址行和州时不虚构字段', async () => {

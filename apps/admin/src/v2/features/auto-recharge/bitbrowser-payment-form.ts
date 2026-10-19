@@ -116,11 +116,12 @@ export function directPaymentFieldOperation(operation: Operation): DocumentResul
   let nodes = Array.from(
     document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(selectors[field])
   ).filter(visible);
-  // Street autocomplete can change its autocomplete attribute after blur; inspect only an exact existing value.
-  if (!nodes.length && field === 'line1' && operation.mode === 'inspect') {
-    nodes = Array.from(
+  // Blur can change street autocomplete; inspect and fill recheck the same unique, exact existing value.
+  if (!nodes.length && field === 'line1' && expected.trim()) {
+    const existing = Array.from(
       document.querySelectorAll<HTMLInputElement>('input[autocomplete="disabled"]')
     ).filter((node) => visible(node) && valueMatches(node.value));
+    if (existing.length === 1) nodes = existing;
   }
   const states = nodes.map((node, index) => {
     const select = node instanceof HTMLSelectElement;
