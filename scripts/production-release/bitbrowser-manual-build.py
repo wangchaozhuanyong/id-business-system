@@ -77,6 +77,14 @@ def source_receipt(run, pr, identity, c, p):
         'sourceEvidenceArtifactId': artifact['id'], 'sourceEvidenceSha256': p.sha(raw)}
 
 
+def verify_manual_mysql_log(log, p):
+    text = re.sub(r'(?:\x1b|\^\[)\[[0-9;]*m', '', log.decode())
+    manual = [line for line in text.splitlines() if '\tVerify financial integrity on disposable MySQL\t' in line
+        and '✓ src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts (5 tests)' in line]
+    p.need(len(manual) == 1 and 'skipped' not in manual[0]
+        and 'Verify rollback, deletion and restore integrity on MySQL' in text, 'MANUAL_MYSQL_NOT_PASSED')
+
+
 def quality(c, p, identity):
     prs = [pr for pr in github('commits/' + identity['commit'] + '/pulls')
         if pr.get('merged_at') and pr.get('merge_commit_sha') == identity['commit'] and pr['base']['ref'] == 'main']
@@ -104,11 +112,7 @@ def quality(c, p, identity):
     # match the frozen review; publisher/CI-only commits do not relabel that review.
     source_run = out['sources']['runId']
     log = subprocess.check_output(['gh', 'run', 'view', source_run, '--log', '--repo', 'wangchaozhuanyong/id-business-system'], cwd=ROOT)
-    text = re.sub(r'\x1b\[[0-9;]*m', '', log.decode())
-    manual = [line for line in text.splitlines() if '\tVerify financial integrity on disposable MySQL\t' in line
-        and '✓ src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts (5 tests)' in line]
-    p.need(len(manual) == 1 and 'skipped' not in manual[0]
-        and 'Verify rollback, deletion and restore integrity on MySQL' in text, 'MANUAL_MYSQL_NOT_PASSED')
+    verify_manual_mysql_log(log, p)
     mysql = {'sourceCommit': p.SOURCE, 'testedCommit': producer, 'runId': source_run, 'manualTestsPassed': 4,
         'manualTestsSkipped': 0, 'financialStepPassed': True, 'rollbackStepPassed': True, 'nativeLogSha256': p.sha(log)}
     p.verify_mysql(mysql, {**identity, 'qualityVerification': out}, c)

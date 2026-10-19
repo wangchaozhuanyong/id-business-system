@@ -68,6 +68,21 @@ class ManualReleaseTests(unittest.TestCase):
         rows[-1]['conclusion'] = 'success'
         b.require_quality_jobs(rows, source=True, p=p)
 
+    def test_native_mysql_log_accepts_real_and_cli_escaped_colors_but_not_skips(self):
+        b = p.load('bitbrowser-manual-build.py')
+        prefix = 'full-quality\tVerify financial integrity on disposable MySQL\t2026-10-19T00:00:00Z '
+        body = '✓ src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts (5 tests)'
+        suffix = '\nfull-quality\tVerify rollback, deletion and restore integrity on MySQL\tdone'
+        for start, end in [('', ''), ('\x1b[32m', '\x1b[39m'), ('^[[32m', '^[[39m')]:
+            colored = body.replace('✓', start + '✓' + end).replace('(5 tests)', start + '(' + end + start + '5 tests' + end + start + ')' + end)
+            b.verify_manual_mysql_log((prefix + colored + suffix).encode(), p)
+        for invalid in [prefix.replace('Verify financial integrity on disposable MySQL', 'Test') + body + suffix,
+            prefix + body.replace('(5 tests)', '(5 tests | 4 skipped)') + suffix,
+            prefix + body + '\n' + prefix + body + suffix,
+            prefix + body.replace('(5 tests)', '(4 tests)') + suffix]:
+            with self.assertRaises(RuntimeError):
+                b.verify_manual_mysql_log(invalid.encode(), p)
+
     def test_adapter_preserves_activation_and_sql_fence(self):
         engine = p.engine(self.c)
         original = p.load('bitbrowser-history-release.py')
