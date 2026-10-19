@@ -494,6 +494,53 @@ export function isOnlinePendingFeaturesControlsOnly(paths) {
     )
   );
 }
+export const onlineCardVisibilityScope = 'ONLINE_CARD_VISIBILITY';
+export const onlineCardVisibilityPaths = Object.freeze(
+  [
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'test/checkout-form.test.cjs',
+    'test/checkout-interaction.test.cjs',
+    'test/session-routing-browser.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name)
+);
+const cardVisibilityDocumentation = ['docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'];
+const cardVisibilityReleaseControls = [
+  '.github/workflows/online-card-visibility-validation.yml',
+  'scripts/production-release/online-checkout-initialization-release.py',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-card-visibility-' + name
+  )
+];
+export const onlineCardVisibilityControls = Object.freeze([
+  ...cardVisibilityReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlineCardVisibilityOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    [...onlineCardVisibilityPaths, ...cardVisibilityDocumentation].every((name) =>
+      paths.includes(name)
+    ) &&
+    paths.every(
+      (name) =>
+        onlineCardVisibilityPaths.includes(name) ||
+        onlineCardVisibilityControls.includes(name) ||
+        cardVisibilityDocumentation.includes(name)
+    )
+  );
+}
+export function isOnlineCardVisibilityControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((name) => cardVisibilityReleaseControls.includes(name)) &&
+    paths.every((name) => onlineCardVisibilityControls.includes(name))
+  );
+}
 export const onlineCardControlDiagnosticsScope = 'ONLINE_CARD_CONTROL_DIAGNOSTICS';
 export const onlineCardControlDiagnosticsPaths = Object.freeze(
   [
@@ -888,6 +935,7 @@ export function isOnlineLegacyCloseOnly(paths) {
 }
 export function isOnlineSettingsOnly(paths) {
   if (
+    isOnlineCardVisibilityOnly(paths) ||
     isOnlineCardControlDiagnosticsOnly(paths) ||
     isOnlineCheckoutInitializationOnly(paths) ||
     isOnlineCheckoutActionabilityOnly(paths) ||
@@ -929,6 +977,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCardVisibilityControlsOnly(paths)) return true;
   if (isOnlineCardControlDiagnosticsControlsOnly(paths)) return true;
   if (isOnlineCheckoutInitializationControlsOnly(paths)) return true;
   if (isOnlineCheckoutActionabilityControlsOnly(paths)) return true;
@@ -955,6 +1004,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const cardVisibility = isOnlineCardVisibilityOnly(paths);
+  const cardVisibilityControls = isOnlineCardVisibilityControlsOnly(paths);
   const cardDiagnostics = isOnlineCardControlDiagnosticsOnly(paths);
   const cardDiagnosticsControls = isOnlineCardControlDiagnosticsControlsOnly(paths);
   const initialization = isOnlineCheckoutInitializationOnly(paths);
@@ -1026,6 +1077,29 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (cardVisibility || cardVisibilityControls)
+      return [
+        ...controls,
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-card-control-diagnostics-release.test.py'
+        ],
+        ['python3', '-B', 'scripts/production-release/online-card-visibility-release.test.py'],
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-checkout-initialization-release.test.py'
+        ],
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-checkout-initialization-recovery.test.py'
+        ],
+        ...(cardVisibility
+          ? ['check:v2-module-architecture', 'check:v2-isolation'].map((name) => npm('run', name))
+          : [])
+      ];
     if (cardDiagnostics || cardDiagnosticsControls)
       return [
         ...controls,
@@ -1320,6 +1394,8 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (controlsOnly) throw new Error('Unsupported controls-only check');
+  if (cardVisibility && part !== 'online-engine')
+    throw new Error('Unsupported card visibility check part');
   if (cardDiagnostics && part !== 'online-engine')
     throw new Error('Unsupported card diagnostics check part');
   if (initialization && part !== 'online-engine')
@@ -1346,7 +1422,14 @@ export function onlineSettingsCommands(part, paths) {
       npm('run', 'build', '--workspace', '@apple-business/admin')
     ];
   }
-  if (cardDiagnostics || initialization || checkoutActionability || queryNetwork || queryDeadline) {
+  if (
+    cardVisibility ||
+    cardDiagnostics ||
+    initialization ||
+    checkoutActionability ||
+    queryNetwork ||
+    queryDeadline
+  ) {
     const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
     const browser = [
       npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),

@@ -234,8 +234,11 @@ function elementRendered(
   } = {}
 ) {
   // Computed visibility on the target already includes inheritance. A visible
-  // child may legally override a hidden ancestor; the other exclusions below
-  // still apply to the whole composed ancestor chain, including shadow hosts.
+  // child may legally override ancestor visibility. CSS can also override the
+  // default display:none of [hidden]; interactive fields/frames must follow the
+  // rendered result and subsequent hit tests, not the attribute alone. Text
+  // probes retain their semantic hidden exclusion. Other exclusions still apply
+  // to the whole composed ancestor chain, including shadow hosts.
   let visibleModals;
   function containsComposed(parent, child) {
     for (let node = child; node; node = node.parentElement || node.getRootNode()?.host)
@@ -279,7 +282,7 @@ function elementRendered(
     }
     for (let node = target; node; node = node.parentElement || node.getRootNode()?.host) {
       const style = node.ownerDocument.defaultView.getComputedStyle(node);
-      if (node.hidden) return 'hidden';
+      if (node.hidden && (!interactive || style.display === 'none')) return 'hidden';
       if (node.inert) return 'inert';
       // ARIA controls the accessibility tree, not rendering or interactivity.
       // Keep it for text probes; actual fields/frames use physical eligibility
