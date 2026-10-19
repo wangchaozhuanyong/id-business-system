@@ -1,5 +1,5 @@
 'use strict';
-/* global window, XMLHttpRequest */
+/* global window, document, XMLHttpRequest */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -204,6 +204,9 @@ async function fixture(t) {
       // The installation's real Cookie probe is synthetic too. If a later
       // request misses its dedicated handler this marker exposes the transport.
       response.end(JSON.stringify({ ...session, transportResponse: true }));
+    } else if (url.pathname === '/fixture/challenge-loader.js') {
+      response.setHeader('content-type', 'application/javascript');
+      response.end('window.__syntheticChallengeResourceLoaded = true;');
     } else if (url.pathname === '/fixture/lazy-checkout') {
       response.setHeader('content-type', 'text/html');
       response.end(lazyCheckout);
@@ -227,7 +230,8 @@ async function fixture(t) {
     'third-party.invalid',
     'chatgpt.com.third-party.invalid',
     'accounts.google.com',
-    'login.microsoftonline.com'
+    'login.microsoftonline.com',
+    'challenges.cloudflare.com'
   ];
   const runtime = await launchFixtureBrowser([
     '--disable-background-networking',
@@ -298,9 +302,13 @@ async function xhr(page, url) {
   );
 }
 
-function noBusinessActions(f) {
+function noBusinessActions(f, { authenticationWrites = false } = {}) {
   assert.equal(
-    f.requests.some((request) => !['GET', 'HEAD', 'OPTIONS'].includes(request.method)),
+    f.requests.some(
+      (request) =>
+        !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
+        !(authenticationWrites && /^\/api\/auth\/(?:session|csrf)$/.test(request.path))
+    ),
     false
   );
   assert.equal(
@@ -365,6 +373,128 @@ test('third-party and noncanonical authentication lookalikes retain native trans
   noBusinessActions(f);
 });
 
+test('fetch keeps quoted and noncanonical authentication URLs on native transport', async (t) => {
+  const f = await fixture(t);
+  for (const endpoint of ['session', 'csrf']) {
+    for (const url of [
+      `${origin}/fixture/ordinary-get?return=/api/auth/${endpoint}`,
+      `${origin}/prefix/api/auth/${endpoint}`,
+      `${origin}/api/auth/${endpoint}/`,
+      `${origin}/api/auth/${endpoint}-extra`
+    ]) {
+      const response = await f.page.evaluate(async (url) => {
+        const response = await fetch(url);
+        return { status: response.status, body: await response.json() };
+      }, url);
+      assert.equal(response.status, 200);
+      assert.equal(response.body.transportResponse, true, url);
+      assert.equal(Boolean(response.body.accessToken || response.body.csrfToken), false, url);
+    }
+  }
+  noBusinessActions(f);
+});
+
+test('authentication writes retain their actual response instead of a synthetic success', async (t) => {
+  const f = await fixture(t);
+  for (const endpoint of ['session', 'csrf']) {
+    for (const inputKind of ['string', 'url', 'request', 'overridden-request']) {
+      const response = await f.page.evaluate(
+        async ({ endpoint, inputKind }) => {
+          const url = `${window.location.origin}/api/auth/${endpoint}`;
+          const input =
+            inputKind === 'url'
+              ? new URL(url)
+              : inputKind === 'request'
+                ? new Request(url, { method: 'POST' })
+                : inputKind === 'overridden-request'
+                  ? new Request(url, { method: 'GET' })
+                  : url;
+          const response = await fetch(
+            input,
+            inputKind === 'request' ? undefined : { method: 'POST' }
+          );
+          return { status: response.status, body: await response.json() };
+        },
+        { endpoint, inputKind }
+      );
+      assert.equal(response.status, 409, `${inputKind}: ${endpoint}`);
+      assert.equal(Boolean(response.body.accessToken || response.body.csrfToken), false);
+    }
+    const response = await f.page.evaluate(async (endpoint) => {
+      const request = new XMLHttpRequest();
+      request.open('PUT', `/api/auth/${endpoint}`);
+      return new Promise((resolve, reject) => {
+        request.onload = () =>
+          resolve({ status: request.status, body: JSON.parse(request.responseText) });
+        request.onerror = () => reject(new Error('Synthetic authentication request failed'));
+        request.send('{}');
+      });
+    }, endpoint);
+    assert.equal(response.status, 409, `XHR PUT: ${endpoint}`);
+    assert.equal(Boolean(response.body.accessToken || response.body.csrfToken), false);
+    assert.ok(
+      f.transport.some(
+        (request) => request.path === `/api/auth/${endpoint}` && request.method === 'POST'
+      )
+    );
+    assert.ok(
+      f.transport.some(
+        (request) => request.path === `/api/auth/${endpoint}` && request.method === 'PUT'
+      )
+    );
+  }
+  noBusinessActions(f, { authenticationWrites: true });
+});
+
+test('Session compatibility supports URL and Request reads without swallowing native fetch errors', async (t) => {
+  const f = await fixture(t);
+  const results = await f.page.evaluate(async () => {
+    const url = `${window.location.origin}/api/auth/session`;
+    const reads = [];
+    for (const input of [new URL(url), new Request(url), new Request(url, { method: 'POST' })]) {
+      const response = await fetch(input, { method: 'GET' });
+      reads.push(await response.json());
+    }
+    const controller = new AbortController();
+    controller.abort();
+    const failures = [];
+    for (const options of [{ method: 'GET', body: '{}' }, { signal: controller.signal }]) {
+      try {
+        await fetch(url, options);
+        failures.push('unexpected-success');
+      } catch (error) {
+        failures.push(error.name);
+      }
+    }
+    return { reads, failures };
+  });
+  for (const response of results.reads) {
+    assert.equal(response.user?.id, userId);
+    assert.equal(response.transportResponse === true, false);
+  }
+  assert.deepEqual(results.failures, ['TypeError', 'AbortError']);
+  noBusinessActions(f);
+});
+
+test('authentication RequestInit is read once before deciding whether native transport is needed', async (t) => {
+  const f = await fixture(t);
+  const result = await f.page.evaluate(async () => {
+    let reads = 0;
+    const response = await fetch('/api/auth/session', {
+      get method() {
+        reads++;
+        return reads === 1 ? 'POST' : 'GET';
+      }
+    });
+    return { reads, status: response.status, body: await response.json() };
+  });
+  assert.equal(result.reads, 1);
+  assert.equal(result.status, 409);
+  assert.equal(Boolean(result.body.accessToken), false);
+  assert.equal(f.transport.filter((request) => request.method === 'POST').length, 1);
+  noBusinessActions(f, { authenticationWrites: true });
+});
+
 test('login navigation remains blocked while ordinary requests keep their native headers', async (t) => {
   const f = await fixture(t);
   const allowed = await xhr(f.page, `${origin}/auth/login?phase=xhr`);
@@ -373,6 +503,8 @@ test('login navigation remains blocked while ordinary requests keep their native
     `${origin}/auth/login`,
     `${origin}/auth/signin`,
     `${origin}/auth/error`,
+    `${origin}/api/auth/signin`,
+    `${origin}/api/auth/error`,
     'https://auth.openai.com/auth/login',
     'https://accounts.google.com/fixture',
     'https://login.microsoftonline.com/fixture'
@@ -380,6 +512,28 @@ test('login navigation remains blocked while ordinary requests keep their native
   const baseline = f.transport.length;
   for (const url of blocked) await assert.rejects(f.page.goto(url), /net::ERR_/);
   assert.equal(f.transport.length, baseline);
+  noBusinessActions(f);
+});
+
+test('quoted login paths do not cancel page navigation or a synthetic challenge script', async (t) => {
+  const f = await fixture(t);
+  await f.page.goto(`${origin}/fixture/page?return=/auth/login&provider=accounts.google.com`);
+  assert.equal(await f.page.locator('main').innerText(), 'Synthetic route fixture');
+  const scriptUrl =
+    'https://challenges.cloudflare.com/fixture/challenge-loader.js?hint=accounts.google.com';
+  await f.page.evaluate(
+    (url) =>
+      new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = url;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Synthetic challenge resource was blocked'));
+        document.head.appendChild(script);
+      }),
+    scriptUrl
+  );
+  assert.equal(await f.page.evaluate(() => window.__syntheticChallengeResourceLoaded), true);
+  assert.ok(f.transport.some((request) => request.path === '/fixture/challenge-loader.js'));
   noBusinessActions(f);
 });
 

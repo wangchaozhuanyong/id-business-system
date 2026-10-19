@@ -186,6 +186,7 @@ async function runSyntheticRecharge(scene, options = {}) {
         'challenge',
         'transient-login',
         'chat-guest-recover',
+        'guest-until-reload',
         'permanent-guest',
         'late-guest'
       ].includes(authUi)
@@ -445,6 +446,8 @@ async function fixtureChild(
     refreshedBearerRequests: 0,
     authUi,
     authPageDocuments: 0,
+    authHomepagePages: [],
+    authHomepageReloadPageIds: [],
     authRedirectDocuments: 0,
     authProbeIdentityResponses: 0,
     authStateTransitions: [],
@@ -480,6 +483,8 @@ async function fixtureChild(
     formReadFailures: [],
     unexpectedNetwork: 0
   };
+  const syntheticPageIds = new WeakMap();
+  let nextSyntheticPageId = 0;
   const session = JSON.parse(task.session);
   const originalClaims = sessionRefresh
     ? JSON.parse(Buffer.from(session.accessToken.split('.')[1], 'base64url').toString('utf8'))
@@ -807,6 +812,11 @@ async function fixtureChild(
         body: JSON.stringify(value)
       });
     if (req.method() === 'GET' && url.origin === origin && url.pathname === '/') {
+      assert.equal(req.isNavigationRequest(), true);
+      const requestPage = req.frame().page();
+      assert.equal(req.frame(), requestPage.mainFrame());
+      assert.ok(syntheticPageIds.has(requestPage));
+      metrics.authHomepagePages.push(syntheticPageIds.get(requestPage));
       metrics.authPageDocuments++;
       if (authUi === 'login-redirect')
         return route.fulfill({
@@ -816,17 +826,29 @@ async function fixtureChild(
       const chatUi =
         '<button>New chat</button><textarea id="prompt-textarea" placeholder="Ask anything"></textarea>';
       if (
-        ['transient-login', 'chat-guest-recover', 'permanent-guest', 'late-guest'].includes(authUi)
+        [
+          'transient-login',
+          'chat-guest-recover',
+          'guest-until-reload',
+          'permanent-guest',
+          'late-guest'
+        ].includes(authUi)
       ) {
-        const initial = ['transient-login', 'permanent-guest'].includes(authUi)
-          ? 'guest'
-          : 'initial';
+        const initial =
+          authUi === 'guest-until-reload'
+            ? metrics.authPageDocuments >= 3
+              ? 'recovered'
+              : 'guest'
+            : ['transient-login', 'permanent-guest'].includes(authUi)
+              ? 'guest'
+              : 'initial';
         const transitions = {
           'transient-login': [{ after: 3800, phase: 'recovered' }],
           'chat-guest-recover': [
             { after: 2600, phase: 'guest' },
             { after: 3800, phase: 'recovered' }
           ],
+          'guest-until-reload': [],
           'permanent-guest': [],
           'late-guest': [{ after: 2800, phase: 'guest' }]
         }[authUi];
@@ -933,7 +955,13 @@ async function fixtureChild(
       metrics.checkoutCreations++;
       assert.equal(metrics.checkoutCreations, 1);
       if (
-        ['transient-login', 'chat-guest-recover', 'permanent-guest', 'late-guest'].includes(authUi)
+        [
+          'transient-login',
+          'chat-guest-recover',
+          'guest-until-reload',
+          'permanent-guest',
+          'late-guest'
+        ].includes(authUi)
       ) {
         const authPage = activeContext.pages().find((page) => page.url() === origin + '/');
         assert.ok(authPage);
@@ -1222,10 +1250,23 @@ async function fixtureChild(
       const nativePage = context.newPage.bind(context);
       context.newPage = async () => {
         const page = await nativePage();
+        syntheticPageIds.set(page, ++nextSyntheticPageId);
+        if (authUi === 'guest-until-reload') {
+          const reload = page.reload.bind(page);
+          page.reload = async (...reloadOptions) => {
+            assert.equal(page.url(), origin + '/');
+            metrics.authHomepageReloadPageIds.push(syntheticPageIds.get(page));
+            return reload(...reloadOptions);
+          };
+        }
         if (
-          ['transient-login', 'chat-guest-recover', 'permanent-guest', 'late-guest'].includes(
-            authUi
-          )
+          [
+            'transient-login',
+            'chat-guest-recover',
+            'guest-until-reload',
+            'permanent-guest',
+            'late-guest'
+          ].includes(authUi)
         ) {
           await page.exposeFunction('reportSyntheticAuthPhase', (observation) => {
             assert.ok(['initial', 'guest', 'recovered'].includes(observation.phase));
@@ -1337,7 +1378,7 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       },
       'hidden login content preserves authenticated chat'
     ],
-    ...['transient-login', 'chat-guest-recover'].map((authUi) => [
+    ...['transient-login', 'chat-guest-recover', 'guest-until-reload'].map((authUi) => [
       'success',
       {
         authUi,
@@ -1409,10 +1450,24 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
           assert.equal(metrics.authUi, fixtureOptions.authUi);
           assert.equal(metrics.authProbeIdentityResponses, 1);
           assert.equal(metrics.authRedirectDocuments, 0);
-          if (['transient-login', 'chat-guest-recover'].includes(fixtureOptions.authUi)) {
+          if (
+            ['transient-login', 'chat-guest-recover', 'guest-until-reload'].includes(
+              fixtureOptions.authUi
+            )
+          ) {
             assert.equal(metrics.authStateAtCheckoutCreation, 'recovered');
             assert.ok(metrics.authStateTransitions.some((item) => item.phase === 'guest'));
             assert.ok(metrics.authStateTransitions.some((item) => item.phase === 'recovered'));
+            if (fixtureOptions.authUi === 'guest-until-reload') {
+              assert.equal(
+                metrics.authPageDocuments,
+                3,
+                'warmup, bootstrap and exactly one homepage refresh'
+              );
+              assert.notEqual(metrics.authHomepagePages[0], metrics.authHomepagePages[1]);
+              assert.equal(metrics.authHomepagePages[1], metrics.authHomepagePages[2]);
+              assert.deepEqual(metrics.authHomepageReloadPageIds, [metrics.authHomepagePages[1]]);
+            }
           }
         }
         if (fixtureOptions.sessionRefresh) {

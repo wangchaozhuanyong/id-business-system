@@ -48,6 +48,10 @@ jobs:
             SESSION_ROUTING_BROWSER_MODE="$mode" xvfb-run -a node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/session-routing-browser.test.cjs | tee "$report_root/session-routing-$mode.tap"
           done
           node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/checkout-card-preparation.test.cjs | tee "$report_root/card-preparation.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/login-evidence-browser.test.cjs | tee "$report_root/login-evidence-browser.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/session-probe.test.cjs | tee "$report_root/session-probe.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/upstream-session-transition.test.cjs | tee "$report_root/upstream-session-transition.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/auth-navigation.test.cjs | tee "$report_root/auth-navigation.tap"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: online-checkout-initialization-linux-${{ github.sha }}-${{ github.run_attempt }}

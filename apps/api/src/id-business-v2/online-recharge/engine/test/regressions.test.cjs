@@ -134,6 +134,7 @@ test('verified Cookie refresh supplies the fresh bearer without generic route in
   await f.calls.routes.at(-1).handler({
     request: () => ({
       url: () => 'https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27',
+      method: () => 'GET',
       resourceType: () => 'fetch',
       headers: () => callerHeaders
     }),
@@ -145,7 +146,7 @@ test('verified Cookie refresh supplies the fresh bearer without generic route in
   assert.equal(callerHeaders.Authorization, `Bearer ${refreshed}`);
   let routedSession;
   await f.calls.routes[0].handler({
-    request: () => ({ url: () => 'https://chatgpt.com/api/auth/session' }),
+    request: () => ({ url: () => 'https://chatgpt.com/api/auth/session', method: () => 'GET' }),
     fulfill: async (options) => {
       routedSession = JSON.parse(options.body);
     }
@@ -168,10 +169,14 @@ test('verified Cookie refresh supplies the fresh bearer without generic route in
       location: window.location,
       URL,
       localStorage: { setItem() {} },
+      Request,
       Response
     }
   );
-  assert.equal((await (await window.fetch('/api/auth/session')).json()).accessToken, refreshed);
+  assert.equal(
+    (await (await window.fetch('https://chatgpt.com/api/auth/session')).json()).accessToken,
+    refreshed
+  );
   assert.equal(f.logs.join('\n').includes(refreshed), false);
   assert.equal(security.redactText(refreshed).includes(refreshed), false);
 });
@@ -275,6 +280,7 @@ test('session routing never manufactures authorization or overrides caller heade
       await f.calls.routes.at(-1).handler({
         request: () => ({
           url: () => `${origin}/fixed-path`,
+          method: () => 'GET',
           resourceType: () => 'fetch',
           headers: () => headers
         }),
@@ -296,7 +302,12 @@ test('session routing never manufactures authorization or overrides caller heade
   ]) {
     let sent;
     await f.calls.routes.at(-1).handler({
-      request: () => ({ url: () => url, resourceType: () => 'fetch', headers: () => ({}) }),
+      request: () => ({
+        url: () => url,
+        method: () => 'GET',
+        resourceType: () => 'fetch',
+        headers: () => ({})
+      }),
       continue: async (options) => {
         sent = options?.headers;
       }
@@ -307,7 +318,10 @@ test('session routing never manufactures authorization or overrides caller heade
     let continued = 0;
     let fulfilled = 0;
     await registered.handler({
-      request: () => ({ url: () => 'https://third-party.invalid/api/auth/session' }),
+      request: () => ({
+        url: () => 'https://third-party.invalid/api/auth/session',
+        method: () => 'GET'
+      }),
       continue: async () => {
         continued++;
       },
@@ -380,6 +394,7 @@ test('native cross-origin 302 strips caller authorization and session routing ad
         await f.calls.routes.at(-1).handler({
           request: () => ({
             url: () => `https://chatgpt.com${pathname}`,
+            method: () => request.method(),
             resourceType: () => request.resourceType(),
             headers: () => request.headers()
           }),

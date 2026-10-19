@@ -355,16 +355,16 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "430a29c6dbede8e6db969e61f68f34424f0a7b3e97fd2a9c8802ae2b3d89dcae",
+      "adaptedSha256": "71c529ebcd23ae2f70f37c9b4214f071ff5c2c89f5e21e13bf6dbe0f958da8b5",
       "changed": true,
-      "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions."
+      "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-19 Prove the restored guest refresh in the production task child: same homepage Page, exactly one reload, one checkout and one payment action, bound payment and tier evidence, one bill/card count and renewal cleanup; isolated synthetic transport only."
     },
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "909315a61d46c8e097563c93c0929c0b4a15a37bb8c9ac5dee6e45fdbc4e9897",
+      "adaptedSha256": "8ff248d79c37091f143bd77a6ef52fc6214b1cb03f0ac549e503e582e4e7f0d3",
       "changed": true,
-      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock."
+      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation."
     },
     {
       "path": "test/renewal-recheck.test.cjs",
@@ -467,9 +467,9 @@
     {
       "path": "upstream/auth-page-detect.js",
       "originalSha256": "32d6fae901ccd9b7831b35e99560973eebf8629ea8b0038602ea0a020f346fc3",
-      "adaptedSha256": "52587b771158665561f4c6276ba2423c1da1053a1886c78cdc459879e648fb41",
-      "changed": false,
-      "reason": "冻结原版保持不变。 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
+      "adaptedSha256": "ce15056bc7a12b7c0e94eaefd985cd843d05c02878bc4349e8e717a1ab41005c",
+      "changed": true,
+      "reason": "冻结原版保持不变。 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-19 Match login and checkout navigation by parsed actual HTTP(S) hostname/path, never query/fragment text; preserve genuine login stops and exact official HTTPS checkout recognition. This removes independently reproduced false route aborts, not a claimed fix for live Cloudflare challenges."
     },
     {
       "path": "upstream/browser-pool-client.js",
@@ -565,9 +565,9 @@
     {
       "path": "upstream/human-verification.js",
       "originalSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
-      "adaptedSha256": "89d3db930159d3cfe9e04075df7b3d48c3526c4dc85752ae5e15a48b7b3af442",
+      "adaptedSha256": "6ca8e13af6369d79ea962fcce6c57417747d42c78bc56c4d77d7637c52a9fdd5",
       "changed": true,
-      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Perform caller-supplied card-section preparation before readiness inspection within the original opening deadline; retain verification and payment guards."
+      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Perform caller-supplied card-section preparation before readiness inspection within the original opening deadline; retain verification and payment guards. 2026-10-19 Exclude ordinary conversation/composer text from verification wording while retaining actual challenge instructions, dialogs and controls."
     },
     {
       "path": "upstream/index.js",
@@ -642,9 +642,9 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "a39f5a8293c196a8c08f6a30f92eb73e5a895c63c7a5ea5be30670aadb749b99",
+      "adaptedSha256": "bda0d2b224aef7c960b6e290aa64f418e5b65329dfe5df69e0e1114f0a25f790",
       "changed": true,
-      "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Delegate only exact official Session/CSRF routes to existing specialized handlers through fallback; retain login blocking and all ordinary request headers."
+      "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Delegate only exact official Session/CSRF routes to existing specialized handlers through fallback; retain login blocking and all ordinary request headers. 2026-10-19 Restore the frozen upstream single normal guest-homepage refresh after verification; constrain it to the same official homepage, original task deadline and lease cancellation; require logged-in UI after refresh and never reload a visible challenge. 2026-10-19 Classify structured Session responses before incidental profile text; constrain compatibility to canonical official GETs, preserve native writes, Request validation, cancellation and single RequestInit evaluation."
     },
     {
       "path": "upstream/stripe-payment.js",
@@ -733,9 +733,16 @@
     {
       "path": "test/session-routing-browser.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "dfb8227f9bc387d06389217f9abe57aeb9fcb88e4fdf2cc99d3f7924c2cdc62e",
+      "adaptedSha256": "772026591581fc85912b539fad4008777a636b8aa4c6be02b6783449d81eabf8",
       "changed": true,
-      "reason": "Synthetic real routing and XHR-to-lazy-card readiness integration across actual native, standalone and pool launchers, DNS fenced and zero checkout/payment writes."
+      "reason": "Synthetic real routing and XHR-to-lazy-card readiness integration across actual native, standalone and pool launchers, DNS fenced and zero checkout/payment writes. 2026-10-19 Real isolated Chromium proves quoted login destinations do not cancel normal document navigation or a synthetic challenge resource; genuine authentication stops remain. 2026-10-19 Real isolated fetch/XHR regressions preserve authentication write responses, exact GET paths, URL/Request inputs, method overrides, single RequestInit evaluation and native failures."
+    },
+    {
+      "path": "test/auth-navigation.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "0dbca0ebbf12555f3c197aa8ad0ac3286b29fbd924d816dac6632b80abb6b727",
+      "changed": true,
+      "reason": "2026-10-19 Regress parsed navigation against quoted query/fragment destinations, lookalike origins, real authentication paths and noncanonical checkout URLs."
     },
     {
       "path": "test/checkout-card-preparation.test.cjs",
@@ -750,6 +757,27 @@
       "adaptedSha256": "861251e2f13a5348e4a59aed9731dabf37ae47696b435e8e2b8eb900a64afe5a",
       "changed": true,
       "reason": "Offline actual parent/recursive CDP and child route refusal diagnostics, unchanged request whitelist, finite privacy-safe counters and strict projection."
+    },
+    {
+      "path": "test/upstream-session-transition.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "aff37f437797ab74da2a45ef6f4698de3d33fdb18e1cb63d3f1c6f221f998aee",
+      "changed": true,
+      "reason": "2026-10-19 Real isolated Chromium regressions for the frozen guest-homepage transition, verified-cookie empty-shell rejection, cancellation during pending reload and late completion, exact homepage and visible-challenge boundaries."
+    },
+    {
+      "path": "test/session-probe.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "reason": "2026-10-19 Offline original Session probe classification: incidental JSON profile wording, explicit challenge response, HTTP failures and unconditional page cleanup.",
+      "adaptedSha256": "543b66baff8e509542bc33019c4abc3bbe4a2dc005c0788e6d07768eeb6c600b"
+    },
+    {
+      "path": "test/login-evidence-browser.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "reason": "2026-10-19 Real isolated Chromium distinguishes ordinary conversation/composer quotations from actual verification pages, dialogs, controls and hidden residue; zero network requests.",
+      "adaptedSha256": "2d97ab72f0081c98f13d840eea16d67580f315d2833a7d29faeadbb616edf54a"
     }
   ],
   "dependencySecurityPatches": [

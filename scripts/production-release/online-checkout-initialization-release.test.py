@@ -26,9 +26,10 @@ BEFORE_ENGINE = b.engine_inventory(p.ENGINE_BASE, p)
 
 
 def runtime_parent():
-    path = ROOT / '.runtime'
-    if path.is_symlink(): raise RuntimeError('SYNTHETIC_FIXTURE_OUTPUT_LINK')
-    path.mkdir(mode=0o700, exist_ok=True)
+    path = ROOT / '.runtime' / 'online-login-release-20261019'
+    if any(parent.is_symlink() for parent in (path, path.parent)):
+        raise RuntimeError('SYNTHETIC_FIXTURE_OUTPUT_LINK')
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
     return path
 
 
@@ -45,7 +46,7 @@ def contract():
         engineFiles=before, engineHealth=p.HEALTH, businessActions=0, databaseWrites=0, preservationReceiptSha256=p.PRESERVATION_SHA)
     baseline['services']['online-recharge']['image'] = p.ENGINE_IMAGE
     return {'version': 1, 'scope': p.SCOPE, 'frozen': True, 'admission': 'FROZEN_REVIEWED_SOURCE', 'pendingBindings': [],
-        'expectedCurrent': p.CURRENT, 'engineSourceBase': p.ENGINE_BASE, 'reviewBase': p.CURRENT,
+        'expectedCurrent': p.CURRENT, 'engineSourceBase': p.ENGINE_BASE, 'reviewBase': p.REVIEW_BASE,
         'sourceReviewCommit': source, 'sourceReviewTag': p.PREFIX + '-source-review-' + source[:12],
         'engineRoot': p.ENGINE, 'upstreamSource': p.LEGACY.UPSTREAM_SOURCE,
         'runtimeSources': {p.ENGINE + '/' + n: after[n] for n in p.FILES},
@@ -64,11 +65,13 @@ def identity():
 
 def browser(c):
     runs = [{'suite': suite, 'mode': mode, 'passed': total, 'reportSha256': p.sha((suite + mode).encode())}
-        for suite, mode, total in [('SESSION_ROUTING', 'native', 4), ('SESSION_ROUTING', 'standalone', 4),
-            ('SESSION_ROUTING', 'pool', 4), ('CARD_PREPARATION', 'native', 13)]]
+        for suite, mode, total in [('SESSION_ROUTING', 'native', 9), ('SESSION_ROUTING', 'standalone', 9),
+            ('SESSION_ROUTING', 'pool', 9), ('CARD_PREPARATION', 'native', 13),
+            ('LOGIN_EVIDENCE_BROWSER', 'native', 11), ('SESSION_PROBE', 'native', 8),
+            ('UPSTREAM_SESSION_TRANSITION', 'native', 16), ('AUTH_NAVIGATION', 'native', 4)]]
     return {**identity(), 'platform': 'linux', 'nodeVersion': '22.23.3', 'sessionRoutingHeadful': True,
         'testFiles': {n: c['afterEngineFiles'][n] for n in p.INITIALIZATION_TESTS}, 'runs': runs,
-        'passed': 25, 'failed': 0, 'skipped': 0, 'todo': 0, 'businessActions': 0, 'paymentActions': 0,
+        'passed': 79, 'failed': 0, 'skipped': 0, 'todo': 0, 'businessActions': 0, 'paymentActions': 0,
         'reportSha256': p.fingerprint(runs)}
 
 
@@ -82,14 +85,88 @@ class Controls(unittest.TestCase):
         c = contract(); c['frozen'] = False
         with self.assertRaisesRegex(RuntimeError, 'SOURCE_NOT_FROZEN'): p.release({}, c)
 
-    def test_exact_ten_file_delta_preserves_dependencies_and_payment_controls(self):
+    def test_exact_eighteen_file_delta_preserves_dependencies_and_payment_controls(self):
         c = contract(); p.validate_contract(c)
-        self.assertEqual(len(p.FILES), 10)
+        self.assertEqual(len(p.FILES), 18)
+        self.assertEqual(len(p.ADDED), 7)
         self.assertEqual(set(c['afterEngineFiles']) - set(c['beforeEngineFiles']), p.ADDED)
+        self.assertTrue({'upstream/auth-page-detect.js', 'upstream/human-verification.js',
+            'test/recharge-flow-acceptance.test.cjs', 'test/regressions.test.cjs',
+            'test/auth-navigation.test.cjs', 'test/login-evidence-browser.test.cjs',
+            'test/session-probe.test.cjs', 'test/upstream-session-transition.test.cjs'} <= p.FILES)
         for name in ('payment-limit.cjs', 'confirmation.cjs', 'rpc.cjs', 'Dockerfile', 'upstream/package.json',
             'upstream/package-lock.json', 'upstream/browser-pool.js', 'upstream/browser-standalone.js'):
             self.assertNotIn(name, p.FILES)
             self.assertEqual(c['beforeEngineFiles'][name], c['afterEngineFiles'][name])
+
+    def test_review_base_is_independent_and_cannot_be_replaced_by_another_production_baseline(self):
+        self.assertEqual(p.REVIEW_BASE, '7df16100f7964bb7183f171ec5e9f275f4f48876')
+        old_current = '0348f0327849f1e1203e43db9b26dbbeca6dfa34'
+        with patch.object(p, 'CURRENT', old_current):
+            c = contract(); p.validate_contract(c)
+            self.assertEqual(c['reviewBase'], p.REVIEW_BASE)
+            for review_base in (old_current, p.ENGINE_BASE, '0' * 40, None):
+                c = contract(); c['reviewBase'] = review_base
+                with self.subTest(review_base=review_base), self.assertRaisesRegex(RuntimeError, 'CONTRACT_IDENTITY_INVALID'):
+                    p.validate_contract(c)
+
+    def test_source_review_uses_only_the_exact_main_review_base_delta(self):
+        c = contract(); review = c['sourceReviewCommit']; sources = b.reviewed_paths(p)
+        content = b'SYNTHETIC_REVIEWED_SOURCE_ONLY'
+        with tempfile.TemporaryDirectory(dir=runtime_parent(), prefix='initialization-review-fixture-') as scratch:
+            root = Path(scratch)
+            for name in sources - {'scripts/production-release/' + p.CONTRACT_FILE}:
+                target = root / name; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(content)
+            for mutation in (None, 'missing-login-test', 'extra-payment-policy', 'wrong-ancestor', 'old-review-base'):
+                value = copy.deepcopy(c)
+                delta = set(sources)
+                if mutation == 'missing-login-test': delta.remove(p.ENGINE + '/test/login-evidence-browser.test.cjs')
+                if mutation == 'extra-payment-policy': delta.add(p.ENGINE + '/payment-limit.cjs')
+                if mutation == 'old-review-base': value['reviewBase'] = '0348f0327849f1e1203e43db9b26dbbeca6dfa34'
+                def git(*args):
+                    if args[:2] == ('cat-file', '-t'): return b'tag\n'
+                    if args[0] == 'rev-parse': return (review + '\n').encode()
+                    if args[0] == 'merge-base':
+                        self.assertEqual(args, ('merge-base', p.REVIEW_BASE, review))
+                        return ((p.ENGINE_BASE if mutation == 'wrong-ancestor' else p.REVIEW_BASE) + '\n').encode()
+                    if args[:2] == ('diff', '--name-only'):
+                        self.assertEqual(args, ('diff', '--name-only', p.REVIEW_BASE, review))
+                        return ('\n'.join(sorted(delta)) + '\n').encode()
+                    if args[0] == 'show': return content
+                    self.fail('Unexpected synthetic git operation: ' + repr(args))
+                with self.subTest(mutation=mutation), patch.object(b, 'ROOT', root), patch.object(b, 'git', side_effect=git):
+                    if mutation is None: b.verify_review(value, p)
+                    else:
+                        with self.assertRaises(RuntimeError): b.verify_review(value, p)
+
+    def test_native_main_uses_the_review_base_and_stale_remote_main_cannot_build(self):
+        c = contract(); native = identity(); sources = b.reviewed_paths(p)
+        with tempfile.TemporaryDirectory(dir=runtime_parent(), prefix='initialization-main-fixture-') as scratch:
+            root = Path(scratch); frozen = root / 'contract.json'; frozen.write_text(json.dumps(c))
+            def git(*args):
+                if args == ('rev-parse', 'HEAD'): return (native['commit'] + '\n').encode()
+                if args == ('rev-parse', 'HEAD^{tree}'): return (native['tree'] + '\n').encode()
+                if args == ('status', '--porcelain', '--untracked-files=no'): return b''
+                if args == ('merge-base', p.REVIEW_BASE, native['commit']): return (p.REVIEW_BASE + '\n').encode()
+                if args == ('diff', '--name-only', p.REVIEW_BASE, native['commit']): return '\n'.join(sorted(sources)).encode()
+                self.fail('Unexpected native-main git operation: ' + repr(args))
+            def inventory(commit, publisher):
+                self.assertIs(publisher, p)
+                return c['afterEngineFiles'] if commit == native['commit'] else c['beforeEngineFiles']
+            env = {'GITHUB_ACTIONS': 'true', 'GITHUB_REF': 'refs/heads/main', 'GITHUB_SHA': native['commit'],
+                'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REPOSITORY': 'wangchaozhuanyong/id-business-system',
+                'GITHUB_RUN_ID': native['workflowRunId'], 'GITHUB_RUN_ATTEMPT': native['workflowRunAttempt']}
+            with patch.object(b, 'CONTRACT', frozen), patch.object(b, 'OUT', root / 'uncreated-output'), \
+                patch.object(b, 'check', return_value=p), patch.object(b, 'git', side_effect=git), \
+                patch.object(b, 'engine_inventory', side_effect=inventory), patch.dict(b.os.environ, env), \
+                patch.object(b.subprocess, 'check_output', return_value=('d' * 40 + '\n').encode()), \
+                patch.object(b, 'quality_evidence', side_effect=RuntimeError('SYNTHETIC_STOP_BEFORE_BUILD')) as quality:
+                with self.assertRaisesRegex(RuntimeError, 'REMOTE_MAIN_MOVED'): b.main()
+                quality.assert_not_called()
+                with patch.object(b.subprocess, 'check_output', return_value=(native['commit'] + '\n').encode()):
+                    with self.assertRaisesRegex(RuntimeError, 'SYNTHETIC_STOP_BEFORE_BUILD'): b.main()
+                quality.assert_called_once_with(native['commit'], native['tree'])
+                self.assertFalse((root / 'uncreated-output').exists())
 
     def test_old_or_changed_production_predecessor_is_rejected(self):
         for mutation in ('global', 'engine', 'image', 'manifest', 'proof', 'extra_role', 'missing_role', 'write'):
@@ -98,7 +175,7 @@ class Controls(unittest.TestCase):
             if mutation == 'engine': c['engineSourceBase'] = p.CURRENT
             if mutation == 'image': c['baseline']['services']['online-recharge']['image'] = 'sha256:' + '0' * 64
             if mutation == 'manifest': c['baseline']['manifestSha256'] = '0' * 64
-            if mutation == 'proof': c['baseline']['proofs']['recharge-checkout-build-proof.json'] = '0' * 64
+            if mutation == 'proof': c['baseline']['proofs']['bitbrowser-history-build-proof.json'] = '0' * 64
             if mutation == 'extra_role': c['baseline']['services']['auto-registration'] = c['baseline']['services']['api']
             if mutation == 'missing_role': c['baseline']['services'].pop('api')
             if mutation == 'write': c['baseline']['databaseWrites'] = 1
@@ -119,6 +196,13 @@ class Controls(unittest.TestCase):
             if mutation == 'unreviewed': c['afterEngineFiles']['rpc.cjs'] = 'a' * 64
             if mutation == 'unchanged': c['afterEngineFiles']['upstream/stripe-payment.js'] = c['beforeEngineFiles']['upstream/stripe-payment.js']
             with self.subTest(mutation=mutation), self.assertRaises(RuntimeError): p.validate_contract(c)
+
+    def test_every_added_login_test_must_be_in_the_runtime_delta(self):
+        for name in ('test/auth-navigation.test.cjs', 'test/login-evidence-browser.test.cjs',
+            'test/session-probe.test.cjs', 'test/upstream-session-transition.test.cjs'):
+            c = contract(); c['afterEngineFiles'].pop(name)
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'SOURCE_SCOPE_CHANGED'):
+                p.validate_contract(c)
 
     def test_readonly_preflight_never_builds_downloads_marks_or_switches(self):
         c = contract(); c['controlPins'] = {}
@@ -204,7 +288,11 @@ class Controls(unittest.TestCase):
 
     def test_linux_node22_three_launcher_initialization_evidence_is_required(self):
         c = contract(); value = browser(c); p.validate_browser(value, identity(), c)
-        for mutation in ('mac', 'node24', 'headless', 'skipped', 'wrong_source', 'missing_pool', 'old_parity'):
+        self.assertEqual(len(value['runs']), 8)
+        self.assertEqual(value['passed'], 79)
+        for mutation in ('mac', 'node24', 'headless', 'skipped', 'wrong_source', 'missing_pool',
+            'old_routing_count', 'missing_login', 'missing_probe', 'missing_transition', 'missing_navigation',
+            'wrong_login_source', 'changed_report_hash', 'old_parity'):
             value = browser(c)
             if mutation == 'mac': value['platform'] = 'darwin'
             if mutation == 'node24': value['nodeVersion'] = '24.0.0'
@@ -212,8 +300,39 @@ class Controls(unittest.TestCase):
             if mutation == 'skipped': value['skipped'] = 1
             if mutation == 'wrong_source': value['testFiles'][p.INITIALIZATION_TESTS[0]] = '0' * 64
             if mutation == 'missing_pool': value['runs'].pop(2)
+            if mutation == 'old_routing_count': value['runs'][0]['passed'] = 4
+            if mutation.startswith('missing_') and mutation != 'missing_pool':
+                suite = {'missing_login': 'LOGIN_EVIDENCE_BROWSER', 'missing_probe': 'SESSION_PROBE',
+                    'missing_transition': 'UPSTREAM_SESSION_TRANSITION', 'missing_navigation': 'AUTH_NAVIGATION'}[mutation]
+                value['runs'] = [run for run in value['runs'] if run['suite'] != suite]
+            if mutation == 'wrong_login_source': value['testFiles']['test/login-evidence-browser.test.cjs'] = '0' * 64
+            if mutation == 'changed_report_hash': value['runs'][0]['reportSha256'] = '0' * 64
             if mutation == 'old_parity': value = {'summary': {'checksPassed': 22}}
             with self.subTest(mutation=mutation), self.assertRaises(RuntimeError): p.validate_browser(value, identity(), c)
+
+    def test_builder_requires_all_eight_pinned_report_summaries_without_rerunning_tests(self):
+        c = contract()
+        with tempfile.TemporaryDirectory(dir=runtime_parent(), prefix='initialization-reports-fixture-') as scratch:
+            reports = Path(scratch)
+            for filename, _, _, total in p.INITIALIZATION_REPORTS:
+                (reports / filename).write_text('TAP version 13\n' + '\n'.join('# ' + name + ' ' + str(value)
+                    for name, value in [('tests', total), ('pass', total), ('fail', 0), ('cancelled', 0), ('skipped', 0), ('todo', 0)]) + '\n')
+            with patch.object(b, 'REPORTS', reports), patch.object(b.os, 'uname', return_value=SimpleNamespace(sysname='Linux')), \
+                patch.dict(b.os.environ, {'SESSION_ROUTING_HEADFUL': '1'}), \
+                patch.object(b.subprocess, 'check_output', return_value=b'v22.23.3\n') as command:
+                evidence = b.browser_evidence(identity(), c, p)
+                self.assertEqual(evidence['passed'], 79)
+                self.assertEqual(len(evidence['runs']), 8)
+                self.assertTrue(all(call.args[0] == ['node', '--version'] for call in command.call_args_list))
+                for filename, _, _, _ in p.INITIALIZATION_REPORTS:
+                    report = reports / filename; raw = report.read_bytes(); report.unlink()
+                    with self.subTest(filename=filename), self.assertRaisesRegex(RuntimeError, 'BROWSER_REPORT_INVALID'):
+                        b.browser_evidence(identity(), c, p)
+                    report.write_bytes(raw)
+                report = reports / p.INITIALIZATION_REPORTS[0][0]
+                report.write_text('# tests 4\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n')
+                with self.assertRaisesRegex(RuntimeError, 'BROWSER_TESTS_FAILED'):
+                    b.browser_evidence(identity(), c, p)
 
     def test_release_requires_exclusive_acceptance_and_rechecks_the_baseline(self):
         source = (HERE / (p.PREFIX + '-release.py')).read_text()

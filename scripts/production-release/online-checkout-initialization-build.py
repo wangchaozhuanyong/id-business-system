@@ -39,11 +39,12 @@ def reviewed_paths(p):
 def verify_review(c, p):
     review = c.get('sourceReviewCommit', '')
     p.need(re.fullmatch('[a-f0-9]{40}', review) and c.get('sourceReviewTag') == PREFIX + '-source-review-' + review[:12], 'SOURCE_REVIEW_INVALID')
+    p.need(c.get('reviewBase') == p.REVIEW_BASE, 'SOURCE_REVIEW_BASE_CHANGED')
     tag = 'refs/tags/' + c['sourceReviewTag']
     p.need(git('cat-file', '-t', tag).decode().strip() == 'tag'
         and git('rev-parse', tag + '^{commit}').decode().strip() == review
-        and git('merge-base', p.CURRENT, review).decode().strip() == p.CURRENT
-        and set(git('diff', '--name-only', p.CURRENT, review).decode().splitlines()) == reviewed_paths(p), 'SOURCE_REVIEW_SCOPE_CHANGED')
+        and git('merge-base', p.REVIEW_BASE, review).decode().strip() == p.REVIEW_BASE
+        and set(git('diff', '--name-only', p.REVIEW_BASE, review).decode().splitlines()) == reviewed_paths(p), 'SOURCE_REVIEW_SCOPE_CHANGED')
     for name in reviewed_paths(p) - {'scripts/production-release/' + p.CONTRACT_FILE}:
         path = ROOT / name
         p.need(path.is_file() and not path.is_symlink() and path.read_bytes() == git('show', review + ':' + name), 'REVIEWED_SOURCE_CHANGED')
@@ -51,12 +52,12 @@ def verify_review(c, p):
 
 def freeze(baseline, review):
     p = publisher()
-    c = {'sourceReviewCommit': review, 'sourceReviewTag': PREFIX + '-source-review-' + review[:12]}
+    c = {'sourceReviewCommit': review, 'sourceReviewTag': PREFIX + '-source-review-' + review[:12], 'reviewBase': p.REVIEW_BASE}
     verify_review(c, p)
     before = engine_inventory(p.ENGINE_BASE, p)
     after = engine_inventory(review, p)
     c.update(version=1, scope=p.SCOPE, frozen=True, admission='FROZEN_REVIEWED_SOURCE', pendingBindings=[],
-        expectedCurrent=p.CURRENT, engineSourceBase=p.ENGINE_BASE, reviewBase=p.CURRENT,
+        expectedCurrent=p.CURRENT, engineSourceBase=p.ENGINE_BASE, reviewBase=p.REVIEW_BASE,
         engineRoot=p.ENGINE, upstreamSource=p.LEGACY.UPSTREAM_SOURCE, requiredQualityParts=list(p.QUALITY_PARTS),
         runtimeSources={p.ENGINE + '/' + n: after[n] for n in sorted(p.FILES)},
         validationSources={n: p.sha((ROOT / n).read_bytes()) for n in sorted(p.VALIDATION)},
@@ -93,12 +94,8 @@ def quality_evidence(commit, tree):
 def browser_evidence(identity, c, p):
     p.need(os.uname().sysname == 'Linux' and os.environ.get('SESSION_ROUTING_HEADFUL') == '1'
         and re.fullmatch(r'v22\.\d+\.\d+', subprocess.check_output(['node', '--version']).decode().strip()), 'LINUX_NODE22_REQUIRED')
-    reports = (('session-routing-native.tap', 'SESSION_ROUTING', 'native', 4),
-        ('session-routing-standalone.tap', 'SESSION_ROUTING', 'standalone', 4),
-        ('session-routing-pool.tap', 'SESSION_ROUTING', 'pool', 4),
-        ('card-preparation.tap', 'CARD_PREPARATION', 'native', 13))
     runs = []
-    for filename, suite, mode, total in reports:
+    for filename, suite, mode, total in p.INITIALIZATION_REPORTS:
         path = REPORTS / filename
         p.need(path.is_file() and not path.is_symlink() and all(not parent.is_symlink() for parent in path.parents), 'BROWSER_REPORT_INVALID')
         raw = path.read_bytes(); p.need(0 < len(raw) <= 4 * 1024**2, 'BROWSER_REPORT_INVALID')
@@ -122,8 +119,8 @@ def main():
         and os.environ.get('GITHUB_SHA') == commit and os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
         and os.environ.get('GITHUB_REPOSITORY') == 'wangchaozhuanyong/id-business-system'
         and not OUT.exists() and not git('status', '--porcelain', '--untracked-files=no').strip()
-        and git('merge-base', p.CURRENT, commit).decode().strip() == p.CURRENT
-        and set(git('diff', '--name-only', p.CURRENT, commit).decode().splitlines()) == reviewed_paths(p)
+        and git('merge-base', p.REVIEW_BASE, commit).decode().strip() == p.REVIEW_BASE
+        and set(git('diff', '--name-only', p.REVIEW_BASE, commit).decode().splitlines()) == reviewed_paths(p)
         and engine_inventory(commit, p) == c['afterEngineFiles']
         and engine_inventory(p.ENGINE_BASE, p) == c['beforeEngineFiles'], 'NATIVE_MAIN_BUILD_REQUIRED')
     p.need(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/git/ref/heads/main', '--jq', '.object.sha'], cwd=ROOT).decode().strip() == commit,

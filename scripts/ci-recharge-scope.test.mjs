@@ -7148,6 +7148,24 @@ test('initialization engine-only changes cannot hide an API or payment policy ch
   assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
   assert.equal(needsOnlineRechargeCiBuild(paths), false);
   assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  assert.equal(onlineCheckoutInitializationPaths.length, 18);
+  for (const name of [
+    'auth-navigation',
+    'login-evidence-browser',
+    'session-probe',
+    'upstream-session-transition'
+  ]) {
+    const required = `apps/api/src/id-business-v2/online-recharge/engine/test/${name}.test.cjs`;
+    assert.ok(paths.includes(required));
+    assert.equal(
+      checkMode(
+        paths.filter((path) => path !== required),
+        'same',
+        'same'
+      ),
+      'full'
+    );
+  }
   for (const extra of [
     'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
     'apps/api/src/id-business-v2/online-recharge/engine/payment-limit.cjs',

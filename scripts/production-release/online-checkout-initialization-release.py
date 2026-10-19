@@ -14,32 +14,48 @@ ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
 PREFIX = 'online-checkout-initialization'
 SCOPE = 'ONLINE_CHECKOUT_INITIALIZATION'
-CURRENT = '5b51148154339b9695fea846eb59ce1ee45fbfff'
+CURRENT = '7df16100f7964bb7183f171ec5e9f275f4f48876'
+REVIEW_BASE = '7df16100f7964bb7183f171ec5e9f275f4f48876'
 ENGINE_BASE = '827ede8b4f32bd43f699413d9630d094bdd33a4c'
 ENGINE_IMAGE = 'sha256:5affbc4fc1adf9794d55408138ae93be1a9209a7c4efaed72282bd29fa3c6b24'
-MANIFEST_SHA = '33726fcb68725fd1c088f693e7f7cab1268f2f2b625247accf5e7a8d7a1061e6'
-PRESERVATION_FILE = 'recharge-checkout-preservation.json'
-PRESERVATION_SHA = '21249e877dd4b2b02c360d3039fcd77b409ae4358e59d8e6a57a95e2cac17db7'
+MANIFEST_SHA = '2108db5002441be8e4acce33152288244eeb68895df71b8cd42941dfe3d31be7'
+PRESERVATION_FILE = 'bitbrowser-history-preservation.json'
+PRESERVATION_SHA = '1972a87db55a8be230f1b75a6aaa413cb7be2845f86894d357a48cd58406cd0a'
 NORMALIZER_PATH = '/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed'
 NORMALIZER_SHA = 'ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202'
 PREDECESSOR_PROOFS = {
     'online-checkout-actionability-build-proof.json': 'e2cea0e27318da7e9cb4c143f2cd26d7b87dc9cc90361eb5ef4f0db17d86f388',
-    'recharge-checkout-build-proof.json': '3004e5f3b87857c32e830607794edd6212e3b53b5297b9216481da41d905b4ff'}
+    'bitbrowser-history-build-proof.json': 'e284ca254334424c8bfeca2ca07da5df75eb0740468fcea4ddc970b7b4b83bb5'}
 CONTRACT_FILE = PREFIX + '-contract.json'
 WORKFLOW = '.github/workflows/' + PREFIX + '-validation.yml'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
 FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-recovery.cjs', 'upstream/session-auth.js',
-    'upstream/stripe-payment.js', 'upstream/chatgpt.js', 'upstream/index.js', 'test/checkout-recovery.test.cjs', 'test/session-routing-browser.test.cjs',
-    'test/checkout-card-preparation.test.cjs', 'test/checkout-reload-request-diagnostics.test.cjs'))
+    'upstream/auth-page-detect.js', 'upstream/human-verification.js', 'upstream/stripe-payment.js',
+    'upstream/chatgpt.js', 'upstream/index.js', 'test/checkout-recovery.test.cjs', 'test/session-routing-browser.test.cjs',
+    'test/checkout-card-preparation.test.cjs', 'test/checkout-reload-request-diagnostics.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs', 'test/regressions.test.cjs', 'test/auth-navigation.test.cjs',
+    'test/login-evidence-browser.test.cjs', 'test/session-probe.test.cjs', 'test/upstream-session-transition.test.cjs'))
 ADDED = frozenset(('test/session-routing-browser.test.cjs', 'test/checkout-card-preparation.test.cjs',
-    'test/checkout-reload-request-diagnostics.test.cjs'))
+    'test/checkout-reload-request-diagnostics.test.cjs', 'test/auth-navigation.test.cjs',
+    'test/login-evidence-browser.test.cjs', 'test/session-probe.test.cjs', 'test/upstream-session-transition.test.cjs'))
 VALIDATION = frozenset(('docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'))
 REVIEW_CONTROLS = frozenset('scripts/ci-' + name for name in (
     'online-settings-scope.mjs', 'online-settings-scope.test.mjs', 'recharge-scope.mjs', 'recharge-scope.test.mjs'))
 PRESERVED = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
 SERVICES = (*PRESERVED, 'online-recharge')
 QUALITY_PARTS = ('guards', 'online-engine')
-INITIALIZATION_TESTS = ('test/session-routing-browser.test.cjs', 'test/checkout-card-preparation.test.cjs')
+INITIALIZATION_TESTS = ('test/session-routing-browser.test.cjs', 'test/checkout-card-preparation.test.cjs',
+    'test/login-evidence-browser.test.cjs', 'test/session-probe.test.cjs',
+    'test/upstream-session-transition.test.cjs', 'test/auth-navigation.test.cjs')
+INITIALIZATION_REPORTS = (
+    ('session-routing-native.tap', 'SESSION_ROUTING', 'native', 9),
+    ('session-routing-standalone.tap', 'SESSION_ROUTING', 'standalone', 9),
+    ('session-routing-pool.tap', 'SESSION_ROUTING', 'pool', 9),
+    ('card-preparation.tap', 'CARD_PREPARATION', 'native', 13),
+    ('login-evidence-browser.tap', 'LOGIN_EVIDENCE_BROWSER', 'native', 11),
+    ('session-probe.tap', 'SESSION_PROBE', 'native', 8),
+    ('upstream-session-transition.tap', 'UPSTREAM_SESSION_TRANSITION', 'native', 16),
+    ('auth-navigation.tap', 'AUTH_NAVIGATION', 'native', 4))
 HEALTH = {'ready': True, 'mode': 'enabled', 'activeTasks': 0, 'stopping': False, 'rpcConnected': True}
 SQL_FENCE = '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925'
 
@@ -82,7 +98,7 @@ def validate_contract(c):
     need(c.get('frozen') is True and c.get('admission') == 'FROZEN_REVIEWED_SOURCE'
         and c.get('pendingBindings') == [], 'SOURCE_NOT_FROZEN')
     need(c.get('version') == 1 and c.get('scope') == SCOPE and c.get('expectedCurrent') == CURRENT
-        and c.get('engineSourceBase') == ENGINE_BASE and c.get('reviewBase') == CURRENT
+        and c.get('engineSourceBase') == ENGINE_BASE and c.get('reviewBase') == REVIEW_BASE
         and c.get('engineRoot') == ENGINE and re.fullmatch('[a-f0-9]{40}', c.get('sourceReviewCommit', ''))
         and c.get('sourceReviewTag') == PREFIX + '-source-review-' + c['sourceReviewCommit'][:12]
         and c.get('upstreamSource') == LEGACY.UPSTREAM_SOURCE
@@ -142,13 +158,12 @@ def artifact_url(commit):
 
 
 def validate_browser(value, identity, c):
-    expected_runs = [('SESSION_ROUTING', 'native', 4), ('SESSION_ROUTING', 'standalone', 4),
-        ('SESSION_ROUTING', 'pool', 4), ('CARD_PREPARATION', 'native', 13)]
+    expected_runs = [(suite, mode, total) for _, suite, mode, total in INITIALIZATION_REPORTS]
     need(type(value) is dict and value.get('platform') == 'linux'
         and re.fullmatch(r'22\.\d+\.\d+', value.get('nodeVersion', ''))
         and all(value.get(k) == identity[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
         and value.get('testFiles') == {n: c['afterEngineFiles'][n] for n in INITIALIZATION_TESTS}
-        and value.get('sessionRoutingHeadful') is True and value.get('passed') == 25
+        and value.get('sessionRoutingHeadful') is True and value.get('passed') == 79
         and value.get('failed') == value.get('skipped') == value.get('todo') == 0
         and value.get('businessActions') == value.get('paymentActions') == 0
         and re.fullmatch('[a-f0-9]{64}', value.get('reportSha256', '')), 'LINUX_INITIALIZATION_TESTS_REQUIRED')

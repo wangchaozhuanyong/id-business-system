@@ -4,29 +4,42 @@
 
 const SESSION_COOKIE_HINT = '请粘贴完整 Session JSON（含 sessionToken 字段，超长会自动分块），或从浏览器导出 chatgpt.com 的 cookies[]（含 __Secure-next-auth.session-token.0/.1）';
 
-function isHardLoginRedirectUrl(url) {
-    const value = String(url || '').toLowerCase();
-    return value.includes('accounts.google.com')
-        || value.includes('login.microsoftonline.com')
-        || value.includes('/auth/login')
-        || value.includes('/auth/error')
-        || value.includes('/auth/signin');
+function navigationUrl(value) {
+    try {
+        const url = new URL(String(value || ''));
+        return ['https:', 'http:'].includes(url.protocol) ? url : null;
+    } catch (_) { return null; }
 }
 
-function isLoginRedirectUrl(url) {
-    const value = String(url || '').toLowerCase();
-    return isHardLoginRedirectUrl(url) || value.includes('auth.openai.com');
+function isHardLoginRedirectUrl(value) {
+    const url = navigationUrl(value);
+    if (!url) return false;
+    const host = url.hostname.toLowerCase().replace(/\.$/, '');
+    if (['accounts.google.com', 'login.microsoftonline.com'].includes(host)) return true;
+    const officialHost = ['chatgpt.com', 'openai.com'].some((domain) =>
+        host === domain || host.endsWith(`.${domain}`));
+    // A return URL or quoted login path in query/fragment is not a redirect.
+    return officialHost && /^\/(?:api\/)?auth\/(?:login|error|signin)(?:\/|$)/i.test(url.pathname);
 }
 
-function isCheckoutPageUrl(url) {
-    return /chatgpt\.com\/checkout\//i.test(String(url || ''));
+function isLoginRedirectUrl(value) {
+    const url = navigationUrl(value);
+    return Boolean(url && (isHardLoginRedirectUrl(value)
+        || url.hostname.toLowerCase().replace(/\.$/, '') === 'auth.openai.com'));
+}
+
+function isCheckoutPageUrl(value) {
+    const url = navigationUrl(value);
+    return Boolean(url && url.protocol === 'https:' && !url.port
+        && url.hostname.toLowerCase().replace(/\.$/, '') === 'chatgpt.com'
+        && /^\/checkout\//i.test(url.pathname));
 }
 
 function shouldBlockLoginNavigation(url, resourceType = '') {
-    const value = String(url || '').toLowerCase();
-    if (value.includes('accounts.google.com') || value.includes('login.microsoftonline.com')) {
-        return true;
-    }
+    const parsed = navigationUrl(url);
+    if (!parsed) return false;
+    const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+    if (['accounts.google.com', 'login.microsoftonline.com'].includes(host)) return true;
     if (resourceType === 'document' && isHardLoginRedirectUrl(url) && !isCheckoutPageUrl(url)) {
         return true;
     }

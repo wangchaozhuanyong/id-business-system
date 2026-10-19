@@ -500,13 +500,21 @@ export const onlineCheckoutInitializationPaths = Object.freeze(
     'SOURCE_MANIFEST.json',
     'checkout-recovery.cjs',
     'upstream/session-auth.js',
+    'upstream/auth-page-detect.js',
+    'upstream/human-verification.js',
     'upstream/stripe-payment.js',
     'upstream/chatgpt.js',
     'upstream/index.js',
     'test/checkout-recovery.test.cjs',
     'test/session-routing-browser.test.cjs',
     'test/checkout-card-preparation.test.cjs',
-    'test/checkout-reload-request-diagnostics.test.cjs'
+    'test/checkout-reload-request-diagnostics.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs',
+    'test/regressions.test.cjs',
+    'test/auth-navigation.test.cjs',
+    'test/login-evidence-browser.test.cjs',
+    'test/session-probe.test.cjs',
+    'test/upstream-session-transition.test.cjs'
   ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name)
 );
 const initializationDocumentation = ['docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'];

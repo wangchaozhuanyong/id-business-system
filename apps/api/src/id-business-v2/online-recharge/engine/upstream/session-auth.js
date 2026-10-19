@@ -451,8 +451,11 @@ async function verifyRealSessionApi(context) {
         } catch (_) {
             data = null;
         }
+        const sessionObject = data && typeof data === 'object' && !Array.isArray(data);
+        // Session profile values may quote verification wording. Only an actual
+        // challenge response, rather than text inside JSON, is a challenge page.
         const isCloudflareChallenge = challengeHeader
-            || /just a moment|verify you are human/i.test(bodyText);
+            || (!sessionObject && /just a moment|verify you are human/i.test(bodyText));
         if (isCloudflareChallenge) {
             return {
                 ok: false,
@@ -462,7 +465,6 @@ async function verifyRealSessionApi(context) {
                 error: `官网要求验证（HTTP ${status}），尚未确认登录状态`
             };
         }
-        const sessionObject = data && typeof data === 'object' && !Array.isArray(data);
         const hasSessionIdentity = sessionObject && data.error == null && data.errors == null
             && [data.accessToken, data.user?.email, data.user?.id]
                 .some((value) => typeof value === 'string' && value.trim());
@@ -710,14 +712,23 @@ async function installChatGptSession(context, sessionRaw) {
 
         const originalFetch = window.fetch.bind(window);
         window.fetch = async function patchedFetch(input, init) {
-            const url = typeof input === 'string' ? input : (input && input.url) || '';
-            if (officialUrl(url) && url.includes('/api/auth/session')) {
+            const raw = input && typeof input.url === 'string' ? input.url : String(input);
+            let url;
+            try { url = new URL(raw, window.location.href); } catch (_) { return originalFetch(input, init); }
+            if (!officialUrl(url.href) || !['/api/auth/session', '/api/auth/csrf'].includes(url.pathname)) {
+                return originalFetch(input, init);
+            }
+            // Preserve native validation (including GET bodies) and cancellation
+            // before returning the read-only compatibility response.
+            const request = new Request(input, init);
+            if (request.method !== 'GET' || request.signal.aborted) return originalFetch(request);
+            if (url.pathname === '/api/auth/session') {
                 return new Response(sessionStr, {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 });
             }
-            if (officialUrl(url) && url.includes('/api/auth/csrf')) {
+            if (url.pathname === '/api/auth/csrf') {
                 return new Response(JSON.stringify({ csrfToken: 'bootstrap-csrf-token' }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
@@ -728,7 +739,8 @@ async function installChatGptSession(context, sessionRaw) {
     }, sessionData);
 
     await context.route(/\/api\/auth\/session(\?.*)?$/, async (route) => {
-        if (!isOfficialSessionUrl(route.request().url())) {
+        if (route.request().method() !== 'GET' || !isOfficialSessionUrl(route.request().url())
+            || new URL(route.request().url()).pathname !== '/api/auth/session') {
             await route.continue();
             return;
         }
@@ -740,7 +752,8 @@ async function installChatGptSession(context, sessionRaw) {
     });
 
     await context.route(/\/api\/auth\/csrf(\?.*)?$/, async (route) => {
-        if (!isOfficialSessionUrl(route.request().url())) {
+        if (route.request().method() !== 'GET' || !isOfficialSessionUrl(route.request().url())
+            || new URL(route.request().url()).pathname !== '/api/auth/csrf') {
             await route.continue();
             return;
         }
@@ -758,7 +771,8 @@ async function installChatGptSession(context, sessionRaw) {
             await route.abort();
             return;
         }
-        if (isOfficialSessionUrl(url) && /^\/api\/auth\/(session|csrf)$/.test(new URL(url).pathname)) {
+        if (route.request().method() === 'GET' && isOfficialSessionUrl(url)
+            && /^\/api\/auth\/(session|csrf)$/.test(new URL(url).pathname)) {
             // This last-registered route runs first. Continue would bypass the
             // dedicated official Session/CSRF handlers registered above.
             await route.fallback();
@@ -804,6 +818,7 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
         const email = sessionData?.user?.email || extractProfileFromToken(resolved.accessToken).email || '';
         const cookieVerified = options.cookieVerified === true;
         let uiWaitRemaining = cookieVerified ? 12000 : 8000;
+        let guestHomepageReloaded = false;
         const waitForStableUi = async (stopWhen) => {
             remaining(1);
             if (uiWaitRemaining <= 0) return false;
@@ -832,6 +847,64 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
 
         diagnostics.reason = 'verification_failed';
         const { clearHumanVerification, isBlockingHumanVerificationVisible } = require('./human-verification');
+        const isOfficialHomepage = () => {
+            try {
+                const url = new URL(page.url());
+                return url.origin === CHATGPT_ORIGIN && url.pathname === '/'
+                    && !url.username && !url.password;
+            } catch (_) { return false; }
+        };
+        const reloadGuestHomepageOnce = async () => {
+            remaining(1);
+            if (guestHomepageReloaded || page.isClosed?.() || !isOfficialHomepage()) return false;
+            const challenge = await isBlockingHumanVerificationVisible(page);
+            diagnostics.challengeDetected ||= challenge;
+            if (challenge || !await hasVisibleLoginChrome(page)) return false;
+            // A challenge may mount while the guest controls are being read.
+            const challengeBeforeReload = await isBlockingHumanVerificationVisible(page);
+            diagnostics.challengeDetected ||= challengeBeforeReload;
+            remaining(1);
+            if (challengeBeforeReload || !isOfficialHomepage()) return false;
+            guestHomepageReloaded = true;
+            diagnostics.reason = 'navigation_failed';
+            let abortReload;
+            try {
+                await new Promise((resolve, reject) => {
+                    abortReload = () => {
+                        // This Page belongs to the current task. Closing it also
+                        // stops a pending navigation when its lease is cancelled.
+                        Promise.resolve().then(() => page.close()).catch(() => {});
+                        reject(signal.reason);
+                    };
+                    signal?.addEventListener('abort', abortReload, { once: true });
+                    if (signal?.aborted) { abortReload(); return; }
+                    // Both outcomes remain observed after cancellation, so a
+                    // delayed navigation cannot continue login or reject unhandled.
+                    Promise.resolve().then(() => {
+                        signal?.throwIfAborted();
+                        return page.reload({ waitUntil: 'domcontentloaded', timeout: remaining(90000) });
+                    }).then(resolve, reject);
+                });
+            } finally {
+                if (abortReload) signal?.removeEventListener('abort', abortReload);
+            }
+            remaining(1);
+            if (!isOfficialHomepage())
+                throw sessionNotConfirmed('刷新后未在原首页确认登录，已停止后续操作', 'navigation_failed', diagnostics);
+            await page.waitForTimeout(remaining(2000));
+            remaining(1);
+            const challengeAfterReload = await isBlockingHumanVerificationVisible(page);
+            diagnostics.challengeDetected ||= challengeAfterReload;
+            if (challengeAfterReload) {
+                diagnostics.reason = 'verification_failed';
+                throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+            }
+            // The original guest hydration wait may be spent. Recheck this one
+            // refreshed page with the same UI cap and original overall deadline.
+            uiWaitRemaining = cookieVerified ? 12000 : 8000;
+            diagnostics.reason = 'login_not_confirmed';
+            return true;
+        };
         diagnostics.challengeDetected = await isBlockingHumanVerificationVisible(page);
         diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
         if (!diagnostics.challengeDetected && diagnostics.visibleLogin) {
@@ -842,7 +915,9 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
                 return challenge;
             });
             diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
-            if (!await isBlockingHumanVerificationVisible(page))
+            // Ordinary guest controls can outlive hydration. Let the one
+            // verification result reach the frozen upstream reload transition.
+            if (!diagnostics.visibleLogin && !await isBlockingHumanVerificationVisible(page))
                 await assertChatGptLoggedIn(page, '首页', diagnostics);
         }
         diagnostics.reason = 'verification_failed';
@@ -862,6 +937,7 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
             && captchaResult.sessionRequired === true && await hasVisibleLoginChrome(page)
             && !await isBlockingHumanVerificationVisible(page)) {
             diagnostics.reason = 'login_not_confirmed';
+            await reloadGuestHomepageOnce();
             diagnostics.loggedInUi = await waitForStableUi(async () => {
                 const challenge = await isBlockingHumanVerificationVisible(page);
                 diagnostics.challengeDetected ||= challenge;
@@ -886,6 +962,7 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
         }
 
         diagnostics.reason = 'login_not_confirmed';
+        await reloadGuestHomepageOnce();
         const uiReady = await waitForStableUi();
         diagnostics.loggedInUi = uiReady;
         diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
@@ -901,7 +978,7 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
             diagnostics.challengeDetected = true;
             throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
         }
-        if (!uiReady && !apiReady) {
+        if (!uiReady && (guestHomepageReloaded || !apiReady)) {
             throw sessionNotConfirmed('尚未取得首页的登录成功证据，已停止后续操作', 'login_not_confirmed', diagnostics);
         }
         if (!uiReady && apiReady) {
