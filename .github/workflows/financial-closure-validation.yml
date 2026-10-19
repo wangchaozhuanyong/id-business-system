@@ -46,6 +46,10 @@ jobs:
       - run: npm run prisma:mysql:generate
       - run: npm run build --workspace @apple-business/shared
       - run: npm run typecheck --workspace @apple-business/api
+      - name: Prepare the existing synthetic browser-chain runtime
+        run: |
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          npx --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream playwright install --with-deps chromium
       - run: npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge
       - run: npm run build --workspace @apple-business/api
       - name: Apply migrations only to disposable CI MySQL
