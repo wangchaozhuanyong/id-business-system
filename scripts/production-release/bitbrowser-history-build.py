@@ -72,7 +72,7 @@ def freeze(baseline, source, proof_path):
 def check(c):
     p = load('bitbrowser-history-release.py')
     p.validate_contract(c)
-    p.need(set(git('diff', '--name-only', p.CURRENT, c['sourceReviewCommit']).decode().splitlines()) == p.APPLICATION,
+    p.need(set(git('diff', '--name-only', p.CURRENT, c['sourceReviewCommit']).decode().splitlines()) == p.APPLICATION | (p.CI_CONTROLS if p.RECIPE == p.BOUNDED else set()),
         'REVIEW_SCOPE_CHANGED')
     for name, expected in c['sources'].items():
         path = ROOT / name
@@ -131,7 +131,7 @@ def reconstruct():
 def require_quality_jobs(rows, p):
     names = {r.get('name', '').replace(' ', '') for r in rows if r.get('conclusion') == 'success'}
     required = ({'recharge(guards)', 'recharge(admin)'} if p.RECIPE == p.ADDRESS else
-        {'recharge(guards)', 'recharge(api)'} | ({'recharge(admin)'} if p.RECIPE == p.FOLLOWUP else set()))
+        {'recharge(guards)', 'recharge(api)'} | ({'recharge(admin)'} if p.RECIPE in (p.FOLLOWUP, p.BOUNDED) else set()))
     p.need('full-quality' in names or required <= names,
         'SOURCE_API_QUALITY_NOT_PASSED')
 
@@ -160,14 +160,14 @@ def mysql(c, identity):
     p = load('bitbrowser-history-release.py')
     raw = (ROOT / '.runtime/bitbrowser-history/mysql-vitest.json').read_bytes()
     result = json.loads(raw)
-    p.need(result.get('success') is True and result.get('numTotalTests') == result.get('numPassedTests') == 18
+    p.need(result.get('success') is True and result.get('numTotalTests') == result.get('numPassedTests') == (31 if p.RECIPE == p.BOUNDED else 18)
         and all(result.get(n) == 0 for n in ('numFailedTests', 'numPendingTests', 'numTodoTests',
             'numFailedTestSuites', 'numPendingTestSuites'))
         and {Path(f['name']).resolve() for f in result.get('testResults', [])} == {ROOT / n for n in p.MYSQL_FILES}
         and all(f.get('status') == 'passed' and all(a.get('status') == 'passed' for a in f['assertionResults'])
             for f in result['testResults']), 'MYSQL_TESTS_NOT_PASSED')
     proof = {**identity, 'scope': 'OWNED_EMPTY_DATABASE', 'runtime': 'github-actions-mysql-service',
-        'testFiles': c['mysqlTestSources'], 'testsTotal': 18, 'testsPassed': 18, 'testsSkipped': 0,
+        'testFiles': c['mysqlTestSources'], 'testsTotal': (31 if p.RECIPE == p.BOUNDED else 18), 'testsPassed': (31 if p.RECIPE == p.BOUNDED else 18), 'testsSkipped': 0,
         'testsTodo': 0, 'productionActions': 0, 'reportSha256': p.sha(raw)}
     p.verify_mysql(proof, identity, c)
     return proof
@@ -281,14 +281,17 @@ def followup_check(c):
     p = load('bitbrowser-history-release.py')
     p.validate_contract(c)
     p.need(git('rev-parse', c['sourceReviewCommit'] + '^{tree}').decode().strip() == c['sourceReviewTree']
-        and set(git('diff', '--name-only', p.CURRENT, c['sourceReviewCommit']).decode().splitlines()) == p.APPLICATION,
+        and set(git('diff', '--name-only', p.CURRENT, c['sourceReviewCommit']).decode().splitlines()) == p.APPLICATION | (p.CI_CONTROLS if p.RECIPE == p.BOUNDED else set()),
         'REVIEW_SCOPE_CHANGED')
     for n, expected in {**c['sources'], **c['mysqlTestSources']}.items():
         path = ROOT / n
         p.need(path.is_file() and not path.is_symlink() and p.sha(path.read_bytes()) == expected
             == p.sha(git('show', c['sourceReviewCommit'] + ':' + n)), 'SOURCE_CHANGED')
-    for n in p.MYSQL_FILES:
+    for n in (p.MYSQL_FILES if p.RECIPE != p.BOUNDED else ()):
         p.need(c['mysqlTestSources'][n] == p.sha(git('show', p.CURRENT + ':' + n)), 'MYSQL_SOURCE_CHANGED')
+    if p.RECIPE == p.BOUNDED:
+        p.need(all(p.sha(git('show', c['sourceReviewCommit'] + ':' + n)) == digest
+            for n, digest in c['sourceReviewControls'].items()), 'SOURCE_REVIEW_CONTROL_CHANGED')
     if p.RECIPE == p.ADDRESS:
         p.need(c['mysqlInheritance']['inputs'] == mysql_inputs(c['sourceReviewCommit']) == mysql_inputs(p.CURRENT)
             == mysql_inputs('HEAD'), 'INHERITED_MYSQL_INPUT_CHANGED')
@@ -626,23 +629,234 @@ def address_main(c):
     print(json.dumps({'status': 'BITBROWSER_EXISTING_ADDRESS_NATIVE_BUILT', **identity, 'businessActions': 0}))
 
 
+
+def reconstruct_bounded_parent(p):
+    # This is a source reconstruction only. No bounded contract or dispatch is
+    # admitted until the business file set and review identity are frozen.
+    api, admin = reconstruct_followup(p)
+    for filename, roles in (('bitbrowser-followup-contract.json', ('api', 'admin')),
+        ('bitbrowser-entry-start-contract.json', ('api',)),
+        ('bitbrowser-existing-address-contract.json', ('admin',))):
+        old = json.loads((HERE / filename).read_bytes())
+        for role in roles:
+            overlay(api if role == 'api' else admin,
+                {n: digest for n, digest in old['sources'].items() if n.startswith('apps/' + role + '/')},
+                old['sourceReviewCommit'])
+    return api, admin
+
+
+def bounded_overlay(context, sources, source, p):
+    # A reviewed root file may only replace its native projected predecessor.
+    # Tests do not enter production compilation and can be newer fixtures.
+    parent = '7df16100f7964bb7183f171ec5e9f275f4f48876'
+    for name in sources:
+        if name.endswith('.spec.ts'):
+            continue
+        path = context / name
+        tracked = git('ls-tree', '--name-only', parent, '--', name).decode().splitlines()
+        if tracked:
+            p.need(path.is_file() and not path.is_symlink()
+                and p.sha(path.read_bytes()) == p.sha(git('show', parent + ':' + name)), 'BOUNDED_SOURCE_PREDECESSOR_CHANGED')
+        else:
+            p.need(not path.exists() and not path.is_symlink(), 'BOUNDED_NEW_SOURCE_ALREADY_PRESENT')
+    overlay(context, sources, source)
+
+
+def verify_bounded_delta(before, after, shared_before, shared_after, c, p):
+    selected = set(c['apiModules'])
+    baseline = c['baseline']['apiModules']
+    absent = set(c['absentApiModules'])
+    p.need(selected == set(baseline) | absent and not set(baseline) & absent
+        and {n: before.get(n) for n in baseline} == baseline
+        and all(n not in before for n in absent)
+        and {n: before.get(n) for n in c['publishedApiModules']} == c['publishedApiModules'], 'BOUNDED_BASE_API_NOT_REPRODUCED')
+    actual_delta = {n for n in set(before) | set(after) if before.get(n) != after.get(n)} - {'tsconfig.build.tsbuildinfo'}
+    p.need(actual_delta == selected, 'BOUNDED_COMPILED_SELECTION_CHANGED')
+    p.need(shared_before == shared_after
+        and {n: shared_before.get(n) for n in c['publishedSharedFiles']} == c['publishedSharedFiles'], 'SHARED_OUTPUT_CHANGED')
+    p.need(all(n in after for n in selected)
+        and any(before.get(n) != after[n] for n in selected if n.endswith('.js')), 'BOUNDED_EXPECTED_API_DELTA_MISSING')
+    return {n: after[n] for n in sorted(selected)}
+
+
+def bounded_freeze(parent_dir, source, delta_path):
+    p = load('bitbrowser-history-release.py')
+    source = git('rev-parse', source + '^{commit}').decode().strip()
+    p.need(source == '04a284c1d038b2eadd6aef933c6cc26a5bfa6935'
+        and set(git('diff', '--name-only', p.CURRENT, source).decode().splitlines()) == p.APPLICATION | p.CI_CONTROLS,
+        'BOUNDED_REVIEW_SCOPE_CHANGED')
+    directory = Path(parent_dir)
+    parent_raw = (directory / 'build-proof.json').read_bytes()
+    parent = json.loads(parent_raw)
+    preflight = json.loads((directory / 'publication/preflight-result.json').read_bytes())
+    p.need(p.sha(parent_raw) == p.BOUNDED_PROOF and parent['commit'] == p.CURRENT
+        and parent['contractSha256'] == p.ADDRESS_CONTRACT_SHA and preflight['commit'] == p.CURRENT
+        and preflight['status'] == 'BITBROWSER_HISTORY_PREFLIGHT_VERIFIED', 'BOUNDED_PREDECESSOR_PROOF_INVALID')
+    old = json.loads((HERE / 'bitbrowser-existing-address-contract.json').read_bytes())
+    delta = json.loads(Path(delta_path).read_bytes())
+    p.need(delta['sourceReviewCommit'] == source and delta['sharedUnchanged'] is True,
+        'BOUNDED_LOCAL_DELTA_INVALID')
+    selected = p.BOUNDED_MODULES
+    p.need(set(delta['apiModules']) == selected | p.BOUNDED_ORDER_ONLY, 'BOUNDED_LOCAL_DELTA_INVALID')
+    c = {'version': 1, 'status': 'FROZEN', 'recipe': p.BOUNDED, 'scope': p.SCOPE,
+        'expectedCurrent': p.CURRENT, 'reviewBase': p.CURRENT, 'sourceReviewCommit': source,
+        'sourceReviewTree': git('rev-parse', source + '^{tree}').decode().strip(),
+        'sourceReviewControls': {n: p.sha(git('show', source + ':' + n)) for n in sorted(p.CI_CONTROLS)},
+        'sources': {n: p.sha(git('show', source + ':' + n)) for n in sorted(p.APPLICATION)},
+        'productionSources': {n: p.sha(git('show', source + ':' + n)) for n in sorted(p.BOUNDED_PRODUCTION)},
+        'apiModules': sorted(selected), 'absentApiModules': sorted(set(delta['absentApiModules']) & selected),
+        'updatedServices': list(p.UPDATED), 'reboundServices': list(p.REBOUND), 'preservedServices': list(p.PRESERVED),
+        'engineHealth': p.ENGINE, 'controlPins': {n: p.sha((HERE / n).read_bytes()) for n in sorted(p.CONTROLS)},
+        'ciControlPins': {n: p.sha((ROOT / n).read_bytes()) for n in sorted(p.CI_CONTROLS)},
+        'mysqlTestSources': {n: p.sha(git('show', source + ':' + n)) for n in sorted(p.MYSQL_FILES)},
+        'mysqlExpectedCounts': [10, 8, 13], 'sharedMysqlDatabase': 'id_business_v2_shared_bank_fixture',
+        'workflowSha256': p.sha((ROOT / p.WORKFLOW).read_bytes()),
+        'qualityWorkflowSha256': p.sha((ROOT / '.github/workflows/quality.yml').read_bytes()),
+        'predecessorProofSha256': p.BOUNDED_PROOF, 'publishedApiModules': old['publishedApiModules'],
+        'publishedSharedFiles': old['publishedSharedFiles'], 'publishedAdminFiles': parent['adminFiles'],
+        'parentApiInventory': p.BOUNDED_API_INVENTORY,
+        'parentVerifiedBaseline': preflight['runtimeBaseline']['verifiedBaseline'],
+        'parentVerifiedSealSha256': preflight['runtimeBaseline']['entryParentSealSha256'],
+        'sqlFenceHelperSha256': p.sha((HERE / 'api-admin-scope.py').read_bytes()),
+        'baseline': {'commit': p.CURRENT, 'apiModules': {n: v for n, v in delta['baselineModules'].items() if n in selected}},
+        'declarationOrderOnly': {n: {'before': delta['baselineModules'][n], 'after': delta['candidateModules'][n]}
+            for n in sorted(p.BOUNDED_ORDER_ONLY)},
+        'parentNative': {'commit': p.CURRENT, 'tree': p.BOUNDED_TREE, 'proofSha256': p.BOUNDED_PROOF,
+            'contractSha256': p.ADDRESS_CONTRACT_SHA, 'workflowRunId': '39204594382',
+            'apiImage': p.ADDRESS_API_IMAGE, 'adminImage': p.BOUNDED_ADMIN_IMAGE},
+        'migrationPerformed': False, 'businessActions': 0}
+    p.validate_contract(c)
+    for name in p.INHERITED:
+        p.need(c['controlPins'][name] == p.sha(git('show', p.CURRENT + ':scripts/production-release/' + name)),
+            'INHERITED_CONTROL_CHANGED')
+    CONTRACT.write_text(json.dumps(c, sort_keys=True, indent=2) + '\n')
+
+
+def checkout_property_move(before, after, node_modules, p):
+    # Byte equality outside the named PropertySignatures, plus exact TypeLiteral
+    # owner paths/text, prevents parameter/tuple/cross-scope normalization.
+    script = r"""const ts=require(process.argv[1]),fs=require('fs'),input=JSON.parse(fs.readFileSync(0,'utf8'));
+function inspect(raw){const file=ts.createSourceFile('output.d.ts',raw,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);if(file.parseDiagnostics.length)throw Error('PARSE');let removed=[],owners=[];
+const target=n=>ts.isPropertySignature(n)&&ts.isTypeLiteralNode(n.parent)&&n.name&&n.name.getText(file)==='checkoutIdentifier'&&n.getText(file)==='checkoutIdentifier: string | null;';
+function walk(n,path){if(target(n)){if(!ts.isTypeLiteralNode(n.parent))throw Error('OWNER');const start=raw.lastIndexOf('\n',n.getStart(file)-1)+1,end=raw.indexOf('\n',n.end);if(end<0||!/^ *checkoutIdentifier: string \| null;$/.test(raw.slice(start,end)))throw Error('PROPERTY');removed.push([start,end+1]);return;}
+const children=[];ts.forEachChild(n,c=>{children.push(c);});let index=0;for(const child of children){if(!target(child))walk(child,path+'/'+index++);else walk(child,path+'/property');}
+if(ts.isTypeLiteralNode(n)){const own=n.members.filter(target);if(own.length){if(own.length!==1)throw Error('DUPLICATE');const prop=own[0],start=raw.lastIndexOf('\n',prop.getStart(file)-1)+1,end=raw.indexOf('\n',prop.end)+1;owners.push([path,raw.slice(n.getStart(file),start)+raw.slice(end,n.end),raw.slice(start,end)]);}}}
+walk(file,'root');let stripped=raw;for(const[a,b]of removed.sort((x,y)=>y[0]-x[0]))stripped=stripped.slice(0,a)+stripped.slice(b);if(!owners.length)throw Error('MISSING');return{stripped,owners};}
+const a=inspect(input.before),b=inspect(input.after);if(a.stripped!==b.stripped||JSON.stringify(a.owners)!==JSON.stringify(b.owners))throw Error('NOT_SINGLE_PROPERTY_MOVE');process.stdout.write('ok');"""
+    result = subprocess.run(['node', '-e', script, str(node_modules / 'typescript')], input=json.dumps({
+        'before': before.decode(), 'after': after.decode()}).encode(), capture_output=True)
+    p.need(result.returncode == 0 and result.stdout == b'ok', 'BOUNDED_DECLARATION_PROPERTY_MOVE_INVALID')
+
+
+def preserve_order_only(before, candidate, c, p):
+    base = before / 'apps/api/dist'
+    target = candidate / 'apps/api/dist'
+    p.need(set(c['declarationOrderOnly']) == p.BOUNDED_ORDER_ONLY, 'BOUNDED_DECLARATION_RULE_INVALID')
+    for name, rule in c['declarationOrderOnly'].items():
+        old, new = (base / name).read_bytes(), (target / name).read_bytes()
+        p.need(p.sha(old) == rule['before'], 'BOUNDED_DECLARATION_HASH_CHANGED')
+        if p.sha(new) == rule['before']:
+            continue
+        p.need(p.sha(new) == rule['after'], 'BOUNDED_DECLARATION_HASH_CHANGED')
+        checkout_property_move(old, new, candidate / 'node_modules', p)
+        (target / name).write_bytes(old)
+
+
+def bounded_native_capture(c, identity, p):
+    dispatch = load('bitbrowser-history-dispatch.py')
+    dispatch.OUT = ROOT / '.deploy/bitbrowser-history-parent'
+    dispatch.OUT.mkdir(mode=0o700, parents=True, exist_ok=False)
+    plan = {**identity, 'recipe': p.BOUNDED, 'contractSha256': p.sha(CONTRACT.read_bytes()),
+        'controlSources': {**c['controlPins'], p.CONTRACT_FILE: p.sha(CONTRACT.read_bytes())}}
+    value = dispatch.transport(plan, 'parent')
+    p.verify_bounded_capture(value, identity, c)
+    return value
+
+
+def bounded_main(c):
+    p = followup_check(c)
+    commit = git('rev-parse', 'HEAD').decode().strip()
+    identity = {'commit': commit, 'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
+        'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT']}
+    p.need(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_REF') == 'refs/heads/main'
+        and os.environ.get('GITHUB_SHA') == commit and os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
+        and os.environ.get('GITHUB_REPOSITORY') == 'wangchaozhuanyong/id-business-system'
+        and not OUT.exists() and not git('status', '--porcelain', '--untracked-files=no').strip(), 'NATIVE_BUILD_REQUIRED')
+    qa = {'release': quality(commit, c), 'sources': quality(c['sourceReviewCommit'], c, source=True)}
+    mysql_evidence = mysql(c, identity)
+    capture = bounded_native_capture(c, identity, p)
+    OUT.mkdir(mode=0o700, parents=True)
+    api, admin = reconstruct_bounded_parent(p)
+    h = load('recharge-record-release.py')
+    outputs = {}
+    for role, before in (('api', api), ('admin', admin)):
+        candidate = OUT / (role + '-candidate')
+        shutil.copytree(before, candidate)
+        bounded_overlay(candidate, {n: v for n, v in c['productionSources'].items() if n.startswith('apps/' + role + '/')}, c['sourceReviewCommit'], p)
+        for variant, context in (('baseline', before), ('candidate', candidate)):
+            build_id = commit if role == 'admin' and variant == 'candidate' else (p.CURRENT if role == 'admin' else p.ADMIN_BUILD)
+            env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + build_id}
+            commands = [('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
+                ('npm', 'run', 'build', '--workspace', '@apple-business/shared')]
+            if role == 'api': commands.append(('npm', 'run', 'prisma:mysql:generate'))
+            commands.append(('npm', 'run', 'build', '--workspace', '@apple-business/' + role))
+            for command in commands: subprocess.run(command, cwd=context, env=env, check=True)
+            if role == 'api' and variant == 'candidate': preserve_order_only(before, context, c, p)
+            outputs[role + '-' + variant] = (h.file_inventory(context / ('apps/' + role + '/dist')),
+                h.file_inventory(context / 'packages/shared/dist'))
+    verify_bounded_delta(*[outputs['api-' + v][0] for v in ('baseline', 'candidate')],
+        *[outputs['api-' + v][1] for v in ('baseline', 'candidate')], c, p)
+    p.need(capture['apiModules'] == {n: outputs['api-baseline'][0][n] for n in c['baseline']['apiModules']},
+        'BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH')
+    verify_followup_admin(outputs['admin-baseline'][0], outputs['admin-baseline'][1], outputs['admin-candidate'][1], c, p)
+    payload = OUT / 'payload'
+    for name in p.MODULES:
+        target = payload / 'api/modules' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(OUT / 'api-candidate/apps/api/dist' / name, target)
+    shutil.copytree(OUT / 'admin-candidate/apps/admin/dist', payload / 'admin/html')
+    for name in c['productionSources']:
+        target = payload / 'source' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    proof = {**identity, 'version': 1, 'recipe': p.BOUNDED, 'scope': p.SCOPE,
+        'contractSha256': p.sha(CONTRACT.read_bytes()), 'sources': c['sources'], 'productionSources': c['productionSources'],
+        'controlSources': c['controlPins'], 'apiModules': h.file_inventory(payload / 'api/modules'),
+        'adminFiles': h.file_inventory(payload / 'admin/html'), 'baselineAdminReproduced': True,
+        'baselineAdminFiles': c['publishedAdminFiles'], 'files': h.file_inventory(payload), 'qualityVerification': qa,
+        'isolatedMysqlVerification': mysql_evidence, 'nativeParentCapture': capture,
+        'baselineModulesReproduced': c['baseline']['apiModules'], 'predecessorProofSha256': p.BOUNDED_PROOF,
+        'baselineSharedUnchanged': True, 'updatedServices': list(p.UPDATED), 'migrationPerformed': False, 'businessActions': 0}
+    p.verify_proof(proof, proof, c, payload, h)
+    (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
+    bundle = OUT / 'bitbrowser-history-artifact.tar.gz'
+    with tarfile.open(bundle, 'w:gz') as archive: archive.add(payload, arcname='payload')
+    (OUT / 'artifact-sha256.txt').write_text(p.sha(bundle.read_bytes()) + '\n')
+    print(json.dumps({'status': 'BITBROWSER_BOUNDED_HOLD_NATIVE_BUILT', **identity, 'businessActions': 0}))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--recipe', choices=('history-20261019', 'followup-20261019', 'entry-start-20261019', 'existing-address-field-20261019'), default=os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019'))
+    parser.add_argument('--recipe', choices=('history-20261019', 'followup-20261019', 'entry-start-20261019', 'existing-address-field-20261019', 'bounded-hold-20261019'), default=os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019'))
+    parser.add_argument('--delta', help='Exact local frozen API compilation delta for bounded freeze only')
     parser.add_argument('--admin-proof', default=str(PREDECESSOR))
     parser.add_argument('--freeze', nargs=2, metavar=('BASELINE', 'SOURCE_REVIEW_COMMIT'))
     parser.add_argument('--predecessor-proof', default=str(PREDECESSOR))
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     RECIPE = args.recipe
-    if RECIPE == 'existing-address-field-20261019':
+    if RECIPE == 'bounded-hold-20261019':
+        CONTRACT = HERE / 'bitbrowser-bounded-hold-contract.json'
+    elif RECIPE == 'existing-address-field-20261019':
         CONTRACT = HERE / 'bitbrowser-existing-address-contract.json'
     elif RECIPE == 'followup-20261019':
         CONTRACT = HERE / 'bitbrowser-followup-contract.json'
     elif RECIPE == 'entry-start-20261019':
         CONTRACT = HERE / 'bitbrowser-entry-start-contract.json'
     if args.freeze:
-        if RECIPE == 'existing-address-field-20261019':
+        if RECIPE == 'bounded-hold-20261019':
+            bounded_freeze(*args.freeze, args.delta)
+        elif RECIPE == 'existing-address-field-20261019':
             address_freeze(*args.freeze, args.admin_proof)
         elif RECIPE == 'entry-start-20261019':
             entry_freeze(*args.freeze)
@@ -651,10 +865,12 @@ if __name__ == '__main__':
         else:
             freeze(*args.freeze, args.predecessor_proof)
     elif args.check:
-        (followup_check if RECIPE in ('followup-20261019', 'entry-start-20261019', 'existing-address-field-20261019') else check)(json.loads(CONTRACT.read_bytes()))
+        (followup_check if RECIPE in ('followup-20261019', 'entry-start-20261019', 'existing-address-field-20261019', 'bounded-hold-20261019') else check)(json.loads(CONTRACT.read_bytes()))
         print('{"sourceCheck":"passed","businessActions":0}')
     else:
-        if RECIPE == 'existing-address-field-20261019':
+        if RECIPE == 'bounded-hold-20261019':
+            bounded_main(json.loads(CONTRACT.read_bytes()))
+        elif RECIPE == 'existing-address-field-20261019':
             address_main(json.loads(CONTRACT.read_bytes()))
         elif RECIPE == 'entry-start-20261019':
             entry_main(json.loads(CONTRACT.read_bytes()))
