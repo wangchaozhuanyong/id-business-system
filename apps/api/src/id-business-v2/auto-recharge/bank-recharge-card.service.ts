@@ -156,6 +156,14 @@ export class BankRechargeCardService {
     return this.repository.findInTransaction(tx, id);
   }
 
+  assertSharedAttemptBinding(
+    tx: V2CommandTransaction,
+    legacyCardId: string | null,
+    attempt: BitBrowserCardAttempt
+  ) {
+    return this.pool.assertBitBrowserAttemptBinding(tx, legacyCardId, attempt);
+  }
+
   finishSharedCard(
     tx: V2CommandTransaction,
     jobId: string,

@@ -7,7 +7,8 @@ const resolutionKeys = [
   'resolution_job_id',
   'source_job_id',
   'verification_job_id',
-  '_official_terminal_failure_v1'
+  '_official_terminal_failure_v1',
+  'manual_settlement'
 ];
 
 /** These fields originate in the server's authenticated resolution transaction. */

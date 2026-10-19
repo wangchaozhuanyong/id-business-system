@@ -56,6 +56,7 @@ export function unknownPaymentCanBeResolved(job: RechargeResolutionJob) {
     result.status !== 'subscription_activated' &&
     result.payment_outcome !== 'subscription_activated' &&
     result.operator_resolution === undefined &&
+    result.manual_settlement === undefined &&
     typeof result.checkout_identifier === 'string' &&
     checkoutPattern.test(result.checkout_identifier)
   );

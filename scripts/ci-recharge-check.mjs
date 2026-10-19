@@ -1,3 +1,7 @@
+import {
+  isManualSettlementCandidate,
+  hasOnlineRuntimeChange
+} from './ci-bitbrowser-manual-controls.mjs';
 import { isFeatureRetirementPermissionsRepair } from './ci-feature-retirement-scope.mjs';
 import {
   rejectRetiredRegistrationCommand,
@@ -197,6 +201,41 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// Business quality stays full. Only unchanged historical publishers are excluded
+// from this finite publisher's control step; the Python check verifies all frozen
+// source/control/CI hashes before the matching publication tests run.
+if (['guards', 'release-controls'].includes(part) && isManualSettlementCandidate(changed)) {
+  if (part === 'guards') {
+    const files = changed.filter((name) => existsSync(name));
+    const formatted = files.filter((name) => /\.(?:[cm]?js|ts|vue|css|json|md|yml)$/.test(name));
+    const linted = files.filter((name) => /\.(?:mjs|ts|vue)$/.test(name));
+    if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
+    if (linted.length) npm('exec', '--', 'eslint', ...linted);
+    for (const name of [
+      'check:admin-ui',
+      'check:v2-ui-language',
+      'check:v2-color-contrast',
+      'check:v2-table-standard',
+      'check:v2-loading-standard',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-decimal-standard',
+      'check:v2-timezone-standard',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ])
+      npm('run', name);
+  }
+  run('python3', ['-B', 'scripts/production-release/bitbrowser-manual-build.py', '--check']);
+  run('node', [
+    '--test',
+    'scripts/ci-bitbrowser-manual-controls.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ]);
+  run('python3', ['-B', 'scripts/production-release/bitbrowser-manual-release.test.py']);
+  process.exit(0);
+}
 // The bounded payment profile is separate from the historical shared-card migration.
 if (mode === 'recharge' && bitbrowserBoundedHoldSourceShape(changed)) {
   if (
@@ -2039,11 +2078,9 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
         : [])
     );
   npm('run', 'build', '--workspace', '@apple-business/api');
-  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
-    onlineEngine();
+  if (hasOnlineRuntimeChange(changed)) onlineEngine();
 } else if (part === 'online-engine') {
-  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
-    onlineEngine();
+  if (hasOnlineRuntimeChange(changed)) onlineEngine();
 } else if (part === 'migration') {
   const combined = hasCombinedComponentScope(changed);
   if (combined && process.env.GITHUB_ACTIONS !== 'true')

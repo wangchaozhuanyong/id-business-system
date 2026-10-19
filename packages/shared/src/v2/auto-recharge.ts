@@ -284,6 +284,7 @@ export interface V2RechargeResult {
     | 'confirmed_no_bank_request'
     | 'confirmed_declined_no_charge'
     | 'confirmed_verification_failed_no_charge';
+  manual_settlement?: V2RechargeManualSettlement;
   resolution_basis?: 'captured_official_failure' | 'operator_observed_official_failure';
   resolved_at?: string;
   resolution_job_id?: string;
@@ -315,6 +316,41 @@ export interface V2RechargeResult {
   handoff_generation?: number;
   [key: string]: unknown;
 }
+export interface V2RechargeManualSettlement {
+  version: 1;
+  outcome: 'success' | 'failure';
+  operationId: string;
+  sourceJobId: string;
+  operatorId: string;
+  accountKey: string;
+  identifier: string;
+  plan: V2RechargePlan;
+  resolvedAt: string;
+  requestDigest: string;
+  orderId?: string;
+}
+export type V2RechargeManualSettlementInput = {
+  operationId: string;
+  expectedUpdatedAt: string;
+  identifier: string;
+  confirmed: true;
+  reason: string;
+} & (
+  | {
+      outcome: 'success';
+      subscriptionConfirmed: true;
+      amount: string;
+      currency: string;
+      evidenceRef: string;
+      openedAt: string;
+      dueAt: string;
+    }
+  | {
+      outcome: 'failure';
+      noDebitConfirmed: true;
+      notActivatedConfirmed: true;
+    }
+);
 export interface V2RechargeAvailability {
   execution: 'active' | 'released' | 'expired';
   payment: 'no_request' | 'unknown' | 'declined' | 'paid_pending' | 'completed' | 'resolved';
@@ -780,3 +816,5 @@ export interface ImportV2RechargeAddressesResult {
   duplicated: number;
   rejected: number;
 }
+
+export { readV2RechargeManualSettlement } from './auto-recharge-manual-settlement.js';

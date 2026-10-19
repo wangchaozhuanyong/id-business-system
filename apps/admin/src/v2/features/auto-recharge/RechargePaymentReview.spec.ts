@@ -19,6 +19,7 @@ vi.mock('@/v2/components/V2SearchInput.vue', () => ({ default: {} }));
 vi.mock('@/v2/components/V2AsyncRegion.vue', () => ({ default: {} }));
 vi.mock('@/v2/components/V2ConfirmDialog.vue', () => ({ default: {} }));
 vi.mock('./RechargeResult.vue', () => ({ default: {} }));
+vi.mock('./RechargeManualSettlement.vue', () => ({ default: {} }));
 
 type Query = {
   data: Ref<V2RechargeReviewPage>;

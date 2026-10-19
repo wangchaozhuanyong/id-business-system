@@ -226,6 +226,7 @@ function storageFixture() {
     'onlineRechargeAddress',
     'onlineRechargeOrderSync',
     'auditLog',
+    'idBusinessV2RechargeJob',
     'idBusinessV2RechargeProxy',
     'idBusinessV2BankRechargeCard',
     'idBusinessV2BankRechargeOrder',
@@ -236,7 +237,25 @@ function storageFixture() {
   let previous = Promise.resolve<unknown>(undefined);
   const client = Object.assign(Object.fromEntries(names.map((name) => [name, model(name)])), {
     $executeRaw: async () => 1,
-    $queryRaw: async () => [{ locked: 1 }],
+    $queryRaw: async (query: Prisma.Sql) => {
+      const sql = query.strings.join('?');
+      if (sql.includes('STRAIGHT_JOIN id_business_v2_bank_recharge_cards')) {
+        const [sharedCardId, excludedJobId] = query.values;
+        const sharedCard = rows('onlineRechargeCard').find((row) => row.id === sharedCardId);
+        if (!sharedCard) return [];
+        const legacyCardIds = new Set(
+          rows('idBusinessV2BankRechargeCard')
+            .filter((row) => row.numberHash === sharedCard?.numberHash)
+            .map((row) => row.id)
+        );
+        return rows('idBusinessV2RechargeJob')
+          .filter((row) => legacyCardIds.has(row.cardId) && row.id !== excludedJobId)
+          .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+          .slice(0, 501)
+          .map((row) => ({ id: row.id, result: copy(row.result) }));
+      }
+      return [{ locked: 1 }];
+    },
     $transaction: <T>(work: (tx: V2CommandTransaction) => Promise<T>, options: unknown) => {
       transactionOptions.push(options);
       const next = previous.then(async () => {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { BadRequestException } from '@nestjs/common';
 import { isRechargeUpgrade, rechargeOperationIdentifier } from './recharge-upgrade-protocol';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
@@ -73,6 +74,7 @@ export function hasDeclineResolution(value: unknown): boolean {
   );
 }
 export function resolvedDeclinedPayment(value: unknown): boolean {
+  if (manualRechargeSettlement(value)?.outcome === 'failure') return true;
   if (hasOfficialTerminalNoncharge(value)) {
     const result = value as Record<string, unknown>;
     return (
@@ -93,6 +95,7 @@ export function resolvedDeclinedPayment(value: unknown): boolean {
   );
 }
 export function resolvedDeclinedCheckout(value: unknown): boolean {
+  if (manualRechargeSettlement(value)?.outcome === 'failure') return true;
   if (hasOfficialTerminalNoncharge(value))
     return (
       (value as Record<string, unknown>).payment_status === 'not_attempted' &&
@@ -131,6 +134,7 @@ export function declinedResolutionEligible(job: {
     v.confirmation_requests_sent === 1 &&
     !v.payment_evidence &&
     !v.operator_resolution &&
+    !v.manual_settlement &&
     typeof v.checkout_identifier === 'string' &&
     /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/.test(v.checkout_identifier)
   );
@@ -154,6 +158,7 @@ export function verificationFailureResolutionEligible(job: {
     v.recheck_only !== true &&
     v.resolution_only !== true &&
     v.operation !== 'subscription_upgrade' &&
+    !v.manual_settlement &&
     v.payment_status === 'unknown' &&
     v.payment_attempted === true &&
     v.payment_requests_sent === 1 &&

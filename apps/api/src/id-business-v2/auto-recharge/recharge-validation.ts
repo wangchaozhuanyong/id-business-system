@@ -9,6 +9,7 @@ import {
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { hasOfficialRechargeQuote } from './recharge-upgrade-protocol';
 import { expiredCheckoutProof } from './recharge-expired-checkout';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
 
 export const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -394,6 +395,8 @@ const callbackEnums: Record<string, readonly string[]> = {
 export function safeDocument(value: unknown): Record<string, unknown> {
   const input = object(value);
   const result: Record<string, unknown> = {};
+  const manual = manualRechargeSettlement(input);
+  if (manual) result.manual_settlement = manual;
   // 诊断只保存协议枚举和受限请求编号，不把错误正文或任意字段放入记录。
   for (const [key, values] of Object.entries(callbackEnums)) {
     if (typeof input[key] === 'string' && values.includes(input[key])) result[key] = input[key];

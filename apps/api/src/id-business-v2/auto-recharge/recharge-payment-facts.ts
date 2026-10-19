@@ -1,5 +1,6 @@
 import type { IdBusinessV2RechargeJob, IdBusinessV2RechargeRecord } from '@prisma/client';
 import { hash, object, safeDocument } from './recharge-validation';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
 import {
   hasOfficialRechargeQuote,
   isRechargeUpgrade,
@@ -135,6 +136,7 @@ export function projectRechargePaymentRecord(
 
 export function recoverRechargePaymentResult(job: PaymentJob, records: PaymentRecord[]) {
   const previous = object(job.result);
+  if (manualRechargeSettlement(previous)) return previous;
   const boundIdentifier = typeof rechargeOperationIdentifier(previous) === 'string';
   const candidates = records.flatMap((record) => {
     if (record.ownerId !== job.ownerId || record.accountKey !== job.accountKey) return [];

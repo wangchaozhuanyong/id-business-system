@@ -679,6 +679,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         Number(job.result.payment_requests_sent ?? 0) === 1) &&
       job.result.recheck_only !== true &&
       !job.result.operator_resolution &&
+      !job.result.manual_settlement &&
       job.result.status !== 'subscription_activated' &&
       job.result.payment_outcome !== 'subscription_activated' &&
       credentialReady.value &&
@@ -705,6 +706,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       job.result.payment_status === 'unknown' &&
       !job.result.payment_evidence &&
       !job.result.operator_resolution &&
+      !job.result.manual_settlement &&
       job.result.resolution_verification_job_id &&
       !busy.value &&
       !active.value &&
@@ -989,6 +991,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
           !['paid_pending_activation', 'subscription_activated'].includes(result.status ?? '');
         if (
           definitelyNotAttempted ||
+          result.manual_settlement ||
           result.payment_status === 'declined' ||
           result.operator_resolution === 'confirmed_no_bank_request' ||
           (result.operator_resolution === 'confirmed_verification_failed_no_charge' &&

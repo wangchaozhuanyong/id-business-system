@@ -1,3 +1,4 @@
+import './recharge-manual-settlement.mysql.integration.spec';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';

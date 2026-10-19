@@ -483,6 +483,8 @@ export function quotePlaceholder(job: V2RechargeJob): string {
 }
 export function subscriptionLabel(job: V2RechargeJob): string {
   const result = job.result;
+  if (result.manual_settlement)
+    return result.manual_settlement.outcome === 'success' ? '人工核实已开通' : '人工核实未开通';
   if (result.mode === 'open_browser') return '未执行开通（仅登录模式）';
   if (result.operator_resolution === 'confirmed_verification_failed_no_charge')
     return '核验时为免费版，未确认开通';
@@ -512,6 +514,10 @@ function resolvedRechargeLabel(job: V2RechargeJob): string | undefined {
 }
 
 export function rechargeHistoryStatusLabel(job: V2RechargeJob): string {
+  if (job.result.manual_settlement)
+    return job.result.manual_settlement.outcome === 'success'
+      ? '人工确认充值成功'
+      : '人工确认充值失败';
   return resolvedRechargeLabel(job) ?? statusLabel(job.result.status || job.state);
 }
 
@@ -754,6 +760,7 @@ export function isUnpaidCancelledRecharge(job: V2RechargeJob) {
 }
 
 export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback | null {
+  if (job.result.manual_settlement) return null;
   if (isUnpaidCancelledRecharge(job)) return null;
   if (job.result.operator_resolution === 'confirmed_verification_failed_no_charge') return null;
   if (job.result.operator_resolution === 'confirmed_no_bank_request') return null;
@@ -916,6 +923,10 @@ export function rechargeIssueFeedback(job: V2RechargeJob): RechargeIssueFeedback
 }
 
 export function paymentStatusLabel(job: V2RechargeJob): string {
+  if (job.result.manual_settlement)
+    return job.result.manual_settlement.outcome === 'success'
+      ? '人工核实付款成功'
+      : '人工核实无扣款或待入账';
   if (job.result.mode === 'open_browser') return '未发起付款（仅登录模式）';
   if (job.result.operator_resolution === 'confirmed_verification_failed_no_charge')
     return '本人已核实验证失败且银行无扣款或待入账';
