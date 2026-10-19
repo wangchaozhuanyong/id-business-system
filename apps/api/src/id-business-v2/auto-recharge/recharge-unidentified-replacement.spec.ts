@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { restoreRechargeAccount } from './recharge-account-restore';
 import { RechargeRepository } from './persistence/recharge.repository';
+import { RechargeLocalService } from './recharge-local.service';
+import { RechargeService } from './recharge.service';
 import { rechargeDocumentDigest } from './recharge-callback-receipts';
 import {
   findUnidentifiedCheckoutSource,
@@ -317,6 +319,172 @@ function recoveredPredecessorFixture() {
   });
   return { ...f, previousMarker: marker, discovery, recoveredId };
 }
+
+function freshEntryFixture() {
+  const f = recoveredPredecessorFixture();
+  let job: Record<string, unknown> | undefined;
+  const repository = {
+    ...f.repository,
+    lock: vi.fn(),
+    findJob: vi.fn(async (_tx: unknown, id: string) => (job?.id === id ? job : null)),
+    findRunningJob: vi.fn().mockResolvedValue(null),
+    createJob: vi.fn((_tx: unknown, data: Record<string, unknown>) => {
+      const now = new Date();
+      job = {
+        accountKey: null,
+        chatgptAccountId: null,
+        createdAt: now,
+        updatedAt: now,
+        ...data
+      };
+      return job;
+    }),
+    updateJob: vi.fn(async (_tx: unknown, id: string, patch: Record<string, unknown>) => {
+      if (!job || job.id !== id) throw new Error('Unexpected test task update');
+      Object.assign(job, patch);
+      return job;
+    })
+  };
+  const addresses = {
+    requireAvailable: vi.fn().mockResolvedValue({
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      status: 'unused',
+      line1: '100 Test Avenue',
+      country: 'US',
+      city: 'Eugene',
+      state: 'OR',
+      postalCode: '97402'
+    })
+  };
+  const transactions = { execute: vi.fn(async (work) => work(f.tx)) };
+  const audit = { append: vi.fn() };
+  const service = new RechargeService(
+    repository as never,
+    addresses as never,
+    transactions as never,
+    audit as never
+  );
+  const local = new RechargeLocalService(
+    repository as never,
+    addresses as never,
+    {
+      runtime: vi.fn().mockResolvedValue({
+        connectorUrl: 'http://127.0.0.1:55322',
+        connectorToken: 'synthetic-connector-token',
+        localApiUrl: 'http://127.0.0.1:54345',
+        localApiToken: 'synthetic-local-api-token',
+        groupName: 'synthetic-group',
+        tagName: 'synthetic-tag',
+        proxyType: 'http',
+        dynamicProxyUrl: ''
+      })
+    } as never,
+    service,
+    transactions as never,
+    audit as never
+  );
+  const start = (directMode: boolean) =>
+    local.start(
+      {
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        plan: 'plus',
+        addressId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        windowName: 'Synthetic fresh Plus task',
+        lockedCurrency: 'PHP',
+        authorizeSinglePayment: true,
+        directMode
+      },
+      {
+        id: 'owner',
+        username: 'synthetic-owner',
+        displayName: '合成测试',
+        roles: ['admin'],
+        permissions: []
+      }
+    );
+  const receive = (launch: { id: string; agentToken: string }) =>
+    local.callback(launch.id, launch.agentToken, {
+      type: 'progress',
+      result: {
+        transport: 'web_direct',
+        mode: 'payment',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        stage: 'bitbrowser_group',
+        status: 'running'
+      }
+    });
+  return { ...f, repository, local, start, receive, current: () => job! };
+}
+
+describe('fresh start and first browser progress before original checkout restoration', () => {
+  it('uses actual start -> first progress -> restore without synthesizing current payment status', async () => {
+    const f = freshEntryFixture();
+    const before = structuredClone({ history: f.history, records: f.records });
+    const launch = await f.start(true);
+    const initial = structuredClone(f.current().result);
+    await f.receive(launch);
+    const afterReceipt = structuredClone(f.current().result);
+    const restored = await f.local.callback(launch.id, launch.agentToken, {
+      type: 'restore',
+      accountKey: key
+    });
+    expect(restored).toMatchObject({ originalCheckoutIdentifier: f.recoveredId });
+    expect(restored).not.toHaveProperty('unidentifiedCheckoutRecovery');
+    for (const result of [initial, afterReceipt])
+      expect(result).toMatchObject({
+        transport: 'web_direct',
+        mode: 'payment',
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0,
+        checkout_requests_sent: 0
+      });
+    expect(f.current()).toMatchObject({
+      state: 'running',
+      accountKey: key,
+      result: { checkout_identifier: f.recoveredId }
+    });
+    expect({ history: f.history, records: f.records }).toEqual(before);
+    expect(f.repository.createJob).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the legacy connector initialization unchanged', async () => {
+    const f = freshEntryFixture();
+    await f.start(false);
+    expect(f.current()).toMatchObject({
+      state: 'running',
+      result: {
+        status: 'waiting_local_connector',
+        stage: 'connector_dispatch',
+        payment_requests_sent: 0
+      }
+    });
+    const result = f.current().result as Record<string, unknown>;
+    for (const field of [
+      'transport',
+      'mode',
+      'payment_status',
+      'payment_attempted',
+      'confirmation_requests_sent',
+      'checkout_requests_sent'
+    ])
+      expect(result).not.toHaveProperty(field);
+  });
+
+  it('does not let explicit fresh defaults repair missing historical payment proof', async () => {
+    const f = freshEntryFixture();
+    const launch = await f.start(true);
+    await f.receive(launch);
+    delete f.discovery.result.payment_status;
+    const before = structuredClone({ history: f.history, records: f.records });
+    await expect(
+      f.local.callback(launch.id, launch.agentToken, { type: 'restore', accountKey: key })
+    ).rejects.toThrow('恢复来源尚未完整核实');
+    expect({ history: f.history, records: f.records }).toEqual(before);
+  });
+});
 
 describe('unidentified checkout after an archived expired replacement', () => {
   it('derives only the retired binding without changing any original facts', () => {
