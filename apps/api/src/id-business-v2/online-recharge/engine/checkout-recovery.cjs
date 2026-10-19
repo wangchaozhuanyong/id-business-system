@@ -23,6 +23,50 @@ const MAX_BODY = 512 * 1024;
 const officialCheckouts = new WeakMap();
 const originalCheckoutReloads = new WeakMap();
 const SOURCE_KEYS = ['kind', 'checkoutId', 'processorEntity'];
+const BLOCKED_REQUEST_OPERATIONS = new Set([
+  'READ_REQUEST',
+  'CHECKOUT_CREATE',
+  'STRIPE_INIT_SAME_CHECKOUT',
+  'STRIPE_INIT_OTHER_CHECKOUT',
+  'STRIPE_INIT_NATIVE_UNBOUND',
+  'STRIPE_OTHER_WRITE',
+  'OTHER_WRITE',
+  'OTHER_REQUEST'
+]);
+const BLOCKED_REQUEST_REASONS = new Set([
+  'NON_INITIALIZATION_OPERATION',
+  'ORIGINAL_CHECKOUT_MISMATCH',
+  'NATIVE_CHECKOUT_UNBOUND',
+  'UNKNOWN_PARAMETER',
+  'DUPLICATE_PARAMETER',
+  'INVALID_PARAMETER_VALUE',
+  'BODY_UNAVAILABLE',
+  'BODY_TOO_LARGE',
+  'INVALID_REQUEST',
+  'GUARD_UNAVAILABLE',
+  'GUARD_REJECTED',
+  'LEASE_LOST',
+  'PAYMENT_ALREADY_STARTED',
+  'ORIGINAL_CHECKOUT_CHANGED',
+  'FRAME_GUARD_UNPROVEN',
+  'DIAGNOSTIC_LIMIT'
+]);
+const RELOAD_DIAGNOSTIC_CODES = new Set([
+  'LEASE_LOST',
+  'CHECKOUT_RELOAD_READONLY',
+  'CHECKOUT_RELOAD_READY',
+  'CHECKOUT_RELOAD_NOT_ATTEMPTED',
+  'CHECKOUT_RELOAD_TIMEOUT',
+  'CHECKOUT_RELOAD_PAYMENT_STARTED',
+  'CHECKOUT_RELOAD_ALREADY_ATTEMPTED',
+  'CHECKOUT_RELOAD_NOT_REQUIRED',
+  'CHECKOUT_RELOAD_ORIGINAL_CHANGED',
+  'CHECKOUT_RELOAD_STATE_UNAVAILABLE',
+  'CHECKOUT_RELOAD_FAILED',
+  'CHECKOUT_RELOAD_PAGE_CLOSED',
+  'CHECKOUT_RELOAD_GUARD_UNAVAILABLE',
+  'CHECKOUT_RELOAD_FRAME_WRITE_UNPROVEN'
+]);
 
 function identityFailure() {
   return Object.assign(new Error('原单恢复标识或付款绑定无效'), {
@@ -303,6 +347,125 @@ function readOnlyRecoveryRequest(request, recovery) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
   return readOnlyInitialization(request, recovery);
 }
+function blockedRequestClassification(request, original) {
+  const method = request.method();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method))
+    return { operation: 'READ_REQUEST', reason: 'GUARD_REJECTED' };
+  const url = new URL(request.url());
+  if (method === 'POST' && decodeURIComponent(url.pathname).replace(/\/+$/, '') === CHECKOUT_PATH)
+    return { operation: 'CHECKOUT_CREATE', reason: 'NON_INITIALIZATION_OPERATION' };
+  if (method !== 'POST' || url.origin !== 'https://api.stripe.com')
+    return { operation: 'OTHER_WRITE', reason: 'NON_INITIALIZATION_OPERATION' };
+  if (url.username || url.password)
+    return { operation: 'STRIPE_OTHER_WRITE', reason: 'INVALID_REQUEST' };
+  if (!/^\/v1\/payment_pages\/[^/]+\/init$/.test(url.pathname))
+    return { operation: 'STRIPE_OTHER_WRITE', reason: 'NON_INITIALIZATION_OPERATION' };
+  if (!original.checkoutId.startsWith('cs_'))
+    return { operation: 'STRIPE_INIT_NATIVE_UNBOUND', reason: 'NATIVE_CHECKOUT_UNBOUND' };
+  if (url.pathname !== `/v1/payment_pages/${original.checkoutId}/init`)
+    return { operation: 'STRIPE_INIT_OTHER_CHECKOUT', reason: 'ORIGINAL_CHECKOUT_MISMATCH' };
+  const operation = 'STRIPE_INIT_SAME_CHECKOUT';
+  const body = request.postData?.() || '';
+  if (typeof body !== 'string') return { operation, reason: 'BODY_UNAVAILABLE' };
+  if (body.length > 16000) return { operation, reason: 'BODY_TOO_LARGE' };
+  const allowed = {
+    key: /^pk_(?:live|test)_[A-Za-z0-9]{1,300}$/,
+    browser_locale: /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}$/,
+    redirect_type: /^(?:url|iframe)$/,
+    eid: /^[A-Za-z0-9_-]{1,300}$/,
+    _stripe_version: /^[A-Za-z0-9_.;-]{1,120}$/
+  };
+  const values = new URLSearchParams(url.search);
+  for (const [key, value] of new URLSearchParams(body)) values.append(key, value);
+  const used = new Set();
+  for (const [key, value] of values) {
+    if (used.has(key)) return { operation, reason: 'DUPLICATE_PARAMETER' };
+    if (!Object.hasOwn(allowed, key)) return { operation, reason: 'UNKNOWN_PARAMETER' };
+    if (!allowed[key].test(value)) return { operation, reason: 'INVALID_PARAMETER_VALUE' };
+    used.add(key);
+  }
+  return { operation, reason: 'GUARD_REJECTED' };
+}
+function blockedGuardReason(error) {
+  if (error?.code === 'LEASE_LOST') return 'LEASE_LOST';
+  if (error?.code === 'CHECKOUT_RELOAD_PAYMENT_STARTED') return 'PAYMENT_ALREADY_STARTED';
+  if (error?.code === 'CHECKOUT_RELOAD_ORIGINAL_CHANGED') return 'ORIGINAL_CHECKOUT_CHANGED';
+  if (error?.code === 'CHECKOUT_RELOAD_FRAME_WRITE_UNPROVEN') return 'FRAME_GUARD_UNPROVEN';
+  return 'GUARD_REJECTED';
+}
+function recordBlockedRequest(state, request, reason) {
+  // Diagnostics never grant a request or retain its URL, identity, parameters or credentials.
+  let classification;
+  try {
+    classification = blockedRequestClassification(request, state.original);
+  } catch {
+    classification = { operation: 'OTHER_WRITE', reason: 'INVALID_REQUEST' };
+  }
+  try {
+    if (reason) classification.reason = reason;
+    const counters = state.blockedRequestDiagnostics;
+    let key = classification.operation + '|' + classification.reason;
+    if (!counters.has(key) && counters.size >= 15) {
+      classification = { operation: 'OTHER_REQUEST', reason: 'DIAGNOSTIC_LIMIT' };
+      key = 'OTHER_REQUEST|DIAGNOSTIC_LIMIT';
+    }
+    const prior = counters.get(key);
+    counters.set(key, { ...classification, count: Math.min(10000, (prior?.count || 0) + 1) });
+  } catch {
+    // A failed diagnostic must never prevent the existing rejection from running.
+  }
+}
+function sanitizeOriginalCheckoutReloadDiagnostics(raw) {
+  try {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const { reloadAttempts, blockedWrites, code, blockedRequestDiagnostics: sourceRows } = raw;
+    if (
+      reloadAttempts !== 1 ||
+      !Number.isInteger(blockedWrites) ||
+      blockedWrites < 0 ||
+      blockedWrites > 10000 ||
+      !RELOAD_DIAGNOSTIC_CODES.has(code)
+    )
+      return undefined;
+    const rows = sourceRows === undefined ? [] : sourceRows;
+    if (!Array.isArray(rows) || rows.length > 16) return undefined;
+    const seen = new Set(),
+      blockedRequestDiagnostics = [];
+    for (const row of rows) {
+      if (
+        !row ||
+        typeof row !== 'object' ||
+        Array.isArray(row) ||
+        Object.keys(row).length !== 3 ||
+        !Object.hasOwn(row, 'operation') ||
+        !Object.hasOwn(row, 'reason') ||
+        !Object.hasOwn(row, 'count')
+      )
+        return undefined;
+      const { operation, reason, count } = row;
+      if (
+        !BLOCKED_REQUEST_OPERATIONS.has(operation) ||
+        !BLOCKED_REQUEST_REASONS.has(reason) ||
+        !Number.isInteger(count) ||
+        count < 1 ||
+        count > 10000
+      )
+        return undefined;
+      const key = operation + '|' + reason;
+      if (seen.has(key)) return undefined;
+      seen.add(key);
+      blockedRequestDiagnostics.push({ operation, reason, count });
+    }
+    return {
+      reloadAttempts: 1,
+      blockedWrites,
+      ...(blockedRequestDiagnostics.length ? { blockedRequestDiagnostics } : {}),
+      code
+    };
+  } catch {
+    return undefined;
+  }
+}
 function checkLive(options) {
   if (options.signal?.aborted) throw Object.assign(new Error('任务已停止'), { code: 'LEASE_LOST' });
   if (performance.now() >= options.deadlineAt)
@@ -404,6 +567,13 @@ function originalCheckoutReloadDiagnostics(page) {
   return {
     reloadAttempts: state?.reloadAttempts || 0,
     blockedWrites: state?.blockedWrites || 0,
+    ...(state?.blockedRequestDiagnostics.size
+      ? {
+          blockedRequestDiagnostics: [...state.blockedRequestDiagnostics.values()].map((item) => ({
+            ...item
+          }))
+        }
+      : {}),
     code: state?.code || 'CHECKOUT_RELOAD_NOT_ATTEMPTED'
   };
 }
@@ -447,6 +617,7 @@ async function reloadOriginalCheckout(page, options = {}) {
     code: 'CHECKOUT_RELOAD_READONLY',
     reloadAttempts: 1,
     blockedWrites: 0,
+    blockedRequestDiagnostics: new Map(),
     inFlight: true,
     childTargets: new Map(),
     channels: new Set(),
@@ -481,8 +652,9 @@ async function reloadOriginalCheckout(page, options = {}) {
       postData: () => raw.postData || ''
     };
     const writing = !['GET', 'HEAD', 'OPTIONS'].includes(raw.method);
-    const reject = async () => {
+    const reject = async (reason) => {
       if (writing) state.blockedWrites += 1;
+      recordBlockedRequest(state, request, reason);
       await cdp
         .send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
         .catch(() => {});
@@ -513,11 +685,15 @@ async function reloadOriginalCheckout(page, options = {}) {
         (writing && raw.hasPostData && typeof raw.postData !== 'string') ||
         !readOnlyRecoveryRequest(request, state.original)
       )
-        return await reject();
+        return await reject(
+          writing && raw.hasPostData && typeof raw.postData !== 'string'
+            ? 'BODY_UNAVAILABLE'
+            : undefined
+        );
       return await proceed();
     } catch (error) {
       haltOriginalReload(state, error);
-      await reject();
+      await reject(blockedGuardReason(error));
     }
   };
   const bindGuard = (cdp) => {
@@ -730,15 +906,16 @@ async function reloadOriginalCheckout(page, options = {}) {
   const childFrameGuard = async (route) => {
     const request = route.request();
     const writing = !['GET', 'HEAD', 'OPTIONS'].includes(request.method());
-    const reject = async () => {
+    const reject = async (reason) => {
       if (writing) state.blockedWrites += 1;
+      recordBlockedRequest(state, request, reason);
       await route.abort('blockedbyclient').catch(() => {});
     };
     try {
       if (state.phase === 'halted') throw reloadFailure(state.code);
       if (leaseLost()) throw reloadFailure('LEASE_LOST');
       if (request.frame() === page.mainFrame()) {
-        if (!state.guardReady && writing) return await reject();
+        if (!state.guardReady && writing) return await reject('GUARD_UNAVAILABLE');
         return await route.fallback();
       }
       const url = new URL(request.url());
@@ -767,7 +944,7 @@ async function reloadOriginalCheckout(page, options = {}) {
           ? reloadFailure('CHECKOUT_RELOAD_TIMEOUT')
           : error
       );
-      await reject();
+      await reject(blockedGuardReason(error));
     }
   };
   try {
@@ -1203,6 +1380,7 @@ module.exports = {
   reloadOriginalCheckout,
   finishOriginalCheckoutReload,
   originalCheckoutReloadDiagnostics,
+  sanitizeOriginalCheckoutReloadDiagnostics,
   rememberOfficialCheckout,
   officialCheckoutForPage,
   readOnlyRecoveryRequest,
