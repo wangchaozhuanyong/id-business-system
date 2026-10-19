@@ -97,9 +97,10 @@ BOUNDED_ORDER_ONLY = frozenset(('id-business-v2/auto-recharge/bank-recharge-corr
 BOUNDED_PROPAGATED = frozenset(('id-business-v2/auto-recharge/recharge-name.service.d.ts', 'id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts'))
 MYSQL_REPAIR_PATH = 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts'
 MYSQL_REPAIR_OLD_SHA = '5a2282de994011484bb34a7ea178895a3582bd08e4eff00d45251f4791386cd4'
-MYSQL_REPAIR_NEW_SHA = '73d5ac6f5efc064fdd74046e752e336ec84344bbf185434892c0708e911a350f'
-MYSQL_REPAIR_BASE = '681e088e1ae6512515769d9e670d7fedd271850f'
-MYSQL_REPAIR_TREE = '3f29da9165b71acaeeef117e86fbfc37e83a1788'
+MYSQL_REPAIR_NEW_SHA = '6a086a57363deec7dcb949e2a8b49c035a6a5d4dff9cddd131af4462ad55e963'
+MYSQL_REPAIR_BASE_SHA = '73d5ac6f5efc064fdd74046e752e336ec84344bbf185434892c0708e911a350f'
+MYSQL_REPAIR_BASE = '48c1c07f341dbb66a174e7f4113e3dd88dcc2fb6'
+MYSQL_REPAIR_TREE = 'ccc93a9277267b16944cc638614ed9785b8013f3'
 RECIPE = 'history-20261019'
 UPDATED = ('api',)
 REBOUND = ('online-recharge',)
@@ -284,7 +285,7 @@ def production_sources(c):
 
 def mysql_test_input_repair():
     return {'path': MYSQL_REPAIR_PATH, 'reviewBase': MYSQL_REPAIR_BASE, 'reviewBaseTree': MYSQL_REPAIR_TREE,
-        'oldSha256': MYSQL_REPAIR_OLD_SHA, 'newSha256': MYSQL_REPAIR_NEW_SHA}
+        'oldSha256': MYSQL_REPAIR_OLD_SHA, 'reviewBaseSha256': MYSQL_REPAIR_BASE_SHA, 'newSha256': MYSQL_REPAIR_NEW_SHA}
 
 
 def reviewed_current_digest(c, name, digest):

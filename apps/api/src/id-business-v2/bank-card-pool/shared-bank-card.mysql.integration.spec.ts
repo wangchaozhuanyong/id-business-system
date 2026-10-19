@@ -186,9 +186,31 @@ const enabled = process.env.SHARED_BANK_CARD_MYSQL_TEST === '1';
       f.card.id
     );
     if (!statement) throw new Error('未捕获实际额度查询');
-    const plan = await db.$queryRaw<Record<string, unknown>[]>(
+    const rawPlan = await db.$queryRaw<Record<string, unknown>[]>(
       Prisma.sql`EXPLAIN FORMAT=TRADITIONAL ${statement}`
     );
+    // MySQL 8.4 TRADITIONAL's documented column order; Prisma may label these f0..f11.
+    // https://dev.mysql.com/doc/refman/8.4/en/explain-output.html
+    const columns = [
+      'id',
+      'select_type',
+      'table',
+      'partitions',
+      'type',
+      'possible_keys',
+      'key',
+      'key_len',
+      'ref',
+      'rows',
+      'filtered',
+      'Extra'
+    ];
+    const plan = rawPlan.map((row) => {
+      const keys = Object.keys(row).sort();
+      if (keys.join(',') === [...columns].sort().join(',')) return row;
+      expect(keys).toEqual(columns.map((_name, index) => `f${index}`).sort());
+      return Object.fromEntries(columns.map((name, index) => [name, row[`f${index}`]]));
+    });
     const detail = JSON.stringify(
       plan.map((row) => ({
         columns: Object.keys(row).sort(),
@@ -205,6 +227,7 @@ const enabled = process.env.SHARED_BANK_CARD_MYSQL_TEST === '1';
     ).slice(0, 4000);
     // Only plan metadata for this isolated synthetic fixture; no query parameters or card data.
     console.info('SHARED_CARD_EXPLAIN_PLAN', detail);
+    expect(plan.map((row) => row.table).sort(), detail).toEqual(['j', 'l', 's']);
     expect(plan.find((row) => row.table === 's')?.key, detail).toBe('PRIMARY');
     expect(plan.find((row) => row.table === 'l')?.key, detail).toBe(
       'id_business_v2_bank_recharge_cards_number_hash_key'

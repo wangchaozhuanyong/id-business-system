@@ -737,6 +737,10 @@ class BoundedFrozenControls(unittest.TestCase):
 
     def test_mysql_test_repair_preserves_original_review_and_all_production_inputs(self):
         self.assertEqual(self.c['mysqlTestInputRepair'],p.mysql_test_input_repair())
+        self.assertEqual(p.sha(b.git('show',p.MYSQL_REPAIR_BASE+':'+p.MYSQL_REPAIR_PATH)),p.MYSQL_REPAIR_BASE_SHA)
+        self.assertEqual(p.sha(b.git('show',self.c['sourceReviewCommit']+':'+p.MYSQL_REPAIR_PATH)),p.MYSQL_REPAIR_OLD_SHA)
+        self.assertEqual(p.sha((ROOT/p.MYSQL_REPAIR_PATH).read_bytes()),p.MYSQL_REPAIR_NEW_SHA)
+        self.assertNotEqual(p.MYSQL_REPAIR_OLD_SHA,p.MYSQL_REPAIR_BASE_SHA)
         self.assertEqual(self.c['sources'][p.MYSQL_REPAIR_PATH],p.MYSQL_REPAIR_OLD_SHA)
         self.assertEqual(self.c['mysqlTestSources'][p.MYSQL_REPAIR_PATH],p.MYSQL_REPAIR_NEW_SHA)
         self.assertEqual(p.reviewed_current_digest(self.c,p.MYSQL_REPAIR_PATH,p.MYSQL_REPAIR_OLD_SHA),p.MYSQL_REPAIR_NEW_SHA)
@@ -746,7 +750,7 @@ class BoundedFrozenControls(unittest.TestCase):
         for key in ('sources','productionSources','apiModules','baseline','absentApiModules','sourceReviewCommit','sourceReviewTree'):
             self.assertEqual(self.c[key],original[key])
         for key,val in (('path','apps/api/src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts'),
-            ('oldSha256','a'*64),('newSha256','b'*64),('reviewBase','c'*40),('reviewBaseTree','d'*40)):
+            ('oldSha256','a'*64),('reviewBaseSha256','b'*64),('newSha256','b'*64),('reviewBase','c'*40),('reviewBaseTree','d'*40)):
             changed=copy.deepcopy(self.c);changed['mysqlTestInputRepair'][key]=val
             with self.assertRaisesRegex(RuntimeError,'MYSQL_TEST_INPUT_REPAIR_INVALID'):p.validate_contract(changed)
         for key,val in (('sources',{**self.c['sources'],p.MYSQL_REPAIR_PATH:p.MYSQL_REPAIR_NEW_SHA}),

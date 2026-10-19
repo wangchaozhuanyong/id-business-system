@@ -1973,8 +1973,8 @@ export function isBitbrowserBoundedHoldControlsOnly(paths, context) {
 }
 
 export const bitbrowserBoundedHoldMysqlRepairStatus = 'FROZEN_MYSQL_REPAIR';
-export const bitbrowserBoundedHoldMysqlRepairBase = '681e088e1ae6512515769d9e670d7fedd271850f';
-export const bitbrowserBoundedHoldMysqlRepairTree = '3f29da9165b71acaeeef117e86fbfc37e83a1788';
+export const bitbrowserBoundedHoldMysqlRepairBase = '48c1c07f341dbb66a174e7f4113e3dd88dcc2fb6';
+export const bitbrowserBoundedHoldMysqlRepairTree = 'ccc93a9277267b16944cc638614ed9785b8013f3';
 export const bitbrowserBoundedHoldMysqlRepairSpec =
   'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts';
 export const bitbrowserBoundedHoldMysqlRepairPaths = Object.freeze([
@@ -1983,9 +1983,7 @@ export const bitbrowserBoundedHoldMysqlRepairPaths = Object.freeze([
     (name) => `scripts/production-release/bitbrowser-history-${name}`
   ),
   bitbrowserBoundedHoldControlContract,
-  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
-    (name) => `scripts/ci-recharge-${name}`
-  )
+  ...['scope.mjs', 'scope.test.mjs'].map((name) => `scripts/ci-recharge-${name}`)
 ]);
 export function bitbrowserBoundedHoldMysqlRepairShape(paths) {
   return (
