@@ -95,6 +95,11 @@ BOUNDED_PRODUCTION = frozenset(('apps/admin/src/v2/features/auto-recharge/Rechar
 BOUNDED_MODULES = frozenset(('id-business-v2/auto-recharge/bank-recharge-card.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-card.service.js', 'id-business-v2/auto-recharge/bank-recharge-card.service.js.map', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js.map', 'id-business-v2/auto-recharge/persistence/recharge.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge.repository.js', 'id-business-v2/auto-recharge/persistence/recharge.repository.js.map', 'id-business-v2/auto-recharge/recharge-callback-lease.d.ts', 'id-business-v2/auto-recharge/recharge-callback-lease.js', 'id-business-v2/auto-recharge/recharge-callback-lease.js.map', 'id-business-v2/auto-recharge/recharge-callback-receipts.d.ts', 'id-business-v2/auto-recharge/recharge-callback-receipts.js', 'id-business-v2/auto-recharge/recharge-callback-receipts.js.map', 'id-business-v2/auto-recharge/recharge-card-billing.d.ts', 'id-business-v2/auto-recharge/recharge-card-billing.js', 'id-business-v2/auto-recharge/recharge-card-billing.js.map', 'id-business-v2/auto-recharge/recharge-declined-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-declined-resolution.js', 'id-business-v2/auto-recharge/recharge-declined-resolution.js.map', 'id-business-v2/auto-recharge/recharge-direct-payment.d.ts', 'id-business-v2/auto-recharge/recharge-direct-payment.js', 'id-business-v2/auto-recharge/recharge-direct-payment.js.map', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js.map', 'id-business-v2/auto-recharge/recharge-local.service.js', 'id-business-v2/auto-recharge/recharge-local.service.js.map', 'id-business-v2/auto-recharge/recharge-name.service.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js.map', 'id-business-v2/auto-recharge/recharge-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-resolution.js', 'id-business-v2/auto-recharge/recharge-resolution.js.map', 'id-business-v2/auto-recharge/recharge-retired-callback.js', 'id-business-v2/auto-recharge/recharge-retired-callback.js.map', 'id-business-v2/auto-recharge/recharge-terminal-failure.d.ts', 'id-business-v2/auto-recharge/recharge-terminal-failure.js', 'id-business-v2/auto-recharge/recharge-terminal-failure.js.map', 'id-business-v2/auto-recharge/recharge.service.js', 'id-business-v2/auto-recharge/recharge.service.js.map', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js.map', 'id-business-v2/bank-card-pool/public-api.d.ts', 'id-business-v2/bank-card-pool/public-api.js', 'id-business-v2/bank-card-pool/public-api.js.map', 'id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts', 'id-business-v2/online-recharge/persistence/worker.repository.js', 'id-business-v2/online-recharge/persistence/worker.repository.js.map'))
 BOUNDED_ORDER_ONLY = frozenset(('id-business-v2/auto-recharge/bank-recharge-correction.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-finance.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-manual-order.d.ts', 'id-business-v2/auto-recharge/bank-recharge-online-order.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-order.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-verified-order.d.ts', 'id-business-v2/auto-recharge/bank-recharge.controller.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge-lifecycle.repository.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge-online-order.repository.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge-query.repository.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge-card-removal.repository.d.ts', 'id-business-v2/auto-recharge/recharge-bank-callback.d.ts', 'id-business-v2/data-governance/persistence/data-governance-bank-restore.d.ts', 'id-business-v2/data-governance/persistence/id-business-v2-data-governance-query.repository.d.ts'))
 BOUNDED_PROPAGATED = frozenset(('id-business-v2/auto-recharge/recharge-name.service.d.ts', 'id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts'))
+MYSQL_REPAIR_PATH = 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts'
+MYSQL_REPAIR_OLD_SHA = '5a2282de994011484bb34a7ea178895a3582bd08e4eff00d45251f4791386cd4'
+MYSQL_REPAIR_NEW_SHA = '73d5ac6f5efc064fdd74046e752e336ec84344bbf185434892c0708e911a350f'
+MYSQL_REPAIR_BASE = '681e088e1ae6512515769d9e670d7fedd271850f'
+MYSQL_REPAIR_TREE = '3f29da9165b71acaeeef117e86fbfc37e83a1788'
 RECIPE = 'history-20261019'
 UPDATED = ('api',)
 REBOUND = ('online-recharge',)
@@ -277,6 +282,22 @@ def production_sources(c):
     return {n: v for n, v in c['sources'].items() if RECIPE != BOUNDED or n in BOUNDED_PRODUCTION}
 
 
+def mysql_test_input_repair():
+    return {'path': MYSQL_REPAIR_PATH, 'reviewBase': MYSQL_REPAIR_BASE, 'reviewBaseTree': MYSQL_REPAIR_TREE,
+        'oldSha256': MYSQL_REPAIR_OLD_SHA, 'newSha256': MYSQL_REPAIR_NEW_SHA}
+
+
+def reviewed_current_digest(c, name, digest):
+    # Source QA still attests the original 39-file review. Only this diagnostic
+    # MySQL fixture may differ, with both immutable old and replacement hashes.
+    if RECIPE == BOUNDED and c.get('mysqlTestInputRepair') and name == MYSQL_REPAIR_PATH:
+        need(c['mysqlTestInputRepair'] == mysql_test_input_repair() and digest == MYSQL_REPAIR_OLD_SHA
+            and c['sources'].get(name) == MYSQL_REPAIR_OLD_SHA
+            and c['mysqlTestSources'].get(name) == MYSQL_REPAIR_NEW_SHA, 'MYSQL_TEST_INPUT_REPAIR_INVALID')
+        return MYSQL_REPAIR_NEW_SHA
+    return digest
+
+
 def validate_bounded_contract(c):
     allowed = {n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
         for n in API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')} | BOUNDED_PROPAGATED
@@ -315,6 +336,11 @@ def validate_bounded_contract(c):
         and c.get('parentVerifiedBaseline', {}).get('commit') == ADDRESS_CURRENT
         and re.fullmatch('[a-f0-9]{64}', c.get('parentVerifiedSealSha256', '')),
         'BOUNDED_BASELINE_INVALID')
+    repair = c.get('mysqlTestInputRepair')
+    need(c['sources'].get(MYSQL_REPAIR_PATH) == MYSQL_REPAIR_OLD_SHA
+        and (repair == mysql_test_input_repair() and c['mysqlTestSources'][MYSQL_REPAIR_PATH] == MYSQL_REPAIR_NEW_SHA
+            if repair is not None else c['mysqlTestSources'][MYSQL_REPAIR_PATH] == MYSQL_REPAIR_OLD_SHA),
+        'MYSQL_TEST_INPUT_REPAIR_INVALID')
     rules = c.get('declarationOrderOnly', {})
     need(set(rules) == BOUNDED_ORDER_ONLY and all(type(rule) is dict and set(rule) == {'before', 'after'}
         and inventory({'before': rule['before'], 'after': rule['after']}) and rule['before'] != rule['after']
@@ -483,7 +509,8 @@ def verify_proof(proof, plan, c, payload, h):
     verify_mysql(proof.get('isolatedMysqlVerification'), plan, c)
     if RECIPE == BOUNDED:
         verify_bounded_capture(proof.get('nativeParentCapture'), plan, c)
-        need(proof.get('nativeParentCapture') == plan.get('nativeParentCapture')
+        need(proof.get('mysqlTestInputRepair') == c.get('mysqlTestInputRepair')
+            and proof.get('nativeParentCapture') == plan.get('nativeParentCapture')
             and proof.get('productionSources') == production_sources(c), 'BOUNDED_PRODUCTION_CHANGED')
     expected = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
         **{'source/' + n: v for n, v in production_sources(c).items()}}

@@ -1137,6 +1137,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldSourceOnly(paths, context)) return false;
   if (isBitbrowserExistingAddressControlsOnly(paths, context)) return false;
@@ -1972,6 +1973,79 @@ export function isBitbrowserBoundedHoldControlsOnly(paths, context) {
   );
 }
 
+export const bitbrowserBoundedHoldMysqlRepairStatus = 'FROZEN_MYSQL_REPAIR';
+export const bitbrowserBoundedHoldMysqlRepairBase = '681e088e1ae6512515769d9e670d7fedd271850f';
+export const bitbrowserBoundedHoldMysqlRepairTree = '3f29da9165b71acaeeef117e86fbfc37e83a1788';
+export const bitbrowserBoundedHoldMysqlRepairSpec =
+  'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts';
+export const bitbrowserBoundedHoldMysqlRepairPaths = Object.freeze([
+  bitbrowserBoundedHoldMysqlRepairSpec,
+  ...['build.py', 'release.py', 'release.test.py'].map(
+    (name) => `scripts/production-release/bitbrowser-history-${name}`
+  ),
+  bitbrowserBoundedHoldControlContract,
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  )
+]);
+export function bitbrowserBoundedHoldMysqlRepairShape(paths) {
+  return (
+    paths.length === bitbrowserBoundedHoldMysqlRepairPaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((name) => bitbrowserBoundedHoldMysqlRepairPaths.includes(name))
+  );
+}
+export function matchBitbrowserBoundedHoldMysqlRepair(paths, context, status) {
+  return (
+    status === 'FROZEN_MYSQL_REPAIR' &&
+    context?.base === bitbrowserBoundedHoldMysqlRepairBase &&
+    context?.baseTree === bitbrowserBoundedHoldMysqlRepairTree &&
+    bitbrowserBoundedHoldMysqlRepairShape(paths)
+  );
+}
+export function isBitbrowserBoundedHoldMysqlRepairOnly(paths, context) {
+  return matchBitbrowserBoundedHoldMysqlRepair(
+    paths,
+    context,
+    bitbrowserBoundedHoldMysqlRepairStatus
+  );
+}
+function hasBitbrowserBoundedHoldMysqlRepairScope(paths) {
+  return (
+    paths.includes(bitbrowserBoundedHoldControlContract) ||
+    (paths.includes(bitbrowserBoundedHoldMysqlRepairSpec) &&
+      paths.some((name) => /^scripts\/production-release\/bitbrowser-history-/.test(name)))
+  );
+}
+export function bitbrowserBoundedHoldMysqlRepairCommands(part) {
+  if (part === 'guards')
+    return [
+      ...[
+        'format:check',
+        'lint',
+        'check:v2-module-architecture',
+        'check:v2-isolation',
+        'check:v2-concurrency-standard',
+        'check:v2-prisma-runtime-boundary'
+      ].map((name) => ['npm', 'run', name]),
+      ['node', '--test', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-check.test.mjs']
+    ];
+  if (part === 'release-controls')
+    return [
+      ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+      ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
+      [
+        'python3',
+        '-B',
+        'scripts/production-release/bitbrowser-history-build.py',
+        '--recipe',
+        'bounded-hold-20261019',
+        '--check'
+      ]
+    ];
+  throw new Error('Unsupported finite BitBrowser bounded-hold MySQL repair control check');
+}
+
 // Only this reviewed source path set is admitted; source hashes remain bound by QA.
 // It never admits a directory wildcard or a schema/migration change.
 export const bitbrowserBoundedHoldSourceStatus = 'FROZEN_SOURCE_PATHS';
@@ -2088,6 +2162,7 @@ export function bitbrowserBoundedHoldCheckCommands(part, paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return true;
   if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return true;
   if (isBitbrowserExistingAddressControlsOnly(paths, context)) return true;
   if (isBitbrowserEntryStartControlsOnly(paths, context)) return true;
@@ -2251,10 +2326,16 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (bitbrowserBoundedHoldMysqlRepairShape(paths))
+    return isBitbrowserBoundedHoldMysqlRepairOnly(paths, context) &&
+      bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema)
+      ? 'ci-only'
+      : 'full';
   if (isBitbrowserBoundedHoldControlsOnly(paths, context))
     return bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema) ? 'ci-only' : 'full';
   if (isBitbrowserBoundedHoldSourceOnly(paths, context))
     return bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
+  if (hasBitbrowserBoundedHoldMysqlRepairScope(paths)) return 'full';
   if (isBitbrowserExistingAddressControlsOnly(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isBitbrowserEntryStartControlsOnly(paths, context))
@@ -2798,6 +2879,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldSourceOnly(paths, context))
     return [...bitbrowserBoundedHoldSourceParts];
@@ -5673,13 +5755,17 @@ async function main() {
   }
   const checkParts =
     mode === 'full' &&
-    (bitbrowserBoundedHoldSourceShape(paths) || bitbrowserBoundedHoldControlsShape(paths))
+    (bitbrowserBoundedHoldSourceShape(paths) ||
+      bitbrowserBoundedHoldControlsShape(paths) ||
+      bitbrowserBoundedHoldMysqlRepairShape(paths) ||
+      hasBitbrowserBoundedHoldMysqlRepairScope(paths))
       ? [...parts]
       : mode === 'ci-only' &&
           (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
             isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserEntryStartControlsOnly(paths, proxyIdentityContext) ||
+            isBitbrowserBoundedHoldMysqlRepairOnly(paths, proxyIdentityContext) ||
             isBitbrowserBoundedHoldControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserExistingAddressControlsOnly(paths, proxyIdentityContext))
         ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)

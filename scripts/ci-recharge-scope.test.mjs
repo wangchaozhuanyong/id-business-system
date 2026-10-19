@@ -7973,3 +7973,140 @@ test('bounded-hold controls admit only the ten reviewed controls and both actual
     false
   );
 });
+
+import {
+  parts as boundedMysqlFullParts,
+  bitbrowserBoundedHoldMysqlRepairStatus,
+  bitbrowserBoundedHoldMysqlRepairBase,
+  bitbrowserBoundedHoldMysqlRepairTree,
+  bitbrowserBoundedHoldMysqlRepairPaths,
+  matchBitbrowserBoundedHoldMysqlRepair,
+  isBitbrowserBoundedHoldMysqlRepairOnly
+} from './ci-recharge-scope.mjs';
+
+test('bounded MySQL repair admits only its frozen nine files and exact base and tree', () => {
+  const context = {
+    base: bitbrowserBoundedHoldMysqlRepairBase,
+    baseTree: bitbrowserBoundedHoldMysqlRepairTree
+  };
+  assert.equal(bitbrowserBoundedHoldMysqlRepairPaths.length, 9);
+  assert.equal(
+    isBitbrowserBoundedHoldMysqlRepairOnly(bitbrowserBoundedHoldMysqlRepairPaths, context),
+    bitbrowserBoundedHoldMysqlRepairStatus === 'FROZEN_MYSQL_REPAIR'
+  );
+  assert.equal(
+    matchBitbrowserBoundedHoldMysqlRepair(
+      bitbrowserBoundedHoldMysqlRepairPaths,
+      context,
+      'DRAFT_MYSQL_REPAIR_PENDING'
+    ),
+    false
+  );
+  assert.equal(
+    matchBitbrowserBoundedHoldMysqlRepair(
+      bitbrowserBoundedHoldMysqlRepairPaths,
+      context,
+      'FROZEN_MYSQL_REPAIR'
+    ),
+    true
+  );
+  for (const invalid of [
+    { ...context, base: 'main' },
+    { ...context, base: 'a'.repeat(40) },
+    { ...context, baseTree: 'a'.repeat(40) }
+  ])
+    assert.equal(
+      isBitbrowserBoundedHoldMysqlRepairOnly(bitbrowserBoundedHoldMysqlRepairPaths, invalid),
+      false
+    );
+  for (const path of [
+    '.github/workflows/bitbrowser-history-validation.yml',
+    'scripts/production-release/bitbrowser-history-dispatch.py'
+  ])
+    assert.equal(bitbrowserBoundedHoldMysqlRepairPaths.includes(path), false);
+});
+
+test('bounded MySQL repair actual PR and push CLI keep both controls and use full checks for every invalid scope', () => {
+  const frozen = bitbrowserBoundedHoldMysqlRepairStatus === 'FROZEN_MYSQL_REPAIR';
+  const context = {
+    base: bitbrowserBoundedHoldMysqlRepairBase,
+    baseTree: bitbrowserBoundedHoldMysqlRepairTree
+  };
+  for (const eventName of ['pull_request', 'push']) {
+    const { result, writes } = recordScopeClassification(
+      bitbrowserBoundedHoldMysqlRepairPaths,
+      {},
+      eventName,
+      context
+    );
+    assert.equal(result.mode, frozen ? 'ci-only' : 'full');
+    assert.deepEqual(
+      result.checkParts,
+      frozen ? ['guards', 'release-controls'] : boundedMysqlFullParts
+    );
+    if (frozen) {
+      assert.equal(result.onlineCiBuild, false);
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+    }
+    assert.throws(
+      () =>
+        recordScopeClassification(bitbrowserBoundedHoldMysqlRepairPaths, {}, eventName, {
+          ...context,
+          base: 'main'
+        }),
+      /Invalid source commit/
+    );
+    for (const { paths, options } of [
+      {
+        paths: bitbrowserBoundedHoldMysqlRepairPaths,
+        options: { ...context, base: 'b'.repeat(40) }
+      },
+      {
+        paths: bitbrowserBoundedHoldMysqlRepairPaths,
+        options: { ...context, baseTree: 'a'.repeat(40) }
+      },
+      {
+        paths: bitbrowserBoundedHoldMysqlRepairPaths,
+        options: { ...context, schemaBefore: schema, schemaAfter: schema + '\n' }
+      },
+      {
+        paths: bitbrowserBoundedHoldMysqlRepairPaths,
+        options: { ...context, schemaBefore: '', schemaAfter: '' }
+      },
+      ...bitbrowserBoundedHoldMysqlRepairPaths.map((missing) => ({
+        paths: bitbrowserBoundedHoldMysqlRepairPaths.filter((n) => n !== missing),
+        options: context
+      })),
+      {
+        paths: [...bitbrowserBoundedHoldMysqlRepairPaths, bitbrowserBoundedHoldMysqlRepairPaths[0]],
+        options: context
+      },
+      {
+        paths: [
+          ...bitbrowserBoundedHoldMysqlRepairPaths.slice(1),
+          bitbrowserBoundedHoldMysqlRepairPaths[1]
+        ],
+        options: context
+      },
+      ...[
+        '.github/workflows/bitbrowser-history-validation.yml',
+        'scripts/production-release/bitbrowser-history-dispatch.py',
+        'scripts/production-release/bitbrowser-existing-address-contract.json',
+        'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts',
+        'apps/api/prisma-mysql/schema.prisma',
+        'package-lock.json'
+      ].map((extra) => ({
+        paths: [...bitbrowserBoundedHoldMysqlRepairPaths, extra],
+        options: context
+      }))
+    ]) {
+      const { result: rejected } = recordScopeClassification(paths, {}, eventName, options);
+      assert.equal(rejected.mode, 'full');
+      assert.deepEqual(rejected.checkParts, boundedMysqlFullParts);
+    }
+  }
+});

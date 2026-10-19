@@ -3695,3 +3695,110 @@ test('bounded-hold control runner rejects moved, incomplete, extended and schema
       );
   }
 });
+
+import {
+  bitbrowserBoundedHoldMysqlRepairStatus,
+  bitbrowserBoundedHoldMysqlRepairBase,
+  bitbrowserBoundedHoldMysqlRepairTree,
+  bitbrowserBoundedHoldMysqlRepairSpec,
+  bitbrowserBoundedHoldMysqlRepairPaths,
+  bitbrowserBoundedHoldMysqlRepairCommands
+} from './ci-recharge-scope.mjs';
+
+test('bounded MySQL repair runner installs control dependencies first and propagates both parts failures', () => {
+  const options = {
+    base: bitbrowserBoundedHoldMysqlRepairBase,
+    baseTree: bitbrowserBoundedHoldMysqlRepairTree
+  };
+  assert.deepEqual(bitbrowserBoundedHoldMysqlRepairCommands('release-controls'), [
+    ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+    ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/bitbrowser-history-build.py',
+      '--recipe',
+      'bounded-hold-20261019',
+      '--check'
+    ]
+  ]);
+  for (const part of ['guards', 'release-controls']) {
+    if (bitbrowserBoundedHoldMysqlRepairStatus !== 'FROZEN_MYSQL_REPAIR') {
+      assert.throws(
+        () => recordGuardCommands('ci-only', bitbrowserBoundedHoldMysqlRepairPaths, part, options),
+        /Unfrozen or moved bounded BitBrowser MySQL repair scope/
+      );
+      continue;
+    }
+    const expected = bitbrowserBoundedHoldMysqlRepairCommands(part);
+    assert.deepEqual(
+      recordGuardCommands('ci-only', bitbrowserBoundedHoldMysqlRepairPaths, part, options),
+      [...expected, ['process-exit', 0]]
+    );
+    for (const command of expected)
+      assert.throws(
+        () =>
+          recordGuardCommands('ci-only', bitbrowserBoundedHoldMysqlRepairPaths, part, {
+            ...options,
+            failCommand: command.join(' ')
+          }),
+        /SYNTHETIC_COMMAND_FAILURE/
+      );
+  }
+  if (bitbrowserBoundedHoldMysqlRepairStatus === 'FROZEN_MYSQL_REPAIR')
+    for (const part of ['api', 'admin', 'migration', 'online-engine'])
+      assert.throws(
+        () => recordGuardCommands('ci-only', bitbrowserBoundedHoldMysqlRepairPaths, part, options),
+        /Unsupported finite BitBrowser bounded-hold MySQL repair control check/
+      );
+});
+
+test('bounded MySQL repair runner rejects base tree path and schema drift without executing business checks', () => {
+  const options = {
+    base: bitbrowserBoundedHoldMysqlRepairBase,
+    baseTree: bitbrowserBoundedHoldMysqlRepairTree
+  };
+  for (const part of ['guards', 'release-controls']) {
+    for (const { paths, context } of [
+      { paths: bitbrowserBoundedHoldMysqlRepairPaths, context: { ...options, base: 'main' } },
+      {
+        paths: bitbrowserBoundedHoldMysqlRepairPaths,
+        context: { ...options, base: 'b'.repeat(40) }
+      },
+      {
+        paths: bitbrowserBoundedHoldMysqlRepairPaths,
+        context: { ...options, baseTree: 'a'.repeat(40) }
+      },
+      ...bitbrowserBoundedHoldMysqlRepairPaths.map((missing) => ({
+        paths: bitbrowserBoundedHoldMysqlRepairPaths.filter((n) => n !== missing),
+        context: options
+      })),
+      {
+        paths: [...bitbrowserBoundedHoldMysqlRepairPaths, bitbrowserBoundedHoldMysqlRepairSpec],
+        context: options
+      },
+      ...[
+        '.github/workflows/bitbrowser-history-validation.yml',
+        'scripts/production-release/bitbrowser-history-dispatch.py',
+        'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts'
+      ].map((extra) => ({
+        paths: [...bitbrowserBoundedHoldMysqlRepairPaths, extra],
+        context: options
+      }))
+    ])
+      assert.throws(
+        () => recordGuardCommands('ci-only', paths, part, context),
+        /Unfrozen or moved bounded BitBrowser (MySQL repair|control) scope/
+      );
+    if (bitbrowserBoundedHoldMysqlRepairStatus === 'FROZEN_MYSQL_REPAIR')
+      for (const schemaAfter of ['', 'model Changed { id String @id }\n'])
+        assert.throws(
+          () =>
+            recordGuardCommands('ci-only', bitbrowserBoundedHoldMysqlRepairPaths, part, {
+              ...options,
+              schemaAfter
+            }),
+          /MySQL repair schema must remain byte identical/
+        );
+  }
+});
