@@ -665,6 +665,11 @@ async function run(runOptions = {}) {
         const skippedReasons = rejectionSummary(inspection?.frameSkipCounts);
         const rejectedReasons = rejectionSummary(inspection?.controlRejectCounts);
         const interactionReasons = rejectionSummary(inspection?.interactionRejectCounts);
+        const exclusionProbe = checkoutOpenDiagnostics?.exclusionProbe;
+        const originLabels = { self: '自身', ancestor: '祖先容器', computed: '计算样式', none: '' };
+        const excludedNumbers = exclusionProbe?.rows?.filter(row => row.field === 'number' && row.reason !== 'eligible') || [];
+        const numberExclusions = excludedNumbers.slice(0, 8).map(row =>
+            `${row.source === 'frame' ? '内嵌页面' : '控件'}${originLabels[row.at]}${rejectionLabels[row.reason]}${row.count}`).join('、');
         const diagnosticDetails = [
             checkoutOpenDiagnostics?.missing?.length ? `未就绪字段：${checkoutOpenDiagnostics.missing.map(field => fieldLabels[field]).join('、')}` : '',
             numberCandidates ? `卡号候选：${numberCandidates.count}` : '',
@@ -673,6 +678,9 @@ async function run(runOptions = {}) {
             typeof inspection?.controlCounts?.scanned === 'number' ? `扫描控件数：${inspection.controlCounts.scanned}` : '',
             rejectedReasons ? `控件排除原因：${rejectedReasons}` : '',
             interactionReasons ? `交互停止原因：${interactionReasons}` : '',
+            numberExclusions ? `失败后卡号排除详情：${numberExclusions}` : '',
+            exclusionProbe?.numberComparison ? `失败后同快照对照：现筛选语义候选${exclusionProbe.numberComparison.semanticEligible}，具备显示尺寸及可编辑状态${exclusionProbe.numberComparison.geometryEditable}（不代表允许填写）` : '',
+            exclusionProbe?.complete === false ? '失败后排除诊断未完整取得' : '',
             inspection?.complete === false ? '控件读取未完成' : '',
             inspection?.framesFailed > 0 ? `读取失败页面数：${inspection.framesFailed}` : '',
             inspection?.readPhase ? `读取阶段：${readPhaseLabels[inspection.readPhase]}` : '',

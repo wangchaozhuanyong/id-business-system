@@ -17,6 +17,7 @@ SCOPE = 'ONLINE_CHECKOUT_INITIALIZATION'
 CURRENT = '523bf8173e46823c05e9641428263f17b1ca3906'
 REVIEW_BASE = '523bf8173e46823c05e9641428263f17b1ca3906'
 ENGINE_BASE = '827ede8b4f32bd43f699413d9630d094bdd33a4c'
+ENGINE_PROOF_FILE = 'online-checkout-actionability-build-proof.json'
 ENGINE_IMAGE = 'sha256:5affbc4fc1adf9794d55408138ae93be1a9209a7c4efaed72282bd29fa3c6b24'
 MANIFEST_SHA = '6248c88223ed7c64c3aa4832e2ff64cf535195678f3cda701a3a37416c7493a1'
 PRESERVATION_FILE = 'bitbrowser-history-preservation.json'
@@ -224,13 +225,26 @@ def connected_engine(d, state, _c, *, wait_connected=False):
     return result
 
 
-def verify_runtime(d, h, states, c, original, files, *, admitted=False):
+def fenced_engine(d, state, _contract, **_kwargs):
+    # Startup already completed its RPC. Do not issue a second API request
+    # while task tables are locked: it can queue behind the worker's claimJob.
+    code = ("require('/workspace/engine/healthcheck.cjs').check().then(v=>console.log(JSON.stringify({"
+        "ready:v.ready,mode:v.mode,activeTasks:v.activeTasks,stopping:v.stopping,rpcConnected:v.rpcConnected})))"
+        ".catch(()=>process.exit(1))")
+    value = json.loads(d.run('docker', 'exec', state['containerId'], 'node', '-e', code, timeout=10))
+    need(value == HEALTH and type(value.get('activeTasks')) is int, 'FENCED_ENGINE_NOT_IDLE')
+    return value
+
+
+def verify_runtime(d, h, states, c, original, files, *, admitted=False, fenced=False):
+    need(not (admitted and fenced), 'HEALTH_PHASE_INVALID')
     need(set(states) == set(SERVICES) and all(states[n] == original[n] for n in PRESERVED), 'PRESERVED_SERVICE_CHANGED')
     # helpers() loads this private module per publication. Preserve every legacy
     # configuration/source check, changing only the post-admission health read.
     engine_health = h.engine_idle
     try:
         if admitted: h.engine_idle = connected_engine
+        elif fenced: h.engine_idle = fenced_engine
         LEGACY.verify_runtime(d, h, states, c, original, files)
     finally:
         h.engine_idle = engine_health
@@ -261,7 +275,7 @@ def read_baseline():
     need(all(sha((current / n).read_bytes()) == v for n, v in PREDECESSOR_PROOFS.items()), 'PREDECESSOR_PROOF_CHANGED')
     preservation_raw = (current / PRESERVATION_FILE).read_bytes()
     need(sha(preservation_raw) == PRESERVATION_SHA, 'PRESERVATION_PROOF_CHANGED')
-    proof = json.loads((current / 'online-checkout-actionability-build-proof.json').read_bytes())
+    proof = json.loads((current / ENGINE_PROOF_FILE).read_bytes())
     need(proof.get('commit') == ENGINE_BASE and inventory(proof.get('afterEngineFiles')), 'ENGINE_PROVENANCE_CHANGED')
     before = h.snapshot(d, current)
     state_keys = {'containerId', 'environmentSha256', 'health', 'image', 'reference', 'startedAtSha256', 'status'}
@@ -511,7 +525,7 @@ def release(plan, c):
         def verify():
             after = h.snapshot(d, target)
             need(after['online-recharge']['image'] == built['Id'], 'IMAGE_CHANGED')
-            verify_runtime(d, h, after, c, before, c['afterEngineFiles']); verify_host(target, after, c, plan)
+            verify_runtime(d, h, after, c, before, c['afterEngineFiles'], fenced=True); verify_host(target, after, c, plan)
             return after
         def finish(after):
             receipt.update(status='DEPLOYED', after=after, image=built['Id'])

@@ -6,6 +6,11 @@ import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
+  onlineCardControlDiagnosticsScope,
+  onlineCardControlDiagnosticsPaths,
+  onlineCardControlDiagnosticsControls,
+  isOnlineCardControlDiagnosticsOnly,
+  isOnlineCardControlDiagnosticsControlsOnly,
   onlineCheckoutInitializationScope,
   onlineCheckoutInitializationPaths,
   onlineCheckoutInitializationControls,
@@ -2775,3 +2780,43 @@ for (const [name, paths] of [
     assert.deepEqual(execute(['a.test.cjs'], null).exits, [1]);
     assert.throws(() => execute(['README.md']), /Missing online engine regression files/);
   });
+
+test('card exclusion diagnostics permits only the six engine sources and its bounded release controls', () => {
+  const sources = [
+    ...onlineCardControlDiagnosticsPaths,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(onlineCardControlDiagnosticsScope, 'ONLINE_CARD_CONTROL_DIAGNOSTICS');
+  assert.equal(onlineCardControlDiagnosticsPaths.length, 6);
+  for (const paths of [sources, [...sources, ...onlineCardControlDiagnosticsControls]]) {
+    assert.equal(isOnlineCardControlDiagnosticsOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+    const guards = JSON.stringify(onlineSettingsCommands('guards', paths));
+    assert.match(guards, /online-card-control-diagnostics-release\.test\.py/);
+    assert.match(guards, /online-checkout-initialization-recovery\.test\.py/);
+    const engine = JSON.stringify(onlineSettingsCommands('online-engine', paths));
+    assert.match(engine, /readdirSync/);
+    assert.doesNotMatch(engine, /prisma|@apple-business\/api|@apple-business\/admin/);
+    for (const part of ['api', 'admin'])
+      assert.throws(() => onlineSettingsCommands(part, paths), /Unsupported card diagnostics/);
+  }
+  for (const missing of sources) {
+    const paths = sources.filter((name) => name !== missing);
+    assert.equal(isOnlineCardControlDiagnosticsOnly(paths), false);
+    assert.equal(checkMode(paths, 'same', 'same'), 'full');
+  }
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs',
+    'scripts/production-release/online-card-control-diagnostics-arbitrary.py'
+  ])
+    assert.equal(checkMode([...sources, extra], 'same', 'same'), 'full');
+  assert.equal(isOnlineCardControlDiagnosticsOnly([...sources, sources[0]]), false);
+  const controls = [...onlineCardControlDiagnosticsControls];
+  assert.equal(isOnlineCardControlDiagnosticsControlsOnly(controls), true);
+  assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+});

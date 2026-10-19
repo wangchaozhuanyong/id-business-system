@@ -350,7 +350,13 @@ for (const scenario of [
     fields: '<label>Card number<input autocomplete="cc-number" readonly></label>',
     candidates: 0
   },
-  { label: 'read failure', fields: number, candidates: 0, readFailure: true }
+  { label: 'read failure', fields: number, candidates: 0, readFailure: true },
+  {
+    label: 'transparent card input',
+    fields: '<label>Card number<input autocomplete="cc-number" style="opacity:0"></label>',
+    candidates: 0,
+    transparent: true
+  }
 ]) {
   test(`real browser readiness diagnostics retain ${scenario.label} without payment`, async (t) => {
     const { page, stats, start } = await fixture(t, {
@@ -395,9 +401,32 @@ for (const scenario of [
         assert.equal(diagnostics.code, scenario.code || 'CHECKOUT_FORM_NOT_READY');
         assert.equal(diagnostics.inspection.complete, true);
       }
+      if (scenario.transparent) {
+        assert.equal(diagnostics.exclusionProbe.complete, true);
+        assert.deepEqual(diagnostics.exclusionProbe.numberComparison, {
+          semanticEligible: 0,
+          geometryEditable: 1
+        });
+        assert.deepEqual(
+          diagnostics.exclusionProbe.rows.filter((row) => row.field === 'number'),
+          [
+            {
+              field: 'number',
+              source: 'control',
+              reason: 'opacity_zero',
+              at: 'self',
+              frameKind: 'main',
+              boxVisible: true,
+              editable: true,
+              count: 1
+            }
+          ]
+        );
+      }
       assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE|selector|value|https|credential/);
       return true;
     });
+    if (scenario.transparent) assert.equal(await page.locator('input').inputValue(), '');
     stoppedWithoutPayment(stats);
   });
 }
@@ -420,6 +449,86 @@ test('navigation and readiness consume the same deadline rather than restarting 
   assert.ok(stats.verificationBudget.maxWaitMs < 1000);
   assert.ok(stats.goto[0].timeout <= 1700);
   assert.ok(elapsed < 2400, 'the navigation delay must consume the readiness budget');
+  stoppedWithoutPayment(stats);
+});
+
+test('exclusion diagnostics projection never exposes field data or arbitrary properties', () => {
+  const row = {
+    field: 'number',
+    source: 'control',
+    reason: 'opacity_zero',
+    at: 'self',
+    frameKind: 'main',
+    boxVisible: true,
+    editable: true,
+    count: 1
+  };
+  const result = safeCheckoutOpenDiagnostics({
+    stage: 'readiness',
+    reason: 'not_ready',
+    exclusionProbe: {
+      complete: true,
+      framesInspected: 1,
+      framesFailed: 0,
+      numberComparison: { semanticEligible: 0, geometryEditable: 1, value: 'PRIVATE' },
+      rows: [
+        { ...row, value: 'PRIVATE', selector: 'PRIVATE', token: 'PRIVATE' },
+        { ...row, field: 'PRIVATE' }
+      ],
+      url: originalUrl
+    }
+  });
+  assert.deepEqual(result.exclusionProbe.rows, [row]);
+  assert.equal(result.exclusionProbe.complete, false);
+  assert.equal(result.exclusionProbe.truncated, true);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|selector|value|https|token/);
+  assert.equal(
+    safeCheckoutOpenDiagnostics({
+      stage: 'login',
+      reason: 'session_required',
+      exclusionProbe: { rows: [row] }
+    }).exclusionProbe,
+    undefined
+  );
+});
+
+test('a failed optional exclusion probe retains the original error and never starts another checkout', async (t) => {
+  const form = require('../checkout-form.cjs');
+  const saved = form.inspectCardExclusions;
+  let probes = 0;
+  form.inspectCardExclusions = async () => {
+    probes++;
+    throw new Error('PRIVATE_PROBE_FAILURE');
+  };
+  t.after(() => {
+    form.inspectCardExclusions = saved;
+  });
+  const { stats, start } = await fixture(t, { fields: '', readyWaitMs: 500 });
+  await assert.rejects(start(), (error) => {
+    assert.equal(error.code, 'CHECKOUT_FORM_NOT_READY');
+    assert.equal(error.checkoutOpenDiagnostics.reason, 'not_ready');
+    assert.equal(error.checkoutOpenDiagnostics.exclusionProbe, undefined);
+    assert.doesNotMatch(error.message, /PRIVATE/);
+    return true;
+  });
+  assert.equal(probes, 1);
+  stoppedWithoutPayment(stats);
+});
+
+test('ready original checkout never runs the failure-only exclusion probe', async (t) => {
+  const form = require('../checkout-form.cjs');
+  const saved = form.inspectCardExclusions;
+  let probes = 0;
+  form.inspectCardExclusions = async () => {
+    probes++;
+    throw new Error('PRIVATE_UNEXPECTED_PROBE');
+  };
+  t.after(() => {
+    form.inspectCardExclusions = saved;
+  });
+  const { stats, start } = await fixture(t);
+  await start();
+  assert.equal(probes, 0);
   stoppedWithoutPayment(stats);
 });
 

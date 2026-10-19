@@ -9,6 +9,7 @@ const {
   fillCard,
   fillBilling,
   inspectCardReadiness,
+  inspectCardExclusions,
   checkoutPageLoadFailed,
   diagnostic
 } = require('../checkout-form.cjs');
@@ -280,6 +281,122 @@ test('frame diagnostics count hidden visibility and zero geometry without identi
   assert.equal(result.inspection.framesSkipped, 2);
   assert.deepEqual(result.inspection.frameSkipCounts, { visibility_hidden: 1, zero_geometry: 1 });
   assert.doesNotMatch(JSON.stringify(result.inspection), /srcdoc|iframe|cc-number|http|number/);
+});
+test('transparent editable card input is diagnosed without changing strict readiness or its value', async (t) => {
+  const page = await pageFor(
+    t,
+    '<label>Card number<input autocomplete="cc-number" style="opacity:0"></label>'
+  );
+  const input = page.locator('input');
+  assert.equal(await input.isVisible(), true);
+  assert.equal(await input.isEditable(), true);
+  await input.fill('4242424242424242');
+  assert.equal((await inspectCardReadiness(page)).ready, false);
+  const result = await inspectCardExclusions(page);
+  assert.equal(result.complete, true);
+  assert.equal(result.shadowCoverage, 'open_only');
+  assert.deepEqual(result.numberComparison, { semanticEligible: 0, geometryEditable: 1 });
+  assert.deepEqual(result.rows, [
+    {
+      field: 'number',
+      source: 'control',
+      reason: 'opacity_zero',
+      at: 'self',
+      frameKind: 'main',
+      boxVisible: true,
+      editable: true,
+      count: 1
+    }
+  ]);
+  assert.equal(await input.inputValue(), '4242424242424242');
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /4242424242424242|autocomplete|cc-number|Card number/
+  );
+});
+
+test('excluded frame diagnostics identify semantic fields through nested and shadow controls', async (t) => {
+  const page = await pageFor(
+    t,
+    '<section style="opacity:0">' + iframe(iframe('<div id="root"></div>')) + '</section>'
+  );
+  const frame = page.frames()[2];
+  await frame.locator('#root').evaluate((n) => {
+    n.attachShadow({ mode: 'open' }).innerHTML =
+      '<input autocomplete="cc-number"><input autocomplete="cc-csc">';
+  });
+  const result = await inspectCardExclusions(page);
+  assert.equal(result.complete, true);
+  assert.equal(result.framesInspected, 3);
+  assert.deepEqual(result.numberComparison, { semanticEligible: 0, geometryEditable: 1 });
+  assert.deepEqual(
+    result.rows.map((row) => [row.field, row.source, row.reason, row.at, row.frameKind]),
+    [
+      ['number', 'frame', 'opacity_zero', 'ancestor', 'embedded'],
+      ['cvc', 'frame', 'opacity_zero', 'ancestor', 'embedded']
+    ]
+  );
+  assert.equal((await inspectCardReadiness(page)).ready, false);
+  assert.deepEqual(await frame.locator('input').evaluateAll((nodes) => nodes.map((n) => n.value)), [
+    '',
+    ''
+  ]);
+});
+
+test('exclusion probe distinguishes absent fields from self and ancestor hidden fields', async (t) => {
+  const page = await pageFor(t, '<input name="ordinary" value="PRIVATE_FIELD_VALUE">');
+  const empty = await inspectCardExclusions(page);
+  assert.equal(empty.complete, true);
+  assert.deepEqual(empty.rows, []);
+  assert.deepEqual(empty.numberComparison, { semanticEligible: 0, geometryEditable: 0 });
+  await page.setContent(
+    '<input hidden autocomplete="cc-number"><section hidden><input autocomplete="cc-csc"></section>'
+  );
+  const hidden = await inspectCardExclusions(page);
+  assert.deepEqual(
+    hidden.rows.map((row) => [row.field, row.reason, row.at, row.boxVisible]),
+    [
+      ['number', 'hidden', 'self', false],
+      ['cvc', 'hidden', 'ancestor', false]
+    ]
+  );
+  assert.doesNotMatch(JSON.stringify([empty, hidden]), /PRIVATE|ordinary|cc-number|cc-csc/);
+});
+
+test('exclusion probe is bounded on frame failure and never changes the original readiness', async (t) => {
+  const page = await pageFor(t, cardHtml);
+  const before = await inspectCardReadiness(page);
+  failFrameRead(t, page.mainFrame(), () => new Promise(() => {}));
+  const started = Date.now();
+  const result = await inspectCardExclusions(page, { deadline: started + 100 });
+  assert.equal(result.complete, false);
+  assert.equal(result.framesFailed, 1);
+  assert.equal(result.timedOut, true);
+  assert.ok(Date.now() - started < 700);
+  assert.equal(before.ready, true);
+});
+
+test('exclusion probe does not mistake a card-labelled checkbox for an editable input', async (t) => {
+  const page = await pageFor(t, '<input type="checkbox" autocomplete="cc-number">');
+  const result = await inspectCardExclusions(page);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.numberComparison, { semanticEligible: 0, geometryEditable: 0 });
+  assert.equal(result.rows[0].reason, 'excluded_type');
+  assert.equal(result.rows[0].editable, false);
+});
+
+test('exclusion probe honours cancellation and closed pages without permitting a new action', async (t) => {
+  const page = await pageFor(t, cardHtml);
+  const controller = new AbortController();
+  controller.abort();
+  const cancelled = await inspectCardExclusions(page, { signal: controller.signal });
+  assert.equal(cancelled.complete, false);
+  assert.equal(cancelled.aborted, true);
+  assert.equal(cancelled.framesInspected, 0);
+  await page.close();
+  const ended = await inspectCardExclusions(page);
+  assert.equal(ended.complete, false);
+  assert.equal(ended.pageClosed, true);
 });
 test('diagnostic counters preserve the existing deadline when the renderer read cannot finish', async (t) => {
   const page = await pageFor(t, cardHtml);

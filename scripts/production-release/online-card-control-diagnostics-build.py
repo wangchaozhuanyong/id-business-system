@@ -1,0 +1,36 @@
+"""Freeze and build only this reviewed diagnostic overlay on native main."""
+import argparse
+import importlib.util
+import json
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+def load(name):
+    spec = importlib.util.spec_from_file_location('card_diagnostics_' + name.replace('-', '_'), HERE / name)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
+
+CORE = load('online-checkout-initialization-build.py')
+CORE.PREFIX = 'online-card-control-diagnostics'
+CORE.CONTRACT = HERE / (CORE.PREFIX + '-contract.json')
+CORE.OUT = CORE.ROOT / '.deploy' / CORE.PREFIX
+CORE.REPORTS = CORE.ROOT / '.runtime' / (CORE.PREFIX + '-ci')
+CORE.publisher = lambda: load('online-card-control-diagnostics-release.py').CORE
+
+def __getattr__(name):
+    return getattr(CORE, name)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--freeze', action='store_true'); parser.add_argument('--baseline')
+    parser.add_argument('--source-review'); parser.add_argument('--check', action='store_true')
+    args = parser.parse_args()
+    if args.freeze:
+        CORE.publisher().need(args.baseline and args.source_review and not args.check, 'FREEZE_ARGUMENTS_INVALID')
+        CORE.freeze(args.baseline, args.source_review)
+    elif args.check:
+        CORE.check(json.loads(CORE.CONTRACT.read_bytes()))
+        print(json.dumps({'status': 'SOURCE_VERIFIED', 'businessActions': 0}))
+    else:
+        CORE.publisher().need(not args.baseline and not args.source_review, 'ARGUMENTS_INVALID'); CORE.main()

@@ -33,6 +33,8 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
+  onlineCardControlDiagnosticsPaths,
+  onlineCardControlDiagnosticsControls,
   onlineCheckoutActionabilityPaths,
   onlineCheckoutInitializationPaths,
   onlineCheckoutInitializationControls,
@@ -8325,4 +8327,17 @@ test('selected native actual PR and push CLI select both controls and use full c
       assert.deepEqual(negative.checkParts, boundedMysqlFullParts);
     }
   }
+});
+
+test('card diagnostics release retains only guards and online engine checks', () => {
+  const paths = [
+    ...onlineCardControlDiagnosticsPaths,
+    ...onlineCardControlDiagnosticsControls,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts([...onlineCardControlDiagnosticsControls]), ['guards']);
+  assert.equal(checkMode([...paths, 'package-lock.json'], 'same', 'same'), 'full');
 });
