@@ -53,6 +53,20 @@ class ManualReleaseTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 p.verify_mysql({**value, key: invalid}, {}, self.c)
 
+    def test_native_main_identical_tree_evidence_is_reused_without_skipping_source_quality(self):
+        b = p.load('bitbrowser-manual-build.py')
+        rows = [{'name': name, 'conclusion': 'success'} for name in ('change-scope', 'quality')]
+        rows += [{'name': 'full-quality', 'conclusion': 'skipped'}]
+        b.require_quality_jobs(rows, source=False, p=p)
+        with self.assertRaises(RuntimeError):
+            b.require_quality_jobs(rows, source=True, p=p)
+        for name in ('change-scope', 'quality', 'full-quality'):
+            invalid = [{**r, 'conclusion': 'failure'} if r['name'] == name else r for r in rows]
+            with self.assertRaises(RuntimeError):
+                b.require_quality_jobs(invalid, source=False, p=p)
+        rows[-1]['conclusion'] = 'success'
+        b.require_quality_jobs(rows, source=True, p=p)
+
     def test_adapter_preserves_activation_and_sql_fence(self):
         engine = p.engine(self.c)
         original = p.load('bitbrowser-history-release.py')

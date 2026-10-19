@@ -43,6 +43,15 @@ def check(c):
     return p
 
 
+def require_quality_jobs(rows, *, source, p):
+    passed = {row['name'] for row in rows if row['conclusion'] == 'success'}
+    p.need({'change-scope', 'quality'} <= passed
+        and (not source or 'full-quality' in passed), 'APPLICABLE_QUALITY_REQUIRED')
+    # The pinned quality job verifies main's identical-tree PR evidence when its
+    # full-quality job is skipped; do not demand a redundant full main run.
+    p.need(all(row['conclusion'] in ('success', 'skipped') for row in rows), 'QUALITY_JOB_NOT_PASSED')
+
+
 def quality(c, p, identity):
     out = {}
     for role, commit in (('sources', p.SOURCE), ('release', identity['commit'])):
@@ -52,7 +61,7 @@ def quality(c, p, identity):
         p.need(bool(rows), 'QUALITY_NOT_PASSED')
         run = rows[0]
         jobs = json.loads(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/actions/runs/' + str(run['id']) + '/jobs?per_page=100'], cwd=ROOT))['jobs']
-        p.need(any(j['name'] == 'full-quality' and j['conclusion'] == 'success' for j in jobs), 'FULL_QUALITY_REQUIRED')
+        require_quality_jobs(jobs, source=role == 'sources', p=p)
         out[role] = {'commit': commit, 'tree': git('rev-parse', commit + '^{tree}').decode().strip(),
             'runId': str(run['id']), 'runAttempt': str(run['run_attempt']), 'event': run['event'], 'conclusion': 'success'}
     p.need(out['sources']['runId'] == c['sourceQualityRunId'], 'SOURCE_QUALITY_CHANGED')
