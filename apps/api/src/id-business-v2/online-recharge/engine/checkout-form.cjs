@@ -224,7 +224,14 @@ function safeControls(items) {
 }
 function elementRendered(
   element,
-  { control = false, interaction = false, reason = false, snapshot = false } = {}
+  {
+    control = false,
+    interaction = false,
+    reason = false,
+    snapshot = false,
+    includeRejected = false,
+    describe = false
+  } = {}
 ) {
   // Computed visibility on the target already includes inheritance. A visible
   // child may legally override a hidden ancestor; the other exclusions below
@@ -333,95 +340,159 @@ function elementRendered(
     }
     return null;
   }
+  function boxVisible(target) {
+    const box = target.getBoundingClientRect(),
+      style = target.ownerDocument.defaultView.getComputedStyle(target);
+    return (
+      box.width > 0 &&
+      box.height > 0 &&
+      style.display !== 'none' &&
+      !['hidden', 'collapse'].includes(style.visibility)
+    );
+  }
+  function rejectedAt(target, rejected) {
+    if (!rejected) return 'none';
+    for (let node = target; node; node = node.parentElement || node.getRootNode()?.host) {
+      const style = node.ownerDocument.defaultView.getComputedStyle(node);
+      if (
+        (rejected === 'hidden' && node.hidden) ||
+        (rejected === 'inert' && node.inert) ||
+        (rejected === 'opacity_zero' && Number(style.opacity) === 0) ||
+        (rejected === 'display_none' && style.display === 'none') ||
+        (rejected === 'content_visibility_hidden' && style.contentVisibility === 'hidden') ||
+        (rejected === 'aria_disabled' && node.getAttribute('aria-disabled') === 'true')
+      )
+        return node === target ? 'self' : 'ancestor';
+    }
+    return ['visibility_hidden', 'zero_geometry', 'modal_background'].includes(rejected)
+      ? 'computed'
+      : 'self';
+  }
   if (!snapshot) {
     const rejected = rejection(element, control);
+    if (describe)
+      return {
+        reason: rejected,
+        at: rejectedAt(element, rejected),
+        boxVisible: boxVisible(element)
+      };
     return reason ? rejected : !rejected;
   }
   const rejectCounts = {},
-    metas = [];
+    metas = [],
+    rejectedMetas = [];
   for (const [index, n] of element.entries()) {
     const rejected = rejection(n, true);
     if (rejected) {
       rejectCounts[rejected] = (rejectCounts[rejected] || 0) + 1;
-      continue;
+      if (!includeRejected) continue;
     }
-    metas.push(
-      (() => {
-        let scope = '',
-          owner = '';
-        for (
-          let parent = n.parentElement;
-          parent && parent !== n.ownerDocument.body;
-          parent = parent.parentElement
-        ) {
-          const heading = parent.querySelector(
-            ':scope > legend,:scope > h2,:scope > h3,:scope > [role="heading"]'
-          );
-          const label = parent.getAttribute('aria-label') || heading?.textContent || '';
-          const identity = `${parent.id} ${parent.getAttribute('data-testid') || ''} ${label}`;
-          const kind = /billing.?address/i.test(identity)
-            ? 'billing'
-            : /shipping|delivery.?address/i.test(identity)
-              ? 'shipping'
-              : /(?:^|[\s_-])contact(?:$|[\s_-])|payment-link/i.test(identity)
-                ? 'contact'
-                : '';
-          if (!kind) continue;
-          scope = kind;
-          owner = parent.id
-            ? `[id=${JSON.stringify(parent.id)}]`
-            : parent.getAttribute('aria-label')
-              ? `[aria-label=${JSON.stringify(label)}]`
-              : heading
-                ? `${parent.tagName.toLowerCase()}:has(> ${heading.tagName.toLowerCase()}:text-is(${JSON.stringify(label)}))`
-                : '';
-          break;
-        }
-        return {
-          index,
-          id: n.id || '',
-          name: n.getAttribute('name') || '',
-          ac: n.getAttribute('autocomplete') || '',
-          stableField: ['cardNumber', 'cardExpiry', 'cardCvc'].includes(
-            n.getAttribute('data-elements-stable-field-name')
-          )
-            ? n.getAttribute('data-elements-stable-field-name')
-            : '',
-          type: n.type || '',
-          testId: [
-            'billingName',
-            'billingCountry',
-            'billingAddressLine1',
-            'billingLocality',
-            'billingPostalCode',
-            'billingAdministrativeArea'
-          ].includes(n.getAttribute('data-testid'))
-            ? n.getAttribute('data-testid')
-            : '',
-          placeholder: n.getAttribute('placeholder') || '',
-          label: (
-            n.getAttribute('aria-label') ||
-            (n.getAttribute('aria-labelledby') || '')
-              .split(/\s+/)
-              .map((id) => n.getRootNode().getElementById?.(id)?.textContent || '')
-              .join(' ')
-              .trim() ||
-            Array.from(n.labels || [])
-              .map((l) => l.textContent)
-              .join(' ') ||
-            ''
-          ).slice(0, 160),
-          tag: n.tagName.toLowerCase(),
-          role: n.getAttribute('role'),
-          scope,
-          owner,
-          readOnly: Boolean(n.readOnly),
-          required: n.required || n.getAttribute('aria-required') === 'true'
-        };
-      })()
-    );
+    const meta = (() => {
+      let scope = '',
+        owner = '';
+      for (
+        let parent = n.parentElement;
+        parent && parent !== n.ownerDocument.body;
+        parent = parent.parentElement
+      ) {
+        const heading = parent.querySelector(
+          ':scope > legend,:scope > h2,:scope > h3,:scope > [role="heading"]'
+        );
+        const label = parent.getAttribute('aria-label') || heading?.textContent || '';
+        const identity = `${parent.id} ${parent.getAttribute('data-testid') || ''} ${label}`;
+        const kind = /billing.?address/i.test(identity)
+          ? 'billing'
+          : /shipping|delivery.?address/i.test(identity)
+            ? 'shipping'
+            : /(?:^|[\s_-])contact(?:$|[\s_-])|payment-link/i.test(identity)
+              ? 'contact'
+              : '';
+        if (!kind) continue;
+        scope = kind;
+        owner = parent.id
+          ? `[id=${JSON.stringify(parent.id)}]`
+          : parent.getAttribute('aria-label')
+            ? `[aria-label=${JSON.stringify(label)}]`
+            : heading
+              ? `${parent.tagName.toLowerCase()}:has(> ${heading.tagName.toLowerCase()}:text-is(${JSON.stringify(label)}))`
+              : '';
+        break;
+      }
+      return {
+        index,
+        id: n.id || '',
+        name: n.getAttribute('name') || '',
+        ac: n.getAttribute('autocomplete') || '',
+        stableField: ['cardNumber', 'cardExpiry', 'cardCvc'].includes(
+          n.getAttribute('data-elements-stable-field-name')
+        )
+          ? n.getAttribute('data-elements-stable-field-name')
+          : '',
+        type: n.type || '',
+        testId: [
+          'billingName',
+          'billingCountry',
+          'billingAddressLine1',
+          'billingLocality',
+          'billingPostalCode',
+          'billingAdministrativeArea'
+        ].includes(n.getAttribute('data-testid'))
+          ? n.getAttribute('data-testid')
+          : '',
+        placeholder: n.getAttribute('placeholder') || '',
+        label: (
+          n.getAttribute('aria-label') ||
+          (n.getAttribute('aria-labelledby') || '')
+            .split(/\s+/)
+            .map((id) => n.getRootNode().getElementById?.(id)?.textContent || '')
+            .join(' ')
+            .trim() ||
+          Array.from(n.labels || [])
+            .map((l) => l.textContent)
+            .join(' ') ||
+          ''
+        ).slice(0, 160),
+        tag: n.tagName.toLowerCase(),
+        role: n.getAttribute('role'),
+        scope,
+        owner,
+        readOnly: Boolean(n.readOnly),
+        required: n.required || n.getAttribute('aria-required') === 'true',
+        ...(includeRejected
+          ? {
+              comparison: {
+                boxVisible: boxVisible(n),
+                editable:
+                  !n.matches(':disabled') &&
+                  !n.readOnly &&
+                  n.getAttribute('aria-disabled') !== 'true' &&
+                  n.getAttribute('aria-readonly') !== 'true' &&
+                  ![
+                    'hidden',
+                    'checkbox',
+                    'radio',
+                    'button',
+                    'submit',
+                    'reset',
+                    'file',
+                    'image',
+                    'range',
+                    'color'
+                  ].includes(n.type)
+              }
+            }
+          : {})
+      };
+    })();
+    if (rejected) rejectedMetas.push({ meta, reason: rejected, at: rejectedAt(n, rejected) });
+    else metas.push(meta);
   }
-  return { metas, scanned: element.length, rejectCounts };
+  return {
+    metas,
+    scanned: element.length,
+    rejectCounts,
+    ...(includeRejected ? { rejectedMetas } : {})
+  };
 }
 async function frameVisible(frame, deadline, signal, inspection) {
   for (let current = frame; current.parentFrame(); current = current.parentFrame()) {
@@ -1411,6 +1482,114 @@ async function inspectCardReadiness(page, { deadline = Date.now() + 120000, sign
     releaseHandles(state);
   }
 }
+// Failure-only, read-only comparison. It never admits a candidate or changes the
+// original failure. Every row comes from the same metadata snapshot under both
+// visibility definitions; no field value, selector, URL or frame identity leaves it.
+async function inspectCardExclusions(page, { deadline = Date.now() + 2000, signal } = {}) {
+  const result = {
+    complete: false,
+    shadowCoverage: 'open_only',
+    framesInspected: 0,
+    framesFailed: 0,
+    timedOut: false,
+    aborted: false,
+    pageClosed: false,
+    truncated: false,
+    numberComparison: { semanticEligible: 0, geometryEditable: 0 },
+    rows: []
+  };
+  try {
+    const frames = page.frames();
+    for (const frame of frames.slice(0, 64)) {
+      const readDeadline = Math.min(deadline, Date.now() + FRAME_READ_MS);
+      try {
+        timeout(deadline, signal);
+        if (closed(page)) break;
+        let frameReason = null,
+          frameAt = 'none',
+          frameBoxVisible = true;
+        for (let current = frame; current.parentFrame(); current = current.parentFrame()) {
+          const owner = await within(() => current.frameElement(), readDeadline, signal);
+          try {
+            const detail = await within(
+              () => owner.evaluate(elementRendered, { describe: true, interaction: true }),
+              readDeadline,
+              signal
+            );
+            frameBoxVisible &&= detail.boxVisible;
+            if (!frameReason && detail.reason) {
+              frameReason = detail.reason;
+              frameAt = detail.at;
+            }
+          } finally {
+            owner.dispose().catch(() => {});
+          }
+        }
+        const snapshot = await within(
+          () =>
+            frame
+              .locator('input,select,textarea,[role="combobox"]')
+              .evaluateAll(elementRendered, { snapshot: true, includeRejected: true }),
+          readDeadline,
+          signal
+        );
+        result.framesInspected++;
+        const controls = [
+          ...snapshot.metas.map((meta) => ({ meta, reason: null, at: 'none' })),
+          ...snapshot.rejectedMetas
+        ];
+        for (const item of controls) {
+          const fields = Object.keys(rules).filter((field) => score(item.meta, field) > 0);
+          const reason = frameReason || item.reason || 'eligible';
+          const boxVisible = frameBoxVisible && item.meta.comparison.boxVisible;
+          const editable = item.meta.comparison.editable;
+          if (fields.includes('number')) {
+            result.numberComparison.semanticEligible += Number(reason === 'eligible' && editable);
+            result.numberComparison.geometryEditable += Number(boxVisible && editable);
+            for (const key of ['semanticEligible', 'geometryEditable'])
+              if (result.numberComparison[key] > 10000) {
+                result.numberComparison[key] = 10000;
+                result.truncated = true;
+              }
+          }
+          for (const field of fields) {
+            const row = {
+              field,
+              source: frameReason ? 'frame' : 'control',
+              reason,
+              at: frameReason ? frameAt : item.at,
+              frameKind: frame.parentFrame() ? 'embedded' : 'main',
+              boxVisible,
+              editable
+            };
+            const same = result.rows.find((other) =>
+              Object.keys(row).every((key) => other[key] === row[key])
+            );
+            if (same && same.count < 10000) same.count++;
+            else if (!same && result.rows.length < 64) result.rows.push({ ...row, count: 1 });
+            else result.truncated = true;
+          }
+        }
+      } catch {
+        result.framesFailed++;
+        if (signal?.aborted || Date.now() >= deadline || closed(page)) break;
+      }
+    }
+    result.truncated ||= frames.length > 64;
+  } catch {
+    result.framesFailed++;
+  }
+  result.timedOut = Date.now() >= deadline;
+  result.aborted = signal?.aborted === true;
+  result.pageClosed = closed(page);
+  result.complete =
+    !result.framesFailed &&
+    !result.timedOut &&
+    !result.aborted &&
+    !result.pageClosed &&
+    !result.truncated;
+  return result;
+}
 async function loadFailed(page, deadline, signal) {
   const state = { signal };
   return freshRead(page, deadline, state, async () => {
@@ -1501,5 +1680,6 @@ module.exports = {
   matches,
   stableDue,
   inspectCardReadiness,
+  inspectCardExclusions,
   checkoutPageLoadFailed
 };

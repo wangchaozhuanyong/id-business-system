@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "scope": "ONLINE_CARD_CONTROL_DIAGNOSTICS",
+  "frozen": false,
+  "sourceReviewCommit": null,
+  "baseline": null,
+  "pendingBindings": ["reviewed-source", "fresh-baseline"]
+}

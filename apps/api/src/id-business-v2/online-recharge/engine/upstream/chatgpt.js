@@ -488,6 +488,42 @@ function safeCheckoutOpenDiagnostics(value) {
             }
             if (Object.keys(inspection).length) result.inspection = inspection;
         }
+        const probe = value.exclusionProbe;
+        if (probe && typeof probe === 'object' && !Array.isArray(probe)) {
+            const clean = {};
+            if (probe.shadowCoverage === 'open_only') clean.shadowCoverage = 'open_only';
+            for (const key of ['complete', 'timedOut', 'aborted', 'pageClosed', 'truncated'])
+                if (typeof probe[key] === 'boolean') clean[key] = probe[key];
+            for (const key of ['framesInspected', 'framesFailed'])
+                if (Number.isInteger(probe[key]) && probe[key] >= 0 && probe[key] <= 10000) clean[key] = probe[key];
+            const comparison = probe.numberComparison;
+            if (comparison && ['semanticEligible', 'geometryEditable'].every(key =>
+                Number.isInteger(comparison[key]) && comparison[key] >= 0 && comparison[key] <= 10000))
+                clean.numberComparison = { semanticEligible: comparison.semanticEligible,
+                    geometryEditable: comparison.geometryEditable };
+            const reasons = new Set(['eligible', 'zero_geometry', 'hidden', 'inert', 'aria_hidden',
+                'display_none', 'visibility_hidden', 'opacity_zero', 'content_visibility_hidden',
+                'modal_background', 'aria_disabled', 'disabled', 'readonly', 'excluded_type']);
+            if (Array.isArray(probe.rows)) {
+                clean.rows = probe.rows.slice(0, 64).filter(row => row
+                    && CHECKOUT_FORM_DIAGNOSTIC_FIELDS.has(row.field) && reasons.has(row.reason)
+                    && ['control', 'frame'].includes(row.source) && ['self', 'ancestor', 'computed', 'none'].includes(row.at)
+                    && ['main', 'embedded'].includes(row.frameKind) && typeof row.boxVisible === 'boolean'
+                    && typeof row.editable === 'boolean' && Number.isInteger(row.count) && row.count >= 1 && row.count <= 10000)
+                    .map(row => ({ field: row.field, source: row.source, reason: row.reason, at: row.at,
+                        frameKind: row.frameKind, boxVisible: row.boxVisible, editable: row.editable, count: row.count }));
+                if (probe.rows.length > 64 || clean.rows.length !== probe.rows.length) {
+                    clean.truncated = true;
+                    clean.complete = false;
+                }
+            }
+            if (clean.shadowCoverage !== 'open_only' || !clean.numberComparison || !Array.isArray(clean.rows)
+                || ['framesInspected', 'framesFailed', 'complete', 'timedOut', 'aborted', 'pageClosed', 'truncated']
+                    .some(key => !Object.hasOwn(clean, key))
+                || clean.framesFailed > 0 || clean.timedOut || clean.aborted || clean.pageClosed || clean.truncated)
+                clean.complete = false;
+            if (Object.keys(clean).length) result.exclusionProbe = clean;
+        }
         return result;
     } catch (_) {
         // Optional diagnostics cannot replace the original task failure.
@@ -590,6 +626,14 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             checkoutReadyWaitMs: Math.min(budget.remaining(), Number(process.env.CHECKOUT_READY_WAIT_MS || 60000))
         }));
         if (!captchaResult.cleared) {
+            let exclusionProbe;
+            if (captchaResult.checkoutNotReady && budget.remaining() > 0 && !page.isClosed?.()) {
+                try {
+                    exclusionProbe = await require('../checkout-form.cjs').inspectCardExclusions(page, {
+                        deadline: Date.now() + Math.min(2000, budget.remaining()), signal: budget.signal
+                    });
+                } catch (_) { /* Optional metadata cannot replace the original readiness failure. */ }
+            }
             const err = captchaResult.sessionRequired
                 ? (captchaResult.message || buildSessionNotLoggedInError('Checkout 支付页'))
                 : captchaResult.checkoutNotReady
@@ -606,7 +650,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                 checkoutOpenDiagnostics: safeCheckoutOpenDiagnostics({
                     stage, reason: checkoutOpenReason, code: captchaResult.code,
                     missing: captchaResult.missing, controls: captchaResult.controls,
-                    inspection: captchaResult.inspection
+                    inspection: captchaResult.inspection, exclusionProbe
                 })
             });
         }
