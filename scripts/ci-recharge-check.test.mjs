@@ -3802,3 +3802,98 @@ test('bounded MySQL repair runner rejects base tree path and schema drift withou
         );
   }
 });
+
+import {
+  bitbrowserBoundedHoldNativeDeclarationsBase,
+  bitbrowserBoundedHoldNativeDeclarationsTree,
+  bitbrowserBoundedHoldNativeDeclarationsPaths,
+  bitbrowserBoundedHoldNativeDeclarationsCommands
+} from './ci-recharge-scope.mjs';
+
+test('native declaration runner installs control dependencies first and propagates failures for both finite parts', () => {
+  const options = {
+    base: bitbrowserBoundedHoldNativeDeclarationsBase,
+    baseTree: bitbrowserBoundedHoldNativeDeclarationsTree
+  };
+  const paths = bitbrowserBoundedHoldNativeDeclarationsPaths;
+  assert.deepEqual(bitbrowserBoundedHoldNativeDeclarationsCommands('release-controls'), [
+    ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+    ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/bitbrowser-history-build.py',
+      '--recipe',
+      'bounded-hold-20261019',
+      '--check'
+    ]
+  ]);
+  assert.deepEqual(bitbrowserBoundedHoldNativeDeclarationsCommands('guards'), [
+    ...[
+      'format:check',
+      'lint',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ].map((name) => ['npm', 'run', name]),
+    ['node', '--test', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-check.test.mjs']
+  ]);
+  for (const part of ['guards', 'release-controls']) {
+    const commands = bitbrowserBoundedHoldNativeDeclarationsCommands(part);
+    assert.deepEqual(recordGuardCommands('ci-only', paths, part, options), [
+      ...commands,
+      ['process-exit', 0]
+    ]);
+    for (const command of commands)
+      assert.throws(
+        () =>
+          recordGuardCommands('ci-only', paths, part, {
+            ...options,
+            failCommand: command.join(' ')
+          }),
+        /SYNTHETIC_COMMAND_FAILURE/
+      );
+  }
+  for (const part of ['api', 'admin', 'migration', 'online-engine'])
+    assert.throws(
+      () => recordGuardCommands('ci-only', paths, part, options),
+      /Unsupported finite BitBrowser native-declarations control check/
+    );
+});
+
+test('native declaration runner rejects every missing extra duplicate moved and schema-changing snapshot', () => {
+  const options = {
+    base: bitbrowserBoundedHoldNativeDeclarationsBase,
+    baseTree: bitbrowserBoundedHoldNativeDeclarationsTree
+  };
+  const paths = bitbrowserBoundedHoldNativeDeclarationsPaths;
+  for (const part of ['guards', 'release-controls']) {
+    for (const invalid of [
+      { paths, context: { ...options, base: 'main' } },
+      { paths, context: { ...options, base: 'b'.repeat(40) } },
+      { paths, context: { ...options, baseTree: 'a'.repeat(40) } },
+      ...paths.map((missing) => ({
+        paths: paths.filter((name) => name !== missing),
+        context: options
+      })),
+      { paths: [...paths, paths[0]], context: options },
+      { paths: [...paths.slice(1), paths[1]], context: options },
+      ...[
+        '.github/workflows/bitbrowser-history-validation.yml',
+        'scripts/production-release/bitbrowser-history-build.py',
+        'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts',
+        'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts'
+      ].map((extra) => ({ paths: [...paths, extra], context: options }))
+    ])
+      assert.throws(
+        () => recordGuardCommands('ci-only', invalid.paths, part, invalid.context),
+        /Unfrozen or moved bounded BitBrowser .*scope/
+      );
+    for (const schemaAfter of ['', 'model Changed { id String @id }\n'])
+      assert.throws(
+        () => recordGuardCommands('ci-only', paths, part, { ...options, schemaAfter }),
+        /native-declarations schema must remain byte identical/
+      );
+  }
+});

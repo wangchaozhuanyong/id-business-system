@@ -168,6 +168,9 @@ import {
   bitbrowserHistorySourceReviewTree,
   bitbrowserBoundedHoldSourceShape,
   bitbrowserBoundedHoldControlContract,
+  bitbrowserBoundedHoldNativeDeclarationsCandidate,
+  isBitbrowserBoundedHoldNativeDeclarationsOnly,
+  bitbrowserBoundedHoldNativeDeclarationsCommands,
   bitbrowserBoundedHoldMysqlRepairSpec,
   bitbrowserBoundedHoldMysqlRepairShape,
   isBitbrowserBoundedHoldMysqlRepairOnly,
@@ -210,6 +213,26 @@ if (mode === 'recharge' && bitbrowserBoundedHoldSourceShape(changed)) {
   process.exit(0);
 }
 // BEGIN finite BitBrowser publication control checks
+if (mode === 'ci-only' && bitbrowserBoundedHoldNativeDeclarationsCandidate(changed)) {
+  if (
+    !isBitbrowserBoundedHoldNativeDeclarationsOnly(changed, {
+      base,
+      baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+    })
+  )
+    throw new Error('Unfrozen or moved bounded BitBrowser native-declarations scope');
+  const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+  if (
+    !bitbrowserBoundedHoldSchemaMatches(
+      execFileSync('git', ['show', base + ':' + schemaPath], { encoding: 'utf8' }),
+      execFileSync('git', ['show', 'HEAD:' + schemaPath], { encoding: 'utf8' })
+    )
+  )
+    throw new Error('Bounded BitBrowser native-declarations schema must remain byte identical');
+  for (const [file, ...args] of bitbrowserBoundedHoldNativeDeclarationsCommands(part))
+    run(file, args);
+  process.exit(0);
+}
 if (
   mode === 'ci-only' &&
   (bitbrowserBoundedHoldMysqlRepairShape(changed) ||

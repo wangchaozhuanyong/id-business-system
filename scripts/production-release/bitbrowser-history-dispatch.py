@@ -154,7 +154,11 @@ try:
  print(json.dumps(module.release(plan,c),sort_keys=True))
 except Exception as error:
  code=str(error) if re.fullmatch('(?:BITBROWSER_HISTORY|BITBROWSER_RECOVERY|RECHARGE_CHECKOUT|RECHARGE_RECORD|RECHARGE_AVAILABILITY|ONLINE_QUERY_NETWORK)_[A-Z0-9_]+',str(error)) else 'BITBROWSER_HISTORY_REMOTE_OPERATION_FAILED'
- print(json.dumps({'status':'FAILED','code':code,'mode':plan['mode'],'businessActions':0}))
+ report=json.dumps({'status':'FAILED','code':code,'mode':plan['mode'],'businessActions':0},sort_keys=True,separators=(',',':'))
+ if plan['mode']=='parent' and 'module' in locals() and type(error) is getattr(module,'BoundedParentMismatch',None):
+  try:report=module.bounded_parent_failure_json(error,plan,c)
+  except Exception:report=json.dumps({'status':'FAILED','code':'BITBROWSER_HISTORY_BOUNDED_PARENT_DIAGNOSTIC_INVALID','mode':plan['mode'],'businessActions':0},sort_keys=True,separators=(',',':'))
+ print(report)
  raise SystemExit(1) from None
 '''
     source = 'PLAN_JSON=' + repr(json.dumps(selected)) + '\nRAW_BASE=' + repr(

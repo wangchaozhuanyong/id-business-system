@@ -124,10 +124,10 @@
   },
   "businessActions": 0,
   "ciControlPins": {
-    "scripts/ci-recharge-check.mjs": "f1a4e5832b1e413a5aa036e13d0e6a7011ac09122ce9a768c851f0ecfde44869",
-    "scripts/ci-recharge-check.test.mjs": "bd82eed3ce0e12af08b5f65be816e2336193756efa148c5283f3b41bdb4f2b1c",
-    "scripts/ci-recharge-scope.mjs": "4e57ed9240714b48494d58dc54b889855eaf484971978b40ec343e6315f94192",
-    "scripts/ci-recharge-scope.test.mjs": "01cbb2f3f87527c7e46fddd200ef13e15b16d40a0f4a581ed0a2c6e7d1dffb14"
+    "scripts/ci-recharge-check.mjs": "c7e3623a79c53a153da40a05415eebfd903a6df1cca9d0d2248e3c0c64f67877",
+    "scripts/ci-recharge-check.test.mjs": "fc3359d450b83b81e4949493129c0cba3576cd54c226dab9300a1771d1d62edb",
+    "scripts/ci-recharge-scope.mjs": "2faaafdec9e72d8e78ce34e97de47f19373a51e7eaa1df3d0cce557f074453fd",
+    "scripts/ci-recharge-scope.test.mjs": "e2bae4671b8762711a370ed3e71b4fc9697dbf44a2cabeee82aadc44e8e72d76"
   },
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
@@ -139,9 +139,9 @@
     "bitbrowser-followup-contract.json": "f79066e8b1347366df4ef90243cb55498e10b10898d2be9c952dd4efbced5881",
     "bitbrowser-history-build.py": "e31193b853d6a609f61d41f813756332e6bb15bfa3dc0c357b22d6b860cf8199",
     "bitbrowser-history-contract.json": "7b0adc46b435e4e1824c6c142d1948168aa38ebc010a8e81f071abb077b0dc91",
-    "bitbrowser-history-dispatch.py": "90c463f6195c9900b48c5f69da4795d660feedb866a2872f8b5ad1d9acdfa167",
-    "bitbrowser-history-release.py": "f42e403fd953dc9a2eee2ae06170c9d52b4d4d969a73f424e60dfbc44bd3a39c",
-    "bitbrowser-history-release.test.py": "11ac780d1e2e424518076d2e0b2dcd357ae976e21b529b9106e6be48ef5ed474",
+    "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
+    "bitbrowser-history-release.py": "4d70a89eab160660147c15504114d9bef081b71531b4e6184c153f2fa4168d34",
+    "bitbrowser-history-release.test.py": "9c867fbef36cb32c2f61530968ef175d36269cbaa08f9dcdbfa0bb5bfa012549",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
