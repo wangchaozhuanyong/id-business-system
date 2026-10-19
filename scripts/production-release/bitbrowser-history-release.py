@@ -353,6 +353,10 @@ def verify_bounded_capture(value, identity, c):
         and all(value.get(n) == identity[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
         and value.get('parentNative') == c['parentNative'] and value.get('apiInventory') == BOUNDED_API_INVENTORY
         and value.get('apiModules') == c['baseline']['apiModules'] and value.get('absentApiModules') == c['absentApiModules']
+        and inventory(value.get('nativeDeclarationBefore'))
+        and set(value['nativeDeclarationBefore']) == BOUNDED_ORDER_ONLY
+        and ('nativeDeclarationBefore' not in c['baseline']
+            or value['nativeDeclarationBefore'] == c['baseline']['nativeDeclarationBefore'])
         and re.fullmatch('[a-f0-9]{64}', value.get('sealSha256', ''))
         and value.get('databaseWrites') == value.get('businessActions') == 0, 'BOUNDED_NATIVE_CAPTURE_INVALID')
 
@@ -421,9 +425,7 @@ def bounded_parent(d, h, c):
     # Complete inventory stays within this server process; no source or business data leaves production.
     code = r"const fs=require('fs'),path=require('path'),c=require('crypto'),o={};function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(p);else if(e.isFile())o[path.relative('/app/apps/api/dist',p)]=c.createHash('sha256').update(fs.readFileSync(p)).digest('hex');else throw Error('KIND');}}walk('/app/apps/api/dist');console.log(JSON.stringify(o));"
     files = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', code, timeout=90))
-    picked = bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
-    verify_bounded_declarations_native(files, c)
-    need(picked['apiModules'] == c['baseline']['apiModules'], 'BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH')
+    picked, native_declarations = verify_bounded_parent_selection(files, c)
     observed = runtime(d, states)
     need(observed['apiModules'] == picked['apiModules'] and all(observed[n] == before[n]
         for n in ('sharedInventory', 'clientInventory', 'nginxSha256')), 'BOUNDED_PARENT_CONTENT_CHANGED')
@@ -431,15 +433,65 @@ def bounded_parent(d, h, c):
         'manifestSha256': sha(raws['release-manifest.json']), 'services': states,
         'configurationSha256': configs, 'runtimeConfigurationSha256': before['runtimeConfigurationSha256'],
         'proofs': {n: sha(raws[n]) for n in raws if n != 'release-manifest.json'}, **observed,
-        'database': before['database'], 'backupNormalizerPath': before['backupNormalizerPath'],
+        'database': before['database'], 'nativeDeclarationBefore': native_declarations,
+        'backupNormalizerPath': before['backupNormalizerPath'],
         'backupNormalizerSha256': before['backupNormalizerSha256'], 'businessActions': 0, 'databaseWrites': 0}
     h.guards(d, parent, states, c)
     return baseline, files
 
 
 def verify_bounded_declarations_native(files, c):
-    need(all(files.get(name) == rule['before'] for name, rule in c['declarationOrderOnly'].items()),
-        'BOUNDED_DECLARATION_NATIVE_BEFORE_CHANGED')
+    # Local before/after AST rules prove only the bounded compilation delta.
+    # Untouched native declarations are authenticated by the complete parent,
+    # captured separately, and remain outside the payload.
+    need(c.get('parentApiInventory') == BOUNDED_API_INVENTORY
+        and set(c.get('declarationOrderOnly', {})) == BOUNDED_ORDER_ONLY,
+        'BOUNDED_DECLARATION_NATIVE_SCOPE_CHANGED')
+    bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    need(BOUNDED_ORDER_ONLY <= files.keys(), 'BOUNDED_DECLARATION_NATIVE_MISSING')
+    return {name: files[name] for name in sorted(BOUNDED_ORDER_ONLY)}
+
+
+class BoundedParentMismatch(RuntimeError):
+    def __init__(self, files, c):
+        picked = bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+        native = verify_bounded_declarations_native(files, c)
+        need(picked['apiModules'] != c['baseline']['apiModules'], 'BOUNDED_PARENT_MISMATCH_NOT_PRESENT')
+        super().__init__('BITBROWSER_HISTORY_BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH')
+        self.selected_before = {name: {'expected': c['baseline']['apiModules'][name], 'actual': digest}
+            for name, digest in picked['apiModules'].items()}
+        self.native_declaration_before = native
+
+
+def verify_bounded_parent_selection(files, c):
+    picked = bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    native = verify_bounded_declarations_native(files, c)
+    if picked['apiModules'] != c['baseline']['apiModules']:
+        raise BoundedParentMismatch(files, c)
+    return picked, native
+
+
+def bounded_parent_failure_json(error, plan, c):
+    # This finite diagnostic is available only after full inventory authentication.
+    # It is still a failed operation; no seal, payload or release is produced.
+    selected = getattr(error, 'selected_before', None)
+    native = getattr(error, 'native_declaration_before', None)
+    need(type(error) is BoundedParentMismatch and RECIPE == BOUNDED
+        and str(error) == 'BITBROWSER_HISTORY_BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH'
+        and plan.get('recipe') == BOUNDED and plan.get('mode') == 'parent'
+        and c.get('parentApiInventory') == BOUNDED_API_INVENTORY
+        and type(selected) is dict and set(selected) == set(c['baseline']['apiModules'])
+        and all(type(pair) is dict and set(pair) == {'expected', 'actual'} and inventory(pair)
+            and pair['expected'] == c['baseline']['apiModules'][name] for name, pair in selected.items())
+        and any(pair['expected'] != pair['actual'] for pair in selected.values())
+        and inventory(native) and set(native) == BOUNDED_ORDER_ONLY,
+        'BOUNDED_PARENT_DIAGNOSTIC_INVALID')
+    report = {'status': 'FAILED', 'code': str(error), 'mode': 'parent',
+        'apiInventory': BOUNDED_API_INVENTORY, 'selectedBefore': selected,
+        'nativeDeclarationBefore': native, 'databaseWrites': 0, 'businessActions': 0}
+    encoded = canonical(report).decode('ascii')
+    need(len(encoded.encode('ascii')) + 1 < 20000, 'BOUNDED_PARENT_DIAGNOSTIC_TOO_LARGE')
+    return encoded
 
 
 def bounded_capture(d, h, c, plan):
@@ -454,6 +506,7 @@ def bounded_capture(d, h, c, plan):
     value = {**{n: plan[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt')},
         'status': 'BITBROWSER_BOUNDED_PARENT_CAPTURED', 'parentNative': c['parentNative'],
         'apiInventory': BOUNDED_API_INVENTORY, 'apiModules': baseline['apiModules'],
+        'nativeDeclarationBefore': baseline['nativeDeclarationBefore'],
         'absentApiModules': c['absentApiModules'], 'sealSha256': sha(seal.read_bytes()),
         'databaseWrites': 0, 'businessActions': 0}
     verify_bounded_capture(value, plan, c)
@@ -466,12 +519,14 @@ def bounded_runtime_contract(d, h, c, plan):
     baseline = seal['baseline']
     verify_entry_seal(plan, baseline, seal_raw)
     files = json.loads((HERE / 'bounded-parent-inventory.json').read_bytes())
-    bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    picked, native_declarations = verify_bounded_parent_selection(files, c)
     need(baseline['apiModules'] == c['baseline']['apiModules'] and baseline['commit'] == CURRENT,
         'BOUNDED_PARENT_SEAL_CHANGED')
     capture = plan.get('nativeParentCapture')
     verify_bounded_capture(capture, plan, c)
-    need(capture['sealSha256'] == sha(seal_raw), 'BOUNDED_PARENT_SEAL_CHANGED')
+    need(capture['sealSha256'] == sha(seal_raw)
+        and native_declarations == baseline.get('nativeDeclarationBefore') == capture['nativeDeclarationBefore']
+        and picked['apiModules'] == baseline['apiModules'], 'BOUNDED_PARENT_SEAL_CHANGED')
     if plan['mode'] != 'readback':
         actual, actual_files = bounded_parent(d, h, c)
         need(actual == baseline and actual_files == files, 'BOUNDED_PARENT_MOVED')

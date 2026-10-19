@@ -718,6 +718,16 @@ class BoundedFrozenControls(unittest.TestCase):
         p.select_recipe('history-20261019')
         b.RECIPE = 'history-20261019'
 
+    def native_fixture(self, mismatch=False):
+        c=copy.deepcopy(self.c)
+        files={**c['baseline']['apiModules'],**{n:p.sha(('native:'+n).encode()) for n in p.BOUNDED_ORDER_ONLY}}
+        for i in range(1761-len(files)):files[f'preserved/native-{i}.js']=p.sha(str(i).encode())
+        if mismatch:
+            for name,digest in c['baseline']['apiModules'].items():files[name]=p.sha(('actual:'+digest).encode())
+        authenticated={'count':len(files),'sha256':p.sha(p.canonical(files))}
+        c['parentApiInventory']=authenticated
+        return c,files,authenticated
+
     def test_frozen_scope_separates_source_review_production_and_compiled_output(self):
         p.validate_contract(self.c)
         self.assertEqual(set(self.c['sourceReviewControls']), p.CI_CONTROLS)
@@ -806,19 +816,123 @@ class BoundedFrozenControls(unittest.TestCase):
         identity={'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
         value={**identity,'status':'BITBROWSER_BOUNDED_PARENT_CAPTURED','parentNative':self.c['parentNative'],
             'apiInventory':p.BOUNDED_API_INVENTORY,'apiModules':self.c['baseline']['apiModules'],
+            'nativeDeclarationBefore':{n:'d'*64 for n in p.BOUNDED_ORDER_ONLY},
             'absentApiModules':self.c['absentApiModules'],'sealSha256':'c'*64,'databaseWrites':0,'businessActions':0}
         p.verify_bounded_capture(value,identity,self.c)
         for key,val in (('workflowRunId','124'),('apiInventory',{'count':1765,'sha256':'a'*64}),
-            ('apiModules',{}),('absentApiModules',[]),('sealSha256',''),('databaseWrites',1)):
+            ('apiModules',{}),('nativeDeclarationBefore',{}),('absentApiModules',[]),('sealSha256',''),('databaseWrites',1)):
             with self.assertRaisesRegex(RuntimeError,'NATIVE_CAPTURE_INVALID'):
                 p.verify_bounded_capture({**value,key:val},identity,self.c)
-        files={n:rule['before'] for n,rule in self.c['declarationOrderOnly'].items()}
-        p.verify_bounded_declarations_native(files,self.c)
-        for wrong in ({}, {**files,next(iter(files)):'f'*64}):
-            with self.assertRaisesRegex(RuntimeError,'DECLARATION_NATIVE_BEFORE_CHANGED'):
-                p.verify_bounded_declarations_native(wrong,self.c)
+        c,files,authenticated=self.native_fixture()
+        with patch.object(p,'BOUNDED_API_INVENTORY',authenticated):
+            native=p.verify_bounded_declarations_native(files,c)
+            self.assertEqual(native,{n:files[n]for n in p.BOUNDED_ORDER_ONLY})
+            self.assertTrue(all(native[n]!=c['declarationOrderOnly'][n]['before']for n in native))
+            for wrong in ({}, {**files,next(iter(files)):'f'*64}, {n:v for n,v in files.items() if n!=next(iter(native))}):
+                with self.assertRaisesRegex(RuntimeError,'FULL_INVENTORY_CHANGED'):
+                    p.verify_bounded_declarations_native(wrong,c)
+        c['baseline']['nativeDeclarationBefore']={n:'e'*64 for n in p.BOUNDED_ORDER_ONLY}
+        with self.assertRaisesRegex(RuntimeError,'NATIVE_CAPTURE_INVALID'):p.verify_bounded_capture(value,identity,c)
         with patch.object(p,'HERE',Path('/nonexistent')):
             with self.assertRaises(FileNotFoundError):p.bounded_runtime_contract(None,None,self.c,{**identity,'mode':'preflight','nativeParentCapture':value})
+
+    def test_native_declaration_projection_is_bound_to_seal_capture_and_readback(self):
+        c,files,authenticated=self.native_fixture()
+        plan={'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1','mode':'readback','recipe':p.BOUNDED}
+        native={n:files[n]for n in p.BOUNDED_ORDER_ONLY}
+        baseline={**c['baseline'],'nativeDeclarationBefore':native}
+        (ROOT/'.runtime').mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT/'.runtime',prefix='native-declaration-seal-')as directory:
+            here=Path(directory);seal=p.canonical(p.entry_seal_record(plan,baseline))
+            with patch.object(p,'HERE',here),patch.object(p,'BOUNDED_API_INVENTORY',authenticated),\
+                patch.object(p,'bounded_parent',return_value=(baseline,files)):
+                capture=p.bounded_capture(None,None,c,plan)
+                self.assertEqual(capture['nativeDeclarationBefore'],native)
+                self.assertEqual((here/'entry-parent-baseline.json').read_bytes(),seal)
+                with self.assertRaisesRegex(RuntimeError,'ALREADY_CAPTURED'):p.bounded_capture(None,None,c,plan)
+            plan['nativeParentCapture']=capture
+            plan['runtimeBaseline']={'verifiedBaseline':baseline,'entryParentSealSha256':p.sha(seal)}
+            with patch.object(p,'HERE',here),patch.object(p,'BOUNDED_API_INVENTORY',authenticated):
+                hydrated=p.bounded_runtime_contract(None,None,c,plan)
+                self.assertEqual(hydrated['baseline']['nativeDeclarationBefore'],native)
+                for target in ('capture','seal','inventory','receipt'):
+                    changed=copy.deepcopy(plan);wrong=copy.deepcopy(baseline)
+                    if target=='capture':changed['nativeParentCapture']['nativeDeclarationBefore'][next(iter(native))]='f'*64
+                    if target=='seal':
+                        wrong['nativeDeclarationBefore'][next(iter(native))]='f'*64
+                        raw=p.canonical(p.entry_seal_record(plan,wrong));(here/'entry-parent-baseline.json').write_bytes(raw)
+                        changed['nativeParentCapture']['sealSha256']=p.sha(raw)
+                    if target=='inventory':(here/'bounded-parent-inventory.json').write_bytes(p.canonical({**files,next(iter(native)):'f'*64}))
+                    if target=='receipt':changed['runtimeBaseline']['verifiedBaseline']['nativeDeclarationBefore'][next(iter(native))]='f'*64
+                    with self.assertRaises(RuntimeError):p.bounded_runtime_contract(None,None,c,changed)
+                    (here/'entry-parent-baseline.json').write_bytes(seal)
+                    (here/'bounded-parent-inventory.json').write_bytes(p.canonical(files))
+
+    def test_authenticated_parent_mismatch_diagnostic_is_bounded_and_cannot_accept_selected_drift(self):
+        c,files,authenticated=self.native_fixture(mismatch=True)
+        plan={'recipe':p.BOUNDED,'mode':'parent'}
+        with patch.object(p,'BOUNDED_API_INVENTORY',authenticated):
+            with self.assertRaises(p.BoundedParentMismatch)as failure:p.verify_bounded_parent_selection(files,c)
+            error=failure.exception;encoded=p.bounded_parent_failure_json(error,plan,c);report=json.loads(encoded)
+            self.assertLess(len((encoded+'\n').encode()),20000)
+            self.assertNotIn('\n',encoded)
+            self.assertEqual(set(report['selectedBefore']),set(c['baseline']['apiModules']))
+            self.assertEqual(len(report['selectedBefore']),42)
+            self.assertTrue(all(pair['expected']!=pair['actual']for pair in report['selectedBefore'].values()))
+            self.assertEqual(report['nativeDeclarationBefore'],{n:files[n]for n in p.BOUNDED_ORDER_ONLY})
+            self.assertFalse(any(n.startswith('preserved/')for n in report['selectedBefore']))
+            for changed in ({**plan,'mode':'release'},{**plan,'recipe':'history-20261019'}):
+                with self.assertRaisesRegex(RuntimeError,'DIAGNOSTIC_INVALID'):p.bounded_parent_failure_json(error,changed,c)
+            for field,value in (('selected_before',{'private':'secret'}),('native_declaration_before',{}),
+                ('selected_before',{**error.selected_before,'foreign.js':{'expected':'a'*64,'actual':'b'*64}})):
+                previous=getattr(error,field);setattr(error,field,value)
+                with self.assertRaisesRegex(RuntimeError,'DIAGNOSTIC_INVALID'):p.bounded_parent_failure_json(error,plan,c)
+                setattr(error,field,previous)
+            with self.assertRaisesRegex(RuntimeError,'FULL_INVENTORY_CHANGED'):
+                p.verify_bounded_parent_selection({**files,next(iter(files)):'f'*64},c)
+
+    def test_dispatch_executes_typed_parent_failure_once_and_transport_rejects_it(self):
+        import contextlib
+        import io
+        from types import SimpleNamespace
+        d=load('bitbrowser-history-dispatch.py');c,files,authenticated=self.native_fixture(mismatch=True)
+        plan={'recipe':p.BOUNDED,'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1','controlSources':{}}
+        with patch.object(p,'BOUNDED_API_INVENTORY',authenticated):
+            with self.assertRaises(p.BoundedParentMismatch)as failure:p.verify_bounded_parent_selection(files,c)
+            (ROOT/'.runtime').mkdir(exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=ROOT/'.runtime',prefix='native-parent-failure-')as directory:
+                here=Path(directory);remote=here/'stage';output=here/'receipts';output.mkdir()
+                stage=Path(str(remote)+'-'+plan['commit']+'-'+plan['workflowRunId']);stage.mkdir()
+                (stage/p.CONTRACT_FILE).write_text(json.dumps(c))
+                stdout=io.StringIO()
+                def send(args,**kwargs):
+                    parameters=json.loads(args[args.index('--parameters')+1]);command=parameters['commands'][0]
+                    source=command.split("python3 - <<'HISTORY_RELEASE'\n",1)[1].rsplit('\nHISTORY_RELEASE',1)[0]
+                    source=source.replace('/opt/id-business-v2/.staging/bitbrowser-history-entry',str(remote))
+                    module=SimpleNamespace(**p.__dict__)
+                    def reject(*unused):raise failure.exception
+                    module.release=reject
+                    spec=SimpleNamespace(loader=SimpleNamespace(exec_module=lambda unused:None))
+                    with patch('importlib.util.spec_from_file_location',return_value=spec),\
+                        patch('importlib.util.module_from_spec',return_value=module),contextlib.redirect_stdout(stdout):
+                        with self.assertRaises(SystemExit)as stopped:exec(compile(source,'tested-parent-dispatch','exec'),{})
+                        self.assertEqual(stopped.exception.code,1)
+                    return json.dumps({'Command':{'CommandId':'one-parent-command'}}).encode()
+                def invocation(*unused,**kwargs):
+                    return SimpleNamespace(returncode=0,stdout=json.dumps({'Status':'Failed','ResponseCode':1,
+                        'StandardErrorContent':'','StandardOutputContent':stdout.getvalue()}).encode())
+                with patch.object(d,'OUT',output),patch.object(d.subprocess,'check_output',side_effect=send)as sent,\
+                    patch.object(d.subprocess,'run',side_effect=invocation):
+                    with self.assertRaisesRegex(RuntimeError,'NATIVE_OPERATION_FAILED'):d.transport(plan,'parent')
+                    sent.assert_called_once()
+                    with self.assertRaisesRegex(RuntimeError,'COMMAND_ALREADY_ACCEPTED_OR_UNCERTAIN'):d.transport(plan,'parent')
+                    sent.assert_called_once()
+                report=json.loads(stdout.getvalue())
+                self.assertEqual(report['status'],'FAILED');self.assertEqual(len(report['selectedBefore']),42)
+                self.assertLess(len(stdout.getvalue().encode()),20000)
+                self.assertTrue((output/'parent-invocation.json').is_file())
+                self.assertFalse((output/'parent-result.json').exists())
+                self.assertFalse((stage/'entry-parent-baseline.json').exists())
 
     def test_ast_allows_only_same_property_in_same_type_literal_and_no_other_bytes(self):
         before=b'declare function x(): {\n    checkoutIdentifier: string | null;\n    other: number;\n};\n'
@@ -869,6 +983,7 @@ class BoundedFrozenControls(unittest.TestCase):
             'testsTotal':31,'testsPassed':31,'testsSkipped':0,'testsTodo':0,'productionActions':0,'reportSha256':'c'*64}
         capture={**identity,'status':'BITBROWSER_BOUNDED_PARENT_CAPTURED','parentNative':self.c['parentNative'],
             'apiInventory':p.BOUNDED_API_INVENTORY,'apiModules':self.c['baseline']['apiModules'],
+            'nativeDeclarationBefore':{n:'d'*64 for n in p.BOUNDED_ORDER_ONLY},
             'absentApiModules':self.c['absentApiModules'],'sealSha256':'c'*64,'databaseWrites':0,'businessActions':0}
         with tempfile.TemporaryDirectory() as directory:
             payload=Path(directory)
