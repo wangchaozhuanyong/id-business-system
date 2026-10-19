@@ -1,4 +1,5 @@
 import { createManualBankRechargeOrder } from './bank-recharge-manual-order';
+import { recordManuallySettledRecharge } from './bank-recharge-manual-settlement';
 import { recordVerifiedBankRechargeOrder } from './bank-recharge-verified-order';
 import {
   assertBankRechargeChannelAccess,
@@ -503,6 +504,29 @@ export class BankRechargeOrderService {
       encryption: this.encryption,
       orderNo: () => this.orderNo()
     });
+  }
+
+  async recordManualSettlement(
+    tx: V2CommandTransaction,
+    job: IdBusinessV2RechargeJob,
+    input: Parameters<typeof recordManuallySettledRecharge>[2]
+  ) {
+    return recordManuallySettledRecharge(tx, job, input, {
+      accounts: this.accounts,
+      repository: this.repository,
+      audit: this.audit,
+      encryption: this.encryption,
+      orderNo: () => this.orderNo()
+    });
+  }
+
+  async assertNoOrderForManualFailure(
+    tx: V2CommandTransaction,
+    job: IdBusinessV2RechargeJob,
+    identifier: string
+  ) {
+    if (await this.repository.findOrderByPaymentEvidence(tx, job.id, identifier, identifier))
+      throw new ConflictException('已有充值订单，不能标记失败；请从原订单进行核对或更正');
   }
 
   private async requireCustomer(tx: V2CommandTransaction, id: string) {

@@ -11,6 +11,7 @@ import {
   type V2RechargeSubscriptionPeriod
 } from '@apple-business/shared';
 import { hash, object, safeDocument } from './recharge-validation';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
 import { rechargeDocumentDigest } from './recharge-callback-receipts';
 import {
   isRechargeUpgrade,
@@ -205,6 +206,19 @@ export function subscriptionInspection(
 
 function completePaidDocument(value: unknown, accountKey: string) {
   const document = safeDocument(value);
+  const manual = manualRechargeSettlement(document);
+  if (
+    manual?.outcome === 'success' &&
+    manual.accountKey === accountKey &&
+    manual.identifier === rechargeOperationIdentifier(document) &&
+    manual.plan === (document.target_plan ?? 'plus') &&
+    V2_RECHARGE_PLANS.includes(manual.plan as never)
+  )
+    return {
+      document,
+      target: manual.plan as V2RechargeNextCycleSource['targetPlan'],
+      identifier: manual.identifier as string
+    };
   const target = document.target_plan ?? object(document.quote ?? {}).plan ?? 'plus';
   const evidence = object(document.payment_evidence ?? {});
   const today = object(object(document.quote ?? {}).today ?? {});

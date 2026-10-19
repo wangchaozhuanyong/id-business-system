@@ -252,3 +252,57 @@ test('普通订单币种契约与持久化兼容映射一致，财务扩展币�
     assert.equal(isV2OrderReceiptCurrency(value), false);
   assert.equal(V2_FINANCE_CURRENCIES.length, 26);
 });
+
+test('人工结单标记在标准 Node ESM 中保持原单绑定，失败不能覆盖成功证据', async () => {
+  const { readV2RechargeManualSettlement } = await import('../dist/index.js');
+  const proof = {
+    version: 1,
+    outcome: 'failure',
+    operationId: '11111111-1111-4111-8111-111111111111',
+    sourceJobId: '22222222-2222-4222-8222-222222222222',
+    operatorId: '33333333-3333-4333-8333-333333333333',
+    accountKey: 'a'.repeat(64),
+    identifier: 'oaics_synthetic',
+    plan: 'plus',
+    resolvedAt: '2026-10-19T00:00:00.000Z',
+    requestDigest: 'b'.repeat(64)
+  };
+  const document = {
+    checkout_identifier: proof.identifier,
+    target_plan: 'plus',
+    manual_settlement: proof
+  };
+  assert.equal(readV2RechargeManualSettlement(document)?.outcome, 'failure');
+  for (const patch of [
+    { payment_status: 'paid' },
+    { payment_evidence: {} },
+    { status: 'subscription_activated' },
+    { checkout_identifier: 'oaics_other' }
+  ])
+    assert.equal(readV2RechargeManualSettlement({ ...document, ...patch }), undefined);
+  assert.equal(
+    readV2RechargeManualSettlement({
+      ...document,
+      manual_settlement: { ...proof, untrusted: true }
+    }),
+    undefined
+  );
+  assert.equal(
+    readV2RechargeManualSettlement({
+      ...document,
+      manual_settlement: { ...proof, outcome: 'success' }
+    }),
+    undefined
+  );
+  assert.equal(
+    readV2RechargeManualSettlement({
+      ...document,
+      manual_settlement: {
+        ...proof,
+        outcome: 'success',
+        orderId: '44444444-4444-4444-8444-444444444444'
+      }
+    })?.outcome,
+    'success'
+  );
+});

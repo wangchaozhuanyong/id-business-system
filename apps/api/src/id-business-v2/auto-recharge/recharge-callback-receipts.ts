@@ -37,7 +37,8 @@ export function rechargeDocumentDigest(value: unknown): string {
 export function assertNoPrivateRechargeCallback(value: unknown) {
   if (!value || typeof value !== 'object') return;
   for (const [key, item] of Object.entries(value)) {
-    if (key.startsWith('_')) throw new BadRequestException('执行回执包含不可写入的内部字段');
+    if (key.startsWith('_') || key === 'manual_settlement')
+      throw new BadRequestException('执行回执包含不可写入的内部字段');
     assertNoPrivateRechargeCallback(item);
   }
 }

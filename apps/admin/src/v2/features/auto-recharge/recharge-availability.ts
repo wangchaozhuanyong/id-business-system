@@ -24,6 +24,7 @@ export function paymentBlockedForAccount(
   if (!same) return false;
   if (job.availability) return job.availability.accountPaymentRestricted;
   const r = job.result;
+  if (r.manual_settlement) return false;
   return (
     r.mode !== 'open_browser' &&
     r.operator_resolution !== 'confirmed_no_bank_request' &&

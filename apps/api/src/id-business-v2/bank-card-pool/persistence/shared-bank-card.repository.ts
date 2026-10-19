@@ -225,6 +225,20 @@ export class SharedBankCardRepository {
     if (!shared && !card.active) throw new ConflictException('该银行卡已停用，不能用于充值');
   }
 
+  async assertBitBrowserAttemptBinding(
+    tx: V2CommandTransaction,
+    legacyCardId: string | null,
+    attempt: BitBrowserCardAttempt
+  ) {
+    await lockSharedBankCards(tx);
+    const legacy = legacyCardId
+      ? await tx.idBusinessV2BankRechargeCard.findUnique({ where: { id: legacyCardId } })
+      : null;
+    const shared = await tx.onlineRechargeCard.findUnique({ where: { id: attempt.cardId } });
+    if (!legacy?.numberHash || !shared || legacy.numberHash !== shared.numberHash)
+      throw new ConflictException('原任务与银行卡额度记录不一致');
+  }
+
   async finishBitBrowser(
     tx: V2CommandTransaction,
     jobId: string,

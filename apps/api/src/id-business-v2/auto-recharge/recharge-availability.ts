@@ -11,6 +11,7 @@ import type { V2RechargeAvailability } from '@apple-business/shared';
 import { hash, object } from './recharge-validation';
 import { resolvedUnknownPayment } from './recharge-resolution';
 import { cycleSources } from './recharge-cycle-state';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
 import type { CycleRecord } from './recharge-cycle-state';
 
 export function rechargeAvailability(
@@ -50,7 +51,9 @@ export function rechargeAvailability(
       (evidence.kind === 'payment_intent' &&
         /^pi_[A-Za-z0-9]{1,180}$/.test(String(evidence.identifier))));
   let payment: V2RechargeAvailability['payment'];
-  if (
+  const manual = manualRechargeSettlement(result);
+  if (manual) payment = manual.outcome === 'success' ? 'completed' : 'resolved';
+  else if (
     resolvedUnknownPayment(job) ||
     resolvedDeclinedPayment(result) ||
     resolvedVerificationFailureRecheck(job, records)

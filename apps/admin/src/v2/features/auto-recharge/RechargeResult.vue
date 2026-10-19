@@ -3,14 +3,28 @@
     <template v-if="job">
       <p class="recharge-status" role="status">
         {{
-          statusLabel(
-            verificationResolved
-              ? 'payment_verification_resolved'
-              : job.state === 'confirming'
-                ? job.state
-                : job.result.status || job.state
-          )
+          job.result.manual_settlement
+            ? rechargeHistoryStatusLabel(job)
+            : statusLabel(
+                verificationResolved
+                  ? 'payment_verification_resolved'
+                  : job.state === 'confirming'
+                    ? job.state
+                    : job.result.status || job.state
+              )
         }}
+      </p>
+      <p v-if="job.result.manual_settlement" class="recharge-note" role="status">
+        {{
+          job.result.manual_settlement.outcome === 'success'
+            ? '已人工核实付款与开通，关联充值订单进入既有记账流程；待补全财务资料后确认入账。'
+            : '已人工核实未开通且无扣款或待入账，原单防重和未决额度已释放。'
+        }}
+        处理时间：{{ formatV2DateTime(job.result.manual_settlement.resolvedAt) }}。
+        <span v-if="job.result.manual_settlement.orderId"
+          >充值订单编号：{{ job.result.manual_settlement.orderId }}</span
+        >
+        原官网快照及付款次数仍保留供核对。
       </p>
       <template v-if="job.result.mode !== 'open_browser'">
         <p v-if="job.result.initial_quote" class="recharge-quote-title">
@@ -96,7 +110,7 @@
           <dt>升级前套餐</dt>
           <dd>{{ statusLabel(job.result.current_plan_before) }}</dd>
         </template>
-        <dt>当前套餐</dt>
+        <dt>{{ job.result.manual_settlement ? '原官网套餐快照' : '当前套餐' }}</dt>
         <dd>{{ officialCurrentPlanLabel(job) }}</dd>
         <template v-if="job.result.subscription_period">
           <dt>套餐生效</dt>
@@ -290,6 +304,7 @@ import {
   paymentFailureLabel,
   paymentStatusLabel,
   rechargeIssueFeedback,
+  rechargeHistoryStatusLabel,
   rechargeCallbackDiagnostics,
   statusLabel,
   proxyAttemptLabel,

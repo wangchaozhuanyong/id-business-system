@@ -6,6 +6,7 @@ import {
   persistDirectRechargeObservation
 } from './recharge-direct-payment';
 import { resolveDeclinedRecharge } from './recharge-declined-resolution';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
 import { reviewRechargeJobs } from './recharge-review';
 import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
@@ -276,6 +277,10 @@ export class RechargeService {
               context.localToken
             )
           : await this.repository.active(tx, id);
+        if (manualRechargeSettlement(job.result))
+          throw new ConflictException(
+            '该原单已由人工结单，迟到回执不能覆盖人工结果；请从订单更正入口处理'
+          );
         if (context) {
           const replay = replayRechargeReceipt(job, input);
           if (replay !== undefined) return replay;
