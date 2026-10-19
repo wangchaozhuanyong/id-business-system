@@ -83,10 +83,10 @@
       "id-business-v2/auto-recharge/persistence/recharge.repository.d.ts": "5ac56e1c4786b2213f258648e85bc47f17c7629dc084243dce363556276d3e71",
       "id-business-v2/auto-recharge/persistence/recharge.repository.js": "ff73b5ac75d28cf2216af58a6e2e8a3038c29bceef0dd9bca97afb88284de6fa",
       "id-business-v2/auto-recharge/persistence/recharge.repository.js.map": "2ca4168652c77888a94ab30014cdd56b5a3f59b6774c965c9bf1bb21522129b4",
-      "id-business-v2/auto-recharge/recharge-callback-receipts.d.ts": "5a22ca4954c575175031d33dba46e8c623d4891fd341f29478384e1fc3b3351e",
+      "id-business-v2/auto-recharge/recharge-callback-receipts.d.ts": "4bb65eaae6f13d587b755c9a83689ad310e279a2b37609943582ccdb9f75134d",
       "id-business-v2/auto-recharge/recharge-callback-receipts.js": "1611c26637f5ea2006dd5ce14f96c1f1226be67d19f2b991f42fcb1c239ee2f3",
       "id-business-v2/auto-recharge/recharge-callback-receipts.js.map": "4f70fd2863993152dc886e9f8eff5c5c7013401554ada1a44808cc35f5083787",
-      "id-business-v2/auto-recharge/recharge-card-billing.d.ts": "116316a06bda3daa8b087193434a78fd810c2922ad03713e488343f2010b2f5a",
+      "id-business-v2/auto-recharge/recharge-card-billing.d.ts": "b83d073a0868a7a7c11a9b55d33e2dbd5a8d3068887e420a4d06058f0022275a",
       "id-business-v2/auto-recharge/recharge-card-billing.js": "8e28cf37febbc94bdd15c9570b9441458e1bff74f8f988a90de53b5da1b2400e",
       "id-business-v2/auto-recharge/recharge-card-billing.js.map": "ada3f9f7052cd36deb89aed6f0ed4ee5081700dc2cdfde04b7287bcef5691721",
       "id-business-v2/auto-recharge/recharge-declined-resolution.d.ts": "6f020deab9353aaeacfbf7fbeb74ab4bb4267630dab58ba15f93ed9ce610102f",
@@ -99,7 +99,7 @@
       "id-business-v2/auto-recharge/recharge-ledger-metadata.js.map": "176a0f696a3df4b1bd696201039d2257011ba5c9083438e2c9bbace22fe95233",
       "id-business-v2/auto-recharge/recharge-local.service.js": "28dfe2682120ad4096396cad401c06374ca5c27b27f3cee602147b6cfc7894c9",
       "id-business-v2/auto-recharge/recharge-local.service.js.map": "549461052e53ab751736154a7ecc07908edf84a472ab6ef79e4fa98e30cca957",
-      "id-business-v2/auto-recharge/recharge-name.service.d.ts": "69dbe7ac23ba53575c069461da385ed2308a5eefa5b335584f23a7ec4b3a0603",
+      "id-business-v2/auto-recharge/recharge-name.service.d.ts": "94e6d3590aee68059ac95c27c2c457867f45f89420f6bd05f7e5c104c2f35bdd",
       "id-business-v2/auto-recharge/recharge-noncharge-proof.d.ts": "ce22b8e9f6872d04aea443c6b4f86186af247fa56f863f8da4bfa7a25d8a87d5",
       "id-business-v2/auto-recharge/recharge-noncharge-proof.js": "d79c8028c6c41f09c02dedd2b10d893e43ba4a137318f574c4af5e2bcf678f61",
       "id-business-v2/auto-recharge/recharge-noncharge-proof.js.map": "e0e5da0eceec51b01628d41bbf64a7f2ac9d8637c97ccc59522e2ca2071e7442",
@@ -110,7 +110,7 @@
       "id-business-v2/auto-recharge/recharge-retired-callback.js.map": "e7b569a03ad1f6b5225f2ba280328f71a2a980e54f6a8930ada3a97600a1d348",
       "id-business-v2/auto-recharge/recharge.service.js": "8e309497332f1f1d2c1e2284081b69e3f38059ac9d26ff94e2cf01684de72030",
       "id-business-v2/auto-recharge/recharge.service.js.map": "00d4a46f7e829213e7bf02f0c38ae751fdf9e05a8273934ec4734ab18ef3436a",
-      "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts": "2f90de58b8d67271e1ac79bc528f71262eeb492c276a6982310754585005fabd",
+      "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts": "af6b1f075a7a8ffd43580f0a3bea989d461a28b1dd6a15a43d95e8fa710c1265",
       "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js": "8597c6386ccb3eac6deceaef53230634e77ec844865341f34f744772dd82f86e",
       "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js.map": "76a179fc1df66bb7881233613f35394c28476a0247e3a01e318c5b38521bf058",
       "id-business-v2/bank-card-pool/public-api.d.ts": "38de09cb7b52f5a080d9584952c6d4f664fcaf870a97c5db5c1d7a518eb84f9a",
@@ -124,10 +124,10 @@
   },
   "businessActions": 0,
   "ciControlPins": {
-    "scripts/ci-recharge-check.mjs": "f1a4e5832b1e413a5aa036e13d0e6a7011ac09122ce9a768c851f0ecfde44869",
-    "scripts/ci-recharge-check.test.mjs": "bd82eed3ce0e12af08b5f65be816e2336193756efa148c5283f3b41bdb4f2b1c",
-    "scripts/ci-recharge-scope.mjs": "4e57ed9240714b48494d58dc54b889855eaf484971978b40ec343e6315f94192",
-    "scripts/ci-recharge-scope.test.mjs": "01cbb2f3f87527c7e46fddd200ef13e15b16d40a0f4a581ed0a2c6e7d1dffb14"
+    "scripts/ci-recharge-check.mjs": "6e913d239293c26beaeabdc283c1a6e6083f23104b4c2714767b8fd85073d283",
+    "scripts/ci-recharge-check.test.mjs": "ee80fc11bf5cd93e53320fcf29535a0cfaa3ba9f0717eda5b7902dafa7fe43ad",
+    "scripts/ci-recharge-scope.mjs": "d0d6c38dc87f18401b3d683fc3accaccd6c7a62e9219994acdad493971e23ab1",
+    "scripts/ci-recharge-scope.test.mjs": "4ac4a1c8f7499122470da2886d8879ed8c3c20b0b5a853c2f1165958662c5795"
   },
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
@@ -137,11 +137,11 @@
     "bitbrowser-entry-start-contract.json": "a7b87f7d009cf223fc9d92603b34caa8aea6d5609d462efbd21c24dda4f9f850",
     "bitbrowser-existing-address-contract.json": "61b090c8ac0b83ce13f713a62804666c92c22304fe4ea9442b6ccc29b441803c",
     "bitbrowser-followup-contract.json": "f79066e8b1347366df4ef90243cb55498e10b10898d2be9c952dd4efbced5881",
-    "bitbrowser-history-build.py": "e31193b853d6a609f61d41f813756332e6bb15bfa3dc0c357b22d6b860cf8199",
+    "bitbrowser-history-build.py": "4fc0c3585f3d3bdce23bfb360cc9a925e8a9d100d10f82721ab0a06428adc733",
     "bitbrowser-history-contract.json": "7b0adc46b435e4e1824c6c142d1948168aa38ebc010a8e81f071abb077b0dc91",
-    "bitbrowser-history-dispatch.py": "90c463f6195c9900b48c5f69da4795d660feedb866a2872f8b5ad1d9acdfa167",
-    "bitbrowser-history-release.py": "f42e403fd953dc9a2eee2ae06170c9d52b4d4d969a73f424e60dfbc44bd3a39c",
-    "bitbrowser-history-release.test.py": "11ac780d1e2e424518076d2e0b2dcd357ae976e21b529b9106e6be48ef5ed474",
+    "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
+    "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
+    "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
@@ -227,6 +227,50 @@
     "stopping": false
   },
   "expectedCurrent": "7df16100f7964bb7183f171ec5e9f275f4f48876",
+  "localCompiledBefore": {
+    "id-business-v2/auto-recharge/bank-recharge-card.service.d.ts": "9cc5bd1cbda0a94569d3f3474c8901c3719298bf5579cbb7c6ad5260e9a84e01",
+    "id-business-v2/auto-recharge/bank-recharge-card.service.js": "c874c4b60d191f59ba96b1b8feb87bf49710c9894bb64a8ec6d5c7cde27b0fcc",
+    "id-business-v2/auto-recharge/bank-recharge-card.service.js.map": "183b1878ec4bfa372e096bc74fddb6a1e926431c33e906b4b3aeaca437fe2808",
+    "id-business-v2/auto-recharge/persistence/recharge.repository.d.ts": "5ac56e1c4786b2213f258648e85bc47f17c7629dc084243dce363556276d3e71",
+    "id-business-v2/auto-recharge/persistence/recharge.repository.js": "ff73b5ac75d28cf2216af58a6e2e8a3038c29bceef0dd9bca97afb88284de6fa",
+    "id-business-v2/auto-recharge/persistence/recharge.repository.js.map": "2ca4168652c77888a94ab30014cdd56b5a3f59b6774c965c9bf1bb21522129b4",
+    "id-business-v2/auto-recharge/recharge-callback-receipts.d.ts": "5a22ca4954c575175031d33dba46e8c623d4891fd341f29478384e1fc3b3351e",
+    "id-business-v2/auto-recharge/recharge-callback-receipts.js": "1611c26637f5ea2006dd5ce14f96c1f1226be67d19f2b991f42fcb1c239ee2f3",
+    "id-business-v2/auto-recharge/recharge-callback-receipts.js.map": "4f70fd2863993152dc886e9f8eff5c5c7013401554ada1a44808cc35f5083787",
+    "id-business-v2/auto-recharge/recharge-card-billing.d.ts": "116316a06bda3daa8b087193434a78fd810c2922ad03713e488343f2010b2f5a",
+    "id-business-v2/auto-recharge/recharge-card-billing.js": "8e28cf37febbc94bdd15c9570b9441458e1bff74f8f988a90de53b5da1b2400e",
+    "id-business-v2/auto-recharge/recharge-card-billing.js.map": "ada3f9f7052cd36deb89aed6f0ed4ee5081700dc2cdfde04b7287bcef5691721",
+    "id-business-v2/auto-recharge/recharge-declined-resolution.d.ts": "6f020deab9353aaeacfbf7fbeb74ab4bb4267630dab58ba15f93ed9ce610102f",
+    "id-business-v2/auto-recharge/recharge-declined-resolution.js": "1c5c7f4d7b7f6663f82848902083a9bae55bcc02337f87339f065655f8d3f6a3",
+    "id-business-v2/auto-recharge/recharge-declined-resolution.js.map": "fce9b7f66c8f127553a07ed409219b56270416567642a9e827207af5f2205231",
+    "id-business-v2/auto-recharge/recharge-direct-payment.d.ts": "ac694d0a6863e62bb6119018e70f399b8fc833bf7bd06b82e3dcfe160d6b7597",
+    "id-business-v2/auto-recharge/recharge-direct-payment.js": "d323c08748eaf334f905ccd21698136c0c026f8cc9d44f8f2d00c049aa41dc4b",
+    "id-business-v2/auto-recharge/recharge-direct-payment.js.map": "13a0878f414e597c22f72625ee7b653b3760902a02cfe3e3868277bc5c701353",
+    "id-business-v2/auto-recharge/recharge-ledger-metadata.js": "19c87f90c7f9be23c3acb3aed35f694d220700a853b9d04faf5c4345eee9da6b",
+    "id-business-v2/auto-recharge/recharge-ledger-metadata.js.map": "176a0f696a3df4b1bd696201039d2257011ba5c9083438e2c9bbace22fe95233",
+    "id-business-v2/auto-recharge/recharge-local.service.js": "28dfe2682120ad4096396cad401c06374ca5c27b27f3cee602147b6cfc7894c9",
+    "id-business-v2/auto-recharge/recharge-local.service.js.map": "549461052e53ab751736154a7ecc07908edf84a472ab6ef79e4fa98e30cca957",
+    "id-business-v2/auto-recharge/recharge-name.service.d.ts": "69dbe7ac23ba53575c069461da385ed2308a5eefa5b335584f23a7ec4b3a0603",
+    "id-business-v2/auto-recharge/recharge-noncharge-proof.d.ts": "ce22b8e9f6872d04aea443c6b4f86186af247fa56f863f8da4bfa7a25d8a87d5",
+    "id-business-v2/auto-recharge/recharge-noncharge-proof.js": "d79c8028c6c41f09c02dedd2b10d893e43ba4a137318f574c4af5e2bcf678f61",
+    "id-business-v2/auto-recharge/recharge-noncharge-proof.js.map": "e0e5da0eceec51b01628d41bbf64a7f2ac9d8637c97ccc59522e2ca2071e7442",
+    "id-business-v2/auto-recharge/recharge-resolution.d.ts": "888a40b0e1012f3ec164eed7fb5c4bc6b05d6d1bae00edea20098e440643bf0f",
+    "id-business-v2/auto-recharge/recharge-resolution.js": "7cfec940edc26689ffff36fbaa38ec8a3e58c2bd0159717752d8452b81821712",
+    "id-business-v2/auto-recharge/recharge-resolution.js.map": "77fb8d4818c3cd408d7ae6c34c7c5da1281b3e7ed22eec1794a242c9eb5d5b38",
+    "id-business-v2/auto-recharge/recharge-retired-callback.js": "f7d6e18cdfa87ac1f1a4cbdb84047dadfca55398b998bbf6c53db5f5cd8dccee",
+    "id-business-v2/auto-recharge/recharge-retired-callback.js.map": "e7b569a03ad1f6b5225f2ba280328f71a2a980e54f6a8930ada3a97600a1d348",
+    "id-business-v2/auto-recharge/recharge.service.js": "8e309497332f1f1d2c1e2284081b69e3f38059ac9d26ff94e2cf01684de72030",
+    "id-business-v2/auto-recharge/recharge.service.js.map": "00d4a46f7e829213e7bf02f0c38ae751fdf9e05a8273934ec4734ab18ef3436a",
+    "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts": "2f90de58b8d67271e1ac79bc528f71262eeb492c276a6982310754585005fabd",
+    "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js": "8597c6386ccb3eac6deceaef53230634e77ec844865341f34f744772dd82f86e",
+    "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js.map": "76a179fc1df66bb7881233613f35394c28476a0247e3a01e318c5b38521bf058",
+    "id-business-v2/bank-card-pool/public-api.d.ts": "38de09cb7b52f5a080d9584952c6d4f664fcaf870a97c5db5c1d7a518eb84f9a",
+    "id-business-v2/bank-card-pool/public-api.js": "2efb6eb4a5e665648f15f6ed28fcbdde468536c24a70ed47c168e2dddb958112",
+    "id-business-v2/bank-card-pool/public-api.js.map": "98ef9d59d8000acaa4a04024692cdbc155a801f428423c058d36e37cbeb21e94",
+    "id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts": "8cdb2d9a99d39991fefe3a2130e60c7f40f070b4d9aea7ce3cfec1fd8575fbbd",
+    "id-business-v2/online-recharge/persistence/worker.repository.js": "fd68865d7c5f6d80cd35e56318f42bafa2346cd10a8ddb478da1027a2ec3ac91",
+    "id-business-v2/online-recharge/persistence/worker.repository.js.map": "2206c48952c3d98316bb7d35bb58c9c2dab48a7bb2f318e12ecdd6514006563a"
+  },
   "migrationPerformed": false,
   "mysqlExpectedCounts": [10, 8, 13],
   "mysqlTestInputRepair": {
@@ -241,6 +285,36 @@
     "apps/api/src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts": "e8a29c7b006beb4c7ef2554614148bd871e1c53d22212256fbea675df89a566e",
     "apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.mysql.integration.spec.ts": "e6910e2e4287b3b4d432058587f6e5cc180be00bc1a4a8b6bdb74f1b0c96d8ab",
     "apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts": "6a086a57363deec7dcb949e2a8b49c035a6a5d4dff9cddd131af4462ad55e963"
+  },
+  "nativeSelectedDeclarationEvidence": {
+    "apiInventory": {
+      "count": 1761,
+      "sha256": "4d1d653397205ae7e28c4c5cd7c6e2e18ff2a8104a0827e9940d53198638c891"
+    },
+    "differences": {
+      "id-business-v2/auto-recharge/recharge-callback-receipts.d.ts": {
+        "local": "5a22ca4954c575175031d33dba46e8c623d4891fd341f29478384e1fc3b3351e",
+        "native": "4bb65eaae6f13d587b755c9a83689ad310e279a2b37609943582ccdb9f75134d"
+      },
+      "id-business-v2/auto-recharge/recharge-card-billing.d.ts": {
+        "local": "116316a06bda3daa8b087193434a78fd810c2922ad03713e488343f2010b2f5a",
+        "native": "b83d073a0868a7a7c11a9b55d33e2dbd5a8d3068887e420a4d06058f0022275a"
+      },
+      "id-business-v2/auto-recharge/recharge-name.service.d.ts": {
+        "local": "69dbe7ac23ba53575c069461da385ed2308a5eefa5b335584f23a7ec4b3a0603",
+        "native": "94e6d3590aee68059ac95c27c2c457867f45f89420f6bd05f7e5c104c2f35bdd"
+      },
+      "id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts": {
+        "local": "2f90de58b8d67271e1ac79bc528f71262eeb492c276a6982310754585005fabd",
+        "native": "af6b1f075a7a8ffd43580f0a3bea989d461a28b1dd6a15a43d95e8fa710c1265"
+      }
+    },
+    "parentApiImage": "sha256:215f8b1887ff12d1b6a93d2bc9c25496c68e36102f6185e2e78bce8a21260a01",
+    "parentCommit": "7df16100f7964bb7183f171ec5e9f275f4f48876",
+    "parentInvocationSha256": "a45721ff68a2e04bafe71cd454ebb8057fdf37f94a61b5cdbee0fa41bb15bee6",
+    "parentReportSha256": "da45cd5c97bf08872a35b7241d37dd0ea4125418cb3481df9ccc8e27b7afe4d5",
+    "workflowRunAttempt": "1",
+    "workflowRunId": "39222086690"
   },
   "parentApiInventory": {
     "count": 1761,

@@ -90,6 +90,19 @@ BOUNDED_PROOF = 'e284ca254334424c8bfeca2ca07da5df75eb0740468fcea4ddc970b7b4b83bb
 ADDRESS_CONTRACT_SHA = '61b090c8ac0b83ce13f713a62804666c92c22304fe4ea9442b6ccc29b441803c'
 BOUNDED_ADMIN_IMAGE = 'sha256:5546f18f4f37b3343f9fddc9d07cba0724dd2a4f79ba8eb7ae76cb7706575631'
 BOUNDED_API_INVENTORY = {'count': 1761, 'sha256': '4d1d653397205ae7e28c4c5cd7c6e2e18ff2a8104a0827e9940d53198638c891'}
+BOUNDED_NATIVE_DECLARATIONS = {
+    'id-business-v2/auto-recharge/recharge-callback-receipts.d.ts': {
+        'local': '5a22ca4954c575175031d33dba46e8c623d4891fd341f29478384e1fc3b3351e',
+        'native': '4bb65eaae6f13d587b755c9a83689ad310e279a2b37609943582ccdb9f75134d'},
+    'id-business-v2/auto-recharge/recharge-card-billing.d.ts': {
+        'local': '116316a06bda3daa8b087193434a78fd810c2922ad03713e488343f2010b2f5a',
+        'native': 'b83d073a0868a7a7c11a9b55d33e2dbd5a8d3068887e420a4d06058f0022275a'},
+    'id-business-v2/auto-recharge/recharge-name.service.d.ts': {
+        'local': '69dbe7ac23ba53575c069461da385ed2308a5eefa5b335584f23a7ec4b3a0603',
+        'native': '94e6d3590aee68059ac95c27c2c457867f45f89420f6bd05f7e5c104c2f35bdd'},
+    'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts': {
+        'local': '2f90de58b8d67271e1ac79bc528f71262eeb492c276a6982310754585005fabd',
+        'native': 'af6b1f075a7a8ffd43580f0a3bea989d461a28b1dd6a15a43d95e8fa710c1265'}}
 BOUNDED_APPLICATION = frozenset(('apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue', 'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.spec.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.spec.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts', 'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts', 'apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-payment-hold.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-terminal-failure.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-capacity.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-hold.ts', 'apps/api/src/id-business-v2/bank-card-pool/public-api.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-capacity.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-management.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-recovery.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-settlement.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.card-capacity.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'))
 BOUNDED_PRODUCTION = frozenset(('apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue', 'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts', 'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts', 'apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-terminal-failure.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-capacity.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-hold.ts', 'apps/api/src/id-business-v2/bank-card-pool/public-api.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'))
 BOUNDED_MODULES = frozenset(('id-business-v2/auto-recharge/bank-recharge-card.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-card.service.js', 'id-business-v2/auto-recharge/bank-recharge-card.service.js.map', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js.map', 'id-business-v2/auto-recharge/persistence/recharge.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge.repository.js', 'id-business-v2/auto-recharge/persistence/recharge.repository.js.map', 'id-business-v2/auto-recharge/recharge-callback-lease.d.ts', 'id-business-v2/auto-recharge/recharge-callback-lease.js', 'id-business-v2/auto-recharge/recharge-callback-lease.js.map', 'id-business-v2/auto-recharge/recharge-callback-receipts.d.ts', 'id-business-v2/auto-recharge/recharge-callback-receipts.js', 'id-business-v2/auto-recharge/recharge-callback-receipts.js.map', 'id-business-v2/auto-recharge/recharge-card-billing.d.ts', 'id-business-v2/auto-recharge/recharge-card-billing.js', 'id-business-v2/auto-recharge/recharge-card-billing.js.map', 'id-business-v2/auto-recharge/recharge-declined-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-declined-resolution.js', 'id-business-v2/auto-recharge/recharge-declined-resolution.js.map', 'id-business-v2/auto-recharge/recharge-direct-payment.d.ts', 'id-business-v2/auto-recharge/recharge-direct-payment.js', 'id-business-v2/auto-recharge/recharge-direct-payment.js.map', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js.map', 'id-business-v2/auto-recharge/recharge-local.service.js', 'id-business-v2/auto-recharge/recharge-local.service.js.map', 'id-business-v2/auto-recharge/recharge-name.service.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js.map', 'id-business-v2/auto-recharge/recharge-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-resolution.js', 'id-business-v2/auto-recharge/recharge-resolution.js.map', 'id-business-v2/auto-recharge/recharge-retired-callback.js', 'id-business-v2/auto-recharge/recharge-retired-callback.js.map', 'id-business-v2/auto-recharge/recharge-terminal-failure.d.ts', 'id-business-v2/auto-recharge/recharge-terminal-failure.js', 'id-business-v2/auto-recharge/recharge-terminal-failure.js.map', 'id-business-v2/auto-recharge/recharge.service.js', 'id-business-v2/auto-recharge/recharge.service.js.map', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js.map', 'id-business-v2/bank-card-pool/public-api.d.ts', 'id-business-v2/bank-card-pool/public-api.js', 'id-business-v2/bank-card-pool/public-api.js.map', 'id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts', 'id-business-v2/online-recharge/persistence/worker.repository.js', 'id-business-v2/online-recharge/persistence/worker.repository.js.map'))
@@ -299,6 +312,32 @@ def reviewed_current_digest(c, name, digest):
     return digest
 
 
+def native_selected_declaration_evidence():
+    return {'workflowRunId': '39222086690', 'workflowRunAttempt': '1',
+        'parentCommit': BOUNDED_CURRENT, 'parentApiImage': ADDRESS_API_IMAGE,
+        'apiInventory': BOUNDED_API_INVENTORY,
+        'parentInvocationSha256': 'a45721ff68a2e04bafe71cd454ebb8057fdf37f94a61b5cdbee0fa41bb15bee6',
+        'parentReportSha256': 'da45cd5c97bf08872a35b7241d37dd0ea4125418cb3481df9ccc8e27b7afe4d5',
+        'differences': copy.deepcopy(BOUNDED_NATIVE_DECLARATIONS)}
+
+
+def verify_bounded_local_native(c):
+    local, native = c.get('localCompiledBefore'), c.get('baseline', {}).get('apiModules')
+    need(inventory(local) and inventory(native) and len(local) == len(native) == 42 and set(local) == set(native)
+        and set(BOUNDED_NATIVE_DECLARATIONS) <= set(native) <= MODULES
+        and {n for n in native if local[n] != native[n]} == set(BOUNDED_NATIVE_DECLARATIONS)
+        and all(local[n] == pair['local'] and native[n] == pair['native']
+            for n, pair in BOUNDED_NATIVE_DECLARATIONS.items())
+        and c.get('nativeSelectedDeclarationEvidence') == native_selected_declaration_evidence(),
+        'BOUNDED_LOCAL_NATIVE_BASELINE_INVALID')
+
+
+def reproduced_baseline(c):
+    # The compiler reproduces local declaration bytes. Parent capture separately
+    # authenticates native bytes; hydration must never replace this local proof.
+    return c['localCompiledBefore'] if RECIPE == BOUNDED else c['baseline']['apiModules']
+
+
 def validate_bounded_contract(c):
     allowed = {n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
         for n in API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')} | BOUNDED_PROPAGATED
@@ -337,6 +376,7 @@ def validate_bounded_contract(c):
         and c.get('parentVerifiedBaseline', {}).get('commit') == ADDRESS_CURRENT
         and re.fullmatch('[a-f0-9]{64}', c.get('parentVerifiedSealSha256', '')),
         'BOUNDED_BASELINE_INVALID')
+    verify_bounded_local_native(c)
     repair = c.get('mysqlTestInputRepair')
     need(c['sources'].get(MYSQL_REPAIR_PATH) == MYSQL_REPAIR_OLD_SHA
         and (repair == mysql_test_input_repair() and c['mysqlTestSources'][MYSQL_REPAIR_PATH] == MYSQL_REPAIR_NEW_SHA
@@ -353,6 +393,10 @@ def verify_bounded_capture(value, identity, c):
         and all(value.get(n) == identity[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
         and value.get('parentNative') == c['parentNative'] and value.get('apiInventory') == BOUNDED_API_INVENTORY
         and value.get('apiModules') == c['baseline']['apiModules'] and value.get('absentApiModules') == c['absentApiModules']
+        and inventory(value.get('nativeDeclarationBefore'))
+        and set(value['nativeDeclarationBefore']) == BOUNDED_ORDER_ONLY
+        and ('nativeDeclarationBefore' not in c['baseline']
+            or value['nativeDeclarationBefore'] == c['baseline']['nativeDeclarationBefore'])
         and re.fullmatch('[a-f0-9]{64}', value.get('sealSha256', ''))
         and value.get('databaseWrites') == value.get('businessActions') == 0, 'BOUNDED_NATIVE_CAPTURE_INVALID')
 
@@ -421,9 +465,7 @@ def bounded_parent(d, h, c):
     # Complete inventory stays within this server process; no source or business data leaves production.
     code = r"const fs=require('fs'),path=require('path'),c=require('crypto'),o={};function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(p);else if(e.isFile())o[path.relative('/app/apps/api/dist',p)]=c.createHash('sha256').update(fs.readFileSync(p)).digest('hex');else throw Error('KIND');}}walk('/app/apps/api/dist');console.log(JSON.stringify(o));"
     files = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', code, timeout=90))
-    picked = bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
-    verify_bounded_declarations_native(files, c)
-    need(picked['apiModules'] == c['baseline']['apiModules'], 'BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH')
+    picked, native_declarations = verify_bounded_parent_selection(files, c)
     observed = runtime(d, states)
     need(observed['apiModules'] == picked['apiModules'] and all(observed[n] == before[n]
         for n in ('sharedInventory', 'clientInventory', 'nginxSha256')), 'BOUNDED_PARENT_CONTENT_CHANGED')
@@ -431,15 +473,65 @@ def bounded_parent(d, h, c):
         'manifestSha256': sha(raws['release-manifest.json']), 'services': states,
         'configurationSha256': configs, 'runtimeConfigurationSha256': before['runtimeConfigurationSha256'],
         'proofs': {n: sha(raws[n]) for n in raws if n != 'release-manifest.json'}, **observed,
-        'database': before['database'], 'backupNormalizerPath': before['backupNormalizerPath'],
+        'database': before['database'], 'nativeDeclarationBefore': native_declarations,
+        'backupNormalizerPath': before['backupNormalizerPath'],
         'backupNormalizerSha256': before['backupNormalizerSha256'], 'businessActions': 0, 'databaseWrites': 0}
     h.guards(d, parent, states, c)
     return baseline, files
 
 
 def verify_bounded_declarations_native(files, c):
-    need(all(files.get(name) == rule['before'] for name, rule in c['declarationOrderOnly'].items()),
-        'BOUNDED_DECLARATION_NATIVE_BEFORE_CHANGED')
+    # Local before/after AST rules prove only the bounded compilation delta.
+    # Untouched native declarations are authenticated by the complete parent,
+    # captured separately, and remain outside the payload.
+    need(c.get('parentApiInventory') == BOUNDED_API_INVENTORY
+        and set(c.get('declarationOrderOnly', {})) == BOUNDED_ORDER_ONLY,
+        'BOUNDED_DECLARATION_NATIVE_SCOPE_CHANGED')
+    bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    need(BOUNDED_ORDER_ONLY <= files.keys(), 'BOUNDED_DECLARATION_NATIVE_MISSING')
+    return {name: files[name] for name in sorted(BOUNDED_ORDER_ONLY)}
+
+
+class BoundedParentMismatch(RuntimeError):
+    def __init__(self, files, c):
+        picked = bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+        native = verify_bounded_declarations_native(files, c)
+        need(picked['apiModules'] != c['baseline']['apiModules'], 'BOUNDED_PARENT_MISMATCH_NOT_PRESENT')
+        super().__init__('BITBROWSER_HISTORY_BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH')
+        self.selected_before = {name: {'expected': c['baseline']['apiModules'][name], 'actual': digest}
+            for name, digest in picked['apiModules'].items()}
+        self.native_declaration_before = native
+
+
+def verify_bounded_parent_selection(files, c):
+    picked = bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    native = verify_bounded_declarations_native(files, c)
+    if picked['apiModules'] != c['baseline']['apiModules']:
+        raise BoundedParentMismatch(files, c)
+    return picked, native
+
+
+def bounded_parent_failure_json(error, plan, c):
+    # This finite diagnostic is available only after full inventory authentication.
+    # It is still a failed operation; no seal, payload or release is produced.
+    selected = getattr(error, 'selected_before', None)
+    native = getattr(error, 'native_declaration_before', None)
+    need(type(error) is BoundedParentMismatch and RECIPE == BOUNDED
+        and str(error) == 'BITBROWSER_HISTORY_BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH'
+        and plan.get('recipe') == BOUNDED and plan.get('mode') == 'parent'
+        and c.get('parentApiInventory') == BOUNDED_API_INVENTORY
+        and type(selected) is dict and set(selected) == set(c['baseline']['apiModules'])
+        and all(type(pair) is dict and set(pair) == {'expected', 'actual'} and inventory(pair)
+            and pair['expected'] == c['baseline']['apiModules'][name] for name, pair in selected.items())
+        and any(pair['expected'] != pair['actual'] for pair in selected.values())
+        and inventory(native) and set(native) == BOUNDED_ORDER_ONLY,
+        'BOUNDED_PARENT_DIAGNOSTIC_INVALID')
+    report = {'status': 'FAILED', 'code': str(error), 'mode': 'parent',
+        'apiInventory': BOUNDED_API_INVENTORY, 'selectedBefore': selected,
+        'nativeDeclarationBefore': native, 'databaseWrites': 0, 'businessActions': 0}
+    encoded = canonical(report).decode('ascii')
+    need(len(encoded.encode('ascii')) + 1 < 20000, 'BOUNDED_PARENT_DIAGNOSTIC_TOO_LARGE')
+    return encoded
 
 
 def bounded_capture(d, h, c, plan):
@@ -454,6 +546,7 @@ def bounded_capture(d, h, c, plan):
     value = {**{n: plan[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt')},
         'status': 'BITBROWSER_BOUNDED_PARENT_CAPTURED', 'parentNative': c['parentNative'],
         'apiInventory': BOUNDED_API_INVENTORY, 'apiModules': baseline['apiModules'],
+        'nativeDeclarationBefore': baseline['nativeDeclarationBefore'],
         'absentApiModules': c['absentApiModules'], 'sealSha256': sha(seal.read_bytes()),
         'databaseWrites': 0, 'businessActions': 0}
     verify_bounded_capture(value, plan, c)
@@ -466,12 +559,14 @@ def bounded_runtime_contract(d, h, c, plan):
     baseline = seal['baseline']
     verify_entry_seal(plan, baseline, seal_raw)
     files = json.loads((HERE / 'bounded-parent-inventory.json').read_bytes())
-    bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    picked, native_declarations = verify_bounded_parent_selection(files, c)
     need(baseline['apiModules'] == c['baseline']['apiModules'] and baseline['commit'] == CURRENT,
         'BOUNDED_PARENT_SEAL_CHANGED')
     capture = plan.get('nativeParentCapture')
     verify_bounded_capture(capture, plan, c)
-    need(capture['sealSha256'] == sha(seal_raw), 'BOUNDED_PARENT_SEAL_CHANGED')
+    need(capture['sealSha256'] == sha(seal_raw)
+        and native_declarations == baseline.get('nativeDeclarationBefore') == capture['nativeDeclarationBefore']
+        and picked['apiModules'] == baseline['apiModules'], 'BOUNDED_PARENT_SEAL_CHANGED')
     if plan['mode'] != 'readback':
         actual, actual_files = bounded_parent(d, h, c)
         need(actual == baseline and actual_files == files, 'BOUNDED_PARENT_MOVED')
@@ -501,7 +596,7 @@ def verify_proof(proof, plan, c, payload, h):
     need(all(proof.get(n) == plan.get(n) for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt',
         'contractSha256', 'qualityVerification', 'isolatedMysqlVerification'))
         and proof.get('version') == 1 and proof.get('scope') == SCOPE and proof.get('sources') == c['sources']
-        and proof.get('controlSources') == c['controlPins'] and proof.get('baselineModulesReproduced') == c['baseline']['apiModules']
+        and proof.get('controlSources') == c['controlPins'] and proof.get('baselineModulesReproduced') == reproduced_baseline(c)
         and proof.get('predecessorProofSha256') == PREDECESSOR_PROOF
         and proof.get('baselineSharedUnchanged') is True and proof.get('migrationPerformed') is False
         and proof.get('businessActions') == 0 and proof.get('updatedServices') == list(UPDATED)

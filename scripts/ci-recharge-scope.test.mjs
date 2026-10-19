@@ -8114,3 +8114,215 @@ test('bounded MySQL repair actual PR and push CLI keep both controls and use ful
     }
   }
 });
+
+import {
+  bitbrowserBoundedHoldNativeDeclarationsStatus,
+  bitbrowserBoundedHoldNativeDeclarationsBase,
+  bitbrowserBoundedHoldNativeDeclarationsTree,
+  bitbrowserBoundedHoldNativeDeclarationsPaths,
+  matchBitbrowserBoundedHoldNativeDeclarations,
+  isBitbrowserBoundedHoldNativeDeclarationsOnly
+} from './ci-recharge-scope.mjs';
+
+test('native declaration controls admit only eight frozen control files at the exact reviewed base and tree', () => {
+  const context = {
+    base: bitbrowserBoundedHoldNativeDeclarationsBase,
+    baseTree: bitbrowserBoundedHoldNativeDeclarationsTree
+  };
+  assert.equal(bitbrowserBoundedHoldNativeDeclarationsPaths.length, 8);
+  assert.equal(
+    isBitbrowserBoundedHoldNativeDeclarationsOnly(
+      bitbrowserBoundedHoldNativeDeclarationsPaths,
+      context
+    ),
+    bitbrowserBoundedHoldNativeDeclarationsStatus === 'FROZEN_NATIVE_DECLARATIONS'
+  );
+  assert.equal(
+    matchBitbrowserBoundedHoldNativeDeclarations(
+      bitbrowserBoundedHoldNativeDeclarationsPaths,
+      context,
+      'DRAFT_NATIVE_DECLARATIONS'
+    ),
+    false
+  );
+  for (const invalid of [
+    { ...context, base: 'main' },
+    { ...context, base: 'b'.repeat(40) },
+    { ...context, baseTree: 'a'.repeat(40) }
+  ])
+    assert.equal(
+      isBitbrowserBoundedHoldNativeDeclarationsOnly(
+        bitbrowserBoundedHoldNativeDeclarationsPaths,
+        invalid
+      ),
+      false
+    );
+  for (const forbidden of [
+    '.github/workflows/bitbrowser-history-validation.yml',
+    'scripts/production-release/bitbrowser-history-build.py',
+    'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts'
+  ])
+    assert.equal(bitbrowserBoundedHoldNativeDeclarationsPaths.includes(forbidden), false);
+});
+
+test('native declaration actual PR and push CLI select both controls and use full checks for all scope drift', () => {
+  const frozen = bitbrowserBoundedHoldNativeDeclarationsStatus === 'FROZEN_NATIVE_DECLARATIONS';
+  const context = {
+    base: bitbrowserBoundedHoldNativeDeclarationsBase,
+    baseTree: bitbrowserBoundedHoldNativeDeclarationsTree
+  };
+  const paths = bitbrowserBoundedHoldNativeDeclarationsPaths;
+  for (const eventName of ['pull_request', 'push']) {
+    const { result, writes } = recordScopeClassification(paths, {}, eventName, context);
+    assert.equal(result.mode, frozen ? 'ci-only' : 'full');
+    assert.deepEqual(
+      result.checkParts,
+      frozen ? ['guards', 'release-controls'] : boundedMysqlFullParts
+    );
+    if (frozen) {
+      assert.equal(result.onlineCiBuild, false);
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+    }
+    assert.throws(
+      () => recordScopeClassification(paths, {}, eventName, { ...context, base: 'main' }),
+      /Invalid source commit/
+    );
+    for (const rejected of [
+      { paths, options: { ...context, base: 'b'.repeat(40) } },
+      { paths, options: { ...context, baseTree: 'a'.repeat(40) } },
+      { paths, options: { ...context, schemaBefore: '', schemaAfter: '' } },
+      { paths, options: { ...context, schemaBefore: schema, schemaAfter: schema + '\n' } },
+      ...paths.map((missing) => ({
+        paths: paths.filter((name) => name !== missing),
+        options: context
+      })),
+      { paths: [...paths, paths[0]], options: context },
+      { paths: [...paths.slice(1), paths[1]], options: context },
+      ...[
+        '.github/workflows/bitbrowser-history-validation.yml',
+        'scripts/production-release/bitbrowser-history-build.py',
+        'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts',
+        'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+        'scripts/production-release/bitbrowser-existing-address-contract.json',
+        'apps/api/prisma-mysql/schema.prisma',
+        'package-lock.json'
+      ].map((extra) => ({ paths: [...paths, extra], options: context }))
+    ]) {
+      const { result: negative } = recordScopeClassification(
+        rejected.paths,
+        {},
+        eventName,
+        rejected.options
+      );
+      assert.equal(negative.mode, 'full');
+      assert.deepEqual(negative.checkParts, boundedMysqlFullParts);
+    }
+  }
+});
+
+import {
+  bitbrowserBoundedHoldSelectedNativeStatus,
+  bitbrowserBoundedHoldSelectedNativeBase,
+  bitbrowserBoundedHoldSelectedNativeTree,
+  bitbrowserBoundedHoldSelectedNativePaths,
+  matchBitbrowserBoundedHoldSelectedNative,
+  isBitbrowserBoundedHoldSelectedNativeOnly
+} from './ci-recharge-scope.mjs';
+
+test('selected native controls admit only eight frozen control files at the exact reviewed base and tree', () => {
+  const context = {
+    base: bitbrowserBoundedHoldSelectedNativeBase,
+    baseTree: bitbrowserBoundedHoldSelectedNativeTree
+  };
+  assert.equal(bitbrowserBoundedHoldSelectedNativePaths.length, 8);
+  assert.equal(
+    isBitbrowserBoundedHoldSelectedNativeOnly(bitbrowserBoundedHoldSelectedNativePaths, context),
+    bitbrowserBoundedHoldSelectedNativeStatus === 'FROZEN_SELECTED_NATIVE'
+  );
+  assert.equal(
+    matchBitbrowserBoundedHoldSelectedNative(
+      bitbrowserBoundedHoldSelectedNativePaths,
+      context,
+      'DRAFT_SELECTED_NATIVE'
+    ),
+    false
+  );
+  for (const invalid of [
+    { ...context, base: 'main' },
+    { ...context, base: 'b'.repeat(40) },
+    { ...context, baseTree: 'a'.repeat(40) }
+  ])
+    assert.equal(
+      isBitbrowserBoundedHoldSelectedNativeOnly(bitbrowserBoundedHoldSelectedNativePaths, invalid),
+      false
+    );
+  for (const forbidden of [
+    '.github/workflows/bitbrowser-history-validation.yml',
+    'scripts/production-release/bitbrowser-history-dispatch.py',
+    'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts'
+  ])
+    assert.equal(bitbrowserBoundedHoldSelectedNativePaths.includes(forbidden), false);
+});
+
+test('selected native actual PR and push CLI select both controls and use full checks for all scope drift', () => {
+  const frozen = bitbrowserBoundedHoldSelectedNativeStatus === 'FROZEN_SELECTED_NATIVE';
+  const context = {
+    base: bitbrowserBoundedHoldSelectedNativeBase,
+    baseTree: bitbrowserBoundedHoldSelectedNativeTree
+  };
+  const paths = bitbrowserBoundedHoldSelectedNativePaths;
+  for (const eventName of ['pull_request', 'push']) {
+    const { result, writes } = recordScopeClassification(paths, {}, eventName, context);
+    assert.equal(result.mode, frozen ? 'ci-only' : 'full');
+    assert.deepEqual(
+      result.checkParts,
+      frozen ? ['guards', 'release-controls'] : boundedMysqlFullParts
+    );
+    if (frozen) {
+      assert.equal(result.onlineCiBuild, false);
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+    }
+    assert.throws(
+      () => recordScopeClassification(paths, {}, eventName, { ...context, base: 'main' }),
+      /Invalid source commit/
+    );
+    for (const rejected of [
+      { paths, options: { ...context, base: 'b'.repeat(40) } },
+      { paths, options: { ...context, baseTree: 'a'.repeat(40) } },
+      { paths, options: { ...context, schemaBefore: '', schemaAfter: '' } },
+      { paths, options: { ...context, schemaBefore: schema, schemaAfter: schema + '\n' } },
+      ...paths.map((missing) => ({
+        paths: paths.filter((name) => name !== missing),
+        options: context
+      })),
+      { paths: [...paths, paths[0]], options: context },
+      { paths: [...paths.slice(1), paths[1]], options: context },
+      ...[
+        '.github/workflows/bitbrowser-history-validation.yml',
+        'scripts/production-release/bitbrowser-history-dispatch.py',
+        'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts',
+        'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+        'scripts/production-release/bitbrowser-existing-address-contract.json',
+        'apps/api/prisma-mysql/schema.prisma',
+        'package-lock.json'
+      ].map((extra) => ({ paths: [...paths, extra], options: context }))
+    ]) {
+      const { result: negative } = recordScopeClassification(
+        rejected.paths,
+        {},
+        eventName,
+        rejected.options
+      );
+      assert.equal(negative.mode, 'full');
+      assert.deepEqual(negative.checkParts, boundedMysqlFullParts);
+    }
+  }
+});
