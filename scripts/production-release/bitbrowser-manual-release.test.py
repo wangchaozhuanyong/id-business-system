@@ -44,14 +44,15 @@ class ManualReleaseTests(unittest.TestCase):
                 p.validate_contract(c)
 
     def test_manual_mysql_must_be_native_and_not_skipped(self):
-        value = {'sourceCommit': p.SOURCE, 'runId': self.c['sourceQualityRunId'], 'manualTestsPassed': 4,
+        value = {'sourceCommit': p.SOURCE, 'runId': '123', 'testedCommit': 'a' * 40, 'manualTestsPassed': 4,
             'manualTestsSkipped': 0, 'financialStepPassed': True, 'rollbackStepPassed': True,
             'nativeLogSha256': 'a' * 64}
-        p.verify_mysql(value, {}, self.c)
-        for key, invalid in (('sourceCommit', 'a' * 40), ('manualTestsPassed', 0), ('manualTestsSkipped', 4),
+        identity = {'qualityVerification': {'sources': {'runId': '123', 'commit': 'a' * 40}}}
+        p.verify_mysql(value, identity, self.c)
+        for key, invalid in (('sourceCommit', 'a' * 40), ('testedCommit', 'b' * 40), ('runId', '456'), ('manualTestsPassed', 0), ('manualTestsSkipped', 4),
             ('financialStepPassed', False), ('rollbackStepPassed', False), ('nativeLogSha256', '')):
             with self.assertRaises(RuntimeError):
-                p.verify_mysql({**value, key: invalid}, {}, self.c)
+                p.verify_mysql({**value, key: invalid}, identity, self.c)
 
     def test_native_main_identical_tree_evidence_is_reused_without_skipping_source_quality(self):
         b = p.load('bitbrowser-manual-build.py')

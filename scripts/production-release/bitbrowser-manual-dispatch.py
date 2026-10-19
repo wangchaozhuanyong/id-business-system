@@ -80,12 +80,20 @@ def prepare():
     for role, evidence in proof['qualityVerification'].items():
         checked = github('repos/' + REPO + '/actions/runs/' + evidence['runId'])
         need(checked['head_sha'] == evidence['commit']
-            and (checked['event'] == 'pull_request' and evidence['commit'] == c['sourceReviewCommit']
+            and (checked['event'] == 'pull_request' and evidence['reviewedBusinessCommit'] == c['sourceReviewCommit']
+                and evidence['testedTree'] == identity['tree']
                 if role == 'sources' else checked['event'] == 'push' and checked['head_branch'] == 'main' and evidence['commit'] == commit)
             and checked['path'] == '.github/workflows/quality.yml'
             and checked['conclusion'] == 'success'
             and execute('git', 'rev-parse', evidence['commit'] + '^{tree}').decode().strip() == evidence['tree'],
             'QUALITY_CHANGED')
+        if role == 'sources':
+            artifacts = github('repos/' + REPO + '/actions/runs/' + evidence['runId'] + '/artifacts')['artifacts']
+            need(any(a['id'] == evidence['sourceEvidenceArtifactId'] and not a['expired']
+                and a['name'] == 'quality-source-evidence-' + evidence['runAttempt']
+                and a.get('digest') == 'sha256:' + evidence['sourceEvidenceSha256'] for a in artifacts), 'SOURCE_RECEIPT_CHANGED')
+            need(all(sha(execute('git', 'show', evidence['commit'] + ':' + n)) == v
+                for n, v in c['sources'].items()), 'BUSINESS_PROJECTION_CHANGED')
     OUT.mkdir(mode=0o700, parents=True, exist_ok=False)
     bundle_path = OUT / 'bitbrowser-history-artifact.tar.gz'
     bundle_path.write_bytes(bundle)
@@ -94,7 +102,7 @@ def prepare():
     p = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(p)
     p.validate_contract(c)
-    p.verify_mysql(proof['isolatedMysqlVerification'], identity, c)
+    p.verify_mysql(proof['isolatedMysqlVerification'], {**identity, 'qualityVerification': proof['qualityVerification']}, c)
     controls = {**c['controlPins'], CONTRACT_FILE: sha(c_raw)}
     need(all(sha((HERE / n).read_bytes()) == v for n, v in controls.items()), 'CONTROLS_CHANGED')
     notes = OUT / 'artifact-notes.md'

@@ -100,6 +100,12 @@
     "packages/shared/src/v2/auto-recharge.ts": "62b142f4c5e4fbc532b35cbcf55c9313a99d7e969595375981dbf3852b51c3f2"
   },
   "businessActions": 0,
+  "ciControlPins": {
+    "scripts/ci-bitbrowser-manual-controls.mjs": "d778a69cde5e7c55521f109127921810dc65227528320f5257451e5e3ad887b4",
+    "scripts/ci-bitbrowser-manual-controls.test.mjs": "10c4809c6673bea5383408e45e1717178909442cc95ad6f4f82599b1009c9132",
+    "scripts/ci-recharge-check.mjs": "948de529536a9f98e6c12249441ac553ab06b07bd0a0850eb6211c7976e717c4",
+    "scripts/ci-recharge-scope.mjs": "aa3580038fe31c91d28c7cd5926568222cfc542c3e36c6f1b6b4d4d093de3de4"
+  },
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",
@@ -114,10 +120,10 @@
     "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
     "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
-    "bitbrowser-manual-build.py": "6533179411a800a12f3e4980aea2f8eb4a4201303dc9bbaa8891fa3d880d0c38",
-    "bitbrowser-manual-dispatch.py": "6ff392060d1a29e5c01402db4005cbc2cf07d2ca6719477ca0b8f7fcd4adc1a1",
-    "bitbrowser-manual-release.py": "326b78db5ede024f554f8aa7a8f229f4d3dd994be5151439e85a25695f3167ff",
-    "bitbrowser-manual-release.test.py": "2db20b4d198f4c3fc2305e65dbf3625e3139a7e0f9ffee2c088904a100f0eade",
+    "bitbrowser-manual-build.py": "e7cf587b6680d46ebb74c3f05e7eebda40eea622096a79a70d0c5d358e7ce15d",
+    "bitbrowser-manual-dispatch.py": "59dc85ccbd8fcf3d6d31dbbe4aece7e607f17478c7a95efce9ca0bd6887cfa37",
+    "bitbrowser-manual-release.py": "d965aecec1ec479aa94b2330a8e966105be35d8cde2113bc12a8565f6c83385e",
+    "bitbrowser-manual-release.test.py": "789dbaa25951bd8edbfeb943d4d2fd70bd041cac48b28a32b64de7d10fc58c2f",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
@@ -231,7 +237,7 @@
     "packages/shared/src/v2/auto-recharge-manual-settlement.ts": null,
     "packages/shared/src/v2/auto-recharge.ts": "62b142f4c5e4fbc532b35cbcf55c9313a99d7e969595375981dbf3852b51c3f2"
   },
-  "sourceQualityRunId": "39250689046",
+  "sourceQualityPolicy": "native-full-candidate-with-exact-reviewed-business-and-main-tree",
   "sourceReviewCommit": "66c57c383db67f6bcebbe4cda32a9b9a35d6dc00",
   "sourceReviewTree": "174560aea3472c7adb546af3dc2503014d7b1ade",
   "sources": {

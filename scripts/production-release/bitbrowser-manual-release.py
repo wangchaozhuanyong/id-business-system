@@ -50,6 +50,10 @@ def validate_contract(c):
         and c.get('recipe') == RECIPE and c.get('expectedCurrent') == CURRENT
         and c.get('sourceReviewCommit') == SOURCE and c.get('predecessorProofSha256') == PARENT_PROOF
         and c.get('migrationPerformed') is False and c.get('businessActions') == 0, 'CONTRACT_IDENTITY')
+    need(c.get('sourceQualityPolicy') == 'native-full-candidate-with-exact-reviewed-business-and-main-tree'
+        and set(c.get('ciControlPins', {})) == {'scripts/ci-bitbrowser-manual-controls.mjs',
+            'scripts/ci-bitbrowser-manual-controls.test.mjs', 'scripts/ci-recharge-scope.mjs',
+            'scripts/ci-recharge-check.mjs'}, 'CI_POLICY_CHANGED')
     need(len(c.get('sources', {})) == 43 and all(re.fullmatch('[a-f0-9]{64}', v)
         for v in c['sources'].values()), 'SOURCE_SCOPE')
     production = {n: v for n, v in c['sources'].items() if n.startswith(('apps/', 'packages/shared/src/'))
@@ -161,7 +165,11 @@ def verify_proof(proof, plan, c, payload, h):
 
 
 def verify_mysql(value, identity, c):
-    need(value.get('sourceCommit') == SOURCE and value.get('runId') == c['sourceQualityRunId']
+    source = identity.get('qualityVerification', {}).get('sources', {})
+    need(value.get('sourceCommit') == SOURCE and value.get('runId') == source.get('runId')
+        and re.fullmatch('[1-9][0-9]*', str(value.get('runId', '')))
+        and value.get('testedCommit') == source.get('commit')
+        and re.fullmatch('[a-f0-9]{40}', value.get('testedCommit', ''))
         and value.get('manualTestsPassed') == 4 and value.get('manualTestsSkipped') == 0
         and value.get('financialStepPassed') is True and value.get('rollbackStepPassed') is True
         and re.fullmatch('[a-f0-9]{64}', value.get('nativeLogSha256', '')),

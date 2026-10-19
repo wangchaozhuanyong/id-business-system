@@ -1,3 +1,7 @@
+import {
+  isManualSettlementCandidate,
+  hasOnlineRuntimeChange
+} from './ci-bitbrowser-manual-controls.mjs';
 import { isFeatureRetirementPermissionsRepair } from './ci-feature-retirement-scope.mjs';
 import {
   rejectRetiredRegistrationCommand,
@@ -197,6 +201,20 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// Business quality stays full. Only unchanged historical publishers are excluded
+// from this finite publisher's control step; the Python check verifies all frozen
+// source/control/CI hashes before the matching publication tests run.
+if (part === 'release-controls' && isManualSettlementCandidate(changed)) {
+  run('python3', ['-B', 'scripts/production-release/bitbrowser-manual-build.py', '--check']);
+  run('node', [
+    '--test',
+    'scripts/ci-bitbrowser-manual-controls.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ]);
+  run('python3', ['-B', 'scripts/production-release/bitbrowser-manual-release.test.py']);
+  process.exit(0);
+}
 // The bounded payment profile is separate from the historical shared-card migration.
 if (mode === 'recharge' && bitbrowserBoundedHoldSourceShape(changed)) {
   if (
@@ -2039,11 +2057,9 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
         : [])
     );
   npm('run', 'build', '--workspace', '@apple-business/api');
-  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
-    onlineEngine();
+  if (hasOnlineRuntimeChange(changed)) onlineEngine();
 } else if (part === 'online-engine') {
-  if (changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/')))
-    onlineEngine();
+  if (hasOnlineRuntimeChange(changed)) onlineEngine();
 } else if (part === 'migration') {
   const combined = hasCombinedComponentScope(changed);
   if (combined && process.env.GITHUB_ACTIONS !== 'true')

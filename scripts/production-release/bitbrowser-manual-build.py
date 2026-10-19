@@ -1,5 +1,7 @@
 """Build the finite API/shared/Admin delta from the previously published composite."""
 import argparse
+import io
+import zipfile
 import json
 import os
 import re
@@ -34,10 +36,12 @@ def check(c):
         p.need(p.sha((ROOT / n).read_bytes()) == v == p.sha(git('show', p.SOURCE + ':' + n)), 'SOURCE_CHANGED')
     for n, v in c['controlPins'].items():
         p.need(p.sha((HERE / n).read_bytes()) == v, 'CONTROL_CHANGED')
+    for n, v in c['ciControlPins'].items():
+        p.need(p.sha((ROOT / n).read_bytes()) == v, 'CI_CONTROL_CHANGED')
     p.need(p.sha((ROOT / p.WORKFLOW).read_bytes()) == c['workflowSha256']
         and p.sha((ROOT / '.github/workflows/quality.yml').read_bytes()) == c['qualityWorkflowSha256'], 'WORKFLOW_CHANGED')
     changed = set(git('diff', '--name-only', c['reviewBase'], 'HEAD').decode().splitlines())
-    allowed = set(c['sources']) | {p.WORKFLOW, 'scripts/production-release/' + p.CONTRACT_FILE} | {
+    allowed = set(c['sources']) | set(c['ciControlPins']) | {p.WORKFLOW, 'scripts/production-release/' + p.CONTRACT_FILE} | {
         'scripts/production-release/' + n for n in c['controlPins'] if n.startswith('bitbrowser-manual-')}
     p.need(changed <= allowed and set(c['sources']) <= changed, 'FINITE_SCOPE_CHANGED')
     return p
@@ -52,30 +56,62 @@ def require_quality_jobs(rows, *, source, p):
     p.need(all(row['conclusion'] in ('success', 'skipped') for row in rows), 'QUALITY_JOB_NOT_PASSED')
 
 
+def github(path):
+    return json.loads(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/' + path], cwd=ROOT))
+
+
+def source_receipt(run, pr, identity, c, p):
+    rows = github('actions/runs/' + str(run['id']) + '/artifacts')['artifacts']
+    selected = [a for a in rows if a['name'] == 'quality-source-evidence-' + str(run['run_attempt']) and not a['expired']]
+    p.need(len(selected) == 1, 'SOURCE_RECEIPT_MISSING')
+    artifact = selected[0]
+    raw = subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/actions/artifacts/' + str(artifact['id']) + '/zip'], cwd=ROOT)
+    p.need(0 < len(raw) < 1024**2 and artifact.get('digest') == 'sha256:' + p.sha(raw), 'SOURCE_RECEIPT_CHANGED')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        p.need(archive.namelist() == ['evidence.json'], 'SOURCE_RECEIPT_LAYOUT')
+        receipt = json.loads(archive.read('evidence.json'))
+    p.need(receipt == {'repository': 'wangchaozhuanyong/id-business-system', 'runId': run['id'],
+        'runAttempt': run['run_attempt'], 'pullRequest': pr['number'], 'headSha': pr['head']['sha'],
+        'baseSha': c['reviewBase'], 'testedTree': identity['tree']}, 'TESTED_TREE_CHANGED')
+    return {'testedTree': receipt['testedTree'], 'pullRequest': pr['number'],
+        'sourceEvidenceArtifactId': artifact['id'], 'sourceEvidenceSha256': p.sha(raw)}
+
+
 def quality(c, p, identity):
+    prs = [pr for pr in github('commits/' + identity['commit'] + '/pulls')
+        if pr.get('merged_at') and pr.get('merge_commit_sha') == identity['commit'] and pr['base']['ref'] == 'main']
+    p.need(len(prs) == 1, 'MERGED_SOURCE_PR_REQUIRED')
+    pr = prs[0]
+    producer = pr['head']['sha']
+    for name, expected in c['sources'].items():
+        p.need(p.sha(git('show', producer + ':' + name)) == expected
+            == p.sha(git('show', p.SOURCE + ':' + name)), 'REVIEWED_BUSINESS_PROJECTION_CHANGED')
     out = {}
-    for role, commit in (('sources', p.SOURCE), ('release', identity['commit'])):
-        runs = json.loads(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/actions/workflows/quality.yml/runs?head_sha=' + commit], cwd=ROOT))['workflow_runs']
+    for role, commit in (('sources', producer), ('release', identity['commit'])):
+        runs = github('actions/workflows/quality.yml/runs?head_sha=' + commit)['workflow_runs']
         rows = [r for r in runs if r['head_sha'] == commit and r['conclusion'] == 'success'
             and (r['event'] == 'pull_request' if role == 'sources' else r['event'] == 'push' and r['head_branch'] == 'main')]
         p.need(bool(rows), 'QUALITY_NOT_PASSED')
         run = rows[0]
-        jobs = json.loads(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/actions/runs/' + str(run['id']) + '/jobs?per_page=100'], cwd=ROOT))['jobs']
+        jobs = github('actions/runs/' + str(run['id']) + '/attempts/' + str(run['run_attempt']) + '/jobs?per_page=100')['jobs']
         require_quality_jobs(jobs, source=role == 'sources', p=p)
         out[role] = {'commit': commit, 'tree': git('rev-parse', commit + '^{tree}').decode().strip(),
             'runId': str(run['id']), 'runAttempt': str(run['run_attempt']), 'event': run['event'], 'conclusion': 'success'}
-    p.need(out['sources']['runId'] == c['sourceQualityRunId'], 'SOURCE_QUALITY_CHANGED')
-    # Fetch the native log rather than trusting an aggregate successful job.
-    log = subprocess.check_output(['gh', 'run', 'view', c['sourceQualityRunId'], '--log', '--repo', 'wangchaozhuanyong/id-business-system'], cwd=ROOT)
+        if role == 'sources':
+            out[role].update(source_receipt(run, pr, identity, c, p))
+            out[role]['reviewedBusinessCommit'] = p.SOURCE
+    # Read the actual full candidate's native MySQL log. Its business files must
+    # match the frozen review; publisher/CI-only commits do not relabel that review.
+    source_run = out['sources']['runId']
+    log = subprocess.check_output(['gh', 'run', 'view', source_run, '--log', '--repo', 'wangchaozhuanyong/id-business-system'], cwd=ROOT)
     text = re.sub(r'\x1b\[[0-9;]*m', '', log.decode())
     manual = [line for line in text.splitlines() if '\tVerify financial integrity on disposable MySQL\t' in line
         and '✓ src/id-business-v2/auto-recharge/recharge-mysql.integration.spec.ts (5 tests)' in line]
     p.need(len(manual) == 1 and 'skipped' not in manual[0]
-        and 'Verify financial integrity on disposable MySQL' in text
         and 'Verify rollback, deletion and restore integrity on MySQL' in text, 'MANUAL_MYSQL_NOT_PASSED')
-    mysql = {'sourceCommit': p.SOURCE, 'runId': c['sourceQualityRunId'], 'manualTestsPassed': 4,
+    mysql = {'sourceCommit': p.SOURCE, 'testedCommit': producer, 'runId': source_run, 'manualTestsPassed': 4,
         'manualTestsSkipped': 0, 'financialStepPassed': True, 'rollbackStepPassed': True, 'nativeLogSha256': p.sha(log)}
-    p.verify_mysql(mysql, identity, c)
+    p.verify_mysql(mysql, {**identity, 'qualityVerification': out}, c)
     return out, mysql
 
 
