@@ -205,6 +205,7 @@ export class RechargeSettingsService {
 
   async update(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeBitBrowserSettings(value);
+    const connectionDraft = input.directMode === true && !input.groupName && !input.tagName;
     const row = await this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
@@ -294,7 +295,10 @@ export class RechargeSettingsService {
         if (
           (!input.serverMode &&
             (!localApiTokenEncrypted || (!input.directMode && !connectorTokenEncrypted))) ||
-          (browserOptions.proxyMode === 'dynamic' && !proxyId && !dynamicProxyUrlEncrypted)
+          (!connectionDraft &&
+            browserOptions.proxyMode === 'dynamic' &&
+            !proxyId &&
+            !dynamicProxyUrlEncrypted)
         ) {
           throw new BadRequestException('请填写连接密钥及当前代理模式所需的配置');
         }
@@ -343,12 +347,8 @@ export class RechargeSettingsService {
             create: input.newConnectionProfile === true,
             expectedUpdatedAt: input.expectedUpdatedAt
           });
-          await this.repository.upsert(tx, operator.id, {
-            browserOptions: toV2JsonDocument({
-              ...object(base?.browserOptions ?? {}),
-              selectedConnectionProfileId: profile.id
-            })
-          });
+          // A connection belongs to this operator; its selection belongs to the
+          // current browser session. Saving on one computer must not switch another.
           updated = {
             ...configuration,
             ownerId: operator.id,
@@ -410,6 +410,10 @@ export class RechargeSettingsService {
         ? object(base?.browserOptions ?? {}).selectedConnectionProfileId
         : profileId;
     const row = selected ? await this.repository.effective(ownerId, String(selected)) : base;
+    if (row && (!row.groupName?.trim() || !row.tagName?.trim()))
+      throw new ServiceUnavailableException(
+        '该连接已保存，请先补全当前比特账号的窗口分组和标签并检测连接'
+      );
     const localApiToken = this.encryption.decrypt(row?.localApiTokenEncrypted);
     const connectorToken = directMode ? '' : this.encryption.decrypt(row?.connectorTokenEncrypted);
     let browserOptions = storedBrowserOptions(row?.browserOptions);
@@ -460,6 +464,8 @@ export class RechargeSettingsService {
       ...row,
       connectionMetadata: {
         connection_profile_id: selected ?? null,
+        connection_profile_name:
+          'connectionProfileName' in row ? String(row.connectionProfileName) : '原连接配置',
         connection_api_key: hash(canonicalLocalUrl(row.localApiUrl) + '\0' + localApiToken),
         ...(directMode
           ? {}

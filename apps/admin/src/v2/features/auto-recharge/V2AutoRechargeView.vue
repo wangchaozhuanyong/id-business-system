@@ -4,6 +4,10 @@
       :direct-mode="true"
       :connector-status="connectorStatus"
       :connector-message="connectorMessage"
+      :connection-choice="browserSettings.connectionProfileChoice.value"
+      :connection-profiles="browserSettings.settingsQuery.data.value?.connectionProfiles"
+      :connection-busy="busy || active || browserSettings.settingsSaving.value"
+      @connection="selectConnection"
       @settings="openProxySettings"
       @history="historyOpen = true"
     />
@@ -321,7 +325,11 @@
         </section>
       </div>
     </V2AsyncRegion>
-    <RechargeBrowserSettings v-if="settingsOpen" :settings="browserSettings" />
+    <RechargeBrowserSettings
+      v-if="settingsOpen"
+      :settings="browserSettings"
+      :execution-active="busy || active"
+    />
     <RechargeHistoryDrawer
       v-if="historyOpen"
       v-model="historyOpen"
@@ -388,6 +396,7 @@ const {
   markAddressSelectionManual,
   addressSource,
   selected,
+  active,
   jsonInput,
   sessionJson,
   jsonError,
@@ -462,5 +471,10 @@ const {
   cancel,
   refresh
 } = useAutoRecharge({ clearPaymentValidation: () => paymentFormRef.value?.clearValidate() });
+function selectConnection(id: string) {
+  if (busy.value || active.value || browserSettings.settingsSaving.value) return;
+  browserSettings.connectionProfileChoice.value = id;
+  if (id === 'new') browserSettings.setSettingsOpen(true);
+}
 </script>
 <style scoped src="./auto-recharge.css"></style>

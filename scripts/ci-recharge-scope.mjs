@@ -2795,6 +2795,8 @@ export const hasRechargeConnectionMigrationScope = (paths) =>
   paths.some(
     (path) =>
       path === rechargeConnectionProfileMigration ||
+      path ===
+        'apps/api/src/id-business-v2/auto-recharge/recharge-employee-concurrency.mysql.integration.spec.ts' ||
       path === 'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
   );
 const registrationMirrorSourcePaths = new Set([

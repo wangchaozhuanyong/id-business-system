@@ -11,16 +11,18 @@
         : '保存后用于后续任务；正在执行的窗口保持原配置。'
     "
     size="min(860px, 96vw)"
-    confirm-text="保存设置"
+    :confirm-text="connectionDraft ? '检测并保存连接' : '保存设置'"
     :confirm-loading="settingsSaving"
     :confirm-disabled-reason="
-      !settingsQuery.data.value
-        ? '请先完成设置读取'
-        : !serverMode && !catalogReady
-          ? '请先读取比特浏览器分组与标签'
-          : !serverMode && proxyCatalog.query.phase.value !== 'ready'
-            ? '请先读取代理 IP 管理'
-            : ''
+      executionActive
+        ? '当前连接正在执行，请结束后再修改设置'
+        : !settingsQuery.data.value
+          ? '请先完成设置读取'
+          : !serverMode && !connectionDraft && !catalogReady
+            ? '请先读取比特浏览器分组与标签'
+            : !serverMode && !connectionDraft && proxyCatalog.query.phase.value !== 'ready'
+              ? '请先读取代理 IP 管理'
+              : ''
     "
     :dirty="settingsDirty"
     @update:model-value="setSettingsOpen"
@@ -49,6 +51,9 @@
         <p v-if="!serverMode">{{ summary.profile }}</p>
       </div>
       <p v-if="settingsError" class="recharge-settings-error" role="alert">{{ settingsError }}</p>
+      <p v-if="connectionDraft" class="recharge-settings-note">
+        先填写名称、当前电脑的接口地址和密钥，即可独立保存连接。分组、标签和代理补齐并检测通过后才能执行；子账号仅使用主账号授予的接口与分组权限。
+      </p>
       <div v-if="directMode" class="recharge-settings-connection">
         <BitBrowserConnectionHelp />
         <span>首次使用或更换电脑，请查看接口开启与密钥填写步骤。</span>
@@ -62,7 +67,7 @@
         label-width="148px"
         require-asterisk-position="right"
         scroll-to-error
-        :disabled="settingsSaving || settingsQuery.isParameterTransition.value"
+        :disabled="settingsSaving || settingsQuery.isParameterTransition.value || executionActive"
       >
         <fieldset v-if="!serverMode && !registration">
           <legend>本人的连接配置</legend>
@@ -167,7 +172,7 @@
             loading-title="正在读取比特浏览器分组与标签"
             @retry="refreshCatalog"
           >
-            <el-form-item label="窗口分组" prop="groupName" required>
+            <el-form-item label="窗口分组" prop="groupName" :required="!connectionDraft">
               <el-select
                 v-model="settingsForm.groupName"
                 aria-label="选择窗口分组"
@@ -185,7 +190,7 @@
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="窗口标签" prop="tagName" required>
+            <el-form-item label="窗口标签" prop="tagName" :required="!connectionDraft">
               <el-select
                 v-model="settingsForm.tagName"
                 aria-label="选择窗口标签"
@@ -301,6 +306,7 @@ const props = defineProps<{
   settings: ReturnType<typeof useRechargeBrowserSettings>;
   serverMode?: boolean;
   registration?: boolean;
+  executionActive?: boolean;
 }>();
 const {
   settingsOpen,
@@ -326,6 +332,13 @@ const {
   proxyCatalog
 } = props.settings;
 const stored = computed(() => storedSettings.value);
+const connectionDraft = computed(
+  () =>
+    directMode.value &&
+    !props.serverMode &&
+    !settingsForm.value.groupName.trim() &&
+    !settingsForm.value.tagName.trim()
+);
 const summary = computed(() => browserSettingsSummary(stored.value));
 const formRef = ref<FormInstance>();
 const rules = computed<FormRules>(() => ({
@@ -336,43 +349,46 @@ const rules = computed<FormRules>(() => ({
       : [],
   connectorUrl: [{ required: true, message: '请填写本机连接器地址', trigger: 'blur' }],
   localApiUrl: [{ required: true, message: '请填写比特接口地址', trigger: 'blur' }],
-  groupName: props.serverMode
-    ? []
-    : [
-        {
-          trigger: 'change',
-          validator: (_rule, value, callback) =>
-            callback(
-              groupOptions.value.some((item) => !item.disabled && item.name === value)
-                ? undefined
-                : new Error('请选择有效且名称唯一的窗口分组')
-            )
-        }
-      ],
-  tagName: props.serverMode
-    ? []
-    : [
-        {
-          trigger: 'change',
-          validator: (_rule, value, callback) =>
-            callback(
-              tagOptions.value.some((item) => !item.disabled && item.name === value)
-                ? undefined
-                : new Error('请选择有效且名称唯一的窗口标签')
-            )
-        }
-      ],
+  groupName:
+    props.serverMode || connectionDraft.value
+      ? []
+      : [
+          {
+            trigger: 'change',
+            validator: (_rule, value, callback) =>
+              callback(
+                groupOptions.value.some((item) => !item.disabled && item.name === value)
+                  ? undefined
+                  : new Error('请选择有效且名称唯一的窗口分组')
+              )
+          }
+        ],
+  tagName:
+    props.serverMode || connectionDraft.value
+      ? []
+      : [
+          {
+            trigger: 'change',
+            validator: (_rule, value, callback) =>
+              callback(
+                tagOptions.value.some((item) => !item.disabled && item.name === value)
+                  ? undefined
+                  : new Error('请选择有效且名称唯一的窗口标签')
+              )
+          }
+        ],
   proxyType: [{ required: true, message: '请选择代理协议', trigger: 'change' }],
-  proxyId: props.serverMode
-    ? []
-    : [
-        {
-          required: true,
-          trigger: 'change',
-          validator: (_rule, _value, callback) =>
-            callback(proxyCatalog.error.value ? new Error(proxyCatalog.error.value) : undefined)
-        }
-      ],
+  proxyId:
+    props.serverMode || connectionDraft.value
+      ? []
+      : [
+          {
+            required: true,
+            trigger: 'change',
+            validator: (_rule, _value, callback) =>
+              callback(proxyCatalog.error.value ? new Error(proxyCatalog.error.value) : undefined)
+          }
+        ],
   localApiToken: props.serverMode
     ? []
     : [
@@ -399,6 +415,7 @@ const rules = computed<FormRules>(() => ({
   dynamicProxyUrl: [
     {
       required:
+        !connectionDraft.value &&
         settingsForm.value.browserOptions.proxyMode === 'dynamic' &&
         !stored.value?.dynamicProxyUrlConfigured,
       type: 'url',
@@ -409,6 +426,7 @@ const rules = computed<FormRules>(() => ({
   ]
 }));
 async function submit() {
+  if (props.executionActive) return;
   if (await validateV2Form(formRef.value)) await saveSettings(props.serverMode);
 }
 </script>

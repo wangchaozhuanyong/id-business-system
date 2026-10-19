@@ -93,6 +93,17 @@ import {
   registrationProtocolRepairPreservationPaths
 } from './ci-recharge-scope.mjs';
 import assert from 'node:assert/strict';
+
+test('比特多连接并发验收变动必须运行既有隔离 MySQL 检查', async () => {
+  const { hasRechargeConnectionMigrationScope, selectedParts } =
+    await import('./ci-recharge-scope.mjs');
+  const paths = [
+    'apps/api/src/id-business-v2/auto-recharge/recharge-employee-concurrency.mysql.integration.spec.ts'
+  ];
+  assert.equal(hasRechargeConnectionMigrationScope(paths), true);
+  assert.equal(selectedParts(paths).includes('migration'), true);
+  assert.equal(hasRechargeConnectionMigrationScope(['docs/V2_TASKS.md']), false);
+});
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs, { readFileSync } from 'node:fs';
