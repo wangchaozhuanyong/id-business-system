@@ -77,7 +77,7 @@ test('initialization narrows only its complete twenty-file engine delta and two 
         'apps/api/src/id-business-v2/online-recharge/engine/' + name
       )
     );
-  assert.equal(onlineCheckoutInitializationControls.length, 9);
+  assert.equal(onlineCheckoutInitializationControls.length, 11);
   for (const paths of [sources, [...sources, ...onlineCheckoutInitializationControls]]) {
     assert.equal(isOnlineCheckoutInitializationOnly(paths), true);
     assert.equal(isOnlineSettingsOnly(paths), true);
@@ -114,6 +114,26 @@ test('initialization narrows only its complete twenty-file engine delta and two 
   assert.equal(isOnlineCheckoutInitializationControlsOnly(controls), true);
   assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
+});
+
+test('failed initialization continuation runs recovery tests without replaying engine validation', () => {
+  const paths = ['recovery.py', 'recovery.test.py'].map(
+    (name) => 'scripts/production-release/online-checkout-initialization-' + name
+  );
+  assert.equal(isOnlineCheckoutInitializationControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.match(
+    JSON.stringify(onlineSettingsCommands('guards', paths)),
+    /initialization-recovery\.test\.py/
+  );
+  assert.equal(
+    isOnlineCheckoutInitializationControlsOnly([
+      ...paths,
+      'scripts/production-release/arbitrary.py'
+    ]),
+    false
+  );
 });
 
 const actionabilitySources = [...onlineCheckoutActionabilityPaths, 'docs/ONLINE_RECHARGE.md'];
