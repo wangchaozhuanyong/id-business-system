@@ -4775,18 +4775,8 @@
   "frozen": true,
   "migrationPerformed": false,
   "pendingBindings": [],
-  "preservedServices": [
-    "api",
-    "admin",
-    "mysql",
-    "caddy",
-    "media-resolver",
-    "auto-recharge"
-  ],
-  "requiredQualityParts": [
-    "guards",
-    "online-engine"
-  ],
+  "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
+  "requiredQualityParts": ["guards", "online-engine"],
   "reviewBase": "0b625c8e0ecb06f4052a4b3d7f3e318e390ca07b",
   "reviewedControlSources": {
     "scripts/ci-online-settings-scope.mjs": "a1ffde2cd6ce48698298502d3f7edcf31d8a7d65e0f79940632b48d7a1f63dcc",
@@ -4806,9 +4796,7 @@
   "sourceReviewCommit": "8a78682b97eac1c026553adf17305d7d04f8f0da",
   "sourceReviewTag": "online-card-control-diagnostics-source-review-8a78682b97ea",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-  "updatedServices": [
-    "online-recharge"
-  ],
+  "updatedServices": ["online-recharge"],
   "upstreamSource": {
     "commit": "ba6cf96312a6953e62edb9d74299d438d12549df",
     "repository": "https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git"
