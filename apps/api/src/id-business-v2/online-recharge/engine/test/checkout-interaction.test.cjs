@@ -129,7 +129,11 @@ for (const [name, html] of [
 }
 
 for (const [name, html] of [
-  ['hidden ancestor', `<section hidden style="display:block">${cardHtml()}</section>`],
+  ['hidden ancestor', `<section hidden>${cardHtml()}</section>`],
+  [
+    'hidden until found',
+    `<section hidden="until-found" style="display:block">${cardHtml()}</section>`
+  ],
   ['inert ancestor', `<section inert>${cardHtml()}</section>`],
   ['disabled field', cardHtml('disabled')],
   ['readonly field', cardHtml('readonly')],
@@ -144,6 +148,33 @@ for (const [name, html] of [
     await assertBlocked(page);
   });
 }
+
+for (const [name, html] of [
+  ['control', cardHtml('hidden style="display:inline-block"')],
+  ['ancestor', `<section hidden style="display:block">${cardHtml()}</section>`],
+  ['iframe owner', iframe(cardHtml(), 'hidden')]
+]) {
+  test(`CSS-rendered hidden ${name} shares pure readiness and actual fill/readback checks`, async (t) => {
+    const page = await pageFor(t, html);
+    assert.equal((await inspectCardReadiness(page)).ready, true);
+    await assertNoActions(page);
+    assert.equal((await fillCard(page, card, { deadline: Date.now() + 3500 })).ok, true);
+    assert.deepEqual(await verifyCard(page, card), []);
+    assert.equal((await actions(page)).click, 0);
+    assert.equal((await actions(page)).pointerdown, 0);
+    assert.equal((await actions(page)).mousedown, 0);
+  });
+}
+
+test('rendered hidden fields becoming unrendered cannot pass final readback', async (t) => {
+  const page = await pageFor(t, `<section hidden style="display:block">${cardHtml()}</section>`);
+  assert.equal((await fillCard(page, card, { deadline: Date.now() + 3500 })).ok, true);
+  await page.locator('section').evaluate((node) => {
+    node.style.display = 'none';
+  });
+  await assertNotVerified(page);
+  assert.equal((await actions(page)).click, 0);
+});
 
 test('a displayed ARIA modal excludes an otherwise clickable background form', async (t) => {
   const page = await pageFor(t, cardHtml() + modal());

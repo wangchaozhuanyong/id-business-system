@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "scope": "ONLINE_CARD_VISIBILITY",
+  "frozen": false,
+  "admission": "AWAITING_REVIEWED_SOURCE",
+  "sourceReviewCommit": null,
+  "baseline": null,
+  "businessActions": 0
+}

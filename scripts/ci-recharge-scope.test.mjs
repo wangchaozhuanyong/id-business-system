@@ -33,6 +33,8 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
+  onlineCardVisibilityPaths,
+  onlineCardVisibilityControls,
   onlineCardControlDiagnosticsPaths,
   onlineCardControlDiagnosticsControls,
   onlineCheckoutActionabilityPaths,
@@ -8339,5 +8341,18 @@ test('card diagnostics release retains only guards and online engine checks', ()
   assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
   assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
   assert.deepEqual(selectedParts([...onlineCardControlDiagnosticsControls]), ['guards']);
+  assert.equal(checkMode([...paths, 'package-lock.json'], 'same', 'same'), 'full');
+});
+
+test('card visibility release retains only guards and online engine checks', () => {
+  const paths = [
+    ...onlineCardVisibilityPaths,
+    ...onlineCardVisibilityControls,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts([...onlineCardVisibilityControls]), ['guards']);
   assert.equal(checkMode([...paths, 'package-lock.json'], 'same', 'same'), 'full');
 });
