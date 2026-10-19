@@ -13,6 +13,7 @@ import {
 import { CurrentUser, Public, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { RechargeLoginCodeService } from './recharge-login-code.service';
+import { RechargeManualSettlementService } from './recharge-manual-settlement.service';
 import { RechargeService } from './recharge.service';
 import { RechargeLocalService } from './recharge-local.service';
 import { RechargeSettingsService } from './recharge-settings.service';
@@ -24,7 +25,8 @@ export class RechargeController {
     private readonly service: RechargeService,
     private readonly local: RechargeLocalService,
     private readonly settings: RechargeSettingsService,
-    private readonly loginCodes: RechargeLoginCodeService
+    private readonly loginCodes: RechargeLoginCodeService,
+    private readonly manualSettlement: RechargeManualSettlementService
   ) {}
   @Get('bitbrowser-settings')
   @Header('Cache-Control', 'no-store')
@@ -114,6 +116,14 @@ export class RechargeController {
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.loginCodes.request(id, input, operator);
+  }
+  @Post('jobs/:id/manual-settlement')
+  settleManually(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.manualSettlement.settle(id, input, operator);
   }
   @Post('jobs/:id/resolve-declined')
   resolveDeclined(

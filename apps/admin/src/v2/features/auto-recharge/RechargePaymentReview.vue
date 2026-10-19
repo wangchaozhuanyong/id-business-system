@@ -16,7 +16,7 @@
       </el-form-item>
       <div class="recharge-actions">
         <AppButton
-          :disabled="busy || resolving || query.phase.value === 'refreshing'"
+          :disabled="busy || resolving || manualBusy || query.phase.value === 'refreshing'"
           @click="query.refresh()"
           >只读刷新</AppButton
         >
@@ -37,7 +37,7 @@
           <button
             type="button"
             :aria-pressed="draft.selectedId === job.id"
-            :disabled="busy || resolving"
+            :disabled="busy || resolving || manualBusy"
             @click="draft.selectedId = job.id"
           >
             {{ planLabels[job.plan] }} ·
@@ -63,31 +63,39 @@
         :current-page="query.data.value?.page ?? draft.page"
         :page-size="20"
         :total="query.data.value?.total ?? 0"
-        :disabled="busy || resolving"
+        :disabled="busy || resolving || manualBusy"
         layout="total, prev, pager, next"
         @current-change="draft.page = $event"
       />
       <RechargeResult v-if="selected" :job="selected" />
+      <RechargeManualSettlement
+        v-if="selected"
+        :job="selected"
+        :busy="busy || resolving || query.phase.value !== 'ready'"
+        @busy-change="manualBusy = $event"
+        @completed="query.refresh()"
+      />
       <AppButton
         v-if="verificationResolution"
-        :disabled="busy || resolving || query.phase.value !== 'ready'"
+        :disabled="busy || resolving || manualBusy || query.phase.value !== 'ready'"
         @click="openVerificationResolution"
         >核实验证失败并结束原单</AppButton
       >
       <AppButton
         v-if="
+          !selected?.result.manual_settlement &&
           selected?.availability?.payment === 'declined' &&
           selected.result.resolution_verification_job_id
         "
         :loading="resolving"
-        :disabled="busy || resolving"
+        :disabled="busy || resolving || manualBusy"
         @click="resolveDeclined"
         >核实拒付并结束原单</AppButton
       >
       <p v-if="commandError" class="recharge-note" role="alert">{{ commandError }}</p>
       <AppButton
         v-if="selected && canReviewPayment(selected)"
-        :disabled="busy || resolving || !inspectionReady"
+        :disabled="busy || resolving || manualBusy || !inspectionReady"
         @click="$emit('recheck', selected)"
         >只读复查该原单</AppButton
       >
@@ -176,6 +184,7 @@ import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import RechargeResult from './RechargeResult.vue';
+import RechargeManualSettlement from './RechargeManualSettlement.vue';
 import { rechargeApi } from './api';
 import { planLabels, statusLabel } from './recharge-presentation';
 import { executionAvailabilityLabels, paymentAvailabilityLabels } from './recharge-availability';
@@ -188,6 +197,7 @@ function canReviewPayment(job: V2RechargeJob) {
     job.action === 'bitbrowser' &&
     ['finished', 'unknown'].includes(job.state) &&
     job.result.recheck_only !== true &&
+    !job.result.manual_settlement &&
     ![
       'confirmed_no_bank_request',
       'confirmed_declined_no_charge',
@@ -214,9 +224,10 @@ const query = useV2ModuleQuery({
   query: ({ signal }) =>
     rechargeApi.review({ page: draft.page, pageSize: 20, search: draft.appliedSearch }, { signal })
 });
+const manualBusy = ref(false);
 const resolving = ref(false),
   commandError = ref('');
-watch(resolving, (value) => emit('busy-change', value), { flush: 'sync' });
+watch([resolving, manualBusy], ([a, b]) => emit('busy-change', a || b), { flush: 'sync' });
 const pageItems = computed(() => query.data.value?.items ?? []);
 const selected = computed(() => pageItems.value.find((job) => job.id === draft.selectedId));
 const verificationResolution = computed(() => {
@@ -227,6 +238,7 @@ const verificationResolution = computed(() => {
     job.action !== 'bitbrowser' ||
     job.state !== 'finished' ||
     job.result.operator_resolution ||
+    job.result.manual_settlement ||
     job.availability?.execution === 'active' ||
     !proof ||
     !['captured_official_failure', 'operator_observation_required'].includes(proof.basis) ||
@@ -302,7 +314,7 @@ const verificationDisabledReason = computed(() => {
     verificationSnapshot.value.binding !== verificationBinding.value
   )
     return '原单或核验记录已变化，请重新核对';
-  if (props.busy || query.phase.value !== 'ready') return '请等待当前核对完成';
+  if (props.busy || manualBusy.value || query.phase.value !== 'ready') return '请等待当前核对完成';
   if (!officialFailureConfirmed.value || !bankNoDebitConfirmed.value)
     return '请本人完成官网提示及银行流水两项确认';
   return '';
@@ -310,7 +322,15 @@ const verificationDisabledReason = computed(() => {
 function openVerificationResolution() {
   const job = selected.value,
     proof = verificationResolution.value;
-  if (!job || !proof || props.busy || resolving.value || query.phase.value !== 'ready') return;
+  if (
+    !job ||
+    !proof ||
+    props.busy ||
+    resolving.value ||
+    manualBusy.value ||
+    query.phase.value !== 'ready'
+  )
+    return;
   clearVerificationResolution();
   commandError.value = '';
   verificationSnapshot.value = {
@@ -364,7 +384,7 @@ async function resolveVerificationFailure() {
 onBeforeUnmount(() => {
   disposed = true;
   clearVerificationResolution();
-  if (resolving.value) emit('busy-change', false);
+  if (resolving.value || manualBusy.value) emit('busy-change', false);
 });
 async function resolveDeclined() {
   const job = selected.value,

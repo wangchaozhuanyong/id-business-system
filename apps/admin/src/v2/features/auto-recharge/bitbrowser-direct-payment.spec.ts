@@ -1720,3 +1720,85 @@ describe('真实runner与task新建标记ACK边界', () => {
     }
   );
 });
+
+describe('人工确认失败后由正常入口新建单', () => {
+  function manualHistory(f: ReturnType<typeof fixture>) {
+    const proof = {
+      version: 1,
+      outcome: 'failure',
+      operationId: '22222222-2222-4222-8222-222222222222',
+      sourceJobId: '33333333-3333-4333-8333-333333333333',
+      operatorId: '44444444-4444-4444-8444-444444444444',
+      accountKey,
+      identifier: oldId,
+      plan: 'plus',
+      resolvedAt: '2026-10-19T00:00:00.000Z',
+      requestDigest: 'b'.repeat(64)
+    };
+    const row = f.restored.records[0] as { document: Record<string, unknown> };
+    Object.assign(row.document, {
+      manual_settlement: { ...proof },
+      payment_attempted: true,
+      payment_requests_sent: 1,
+      confirmation_requests_sent: 1,
+      payment_status: 'requires_action'
+    });
+    f.restored.records.push({
+      fileKey: `payments/${createHash('sha256').update(oldId).digest('hex')}.json`,
+      revision: 4,
+      document: { ...row.document, account_key: accountKey, manual_settlement: { ...proof } }
+    });
+  }
+  it('保留历史实际付款事实，后台确认失败后只建一张新单并停在人工付款确认前', async () => {
+    const f = fixture();
+    manualHistory(f);
+    f.confirm.mockRejectedValue(new Error('SYNTHETIC_STOP_BEFORE_PAYMENT'));
+    await expect(f.run()).rejects.toThrow('官网付款操作未完成');
+    expect(f.confirm).toHaveBeenCalledOnce();
+    expect(f.events.filter((e) => e === 'create_clicked')).toHaveLength(1);
+    expect(f.events).not.toContain('expired_authorized');
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.fill).toHaveBeenCalledOnce();
+    expect(f.callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'ledger',
+        document: expect.objectContaining({
+          status: 'checkout_attempted',
+          retry_of: expect.stringMatching(/^[a-f0-9]{64}$/)
+        })
+      })
+    );
+    for (const [input] of f.callback.mock.calls)
+      expect(JSON.stringify(input)).not.toContain('manual_settlement');
+  });
+  it.each(['different-source', 'different-account', 'missing-ledger', 'other-pending'])(
+    '绑定不一致或其他单未决仍禁止建单：%s',
+    async (kind) => {
+      const f = fixture();
+      manualHistory(f);
+      const payment = f.restored.records[1] as { document: Record<string, unknown> };
+      if (kind === 'different-source')
+        (payment.document.manual_settlement as Record<string, unknown>).sourceJobId =
+          '55555555-5555-4555-8555-555555555555';
+      if (kind === 'different-account') payment.document.account_key = 'c'.repeat(64);
+      if (kind === 'missing-ledger') f.restored.records.splice(1, 1);
+      if (kind === 'other-pending')
+        f.restored.records.push({
+          fileKey: 'payments/' + 'd'.repeat(64) + '.json',
+          revision: 1,
+          document: {
+            account_key: accountKey,
+            target_plan: 'plus',
+            checkout_identifier: 'oaics_other',
+            payment_attempted: true,
+            confirmation_requests_sent: 1,
+            payment_status: 'requires_action'
+          }
+        });
+      await expect(f.run()).rejects.toThrow();
+      expect(f.events).not.toContain('create_clicked');
+      expect(mock.fill).not.toHaveBeenCalled();
+      expect(f.confirm).not.toHaveBeenCalled();
+    }
+  );
+});

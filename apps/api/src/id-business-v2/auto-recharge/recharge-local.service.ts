@@ -329,6 +329,7 @@ export class RechargeLocalService {
           !['prepare', 'flow', 'bitbrowser', 'server'].includes(source.action) ||
           !paymentAttempted ||
           sourceResult.recheck_only === true ||
+          sourceResult.manual_settlement !== undefined ||
           ['confirmed_declined_no_charge', 'confirmed_verification_failed_no_charge'].includes(
             String(sourceResult.operator_resolution)
           ) ||

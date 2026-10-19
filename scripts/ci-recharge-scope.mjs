@@ -1,3 +1,4 @@
+import { isManualSettlementCandidate } from './ci-bitbrowser-manual-controls.mjs';
 import { isMailboxVersionOnly, isMailboxVersionControlsOnly } from './ci-mailbox-version-scope.mjs';
 import {
   affectsGptRechargeArtifact,
@@ -5728,7 +5729,8 @@ async function main() {
       const salesAfter = execFileSync('git', ['show', `HEAD:${schema}`], { encoding: 'utf8' });
       if (
         requestedBaseIsAncestor &&
-        ((isGptRechargeOnly(salesPaths) && salesBefore === salesAfter) ||
+        ((isManualSettlementCandidate(salesPaths) && salesBefore === salesAfter) ||
+          (isGptRechargeOnly(salesPaths) && salesBefore === salesAfter) ||
           ((isOnlineSettingsOnly(salesPaths) || isOnlineSettingsControlsOnly(salesPaths)) &&
             salesBefore === salesAfter) ||
           (isAccountLoginControlsOnly(salesPaths) && salesBefore === salesAfter) ||
@@ -5911,7 +5913,9 @@ async function main() {
         : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
   // END finite ONLINE build-proof reuse classifier admission
 
-  const onlineCiBuild = needsOnlineRechargeCiBuild(paths);
+  const onlineCiBuild = isManualSettlementCandidate(paths)
+    ? false
+    : needsOnlineRechargeCiBuild(paths);
   const browserCandidate = isRegistrationBrowserOnly(paths, proxyIdentityContext);
   const protocolRestoreCandidate = isRegistrationProtocolRestoreOnly(paths, proxyIdentityContext);
   const result = {

@@ -14,6 +14,7 @@ import { hash, object } from '../recharge-validation';
 import { isRechargeUpgrade, rechargeOperationIdentifier } from '../recharge-upgrade-protocol';
 import { rechargeDocumentDigest } from '../recharge-callback-receipts';
 import { isClosedCycleDocument } from '../recharge-cycle-state';
+import { manualRechargeSettlement } from '../recharge-manual-settlement-proof';
 import { preserveRechargeResolutionMetadata } from '../recharge-ledger-metadata';
 import { hasOfficialTerminalNoncharge } from '../recharge-terminal-failure';
 import { assertUnpaidCheckoutRecoverySources } from '../recharge-checkout-recovery';
@@ -685,9 +686,11 @@ export class RechargeRepository {
       typeof replacement.retry_of === 'string' &&
       /^[a-f0-9]{64}$/.test(replacement.retry_of);
     const replacingVerifiedFailure =
+      before !== undefined &&
       replacingResolvedDecline &&
       (before?.operator_resolution === 'confirmed_verification_failed_no_charge' ||
-        hasOfficialTerminalNoncharge(before));
+        hasOfficialTerminalNoncharge(before) ||
+        manualRechargeSettlement(before)?.outcome === 'failure');
     if (
       replacingVerifiedFailure &&
       (replacement.retry_of !== rechargeDocumentDigest(before) ||

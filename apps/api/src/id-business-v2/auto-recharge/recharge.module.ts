@@ -16,6 +16,7 @@ import { IdBusinessV2RuntimeModule } from '../runtime/public-api';
 import { RechargeRepository } from './persistence/recharge.repository';
 import { RechargeAddressRepository } from './persistence/recharge-address.repository';
 import { RechargeController } from './recharge.controller';
+import { RechargeManualSettlementService } from './recharge-manual-settlement.service';
 import { RechargeService } from './recharge.service';
 import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { RechargeLocalService } from './recharge-local.service';
@@ -81,6 +82,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     BankRechargeFinanceService,
     BankRechargeCorrectionService,
     RechargeService,
+    RechargeManualSettlementService,
     RechargeLocalService,
     RechargeSettingsService,
     RechargeRepository,

@@ -2,6 +2,7 @@ import { http, request, type ApiRequestOptions } from '@/api/client';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 import type {
   V2RechargeBrowserRestore,
+  V2RechargeManualSettlementInput,
   V2RechargeResolveDeclinedInput
 } from '@apple-business/shared';
 import { connectorRequest, requireConnectorHealth } from './connector-transport';
@@ -41,6 +42,14 @@ export const rechargeApi = {
       kind?: 'email' | 'totp';
       challengeId?: string;
     }>(http.post(`${base}/${id}/login-code`, input, { signal: options.signal }));
+  },
+  settleManually(id: string, input: V2RechargeManualSettlementInput) {
+    return withV2QueryInvalidation(
+      request<{ id: string; orderId?: string; alreadyResolved: boolean }>(
+        http.post(`${base}/${id}/manual-settlement`, input)
+      ),
+      'auto-recharge'
+    );
   },
   resolveDeclined(id: string, input: string | V2RechargeResolveDeclinedInput) {
     const body: V2RechargeResolveDeclinedInput =

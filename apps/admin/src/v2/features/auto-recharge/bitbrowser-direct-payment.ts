@@ -1,3 +1,8 @@
+import {
+  resolvedDirectManualPayment,
+  resolvedDirectManualCheckout,
+  completedDirectManualDocument
+} from './bitbrowser-manual-settlement';
 import type { V2RechargeBrowserRestore, V2RechargeQuote } from '@apple-business/shared';
 import type { V2RechargeBitBrowserLaunch, V2RechargeDetails, V2RechargePlan } from './contracts';
 import {
@@ -213,12 +218,23 @@ export async function runDirectPayment(
         Number(item.revision) > 0 &&
         rows.filter((candidate) => candidate.fileKey === item.fileKey).length === 1 &&
         (resolvedDirectVerificationPayment(value, key) ||
-          resolvedDirectTerminalPayment(value, key)) &&
+          resolvedDirectTerminalPayment(value, key) ||
+          resolvedDirectManualPayment(value, key)) &&
         item.fileKey ===
           `payments/${await paymentHash(String(value.operation === 'subscription_upgrade' ? value.upgrade_identifier : value.checkout_identifier))}.json`
       )
         resolvedPaymentRows.add(item);
     }
+    const resolvedManualCheckoutRows = new Set(
+      rows.filter(
+        (item) =>
+          !String(item.fileKey).startsWith('payments/') &&
+          !String(item.fileKey).startsWith('history/') &&
+          [...resolvedPaymentRows].filter((payment) =>
+            resolvedDirectManualCheckout(item.document, payment.document, key, plan)
+          ).length === 1
+      )
+    );
     if (
       rows.some((item) => {
         const value = paymentObject(item.document);
@@ -231,10 +247,16 @@ export async function runDirectPayment(
             value.operation === 'subscription_upgrade' ||
             Boolean(value.upgrade_identifier));
         const completed =
-          value.payment_status === 'paid' &&
-          value.status === 'subscription_activated' &&
-          Boolean(value.payment_evidence);
-        return payment && !completed && !resolvedPaymentRows.has(item);
+          completedDirectManualDocument(value, key) ||
+          (value.payment_status === 'paid' &&
+            value.status === 'subscription_activated' &&
+            Boolean(value.payment_evidence));
+        return (
+          payment &&
+          !completed &&
+          !resolvedPaymentRows.has(item) &&
+          !resolvedManualCheckoutRows.has(item)
+        );
       })
     )
       throw new Error('该账号历史付款或升级结果仍待核实，本次仅允许复查原单。');
@@ -342,6 +364,7 @@ export async function runDirectPayment(
       (item) => paymentObject(item.document).checkout_identifier === checkoutId
     );
     if (
+      document.manual_settlement !== undefined ||
       document.operator_resolution === 'confirmed_verification_failed_no_charge' ||
       document._official_terminal_failure_v1 !== undefined ||
       resolvedCurrentPayments.length
@@ -359,7 +382,13 @@ export async function runDirectPayment(
             key,
             plan
           ) ||
-          resolvedDirectTerminalCheckout(document, resolvedCurrentPayments[0]!.document, key, plan)
+          resolvedDirectTerminalCheckout(
+            document,
+            resolvedCurrentPayments[0]!.document,
+            key,
+            plan
+          ) ||
+          resolvedDirectManualCheckout(document, resolvedCurrentPayments[0]!.document, key, plan)
         )
       )
         throw new Error('已结束原单与付款账本绑定不一致，本次不会新建订单。');
