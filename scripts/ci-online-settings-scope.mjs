@@ -522,9 +522,14 @@ export const onlineCheckoutInitializationPaths = Object.freeze(
 const initializationDocumentation = ['docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'];
 const initializationReleaseControls = [
   '.github/workflows/online-checkout-initialization-validation.yml',
-  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
-    (name) => 'scripts/production-release/online-checkout-initialization-' + name
-  )
+  ...[
+    'build.py',
+    'release.py',
+    'release.test.py',
+    'contract.json',
+    'recovery.py',
+    'recovery.test.py'
+  ].map((name) => 'scripts/production-release/online-checkout-initialization-' + name)
 ];
 export const onlineCheckoutInitializationControls = Object.freeze([
   ...initializationReleaseControls,
@@ -978,6 +983,17 @@ export function onlineSettingsCommands(part, paths) {
           '-B',
           'scripts/production-release/online-checkout-initialization-release.test.py'
         ],
+        ...(paths.some((name) =>
+          /online-checkout-initialization-recovery(?:\.test)?\.py$/.test(name)
+        )
+          ? [
+              [
+                'python3',
+                '-B',
+                'scripts/production-release/online-checkout-initialization-recovery.test.py'
+              ]
+            ]
+          : []),
         ...(initialization
           ? ['check:v2-module-architecture', 'check:v2-isolation'].map((name) => npm('run', name))
           : [])
