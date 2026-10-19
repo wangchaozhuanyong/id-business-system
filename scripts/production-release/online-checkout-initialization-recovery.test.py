@@ -89,15 +89,14 @@ class FencedRecovery(unittest.TestCase):
                 unlocked = True; trace.append('unlock')
             fence.acquire.side_effect = acquire; fence.close.side_effect = close
             marker = Mock(); marker.sql_fence_class.return_value = lambda *_args: fence
-            marker.registration_marker.return_value = base / 'registration-marker.json'
+            marker.registration_marker.side_effect = AssertionError('RETIRED_REGISTRATION_MUST_NOT_BE_READ')
             marker_raw = json.dumps({'scope': p.SCOPE, 'commit': plan['commit'],
                 'workflowRunId': plan['workflowRunId']}, sort_keys=True).encode()
-            (base / 'maintenance.json').write_bytes(marker_raw)
-            marker.registration_marker.return_value.write_bytes(marker_raw if mutation != 'marker' else b'{}')
+            (base / 'maintenance.json').write_bytes(marker_raw if mutation != 'marker' else b'{}')
             real_markers = p.ORIGINAL.load('proxy-result-identity-release.py')
             marker.verify_markers.side_effect = real_markers.verify_markers
             def release_markers(receipt):
-                self.assertEqual(set(receipt['paths']), {str(base / 'maintenance.json'), str(base / 'registration-marker.json')})
+                self.assertEqual(receipt['paths'], [str(base / 'maintenance.json')])
                 real_markers.release_markers(receipt); trace.append('marker-release')
             marker.release_markers.side_effect = release_markers
             def admitted(*_args):
