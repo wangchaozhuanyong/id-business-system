@@ -3593,6 +3593,7 @@ test('bounded-hold control runner executes both finite parts without business co
     baseTree: bitbrowserBoundedHoldSourceReviewTree
   };
   const commands = [
+    ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'],
     ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
     [
       'python3',

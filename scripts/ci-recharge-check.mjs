@@ -240,6 +240,7 @@ if (mode === 'ci-only' && changed.includes(bitbrowserBoundedHoldControlContract)
       'scripts/ci-recharge-check.test.mjs'
     ]);
   } else {
+    npm('ci', '--ignore-scripts', '--no-audit', '--no-fund');
     run('python3', ['-B', 'scripts/production-release/bitbrowser-history-release.test.py']);
     run('python3', [
       '-B',
