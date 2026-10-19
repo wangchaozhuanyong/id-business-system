@@ -56,6 +56,13 @@ def validate_contract(c):
         and not n.endswith(('.spec.ts', '.test.mjs'))}
     need(c.get('productionSources') == production and len(production) == 32
         and set(c.get('sourceParents', {})) == set(production), 'PRODUCTION_SCOPE')
+    cycle = 'apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts'
+    need(set(c.get('buildParents', {})) == set(production)
+        and {n for n in production if c['sourceParents'][n] != c['buildParents'][n]} == {cycle}
+        and c['sourceParents'][cycle] is None
+        and isinstance(c['buildParents'][cycle], str)
+        and set(c.get('nativeCycleModules', {})) == {'id-business-v2/auto-recharge/recharge-cycle-state' + suffix
+            for suffix in ('.js', '.d.ts', '.js.map')}, 'PARENT_SOURCE_RECONSTRUCTION')
     need(all(n.startswith(('apps/admin/src/v2/features/auto-recharge/',
         'apps/api/src/id-business-v2/auto-recharge/',
         'apps/api/src/id-business-v2/bank-card-pool/', 'packages/shared/src/v2/'))
@@ -120,6 +127,8 @@ def observe(c):
         'runtimeConfigurationSha256': {n: h.configuration(d, s) for n, s in states.items()},
         **runtime(d, states, c), 'database': p.database(d, states['api']),
         'backupNormalizerPath': str(normalizer), 'backupNormalizerSha256': sha(normalizer.read_bytes())}
+    need(all(baseline['apiModules'].get(n) == v for n, v in c['nativeCycleModules'].items()),
+        'RECONSTRUCTED_CYCLE_RUNTIME_CHANGED')
     need(baseline['database']['pending'] == 0 and shutil.disk_usage(BASE).free > 6 * 1024**3, 'PARENT_NOT_READY')
     return {'status': 'BITBROWSER_MANUAL_READONLY_PARENT', 'baseline': baseline,
         'businessActions': 0, 'databaseWrites': 0}

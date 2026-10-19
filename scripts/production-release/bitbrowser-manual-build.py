@@ -100,7 +100,7 @@ def main(c):
         b.overlay(context, {n: v for n, v in prior['productionSources'].items() if n.startswith('apps/' + role + '/')}, prior['sourceReviewCommit'])
         selected = {n: v for n, v in c['productionSources'].items() if n.startswith(('apps/' + role + '/', 'packages/shared/'))}
         for n in selected:
-            path, expected = context / n, c['sourceParents'][n]
+            path, expected = context / n, c['buildParents'][n]
             p.need(not path.is_symlink() and (not path.exists() if expected is None else path.is_file()
                 and p.sha(path.read_bytes()) == expected), 'RECONSTRUCTED_PARENT_SOURCE_CHANGED')
         b.overlay(context, selected, p.SOURCE)
