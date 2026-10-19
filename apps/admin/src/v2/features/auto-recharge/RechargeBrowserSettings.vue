@@ -106,6 +106,7 @@
         </fieldset>
         <RechargeProxyOptions
           v-model="settingsForm"
+          :connection-draft="connectionDraft"
           :stored="stored"
           :server-mode="serverMode"
           :registration="registration"
