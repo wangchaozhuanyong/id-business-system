@@ -146,7 +146,16 @@ export class RechargeLocalService {
           result: toV2JsonDocument({
             ...runtime.connectionMetadata,
             ...(input.subscriptionCycleProtocol === 1 ? { client_cycle_protocol: 1 } : {}),
-            ...(input.directMode ? { transport: 'web_direct', mode: 'payment' } : {}),
+            ...(input.directMode
+              ? {
+                  transport: 'web_direct',
+                  mode: 'payment',
+                  payment_status: 'not_attempted',
+                  payment_attempted: false,
+                  confirmation_requests_sent: 0,
+                  checkout_requests_sent: 0
+                }
+              : {}),
             status: input.directMode ? 'waiting_browser' : 'waiting_local_connector',
             stage: 'connector_dispatch',
             addressId: address.id,
