@@ -4610,18 +4610,8 @@
   "frozen": true,
   "migrationPerformed": false,
   "pendingBindings": [],
-  "preservedServices": [
-    "api",
-    "admin",
-    "mysql",
-    "caddy",
-    "media-resolver",
-    "auto-recharge"
-  ],
-  "requiredQualityParts": [
-    "guards",
-    "online-engine"
-  ],
+  "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
+  "requiredQualityParts": ["guards", "online-engine"],
   "reviewBase": "6cdef85aba8c9835801fc4b1ff0c512cd0e5fe41",
   "reviewedControlSources": {
     "scripts/ci-online-settings-scope.mjs": "be01c5cf21f2afeae9f653e2079488a629f45809becde9e059afd92e279f83e3",
@@ -4655,9 +4645,7 @@
   "sourceReviewCommit": "b8b797555fe53e21a9a7dcf9c4736810cfe97cf4",
   "sourceReviewTag": "online-checkout-initialization-source-review-b8b797555fe5",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-  "updatedServices": [
-    "online-recharge"
-  ],
+  "updatedServices": ["online-recharge"],
   "upstreamSource": {
     "commit": "ba6cf96312a6953e62edb9d74299d438d12549df",
     "repository": "https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git"
