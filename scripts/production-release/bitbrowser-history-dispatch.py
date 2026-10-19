@@ -20,7 +20,11 @@ SCOPE = 'BITBROWSER_HISTORY_PAGINATION_20261019'
 CURRENT = 'fe27681e1ef06b14616276dff33c3febeea47579'
 RECIPE = os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019')
 CONTRACT_FILE = 'bitbrowser-history-contract.json'
-if RECIPE == 'existing-address-field-20261019':
+if RECIPE == 'bounded-hold-20261019':
+    CURRENT = '7df16100f7964bb7183f171ec5e9f275f4f48876'
+    SCOPE = 'BITBROWSER_BOUNDED_HOLD_20261019'
+    CONTRACT_FILE = 'bitbrowser-bounded-hold-contract.json'
+elif RECIPE == 'existing-address-field-20261019':
     CURRENT = '0348f0327849f1e1203e43db9b26dbbeca6dfa34'
     SCOPE = 'BITBROWSER_EXISTING_ADDRESS_FIELD_20261019'
     CONTRACT_FILE = 'bitbrowser-existing-address-contract.json'
@@ -119,6 +123,9 @@ def prepare():
         'artifactSha256': declared, 'buildProofSha256': sha(raw),
         'qualityVerification': proof['qualityVerification'], 'isolatedMysqlVerification': proof['isolatedMysqlVerification'],
         'artifactUrl': 'https://github.com/' + REPO + '/releases/download/' + tag + '/bitbrowser-history-artifact.tar.gz'}
+    if RECIPE == 'bounded-hold-20261019':
+        p.verify_bounded_capture(proof.get('nativeParentCapture'), identity, c)
+        plan['nativeParentCapture'] = proof['nativeParentCapture']
     (OUT / 'publication-plan.json').write_text(json.dumps(plan, sort_keys=True, indent=2) + '\n')
     return plan
 

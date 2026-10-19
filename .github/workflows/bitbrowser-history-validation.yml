@@ -13,6 +13,7 @@ on:
           - followup-20261019
           - entry-start-20261019
           - existing-address-field-20261019
+          - bounded-hold-20261019
       commit:
         description: Exact reviewed main commit
         required: true
@@ -34,7 +35,11 @@ jobs:
   validate:
     if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.recipe != 'existing-address-field-20261019'
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     env:
       BITBROWSER_RELEASE_RECIPE: ${{ inputs.recipe }}
     services:
@@ -81,14 +86,24 @@ jobs:
           export RECHARGE_DIRECT_MYSQL_TEST=1
           npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
           npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-direct-payment.mysql.integration.spec.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/bitbrowser-history/direct-vitest.json"
+          if [ "$BITBROWSER_RELEASE_RECIPE" = bounded-hold-20261019 ]; then
+            shared_database=id_business_v2_shared_bank_fixture
+            docker exec "$MYSQL_CONTAINER" mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE $shared_database;"
+            export DATABASE_URL="${DATABASE_URL%/*}/$shared_database"
+            export SHARED_BANK_CARD_MYSQL_TEST=1
+            npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
+            npm run test --workspace @apple-business/api -- src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/bitbrowser-history/shared-vitest.json"
+          fi
           python3 - <<'PYREPORT'
-          import json,pathlib
+          import json,pathlib,os
           root=pathlib.Path('.runtime/bitbrowser-history')
-          reports=[json.loads((root/name).read_bytes()) for name in ('availability-vitest.json','direct-vitest.json')]
+          bounded=os.environ['BITBROWSER_RELEASE_RECIPE']=='bounded-hold-20261019'
+          names=['availability-vitest.json','direct-vitest.json']+(['shared-vitest.json'] if bounded else [])
+          reports=[json.loads((root/name).read_bytes()) for name in names]
           assert all(r['success'] is True for r in reports)
-          assert [r['numTotalTests'] for r in reports] == [10,8]
+          assert [r['numTotalTests'] for r in reports] == ([10,8,13] if bounded else [10,8])
           out={name:sum(r[name] for r in reports) for name in ('numTotalTests','numPassedTests','numFailedTests','numPendingTests','numTodoTests','numFailedTestSuites','numPendingTestSuites')}
-          assert out['numTotalTests'] == out['numPassedTests'] == 18
+          assert out['numTotalTests'] == out['numPassedTests'] == (31 if bounded else 18)
           assert all(out[k] == 0 for k in ('numFailedTests','numPendingTests','numTodoTests','numFailedTestSuites','numPendingTestSuites'))
           out.update(success=True,testResults=[row for report in reports for row in report['testResults']])
           (root/'mysql-vitest.json').write_text(json.dumps(out,sort_keys=True)+'\n')
@@ -102,10 +117,27 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30
+      - name: Configure existing OIDC role for bounded read-only parent capture
+        if: inputs.recipe == 'bounded-hold-20261019'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-history-parent-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
       - name: Reproduce exact published runtime and build the finite overlay
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/production-release/bitbrowser-history-build.py
+      - name: Preserve bounded read-only parent capture receipts
+        if: always() && inputs.recipe == 'bounded-hold-20261019'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-history-parent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/bitbrowser-history-parent/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: bitbrowser-history-${{ github.sha }}-${{ github.run_attempt }}

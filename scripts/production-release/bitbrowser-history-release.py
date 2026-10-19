@@ -83,6 +83,18 @@ FOLLOWUP_ADMIN = frozenset(ADMIN_ROOT + n for n in (
 FOLLOWUP_TESTS = frozenset(('apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-replacement.spec.ts',
     *(ADMIN_ROOT + n for n in ('bitbrowser-native-quote.spec.ts', 'bitbrowser-native-observer.spec.ts',
         'bitbrowser-direct-payment.spec.ts'))))
+BOUNDED = 'bounded-hold-20261019'
+BOUNDED_CURRENT = '7df16100f7964bb7183f171ec5e9f275f4f48876'
+BOUNDED_TREE = 'ddd571a0921335e9a437f0e99ee5886916680545'
+BOUNDED_PROOF = 'e284ca254334424c8bfeca2ca07da5df75eb0740468fcea4ddc970b7b4b83bb5'
+ADDRESS_CONTRACT_SHA = '61b090c8ac0b83ce13f713a62804666c92c22304fe4ea9442b6ccc29b441803c'
+BOUNDED_ADMIN_IMAGE = 'sha256:5546f18f4f37b3343f9fddc9d07cba0724dd2a4f79ba8eb7ae76cb7706575631'
+BOUNDED_API_INVENTORY = {'count': 1761, 'sha256': '4d1d653397205ae7e28c4c5cd7c6e2e18ff2a8104a0827e9940d53198638c891'}
+BOUNDED_APPLICATION = frozenset(('apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue', 'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.spec.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.spec.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts', 'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts', 'apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-payment-hold.spec.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-terminal-failure.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-capacity.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-hold.ts', 'apps/api/src/id-business-v2/bank-card-pool/public-api.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-capacity.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-management.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-recovery.spec.ts', 'apps/api/src/id-business-v2/bank-card-pool/shared-card-settlement.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.card-capacity.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'))
+BOUNDED_PRODUCTION = frozenset(('apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue', 'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts', 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts', 'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts', 'apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge-terminal-failure.ts', 'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-capacity.ts', 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-hold.ts', 'apps/api/src/id-business-v2/bank-card-pool/public-api.ts', 'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'))
+BOUNDED_MODULES = frozenset(('id-business-v2/auto-recharge/bank-recharge-card.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-card.service.js', 'id-business-v2/auto-recharge/bank-recharge-card.service.js.map', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js', 'id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.js.map', 'id-business-v2/auto-recharge/persistence/recharge.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge.repository.js', 'id-business-v2/auto-recharge/persistence/recharge.repository.js.map', 'id-business-v2/auto-recharge/recharge-callback-lease.d.ts', 'id-business-v2/auto-recharge/recharge-callback-lease.js', 'id-business-v2/auto-recharge/recharge-callback-lease.js.map', 'id-business-v2/auto-recharge/recharge-callback-receipts.d.ts', 'id-business-v2/auto-recharge/recharge-callback-receipts.js', 'id-business-v2/auto-recharge/recharge-callback-receipts.js.map', 'id-business-v2/auto-recharge/recharge-card-billing.d.ts', 'id-business-v2/auto-recharge/recharge-card-billing.js', 'id-business-v2/auto-recharge/recharge-card-billing.js.map', 'id-business-v2/auto-recharge/recharge-declined-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-declined-resolution.js', 'id-business-v2/auto-recharge/recharge-declined-resolution.js.map', 'id-business-v2/auto-recharge/recharge-direct-payment.d.ts', 'id-business-v2/auto-recharge/recharge-direct-payment.js', 'id-business-v2/auto-recharge/recharge-direct-payment.js.map', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js', 'id-business-v2/auto-recharge/recharge-ledger-metadata.js.map', 'id-business-v2/auto-recharge/recharge-local.service.js', 'id-business-v2/auto-recharge/recharge-local.service.js.map', 'id-business-v2/auto-recharge/recharge-name.service.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.d.ts', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js', 'id-business-v2/auto-recharge/recharge-noncharge-proof.js.map', 'id-business-v2/auto-recharge/recharge-resolution.d.ts', 'id-business-v2/auto-recharge/recharge-resolution.js', 'id-business-v2/auto-recharge/recharge-resolution.js.map', 'id-business-v2/auto-recharge/recharge-retired-callback.js', 'id-business-v2/auto-recharge/recharge-retired-callback.js.map', 'id-business-v2/auto-recharge/recharge-terminal-failure.d.ts', 'id-business-v2/auto-recharge/recharge-terminal-failure.js', 'id-business-v2/auto-recharge/recharge-terminal-failure.js.map', 'id-business-v2/auto-recharge/recharge.service.js', 'id-business-v2/auto-recharge/recharge.service.js.map', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js', 'id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js', 'id-business-v2/bank-card-pool/persistence/shared-card-capacity.js.map', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.d.ts', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js', 'id-business-v2/bank-card-pool/persistence/shared-card-hold.js.map', 'id-business-v2/bank-card-pool/public-api.d.ts', 'id-business-v2/bank-card-pool/public-api.js', 'id-business-v2/bank-card-pool/public-api.js.map', 'id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts', 'id-business-v2/online-recharge/persistence/worker.repository.js', 'id-business-v2/online-recharge/persistence/worker.repository.js.map'))
+BOUNDED_ORDER_ONLY = frozenset(('id-business-v2/auto-recharge/bank-recharge-correction.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-finance.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-manual-order.d.ts', 'id-business-v2/auto-recharge/bank-recharge-online-order.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-order.service.d.ts', 'id-business-v2/auto-recharge/bank-recharge-verified-order.d.ts', 'id-business-v2/auto-recharge/bank-recharge.controller.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge-lifecycle.repository.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge-online-order.repository.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge-query.repository.d.ts', 'id-business-v2/auto-recharge/persistence/bank-recharge.repository.d.ts', 'id-business-v2/auto-recharge/persistence/recharge-card-removal.repository.d.ts', 'id-business-v2/auto-recharge/recharge-bank-callback.d.ts', 'id-business-v2/data-governance/persistence/data-governance-bank-restore.d.ts', 'id-business-v2/data-governance/persistence/id-business-v2-data-governance-query.repository.d.ts'))
+BOUNDED_PROPAGATED = frozenset(('id-business-v2/auto-recharge/recharge-name.service.d.ts', 'id-business-v2/bank-card-pool/shared-bank-card.controller.d.ts'))
 RECIPE = 'history-20261019'
 UPDATED = ('api',)
 REBOUND = ('online-recharge',)
@@ -91,11 +103,11 @@ BASELINE_STATUS = 'BITBROWSER_HISTORY_READONLY_BASELINE'
 ARTIFACT_LIMIT = 8 * 1024**2
 _LEGACY = {n: globals()[n] for n in ('SCOPE', 'CURRENT', 'PREDECESSOR_PROOF', 'CONTRACT_FILE', 'PRESERVED',
     'API_SOURCES', 'TEST_SOURCES', 'APPLICATION', 'MODULES', 'INHERITED', 'CONTROLS', 'RECIPE', 'UPDATED',
-    'PROOF_FILE', 'BASELINE_STATUS', 'ARTIFACT_LIMIT', 'REBOUND')}
+    'PROOF_FILE', 'BASELINE_STATUS', 'ARTIFACT_LIMIT', 'REBOUND', 'MYSQL_FILES')}
 
 
 def select_recipe(name):
-    need(name in ('history-20261019', FOLLOWUP, ENTRY, ADDRESS), 'RECIPE_INVALID')
+    need(name in ('history-20261019', FOLLOWUP, ENTRY, ADDRESS, BOUNDED), 'RECIPE_INVALID')
     globals().update(_LEGACY)
     if name == FOLLOWUP:
         sources = FOLLOWUP_API
@@ -131,6 +143,19 @@ def select_recipe(name):
             INHERITED=inherited, CONTROLS=inherited | (_LEGACY['CONTROLS'] - _LEGACY['INHERITED']),
             UPDATED=('admin',), REBOUND=(), PRESERVED=('api', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'online-recharge'),
             PROOF_FILE='bitbrowser-history-build-proof.json', BASELINE_STATUS='BITBROWSER_EXISTING_ADDRESS_READONLY_BASELINE',
+            ARTIFACT_LIMIT=32 * 1024**2)
+    elif name == BOUNDED:
+        inherited = INHERITED | frozenset(('bitbrowser-history-contract.json', 'bitbrowser-followup-contract.json',
+            'bitbrowser-entry-start-contract.json', 'bitbrowser-existing-address-contract.json'))
+        globals().update(RECIPE=name, SCOPE='BITBROWSER_BOUNDED_HOLD_20261019', CURRENT=BOUNDED_CURRENT,
+            PREDECESSOR_PROOF=BOUNDED_PROOF, CONTRACT_FILE='bitbrowser-bounded-hold-contract.json',
+            API_SOURCES=frozenset(n for n in BOUNDED_PRODUCTION if n.startswith('apps/api/')),
+            TEST_SOURCES=BOUNDED_APPLICATION - BOUNDED_PRODUCTION, APPLICATION=BOUNDED_APPLICATION,
+            MODULES=BOUNDED_MODULES, INHERITED=inherited,
+            CONTROLS=inherited | (_LEGACY['CONTROLS'] - _LEGACY['INHERITED']),
+            UPDATED=('api', 'admin'), REBOUND=('online-recharge',), PRESERVED=('mysql', 'caddy', 'media-resolver', 'auto-recharge'),
+            MYSQL_FILES=_LEGACY['MYSQL_FILES'] | frozenset(('apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts',)),
+            PROOF_FILE='bitbrowser-history-build-proof.json', BASELINE_STATUS='BITBROWSER_BOUNDED_HOLD_READONLY_BASELINE',
             ARTIFACT_LIMIT=32 * 1024**2)
     return name
 
@@ -176,6 +201,9 @@ def validate_contract(c):
         and set(c.get('apiModules', [])) == MODULES and c.get('updatedServices') == list(UPDATED)
         and c.get('reboundServices') == list(REBOUND) and c.get('preservedServices') == list(PRESERVED),
         'SOURCE_SCOPE_INVALID')
+    if RECIPE == BOUNDED:
+        validate_bounded_contract(c)
+        return
     need(inventory(c.get('publishedApiModules')) and len(c['publishedApiModules']) == 40
         and MODULES <= set(c['publishedApiModules']) and inventory(c.get('publishedSharedFiles'))
         and set(c['publishedSharedFiles']) == SHARED, 'PREDECESSOR_OUTPUT_INVALID')
@@ -245,6 +273,187 @@ def validate_contract(c):
 
 
 
+def production_sources(c):
+    return {n: v for n, v in c['sources'].items() if RECIPE != BOUNDED or n in BOUNDED_PRODUCTION}
+
+
+def validate_bounded_contract(c):
+    allowed = {n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
+        for n in API_SOURCES for suffix in ('.js', '.d.ts', '.js.map')} | BOUNDED_PROPAGATED
+    need(c.get('sourceReviewCommit') == '04a284c1d038b2eadd6aef933c6cc26a5bfa6935'
+        and c.get('sourceReviewTree') == '772404ac612f0c5a585efedefef3055ec686a7d9'
+        and inventory(c.get('sourceReviewControls')) and set(c['sourceReviewControls']) == CI_CONTROLS
+        and c.get('productionSources') == production_sources(c) and len(c['productionSources']) == 25
+        and MODULES <= allowed and BOUNDED_PROPAGATED <= MODULES and not MODULES & BOUNDED_ORDER_ONLY,
+        'BOUNDED_SOURCE_REVIEW_INVALID')
+    need(inventory(c.get('controlPins')) and set(c['controlPins']) == CONTROLS
+        and inventory(c.get('ciControlPins')) and set(c['ciControlPins']) == CI_CONTROLS
+        and inventory(c.get('mysqlTestSources')) and set(c['mysqlTestSources']) == MYSQL_FILES
+        and c.get('mysqlExpectedCounts') == [10, 8, 13]
+        and c.get('sharedMysqlDatabase') == 'id_business_v2_shared_bank_fixture'
+        and c.get('predecessorProofSha256') == BOUNDED_PROOF
+        and c.get('sqlFenceHelperSha256') == c['controlPins']['api-admin-scope.py']
+        and all(re.fullmatch('[a-f0-9]{64}', c.get(n, '')) for n in ('workflowSha256', 'qualityWorkflowSha256')),
+        'BOUNDED_CONTROL_SCOPE_INVALID')
+    old_contracts = {'bitbrowser-recovery-contract.json': PREDECESSOR_CONTRACT,
+        'bitbrowser-history-contract.json': LEGACY_CONTRACT_SHA, 'bitbrowser-followup-contract.json': FOLLOWUP_CONTRACT_SHA,
+        'bitbrowser-entry-start-contract.json': ENTRY_CONTRACT_SHA, 'bitbrowser-existing-address-contract.json': ADDRESS_CONTRACT_SHA}
+    need(all(c['controlPins'].get(n) == digest for n, digest in old_contracts.items())
+        and c.get('parentNative') == {'commit': BOUNDED_CURRENT, 'tree': BOUNDED_TREE,
+            'proofSha256': BOUNDED_PROOF, 'contractSha256': ADDRESS_CONTRACT_SHA, 'workflowRunId': '39204594382',
+            'apiImage': ADDRESS_API_IMAGE, 'adminImage': BOUNDED_ADMIN_IMAGE}
+        and c.get('parentApiInventory') == BOUNDED_API_INVENTORY
+        and c.get('engineHealth') == ENGINE and inventory(c.get('publishedAdminFiles'))
+        and len(c['publishedAdminFiles']) == 261 and inventory(c.get('publishedApiModules'))
+        and len(c['publishedApiModules']) == 40 and inventory(c.get('publishedSharedFiles'))
+        and set(c['publishedSharedFiles']) == SHARED, 'BOUNDED_PROVENANCE_INVALID')
+    baseline = c.get('baseline', {})
+    need(baseline.get('commit') == CURRENT and inventory(baseline.get('apiModules'))
+        and isinstance(c.get('absentApiModules'), list) and len(set(c['absentApiModules'])) == len(c['absentApiModules'])
+        and set(baseline['apiModules']).isdisjoint(c['absentApiModules'])
+        and set(baseline['apiModules']) | set(c['absentApiModules']) == MODULES
+        and c.get('parentVerifiedBaseline', {}).get('commit') == ADDRESS_CURRENT
+        and re.fullmatch('[a-f0-9]{64}', c.get('parentVerifiedSealSha256', '')),
+        'BOUNDED_BASELINE_INVALID')
+    rules = c.get('declarationOrderOnly', {})
+    need(set(rules) == BOUNDED_ORDER_ONLY and all(type(rule) is dict and set(rule) == {'before', 'after'}
+        and inventory({'before': rule['before'], 'after': rule['after']}) and rule['before'] != rule['after']
+        for rule in rules.values()), 'BOUNDED_DECLARATION_RULE_INVALID')
+
+
+def verify_bounded_capture(value, identity, c):
+    need(type(value) is dict and value.get('status') == 'BITBROWSER_BOUNDED_PARENT_CAPTURED'
+        and all(value.get(n) == identity[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
+        and value.get('parentNative') == c['parentNative'] and value.get('apiInventory') == BOUNDED_API_INVENTORY
+        and value.get('apiModules') == c['baseline']['apiModules'] and value.get('absentApiModules') == c['absentApiModules']
+        and re.fullmatch('[a-f0-9]{64}', value.get('sealSha256', ''))
+        and value.get('databaseWrites') == value.get('businessActions') == 0, 'BOUNDED_NATIVE_CAPTURE_INVALID')
+
+
+def bounded_parent(d, h, c):
+    parent = (BASE / 'current').resolve(strict=True)
+    need(parent.parent == BASE / 'releases', 'BOUNDED_PARENT_PATH_CHANGED')
+    raws = {n: (parent / n).read_bytes() for n in ('release-manifest.json',
+        'bitbrowser-history-build-proof.json', 'bitbrowser-history-preservation.json')}
+    need(sha(raws['bitbrowser-history-build-proof.json']) == BOUNDED_PROOF, 'BOUNDED_PARENT_PROOF_CHANGED')
+    manifest, proof, preservation = (json.loads(raws[n]) for n in ('release-manifest.json',
+        'bitbrowser-history-build-proof.json', 'bitbrowser-history-preservation.json'))
+    old = json.loads((HERE / 'bitbrowser-existing-address-contract.json').read_bytes())
+    before = c['parentVerifiedBaseline']
+    origin = Path(before['current']).resolve(strict=True)
+    need(origin.parent == BASE / 'releases' and str(origin) == before['current'], 'BOUNDED_PARENT_ORIGIN_CHANGED')
+    old_raw = (origin / 'release-manifest.json').read_bytes()
+    need(sha(old_raw) == before['manifestSha256'], 'BOUNDED_PARENT_ORIGIN_CHANGED')
+    old_manifest = json.loads(old_raw)
+    need(manifest.get('commit') == proof.get('commit') == preservation.get('commit') == CURRENT
+        and manifest.get('sourceTree') == proof.get('tree') == preservation.get('tree') == BOUNDED_TREE
+        and manifest.get('scope') == proof.get('scope') == 'BITBROWSER_EXISTING_ADDRESS_FIELD_20261019'
+        and manifest.get('status') == 'DEPLOYED' and proof.get('recipe') == ADDRESS
+        and proof.get('contractSha256') == ADDRESS_CONTRACT_SHA
+        and proof.get('workflowRunId') == preservation.get('workflowRunId') == '39204594382'
+        and proof.get('sources') == old['sources'] and proof.get('controlSources') == old['controlPins']
+        and proof.get('isolatedMysqlVerification') == old['mysqlInheritance']['evidence']
+        and proof.get('updatedServices') == ['admin'] and proof.get('apiModules') == {}
+        and proof.get('businessActions') == preservation.get('businessActions') == 0
+        and proof.get('migrationPerformed') is preservation.get('migrationPerformed') is False
+        and manifest.get('bitbrowserHistoryPublication') == preservation
+        and preservation.get('verifiedParentBaseline') == before
+        and preservation.get('entryParentSealSha256') == c['parentVerifiedSealSha256']
+        and manifest.get('previousCommit') == ADDRESS_CURRENT and manifest.get('previousRelease') == str(origin)
+        and manifest.get('previousManifestSha256') == before['manifestSha256'], 'BOUNDED_PARENT_IDENTITY_CHANGED')
+    need(preservation.get('before') == before['services'] and set(preservation.get('after', {})) == set(SERVICES)
+        and set(preservation.get('images', {})) == {'admin'}
+        and all(preservation['before'][n] == preservation['after'][n] for n in SERVICES if n != 'admin')
+        and preservation['after']['api']['image'] == ADDRESS_API_IMAGE
+        and preservation['after']['admin']['image'] == preservation['images']['admin']['imageId'] == BOUNDED_ADMIN_IMAGE
+        and preservation.get('image') == preservation['images']['admin']
+        and all(manifest['images'][n] == old_manifest['images'][n] for n in old_manifest['images'] if n != 'admin')
+        and manifest['images']['admin'] == {'digest': BOUNDED_ADMIN_IMAGE,
+            'reference': preservation['images']['admin']['reference'], 'sourceCommit': CURRENT}
+        and manifest['roleSourceProjections']['api'] == old_manifest['roleSourceProjections']['api']
+        and manifest.get('apiCompiledArtifact') == old_manifest.get('apiCompiledArtifact'), 'BOUNDED_PARENT_SERVICES_CHANGED')
+    projection = manifest['roleSourceProjections']['admin']
+    need(projection.get('commit') == CURRENT and projection.get('kind') == manifest['scope']
+        and projection.get('buildProofSha256') == BOUNDED_PROOF and projection.get('sources') == old['sources']
+        and projection.get('parentProjection') == old_manifest['roleSourceProjections']['admin']
+        and manifest.get('adminSourceProjection') == projection and proof.get('adminFiles') == c['publishedAdminFiles'],
+        'BOUNDED_PARENT_PROJECTION_CHANGED')
+    states = h.snapshot(d, parent)
+    need(states == preservation['after'], 'BOUNDED_PARENT_RUNTIME_MOVED')
+    configs = {n: sha((parent / n).read_bytes()) for n in CONFIGURATION}
+    selected = json.loads((parent / 'compose.release.json').read_bytes())
+    original = json.loads((origin / 'compose.release.json').read_bytes())
+    need(sha((origin / 'compose.release.json').read_bytes()) == before['configurationSha256']['compose.release.json']
+        and selected['services']['admin']['image'] == preservation['images']['admin']['reference'], 'BOUNDED_PARENT_COMPOSE_CHANGED')
+    selected['services']['admin']['image'] = original['services']['admin']['image']
+    need(selected == original and all(configs[n] == before['configurationSha256'][n] for n in CONFIGURATION if n != 'compose.release.json')
+        and {n: h.configuration(d, state) for n, state in states.items()} == before['runtimeConfigurationSha256']
+        and database(d, states['api']) == before['database'], 'BOUNDED_PARENT_CONFIGURATION_CHANGED')
+    admin_files = load('recharge-checkout-release.py').admin_inventory(d, states['admin'])
+    verify_admin_merge(preservation['beforeAdminFiles'], proof['adminFiles'], admin_files, before['adminInventory'])
+    # Complete inventory stays within this server process; no source or business data leaves production.
+    code = r"const fs=require('fs'),path=require('path'),c=require('crypto'),o={};function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(p);else if(e.isFile())o[path.relative('/app/apps/api/dist',p)]=c.createHash('sha256').update(fs.readFileSync(p)).digest('hex');else throw Error('KIND');}}walk('/app/apps/api/dist');console.log(JSON.stringify(o));"
+    files = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', code, timeout=90))
+    picked = bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    verify_bounded_declarations_native(files, c)
+    need(picked['apiModules'] == c['baseline']['apiModules'], 'BOUNDED_COMPILED_BEFORE_NATIVE_MISMATCH')
+    observed = runtime(d, states)
+    need(observed['apiModules'] == picked['apiModules'] and all(observed[n] == before[n]
+        for n in ('sharedInventory', 'clientInventory', 'nginxSha256')), 'BOUNDED_PARENT_CONTENT_CHANGED')
+    baseline = {'status': BASELINE_STATUS, 'commit': CURRENT, 'current': str(parent),
+        'manifestSha256': sha(raws['release-manifest.json']), 'services': states,
+        'configurationSha256': configs, 'runtimeConfigurationSha256': before['runtimeConfigurationSha256'],
+        'proofs': {n: sha(raws[n]) for n in raws if n != 'release-manifest.json'}, **observed,
+        'database': before['database'], 'backupNormalizerPath': before['backupNormalizerPath'],
+        'backupNormalizerSha256': before['backupNormalizerSha256'], 'businessActions': 0, 'databaseWrites': 0}
+    h.guards(d, parent, states, c)
+    return baseline, files
+
+
+def verify_bounded_declarations_native(files, c):
+    need(all(files.get(name) == rule['before'] for name, rule in c['declarationOrderOnly'].items()),
+        'BOUNDED_DECLARATION_NATIVE_BEFORE_CHANGED')
+
+
+def bounded_capture(d, h, c, plan):
+    baseline, files = bounded_parent(d, h, c)
+    seal = HERE / 'entry-parent-baseline.json'
+    complete = HERE / 'bounded-parent-inventory.json'
+    need(not seal.exists() and not complete.exists(), 'BOUNDED_PARENT_ALREADY_CAPTURED')
+    # Immutable staging evidence only. No production files, SQL rows or lease are changed.
+    for path, value in ((complete, files), (seal, entry_seal_record(plan, baseline))):
+        with path.open('xb') as output:
+            output.write(canonical(value)); output.flush(); os.fsync(output.fileno())
+    value = {**{n: plan[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt')},
+        'status': 'BITBROWSER_BOUNDED_PARENT_CAPTURED', 'parentNative': c['parentNative'],
+        'apiInventory': BOUNDED_API_INVENTORY, 'apiModules': baseline['apiModules'],
+        'absentApiModules': c['absentApiModules'], 'sealSha256': sha(seal.read_bytes()),
+        'databaseWrites': 0, 'businessActions': 0}
+    verify_bounded_capture(value, plan, c)
+    return value
+
+
+def bounded_runtime_contract(d, h, c, plan):
+    seal_raw = (HERE / 'entry-parent-baseline.json').read_bytes()
+    seal = json.loads(seal_raw)
+    baseline = seal['baseline']
+    verify_entry_seal(plan, baseline, seal_raw)
+    files = json.loads((HERE / 'bounded-parent-inventory.json').read_bytes())
+    bounded_api_selection(files, MODULES, c['absentApiModules'], BOUNDED_API_INVENTORY)
+    need(baseline['apiModules'] == c['baseline']['apiModules'] and baseline['commit'] == CURRENT,
+        'BOUNDED_PARENT_SEAL_CHANGED')
+    capture = plan.get('nativeParentCapture')
+    verify_bounded_capture(capture, plan, c)
+    need(capture['sealSha256'] == sha(seal_raw), 'BOUNDED_PARENT_SEAL_CHANGED')
+    if plan['mode'] != 'readback':
+        actual, actual_files = bounded_parent(d, h, c)
+        need(actual == baseline and actual_files == files, 'BOUNDED_PARENT_MOVED')
+    if plan.get('runtimeBaseline'):
+        need(plan['runtimeBaseline'].get('entryParentSealSha256') == sha(seal_raw)
+            and plan['runtimeBaseline'].get('verifiedBaseline') == baseline, 'BOUNDED_PARENT_SEAL_CHANGED')
+    return {**c, 'baseline': baseline}
+
+
 def verify_mysql(value, identity, c):
     if RECIPE == ADDRESS:
         inherited = c['mysqlInheritance']
@@ -255,7 +464,7 @@ def verify_mysql(value, identity, c):
         and all(value.get(n) == identity[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
         and value.get('testFiles') == c['mysqlTestSources']
         and all(type(value.get(n)) is int for n in ('testsTotal', 'testsPassed', 'testsSkipped', 'testsTodo', 'productionActions'))
-        and value['testsTotal'] == value['testsPassed'] == 18
+        and value['testsTotal'] == value['testsPassed'] == (31 if RECIPE == BOUNDED else 18)
         and value['testsSkipped'] == value['testsTodo'] == value['productionActions'] == 0
         and re.fullmatch('[a-f0-9]{64}', value.get('reportSha256', '')), 'MYSQL_EVIDENCE_INVALID')
 
@@ -269,12 +478,16 @@ def verify_proof(proof, plan, c, payload, h):
         and proof.get('predecessorProofSha256') == PREDECESSOR_PROOF
         and proof.get('baselineSharedUnchanged') is True and proof.get('migrationPerformed') is False
         and proof.get('businessActions') == 0 and proof.get('updatedServices') == list(UPDATED)
-        and (RECIPE != ENTRY or proof.get('recipe') == ENTRY)
+        and (RECIPE not in (ENTRY, BOUNDED) or proof.get('recipe') == RECIPE)
         and (inventory(proof.get('apiModules')) if MODULES else proof.get('apiModules') == {}) and set(proof['apiModules']) == MODULES, 'PROOF_INVALID')
     verify_mysql(proof.get('isolatedMysqlVerification'), plan, c)
+    if RECIPE == BOUNDED:
+        verify_bounded_capture(proof.get('nativeParentCapture'), plan, c)
+        need(proof.get('nativeParentCapture') == plan.get('nativeParentCapture')
+            and proof.get('productionSources') == production_sources(c), 'BOUNDED_PRODUCTION_CHANGED')
     expected = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
-        **{'source/' + n: v for n, v in c['sources'].items()}}
-    if RECIPE in (FOLLOWUP, ADDRESS):
+        **{'source/' + n: v for n, v in production_sources(c).items()}}
+    if RECIPE in (FOLLOWUP, ADDRESS, BOUNDED):
         need(proof.get('recipe') == RECIPE and proof.get('baselineAdminReproduced') is True
             and proof.get('baselineAdminFiles') == c['publishedAdminFiles'] and inventory(proof.get('adminFiles'))
             and len(proof['adminFiles']) >= 250 and 'index.html' in proof['adminFiles'],
@@ -299,8 +512,9 @@ def runtime(d, states, modules=None):
     code = "const excluded=" + json.dumps(sorted(MODULES if modules is None else modules)) + ";" + r"""
 const fs=require('fs'),path=require('path'),crypto=require('crypto');const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
 function inv(root,except=[]){const out={};function walk(dir){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,e.name),n=path.relative(root,p);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(p);else if(e.isFile()&&!except.includes(n))out[n]=hash(fs.readFileSync(p));else if(!e.isFile())throw Error('KIND');}}walk(root);const sorted=Object.fromEntries(Object.entries(out).sort(([a],[b])=>a<b?-1:a>b?1:0));return{count:Object.keys(sorted).length,sha256:hash(JSON.stringify(sorted))};}
-console.log(JSON.stringify({apiModules:Object.fromEntries(excluded.map(n=>[n,hash(fs.readFileSync('/app/apps/api/dist/'+n))])),apiPreservedInventory:inv('/app/apps/api/dist',excluded),sharedInventory:inv('/app/packages/shared/dist'),clientInventory:inv('/app/node_modules/.prisma/client')}));
+console.log(JSON.stringify({apiModules:Object.fromEntries(excluded.filter(n=>ALLOW_MISSING?fs.existsSync('/app/apps/api/dist/'+n):true).map(n=>[n,hash(fs.readFileSync('/app/apps/api/dist/'+n))])),apiPreservedInventory:inv('/app/apps/api/dist',excluded),sharedInventory:inv('/app/packages/shared/dist'),clientInventory:inv('/app/node_modules/.prisma/client')}));
 """
+    code = 'const ALLOW_MISSING=' + ('true' if RECIPE == BOUNDED else 'false') + ';' + code
     result = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', code, timeout=90))
     rows = {}
     for line in d.run('docker', 'exec', states['admin']['containerId'], 'sh', '-c',
@@ -612,12 +826,25 @@ def baseline(d, h, c, expected=None):
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     h.guards(d, current, states, c)
     receipt = load('recharge-availability-release.py').runtime_receipt(current, raw, states)
-    if RECIPE in (ENTRY, ADDRESS):
+    if RECIPE in (ENTRY, ADDRESS, BOUNDED):
         receipt['verifiedBaseline'] = copy.deepcopy(b)
         receipt['entryParentSealSha256'] = sha((HERE / 'entry-parent-baseline.json').read_bytes())
     if expected is not None:
         need(receipt == expected, 'BASELINE_MOVED')
     return current, raw, states, receipt
+
+
+
+def bounded_api_selection(files, selected, absent, authenticated_inventory):
+    # Capture the full parent in server staging, returning only the finite
+    # selection to avoid SSM output truncation. No draft dispatch calls this.
+    need(inventory(files) and {'count': len(files), 'sha256': sha(canonical(files))} == authenticated_inventory,
+        'BOUNDED_PARENT_FULL_INVENTORY_CHANGED')
+    selected, absent = set(selected), set(absent)
+    need(bool(selected) and absent <= selected and absent.isdisjoint(files)
+        and all(name in files for name in selected - absent), 'BOUNDED_PARENT_SELECTED_OUTPUT_CHANGED')
+    return {'apiModules': {name: files[name] for name in sorted(selected - absent)},
+        'absentApiModules': sorted(absent), 'apiInventory': authenticated_inventory}
 
 
 def verify_admin_merge(before, candidate, actual, baseline):
@@ -638,7 +865,7 @@ def smoke(d, h, retired, target, states, c, proof, before_admin=None):
     observed = runtime(d, states)
     expected_runtime = {**{n: c['baseline'][n] for n in ('apiModules', 'apiPreservedInventory', 'sharedInventory',
         'clientInventory', 'adminInventory', 'nginxSha256')}, 'apiModules': proof['apiModules']}
-    if RECIPE in (FOLLOWUP, ADDRESS):
+    if RECIPE in (FOLLOWUP, ADDRESS, BOUNDED):
         need(type(before_admin) is dict and inventory(before_admin), 'ADMIN_HISTORY_MISSING')
         expected_runtime['adminInventory'] = verify_admin_merge(before_admin, proof['adminFiles'],
             load('recharge-checkout-release.py').admin_inventory(d, states['admin']), c['baseline']['adminInventory'])
@@ -654,7 +881,7 @@ def smoke(d, h, retired, target, states, c, proof, before_admin=None):
         for n in CONFIGURATION if n != 'compose.release.json'), 'COMPOSE_SCOPE_CHANGED')
     row = json.loads(d.run('docker', 'inspect', states['online-recharge']['containerId']))[0]
     need(row['HostConfig']['NetworkMode'] == 'container:' + states['api']['containerId'], 'SIDECAR_BINDING_CHANGED')
-    for name, digest in c['sources'].items():
+    for name, digest in production_sources(c).items():
         path = target / name
         need(not path.is_symlink() and path.resolve().is_relative_to(target) and sha(path.read_bytes()) == digest, 'HOST_SOURCE_CHANGED')
     retired.verify_retired_runtime(d, states)
@@ -682,7 +909,7 @@ def release(plan, c):
     need(c == json.loads(raw_contract) and plan.get('contractSha256') == sha(raw_contract)
         and plan.get('controlSources') == {**c['controlPins'], CONTRACT_FILE: sha(raw_contract)}, 'PLAN_CHANGED')
     need(plan.get('recipe', 'history-20261019') == RECIPE, 'PLAN_RECIPE_CHANGED')
-    need(plan.get('mode') in ('preflight', 'release', 'readback')
+    need(plan.get('mode') in (('parent', 'preflight', 'release', 'readback') if RECIPE == BOUNDED else ('preflight', 'release', 'readback'))
         and all(re.fullmatch('[a-f0-9]{40}', plan.get(n, '')) for n in ('commit', 'tree'))
         and all(re.fullmatch('[1-9][0-9]*', plan.get(n, '')) for n in ('workflowRunId', 'workflowRunAttempt')), 'PLAN_IDENTITY_INVALID')
     for name, digest in plan['controlSources'].items():
@@ -692,7 +919,11 @@ def release(plan, c):
     a, p = load('recharge-availability-release.py'), load('proxy-result-identity-release.py')
     with (BASE / '.deploy.lock').open('a') as lock:
         a.acquire_release_lock(lock)
-        if RECIPE == ENTRY:
+        if RECIPE == BOUNDED:
+            if plan['mode'] == 'parent':
+                return bounded_capture(d, h, c, plan)
+            c = bounded_runtime_contract(d, h, c, plan)
+        elif RECIPE == ENTRY:
             c = entry_runtime_contract(d, h, c, plan)
         elif RECIPE == ADDRESS:
             c = address_runtime_contract(d, h, c, plan)
@@ -706,11 +937,11 @@ def release(plan, c):
             receipt = json.loads((target / 'bitbrowser-history-preservation.json').read_bytes())
             states = h.snapshot(d, target)
             need(states == receipt['after'] and states[UPDATED[0]]['image'] == receipt['image']['imageId']
-                and (RECIPE != FOLLOWUP or all(states[role]['image'] == receipt['images'][role]['imageId'] for role in UPDATED)),
+                and (RECIPE not in (FOLLOWUP, BOUNDED) or all(states[role]['image'] == receipt['images'][role]['imageId'] for role in UPDATED)),
                 'READBACK_SERVICES_CHANGED')
             need(all(sha((target / 'scripts/production-release' / n).read_bytes()) == v
                 for n, v in plan['controlSources'].items()), 'READBACK_EXECUTOR_CHANGED')
-            if RECIPE in (ENTRY, ADDRESS):
+            if RECIPE in (ENTRY, ADDRESS, BOUNDED):
                 need(receipt.get('verifiedParentBaseline') == c['baseline']
                     and receipt.get('entryParentSealSha256') == plan['runtimeBaseline']['entryParentSealSha256'], 'ENTRY_PARENT_SEAL_CHANGED')
             smoke(d, h, retired, target, states, c, proof, receipt.get('beforeAdminFiles'))
@@ -763,7 +994,7 @@ def release(plan, c):
             built = json.loads(d.run('docker', 'image', 'inspect', reference))[0]
             p.verify_overlay_image(original, built, plan, 1, load('recharge-checkout-release.py'))
             images[role] = {'reference': reference, 'imageId': built['Id']}
-        before_admin = load('recharge-checkout-release.py').admin_inventory(d, before['admin']) if RECIPE in (FOLLOWUP, ADDRESS) else None
+        before_admin = load('recharge-checkout-release.py').admin_inventory(d, before['admin']) if RECIPE in (FOLLOWUP, ADDRESS, BOUNDED) else None
         baseline(d, h, c, plan['runtimeBaseline'])
         backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(c['baseline']['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')
@@ -771,7 +1002,7 @@ def release(plan, c):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-bitbrowser-history')
         need(not target.exists(), 'TARGET_EXISTS')
         shutil.copytree(previous, target, symlinks=True)
-        for name in c['sources']:
+        for name in production_sources(c):
             destination = target / name
             need(not destination.is_symlink() and destination.resolve().is_relative_to(target), 'SOURCE_PATH_CHANGED')
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -808,7 +1039,7 @@ def release(plan, c):
         preservation = {'status': 'BITBROWSER_HISTORY_DEPLOYED', 'commit': plan['commit'], 'tree': plan['tree'],
             'before': before, 'after': after, 'image': image, 'images': images, 'beforeAdminFiles': before_admin, 'backup': backup, 'workflowRunId': plan['workflowRunId'],
             'businessActions': 0, 'migrationPerformed': False}
-        if RECIPE in (ENTRY, ADDRESS):
+        if RECIPE in (ENTRY, ADDRESS, BOUNDED):
             preservation['verifiedParentBaseline'] = copy.deepcopy(c['baseline'])
             preservation['entryParentSealSha256'] = plan['runtimeBaseline']['entryParentSealSha256']
         (target / 'bitbrowser-history-preservation.json').write_text(json.dumps(preservation, sort_keys=True, indent=2) + '\n')
@@ -817,10 +1048,10 @@ def release(plan, c):
         for role in UPDATED:
             manifest['roleSourceProjections'][role] = {'kind': SCOPE, 'commit': plan['commit'],
                 'parentProjection': copy.deepcopy(manifest['roleSourceProjections'][role]),
-                'sources': {n: v for n, v in c['sources'].items() if n.startswith('apps/' + role + '/')},
+                'sources': {n: v for n, v in production_sources(c).items() if n.startswith('apps/' + role + '/')},
                 'buildProofSha256': plan['buildProofSha256']}
             manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
-        if RECIPE in (FOLLOWUP, ADDRESS):
+        if RECIPE in (FOLLOWUP, ADDRESS, BOUNDED):
             manifest['previousAdminSourceProjection'] = copy.deepcopy(manifest.get('adminSourceProjection'))
             manifest['adminSourceProjection'] = copy.deepcopy(manifest['roleSourceProjections']['admin'])
         manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=SCOPE,
@@ -843,7 +1074,7 @@ def release(plan, c):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--recipe', default='history-20261019', choices=('history-20261019', FOLLOWUP, ENTRY, ADDRESS))
+    parser.add_argument('--recipe', default='history-20261019', choices=('history-20261019', FOLLOWUP, ENTRY, ADDRESS, BOUNDED))
     parser.add_argument('--observe', action='store_true', required=True)
     args = parser.parse_args()
     select_recipe(args.recipe)

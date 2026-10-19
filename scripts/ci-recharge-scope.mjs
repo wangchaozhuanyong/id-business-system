@@ -1136,6 +1136,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldSourceOnly(paths, context)) return false;
   if (isBitbrowserExistingAddressControlsOnly(paths, context)) return false;
   if (isBitbrowserEntryStartControlsOnly(paths, context)) return false;
@@ -1939,6 +1940,37 @@ export function isBitbrowserExistingAddressControlsOnly(paths, context) {
   );
 }
 
+export const bitbrowserBoundedHoldSourceReviewCommit = '04a284c1d038b2eadd6aef933c6cc26a5bfa6935';
+export const bitbrowserBoundedHoldSourceReviewTree = '772404ac612f0c5a585efedefef3055ec686a7d9';
+export const bitbrowserBoundedHoldControlContract =
+  'scripts/production-release/bitbrowser-bounded-hold-contract.json';
+export const bitbrowserBoundedHoldControlPaths = Object.freeze([
+  '.github/workflows/bitbrowser-history-validation.yml',
+  ...['build.py', 'release.py', 'dispatch.py', 'release.test.py'].map(
+    (name) => `scripts/production-release/bitbrowser-history-${name}`
+  ),
+  bitbrowserBoundedHoldControlContract,
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  )
+]);
+export function bitbrowserBoundedHoldControlsShape(paths) {
+  return (
+    paths.length === bitbrowserBoundedHoldControlPaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((name) => bitbrowserBoundedHoldControlPaths.includes(name))
+  );
+}
+export function isBitbrowserBoundedHoldControlsOnly(paths, context) {
+  return (
+    /^[a-f0-9]{40}$/.test(bitbrowserBoundedHoldSourceReviewCommit) &&
+    /^[a-f0-9]{40}$/.test(bitbrowserBoundedHoldSourceReviewTree) &&
+    /^[a-f0-9]{40}$/.test(context?.base ?? '') &&
+    context?.baseTree === bitbrowserBoundedHoldSourceReviewTree &&
+    bitbrowserBoundedHoldControlsShape(paths)
+  );
+}
+
 // Only this reviewed source path set is admitted; source hashes remain bound by QA.
 // It never admits a directory wildcard or a schema/migration change.
 export const bitbrowserBoundedHoldSourceStatus = 'FROZEN_SOURCE_PATHS';
@@ -2055,6 +2087,7 @@ export function bitbrowserBoundedHoldCheckCommands(part, paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return true;
   if (isBitbrowserExistingAddressControlsOnly(paths, context)) return true;
   if (isBitbrowserEntryStartControlsOnly(paths, context)) return true;
   if (isBitbrowserFollowupControlsOnly(paths, context)) return true;
@@ -2217,6 +2250,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isBitbrowserBoundedHoldControlsOnly(paths, context))
+    return bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema) ? 'ci-only' : 'full';
   if (isBitbrowserBoundedHoldSourceOnly(paths, context))
     return bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
   if (isBitbrowserExistingAddressControlsOnly(paths, context))
@@ -2762,6 +2797,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isBitbrowserBoundedHoldControlsOnly(paths, context)) return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldSourceOnly(paths, context))
     return [...bitbrowserBoundedHoldSourceParts];
   if (isBitbrowserExistingAddressControlsOnly(paths, context))
@@ -5634,13 +5670,15 @@ async function main() {
     }
   }
   const checkParts =
-    mode === 'full' && bitbrowserBoundedHoldSourceShape(paths)
+    mode === 'full' &&
+    (bitbrowserBoundedHoldSourceShape(paths) || bitbrowserBoundedHoldControlsShape(paths))
       ? [...parts]
       : mode === 'ci-only' &&
           (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
             isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserEntryStartControlsOnly(paths, proxyIdentityContext) ||
+            isBitbrowserBoundedHoldControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserExistingAddressControlsOnly(paths, proxyIdentityContext))
         ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)
         : mode === 'ci-only' || mode === 'audit-retention'

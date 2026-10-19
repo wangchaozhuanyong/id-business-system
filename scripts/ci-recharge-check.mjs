@@ -167,6 +167,8 @@ import {
   isBitbrowserHistoryControlsOnly,
   bitbrowserHistorySourceReviewTree,
   bitbrowserBoundedHoldSourceShape,
+  bitbrowserBoundedHoldControlContract,
+  isBitbrowserBoundedHoldControlsOnly,
   isBitbrowserBoundedHoldSourceOnly,
   bitbrowserBoundedHoldSchemaMatches,
   bitbrowserBoundedHoldCheckCommands
@@ -204,6 +206,51 @@ if (mode === 'recharge' && bitbrowserBoundedHoldSourceShape(changed)) {
   process.exit(0);
 }
 // BEGIN finite BitBrowser publication control checks
+if (mode === 'ci-only' && changed.includes(bitbrowserBoundedHoldControlContract)) {
+  if (
+    !isBitbrowserBoundedHoldControlsOnly(changed, {
+      base,
+      baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+    })
+  )
+    throw new Error('Unfrozen or moved bounded BitBrowser control scope');
+  if (!['guards', 'release-controls'].includes(part))
+    throw new Error('Unsupported finite BitBrowser bounded-hold control check');
+  const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+  if (
+    !bitbrowserBoundedHoldSchemaMatches(
+      execFileSync('git', ['show', base + ':' + schemaPath], { encoding: 'utf8' }),
+      execFileSync('git', ['show', 'HEAD:' + schemaPath], { encoding: 'utf8' })
+    )
+  )
+    throw new Error('Bounded BitBrowser control schema must remain byte identical');
+  if (part === 'guards') {
+    npm('run', 'format:check');
+    npm('run', 'lint');
+    for (const name of [
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ])
+      npm('run', name);
+    run('node', [
+      '--test',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+  } else {
+    run('python3', ['-B', 'scripts/production-release/bitbrowser-history-release.test.py']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/bitbrowser-history-build.py',
+      '--recipe',
+      'bounded-hold-20261019',
+      '--check'
+    ]);
+  }
+  process.exit(0);
+}
 if (
   mode === 'ci-only' &&
   base === bitbrowserBillingControlBase &&

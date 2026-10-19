@@ -7835,3 +7835,90 @@ test('bounded source actual PR and push CLI emit the frozen three-part matrix an
     }
   }
 });
+
+import {
+  isBitbrowserBoundedHoldControlsOnly as finiteBoundedControlsOnly,
+  bitbrowserBoundedHoldControlPaths as finiteBoundedControlPaths,
+  bitbrowserBoundedHoldSourceReviewCommit as finiteBoundedControlCommit,
+  bitbrowserBoundedHoldSourceReviewTree as finiteBoundedControlTree
+} from './ci-recharge-scope.mjs';
+
+test('bounded-hold controls admit only the ten reviewed controls and both actual CLI matrix entries', () => {
+  const context = { base: finiteBoundedControlCommit, baseTree: finiteBoundedControlTree };
+  assert.equal(finiteBoundedControlPaths.length, 10);
+  assert.equal(finiteBoundedControlsOnly(finiteBoundedControlPaths, context), true);
+  assert.deepEqual(finiteBillingParts(finiteBoundedControlPaths, undefined, context), [
+    'guards',
+    'release-controls'
+  ]);
+  for (const base of [finiteBoundedControlCommit, 'b'.repeat(40)]) {
+    for (const eventName of ['pull_request', 'push']) {
+      const { result, writes } = recordScopeClassification(
+        finiteBoundedControlPaths,
+        {},
+        eventName,
+        { ...context, base }
+      );
+      assert.equal(result.mode, 'ci-only');
+      assert.deepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(result.onlineCiBuild, false);
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+    }
+  }
+  for (const eventName of ['pull_request', 'push']) {
+    assert.throws(
+      () =>
+        recordScopeClassification(finiteBoundedControlPaths, {}, eventName, {
+          ...context,
+          base: 'main'
+        }),
+      /Invalid source commit/
+    );
+    for (const { paths, options } of [
+      { paths: finiteBoundedControlPaths, options: { ...context, baseTree: finiteAddressTree } },
+      { paths: finiteBoundedControlPaths, options: { ...context, baseTree: 'a'.repeat(40) } },
+      {
+        paths: finiteBoundedControlPaths,
+        options: { ...context, schemaBefore: schema, schemaAfter: schema + '\n' }
+      },
+      {
+        paths: finiteBoundedControlPaths,
+        options: { ...context, schemaBefore: '', schemaAfter: '' }
+      },
+      ...finiteBoundedControlPaths.map((missing) => ({
+        paths: finiteBoundedControlPaths.filter((n) => n !== missing),
+        options: context
+      })),
+      { paths: [...finiteBoundedControlPaths, finiteBoundedControlPaths[0]], options: context },
+      ...[
+        'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+        'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts',
+        'scripts/production-release/bitbrowser-existing-address-contract.json',
+        'scripts/production-release/bitbrowser-history-contract.json',
+        'apps/api/prisma-mysql/schema.prisma',
+        'packages/shared/src/index.ts'
+      ].map((extra) => ({ paths: [...finiteBoundedControlPaths, extra], options: context }))
+    ]) {
+      const { result, writes } = recordScopeClassification(paths, {}, eventName, options);
+      assert.equal(result.mode, 'full');
+      assert.notDeepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        ),
+        false
+      );
+    }
+  }
+  assert.equal(
+    finiteBoundedControlsOnly(
+      [...finiteBoundedControlPaths.slice(1), finiteBoundedControlPaths[1]],
+      context
+    ),
+    false
+  );
+});
