@@ -841,6 +841,7 @@ class BoundedFrozenControls(unittest.TestCase):
         plan={'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1','mode':'readback','recipe':p.BOUNDED}
         native={n:files[n]for n in p.BOUNDED_ORDER_ONLY}
         baseline={**c['baseline'],'nativeDeclarationBefore':native}
+        (ROOT/'.runtime').mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT/'.runtime',prefix='native-declaration-seal-')as directory:
             here=Path(directory);seal=p.canonical(p.entry_seal_record(plan,baseline))
             with patch.object(p,'HERE',here),patch.object(p,'BOUNDED_API_INVENTORY',authenticated),\
@@ -898,6 +899,7 @@ class BoundedFrozenControls(unittest.TestCase):
         plan={'recipe':p.BOUNDED,'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1','controlSources':{}}
         with patch.object(p,'BOUNDED_API_INVENTORY',authenticated):
             with self.assertRaises(p.BoundedParentMismatch)as failure:p.verify_bounded_parent_selection(files,c)
+            (ROOT/'.runtime').mkdir(exist_ok=True)
             with tempfile.TemporaryDirectory(dir=ROOT/'.runtime',prefix='native-parent-failure-')as directory:
                 here=Path(directory);remote=here/'stage';output=here/'receipts';output.mkdir()
                 stage=Path(str(remote)+'-'+plan['commit']+'-'+plan['workflowRunId']);stage.mkdir()
