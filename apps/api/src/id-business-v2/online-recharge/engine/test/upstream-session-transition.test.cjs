@@ -54,6 +54,8 @@ async function fixture(t, options = {}) {
     unknownRequests: 0,
     uiReadsAfterCancel: 0,
     lateReloadReturns: 0,
+    transientGuestShown: false,
+    recoveryNavigations: 0,
     cookiePresent: []
   };
   let activeSignal, signalReloadStarted, releaseReload, signalLateResponse, signalLateReload;
@@ -104,7 +106,9 @@ async function fixture(t, options = {}) {
                 : options.emptyAfterReload
                   ? '<!doctype html><main></main>'
                   : ready
-            : guest;
+            : options.readyInitially
+              ? ready
+              : guest;
       try {
         return await route.fulfill({ contentType: 'text/html', body });
       } catch (error) {
@@ -113,8 +117,11 @@ async function fixture(t, options = {}) {
         if (state.homeLoads > 1 && options.holdReload) signalLateResponse();
       }
     }
-    if (options.destination && url.href === options.destination)
-      return route.fulfill({ contentType: 'text/html', body: guest });
+    if ([options.destination, options.waitDestination].includes(url.href))
+      return route.fulfill({
+        contentType: 'text/html',
+        body: options.waitDestination === url.href ? ready : guest
+      });
     state.unknownRequests++;
     return route.abort();
   });
@@ -147,13 +154,27 @@ async function fixture(t, options = {}) {
       if (name === './auth-page-detect')
         return {
           ...authPage,
-          waitForLoggedInChatUi: (...args) => {
+          waitForLoggedInChatUi: async (...args) => {
             if (activeSignal?.aborted) state.uiReadsAfterCancel++;
-            return authPage.waitForLoggedInChatUi(...args);
+            if (
+              options.waitDestination &&
+              state.verificationCalls > 0 &&
+              state.recoveryNavigations === 0
+            ) {
+              state.recoveryNavigations++;
+              await args[0].goto(options.waitDestination, { waitUntil: 'domcontentloaded' });
+            }
+            const result = await authPage.waitForLoggedInChatUi(...args);
+            if (result && options.guestAfterStableUi && !state.transientGuestShown)
+              await showTransientGuest(args[0]);
+            return result;
           },
-          hasLoggedInSessionApi: (...args) => {
+          hasLoggedInSessionApi: async (...args) => {
             if (activeSignal?.aborted) state.uiReadsAfterCancel++;
-            return authPage.hasLoggedInSessionApi(...args);
+            const result = await authPage.hasLoggedInSessionApi(...args);
+            if (options.guestAfterSessionApi && !state.transientGuestShown)
+              await showTransientGuest(args[0]);
+            return result;
           }
         };
       if (name === './human-verification')
@@ -171,6 +192,18 @@ async function fixture(t, options = {}) {
       throw Error('Unexpected synthetic dependency');
     }
   });
+  async function showTransientGuest(page) {
+    state.transientGuestShown = true;
+    await page.evaluate(
+      ({ guest, ready }) => {
+        document.body.innerHTML = guest;
+        setTimeout(() => {
+          document.body.innerHTML = ready;
+        }, 200);
+      },
+      { guest, ready }
+    );
+  }
   const run = (overrides = {}) => {
     activeSignal = overrides.signal;
     return module.exports.bootstrapChatGptSession(page, JSON.stringify(session), {
@@ -232,12 +265,32 @@ test('the frozen upstream reload transition reaches login in the same synthetic 
 });
 
 test('the existing SESSION_INVALID guest transition can recover without running verification twice', async (t) => {
-  const f = await fixture(t);
-  const result = await f.run();
-  assert.equal(result.email, session.user.email);
-  assert.equal(f.state.verificationCalls, 1);
-  assert.equal(f.state.reloads, 1);
-  noBusinessActions(f);
+  for (const alreadyRecovered of [false, true]) {
+    const f = await fixture(
+      t,
+      alreadyRecovered
+        ? {
+            readyInitially: true,
+            verify: async (page) => {
+              await page.evaluate((body) => {
+                document.body.innerHTML = body;
+              }, guest);
+              assert.equal(await authPage.hasVisibleLoginChrome(page), true);
+              await page.evaluate((body) => {
+                document.body.innerHTML = body;
+              }, ready);
+              return { cleared: false, code: 'SESSION_INVALID', sessionRequired: true };
+            }
+          }
+        : {}
+    );
+    const result = await f.run();
+    assert.equal(result.email, session.user.email);
+    assert.equal(f.state.verificationCalls, 1);
+    assert.equal(f.state.reloads, alreadyRecovered ? 0 : 1);
+    assert.equal(await authPage.hasLoggedInChatUi(f.page), true);
+    noBusinessActions(f);
+  }
 });
 
 test('a homepage still showing guest controls after reload stops with login diagnostics', async (t) => {
@@ -267,12 +320,20 @@ test('a verified Cookie cannot replace logged-in UI after the single homepage re
 });
 
 test('a verified Cookie and real logged-in UI recover through one homepage refresh', async (t) => {
-  const f = await fixture(t, { cleared: true });
-  const result = await f.run({ cookieVerified: true });
-  assert.equal(result.email, session.user.email);
-  assert.equal(f.state.reloads, 1);
-  assert.equal(f.state.verificationCalls, 1);
-  noBusinessActions(f);
+  for (const recoveryPoint of ['none', 'stable-ui', 'session-api']) {
+    const f = await fixture(t, {
+      cleared: true,
+      guestAfterStableUi: recoveryPoint === 'stable-ui',
+      guestAfterSessionApi: recoveryPoint === 'session-api'
+    });
+    const result = await f.run({ cookieVerified: true });
+    assert.equal(result.email, session.user.email);
+    assert.equal(f.state.reloads, 1);
+    assert.equal(f.state.verificationCalls, 1);
+    assert.equal(f.state.transientGuestShown, recoveryPoint !== 'none');
+    assert.equal(await authPage.hasLoggedInChatUi(f.page), true);
+    noBusinessActions(f);
+  }
 });
 
 test('cancelling a pending reload closes only its task Page and ignores late completion', async (t) => {
@@ -381,6 +442,22 @@ test('checkout and third-party guest pages are never refreshed as the official h
         await assert.rejects(f.run(), { code: 'SESSION_NOT_CONFIRMED' });
         assert.equal(f.state.reloads, 0);
         noBusinessActions(f);
+        for (const cleared of [false, true]) {
+          const pending = await fixture(t, {
+            readyInitially: true,
+            cleared,
+            waitDestination: destination
+          });
+          await assert.rejects(pending.run(), (error) => {
+            assert.equal(error.code, 'SESSION_NOT_CONFIRMED');
+            assert.equal(error.bootstrapDiagnostics.reason, 'navigation_failed');
+            return true;
+          });
+          assert.equal(pending.state.recoveryNavigations, 1);
+          assert.equal(pending.state.reloads, 0);
+          assert.equal(pending.state.verificationCalls, 1);
+          noBusinessActions(pending);
+        }
       }
     );
   }

@@ -810,16 +810,19 @@ test('late verification preserves the authentication wait boundary without resta
             }
           }
         });
-        page.goto = async () => {
-          await page.setContent(`<main>${phase === 'during-prewait' ? guest : chat}</main><script>
+        await page.route('https://chatgpt.com/', (route) =>
+          route.fulfill({
+            contentType: 'text/html',
+            body: `<main>${phase === 'during-prewait' ? guest : chat}</main><script>
             setTimeout(() => {
               const challenge = document.createElement('section');
               challenge.id = 'synthetic-challenge';
               challenge.textContent = 'Synthetic verification';
               document.body.appendChild(challenge);
             }, 2800);
-          </script>`);
-        };
+          </script>`
+          })
+        );
         try {
           await assert.rejects(
             f.api.bootstrapChatGptSession(page, JSON.stringify(f.session), {
@@ -846,6 +849,7 @@ test('late verification preserves the authentication wait boundary without resta
         async () => {
           const page = await browser.newPage();
           let clears = 0;
+          let homepageLoads = 0;
           let entryResult;
           const f = await sessionInstallFixture({
             dependencies: {
@@ -867,7 +871,12 @@ test('late verification preserves the authentication wait boundary without resta
               }
             }
           });
-          page.goto = async () => page.setContent(`<main>${chat}</main>`);
+          await page.route('https://chatgpt.com/', (route) =>
+            route.fulfill({
+              contentType: 'text/html',
+              body: `<main>${++homepageLoads > 1 && !recover ? guest : chat}</main>`
+            })
+          );
           try {
             const bootstrap = f.api.bootstrapChatGptSession(page, JSON.stringify(f.session), {
               cookieVerified: true,
@@ -891,6 +900,7 @@ test('late verification preserves the authentication wait boundary without resta
             assert.equal(entryResult?.code, 'SESSION_INVALID');
             assert.equal(entryResult?.sessionRequired, true);
             assert.equal(clears, 1);
+            assert.equal(homepageLoads, 2);
           } finally {
             await page.close();
           }

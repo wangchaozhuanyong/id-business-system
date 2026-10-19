@@ -355,16 +355,16 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "71c529ebcd23ae2f70f37c9b4214f071ff5c2c89f5e21e13bf6dbe0f958da8b5",
+      "adaptedSha256": "b94aa9a86b38e12bbe6ad25e132c01ef5f0155fa5f9c9655bbd6854086126da8",
       "changed": true,
-      "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-19 Prove the restored guest refresh in the production task child: same homepage Page, exactly one reload, one checkout and one payment action, bound payment and tier evidence, one bill/card count and renewal cleanup; isolated synthetic transport only."
+      "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-19 Prove the restored guest refresh in the production task child: same homepage Page, exactly one reload, one checkout and one payment action, bound payment and tier evidence, one bill/card count and renewal cleanup; isolated synthetic transport only. 2026-10-19 Assert the controlled task outcome before auth metrics; report only status, controlled error code and whitelisted bootstrap diagnosis fields on failure."
     },
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "8ff248d79c37091f143bd77a6ef52fc6214b1cb03f0ac549e503e582e4e7f0d3",
+      "adaptedSha256": "eb478cd1dac60f066797761b323a49caadef74d7b87a68238a82899f925c6fa1",
       "changed": true,
-      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation."
+      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation. 2026-10-19 Use routed real official-origin pages for existing late-verification browser fixtures; retain guest rejection after the one reload and the seventy-three-test total."
     },
     {
       "path": "test/renewal-recheck.test.cjs",
@@ -642,9 +642,9 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "bda0d2b224aef7c960b6e290aa64f418e5b65329dfe5df69e0e1114f0a25f790",
+      "adaptedSha256": "b9292001cdecacbf1bce9752def9ba9ddca83ef3bc0859dac02bfc4d53107bd9",
       "changed": true,
-      "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Delegate only exact official Session/CSRF routes to existing specialized handlers through fallback; retain login blocking and all ordinary request headers. 2026-10-19 Restore the frozen upstream single normal guest-homepage refresh after verification; constrain it to the same official homepage, original task deadline and lease cancellation; require logged-in UI after refresh and never reload a visible challenge. 2026-10-19 Classify structured Session responses before incidental profile text; constrain compatibility to canonical official GETs, preserve native writes, Request validation, cancellation and single RequestInit evaluation."
+      "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Delegate only exact official Session/CSRF routes to existing specialized handlers through fallback; retain login blocking and all ordinary request headers. 2026-10-19 Restore the frozen upstream single normal guest-homepage refresh after verification; constrain it to the same official homepage, original task deadline and lease cancellation; require logged-in UI after refresh and never reload a visible challenge. 2026-10-19 Classify structured Session responses before incidental profile text; constrain compatibility to canonical official GETs, preserve native writes, Request validation, cancellation and single RequestInit evaluation. 2026-10-19 Reobserve stale guest-only verification verdicts and late guest hydration within the unchanged shared UI and overall deadlines; require the same exact official homepage before recovery succeeds, without additional refresh, verification or payment actions."
     },
     {
       "path": "upstream/stripe-payment.js",
@@ -761,9 +761,9 @@
     {
       "path": "test/upstream-session-transition.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "aff37f437797ab74da2a45ef6f4698de3d33fdb18e1cb63d3f1c6f221f998aee",
+      "adaptedSha256": "4a289e61073cdba9c24fa55a0e2dc1d57fe0b10f34aebbeb57f8cade8b2c5878",
       "changed": true,
-      "reason": "2026-10-19 Real isolated Chromium regressions for the frozen guest-homepage transition, verified-cookie empty-shell rejection, cancellation during pending reload and late completion, exact homepage and visible-challenge boundaries."
+      "reason": "2026-10-19 Real isolated Chromium regressions for the frozen guest-homepage transition, verified-cookie empty-shell rejection, cancellation during pending reload and late completion, exact homepage and visible-challenge boundaries. 2026-10-19 Cover stale guest verdicts, late guest UI at both final reads and navigation during recovery with real isolated Chromium; retain the sixteen-test total and all cancellation, challenge, origin and budget rejection cases."
     },
     {
       "path": "test/session-probe.test.cjs",

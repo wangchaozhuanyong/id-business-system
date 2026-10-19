@@ -854,6 +854,46 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
                     && !url.username && !url.password;
             } catch (_) { return false; }
         };
+        const assertCurrentLoggedInUi = async () => {
+            let restabilized = false;
+            for (;;) {
+                remaining(1);
+                if (!isOfficialHomepage())
+                    throw sessionNotConfirmed('登录核验已离开原首页，已停止后续操作', 'navigation_failed', diagnostics);
+                try {
+                    await assertChatGptLoggedIn(page, '首页', diagnostics);
+                    if (!isOfficialHomepage())
+                        throw sessionNotConfirmed('登录核验已离开原首页，已停止后续操作', 'navigation_failed', diagnostics);
+                    return restabilized;
+                } catch (error) {
+                    if (error.code !== 'SESSION_NOT_CONFIRMED'
+                        || !['visible_login_controls', 'visible_login_content'].includes(error.bootstrapDiagnostics?.reason)
+                        || !isOfficialHomepage() || uiWaitRemaining <= 0) throw error;
+                    const challenge = await isBlockingHumanVerificationVisible(page);
+                    diagnostics.challengeDetected ||= challenge;
+                    if (challenge)
+                        throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+                    diagnostics.reason = 'login_not_confirmed';
+                    diagnostics.loggedInUi = await waitForStableUi(async () => {
+                        const blocking = await isBlockingHumanVerificationVisible(page);
+                        diagnostics.challengeDetected ||= blocking;
+                        return blocking;
+                    });
+                    if (!isOfficialHomepage())
+                        throw sessionNotConfirmed('登录核验已离开原首页，已停止后续操作', 'navigation_failed', diagnostics);
+                    diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+                    if (await isBlockingHumanVerificationVisible(page)) {
+                        diagnostics.challengeDetected = true;
+                        throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+                    }
+                    if (!diagnostics.loggedInUi) {
+                        await assertChatGptLoggedIn(page, '首页', diagnostics);
+                        throw sessionNotConfirmed('尚未取得首页的稳定登录证据，已停止后续操作', 'login_not_confirmed', diagnostics);
+                    }
+                    restabilized = true;
+                }
+            }
+        };
         const reloadGuestHomepageOnce = async () => {
             remaining(1);
             if (guestHomepageReloaded || page.isClosed?.() || !isOfficialHomepage()) return false;
@@ -934,7 +974,7 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
         });
         let recoveredGuestTransition = false;
         if (!captchaResult.cleared && captchaResult.code === 'SESSION_INVALID'
-            && captchaResult.sessionRequired === true && await hasVisibleLoginChrome(page)
+            && captchaResult.sessionRequired === true && isOfficialHomepage()
             && !await isBlockingHumanVerificationVisible(page)) {
             diagnostics.reason = 'login_not_confirmed';
             await reloadGuestHomepageOnce();
@@ -949,12 +989,14 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
                 throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
             }
             diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
-            await assertChatGptLoggedIn(page, '首页', diagnostics);
+            await assertCurrentLoggedInUi();
             if (!diagnostics.loggedInUi)
                 throw sessionNotConfirmed('尚未取得首页的稳定登录证据，已停止后续操作', 'login_not_confirmed', diagnostics);
             recoveredGuestTransition = true;
         }
         if (!captchaResult.cleared && !recoveredGuestTransition) {
+            if (captchaResult.code === 'SESSION_INVALID' && captchaResult.sessionRequired === true
+                && !isOfficialHomepage()) await assertChatGptLoggedIn(page, '首页', diagnostics);
             throw Object.assign(new Error('官网验证未通过，登录核验未完成'), {
                 code: captchaResult.code || 'HUMAN_VERIFICATION_REQUIRED',
                 diagnostics: captchaResult.diagnostics
@@ -963,16 +1005,16 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
 
         diagnostics.reason = 'login_not_confirmed';
         await reloadGuestHomepageOnce();
-        const uiReady = await waitForStableUi();
+        let uiReady = await waitForStableUi();
         diagnostics.loggedInUi = uiReady;
         diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
-        await assertChatGptLoggedIn(page, '首页', diagnostics);
+        uiReady = await assertCurrentLoggedInUi() || uiReady;
 
         const apiReady = cookieVerified ? await hasLoggedInSessionApi(page) : false;
         remaining(1);
 
         diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
-        await assertChatGptLoggedIn(page, '首页', diagnostics);
+        uiReady = await assertCurrentLoggedInUi() || uiReady;
         if (await isBlockingHumanVerificationVisible(page)) {
             diagnostics.reason = 'verification_failed';
             diagnostics.challengeDetected = true;

@@ -1445,6 +1445,30 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         const actual = await runSyntheticRecharge(scene, fixtureOptions);
         const metrics = actual.metrics;
         assert.equal(actual.failure, '');
+        const outcome = actual.result?.result;
+        const bootstrap = outcome?.bootstrapDiagnostics;
+        const safeOutcome = {
+          status: actual.result?.status,
+          errorCode: outcome?.errorCode ?? outcome?.code ?? null,
+          bootstrapDiagnostics: bootstrap
+            ? Object.fromEntries(
+                [
+                  'reason',
+                  'authApiVerified',
+                  'visibleLogin',
+                  'loggedInUi',
+                  'redirectDetected',
+                  'challengeDetected',
+                  'pageClosed'
+                ].map((key) => [key, bootstrap[key]])
+              )
+            : null
+        };
+        assert.equal(
+          actual.result?.status,
+          scene === 'unknown' ? 'awaiting_review' : 'succeeded',
+          JSON.stringify(safeOutcome)
+        );
         assert.equal(metrics.loginCookieVerified, 1);
         if (fixtureOptions.authUi) {
           assert.equal(metrics.authUi, fixtureOptions.authUi);
