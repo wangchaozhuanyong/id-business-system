@@ -32,12 +32,12 @@
         </dl>
       </section>
       <section class="online-panel">
-        <V2SectionHeading title="实际账单金额" />
-        <p v-if="!billing.length">当前没有已确认成功的实际账单。</p>
+        <V2SectionHeading title="成功账单金额" />
+        <p v-if="!billing.length">当前没有已确认成功的账单。</p>
         <dl v-else class="online-status-grid">
           <template v-for="item in billing" :key="item.currency"
             ><dt>{{ item.currency }}</dt>
-            <dd>{{ item.amount ?? '—' }}（{{ item.count }} 笔）</dd></template
+            <dd>{{ onlineBillingAmountText(item) }}</dd></template
           >
         </dl>
       </section></V2AsyncRegion
@@ -58,6 +58,7 @@ import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { onlineApi } from './api';
 import { regionOptions } from './labels';
+import { onlineBillingAmountText, type OnlineBillingSummary } from './billing-presentation';
 import './online-recharge.css';
 interface Group {
   status: string;
@@ -84,7 +85,7 @@ const config = computed(() => query.data.value?.config as Record<string, unknown
 const host = computed(() => query.data.value?.runtime as Record<string, unknown> | undefined);
 const billing = computed(() =>
   Array.isArray(query.data.value?.billing)
-    ? (query.data.value.billing as { currency: string; amount: string | null; count: number }[])
+    ? (query.data.value.billing as OnlineBillingSummary[])
     : []
 );
 const confirmedRechargeCount = computed(() => {

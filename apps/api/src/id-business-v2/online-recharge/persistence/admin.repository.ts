@@ -23,6 +23,7 @@ import { OnlineRechargeTasksService } from '../tasks.service';
 import { OnlineRechargeEphemeralCredentials } from '../ephemeral-credentials.service';
 import { OnlineRechargeArtifactsService } from '../artifacts.service';
 import { id, ids, object, sanitize } from '../validation';
+import { onlineBillAmountMeaning, onlineBillingSummary } from './billing-summary';
 
 @Injectable()
 export class OnlineRechargeAdminRepository {
@@ -50,7 +51,7 @@ export class OnlineRechargeAdminRepository {
             by: ['currency'],
             where: { status: 'success' },
             _sum: { amount: true },
-            _count: true
+            _count: { _all: true, amount: true }
           }),
           db.onlineRechargeTask.count({ where: { status: 'running' } }),
           db.onlineRechargeTask.groupBy({
@@ -68,8 +69,7 @@ export class OnlineRechargeAdminRepository {
         cards,
         billing: billing.map((row) => ({
           currency: row.currency,
-          amount: row._sum.amount?.toString() ?? null,
-          count: row._count
+          ...onlineBillingSummary(row)
         })),
         active
       };
@@ -385,7 +385,10 @@ export class OnlineRechargeAdminRepository {
       return this.repository.read(async (db) => {
         const row = await db.onlineRechargeBill.findUnique({ where: { id: id(input.id) } });
         if (!row) throw new BadRequestException('账单不存在');
-        return sanitize(JSON.parse(JSON.stringify(row)));
+        return sanitize({
+          ...JSON.parse(JSON.stringify(row)),
+          amountMeaning: onlineBillAmountMeaning(row)
+        });
       });
     if (action === 'summary')
       return this.repository.read(async (db) =>
@@ -394,22 +397,25 @@ export class OnlineRechargeAdminRepository {
             by: ['cardLast4', 'currency'],
             where: {
               status: 'success',
-              ...(input.cardLast4 ? { cardLast4: String(input.cardLast4) } : {})
+              ...(input.cardLast4 === null
+                ? { cardLast4: null }
+                : input.cardLast4
+                  ? { cardLast4: String(input.cardLast4) }
+                  : {})
             },
             _sum: { amount: true },
-            _count: true
+            _count: { _all: true, amount: true }
           })
         ).map((row) => ({
           cardLast4: row.cardLast4,
           currency: row.currency,
-          amount: row._sum.amount?.toString() ?? null,
-          count: row._count
+          ...onlineBillingSummary(row)
         }))
       );
     if (action === 'export') {
       const rows = await this.exportRows('billing', input);
       const csv = [
-        '支付时间,卡尾号,实际金额,币种,套餐,结果',
+        '记录时间,卡尾号,结账金额,币种,套餐,结果,金额说明',
         ...rows.map((row) => {
           const bill = row as {
             createdAt: Date;
@@ -430,7 +436,8 @@ export class OnlineRechargeAdminRepository {
                 string,
                 string
               >
-            )[bill.status]
+            )[bill.status],
+            onlineBillAmountMeaning(bill)
           ]
             .map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`)
             .join(',');
@@ -441,26 +448,39 @@ export class OnlineRechargeAdminRepository {
       );
       return { content: '\uFEFF' + csv, filename: '线上代充账单.csv' };
     }
+    if (!['delete', 'clear-failed'].includes(action)) throw new BadRequestException('账单操作无效');
     return this.repository.transaction('billing-delete', async (tx) => {
       const where: Prisma.OnlineRechargeBillWhereInput =
         action === 'clear-failed' ? { status: 'failed' } : { id: { in: ids(input) } };
       const rows = await tx.onlineRechargeBill.findMany({ where });
-      if (
-        rows.some((row) => row.status === 'result_unknown') ||
-        (await tx.onlineRechargeTask.count({
-          where: {
-            id: { in: rows.map((row) => row.taskId) },
-            status: { in: ['queued', 'running', 'awaiting_credentials', 'awaiting_review'] }
-          }
-        }))
-      )
-        throw new ConflictException('账单关联执行中或待核对任务，不能删除');
-      if (!['delete', 'clear-failed'].includes(action))
-        throw new BadRequestException('账单操作无效');
-      const result = await tx.onlineRechargeBill.deleteMany({ where });
-      await this.repository.log(tx, `billing.${action}`, operator, undefined, {
-        count: result.count
+      if (rows.some((row) => row.status !== 'failed'))
+        throw new ConflictException('成功或待核对账单必须保留，只允许清理明确失败的账单');
+      const taskIds = [...new Set(rows.map((row) => row.taskId))];
+      const failedTasks = await tx.onlineRechargeTask.count({
+        where: { id: { in: taskIds }, status: 'failed', confirmedPaid: false }
       });
+      if (failedTasks !== taskIds.length)
+        throw new ConflictException('关联任务尚未明确失败、已确认付款或来源缺失，不能清理账单');
+      const result = await tx.onlineRechargeBill.deleteMany({
+        where: { id: { in: rows.map((row) => row.id) }, status: 'failed' }
+      });
+      if (result.count !== rows.length)
+        throw new ConflictException('账单状态已变化，请刷新后重新核对');
+      for (const row of rows)
+        await this.repository.log(tx, `billing.${action}`, operator, row.id, {
+          count: 1,
+          deletedBill: {
+            id: row.id,
+            taskId: row.taskId,
+            cardLast4: row.cardLast4,
+            status: row.status,
+            amount: row.amount?.toString() ?? null,
+            estimatedAmount: row.estimatedAmount?.toString() ?? null,
+            currency: row.currency,
+            checkoutId: row.checkoutId,
+            createdAt: row.createdAt.toISOString()
+          }
+        });
       return { success: true, count: result.count };
     });
   }

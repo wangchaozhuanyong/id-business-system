@@ -170,6 +170,12 @@ try {
     file.assertionResults.map((test) => ({ title: test.title, status: test.status }))
   );
   report.passedTests = results.numPassedTests;
+  execute(
+    ['--test', resolve(root, 'scripts/v2-online-recharge-integrity-mysql.test.mjs')],
+    env,
+    root
+  );
+  report.databaseChecks.push('独立代充十一条一致性SQL正反例');
   report.status = 'PASS';
 } catch (error) {
   report.status = 'FAIL';

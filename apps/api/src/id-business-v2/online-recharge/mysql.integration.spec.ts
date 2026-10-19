@@ -961,6 +961,127 @@ suite('线上代充隔离MySQL事务验收', () => {
     expect(await db.onlineRechargeTask.count()).toBe(1);
     expect(await db.onlineRechargeBill.count()).toBe(0);
   });
+  it('账单汇总通过真实MySQL区分未知金额并保留成功记录', async () => {
+    const task = await db.onlineRechargeTask.create({
+      data: { status: 'succeeded', confirmedPaid: true, message: '合成账务核对任务' }
+    });
+    const first = await db.onlineRechargeBill.create({
+      data: {
+        taskId: task.id,
+        plan: 'plus',
+        status: 'success',
+        amount: '20.1234',
+        currency: 'USD',
+        idempotencyKey: randomUUID(),
+        message: '合成已知金额'
+      }
+    });
+    await db.onlineRechargeBill.create({
+      data: {
+        taskId: task.id,
+        plan: 'plus',
+        status: 'success',
+        amount: null,
+        currency: 'USD',
+        idempotencyKey: randomUUID(),
+        message: '合成未知金额'
+      }
+    });
+    expect(await admin.action('billing', 'summary', {}, operator)).toEqual([
+      {
+        cardLast4: null,
+        currency: 'USD',
+        amount: null,
+        knownAmount: '20.1234',
+        count: 2,
+        knownAmountCount: 1,
+        unknownAmountCount: 1,
+        isComplete: false
+      }
+    ]);
+    expect((await admin.overview()).billing[0]).toMatchObject({
+      amount: null,
+      knownAmount: '20.1234',
+      unknownAmountCount: 1,
+      isComplete: false
+    });
+    await expect(admin.action('billing', 'delete', { ids: [first.id] }, operator)).rejects.toThrow(
+      '必须保留'
+    );
+    expect(await db.onlineRechargeBill.count()).toBe(2);
+  });
+  it('失败账单清理逐条保存原始金额与关联审计', async () => {
+    const task = await db.onlineRechargeTask.create({
+      data: { status: 'failed', confirmedPaid: false, message: '合成明确失败任务' }
+    });
+    const row = await db.onlineRechargeBill.create({
+      data: {
+        taskId: task.id,
+        plan: 'plus',
+        status: 'failed',
+        amount: '20.1234',
+        currency: 'USD',
+        idempotencyKey: randomUUID(),
+        message: '合成失败账单'
+      }
+    });
+    await admin.action('billing', 'delete', { ids: [row.id] }, operator);
+    expect(await db.onlineRechargeBill.findUnique({ where: { id: row.id } })).toBeNull();
+    const audit = await db.auditLog.findFirst({
+      where: { objectId: row.id, action: 'id_business_v2.online_recharge.billing.delete' }
+    });
+    expect(audit?.afterData).toMatchObject({
+      count: 1,
+      deletedBill: { id: row.id, taskId: task.id, amount: '20.1234', currency: 'USD' }
+    });
+  });
+  it('已确认付款的失败任务不能清理账单，审计写入失败则整笔回滚', async () => {
+    const task = await db.onlineRechargeTask.create({
+      data: { status: 'failed', confirmedPaid: true, message: '合成已付款任务' }
+    });
+    const row = await db.onlineRechargeBill.create({
+      data: {
+        taskId: task.id,
+        plan: 'plus',
+        status: 'failed',
+        amount: '20',
+        currency: 'USD',
+        idempotencyKey: randomUUID(),
+        message: '合成受保护账单'
+      }
+    });
+    await expect(admin.action('billing', 'delete', { ids: [row.id] }, operator)).rejects.toThrow(
+      '不能清理'
+    );
+    await db.onlineRechargeTask.update({ where: { id: task.id }, data: { confirmedPaid: false } });
+    const audit = vi.spyOn(repository, 'log').mockRejectedValueOnce(new Error('合成审计故障'));
+    try {
+      await expect(admin.action('billing', 'delete', { ids: [row.id] }, operator)).rejects.toThrow(
+        '合成审计故障'
+      );
+    } finally {
+      audit.mockRestore();
+    }
+    expect(await db.onlineRechargeBill.findUnique({ where: { id: row.id } })).not.toBeNull();
+  });
+  it('待核对和来源缺失的账单不能清理', async () => {
+    const row = await db.onlineRechargeBill.create({
+      data: {
+        taskId: randomUUID(),
+        plan: 'plus',
+        status: 'result_unknown',
+        currency: 'USD',
+        idempotencyKey: randomUUID(),
+        message: '合成来源缺失账单'
+      }
+    });
+    await expect(admin.action('billing', 'delete', { ids: [row.id] }, operator)).rejects.toThrow(
+      '必须保留'
+    );
+    await db.onlineRechargeBill.update({ where: { id: row.id }, data: { status: 'failed' } });
+    await expect(admin.action('billing', 'clear-failed', {}, operator)).rejects.toThrow('不能清理');
+    expect(await db.onlineRechargeBill.findUnique({ where: { id: row.id } })).not.toBeNull();
+  });
   it('账单实际金额Decimal，未知金额不落估算', async () => {
     await start();
     const claim = (await workers.claim('fixture-a'))!;

@@ -880,6 +880,10 @@ async function main() {
       }
     );
 
+    run('node', ['--test', 'scripts/v2-online-recharge-integrity-mysql.test.mjs'], {
+      env: { ...process.env, V2_FINANCIAL_INTEGRITY_DATABASE_URL: rootUrl }
+    });
+
     const provisioned = JSON.parse(
       run('node', ['scripts/provision-v2-data-integrity-auditor.mjs'], {
         env: {

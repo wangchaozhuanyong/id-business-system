@@ -1,0 +1,114 @@
+name: Financial Closure Validation
+
+on:
+  push:
+    branches:
+      - codex/financial-closure-20261019
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: financial-closure-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: synthetic-billing-ci-fixture
+          MYSQL_DATABASE: id_business_v2_online_recharge_fixture
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -psynthetic-billing-ci-fixture"
+          --health-interval=5s --health-timeout=5s --health-retries=24
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:synthetic-billing-ci-fixture@127.0.0.1:3306/id_business_v2_online_recharge_fixture
+      FIELD_ENCRYPTION_KEY: synthetic-billing-ci-encryption
+      HASH_SECRET: synthetic-billing-ci-index
+      ONLINE_RECHARGE_WORKER_KEY: synthetic-billing-ci-worker-key-32-characters
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run prisma:mysql:generate
+      - run: npm run build --workspace @apple-business/shared
+      - run: npm run typecheck --workspace @apple-business/api
+      - run: npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge
+      - run: npm run build --workspace @apple-business/api
+      - name: Apply migrations only to disposable CI MySQL
+        run: npm run prisma:mysql:migrate:deploy
+      - name: Verify billing transactions on real isolated MySQL
+        env:
+          ONLINE_RECHARGE_MYSQL_TEST: '1'
+        run: |
+          mkdir -p .runtime/financial-closure
+          npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge/mysql.integration.spec.ts --reporter=default --reporter=json --outputFile=$GITHUB_WORKSPACE/.runtime/financial-closure/mysql-results.json
+      - name: Verify eleven independent SQL invariants and counterexamples
+        env:
+          ONLINE_RECHARGE_MYSQL_TEST: '1'
+        run: node --test scripts/v2-online-recharge-integrity-mysql.test.mjs
+      - name: Verify existing financial lifecycle and frozen integrity gate
+        run: npm run acceptance:v2-financial-integrity
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: financial-closure-database-${{ github.sha }}-${{ github.run_attempt }}
+          path: .runtime/financial-closure/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  interface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build --workspace @apple-business/shared
+      - run: npm run test --workspace @apple-business/admin -- src/v2/features/online-recharge
+      - run: npm run build --workspace @apple-business/admin
+      - name: Verify affected controls and shared UI rules
+        run: |
+          npm run test:online-recharge:controls
+          node --test scripts/check-v2-decimal-standard.test.mjs scripts/v2-data-integrity-audit.test.mjs
+          npm run check:admin-ui
+          npm run check:v2-ui-language
+          npm run check:v2-color-contrast
+          npm run check:v2-table-standard
+          npm run check:v2-loading-standard
+          npm run check:v2-module-architecture
+          npm run check:v2-isolation
+          npm run check:v2-decimal-standard
+          npm run check:v2-timezone-standard
+          npm run check:v2-concurrency-standard
+          npm run check:v2-prisma-runtime-boundary
+      - run: npx playwright install --with-deps chromium
+      - name: Verify actual compiled billing routes without app server or external calls
+        run: npm run acceptance:v2-online-billing-ui
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: financial-closure-interface-${{ github.sha }}-${{ github.run_attempt }}
+          path: .runtime/online-recharge/billing-ui/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30

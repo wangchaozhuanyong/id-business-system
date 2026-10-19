@@ -95,7 +95,7 @@ const columns: Partial<Record<OnlineSection, Column[]>> = {
     ['email', '账号', 'identifier'],
     ['cardLast4', '卡尾号', 'identifier'],
     ['plan', '套餐', 'status'],
-    ['amount', '实际金额', 'numeric'],
+    ['amount', '结账金额', 'numeric'],
     ['currency', '币种'],
     ['status', '状态', 'status'],
     ['createdAt', '记录时间', 'date']
