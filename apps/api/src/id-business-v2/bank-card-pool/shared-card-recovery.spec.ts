@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SharedBankCardRepository } from './persistence/shared-bank-card.repository';
 import { OnlineRechargeAssetsRepository } from '../online-recharge/persistence/assets.repository';
 import { RechargeNameService } from '../auto-recharge/recharge-name.service';
+
+beforeEach(() => vi.stubEnv('DATABASE_URL', 'postgresql://unit.invalid/only'));
+afterEach(() => vi.unstubAllEnvs());
 
 const cardId = '22222222-2222-4222-8222-222222222222';
 const operator = { id: 'operator', roles: ['admin'], permissions: [] } as never;
@@ -26,6 +29,7 @@ function fixture() {
     active: false
   };
   const tx = {
+    idBusinessV2RechargeJob: { findMany: vi.fn(async () => []) },
     $queryRaw: vi.fn(),
     $executeRaw: vi.fn(),
     onlineRechargeCard: {

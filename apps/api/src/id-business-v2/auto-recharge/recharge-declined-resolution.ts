@@ -11,6 +11,8 @@ import {
   resolvedDeclinedPayment,
   verificationFailureResolutionEligible
 } from './recharge-noncharge-proof';
+import type { BankRechargeCardService } from './bank-recharge-card.service';
+import { settleResolvedRechargeCard } from './persistence/recharge-payment-hold.repository';
 
 export async function resolveDeclinedRecharge(
   tx: V2CommandTransaction,
@@ -18,7 +20,8 @@ export async function resolveDeclinedRecharge(
   audit: V2TransactionalAuditService,
   sourceId: string,
   value: unknown,
-  operator: AuthenticatedUser
+  operator: AuthenticatedUser,
+  cards?: BankRechargeCardService
 ) {
   const input = object(value);
   if (
@@ -36,8 +39,17 @@ export async function resolveDeclinedRecharge(
   const source = await repository.findJob(tx, sourceId);
   if (!source || source.ownerId !== operator.id) throw new ForbiddenException('无权处理此付款记录');
   const before = object(source.result);
-  if (resolvedDeclinedPayment(before))
-    return { id: String(before.resolution_job_id), alreadyResolved: true };
+  if (resolvedDeclinedPayment(before)) {
+    await settleResolvedRechargeCard(tx, source, cards);
+    if (cards)
+      await repository.updateJob(
+        tx,
+        source.id,
+        { result: toV2JsonDocument(object(source.result)) },
+        { factsOnly: true }
+      );
+    return { id: String(before.resolution_job_id ?? source.id), alreadyResolved: true };
+  }
   const verificationFailure = verificationFailureResolutionEligible(source);
   if (!declinedResolutionEligible(source) && !verificationFailure)
     throw new ConflictException('只有明确拒付或符合支付方式验证失败人工核实条件的完整原单可以结束');
@@ -118,9 +130,10 @@ export async function resolveDeclinedRecharge(
       payment_requests_sent: 0
     })
   });
+  await settleResolvedRechargeCard(tx, source, cards);
   await repository.updateJob(tx, source.id, {
     result: toV2JsonDocument({
-      ...before,
+      ...object(source.result),
       ...resolution,
       ...(!verificationFailure ? { status: 'payment_decline_resolved' } : {})
     })

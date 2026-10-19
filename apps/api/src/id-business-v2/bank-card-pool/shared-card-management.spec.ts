@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OnlineRechargeAssetsRepository } from '../online-recharge/persistence/assets.repository';
 import { SharedBankCardRepository } from './persistence/shared-bank-card.repository';
 
+beforeEach(() => vi.stubEnv('DATABASE_URL', 'postgresql://unit.invalid/only'));
+afterEach(() => vi.unstubAllEnvs());
+
 function setup() {
   const tx = {
+    idBusinessV2RechargeJob: { findMany: vi.fn(async () => []) },
     $executeRaw: vi.fn(),
     $queryRaw: vi.fn(),
     onlineRechargeCard: {

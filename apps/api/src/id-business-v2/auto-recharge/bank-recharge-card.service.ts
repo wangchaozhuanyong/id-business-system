@@ -15,7 +15,7 @@ import {
 } from '../runtime/public-api';
 import { BankRechargeCardRepository } from './persistence/bank-recharge-card.repository';
 import { BankRechargeAccountService } from './bank-recharge-account.service';
-import { SharedBankCardRepository } from '../bank-card-pool/public-api';
+import { SharedBankCardRepository, type BitBrowserCardAttempt } from '../bank-card-pool/public-api';
 import {
   bankRechargeCurrency,
   bankRechargeId,
@@ -28,6 +28,11 @@ import {
   parseManagedCard,
   type ManagedCardInput
 } from './bank-recharge-card-validation';
+import {
+  NoRechargeHoldChanges,
+  reconcileRechargePaymentHolds
+} from './persistence/recharge-payment-hold.repository';
+import type { RechargeRepository } from './persistence/recharge.repository';
 
 @Injectable()
 export class BankRechargeCardService {
@@ -155,9 +160,51 @@ export class BankRechargeCardService {
     tx: V2CommandTransaction,
     jobId: string,
     report: Record<string, unknown>,
-    verified: boolean
+    verified: boolean,
+    attempt?: BitBrowserCardAttempt
   ) {
-    return this.pool.finishBitBrowser(tx, jobId, report, verified);
+    return this.pool.finishBitBrowser(tx, jobId, report, verified, attempt);
+  }
+
+  authorizeSharedAttempt(tx: V2CommandTransaction, jobId: string, legacyCardId: string | null) {
+    return this.pool.authorizeBitBrowserAttempt(tx, jobId, legacyCardId);
+  }
+  recoverSharedAttempt(
+    tx: V2CommandTransaction,
+    jobId: string,
+    authorizedAt: string,
+    legacyCardId: string | null
+  ) {
+    return this.pool.recoverBitBrowserAttempt(tx, jobId, authorizedAt, legacyCardId);
+  }
+  releaseSharedHold(tx: V2CommandTransaction, jobId: string) {
+    return this.pool.releaseBitBrowserHold(tx, jobId);
+  }
+  async reconcilePaymentHolds(repository: RechargeRepository, operator: AuthenticatedUser) {
+    try {
+      return await this.transactions.execute(
+        async (tx) => {
+          await repository.lock(tx);
+          const changed = await reconcileRechargePaymentHolds({
+            tx,
+            repository,
+            cards: this,
+            audit: this.audit,
+            ownerId: operator.id
+          });
+          if (!changed) throw new NoRechargeHoldChanges();
+        },
+        {
+          changedScopes: ['auto-recharge', 'online-recharge'],
+          requestId: randomUUID(),
+          operator,
+          retryMode: 'none'
+        }
+      );
+    } catch (error) {
+      if (error instanceof NoRechargeHoldChanges) return;
+      throw error;
+    }
   }
 
   encryptBillingName(value: string) {

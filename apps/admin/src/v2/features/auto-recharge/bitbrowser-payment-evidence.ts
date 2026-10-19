@@ -99,6 +99,98 @@ export function resolvedDirectVerificationCheckout(
     checkout.payment_outcome !== 'subscription_activated'
   );
 }
+
+const terminalFailureKey = '_official_terminal_failure_v1';
+const terminalFailureKeys = [
+  'kind',
+  'sourceJobId',
+  'accountKey',
+  'checkoutIdentifier',
+  'paymentIntentIdentifier',
+  'plan',
+  'confirmedAt'
+] as const;
+function directTerminalProof(value: PaymentDocument, accountKey: string) {
+  const proof = paymentObject(value[terminalFailureKey]);
+  const upgrade = value.operation === 'subscription_upgrade';
+  const reference = upgrade ? value.upgrade_identifier : value.checkout_identifier;
+  const target = value.target_plan ?? 'plus';
+  const validReference = upgrade
+    ? typeof reference === 'string' &&
+      /^upg_[a-f0-9]{32}$/.test(reference) &&
+      ((value.current_plan_before === 'go' && target === 'plus') ||
+        (value.current_plan_before === 'plus' &&
+          ['pro-5x', 'pro-20x', 'pro-500'].includes(String(target))))
+    : typeof reference === 'string' &&
+      /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/.test(reference) &&
+      !value.upgrade_identifier;
+  return (
+    /^[a-f0-9]{64}$/.test(accountKey) &&
+    proof.kind === 'bound_payment_intent_declined' &&
+    typeof proof.sourceJobId === 'string' &&
+    resolutionUuid.test(proof.sourceJobId) &&
+    proof.accountKey === accountKey &&
+    proof.checkoutIdentifier === reference &&
+    validReference &&
+    Object.hasOwn(directOfficialPlans, String(value.target_plan ?? 'plus')) &&
+    proof.plan === (value.target_plan ?? 'plus') &&
+    typeof proof.paymentIntentIdentifier === 'string' &&
+    /^pi_[A-Za-z0-9]{1,180}$/.test(proof.paymentIntentIdentifier) &&
+    (value.payment_intent_identifier === undefined ||
+      value.payment_intent_identifier === proof.paymentIntentIdentifier) &&
+    (value.upgrade_payment_intent_identifier === undefined ||
+      value.upgrade_payment_intent_identifier === proof.paymentIntentIdentifier) &&
+    typeof proof.confirmedAt === 'string' &&
+    Number.isFinite(Date.parse(proof.confirmedAt)) &&
+    new Date(proof.confirmedAt).toISOString() === proof.confirmedAt &&
+    !value.payment_evidence &&
+    value.operator_resolution === undefined &&
+    value.status !== 'subscription_activated' &&
+    ![
+      'subscription_activated',
+      'paid_pending_activation',
+      'paid_tier_pending_verification'
+    ].includes(String(value.payment_outcome))
+  );
+}
+/** Read only: this private proof can originate only in an authenticated server record. */
+export function resolvedDirectTerminalPayment(value: unknown, accountKey: string) {
+  const payment = paymentObject(value);
+  return (
+    directTerminalProof(payment, accountKey) &&
+    payment.account_key === accountKey &&
+    payment.payment_status === 'declined' &&
+    payment.payment_attempted === true &&
+    payment.payment_requests_sent === 1 &&
+    payment.confirmation_requests_sent === 1
+  );
+}
+export function resolvedDirectTerminalCheckout(
+  value: unknown,
+  paymentValue: unknown,
+  accountKey: string,
+  plan: V2RechargePlan
+) {
+  const checkout = paymentObject(value),
+    payment = paymentObject(paymentValue);
+  const proof = paymentObject(checkout[terminalFailureKey]);
+  const paymentProof = paymentObject(payment[terminalFailureKey]);
+  return (
+    checkout.operation !== 'subscription_upgrade' &&
+    payment.operation !== 'subscription_upgrade' &&
+    resolvedDirectTerminalPayment(payment, accountKey) &&
+    directTerminalProof(checkout, accountKey) &&
+    terminalFailureKeys.every((key) => proof[key] === paymentProof[key]) &&
+    String(checkout.target_plan ?? 'plus') === plan &&
+    String(payment.target_plan ?? 'plus') === plan &&
+    (checkout.account_key === undefined || checkout.account_key === accountKey) &&
+    (checkout.plan === undefined || checkout.plan === directOfficialPlans[plan]) &&
+    checkout.payment_status === 'not_attempted' &&
+    checkout.payment_attempted === false &&
+    checkout.payment_requests_sent === 0 &&
+    checkout.confirmation_requests_sent === 0
+  );
+}
 export function directPaymentMoney(currency: string, minor: unknown): V2RechargeMoney {
   if (
     !/^[A-Z]{3}$/.test(currency) ||

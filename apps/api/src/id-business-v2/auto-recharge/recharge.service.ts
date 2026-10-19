@@ -7,14 +7,8 @@ import {
 } from './recharge-direct-payment';
 import { resolveDeclinedRecharge } from './recharge-declined-resolution';
 import { reviewRechargeJobs } from './recharge-review';
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Optional
-} from '@nestjs/common';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import {
   V2CommandTransactionManager,
@@ -63,6 +57,7 @@ import { listRechargeJobs } from './recharge-job-list';
 import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 import {
   assertNoPrivateRechargeCallback,
+  authorizeRechargeWorkerCallback,
   authorizeLocalRechargeCallback,
   isRetiredRechargeCallback,
   replayRechargeReceipt,
@@ -73,6 +68,7 @@ import { restoreRechargeAccount } from './recharge-account-restore';
 import { prepareNextSubscriptionCycle } from './recharge-subscription-cycle';
 import { assertNoClientCycleFields } from './recharge-cycle-state';
 import { isNextCycleCheckoutMarker } from './recharge-cycle-ledger';
+import { rechargeCallbackLease } from './recharge-callback-lease';
 import { IdBusinessV2TotpAccountService } from '../workspace/public-api';
 import {
   readRechargeHandoff,
@@ -180,12 +176,27 @@ export class RechargeService {
 
   async resolveDeclined(id: string, value: unknown, operator: AuthenticatedUser) {
     return this.transactions.execute(
-      (tx) => resolveDeclinedRecharge(tx, this.repository, this.audit, id, value, operator),
-      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+      (tx) =>
+        resolveDeclinedRecharge(
+          tx,
+          this.repository,
+          this.audit,
+          id,
+          value,
+          operator,
+          this.bankCards
+        ),
+      {
+        changedScopes: ['auto-recharge', 'online-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
     );
   }
 
   async review(query: Record<string, unknown>, operator: AuthenticatedUser) {
+    await this.bankCards?.reconcilePaymentHolds(this.repository, operator);
     return reviewRechargeJobs(
       this.repository,
       operator.id,
@@ -195,6 +206,7 @@ export class RechargeService {
   }
 
   async list(operator: AuthenticatedUser) {
+    await this.bankCards?.reconcilePaymentHolds(this.repository, operator);
     return listRechargeJobs(
       this.repository,
       operator.id,
@@ -228,7 +240,8 @@ export class RechargeService {
       operator,
       repository: this.repository,
       transactions: this.transactions,
-      audit: this.audit
+      audit: this.audit,
+      cards: this.bankCards
     });
   }
   handoffFrame(id: string, operator: AuthenticatedUser) {
@@ -247,14 +260,7 @@ export class RechargeService {
     return { id };
   }
   authorizeWorker(token: unknown) {
-    const expected = process.env.AUTO_RECHARGE_WORKER_TOKEN ?? '';
-    if (
-      expected.length < 32 ||
-      typeof token !== 'string' ||
-      token.length !== expected.length ||
-      !timingSafeEqual(Buffer.from(token), Buffer.from(expected))
-    )
-      throw new ForbiddenException('执行器身份无效');
+    return authorizeRechargeWorkerCallback(token);
   }
   async callback(id: string, value: unknown, context?: { localToken: unknown }) {
     if (!uuidPattern.test(id)) throw new BadRequestException('任务编号无效');
@@ -554,31 +560,16 @@ export class RechargeService {
             order: verifiedOrder,
             repository: this.repository,
             cards: this.bankCards,
-            names: this.names
+            names: this.names,
+            terminalReport: report
           });
           state = 'finished';
           nonceHash = null;
         }
-        const previousResult = object(job.result);
-        const serverBusinessHandoff =
-          job.action === 'server' &&
-          job.state === 'running' &&
-          input.type === 'progress' &&
-          ['proxy_verifying', 'proxy_retrying'].includes(String(previousResult.stage)) &&
-          report.stage === 'session_restore' &&
-          previousResult.server_business_lease_started !== true;
-        // API 写入一次交接标记，迟到的代理进度也不能再次延长业务期限。
-        if (serverBusinessHandoff) report.server_business_lease_started = true;
         await this.repository.updateJob(tx, id, {
           state,
           nonceHash,
-          ...(job.action === 'bitbrowser' &&
-          input.type === 'progress' &&
-          report.stage !== 'next_subscription_cycle_review'
-            ? { leaseUntil: new Date(Date.now() + 45 * 60000) }
-            : serverBusinessHandoff
-              ? { leaseUntil: new Date(Date.now() + 16 * 60000) }
-              : {}),
+          ...rechargeCallbackLease(job, input.type, report),
           result: toV2JsonDocument(
             input.type === 'finished'
               ? withRechargeReceipt(

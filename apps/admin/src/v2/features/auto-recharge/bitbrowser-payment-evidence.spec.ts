@@ -12,6 +12,8 @@ import {
   parseDirectVisibleQuote,
   resolvedDirectVerificationCheckout,
   resolvedDirectVerificationPayment,
+  resolvedDirectTerminalCheckout,
+  resolvedDirectTerminalPayment,
   verifyNativeDirectQuote
 } from './bitbrowser-payment-evidence';
 
@@ -48,6 +50,167 @@ function resolvedCheckoutDocument() {
     payment_status: 'not_attempted'
   };
 }
+
+describe('官网明确拒付的服务端原单证明', () => {
+  const proof = {
+    kind: 'bound_payment_intent_declined',
+    sourceJobId: '22222222-2222-4222-8222-222222222222',
+    accountKey: resolutionAccountKey,
+    checkoutIdentifier: sid,
+    paymentIntentIdentifier: 'pi_SyntheticDecline',
+    plan: 'plus',
+    confirmedAt: '2026-10-19T00:00:00.000Z'
+  };
+  function documents() {
+    return {
+      payment: {
+        account_key: resolutionAccountKey,
+        target_plan: 'plus',
+        checkout_identifier: sid,
+        payment_status: 'declined',
+        payment_attempted: true,
+        payment_requests_sent: 1,
+        confirmation_requests_sent: 1,
+        _official_terminal_failure_v1: { ...proof }
+      },
+      checkout: {
+        target_plan: 'plus',
+        checkout_identifier: sid,
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0,
+        _official_terminal_failure_v1: { ...proof }
+      }
+    };
+  }
+  it('仅相同账号、原单、付款意图和来源的两份服务端证明允许再次建单，保持原付款事实', () => {
+    const { payment, checkout } = documents();
+    const before = JSON.stringify({ payment, checkout });
+    expect(resolvedDirectTerminalPayment(payment, resolutionAccountKey)).toBe(true);
+    expect(resolvedDirectTerminalCheckout(checkout, payment, resolutionAccountKey, 'plus')).toBe(
+      true
+    );
+    expect(JSON.stringify({ payment, checkout })).toBe(before);
+  });
+  it.each([
+    { kind: 'operator_observed_failure' },
+    { sourceJobId: 'invalid' },
+    { accountKey: 'b'.repeat(64) },
+    { checkoutIdentifier: 'oaics_other' },
+    { paymentIntentIdentifier: 'not-an-intent' },
+    { plan: 'go' },
+    { confirmedAt: '2026-02-30T00:00:00.000Z' },
+    { confirmedAt: 'not-a-date' }
+  ])('无效或与付款不符的私有证明不能解除保护 %j', (patch) => {
+    const { payment } = documents();
+    expect(
+      resolvedDirectTerminalPayment(
+        { ...payment, _official_terminal_failure_v1: { ...proof, ...patch } },
+        resolutionAccountKey
+      )
+    ).toBe(false);
+  });
+  it.each([
+    { _official_terminal_failure_v1: undefined },
+    { payment_status: 'unknown' },
+    { payment_status: 'requires_action' },
+    { payment_status: 'paid' },
+    { account_key: 'b'.repeat(64) },
+    { payment_requests_sent: 2 },
+    { confirmation_requests_sent: '1' },
+    { payment_attempted: false },
+    { payment_evidence: { identifier: 'pi_Paid' } },
+    { payment_intent_identifier: 'pi_Other' },
+    { operation: 'subscription_upgrade' },
+    { operator_resolution: 'confirmed_verification_failed_no_charge' }
+  ])('未决、付款成功、不同意图及不完整回执不能借用失败证明 %j', (patch) => {
+    expect(
+      resolvedDirectTerminalPayment({ ...documents().payment, ...patch }, resolutionAccountKey)
+    ).toBe(false);
+  });
+  it.each([
+    { sourceJobId: '44444444-4444-4444-8444-444444444444' },
+    { paymentIntentIdentifier: 'pi_Other' },
+    { confirmedAt: '2026-10-19T00:01:00.000Z' }
+  ])('根账本证明必须与付款账本完全相同 %j', (patch) => {
+    const { payment, checkout } = documents();
+    expect(
+      resolvedDirectTerminalCheckout(
+        { ...checkout, _official_terminal_failure_v1: { ...proof, ...patch } },
+        payment,
+        resolutionAccountKey,
+        'plus'
+      )
+    ).toBe(false);
+  });
+  it('已存在的付款计数与成功证据不能被私有证明覆盖', () => {
+    const { payment, checkout } = documents();
+    for (const patch of [
+      { payment_requests_sent: 1 },
+      { payment_attempted: true },
+      { payment_evidence: { identifier: 'pi_Paid' } },
+      { target_plan: 'go' }
+    ])
+      expect(
+        resolvedDirectTerminalCheckout(
+          { ...checkout, ...patch },
+          payment,
+          resolutionAccountKey,
+          'plus'
+        )
+      ).toBe(false);
+  });
+  it.each([
+    ['go', 'plus'],
+    ['plus', 'pro-5x'],
+    ['plus', 'pro-20x'],
+    ['plus', 'pro-500']
+  ])('%s升级%s的已绑定明确拒付可结束付款保护，但不能冒充新订阅checkout证明', (source, target) => {
+    const reference = 'upg_' + 'b'.repeat(32);
+    const payment = {
+      ...documents().payment,
+      operation: 'subscription_upgrade',
+      current_plan_before: source,
+      target_plan: target,
+      upgrade_identifier: reference,
+      checkout_identifier: undefined,
+      _official_terminal_failure_v1: { ...proof, plan: target, checkoutIdentifier: reference }
+    };
+    expect(resolvedDirectTerminalPayment(payment, resolutionAccountKey)).toBe(true);
+    expect(resolvedDirectTerminalCheckout(payment, payment, resolutionAccountKey, 'plus')).toBe(
+      false
+    );
+  });
+  it.each([
+    { current_plan_before: 'free' },
+    { target_plan: 'go' },
+    { upgrade_identifier: 'upg_invalid' },
+    { upgrade_payment_intent_identifier: 'pi_Other' },
+    { payment_status: 'requires_action' }
+  ])('升级关系、付款绑定或终态不完整时仍保护 %j', (patch) => {
+    const reference = 'upg_' + 'b'.repeat(32);
+    expect(
+      resolvedDirectTerminalPayment(
+        {
+          ...documents().payment,
+          operation: 'subscription_upgrade',
+          current_plan_before: 'plus',
+          target_plan: 'pro-20x',
+          upgrade_identifier: reference,
+          checkout_identifier: undefined,
+          _official_terminal_failure_v1: {
+            ...proof,
+            plan: 'pro-20x',
+            checkoutIdentifier: reference
+          },
+          ...patch
+        },
+        resolutionAccountKey
+      )
+    ).toBe(false);
+  });
+});
 
 describe('人工核实验证失败账本严格绑定', () => {
   it.each(['captured_official_failure', 'operator_observed_official_failure'])(

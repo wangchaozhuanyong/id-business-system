@@ -165,7 +165,11 @@ import {
   isBitbrowserFollowupControlsOnly,
   bitbrowserFollowupSourceReviewTree,
   isBitbrowserHistoryControlsOnly,
-  bitbrowserHistorySourceReviewTree
+  bitbrowserHistorySourceReviewTree,
+  bitbrowserBoundedHoldSourceShape,
+  isBitbrowserBoundedHoldSourceOnly,
+  bitbrowserBoundedHoldSchemaMatches,
+  bitbrowserBoundedHoldCheckCommands
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -179,6 +183,26 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// The bounded payment profile is separate from the historical shared-card migration.
+if (mode === 'recharge' && bitbrowserBoundedHoldSourceShape(changed)) {
+  if (
+    !isBitbrowserBoundedHoldSourceOnly(changed, {
+      base,
+      baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+    })
+  )
+    throw new Error('Unfrozen or moved bounded BitBrowser source scope');
+  const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+  if (
+    !bitbrowserBoundedHoldSchemaMatches(
+      execFileSync('git', ['show', base + ':' + schemaPath], { encoding: 'utf8' }),
+      execFileSync('git', ['show', 'HEAD:' + schemaPath], { encoding: 'utf8' })
+    )
+  )
+    throw new Error('Bounded BitBrowser schema must remain byte identical');
+  for (const [file, ...args] of bitbrowserBoundedHoldCheckCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 // BEGIN finite BitBrowser publication control checks
 if (
   mode === 'ci-only' &&
