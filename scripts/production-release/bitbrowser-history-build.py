@@ -148,7 +148,7 @@ def quality(commit, c, *, source=False):
         p.need(commit == c['sourceReviewCommit'], 'SOURCE_REVIEW_CHANGED')
         for name, digest in c['sources'].items():
             p.need(p.sha(git('show', commit + ':' + name)) == digest
-                == p.sha(git('show', 'HEAD:' + name)), 'SOURCE_PROJECTION_CHANGED')
+                and p.sha(git('show', 'HEAD:' + name)) == p.reviewed_current_digest(c, name, digest), 'SOURCE_PROJECTION_CHANGED')
         jobs = json.loads(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/actions/runs/'
             + str(rows[0]['id']) + '/attempts/' + str(rows[0]['run_attempt']) + '/jobs?per_page=100'], cwd=ROOT))
         require_quality_jobs(jobs['jobs'], p)
@@ -283,10 +283,22 @@ def followup_check(c):
     p.need(git('rev-parse', c['sourceReviewCommit'] + '^{tree}').decode().strip() == c['sourceReviewTree']
         and set(git('diff', '--name-only', p.CURRENT, c['sourceReviewCommit']).decode().splitlines()) == p.APPLICATION | (p.CI_CONTROLS if p.RECIPE == p.BOUNDED else set()),
         'REVIEW_SCOPE_CHANGED')
-    for n, expected in {**c['sources'], **c['mysqlTestSources']}.items():
+    for n, expected in c['sources'].items():
+        path = ROOT / n
+        p.need(path.is_file() and not path.is_symlink()
+            and p.sha(git('show', c['sourceReviewCommit'] + ':' + n)) == expected
+            and p.sha(path.read_bytes()) == p.reviewed_current_digest(c, n, expected), 'SOURCE_CHANGED')
+    for n, expected in c['mysqlTestSources'].items():
+        original = c['sources'][n] if p.RECIPE == p.BOUNDED and c.get('mysqlTestInputRepair') and n == p.MYSQL_REPAIR_PATH else expected
         path = ROOT / n
         p.need(path.is_file() and not path.is_symlink() and p.sha(path.read_bytes()) == expected
-            == p.sha(git('show', c['sourceReviewCommit'] + ':' + n)), 'SOURCE_CHANGED')
+            == p.reviewed_current_digest(c, n, original)
+            and p.sha(git('show', c['sourceReviewCommit'] + ':' + n)) == original, 'MYSQL_SOURCE_CHANGED')
+    if p.RECIPE == p.BOUNDED and c.get('mysqlTestInputRepair'):
+        repair = c['mysqlTestInputRepair']
+        p.need(git('rev-parse', repair['reviewBase'] + '^{tree}').decode().strip() == repair['reviewBaseTree']
+            and p.sha(git('show', repair['reviewBase'] + ':' + repair['path'])) == repair['oldSha256'],
+            'MYSQL_TEST_INPUT_REPAIR_BASE_CHANGED')
     for n in (p.MYSQL_FILES if p.RECIPE != p.BOUNDED else ()):
         p.need(c['mysqlTestSources'][n] == p.sha(git('show', p.CURRENT + ':' + n)), 'MYSQL_SOURCE_CHANGED')
     if p.RECIPE == p.BOUNDED:
@@ -725,6 +737,14 @@ def bounded_freeze(parent_dir, source, delta_path):
             'contractSha256': p.ADDRESS_CONTRACT_SHA, 'workflowRunId': '39204594382',
             'apiImage': p.ADDRESS_API_IMAGE, 'adminImage': p.BOUNDED_ADMIN_IMAGE},
         'migrationPerformed': False, 'businessActions': 0}
+    current_mysql = p.sha((ROOT / p.MYSQL_REPAIR_PATH).read_bytes())
+    if current_mysql != p.MYSQL_REPAIR_OLD_SHA:
+        p.need(current_mysql == p.MYSQL_REPAIR_NEW_SHA
+            and p.sha(git('show', p.MYSQL_REPAIR_BASE + ':' + p.MYSQL_REPAIR_PATH)) == p.MYSQL_REPAIR_OLD_SHA
+            and git('rev-parse', p.MYSQL_REPAIR_BASE + '^{tree}').decode().strip() == p.MYSQL_REPAIR_TREE,
+            'MYSQL_TEST_INPUT_REPAIR_INVALID')
+        c['mysqlTestInputRepair'] = p.mysql_test_input_repair()
+        c['mysqlTestSources'][p.MYSQL_REPAIR_PATH] = p.MYSQL_REPAIR_NEW_SHA
     p.validate_contract(c)
     for name in p.INHERITED:
         p.need(c['controlPins'][name] == p.sha(git('show', p.CURRENT + ':scripts/production-release/' + name)),
@@ -827,6 +847,8 @@ def bounded_main(c):
         'isolatedMysqlVerification': mysql_evidence, 'nativeParentCapture': capture,
         'baselineModulesReproduced': c['baseline']['apiModules'], 'predecessorProofSha256': p.BOUNDED_PROOF,
         'baselineSharedUnchanged': True, 'updatedServices': list(p.UPDATED), 'migrationPerformed': False, 'businessActions': 0}
+    if c.get('mysqlTestInputRepair'):
+        proof['mysqlTestInputRepair'] = c['mysqlTestInputRepair']
     p.verify_proof(proof, proof, c, payload, h)
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
     bundle = OUT / 'bitbrowser-history-artifact.tar.gz'

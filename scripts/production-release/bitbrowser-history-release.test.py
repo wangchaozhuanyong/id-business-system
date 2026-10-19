@@ -735,6 +735,53 @@ class BoundedFrozenControls(unittest.TestCase):
             changed = copy.deepcopy(self.c); changed[key] = value
             with self.assertRaises(RuntimeError): p.validate_contract(changed)
 
+    def test_mysql_test_repair_preserves_original_review_and_all_production_inputs(self):
+        self.assertEqual(self.c['mysqlTestInputRepair'],p.mysql_test_input_repair())
+        self.assertEqual(self.c['sources'][p.MYSQL_REPAIR_PATH],p.MYSQL_REPAIR_OLD_SHA)
+        self.assertEqual(self.c['mysqlTestSources'][p.MYSQL_REPAIR_PATH],p.MYSQL_REPAIR_NEW_SHA)
+        self.assertEqual(p.reviewed_current_digest(self.c,p.MYSQL_REPAIR_PATH,p.MYSQL_REPAIR_OLD_SHA),p.MYSQL_REPAIR_NEW_SHA)
+        for name,digest in self.c['sources'].items():
+            if name != p.MYSQL_REPAIR_PATH:self.assertEqual(p.reviewed_current_digest(self.c,name,digest),digest)
+        original=json.loads(b.git('show',p.MYSQL_REPAIR_BASE+':scripts/production-release/bitbrowser-bounded-hold-contract.json'))
+        for key in ('sources','productionSources','apiModules','baseline','absentApiModules','sourceReviewCommit','sourceReviewTree'):
+            self.assertEqual(self.c[key],original[key])
+        for key,val in (('path','apps/api/src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts'),
+            ('oldSha256','a'*64),('newSha256','b'*64),('reviewBase','c'*40),('reviewBaseTree','d'*40)):
+            changed=copy.deepcopy(self.c);changed['mysqlTestInputRepair'][key]=val
+            with self.assertRaisesRegex(RuntimeError,'MYSQL_TEST_INPUT_REPAIR_INVALID'):p.validate_contract(changed)
+        for key,val in (('sources',{**self.c['sources'],p.MYSQL_REPAIR_PATH:p.MYSQL_REPAIR_NEW_SHA}),
+            ('mysqlTestSources',{**self.c['mysqlTestSources'],p.MYSQL_REPAIR_PATH:p.MYSQL_REPAIR_OLD_SHA}),
+            ('mysqlTestInputRepair',None)):
+            changed=copy.deepcopy(self.c);changed[key]=val
+            with self.assertRaisesRegex(RuntimeError,'MYSQL_TEST_INPUT_REPAIR_INVALID'):p.validate_contract(changed)
+        with self.assertRaisesRegex(RuntimeError,'MYSQL_TEST_INPUT_REPAIR_INVALID'):
+            p.reviewed_current_digest(self.c,p.MYSQL_REPAIR_PATH,'e'*64)
+
+    def test_source_quality_exempts_only_exact_old_to_new_mysql_fixture_hashes(self):
+        commit=self.c['sourceReviewCommit'];tree=self.c['sourceReviewTree']
+        old={name:b.git('show',commit+':'+name)for name in self.c['sources']}
+        current={**old,p.MYSQL_REPAIR_PATH:(ROOT/p.MYSQL_REPAIR_PATH).read_bytes()}
+        rows={'workflow_runs':[{'head_sha':commit,'event':'pull_request','path':'.github/workflows/quality.yml',
+            'conclusion':'success','id':39211892224,'run_attempt':1}]}
+        jobs={'jobs':[{'name':'recharge ('+part+')','conclusion':'success'}for part in ('guards','api','admin')]}
+        def github(args,**kwargs):return json.dumps(jobs if '/attempts/'in args[-1]else rows).encode()
+        def git(*args):
+            if args==('rev-parse',commit+'^{tree}'):return(tree+'\n').encode()
+            if args[0]=='show':
+                selected,name=args[1].split(':',1)
+                return(current if selected=='HEAD'else old)[name]
+            raise AssertionError(args)
+        with patch.object(b,'git',side_effect=git),patch.object(b.subprocess,'check_output',side_effect=github):
+            evidence=b.quality(commit,self.c,source=True)
+            self.assertEqual(evidence['commit'],commit)
+            current[p.MYSQL_REPAIR_PATH]=b'unapproved fixture bytes'
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_PROJECTION_CHANGED'):b.quality(commit,self.c,source=True)
+            current[p.MYSQL_REPAIR_PATH]=(ROOT/p.MYSQL_REPAIR_PATH).read_bytes()
+            other=next(n for n in old if n!=p.MYSQL_REPAIR_PATH);current[other]=b'unreviewed source bytes'
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_PROJECTION_CHANGED'):b.quality(commit,self.c,source=True)
+            current[other]=old[other];old[p.MYSQL_REPAIR_PATH]=b'unreviewed original fixture bytes'
+            with self.assertRaisesRegex(RuntimeError,'SOURCE_PROJECTION_CHANGED'):b.quality(commit,self.c,source=True)
+
     def test_mysql_requires_31_real_tests_and_all_three_exact_specs_in_same_run(self):
         identity = {'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
         value = {**identity,'scope':'OWNED_EMPTY_DATABASE','runtime':'github-actions-mysql-service',
@@ -834,6 +881,8 @@ class BoundedFrozenControls(unittest.TestCase):
                 'qualityVerification':{},'isolatedMysqlVerification':mysql,'nativeParentCapture':capture,
                 'apiModules':helper.file_inventory(payload/'api/modules'),'adminFiles':helper.file_inventory(payload/'admin/html'),
                 'baselineAdminReproduced':True,'baselineAdminFiles':self.c['publishedAdminFiles'],'files':helper.file_inventory(payload)}
+            if self.c.get('mysqlTestInputRepair'):
+                proof['mysqlTestInputRepair'] = self.c['mysqlTestInputRepair']
             p.verify_proof(proof,proof,self.c,payload,helper)
             for extra in ('source/scripts/ci-recharge-scope.mjs','source/'+next(iter(p.TEST_SOURCES)),
                 'api/modules/id-business-v2/online-recharge/persistence/worker.repository.d.ts'):

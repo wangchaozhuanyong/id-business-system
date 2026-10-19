@@ -174,6 +174,7 @@ const enabled = process.env.SHARED_BANK_CARD_MYSQL_TEST === '1';
   it('额度当前读的实际 SQL 计划必须使用既有主键、唯一号卡索引与 job.card_id 索引', async () => {
     const f = await fixture();
     await pendingJob(f.card.id);
+    expect(await run((tx) => bitBrowserPendingCapacity(tx, f.card.id))).toBe(1);
     let statement: Prisma.Sql | undefined;
     await bitBrowserPendingCapacity(
       {
@@ -185,17 +186,33 @@ const enabled = process.env.SHARED_BANK_CARD_MYSQL_TEST === '1';
       f.card.id
     );
     if (!statement) throw new Error('未捕获实际额度查询');
-    const plan = await db.$queryRaw<{ table: string; type: string; key: string | null }[]>(
-      Prisma.sql`EXPLAIN ${statement}`
+    const plan = await db.$queryRaw<Record<string, unknown>[]>(
+      Prisma.sql`EXPLAIN FORMAT=TRADITIONAL ${statement}`
     );
-    expect(plan.find((row) => row.table === 's')?.key).toBe('PRIMARY');
-    expect(plan.find((row) => row.table === 'l')?.key).toBe(
+    const detail = JSON.stringify(
+      plan.map((row) => ({
+        columns: Object.keys(row).sort(),
+        table: row.table,
+        tableType: typeof row.table,
+        tableBytes: row.table instanceof Uint8Array,
+        type: row.type,
+        key: row.key,
+        keyType: typeof row.key,
+        rows: row.rows,
+        extra: row.Extra
+      })),
+      (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value)
+    ).slice(0, 4000);
+    // Only plan metadata for this isolated synthetic fixture; no query parameters or card data.
+    console.info('SHARED_CARD_EXPLAIN_PLAN', detail);
+    expect(plan.find((row) => row.table === 's')?.key, detail).toBe('PRIMARY');
+    expect(plan.find((row) => row.table === 'l')?.key, detail).toBe(
       'id_business_v2_bank_recharge_cards_number_hash_key'
     );
-    expect(plan.find((row) => row.table === 'j')?.key).toBe(
+    expect(plan.find((row) => row.table === 'j')?.key, detail).toBe(
       'id_business_v2_recharge_jobs_card_id_idx'
     );
-    expect(['const', 'eq_ref', 'ref', 'range']).toContain(
+    expect(['const', 'eq_ref', 'ref', 'range'], detail).toContain(
       plan.find((row) => row.table === 'j')?.type
     );
   });
