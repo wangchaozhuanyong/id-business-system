@@ -54,6 +54,13 @@ OBSERVE_PINS = {
 
 
 # A closed successor recipe reuses this controller; published legacy contracts stay byte-identical.
+ADDRESS = 'existing-address-field-20261019'
+ADDRESS_CURRENT = '0348f0327849f1e1203e43db9b26dbbeca6dfa34'
+ADDRESS_TREE = '5e20ecd367c7e669593f7824b97397d9dfac653b'
+ADDRESS_PROOF = '5c11d73a4816f2429b09b337e5fb10a1d3c40fff8f1b864378b3960f4e8d017c'
+ADDRESS_API_IMAGE = 'sha256:215f8b1887ff12d1b6a93d2bc9c25496c68e36102f6185e2e78bce8a21260a01'
+ADDRESS_ADMIN_IMAGE = 'sha256:7f6980a4adb511ea11fbd8064118d33ea600a6c2cec52e72d15bba22a54764c5'
+ENTRY_CONTRACT_SHA = 'a7b87f7d009cf223fc9d92603b34caa8aea6d5609d462efbd21c24dda4f9f850'
 ENTRY = 'entry-start-20261019'
 ENTRY_CURRENT = '5f122fcb841c6029b46b023f41562529b7b4bde0'
 ENTRY_TREE = 'bf9d39169479a27288631731981a5aadbd180f21'
@@ -78,16 +85,17 @@ FOLLOWUP_TESTS = frozenset(('apps/api/src/id-business-v2/auto-recharge/recharge-
         'bitbrowser-direct-payment.spec.ts'))))
 RECIPE = 'history-20261019'
 UPDATED = ('api',)
+REBOUND = ('online-recharge',)
 PROOF_FILE = 'recharge-checkout-build-proof.json'
 BASELINE_STATUS = 'BITBROWSER_HISTORY_READONLY_BASELINE'
 ARTIFACT_LIMIT = 8 * 1024**2
 _LEGACY = {n: globals()[n] for n in ('SCOPE', 'CURRENT', 'PREDECESSOR_PROOF', 'CONTRACT_FILE', 'PRESERVED',
     'API_SOURCES', 'TEST_SOURCES', 'APPLICATION', 'MODULES', 'INHERITED', 'CONTROLS', 'RECIPE', 'UPDATED',
-    'PROOF_FILE', 'BASELINE_STATUS', 'ARTIFACT_LIMIT')}
+    'PROOF_FILE', 'BASELINE_STATUS', 'ARTIFACT_LIMIT', 'REBOUND')}
 
 
 def select_recipe(name):
-    need(name in ('history-20261019', FOLLOWUP, ENTRY), 'RECIPE_INVALID')
+    need(name in ('history-20261019', FOLLOWUP, ENTRY, ADDRESS), 'RECIPE_INVALID')
     globals().update(_LEGACY)
     if name == FOLLOWUP:
         sources = FOLLOWUP_API
@@ -113,6 +121,17 @@ def select_recipe(name):
                 for ext in ('.js', '.d.ts', '.js.map')),
             INHERITED=inherited, CONTROLS=inherited | (_LEGACY['CONTROLS'] - _LEGACY['INHERITED']),
             PROOF_FILE='bitbrowser-history-build-proof.json', BASELINE_STATUS='BITBROWSER_ENTRY_START_READONLY_BASELINE')
+    elif name == ADDRESS:
+        sources = frozenset((ADMIN_ROOT + 'bitbrowser-payment-form.ts',))
+        tests = frozenset((ADMIN_ROOT + 'bitbrowser-payment-form.spec.ts',))
+        inherited = INHERITED | frozenset(('bitbrowser-history-contract.json', 'bitbrowser-followup-contract.json', 'bitbrowser-entry-start-contract.json'))
+        globals().update(RECIPE=name, SCOPE='BITBROWSER_EXISTING_ADDRESS_FIELD_20261019', CURRENT=ADDRESS_CURRENT,
+            PREDECESSOR_PROOF=ADDRESS_PROOF, CONTRACT_FILE='bitbrowser-existing-address-contract.json',
+            API_SOURCES=frozenset(), TEST_SOURCES=tests, APPLICATION=sources | tests, MODULES=frozenset(),
+            INHERITED=inherited, CONTROLS=inherited | (_LEGACY['CONTROLS'] - _LEGACY['INHERITED']),
+            UPDATED=('admin',), REBOUND=(), PRESERVED=('api', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'online-recharge'),
+            PROOF_FILE='bitbrowser-history-build-proof.json', BASELINE_STATUS='BITBROWSER_EXISTING_ADDRESS_READONLY_BASELINE',
+            ARTIFACT_LIMIT=32 * 1024**2)
     return name
 
 
@@ -155,7 +174,7 @@ def validate_contract(c):
         and c['businessActions'] == 0, 'CONTRACT_IDENTITY_INVALID')
     need(inventory(c.get('sources')) and set(c['sources']) == APPLICATION
         and set(c.get('apiModules', [])) == MODULES and c.get('updatedServices') == list(UPDATED)
-        and c.get('reboundServices') == ['online-recharge'] and c.get('preservedServices') == list(PRESERVED),
+        and c.get('reboundServices') == list(REBOUND) and c.get('preservedServices') == list(PRESERVED),
         'SOURCE_SCOPE_INVALID')
     need(inventory(c.get('publishedApiModules')) and len(c['publishedApiModules']) == 40
         and MODULES <= set(c['publishedApiModules']) and inventory(c.get('publishedSharedFiles'))
@@ -169,6 +188,22 @@ def validate_contract(c):
         and re.fullmatch('[a-f0-9]{64}', c.get('qualityWorkflowSha256', ''))
         and c.get('sqlFenceHelperSha256') == c['controlPins']['api-admin-scope.py'], 'CONTROL_SCOPE_INVALID')
     b = c.get('baseline', {})
+    if RECIPE == ADDRESS:
+        need(re.fullmatch('[a-f0-9]{40}', c.get('sourceReviewTree', '')) and b.get('commit') == CURRENT and b.get('apiModules') == {}
+            and c.get('parentNative') == {'commit': ADDRESS_CURRENT, 'tree': ADDRESS_TREE, 'proofSha256': ADDRESS_PROOF,
+                'contractSha256': ENTRY_CONTRACT_SHA, 'workflowRunId': '39202298576', 'apiImage': ADDRESS_API_IMAGE,
+                'adminImage': ADDRESS_ADMIN_IMAGE}
+            and c['controlPins'].get('bitbrowser-entry-start-contract.json') == ENTRY_CONTRACT_SHA
+            and c['controlPins'].get('bitbrowser-followup-contract.json') == FOLLOWUP_CONTRACT_SHA
+            and c['controlPins'].get('bitbrowser-history-contract.json') == LEGACY_CONTRACT_SHA
+            and inventory(c.get('publishedAdminFiles')) and len(c['publishedAdminFiles']) == 261
+            and c.get('adminNativeProofSha256') == ENTRY_PROOF and c.get('engineHealth') == ENGINE
+            and inventory(c.get('mysqlInheritance', {}).get('inputs'))
+            and c.get('mysqlInheritance', {}).get('parentProofSha256') == ADDRESS_PROOF
+            and c.get('parentVerifiedBaseline', {}).get('commit') == ENTRY_CURRENT
+            and re.fullmatch('[a-f0-9]{64}', c.get('parentVerifiedSealSha256', '')), 'ADDRESS_PROVENANCE_INVALID')
+        verify_mysql(c['mysqlInheritance'].get('evidence'), {}, c)
+        return
     if RECIPE == ENTRY:
         need(re.fullmatch('[a-f0-9]{40}', c.get('sourceReviewTree', ''))
             and b.get('commit') == CURRENT and b.get('apiModules') == {n: c['publishedApiModules'][n] for n in MODULES}
@@ -211,6 +246,10 @@ def validate_contract(c):
 
 
 def verify_mysql(value, identity, c):
+    if RECIPE == ADDRESS:
+        inherited = c['mysqlInheritance']
+        need(value == inherited['evidence'] and inherited['parentProofSha256'] == ADDRESS_PROOF, 'MYSQL_INHERITANCE_INVALID')
+        identity = {'commit': ADDRESS_CURRENT, 'tree': ADDRESS_TREE, 'workflowRunId': '39202298576', 'workflowRunAttempt': '1'}
     need(type(value) is dict and value.get('scope') == 'OWNED_EMPTY_DATABASE'
         and value.get('runtime') == 'github-actions-mysql-service'
         and all(value.get(n) == identity[n] for n in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
@@ -231,12 +270,12 @@ def verify_proof(proof, plan, c, payload, h):
         and proof.get('baselineSharedUnchanged') is True and proof.get('migrationPerformed') is False
         and proof.get('businessActions') == 0 and proof.get('updatedServices') == list(UPDATED)
         and (RECIPE != ENTRY or proof.get('recipe') == ENTRY)
-        and inventory(proof.get('apiModules')) and set(proof['apiModules']) == MODULES, 'PROOF_INVALID')
+        and (inventory(proof.get('apiModules')) if MODULES else proof.get('apiModules') == {}) and set(proof['apiModules']) == MODULES, 'PROOF_INVALID')
     verify_mysql(proof.get('isolatedMysqlVerification'), plan, c)
     expected = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
         **{'source/' + n: v for n, v in c['sources'].items()}}
-    if RECIPE == FOLLOWUP:
-        need(proof.get('recipe') == FOLLOWUP and proof.get('baselineAdminReproduced') is True
+    if RECIPE in (FOLLOWUP, ADDRESS):
+        need(proof.get('recipe') == RECIPE and proof.get('baselineAdminReproduced') is True
             and proof.get('baselineAdminFiles') == c['publishedAdminFiles'] and inventory(proof.get('adminFiles'))
             and len(proof['adminFiles']) >= 250 and 'index.html' in proof['adminFiles'],
             'ADMIN_BUILD_PROOF_INVALID')
@@ -445,6 +484,115 @@ def entry_runtime_contract(d, h, c, plan):
     return {**c, 'baseline': b}
 
 
+def verify_address_parent(c, manifest, proof, preservation, old_entry, old_manifest):
+    before = c['parentVerifiedBaseline']
+    need(manifest.get('commit') == proof.get('commit') == preservation.get('commit') == ADDRESS_CURRENT
+        and manifest.get('sourceTree') == proof.get('tree') == preservation.get('tree') == ADDRESS_TREE
+        and manifest.get('status') == 'DEPLOYED' and manifest.get('scope') == proof.get('scope') == 'BITBROWSER_ENTRY_START_20261019'
+        and proof.get('recipe') == ENTRY and proof.get('contractSha256') == ENTRY_CONTRACT_SHA
+        and proof.get('workflowRunId') == preservation.get('workflowRunId') == '39202298576'
+        and proof.get('sources') == old_entry['sources'] and proof.get('controlSources') == old_entry['controlPins']
+        and proof.get('isolatedMysqlVerification') == c['mysqlInheritance']['evidence']
+        and proof.get('updatedServices') == ['api'] and proof.get('migrationPerformed') is False
+        and proof.get('businessActions') == 0 and preservation.get('businessActions') == 0
+        and preservation.get('migrationPerformed') is False and manifest.get('bitbrowserHistoryPublication') == preservation
+        and preservation.get('verifiedParentBaseline') == before
+        and preservation.get('entryParentSealSha256') == c['parentVerifiedSealSha256']
+        and manifest.get('previousCommit') == ENTRY_CURRENT and manifest.get('previousRelease') == before['current']
+        and manifest.get('previousManifestSha256') == before['manifestSha256'], 'ADDRESS_PARENT_IDENTITY_CHANGED')
+    need(preservation.get('before') == before['services'] and set(preservation.get('after', {})) == set(SERVICES)
+        and set(preservation.get('images', {})) == {'api'}
+        and all(preservation['after'][n] == preservation['before'][n] for n in ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge'))
+        and preservation['after']['admin']['image'] == ADDRESS_ADMIN_IMAGE
+        and preservation['after']['api']['image'] == preservation['images']['api']['imageId'] == ADDRESS_API_IMAGE
+        and preservation.get('image') == preservation['images']['api']
+        and manifest['images']['api'] == {'digest': ADDRESS_API_IMAGE, 'reference': preservation['images']['api']['reference'], 'sourceCommit': ADDRESS_CURRENT}
+        and all(manifest['images'][n] == old_manifest['images'][n] for n in old_manifest['images'] if n != 'api')
+        and preservation['after']['online-recharge']['image'] == preservation['before']['online-recharge']['image']
+        and all(preservation['after'][n]['environmentSha256'] == preservation['before'][n]['environmentSha256'] for n in ('api', 'online-recharge')),
+        'ADDRESS_PARENT_SERVICES_CHANGED')
+    api = manifest['roleSourceProjections']['api']
+    need(api.get('commit') == ADDRESS_CURRENT and api.get('kind') == manifest['scope'] and api.get('buildProofSha256') == ADDRESS_PROOF
+        and api.get('sources') == old_entry['sources'] and api.get('parentProjection') == old_manifest['roleSourceProjections']['api']
+        and manifest['roleSourceProjections']['admin'] == old_manifest['roleSourceProjections']['admin']
+        and manifest.get('adminSourceProjection') == old_manifest.get('adminSourceProjection'), 'ADDRESS_PARENT_PROJECTION_CHANGED')
+
+
+def address_runtime_contract(d, h, c, plan):
+    sealed = plan.get('runtimeBaseline', {}).get('verifiedBaseline')
+    readback = plan['mode'] == 'readback'
+    need(plan['mode'] == 'preflight' or type(sealed) is dict, 'ENTRY_PARENT_SEAL_MISSING')
+    seal_path = HERE / 'entry-parent-baseline.json'
+    if plan['mode'] != 'preflight':
+        need(seal_path.is_file() and not seal_path.is_symlink(), 'ENTRY_PARENT_SEAL_MISSING')
+        raw_seal = seal_path.read_bytes()
+        verify_entry_seal(plan, sealed, raw_seal)
+        need(plan['runtimeBaseline'].get('entryParentSealSha256') == sha(raw_seal), 'ENTRY_PARENT_SEAL_CHANGED')
+    parent = (Path(sealed['current']) if readback else BASE / 'current').resolve(strict=True)
+    need(parent.parent == BASE / 'releases' and (not readback or str(parent) == sealed['current']), 'ADDRESS_PARENT_PATH_CHANGED')
+    raw_manifest = (parent / 'release-manifest.json').read_bytes()
+    raw_proof = (parent / 'bitbrowser-history-build-proof.json').read_bytes()
+    raw_preservation = (parent / 'bitbrowser-history-preservation.json').read_bytes()
+    raw_entry = (HERE / 'bitbrowser-entry-start-contract.json').read_bytes()
+    need(sha(raw_proof) == ADDRESS_PROOF and sha(raw_entry) == ENTRY_CONTRACT_SHA, 'ADDRESS_PARENT_PROOF_CHANGED')
+    old_entry = json.loads(raw_entry)
+    before = c['parentVerifiedBaseline']
+    old_root = Path(before['current']).resolve(strict=True)
+    need(old_root.parent == BASE / 'releases' and str(old_root) == before['current'], 'ADDRESS_PARENT_ORIGIN_CHANGED')
+    raw_old_manifest = (old_root / 'release-manifest.json').read_bytes()
+    raw_admin_proof = (old_root / 'bitbrowser-history-build-proof.json').read_bytes()
+    need(sha(raw_old_manifest) == before['manifestSha256'] and sha(raw_admin_proof) == ENTRY_PROOF, 'ADDRESS_PARENT_ORIGIN_CHANGED')
+    manifest, proof, preservation = json.loads(raw_manifest), json.loads(raw_proof), json.loads(raw_preservation)
+    old_manifest, admin_proof = json.loads(raw_old_manifest), json.loads(raw_admin_proof)
+    verify_address_parent(c, manifest, proof, preservation, old_entry, old_manifest)
+    need(admin_proof.get('commit') == ENTRY_CURRENT and admin_proof.get('adminFiles') == c['publishedAdminFiles'], 'ADDRESS_ADMIN_NATIVE_CHANGED')
+    hashes = {n: sha((parent / n).read_bytes()) for n in CONFIGURATION}
+    old_compose_raw = (old_root / 'compose.release.json').read_bytes()
+    need(sha(old_compose_raw) == before['configurationSha256']['compose.release.json'], 'ADDRESS_PARENT_ORIGIN_CHANGED')
+    original_compose, selected_compose = json.loads(old_compose_raw), json.loads((parent / 'compose.release.json').read_bytes())
+    need(selected_compose['services']['api']['image'] == preservation['images']['api']['reference'], 'ADDRESS_PARENT_COMPOSE_CHANGED')
+    selected_compose['services']['api']['image'] = original_compose['services']['api']['image']
+    need(selected_compose == original_compose
+        and all(hashes[n] == before['configurationSha256'][n] for n in CONFIGURATION if n != 'compose.release.json'), 'ADDRESS_PARENT_COMPOSE_CHANGED')
+    parent_hashes = {'bitbrowser-history-build-proof.json': ADDRESS_PROOF, 'bitbrowser-history-preservation.json': sha(raw_preservation)}
+    if readback:
+        need(sealed['commit'] == CURRENT and sealed['manifestSha256'] == sha(raw_manifest)
+            and sealed['proofs'] == parent_hashes and sealed['services'] == preservation['after']
+            and sealed['configurationSha256'] == hashes and sealed['apiModules'] == {}
+            and sealed['adminInventory'] == before['adminInventory'], 'ENTRY_PARENT_SEAL_CHANGED')
+        return {**c, 'baseline': copy.deepcopy(sealed)}
+    states = h.snapshot(d, parent)
+    need(states == preservation['after'], 'ADDRESS_PARENT_RUNTIME_MOVED')
+    observed = runtime(d, states, proof['apiModules'])
+    expected = {**{n: before[n] for n in ('apiPreservedInventory', 'sharedInventory', 'clientInventory', 'adminInventory', 'nginxSha256')}, 'apiModules': proof['apiModules']}
+    need(observed == expected and database(d, states['api']) == before['database']
+        and {n: h.configuration(d, st) for n, st in states.items()} == before['runtimeConfigurationSha256'], 'ADDRESS_PARENT_CONTENT_CHANGED')
+    old_preservation = json.loads((old_root / 'bitbrowser-history-preservation.json').read_bytes())
+    need(old_manifest.get('bitbrowserHistoryPublication') == old_preservation, 'ADDRESS_ADMIN_HISTORY_CHANGED')
+    old_followup_raw = (HERE / 'bitbrowser-followup-contract.json').read_bytes()
+    need(sha(old_followup_raw) == FOLLOWUP_CONTRACT_SHA, 'ADDRESS_ADMIN_HISTORY_CHANGED')
+    old_followup = json.loads(old_followup_raw)
+    merged = verify_admin_merge(old_preservation['beforeAdminFiles'], admin_proof['adminFiles'],
+        load('recharge-checkout-release.py').admin_inventory(d, states['admin']), old_followup['baseline']['adminInventory'])
+    need(merged == before['adminInventory'], 'ADDRESS_ADMIN_HISTORY_CHANGED')
+    b = {'status': BASELINE_STATUS, 'commit': CURRENT, 'current': str(parent), 'manifestSha256': sha(raw_manifest),
+        'services': states, 'configurationSha256': hashes, 'proofs': parent_hashes,
+        'runtimeConfigurationSha256': before['runtimeConfigurationSha256'], **runtime(d, states), 'database': before['database'],
+        'backupNormalizerPath': before['backupNormalizerPath'], 'backupNormalizerSha256': before['backupNormalizerSha256'], 'businessActions': 0, 'databaseWrites': 0}
+    need(b['apiModules'] == {} and (sealed is None or b == sealed), 'ENTRY_PARENT_SEAL_CHANGED')
+    normalizer = Path(b['backupNormalizerPath'])
+    need(normalizer.is_relative_to(BASE / 'releases') and not normalizer.is_symlink() and sha(normalizer.read_bytes()) == b['backupNormalizerSha256'], 'BACKUP_NORMALIZER_CHANGED')
+    need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
+    h.guards(d, parent, states, c)
+    if plan['mode'] == 'preflight':
+        need(not seal_path.exists(), 'ENTRY_PARENT_ALREADY_SEALED')
+        with seal_path.open('xb') as output:
+            output.write(canonical(entry_seal_record(plan, b)))
+            output.flush()
+            os.fsync(output.fileno())
+    return {**c, 'baseline': b}
+
+
 def baseline(d, h, c, expected=None):
     current = (BASE / 'current').resolve(strict=True)
     b = c['baseline']
@@ -464,7 +612,7 @@ def baseline(d, h, c, expected=None):
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     h.guards(d, current, states, c)
     receipt = load('recharge-availability-release.py').runtime_receipt(current, raw, states)
-    if RECIPE == ENTRY:
+    if RECIPE in (ENTRY, ADDRESS):
         receipt['verifiedBaseline'] = copy.deepcopy(b)
         receipt['entryParentSealSha256'] = sha((HERE / 'entry-parent-baseline.json').read_bytes())
     if expected is not None:
@@ -490,7 +638,7 @@ def smoke(d, h, retired, target, states, c, proof, before_admin=None):
     observed = runtime(d, states)
     expected_runtime = {**{n: c['baseline'][n] for n in ('apiModules', 'apiPreservedInventory', 'sharedInventory',
         'clientInventory', 'adminInventory', 'nginxSha256')}, 'apiModules': proof['apiModules']}
-    if RECIPE == FOLLOWUP:
+    if RECIPE in (FOLLOWUP, ADDRESS):
         need(type(before_admin) is dict and inventory(before_admin), 'ADMIN_HISTORY_MISSING')
         expected_runtime['adminInventory'] = verify_admin_merge(before_admin, proof['adminFiles'],
             load('recharge-checkout-release.py').admin_inventory(d, states['admin']), c['baseline']['adminInventory'])
@@ -513,6 +661,21 @@ def smoke(d, h, retired, target, states, c, proof, before_admin=None):
     h.engine_idle(d, states['online-recharge'], c, wait_connected=True)
 
 
+def activate_services(d, target, before, fence):
+    if 'api' in UPDATED:
+        fence.stop(before['api'], grace=30)
+        fence.stop(before['online-recharge'], grace=45)
+        fence.close()
+    d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', *UPDATED, timeout=180)
+    for role in UPDATED:
+        d.wait_healthy(target, role)
+    fence.close()
+    if REBOUND:
+        d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', *REBOUND, timeout=180)
+        for role in REBOUND:
+            d.wait_healthy(target, role)
+
+
 def release(plan, c):
     validate_contract(c)
     raw_contract = (HERE / CONTRACT_FILE).read_bytes()
@@ -531,6 +694,8 @@ def release(plan, c):
         a.acquire_release_lock(lock)
         if RECIPE == ENTRY:
             c = entry_runtime_contract(d, h, c, plan)
+        elif RECIPE == ADDRESS:
+            c = address_runtime_contract(d, h, c, plan)
         if plan['mode'] == 'readback':
             target = (BASE / 'current').resolve(strict=True)
             manifest = json.loads((target / 'release-manifest.json').read_bytes())
@@ -540,12 +705,12 @@ def release(plan, c):
             proof = json.loads(raw)
             receipt = json.loads((target / 'bitbrowser-history-preservation.json').read_bytes())
             states = h.snapshot(d, target)
-            need(states == receipt['after'] and states['api']['image'] == receipt['image']['imageId']
+            need(states == receipt['after'] and states[UPDATED[0]]['image'] == receipt['image']['imageId']
                 and (RECIPE != FOLLOWUP or all(states[role]['image'] == receipt['images'][role]['imageId'] for role in UPDATED)),
                 'READBACK_SERVICES_CHANGED')
             need(all(sha((target / 'scripts/production-release' / n).read_bytes()) == v
                 for n, v in plan['controlSources'].items()), 'READBACK_EXECUTOR_CHANGED')
-            if RECIPE == ENTRY:
+            if RECIPE in (ENTRY, ADDRESS):
                 need(receipt.get('verifiedParentBaseline') == c['baseline']
                     and receipt.get('entryParentSealSha256') == plan['runtimeBaseline']['entryParentSealSha256'], 'ENTRY_PARENT_SEAL_CHANGED')
             smoke(d, h, retired, target, states, c, proof, receipt.get('beforeAdminFiles'))
@@ -557,6 +722,11 @@ def release(plan, c):
                     and manifest.get('adminSourceProjection') == old_manifest.get('adminSourceProjection')
                     and all(manifest['images'][n] == old_manifest['images'][n] for n in old_manifest['images'] if n != 'api'),
                     'ENTRY_PRESERVED_IDENTITY_CHANGED')
+            if RECIPE == ADDRESS:
+                need(manifest['roleSourceProjections']['api'] == old_projections['api']
+                    and manifest.get('apiCompiledArtifact') == old_manifest.get('apiCompiledArtifact')
+                    and all(manifest['images'][n] == old_manifest['images'][n] for n in old_manifest['images'] if n != 'admin'),
+                    'ADDRESS_PRESERVED_IDENTITY_CHANGED')
             need(all(manifest['roleSourceProjections'][role]['parentProjection'] == old_projections[role] for role in UPDATED),
                 'SOURCE_INHERITANCE_CHANGED')
             return {'status': 'BITBROWSER_HISTORY_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'],
@@ -593,7 +763,7 @@ def release(plan, c):
             built = json.loads(d.run('docker', 'image', 'inspect', reference))[0]
             p.verify_overlay_image(original, built, plan, 1, load('recharge-checkout-release.py'))
             images[role] = {'reference': reference, 'imageId': built['Id']}
-        before_admin = load('recharge-checkout-release.py').admin_inventory(d, before['admin']) if RECIPE == FOLLOWUP else None
+        before_admin = load('recharge-checkout-release.py').admin_inventory(d, before['admin']) if RECIPE in (FOLLOWUP, ADDRESS) else None
         baseline(d, h, c, plan['runtimeBaseline'])
         backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(c['baseline']['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')
@@ -624,14 +794,7 @@ def release(plan, c):
         try:
             fence.acquire()
             p.verify_markers(markers)
-            fence.stop(before['api'], grace=30)
-            fence.stop(before['online-recharge'], grace=45)
-            fence.close()
-            d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', *UPDATED, timeout=180)
-            for role in UPDATED:
-                d.wait_healthy(target, role)
-            d.compose(target, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--force-recreate', 'online-recharge', timeout=180)
-            d.wait_healthy(target, 'online-recharge')
+            activate_services(d, target, before, fence)
             after = h.snapshot(d, target)
             need(all(after[role]['image'] == images[role]['imageId'] for role in UPDATED), 'IMAGE_CHANGED')
             smoke(d, h, retired, target, after, c, proof, before_admin)
@@ -641,11 +804,11 @@ def release(plan, c):
             raise
         finally:
             fence.close()
-        image = images['api']
+        image = images[UPDATED[0]]
         preservation = {'status': 'BITBROWSER_HISTORY_DEPLOYED', 'commit': plan['commit'], 'tree': plan['tree'],
             'before': before, 'after': after, 'image': image, 'images': images, 'beforeAdminFiles': before_admin, 'backup': backup, 'workflowRunId': plan['workflowRunId'],
             'businessActions': 0, 'migrationPerformed': False}
-        if RECIPE == ENTRY:
+        if RECIPE in (ENTRY, ADDRESS):
             preservation['verifiedParentBaseline'] = copy.deepcopy(c['baseline'])
             preservation['entryParentSealSha256'] = plan['runtimeBaseline']['entryParentSealSha256']
         (target / 'bitbrowser-history-preservation.json').write_text(json.dumps(preservation, sort_keys=True, indent=2) + '\n')
@@ -657,14 +820,19 @@ def release(plan, c):
                 'sources': {n: v for n, v in c['sources'].items() if n.startswith('apps/' + role + '/')},
                 'buildProofSha256': plan['buildProofSha256']}
             manifest['images'][role] = {'reference': images[role]['reference'], 'digest': images[role]['imageId'], 'sourceCommit': plan['commit']}
-        if RECIPE == FOLLOWUP:
+        if RECIPE in (FOLLOWUP, ADDRESS):
             manifest['previousAdminSourceProjection'] = copy.deepcopy(manifest.get('adminSourceProjection'))
             manifest['adminSourceProjection'] = copy.deepcopy(manifest['roleSourceProjections']['admin'])
         manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=SCOPE,
             previousCommit=CURRENT, previousRelease=str(previous), previousManifestSha256=sha(raw_manifest),
-            status='DEPLOYED', servicesUpdated=list(UPDATED), servicesRebound=['online-recharge'], newMigrations=[],
+            status='DEPLOYED', servicesUpdated=list(UPDATED), servicesRebound=list(REBOUND), newMigrations=[],
             migrationPerformed=False, paymentActions=0, bitbrowserHistoryPublication=preservation,
-            apiCompiledArtifact={'url': url, 'sha256': plan['artifactSha256'], 'validationRun': plan['workflowRunId']})
+            compiledArtifactSelection=list(UPDATED))
+        artifact = {'url': url, 'sha256': plan['artifactSha256'], 'validationRun': plan['workflowRunId']}
+        if 'api' in UPDATED:
+            manifest['apiCompiledArtifact'] = artifact
+        if 'admin' in UPDATED:
+            manifest['adminCompiledArtifact'] = artifact
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         d.point_current(target, stamp + '-bitbrowser-history')
         p.release_markers(markers)
@@ -675,7 +843,7 @@ def release(plan, c):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--recipe', default='history-20261019', choices=('history-20261019', FOLLOWUP, ENTRY))
+    parser.add_argument('--recipe', default='history-20261019', choices=('history-20261019', FOLLOWUP, ENTRY, ADDRESS))
     parser.add_argument('--observe', action='store_true', required=True)
     args = parser.parse_args()
     select_recipe(args.recipe)

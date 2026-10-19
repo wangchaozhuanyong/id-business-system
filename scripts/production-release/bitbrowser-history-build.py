@@ -2,7 +2,9 @@
 import argparse
 import importlib.util
 import json
+import io
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -128,7 +130,8 @@ def reconstruct():
 
 def require_quality_jobs(rows, p):
     names = {r.get('name', '').replace(' ', '') for r in rows if r.get('conclusion') == 'success'}
-    required = {'recharge(guards)', 'recharge(api)'} | ({'recharge(admin)'} if p.RECIPE == p.FOLLOWUP else set())
+    required = ({'recharge(guards)', 'recharge(admin)'} if p.RECIPE == p.ADDRESS else
+        {'recharge(guards)', 'recharge(api)'} | ({'recharge(admin)'} if p.RECIPE == p.FOLLOWUP else set()))
     p.need('full-quality' in names or required <= names,
         'SOURCE_API_QUALITY_NOT_PASSED')
 
@@ -286,6 +289,9 @@ def followup_check(c):
             == p.sha(git('show', c['sourceReviewCommit'] + ':' + n)), 'SOURCE_CHANGED')
     for n in p.MYSQL_FILES:
         p.need(c['mysqlTestSources'][n] == p.sha(git('show', p.CURRENT + ':' + n)), 'MYSQL_SOURCE_CHANGED')
+    if p.RECIPE == p.ADDRESS:
+        p.need(c['mysqlInheritance']['inputs'] == mysql_inputs(c['sourceReviewCommit']) == mysql_inputs(p.CURRENT)
+            == mysql_inputs('HEAD'), 'INHERITED_MYSQL_INPUT_CHANGED')
     for n, expected in c['controlPins'].items():
         p.need((HERE / n).is_file() and not (HERE / n).is_symlink() and p.sha((HERE / n).read_bytes()) == expected, 'CONTROL_CHANGED')
         if n in p.INHERITED:
@@ -478,31 +484,179 @@ def followup_main(c):
     print(json.dumps({'status': 'BITBROWSER_FOLLOWUP_NATIVE_BUILT', **identity, 'businessActions': 0}))
 
 
+
+def mysql_inputs(commit):
+    # Bind the unchanged lock implementation, its complete local dependencies,
+    # both database specs and all MySQL migrations/schema and dependency locks.
+    p = load('bitbrowser-history-release.py')
+    raw = git('archive', '--format=tar', commit, 'apps/api/src/id-business-v2/auto-recharge',
+        'apps/api/prisma-mysql', 'packages/shared/src', 'package-lock.json', 'package.json',
+        'apps/api/package.json', 'packages/shared/package.json')
+    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+        members = archive.getmembers()
+        p.need(all(member.isdir() or member.isfile() for member in members), 'MYSQL_INPUT_KIND_CHANGED')
+        return {member.name: p.sha(archive.extractfile(member).read()) for member in members if member.isfile()}
+
+
+def address_freeze(parent_dir, source, admin_proof_path):
+    p = load('bitbrowser-history-release.py')
+    source = git('rev-parse', source + '^{commit}').decode().strip()
+    p.need(set(git('diff', '--name-only', p.CURRENT, source).decode().splitlines()) == p.APPLICATION, 'REVIEW_SCOPE_CHANGED')
+    directory = Path(parent_dir)
+    raw = (directory / 'build-proof.json').read_bytes()
+    parent = json.loads(raw)
+    preflight = json.loads((directory / 'publication/preflight-result.json').read_bytes())
+    admin_raw = Path(admin_proof_path).read_bytes()
+    admin = json.loads(admin_raw)
+    old = json.loads((HERE / 'bitbrowser-entry-start-contract.json').read_bytes())
+    p.need(p.sha(raw) == p.ADDRESS_PROOF and parent['commit'] == p.ADDRESS_CURRENT
+        and parent['contractSha256'] == p.ENTRY_CONTRACT_SHA and p.sha(admin_raw) == p.ENTRY_PROOF
+        and admin['commit'] == p.ENTRY_CURRENT and preflight['commit'] == p.ADDRESS_CURRENT
+        and preflight['status'] == 'BITBROWSER_HISTORY_PREFLIGHT_VERIFIED', 'PREDECESSOR_PROOF_INVALID')
+    inputs = mysql_inputs(source)
+    p.need(inputs == mysql_inputs(p.CURRENT), 'INHERITED_MYSQL_INPUT_CHANGED')
+    tree = git('rev-parse', source + '^{tree}').decode().strip()
+    selector = ROOT / 'scripts/ci-recharge-scope.mjs'
+    text = selector.read_text()
+    for key, value in (('Commit', source), ('Tree', tree)):
+        text, count = re.subn(r"(export const bitbrowserExistingAddressSourceReview" + key + r"\s*=\s*')[^']+(';?)", lambda m: m[1] + value + m[2], text)
+        p.need(count == 1, 'ADDRESS_SELECTOR_MISSING')
+    selector.write_text(text)
+    c = {'version': 1, 'status': 'FROZEN', 'recipe': p.ADDRESS, 'scope': p.SCOPE,
+        'expectedCurrent': p.CURRENT, 'reviewBase': p.CURRENT, 'sourceReviewCommit': source, 'sourceReviewTree': tree,
+        'sources': {n: p.sha(git('show', source + ':' + n)) for n in sorted(p.APPLICATION)},
+        'apiModules': [], 'updatedServices': list(p.UPDATED), 'reboundServices': [], 'preservedServices': list(p.PRESERVED),
+        'engineHealth': p.ENGINE, 'controlPins': {n: p.sha((HERE / n).read_bytes()) for n in sorted(p.CONTROLS)},
+        'ciControlPins': {n: p.sha((ROOT / n).read_bytes()) for n in sorted(p.CI_CONTROLS)},
+        'mysqlTestSources': old['mysqlTestSources'], 'mysqlInheritance': {'parentProofSha256': p.ADDRESS_PROOF,
+            'evidence': parent['isolatedMysqlVerification'], 'inputs': inputs},
+        'workflowSha256': p.sha((ROOT / p.WORKFLOW).read_bytes()),
+        'qualityWorkflowSha256': p.sha((ROOT / '.github/workflows/quality.yml').read_bytes()),
+        'predecessorProofSha256': p.ADDRESS_PROOF,
+        'publishedApiModules': {**old['publishedApiModules'], **parent['apiModules']}, 'publishedSharedFiles': old['publishedSharedFiles'],
+        'publishedAdminFiles': admin['adminFiles'], 'adminNativeProofSha256': p.ENTRY_PROOF,
+        'parentVerifiedBaseline': preflight['runtimeBaseline']['verifiedBaseline'],
+        'parentVerifiedSealSha256': preflight['runtimeBaseline']['entryParentSealSha256'],
+        'sqlFenceHelperSha256': p.sha((HERE / 'api-admin-scope.py').read_bytes()),
+        'baseline': {'commit': p.CURRENT, 'apiModules': {}},
+        'parentNative': {'commit': p.ADDRESS_CURRENT, 'tree': p.ADDRESS_TREE, 'proofSha256': p.ADDRESS_PROOF,
+            'contractSha256': p.ENTRY_CONTRACT_SHA, 'workflowRunId': '39202298576',
+            'apiImage': p.ADDRESS_API_IMAGE, 'adminImage': p.ADDRESS_ADMIN_IMAGE},
+        'migrationPerformed': False, 'businessActions': 0}
+    p.validate_contract(c)
+    for n in p.INHERITED:
+        p.need(c['controlPins'][n] == p.sha(git('show', p.CURRENT + ':scripts/production-release/' + n)), 'INHERITED_CONTROL_CHANGED')
+    CONTRACT.write_text(json.dumps(c, sort_keys=True, indent=2) + '\n')
+
+
+def inherited_mysql(c, identity):
+    p = load('bitbrowser-history-release.py')
+    destination = ROOT / '.runtime/bitbrowser-history-parent'
+    p.need(not destination.exists(), 'PARENT_EVIDENCE_ALREADY_EXISTS')
+    run = json.loads(subprocess.check_output(['gh', 'api', 'repos/wangchaozhuanyong/id-business-system/actions/runs/39202298576'], cwd=ROOT))
+    p.need(run['head_sha'] == p.ADDRESS_CURRENT and run['conclusion'] == 'success'
+        and run['path'] == p.WORKFLOW and str(run['run_attempt']) == '1', 'PARENT_NATIVE_CHANGED')
+    destination.mkdir(mode=0o700, parents=True)
+    subprocess.run(['gh', 'run', 'download', '39202298576', '-n', 'bitbrowser-history-mysql-39202298576-1', '-D', str(destination / 'mysql')], cwd=ROOT, check=True)
+    subprocess.run(['gh', 'run', 'download', '39202298576', '-n', 'bitbrowser-history-' + p.ADDRESS_CURRENT + '-1', '-D', str(destination / 'native')], cwd=ROOT, check=True)
+    bundle = destination / 'native/bitbrowser-history-artifact.tar.gz'
+    with tarfile.open(bundle) as archive:
+        raw = archive.extractfile('payload/build-proof.json').read()
+    parent = json.loads(raw)
+    report = (destination / 'mysql/mysql-vitest.json').read_bytes()
+    p.need(p.sha(raw) == p.ADDRESS_PROOF and parent['isolatedMysqlVerification'] == c['mysqlInheritance']['evidence']
+        and p.sha(report) == parent['isolatedMysqlVerification']['reportSha256'], 'PARENT_MYSQL_EVIDENCE_CHANGED')
+    evidence = parent['isolatedMysqlVerification']
+    p.verify_mysql(evidence, identity, c)
+    return evidence
+
+
+def reconstruct_address(p):
+    _unused_api, admin = reconstruct_followup(p)
+    old = json.loads((HERE / 'bitbrowser-followup-contract.json').read_bytes())
+    overlay(admin, {n: v for n, v in old['sources'].items() if n.startswith('apps/admin/')}, old['sourceReviewCommit'])
+    return admin
+
+
+def address_main(c):
+    p = followup_check(c)
+    commit = git('rev-parse', 'HEAD').decode().strip()
+    identity = {'commit': commit, 'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
+        'workflowRunId': os.environ['GITHUB_RUN_ID'], 'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT']}
+    p.need(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_REF') == 'refs/heads/main'
+        and os.environ.get('GITHUB_SHA') == commit and os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
+        and os.environ.get('GITHUB_REPOSITORY') == 'wangchaozhuanyong/id-business-system'
+        and not OUT.exists() and not git('status', '--porcelain', '--untracked-files=no').strip(), 'NATIVE_BUILD_REQUIRED')
+    qa = {'release': quality(commit, c), 'sources': quality(c['sourceReviewCommit'], c, source=True)}
+    mysql_evidence = inherited_mysql(c, identity)
+    OUT.mkdir(mode=0o700, parents=True)
+    before = reconstruct_address(p)
+    candidate = OUT / 'admin-candidate'
+    shutil.copytree(before, candidate)
+    overlay(candidate, c['sources'], c['sourceReviewCommit'])
+    h = load('recharge-record-release.py')
+    outputs = []
+    for context, build_id in ((before, p.ENTRY_CURRENT), (candidate, commit)):
+        env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + build_id}
+        for command in (('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
+            ('npm', 'run', 'build', '--workspace', '@apple-business/shared'),
+            ('npm', 'run', 'build', '--workspace', '@apple-business/admin')):
+            subprocess.run(command, cwd=context, env=env, check=True)
+        outputs.append((h.file_inventory(context / 'apps/admin/dist'), h.file_inventory(context / 'packages/shared/dist')))
+    verify_followup_admin(outputs[0][0], outputs[0][1], outputs[1][1], c, p)
+    payload = OUT / 'payload'
+    shutil.copytree(candidate / 'apps/admin/dist', payload / 'admin/html')
+    for n in c['sources']:
+        target = payload / 'source' / n
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / n, target)
+    proof = {**identity, 'version': 1, 'recipe': p.ADDRESS, 'scope': p.SCOPE,
+        'contractSha256': p.sha(CONTRACT.read_bytes()), 'sources': c['sources'], 'controlSources': c['controlPins'],
+        'apiModules': {}, 'adminFiles': h.file_inventory(payload / 'admin/html'),
+        'baselineAdminReproduced': True, 'baselineAdminFiles': c['publishedAdminFiles'],
+        'files': h.file_inventory(payload), 'qualityVerification': qa, 'isolatedMysqlVerification': mysql_evidence,
+        'baselineModulesReproduced': {}, 'predecessorProofSha256': p.ADDRESS_PROOF,
+        'baselineSharedUnchanged': True, 'updatedServices': ['admin'], 'migrationPerformed': False, 'businessActions': 0}
+    p.verify_proof(proof, proof, c, payload, h)
+    (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
+    bundle = OUT / 'bitbrowser-history-artifact.tar.gz'
+    with tarfile.open(bundle, 'w:gz') as archive:
+        archive.add(payload, arcname='payload')
+    (OUT / 'artifact-sha256.txt').write_text(p.sha(bundle.read_bytes()) + '\n')
+    print(json.dumps({'status': 'BITBROWSER_EXISTING_ADDRESS_NATIVE_BUILT', **identity, 'businessActions': 0}))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--recipe', choices=('history-20261019', 'followup-20261019', 'entry-start-20261019'), default=os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019'))
+    parser.add_argument('--recipe', choices=('history-20261019', 'followup-20261019', 'entry-start-20261019', 'existing-address-field-20261019'), default=os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019'))
     parser.add_argument('--admin-proof', default=str(PREDECESSOR))
     parser.add_argument('--freeze', nargs=2, metavar=('BASELINE', 'SOURCE_REVIEW_COMMIT'))
     parser.add_argument('--predecessor-proof', default=str(PREDECESSOR))
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     RECIPE = args.recipe
-    if RECIPE == 'followup-20261019':
+    if RECIPE == 'existing-address-field-20261019':
+        CONTRACT = HERE / 'bitbrowser-existing-address-contract.json'
+    elif RECIPE == 'followup-20261019':
         CONTRACT = HERE / 'bitbrowser-followup-contract.json'
     elif RECIPE == 'entry-start-20261019':
         CONTRACT = HERE / 'bitbrowser-entry-start-contract.json'
     if args.freeze:
-        if RECIPE == 'entry-start-20261019':
+        if RECIPE == 'existing-address-field-20261019':
+            address_freeze(*args.freeze, args.admin_proof)
+        elif RECIPE == 'entry-start-20261019':
             entry_freeze(*args.freeze)
         elif RECIPE == 'followup-20261019':
             followup_freeze(*args.freeze, args.predecessor_proof, args.admin_proof)
         else:
             freeze(*args.freeze, args.predecessor_proof)
     elif args.check:
-        (followup_check if RECIPE in ('followup-20261019', 'entry-start-20261019') else check)(json.loads(CONTRACT.read_bytes()))
+        (followup_check if RECIPE in ('followup-20261019', 'entry-start-20261019', 'existing-address-field-20261019') else check)(json.loads(CONTRACT.read_bytes()))
         print('{"sourceCheck":"passed","businessActions":0}')
     else:
-        if RECIPE == 'entry-start-20261019':
+        if RECIPE == 'existing-address-field-20261019':
+            address_main(json.loads(CONTRACT.read_bytes()))
+        elif RECIPE == 'entry-start-20261019':
             entry_main(json.loads(CONTRACT.read_bytes()))
         elif RECIPE == 'followup-20261019':
             followup_main(json.loads(CONTRACT.read_bytes()))

@@ -12,6 +12,7 @@ on:
           - history-20261019
           - followup-20261019
           - entry-start-20261019
+          - existing-address-field-20261019
       commit:
         description: Exact reviewed main commit
         required: true
@@ -31,7 +32,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.recipe != 'existing-address-field-20261019'
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
@@ -115,9 +116,39 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  validate-admin:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.recipe == 'existing-address-field-20261019'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BITBROWSER_RELEASE_RECIPE: ${{ inputs.recipe }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Verify finite Admin controls and unchanged inherited MySQL inputs
+        run: |
+          python3 -B scripts/production-release/bitbrowser-history-build.py --check
+          python3 -B scripts/production-release/bitbrowser-history-release.test.py
+      - name: Reproduce published Admin and inherit exact parent MySQL evidence
+        run: python3 -B scripts/production-release/bitbrowser-history-build.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-history-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/bitbrowser-history/bitbrowser-history-artifact.tar.gz
+            .deploy/bitbrowser-history/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
   publish:
-    needs: validate
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    needs: [validate, validate-admin]
+    if: always() && github.ref == 'refs/heads/main' && inputs.commit == github.sha && ((inputs.recipe == 'existing-address-field-20261019' && needs.validate-admin.result == 'success' && needs.validate.result == 'skipped') || (inputs.recipe != 'existing-address-field-20261019' && needs.validate.result == 'success' && needs.validate-admin.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
