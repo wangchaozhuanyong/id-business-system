@@ -101,13 +101,13 @@ class Controls(unittest.TestCase):
             self.assertEqual(c['beforeEngineFiles'][name], c['afterEngineFiles'][name])
 
     def test_review_base_is_independent_and_cannot_be_replaced_by_another_production_baseline(self):
-        self.assertEqual(p.REVIEW_BASE, '681e088e1ae6512515769d9e670d7fedd271850f')
+        self.assertEqual(p.REVIEW_BASE, '48c1c07f341dbb66a174e7f4113e3dd88dcc2fb6')
         current = p.CURRENT
         old_current = '0348f0327849f1e1203e43db9b26dbbeca6dfa34'
         with patch.object(p, 'CURRENT', old_current):
             c = contract(); p.validate_contract(c)
             self.assertEqual(c['reviewBase'], p.REVIEW_BASE)
-            for review_base in (current, '6cdef85aba8c9835801fc4b1ff0c512cd0e5fe41', old_current, p.ENGINE_BASE, '0' * 40, None):
+            for review_base in (current, '681e088e1ae6512515769d9e670d7fedd271850f', old_current, p.ENGINE_BASE, '0' * 40, None):
                 c = contract(); c['reviewBase'] = review_base
                 with self.subTest(review_base=review_base), self.assertRaisesRegex(RuntimeError, 'CONTRACT_IDENTITY_INVALID'):
                     p.validate_contract(c)
@@ -124,7 +124,7 @@ class Controls(unittest.TestCase):
                 delta = set(sources)
                 if mutation == 'missing-login-test': delta.remove(p.ENGINE + '/test/login-evidence-browser.test.cjs')
                 if mutation == 'extra-payment-policy': delta.add(p.ENGINE + '/payment-limit.cjs')
-                if mutation == 'old-review-base': value['reviewBase'] = '6cdef85aba8c9835801fc4b1ff0c512cd0e5fe41'
+                if mutation == 'old-review-base': value['reviewBase'] = '681e088e1ae6512515769d9e670d7fedd271850f'
                 def git(*args):
                     if args[:2] == ('cat-file', '-t'): return b'tag\n'
                     if args[0] == 'rev-parse': return (review + '\n').encode()
