@@ -183,7 +183,6 @@ except Exception as error:
             'NATIVE_OPERATION_FAILED')
         report = json.loads(result['StandardOutputContent'])
         if 'zlibBase64' in report:
-            import zlib,base64
             report = json.loads(zlib.decompress(base64.b64decode(report['zlibBase64'])))
         (OUT / (mode + '-result.json')).write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
         return report

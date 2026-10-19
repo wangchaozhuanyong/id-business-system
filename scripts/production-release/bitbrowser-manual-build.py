@@ -72,7 +72,7 @@ def source_receipt(run, pr, identity, c, p):
         receipt = json.loads(archive.read('evidence.json'))
     p.need(receipt == {'repository': 'wangchaozhuanyong/id-business-system', 'runId': run['id'],
         'runAttempt': run['run_attempt'], 'pullRequest': pr['number'], 'headSha': pr['head']['sha'],
-        'baseSha': c['reviewBase'], 'testedTree': identity['tree']}, 'TESTED_TREE_CHANGED')
+        'baseSha': pr['base']['sha'], 'testedTree': identity['tree']}, 'TESTED_TREE_CHANGED')
     return {'testedTree': receipt['testedTree'], 'pullRequest': pr['number'],
         'sourceEvidenceArtifactId': artifact['id'], 'sourceEvidenceSha256': p.sha(raw)}
 
