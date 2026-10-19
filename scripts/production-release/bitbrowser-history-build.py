@@ -297,7 +297,7 @@ def followup_check(c):
     if p.RECIPE == p.BOUNDED and c.get('mysqlTestInputRepair'):
         repair = c['mysqlTestInputRepair']
         p.need(git('rev-parse', repair['reviewBase'] + '^{tree}').decode().strip() == repair['reviewBaseTree']
-            and p.sha(git('show', repair['reviewBase'] + ':' + repair['path'])) == repair['oldSha256'],
+            and p.sha(git('show', repair['reviewBase'] + ':' + repair['path'])) == repair['reviewBaseSha256'],
             'MYSQL_TEST_INPUT_REPAIR_BASE_CHANGED')
     for n in (p.MYSQL_FILES if p.RECIPE != p.BOUNDED else ()):
         p.need(c['mysqlTestSources'][n] == p.sha(git('show', p.CURRENT + ':' + n)), 'MYSQL_SOURCE_CHANGED')
@@ -740,7 +740,7 @@ def bounded_freeze(parent_dir, source, delta_path):
     current_mysql = p.sha((ROOT / p.MYSQL_REPAIR_PATH).read_bytes())
     if current_mysql != p.MYSQL_REPAIR_OLD_SHA:
         p.need(current_mysql == p.MYSQL_REPAIR_NEW_SHA
-            and p.sha(git('show', p.MYSQL_REPAIR_BASE + ':' + p.MYSQL_REPAIR_PATH)) == p.MYSQL_REPAIR_OLD_SHA
+            and p.sha(git('show', p.MYSQL_REPAIR_BASE + ':' + p.MYSQL_REPAIR_PATH)) == p.MYSQL_REPAIR_BASE_SHA
             and git('rev-parse', p.MYSQL_REPAIR_BASE + '^{tree}').decode().strip() == p.MYSQL_REPAIR_TREE,
             'MYSQL_TEST_INPUT_REPAIR_INVALID')
         c['mysqlTestInputRepair'] = p.mysql_test_input_repair()

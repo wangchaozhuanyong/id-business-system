@@ -7933,12 +7933,12 @@ import {
   isBitbrowserBoundedHoldMysqlRepairOnly
 } from './ci-recharge-scope.mjs';
 
-test('bounded MySQL repair admits only its frozen nine files and exact base and tree', () => {
+test('bounded MySQL repair admits only its frozen seven files and exact base and tree', () => {
   const context = {
     base: bitbrowserBoundedHoldMysqlRepairBase,
     baseTree: bitbrowserBoundedHoldMysqlRepairTree
   };
-  assert.equal(bitbrowserBoundedHoldMysqlRepairPaths.length, 9);
+  assert.equal(bitbrowserBoundedHoldMysqlRepairPaths.length, 7);
   assert.equal(
     isBitbrowserBoundedHoldMysqlRepairOnly(bitbrowserBoundedHoldMysqlRepairPaths, context),
     bitbrowserBoundedHoldMysqlRepairStatus === 'FROZEN_MYSQL_REPAIR'
@@ -7970,7 +7970,9 @@ test('bounded MySQL repair admits only its frozen nine files and exact base and 
     );
   for (const path of [
     '.github/workflows/bitbrowser-history-validation.yml',
-    'scripts/production-release/bitbrowser-history-dispatch.py'
+    'scripts/production-release/bitbrowser-history-dispatch.py',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs'
   ])
     assert.equal(bitbrowserBoundedHoldMysqlRepairPaths.includes(path), false);
 });
@@ -8044,6 +8046,8 @@ test('bounded MySQL repair actual PR and push CLI keep both controls and use ful
       ...[
         '.github/workflows/bitbrowser-history-validation.yml',
         'scripts/production-release/bitbrowser-history-dispatch.py',
+        'scripts/ci-recharge-check.mjs',
+        'scripts/ci-recharge-check.test.mjs',
         'scripts/production-release/bitbrowser-existing-address-contract.json',
         'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts',
         'apps/api/prisma-mysql/schema.prisma',
