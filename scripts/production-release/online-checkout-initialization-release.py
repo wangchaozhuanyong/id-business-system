@@ -14,18 +14,18 @@ ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
 PREFIX = 'online-checkout-initialization'
 SCOPE = 'ONLINE_CHECKOUT_INITIALIZATION'
-CURRENT = '7df16100f7964bb7183f171ec5e9f275f4f48876'
-REVIEW_BASE = '48c1c07f341dbb66a174e7f4113e3dd88dcc2fb6'
+CURRENT = '523bf8173e46823c05e9641428263f17b1ca3906'
+REVIEW_BASE = '523bf8173e46823c05e9641428263f17b1ca3906'
 ENGINE_BASE = '827ede8b4f32bd43f699413d9630d094bdd33a4c'
 ENGINE_IMAGE = 'sha256:5affbc4fc1adf9794d55408138ae93be1a9209a7c4efaed72282bd29fa3c6b24'
-MANIFEST_SHA = '2108db5002441be8e4acce33152288244eeb68895df71b8cd42941dfe3d31be7'
+MANIFEST_SHA = '6248c88223ed7c64c3aa4832e2ff64cf535195678f3cda701a3a37416c7493a1'
 PRESERVATION_FILE = 'bitbrowser-history-preservation.json'
-PRESERVATION_SHA = '1972a87db55a8be230f1b75a6aaa413cb7be2845f86894d357a48cd58406cd0a'
+PRESERVATION_SHA = '9011711a9fc23fd5b62cb27b97faf42bc09dbe26f3faf6d5163ad2b48efedd9b'
 NORMALIZER_PATH = '/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed'
 NORMALIZER_SHA = 'ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202'
 PREDECESSOR_PROOFS = {
     'online-checkout-actionability-build-proof.json': 'e2cea0e27318da7e9cb4c143f2cd26d7b87dc9cc90361eb5ef4f0db17d86f388',
-    'bitbrowser-history-build-proof.json': 'e284ca254334424c8bfeca2ca07da5df75eb0740468fcea4ddc970b7b4b83bb5'}
+    'bitbrowser-history-build-proof.json': '21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354'}
 CONTRACT_FILE = PREFIX + '-contract.json'
 WORKFLOW = '.github/workflows/' + PREFIX + '-validation.yml'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
