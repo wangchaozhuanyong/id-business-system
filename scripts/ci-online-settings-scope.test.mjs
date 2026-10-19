@@ -63,14 +63,20 @@ import {
   onlineSessionPreflightControls
 } from './ci-online-settings-scope.mjs';
 
-test('initialization narrows only its complete eighteen-file engine delta and two task documents', () => {
+test('initialization narrows only its complete twenty-file engine delta and two task documents', () => {
   const sources = [
     ...onlineCheckoutInitializationPaths,
     'docs/ONLINE_RECHARGE.md',
     'docs/V2_TASKS.md'
   ];
   assert.equal(onlineCheckoutInitializationScope, 'ONLINE_CHECKOUT_INITIALIZATION');
-  assert.equal(onlineCheckoutInitializationPaths.length, 18);
+  assert.equal(onlineCheckoutInitializationPaths.length, 20);
+  for (const name of ['checkout-form.cjs', 'test/checkout-form.test.cjs'])
+    assert.ok(
+      onlineCheckoutInitializationPaths.includes(
+        'apps/api/src/id-business-v2/online-recharge/engine/' + name
+      )
+    );
   assert.equal(onlineCheckoutInitializationControls.length, 9);
   for (const paths of [sources, [...sources, ...onlineCheckoutInitializationControls]]) {
     assert.equal(isOnlineCheckoutInitializationOnly(paths), true);

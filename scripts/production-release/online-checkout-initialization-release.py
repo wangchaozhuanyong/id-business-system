@@ -29,9 +29,9 @@ PREDECESSOR_PROOFS = {
 CONTRACT_FILE = PREFIX + '-contract.json'
 WORKFLOW = '.github/workflows/' + PREFIX + '-validation.yml'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine'
-FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-recovery.cjs', 'upstream/session-auth.js',
+FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'checkout-recovery.cjs', 'upstream/session-auth.js',
     'upstream/auth-page-detect.js', 'upstream/human-verification.js', 'upstream/stripe-payment.js',
-    'upstream/chatgpt.js', 'upstream/index.js', 'test/checkout-recovery.test.cjs', 'test/session-routing-browser.test.cjs',
+    'upstream/chatgpt.js', 'upstream/index.js', 'test/checkout-form.test.cjs', 'test/checkout-recovery.test.cjs', 'test/session-routing-browser.test.cjs',
     'test/checkout-card-preparation.test.cjs', 'test/checkout-reload-request-diagnostics.test.cjs',
     'test/recharge-flow-acceptance.test.cjs', 'test/regressions.test.cjs', 'test/auth-navigation.test.cjs',
     'test/login-evidence-browser.test.cjs', 'test/session-probe.test.cjs', 'test/upstream-session-transition.test.cjs'))

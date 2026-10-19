@@ -85,12 +85,13 @@ class Controls(unittest.TestCase):
         c = contract(); c['frozen'] = False
         with self.assertRaisesRegex(RuntimeError, 'SOURCE_NOT_FROZEN'): p.release({}, c)
 
-    def test_exact_eighteen_file_delta_preserves_dependencies_and_payment_controls(self):
+    def test_exact_twenty_file_delta_preserves_dependencies_and_payment_controls(self):
         c = contract(); p.validate_contract(c)
-        self.assertEqual(len(p.FILES), 18)
+        self.assertEqual(len(p.FILES), 20)
         self.assertEqual(len(p.ADDED), 7)
         self.assertEqual(set(c['afterEngineFiles']) - set(c['beforeEngineFiles']), p.ADDED)
-        self.assertTrue({'upstream/auth-page-detect.js', 'upstream/human-verification.js',
+        self.assertTrue({'checkout-form.cjs', 'test/checkout-form.test.cjs',
+            'upstream/auth-page-detect.js', 'upstream/human-verification.js',
             'test/recharge-flow-acceptance.test.cjs', 'test/regressions.test.cjs',
             'test/auth-navigation.test.cjs', 'test/login-evidence-browser.test.cjs',
             'test/session-probe.test.cjs', 'test/upstream-session-transition.test.cjs'} <= p.FILES)

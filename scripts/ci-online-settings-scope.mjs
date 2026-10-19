@@ -498,6 +498,7 @@ export const onlineCheckoutInitializationScope = 'ONLINE_CHECKOUT_INITIALIZATION
 export const onlineCheckoutInitializationPaths = Object.freeze(
   [
     'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
     'checkout-recovery.cjs',
     'upstream/session-auth.js',
     'upstream/auth-page-detect.js',
@@ -505,6 +506,7 @@ export const onlineCheckoutInitializationPaths = Object.freeze(
     'upstream/stripe-payment.js',
     'upstream/chatgpt.js',
     'upstream/index.js',
+    'test/checkout-form.test.cjs',
     'test/checkout-recovery.test.cjs',
     'test/session-routing-browser.test.cjs',
     'test/checkout-card-preparation.test.cjs',

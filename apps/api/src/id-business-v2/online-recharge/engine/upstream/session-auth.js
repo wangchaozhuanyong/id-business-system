@@ -854,16 +854,21 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
                     && !url.username && !url.password;
             } catch (_) { return false; }
         };
+        const assertOfficialHomepage = () => {
+            if (isOfficialHomepage()) return;
+            const redirectDetected = isLoginRedirectUrl(page.url());
+            throw sessionNotConfirmed('登录核验已离开原首页，已停止后续操作',
+                redirectDetected ? 'login_redirect' : 'navigation_failed',
+                { ...diagnostics, redirectDetected: diagnostics.redirectDetected || redirectDetected });
+        };
         const assertCurrentLoggedInUi = async () => {
             let restabilized = false;
             for (;;) {
                 remaining(1);
-                if (!isOfficialHomepage())
-                    throw sessionNotConfirmed('登录核验已离开原首页，已停止后续操作', 'navigation_failed', diagnostics);
+                assertOfficialHomepage();
                 try {
                     await assertChatGptLoggedIn(page, '首页', diagnostics);
-                    if (!isOfficialHomepage())
-                        throw sessionNotConfirmed('登录核验已离开原首页，已停止后续操作', 'navigation_failed', diagnostics);
+                    assertOfficialHomepage();
                     return restabilized;
                 } catch (error) {
                     if (error.code !== 'SESSION_NOT_CONFIRMED'
@@ -879,8 +884,7 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
                         diagnostics.challengeDetected ||= blocking;
                         return blocking;
                     });
-                    if (!isOfficialHomepage())
-                        throw sessionNotConfirmed('登录核验已离开原首页，已停止后续操作', 'navigation_failed', diagnostics);
+                    assertOfficialHomepage();
                     diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
                     if (await isBlockingHumanVerificationVisible(page)) {
                         diagnostics.challengeDetected = true;
