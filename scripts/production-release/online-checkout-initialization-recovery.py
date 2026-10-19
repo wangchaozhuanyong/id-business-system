@@ -20,6 +20,25 @@ LEGACY, sha, need, quiet_candidate = ORIGINAL.LEGACY, ORIGINAL.sha, ORIGINAL.nee
 connected_engine = ORIGINAL.connected_engine
 
 
+def selected_snapshot(d, target, expected):
+    # compose ps -q omits the stopped container this continuation must inspect.
+    container = d.compose(target, 'ps', '--all', '--quiet', 'online-recharge').strip()
+    need(container == expected['containerId'], 'RECOVERY_COMPOSE_SELECTION_CHANGED')
+    rows = json.loads(d.run('docker', 'inspect', container))
+    need(type(rows) is list and len(rows) == 1, 'RECOVERY_INSPECTION_INVALID')
+    row = rows[0]; state = row.get('State', {}); config = row.get('Config', {})
+    environment = config.get('Env'); started = state.get('StartedAt')
+    need(row.get('Id') == container and row.get('Image') == expected['image']
+        and type(environment) is list and bool(environment) and all(type(v) is str for v in environment)
+        and type(started) is str and 0 < len(started) <= 128, 'RECOVERY_INSPECTION_INVALID')
+    states = {name: d.service_state(target, name, include_container_id=True,
+        include_environment_hash=True) for name in PRESERVED}
+    states['online-recharge'] = {'containerId': container, 'image': row['Image'],
+        'reference': config['Image'], 'status': state['Status'], 'health': state.get('Health', {}).get('Status'),
+        'startedAtSha256': sha(started.encode()), 'environmentSha256': d.historical_fingerprint(sorted(environment))}
+    return states, row
+
+
 def fenced_engine(d, state, _contract, **_kwargs):
     # The parent has already completed its startup RPC before health is ready.
     # A second API request while task tables are locked can wait behind claimJob.
@@ -82,11 +101,10 @@ def resume_failed_selection(plan, c, control, expected):
         proof_raw = (target / (PREFIX + '-build-proof.json')).read_bytes()
         need(sha(proof_raw) == plan['buildProofSha256'], 'RECOVERY_PROOF_CHANGED')
         proof = json.loads(proof_raw); original.verify_proof(proof, plan, c, proof['files'])
-        states = h.snapshot(d, target)
+        states, metadata = selected_snapshot(d, target, expected)
         need(all(states[n] == c['baseline']['services'][n] for n in PRESERVED)
             and states['online-recharge']['containerId'] == expected['containerId']
             and states['online-recharge']['image'] == image, 'RECOVERY_SERVICE_CHANGED')
-        metadata = json.loads(d.run('docker', 'inspect', expected['containerId']))[0]
         need(metadata['Id'] == expected['containerId'] and metadata['Image'] == image
             and metadata['State']['Running'] is False and metadata['State'].get('Paused') is False, 'RECOVERY_NOT_STOPPED')
         original.verify_host(target, states, c, plan)
@@ -137,7 +155,7 @@ def resume_failed_selection(plan, c, control, expected):
             try:
                 if started:
                     if candidate is None:
-                        candidate = h.snapshot(d, target)['online-recharge']
+                        candidate = selected_snapshot(d, target, expected)[0]['online-recharge']
                     need(candidate['containerId'] == expected['containerId'] and candidate['image'] == image,
                         'RECOVERY_SERVICE_CHANGED')
                     quiet = quiet_candidate(d, candidate)
