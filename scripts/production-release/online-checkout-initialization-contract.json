@@ -6,9 +6,9 @@
     ".gitignore": "ee2666d766b138b1597680a997c7c3f3d1bdf2df69e27c1a6e89850745cb8710",
     "Dockerfile": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
     "README.md": "cd84a0602c8e2c7b4b34dae9db404cf6bb81a2f8cf2921e111b83a87176a2dc5",
-    "SOURCE_MANIFEST.json": "88e913fcd0878d8ef591b9b47d98bad2088a0ee5b0fe5a523ccd26f3742b36f4",
+    "SOURCE_MANIFEST.json": "7ad448400c028d77242a2b681e7e402bcd51197c8d9125c4451eab51402d78a7",
     "UPSTREAM.json": "2357ff0a121ce916de81aa7cf6303d58ac59666aa530f42083e528b6530f9623",
-    "checkout-form.cjs": "74811ee9378cae418277a5c56d379dc7002bff3681ba3cf8ac574351c1f94dcd",
+    "checkout-form.cjs": "38b4be9bd6d866707e078e2e660ee0d0941dc96f5140f52726690100779b01f6",
     "checkout-recovery.cjs": "2bdabc723dceacc20c6f36906b15561e863dc055451bfd6919262b908db230f8",
     "confirmation.cjs": "798026e30cb9a907e5cdc7195720f2b758eea83ecf76dbf4ee793eff6c8f318f",
     "credential-client.cjs": "410caab6d4fa7b748d21bea0c21750023ff480e9c408aa54a0fd5fa28e7c1f2b",
@@ -30,7 +30,7 @@
     "test/auth-navigation.test.cjs": "0dbca0ebbf12555f3c197aa8ad0ac3286b29fbd924d816dac6632b80abb6b727",
     "test/checkout-card-preparation.test.cjs": "00d94af3b5b61031f997f95824a59d3b5f4eea467bb214b5f80c226002e19324",
     "test/checkout-cs-browser.test.cjs": "7ae537e5a145f2a7188372502ff875b404926d3d9fbe207c2091b442956af04d",
-    "test/checkout-form.test.cjs": "330a66c72fd2ca5348171962d0f46c7d5e524e460aa8bcbb68a47dcf79f9f453",
+    "test/checkout-form.test.cjs": "7216dd11bb30a28424f6c0ef4d853307fdfa107f4e9a544b88bf2dff53c9bc29",
     "test/checkout-interaction.test.cjs": "5fe246a97d6f8dd05cfc1723b52ce94f010dfd87e68deb6b75e9daadc49f07ff",
     "test/checkout-load-recovery.test.cjs": "a2165a4f1332d580d003c100e6ea33cab946eb8e0ad5a226653cd55c2ca192d7",
     "test/checkout-navigation.test.cjs": "9fed69c4fa6fc649d988cdb14b53a03e3889864883896459c21cc0d038583d20",
@@ -99,7 +99,7 @@
     "upstream/proxy-pool.js": "50762b9ed3e7cab8ac6d54a377f77bc4e11c5c34f38bebbca5ea16184294b0ef",
     "upstream/region-config.js": "627661ad53b00ca4bd73fcea7a762790df3430637ddbc5823bcf3a9fc7adea7f",
     "upstream/requirements-hcaptcha.txt": "2dc2e143fb0fb2be771f5a851e4230e9d5d34bd79b63863f59d91111a048bbe2",
-    "upstream/session-auth.js": "b9292001cdecacbf1bce9752def9ba9ddca83ef3bc0859dac02bfc4d53107bd9",
+    "upstream/session-auth.js": "9f2b9683b6eccaf23dbba1201b6f05bbe0bfad80c30c181d30ac826815a98f8d",
     "upstream/stripe-payment.js": "37134d91f9ff46485da9b6a3186c7b9d4804ae6c8d7b9329fbe747cf76570ff5",
     "upstream/subscription-check.js": "f88083289b9e79e53cb4ea70db31c36c9e50c756768d121a395029b66b8b5c87",
     "upstream/tax-free-address.js": "0c063e0e201a37628542db2f87c93cb1057f3f29671eb6a2887deeda88ec3162",
@@ -4583,8 +4583,8 @@
     "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
     "online-checkout-actionability-release.test.py": "271add54ce5080ad3e1a20400697361af3ddf63392da8a78a79efdbf7025c827",
     "online-checkout-initialization-build.py": "d202ee4e1f00b72eca5eb4d0477e4e15e795d3a23cdaac9193f1ccdc22a4bed9",
-    "online-checkout-initialization-release.py": "f3551d26f902095625219cde8d39dc7920c2a71ffa6985f4fdda3fc5ceaccd4f",
-    "online-checkout-initialization-release.test.py": "994680faaf840c2fa37066796875f7d3a904532bf3b7ce2d882ab1ae4303c145",
+    "online-checkout-initialization-release.py": "5f7a20aae0848499b578cf4b299edb84dfc5d9ee7981243c40abb7674d2fd721",
+    "online-checkout-initialization-release.test.py": "4a10e9892e59fc48d0dabd6466751b7a400b84631d682c07c76e465ba437d83b",
     "online-checkout-load-release.py": "50f9608895bf0072c38a2549a8db70c941316339c3a4626b179ca8b016078374",
     "online-checkout-release.py": "a20b33e15d05e7c01ddefd92ebce91c0587c0ccc09a5cd7a4cb019ebee6e0b39",
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
@@ -4614,16 +4614,18 @@
   "requiredQualityParts": ["guards", "online-engine"],
   "reviewBase": "7df16100f7964bb7183f171ec5e9f275f4f48876",
   "reviewedControlSources": {
-    "scripts/ci-online-settings-scope.mjs": "ee6d66321eded56cc5d8fe2b95d5ed729ed36338613a14bbb6f91474dc4321e8",
-    "scripts/ci-online-settings-scope.test.mjs": "b41c91c1bac9142fff05b78b1be2f7aaacf6daa271b4c7638f5982fd85f22cf1",
+    "scripts/ci-online-settings-scope.mjs": "be01c5cf21f2afeae9f653e2079488a629f45809becde9e059afd92e279f83e3",
+    "scripts/ci-online-settings-scope.test.mjs": "254c8f16898c7742785ece9199c247bf615795a6b2ce96edc4dda3d01f7dcd2b",
     "scripts/ci-recharge-scope.mjs": "7cce4f5962e9107fe2a15eb426b287eaf2ca3c26215e90b8496203742931d0e5",
-    "scripts/ci-recharge-scope.test.mjs": "ca0f7166421afd5d8bb1e9621fa5673b78481c512215ba8ea5311b4e4270e31c"
+    "scripts/ci-recharge-scope.test.mjs": "dc929956121859417868f54d0eed701a8b4f06721b48a7e2232525460ed506dc"
   },
   "runtimeSources": {
-    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "88e913fcd0878d8ef591b9b47d98bad2088a0ee5b0fe5a523ccd26f3742b36f4",
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "7ad448400c028d77242a2b681e7e402bcd51197c8d9125c4451eab51402d78a7",
+    "apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs": "38b4be9bd6d866707e078e2e660ee0d0941dc96f5140f52726690100779b01f6",
     "apps/api/src/id-business-v2/online-recharge/engine/checkout-recovery.cjs": "2bdabc723dceacc20c6f36906b15561e863dc055451bfd6919262b908db230f8",
     "apps/api/src/id-business-v2/online-recharge/engine/test/auth-navigation.test.cjs": "0dbca0ebbf12555f3c197aa8ad0ac3286b29fbd924d816dac6632b80abb6b727",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-card-preparation.test.cjs": "00d94af3b5b61031f997f95824a59d3b5f4eea467bb214b5f80c226002e19324",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs": "7216dd11bb30a28424f6c0ef4d853307fdfa107f4e9a544b88bf2dff53c9bc29",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs": "3d8088085c62e62c98526ecd10929a36e88a0a3b61e2f8cb463a54f4665bef99",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-reload-request-diagnostics.test.cjs": "861251e2f13a5348e4a59aed9731dabf37ae47696b435e8e2b8eb900a64afe5a",
     "apps/api/src/id-business-v2/online-recharge/engine/test/login-evidence-browser.test.cjs": "2d97ab72f0081c98f13d840eea16d67580f315d2833a7d29faeadbb616edf54a",
@@ -4636,12 +4638,12 @@
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js": "f30ca99d6b07eca7eb6b0383fc1c5cebf88d4eae7bf26d1f89d34c3674ef2e63",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js": "6ca8e13af6369d79ea962fcce6c57417747d42c78bc56c4d77d7637c52a9fdd5",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "5a4cd299fa54915ce9a39b47bb8cc9ee2326a2bc902cad3c00a101f1ce21595e",
-    "apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js": "b9292001cdecacbf1bce9752def9ba9ddca83ef3bc0859dac02bfc4d53107bd9",
+    "apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js": "9f2b9683b6eccaf23dbba1201b6f05bbe0bfad80c30c181d30ac826815a98f8d",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js": "37134d91f9ff46485da9b6a3186c7b9d4804ae6c8d7b9329fbe747cf76570ff5"
   },
   "scope": "ONLINE_CHECKOUT_INITIALIZATION",
-  "sourceReviewCommit": "f8f2d9b114d6a44b05175f29acc7fdff7ea1f7d5",
-  "sourceReviewTag": "online-checkout-initialization-source-review-f8f2d9b114d6",
+  "sourceReviewCommit": "7f97c3d8dda17b8243e380cf72d232c86bf409cf",
+  "sourceReviewTag": "online-checkout-initialization-source-review-7f97c3d8dda1",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "upstreamSource": {
@@ -4649,8 +4651,8 @@
     "repository": "https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git"
   },
   "validationSources": {
-    "docs/ONLINE_RECHARGE.md": "2eadf0a3d37900f36e3f961d7a9591752117fe102eed08c6ce10259c216d8961",
-    "docs/V2_TASKS.md": "cfd79aaa3d4e393689a08f357ee7303b2e27aa75e8a7072fa4033a0f0d4b8061"
+    "docs/ONLINE_RECHARGE.md": "65fdc26d3459b013bcee2c3154d687cef295325e99e187808b27eb977a3d2262",
+    "docs/V2_TASKS.md": "b10ff39fb09f01dcd2a5e89a96ab4ea70296320aa93ed1bed5e0b14a2efd96a5"
   },
   "version": 1,
   "workflowSha256": "9e5fb511b25238141f2f7307e473b6fa2e3f21d10ea19f9a285db739c4571512"
