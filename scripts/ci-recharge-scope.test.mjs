@@ -7765,3 +7765,124 @@ test('finite existing-address controls retain exactly ten controls and both real
     false
   );
 });
+
+import {
+  bitbrowserBoundedHoldSourceStatus,
+  bitbrowserBoundedHoldSourceBase,
+  bitbrowserBoundedHoldSourceBaseTree,
+  bitbrowserBoundedHoldSourcePaths,
+  isBitbrowserBoundedHoldSourceOnly,
+  matchBitbrowserBoundedHoldSource,
+  bitbrowserBoundedHoldSchemaMatches
+} from './ci-recharge-scope.mjs';
+
+test('bounded source admission is draft closed and its future frozen path set excludes schema and neighboring business', () => {
+  const context = {
+    base: bitbrowserBoundedHoldSourceBase,
+    baseTree: bitbrowserBoundedHoldSourceBaseTree
+  };
+  assert.equal(
+    isBitbrowserBoundedHoldSourceOnly(bitbrowserBoundedHoldSourcePaths, context),
+    bitbrowserBoundedHoldSourceStatus === 'FROZEN_SOURCE_PATHS'
+  );
+  assert.equal(
+    matchBitbrowserBoundedHoldSource(
+      bitbrowserBoundedHoldSourcePaths,
+      context,
+      'DRAFT_SCOPE_PENDING'
+    ),
+    false
+  );
+  assert.equal(
+    matchBitbrowserBoundedHoldSource(
+      bitbrowserBoundedHoldSourcePaths,
+      context,
+      'FROZEN_SOURCE_PATHS'
+    ),
+    true
+  );
+  for (const paths of [
+    ...bitbrowserBoundedHoldSourcePaths.map((missing) =>
+      bitbrowserBoundedHoldSourcePaths.filter((n) => n !== missing)
+    ),
+    [...bitbrowserBoundedHoldSourcePaths, bitbrowserBoundedHoldSourcePaths[0]],
+    ...[
+      'apps/api/prisma-mysql/schema.prisma',
+      'apps/api/prisma-mysql/migrations/unknown/migration.sql',
+      'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+      'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.controller.ts',
+      'apps/api/src/auth/auth.service.ts',
+      'package-lock.json',
+      'scripts/production-release/bitbrowser-existing-address-contract.json'
+    ].map((extra) => [...bitbrowserBoundedHoldSourcePaths, extra])
+  ])
+    assert.equal(matchBitbrowserBoundedHoldSource(paths, context, 'FROZEN_SOURCE_PATHS'), false);
+  for (const changed of [
+    { ...context, base: 'main' },
+    { ...context, base: 'a'.repeat(40) },
+    { ...context, baseTree: 'a'.repeat(40) }
+  ])
+    assert.equal(
+      matchBitbrowserBoundedHoldSource(
+        bitbrowserBoundedHoldSourcePaths,
+        changed,
+        'FROZEN_SOURCE_PATHS'
+      ),
+      false
+    );
+  assert.equal(bitbrowserBoundedHoldSchemaMatches(schema, schema), true);
+  for (const [before, after] of [
+    [undefined, undefined],
+    ['', ''],
+    [schema, schema + '\n'],
+    [schema, schema.replace('model', 'model Changed')]
+  ])
+    assert.equal(bitbrowserBoundedHoldSchemaMatches(before, after), false);
+});
+
+test('bounded source actual PR and push CLI emit the frozen three-part matrix and reject every missing or neighboring path', () => {
+  const frozen = bitbrowserBoundedHoldSourceStatus === 'FROZEN_SOURCE_PATHS';
+  for (const eventName of ['pull_request', 'push']) {
+    const context = {
+      base: bitbrowserBoundedHoldSourceBase,
+      baseTree: bitbrowserBoundedHoldSourceBaseTree
+    };
+    const { result } = recordScopeClassification(
+      bitbrowserBoundedHoldSourcePaths,
+      {},
+      eventName,
+      context
+    );
+    assert.equal(result.mode, frozen ? 'recharge' : 'full');
+    if (frozen) {
+      assert.deepEqual(result.checkParts, ['guards', 'api', 'admin']);
+      assert.equal(result.onlineCiBuild, false);
+    } else assert.notDeepEqual(result.checkParts, ['guards', 'api', 'admin']);
+    for (const { paths, options } of [
+      {
+        paths: bitbrowserBoundedHoldSourcePaths,
+        options: { ...context, baseTree: 'a'.repeat(40) }
+      },
+      {
+        paths: bitbrowserBoundedHoldSourcePaths,
+        options: { ...context, schemaBefore: schema, schemaAfter: schema + '\n' }
+      },
+      ...bitbrowserBoundedHoldSourcePaths.map((missing) => ({
+        paths: bitbrowserBoundedHoldSourcePaths.filter((n) => n !== missing),
+        options: context
+      })),
+      ...[
+        'apps/api/src/id-business-v2/online-recharge/persistence/tasks.repository.ts',
+        'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.controller.ts',
+        'apps/api/src/auth/auth.service.ts',
+        'apps/api/prisma-mysql/schema.prisma',
+        'apps/api/prisma-mysql/migrations/unknown/migration.sql',
+        'package-lock.json'
+      ].map((extra) => ({ paths: [...bitbrowserBoundedHoldSourcePaths, extra], options: context }))
+    ]) {
+      const { result: negative } = recordScopeClassification(paths, {}, eventName, options);
+      assert.equal(negative.mode, 'full');
+      assert.notDeepEqual(negative.checkParts, ['guards', 'api', 'admin']);
+    }
+  }
+});

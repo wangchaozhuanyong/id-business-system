@@ -1137,6 +1137,7 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserBoundedHoldSourceOnly(paths, context)) return false;
   if (isBitbrowserExistingAddressControlsOnly(paths, context)) return false;
   if (isBitbrowserEntryStartControlsOnly(paths, context)) return false;
   if (isBitbrowserFollowupControlsOnly(paths, context)) return false;
@@ -1939,6 +1940,121 @@ export function isBitbrowserExistingAddressControlsOnly(paths, context) {
   );
 }
 
+// Only this reviewed source path set is admitted; source hashes remain bound by QA.
+// It never admits a directory wildcard or a schema/migration change.
+export const bitbrowserBoundedHoldSourceStatus = 'FROZEN_SOURCE_PATHS';
+export const bitbrowserBoundedHoldSourceBase = '7df16100f7964bb7183f171ec5e9f275f4f48876';
+export const bitbrowserBoundedHoldSourceBaseTree = 'ddd571a0921335e9a437f0e99ee5886916680545';
+export const bitbrowserBoundedHoldSourceApplications = Object.freeze([
+  'apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts',
+  'apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts',
+  'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-payment-hold.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-retired-callback.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-terminal-failure.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge.service.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-capacity.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-card-hold.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/public-api.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.mysql.integration.spec.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/shared-card-capacity.spec.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/shared-card-management.spec.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/shared-card-recovery.spec.ts',
+  'apps/api/src/id-business-v2/bank-card-pool/shared-card-settlement.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.card-capacity.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts'
+]);
+export const bitbrowserBoundedHoldSourcePaths = Object.freeze([
+  ...bitbrowserBoundedHoldSourceApplications,
+  ...['scope.mjs', 'scope.test.mjs', 'check.mjs', 'check.test.mjs'].map(
+    (name) => `scripts/ci-recharge-${name}`
+  )
+]);
+export const bitbrowserBoundedHoldSourceParts = Object.freeze(['guards', 'api', 'admin']);
+export function bitbrowserBoundedHoldSourceShape(paths) {
+  return (
+    paths.length === bitbrowserBoundedHoldSourcePaths.length &&
+    new Set(paths).size === paths.length &&
+    paths.every((name) => bitbrowserBoundedHoldSourcePaths.includes(name))
+  );
+}
+export function matchBitbrowserBoundedHoldSource(paths, context, status) {
+  return (
+    status === 'FROZEN_SOURCE_PATHS' &&
+    bitbrowserBoundedHoldSourceShape(paths) &&
+    context?.base === bitbrowserBoundedHoldSourceBase &&
+    context?.baseTree === bitbrowserBoundedHoldSourceBaseTree
+  );
+}
+export function isBitbrowserBoundedHoldSourceOnly(paths, context) {
+  return matchBitbrowserBoundedHoldSource(paths, context, bitbrowserBoundedHoldSourceStatus);
+}
+export function bitbrowserBoundedHoldSchemaMatches(before, after) {
+  return typeof before === 'string' && before.length > 0 && before === after;
+}
+export function bitbrowserBoundedHoldCheckCommands(part, paths) {
+  const npm = (...args) => ['npm', ...args];
+  if (part === 'guards')
+    return [
+      npm('run', 'format:check'),
+      npm('run', 'lint'),
+      [
+        'node',
+        '--test',
+        'scripts/ci-recharge-scope.test.mjs',
+        'scripts/ci-recharge-check.test.mjs'
+      ],
+      ...new Set([
+        ...adminUiGuardChecks('recharge', paths),
+        ...backendArchitectureGuardChecks('recharge', paths)
+      ])
+    ].map((command) => (typeof command === 'string' ? npm('run', command) : command));
+  if (part === 'api')
+    return [
+      npm('run', 'prisma:mysql:generate'),
+      npm('run', 'prisma:mysql:validate'),
+      npm('run', 'build', '--workspace', '@apple-business/shared'),
+      npm('run', 'typecheck', '--workspace', '@apple-business/api'),
+      npm(
+        'run',
+        'test',
+        '--workspace',
+        '@apple-business/api',
+        '--',
+        'src/id-business-v2/auto-recharge',
+        'src/id-business-v2/bank-card-pool',
+        'src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+        'src/id-business-v2/online-recharge/persistence/worker.card-capacity.spec.ts',
+        'src/id-business-v2/online-recharge/persistence/worker-rpc.repository.spec.ts'
+      ),
+      npm('run', 'build', '--workspace', '@apple-business/api')
+    ];
+  if (part === 'admin') return adminCheckCommands('recharge', paths).map((args) => npm(...args));
+  throw new Error('Unsupported bounded BitBrowser source check part');
+}
+
 export function isCiOnly(paths, context) {
   if (isBitbrowserExistingAddressControlsOnly(paths, context)) return true;
   if (isBitbrowserEntryStartControlsOnly(paths, context)) return true;
@@ -2102,6 +2218,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isBitbrowserBoundedHoldSourceOnly(paths, context))
+    return bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema) ? 'recharge' : 'full';
   if (isBitbrowserExistingAddressControlsOnly(paths, context))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isBitbrowserEntryStartControlsOnly(paths, context))
@@ -2645,6 +2763,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isBitbrowserBoundedHoldSourceOnly(paths, context))
+    return [...bitbrowserBoundedHoldSourceParts];
   if (isBitbrowserExistingAddressControlsOnly(paths, context))
     return ['guards', 'release-controls'];
   if (isBitbrowserEntryStartControlsOnly(paths, context)) return ['guards', 'release-controls'];
@@ -5516,20 +5636,22 @@ async function main() {
     }
   }
   const checkParts =
-    mode === 'ci-only' &&
-    (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
-      isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
-      isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext) ||
-      isBitbrowserEntryStartControlsOnly(paths, proxyIdentityContext) ||
-      isBitbrowserExistingAddressControlsOnly(paths, proxyIdentityContext))
-      ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)
-      : mode === 'ci-only' || mode === 'audit-retention'
-        ? ['guards']
-        : mode === 'admin'
-          ? ['guards', 'admin', ...(hasCombinedComponentScope(paths) ? ['migration'] : [])]
-          : mode === 'mailbox'
-            ? ['guards', 'admin', 'api']
-            : selectedParts(paths, undefined, proxyIdentityContext);
+    mode === 'full' && bitbrowserBoundedHoldSourceShape(paths)
+      ? [...parts]
+      : mode === 'ci-only' &&
+          (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
+            isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
+            isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext) ||
+            isBitbrowserEntryStartControlsOnly(paths, proxyIdentityContext) ||
+            isBitbrowserExistingAddressControlsOnly(paths, proxyIdentityContext))
+        ? selectedParts(paths, grantHelperSnapshot, proxyIdentityContext)
+        : mode === 'ci-only' || mode === 'audit-retention'
+          ? ['guards']
+          : mode === 'admin'
+            ? ['guards', 'admin', ...(hasCombinedComponentScope(paths) ? ['migration'] : [])]
+            : mode === 'mailbox'
+              ? ['guards', 'admin', 'api']
+              : selectedParts(paths, undefined, proxyIdentityContext);
   // BEGIN finite ONLINE build-proof reuse classifier admission
   const needsOnlineRechargeCiBuild = (paths) =>
     isGptRechargeOnly(paths) ||

@@ -1,7 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma, type OnlineRechargeTask } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import type { OnlineRechargeWorkerRpc } from '../contracts';
@@ -12,6 +12,8 @@ import { OnlineRechargeWorkerRepository } from './worker.repository';
 import type { OnlineRechargeOrderSyncService } from '../order-sync.service';
 
 const accountId = randomUUID();
+beforeEach(() => vi.stubEnv('DATABASE_URL', 'postgresql://synthetic/fixture'));
+afterEach(() => vi.unstubAllEnvs());
 const syntheticSession = JSON.stringify({
   accessToken: `fixture.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: accountId } })).toString('base64url')}.unused`
 });
@@ -38,6 +40,7 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
   const tx = {
     $executeRaw: vi.fn(async () => 1),
     $queryRaw: vi.fn(async () => [{ lock_key: 'synthetic' }]),
+    idBusinessV2RechargeJob: { findMany: vi.fn(async () => []) },
     onlineRechargeTask: {
       findUnique: vi.fn(async (query?: { where: { id: string } }) =>
         query?.where.id === original?.id ? original! : row

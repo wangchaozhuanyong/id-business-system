@@ -20,6 +20,8 @@ import { completeCancellation } from './recharge-cancellation';
 import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 import { rechargeDocumentDigest, withRechargeReceipt } from './recharge-callback-receipts';
 import { assertDirectRechargeReport, directRechargeObserved } from './recharge-direct-payment';
+import { CARD_ATTEMPT_KEY } from './persistence/recharge-payment-hold.repository';
+import { hasOfficialTerminalNoncharge, TERMINAL_FAILURE_KEY } from './recharge-terminal-failure';
 
 export function assertRetiredRechargeFacts(
   job: IdBusinessV2RechargeJob,
@@ -28,6 +30,13 @@ export function assertRetiredRechargeFacts(
 ) {
   if (directRechargeObserved(job)) assertDirectRechargeReport(job, report);
   const previous = object(job.result);
+  if (
+    hasOfficialTerminalNoncharge(previous) &&
+    (report.payment_status !== 'declined' || report.payment_evidence)
+  )
+    throw new ConflictException(
+      '官网已核实拒付终态，迟到回执不得回退或覆盖；冲突付款事实需重新核对'
+    );
   const identifier = rechargeOperationIdentifier(previous);
   const evidence = object(report.payment_evidence ?? {});
   const today = object(object(previous.quote ?? {}).today ?? {});
@@ -173,6 +182,11 @@ export async function completeRetiredRechargeCallback(input: {
     report.payment_status === 'paid' &&
     report.payment_outcome === 'subscription_activated' &&
     report.account_matched === true;
+  const declined =
+    report.status === 'payment_failed' &&
+    report.stage === 'payment_result' &&
+    facts.payment_status === 'declined' &&
+    !facts.payment_evidence;
   const result = successful
     ? {
         ...facts,
@@ -185,7 +199,9 @@ export async function completeRetiredRechargeCallback(input: {
         ),
         ...(report.subscription_period ? { subscription_period: report.subscription_period } : {})
       }
-    : facts;
+    : declined
+      ? { ...facts, status: report.status, stage: report.stage }
+      : facts;
   await consumeRechargeAddress({
     tx,
     rechargeJobId: job.id,
@@ -203,8 +219,13 @@ export async function completeRetiredRechargeCallback(input: {
     order,
     repository,
     cards: input.cards,
-    names: input.names
+    names: input.names,
+    terminalReport: report
   });
+  if (object(job.result)[CARD_ATTEMPT_KEY])
+    result[CARD_ATTEMPT_KEY] = object(job.result)[CARD_ATTEMPT_KEY];
+  if (object(job.result)[TERMINAL_FAILURE_KEY])
+    result[TERMINAL_FAILURE_KEY] = object(job.result)[TERMINAL_FAILURE_KEY];
   const response = { ok: true };
   await repository.updateJob(tx, job.id, {
     state: 'finished',

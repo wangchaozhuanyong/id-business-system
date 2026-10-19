@@ -14,6 +14,7 @@ import { unknownPaymentCanBeResolved, withResolutionVerification } from './recha
 import { preserveRechargeResolutionMetadata } from './recharge-ledger-metadata';
 import { presentRechargeJobs } from './recharge-job-list';
 import { rechargeDocumentDigest } from './recharge-callback-receipts';
+import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const verificationId = '22222222-2222-4222-8222-222222222222';
@@ -918,7 +919,7 @@ describe('declined-only resolution', () => {
 });
 
 describe('verification-failure same-plan checkout archive', () => {
-  function fixture() {
+  function fixture(officialTerminal = false) {
     const before = {
       ...verificationMarker,
       account_key: key,
@@ -931,6 +932,26 @@ describe('verification-failure same-plan checkout archive', () => {
       network: { country: 'PH', observedAt: '2026-10-15T09:00:00Z' },
       _retained_fixture: { nested: ['complete', 'original', 'document'] }
     };
+    if (officialTerminal) {
+      for (const key of [
+        'operator_resolution',
+        'resolution_basis',
+        'resolved_at',
+        'resolution_job_id',
+        'source_job_id',
+        'verification_job_id'
+      ])
+        delete (before as Record<string, unknown>)[key];
+      (before as Record<string, unknown>)._official_terminal_failure_v1 = {
+        kind: 'bound_payment_intent_declined',
+        sourceJobId: id,
+        accountKey: key,
+        checkoutIdentifier: 'cs_original',
+        paymentIntentIdentifier: 'pi_bound',
+        plan: 'plus',
+        confirmedAt: '2026-10-19T10:00:00.000Z'
+      };
+    }
     const archiveKey = `history/${rechargeDocumentDigest(before)}.json`;
     const root = {
       accountKey: key,
@@ -1018,6 +1039,66 @@ describe('verification-failure same-plan checkout archive', () => {
     });
     expect(f.tx.idBusinessV2RechargeRecord.create).toHaveBeenCalledOnce();
     expect(f.tx.idBusinessV2RechargeRecord.upsert).toHaveBeenCalledOnce();
+  });
+  it('官方intent终态同档新开走正常ledger CAS、完整归档并重置旧binding', async () => {
+    const f = fixture(true);
+    const fresh = job(
+      {
+        transport: 'web_direct',
+        mode: 'payment',
+        checkout_identifier: 'cs_original',
+        payment_status: 'not_attempted',
+        payment_attempted: false,
+        payment_requests_sent: 0,
+        confirmation_requests_sent: 0
+      },
+      { state: 'running' }
+    );
+    vi.spyOn(f.repository, 'updateJob').mockImplementation(async (_tx, _id, data) =>
+      Object.assign(fresh, data)
+    );
+    const response = await completeRechargeLedgerCallback({
+      tx: f.tx as never,
+      job: fresh,
+      callback: {
+        type: 'ledger',
+        accountKey: key,
+        fileKey: f.input.fileKey,
+        revision: f.input.revision,
+        document: f.input.document
+      },
+      repository: f.repository,
+      addressRepository: {} as never,
+      audit: { append: vi.fn() } as never
+    });
+    expect(response.revision).toBe(5);
+    expect(f.entries.get(f.archiveKey)?.document).toEqual(f.before);
+    expect(fresh.result).not.toHaveProperty('checkout_identifier');
+    expect(fresh.result).toHaveProperty(
+      '_checkout_replacement_binding_v1',
+      expect.objectContaining({ retiredIdentifier: 'cs_original', markerRevision: 5 })
+    );
+    expect(f.entries.get(f.input.fileKey)?.document).not.toHaveProperty(
+      '_official_terminal_failure_v1'
+    );
+  });
+  it.each([
+    { retry_of: 'b'.repeat(64) },
+    { account_key: 'b'.repeat(64) },
+    { target_plan: 'go' },
+    { payment_requests_sent: 1 },
+    { confirmation_requests_sent: 1 },
+    { payment_attempted: true }
+  ])('官方终态替换同样拒绝错误摘要/账号/套餐或付款痕迹 %j', async (patch) => {
+    const f = fixture(true);
+    await expect(
+      f.repository.saveRecord(f.tx as never, {
+        ...f.input,
+        document: { ...f.input.document, ...patch }
+      })
+    ).rejects.toThrow();
+    expect(f.tx.idBusinessV2RechargeRecord.upsert).not.toHaveBeenCalled();
+    expect(f.tx.idBusinessV2RechargeRecord.create).not.toHaveBeenCalled();
   });
   it('reuses an existing identical complete archive without overwriting it', async () => {
     const f = fixture();

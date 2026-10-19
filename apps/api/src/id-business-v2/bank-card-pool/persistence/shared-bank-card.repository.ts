@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import type { IdBusinessV2BankRechargeCard } from '@prisma/client';
+import type { IdBusinessV2BankRechargeCard, OnlineRechargeCard } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
@@ -16,6 +16,24 @@ import {
   sharedCardLimits,
   SHARED_CARD_PLANS
 } from '../card-plan-policy';
+import { bitBrowserPendingCapacity, SharedCardBusyConflict } from './shared-card-capacity';
+import { releaseExpiredBitBrowserCardHold } from './shared-card-hold';
+
+export type BitBrowserCardAttempt = {
+  cardId: string;
+  authorizedAt: string;
+  outcome: 'pending' | 'paid' | 'declined' | 'resolved';
+  holdReleasedAt?: string;
+};
+type CardOption = Pick<
+  OnlineRechargeCard,
+  'id' | 'last4' | 'allowedPlans' | 'expiryMonth' | 'expiryYear'
+> & { label: string; active: boolean; hasNumber: boolean };
+class UnchangedCardOptions extends Error {
+  constructor(readonly value: { items: CardOption[] }) {
+    super('unchanged card options');
+  }
+}
 
 export function lockSharedBankCards(tx: V2CommandTransaction) {
   return acquireMysqlTransactionLock(tx, 'shared-bank-card-pool');
@@ -31,27 +49,64 @@ export class SharedBankCardRepository {
   ) {}
 
   async options(plan: string) {
-    const config = await this.prisma.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
-    const policy = sharedCardLimits(config?.settings);
-    const items = await this.prisma.onlineRechargeCard.findMany({
-      where: {
-        status: 'active',
-        leaseOwner: null,
-        allowedPlans: { array_contains: [sharedCardPlan(plan)] },
-        successCount: { lt: policy.maxSubscriptionCount },
-        declineCount: { lt: policy.maxDeclineCount }
-      },
-      select: { id: true, last4: true, allowedPlans: true, expiryMonth: true, expiryYear: true },
-      orderBy: [{ successCount: 'asc' }, { lastUsedAt: 'asc' }, { id: 'asc' }]
-    });
-    return {
-      items: items.map((card) => ({
-        ...card,
-        label: `银行卡 ····${card.last4}`,
-        active: true,
-        hasNumber: true
-      }))
-    };
+    try {
+      return await this.transactions.execute(
+        async (tx) => {
+          await lockSharedBankCards(tx);
+          const config = await tx.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
+          const policy = sharedCardLimits(config?.settings);
+          const candidates = await tx.onlineRechargeCard.findMany({
+            where: {
+              status: 'active',
+              allowedPlans: { array_contains: [sharedCardPlan(plan)] },
+              successCount: { lt: policy.maxSubscriptionCount },
+              declineCount: { lt: policy.maxDeclineCount },
+              OR: [{ leaseOwner: null }, { leaseExpiresAt: { lte: new Date() } }]
+            },
+            orderBy: [{ successCount: 'asc' }, { lastUsedAt: 'asc' }, { id: 'asc' }],
+            take: 500
+          });
+          const items = [];
+          let changed = false;
+          for (const card of candidates) {
+            try {
+              if (card.leaseOwner) {
+                if (!(await releaseExpiredBitBrowserCardHold(tx, card))) continue;
+                changed = true;
+              }
+              if (
+                card.successCount + (await bitBrowserPendingCapacity(tx, card.id)) >=
+                policy.maxSubscriptionCount
+              )
+                continue;
+              items.push({
+                id: card.id,
+                last4: card.last4,
+                allowedPlans: card.allowedPlans,
+                expiryMonth: card.expiryMonth,
+                expiryYear: card.expiryYear,
+                label: `银行卡 ····${card.last4}`,
+                active: true,
+                hasNumber: true
+              });
+            } catch (error) {
+              if (error instanceof SharedCardBusyConflict) continue;
+              throw error;
+            }
+          }
+          if (!changed) throw new UnchangedCardOptions({ items });
+          return { items };
+        },
+        {
+          changedScopes: ['auto-recharge', 'online-recharge'],
+          requestId: randomUUID(),
+          retryMode: 'none'
+        }
+      );
+    } catch (error) {
+      if (error instanceof UnchangedCardOptions) return error.value;
+      throw error;
+    }
   }
 
   async paymentDetails(id: string, plan: string, operator: AuthenticatedUser) {
@@ -117,9 +172,15 @@ export class SharedBankCardRepository {
   ) {
     const shared = await this.ensureLegacy(tx, card);
     if (!shared) throw new ConflictException('银行卡资料不完整');
+    await releaseExpiredBitBrowserCardHold(tx, shared);
     assertSharedCardPlan(shared.allowedPlans, plan);
     const config = await tx.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
     const policy = sharedCardLimits(config?.settings);
+    if (
+      shared.successCount + (await bitBrowserPendingCapacity(tx, shared.id, jobId)) >=
+      policy.maxSubscriptionCount
+    )
+      throw new ConflictException('银行卡成功与待核对订阅已达上限');
     const result = await tx.onlineRechargeCard.updateMany({
       where: {
         id: shared.id,
@@ -143,6 +204,7 @@ export class SharedBankCardRepository {
     await lockSharedBankCards(tx);
     const shared = await tx.onlineRechargeCard.findUnique({ where: { numberHash } });
     if (!shared) return;
+    if (await releaseExpiredBitBrowserCardHold(tx, shared)) shared.leaseOwner = null;
     if (plan) assertSharedCardPlan(shared.allowedPlans, plan);
     if (shared.status !== 'active' || shared.leaseOwner)
       throw new ConflictException('银行卡已停用或正被另一充值任务使用');
@@ -167,14 +229,23 @@ export class SharedBankCardRepository {
     tx: V2CommandTransaction,
     jobId: string,
     report: Record<string, unknown>,
-    verified: boolean
+    verified: boolean,
+    attempt?: BitBrowserCardAttempt
   ) {
     await lockSharedBankCards(tx);
     const noPayment =
       report.payment_attempted === false && Number(report.payment_requests_sent ?? 0) === 0;
     const declined = report.payment_status === 'declined';
-    if (!verified && !noPayment && !declined) return;
-    const card = await tx.onlineRechargeCard.findFirst({ where: { leaseOwner: jobId } });
+    if (!verified && !noPayment && !declined) return attempt;
+    if (attempt && attempt.outcome !== 'pending') {
+      if (verified && attempt.outcome !== 'paid')
+        throw new ConflictException('原付款结算与迟到结果冲突，请人工核对');
+      await this.releaseBitBrowserHold(tx, jobId);
+      return attempt;
+    }
+    const card = attempt
+      ? await tx.onlineRechargeCard.findUnique({ where: { id: attempt.cardId } })
+      : await this.ownedBitBrowserCard(tx, jobId);
     if (!card) return;
     const config = await tx.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
     const policy = sharedCardLimits(config?.settings);
@@ -185,17 +256,99 @@ export class SharedBankCardRepository {
           ? 'retired'
           : card.status;
     await tx.onlineRechargeCard.updateMany({
-      where: { leaseOwner: jobId },
+      where: attempt ? { id: card.id } : { leaseOwner: jobId },
       data: {
         status,
-        leaseOwner: null,
-        leaseId: null,
-        leaseExpiresAt: null,
+        ...(!attempt ? { leaseOwner: null, leaseId: null, leaseExpiresAt: null } : {}),
         ...(verified
           ? { successCount: { increment: 1 }, declineCount: 0, lastUsedAt: new Date() }
           : {}),
         ...(!verified && declined ? { declineCount: { increment: 1 } } : {})
       }
+    });
+    if (attempt) {
+      await this.releaseBitBrowserHold(tx, jobId);
+      return {
+        ...attempt,
+        outcome: verified
+          ? ('paid' as const)
+          : declined
+            ? ('declined' as const)
+            : ('resolved' as const)
+      };
+    }
+  }
+
+  private async ownedBitBrowserCard(
+    tx: V2CommandTransaction,
+    jobId: string,
+    legacyCardId?: string | null
+  ) {
+    const matches = await tx.onlineRechargeCard.findMany({ where: { leaseOwner: jobId }, take: 2 });
+    if (matches.length > 1) throw new ConflictException('原任务关联多张银行卡，禁止自动处理');
+    const card = matches[0];
+    if (card && legacyCardId) {
+      const legacy = await tx.idBusinessV2BankRechargeCard.findUnique({
+        where: { id: legacyCardId }
+      });
+      if (!legacy || legacy.numberHash !== card.numberHash)
+        throw new ConflictException('原任务银行卡归属未核实');
+    }
+    return card;
+  }
+
+  async authorizeBitBrowserAttempt(
+    tx: V2CommandTransaction,
+    jobId: string,
+    legacyCardId: string | null
+  ): Promise<BitBrowserCardAttempt> {
+    await lockSharedBankCards(tx);
+    if (!legacyCardId) throw new ConflictException('本次银行卡归属缺失，禁止付款');
+    const card = await this.ownedBitBrowserCard(tx, jobId, legacyCardId);
+    if (
+      !card ||
+      card.status !== 'active' ||
+      !card.leaseExpiresAt ||
+      card.leaseExpiresAt.getTime() <= Date.now()
+    )
+      throw new ConflictException('本次银行卡租约已失效，禁止付款');
+    const config = await tx.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
+    if (
+      card.successCount + (await bitBrowserPendingCapacity(tx, card.id, jobId)) >=
+      sharedCardLimits(config?.settings).maxSubscriptionCount
+    )
+      throw new ConflictException('银行卡成功与待核对订阅已达上限');
+    const authorizedAt = new Date().toISOString();
+    const updated = await tx.onlineRechargeCard.updateMany({
+      where: { id: card.id, leaseOwner: jobId },
+      data: { leaseExpiresAt: new Date(Date.parse(authorizedAt) + 120000) }
+    });
+    if (updated.count !== 1) throw new ConflictException('本次银行卡租约已变化，禁止付款');
+    return { cardId: card.id, authorizedAt, outcome: 'pending' };
+  }
+
+  async recoverBitBrowserAttempt(
+    tx: V2CommandTransaction,
+    jobId: string,
+    authorizedAt: string,
+    legacyCardId: string | null
+  ) {
+    await lockSharedBankCards(tx);
+    if (!legacyCardId) return;
+    const card = await this.ownedBitBrowserCard(tx, jobId, legacyCardId);
+    if (!card) return;
+    await tx.onlineRechargeCard.updateMany({
+      where: { id: card.id, leaseOwner: jobId },
+      data: { leaseExpiresAt: new Date(Date.parse(authorizedAt) + 120000) }
+    });
+    return { cardId: card.id, authorizedAt, outcome: 'pending' as const };
+  }
+
+  async releaseBitBrowserHold(tx: V2CommandTransaction, jobId: string) {
+    await lockSharedBankCards(tx);
+    return tx.onlineRechargeCard.updateMany({
+      where: { leaseOwner: jobId },
+      data: { leaseOwner: null, leaseId: null, leaseExpiresAt: null }
     });
   }
 
@@ -239,6 +392,7 @@ export class SharedBankCardRepository {
     if (!shared) return;
     if (
       shared.leaseOwner ||
+      (await bitBrowserPendingCapacity(tx, shared.id)) > 0 ||
       (await tx.onlineRechargeTask.count({ where: { cardId: shared.id } })) ||
       (await tx.onlineRechargeBill.count({ where: { cardId: shared.id } }))
     )

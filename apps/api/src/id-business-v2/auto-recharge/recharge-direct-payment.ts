@@ -15,6 +15,8 @@ import { mergeRechargeCallbackResult } from './recharge-bank-callback';
 import { rechargeOperationIdentifier } from './recharge-upgrade-protocol';
 import { assertFinalQuote, hash, object, safeDocument, uuidPattern } from './recharge-validation';
 import { assertReplacementCheckoutReport } from './recharge-expired-checkout';
+import type { BankRechargeCardService } from './bank-recharge-card.service';
+import { CARD_ATTEMPT_KEY, PAYMENT_HOLD_MS } from './persistence/recharge-payment-hold.repository';
 
 const privateKey = '_direct_confirmation_v1';
 const observationKey = '_direct_unexpected_payment_v1';
@@ -319,6 +321,7 @@ export async function confirmDirectRechargePayment(input: {
   operator: AuthenticatedUser;
   repository: RechargeRepository;
   audit: V2TransactionalAuditService;
+  cards?: BankRechargeCardService;
 }) {
   const { tx, job, operator, repository, audit } = input;
   if (!job || job.ownerId !== operator.id) throw new ForbiddenException('无权确认此充值任务');
@@ -363,6 +366,9 @@ export async function confirmDirectRechargePayment(input: {
   assertFinalQuote(object(previous.quote) as never, job.plan, previous.quote_authority, previous);
   if (directQuoteDigest(job, previous) !== request.quoteDigest)
     throw new ConflictException('本次最终报价或账单已变化，请重新核价');
+  const attempt = input.cards
+    ? await input.cards.authorizeSharedAttempt(tx, job.id, job.cardId)
+    : undefined;
   const payment = safeDocument({
     ...previous,
     account_key: job.accountKey,
@@ -384,10 +390,14 @@ export async function confirmDirectRechargePayment(input: {
   });
   await repository.updateJob(tx, job.id, {
     state: 'confirming',
+    leaseUntil: new Date(
+      (attempt ? Date.parse(attempt.authorizedAt) : Date.now()) + PAYMENT_HOLD_MS
+    ),
     result: toV2JsonDocument({
       ...previous,
       ...payment,
       manual_confirmation_accepted: true,
+      ...(attempt ? { [CARD_ATTEMPT_KEY]: attempt } : {}),
       [privateKey]: { ...confirmation, consumed: true, consumedAt: new Date().toISOString() }
     })
   });
@@ -480,6 +490,7 @@ export function confirmDirectRechargeRequest(input: {
   repository: RechargeRepository;
   transactions: V2CommandTransactionManager;
   audit: V2TransactionalAuditService;
+  cards?: BankRechargeCardService;
 }) {
   const { id, value, operator, repository, transactions, audit } = input;
   if (
@@ -494,7 +505,15 @@ export function confirmDirectRechargeRequest(input: {
     async (tx) => {
       await repository.lock(tx);
       const job = await repository.findJob(tx, id);
-      return confirmDirectRechargePayment({ tx, job, value, operator, repository, audit });
+      return confirmDirectRechargePayment({
+        tx,
+        job,
+        value,
+        operator,
+        repository,
+        audit,
+        cards: input.cards
+      });
     },
     { changedScopes: ['auto-recharge'], requestId: id, operator, retryMode: 'none' }
   );

@@ -539,7 +539,7 @@ describe('套餐准备动作只触发一次并等待迟到状态', () => {
   });
 });
 
-describe('人工核实验证失败原单后的正常入口', () => {
+describe('人工核实或官网明确拒付原单后的正常入口', () => {
   const resolution = {
     operator_resolution: 'confirmed_verification_failed_no_charge',
     resolution_basis: 'operator_observed_official_failure',
@@ -583,6 +583,25 @@ describe('人工核实验证失败原单后的正常入口', () => {
       }
     };
   }
+  function officialHistory(plan: V2RechargePlan) {
+    const previous = history(plan);
+    const proof = {
+      kind: 'bound_payment_intent_declined',
+      sourceJobId: resolution.source_job_id,
+      accountKey,
+      checkoutIdentifier: oldId,
+      paymentIntentIdentifier: 'pi_SyntheticDecline',
+      plan,
+      confirmedAt: '2026-10-19T00:00:00.000Z'
+    };
+    for (const item of [previous.checkout, previous.payment]) {
+      const document = item.document as Record<string, unknown>;
+      for (const key of Object.keys(resolution)) delete document[key];
+      document._official_terminal_failure_v1 = { ...proof };
+    }
+    previous.payment.document.payment_status = 'declined';
+    return previous;
+  }
   async function stopAtFinalQuote(f: ReturnType<typeof fixture>) {
     // The confirmation hook displays the quote; no payment authorization endpoint is invoked.
     f.confirm.mockImplementationOnce(async () => {
@@ -607,6 +626,104 @@ describe('人工核实验证失败原单后的正常入口', () => {
     expect(mock.observer.confirmationRequests).toBe(0);
     expect(mock.grant).not.toHaveBeenCalled();
   }
+  it.each(['go', 'plus'] as const)(
+    '官网明确拒付的%s原单允许正常创建Plus并核价，零付款且不回传私有证明',
+    async (plan) => {
+      const f = fixture({ noRecord: plan !== 'plus' });
+      const previous = officialHistory(plan);
+      f.restored.records = [previous.checkout, previous.payment];
+      const before = JSON.stringify(f.restored.records);
+      await stopAtFinalQuote(f);
+      expect(JSON.stringify(f.restored.records)).toBe(before);
+      const marker = f.callback.mock.calls[0]![0] as {
+        revision: number;
+        document: Record<string, unknown>;
+      };
+      expect(marker.revision).toBe(plan === 'plus' ? 7 : 0);
+      expect(marker.document.retry_of).toBe(
+        plan === 'plus' ? await directPaymentDocumentDigest(previous.checkout.document) : undefined
+      );
+      for (const [command] of f.callback.mock.calls) {
+        const document = (command as { document: Record<string, unknown> }).document;
+        expect(Object.keys(document).some((key) => key.startsWith('_'))).toBe(false);
+      }
+    }
+  );
+  it.each([
+    'missing-proof',
+    'requires-action',
+    'duplicate-payment',
+    'missing-root',
+    'different-proof',
+    'changed-count'
+  ])('官网拒付历史%s仍在建单与填卡前停止', async (kind) => {
+    const f = fixture();
+    const previous = officialHistory('plus');
+    const payment = previous.payment.document as Record<string, unknown>;
+    const checkout = previous.checkout.document as Record<string, unknown>;
+    f.restored.records = [previous.checkout, previous.payment];
+    if (kind === 'missing-proof') delete payment._official_terminal_failure_v1;
+    if (kind === 'requires-action') payment.payment_status = 'requires_action';
+    if (kind === 'duplicate-payment') f.restored.records.push({ ...previous.payment });
+    if (kind === 'missing-root') f.restored.records = [previous.payment];
+    if (kind === 'different-proof')
+      checkout._official_terminal_failure_v1 = {
+        ...(checkout._official_terminal_failure_v1 as Record<string, unknown>),
+        sourceJobId: '55555555-5555-4555-8555-555555555555'
+      };
+    if (kind === 'changed-count') payment.payment_requests_sent = 2;
+    const before = JSON.stringify(f.restored.records);
+    await expect(f.run()).rejects.toThrow();
+    expect(f.callback).not.toHaveBeenCalled();
+    expect(f.events).not.toContain('create_clicked');
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.fill).not.toHaveBeenCalled();
+    expect(f.confirm).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.restored.records)).toBe(before);
+  });
+  it('官网明确拒付的新建标记CAS失败时不点击建单，不重试', async () => {
+    const f = fixture();
+    const previous = officialHistory('plus');
+    f.restored.records = [previous.checkout, previous.payment];
+    f.callback.mockRejectedValueOnce(new Error('synthetic CAS conflict'));
+    await expect(f.run()).rejects.toThrow();
+    expect(f.callback).toHaveBeenCalledOnce();
+    expect(f.events).not.toContain('create_clicked');
+    expect(f.events).not.toContain('payment_clicked');
+    expect(mock.fill).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['go', 'plus'],
+    ['plus', 'pro-5x'],
+    ['plus', 'pro-20x'],
+    ['plus', 'pro-500']
+  ] as const)(
+    '%s升级%s的明确拒付结束后可进入原有升级流程，不重新写旧订阅checkout',
+    async (source, target) => {
+      const f = fixture({ current: source, plan: target, noRecord: true });
+      const previous = officialHistory(target);
+      const reference = 'upg_' + 'b'.repeat(32);
+      const payment = previous.payment.document as Record<string, unknown>;
+      const proof = payment._official_terminal_failure_v1 as Record<string, unknown>;
+      delete payment.checkout_identifier;
+      Object.assign(payment, {
+        operation: 'subscription_upgrade',
+        current_plan_before: source,
+        upgrade_identifier: reference,
+        _official_terminal_failure_v1: { ...proof, checkoutIdentifier: reference }
+      });
+      previous.payment.fileKey = `payments/${createHash('sha256').update(reference).digest('hex')}.json`;
+      f.restored.records = [previous.payment];
+      const before = JSON.stringify(f.restored.records);
+      await expect(f.run()).resolves.toMatchObject({ status: 'synthetic_upgrade' });
+      expect(mock.upgrade).toHaveBeenCalledOnce();
+      expect(f.callback).not.toHaveBeenCalled();
+      expect(f.confirm).not.toHaveBeenCalled();
+      expect(mock.grant).not.toHaveBeenCalled();
+      expect(f.events).not.toContain('payment_clicked');
+      expect(JSON.stringify(f.restored.records)).toBe(before);
+    }
+  );
   it('Go已人工核实后可从正常入口创建Plus并完成最终核价，不改Go账本且零付款确认', async () => {
     const f = fixture({ noRecord: true });
     const previous = history('go');

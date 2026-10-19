@@ -8,7 +8,7 @@ export const executionAvailabilityLabels: Record<V2RechargeAvailability['executi
 export const paymentAvailabilityLabels: Record<V2RechargeAvailability['payment'], string> = {
   no_request: '本次未发送付款请求',
   unknown: '付款结果待核实',
-  declined: '官网已拒付，待核对原单',
+  declined: '官网已明确拒付',
   paid_pending: '已有付款凭证，订阅待生效',
   completed: '付款与订阅均已核实',
   resolved: '原单已核实处理'

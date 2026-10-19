@@ -27,6 +27,8 @@ import {
   directPaymentDocumentDigest,
   resolvedDirectVerificationPayment,
   resolvedDirectVerificationCheckout,
+  resolvedDirectTerminalPayment,
+  resolvedDirectTerminalCheckout,
   type PaymentDocument
 } from './bitbrowser-payment-evidence';
 export interface DirectPaymentHooks {
@@ -210,8 +212,10 @@ export async function runDirectPayment(
         Number.isSafeInteger(item.revision) &&
         Number(item.revision) > 0 &&
         rows.filter((candidate) => candidate.fileKey === item.fileKey).length === 1 &&
-        resolvedDirectVerificationPayment(value, key) &&
-        item.fileKey === `payments/${await paymentHash(String(value.checkout_identifier))}.json`
+        (resolvedDirectVerificationPayment(value, key) ||
+          resolvedDirectTerminalPayment(value, key)) &&
+        item.fileKey ===
+          `payments/${await paymentHash(String(value.operation === 'subscription_upgrade' ? value.upgrade_identifier : value.checkout_identifier))}.json`
       )
         resolvedPaymentRows.add(item);
     }
@@ -281,7 +285,7 @@ export async function runDirectPayment(
         (item) => String(paymentObject(item.document).target_plan ?? 'plus') === plan
       )
     )
-      throw new Error('人工核实付款的原结算账本缺失，本次不会新建订单。');
+      throw new Error('已结束付款的原结算账本缺失，本次不会新建订单。');
     if (hooks.restored?.unidentifiedCheckoutRecovery === true) {
       const owned = hooks.restored.ownedProfile;
       if (
@@ -339,6 +343,7 @@ export async function runDirectPayment(
     );
     if (
       document.operator_resolution === 'confirmed_verification_failed_no_charge' ||
+      document._official_terminal_failure_v1 !== undefined ||
       resolvedCurrentPayments.length
     ) {
       if (
@@ -347,14 +352,17 @@ export async function runDirectPayment(
         !Number.isSafeInteger(revision) ||
         revision < 1 ||
         resolvedCurrentPayments.length !== 1 ||
-        !resolvedDirectVerificationCheckout(
-          document,
-          resolvedCurrentPayments[0]!.document,
-          key,
-          plan
+        !(
+          resolvedDirectVerificationCheckout(
+            document,
+            resolvedCurrentPayments[0]!.document,
+            key,
+            plan
+          ) ||
+          resolvedDirectTerminalCheckout(document, resolvedCurrentPayments[0]!.document, key, plan)
         )
       )
-        throw new Error('人工核实原单与付款账本绑定不一致，本次不会新建订单。');
+        throw new Error('已结束原单与付款账本绑定不一致，本次不会新建订单。');
       resolvedCheckoutRetryOf = await directPaymentDocumentDigest(document);
       checkoutId = '';
       entity = '';

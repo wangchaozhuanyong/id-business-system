@@ -106,6 +106,9 @@ function fixture() {
     ...tx,
     onlineRechargeConfig: { findUnique: vi.fn().mockResolvedValue(null) },
     onlineRechargeCard: {
+      findMany: vi.fn(async ({ where }) =>
+        shared.leaseOwner === where.leaseOwner ? [shared] : []
+      ),
       findFirst: vi.fn(async ({ where }) =>
         shared.leaseOwner === where.leaseOwner ? shared : null
       ),
@@ -120,6 +123,7 @@ function fixture() {
   };
   const pool = new SharedBankCardRepository({} as never, {} as never, {} as never, {} as never);
   const cards = {
+    reconcilePaymentHolds: vi.fn(),
     finishSharedCard: vi.fn((_tx, jobId, report, verified) =>
       pool.finishBitBrowser(cardTx as never, jobId, report, verified)
     ),
