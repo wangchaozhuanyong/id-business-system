@@ -168,6 +168,11 @@ import {
   bitbrowserHistorySourceReviewTree,
   bitbrowserBoundedHoldSourceShape,
   bitbrowserBoundedHoldControlContract,
+  bitbrowserBoundedHoldSelectedNativeBase,
+  bitbrowserBoundedHoldSelectedNativeShape,
+  bitbrowserBoundedHoldSelectedNativeCandidate,
+  isBitbrowserBoundedHoldSelectedNativeOnly,
+  bitbrowserBoundedHoldSelectedNativeCommands,
   bitbrowserBoundedHoldNativeDeclarationsCandidate,
   isBitbrowserBoundedHoldNativeDeclarationsOnly,
   bitbrowserBoundedHoldNativeDeclarationsCommands,
@@ -213,6 +218,30 @@ if (mode === 'recharge' && bitbrowserBoundedHoldSourceShape(changed)) {
   process.exit(0);
 }
 // BEGIN finite BitBrowser publication control checks
+if (
+  mode === 'ci-only' &&
+  (bitbrowserBoundedHoldSelectedNativeShape(changed) ||
+    (base === bitbrowserBoundedHoldSelectedNativeBase &&
+      bitbrowserBoundedHoldSelectedNativeCandidate(changed)))
+) {
+  if (
+    !isBitbrowserBoundedHoldSelectedNativeOnly(changed, {
+      base,
+      baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+    })
+  )
+    throw new Error('Unfrozen or moved bounded BitBrowser selected-native scope');
+  const schemaPath = 'apps/api/prisma-mysql/schema.prisma';
+  if (
+    !bitbrowserBoundedHoldSchemaMatches(
+      execFileSync('git', ['show', base + ':' + schemaPath], { encoding: 'utf8' }),
+      execFileSync('git', ['show', 'HEAD:' + schemaPath], { encoding: 'utf8' })
+    )
+  )
+    throw new Error('Bounded BitBrowser selected-native schema must remain byte identical');
+  for (const [file, ...args] of bitbrowserBoundedHoldSelectedNativeCommands(part)) run(file, args);
+  process.exit(0);
+}
 if (mode === 'ci-only' && bitbrowserBoundedHoldNativeDeclarationsCandidate(changed)) {
   if (
     !isBitbrowserBoundedHoldNativeDeclarationsOnly(changed, {

@@ -651,12 +651,14 @@ class BoundedBuildControls(unittest.TestCase):
         shared = {'index.js': 'a' * 64}
         c = {'apiModules': ['old.js', 'new.js', 'new.d.ts'],
             'absentApiModules': ['new.js', 'new.d.ts'], 'baseline': {'apiModules': {'old.js': before['old.js']}},
+            'localCompiledBefore': {'old.js': before['old.js']},
             'publishedApiModules': before, 'publishedSharedFiles': shared}
         self.assertEqual(b.verify_bounded_delta(before, after, shared, shared, c, p),
             {n: after[n] for n in c['apiModules']})
         unchanged_declaration = copy.deepcopy(c)
         unchanged_declaration['apiModules'].append('old.d.ts')
         unchanged_declaration['baseline']['apiModules']['old.d.ts'] = before['old.d.ts']
+        unchanged_declaration['localCompiledBefore']['old.d.ts'] = before['old.d.ts']
         with self.assertRaisesRegex(RuntimeError, 'COMPILED_SELECTION_CHANGED'):
             b.verify_bounded_delta(before, after, shared, shared, unchanged_declaration, p)
         for changed_before, changed_after, changed_shared in (
@@ -757,8 +759,9 @@ class BoundedFrozenControls(unittest.TestCase):
         for name,digest in self.c['sources'].items():
             if name != p.MYSQL_REPAIR_PATH:self.assertEqual(p.reviewed_current_digest(self.c,name,digest),digest)
         original=json.loads(b.git('show',p.MYSQL_REPAIR_BASE+':scripts/production-release/bitbrowser-bounded-hold-contract.json'))
-        for key in ('sources','productionSources','apiModules','baseline','absentApiModules','sourceReviewCommit','sourceReviewTree'):
+        for key in ('sources','productionSources','apiModules','absentApiModules','sourceReviewCommit','sourceReviewTree'):
             self.assertEqual(self.c[key],original[key])
+        self.assertEqual(self.c['localCompiledBefore'],original['baseline']['apiModules'])
         for key,val in (('path','apps/api/src/id-business-v2/auto-recharge/recharge-availability.mysql.integration.spec.ts'),
             ('oldSha256','a'*64),('reviewBaseSha256','b'*64),('newSha256','b'*64),('reviewBase','c'*40),('reviewBaseTree','d'*40)):
             changed=copy.deepcopy(self.c);changed['mysqlTestInputRepair'][key]=val
@@ -770,6 +773,45 @@ class BoundedFrozenControls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'MYSQL_TEST_INPUT_REPAIR_INVALID'):p.validate_contract(changed)
         with self.assertRaisesRegex(RuntimeError,'MYSQL_TEST_INPUT_REPAIR_INVALID'):
             p.reviewed_current_digest(self.c,p.MYSQL_REPAIR_PATH,'e'*64)
+
+    def test_native_selected_baseline_allows_only_four_exact_authenticated_declarations(self):
+        old=json.loads(b.git('show','049117ef8d585d621aed655ea1b32c9a2aff6fd0:scripts/production-release/bitbrowser-bounded-hold-contract.json'))
+        self.assertEqual(self.c['localCompiledBefore'],old['baseline']['apiModules'])
+        p.verify_bounded_local_native(self.c)
+        self.assertEqual({n for n in self.c['localCompiledBefore']if self.c['localCompiledBefore'][n]!=self.c['baseline']['apiModules'][n]},
+            set(p.BOUNDED_NATIVE_DECLARATIONS))
+        self.assertTrue(all(n.endswith('.d.ts')for n in p.BOUNDED_NATIVE_DECLARATIONS))
+        for side in ('localCompiledBefore','native'):
+            for name in self.c['localCompiledBefore']:
+                changed=copy.deepcopy(self.c)
+                target=changed['baseline']['apiModules']if side=='native'else changed[side]
+                target[name]='f'*64
+                with self.assertRaisesRegex(RuntimeError,'LOCAL_NATIVE_BASELINE_INVALID'):p.verify_bounded_local_native(changed)
+        for key,val in (('localCompiledBefore',{}),('nativeSelectedDeclarationEvidence',{})):
+            changed=copy.deepcopy(self.c);changed[key]=val
+            with self.assertRaisesRegex(RuntimeError,'LOCAL_NATIVE_BASELINE_INVALID'):p.verify_bounded_local_native(changed)
+        for key,val in (('workflowRunId','39222086691'),('parentReportSha256','a'*64),('parentInvocationSha256','a'*64),
+            ('apiInventory',{'count':1765,'sha256':'a'*64}),('parentApiImage','sha256:'+'a'*64),('parentCommit','a'*40)):
+            changed=copy.deepcopy(self.c);changed['nativeSelectedDeclarationEvidence'][key]=val
+            with self.assertRaisesRegex(RuntimeError,'LOCAL_NATIVE_BASELINE_INVALID'):p.verify_bounded_local_native(changed)
+
+    def test_closed_compilation_delta_uses_local_before_while_native_capture_remains_strict(self):
+        before={**self.c['publishedApiModules'],**self.c['localCompiledBefore'],'preserved.js':'b'*64}
+        after={**before,**{n:p.sha(('candidate:'+n).encode())for n in p.MODULES}}
+        shared=self.c['publishedSharedFiles']
+        self.assertEqual(set(b.verify_bounded_delta(before,after,shared,shared,self.c,p)),p.MODULES)
+        for name in self.c['localCompiledBefore']:
+            changed={**before,name:'f'*64}
+            with self.assertRaisesRegex(RuntimeError,'BASE_API_NOT_REPRODUCED'):
+                b.verify_bounded_delta(changed,after,shared,shared,self.c,p)
+        for extra in ('other.js','other.js.map','other.d.ts',next(iter(p.BOUNDED_ORDER_ONLY))):
+            with self.assertRaisesRegex(RuntimeError,'COMPILED_SELECTION_CHANGED'):
+                b.verify_bounded_delta(before,{**after,extra:'f'*64},shared,shared,self.c,p)
+        c,files,authenticated=self.native_fixture()
+        with patch.object(p,'BOUNDED_API_INVENTORY',authenticated):
+            p.verify_bounded_parent_selection(files,c)
+            drift={**files,**{n:pair['local']for n,pair in p.BOUNDED_NATIVE_DECLARATIONS.items()}}
+            with self.assertRaisesRegex(RuntimeError,'FULL_INVENTORY_CHANGED'):p.verify_bounded_parent_selection(drift,c)
 
     def test_source_quality_exempts_only_exact_old_to_new_mysql_fixture_hashes(self):
         commit=self.c['sourceReviewCommit'];tree=self.c['sourceReviewTree']
@@ -995,7 +1037,7 @@ class BoundedFrozenControls(unittest.TestCase):
                 path=payload/'admin/html'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic-admin')
             proof={**identity,'version':1,'recipe':p.BOUNDED,'scope':p.SCOPE,'contractSha256':'d'*64,
                 'sources':self.c['sources'],'productionSources':self.c['productionSources'],'controlSources':self.c['controlPins'],
-                'baselineModulesReproduced':self.c['baseline']['apiModules'],'predecessorProofSha256':p.BOUNDED_PROOF,
+                'baselineModulesReproduced':self.c['localCompiledBefore'],'predecessorProofSha256':p.BOUNDED_PROOF,
                 'baselineSharedUnchanged':True,'migrationPerformed':False,'businessActions':0,'updatedServices':list(p.UPDATED),
                 'qualityVerification':{},'isolatedMysqlVerification':mysql,'nativeParentCapture':capture,
                 'apiModules':helper.file_inventory(payload/'api/modules'),'adminFiles':helper.file_inventory(payload/'admin/html'),
@@ -1003,6 +1045,10 @@ class BoundedFrozenControls(unittest.TestCase):
             if self.c.get('mysqlTestInputRepair'):
                 proof['mysqlTestInputRepair'] = self.c['mysqlTestInputRepair']
             p.verify_proof(proof,proof,self.c,payload,helper)
+            hydrated={**self.c,'baseline':{**self.c['baseline'],'nativeDeclarationBefore':capture['nativeDeclarationBefore']}}
+            p.verify_proof(proof,proof,hydrated,payload,helper)
+            with self.assertRaisesRegex(RuntimeError,'PROOF_INVALID'):
+                p.verify_proof({**proof,'baselineModulesReproduced':self.c['baseline']['apiModules']},proof,hydrated,payload,helper)
             for extra in ('source/scripts/ci-recharge-scope.mjs','source/'+next(iter(p.TEST_SOURCES)),
                 'api/modules/id-business-v2/online-recharge/persistence/worker.repository.d.ts'):
                 path=payload/extra;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'foreign-output')
