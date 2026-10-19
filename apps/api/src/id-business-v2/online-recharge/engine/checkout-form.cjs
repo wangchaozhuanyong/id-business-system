@@ -465,7 +465,7 @@ async function readControlsOnce(page, deadline, state) {
     }
   }
   for (const frame of frames) {
-    inspection.timedOut = Date.now() >= deadline;
+    inspection.timedOut ||= Date.now() >= deadline;
     inspection.pageClosed = closed(page);
     inspection.aborted = state.signal?.aborted === true;
     if (inspection.timedOut || inspection.pageClosed || inspection.aborted) break;
@@ -528,12 +528,16 @@ async function readControlsOnce(page, deadline, state) {
           inspection.controlRejectCounts.no_locator =
             (inspection.controlRejectCounts.no_locator || 0) + 1;
       }
-    } catch {
+    } catch (error) {
       inspection.framesFailed++;
       inspection.readPhase = 'frame_scan';
+      // Preserve the total-budget timer even if Date observes the preceding tick.
+      // A shorter frame read budget remains an incomplete read, not a global timeout.
+      inspection.timedOut ||= error?.code === 'CHECKOUT_FORM_TIMEOUT' && frameDeadline === deadline;
+      if (inspection.timedOut) break;
     }
   }
-  inspection.timedOut = Date.now() >= deadline;
+  inspection.timedOut ||= Date.now() >= deadline;
   inspection.pageClosed = closed(page);
   inspection.aborted = state.signal?.aborted === true;
   inspection.complete = !inspectionCode(inspection);

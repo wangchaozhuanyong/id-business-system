@@ -2,6 +2,8 @@
 /* global document, window */
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const vm = require('node:vm');
 const { chromium } = require('../upstream/node_modules/playwright');
 const {
   fillCard,
@@ -1089,18 +1091,69 @@ test('one hung frame has a short budget and later frames are still inspected', a
   assert.ok(result.controls.some((control) => control.fields.includes('number')));
   assert.ok(Date.now() - started < 2300);
 });
-test('global timeout retains missing fields and explicit inspection instead of an empty ambiguity', async (t) => {
-  const page = await pageFor(t, iframe(cardHtml));
-  failFrameRead(t, page.frames()[1], () => new Promise(() => {}));
-  const result = await inspectCardReadiness(page, { deadline: Date.now() + 80 });
-  assert.equal(result.code, 'CHECKOUT_FORM_TIMEOUT');
-  assert.deepEqual(result.missing, ['number']);
-  assert.equal(result.inspection.timedOut, true);
-  const billing = await fillBilling(page, address, 'Synthetic Person', {
-    deadline: Date.now() + 80
-  });
-  assert.equal(billing.errorCode, 'CHECKOUT_FORM_TIMEOUT');
-  assert.ok(billing.missing.includes('line1'));
+test('global timeout retains missing fields and explicit inspection instead of an empty ambiguity', async () => {
+  const source = readFileSync(require.resolve('../checkout-form.cjs'), 'utf8');
+  const fixture = (wallClockLag) => {
+    const deadline = 1080;
+    let clock = 1000;
+    const observed = { timerCallbacks: 0, laterFrameReads: 0 };
+    const module = { exports: {} };
+    vm.runInNewContext(source, {
+      module,
+      exports: module.exports,
+      Date: { now: () => clock },
+      setTimeout: (callback, delay) =>
+        setTimeout(() => {
+          // The real budget timer fires; only its observed Date tick is controlled.
+          clock = deadline - wallClockLag;
+          observed.timerCallbacks++;
+          callback();
+        }, delay),
+      clearTimeout
+    });
+    const emptySnapshot = () => Promise.resolve({ metas: [], scanned: 0, rejectCounts: {} });
+    const frame = (parent, read) => ({
+      parentFrame: () => parent,
+      frameElement: async () => ({
+        evaluate: async () => null,
+        dispose: async () => {}
+      }),
+      getByText: () => ({ count: async () => 0 }),
+      locator: () => ({ evaluateAll: read })
+    });
+    const main = frame(null, emptySnapshot);
+    const hung = frame(main, () => new Promise(() => {}));
+    const later = frame(main, () => {
+      observed.laterFrameReads++;
+      return emptySnapshot();
+    });
+    return {
+      form: module.exports,
+      page: { isClosed: () => false, frames: () => [main, hung, later] },
+      deadline,
+      observed
+    };
+  };
+  for (const wallClockLag of [0, 1]) {
+    const f = fixture(wallClockLag);
+    const result = await f.form.inspectCardReadiness(f.page, { deadline: f.deadline });
+    assert.equal(result.code, 'CHECKOUT_FORM_TIMEOUT');
+    assert.deepEqual(Array.from(result.missing), ['number']);
+    assert.equal(result.inspection.timedOut, true);
+    assert.equal(result.inspection.complete, false);
+    assert.equal(f.observed.timerCallbacks, 1);
+    assert.equal(f.observed.laterFrameReads, 0);
+
+    const b = fixture(wallClockLag);
+    const billing = await b.form.fillBilling(b.page, address, 'Synthetic Person', {
+      deadline: b.deadline
+    });
+    assert.equal(billing.errorCode, 'CHECKOUT_FORM_TIMEOUT');
+    assert.ok(billing.missing.includes('line1'));
+    assert.equal(billing.inspection.timedOut, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(b.observed.laterFrameReads, 0);
+  }
 });
 test('selected-node eligibility timeout is a read failure while the form budget remains', async (t) => {
   const page = await pageFor(t, cardHtml);

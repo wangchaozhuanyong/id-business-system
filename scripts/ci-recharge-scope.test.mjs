@@ -34,6 +34,8 @@ import {
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
   onlineCheckoutActionabilityPaths,
+  onlineCheckoutInitializationPaths,
+  onlineCheckoutInitializationControls,
   onlineCheckoutActionabilityControls,
   onlineQueryDeadlinePaths,
   onlineQueryDeadlineControls,
@@ -7133,6 +7135,55 @@ test('fresh Session subscription preflight selects only Admin and cannot hide pa
     'scripts/production-release/online-session-preflight-arbitrary.py'
   ])
     assert.equal(checkMode([...paths, extra], schema, schema), 'full', extra);
+});
+
+test('initialization engine-only changes cannot hide an API or payment policy change', () => {
+  const sources = [
+    ...onlineCheckoutInitializationPaths,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  const paths = [...sources, ...onlineCheckoutInitializationControls];
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  assert.equal(onlineCheckoutInitializationPaths.length, 20);
+  for (const name of ['checkout-form.cjs', 'test/checkout-form.test.cjs']) {
+    const required = `apps/api/src/id-business-v2/online-recharge/engine/${name}`;
+    assert.ok(paths.includes(required));
+    assert.equal(
+      checkMode(
+        paths.filter((path) => path !== required),
+        'same',
+        'same'
+      ),
+      'full'
+    );
+  }
+  for (const name of [
+    'auth-navigation',
+    'login-evidence-browser',
+    'session-probe',
+    'upstream-session-transition'
+  ]) {
+    const required = `apps/api/src/id-business-v2/online-recharge/engine/test/${name}.test.cjs`;
+    assert.ok(paths.includes(required));
+    assert.equal(
+      checkMode(
+        paths.filter((path) => path !== required),
+        'same',
+        'same'
+      ),
+      'full'
+    );
+  }
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/payment-limit.cjs',
+    'package-lock.json'
+  ])
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full');
 });
 
 test('checkout actionability selects finite engine checks and cannot hide neighboring changes', () => {
