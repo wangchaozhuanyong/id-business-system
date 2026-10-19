@@ -14,7 +14,12 @@ export const manualCiPaths = Object.freeze([
 ]);
 
 export function isManualSettlementCandidate(paths, manifest) {
-  if (!manualReleasePaths.every((name) => paths.includes(name))) return false;
+  const controlRepair =
+    paths.length > 0 &&
+    paths.includes('scripts/production-release/bitbrowser-manual-contract.json') &&
+    paths.includes('scripts/production-release/bitbrowser-manual-release.test.py') &&
+    paths.every((name) => [...manualReleasePaths, ...manualCiPaths].includes(name));
+  if (!controlRepair && !manualReleasePaths.every((name) => paths.includes(name))) return false;
   try {
     const c =
       manifest ??

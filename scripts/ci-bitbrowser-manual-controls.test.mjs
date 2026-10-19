@@ -42,6 +42,29 @@ test('unreviewed source, schema, dependencies and other publishers keep their or
     assert.equal(isManualSettlementCandidate(paths, c), false);
 });
 
+test('publisher repair retains finite controls only with frozen contract and matching tests', () => {
+  const repair = [
+    'scripts/production-release/bitbrowser-manual-dispatch.py',
+    'scripts/production-release/bitbrowser-manual-contract.json',
+    'scripts/production-release/bitbrowser-manual-release.test.py',
+    ...manualCiPaths.slice(0, 2)
+  ];
+  assert.equal(isManualSettlementCandidate(repair, manifest), true);
+  for (const path of repair.slice(1, 3))
+    assert.equal(
+      isManualSettlementCandidate(
+        repair.filter((name) => name !== path),
+        manifest
+      ),
+      false
+    );
+  assert.equal(isManualSettlementCandidate([...repair, 'package-lock.json'], manifest), false);
+  assert.equal(
+    isManualSettlementCandidate([...repair, Object.keys(manifest.sources)[0]], manifest),
+    false
+  );
+});
+
 test('test fixture alone requires API tests rather than a rebuilt unchanged ONLINE engine', () => {
   const root = 'apps/api/src/id-business-v2/online-recharge/';
   assert.equal(hasOnlineRuntimeChange([root + 'local-chain-acceptance.spec.ts']), false);
