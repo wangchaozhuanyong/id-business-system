@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertSharedCardPlan, sharedCardPlan, sharedCardPlans } from './card-plan-policy';
 import { SharedBankCardRepository } from './persistence/shared-bank-card.repository';
 import { OnlineRechargeWorkerRepository } from '../online-recharge/persistence/worker.repository';
+
+beforeEach(() => vi.stubEnv('DATABASE_URL', 'postgresql://unit.invalid/only'));
+afterEach(() => vi.unstubAllEnvs());
 
 const taskId = '11111111-1111-4111-8111-111111111111';
 const plusId = '22222222-2222-4222-8222-222222222222';
@@ -63,9 +66,11 @@ function fixture(plan = 'plus', preferred?: string) {
     });
   }
   const tx = {
+    idBusinessV2RechargeJob: { findMany: vi.fn(async () => []) },
     $queryRaw: vi.fn(),
     $executeRaw: vi.fn(),
     onlineRechargeCard: {
+      findMany: vi.fn(async ({ where }) => cards.filter((card) => matches(card, where))),
       findUnique: vi.fn(async ({ where }) => cards.find((card) => matches(card, where)) ?? null),
       findFirst: vi.fn(async ({ where }) => cards.find((card) => matches(card, where)) ?? null),
       upsert: vi.fn(async ({ where }) => cards.find((card) => matches(card, where))),

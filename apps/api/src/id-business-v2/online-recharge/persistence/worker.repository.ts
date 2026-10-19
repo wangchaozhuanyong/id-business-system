@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import { Prisma, type OnlineRechargeTask } from '@prisma/client';
+import { Prisma, type OnlineRechargeCard, type OnlineRechargeTask } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
@@ -37,6 +37,9 @@ import { originalRecheckSchedule } from '../reconciliation';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import {
   assertSharedCardPlan,
+  bitBrowserPendingCapacity,
+  releaseExpiredBitBrowserCardHold,
+  SharedCardBusyConflict,
   sharedCardPlan,
   lockSharedBankCards
 } from '../../bank-card-pool/public-api';
@@ -915,33 +918,70 @@ export class OnlineRechargeWorkerRepository {
         ...(selectedId ? { id: selectedId } : {})
       };
       if (selectedId && excluded.includes(selectedId)) return null;
+      const skipped = new Set(excluded.map(id));
+      const hasCapacity = async (card: { id: string; successCount: number }) =>
+        card.successCount + (await bitBrowserPendingCapacity(tx, card.id)) <
+        policy.maxSubscriptionCount;
+      const unleased = { OR: [{ leaseOwner: null }, { leaseExpiresAt: { lte: new Date() } }] };
+      const available = async (candidate: OnlineRechargeCard | null) => {
+        if (!candidate) return null;
+        try {
+          const card =
+            !candidate.leaseOwner || candidate.leaseOwner === row.id
+              ? candidate
+              : (await releaseExpiredBitBrowserCardHold(tx, candidate))
+                ? { ...candidate, leaseOwner: null, leaseId: null, leaseExpiresAt: null }
+                : null;
+          return card && (await hasCapacity(card)) ? card : null;
+        } catch (error) {
+          if (!selectedId && error instanceof SharedCardBusyConflict) return null;
+          throw error;
+        }
+      };
       const prior = await tx.onlineRechargeCard.findFirst({
-        where: { ...eligible, leaseOwner: row.id }
+        where: {
+          ...eligible,
+          leaseOwner: row.id,
+          id: selectedId ?? { notIn: [...skipped] }
+        }
       });
-      const resumed =
+      let card = await available(prior);
+      if (prior && !card) skipped.add(prior.id);
+      const resumedCandidate =
+        !card &&
         row.cardId &&
         (!selectedId || row.cardId === selectedId) &&
         !row.paymentStarted &&
-        !excluded.includes(row.cardId)
+        !skipped.has(row.cardId)
           ? await tx.onlineRechargeCard.findFirst({
               where: {
                 ...eligible,
                 id: row.cardId,
-                leaseOwner: null
+                ...unleased
               }
             })
           : null;
-      const card =
-        prior ??
-        resumed ??
-        (await tx.onlineRechargeCard.findFirst({
+      const resumed = await available(resumedCandidate);
+      if (resumed) card = resumed;
+      else if (resumedCandidate) skipped.add(resumedCandidate.id);
+      for (let checked = 0; !card && checked < 500; checked++) {
+        if (selectedId && skipped.has(selectedId)) break;
+        const found = await tx.onlineRechargeCard.findFirst({
           where: {
             ...eligible,
-            leaseOwner: null,
-            id: selectedId ?? { notIn: excluded.map(id) }
+            ...unleased,
+            id: selectedId ?? { notIn: [...skipped] }
           },
           orderBy: [{ successCount: 'asc' }, { lastUsedAt: 'asc' }, { id: 'asc' }]
-        }));
+        });
+        if (!found) break;
+        const candidate = await available(found);
+        if (!candidate) {
+          skipped.add(found.id);
+          continue;
+        }
+        card = candidate;
+      }
       if (!card) return null;
       const hasCvc = (await this.memory.available([card.id])).includes(card.id);
       if (!hasCvc && args.requireCvc !== false) {
@@ -957,8 +997,10 @@ export class OnlineRechargeWorkerRepository {
         });
         return { pendingCredentials: true, cardId: card.id, id: undefined };
       }
-      const leaseId = prior?.leaseId ?? randomUUID(),
-        leaseVersion = prior?.leaseVersion ?? card.leaseVersion + 1;
+      if (!(await hasCapacity(card))) return null;
+      const existingLease = card.leaseOwner === row.id ? card : null;
+      const leaseId = existingLease?.leaseId ?? randomUUID(),
+        leaseVersion = existingLease?.leaseVersion ?? card.leaseVersion + 1;
       const reserved = await tx.onlineRechargeCard.updateMany({
         where: { ...eligible, id: card.id, OR: [{ leaseOwner: null }, { leaseOwner: row.id }] },
         data: { leaseOwner: row.id, leaseId, leaseVersion, leaseExpiresAt: row.leaseExpiresAt }

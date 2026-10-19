@@ -1,6 +1,60 @@
 import { createHash } from 'node:crypto';
+import { BadRequestException } from '@nestjs/common';
+import { isRechargeUpgrade, rechargeOperationIdentifier } from './recharge-upgrade-protocol';
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+
+export const TERMINAL_FAILURE_KEY = '_official_terminal_failure_v1';
+
+export function hasOfficialTerminalNoncharge(
+  value: unknown
+): value is Record<string, unknown> & { _official_terminal_failure_v1: Record<string, unknown> } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>,
+    raw = result[TERMINAL_FAILURE_KEY];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const proof = raw as Record<string, unknown>;
+  const upgrade = result.operation === 'subscription_upgrade';
+  return (
+    proof.kind === 'bound_payment_intent_declined' &&
+    typeof proof.sourceJobId === 'string' &&
+    uuid.test(proof.sourceJobId) &&
+    typeof proof.accountKey === 'string' &&
+    /^[a-f0-9]{64}$/.test(proof.accountKey) &&
+    (!upgrade || isRechargeUpgrade(result)) &&
+    typeof proof.checkoutIdentifier === 'string' &&
+    (upgrade ? /^upg_[a-f0-9]{32}$/ : /^(?:cs|oaics)_[A-Za-z0-9_]{1,200}$/).test(
+      proof.checkoutIdentifier
+    ) &&
+    proof.checkoutIdentifier === rechargeOperationIdentifier(result) &&
+    (result.account_key === undefined || result.account_key === proof.accountKey) &&
+    proof.plan === (result.target_plan ?? 'plus') &&
+    typeof proof.paymentIntentIdentifier === 'string' &&
+    /^pi_[A-Za-z0-9]{1,180}$/.test(proof.paymentIntentIdentifier) &&
+    (result.payment_intent_identifier === undefined ||
+      result.payment_intent_identifier === proof.paymentIntentIdentifier) &&
+    (!upgrade ||
+      result.upgrade_payment_intent_identifier === undefined ||
+      result.upgrade_payment_intent_identifier === proof.paymentIntentIdentifier) &&
+    typeof proof.confirmedAt === 'string' &&
+    Number.isFinite(Date.parse(proof.confirmedAt)) &&
+    new Date(Date.parse(proof.confirmedAt)).toISOString() === proof.confirmedAt &&
+    ['declined', 'not_attempted'].includes(String(result.payment_status)) &&
+    !result.payment_evidence
+  );
+}
+
+export function resolvedUnknownPayment(job: { result: unknown }) {
+  if (!job.result || typeof job.result !== 'object' || Array.isArray(job.result))
+    throw new BadRequestException('输入格式无效');
+  const result = job.result as Record<string, unknown>;
+  return (
+    result.operator_resolution === 'confirmed_no_bank_request' &&
+    typeof result.resolution_job_id === 'string' &&
+    uuid.test(result.resolution_job_id)
+  );
+}
+
 export function hasDeclineResolution(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const v = value as Record<string, unknown>;
@@ -19,6 +73,15 @@ export function hasDeclineResolution(value: unknown): boolean {
   );
 }
 export function resolvedDeclinedPayment(value: unknown): boolean {
+  if (hasOfficialTerminalNoncharge(value)) {
+    const result = value as Record<string, unknown>;
+    return (
+      result.payment_status === 'declined' &&
+      result.payment_attempted === true &&
+      result.confirmation_requests_sent === 1 &&
+      result.payment_requests_sent === 1
+    );
+  }
   if (!hasDeclineResolution(value)) return false;
   const v = value as Record<string, unknown>;
   return (
@@ -30,6 +93,11 @@ export function resolvedDeclinedPayment(value: unknown): boolean {
   );
 }
 export function resolvedDeclinedCheckout(value: unknown): boolean {
+  if (hasOfficialTerminalNoncharge(value))
+    return (
+      (value as Record<string, unknown>).payment_status === 'not_attempted' &&
+      (value as Record<string, unknown>).payment_attempted !== true
+    );
   if (!hasDeclineResolution(value)) return false;
   const v = value as Record<string, unknown>;
   return (
@@ -56,6 +124,7 @@ export function declinedResolutionEligible(job: {
     job.state === 'finished' &&
     Boolean(job.accountKey) &&
     v.recheck_only !== true &&
+    !hasOfficialTerminalNoncharge(v) &&
     v.operation !== 'subscription_upgrade' &&
     v.payment_status === 'declined' &&
     v.payment_attempted === true &&

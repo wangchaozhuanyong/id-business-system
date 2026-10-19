@@ -241,7 +241,7 @@ describe('网页未知付款在同一服务端事务内处理', () => {
     );
     await expect(startUnknownPaymentResolution(f.input)).resolves.toEqual(result);
     expect(f.repository.createJob).toHaveBeenCalledOnce();
-    expect(f.cards.finishSharedCard).toHaveBeenCalledOnce();
+    expect(f.cards.finishSharedCard).toHaveBeenCalledTimes(2);
   });
 
   it.each(['owner', 'paid', 'wrong-account', 'older-verification', 'not-confirmed', 'running'])(

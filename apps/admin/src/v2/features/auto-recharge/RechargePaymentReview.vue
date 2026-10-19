@@ -1,7 +1,8 @@
 <template>
   <section class="v2-page-layout" aria-label="历史任务只读核对">
     <p class="recharge-note">
-      批量读取现有记录，不重新建单或付款。租约结束会释放执行名额；付款未知不会因超时自动解锁。
+      批量读取现有记录，不重新建单或付款。提交付款后最多等待 2
+      分钟，超时释放执行名额和银行卡独占；原账号原单仍防止重复付款，未结算付款继续占用银行卡额度。
     </p>
     <el-form label-position="left" require-asterisk-position="right" @submit.prevent="search">
       <el-form-item label="查找记录">

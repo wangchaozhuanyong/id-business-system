@@ -1,5 +1,6 @@
 import {
   declinedResolutionEligible,
+  resolvedUnknownPayment,
   verificationFailureResolutionEligible
 } from './recharge-noncharge-proof';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { assertOriginalRechargeConnection } from './recharge-connection-access';
 import { validateRechargeNoBankRequest } from './recharge-local-validation';
 import type { RechargeSettingsService } from './recharge-settings.service';
 import type { BankRechargeCardService } from './bank-recharge-card.service';
+import { settleResolvedRechargeCard } from './persistence/recharge-payment-hold.repository';
 
 export interface RechargeResolutionJob {
   id: string;
@@ -79,14 +81,7 @@ export function isFreeAccountVerification(
   );
 }
 
-export function resolvedUnknownPayment(job: RechargeResolutionJob) {
-  const result = object(job.result);
-  return (
-    result.operator_resolution === 'confirmed_no_bank_request' &&
-    typeof result.resolution_job_id === 'string' &&
-    uuidPattern.test(result.resolution_job_id)
-  );
-}
+export { resolvedUnknownPayment } from './recharge-noncharge-proof';
 
 export function withResolutionVerification<T extends Record<string, unknown>>(
   result: T,
@@ -148,11 +143,20 @@ export async function startUnknownPaymentResolution(input: {
       const source = await repository.findJob(tx, sourceId);
       if (!source || source.ownerId !== operator.id)
         throw new ForbiddenException('无权处理此付款记录');
-      if (resolvedUnknownPayment(source))
+      if (resolvedUnknownPayment(source)) {
+        await settleResolvedRechargeCard(tx, source, cards);
+        if (cards)
+          await repository.updateJob(
+            tx,
+            source.id,
+            { result: toV2JsonDocument(object(source.result)) },
+            { factsOnly: true }
+          );
         return {
           alreadyResolved: true as const,
           id: String(object(source.result).resolution_job_id)
         };
+      }
       if (!unknownPaymentCanBeResolved(source))
         throw new ConflictException('该记录不是可处理的付款结果未知记录');
       if (await repository.findRunningJob(tx, operator.id))
@@ -285,12 +289,7 @@ export async function completeUnknownPaymentResolution(input: {
     throw new ConflictException('历史付款状态或账号核验结果已经变化');
   }
   const resolvedAt = new Date().toISOString();
-  await input.cards?.finishSharedCard(
-    tx,
-    source.id,
-    { payment_attempted: false, payment_requests_sent: 0 },
-    false
-  );
+  await settleResolvedRechargeCard(tx, source, input.cards);
   const resolution = {
     operator_resolution: 'confirmed_no_bank_request',
     resolved_at: resolvedAt,

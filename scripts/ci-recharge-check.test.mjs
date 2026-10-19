@@ -1100,6 +1100,8 @@ function recordGuardCommands(
     event = '',
     base = 'a'.repeat(40),
     baseTree = '',
+    schemaBefore = 'model Synthetic { id String @id }\n',
+    schemaAfter = schemaBefore,
     readonlyBaseSource = '',
     readonlyCurrentSource = null,
     cacheConfiguration = null,
@@ -1355,6 +1357,8 @@ function recordGuardCommands(
         if (args.join(' ') === 'rev-parse cd7bba03bec1742328e0829c215823bda1fd3fae^{tree}') return '874102957cbd6cc921e05e5bba252e63bd09fd85\\n';
         if (args.join(' ') === 'rev-parse 7d1c3822c8f8c8c6a970067580443a3b75e88bf0^{tree}') return 'a1ffd620d2b79630b9c1e9db700d6af765f33a50\\n';
         if (args.join(' ') === 'rev-parse HEAD^{tree}') return 'a'.repeat(40) + '\\n';
+        if (args[0] === 'show' && args[1].endsWith(':apps/api/prisma-mysql/schema.prisma'))
+          return args[1].startsWith('HEAD:') ? ${JSON.stringify(schemaAfter)} : ${JSON.stringify(schemaBefore)};
         if (args[0] === 'show' && args[1] === process.env.GUARD_TEST_BASE + ':${readonlyMetadataPaths[0]}')
           return Buffer.from(${JSON.stringify(readonlyBaseSource)});
         return paths.join('\\n');
@@ -3481,4 +3485,97 @@ test('finite existing-address runner executes both closed control commands and r
       () => recordGuardCommands('ci-only', bitbrowserExistingAddressControlPaths, part, options),
       /Unsupported finite BitBrowser existing-address control check/
     );
+});
+
+import {
+  bitbrowserBoundedHoldSourceStatus,
+  bitbrowserBoundedHoldSourceBase,
+  bitbrowserBoundedHoldSourceBaseTree,
+  bitbrowserBoundedHoldSourcePaths,
+  bitbrowserBoundedHoldCheckCommands
+} from './ci-recharge-scope.mjs';
+
+test('bounded payment source commands retain API, card-pool and online quota coverage without database or engine suites', () => {
+  const api = bitbrowserBoundedHoldCheckCommands('api', bitbrowserBoundedHoldSourcePaths);
+  const tests = api.find((row) => row.includes('test'));
+  for (const path of [
+    'src/id-business-v2/auto-recharge',
+    'src/id-business-v2/bank-card-pool',
+    'src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+    'src/id-business-v2/online-recharge/persistence/worker.card-capacity.spec.ts',
+    'src/id-business-v2/online-recharge/persistence/worker-rpc.repository.spec.ts'
+  ])
+    assert.ok(tests.includes(path), path);
+  for (const operation of ['prisma:mysql:generate', 'prisma:mysql:validate', 'typecheck', 'build'])
+    assert.ok(
+      api.some((row) => row.includes(operation)),
+      operation
+    );
+  assert.ok(
+    api.every((row) => !row.some((arg) => /migrate|financial|engine|acceptance:v2-/.test(arg)))
+  );
+  const guards = bitbrowserBoundedHoldCheckCommands('guards', bitbrowserBoundedHoldSourcePaths);
+  for (const name of [
+    'format:check',
+    'lint',
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-decimal-standard',
+    'check:v2-concurrency-standard',
+    'check:v2-prisma-runtime-boundary'
+  ])
+    assert.ok(
+      guards.some((row) => row.join(' ') === 'npm run ' + name),
+      name
+    );
+  assert.ok(guards.some((row) => row.includes('scripts/ci-recharge-scope.test.mjs')));
+  for (const part of ['migration', 'release-controls', 'online-engine'])
+    assert.throws(
+      () => bitbrowserBoundedHoldCheckCommands(part, bitbrowserBoundedHoldSourcePaths),
+      /Unsupported bounded/
+    );
+});
+
+test('bounded source runner remains fail closed while draft; frozen runner propagates every selected command failure', () => {
+  const options = {
+    base: bitbrowserBoundedHoldSourceBase,
+    baseTree: bitbrowserBoundedHoldSourceBaseTree
+  };
+  for (const part of ['guards', 'api', 'admin']) {
+    if (bitbrowserBoundedHoldSourceStatus !== 'FROZEN_SOURCE_PATHS') {
+      assert.throws(
+        () => recordGuardCommands('recharge', bitbrowserBoundedHoldSourcePaths, part, options),
+        /Unfrozen or moved bounded/
+      );
+      continue;
+    }
+    const expected = bitbrowserBoundedHoldCheckCommands(part, bitbrowserBoundedHoldSourcePaths);
+    assert.deepEqual(
+      recordGuardCommands('recharge', bitbrowserBoundedHoldSourcePaths, part, options),
+      [...expected, ['process-exit', 0]]
+    );
+    for (const command of expected)
+      assert.throws(
+        () =>
+          recordGuardCommands('recharge', bitbrowserBoundedHoldSourcePaths, part, {
+            ...options,
+            failCommand: command.join(' ')
+          }),
+        /SYNTHETIC_COMMAND_FAILURE/
+      );
+    for (const schemaAfter of ['', 'model Synthetic { changed String @id }\n'])
+      assert.throws(
+        () =>
+          recordGuardCommands('recharge', bitbrowserBoundedHoldSourcePaths, part, {
+            ...options,
+            schemaAfter
+          }),
+        /schema must remain byte identical/
+      );
+  }
 });

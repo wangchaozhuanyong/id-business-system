@@ -11,10 +11,11 @@ import { toV2JsonDocument, type V2CommandTransaction } from '../../runtime/publi
 import type { IdBusinessV2RechargeJob, Prisma } from '@prisma/client';
 import { assertEmployeeBusinessWriter } from '../../../v2-auth/system-super-admin';
 import { hash, object } from '../recharge-validation';
-import { isRechargeUpgrade } from '../recharge-upgrade-protocol';
+import { isRechargeUpgrade, rechargeOperationIdentifier } from '../recharge-upgrade-protocol';
 import { rechargeDocumentDigest } from '../recharge-callback-receipts';
 import { isClosedCycleDocument } from '../recharge-cycle-state';
 import { preserveRechargeResolutionMetadata } from '../recharge-ledger-metadata';
+import { hasOfficialTerminalNoncharge } from '../recharge-terminal-failure';
 import { assertUnpaidCheckoutRecoverySources } from '../recharge-checkout-recovery';
 import { createCycleArchive, closeCycleRecord, closeCycleJobs } from './recharge-cycle.repository';
 import {
@@ -451,6 +452,83 @@ export class RechargeRepository {
     return true;
   }
 
+  async closeOfficialDeclinedRecords(
+    tx: V2CommandTransaction,
+    job: IdBusinessV2RechargeJob,
+    proof: Record<string, unknown>
+  ) {
+    if (!job.accountKey) throw new ConflictException('原付款账号缺失');
+    const result = object(job.result),
+      records = await this.records(tx, job.accountKey);
+    const upgrade = result.operation === 'subscription_upgrade';
+    const identifier = rechargeOperationIdentifier(result);
+    if (
+      typeof identifier !== 'string' ||
+      (upgrade && !isRechargeUpgrade(result)) ||
+      proof.checkoutIdentifier !== identifier
+    )
+      throw new ConflictException('原付款操作绑定未核实');
+    const checkout = upgrade
+      ? []
+      : records.filter(
+          (item) =>
+            item.fileKey === `${job.accountKey}${job.plan === 'plus' ? '' : `-${job.plan}`}.json`
+        );
+    const payments = records.filter((item) => item.fileKey === `payments/${hash(identifier)}.json`);
+    if ((!upgrade && checkout.length !== 1) || payments.length !== 1)
+      throw new ConflictException('找不到唯一原单与付款记录，保留待核对状态');
+    for (const item of [...checkout, ...payments]) {
+      const document = object(item.document),
+        payment = item.fileKey.startsWith('payments/');
+      if (
+        item.ownerId !== job.ownerId ||
+        item.accountKey !== job.accountKey ||
+        rechargeOperationIdentifier(document) !== identifier ||
+        (upgrade &&
+          (!isRechargeUpgrade(document) ||
+            document.current_plan_before !== result.current_plan_before ||
+            (document.upgrade_payment_intent_identifier !== undefined &&
+              document.upgrade_payment_intent_identifier !== proof.paymentIntentIdentifier))) ||
+        (document.payment_intent_identifier !== undefined &&
+          document.payment_intent_identifier !== proof.paymentIntentIdentifier) ||
+        (document.target_plan ?? 'plus') !== job.plan ||
+        document.payment_evidence ||
+        document.payment_status === 'paid' ||
+        document.operator_resolution ||
+        (payment &&
+          (document.payment_attempted !== true ||
+            document.payment_requests_sent !== 1 ||
+            document.confirmation_requests_sent !== 1 ||
+            document.quote_digest !== result.quote_digest ||
+            rechargeDocumentDigest(document.quote) !== rechargeDocumentDigest(result.quote))) ||
+        (!payment &&
+          (document.payment_attempted === true ||
+            Number(document.confirmation_requests_sent ?? 0) !== 0))
+      )
+        throw new ConflictException('原单付款事实存在冲突，禁止自动结束保护');
+      const beforeProof = document._official_terminal_failure_v1;
+      if (beforeProof && !isDeepStrictEqual(beforeProof, proof))
+        throw new ConflictException('原单失败核验记录已存在');
+      const changed = await tx.idBusinessV2RechargeRecord.updateMany({
+        where: {
+          accountKey: item.accountKey,
+          fileKey: item.fileKey,
+          ownerId: job.ownerId,
+          revision: item.revision
+        },
+        data: {
+          revision: { increment: 1 },
+          document: toV2JsonDocument({
+            ...document,
+            ...(payment ? { payment_status: 'declined' } : {}),
+            _official_terminal_failure_v1: proof
+          })
+        }
+      });
+      if (changed.count !== 1) throw new ConflictException('原单版本已变化，请重新核对');
+    }
+  }
+
   async resolveUnknownPaymentRecords(
     tx: V2CommandTransaction,
     input: {
@@ -608,7 +686,8 @@ export class RechargeRepository {
       /^[a-f0-9]{64}$/.test(replacement.retry_of);
     const replacingVerifiedFailure =
       replacingResolvedDecline &&
-      before?.operator_resolution === 'confirmed_verification_failed_no_charge';
+      (before?.operator_resolution === 'confirmed_verification_failed_no_charge' ||
+        hasOfficialTerminalNoncharge(before));
     if (
       replacingVerifiedFailure &&
       (replacement.retry_of !== rechargeDocumentDigest(before) ||
@@ -703,6 +782,11 @@ export class RechargeRepository {
       throw new ConflictException('原订单编号不可更换');
     }
     if (input.fileKey.startsWith('payments/')) {
+      if (
+        hasOfficialTerminalNoncharge(before) &&
+        (next.payment_status !== 'declined' || next.payment_evidence)
+      )
+        throw new ConflictException('官网已核实拒付终态，付款记录不可回退或覆盖');
       if (
         next.account_key !== input.accountKey ||
         next.payment_attempted !== true ||

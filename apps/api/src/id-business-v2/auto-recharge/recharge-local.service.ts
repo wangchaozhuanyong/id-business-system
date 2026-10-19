@@ -65,6 +65,7 @@ export class RechargeLocalService {
 
   async start(value: unknown, operator: AuthenticatedUser) {
     const input = validateRechargeBitBrowserStart(value);
+    await this.bankCards?.reconcilePaymentHolds(this.repository, operator);
     const selectedProxy = input.proxyId
       ? await this.proxies?.forCharge(input.proxyId, operator, input.proxyCountryCode)
       : null;

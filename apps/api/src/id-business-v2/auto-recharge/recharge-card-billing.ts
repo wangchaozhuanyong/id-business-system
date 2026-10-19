@@ -5,6 +5,12 @@ import type { RechargeNameService } from './recharge-name.service';
 import type { RechargeRepository } from './persistence/recharge.repository';
 import { object } from './recharge-validation';
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  CARD_ATTEMPT_KEY,
+  recoverRechargeCardAttempt
+} from './persistence/recharge-payment-hold.repository';
+import { toV2JsonDocument } from '../runtime/public-api';
+import { closeOfficialTerminalFailure } from './recharge-terminal-failure';
 
 export async function finalizeRechargeCard(input: {
   tx: V2CommandTransaction;
@@ -14,6 +20,7 @@ export async function finalizeRechargeCard(input: {
   repository: RechargeRepository;
   cards?: BankRechargeCardService;
   names?: RechargeNameService;
+  terminalReport?: Record<string, unknown>;
 }) {
   const { tx, report, order, repository, cards, names } = input;
   let { job } = input;
@@ -36,7 +43,23 @@ export async function finalizeRechargeCard(input: {
     job = source;
   }
   await finalizeRechargeCardBilling(tx, job, order, cards, names);
-  await cards?.finishSharedCard(tx, job.id, report, Boolean(order));
+  const attempt = await recoverRechargeCardAttempt(tx, job, cards);
+  const settled = attempt
+    ? await cards?.finishSharedCard(tx, job.id, report, Boolean(order), attempt)
+    : await cards?.finishSharedCard(tx, job.id, report, Boolean(order));
+  if (settled) {
+    job.result = toV2JsonDocument({ ...object(job.result), [CARD_ATTEMPT_KEY]: settled });
+    // A recheck settles the original source; never leave its private accounting on the recheck job.
+    if (job.id !== input.job.id)
+      await repository.updateJob(
+        tx,
+        job.id,
+        { result: toV2JsonDocument(object(job.result)) },
+        { factsOnly: true }
+      );
+  }
+  if (job.id === input.job.id)
+    await closeOfficialTerminalFailure(tx, repository, job, input.terminalReport ?? report);
 }
 
 export async function resolveLocalRechargeCard(
