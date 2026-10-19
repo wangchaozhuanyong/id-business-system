@@ -20,7 +20,11 @@ SCOPE = 'BITBROWSER_HISTORY_PAGINATION_20261019'
 CURRENT = 'fe27681e1ef06b14616276dff33c3febeea47579'
 RECIPE = os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019')
 CONTRACT_FILE = 'bitbrowser-history-contract.json'
-if RECIPE == 'followup-20261019':
+if RECIPE == 'entry-start-20261019':
+    CURRENT = '5f122fcb841c6029b46b023f41562529b7b4bde0'
+    SCOPE = 'BITBROWSER_ENTRY_START_20261019'
+    CONTRACT_FILE = 'bitbrowser-entry-start-contract.json'
+elif RECIPE == 'followup-20261019':
     CURRENT = '02a348a6c6b252968bc63ccb38c7d2b82e0e0c66'
     SCOPE = 'BITBROWSER_FOLLOWUP_ACCEPTANCE_20261019'
     CONTRACT_FILE = 'bitbrowser-followup-contract.json'

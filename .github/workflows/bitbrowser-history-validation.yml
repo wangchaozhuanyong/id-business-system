@@ -11,6 +11,7 @@ on:
         options:
           - history-20261019
           - followup-20261019
+          - entry-start-20261019
       commit:
         description: Exact reviewed main commit
         required: true

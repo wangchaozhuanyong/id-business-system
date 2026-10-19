@@ -350,5 +350,143 @@ class FollowupControls(unittest.TestCase):
         self.assertEqual(p.UPDATED, ('api',))
 
 
+
+class EntryStartControls(unittest.TestCase):
+    def setUp(self):
+        p.select_recipe(p.ENTRY)
+        self.c = json.loads((HERE / 'bitbrowser-entry-start-contract.json').read_bytes())
+        if self.c.get('status') != 'FROZEN':
+            self.c.update(status='FROZEN', sourceReviewCommit='b' * 40, sourceReviewTree='d' * 40,
+                sources={n: 'a' * 64 for n in p.APPLICATION}, apiModules=sorted(p.MODULES),
+                updatedServices=['api'], reboundServices=['online-recharge'], preservedServices=list(p.PRESERVED),
+                controlPins={n: 'c' * 64 for n in p.CONTROLS}, ciControlPins={n: 'd' * 64 for n in p.CI_CONTROLS},
+                mysqlTestSources={n: 'e' * 64 for n in p.MYSQL_FILES}, workflowSha256='f' * 64,
+                qualityWorkflowSha256='f' * 64, sqlFenceHelperSha256='c' * 64, engineHealth=p.ENGINE)
+            for name, value in (('bitbrowser-recovery-contract.json', p.PREDECESSOR_CONTRACT),
+                ('bitbrowser-history-contract.json', p.LEGACY_CONTRACT_SHA), ('bitbrowser-followup-contract.json', p.FOLLOWUP_CONTRACT_SHA)):
+                self.c['controlPins'][name] = value
+
+    def tearDown(self):
+        p.select_recipe('history-20261019')
+
+    def parent(self):
+        old = json.loads((HERE / 'bitbrowser-followup-contract.json').read_bytes())
+        parent_modules = {n: v for n, v in self.c['publishedApiModules'].items()
+            if any('/' + module + '.' in n for module in ('recharge-account-restore', 'recharge-unidentified-checkout'))}
+        proof = {'commit': p.ENTRY_CURRENT, 'tree': p.ENTRY_TREE, 'scope': 'BITBROWSER_FOLLOWUP_ACCEPTANCE_20261019',
+            'recipe': p.FOLLOWUP, 'contractSha256': p.FOLLOWUP_CONTRACT_SHA, 'workflowRunId': '39199575083',
+            'sources': old['sources'], 'controlSources': old['controlPins'], 'updatedServices': ['api', 'admin'],
+            'migrationPerformed': False, 'businessActions': 0, 'baselineAdminReproduced': True,
+            'apiModules': parent_modules, 'adminFiles': {'index.html': 'a' * 64,
+                **{'assets/fixture-' + str(n) + '.js': 'b' * 64 for n in range(260)}}}
+        # Fixture-only parent metadata: the real controller first checks both immutable file digests.
+        admin_before = {'index.html': 'a' * 64, 'assets/old.js': 'b' * 64}
+        old['baseline']['adminInventory'] = {'count': 2, 'sha256': p.sha(p.canonical(admin_before))}
+        before = copy.deepcopy(old['baseline']['services'])
+        after = copy.deepcopy(before)
+        images = {}
+        for role in ('api', 'admin'):
+            image = p.ENTRY_API_IMAGE if role == 'api' else 'sha256:' + 'a' * 64
+            reference = 'id-business-v2-history:' + p.ENTRY_CURRENT + '-39199575083-' + role
+            after[role].update(image=image, containerId=role + '-new', reference=reference)
+            images[role] = {'imageId': image, 'reference': reference}
+        after['online-recharge']['containerId'] = 'sidecar-new'
+        preservation = {'status': 'BITBROWSER_HISTORY_DEPLOYED', 'commit': p.ENTRY_CURRENT, 'tree': p.ENTRY_TREE,
+            'workflowRunId': '39199575083', 'businessActions': 0, 'migrationPerformed': False,
+            'before': before, 'after': after, 'images': images, 'image': images['api'], 'beforeAdminFiles': admin_before}
+        old_manifest = {'roleSourceProjections': {'api': {'parent': 'api'}, 'admin': {'parent': 'admin'}}}
+        projections = {role: {'commit': p.ENTRY_CURRENT, 'kind': 'BITBROWSER_FOLLOWUP_ACCEPTANCE_20261019',
+            'buildProofSha256': p.ENTRY_PROOF, 'sources': {n: v for n, v in old['sources'].items() if n.startswith('apps/' + role + '/')},
+            'parentProjection': old_manifest['roleSourceProjections'][role]} for role in ('api', 'admin')}
+        manifest = {'commit': p.ENTRY_CURRENT, 'sourceTree': p.ENTRY_TREE, 'status': 'DEPLOYED',
+            'scope': 'BITBROWSER_FOLLOWUP_ACCEPTANCE_20261019', 'bitbrowserHistoryPublication': preservation,
+            'previousCommit': old['expectedCurrent'], 'previousRelease': old['baseline']['current'],
+            'previousManifestSha256': old['baseline']['manifestSha256'], 'roleSourceProjections': projections,
+            'adminSourceProjection': projections['admin'], 'images': {role: {'digest': image['imageId'], 'reference': image['reference'],
+                'sourceCommit': p.ENTRY_CURRENT} for role, image in images.items()}}
+        return old, manifest, proof, preservation, old_manifest
+
+    def test_entry_start_is_one_api_module_and_never_an_admin_recipe(self):
+        p.validate_contract(self.c)
+        self.assertEqual(len(p.APPLICATION), 2)
+        self.assertEqual(len(p.MODULES), 3)
+        self.assertEqual(p.UPDATED, ('api',))
+        self.assertIn('admin', p.PRESERVED)
+        self.assertEqual(p.CURRENT, p.ENTRY_CURRENT)
+        self.assertEqual(p.sha((HERE / 'bitbrowser-followup-contract.json').read_bytes()), p.FOLLOWUP_CONTRACT_SHA)
+        for changes in ({'updatedServices': ['api', 'admin']}, {'status': 'DRAFT_SOURCE_REVIEW_PENDING'},
+            {'expectedCurrent': p.FOLLOWUP_CURRENT}, {'recipe': p.FOLLOWUP}):
+            with self.assertRaises(RuntimeError):
+                p.validate_contract({**self.c, **changes})
+        for name in ('apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+            'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts'):
+            with self.assertRaises(RuntimeError):
+                p.validate_contract({**self.c, 'sources': {**self.c['sources'], name: 'a' * 64}})
+
+    def test_parent_native_identity_services_projections_and_admin_history_are_authenticated(self):
+        old, manifest, proof, preservation, previous = self.parent()
+        merged = p.verify_entry_parent(self.c, manifest, proof, preservation, old, previous)
+        self.assertEqual(merged, {**preservation['beforeAdminFiles'], **proof['adminFiles']})
+        mutations = [lambda m, pr, ps: m.update(commit=p.FOLLOWUP_CURRENT),
+            lambda m, pr, ps: pr.update(contractSha256='0' * 64),
+            lambda m, pr, ps: ps['after']['api'].update(image='sha256:' + 'b' * 64),
+            lambda m, pr, ps: ps['after']['mysql'].update(containerId='changed'),
+            lambda m, pr, ps: ps['after']['admin'].update(image=ps['before']['admin']['image']),
+            lambda m, pr, ps: ps['beforeAdminFiles'].update(extra='f' * 64),
+            lambda m, pr, ps: m['roleSourceProjections']['admin'].update(buildProofSha256='f' * 64),
+            lambda m, pr, ps: m['roleSourceProjections']['api'].update(parentProjection={})]
+        for mutate in mutations:
+            o, m, pr, ps, prev = self.parent()
+            mutate(m, pr, ps)
+            with self.assertRaises(RuntimeError):
+                p.verify_entry_parent(self.c, m, pr, ps, o, prev)
+
+    def test_parent_api_uses_old_six_module_partition_before_capturing_new_three(self):
+        old, manifest, proof, preservation, previous = self.parent()
+        admin = p.verify_entry_parent(self.c, manifest, proof, preservation, old, previous)
+        actual = {**{n: old['baseline'][n] for n in ('apiPreservedInventory', 'sharedInventory', 'clientInventory', 'nginxSha256')},
+            'apiModules': proof['apiModules'], 'adminInventory': {'count': len(admin), 'sha256': p.sha(p.canonical(admin))}}
+        p.verify_entry_inventory(old, proof, admin, actual)
+        for key in ('apiPreservedInventory', 'sharedInventory', 'clientInventory', 'adminInventory', 'apiModules'):
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'ENTRY_PARENT_CONTENT'):
+                p.verify_entry_inventory(old, proof, admin, {**actual, key: {}})
+
+    def test_seal_binds_all_runtime_inventory_and_one_native_attempt(self):
+        plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '12', 'workflowRunAttempt': '1'}
+        baseline = {'current': '/opt/id-business-v2/releases/parent', 'apiPreservedInventory': {'count': 10, 'sha256': 'c' * 64}}
+        raw = p.canonical(p.entry_seal_record(plan, baseline))
+        p.verify_entry_seal(plan, baseline, raw)
+        for changed in ({**plan, 'workflowRunId': '13'}, {**plan, 'workflowRunAttempt': '2'}):
+            with self.assertRaisesRegex(RuntimeError, 'ENTRY_PARENT_SEAL'):
+                p.verify_entry_seal(changed, baseline, raw)
+        with self.assertRaisesRegex(RuntimeError, 'ENTRY_PARENT_SEAL'):
+            p.verify_entry_seal(plan, {**baseline, 'apiPreservedInventory': {}}, raw)
+
+    def test_api_delta_rejects_every_parent_module_and_all_shared(self):
+        before, shared = self.c['publishedApiModules'], self.c['publishedSharedFiles']
+        after = {**before, next(n for n in p.MODULES if n.endswith('.js')): 'f' * 64}
+        b.verify_delta(before, after, shared, shared, self.c, p)
+        for name in ('id-business-v2/auto-recharge/recharge-account-restore.js',
+            'id-business-v2/auto-recharge/recharge-unidentified-checkout.js',
+            'id-business-v2/auto-recharge/persistence/recharge.repository.js'):
+            with self.assertRaisesRegex(RuntimeError, 'UNSELECTED_API_OUTPUT'):
+                b.verify_delta(before, {**after, name: 'f' * 64}, shared, shared, self.c, p)
+        with self.assertRaisesRegex(RuntimeError, 'SHARED_OUTPUT'):
+            b.verify_delta(before, after, shared, {}, self.c, p)
+
+    def test_source_quality_and_entry_build_do_not_require_or_build_admin(self):
+        b.require_quality_jobs([{'name': 'recharge (guards)', 'conclusion': 'success'},
+            {'name': 'recharge (api)', 'conclusion': 'success'}], p)
+        import inspect
+        code = inspect.getsource(b.entry_main)
+        self.assertNotIn('@apple-business/admin', code)
+        self.assertNotIn('admin/html', code)
+        self.assertIn('reconstruct_entry', code)
+        self.assertIn('verify_delta', code)
+        restore = inspect.getsource(b.reconstruct_entry)
+        self.assertIn("old['sourceReviewCommit']", restore)
+        self.assertNotIn("git('archive'", restore)
+
+
 if __name__ == '__main__':
     unittest.main()
