@@ -21,6 +21,32 @@ contract, identity, runtime_parent = fixtures.contract, fixtures.identity, fixtu
 
 
 class FencedRecovery(unittest.TestCase):
+    def test_stopped_selection_uses_actual_production_inspection_projection(self):
+        driver = p.ORIGINAL.load('remote-deploy.py'); target = Path('/synthetic-release')
+        roles = list(p.PRESERVED) + ['online-recharge']
+        identifiers = {name: format(index + 1, '064x') for index, name in enumerate(roles)}
+        expected = {'containerId': identifiers['online-recharge'], 'image': 'sha256:' + 'e' * 64}
+        def compose(_target, *args):
+            name = args[-1]
+            if name == 'online-recharge' and '--all' not in args: return ''
+            return identifiers[name]
+        def run(*args, **_kwargs):
+            name = next(name for name, value in identifiers.items() if value == args[-1])
+            return json.dumps([{'Id': args[-1], 'Image': expected['image'],
+                'Config': {'Env': ['SYNTHETIC=1'], 'Image': 'synthetic-reference'},
+                'State': {'Status': 'exited' if name == 'online-recharge' else 'running',
+                    'StartedAt': 'synthetic-start', 'Running': name != 'online-recharge', 'Paused': False,
+                    'Health': {'Status': 'unhealthy' if name == 'online-recharge' else 'healthy'}}}])
+        with patch.object(driver, 'compose', side_effect=compose), patch.object(driver, 'run', side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, 'online-recharge container missing'):
+                driver.service_state(target, 'online-recharge')
+            states, metadata = p.selected_snapshot(driver, target, expected)
+            self.assertEqual(set(states), set(p.SERVICES))
+            self.assertEqual(states['online-recharge']['status'], 'exited')
+            self.assertEqual(states['online-recharge']['environmentSha256'], driver.historical_fingerprint(['SYNTHETIC=1']))
+            self.assertEqual(states['online-recharge']['startedAtSha256'], p.sha(b'synthetic-start'))
+            self.assertIs(metadata['State']['Running'], False)
+
     def test_fenced_health_never_calls_rpc_and_restores_legacy_health(self):
         c = contract(); states = c['baseline']['services']; h = Mock(); d = Mock()
         d.run.return_value = json.dumps(p.HEALTH); previous = h.engine_idle
@@ -66,6 +92,10 @@ class FencedRecovery(unittest.TestCase):
             states = copy.deepcopy(c['baseline']['services']); states['online-recharge'].update(
                 containerId=expected['containerId'], image=expected['image'], status='exited', health='unhealthy')
             if mutation == 'preserved': states['api']['containerId'] = 'f' * 64
+            d.compose.return_value = expected['containerId']
+            if mutation == 'compose': d.compose.return_value = 'f' * 64
+            d.service_state.side_effect = lambda _target, name, **_kwargs: copy.deepcopy(states[name])
+            d.historical_fingerprint.return_value = states['online-recharge']['environmentSha256']
             def snapshot(*_args):
                 value = copy.deepcopy(states)
                 if running: value['online-recharge'].update(status='running', health='healthy')
@@ -75,7 +105,9 @@ class FencedRecovery(unittest.TestCase):
                 nonlocal running
                 if args[:2] == ('docker', 'inspect'):
                     return json.dumps([{'Id': expected['containerId'], 'Image': expected['image'],
-                        'State': {'Running': mutation == 'running', 'Paused': False}}])
+                        'Config': {'Env': ['SYNTHETIC=1'], 'Image': states['online-recharge']['reference']},
+                        'State': {'Running': mutation == 'running', 'Paused': False, 'StartedAt': 'synthetic-start',
+                            'Status': 'exited', 'Health': {'Status': 'unhealthy'}}}])
                 if args[:2] == ('docker', 'start'):
                     running = True; trace.append('start'); return ''
                 self.assertEqual(args[:2], ('docker', 'exec'))
@@ -118,6 +150,8 @@ class FencedRecovery(unittest.TestCase):
                 patch.object(p, 'quiet_candidate', side_effect=stop):
                 try: value = p.resume_failed_selection(plan, c, control, expected)
                 except Exception as caught: error = caught
+            if mutation not in ('journal', 'proof', 'backup', 'source', 'control'):
+                d.compose.assert_called_with(target, 'ps', '--all', '--quiet', 'online-recharge')
             return SimpleNamespace(value=value, error=error, trace=trace,
                 manifest=json.loads((target / 'release-manifest.json').read_text()), marker=marker,
                 journal=json.loads((stage / 'switch-state.json').read_text()))
@@ -129,7 +163,7 @@ class FencedRecovery(unittest.TestCase):
         self.assertEqual(result.manifest['status'], 'DEPLOYED')
 
     def test_changed_evidence_or_running_candidate_never_starts(self):
-        for mutation in ('journal', 'proof', 'backup', 'preserved', 'running', 'source', 'reserved', 'control', 'marker'):
+        for mutation in ('journal', 'proof', 'backup', 'preserved', 'running', 'source', 'reserved', 'control', 'marker', 'compose'):
             with self.subTest(mutation=mutation):
                 result = self.scenario(mutation); self.assertIsNotNone(result.error)
                 self.assertNotIn('start', result.trace); result.marker.release_markers.assert_not_called()
