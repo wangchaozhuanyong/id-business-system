@@ -488,5 +488,148 @@ class EntryStartControls(unittest.TestCase):
         self.assertNotIn("git('archive'", restore)
 
 
+
+class ExistingAddressControls(unittest.TestCase):
+    def setUp(self):
+        p.select_recipe(p.ADDRESS)
+        self.c = json.loads((HERE / p.CONTRACT_FILE).read_bytes())
+
+    def tearDown(self):
+        p.select_recipe('history-20261019')
+
+    def parent(self):
+        old_entry = json.loads((HERE / 'bitbrowser-entry-start-contract.json').read_bytes())
+        before = self.c['parentVerifiedBaseline']
+        old_manifest = {'roleSourceProjections': {'api': {'old': 'api'}, 'admin': {'old': 'admin'}},
+            'adminSourceProjection': {'old': 'admin'}, 'images': {n: {'digest': v['image']} for n, v in before['services'].items()}}
+        after = copy.deepcopy(before['services'])
+        after['api'].update(image=p.ADDRESS_API_IMAGE, containerId='api-new')
+        after['online-recharge']['containerId'] = 'sidecar-new'
+        image = {'imageId': p.ADDRESS_API_IMAGE, 'reference': 'new-api'}
+        preservation = {'commit': p.ADDRESS_CURRENT, 'tree': p.ADDRESS_TREE, 'workflowRunId': '39202298576',
+            'businessActions': 0, 'migrationPerformed': False, 'verifiedParentBaseline': copy.deepcopy(before),
+            'entryParentSealSha256': self.c['parentVerifiedSealSha256'], 'before': copy.deepcopy(before['services']),
+            'after': after, 'images': {'api': image}, 'image': image}
+        proof = {'commit': p.ADDRESS_CURRENT, 'tree': p.ADDRESS_TREE, 'scope': 'BITBROWSER_ENTRY_START_20261019',
+            'recipe': p.ENTRY, 'contractSha256': p.ENTRY_CONTRACT_SHA, 'workflowRunId': '39202298576',
+            'isolatedMysqlVerification': self.c['mysqlInheritance']['evidence'], 'sources': old_entry['sources'], 'controlSources': old_entry['controlPins'], 'updatedServices': ['api'],
+            'migrationPerformed': False, 'businessActions': 0}
+        manifest = {'commit': p.ADDRESS_CURRENT, 'sourceTree': p.ADDRESS_TREE, 'status': 'DEPLOYED',
+            'scope': proof['scope'], 'bitbrowserHistoryPublication': preservation, 'previousCommit': p.ENTRY_CURRENT,
+            'previousRelease': before['current'], 'previousManifestSha256': before['manifestSha256'],
+            'roleSourceProjections': {'api': {'commit': p.ADDRESS_CURRENT, 'kind': proof['scope'],
+                'buildProofSha256': p.ADDRESS_PROOF, 'sources': old_entry['sources'],
+                'parentProjection': old_manifest['roleSourceProjections']['api']},
+                'admin': copy.deepcopy(old_manifest['roleSourceProjections']['admin'])},
+            'adminSourceProjection': copy.deepcopy(old_manifest['adminSourceProjection']),
+            'images': {**old_manifest['images'], 'api': {'digest': p.ADDRESS_API_IMAGE, 'reference': 'new-api', 'sourceCommit': p.ADDRESS_CURRENT}}}
+        return manifest, proof, preservation, old_entry, old_manifest
+
+    def test_admin_only_scope_has_no_api_modules_and_preserves_all_other_services(self):
+        p.validate_contract(self.c)
+        self.assertEqual(p.UPDATED, ('admin',))
+        self.assertEqual(p.REBOUND, ())
+        self.assertEqual(p.MODULES, frozenset())
+        self.assertEqual(len(p.APPLICATION), 2)
+        self.assertEqual(set(p.PRESERVED), set(p.SERVICES) - {'admin'})
+        for value in ({'updatedServices': ['api', 'admin']}, {'apiModules': ['unowned.js']},
+            {'reboundServices': ['online-recharge']}, {'expectedCurrent': p.ENTRY_CURRENT},
+            {'adminNativeProofSha256': p.ADMIN_PROOF}):
+            with self.assertRaises(RuntimeError):
+                p.validate_contract({**self.c, **value})
+
+    def test_parent_entry_identity_api_projection_and_actual_admin_image_are_bound(self):
+        p.verify_address_parent(self.c, *self.parent())
+        mutations = [lambda m, pr, ps: m.update(commit=p.ENTRY_CURRENT),
+            lambda m, pr, ps: pr.update(contractSha256='0' * 64),
+            lambda m, pr, ps: ps['after']['api'].update(image=p.ENTRY_API_IMAGE),
+            lambda m, pr, ps: ps['after']['admin'].update(image='sha256:' + '0' * 64),
+            lambda m, pr, ps: ps['after']['mysql'].update(containerId='changed'),
+            lambda m, pr, ps: ps['after']['online-recharge'].update(environmentSha256='0' * 64),
+            lambda m, pr, ps: ps['verifiedParentBaseline'].update(apiPreservedInventory={}),
+            lambda m, pr, ps: m['roleSourceProjections']['api'].update(parentProjection={}),
+            lambda m, pr, ps: m['roleSourceProjections']['admin'].update(old='changed')]
+        for mutate in mutations:
+            m, pr, ps, entry, old = copy.deepcopy(self.parent())
+            mutate(m, pr, ps)
+            with self.assertRaises(RuntimeError):
+                p.verify_address_parent(self.c, m, pr, ps, entry, old)
+
+    def test_activation_only_replaces_admin_without_api_stop_or_sidecar_rebind(self):
+        calls = []
+        class Driver:
+            def compose(self, *args, **kwargs): calls.append(('compose', args, kwargs))
+            def wait_healthy(self, *args): calls.append(('healthy', args))
+        class Fence:
+            def stop(self, *args, **kwargs): raise AssertionError('must preserve API and sidecar')
+            def close(self): calls.append(('fence-close',))
+        p.activate_services(Driver(), HERE, {}, Fence())
+        self.assertEqual(calls, [('compose', (HERE, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'admin'), {'timeout': 180}),
+            ('healthy', (HERE, 'admin')), ('fence-close',)])
+
+    def test_mysql_evidence_is_exact_parent_native_evidence_never_a_new_test_claim(self):
+        value = self.c['mysqlInheritance']['evidence']
+        p.verify_mysql(value, {'commit': 'a' * 40}, self.c)
+        self.assertEqual(value['workflowRunId'], '39202298576')
+        self.assertEqual(value['testsPassed'], 18)
+        for changed in ({**value, 'workflowRunId': '12'}, {**value, 'testsPassed': 17}, {**value, 'reportSha256': '0' * 64}):
+            with self.assertRaisesRegex(RuntimeError, 'MYSQL_INHERITANCE'):
+                p.verify_mysql(changed, {}, self.c)
+        self.assertEqual(set(self.c['mysqlInheritance']['inputs']) & p.MYSQL_FILES, p.MYSQL_FILES)
+        self.assertTrue(any(n.startswith('apps/api/prisma-mysql/migrations/') for n in self.c['mysqlInheritance']['inputs']))
+        self.assertIn('apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts', self.c['mysqlInheritance']['inputs'])
+
+    def test_source_quality_requires_only_guards_and_admin_and_build_omits_api_database(self):
+        b.require_quality_jobs([{'name': 'recharge (guards)', 'conclusion': 'success'},
+            {'name': 'recharge (admin)', 'conclusion': 'success'}], p)
+        with self.assertRaisesRegex(RuntimeError, 'SOURCE_API_QUALITY'):
+            b.require_quality_jobs([{'name': 'recharge (guards)', 'conclusion': 'success'},
+                {'name': 'recharge (api)', 'conclusion': 'success'}], p)
+        import inspect
+        code = inspect.getsource(b.address_main)
+        self.assertNotIn('@apple-business/api', code)
+        self.assertNotIn('prisma:mysql', code)
+        self.assertNotIn('api/modules', code)
+        self.assertIn('inherited_mysql', code)
+        self.assertIn('p.ENTRY_CURRENT', code)
+        reconstruction = inspect.getsource(b.reconstruct_address)
+        self.assertIn('reconstruct_followup', reconstruction)
+        self.assertIn("old['sourceReviewCommit']", reconstruction)
+        self.assertNotIn("git('archive'", reconstruction)
+
+    def test_admin_proof_and_payload_reject_any_api_or_shared_output(self):
+        identity = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '12', 'workflowRunAttempt': '1', 'contractSha256': 'e' * 64}
+        proof = {**identity, 'version': 1, 'recipe': p.ADDRESS, 'scope': p.SCOPE,
+            'sources': self.c['sources'], 'controlSources': self.c['controlPins'],
+            'baselineModulesReproduced': {}, 'predecessorProofSha256': p.ADDRESS_PROOF,
+            'baselineSharedUnchanged': True, 'baselineAdminReproduced': True,
+            'baselineAdminFiles': self.c['publishedAdminFiles'], 'adminFiles': self.c['publishedAdminFiles'],
+            'migrationPerformed': False, 'businessActions': 0, 'updatedServices': ['admin'],
+            'qualityVerification': {}, 'isolatedMysqlVerification': self.c['mysqlInheritance']['evidence'], 'apiModules': {}}
+        files = {**{'source/' + n: v for n, v in self.c['sources'].items()}, **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()}}
+        proof['files'] = files
+        class Helper:
+            @staticmethod
+            def file_inventory(_path): return files.copy()
+        p.verify_proof(proof, proof, self.c, HERE, Helper)
+        for name in ('api/modules/id-business-v2/auto-recharge/recharge-local.service.js', 'shared/index.js'):
+            files[name] = 'a' * 64
+            with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_CHANGED'):
+                p.verify_proof(proof, proof, self.c, HERE, Helper)
+            files.pop(name)
+        with self.assertRaisesRegex(RuntimeError, 'ADMIN_BUILD_PROOF'):
+            p.verify_proof({**proof, 'baselineAdminFiles': {}}, proof, self.c, HERE, Helper)
+
+    def test_no_database_workflow_branch_and_publication_job_are_recipe_specific(self):
+        workflow = (ROOT / p.WORKFLOW).read_text()
+        admin = workflow.split('  validate-admin:', 1)[1].split('  publish:', 1)[0]
+        self.assertNotIn('services:', admin)
+        self.assertNotIn('migrate', admin)
+        self.assertNotIn('MYSQL_ROOT_PASSWORD', admin)
+        self.assertIn('inherit exact parent MySQL evidence', admin)
+        self.assertIn('needs: [validate, validate-admin]', workflow)
+        self.assertIn("needs.validate-admin.result == 'success'", workflow)
+
+
 if __name__ == '__main__':
     unittest.main()

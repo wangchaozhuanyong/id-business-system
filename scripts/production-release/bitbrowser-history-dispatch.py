@@ -20,7 +20,11 @@ SCOPE = 'BITBROWSER_HISTORY_PAGINATION_20261019'
 CURRENT = 'fe27681e1ef06b14616276dff33c3febeea47579'
 RECIPE = os.environ.get('BITBROWSER_RELEASE_RECIPE', 'history-20261019')
 CONTRACT_FILE = 'bitbrowser-history-contract.json'
-if RECIPE == 'entry-start-20261019':
+if RECIPE == 'existing-address-field-20261019':
+    CURRENT = '0348f0327849f1e1203e43db9b26dbbeca6dfa34'
+    SCOPE = 'BITBROWSER_EXISTING_ADDRESS_FIELD_20261019'
+    CONTRACT_FILE = 'bitbrowser-existing-address-contract.json'
+elif RECIPE == 'entry-start-20261019':
     CURRENT = '5f122fcb841c6029b46b023f41562529b7b4bde0'
     SCOPE = 'BITBROWSER_ENTRY_START_20261019'
     CONTRACT_FILE = 'bitbrowser-entry-start-contract.json'
@@ -63,7 +67,7 @@ def prepare():
         and run['path'] == '.github/workflows/bitbrowser-history-validation.yml'
         and str(run['run_attempt']) == attempt, 'WORKFLOW_CHANGED')
     jobs = github('repos/' + REPO + '/actions/runs/' + run_id + '/attempts/' + attempt + '/jobs')['jobs']
-    validate = [j for j in jobs if j['name'] == 'validate']
+    validate = [j for j in jobs if j['name'] == ('validate-admin' if RECIPE == 'existing-address-field-20261019' else 'validate')]
     need(len(validate) == 1 and validate[0]['status'] == 'completed'
         and validate[0]['conclusion'] == 'success', 'NATIVE_VALIDATION_REQUIRED')
     rows = github('repos/' + REPO + '/actions/runs/' + run_id + '/artifacts')['artifacts']

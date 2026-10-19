@@ -7646,3 +7646,71 @@ test('finite entry-start controls retain exactly ten controls and both real CLI 
     false
   );
 });
+
+import {
+  isBitbrowserExistingAddressControlsOnly as finiteAddressOnly,
+  bitbrowserExistingAddressControlPaths as finiteAddressPaths,
+  bitbrowserExistingAddressSourceReviewCommit as finiteAddressCommit,
+  bitbrowserExistingAddressSourceReviewTree as finiteAddressTree
+} from './ci-recharge-scope.mjs';
+
+test('finite existing-address controls retain exactly ten controls and both real CLI matrix entries', () => {
+  const context = { base: finiteAddressCommit, baseTree: finiteAddressTree };
+  assert.equal(finiteAddressPaths.length, 10);
+  assert.equal(finiteAddressOnly(finiteAddressPaths, context), true);
+  assert.deepEqual(finiteBillingParts(finiteAddressPaths, undefined, context), [
+    'guards',
+    'release-controls'
+  ]);
+  for (const base of [finiteAddressCommit, 'b'.repeat(40)]) {
+    for (const eventName of ['pull_request', 'push']) {
+      const { result, writes } = recordScopeClassification(finiteAddressPaths, {}, eventName, {
+        base,
+        baseTree: finiteAddressTree
+      });
+      assert.equal(result.mode, 'ci-only');
+      assert.deepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(result.onlineCiBuild, false);
+      assert.ok(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        )
+      );
+    }
+  }
+  for (const eventName of ['pull_request', 'push']) {
+    for (const { paths, baseTree } of [
+      { paths: finiteAddressPaths, baseTree: finiteFollowupTree },
+      { paths: finiteAddressPaths, baseTree: 'a'.repeat(40) },
+      ...finiteAddressPaths.map((missing) => ({
+        paths: finiteAddressPaths.filter((n) => n !== missing),
+        baseTree: finiteAddressTree
+      })),
+      ...[
+        'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+        'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts',
+        'scripts/production-release/bitbrowser-followup-contract.json',
+        'scripts/production-release/bitbrowser-history-contract.json',
+        'packages/shared/src/index.ts'
+      ].map((extra) => ({ paths: [...finiteAddressPaths, extra], baseTree: finiteAddressTree }))
+    ]) {
+      const { result, writes } = recordScopeClassification(paths, {}, eventName, {
+        base: 'b'.repeat(40),
+        baseTree
+      });
+      assert.equal(result.mode, 'full');
+      assert.notDeepEqual(result.checkParts, ['guards', 'release-controls']);
+      assert.equal(
+        writes.some(({ contents }) =>
+          contents.includes('check_parts=["guards","release-controls"]\n')
+        ),
+        false
+      );
+    }
+  }
+  assert.equal(finiteAddressOnly(finiteAddressPaths, { ...context, base: 'main' }), false);
+  assert.equal(
+    finiteAddressOnly([...finiteAddressPaths.slice(1), finiteAddressPaths[1]], context),
+    false
+  );
+});

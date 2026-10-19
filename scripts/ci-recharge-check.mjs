@@ -158,6 +158,8 @@ import {
   bitbrowserRecoverySourceReviewTree,
   bitbrowserRecoveryControlRepairBase,
   bitbrowserRecoveryControlRepairTree,
+  isBitbrowserExistingAddressControlsOnly,
+  bitbrowserExistingAddressSourceReviewTree,
   isBitbrowserEntryStartControlsOnly,
   bitbrowserEntryStartSourceReviewTree,
   isBitbrowserFollowupControlsOnly,
@@ -351,6 +353,46 @@ if (
       'scripts/production-release/bitbrowser-history-build.py',
       '--recipe',
       'entry-start-20261019',
+      '--check'
+    ]);
+  }
+  process.exit(0);
+}
+if (
+  mode === 'ci-only' &&
+  isBitbrowserExistingAddressControlsOnly(changed, {
+    base,
+    baseTree: bitbrowserExistingAddressSourceReviewTree
+  }) &&
+  isBitbrowserExistingAddressControlsOnly(changed, {
+    base,
+    baseTree: execFileSync('git', ['rev-parse', base + '^{tree}'], { encoding: 'utf8' }).trim()
+  })
+) {
+  if (!['guards', 'release-controls'].includes(part))
+    throw new Error('Unsupported finite BitBrowser existing-address control check');
+  if (part === 'guards') {
+    npm('run', 'format:check');
+    npm('run', 'lint');
+    for (const name of [
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ])
+      npm('run', name);
+    run('node', [
+      '--test',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+  } else {
+    run('python3', ['-B', 'scripts/production-release/bitbrowser-history-release.test.py']);
+    run('python3', [
+      '-B',
+      'scripts/production-release/bitbrowser-history-build.py',
+      '--recipe',
+      'existing-address-field-20261019',
       '--check'
     ]);
   }
