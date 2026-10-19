@@ -82,7 +82,7 @@
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
     "bitbrowser-manual-build.py": "e20d4ed8cd22d76222b147c1ec33b0de9d6bb49369e45c26b8c0fe892d4e5e81",
     "bitbrowser-manual-dispatch.py": "6ff392060d1a29e5c01402db4005cbc2cf07d2ca6719477ca0b8f7fcd4adc1a1",
-    "bitbrowser-manual-release.py": "6d0e678b487f9665be9ba9e5b2ee6eb6668ecabc5c75dad6494cd8759a80f8f4",
+    "bitbrowser-manual-release.py": "3e5ad1dd6976a8637e556ffcfc7f91661b75ecf0b0ec847a69f1c35a473429bf",
     "bitbrowser-manual-release.test.py": "4f1c2f7934b2f2167e53db01a3737a73b5785bdbea98a6d0b952fffcc8850471",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
@@ -110,6 +110,7 @@
   "migrationPerformed": false,
   "parentAdminImage": "sha256:75e55559dc7f3c3ae8418dfdae39b26a7482ad7c1b3257c66b1907938ea0fc79",
   "parentApiImage": "sha256:58f577117c87c7bb575e01b656743ff7224cca2ac79301b5a3764d302aae0acb",
+  "parentOnlineImage": "sha256:efcd4b195120e83ab1df71b2244604f187a5e19963d565b5439feb0e3dca2e21",
   "predecessorProofSha256": "21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354",
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
   "productionSources": {

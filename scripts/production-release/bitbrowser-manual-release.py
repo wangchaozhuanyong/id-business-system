@@ -98,10 +98,13 @@ def observe(c):
     raw = (current / 'release-manifest.json').read_bytes()
     manifest = json.loads(raw)
     need(current.parent == BASE / 'releases' and manifest.get('commit') == CURRENT
+        and manifest.get('status') == 'DEPLOYED'
+        and all(manifest.get('roleSourceProjections', {}).get(role, {}).get('commit') == c['apiAdminParentCommit'] for role in ('api', 'admin'))
         and sha((current / 'bitbrowser-history-build-proof.json').read_bytes()) == PARENT_PROOF,
         'PUBLISHED_PARENT_CHANGED')
     states = h.snapshot(d, current)
-    need(states['api']['image'] == c['parentApiImage'] and states['admin']['image'] == c['parentAdminImage'],
+    need(states['api']['image'] == c['parentApiImage'] and states['admin']['image'] == c['parentAdminImage']
+        and states['online-recharge']['image'] == c['parentOnlineImage'],
         'PARENT_IMAGE_CHANGED')
     need(json.loads(d.run('docker', 'image', 'inspect', states['admin']['image']))[0]['Config']['Labels'].get('org.opencontainers.image.revision') == c['apiAdminParentCommit'], 'ADMIN_PARENT_REVISION')
     h.guards(d, current, states, c)
