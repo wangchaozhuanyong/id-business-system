@@ -89,7 +89,17 @@ class FencedRecovery(unittest.TestCase):
                 unlocked = True; trace.append('unlock')
             fence.acquire.side_effect = acquire; fence.close.side_effect = close
             marker = Mock(); marker.sql_fence_class.return_value = lambda *_args: fence
-            marker.release_markers.side_effect = lambda *_args: trace.append('marker-release')
+            marker.registration_marker.return_value = base / 'registration-marker.json'
+            marker_raw = json.dumps({'scope': p.SCOPE, 'commit': plan['commit'],
+                'workflowRunId': plan['workflowRunId']}, sort_keys=True).encode()
+            (base / 'maintenance.json').write_bytes(marker_raw)
+            marker.registration_marker.return_value.write_bytes(marker_raw if mutation != 'marker' else b'{}')
+            real_markers = p.ORIGINAL.load('proxy-result-identity-release.py')
+            marker.verify_markers.side_effect = real_markers.verify_markers
+            def release_markers(receipt):
+                self.assertEqual(set(receipt['paths']), {str(base / 'maintenance.json'), str(base / 'registration-marker.json')})
+                real_markers.release_markers(receipt); trace.append('marker-release')
+            marker.release_markers.side_effect = release_markers
             def admitted(*_args):
                 self.assertTrue(unlocked); trace.append('fresh-rpc')
                 if adoption_failure: raise RuntimeError('READBACK_UNAVAILABLE')
@@ -120,7 +130,7 @@ class FencedRecovery(unittest.TestCase):
         self.assertEqual(result.manifest['status'], 'DEPLOYED')
 
     def test_changed_evidence_or_running_candidate_never_starts(self):
-        for mutation in ('journal', 'proof', 'backup', 'preserved', 'running', 'source', 'reserved', 'control'):
+        for mutation in ('journal', 'proof', 'backup', 'preserved', 'running', 'source', 'reserved', 'control', 'marker'):
             with self.subTest(mutation=mutation):
                 result = self.scenario(mutation); self.assertIsNotNone(result.error)
                 self.assertNotIn('start', result.trace); result.marker.release_markers.assert_not_called()

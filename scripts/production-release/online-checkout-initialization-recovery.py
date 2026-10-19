@@ -91,7 +91,8 @@ def resume_failed_selection(plan, c, control, expected):
             and metadata['State']['Running'] is False and metadata['State'].get('Paused') is False, 'RECOVERY_NOT_STOPPED')
         original.verify_host(target, states, c, plan)
         marker_raw = json.dumps({'scope': SCOPE, 'commit': plan['commit'], 'workflowRunId': plan['workflowRunId']}, sort_keys=True).encode()
-        marker = {'paths': [str(BASE / 'maintenance.json')], 'ownerSha256': sha(marker_raw)}
+        marker = {'paths': [str(BASE / 'maintenance.json'), str(p.registration_marker(d, states))],
+            'ownerSha256': sha(marker_raw)}
         p.verify_markers(marker)
         recovery_path = stage / ('resume-' + control['commit'] + '.json')
         with recovery_path.open('x') as output:
