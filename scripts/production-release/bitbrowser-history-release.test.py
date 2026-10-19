@@ -631,5 +631,275 @@ class ExistingAddressControls(unittest.TestCase):
         self.assertIn("needs.validate-admin.result == 'success'", workflow)
 
 
+
+class BoundedBuildControls(unittest.TestCase):
+    def test_full_parent_inventory_is_authenticated_before_selecting_known_and_absent_outputs(self):
+        files = {'old.js': 'a' * 64, 'old.d.ts': 'b' * 64, 'preserved.js': 'c' * 64}
+        expected = {'count': len(files), 'sha256': p.sha(p.canonical(files))}
+        value = p.bounded_api_selection(files, ['old.js', 'old.d.ts', 'new.js'], ['new.js'], expected)
+        self.assertEqual(value['apiModules'], {n: files[n] for n in ('old.js', 'old.d.ts')})
+        self.assertEqual(value['absentApiModules'], ['new.js'])
+        with self.assertRaisesRegex(RuntimeError, 'FULL_INVENTORY_CHANGED'):
+            p.bounded_api_selection({**files, 'preserved.js': 'd' * 64}, ['old.js'], [], expected)
+        for selected, absent in ((['missing.js'], []), (['old.js'], ['old.js']), (['old.js'], ['new.js']), ([], [])):
+            with self.assertRaisesRegex(RuntimeError, 'SELECTED_OUTPUT_CHANGED'):
+                p.bounded_api_selection(files, selected, absent, expected)
+
+    def test_existing_and_explicitly_absent_api_outputs_stay_closed(self):
+        before = {'old.js': 'a' * 64, 'old.d.ts': 'b' * 64, 'preserved.js': 'c' * 64}
+        after = {**before, 'old.js': 'd' * 64, 'new.js': 'e' * 64, 'new.d.ts': 'f' * 64}
+        shared = {'index.js': 'a' * 64}
+        c = {'apiModules': ['old.js', 'new.js', 'new.d.ts'],
+            'absentApiModules': ['new.js', 'new.d.ts'], 'baseline': {'apiModules': {'old.js': before['old.js']}},
+            'publishedApiModules': before, 'publishedSharedFiles': shared}
+        self.assertEqual(b.verify_bounded_delta(before, after, shared, shared, c, p),
+            {n: after[n] for n in c['apiModules']})
+        unchanged_declaration = copy.deepcopy(c)
+        unchanged_declaration['apiModules'].append('old.d.ts')
+        unchanged_declaration['baseline']['apiModules']['old.d.ts'] = before['old.d.ts']
+        with self.assertRaisesRegex(RuntimeError, 'COMPILED_SELECTION_CHANGED'):
+            b.verify_bounded_delta(before, after, shared, shared, unchanged_declaration, p)
+        for changed_before, changed_after, changed_shared in (
+            ({**before, 'new.js': 'e' * 64}, after, shared),
+            ({**before, 'old.js': 'f' * 64}, after, shared),
+            (before, {**after, 'preserved.js': 'f' * 64}, shared),
+            (before, {**after, 'other.d.ts': 'f' * 64}, shared),
+            (before, after, {})):
+            with self.assertRaises(RuntimeError):
+                b.verify_bounded_delta(changed_before, changed_after, shared, changed_shared, c, p)
+
+    def test_root_before_source_drift_cannot_enter_a_finite_overlay(self):
+        name = 'apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts'
+        with tempfile.TemporaryDirectory() as directory:
+            context = Path(directory)
+            target = context / name
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'projected-native-source')
+            def fake_git(*args):
+                if args[0] == 'ls-tree': return (name + '\n').encode()
+                if args[0] == 'show': return b'projected-native-source'
+                raise AssertionError(args)
+            with patch.object(b, 'git', side_effect=fake_git), patch.object(b, 'overlay') as apply:
+                b.bounded_overlay(context, {name: 'a' * 64}, 'b' * 40, p)
+                apply.assert_called_once()
+                target.write_bytes(b'unpublished-root-drift')
+                with self.assertRaisesRegex(RuntimeError, 'SOURCE_PREDECESSOR_CHANGED'):
+                    b.bounded_overlay(context, {name: 'a' * 64}, 'b' * 40, p)
+                self.assertEqual(apply.call_count, 1)
+
+    def test_new_helpers_must_be_absent_and_closed_recipe_is_frozen(self):
+        name = 'apps/api/src/id-business-v2/auto-recharge/recharge-payment-hold.ts'
+        with tempfile.TemporaryDirectory() as directory:
+            context = Path(directory)
+            with patch.object(b, 'git', return_value=b''), patch.object(b, 'overlay') as apply:
+                b.bounded_overlay(context, {name: 'a' * 64}, 'b' * 40, p)
+                target = context / name
+                target.parent.mkdir(parents=True)
+                target.write_bytes(b'preexisting')
+                with self.assertRaisesRegex(RuntimeError, 'NEW_SOURCE_ALREADY_PRESENT'):
+                    b.bounded_overlay(context, {name: 'a' * 64}, 'b' * 40, p)
+                self.assertEqual(apply.call_count, 1)
+        p.select_recipe(p.BOUNDED)
+        c = json.loads((HERE / p.CONTRACT_FILE).read_bytes())
+        p.validate_contract(c)
+        self.assertEqual(len(p.API_SOURCES), 20)
+        self.assertEqual(len(p.BOUNDED_PRODUCTION), 25)
+        self.assertEqual(len(p.TEST_SOURCES), 14)
+        p.select_recipe('history-20261019')
+
+
+class BoundedFrozenControls(unittest.TestCase):
+    def setUp(self):
+        p.select_recipe(p.BOUNDED)
+        b.RECIPE = p.BOUNDED
+        self.c = json.loads((HERE / p.CONTRACT_FILE).read_bytes())
+
+    def tearDown(self):
+        p.select_recipe('history-20261019')
+        b.RECIPE = 'history-20261019'
+
+    def test_frozen_scope_separates_source_review_production_and_compiled_output(self):
+        p.validate_contract(self.c)
+        self.assertEqual(set(self.c['sourceReviewControls']), p.CI_CONTROLS)
+        self.assertEqual(len(self.c['sources']), 39)
+        self.assertEqual(len(p.production_sources(self.c)), 25)
+        self.assertFalse(any(n.endswith('.spec.ts') for n in p.production_sources(self.c)))
+        self.assertEqual(len(p.MODULES), 57)
+        self.assertEqual(set(self.c['absentApiModules']), p.MODULES - set(self.c['baseline']['apiModules']))
+        self.assertFalse(p.MODULES & p.BOUNDED_ORDER_ONLY)
+        self.assertFalse(any(n.endswith('worker.repository.d.ts') for n in p.MODULES))
+        self.assertEqual(p.BOUNDED_PROPAGATED, {n for n in p.MODULES if n.endswith(('recharge-name.service.d.ts','shared-bank-card.controller.d.ts'))})
+        for key, value in (('status','DRAFT'), ('sourceReviewCommit','a'*40), ('sourceReviewTree','b'*40),
+            ('productionSources',self.c['sources']), ('absentApiModules',[]), ('mysqlExpectedCounts',[10,8]),
+            ('parentApiInventory',{'count':1765,'sha256':'a'*64})):
+            changed = copy.deepcopy(self.c); changed[key] = value
+            with self.assertRaises(RuntimeError): p.validate_contract(changed)
+
+    def test_mysql_requires_31_real_tests_and_all_three_exact_specs_in_same_run(self):
+        identity = {'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
+        value = {**identity,'scope':'OWNED_EMPTY_DATABASE','runtime':'github-actions-mysql-service',
+            'testFiles':self.c['mysqlTestSources'],'testsTotal':31,'testsPassed':31,'testsSkipped':0,
+            'testsTodo':0,'productionActions':0,'reportSha256':'c'*64}
+        p.verify_mysql(value,identity,self.c)
+        for key,val in (('testsTotal',18),('testsPassed',30),('testsSkipped',1),('workflowRunAttempt','2'),
+            ('testFiles',{n:v for n,v in value['testFiles'].items() if '/bank-card-pool/' not in n})):
+            changed={**value,key:val}
+            with self.assertRaisesRegex(RuntimeError,'MYSQL_EVIDENCE_INVALID'):p.verify_mysql(changed,identity,self.c)
+        text=(ROOT/p.WORKFLOW).read_text()
+        for required in ('id_business_v2_shared_bank_fixture','export SHARED_BANK_CARD_MYSQL_TEST=1',
+            '[10,8,13]','(31 if bounded else 18)',"inputs.recipe == 'bounded-hold-20261019'",'id-token: write',
+            'bitbrowser-history-parent-${{ github.run_id }}-${{ github.run_attempt }}'):
+            self.assertIn(required,text)
+
+    def test_parent_capture_binds_native_full_inventory_before_absence_and_declaration_bytes(self):
+        identity={'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
+        value={**identity,'status':'BITBROWSER_BOUNDED_PARENT_CAPTURED','parentNative':self.c['parentNative'],
+            'apiInventory':p.BOUNDED_API_INVENTORY,'apiModules':self.c['baseline']['apiModules'],
+            'absentApiModules':self.c['absentApiModules'],'sealSha256':'c'*64,'databaseWrites':0,'businessActions':0}
+        p.verify_bounded_capture(value,identity,self.c)
+        for key,val in (('workflowRunId','124'),('apiInventory',{'count':1765,'sha256':'a'*64}),
+            ('apiModules',{}),('absentApiModules',[]),('sealSha256',''),('databaseWrites',1)):
+            with self.assertRaisesRegex(RuntimeError,'NATIVE_CAPTURE_INVALID'):
+                p.verify_bounded_capture({**value,key:val},identity,self.c)
+        files={n:rule['before'] for n,rule in self.c['declarationOrderOnly'].items()}
+        p.verify_bounded_declarations_native(files,self.c)
+        for wrong in ({}, {**files,next(iter(files)):'f'*64}):
+            with self.assertRaisesRegex(RuntimeError,'DECLARATION_NATIVE_BEFORE_CHANGED'):
+                p.verify_bounded_declarations_native(wrong,self.c)
+        with patch.object(p,'HERE',Path('/nonexistent')):
+            with self.assertRaises(FileNotFoundError):p.bounded_runtime_contract(None,None,self.c,{**identity,'mode':'preflight','nativeParentCapture':value})
+
+    def test_ast_allows_only_same_property_in_same_type_literal_and_no_other_bytes(self):
+        before=b'declare function x(): {\n    checkoutIdentifier: string | null;\n    other: number;\n};\n'
+        after=b'declare function x(): {\n    other: number;\n    checkoutIdentifier: string | null;\n};\n'
+        b.checkout_property_move(before,after,ROOT/'node_modules',p)
+        for invalid in (after.replace(b'other: number',b'other: string'),
+            b'declare function x(): {\n    other: number;\n};\ndeclare function y(): {\n    checkoutIdentifier: string | null;\n};\n',
+            after.replace(b'checkoutIdentifier: string | null',b'checkoutIdentifier: string'),
+            after+b'declare function y(p: [string, number]): void;\n'):
+            with self.assertRaisesRegex(RuntimeError,'DECLARATION_PROPERTY_MOVE_INVALID'):
+                b.checkout_property_move(before,invalid,ROOT/'node_modules',p)
+        params=b'declare function x(a: string, b: number): void;\n'
+        with self.assertRaisesRegex(RuntimeError,'DECLARATION_PROPERTY_MOVE_INVALID'):
+            b.checkout_property_move(params,params.replace(b'a: string, b: number',b'b: number, a: string'),ROOT/'node_modules',p)
+        cross_before=b'declare const x: {\n    checkoutIdentifier: string | null;\n    a: number;\n};\ndeclare const y: {\n    b: number;\n};\n'
+        cross_after=b'declare const x: {\n    a: number;\n};\ndeclare const y: {\n    checkoutIdentifier: string | null;\n    b: number;\n};\n'
+        with self.assertRaisesRegex(RuntimeError,'DECLARATION_PROPERTY_MOVE_INVALID'):
+            b.checkout_property_move(cross_before,cross_after,ROOT/'node_modules',p)
+
+    def test_only_exact_frozen_declaration_file_hashes_can_be_preserved(self):
+        name=next(iter(self.c['declarationOrderOnly']))
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); before=root/'before';after=root/'after'
+            for context in (before,after):
+                target=context/'apps/api/dist'/name;target.parent.mkdir(parents=True);target.write_bytes(b'unapproved')
+            with self.assertRaisesRegex(RuntimeError,'DECLARATION_HASH_CHANGED'):
+                b.preserve_order_only(before,after,self.c,p)
+        self.assertEqual(set(self.c['declarationOrderOnly']),p.BOUNDED_ORDER_ONLY)
+        for name in ('bitbrowser-recovery-contract.json','bitbrowser-history-contract.json','bitbrowser-followup-contract.json',
+            'bitbrowser-entry-start-contract.json','bitbrowser-existing-address-contract.json'):
+            self.assertEqual(p.sha((HERE/name).read_bytes()),self.c['controlPins'][name])
+
+    def test_exact_before_declaration_hash_is_noop_and_third_hash_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);before=root/'before';after=root/'after';c=copy.deepcopy(self.c)
+            for name in p.BOUNDED_ORDER_ONLY:
+                for context in (before,after):
+                    path=context/'apps/api/dist'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'exact-before')
+                c['declarationOrderOnly'][name]={'before':p.sha(b'exact-before'),'after':p.sha(b'exact-after')}
+            with patch.object(b,'checkout_property_move') as move:
+                b.preserve_order_only(before,after,c,p);move.assert_not_called()
+            (after/'apps/api/dist'/next(iter(c['declarationOrderOnly']))).write_bytes(b'unapproved-third-hash')
+            with self.assertRaisesRegex(RuntimeError,'DECLARATION_HASH_CHANGED'):b.preserve_order_only(before,after,c,p)
+
+    def test_frozen_bounded_payload_cannot_contain_spec_ci_or_unchanged_declaration(self):
+        helper=load('recharge-record-release.py');identity={'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1'}
+        mysql={**identity,'scope':'OWNED_EMPTY_DATABASE','runtime':'github-actions-mysql-service','testFiles':self.c['mysqlTestSources'],
+            'testsTotal':31,'testsPassed':31,'testsSkipped':0,'testsTodo':0,'productionActions':0,'reportSha256':'c'*64}
+        capture={**identity,'status':'BITBROWSER_BOUNDED_PARENT_CAPTURED','parentNative':self.c['parentNative'],
+            'apiInventory':p.BOUNDED_API_INVENTORY,'apiModules':self.c['baseline']['apiModules'],
+            'absentApiModules':self.c['absentApiModules'],'sealSha256':'c'*64,'databaseWrites':0,'businessActions':0}
+        with tempfile.TemporaryDirectory() as directory:
+            payload=Path(directory)
+            for name in self.c['productionSources']:
+                path=payload/'source'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/name).read_bytes())
+            for name in p.MODULES:
+                path=payload/'api/modules'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic-output')
+            for name in ['index.html']+[f'assets/test-{i}.js'for i in range(250)]:
+                path=payload/'admin/html'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic-admin')
+            proof={**identity,'version':1,'recipe':p.BOUNDED,'scope':p.SCOPE,'contractSha256':'d'*64,
+                'sources':self.c['sources'],'productionSources':self.c['productionSources'],'controlSources':self.c['controlPins'],
+                'baselineModulesReproduced':self.c['baseline']['apiModules'],'predecessorProofSha256':p.BOUNDED_PROOF,
+                'baselineSharedUnchanged':True,'migrationPerformed':False,'businessActions':0,'updatedServices':list(p.UPDATED),
+                'qualityVerification':{},'isolatedMysqlVerification':mysql,'nativeParentCapture':capture,
+                'apiModules':helper.file_inventory(payload/'api/modules'),'adminFiles':helper.file_inventory(payload/'admin/html'),
+                'baselineAdminReproduced':True,'baselineAdminFiles':self.c['publishedAdminFiles'],'files':helper.file_inventory(payload)}
+            p.verify_proof(proof,proof,self.c,payload,helper)
+            for extra in ('source/scripts/ci-recharge-scope.mjs','source/'+next(iter(p.TEST_SOURCES)),
+                'api/modules/id-business-v2/online-recharge/persistence/worker.repository.d.ts'):
+                path=payload/extra;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'foreign-output')
+                with self.assertRaisesRegex(RuntimeError,'PAYLOAD_CHANGED'):p.verify_proof(proof,proof,self.c,payload,helper)
+                path.unlink()
+
+    def test_bounded_release_execution_captures_admin_before_backup_and_any_activation(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        events=[]
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); controls=root/'controls';controls.mkdir();base=root/'production';base.mkdir();(base/'.staging').mkdir()
+            current=base/'releases'/'parent';current.mkdir(parents=True)
+            c=copy.deepcopy(self.c);c['controlPins']={};c['baseline']={**c['baseline'],'backupNormalizerPath':str(current/'normalizer')}
+            raw=p.canonical(c);(controls/p.CONTRACT_FILE).write_bytes(raw)
+            plan={'commit':'a'*40,'tree':'b'*40,'workflowRunId':'123','workflowRunAttempt':'1','mode':'release',
+                'recipe':p.BOUNDED,'contractSha256':p.sha(raw),'controlSources':{p.CONTRACT_FILE:p.sha(raw)},
+                'runtimeBaseline':{'sealed':True},'artifactSha256':p.sha(b'bundle'),'buildProofSha256':p.sha(b'{}'),
+                'artifactUrl':'https://github.com/wangchaozhuanyong/id-business-system/releases/download/bitbrowser-history-'+'a'*40+'/bitbrowser-history-artifact.tar.gz'}
+            before={'api':{'containerId':'api','image':'old-api'},'admin':{'containerId':'admin','image':'old-admin'}}
+            def archive(raw,path):
+                path.mkdir();(path/'api').mkdir();(path/'admin').mkdir();(path/'build-proof.json').write_bytes(b'{}');return path
+            def capture(*args):events.append('capture-admin');return {'old.js':'a'*64}
+            def backup(*args,**kwargs):
+                events.append('backup');self.assertIn('capture-admin',events)
+                raise RuntimeError('SYNTHETIC_STOP_BEFORE_SWITCH')
+            driver=SimpleNamespace(run=lambda *args,**kwargs:json.dumps([{'Id':'synthetic-image'}]))
+            helper=SimpleNamespace(safe_archive=archive,base_image_reference=lambda *args:'synthetic-parent',
+                build_image=lambda *args:events.append('build-'+args[3]),fresh_scoped_backup=backup)
+            availability=SimpleNamespace(acquire_release_lock=lambda lock:None,normalize_image_context=lambda context:None)
+            overlay=SimpleNamespace(verify_overlay_image=lambda *args:None)
+            checkout=SimpleNamespace(admin_inventory=capture)
+            def modules(name):
+                return {'recharge-availability-release.py':availability,'proxy-result-identity-release.py':overlay,
+                    'recharge-checkout-release.py':checkout}[name]
+            response=MagicMock();response.__enter__.return_value.read.return_value=b'bundle'
+            with patch.object(p,'HERE',controls),patch.object(p,'BASE',base),patch.object(p,'validate_contract'), \
+                patch.object(p,'helpers',return_value=(helper,driver,None)),patch.object(p,'load',side_effect=modules), \
+                patch.object(p,'bounded_runtime_contract',return_value=c), \
+                patch.object(p,'baseline',return_value=(current,b'{}',before,plan['runtimeBaseline'])), \
+                patch.object(p.urllib.request,'urlopen',return_value=response), \
+                patch.object(p,'verify_proof',return_value={'apiModules':{},'adminFiles':{}}), \
+                patch.object(p,'activate_services') as activate:
+                with self.assertRaisesRegex(RuntimeError,'SYNTHETIC_STOP_BEFORE_SWITCH'):p.release(plan,c)
+                activate.assert_not_called()
+            self.assertEqual(events,['build-api','build-admin','capture-admin','backup'])
+
+    def test_quality_requires_guards_api_admin_and_payload_never_has_test_or_ci_sources(self):
+        for names in (['recharge (guards)','recharge (api)','recharge (admin)'],['full-quality']):
+            b.require_quality_jobs([{'name':n,'conclusion':'success'} for n in names],p)
+        for names in (['recharge (guards)','recharge (api)'],['recharge (guards)','recharge (admin)']):
+            with self.assertRaises(RuntimeError):b.require_quality_jobs([{'name':n,'conclusion':'success'} for n in names],p)
+        from inspect import getsource
+        source=getsource(b.bounded_main)
+        self.assertIn("for name in c['productionSources']:",source)
+        self.assertNotIn("for name in c['sources']:",source)
+        self.assertLess(source.index('bounded_native_capture('),source.index('reconstruct_bounded_parent('))
+        self.assertIn('verify_bounded_delta(',source)
+        self.assertIn('preserve_order_only(before, context, c, p)',source)
+        release=getsource(p.release)
+        self.assertIn("return bounded_capture(d, h, c, plan)",release)
+        self.assertLess(release.index("return bounded_capture(d, h, c, plan)"),release.index('h.fresh_scoped_backup('))
+        self.assertIn('for name in production_sources(c):',release)
+        self.assertIn("'preflight', 'release', 'readback'",release)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -3579,3 +3579,119 @@ test('bounded source runner remains fail closed while draft; frozen runner propa
       );
   }
 });
+
+import {
+  bitbrowserBoundedHoldControlPaths,
+  bitbrowserBoundedHoldControlContract,
+  bitbrowserBoundedHoldSourceReviewCommit,
+  bitbrowserBoundedHoldSourceReviewTree
+} from './ci-recharge-scope.mjs';
+
+test('bounded-hold control runner executes both finite parts without business commands and propagates failures', () => {
+  const options = {
+    base: bitbrowserBoundedHoldSourceReviewCommit,
+    baseTree: bitbrowserBoundedHoldSourceReviewTree
+  };
+  const commands = [
+    ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'],
+    ['python3', '-B', 'scripts/production-release/bitbrowser-history-release.test.py'],
+    [
+      'python3',
+      '-B',
+      'scripts/production-release/bitbrowser-history-build.py',
+      '--recipe',
+      'bounded-hold-20261019',
+      '--check'
+    ]
+  ];
+  for (const base of [options.base, 'b'.repeat(40)])
+    assert.deepEqual(
+      recordGuardCommands('ci-only', bitbrowserBoundedHoldControlPaths, 'release-controls', {
+        ...options,
+        base
+      }),
+      [...commands, ['process-exit', 0]]
+    );
+  const guards = recordGuardCommands(
+    'ci-only',
+    bitbrowserBoundedHoldControlPaths,
+    'guards',
+    options
+  );
+  const expectedGuards = [
+    ...[
+      'format:check',
+      'lint',
+      'check:v2-module-architecture',
+      'check:v2-isolation',
+      'check:v2-concurrency-standard',
+      'check:v2-prisma-runtime-boundary'
+    ].map((name) => ['npm', 'run', name]),
+    ['node', '--test', 'scripts/ci-recharge-scope.test.mjs', 'scripts/ci-recharge-check.test.mjs']
+  ];
+  assert.deepEqual(guards, [...expectedGuards, ['process-exit', 0]]);
+  for (const [part, selected] of [
+    ['guards', expectedGuards],
+    ['release-controls', commands]
+  ])
+    for (const command of selected)
+      assert.throws(
+        () =>
+          recordGuardCommands('ci-only', bitbrowserBoundedHoldControlPaths, part, {
+            ...options,
+            failCommand: command.join(' ')
+          }),
+        /SYNTHETIC_COMMAND_FAILURE/
+      );
+  for (const part of ['api', 'admin', 'migration', 'online-engine'])
+    assert.throws(
+      () => recordGuardCommands('ci-only', bitbrowserBoundedHoldControlPaths, part, options),
+      /Unsupported finite BitBrowser bounded-hold control check/
+    );
+});
+
+test('bounded-hold control runner rejects moved, incomplete, extended and schema-changing control snapshots', () => {
+  const options = {
+    base: bitbrowserBoundedHoldSourceReviewCommit,
+    baseTree: bitbrowserBoundedHoldSourceReviewTree
+  };
+  for (const part of ['guards', 'release-controls']) {
+    for (const { paths, context } of [
+      { paths: bitbrowserBoundedHoldControlPaths, context: { ...options, base: 'main' } },
+      {
+        paths: bitbrowserBoundedHoldControlPaths,
+        context: { ...options, baseTree: 'a'.repeat(40) }
+      },
+      ...bitbrowserBoundedHoldControlPaths
+        .filter((n) => n !== bitbrowserBoundedHoldControlContract)
+        .map((missing) => ({
+          paths: bitbrowserBoundedHoldControlPaths.filter((n) => n !== missing),
+          context: options
+        })),
+      {
+        paths: [...bitbrowserBoundedHoldControlPaths, bitbrowserBoundedHoldControlPaths[0]],
+        context: options
+      },
+      ...[
+        'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+        'scripts/production-release/bitbrowser-existing-address-contract.json'
+      ].map((extra) => ({
+        paths: [...bitbrowserBoundedHoldControlPaths, extra],
+        context: options
+      }))
+    ])
+      assert.throws(
+        () => recordGuardCommands('ci-only', paths, part, context),
+        /Unfrozen or moved bounded BitBrowser control scope/
+      );
+    for (const schemaAfter of ['', 'model Changed { id String @id }\n'])
+      assert.throws(
+        () =>
+          recordGuardCommands('ci-only', bitbrowserBoundedHoldControlPaths, part, {
+            ...options,
+            schemaAfter
+          }),
+        /control schema must remain byte identical/
+      );
+  }
+});
