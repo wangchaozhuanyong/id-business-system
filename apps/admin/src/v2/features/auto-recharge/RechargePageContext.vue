@@ -53,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import '@/v2/styles/records.css';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import BitBrowserConnectionHelp from './BitBrowserConnectionHelp.vue';
