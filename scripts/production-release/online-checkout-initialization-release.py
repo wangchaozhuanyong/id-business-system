@@ -164,7 +164,7 @@ def validate_browser(value, identity, c):
         and re.fullmatch(r'22\.\d+\.\d+', value.get('nodeVersion', ''))
         and all(value.get(k) == identity[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt'))
         and value.get('testFiles') == {n: c['afterEngineFiles'][n] for n in INITIALIZATION_TESTS}
-        and value.get('sessionRoutingHeadful') is True and value.get('passed') == 79
+        and value.get('sessionRoutingHeadful') is True and value.get('passed') == sum(row[3] for row in INITIALIZATION_REPORTS)
         and value.get('failed') == value.get('skipped') == value.get('todo') == 0
         and value.get('businessActions') == value.get('paymentActions') == 0
         and re.fullmatch('[a-f0-9]{64}', value.get('reportSha256', '')), 'LINUX_INITIALIZATION_TESTS_REQUIRED')

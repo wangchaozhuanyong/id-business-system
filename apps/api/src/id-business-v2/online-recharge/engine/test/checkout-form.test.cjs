@@ -150,9 +150,124 @@ test('visible iframe can override ancestor visibility and retain shared fill eli
     card.number
   );
 });
+for (const [kind, html] of [
+  ['ancestor', `<section hidden style="display:block">${cardHtml}</section>`],
+  ['contents ancestor', `<section hidden style="display:contents">${cardHtml}</section>`],
+  ['own attribute', cardHtml.replaceAll('<input ', '<input hidden style="display:inline-block" ')],
+  ['embedded controls', iframe(`<section hidden style="display:block">${cardHtml}</section>`)],
+  [
+    'nested frame owner',
+    `<section hidden style="display:block">${iframe(iframe(cardHtml))}</section>`
+  ]
+]) {
+  test(`rendered hidden attribute on ${kind} uses actual card interaction and readback`, async (t) => {
+    const page = await pageFor(t, html);
+    const readiness = await inspectCardReadiness(page);
+    assert.equal(readiness.ready, true);
+    const probe = await inspectCardExclusions(page);
+    assert.equal(probe.complete, true);
+    assert.deepEqual(probe.numberComparison, { semanticEligible: 1, geometryEditable: 1 });
+    const result = await fillCard(page, card, { deadline: Date.now() + 4000 });
+    assert.equal(result.ok, true);
+    const frame = page.frames().at(-1);
+    for (const [ac, value] of [
+      ['cc-number', card.number],
+      ['cc-exp', card.expiry],
+      ['cc-csc', card.cvc]
+    ])
+      assert.equal(await frame.locator(`[autocomplete="${ac}"]`).inputValue(), value);
+  });
+}
+test('rendered hidden shadow host keeps visible fields and excludes truly hidden duplicates', async (t) => {
+  const page = await pageFor(t, '<div id="payment-root" hidden style="display:block"></div>');
+  await page.locator('#payment-root').evaluate((host, html) => {
+    host.attachShadow({ mode: 'open' }).innerHTML =
+      `<section hidden>${html}</section><section data-active>${html}</section>`;
+  }, cardHtml);
+  assert.equal((await inspectCardReadiness(page)).ready, true);
+  assert.equal((await fillCard(page, card, { deadline: Date.now() + 4000 })).ok, true);
+  assert.equal(
+    await page.locator('[data-active] [autocomplete="cc-number"]').inputValue(),
+    card.number
+  );
+  assert.deepEqual(
+    await page.locator('section[hidden] input').evaluateAll((nodes) => nodes.map((n) => n.value)),
+    ['', '', '', '']
+  );
+});
+test('two rendered hidden card groups stay ambiguous and neither receives card data', async (t) => {
+  const page = await pageFor(
+    t,
+    `<section hidden style="display:block">${cardHtml}</section>` + cardHtml
+  );
+  const result = await fillCard(page, card, { deadline: Date.now() + 1500 });
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_AMBIGUOUS');
+  assert.ok(
+    (await page.locator('input').evaluateAll((nodes) => nodes.map((n) => n.value))).every(
+      (v) => v === ''
+    )
+  );
+});
+test('rendered hidden billing controls use the same fill and readback eligibility', async (t) => {
+  const page = await pageFor(
+    t,
+    iframe(`<section hidden style="display:block">${countryHtml + addressHtml}</section>`)
+  );
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.ok, true);
+  assert.equal(
+    await page.frameLocator('iframe').locator('[autocomplete="billing name"]').inputValue(),
+    'Synthetic Name'
+  );
+  assert.equal(
+    await page
+      .frameLocator('iframe')
+      .locator('[autocomplete="billing address-line1"]')
+      .inputValue(),
+    address.line1
+  );
+});
+test('rendered hidden attributes do not admit inert disabled readonly transparent or occluded fields', async (t) => {
+  const cases = [
+    ['inert', `<section hidden inert style="display:block">${cardHtml}</section>`],
+    [
+      'disabled',
+      `<section hidden style="display:block">${cardHtml.replaceAll('<input ', '<input disabled ')}</section>`
+    ],
+    [
+      'readonly',
+      `<section hidden style="display:block">${cardHtml.replaceAll('<input ', '<input readonly ')}</section>`
+    ],
+    ['opacity_zero', `<section hidden style="display:block;opacity:0">${cardHtml}</section>`],
+    [
+      'content_visibility_hidden',
+      `<section hidden style="display:block;content-visibility:hidden">${cardHtml}</section>`
+    ],
+    [
+      'occluded',
+      `<section hidden style="display:block">${cardHtml}</section><div style="position:fixed;inset:0;background:white"></div>`
+    ]
+  ];
+  for (const [reason, html] of cases) {
+    const page = await pageFor(t, html);
+    const readiness = await inspectCardReadiness(page);
+    assert.equal(readiness.ready, false, reason);
+    if (reason === 'occluded') assert.ok(readiness.inspection.interactionRejectCounts.occluded > 0);
+    else assert.ok(readiness.inspection.controlRejectCounts[reason] > 0, reason);
+    assert.ok(
+      (await page.locator('input').evaluateAll((nodes) => nodes.map((n) => n.value))).every(
+        (v) => v === ''
+      ),
+      reason
+    );
+  }
+});
 test('visibility override does not relax other card control or iframe exclusions', async (t) => {
   const cases = [
-    ['hidden', '<section hidden style="display:block">'],
+    ['hidden', '<section hidden>'],
     ['inert', '<section inert>'],
     ['display_none', '<section style="display:none">'],
     ['opacity_zero', '<section style="opacity:0">'],

@@ -163,6 +163,7 @@ async function runSyntheticRecharge(scene, options = {}) {
   assert.ok(
     [
       'standard',
+      'rendered-hidden',
       'legacy-names',
       'legacy-placeholders',
       'legacy-stable-nested',
@@ -171,7 +172,9 @@ async function runSyntheticRecharge(scene, options = {}) {
   );
   const billingFields = options.billingFields || 'standard';
   assert.ok(
-    ['standard', 'legacy-names', 'legacy-testids', 'legacy-collapsed'].includes(billingFields)
+    ['standard', 'rendered-hidden', 'legacy-names', 'legacy-testids', 'legacy-collapsed'].includes(
+      billingFields
+    )
   );
   const sessionRefresh = options.sessionRefresh || null;
   assert.ok(sessionRefresh === null || ['same-account', 'wrong-account'].includes(sessionRefresh));
@@ -351,7 +354,9 @@ function billingHtml(mode) {
   );
   return mode === 'legacy-collapsed'
     ? `<button type="button" id="fixture-billing-toggle" aria-expanded="false" aria-controls="fixture-billing-fields">Billing address</button><div id="fixture-billing-fields" hidden>${collapsedControls}</div>`
-    : controls;
+    : mode === 'rendered-hidden'
+      ? `<div hidden style="display:block">${controls}</div>`
+      : controls;
 }
 
 function checkoutHtml(checkoutId, scene, billingFields, cardFields) {
@@ -1054,6 +1059,8 @@ async function fixtureChild(
       const fields = {
         standard:
           '<input autocomplete="cc-csc"><input autocomplete="cc-number"><input autocomplete="cc-exp">',
+        'rendered-hidden':
+          '<section hidden style="display:block"><input autocomplete="cc-csc"><input autocomplete="cc-number"><input autocomplete="cc-exp"></section>',
         'legacy-names':
           '<input autocomplete="off" name="cardCvc"><input autocomplete="off" name="number"><input autocomplete="off" name="exp-date">',
         'legacy-placeholders':
@@ -1404,6 +1411,11 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         outputDir: path.join(repairOutputRoot, `full-flow-${randomUUID().slice(0, 8)}`)
       },
       'prepared native card with physically visible ARIA-marked frame and shadow fields'
+    ],
+    [
+      'success',
+      { cardFields: 'rendered-hidden', billingFields: 'rendered-hidden' },
+      'CSS-rendered hidden card and billing controls'
     ],
     [
       'success',
