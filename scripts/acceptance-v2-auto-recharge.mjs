@@ -1135,7 +1135,8 @@ try {
     assert.equal(starts, 0);
     localReachable = true;
     await start.click();
-    const confirm = page.getByRole('button', { name: /确认.*付款|确认.*扣款/ });
+    const confirm = page.getByRole('button', { name: '确认本次报价并付款', exact: true });
+    await waitFor(() => apiStarts === 1);
     if (process.argv.includes('--quote-stages')) {
       await page.getByText('初始参考报价（银行卡与完整账单资料填写前）', { exact: true }).waitFor();
       assert.equal(await confirm.count(), 0, '填写资料和重新计税前不能确认付款');
@@ -1359,6 +1360,8 @@ try {
               .then((value) => value === '办公室未保存输入')
           );
           assert.equal(profileSaves, 0, '切换配置不会覆盖任何已保存配置');
+        } else {
+          await choose('办公室电脑');
         }
         await drawer.getByText('本人的连接配置', { exact: true }).click();
         await drawer.getByRole('button', { name: '检测完整连接', exact: true }).click();
@@ -1392,6 +1395,20 @@ try {
         );
         await drawer.getByRole('button', { name: '关闭', exact: true }).last().click();
         await page.getByRole('dialog').waitFor({ state: 'hidden' });
+        // Historical default-connection jobs must not appear under the other computer.
+        assert.equal(await page.getByRole('button', { name: /继续.*账号.*升级/ }).count(), 0);
+        await page
+          .getByRole('combobox', { name: '当前比特连接', exact: true })
+          .locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')
+          .click();
+        await page.getByRole('option', { name: '原连接配置', exact: true }).click();
+        // Switching clears the selected job; finished history requires explicit selection.
+        await page.getByRole('button', { name: '最近执行记录', exact: true }).click();
+        const history = page.getByRole('dialog', { name: '最近执行记录', exact: true });
+        await history.locator('.recharge-history button').first().click();
+        await history.locator('.el-drawer__close-btn').click();
+        await history.waitFor({ state: 'hidden' });
+        await page.getByRole('button', { name: /继续.*账号.*升级/ }).waitFor();
       }
       if (width < 900) {
         await page.locator('.recharge-status-panel').scrollIntoViewIfNeeded();

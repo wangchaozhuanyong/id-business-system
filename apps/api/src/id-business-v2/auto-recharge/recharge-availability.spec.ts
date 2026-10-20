@@ -349,6 +349,26 @@ describe('execution occupancy and account payment protection', () => {
 });
 
 describe('paginated read-only review', () => {
+  it('仅展示有效连接编号与名称，不泄漏接口指纹或密钥快照', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const item = job({
+      connection_profile_id: id,
+      connection_profile_name: 'Mac 子账号',
+      connection_api_key: 'private-fingerprint',
+      connection_snapshot_encrypted: 'private-snapshot'
+    });
+    const result = presentRechargeJobs([item], [], 'synthetic')[0]!;
+    expect(result).toMatchObject({ connectionProfileId: id, connectionProfileName: 'Mac 子账号' });
+    expect(JSON.stringify(result)).not.toContain('private-fingerprint');
+    expect(JSON.stringify(result)).not.toContain('private-snapshot');
+    expect(
+      presentRechargeJobs(
+        [job({ connection_profile_id: 'private-invalid-value' })],
+        [],
+        'synthetic'
+      )[0]!.connectionProfileId
+    ).toBeUndefined();
+  });
   it.each([{ page: 0 }, { pageSize: 101 }, { page: 1.1 }, { search: 'x'.repeat(101) }])(
     'rejects invalid bounds %o',
     (query) => {

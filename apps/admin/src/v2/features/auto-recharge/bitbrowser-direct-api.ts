@@ -10,7 +10,8 @@ const messages = {
     '网页无法访问比特浏览器。请启动比特浏览器、开启本地接口，并允许当前网站访问本机网络。',
   bitbrowser_direct_token_invalid:
     '比特接口密钥不匹配，请填写当前电脑比特浏览器系统设置中的接口密钥。',
-  bitbrowser_direct_rejected: '比特浏览器拒绝了请求，请检查接口、代理和窗口配置。',
+  bitbrowser_direct_rejected:
+    '比特浏览器拒绝了请求，请检查接口、代理和窗口配置；子账号还需主账号授予 Local API 及对应分组权限。',
   bitbrowser_direct_protocol: '比特接口返回的数据无法确认，请核对接口地址并更新比特浏览器。',
   bitbrowser_direct_debug_unavailable:
     '窗口已打开，但网页无法连接窗口控制接口。请检查网站本机网络权限，并更新比特浏览器后重试。',

@@ -82,8 +82,13 @@ export class RechargeLocalService {
         await this.repository.lock(tx);
         const previous = await this.repository.findJob(tx, input.id);
         if (previous) throw new ConflictException('本次连接凭据已失效，请重新开始');
-        const active = await this.repository.findRunningJob(tx, operator.id);
-        if (active) throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
+        const active = await this.repository.findRunningJob(
+          tx,
+          operator.id,
+          runtime.connectionMetadata?.connection_api_key
+        );
+        if (active)
+          throw new ConflictException('当前比特连接已有一笔充值任务执行中，请先处理原任务');
         const address = await this.addressRepository.requireAvailable(
           tx,
           operator.id,
@@ -265,8 +270,13 @@ export class RechargeLocalService {
         await this.repository.lock(tx);
         const previous = await this.repository.findJob(tx, input.id);
         if (previous) throw new ConflictException('本次连接凭据已失效，请重新开始');
-        const active = await this.repository.findRunningJob(tx, operator.id);
-        if (active) throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
+        const active = await this.repository.findRunningJob(
+          tx,
+          operator.id,
+          runtime.connectionMetadata?.connection_api_key
+        );
+        if (active)
+          throw new ConflictException('当前比特连接已有一笔充值任务执行中，请先处理原任务');
         return startRechargeOpenProfile({
           tx,
           request: input,
@@ -312,8 +322,14 @@ export class RechargeLocalService {
         if (await this.repository.findJob(tx, input.id)) {
           throw new ConflictException('本次连接凭据已失效，请重新开始');
         }
-        if (await this.repository.findRunningJob(tx, operator.id)) {
-          throw new ConflictException('本人已有一笔充值任务执行中，请先处理原任务');
+        if (
+          await this.repository.findRunningJob(
+            tx,
+            operator.id,
+            runtime.connectionMetadata?.connection_api_key
+          )
+        ) {
+          throw new ConflictException('当前比特连接已有一笔充值任务执行中，请先处理原任务');
         }
         const source = await this.repository.findJob(tx, input.sourceJobId);
         const sourceResult = await recoverLocalRechargePaymentFacts(tx, this.repository, source);

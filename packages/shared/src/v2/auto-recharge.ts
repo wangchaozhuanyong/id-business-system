@@ -370,6 +370,8 @@ export interface V2RechargeReviewPage {
   pageSize: number;
 }
 export interface V2RechargeJob {
+  connectionProfileId?: string | null;
+  connectionProfileName?: string;
   availability?: V2RechargeAvailability;
   id: string;
   chatgptAccountId?: string | null;

@@ -74,6 +74,8 @@
         </dl>
       </template>
       <dl class="recharge-summary">
+        <dt>所属比特连接</dt>
+        <dd>{{ job.connectionProfileName ?? '历史连接未标注，请核对原电脑' }}</dd>
         <template v-if="job.availability">
           <dt>执行占用</dt>
           <dd>{{ executionAvailabilityLabels[job.availability.execution] }}</dd>

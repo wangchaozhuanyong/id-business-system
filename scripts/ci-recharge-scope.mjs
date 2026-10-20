@@ -1139,7 +1139,49 @@ const onlineCiBuildTestInputs = new Set([
   'scripts/production-release/online-recharge-ci-build.test.py',
   'scripts/production-release/online-recharge-component-lifecycle.test.py'
 ]);
+// Multi-computer connections use the current API/Admin builds and real MySQL
+// concurrency acceptance. The historical ONLINE application is unchanged.
+const bitbrowserConnectionProfilePaths = new Set([
+  'apps/admin/src/v2/features/auto-recharge/BitBrowserConnectionHelp.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargeHistoryDrawer.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargePageContext.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue',
+  'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue',
+  'apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue',
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-availability.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts',
+  'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts',
+  'apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.spec.ts',
+  'apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts',
+  'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-connection-concurrency.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-employee-concurrency.mysql.integration.spec.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts',
+  'apps/api/src/id-business-v2/auto-recharge/recharge-settings.spec.ts',
+  'docs/V2_TASKS.md',
+  'packages/shared/src/v2/auto-recharge.ts',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/acceptance-v2-auto-recharge.mjs'
+]);
+function isBitbrowserConnectionProfilesOnly(paths) {
+  return (
+    paths.includes('apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts') &&
+    paths.includes(
+      'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts'
+    ) &&
+    paths.includes('apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts') &&
+    paths.every((path) => bitbrowserConnectionProfilePaths.has(path))
+  );
+}
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isBitbrowserConnectionProfilesOnly(paths)) return false;
   if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return false;
@@ -2768,7 +2810,19 @@ export function adminCheckCommands(mode, paths) {
     mode !== 'admin' ||
     paths.some((p) => p.startsWith('apps/admin/src/v2/features/auto-recharge/'))
   )
-    commands.push(['run', 'acceptance:v2-auto-recharge']);
+    commands.push(
+      isBitbrowserConnectionProfilesOnly(paths)
+        ? [
+            'exec',
+            '--',
+            'node',
+            'scripts/acceptance-v2-auto-recharge.mjs',
+            '--built',
+            '--quote-stages',
+            '--connections'
+          ]
+        : ['run', 'acceptance:v2-auto-recharge']
+    );
   if (paths.includes('scripts/acceptance-v2-recharge-billing.mjs'))
     commands.push(['exec', '--', 'node', 'scripts/acceptance-v2-recharge-billing.mjs']);
   if (
@@ -2796,6 +2850,8 @@ export const hasRechargeConnectionMigrationScope = (paths) =>
   paths.some(
     (path) =>
       path === rechargeConnectionProfileMigration ||
+      path ===
+        'apps/api/src/id-business-v2/auto-recharge/recharge-employee-concurrency.mysql.integration.spec.ts' ||
       path === 'scripts/acceptance-v2-recharge-employee-concurrency.mjs'
   );
 const registrationMirrorSourcePaths = new Set([
@@ -5935,6 +5991,7 @@ async function main() {
       args.some(
         (arg) =>
           /^acceptance:v2-(?:auto-recharge|table-layout|online-recharge-ui)$/.test(arg) ||
+          arg === 'scripts/acceptance-v2-auto-recharge.mjs' ||
           arg === 'scripts/acceptance-v2-registration-inventory-ui.mjs' ||
           arg === 'scripts/acceptance-v2-registration-native-ui.mjs' ||
           arg === 'scripts/acceptance-v2-order-archive-ui.mjs' ||

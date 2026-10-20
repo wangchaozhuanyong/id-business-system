@@ -1,5 +1,25 @@
 import type { V2RechargeAvailability, V2RechargeJob } from './contracts';
 
+export function rechargeAddressReserved(job: V2RechargeJob, addressId: string, currentId?: string) {
+  if (job.id === currentId || job.result.addressId !== addressId) return false;
+  if (job.availability) return job.availability.execution === 'active';
+  return [
+    'running',
+    'awaiting_details',
+    'awaiting_confirmation',
+    'awaiting_human_verification',
+    'confirming'
+  ].includes(job.state);
+}
+
+export function rechargeJobUsesConnection(job: V2RechargeJob, profileId: string | null) {
+  return (
+    job.action !== 'bitbrowser' ||
+    job.connectionProfileId === undefined ||
+    job.connectionProfileId === profileId
+  );
+}
+
 export const executionAvailabilityLabels: Record<V2RechargeAvailability['execution'], string> = {
   active: '本次任务仍在执行',
   released: '执行名额已释放',

@@ -14,7 +14,7 @@ import { rechargeApi } from './api';
 import { readBrowserCatalog, useRechargeBrowserCatalog } from './useRechargeBrowserCatalog';
 import { useManagedBrowserProxy } from './useManagedBrowserProxy';
 
-export type ConnectorStatus = 'unknown' | 'checking' | 'online' | 'offline';
+export type ConnectorStatus = 'unknown' | 'checking' | 'online' | 'offline' | 'incomplete';
 export interface BitBrowserSettingsForm extends UpdateV2RechargeBitBrowserSettingsInput {
   proxyId: string;
   localApiToken: string;
@@ -57,7 +57,7 @@ export function useRechargeBrowserSettings(
     () => ({
       settingsError: ref(''),
       settingsSaving: ref(false),
-      selectedProfile: ref<string | null | undefined>(undefined),
+      selectedProfile: ref<string | null | undefined>(null),
       editingNewProfile: ref(false)
     })
   );
@@ -134,12 +134,13 @@ export function useRechargeBrowserSettings(
       settingsError.value = '';
       editingNewProfile.value = id === 'new';
       if (id === 'new') {
-        const seed = formFromSettings(settingsQuery.data.value);
         formDraft.open('new', {
-          ...seed,
+          ...formFromSettings(),
           connectionProfileId: null,
           connectionProfileName: '',
-          newConnectionProfile: true
+          newConnectionProfile: true,
+          groupName: '',
+          tagName: ''
         });
       } else {
         selectedProfile.value = id === 'default' ? null : id;
@@ -166,7 +167,11 @@ export function useRechargeBrowserSettings(
     settingsOpen.value = open;
   }
 
-  async function checkConnection(form: BitBrowserSettingsForm, current = () => true) {
+  async function checkConnection(
+    form: BitBrowserSettingsForm,
+    current = () => true,
+    requireWindow = true
+  ) {
     if (!current()) throw new Error('本次连接检测已取消。');
     connectionCheck?.abort();
     const check = new AbortController();
@@ -179,6 +184,12 @@ export function useRechargeBrowserSettings(
     try {
       const catalog = await readBrowserCatalog(form, check.signal, direct);
       if (check.signal.aborted || !current()) throw new Error('本次连接检测已取消。');
+      if (!form.groupName.trim() || !form.tagName.trim()) {
+        connectorStatus.value = 'incomplete';
+        connectorMessage.value = '比特接口已连通；请在该账号下补全窗口分组和标签后执行。';
+        if (requireWindow) throw new Error(connectorMessage.value);
+        return [];
+      }
       if (catalog.groups.filter((item) => item.name === form.groupName).length !== 1)
         throw new Error('比特接口已连通，但所选窗口分组不存在或重名，请重新选择。');
       if (catalog.tags.filter((item) => item.name === form.tagName).length !== 1)
@@ -192,7 +203,7 @@ export function useRechargeBrowserSettings(
         : (catalog.connectorCapabilities ?? []);
     } catch (cause) {
       if (connectionCheck === check && current()) {
-        connectorStatus.value = 'offline';
+        if (connectorStatus.value !== 'incomplete') connectorStatus.value = 'offline';
         connectorMessage.value = getApiErrorMessage(cause);
       }
       throw cause;
@@ -223,7 +234,7 @@ export function useRechargeBrowserSettings(
 
   async function testConnector() {
     try {
-      await checkConnection({ ...settingsForm.value });
+      await checkConnection({ ...settingsForm.value }, () => true, false);
     } catch {
       /* 具体原因保留在当前抽屉内。 */
     }
@@ -243,11 +254,15 @@ export function useRechargeBrowserSettings(
 
   async function saveSettings(serverMode = false) {
     if (settingsSaving.value) return;
+    const connectionDraft =
+      directMode.value &&
+      !settingsForm.value.groupName.trim() &&
+      !settingsForm.value.tagName.trim();
     if (!serverMode && settingsForm.value.proxyId && proxyCatalog.error.value) {
       settingsError.value = proxyCatalog.error.value;
       return;
     }
-    if (!serverMode && browserCatalog.selectionError.value) {
+    if (!serverMode && !connectionDraft && browserCatalog.selectionError.value) {
       settingsError.value = browserCatalog.selectionError.value;
       return;
     }
@@ -258,7 +273,8 @@ export function useRechargeBrowserSettings(
         !directMode.value &&
         !stored?.connectorTokenConfigured &&
         !settingsForm.value.connectorToken) ||
-      (settingsForm.value.browserOptions.proxyMode === 'dynamic' &&
+      (!connectionDraft &&
+        settingsForm.value.browserOptions.proxyMode === 'dynamic' &&
         !settingsForm.value.proxyId &&
         !stored?.dynamicProxyUrlConfigured &&
         !settingsForm.value.dynamicProxyUrl)
@@ -271,6 +287,7 @@ export function useRechargeBrowserSettings(
     const submitted = JSON.stringify(settingsForm.value);
     const completeSave = formDraft.beginSave();
     try {
+      if (connectionDraft) await checkConnection({ ...settingsForm.value }, () => true, false);
       const { staticProxyUsername, staticProxyPassword, ...input } = settingsForm.value;
       const updated = await rechargeApi.updateBitBrowserSettings({
         ...input,
