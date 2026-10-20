@@ -2861,3 +2861,24 @@ test('card visibility permits only the six engine sources and its bounded releas
   assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
 });
+
+test('card diagnostic timeout repair keeps its manifest, test and frozen contract requirements', () => {
+  const paths = [
+    ...onlineCardVisibilityPaths.slice(0, 3),
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md',
+    'scripts/production-release/online-card-visibility-contract.json'
+  ];
+  assert.equal(isOnlineCardVisibilityOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.match(JSON.stringify(onlineSettingsCommands('online-engine', paths)), /readdirSync/);
+  for (const missing of paths)
+    assert.equal(isOnlineCardVisibilityOnly(paths.filter((name) => name !== missing)), false);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs',
+    'apps/api/prisma-mysql/schema.prisma'
+  ])
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full');
+});
