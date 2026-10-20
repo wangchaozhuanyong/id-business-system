@@ -12,8 +12,8 @@ import urllib.request
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
-CURRENT = 'bd40a0b68a31821708a7204225a1dbf79b210efe'
-SOURCE = '66c57c383db67f6bcebbe4cda32a9b9a35d6dc00'
+CURRENT = 'fe52794341fe07d518b4fcc8b2141a67341487c7'
+SOURCE = 'dd4b4d830beb055976281462bd210c66b735d65c'
 PARENT_PROOF = '21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354'
 RECIPE = 'manual-settlement-20261019'
 SCOPE = 'BITBROWSER_MANUAL_SETTLEMENT_20261019'
@@ -54,11 +54,11 @@ def validate_contract(c):
         and set(c.get('ciControlPins', {})) == {'scripts/ci-bitbrowser-manual-controls.mjs',
             'scripts/ci-bitbrowser-manual-controls.test.mjs', 'scripts/ci-recharge-scope.mjs',
             'scripts/ci-recharge-check.mjs'}, 'CI_POLICY_CHANGED')
-    need(len(c.get('sources', {})) == 43 and all(re.fullmatch('[a-f0-9]{64}', v)
+    need(len(c.get('sources', {})) == 61 and all(re.fullmatch('[a-f0-9]{64}', v)
         for v in c['sources'].values()), 'SOURCE_SCOPE')
     production = {n: v for n, v in c['sources'].items() if n.startswith(('apps/', 'packages/shared/src/'))
         and not n.endswith(('.spec.ts', '.test.mjs'))}
-    need(c.get('productionSources') == production and len(production) == 32
+    need(c.get('productionSources') == production and len(production) == 43
         and set(c.get('sourceParents', {})) == set(production), 'PRODUCTION_SCOPE')
     cycle = 'apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts'
     need(set(c.get('buildParents', {})) == set(production)

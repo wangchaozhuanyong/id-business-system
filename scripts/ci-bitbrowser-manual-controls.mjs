@@ -23,9 +23,9 @@ export function isManualSettlementCandidate(paths, manifest) {
       );
     if (
       c.status !== 'FROZEN' ||
-      c.sourceReviewCommit !== '66c57c383db67f6bcebbe4cda32a9b9a35d6dc00' ||
-      Object.keys(c.sources ?? {}).length !== 43 ||
-      Object.keys(c.productionSources ?? {}).length !== 32
+      c.sourceReviewCommit !== 'dd4b4d830beb055976281462bd210c66b735d65c' ||
+      Object.keys(c.sources ?? {}).length !== 61 ||
+      Object.keys(c.productionSources ?? {}).length !== 43
     )
       return false;
     const allowed = new Set([...Object.keys(c.sources), ...manualReleasePaths, ...manualCiPaths]);

@@ -43,7 +43,7 @@ def check(c):
     changed = set(git('diff', '--name-only', c['reviewBase'], 'HEAD').decode().splitlines())
     allowed = set(c['sources']) | set(c['ciControlPins']) | {p.WORKFLOW, 'scripts/production-release/' + p.CONTRACT_FILE} | {
         'scripts/production-release/' + n for n in c['controlPins'] if n.startswith('bitbrowser-manual-')}
-    p.need(changed <= allowed and set(c['sources']) <= changed, 'FINITE_SCOPE_CHANGED')
+    p.need(changed <= allowed and git('merge-base', p.SOURCE, 'HEAD').decode().strip() == p.SOURCE, 'FINITE_SCOPE_CHANGED')
     return p
 
 
@@ -72,7 +72,7 @@ def source_receipt(run, pr, identity, c, p):
         receipt = json.loads(archive.read('evidence.json'))
     p.need(receipt == {'repository': 'wangchaozhuanyong/id-business-system', 'runId': run['id'],
         'runAttempt': run['run_attempt'], 'pullRequest': pr['number'], 'headSha': pr['head']['sha'],
-        'baseSha': c['reviewBase'], 'testedTree': identity['tree']}, 'TESTED_TREE_CHANGED')
+        'baseSha': pr['base']['sha'], 'testedTree': identity['tree']}, 'TESTED_TREE_CHANGED')
     return {'testedTree': receipt['testedTree'], 'pullRequest': pr['number'],
         'sourceEvidenceArtifactId': artifact['id'], 'sourceEvidenceSha256': p.sha(raw)}
 

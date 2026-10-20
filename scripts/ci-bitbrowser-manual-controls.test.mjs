@@ -63,3 +63,16 @@ test('finite publisher tests preserve source, payload, shared runtime and origin
     /isManualSettlementCandidate\(paths\)\s*\?\s*false\s*:\s*needsOnlineRechargeCiBuild\(paths\)/
   );
 });
+
+test('connections publisher refuses the superseded production and source baseline', () => {
+  assert.equal(manifest.expectedCurrent, 'fe52794341fe07d518b4fcc8b2141a67341487c7');
+  assert.equal(manifest.sourceReviewCommit, 'dd4b4d830beb055976281462bd210c66b735d65c');
+  assert.equal(Object.keys(manifest.productionSources).length, 43);
+  assert.equal(
+    isManualSettlementCandidate(paths, {
+      ...manifest,
+      sourceReviewCommit: '66c57c383db67f6bcebbe4cda32a9b9a35d6dc00'
+    }),
+    false
+  );
+});
