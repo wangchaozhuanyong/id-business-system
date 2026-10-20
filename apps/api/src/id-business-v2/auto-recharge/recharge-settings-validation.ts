@@ -158,8 +158,14 @@ export function validateRechargeBitBrowserSettings(
     localApiUrl: localUrl(input.localApiUrl, '比特浏览器 Local API 地址'),
     localApiToken: secret(input.localApiToken, 'Local API Token', 1000),
     connectorToken: secret(input.connectorToken, '本机连接密钥', 1000),
-    groupName: plainText(input.groupName, '窗口分组', 80),
-    tagName: plainText(input.tagName, '标签／窗口备注', 80),
+    groupName:
+      input.directMode === true && input.groupName === '' && input.tagName === ''
+        ? ''
+        : plainText(input.groupName, '窗口分组', 80),
+    tagName:
+      input.directMode === true && input.groupName === '' && input.tagName === ''
+        ? ''
+        : plainText(input.tagName, '标签／窗口备注', 80),
     proxyType: input.proxyType as UpdateV2RechargeBitBrowserSettingsInput['proxyType'],
     dynamicProxyUrl: dynamicProxyUrl(input.dynamicProxyUrl),
     browserOptions:

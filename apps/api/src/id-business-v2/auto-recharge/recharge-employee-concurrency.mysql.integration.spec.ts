@@ -226,12 +226,13 @@ suite('员工连接配置与真实 MySQL 并发隔离', () => {
       await prisma.idBusinessV2RechargeJob.count({ where: { accountKey, state: 'running' } })
     ).toBe(1);
   });
-  it('同一比特窗口不能被两名员工接管，伪造连接摘要不能覆盖任务快照', async () => {
+  it('同一接口不能被两名员工并行接管，伪造连接摘要不能覆盖任务快照', async () => {
     await settings.update(
       { ...base(1), localApiToken: base(0).localApiToken, localApiUrl: 'http://localhost:54345' },
       employees[1]!
     );
-    const launches = await Promise.all([open(0), open(1)]);
+    const launch = await open(0);
+    await expect(open(1)).rejects.toThrow('独立资源');
     const browserProfileId = 'a'.repeat(32);
     const event = {
       type: 'progress',
@@ -241,9 +242,14 @@ suite('员工连接配置与真实 MySQL 并发隔离', () => {
         connection_api_key: hash('forged-fixture')
       }
     };
-    await local.callback(launches[0]!.id, launches[0]!.agentToken, event);
-    await expect(local.callback(launches[1]!.id, launches[1]!.agentToken, event)).rejects.toThrow(
-      '独立资源'
+    const before = await repository.byId(launch.id);
+    await local.callback(launch.id, launch.agentToken, event);
+    const after = await repository.byId(launch.id);
+    expect((after.result as Record<string, unknown>).connection_api_key).toBe(
+      (before.result as Record<string, unknown>).connection_api_key
+    );
+    expect((after.result as Record<string, unknown>).connection_api_key).not.toBe(
+      hash('forged-fixture')
     );
   });
   it('结束或超时仅释放本人任务，另一员工继续运行', async () => {
@@ -271,7 +277,10 @@ suite('员工连接配置与真实 MySQL 并发隔离', () => {
       employees[0]!
     );
     expect(created.connectionProfileId).toBeTruthy();
-    expect((await settings.get(employees[0]!)).groupName).toBe('第二分组');
+    expect((await settings.get(employees[0]!, created.connectionProfileId!)).groupName).toBe(
+      '第二分组'
+    );
+    expect((await settings.get(employees[0]!, null)).connectionProfileId).toBeNull();
     expect((await settings.get(employees[0]!, null)).groupName).toBe('合成分组0');
     const first = await settings.catalogAccess(employees[0]!, { connectionProfileId: null });
     expect(first.localApiToken).toBe(original.localApiToken);
@@ -311,7 +320,78 @@ suite('员工连接配置与真实 MySQL 并发隔离', () => {
     await expect(
       settings.update({ ...update, groupName: '迟到分组' }, employees[0]!)
     ).rejects.toThrow('已被修改');
-    expect((await settings.get(employees[0]!)).groupName).toBe('最新分组');
+    expect((await settings.get(employees[0]!, created.connectionProfileId!)).groupName).toBe(
+      '最新分组'
+    );
+  });
+  it('同一网站用户两套比特连接可同时执行，各自单独占用；同接口复制配置不能绕过占用', async () => {
+    const second = await settings.update(
+      {
+        ...base(0),
+        newConnectionProfile: true,
+        connectionProfileName: '第二台电脑',
+        localApiToken: 'synthetic-second-computer-api',
+        connectorToken: 'synthetic-second-computer-helper'
+      },
+      employees[0]!
+    );
+    const launches = await Promise.all([
+      open(0, { connectionProfileId: null }),
+      open(0, { connectionProfileId: second.connectionProfileId })
+    ]);
+    expect(launches[0]!.id).not.toBe(launches[1]!.id);
+    await expect(open(0, { connectionProfileId: second.connectionProfileId })).rejects.toThrow(
+      '连接已有'
+    );
+    const duplicate = await settings.update(
+      {
+        ...base(0),
+        newConnectionProfile: true,
+        connectionProfileName: '第二台重复配置',
+        localApiToken: 'synthetic-second-computer-api',
+        connectorToken: 'synthetic-second-computer-helper'
+      },
+      employees[0]!
+    );
+    await expect(open(0, { connectionProfileId: duplicate.connectionProfileId })).rejects.toThrow(
+      '连接已有'
+    );
+    const list = await service.list(employees[0]!);
+    expect(list.items.find((job) => job.id === launches[1]!.id)).toMatchObject({
+      connectionProfileId: second.connectionProfileId,
+      connectionProfileName: '第二台电脑'
+    });
+    expect(JSON.stringify(list)).not.toContain('synthetic-second-computer-api');
+  });
+  it('同一用户独立连接的充值任务不能并发抢用同一地址', async () => {
+    const second = await settings.update(
+      {
+        ...base(0),
+        newConnectionProfile: true,
+        connectionProfileName: '地址并发第二台',
+        localApiToken: 'synthetic-address-second-api',
+        connectorToken: 'synthetic-address-second-helper'
+      },
+      employees[0]!
+    );
+    const results = await Promise.allSettled(
+      [null, second.connectionProfileId].map((connectionProfileId) =>
+        local.start(
+          {
+            id: randomUUID(),
+            plan: 'plus',
+            addressId: addressIds[0],
+            windowName: '合成地址并发',
+            lockedCurrency: 'USD',
+            authorizeSinglePayment: true,
+            connectionProfileId
+          },
+          employees[0]!
+        )
+      )
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
   });
   it.each([false, true])(
     '升级前的未结束任务在修改配置时补齐原助手快照，租约已过期：%s',

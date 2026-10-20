@@ -308,10 +308,31 @@ export class RechargeRepository {
     return identifier;
   }
 
-  findRunningJob(tx: V2CommandTransaction, ownerId: string) {
-    return tx.idBusinessV2RechargeJob.findFirst({
-      where: { ownerId, state: { not: 'finished' }, leaseUntil: { gt: new Date() } }
-    });
+  async findRunningJob(
+    tx: V2CommandTransaction,
+    ownerId: string,
+    connectionApiKey?: string,
+    excludeId?: string
+  ) {
+    const where = {
+      ownerId,
+      state: { not: 'finished' },
+      leaseUntil: { gt: new Date() },
+      ...(excludeId ? { id: { not: excludeId } } : {})
+    };
+    if (!connectionApiKey) return tx.idBusinessV2RechargeJob.findFirst({ where });
+    const jobs = await tx.idBusinessV2RechargeJob.findMany({ where, take: 101 });
+    if (jobs.length > 100) throw new ConflictException('执行中的连接过多，请先核对已有任务');
+    // Legacy tasks without a binding remain conservative; a known different
+    // computer/connection no longer occupies this connection's execution slot.
+    return (
+      jobs.find(
+        (job) =>
+          job.action !== 'bitbrowser' ||
+          !object(job.result).connection_api_key ||
+          object(job.result).connection_api_key === connectionApiKey
+      ) ?? null
+    );
   }
 
   async createJob(
@@ -356,9 +377,20 @@ export class RechargeRepository {
   ) {
     if (data.action !== 'bitbrowser' || data.state === 'finished') return;
     const result = data.result as Record<string, unknown> | undefined;
-    const checks: Prisma.IdBusinessV2RechargeJobWhereInput[] = [{ ownerId: data.ownerId }];
+    const apiKey =
+      typeof result?.connection_api_key === 'string' ? result.connection_api_key : undefined;
+    if (await this.findRunningJob(tx, data.ownerId, apiKey, id))
+      throw new ConflictException('当前比特连接已有任务执行中，请先处理原任务');
+    const checks: Prisma.IdBusinessV2RechargeJobWhereInput[] = apiKey
+      ? [{ result: { path: '$.connection_api_key', equals: apiKey } }]
+      : [{ ownerId: data.ownerId }];
     if (data.accountKey) checks.push({ accountKey: data.accountKey });
     if (data.chatgptAccountId) checks.push({ chatgptAccountId: data.chatgptAccountId });
+    if (typeof result?.addressId === 'string' && result.addressId)
+      checks.push({
+        ownerId: data.ownerId,
+        result: { path: '$.addressId', equals: result.addressId }
+      });
     if (typeof result?.connection_connector_key === 'string')
       checks.push({
         result: { path: '$.connection_connector_key', equals: result.connection_connector_key }
