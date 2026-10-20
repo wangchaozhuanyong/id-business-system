@@ -31,6 +31,8 @@ def git(*args):
 def check(c):
     p = load('bitbrowser-manual-release.py')
     p.validate_contract(c)
+    p.need(git('merge-base', p.SOURCE, c['reviewBase']).decode().strip() == p.SOURCE,
+        'SOURCE_MAINLINE_REQUIRED')
     p.need(git('rev-parse', p.SOURCE + '^{tree}').decode().strip() == c['sourceReviewTree'], 'SOURCE_TREE_CHANGED')
     for n, v in c['sources'].items():
         p.need(p.sha((ROOT / n).read_bytes()) == v == p.sha(git('show', p.SOURCE + ':' + n)), 'SOURCE_CHANGED')

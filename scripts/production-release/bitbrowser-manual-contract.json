@@ -81,7 +81,7 @@
     "parentSha256": "6104c1be6681361d002145c15c8bd1a15a9741a3b61a4694b3982daf7ba5b70f",
     "path": "package-lock.json",
     "sha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
-    "sourceCommit": "1abab99fad82c064ff0b5c7494d51141bd991f08",
+    "sourceCommit": "bbd28b70baf257f21ab3845bb3439ddf41357537",
     "toVersion": "1.16.1"
   },
   "buildParents": {
@@ -131,8 +131,8 @@
   },
   "businessActions": 0,
   "ciControlPins": {
-    "scripts/ci-bitbrowser-manual-controls.mjs": "71c858a81c3223a99ca16d506fabc5038341b85003c6a9b844a61eaed0bc3402",
-    "scripts/ci-bitbrowser-manual-controls.test.mjs": "46dea56de35e3f614ad2e5816b0e0831ed4e9832a59f76428ea66cf792ed33a6",
+    "scripts/ci-bitbrowser-manual-controls.mjs": "0975b37ce9a23280af08fe1718dfd25e5328e8d68f3b8a7e66755c8e8eeb7c40",
+    "scripts/ci-bitbrowser-manual-controls.test.mjs": "7cb8a366e206f6a9b210adc1282e48c04782e124675a5f654d3d97c8a02461e3",
     "scripts/ci-recharge-check.mjs": "5f1edc7d9a1d850fd2797a11f0b15a881a7410c0c7907cd91ff4bc895d9d593a",
     "scripts/ci-recharge-scope.mjs": "3e045714aa4db632075251a31b3e25d2cee040ecb27bf744901e569d0e5f9266"
   },
@@ -150,10 +150,10 @@
     "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
     "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
-    "bitbrowser-manual-build.py": "a07b589681fe3ab7c09a8d2605cb537e86f1e0cda754dc276dbd797548f2a607",
+    "bitbrowser-manual-build.py": "5e2c1d121dd1496d1b1a384785752482c4e890dac6edc8f4f79e9f7a42eaa82d",
     "bitbrowser-manual-dispatch.py": "fb490214ffcf76bb9e2b0e4885bbba3fa64f860538a1bfafa4f9afd29889fb12",
-    "bitbrowser-manual-release.py": "398f79f7da4de076989948ad94695752569a2fbb5dead543af0151e34ed9d7d0",
-    "bitbrowser-manual-release.test.py": "6d359743da6461bb918bb3b38fe1f3359698f16d53e39d662faf504446aae290",
+    "bitbrowser-manual-release.py": "2bb586e6b27e5ac1f8c6de52fbbc2dcf7e69b4a60657b7321c27f0d299e34ef7",
+    "bitbrowser-manual-release.test.py": "6bfcfddd1ea3ff2af85916c350da514e7d8aa93e0a47d83c044bb8971caa9029",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
@@ -263,7 +263,7 @@
     "id-business-v2/auto-recharge/recharge-settings-validation.js": "c8ec1ca6eab69f2d941817ced88e1a0176961e93676c74b0212cf1e64692f7e5",
     "id-business-v2/auto-recharge/recharge-settings.service.js": "dd294077dc73e416235e1bc8d85fe2e394d454ea60dc9b5b1db96c82fe1bb916"
   },
-  "reviewBase": "2ecce1a22aab84f0ae4c40a573511567f7309d71",
+  "reviewBase": "bbd28b70baf257f21ab3845bb3439ddf41357537",
   "scope": "BITBROWSER_MANUAL_SETTLEMENT_20261019",
   "sharedModules": [
     "v2/auto-recharge-manual-settlement.d.ts",
@@ -317,8 +317,8 @@
     "packages/shared/src/v2/auto-recharge.ts": "62b142f4c5e4fbc532b35cbcf55c9313a99d7e969595375981dbf3852b51c3f2"
   },
   "sourceQualityPolicy": "native-full-candidate-with-exact-reviewed-business-and-main-tree",
-  "sourceReviewCommit": "1abab99fad82c064ff0b5c7494d51141bd991f08",
-  "sourceReviewTree": "c230f868c0ff103c0a69c70bc5ac425e13cce111",
+  "sourceReviewCommit": "bbd28b70baf257f21ab3845bb3439ddf41357537",
+  "sourceReviewTree": "8052744e25c93174a908670365e375c92b94cc14",
   "sources": {
     "apps/admin/src/v2/features/auto-recharge/BitBrowserConnectionHelp.vue": "11337d8b33bf4db04f58486d832664154e39f8d9e98d6b4381412117e6412490",
     "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue": "d4544daa0ec02588f6c81e4ee9e79e784517895fa4afe19f76260574840af2ee",
