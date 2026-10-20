@@ -34,7 +34,7 @@ class Controls(unittest.TestCase):
         self.assertEqual(len(p.FILES), 6); self.assertFalse(p.ADDED)
         self.assertEqual(p.CURRENT, 'fe52794341fe07d518b4fcc8b2141a67341487c7')
         self.assertEqual(p.ENGINE_BASE, p.CURRENT)
-        self.assertEqual(p.REVIEW_BASE, 'fe52794341fe07d518b4fcc8b2141a67341487c7')
+        self.assertEqual(p.REVIEW_BASE, 'dd4b4d830beb055976281462bd210c66b735d65c')
         self.assertEqual(p.ENGINE_PROOF_FILE, 'online-card-control-diagnostics-build-proof.json')
         self.assertEqual(len(p.PRESERVED), 6)
         for name in ('payment-limit.cjs', 'confirmation.cjs', 'checkout-recovery.cjs', 'rpc.cjs',
@@ -45,6 +45,26 @@ class Controls(unittest.TestCase):
         self.assertEqual(set(c['controlPins']), p.CONTROLS)
         self.assertIn('online-checkout-initialization-release.py', p.CONTROLS)
         self.assertIn('scripts/production-release/online-checkout-initialization-release.py', p.PUBLIC_CONTROLS)
+
+    def test_latest_main_review_admits_only_the_exact_repair_delta(self):
+        paths = b.reviewed_paths(p)
+        self.assertEqual(len(paths), 11)
+        self.assertIn(p.ENGINE + '/checkout-form.cjs', paths)
+        self.assertNotIn('apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts', paths)
+        c = {'sourceReviewCommit': 'a' * 40, 'sourceReviewTag': p.PREFIX + '-source-review-' + 'a' * 12,
+            'reviewBase': p.REVIEW_BASE}
+        def git(*args):
+            if args[0] == 'cat-file': return b'tag\n'
+            if args[0] == 'rev-parse': return ('a' * 40 + '\n').encode()
+            if args[0] == 'merge-base': return (p.REVIEW_BASE + '\n').encode()
+            if args[0] == 'diff': return ('\n'.join(sorted(paths)) + '\n').encode()
+            if args[0] == 'show': return (b.ROOT / args[1].split(':', 1)[1]).read_bytes()
+            raise AssertionError(args)
+        with patch.object(b, 'git', side_effect=git): b.verify_review(c, p)
+        for extra in (p.ENGINE + '/rpc.cjs', 'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts'):
+            with patch.object(b, 'git', side_effect=lambda *args: ('\n'.join(sorted(paths | {extra})) + '\n').encode()
+                    if args[0] == 'diff' else git(*args)):
+                with self.assertRaisesRegex(RuntimeError, 'SOURCE_REVIEW_SCOPE_CHANGED'): b.verify_review(c, p)
 
     def test_changed_source_predecessor_or_scope_is_refused(self):
         for mutation in ('base', 'review', 'image', 'receipt', 'proof', 'extra', 'missing', 'write'):
