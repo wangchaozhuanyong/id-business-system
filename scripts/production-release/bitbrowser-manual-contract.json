@@ -122,7 +122,7 @@
   "businessActions": 0,
   "ciControlPins": {
     "scripts/ci-bitbrowser-manual-controls.mjs": "d808431846b1ab91814def59e03c73f67f85b53e58a95801d5a1931fcf9b3c38",
-    "scripts/ci-bitbrowser-manual-controls.test.mjs": "c3a9c74b84a4010ec2b6d0b6146ca93260641449414deb84737aa795a632a6ae",
+    "scripts/ci-bitbrowser-manual-controls.test.mjs": "3de9010efc62491145b1ca9e5e4d765158dc829a1a3ca734dd8a4576e5fc92bd",
     "scripts/ci-recharge-check.mjs": "5f1edc7d9a1d850fd2797a11f0b15a881a7410c0c7907cd91ff4bc895d9d593a",
     "scripts/ci-recharge-scope.mjs": "3e045714aa4db632075251a31b3e25d2cee040ecb27bf744901e569d0e5f9266"
   },
@@ -141,8 +141,8 @@
     "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
     "bitbrowser-manual-build.py": "feb0904a0a1a6a83899167e16af5576883a60e5aee283431cd62778e0ac5bdf9",
-    "bitbrowser-manual-dispatch.py": "000887b15712649733fe03a08dbadf488fdcd9001239346f19b331a920d9bbfe",
-    "bitbrowser-manual-release.py": "e87e3394beb873265d1398883e50ed6d515f87ffa67a0c53a961b373071052cf",
+    "bitbrowser-manual-dispatch.py": "d9bc16413de5a214881fce7ebccb87e6880d71fb116a27698b3cbea4dd6006d1",
+    "bitbrowser-manual-release.py": "d0fa3d147f479f68ceb7d1713cf2d14494d0ea622ac85145942673b3100f1c55",
     "bitbrowser-manual-release.test.py": "af174690b4ba61d8cc24b220bb25a55b712289a7c61c650db12e0159890967f2",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
@@ -166,7 +166,7 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "fe52794341fe07d518b4fcc8b2141a67341487c7",
+  "expectedCurrent": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
   "migrationPerformed": false,
   "nativeCycleModules": {
     "id-business-v2/auto-recharge/recharge-cycle-state.d.ts": "5a258fa90ae098975bf4bdb52d4b284149072efd8011ea92b4359b99a36b95f2",
@@ -175,7 +175,7 @@
   },
   "parentAdminImage": "sha256:75e55559dc7f3c3ae8418dfdae39b26a7482ad7c1b3257c66b1907938ea0fc79",
   "parentApiImage": "sha256:58f577117c87c7bb575e01b656743ff7224cca2ac79301b5a3764d302aae0acb",
-  "parentOnlineImage": "sha256:9c745aeeb3f30713d572945dc55a6067a494e914c9a144c23e341270be7ec052",
+  "parentOnlineImage": "sha256:9230ff58e604ee4d5200d9ee6611e2fa1419c833faf13b1f5d1f30167c3af3a1",
   "predecessorProofSha256": "21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354",
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
   "productionSources": {

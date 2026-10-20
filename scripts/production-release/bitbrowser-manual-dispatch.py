@@ -19,7 +19,7 @@ OUT = ROOT / '.deploy/bitbrowser-manual-publication'
 REPO = 'wangchaozhuanyong/id-business-system'
 INSTANCE = 'i-05836da38606e633c'
 SCOPE = 'BITBROWSER_MANUAL_SETTLEMENT_20261019'
-CURRENT = 'fe52794341fe07d518b4fcc8b2141a67341487c7'
+CURRENT = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
 RECIPE = 'manual-settlement-20261019'
 CONTRACT_FILE = 'bitbrowser-manual-contract.json'
 

@@ -12,7 +12,7 @@ import urllib.request
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
-CURRENT = 'fe52794341fe07d518b4fcc8b2141a67341487c7'
+CURRENT = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
 SOURCE = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
 PARENT_PROOF = '21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354'
 RECIPE = 'manual-settlement-20261019'

@@ -65,7 +65,7 @@ test('finite publisher tests preserve source, payload, shared runtime and origin
 });
 
 test('connections publisher refuses the superseded production and source baseline', () => {
-  assert.equal(manifest.expectedCurrent, 'fe52794341fe07d518b4fcc8b2141a67341487c7');
+  assert.equal(manifest.expectedCurrent, 'cb38a1ef351b42f98ce86740b2191fd54207fa32');
   assert.equal(manifest.sourceReviewCommit, 'cb38a1ef351b42f98ce86740b2191fd54207fa32');
   assert.equal(Object.keys(manifest.productionSources).length, 43);
   assert.equal(
