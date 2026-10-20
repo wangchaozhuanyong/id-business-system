@@ -104,6 +104,61 @@ describe('比特浏览器列表只读连接授权', () => {
 });
 
 describe('网页直连设置与运行凭据', () => {
+  it('子账号可先保存无窗口资料的独立连接，不改变用户的共享默认选择，执行仍受完整配置检查', async () => {
+    const repository = {
+      lock: vi.fn(),
+      pinLegacyConnections: vi.fn(),
+      listProfiles: vi.fn().mockResolvedValue([]),
+      findInTransaction: vi.fn().mockResolvedValue(null),
+      upsert: vi.fn(),
+      saveProfile: vi.fn().mockImplementation((_, input) => ({
+        id: input.id,
+        name: input.name,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      })),
+      find: vi.fn().mockResolvedValue(null),
+      effective: vi.fn().mockResolvedValue({ groupName: '', tagName: '' })
+    };
+    const encryption = { encrypt: vi.fn((value) => `encrypted:${value}`) };
+    const audit = { append: vi.fn() };
+    const service = new RechargeSettingsService(
+      repository as never,
+      encryption as never,
+      { execute: vi.fn((work) => work({})) } as never,
+      audit as never,
+      {} as never
+    );
+    const input = {
+      directMode: true,
+      newConnectionProfile: true,
+      connectionProfileName: 'Mac 子账号',
+      connectorUrl: 'http://127.0.0.1:55322',
+      localApiUrl: 'http://127.0.0.1:54345',
+      localApiToken: 'synthetic-child-api-token',
+      groupName: '',
+      tagName: '',
+      proxyType: 'http'
+    };
+    const saved = await service.update(input, operator);
+    expect(saved.localApiTokenConfigured).toBe(true);
+    expect(saved.groupName).toBe('');
+    expect(repository.upsert).not.toHaveBeenCalled();
+    expect(repository.saveProfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ ownerId: operator.id, create: true })
+    );
+    await expect(
+      service.runtime(operator.id, false, true, saved.connectionProfileId)
+    ).rejects.toThrow('补全');
+    await expect(service.update({ ...input, directMode: false }, operator)).rejects.toThrow(
+      '格式无效'
+    );
+    await expect(service.update({ ...input, tagName: 'only-one-field' }, operator)).rejects.toThrow(
+      '格式无效'
+    );
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain('synthetic-child-api-token');
+  });
   const row = {
     connectorUrl: 'http://127.0.0.1:55321',
     localApiUrl: 'http://127.0.0.1:54345',

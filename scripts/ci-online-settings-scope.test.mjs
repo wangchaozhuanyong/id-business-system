@@ -6,6 +6,11 @@ import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
 import {
+  onlineCardVisibilityScope,
+  onlineCardVisibilityPaths,
+  onlineCardVisibilityControls,
+  isOnlineCardVisibilityOnly,
+  isOnlineCardVisibilityControlsOnly,
   onlineCardControlDiagnosticsScope,
   onlineCardControlDiagnosticsPaths,
   onlineCardControlDiagnosticsControls,
@@ -2819,4 +2824,61 @@ test('card exclusion diagnostics permits only the six engine sources and its bou
   assert.equal(isOnlineCardControlDiagnosticsControlsOnly(controls), true);
   assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
+});
+
+test('card visibility permits only the six engine sources and its bounded release controls', () => {
+  const sources = [...onlineCardVisibilityPaths, 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'];
+  assert.equal(onlineCardVisibilityScope, 'ONLINE_CARD_VISIBILITY');
+  assert.equal(onlineCardVisibilityPaths.length, 6);
+  for (const paths of [sources, [...sources, ...onlineCardVisibilityControls]]) {
+    assert.equal(isOnlineCardVisibilityOnly(paths), true);
+    assert.equal(isOnlineSettingsOnly(paths), true);
+    assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+    const guards = JSON.stringify(onlineSettingsCommands('guards', paths));
+    assert.match(guards, /online-card-visibility-release\.test\.py/);
+    assert.match(guards, /online-checkout-initialization-recovery\.test\.py/);
+    const engine = JSON.stringify(onlineSettingsCommands('online-engine', paths));
+    assert.match(engine, /readdirSync/);
+    assert.doesNotMatch(engine, /prisma|@apple-business\/api|@apple-business\/admin/);
+    for (const part of ['api', 'admin'])
+      assert.throws(() => onlineSettingsCommands(part, paths), /Unsupported card visibility/);
+  }
+  for (const missing of sources) {
+    const paths = sources.filter((name) => name !== missing);
+    assert.equal(isOnlineCardVisibilityOnly(paths), false);
+    assert.equal(checkMode(paths, 'same', 'same'), 'full');
+  }
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/confirmation.cjs',
+    'scripts/production-release/online-card-visibility-arbitrary.py'
+  ])
+    assert.equal(checkMode([...sources, extra], 'same', 'same'), 'full');
+  assert.equal(isOnlineCardVisibilityOnly([...sources, sources[0]]), false);
+  const controls = [...onlineCardVisibilityControls];
+  assert.equal(isOnlineCardVisibilityControlsOnly(controls), true);
+  assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+});
+
+test('card diagnostic timeout repair keeps its manifest, test and frozen contract requirements', () => {
+  const paths = [
+    ...onlineCardVisibilityPaths.slice(0, 3),
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md',
+    'scripts/production-release/online-card-visibility-contract.json'
+  ];
+  assert.equal(isOnlineCardVisibilityOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.match(JSON.stringify(onlineSettingsCommands('online-engine', paths)), /readdirSync/);
+  for (const missing of paths)
+    assert.equal(isOnlineCardVisibilityOnly(paths.filter((name) => name !== missing)), false);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs',
+    'apps/api/prisma-mysql/schema.prisma'
+  ])
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full');
 });

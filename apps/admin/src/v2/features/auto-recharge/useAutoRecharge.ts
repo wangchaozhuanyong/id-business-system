@@ -47,7 +47,12 @@ import {
   startDirectPayment,
   submitDirectPaymentCode
 } from './direct-payment-task';
-import { accountReferenceFromJson, paymentBlockedForAccount } from './recharge-availability';
+import {
+  accountReferenceFromJson,
+  rechargeAddressReserved,
+  paymentBlockedForAccount,
+  rechargeJobUsesConnection
+} from './recharge-availability';
 
 const activeStates = new Set([
   'running',
@@ -122,6 +127,8 @@ function settingsReady(
 ) {
   return Boolean(
     settings?.localApiTokenConfigured &&
+    settings.groupName.trim() &&
+    settings.tagName.trim() &&
     (directMode || settings.connectorTokenConfigured) &&
     (selectedProxy ||
       settings.proxyId ||
@@ -304,6 +311,15 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     ref(false),
     ref(true)
   );
+  watch(
+    () => browserSettings.connectionProfileChoice.value,
+    () => {
+      currentId.value = '';
+      authorizeSinglePayment.value = false;
+      details.value.cvc = '';
+    },
+    { flush: 'sync' }
+  );
   const directTaskDisplay = ref<V2RechargeJob>();
   let directCancelling = false;
   let openStartGeneration = 0;
@@ -347,7 +363,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     (addressQuery.data.value?.items ?? [])
       .filter(
         (item) =>
-          item.status === 'unused' ||
+          (item.status === 'unused' &&
+            !jobs.value.some((job) => rechargeAddressReserved(job, item.id, currentId.value))) ||
           (item.status === 'used' &&
             (active.value || formLocked.value) &&
             item.id === selectedAddressId.value)
@@ -463,16 +480,35 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         (directOpen.owns(currentId.value) && directTaskDisplay.value?.id === currentId.value
           ? directTaskDisplay.value
           : undefined))
-      : (jobs.value.find((job) => activeStates.has(job.state)) ??
-        jobs.value.find((job) => job.state === 'unknown' && job.result.payment_attempted === true))
+      : (jobs.value.find(
+          (job) =>
+            activeStates.has(job.state) &&
+            rechargeJobUsesConnection(job, settingsQuery.data.value?.connectionProfileId ?? null)
+        ) ??
+        jobs.value.find(
+          (job) =>
+            job.state === 'unknown' &&
+            job.result.payment_attempted === true &&
+            rechargeJobUsesConnection(job, settingsQuery.data.value?.connectionProfileId ?? null)
+        ))
   );
-  const active = computed(() => jobs.value.some((job) => activeStates.has(job.state)));
-  const currentSettingsReady = computed(() =>
-    settingsReady(
-      settingsQuery.data.value,
-      operationMode.value === 'payment' && Boolean(selectedProxyId.value),
-      true
+  const active = computed(() =>
+    jobs.value.some(
+      (job) =>
+        activeStates.has(job.state) &&
+        rechargeJobUsesConnection(job, settingsQuery.data.value?.connectionProfileId ?? null)
     )
+  );
+  const currentSettingsReady = computed(
+    () =>
+      settingsQuery.phase.value === 'ready' &&
+      browserSettings.connectionProfileChoice.value ===
+        (settingsQuery.data.value?.connectionProfileId ?? 'default') &&
+      settingsReady(
+        settingsQuery.data.value,
+        operationMode.value === 'payment' && Boolean(selectedProxyId.value),
+        true
+      )
   );
   const formLocked = computed(
     () =>

@@ -19,7 +19,7 @@ OUT = ROOT / '.deploy/bitbrowser-manual-publication'
 REPO = 'wangchaozhuanyong/id-business-system'
 INSTANCE = 'i-05836da38606e633c'
 SCOPE = 'BITBROWSER_MANUAL_SETTLEMENT_20261019'
-CURRENT = 'bd40a0b68a31821708a7204225a1dbf79b210efe'
+CURRENT = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
 RECIPE = 'manual-settlement-20261019'
 CONTRACT_FILE = 'bitbrowser-manual-contract.json'
 
@@ -183,7 +183,6 @@ except Exception as error:
             'NATIVE_OPERATION_FAILED')
         report = json.loads(result['StandardOutputContent'])
         if 'zlibBase64' in report:
-            import zlib,base64
             report = json.loads(zlib.decompress(base64.b64decode(report['zlibBase64'])))
         (OUT / (mode + '-result.json')).write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
         return report

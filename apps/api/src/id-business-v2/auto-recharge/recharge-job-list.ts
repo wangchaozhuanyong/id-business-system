@@ -3,7 +3,7 @@ import { withResolutionVerification } from './recharge-resolution';
 import { resultWithConfirmation } from './recharge-validation';
 import { isRechargeWorkerConfigured } from './recharge-worker-client';
 import { recoverRechargePaymentResult } from './recharge-payment-facts';
-import { object } from './recharge-validation';
+import { object, uuidPattern } from './recharge-validation';
 import { rechargeAvailability } from './recharge-availability';
 import type { IdBusinessV2RechargeJob, IdBusinessV2RechargeRecord } from '@prisma/client';
 
@@ -43,6 +43,16 @@ export function presentRechargeJobs(
     const result = resultWithConfirmation({ ...job, result: publicResult }, workerToken);
     return {
       ...job,
+      connectionProfileId:
+        storedResult.connection_profile_id === null ||
+        (typeof storedResult.connection_profile_id === 'string' &&
+          uuidPattern.test(storedResult.connection_profile_id))
+          ? storedResult.connection_profile_id
+          : undefined,
+      connectionProfileName:
+        typeof storedResult.connection_profile_name === 'string'
+          ? storedResult.connection_profile_name.slice(0, 80)
+          : undefined,
       availability: rechargeAvailability({ ...job, result: storedResult as never }, records),
       nonceHash: undefined,
       accountKey: undefined,

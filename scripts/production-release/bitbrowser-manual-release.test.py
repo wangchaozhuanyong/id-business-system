@@ -5,6 +5,12 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+import tempfile
+import base64
+import zlib
+import io
+import zipfile
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('manual_release_tests', HERE / 'bitbrowser-manual-release.py')
@@ -18,7 +24,7 @@ class ManualReleaseTests(unittest.TestCase):
 
     def test_exact_frozen_contract(self):
         p.validate_contract(self.c)
-        self.assertEqual(len(self.c['productionSources']), 32)
+        self.assertEqual(len(self.c['productionSources']), 43)
         self.assertEqual(len(self.c['sharedModules']), 4)
 
     def test_reject_different_source_parent_or_recipe(self):
@@ -35,6 +41,25 @@ class ManualReleaseTests(unittest.TestCase):
             c['sources'][name] = 'a' * 64
             with self.assertRaises(RuntimeError):
                 p.validate_contract(c)
+
+    def test_reconstructed_parents_are_finite_and_native_bound(self):
+        self.assertEqual(len(self.c['reconstructedParents']), 4)
+        self.assertEqual(len(self.c['reconstructedRuntimeModules']), 3)
+        for field in ('reconstructedParents', 'reconstructedRuntimeModules'):
+            c = copy.deepcopy(self.c)
+            c[field].pop(next(iter(c[field])))
+            with self.assertRaises(RuntimeError):
+                p.validate_contract(c)
+        for path in ('../index.html', 'assets/other.js'):
+            c = copy.deepcopy(self.c)
+            c['reconstructedAdminChunk']['path'] = path
+            with self.assertRaises(RuntimeError):
+                p.validate_contract(c)
+        c = copy.deepcopy(self.c)
+        name = next(iter(c['reconstructedParents']))
+        c['reconstructedParents'][name]['sourceCommit'] = 'a' * 40
+        with self.assertRaises(RuntimeError):
+            p.validate_contract(c)
 
     def test_selected_shared_output_required(self):
         for key in ('apiModules', 'sharedModules'):
@@ -83,6 +108,45 @@ class ManualReleaseTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 b.verify_manual_mysql_log(invalid.encode(), p)
 
+    def test_transport_encodes_parent_before_send_and_decodes_one_accepted_result(self):
+        d = p.load('bitbrowser-manual-dispatch.py')
+        expected = {'status': 'BITBROWSER_MANUAL_READONLY_PARENT', 'databaseWrites': 0}
+        report = {'zlibBase64': base64.b64encode(zlib.compress(json.dumps(expected).encode())).decode()}
+        response = {'Status': 'Success', 'ResponseCode': 0, 'StandardErrorContent': '',
+            'StandardOutputContent': json.dumps(report)}
+        with tempfile.TemporaryDirectory(dir=HERE.parents[1] / '.runtime') as temporary:
+            d.OUT = Path(temporary)
+            with patch.object(d.subprocess, 'check_output', return_value=b'{"Command":{"CommandId":"test-parent"}}') as send, \
+                patch.object(d.subprocess, 'run', return_value=type('Result', (), {'returncode': 0, 'stdout': json.dumps(response).encode()})()):
+                self.assertEqual(d.transport({'commit': 'a' * 40, 'workflowRunId': '123'}, 'parent'), expected)
+                self.assertEqual(send.call_count, 1)
+                parameters = json.loads(send.call_args.args[0][send.call_args.args[0].index('--parameters') + 1])
+                self.assertIn('PLAN_ZLIB64=', parameters['commands'][0])
+                self.assertTrue((d.OUT / 'parent-accepted.json').is_file())
+                with self.assertRaises(RuntimeError):
+                    d.transport({'commit': 'a' * 40, 'workflowRunId': '123'}, 'parent')
+                self.assertEqual(send.call_count, 1)
+
+    def test_source_receipt_authenticates_native_pr_base_separately_from_business_diff_base(self):
+        b = p.load('bitbrowser-manual-build.py')
+        run = {'id': 123, 'run_attempt': 1}
+        pr = {'number': 640, 'head': {'sha': 'a' * 40}, 'base': {'sha': 'b' * 40}}
+        evidence = {'repository': 'wangchaozhuanyong/id-business-system', 'runId': 123,
+            'runAttempt': 1, 'pullRequest': 640, 'headSha': 'a' * 40, 'baseSha': 'b' * 40, 'testedTree': 'c' * 40}
+        def encoded(value):
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w') as archive:
+                archive.writestr('evidence.json', json.dumps(value))
+            return stream.getvalue()
+        raw = encoded(evidence)
+        artifact = {'id': 456, 'name': 'quality-source-evidence-1', 'expired': False, 'digest': 'sha256:' + p.sha(raw)}
+        with patch.object(b, 'github', return_value={'artifacts': [artifact]}), \
+            patch.object(b.subprocess, 'check_output', return_value=raw):
+            receipt = b.source_receipt(run, pr, {'tree': 'c' * 40}, self.c, p)
+            self.assertEqual(receipt['testedTree'], 'c' * 40)
+            with self.assertRaises(RuntimeError):
+                b.source_receipt(run, {**pr, 'base': {'sha': 'd' * 40}}, {'tree': 'c' * 40}, self.c, p)
+
     def test_adapter_preserves_activation_and_sql_fence(self):
         engine = p.engine(self.c)
         original = p.load('bitbrowser-history-release.py')
@@ -91,6 +155,14 @@ class ManualReleaseTests(unittest.TestCase):
         self.assertEqual(engine.UPDATED, ('api', 'admin'))
         self.assertEqual(engine.PRESERVED, ('mysql', 'caddy', 'media-resolver', 'auto-recharge'))
         self.assertEqual(engine.REBOUND, ('online-recharge',))
+
+    def test_derived_publisher_resolves_all_global_names_before_activation(self):
+        import builtins
+        import symtable
+        table = symtable.symtable((HERE / 'bitbrowser-manual-release.py').read_text(), str(HERE / 'bitbrowser-manual-release.py'), 'exec')
+        publish = next(row for row in table.get_children() if row.get_name() == '_publish')
+        unresolved = set(publish.get_globals()) - set(p.__dict__) - set(dir(builtins))
+        self.assertEqual(unresolved, set(), 'Activation must not reach an unresolved inherited module name')
 
     def test_publication_keeps_original_guarded_algorithm(self):
         # Compare AST, allowing only qualification of inherited globals, rename,

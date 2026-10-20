@@ -16,7 +16,7 @@
       loading-title="正在读取代理 IP 管理"
       @retry="catalog.query.refresh"
     >
-      <el-form-item label="代理 IP" prop="proxyId" required>
+      <el-form-item label="代理 IP" prop="proxyId" :required="!connectionDraft">
         <el-select
           v-model="form.proxyId"
           filterable
@@ -179,6 +179,7 @@ defineProps<{
   stored?: V2RechargeBitBrowserSettings;
   serverMode?: boolean;
   registration?: boolean;
+  connectionDraft?: boolean;
   catalog?: ReturnType<typeof useManagedBrowserProxy>;
 }>();
 const form = defineModel<BitBrowserSettingsForm>({ required: true });

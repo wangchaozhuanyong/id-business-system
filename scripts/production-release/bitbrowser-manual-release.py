@@ -12,13 +12,19 @@ import urllib.request
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
-CURRENT = 'bd40a0b68a31821708a7204225a1dbf79b210efe'
-SOURCE = '66c57c383db67f6bcebbe4cda32a9b9a35d6dc00'
+CURRENT = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
+SOURCE = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
 PARENT_PROOF = '21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354'
 RECIPE = 'manual-settlement-20261019'
 SCOPE = 'BITBROWSER_MANUAL_SETTLEMENT_20261019'
 CONTRACT_FILE = 'bitbrowser-manual-contract.json'
 WORKFLOW = '.github/workflows/bitbrowser-manual-validation.yml'
+RECONSTRUCTED_PARENT_SOURCES = frozenset({
+    'apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts',
+    'apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue'})
+
 
 
 def need(value, code):
@@ -54,19 +60,36 @@ def validate_contract(c):
         and set(c.get('ciControlPins', {})) == {'scripts/ci-bitbrowser-manual-controls.mjs',
             'scripts/ci-bitbrowser-manual-controls.test.mjs', 'scripts/ci-recharge-scope.mjs',
             'scripts/ci-recharge-check.mjs'}, 'CI_POLICY_CHANGED')
-    need(len(c.get('sources', {})) == 43 and all(re.fullmatch('[a-f0-9]{64}', v)
+    need(len(c.get('sources', {})) == 61 and all(re.fullmatch('[a-f0-9]{64}', v)
         for v in c['sources'].values()), 'SOURCE_SCOPE')
     production = {n: v for n, v in c['sources'].items() if n.startswith(('apps/', 'packages/shared/src/'))
         and not n.endswith(('.spec.ts', '.test.mjs'))}
-    need(c.get('productionSources') == production and len(production) == 32
+    need(c.get('productionSources') == production and len(production) == 43
         and set(c.get('sourceParents', {})) == set(production), 'PRODUCTION_SCOPE')
     cycle = 'apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts'
     need(set(c.get('buildParents', {})) == set(production)
-        and {n for n in production if c['sourceParents'][n] != c['buildParents'][n]} == {cycle}
+        and {n for n in production if c['sourceParents'][n] != c['buildParents'][n]} == {cycle, *RECONSTRUCTED_PARENT_SOURCES}
         and c['sourceParents'][cycle] is None
         and isinstance(c['buildParents'][cycle], str)
         and set(c.get('nativeCycleModules', {})) == {'id-business-v2/auto-recharge/recharge-cycle-state' + suffix
             for suffix in ('.js', '.d.ts', '.js.map')}, 'PARENT_SOURCE_RECONSTRUCTION')
+    bindings = c.get('reconstructedParents', {})
+    need(set(bindings) == RECONSTRUCTED_PARENT_SOURCES
+        and all(c['sourceParents'][name] is None
+            and set(row) == {'sourceCommit', 'sourceSha256'}
+            and row['sourceCommit'] == c['apiAdminParentCommit']
+            and row['sourceSha256'] == c['buildParents'][name]
+            and re.fullmatch('[a-f0-9]{64}', row['sourceSha256']) for name, row in bindings.items()),
+        'RECONSTRUCTED_PARENT_SOURCES')
+    parent_modules = {name.removeprefix('apps/api/src/').removesuffix('.ts') + '.js'
+        for name in RECONSTRUCTED_PARENT_SOURCES if name.startswith('apps/api/')}
+    need(set(c.get('reconstructedRuntimeModules', {})) == parent_modules
+        and all(re.fullmatch('[a-f0-9]{64}', value) for value in c['reconstructedRuntimeModules'].values()),
+        'RECONSTRUCTED_RUNTIME_SCOPE')
+    chunk = c.get('reconstructedAdminChunk', {})
+    need(set(chunk) == {'path', 'sha256'}
+        and re.fullmatch(r'assets/V2AutoRechargeView-[A-Za-z0-9_-]+\.js', chunk.get('path', ''))
+        and re.fullmatch('[a-f0-9]{64}', chunk.get('sha256', '')), 'RECONSTRUCTED_ADMIN_SCOPE')
     need(all(n.startswith(('apps/admin/src/v2/features/auto-recharge/',
         'apps/api/src/id-business-v2/auto-recharge/',
         'apps/api/src/id-business-v2/bank-card-pool/', 'packages/shared/src/v2/'))
@@ -133,6 +156,11 @@ def observe(c):
         'backupNormalizerPath': str(normalizer), 'backupNormalizerSha256': sha(normalizer.read_bytes())}
     need(all(baseline['apiModules'].get(n) == v for n, v in c['nativeCycleModules'].items()),
         'RECONSTRUCTED_CYCLE_RUNTIME_CHANGED')
+    need(all(baseline['apiModules'].get(n) == v for n, v in c['reconstructedRuntimeModules'].items()),
+        'RECONSTRUCTED_RUNTIME_CHANGED')
+    chunk = c['reconstructedAdminChunk']
+    need(d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
+        '/usr/share/nginx/html/' + chunk['path']).split()[0] == chunk['sha256'], 'RECONSTRUCTED_ADMIN_CHANGED')
     need(baseline['database']['pending'] == 0 and shutil.disk_usage(BASE).free > 6 * 1024**3, 'PARENT_NOT_READY')
     return {'status': 'BITBROWSER_MANUAL_READONLY_PARENT', 'baseline': baseline,
         'businessActions': 0, 'databaseWrites': 0}
@@ -400,7 +428,7 @@ def _publish(engine, plan, c):
         if engine.RECIPE in (engine.FOLLOWUP, engine.ADDRESS, engine.BOUNDED):
             manifest['previousAdminSourceProjection'] = copy.deepcopy(manifest.get('adminSourceProjection'))
             manifest['adminSourceProjection'] = copy.deepcopy(manifest['roleSourceProjections']['admin'])
-        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=engine.SCOPE, previousCommit=engine.CURRENT, previousRelease=str(previous), previousManifestSha256=sha(raw_manifest), status='DEPLOYED', servicesUpdated=list(engine.UPDATED), servicesRebound=list(REBOUND), newMigrations=[], migrationPerformed=False, paymentActions=0, bitbrowserHistoryPublication=preservation, compiledArtifactSelection=list(engine.UPDATED))
+        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=engine.SCOPE, previousCommit=engine.CURRENT, previousRelease=str(previous), previousManifestSha256=sha(raw_manifest), status='DEPLOYED', servicesUpdated=list(engine.UPDATED), servicesRebound=list(engine.REBOUND), newMigrations=[], migrationPerformed=False, paymentActions=0, bitbrowserHistoryPublication=preservation, compiledArtifactSelection=list(engine.UPDATED))
         artifact = {'url': url, 'sha256': plan['artifactSha256'], 'validationRun': plan['workflowRunId']}
         if 'api' in engine.UPDATED:
             manifest['apiCompiledArtifact'] = artifact

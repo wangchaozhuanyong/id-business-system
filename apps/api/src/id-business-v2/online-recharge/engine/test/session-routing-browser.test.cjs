@@ -1,5 +1,5 @@
 'use strict';
-/* global window, document, XMLHttpRequest */
+/* global window, document, XMLHttpRequest, MutationObserver */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -14,7 +14,7 @@ const { createRequire } = require('node:module');
 const { runInNewContext } = require('node:vm');
 const { chromium } = require('../upstream/node_modules/playwright');
 const { prepareCheckoutCardSection } = require('../upstream/stripe-payment');
-const { inspectCardReadiness } = require('../checkout-form.cjs');
+const { inspectCardReadiness, fillCard, fillBilling } = require('../checkout-form.cjs');
 
 const browserMode = process.env.SESSION_ROUTING_BROWSER_MODE || 'native';
 const headful = process.env.SESSION_ROUTING_HEADFUL === '1';
@@ -554,5 +554,72 @@ test('authenticated XHR initialization precedes physical ARIA card preparation a
     f.transport.some((request) => request.path === '/api/auth/session'),
     false
   );
+  noBusinessActions(f);
+});
+
+test('installed launcher fills rendered hidden iframe fields without changing attributes or submitting', async (t) => {
+  const f = await fixture(t);
+  const controls =
+    '<input autocomplete="cc-csc"><input autocomplete="cc-number"><input autocomplete="cc-exp">' +
+    '<input autocomplete="billing name"><input autocomplete="billing address-line1">' +
+    '<input autocomplete="billing address-level2"><input autocomplete="billing postal-code">' +
+    '<select autocomplete="billing country"><option value="PH">Philippines</option></select>';
+  const html = `<form><section hidden>${controls}</section><section hidden style="display:block" data-active>${controls}</section><button>Pay</button></form>`;
+  await f.page.setContent(
+    `<iframe hidden style="display:block;width:900px;height:600px" srcdoc="${html.replaceAll('"', '&quot;')}"></iframe>`
+  );
+  const frame = f.page.frames()[1];
+  await frame.evaluate(() => {
+    window.fixtureActions = { submit: 0, click: 0, hiddenChanges: 0 };
+    document.addEventListener('click', () => window.fixtureActions.click++);
+    document.addEventListener('submit', (event) => {
+      event.preventDefault();
+      window.fixtureActions.submit++;
+    });
+    new MutationObserver((changes) => {
+      window.fixtureActions.hiddenChanges += changes.length;
+    }).observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['hidden', 'style']
+    });
+  });
+  const deadline = Date.now() + 15000;
+  assert.equal((await inspectCardReadiness(f.page, { deadline })).ready, true);
+  const cardResult = await fillCard(
+    f.page,
+    { number: '4242424242424242', expiry: '12/30', cvc: '123' },
+    { deadline }
+  );
+  assert.equal(cardResult.ok, true, JSON.stringify(cardResult));
+  const billingResult = await fillBilling(
+    f.page,
+    { country: 'PH', line1: '1 Synthetic Street', city: 'Synthetic', postal_code: '1000' },
+    'Synthetic Name',
+    { deadline }
+  );
+  assert.equal(billingResult.ok, true, JSON.stringify(billingResult));
+  const active = frame.locator('[data-active]');
+  assert.equal(await active.locator('[autocomplete="cc-number"]').inputValue(), '4242424242424242');
+  assert.equal(await active.locator('[autocomplete="cc-exp"]').inputValue(), '12/30');
+  assert.equal(await active.locator('[autocomplete="cc-csc"]').inputValue(), '123');
+  assert.equal(
+    await active.locator('[autocomplete="billing name"]').inputValue(),
+    'Synthetic Name'
+  );
+  assert.equal(await frame.locator('[data-active]').getAttribute('hidden'), '');
+  assert.equal(await f.page.locator('iframe').getAttribute('hidden'), '');
+  assert.ok(
+    (
+      await frame
+        .locator('section:not([data-active]) input')
+        .evaluateAll((nodes) => nodes.map((n) => n.value))
+    ).every((v) => v === '')
+  );
+  assert.deepEqual(await frame.evaluate(() => window.fixtureActions), {
+    submit: 0,
+    click: 0,
+    hiddenChanges: 0
+  });
   noBusinessActions(f);
 });

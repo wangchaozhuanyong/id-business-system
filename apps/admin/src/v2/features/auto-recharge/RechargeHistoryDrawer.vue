@@ -34,6 +34,7 @@
           @click="select(job.id)"
         >
           {{ planLabels[job.plan] }} · {{ rechargeHistoryStatusLabel(job) }}
+          <small>{{ job.connectionProfileName ?? '历史连接未标注' }}</small>
           <small>{{ formatV2DateTime(job.createdAt) }}</small>
         </button>
       </li>

@@ -76,14 +76,14 @@ const settle = async () => {
   await Promise.resolve();
   await nextTick();
 };
-const create = () => {
+const create = (direct = false) => {
   const scope = effectScope();
   const settings = scope.run(() =>
     useRechargeBrowserSettings(
       ref('unknown'),
       ref(''),
       ref(false),
-      computed(() => false)
+      computed(() => direct)
     )
   )!;
   return { settings, stop: () => scope.stop() };
@@ -124,9 +124,50 @@ describe('按连接配置隔离设置草稿', () => {
     expect(settings.settingsForm.value.newConnectionProfile).toBe(true);
     expect(settings.storedSettings.value?.localApiTokenConfigured).toBe(false);
     expect(settings.storedSettings.value?.connectorTokenConfigured).toBe(false);
+    expect(settings.settingsForm.value.groupName).toBe('');
+    expect(settings.settingsForm.value.tagName).toBe('');
     await settings.saveSettings();
     expect(mocks.save).not.toHaveBeenCalled();
     expect(settings.settingsError.value).toContain('连接密钥');
+    stop();
+  });
+  it('首次读取显式选择原连接，不跟随另一台电脑保存的服务器默认选择', async () => {
+    const { settings, stop } = create(true);
+    await settle();
+    expect(mocks.get.mock.calls[0]![1]).toBeNull();
+    settings.connectionProfileChoice.value = profileB;
+    await settle();
+    expect(mocks.get.mock.calls.at(-1)![1]).toBe(profileB);
+    expect(settings.connectorStatus.value).toBe('unknown');
+    stop();
+  });
+  it('子账号无分组或标签时仍可先检测并保存连接，但不能通过完整执行检查', async () => {
+    const { settings, stop } = create(true);
+    await settle();
+    settings.connectionProfileChoice.value = 'new';
+    Object.assign(settings.settingsForm.value, {
+      connectionProfileName: 'Mac 子账号',
+      localApiToken: 'synthetic-child-api-token'
+    });
+    mocks.catalog.mockResolvedValue({ groups: [], tags: [] });
+    mocks.save.mockResolvedValue({
+      ...fixture(profileB),
+      groupName: '',
+      tagName: '',
+      dynamicProxyUrlConfigured: false
+    });
+    await settings.saveSettings();
+    expect(mocks.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directMode: true,
+        groupName: '',
+        tagName: '',
+        newConnectionProfile: true
+      })
+    );
+    expect(settings.connectorStatus.value).toBe('incomplete');
+    await expect(settings.checkSavedConnection()).rejects.toThrow('分组和标签');
+    expect(settings.connectorStatus.value).toBe('incomplete');
     stop();
   });
   it('保存失败保留输入，成功才清理当前提交快照并选中服务器生成的配置', async () => {
