@@ -137,6 +137,14 @@ class ManualReleaseTests(unittest.TestCase):
         self.assertEqual(engine.PRESERVED, ('mysql', 'caddy', 'media-resolver', 'auto-recharge'))
         self.assertEqual(engine.REBOUND, ('online-recharge',))
 
+    def test_derived_publisher_resolves_all_global_names_before_activation(self):
+        import builtins
+        import symtable
+        table = symtable.symtable((HERE / 'bitbrowser-manual-release.py').read_text(), str(HERE / 'bitbrowser-manual-release.py'), 'exec')
+        publish = next(row for row in table.get_children() if row.get_name() == '_publish')
+        unresolved = set(publish.get_globals()) - set(p.__dict__) - set(dir(builtins))
+        self.assertEqual(unresolved, set(), 'Activation must not reach an unresolved inherited module name')
+
     def test_publication_keeps_original_guarded_algorithm(self):
         # Compare AST, allowing only qualification of inherited globals, rename,
         # explicit engine parameter and native parent injection. No guard omitted.

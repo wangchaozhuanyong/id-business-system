@@ -400,7 +400,7 @@ def _publish(engine, plan, c):
         if engine.RECIPE in (engine.FOLLOWUP, engine.ADDRESS, engine.BOUNDED):
             manifest['previousAdminSourceProjection'] = copy.deepcopy(manifest.get('adminSourceProjection'))
             manifest['adminSourceProjection'] = copy.deepcopy(manifest['roleSourceProjections']['admin'])
-        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=engine.SCOPE, previousCommit=engine.CURRENT, previousRelease=str(previous), previousManifestSha256=sha(raw_manifest), status='DEPLOYED', servicesUpdated=list(engine.UPDATED), servicesRebound=list(REBOUND), newMigrations=[], migrationPerformed=False, paymentActions=0, bitbrowserHistoryPublication=preservation, compiledArtifactSelection=list(engine.UPDATED))
+        manifest.update(commit=plan['commit'], sourceTree=plan['tree'], sourceBranch='main', scope=engine.SCOPE, previousCommit=engine.CURRENT, previousRelease=str(previous), previousManifestSha256=sha(raw_manifest), status='DEPLOYED', servicesUpdated=list(engine.UPDATED), servicesRebound=list(engine.REBOUND), newMigrations=[], migrationPerformed=False, paymentActions=0, bitbrowserHistoryPublication=preservation, compiledArtifactSelection=list(engine.UPDATED))
         artifact = {'url': url, 'sha256': plan['artifactSha256'], 'validationRun': plan['workflowRunId']}
         if 'api' in engine.UPDATED:
             manifest['apiCompiledArtifact'] = artifact
