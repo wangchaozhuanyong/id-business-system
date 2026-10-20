@@ -4780,8 +4780,8 @@
   "requiredQualityParts": ["guards", "online-engine"],
   "reviewBase": "fe52794341fe07d518b4fcc8b2141a67341487c7",
   "reviewedControlSources": {
-    "scripts/ci-online-settings-scope.mjs": "419e16ef8371343407764725836f88c47815a57fd57c85de01aeedccb4b9d155",
-    "scripts/ci-online-settings-scope.test.mjs": "e5073c8a23091b565c6758fc35c4466f8065f76c17fd37c3c28293014b4b1554",
+    "scripts/ci-online-settings-scope.mjs": "0e6f191d7eea0f8bee62edfbef89eef70b7b4d073bff3ea9ca7661909a0dd9b5",
+    "scripts/ci-online-settings-scope.test.mjs": "4ff0a6c1e5ee207873fbeb50d64deaaaca839f665a5a1f26a0fb51ea8a553143",
     "scripts/ci-recharge-scope.mjs": "b633580c8d16877bdbf628dab6914834f85c089a4e20003e2d38327b21693a44",
     "scripts/ci-recharge-scope.test.mjs": "4e268daf7da1b8b05af5d3a1f0c2579cef412f9eb2fdff4402556a3e00e9989d"
   },
@@ -4794,8 +4794,8 @@
     "apps/api/src/id-business-v2/online-recharge/engine/test/session-routing-browser.test.cjs": "ccccb18feead16555df6378086406dcaa0bb37699c06daded94e5d8549c9937a"
   },
   "scope": "ONLINE_CARD_VISIBILITY",
-  "sourceReviewCommit": "a46ff2252fe2b58ff06e8865528f4ba7e2ffdc5d",
-  "sourceReviewTag": "online-card-visibility-source-review-a46ff2252fe2",
+  "sourceReviewCommit": "1f4dbc2f16c91f5e5c6b278ef18b398c4721a3ea",
+  "sourceReviewTag": "online-card-visibility-source-review-1f4dbc2f16c9",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "upstreamSource": {
