@@ -42,6 +42,25 @@ class ManualReleaseTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 p.validate_contract(c)
 
+    def test_reconstructed_parents_are_finite_and_native_bound(self):
+        self.assertEqual(len(self.c['reconstructedParents']), 4)
+        self.assertEqual(len(self.c['reconstructedRuntimeModules']), 3)
+        for field in ('reconstructedParents', 'reconstructedRuntimeModules'):
+            c = copy.deepcopy(self.c)
+            c[field].pop(next(iter(c[field])))
+            with self.assertRaises(RuntimeError):
+                p.validate_contract(c)
+        for path in ('../index.html', 'assets/other.js'):
+            c = copy.deepcopy(self.c)
+            c['reconstructedAdminChunk']['path'] = path
+            with self.assertRaises(RuntimeError):
+                p.validate_contract(c)
+        c = copy.deepcopy(self.c)
+        name = next(iter(c['reconstructedParents']))
+        c['reconstructedParents'][name]['sourceCommit'] = 'a' * 40
+        with self.assertRaises(RuntimeError):
+            p.validate_contract(c)
+
     def test_selected_shared_output_required(self):
         for key in ('apiModules', 'sharedModules'):
             c = copy.deepcopy(self.c)

@@ -81,7 +81,7 @@
     "apps/admin/src/v2/features/auto-recharge/RechargeManualSettlement.vue": null,
     "apps/admin/src/v2/features/auto-recharge/RechargePageContext.vue": "08b765e38cee9b8ab5bac70bd800bb1388401f95b11f1ac0a6e594cf3dda5b05",
     "apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue": "a4bc9aa99734f66aab3481a5631c50c6b6a3f2b419c7c273324395a95500744d",
-    "apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue": null,
+    "apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue": "e292a2f4e77f32abfdcfa087ca3bf9cdce8212dfdf23339a14e8d3f9f133ab23",
     "apps/admin/src/v2/features/auto-recharge/RechargeResult.vue": "0a5f2b2bd8ca70cf5510aa74ce16e25dc2e664fb9a77def756b6ba2ad4c79d3f",
     "apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue": "815939712d9515592a677d127113192a3d0bcb8b3abc0d0bccffc3c9e3f5ba4a",
     "apps/admin/src/v2/features/auto-recharge/api.ts": "aba7cc222e8210abe8c0a72503ca64ca8a4b3d17ce4b22b8c7083e6aebd2215a",
@@ -100,7 +100,7 @@
     "apps/api/src/id-business-v2/auto-recharge/recharge-availability.ts": "4d22f24f2cf3ba57a5d22e704964481e5b28e0ce36008ce75d2f938b68c12af7",
     "apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts": "2e895a8b902022ef54e65129cce189ab6cee67250536df5edcd59cc60babb82b",
     "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts": "de83ee3c6a1ae2fb1b61e606397aa3fd3d46875bcf82d0b70152d7d221a9332b",
-    "apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts": null,
+    "apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts": "1eae02afd8acbd78e62fb9253466b850f623cc4daf2d368c66d2115d9d754ad7",
     "apps/api/src/id-business-v2/auto-recharge/recharge-ledger-metadata.ts": "7ef7d6745927391dc3aac6fec0d925406f5e84d2ee34044a1fade3b2422ddd26",
     "apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts": "d48d6bacfa86d0d9ff6d4d8aea212e88ee995118fe5f1c1a9b102b3ea8d2aa91",
     "apps/api/src/id-business-v2/auto-recharge/recharge-manual-settlement-proof.ts": null,
@@ -109,8 +109,8 @@
     "apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts": "ceb76045558276babf41017e2a80dd5950debe778424467d69cf3a594e0f1622",
     "apps/api/src/id-business-v2/auto-recharge/recharge-payment-facts.ts": "98a69036d853b2c6a27fbce02efc6f659bc7ff9bf0ce164686d1c5532e7e3b57",
     "apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts": "4ff9d1abeb7a193c6763593becf827586a3d007293e991e8a594b0f7433f68d8",
-    "apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts": null,
-    "apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts": null,
+    "apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts": "27c8a7e62de56b15fd50d4db30651dc53086e5e5a1739db4e42ae8a077c42c17",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts": "a0b70ed48a29dc1434288504425abeb6a605ee0ad01b91b362b5967173c274d9",
     "apps/api/src/id-business-v2/auto-recharge/recharge-validation.ts": "c86ef1768e000bc1068693f9ff8b847dd49d29e5491b390127fb1ac9416703ed",
     "apps/api/src/id-business-v2/auto-recharge/recharge.controller.ts": "d7eda5db58a3b4931cebe3211352cb8b333bf43f7f32f422158c49c435ad1731",
     "apps/api/src/id-business-v2/auto-recharge/recharge.module.ts": "cba1a02b4adf442963e0e8c6a9c340f0856bbee2c3ea99ee5ded04a61d814127",
@@ -140,10 +140,10 @@
     "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
     "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
-    "bitbrowser-manual-build.py": "3d5cf604512aa5c5a24007d8066ed367fa1a23833709a7cce9fa2f2b6f2d3fb9",
+    "bitbrowser-manual-build.py": "feb0904a0a1a6a83899167e16af5576883a60e5aee283431cd62778e0ac5bdf9",
     "bitbrowser-manual-dispatch.py": "000887b15712649733fe03a08dbadf488fdcd9001239346f19b331a920d9bbfe",
-    "bitbrowser-manual-release.py": "0edc0171aacbdb64b7c56cef5881076de77f73569ff772e92a3b031e87ff9ae4",
-    "bitbrowser-manual-release.test.py": "360be085e49c907527df42b6596a36b7a0b3e42d7a92531df1bae352fc9f9137",
+    "bitbrowser-manual-release.py": "e87e3394beb873265d1398883e50ed6d515f87ffa67a0c53a961b373071052cf",
+    "bitbrowser-manual-release.test.py": "af174690b4ba61d8cc24b220bb25a55b712289a7c61c650db12e0159890967f2",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
@@ -226,6 +226,33 @@
   "qualityWorkflowSha256": "03c7d2386b7f5a36a5125cbe450832f7a17ef327adad02f34453389682048387",
   "reboundServices": ["online-recharge"],
   "recipe": "manual-settlement-20261019",
+  "reconstructedAdminChunk": {
+    "path": "assets/V2AutoRechargeView-SnW3d3AQ.js",
+    "sha256": "b349dda8be7ced6444ed4b1b6018ad8907843f6f0c7f6d280c736f9935470476"
+  },
+  "reconstructedParents": {
+    "apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue": {
+      "sourceCommit": "523bf8173e46823c05e9641428263f17b1ca3906",
+      "sourceSha256": "e292a2f4e77f32abfdcfa087ca3bf9cdce8212dfdf23339a14e8d3f9f133ab23"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts": {
+      "sourceCommit": "523bf8173e46823c05e9641428263f17b1ca3906",
+      "sourceSha256": "1eae02afd8acbd78e62fb9253466b850f623cc4daf2d368c66d2115d9d754ad7"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts": {
+      "sourceCommit": "523bf8173e46823c05e9641428263f17b1ca3906",
+      "sourceSha256": "27c8a7e62de56b15fd50d4db30651dc53086e5e5a1739db4e42ae8a077c42c17"
+    },
+    "apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts": {
+      "sourceCommit": "523bf8173e46823c05e9641428263f17b1ca3906",
+      "sourceSha256": "a0b70ed48a29dc1434288504425abeb6a605ee0ad01b91b362b5967173c274d9"
+    }
+  },
+  "reconstructedRuntimeModules": {
+    "id-business-v2/auto-recharge/recharge-job-list.js": "105ce905cfbda88137f63b21eb0ecf40713a4d862d6f9a46ed4dca3963d591a8",
+    "id-business-v2/auto-recharge/recharge-settings-validation.js": "c8ec1ca6eab69f2d941817ced88e1a0176961e93676c74b0212cf1e64692f7e5",
+    "id-business-v2/auto-recharge/recharge-settings.service.js": "dd294077dc73e416235e1bc8d85fe2e394d454ea60dc9b5b1db96c82fe1bb916"
+  },
   "reviewBase": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
   "scope": "BITBROWSER_MANUAL_SETTLEMENT_20261019",
   "sharedModules": [

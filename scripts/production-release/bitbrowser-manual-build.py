@@ -34,6 +34,9 @@ def check(c):
     p.need(git('rev-parse', p.SOURCE + '^{tree}').decode().strip() == c['sourceReviewTree'], 'SOURCE_TREE_CHANGED')
     for n, v in c['sources'].items():
         p.need(p.sha((ROOT / n).read_bytes()) == v == p.sha(git('show', p.SOURCE + ':' + n)), 'SOURCE_CHANGED')
+    for name, row in c['reconstructedParents'].items():
+        p.need(p.sha(git('show', row['sourceCommit'] + ':' + name)) == row['sourceSha256']
+            == c['buildParents'][name], 'RECONSTRUCTED_SOURCE_CHANGED')
     for n, v in c['controlPins'].items():
         p.need(p.sha((HERE / n).read_bytes()) == v, 'CONTROL_CHANGED')
     for n, v in c['ciControlPins'].items():

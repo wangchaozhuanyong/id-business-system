@@ -19,6 +19,12 @@ RECIPE = 'manual-settlement-20261019'
 SCOPE = 'BITBROWSER_MANUAL_SETTLEMENT_20261019'
 CONTRACT_FILE = 'bitbrowser-manual-contract.json'
 WORKFLOW = '.github/workflows/bitbrowser-manual-validation.yml'
+RECONSTRUCTED_PARENT_SOURCES = frozenset({
+    'apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts',
+    'apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue'})
+
 
 
 def need(value, code):
@@ -62,11 +68,28 @@ def validate_contract(c):
         and set(c.get('sourceParents', {})) == set(production), 'PRODUCTION_SCOPE')
     cycle = 'apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts'
     need(set(c.get('buildParents', {})) == set(production)
-        and {n for n in production if c['sourceParents'][n] != c['buildParents'][n]} == {cycle}
+        and {n for n in production if c['sourceParents'][n] != c['buildParents'][n]} == {cycle, *RECONSTRUCTED_PARENT_SOURCES}
         and c['sourceParents'][cycle] is None
         and isinstance(c['buildParents'][cycle], str)
         and set(c.get('nativeCycleModules', {})) == {'id-business-v2/auto-recharge/recharge-cycle-state' + suffix
             for suffix in ('.js', '.d.ts', '.js.map')}, 'PARENT_SOURCE_RECONSTRUCTION')
+    bindings = c.get('reconstructedParents', {})
+    need(set(bindings) == RECONSTRUCTED_PARENT_SOURCES
+        and all(c['sourceParents'][name] is None
+            and set(row) == {'sourceCommit', 'sourceSha256'}
+            and row['sourceCommit'] == c['apiAdminParentCommit']
+            and row['sourceSha256'] == c['buildParents'][name]
+            and re.fullmatch('[a-f0-9]{64}', row['sourceSha256']) for name, row in bindings.items()),
+        'RECONSTRUCTED_PARENT_SOURCES')
+    parent_modules = {name.removeprefix('apps/api/src/').removesuffix('.ts') + '.js'
+        for name in RECONSTRUCTED_PARENT_SOURCES if name.startswith('apps/api/')}
+    need(set(c.get('reconstructedRuntimeModules', {})) == parent_modules
+        and all(re.fullmatch('[a-f0-9]{64}', value) for value in c['reconstructedRuntimeModules'].values()),
+        'RECONSTRUCTED_RUNTIME_SCOPE')
+    chunk = c.get('reconstructedAdminChunk', {})
+    need(set(chunk) == {'path', 'sha256'}
+        and re.fullmatch(r'assets/V2AutoRechargeView-[A-Za-z0-9_-]+\.js', chunk.get('path', ''))
+        and re.fullmatch('[a-f0-9]{64}', chunk.get('sha256', '')), 'RECONSTRUCTED_ADMIN_SCOPE')
     need(all(n.startswith(('apps/admin/src/v2/features/auto-recharge/',
         'apps/api/src/id-business-v2/auto-recharge/',
         'apps/api/src/id-business-v2/bank-card-pool/', 'packages/shared/src/v2/'))
@@ -133,6 +156,11 @@ def observe(c):
         'backupNormalizerPath': str(normalizer), 'backupNormalizerSha256': sha(normalizer.read_bytes())}
     need(all(baseline['apiModules'].get(n) == v for n, v in c['nativeCycleModules'].items()),
         'RECONSTRUCTED_CYCLE_RUNTIME_CHANGED')
+    need(all(baseline['apiModules'].get(n) == v for n, v in c['reconstructedRuntimeModules'].items()),
+        'RECONSTRUCTED_RUNTIME_CHANGED')
+    chunk = c['reconstructedAdminChunk']
+    need(d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
+        '/usr/share/nginx/html/' + chunk['path']).split()[0] == chunk['sha256'], 'RECONSTRUCTED_ADMIN_CHANGED')
     need(baseline['database']['pending'] == 0 and shutil.disk_usage(BASE).free > 6 * 1024**3, 'PARENT_NOT_READY')
     return {'status': 'BITBROWSER_MANUAL_READONLY_PARENT', 'baseline': baseline,
         'businessActions': 0, 'databaseWrites': 0}
