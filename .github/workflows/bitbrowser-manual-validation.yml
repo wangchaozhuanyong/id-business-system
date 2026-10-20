@@ -1,4 +1,4 @@
-name: BitBrowser Manual Settlement and Connections Finite Release
+name: BitBrowser Manual Settlement and Connections Patched Finite Release
 
 on:
   workflow_dispatch:

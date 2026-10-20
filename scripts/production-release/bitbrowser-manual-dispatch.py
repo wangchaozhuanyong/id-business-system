@@ -72,6 +72,9 @@ def prepare():
     proof = json.loads(raw)
     c_raw = (HERE / CONTRACT_FILE).read_bytes()
     c = json.loads(c_raw)
+    need(proof.get('buildDependencyPatch') == c['buildDependencyPatch']
+        and sha((ROOT / c['buildDependencyPatch']['path']).read_bytes()) == c['buildDependencyPatch']['sha256'],
+        'BUILD_DEPENDENCY_LOCK_CHANGED')
     identity['tree'] = execute('git', 'rev-parse', 'HEAD^{tree}').decode().strip()
     need(all(proof[k] == v for k, v in identity.items()) and proof['contractSha256'] == sha(c_raw)
         and proof.get('scope') == c.get('scope') == SCOPE
