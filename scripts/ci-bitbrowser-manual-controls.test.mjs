@@ -11,7 +11,12 @@ import {
 const manifest = JSON.parse(
   readFileSync('scripts/production-release/bitbrowser-manual-contract.json', 'utf8')
 );
-const paths = [...Object.keys(manifest.sources), ...manualReleasePaths, ...manualCiPaths];
+const paths = [
+  ...Object.keys(manifest.sources),
+  manifest.buildDependencyPatch.path,
+  ...manualReleasePaths,
+  ...manualCiPaths
+];
 
 test('manual publisher closes its source and control paths without changing full quality mode', () => {
   assert.equal(isManualSettlementCandidate(paths, manifest), true);
@@ -29,7 +34,7 @@ test('manual publisher closes its source and control paths without changing full
 test('unreviewed source, schema, dependencies and other publishers keep their ordinary controls', () => {
   for (const path of [
     'apps/api/prisma-mysql/schema.prisma',
-    'package-lock.json',
+    'package.json',
     'apps/api/src/id-business-v2/online-recharge/worker.repository.ts',
     'scripts/production-release/remote-deploy.py'
   ])
@@ -66,7 +71,7 @@ test('finite publisher tests preserve source, payload, shared runtime and origin
 
 test('connections publisher refuses the superseded production and source baseline', () => {
   assert.equal(manifest.expectedCurrent, 'cb38a1ef351b42f98ce86740b2191fd54207fa32');
-  assert.equal(manifest.sourceReviewCommit, 'cb38a1ef351b42f98ce86740b2191fd54207fa32');
+  assert.equal(manifest.sourceReviewCommit, '1abab99fad82c064ff0b5c7494d51141bd991f08');
   assert.equal(Object.keys(manifest.productionSources).length, 43);
   assert.equal(
     isManualSettlementCandidate(paths, {
@@ -75,4 +80,21 @@ test('connections publisher refuses the superseded production and source baselin
     }),
     false
   );
+});
+
+test('only the reviewed follow-redirects patch lock enters the finite build', () => {
+  assert.equal(isManualSettlementCandidate(paths, manifest), true);
+  for (const change of [
+    { path: 'package.json' },
+    { package: 'axios' },
+    { toVersion: '1.16.2' },
+    { sha256: 'a'.repeat(64) }
+  ])
+    assert.equal(
+      isManualSettlementCandidate(paths, {
+        ...manifest,
+        buildDependencyPatch: { ...manifest.buildDependencyPatch, ...change }
+      }),
+      false
+    );
 });
