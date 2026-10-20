@@ -4741,9 +4741,9 @@
   "businessActions": 0,
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-    "online-card-visibility-build.py": "bbadcf2f58ac1746c5f92d8e4f2fc8f7db6e6c6b3566d400338e186155ac5db4",
-    "online-card-visibility-release.py": "bb34e02afdcf9b0bee6f967443344fb9423280310872013867fd977c7e5232f1",
-    "online-card-visibility-release.test.py": "fb5f33f9ee10914e9da1822a3f8732b6dde5b6882d8ad86c40352068b7360cec",
+    "online-card-visibility-build.py": "db5c0a666f61a8ab52aa24828b8679c93382168b4c6f4a96b2f8ffd9941ab49e",
+    "online-card-visibility-release.py": "7c6d3969a5df56579ff932021992c83b7b693e8827d1ef34fd60bd0a2f5684c7",
+    "online-card-visibility-release.test.py": "258fc6e740b4e1ab2403ac1f00649225d5b032898966c853616b12737fcb953e",
     "online-checkout-actionability-build.py": "22f572ddfa952b375ab62f2e8a976cbda89fea0ea612bd90caae560dbc282b6f",
     "online-checkout-actionability-parity.cjs": "6b7ae035f1fca3f7fbd929e6fa60972d5d43f04e82f132230dfc2bcb66ce6088",
     "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
@@ -4778,12 +4778,12 @@
   "pendingBindings": [],
   "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
   "requiredQualityParts": ["guards", "online-engine"],
-  "reviewBase": "fe52794341fe07d518b4fcc8b2141a67341487c7",
+  "reviewBase": "dd4b4d830beb055976281462bd210c66b735d65c",
   "reviewedControlSources": {
     "scripts/ci-online-settings-scope.mjs": "0e6f191d7eea0f8bee62edfbef89eef70b7b4d073bff3ea9ca7661909a0dd9b5",
     "scripts/ci-online-settings-scope.test.mjs": "4ff0a6c1e5ee207873fbeb50d64deaaaca839f665a5a1f26a0fb51ea8a553143",
-    "scripts/ci-recharge-scope.mjs": "b633580c8d16877bdbf628dab6914834f85c089a4e20003e2d38327b21693a44",
-    "scripts/ci-recharge-scope.test.mjs": "4e268daf7da1b8b05af5d3a1f0c2579cef412f9eb2fdff4402556a3e00e9989d"
+    "scripts/ci-recharge-scope.mjs": "3e045714aa4db632075251a31b3e25d2cee040ecb27bf744901e569d0e5f9266",
+    "scripts/ci-recharge-scope.test.mjs": "1c46a63bdeb73aab9c9bcc0478d9416b20b4f61d18226796f868a5b4c8ddd960"
   },
   "runtimeSources": {
     "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "b3e72aabeb1e4940f77e1f7d00d98309edcb3904799c8a2b2584ddf912868803",
@@ -4794,8 +4794,8 @@
     "apps/api/src/id-business-v2/online-recharge/engine/test/session-routing-browser.test.cjs": "ccccb18feead16555df6378086406dcaa0bb37699c06daded94e5d8549c9937a"
   },
   "scope": "ONLINE_CARD_VISIBILITY",
-  "sourceReviewCommit": "1f4dbc2f16c91f5e5c6b278ef18b398c4721a3ea",
-  "sourceReviewTag": "online-card-visibility-source-review-1f4dbc2f16c9",
+  "sourceReviewCommit": "698bb87c18b856698c759145cd0c8f6534705caa",
+  "sourceReviewTag": "online-card-visibility-source-review-698bb87c18b8",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "upstreamSource": {
@@ -4804,7 +4804,7 @@
   },
   "validationSources": {
     "docs/ONLINE_RECHARGE.md": "426a69d80b3bf327b186e786fb19fc3916599f23e7d6354b5f75c14874dd26a4",
-    "docs/V2_TASKS.md": "ab42837776721a3a1370a3440b2df58fc6782be8994441cbb3aad1698af59b7e"
+    "docs/V2_TASKS.md": "3876bd4cd30bef89671546b6e172f39d74cb9cffc3cd5a96353b8eab8f604007"
   },
   "version": 1,
   "workflowSha256": "eb92e4620b4be92f85268e065afdba7fd77dd6b6963c511135f7c9ce122296cd"
