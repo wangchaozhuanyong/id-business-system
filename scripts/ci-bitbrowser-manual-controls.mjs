@@ -23,7 +23,7 @@ export function isManualSettlementCandidate(paths, manifest) {
       );
     if (
       c.status !== 'FROZEN' ||
-      c.sourceReviewCommit !== 'dd4b4d830beb055976281462bd210c66b735d65c' ||
+      c.sourceReviewCommit !== 'cb38a1ef351b42f98ce86740b2191fd54207fa32' ||
       Object.keys(c.sources ?? {}).length !== 61 ||
       Object.keys(c.productionSources ?? {}).length !== 43
     )

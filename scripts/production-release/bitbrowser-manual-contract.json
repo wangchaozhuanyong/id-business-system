@@ -121,8 +121,8 @@
   },
   "businessActions": 0,
   "ciControlPins": {
-    "scripts/ci-bitbrowser-manual-controls.mjs": "580a84bd5b55c342d33ac43297b0a89e08bce9378b12fec9f8e68dac4d2a4489",
-    "scripts/ci-bitbrowser-manual-controls.test.mjs": "fbfcfa64cbe950e39e9a77d700abe2105064169c23db52a3152ee478315680ba",
+    "scripts/ci-bitbrowser-manual-controls.mjs": "d808431846b1ab91814def59e03c73f67f85b53e58a95801d5a1931fcf9b3c38",
+    "scripts/ci-bitbrowser-manual-controls.test.mjs": "c3a9c74b84a4010ec2b6d0b6146ca93260641449414deb84737aa795a632a6ae",
     "scripts/ci-recharge-check.mjs": "5f1edc7d9a1d850fd2797a11f0b15a881a7410c0c7907cd91ff4bc895d9d593a",
     "scripts/ci-recharge-scope.mjs": "3e045714aa4db632075251a31b3e25d2cee040ecb27bf744901e569d0e5f9266"
   },
@@ -142,7 +142,7 @@
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
     "bitbrowser-manual-build.py": "3d5cf604512aa5c5a24007d8066ed367fa1a23833709a7cce9fa2f2b6f2d3fb9",
     "bitbrowser-manual-dispatch.py": "000887b15712649733fe03a08dbadf488fdcd9001239346f19b331a920d9bbfe",
-    "bitbrowser-manual-release.py": "2930209fb077adc2ae349b9ab918d25f4459cf8e42a5b777aa0e681b1b270af0",
+    "bitbrowser-manual-release.py": "0edc0171aacbdb64b7c56cef5881076de77f73569ff772e92a3b031e87ff9ae4",
     "bitbrowser-manual-release.test.py": "360be085e49c907527df42b6596a36b7a0b3e42d7a92531df1bae352fc9f9137",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
@@ -226,7 +226,7 @@
   "qualityWorkflowSha256": "03c7d2386b7f5a36a5125cbe450832f7a17ef327adad02f34453389682048387",
   "reboundServices": ["online-recharge"],
   "recipe": "manual-settlement-20261019",
-  "reviewBase": "dd4b4d830beb055976281462bd210c66b735d65c",
+  "reviewBase": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
   "scope": "BITBROWSER_MANUAL_SETTLEMENT_20261019",
   "sharedModules": [
     "v2/auto-recharge-manual-settlement.d.ts",
@@ -280,8 +280,8 @@
     "packages/shared/src/v2/auto-recharge.ts": "62b142f4c5e4fbc532b35cbcf55c9313a99d7e969595375981dbf3852b51c3f2"
   },
   "sourceQualityPolicy": "native-full-candidate-with-exact-reviewed-business-and-main-tree",
-  "sourceReviewCommit": "dd4b4d830beb055976281462bd210c66b735d65c",
-  "sourceReviewTree": "86a0a24ae8cb01ba0bde5ea73e1ef7f21e805090",
+  "sourceReviewCommit": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
+  "sourceReviewTree": "56ace11ac00b8ac964dfc6fb19b974a99eea3293",
   "sources": {
     "apps/admin/src/v2/features/auto-recharge/BitBrowserConnectionHelp.vue": "11337d8b33bf4db04f58486d832664154e39f8d9e98d6b4381412117e6412490",
     "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue": "d4544daa0ec02588f6c81e4ee9e79e784517895fa4afe19f76260574840af2ee",
@@ -339,7 +339,7 @@
     "apps/api/src/id-business-v2/auto-recharge/recharge.service.ts": "ff88690e552ad7cfd1ec9fc22d28b3097f147672cb007c04ca68f604a966a611",
     "apps/api/src/id-business-v2/bank-card-pool/persistence/shared-bank-card.repository.ts": "3ef3ffbe441cccb8be9330119c2892758bc0d878f11b9b744bdeeaad33a17a6b",
     "apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts": "bdd9fd12e3a88e78719c6685a9a1b99efe4d0d58e1f8b798f96d9bd2a0374a4a",
-    "docs/V2_TASKS.md": "aea6be81236dd42d8aaa04101fb090adfe1332fc755478b9a40ba6180a6d77b7",
+    "docs/V2_TASKS.md": "3876bd4cd30bef89671546b6e172f39d74cb9cffc3cd5a96353b8eab8f604007",
     "packages/shared/src/v2/auto-recharge-manual-settlement.ts": "e2720568ed3041980ab31237934875f061d0860cd13696d28ef24c477c9013ba",
     "packages/shared/src/v2/auto-recharge.ts": "76d46c8473c78e156e5306635efe00b41decdd28e76c99509cf681721f4f577d",
     "packages/shared/test/node-esm-runtime.test.mjs": "73f39200f2d02fa5a11823dd479940b4e50ce4a84d5b521f66dbbb453a81315c",
