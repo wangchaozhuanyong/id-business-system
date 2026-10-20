@@ -27,6 +27,13 @@ class ManualReleaseTests(unittest.TestCase):
         self.assertEqual(len(self.c['productionSources']), 43)
         self.assertEqual(len(self.c['sharedModules']), 4)
 
+    def test_review_anchor_is_on_mainline_before_squash_merging_publisher(self):
+        b = p.load('bitbrowser-manual-build.py')
+        self.assertEqual(b.git('merge-base', p.SOURCE, self.c['reviewBase']).decode().strip(), p.SOURCE)
+        with patch.object(b, 'git', return_value=b'2ecce1a22aab84f0ae4c40a573511567f7309d71\n'):
+            with self.assertRaisesRegex(RuntimeError, 'SOURCE_MAINLINE_REQUIRED'):
+                b.check(self.c)
+
     def test_reject_different_source_parent_or_recipe(self):
         for key in ('sourceReviewCommit', 'expectedCurrent', 'predecessorProofSha256', 'recipe'):
             c = copy.deepcopy(self.c)

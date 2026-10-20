@@ -15,7 +15,7 @@ export const manualCiPaths = Object.freeze([
 ]);
 
 export function isManualSettlementCandidate(paths, manifest) {
-  if (!manualReleasePaths.every((name) => paths.includes(name))) return false;
+  if (!paths.includes('scripts/production-release/bitbrowser-manual-contract.json')) return false;
   try {
     const c =
       manifest ??
@@ -24,7 +24,7 @@ export function isManualSettlementCandidate(paths, manifest) {
       );
     if (
       c.status !== 'FROZEN' ||
-      c.sourceReviewCommit !== '1abab99fad82c064ff0b5c7494d51141bd991f08' ||
+      c.sourceReviewCommit !== 'bbd28b70baf257f21ab3845bb3439ddf41357537' ||
       Object.keys(c.sources ?? {}).length !== 61 ||
       Object.keys(c.productionSources ?? {}).length !== 43
     )
