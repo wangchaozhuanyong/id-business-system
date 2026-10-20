@@ -1573,16 +1573,17 @@ async function inspectCardExclusions(page, { deadline = Date.now() + 2000, signa
             else result.truncated = true;
           }
         }
-      } catch {
+      } catch (error) {
         result.framesFailed++;
-        if (signal?.aborted || Date.now() >= deadline || closed(page)) break;
+        result.timedOut ||= error?.code === 'CHECKOUT_FORM_TIMEOUT' && readDeadline === deadline;
+        if (result.timedOut || signal?.aborted || Date.now() >= deadline || closed(page)) break;
       }
     }
     result.truncated ||= frames.length > 64;
   } catch {
     result.framesFailed++;
   }
-  result.timedOut = Date.now() >= deadline;
+  result.timedOut ||= Date.now() >= deadline;
   result.aborted = signal?.aborted === true;
   result.pageClosed = closed(page);
   result.complete =
