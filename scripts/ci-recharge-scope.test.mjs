@@ -8367,3 +8367,48 @@ test('card visibility release retains only guards and online engine checks', () 
   assert.deepEqual(selectedParts([...onlineCardVisibilityControls]), ['guards']);
   assert.equal(checkMode([...paths, 'package-lock.json'], 'same', 'same'), 'full');
 });
+
+test('多电脑比特连接保留当前构建与 MySQL 验收，不送入历史 ONLINE 源码投影', () => {
+  const paths = [
+    'apps/admin/src/v2/features/auto-recharge/BitBrowserConnectionHelp.vue',
+    'apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue',
+    'apps/admin/src/v2/features/auto-recharge/RechargeHistoryDrawer.vue',
+    'apps/admin/src/v2/features/auto-recharge/RechargePageContext.vue',
+    'apps/admin/src/v2/features/auto-recharge/RechargeProxyOptions.vue',
+    'apps/admin/src/v2/features/auto-recharge/RechargeResult.vue',
+    'apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue',
+    'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts',
+    'apps/admin/src/v2/features/auto-recharge/recharge-availability.spec.ts',
+    'apps/admin/src/v2/features/auto-recharge/recharge-availability.ts',
+    'apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts',
+    'apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.spec.ts',
+    'apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts',
+    'apps/api/src/id-business-v2/auto-recharge/persistence/recharge-connection-concurrency.spec.ts',
+    'apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-availability.spec.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-employee-concurrency.mysql.integration.spec.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-job-list.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-settings.spec.ts',
+    'docs/V2_TASKS.md',
+    'packages/shared/src/v2/auto-recharge.ts',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/acceptance-v2-auto-recharge.mjs'
+  ];
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const selected = selectedParts(paths);
+  for (const part of ['guards', 'admin', 'api', 'migration'])
+    assert.ok(selected.includes(part), part);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+    'apps/admin/src/v2/features/online-recharge/V2OnlineRechargeView.vue',
+    'apps/api/Dockerfile.mysql',
+    'package-lock.json',
+    '.github/workflows/quality.yml',
+    'scripts/ci-recharge-check.mjs'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([...paths, extra]), true, extra);
+});
