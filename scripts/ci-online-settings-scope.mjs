@@ -521,11 +521,17 @@ export const onlineCardVisibilityControls = Object.freeze([
   'scripts/ci-recharge-scope.test.mjs'
 ]);
 export function isOnlineCardVisibilityOnly(paths) {
+  const fullOverlay = [...onlineCardVisibilityPaths, ...cardVisibilityDocumentation].every((name) =>
+    paths.includes(name)
+  );
+  const diagnosticTimeoutRepair = [
+    ...onlineCardVisibilityPaths.slice(0, 3),
+    ...cardVisibilityDocumentation,
+    'scripts/production-release/online-card-visibility-contract.json'
+  ].every((name) => paths.includes(name));
   return (
     new Set(paths).size === paths.length &&
-    [...onlineCardVisibilityPaths, ...cardVisibilityDocumentation].every((name) =>
-      paths.includes(name)
-    ) &&
+    (fullOverlay || diagnosticTimeoutRepair) &&
     paths.every(
       (name) =>
         onlineCardVisibilityPaths.includes(name) ||

@@ -17,6 +17,18 @@ CORE.CONTRACT = HERE / (CORE.PREFIX + '-contract.json')
 CORE.OUT = CORE.ROOT / '.deploy' / CORE.PREFIX
 CORE.REPORTS = CORE.ROOT / '.runtime' / (CORE.PREFIX + '-ci')
 CORE.publisher = lambda: load('online-card-visibility-release.py').CORE
+# The six-file overlay was merged before this narrow repair. Review only the
+# exact repair delta against the latest main; freeze/check still hash every
+# overlay file and the full engine inventory against the production base.
+REVIEW_DELTA = frozenset((
+    'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+    'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md',
+    'scripts/ci-online-settings-scope.mjs', 'scripts/ci-online-settings-scope.test.mjs',
+    *('scripts/production-release/online-card-visibility-' + name
+        for name in ('build.py', 'release.py', 'release.test.py', 'contract.json'))))
+CORE.reviewed_paths = lambda _publisher: REVIEW_DELTA
 
 def __getattr__(name):
     return getattr(CORE, name)

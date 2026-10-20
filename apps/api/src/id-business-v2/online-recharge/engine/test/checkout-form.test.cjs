@@ -489,6 +489,44 @@ test('exclusion probe is bounded on frame failure and never changes the original
   assert.equal(result.timedOut, true);
   assert.ok(Date.now() - started < 700);
   assert.equal(before.ready, true);
+
+  // A timer may fire before Date.now() advances to its deadline. Preserve the
+  // global timeout cause, but distinguish a shorter per-frame read budget.
+  const source = readFileSync(require.resolve('../checkout-form.cjs'), 'utf8');
+  for (const budget of [80, 1000]) {
+    let clock = 1000;
+    const deadline = clock + budget;
+    let laterReads = 0;
+    const module = { exports: {} };
+    vm.runInNewContext(source, {
+      module,
+      exports: module.exports,
+      Date: { now: () => clock },
+      setTimeout: (callback, delay) =>
+        setTimeout(() => {
+          clock += delay - 1;
+          callback();
+        }, delay),
+      clearTimeout
+    });
+    const frame = (read) => ({
+      parentFrame: () => null,
+      locator: () => ({ evaluateAll: read })
+    });
+    const hung = frame(() => new Promise(() => {}));
+    const later = frame(async () => {
+      laterReads++;
+      return { metas: [], rejectedMetas: [] };
+    });
+    const probe = await module.exports.inspectCardExclusions(
+      { isClosed: () => false, frames: () => [hung, later] },
+      { deadline }
+    );
+    assert.equal(probe.complete, false);
+    assert.equal(probe.framesFailed, 1);
+    assert.equal(probe.timedOut, budget === 80);
+    assert.equal(laterReads, budget === 80 ? 0 : 1);
+  }
 });
 
 test('exclusion probe does not mistake a card-labelled checkbox for an editable input', async (t) => {
