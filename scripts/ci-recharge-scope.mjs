@@ -5991,6 +5991,7 @@ async function main() {
       args.some(
         (arg) =>
           /^acceptance:v2-(?:auto-recharge|table-layout|online-recharge-ui)$/.test(arg) ||
+          arg === 'scripts/acceptance-v2-auto-recharge.mjs' ||
           arg === 'scripts/acceptance-v2-registration-inventory-ui.mjs' ||
           arg === 'scripts/acceptance-v2-registration-native-ui.mjs' ||
           arg === 'scripts/acceptance-v2-order-archive-ui.mjs' ||

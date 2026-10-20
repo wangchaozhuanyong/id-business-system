@@ -8399,6 +8399,23 @@ test('多电脑比特连接保留当前构建与 MySQL 验收，不送入历史 
     'scripts/acceptance-v2-auto-recharge.mjs'
   ];
   assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const eventName of ['pull_request', 'push']) {
+    const { writes } = recordScopeClassification(paths, {}, eventName);
+    assert.ok(
+      writes.some(({ contents }) => /(?:^|\n)admin_acceptance=true\n/.test(contents)),
+      eventName
+    );
+    assert.ok(
+      writes.some(({ contents }) => /(?:^|\n)online_ci_build=false\n/.test(contents)),
+      eventName
+    );
+  }
+  assert.ok(
+    adminCheckCommands('recharge', paths).some(
+      (args) =>
+        args.includes('scripts/acceptance-v2-auto-recharge.mjs') && args.includes('--connections')
+    )
+  );
   const selected = selectedParts(paths);
   for (const part of ['guards', 'admin', 'api', 'migration'])
     assert.ok(selected.includes(part), part);
