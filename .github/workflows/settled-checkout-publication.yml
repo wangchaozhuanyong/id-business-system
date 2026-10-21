@@ -1,4 +1,4 @@
-name: BitBrowser Native Quote Diagnostics Publication
+name: BitBrowser Native Wire Header Publication
 
 on:
   workflow_dispatch:

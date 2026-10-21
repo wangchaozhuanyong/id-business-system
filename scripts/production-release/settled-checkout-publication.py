@@ -1,4 +1,4 @@
-"""Main-only finite native tax context publication; no API or payment actions."""
+"""Main-only finite native wire-header publication; no API or payment actions."""
 import argparse
 import base64
 import io
@@ -111,6 +111,10 @@ def reconstruct_parent(c):
     # Preserve the published omitted-tax-id compatibility in the reproduced parent.
     b.overlay(admin, {'apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.ts': '09a899e6eebd872eb6b404cd24c962afb4d7389775f76ddff137bb854d75bd23'},
               'ec6987a1b32d1991a2a5a318f58b3f491c51408a')
+    # Preserve the published safe observer diagnostic in the exact parent.
+    b.overlay(admin, {'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts':
+                     '5c851af6a9ead952913031fc5230fe46bc547afc0239af1e10ba001dc0f76741'},
+              '018f447ef67297ab136e3da4cc601c1bfb59dbf1')
     F.patch_build_lock(admin, finance)
     need(all(sha((admin / name).read_bytes()) == digest for name, digest in c['sourceParents'].items()), 'BUILD_SOURCE_PARENT_CHANGED')
     return admin, b
