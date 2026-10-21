@@ -62,6 +62,9 @@ def check(c):
          'DEPENDENCY_LOCK_CHANGED')
     need(sha((ROOT / 'scripts/lib/v2-data-integrity-audit.mjs').read_bytes())
          == '9c982c6f6c4573715d6679d64eb898ea20080430aa18ac42ae093beac181f26e', 'FROZEN_RULES_CHANGED')
+    rules = load('financial-closure-readonly.py').bundle()['rules']
+    need([{k: row[k] for k in ('code', 'severity', 'scope')} for row in rules] == c['productionAuditRules'],
+         'PRODUCTION_RULES_CHANGED')
 
 
 def artifact_json(run, name, member):
@@ -245,12 +248,28 @@ def patch_build_lock(context, c):
     target.write_bytes(after)
 
 
+def production_counts(output, phase):
+    reader = load('financial-closure-readonly.py')
+    reader.main()
+    path = ROOT / '.deploy/financial-closure-readonly' / (
+        os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+    report = json.loads((path / 'result.json').read_bytes())
+    need(reader.validate_report(report, reader.bundle()['rules']), 'PRODUCTION_COUNTS_UNAVAILABLE')
+    value = {'report': report, 'reportSha256': sha(P.canonical(report)),
+        'commandId': (path / 'command-id.txt').read_text().strip(),
+        'invocationSha256': sha((path / 'invocation.json').read_bytes())}
+    (output / ('production-counts-' + phase + '.json')).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n')
+    return value
+
+
 def build(c):
     check(c)
     identity = native_identity()
     need(not OUT.exists(), 'OUTPUT_EXISTS')
     OUT.mkdir(parents=True, mode=0o700)
     qa, mysql = quality(c, identity['commit'])
+    integrity = production_counts(OUT, 'before')
+    P.verify_production_integrity(integrity, c)
     controls = {**c['controlPins'], P.CONTRACT_FILE: sha((HERE / P.CONTRACT_FILE).read_bytes())}
     plan = {**identity, 'recipe': P.RECIPE, 'contractSha256': controls[P.CONTRACT_FILE], 'controlSources': controls}
     capture = transport(plan, 'parent', OUT)
@@ -333,6 +352,7 @@ def build(c):
         'baselineSharedUnchanged': True, 'baselineClientUnchanged': True,
         'baselineAdminIndexSha256': c['parentAdminIndexSha256'], 'projectedInterfaceCasesPassed': 112,
         'qualityVerification': qa, 'isolatedMysqlVerification': mysql, 'nativeParentCapture': capture,
+        'productionIntegrityBefore': integrity,
         'businessActions': 0, 'migrationPerformed': False}
     P.verify_proof(proof, proof, c, payload, h)
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
@@ -373,7 +393,8 @@ def publish(c):
     controls = {**c['controlPins'], P.CONTRACT_FILE: sha((HERE / P.CONTRACT_FILE).read_bytes())}
     plan = {**identity, 'recipe': P.RECIPE, 'contractSha256': controls[P.CONTRACT_FILE], 'controlSources': controls,
         'artifactSha256': declared, 'buildProofSha256': sha(proof_raw), 'qualityVerification': qa,
-        'isolatedMysqlVerification': mysql, 'nativeParentCapture': proof['nativeParentCapture']}
+        'isolatedMysqlVerification': mysql, 'nativeParentCapture': proof['nativeParentCapture'],
+        'productionIntegrityBefore': proof['productionIntegrityBefore']}
     bundle_path = OUT / 'bitbrowser-history-artifact.tar.gz'
     bundle_path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
@@ -391,6 +412,12 @@ def publish(c):
     need(result['status'] == 'BITBROWSER_HISTORY_DEPLOYED', 'NOT_DEPLOYED')
     result = transport(plan, 'readback', OUT)
     need(result['status'] == 'BITBROWSER_HISTORY_INDEPENDENT_READBACK_VERIFIED', 'READBACK_FAILED')
+    after = production_counts(OUT, 'after')['report']
+    need(after['identity']['commit'] == identity['commit']
+         and after['identity']['apiBillingSha256'] == proof['apiModules']['id-business-v2/online-recharge/persistence/admin.repository.js']
+         and after['identity']['adminIndexSha256'] == proof['adminFiles']['index.html']
+         and all(row['severity'] != 'error' or row['count'] == 0 for row in after['audit']['checks']),
+         'POSTFLIGHT_INTEGRITY_FINDINGS')
     print(json.dumps(result, sort_keys=True))
 
 

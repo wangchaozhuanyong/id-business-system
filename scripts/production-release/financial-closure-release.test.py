@@ -120,11 +120,54 @@ class FinancialPublicationTests(unittest.TestCase):
         return {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1',
             'contractSha256': '6' * 64, 'qualityVerification': {}, 'isolatedMysqlVerification': mysql,
             'nativeParentCapture': {}, 'scope': P.SCOPE, 'recipe': P.RECIPE,
+            'productionIntegrityBefore': self.integrity(),
             'productionSources': c['productionSources'], 'controlSources': c['controlPins'],
             'businessActions': 0, 'migrationPerformed': False, 'apiModules': modules,
             'parentModulesReproduced': c['parentApiModules'], 'baselineSharedUnchanged': True,
             'baselineClientUnchanged': True, 'baselineAdminIndexSha256': c['parentAdminIndexSha256'],
             'projectedInterfaceCasesPassed': 112, 'adminFiles': admin, 'files': files}
+
+    def integrity(self):
+        c = self.c
+        report = {'status': 'FINANCIAL_READONLY_OBSERVED', 'productionWrites': 0,
+            'identity': {'commit': P.CURRENT, 'manifestSha256': c['parentManifestSha256'],
+                'apiBillingSha256': c['parentApiModules']['id-business-v2/online-recharge/persistence/admin.repository.js'],
+                'adminIndexSha256': c['parentAdminIndexSha256'],
+                'services': {n: {'image': v, 'status': 'running', 'health': 'healthy'}
+                    for n, v in c['parentImages'].items()}},
+            'audit': {'status': 'AUDITED', 'verifiedReadOnlyAccount': True, 'databaseWrites': 0,
+                'checks': [{**rule, 'count': 0} for rule in c['productionAuditRules']]}}
+        return {'report': report, 'reportSha256': P.sha(P.canonical(report)),
+                'commandId': '12345678-1234-1234-1234-123456789abc', 'invocationSha256': '1' * 64}
+
+    def test_production_findings_and_unavailable_audit_block_before_publication(self):
+        P.verify_production_integrity(self.integrity(), self.c)
+        cases = [
+            lambda r: r['audit'].update(status='AUDIT_UNAVAILABLE'),
+            lambda r: r['audit'].update(verifiedReadOnlyAccount=False),
+            lambda r: r['audit'].update(databaseWrites=1),
+            lambda r: r['audit']['checks'].pop(),
+            lambda r: r['audit']['checks'][0].update(count=1),
+            lambda r: r['audit']['checks'][0].update(count='0'),
+            lambda r: r['audit']['checks'][0].update(code='unknown'),
+            lambda r: r['identity'].update(commit='b' * 40)
+        ]
+        for mutate in cases:
+            with self.subTest(mutate=mutate):
+                value = self.integrity()
+                mutate(value['report'])
+                value['reportSha256'] = P.sha(P.canonical(value['report']))
+                with self.assertRaises(RuntimeError):
+                    P.verify_production_integrity(value, self.c)
+
+    def test_nonzero_warning_is_preserved_for_explicit_review(self):
+        value = self.integrity()
+        warnings = [r for r in value['report']['audit']['checks'] if r['severity'] == 'warning']
+        self.assertTrue(warnings)
+        warnings[0]['count'] = 2
+        value['reportSha256'] = P.sha(P.canonical(value['report']))
+        P.verify_production_integrity(value, self.c)
+        self.assertEqual(warnings[0]['count'], 2)
 
     def test_payload_is_exact_finite_file_set(self):
         proof = self.proof()

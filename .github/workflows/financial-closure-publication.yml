@@ -65,6 +65,8 @@ jobs:
             .deploy/financial-closure/*-accepted.json
             .deploy/financial-closure/*-invocation.json
             .deploy/financial-closure/*-result.json
+            .deploy/financial-closure/production-counts-before.json
+            .deploy/financial-closure-readonly/
           include-hidden-files: true
           if-no-files-found: warn
       - name: Preserve projected interface acceptance
@@ -118,5 +120,6 @@ jobs:
           path: |
             .deploy/financial-closure/*.json
             .deploy/financial-closure/artifact-notes.md
+            .deploy/financial-closure-readonly/
           include-hidden-files: true
           if-no-files-found: warn

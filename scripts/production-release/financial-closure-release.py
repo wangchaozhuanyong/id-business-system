@@ -85,11 +85,36 @@ def verify_mysql(value, plan, c):
          'ISOLATED_ACCEPTANCE_CHANGED')
 
 
+def verify_production_integrity(value, c):
+    need(type(value) is dict and set(value) == {'report', 'reportSha256', 'commandId', 'invocationSha256'}
+         and sha(canonical(value['report'])) == value['reportSha256']
+         and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value['commandId'])
+         and re.fullmatch('[a-f0-9]{64}', value['invocationSha256']), 'PRODUCTION_AUDIT_RECEIPT')
+    report = value['report']
+    identity, audit = report['identity'], report['audit']
+    need(report.get('status') == 'FINANCIAL_READONLY_OBSERVED' and report.get('productionWrites') == 0
+         and identity['commit'] == CURRENT and identity['manifestSha256'] == c['parentManifestSha256']
+         and identity['apiBillingSha256'] == c['parentApiModules']['id-business-v2/online-recharge/persistence/admin.repository.js']
+         and identity['adminIndexSha256'] == c['parentAdminIndexSha256']
+         and all(identity['services'][n]['image'] == digest for n, digest in c['parentImages'].items())
+         and all(s['status'] == 'running' and s['health'] in (None, 'healthy')
+                 for s in identity['services'].values()), 'PRODUCTION_AUDIT_PARENT')
+    need(audit.get('status') == 'AUDITED' and audit.get('verifiedReadOnlyAccount') is True
+         and audit.get('databaseWrites') == 0 and len(audit.get('checks', [])) == 60
+         and len(c.get('productionAuditRules', [])) == 60, 'PRODUCTION_AUDIT_REQUIRED')
+    for row, expected in zip(audit['checks'], c['productionAuditRules']):
+        need(set(row) == {'code', 'severity', 'scope', 'count'}
+             and all(row[k] == expected[k] for k in ('code', 'severity', 'scope'))
+             and type(row['count']) is int and 0 <= row['count'] <= 2**53 - 1,
+             'PRODUCTION_AUDIT_RULE_CHANGED')
+        need(row['severity'] != 'error' or row['count'] == 0, 'PRODUCTION_INTEGRITY_FINDINGS')
+
+
 def verify_proof(proof, plan, c, payload, h):
     validate_contract(c)
     need(all(proof.get(n) == plan.get(n) for n in ('commit', 'tree', 'workflowRunId',
         'workflowRunAttempt', 'contractSha256', 'qualityVerification', 'isolatedMysqlVerification',
-        'nativeParentCapture')) and proof.get('scope') == SCOPE and proof.get('recipe') == RECIPE
+        'nativeParentCapture', 'productionIntegrityBefore')) and proof.get('scope') == SCOPE and proof.get('recipe') == RECIPE
         and proof.get('productionSources') == c['productionSources']
         and proof.get('controlSources') == c['controlPins']
         and proof.get('businessActions') == 0 and proof.get('migrationPerformed') is False,
@@ -102,6 +127,7 @@ def verify_proof(proof, plan, c, payload, h):
     need(type(proof.get('adminFiles')) is dict and len(proof['adminFiles']) >= 250
          and 'index.html' in proof['adminFiles'], 'ADMIN_OUTPUTS_CHANGED')
     verify_mysql(proof['isolatedMysqlVerification'], plan, c)
+    verify_production_integrity(proof.get('productionIntegrityBefore'), c)
     expected = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
         **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()},
         **{'source/' + n: v for n, v in c['productionSources'].items()}}

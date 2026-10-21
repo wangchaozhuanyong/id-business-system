@@ -41,9 +41,11 @@
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
-    "financial-closure-publication.py": "280b2c2b8a22fd46eb19737c896b39ede5831c8b08aa3276d36745a267f70985",
-    "financial-closure-release.py": "712d8715adcd0f43ad4cfd19bc9616e2ab29e31b38c8674995d385aaca55a113",
-    "financial-closure-release.test.py": "413d09df5383e72b98d4070fff358b3249b7e866b04d1b43826238b1ec9dbc5f",
+    "financial-closure-publication.py": "7d5a031132fd9ca1948ae258bcc843a044625646fb0afc2684c25707cfcd5b3d",
+    "financial-closure-readonly.py": "ae79b6186b8acda35479f2ac887b81d43b4b3afbbca7cd920d7695a59aba427b",
+    "financial-closure-readonly.test.py": "44e4e901b5c331a86377f8c9fefcd65a82e3f87126b55c1cb77d2114bfd1a1df",
+    "financial-closure-release.py": "6b394628a0b6b7d8f08f3e6b885311c1989c428dfc47adb62e5ed0a6488517f2",
+    "financial-closure-release.test.py": "aa9331e9dae67464cdf1fac786db06f5167084b0244fd094106aafe998a01bd8",
     "online-pending-features-contract.json": "b297597b6c0daab42e51cc01e163621f0c875d264dd3e611374c89388ba3e651",
     "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
     "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
@@ -86,6 +88,308 @@
   "parentManifestSha256": "f2da51b6175e77edd392e8709f97a28d37375397fe42cbac2086d19b8792c370",
   "predecessorProofSha256": "21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354",
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
+  "productionAuditRules": [
+    {
+      "code": "auth_user_phone_storage_invalid",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_expense_display_snapshot_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_expense_display_snapshot_not_protected",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "pending_or_failed_migrations",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "foreign_key_enforcement_disabled",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "order_display_snapshot_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "deleted_option_key_not_namespaced",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "live_option_has_delete_snapshot",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "option_cascade_marker_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "live_service_under_inactive_master",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "active_account_inactive_master",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "open_order_inactive_entity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "activation_order_dimension_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "customer_owned_order_source_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "sold_account_ownership_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "customer_owned_order_duplicate_id_cost",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "customer_service_aggregate_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "account_balance_latest_ledger_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "balance_ledger_chain_discontinuity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "balance_ledger_reversal_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "gift_card_ledger_state_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "order_consumption_state_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "sold_account_order_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "unsafe_active_account_lock",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "account_loss_state_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_balance_latest_ledger_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_ledger_chain_discontinuity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_ledger_reversal_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_wallet_delete_marker_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_inflow_reference_integrity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_inflow_receipt_integrity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_inflow_posting_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "completed_order_finance_reconciliation_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_journal_unbalanced",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_reversal_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_account_balance_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "soft_delete_audit_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_wallet_gl_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "gift_card_refund_frozen_source_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_cash_source_currency_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "order_financial_snapshot_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_paid_job_order_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_order_financial_reconciliation_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_subscription_projection_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "fx_exchange_principal_fee_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "cash_historical_cost_evidence_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "historical_cash_adjustment_integrity_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_soft_delete_safety_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "audit_immutability_trigger_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_task_missing",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_status_invalid",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_amount_invalid",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_currency_invalid",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_plan_mismatch",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_checkout_multiple_success_bills",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_third_party_local_bill",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_confirmed_payment_bill_missing",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_success_actual_amount_missing",
+      "scope": "online-recharge",
+      "severity": "warning"
+    },
+    {
+      "code": "online_payment_awaiting_review",
+      "scope": "online-recharge",
+      "severity": "warning"
+    },
+    {
+      "code": "online_success_bill_terminal_task_not_paid",
+      "scope": "online-recharge",
+      "severity": "warning"
+    }
+  ],
   "productionSources": {
     "apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue": "1433b93c2b5403ae48dfd150bf27ceafb85167953656feb3a78d1e24301da0b2",
     "apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue": "b3b6ff682097cdbea1817302608f21fc8de720b2eec3a28471c1fdb6a5621d4e",
@@ -133,5 +437,5 @@
     "scripts/v2-online-recharge-integrity-mysql.test.mjs": "0269dc0f15814d300f4071045df25a20f65a80cc0e9bb9492ca9f71b3d1bc686"
   },
   "version": 1,
-  "workflowSha256": "c3ff5fc8c5fa39f9953bd2af1556b50a9815ac0ca4b802aba45b820f7ca6c847"
+  "workflowSha256": "b19a558c7ae07b4d5d4c8db3c0081233c579b62040b888d0c0a52d7ee36e6ad3"
 }
