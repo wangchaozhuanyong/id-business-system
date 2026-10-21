@@ -1,4 +1,4 @@
-name: BitBrowser Tax Context Finite Publication
+name: BitBrowser Native Quote Diagnostics Publication
 
 on:
   workflow_dispatch:

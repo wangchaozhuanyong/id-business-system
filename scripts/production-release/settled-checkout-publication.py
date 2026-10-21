@@ -108,6 +108,9 @@ def reconstruct_parent(c):
     b.overlay(admin, {'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-page.ts':
                      '5e7c50d16146187b2d1c4a5d217974309566a993332e20408cd3c64e0a6a6bdb'},
               '893da2f6f8a9b06a26f43b13b87cd5cb89fb499d')
+    # Preserve the published omitted-tax-id compatibility in the reproduced parent.
+    b.overlay(admin, {'apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.ts': '09a899e6eebd872eb6b404cd24c962afb4d7389775f76ddff137bb854d75bd23'},
+              'ec6987a1b32d1991a2a5a318f58b3f491c51408a')
     F.patch_build_lock(admin, finance)
     need(all(sha((admin / name).read_bytes()) == digest for name, digest in c['sourceParents'].items()), 'BUILD_SOURCE_PARENT_CHANGED')
     return admin, b
@@ -194,10 +197,10 @@ def publish(c):
     path = OUT / 'bitbrowser-history-artifact.tar.gz'
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('官网计税缺省字段兼容：仅一个管理端源码，明确核实无税号证明，保留 API 与历史资源，无迁移、付款或订阅操作。\n')
+    notes.write_text('原生核价安全诊断：仅输出一次受控状态及错误代码，不记录凭据或账单，不改变放行条件；保留 API 与历史资源，无迁移、付款或订阅操作。\n')
     tag = 'bitbrowser-history-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
-            '--title', '计税字段兼容 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
+            '--title', '核价安全诊断 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
     plan['artifactUrl'] = 'https://github.com/' + REPO + '/releases/download/' + tag + '/bitbrowser-history-artifact.tar.gz'
     preflight = transport(plan, 'preflight')
     need(preflight['status'] == 'BITBROWSER_HISTORY_PREFLIGHT_VERIFIED', 'PREFLIGHT_FAILED')
