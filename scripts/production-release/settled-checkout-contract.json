@@ -2,10 +2,7 @@
   "apiModules": [
     "id-business-v2/auto-recharge/recharge-account-restore.d.ts",
     "id-business-v2/auto-recharge/recharge-account-restore.js",
-    "id-business-v2/auto-recharge/recharge-account-restore.js.map",
-    "id-business-v2/auto-recharge/recharge-unidentified-checkout.d.ts",
-    "id-business-v2/auto-recharge/recharge-unidentified-checkout.js",
-    "id-business-v2/auto-recharge/recharge-unidentified-checkout.js.map"
+    "id-business-v2/auto-recharge/recharge-account-restore.js.map"
   ],
   "baseline": {
     "adminInventory": {
@@ -14,15 +11,12 @@
     },
     "apiModules": {
       "id-business-v2/auto-recharge/recharge-account-restore.d.ts": "8e64ce871448d9be429b5c1aba9db79c99d47eee8f9c5c07f71cdadaf8ee089c",
-      "id-business-v2/auto-recharge/recharge-account-restore.js": "017b2dfa95d75eb9e075ff9027a4d8d51af70daedd1513102476448c5d08832b",
-      "id-business-v2/auto-recharge/recharge-account-restore.js.map": "45ab791b7a33e74eca6fa29829cfe4ca044da016a1e3d870aca8c08ff9bb28b1",
-      "id-business-v2/auto-recharge/recharge-unidentified-checkout.d.ts": "73269739b3bef996246607782e6968cf7cdc3fe50743ab2ac8a7199bad778510",
-      "id-business-v2/auto-recharge/recharge-unidentified-checkout.js": "2fc10156c9b47500d2c90b11b7b49d84d674097273fe7cc6f14f4fb7ddee3c81",
-      "id-business-v2/auto-recharge/recharge-unidentified-checkout.js.map": "93b0e524a1031412b75d018fedef3656e237f6a5399d90bbc2259dc44d7d9828"
+      "id-business-v2/auto-recharge/recharge-account-restore.js": "e3d7695fd682a1a16d2913569eae5991b065fcd8da775a47787b0a25af995b94",
+      "id-business-v2/auto-recharge/recharge-account-restore.js.map": "1ec586a8432804b3828cc51c8e14daf0f3f5a9fd22f6d0baa67b5e8029d275e6"
     },
     "apiPreservedInventory": {
-      "count": 1788,
-      "sha256": "02fc0b666b3a33592103717a1996c3fc2171a1f5d88b330768f21b47c8709e7a"
+      "count": 1791,
+      "sha256": "d5148c1c04a1fac4d01309663ade09e2483793548245d62e3647e64e4585f9b7"
     },
     "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
     "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
@@ -30,22 +24,22 @@
       "count": 27,
       "sha256": "46cebf0e0e3bc37a0d49570c56d8f3cb08d2237aa525161665afef7fd5b60cdc"
     },
-    "commit": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
+    "commit": "be4dc7ea9da6b42fbc9f61653cb006d1242b1493",
     "configurationSha256": {
       ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-      "compose.release.json": "06196b3d749b15c0abdd3d0027ce34ca83c54b090954e9a025db73fe9742da02",
+      "compose.release.json": "894800b3664080fec5df0f423ec1216e5a46b80eebc3886ee158c3959fa51222",
       "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
     },
-    "current": "/opt/id-business-v2/releases/20261021T073045Z-e5f295ed4fd4-bitbrowser-history",
+    "current": "/opt/id-business-v2/releases/20261021T075448Z-be4dc7ea9da6-bitbrowser-history",
     "database": {
       "columns": "91821bb43685e53ce37e5434e5f3d0936d518b2905590580d3e887d74d6060b6",
       "ledger": "c1cc90e85efac2c9c9ef4c55f9090d3ae2fa4ef79ca2ca3e6292ce03e24a83cb",
       "pending": 0
     },
-    "manifestSha256": "a268868bbb750107439f6b201f3114259df8cec39d04396c76d882a2e3cae37d",
+    "manifestSha256": "ee3ebfcd85f399bd57c6e2ca86747ed335ba8cdbda89bb2316735766da894020",
     "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
     "proofs": {
-      "bitbrowser-history-build-proof.json": "45702f519618f978092aa57eef478d314110007f0322b6664cfe0080aaac8ebf"
+      "bitbrowser-history-build-proof.json": "b47ad6719660bd44ff910fbf9a57c84ad5da3a3bbe27cda15be7273531623274"
     },
     "runtimeConfigurationSha256": {
       "admin": "8e6f51e912ad90182b3ca4d61888042e0c3d818be1e519accec1ac3367efd521",
@@ -67,12 +61,12 @@
         "status": "running"
       },
       "api": {
-        "containerId": "29b66bc429c05749d7e50d5bd26cbf24e3c7a75f519998a1ea641062a389d48b",
+        "containerId": "9475825fa41d53e0f4822df75e6d29fbd64508d1111fb563958dfab9e45db11a",
         "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
         "health": "healthy",
-        "image": "sha256:e9988720d1a87c825c883ac282fbc020b6619509d38c7c2dbf2602a0ec029576",
-        "reference": "id-business-v2-history:e5f295ed4fd48f712169f3a6faaae33378f9cd6b-39562247002-api",
-        "startedAtSha256": "b670746729605f6cb8fafa21feb3e3bf739050600843e3fc7d76cbd2e47e67a2",
+        "image": "sha256:f17b90e92e62c492f12cc2cf2590a2604bc13e6a2da6b78242ddb6f46e8e1fc1",
+        "reference": "id-business-v2-history:be4dc7ea9da6b42fbc9f61653cb006d1242b1493-39565080942-api",
+        "startedAtSha256": "f1df77db8a74e66ee4e5bc98e6a3e48bba7b09e395ae019613b48aa02bc22765",
         "status": "running"
       },
       "auto-recharge": {
@@ -112,12 +106,12 @@
         "status": "running"
       },
       "online-recharge": {
-        "containerId": "752eef342110b546a8fa46d4a59c0f4282f4919d5637238776a99550c8804a60",
+        "containerId": "2b5a7ace42ae9f40f6a2ff3c1cbe4800a440d5e08335a4e7d6c354af4381dd74",
         "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
         "health": "healthy",
         "image": "sha256:9230ff58e604ee4d5200d9ee6611e2fa1419c833faf13b1f5d1f30167c3af3a1",
         "reference": "id-business-v2-online-card-visibility:cb38a1ef351b42f98ce86740b2191fd54207fa32-39407073363",
-        "startedAtSha256": "fcaec1c65f8731d8724960e72f8cbf8d0adebc8de5badda8cc77dbf17f36003f",
+        "startedAtSha256": "c1fe69d60fb62f96241caf5af3f3f089064359f7cfd00e7b705c972d0989ba3b",
         "status": "running"
       }
     },
@@ -163,8 +157,8 @@
     "recharge-record-build.py": "071696a021aa0956c626891b48c207cd68b68d6a4701254e715766cd0d6ec122",
     "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
     "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
-    "settled-checkout-publication.py": "55f57444145cddf5c5c2890ea43f6e86b7f953f1698e927690ad0a57f887b362",
-    "settled-checkout-release.py": "ffdf1656e39d4784e89abe7c21c323cca4082443b5faf8cb8b6c119eeec674ec"
+    "settled-checkout-publication.py": "97488d66ad143ca14f29afe1a9bb24021adfb680324a19e050497f9658fa98d1",
+    "settled-checkout-release.py": "e7e1ff51cb67bbb64b31627a2e7abe83ef0f03f85244f7f6db18423650455cf4"
   },
   "engineHealth": {
     "activeTasks": 0,
@@ -173,35 +167,33 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
+  "expectedCurrent": "be4dc7ea9da6b42fbc9f61653cb006d1242b1493",
   "migrationPerformed": false,
   "parentOverlay": {
     "productionSources": {
-      "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "7b5992551e7f172d8919760501790815d6fd3d35f0d019845067589a29b3e30a"
+      "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "692fc8f6a79f8ace806af0252788f9b2143d4420ae346e1c4b6e4ece91a7811c",
+      "apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.ts": "d58fd299bf936f801ba77c74c76ede1bed334092a92974b925b8014a63f4cef0"
     },
-    "sourceCommit": "b5de904e778dc0ce4a1f648caa391770130cf4e1"
+    "sourceCommit": "22ba535ccdebdc4cf1abf98fb2cc5c9d9f2bc20b"
   },
   "preservedServices": ["admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
   "productionSources": {
-    "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "692fc8f6a79f8ace806af0252788f9b2143d4420ae346e1c4b6e4ece91a7811c",
-    "apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.ts": "d58fd299bf936f801ba77c74c76ede1bed334092a92974b925b8014a63f4cef0"
+    "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "98fa05bd6d669ec564bfda737ef57901fbf5a3f5e42975cabaca3b2895d45dbd"
   },
   "reboundServices": ["online-recharge"],
-  "recipe": "settled-lineage-20261021",
-  "scope": "BITBROWSER_SETTLED_LINEAGE_20261021",
+  "recipe": "settled-connection-20261021",
+  "scope": "BITBROWSER_SETTLED_CONNECTION_20261021",
   "sourceParents": {
-    "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "7b5992551e7f172d8919760501790815d6fd3d35f0d019845067589a29b3e30a",
-    "apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-checkout.ts": "14503f7baebe6266261acdaeac32d5d656c3e12a6450b9cc500d64dd0043919a"
+    "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts": "692fc8f6a79f8ace806af0252788f9b2143d4420ae346e1c4b6e4ece91a7811c"
   },
-  "sourcePullRequest": 657,
-  "sourceReviewCommit": "22ba535ccdebdc4cf1abf98fb2cc5c9d9f2bc20b",
+  "sourcePullRequest": 659,
+  "sourceReviewCommit": "336ac9a8a983e0df3741ee118d83f9fcbacb73ba",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "status": "FROZEN",
   "updatedServices": ["api"],
   "validationSources": {
-    "apps/api/src/id-business-v2/auto-recharge/recharge-account-restore-settled.spec.ts": "e8bd7bd75b3156343e1a773efd77df5a43a6f83bcc2b17a2a789b9ead13aa5f9",
-    "apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-replacement.spec.ts": "2f4970f8594247a63cfe99bcfaa2caee582c9efe33b3c099fe97720e42fd16b8"
+    "apps/api/src/id-business-v2/auto-recharge/recharge-unidentified-replacement.spec.ts": "dceed438d68fd867d707e943353f38dd7856be7f3825a4dc95608d5de9fe2b6a"
   },
   "version": 1,
-  "workflowSha256": "7a4889b7a8f179baa6b1c0c9df833cb85ee8f979db5daac31a6203fd3af222e8"
+  "workflowSha256": "5c0ae9574ae6233bb85cc8293d98557ba2467d02de1a1597e6a87c01811d764c"
 }
