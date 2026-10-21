@@ -153,7 +153,7 @@
     "bitbrowser-manual-build.py": "5e2c1d121dd1496d1b1a384785752482c4e890dac6edc8f4f79e9f7a42eaa82d",
     "bitbrowser-manual-dispatch.py": "fb490214ffcf76bb9e2b0e4885bbba3fa64f860538a1bfafa4f9afd29889fb12",
     "bitbrowser-manual-release.py": "2bb586e6b27e5ac1f8c6de52fbbc2dcf7e69b4a60657b7321c27f0d299e34ef7",
-    "bitbrowser-manual-release.test.py": "6bfcfddd1ea3ff2af85916c350da514e7d8aa93e0a47d83c044bb8971caa9029",
+    "bitbrowser-manual-release.test.py": "457aa8a17b16f5b61451e02cc270b467a843415a867adc11d79f10eed9429b7e",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
