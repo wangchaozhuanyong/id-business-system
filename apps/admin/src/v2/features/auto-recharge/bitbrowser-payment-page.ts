@@ -214,7 +214,7 @@ export function inspectDirectPaymentPage(
       // The official home page exposes both a sidebar and a titlebar upgrade entry.
       // Only opening the menu may prefer the uniquely identified titlebar entry.
       const titlebar = upgrade.filter((node) =>
-        node.closest('header[data-app-shell-titlebar="true"]')
+        node.closest('header[data-app-shell-titlebar="true"],header#page-header')
       );
       const menu = titlebar.length === 1 ? titlebar : upgrade;
       if (menu.length === 1) {
