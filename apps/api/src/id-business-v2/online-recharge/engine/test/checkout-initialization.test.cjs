@@ -92,6 +92,45 @@ test('a full timeline still retains the first later failure', () => {
   assert.equal(result.truncated, true);
   assert.equal(result.firstFailure.code, 'CONNECTION_CLOSED');
 });
+test('later SDK failures remain classified after normal traffic fills the timeline', () => {
+  const { page, main } = fakePage(),
+    observer = initialization.observe(page);
+  page.emit('response', {
+    request: () => request(main, 'https://chatgpt.com/api/auth/session'),
+    status: () => 403
+  });
+  for (let n = 0; n < 100; n++) page.emit('request', request(main));
+  for (let n = 0; n < 3; n++)
+    page.emit('console', {
+      type: () => 'error',
+      text: () => 'Stripe initCheckout failed ' + canary,
+      location: () => ({ url: 'https://js.stripe.com/v3/?private=' + canary })
+    });
+  const result = observer.snapshot();
+  assert.equal(result.events.length, 64);
+  assert.equal(result.truncated, true);
+  assert.equal(result.firstFailure.endpoint, 'chatgpt_auth');
+  assert.equal(result.failureClasses.length, 2);
+  assert.equal(result.failureClasses[1].code, 'SDK_INITIALIZATION_FAILED');
+  assert.equal(result.failureClasses[1].count, 3);
+  assert.equal(JSON.stringify(result).includes(canary), false);
+  for (let status = 400; status < 435; status++)
+    page.emit('response', {
+      request: () => request(main),
+      status: () => status
+    });
+  const bounded = observer.snapshot();
+  assert.equal(bounded.failureClasses.length, 32);
+  assert.equal(bounded.failureClassesTruncated, true);
+  const extra = structuredClone(bounded);
+  extra.failureClasses[0].raw = canary;
+  assert.equal(initialization.sanitize(extra), undefined);
+  const invalidCount = structuredClone(bounded);
+  invalidCount.failureClasses[0].count = -1;
+  assert.equal(initialization.sanitize(invalidCount), undefined);
+  observer.dispose();
+});
+
 test('task cancellation removes observers and isolates another task page', () => {
   const a = fakePage(),
     b = fakePage(),

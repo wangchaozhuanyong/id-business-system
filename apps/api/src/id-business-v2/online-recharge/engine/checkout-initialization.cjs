@@ -62,6 +62,7 @@ const DIRECTIVES = new Set([
   'other'
 ]);
 const MAX_EVENTS = 64;
+const MAX_FAILURE_CLASSES = 32;
 const count = (n) => Number.isInteger(n) && n >= 0 && n <= 10000;
 const elapsed = (n) => Number.isInteger(n) && n >= 0 && n <= 3600000;
 const object = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -157,6 +158,8 @@ function sanitize(value) {
           'elapsedMs',
           'events',
           'firstFailure',
+          'failureClasses',
+          'failureClassesTruncated',
           'eventCount',
           'readFailures',
           'truncated'
@@ -174,7 +177,29 @@ function sanitize(value) {
   const events = value.events.map(safeRow);
   const firstFailure = value.firstFailure === null ? null : safeRow(value.firstFailure);
   if (
+    !Array.isArray(value.failureClasses) ||
+    value.failureClasses.length > MAX_FAILURE_CLASSES ||
+    typeof value.failureClassesTruncated !== 'boolean'
+  )
+    return undefined;
+  const failureClasses = value.failureClasses.map((entry) => {
+    if (!object(entry)) return null;
+    const { count: occurrences, lastElapsedMs, ...first } = entry;
+    const row = safeRow(first);
+    if (
+      !row ||
+      !isFailure(row) ||
+      !count(occurrences) ||
+      occurrences < 1 ||
+      !elapsed(lastElapsedMs) ||
+      lastElapsedMs < row.elapsedMs
+    )
+      return null;
+    return { ...row, count: occurrences, lastElapsedMs };
+  });
+  if (
     events.some((v) => !v) ||
+    failureClasses.some((v) => !v) ||
     (value.firstFailure !== null && !firstFailure) ||
     (firstFailure && (!isFailure(firstFailure) || !value.eventCount)) ||
     value.eventCount < events.length
@@ -187,17 +212,21 @@ function sanitize(value) {
     readFailures: value.readFailures,
     truncated: value.truncated,
     events,
-    firstFailure
+    firstFailure,
+    failureClasses,
+    failureClassesTruncated: value.failureClassesTruncated
   };
 }
 function observe(page, { signal } = {}) {
   const started = performance.now(),
     events = [],
+    failureClasses = [],
     listeners = [];
   let stopped = false,
     eventCount = 0,
     readFailures = 0,
     truncated = false,
+    failureClassesTruncated = false,
     firstFailure = null;
   const time = () => Math.min(3600000, Math.max(0, Math.floor(performance.now() - started)));
   const frameKind = (frame) =>
@@ -211,6 +240,19 @@ function observe(page, { signal } = {}) {
     }
     eventCount = Math.min(10000, eventCount + 1);
     if (!firstFailure && isFailure(row)) firstFailure = row;
+    if (isFailure(row)) {
+      const same = failureClasses.find((previous) =>
+        ['event', 'endpoint', 'frame', 'method', 'status', 'code', 'directive'].every(
+          (key) => previous[key] === row[key]
+        )
+      );
+      if (same) {
+        same.count = Math.min(10000, same.count + 1);
+        same.lastElapsedMs = row.elapsedMs;
+      } else if (failureClasses.length < MAX_FAILURE_CLASSES) {
+        failureClasses.push({ ...row, count: 1, lastElapsedMs: row.elapsedMs });
+      } else failureClassesTruncated = true;
+    }
     if (events.length < MAX_EVENTS) events.push(row);
     else truncated = true;
   };
@@ -263,7 +305,9 @@ function observe(page, { signal } = {}) {
       readFailures,
       truncated,
       events: events.map((row) => ({ ...row })),
-      firstFailure: firstFailure ? { ...firstFailure } : null
+      firstFailure: firstFailure ? { ...firstFailure } : null,
+      failureClasses: failureClasses.map((row) => ({ ...row })),
+      failureClassesTruncated
     });
   try {
     listen('request', (request) => record({ event: 'request', ...requestData(request) }));

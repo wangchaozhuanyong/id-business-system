@@ -84,7 +84,7 @@ class Controls(unittest.TestCase):
 
     def test_linux_node22_and_all_launchers_are_required(self):
         c = fixtures.contract(); value = browser(c)
-        self.assertEqual(value['passed'], 277)
+        self.assertEqual(value['passed'], 278)
         self.assertEqual([row[3] for row in p.INITIALIZATION_REPORTS[:3]], [10, 10, 10])
         p.validate_browser(value, fixtures.identity(), c)
         for field, changed in [('platform', 'darwin'), ('nodeVersion', '24.19.0'),

@@ -61,7 +61,7 @@
     {
       "path": "checkout-initialization.cjs",
       "originalSha256": null,
-      "adaptedSha256": "84e7ff6159ea6e7ff02fe6893cddd31b810ca76997cc1feae5b11a750bf58555",
+      "adaptedSha256": "e4ea332b526aa7ff53f76a0654e651edd0c608277754545fae62c1e9e34c4d58",
       "changed": true,
       "reason": "2026-10-21 Passive task-page first-open request, response, script/CSP and frame diagnostics before navigation; bounded fixed enums, no request admission or credential/body/header/URL capture."
     },
@@ -208,7 +208,7 @@
     {
       "path": "test/checkout-initialization.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b69b4f87348efd3c410de7a3d3b80f66251972d1a51fe8c97e22c25f853ef5a7",
+      "adaptedSha256": "5a47f95bd14e0e07c816df66db6ab9fe05e5d279f2e217c2de6df096ca0fed03",
       "changed": true,
       "reason": "2026-10-21 Synthetic real Chromium coverage for SDK transport/HTTP/CSP/embedded initialization failures, healthy mounting, bounded evidence and task listener isolation."
     },

@@ -38,7 +38,7 @@ CORE.INITIALIZATION_REPORTS = tuple((name, suite, mode, 10 if suite == 'SESSION_
     ('checkout-form.tap', 'CHECKOUT_FORM', 'native', 134),
     ('checkout-navigation.tap', 'CHECKOUT_NAVIGATION', 'native', 30),
     ('debug-checkout.tap', 'DEBUG_CHECKOUT', 'native', 15),
-    ('checkout-initialization.tap', 'CHECKOUT_INITIALIZATION', 'native', 16))
+    ('checkout-initialization.tap', 'CHECKOUT_INITIALIZATION', 'native', 17))
 
 
 def __getattr__(name):
