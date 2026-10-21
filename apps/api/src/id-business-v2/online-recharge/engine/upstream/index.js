@@ -670,7 +670,26 @@ async function run(runOptions = {}) {
         const excludedNumbers = exclusionProbe?.rows?.filter(row => row.field === 'number' && row.reason !== 'eligible') || [];
         const numberExclusions = excludedNumbers.slice(0, 8).map(row =>
             `${row.source === 'frame' ? '内嵌页面' : '控件'}${originLabels[row.at]}${rejectionLabels[row.reason]}${row.count}`).join('、');
+        const initialization = checkoutOpenDiagnostics?.initialization;
+        const initializationLabels = { stripe_script: 'Stripe脚本', stripe_elements: 'Stripe控件配置',
+            stripe_init: 'Stripe原单初始化', stripe_confirm: 'Stripe确认请求', stripe_other: 'Stripe资源',
+            chatgpt_checkout: '官网结账', chatgpt_auth: '官网登录资料', chatgpt_script: '官网脚本',
+            chatgpt_other: '官网资源', openai_checkout: '付款页面', verification: '验证服务', other: '页面脚本或资源' };
+        const initializationCodes = { DNS_FAILED: '域名解析失败', PROXY_AUTH_FAILED: '代理认证失败',
+            PROXY_TUNNEL_FAILED: '代理隧道失败', TLS_FAILED: '证书或TLS连接失败', CONNECTION_RESET: '连接重置',
+            CONNECTION_CLOSED: '连接关闭', CONNECTION_REFUSED: '连接拒绝', TIMEOUT: '网络超时',
+            BLOCKED_BY_CLIENT: '客户端阻止', BLOCKED_BY_CSP: '内容安全策略阻止', ABORTED: '请求取消',
+            NETWORK_FAILED: '网络请求失败', JS_TYPE_ERROR: '脚本类型错误', JS_SYNTAX_ERROR: '脚本语法错误',
+            JS_REFERENCE_ERROR: '脚本引用错误', SCRIPT_LOAD_FAILED: '脚本加载失败', SCRIPT_ERROR: '脚本执行错误',
+            SDK_INITIALIZATION_FAILED: '支付组件初始化报错', STRIPE_KEY_INVALID: '支付组件公钥配置异常',
+            STRIPE_CLIENT_SECRET_INVALID: '支付组件会话参数异常', CORS_BLOCKED: '跨域策略阻止' };
+        const firstInitializationFailure = initialization?.firstFailure;
+        const probeFailureLabels = { timeout: '读取超时', detached: '页面已替换', closed: '页面关闭',
+            aborted: '任务停止', read_failed: '读取失败' };
+        const probeFailures = exclusionProbe?.failures?.map(row =>
+            `${row.phase === 'frame_owner' ? '框架容器' : row.phase === 'control_snapshot' ? '控件快照' : '页面扫描'}${probeFailureLabels[row.reason]}${row.count}`).join('、');
         const diagnosticDetails = [
+            firstInitializationFailure ? `首个观测异常（不等同根因）：${initializationLabels[firstInitializationFailure.endpoint]}${firstInitializationFailure.status ? ` HTTP ${firstInitializationFailure.status}` : ''}${firstInitializationFailure.code ? ` ${initializationCodes[firstInitializationFailure.code]}` : ''}` : '',
             checkoutOpenDiagnostics?.missing?.length ? `未就绪字段：${checkoutOpenDiagnostics.missing.map(field => fieldLabels[field]).join('、')}` : '',
             numberCandidates ? `卡号候选：${numberCandidates.count}` : '',
             typeof inspection?.framesChecked === 'number' ? `已检查页面数：${inspection.framesChecked}` : '',
@@ -681,6 +700,7 @@ async function run(runOptions = {}) {
             numberExclusions ? `失败后卡号排除详情：${numberExclusions}` : '',
             exclusionProbe?.numberComparison ? `失败后同快照对照：现筛选语义候选${exclusionProbe.numberComparison.semanticEligible}，具备显示尺寸及可编辑状态${exclusionProbe.numberComparison.geometryEditable}（不代表允许填写）` : '',
             exclusionProbe?.complete === false ? '失败后排除诊断未完整取得' : '',
+            probeFailures ? `补充读取失败：${probeFailures}` : '',
             inspection?.complete === false ? '控件读取未完成' : '',
             inspection?.framesFailed > 0 ? `读取失败页面数：${inspection.framesFailed}` : '',
             inspection?.readPhase ? `读取阶段：${readPhaseLabels[inspection.readPhase]}` : '',
@@ -690,7 +710,10 @@ async function run(runOptions = {}) {
         const checkoutFailureMessage = checkoutOpenDiagnostics
             ? `原结账单已创建，${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}；已停止后续操作${diagnosticDetails ? `（${diagnosticDetails}）` : ''}`
             : resultUnknown && checkoutFailure ? '结账单检查未完成，付款结果待核对；已停止后续操作' : checkoutFailure;
-        return { ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure ? { errorCode: checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
+        const debugCheckout = debugOnly && !resultUnknown && e.checkoutCreationState === 'accepted'
+            && typeof e.originalCheckoutUrl === 'string'
+            ? { debugOnly: true, checkoutUrl: e.originalCheckoutUrl } : {};
+        return { ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure ? { errorCode: checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
