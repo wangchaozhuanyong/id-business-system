@@ -18,9 +18,25 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 
+def project_temporary_directory(root=HERE.parents[1]):
+    directory = root / '.runtime'
+    directory.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=directory)
+
+
 class ManualReleaseTests(unittest.TestCase):
     def setUp(self):
         self.c = json.loads((HERE / p.CONTRACT_FILE).read_bytes())
+
+    def test_temporary_directory_initializes_fresh_project_runtime(self):
+        with project_temporary_directory() as outer:
+            root = Path(outer) / 'fresh-checkout'
+            root.mkdir()
+            self.assertFalse((root / '.runtime').exists())
+            with project_temporary_directory(root) as temporary:
+                self.assertEqual(Path(temporary).parent, root / '.runtime')
+                self.assertTrue(Path(temporary).is_dir())
+            self.assertFalse(Path(temporary).exists())
 
     def test_exact_frozen_contract(self):
         p.validate_contract(self.c)
@@ -105,7 +121,7 @@ class ManualReleaseTests(unittest.TestCase):
         patch = self.c['buildDependencyPatch']
         before = b.git('show', patch['parentCommit'] + ':' + patch['path'])
         after = (HERE.parents[1] / patch['path']).read_bytes()
-        with tempfile.TemporaryDirectory(dir=HERE.parents[1] / '.runtime') as temporary:
+        with project_temporary_directory() as temporary:
             context = Path(temporary)
             target = context / patch['path']
             target.write_bytes(before)
@@ -167,7 +183,7 @@ class ManualReleaseTests(unittest.TestCase):
         report = {'zlibBase64': base64.b64encode(zlib.compress(json.dumps(expected).encode())).decode()}
         response = {'Status': 'Success', 'ResponseCode': 0, 'StandardErrorContent': '',
             'StandardOutputContent': json.dumps(report)}
-        with tempfile.TemporaryDirectory(dir=HERE.parents[1] / '.runtime') as temporary:
+        with project_temporary_directory() as temporary:
             d.OUT = Path(temporary)
             with patch.object(d.subprocess, 'check_output', return_value=b'{"Command":{"CommandId":"test-parent"}}') as send, \
                 patch.object(d.subprocess, 'run', return_value=type('Result', (), {'returncode': 0, 'stdout': json.dumps(response).encode()})()):
