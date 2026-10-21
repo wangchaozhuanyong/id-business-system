@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "scope": "ONLINE_CHECKOUT_FIRST_OPEN",
+  "frozen": false,
+  "admission": "PENDING_COMPLETED_PREDECESSOR",
+  "baseline": null,
+  "sourceReviewCommit": null
+}

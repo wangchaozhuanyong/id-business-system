@@ -52,6 +52,7 @@ import {
   isOnlineCheckoutInitializationOnly,
   isOnlineCardControlDiagnosticsOnly,
   isOnlineCardVisibilityOnly,
+  isOnlineCheckoutFirstOpenOnly,
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
@@ -3108,6 +3109,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isOnlineQueryDeadlineOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCheckoutActionabilityOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCardVisibilityOnly(paths)) return ['guards', 'online-engine'];
+  if (isOnlineCheckoutFirstOpenOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCardControlDiagnosticsOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCheckoutInitializationOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineSettingsControlsOnly(paths)) return ['guards'];

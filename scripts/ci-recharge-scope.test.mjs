@@ -33,6 +33,8 @@ import {
 } from './ci-registration-closure-scope.mjs';
 import { imageInputsChanged } from './ci-recharge-python-image.mjs';
 import {
+  onlineCheckoutFirstOpenPaths,
+  onlineCheckoutFirstOpenControls,
   onlineCardVisibilityPaths,
   onlineCardVisibilityControls,
   onlineCardControlDiagnosticsPaths,
@@ -8353,6 +8355,23 @@ test('card diagnostics release retains only guards and online engine checks', ()
   assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
   assert.deepEqual(selectedParts([...onlineCardControlDiagnosticsControls]), ['guards']);
   assert.equal(checkMode([...paths, 'package-lock.json'], 'same', 'same'), 'full');
+});
+
+test('first-open release retains exact source scope and complete online engine checks', () => {
+  const paths = [
+    ...onlineCheckoutFirstOpenPaths,
+    ...onlineCheckoutFirstOpenControls,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts([...onlineCheckoutFirstOpenControls]), ['guards']);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs'
+  ])
+    assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full');
 });
 
 test('card visibility release retains only guards and online engine checks', () => {

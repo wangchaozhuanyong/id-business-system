@@ -494,6 +494,54 @@ export function isOnlinePendingFeaturesControlsOnly(paths) {
     )
   );
 }
+export const onlineCheckoutFirstOpenPaths = Object.freeze(
+  [
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'checkout-initialization.cjs',
+    'test/checkout-form.test.cjs',
+    'test/checkout-initialization.test.cjs',
+    'test/checkout-navigation.test.cjs',
+    'test/debug-checkout.test.cjs',
+    'upstream/chatgpt.js',
+    'upstream/index.js'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name)
+);
+const firstOpenDocumentation = ['docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'];
+const firstOpenReleaseControls = [
+  '.github/workflows/online-checkout-first-open-validation.yml',
+  ...['build.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-checkout-first-open-' + name
+  )
+];
+export const onlineCheckoutFirstOpenControls = Object.freeze([
+  ...firstOpenReleaseControls,
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs'
+]);
+export function isOnlineCheckoutFirstOpenOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    [...onlineCheckoutFirstOpenPaths, ...firstOpenDocumentation].every((name) =>
+      paths.includes(name)
+    ) &&
+    paths.every(
+      (name) =>
+        onlineCheckoutFirstOpenPaths.includes(name) ||
+        onlineCheckoutFirstOpenControls.includes(name) ||
+        firstOpenDocumentation.includes(name)
+    )
+  );
+}
+export function isOnlineCheckoutFirstOpenControlsOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    paths.some((name) => firstOpenReleaseControls.includes(name)) &&
+    paths.every((name) => onlineCheckoutFirstOpenControls.includes(name))
+  );
+}
 export const onlineCardVisibilityScope = 'ONLINE_CARD_VISIBILITY';
 export const onlineCardVisibilityPaths = Object.freeze(
   [
@@ -941,6 +989,7 @@ export function isOnlineLegacyCloseOnly(paths) {
 }
 export function isOnlineSettingsOnly(paths) {
   if (
+    isOnlineCheckoutFirstOpenOnly(paths) ||
     isOnlineCardVisibilityOnly(paths) ||
     isOnlineCardControlDiagnosticsOnly(paths) ||
     isOnlineCheckoutInitializationOnly(paths) ||
@@ -983,6 +1032,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCheckoutFirstOpenControlsOnly(paths)) return true;
   if (isOnlineCardVisibilityControlsOnly(paths)) return true;
   if (isOnlineCardControlDiagnosticsControlsOnly(paths)) return true;
   if (isOnlineCheckoutInitializationControlsOnly(paths)) return true;
@@ -1010,6 +1060,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
+  const firstOpen = isOnlineCheckoutFirstOpenOnly(paths);
+  const firstOpenControls = isOnlineCheckoutFirstOpenControlsOnly(paths);
   const cardVisibility = isOnlineCardVisibilityOnly(paths);
   const cardVisibilityControls = isOnlineCardVisibilityControlsOnly(paths);
   const cardDiagnostics = isOnlineCardControlDiagnosticsOnly(paths);
@@ -1083,6 +1135,24 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (firstOpen || firstOpenControls)
+      return [
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-checkout-first-open-release.test.py'],
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-checkout-initialization-release.test.py'
+        ],
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-checkout-initialization-recovery.test.py'
+        ],
+        ...(firstOpen
+          ? ['check:v2-module-architecture', 'check:v2-isolation'].map((name) => npm('run', name))
+          : [])
+      ];
     if (cardVisibility || cardVisibilityControls)
       return [
         ...controls,
@@ -1400,6 +1470,7 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (controlsOnly) throw new Error('Unsupported controls-only check');
+  if (firstOpen && part !== 'online-engine') throw new Error('Unsupported first-open check part');
   if (cardVisibility && part !== 'online-engine')
     throw new Error('Unsupported card visibility check part');
   if (cardDiagnostics && part !== 'online-engine')
@@ -1429,6 +1500,7 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (
+    firstOpen ||
     cardVisibility ||
     cardDiagnostics ||
     initialization ||
