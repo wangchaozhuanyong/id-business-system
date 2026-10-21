@@ -259,7 +259,15 @@ def engine(c):
                 need(text.count(line) == 1, 'API_OVERLAY_LAYOUT')
                 shutil.copytree(context / 'modules', context / 'overlay/app/apps/api/dist')
                 shutil.copytree(context / 'shared', context / 'overlay/app/packages/shared/dist')
+                load('recharge-availability-release.py').normalize_image_context(context / 'overlay')
                 dockerfile.write_text(text.replace(line, 'COPY overlay/ /'))
+                # Docker can reuse a COPY layer despite changed intermediate directory modes.
+                # Rebuild this finite layer so the non-root runtime receives the normalized parents.
+                class FreshApiBuild:
+                    def run(self, *args, **kwargs):
+                        need(args[:2] == ('docker', 'build'), 'API_BUILD_COMMAND_CHANGED')
+                        return driver.run(*args[:2], '--no-cache', *args[2:], **kwargs)
+                return build(FreshApiBuild(), context, reference, role, before, stage)
             return build(driver, context, reference, role, before, stage)
 
         h.build_image = image

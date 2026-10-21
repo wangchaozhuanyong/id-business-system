@@ -1,5 +1,7 @@
 """Reject widened scope and preserve the existing finite publication guards."""
 import ast
+import os
+from types import SimpleNamespace
 import copy
 import importlib.util
 import json
@@ -215,6 +217,37 @@ class ManualReleaseTests(unittest.TestCase):
             self.assertEqual(receipt['testedTree'], 'c' * 40)
             with self.assertRaises(RuntimeError):
                 b.source_receipt(run, {**pr, 'base': {'sha': 'd' * 40}}, {'tree': 'c' * 40}, self.c, p)
+
+    def test_api_overlay_new_parents_are_readable_under_private_umask(self):
+        engine = p.engine(self.c)
+        with project_temporary_directory() as temporary:
+            context = Path(temporary)
+            for name in ('modules', 'shared'):
+                (context / name).mkdir()
+                (context / name / 'fixture.js').write_text('fixture')
+            (context / 'Dockerfile').write_text('COPY modules/ /app/apps/api/dist/')
+            checked = []
+            def build(driver, directory, reference, role, before, stage):
+                for name in ('app', 'app/apps', 'app/apps/api', 'app/packages', 'app/packages/shared'):
+                    self.assertEqual(((directory / 'overlay' / name).stat().st_mode & 0o777), 0o755)
+                for name in ('app/apps/api/dist/fixture.js', 'app/packages/shared/dist/fixture.js'):
+                    self.assertEqual(((directory / 'overlay' / name).stat().st_mode & 0o777), 0o644)
+                command = ('docker', 'build', '--pull=false')
+                self.assertEqual(driver.run(*command), ('docker', 'build', '--no-cache', '--pull=false'))
+                with self.assertRaisesRegex(RuntimeError, 'API_BUILD_COMMAND_CHANGED'):
+                    driver.run('docker', 'run')
+                checked.append(role)
+            helper = SimpleNamespace(build_image=build)
+            modules = {'recharge-record-release.py': helper, 'remote-deploy.py': SimpleNamespace(run=lambda *args, **kwargs: args),
+                'online-query-network-release.py': SimpleNamespace()}
+            with patch.object(engine, 'load', side_effect=modules.__getitem__):
+                wrapped, driver, _ = engine.helpers()
+            previous = os.umask(0o077)
+            try:
+                wrapped.build_image(driver, context, 'reference', 'api', {}, context)
+            finally:
+                os.umask(previous)
+            self.assertEqual(checked, ['api'])
 
     def test_adapter_preserves_activation_and_sql_fence(self):
         engine = p.engine(self.c)
