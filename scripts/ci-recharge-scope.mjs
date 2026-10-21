@@ -1,4 +1,5 @@
 import { isManualSettlementCandidate } from './ci-bitbrowser-manual-controls.mjs';
+import { isFinancialClosureCandidate } from './ci-financial-closure-scope.mjs';
 import { isMailboxVersionOnly, isMailboxVersionControlsOnly } from './ci-mailbox-version-scope.mjs';
 import {
   affectsGptRechargeArtifact,
@@ -1181,6 +1182,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isFinancialClosureCandidate(paths)) return false;
   if (isBitbrowserConnectionProfilesOnly(paths)) return false;
   if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context)) return false;
@@ -5971,9 +5973,10 @@ async function main() {
         : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
   // END finite ONLINE build-proof reuse classifier admission
 
-  const onlineCiBuild = isManualSettlementCandidate(paths)
-    ? false
-    : needsOnlineRechargeCiBuild(paths);
+  const onlineCiBuild =
+    isManualSettlementCandidate(paths) || isFinancialClosureCandidate(paths)
+      ? false
+      : needsOnlineRechargeCiBuild(paths);
   const browserCandidate = isRegistrationBrowserOnly(paths, proxyIdentityContext);
   const protocolRestoreCandidate = isRegistrationProtocolRestoreOnly(paths, proxyIdentityContext);
   const result = {

@@ -5,6 +5,15 @@ on:
     branches:
       - codex/financial-closure-20261019
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Isolated validation or main-only read-only production inspection
+        required: true
+        default: validation
+        type: choice
+        options:
+          - validation
+          - production-readonly
 
 permissions:
   contents: read
@@ -15,6 +24,7 @@ concurrency:
 
 jobs:
   database:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode == 'validation'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -76,6 +86,7 @@ jobs:
           retention-days: 30
 
   interface:
+    if: github.event_name != 'workflow_dispatch' || inputs.mode == 'validation'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -92,6 +103,8 @@ jobs:
       - run: npm run build --workspace @apple-business/admin
       - name: Verify affected controls and shared UI rules
         run: |
+          python3 -B scripts/production-release/financial-closure-readonly.test.py
+          node --test scripts/ci-financial-closure-scope.test.mjs
           npm run test:online-recharge:controls
           node --test scripts/check-v2-decimal-standard.test.mjs scripts/v2-data-integrity-audit.test.mjs
           npm run check:admin-ui
@@ -113,6 +126,47 @@ jobs:
         with:
           name: financial-closure-interface-${{ github.sha }}-${{ github.run_attempt }}
           path: .runtime/online-recharge/billing-ui/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  production-readonly:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'production-readonly'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    concurrency:
+      group: id-business-v2-production-release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Verify read-only input and receipt controls
+        run: python3 -B scripts/production-release/financial-closure-readonly.test.py
+      - name: Obtain existing short-lived production credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-financial-read-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 900
+      - name: Read production identity and sixty count-only invariants
+        run: python3 -B scripts/production-release/financial-closure-readonly.py
+      - name: Preserve read-only intent and independently validated native receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: financial-closure-production-readonly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/financial-closure-readonly/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30
