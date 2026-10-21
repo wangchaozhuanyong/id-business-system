@@ -49,6 +49,13 @@ def github(path):
 
 def check(c):
     P.validate_contract(c)
+    published = json.loads((HERE / P.PARENT_FILE).read_bytes())
+    parent = json.loads((HERE / 'bitbrowser-manual-contract.json').read_bytes())
+    need(published['commit'] == P.CURRENT and published['scope'] == 'BITBROWSER_MANUAL_SETTLEMENT_20261019'
+         and published['productionSources'] == parent['productionSources']
+         and published['qualityVerification']['sources']['reviewedBusinessCommit'] == parent['sourceReviewCommit']
+         and published['businessActions'] == 0 and published['migrationPerformed'] is False,
+         'PARENT_PROJECTION_CHANGED')
     for name, digest in {**c['productionSources'], **c['validationSources']}.items():
         need(sha((ROOT / name).read_bytes()) == digest
              == sha(git('show', c['validation']['commit'] + ':' + name)), 'REVIEWED_SOURCE_CHANGED')
@@ -282,6 +289,7 @@ def build(c):
     api, admin = b.reconstruct_bounded_parent(legacy)
     prior = json.loads((HERE / 'bitbrowser-bounded-hold-contract.json').read_bytes())
     parent = json.loads((HERE / 'bitbrowser-manual-contract.json').read_bytes())
+    published = json.loads((HERE / P.PARENT_FILE).read_bytes())
     h = P.load('recharge-record-release.py')
     baseline = {}
     outputs = {}
@@ -290,6 +298,11 @@ def build(c):
         for name, row in parent['reconstructedParents'].items():
             if name.startswith('apps/' + role + '/'):
                 b.overlay(context, {name: row['sourceSha256']}, row['sourceCommit'])
+        # The independently observed 640e predecessor already includes this
+        # exact native manual projection. Reconstruct it before adding billing;
+        # none of these parent sources enter the new eight-file payload.
+        b.overlay(context, {n: v for n, v in published['productionSources'].items()
+            if n.startswith(('apps/' + role + '/', 'packages/shared/'))}, parent['sourceReviewCommit'])
         for name, expected in c['sourceParents'].items():
             if name.startswith('apps/' + role + '/'):
                 target = context / name
@@ -307,12 +320,20 @@ def build(c):
         dist = context / ('apps/' + role + '/dist')
         before = h.file_inventory(dist)
         if role == 'api':
+            shared = h.file_inventory(context / 'packages/shared/dist')
+            reproduced = {'apiModules': {n: before.get(n) for n in published['apiModules']},
+                          'sharedModules': {n: shared.get(n) for n in published['sharedModules']}}
+            (OUT / 'parent-api-reproduction-result.json').write_text(json.dumps(reproduced, sort_keys=True, indent=2) + '\n')
+            need(reproduced['apiModules'] == published['apiModules']
+                 and reproduced['sharedModules'] == published['sharedModules'], 'PARENT_PUBLICATION_COMPILE_CHANGED')
             need({n: before[n] for n in P.MODULES - P.ABSENT} == c['parentApiModules']
                  and P.ABSENT.isdisjoint(before), 'PARENT_COMPILE_CHANGED')
             baseline['api'] = before
             baseline['shared'] = h.file_inventory(context / 'packages/shared/dist')
             baseline['client'] = h.file_inventory(context / 'node_modules/.prisma/client')
         else:
+            (OUT / 'parent-admin-reproduction-result.json').write_text(json.dumps(before, sort_keys=True, indent=2) + '\n')
+            need(before == published['adminFiles'], 'PARENT_ADMIN_CONTENT_REPRODUCTION_FAILED')
             need(before['index.html'] == c['parentAdminIndexSha256'], 'PARENT_ADMIN_REPRODUCTION_FAILED')
         selected = {n: v for n, v in c['productionSources'].items() if n.startswith('apps/' + role + '/')}
         b.overlay(context, selected, P.SOURCE)

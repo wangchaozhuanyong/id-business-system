@@ -33,6 +33,16 @@ class FinancialPublicationTests(unittest.TestCase):
         self.assertEqual(len(self.c['parentApiModules']), 5)
         self.assertEqual(len(self.c['apiModules']), 8)
 
+    def test_native_predecessor_projection_is_exact_and_separate_from_billing(self):
+        published = json.loads((HERE / P.PARENT_FILE).read_bytes())
+        parent = json.loads((HERE / 'bitbrowser-manual-contract.json').read_bytes())
+        self.assertEqual(published['commit'], P.CURRENT)
+        self.assertEqual(len(published['productionSources']), 43)
+        self.assertEqual(published['productionSources'], parent['productionSources'])
+        self.assertFalse(set(published['productionSources']) & P.SOURCES)
+        self.assertFalse(set(published['apiModules']) & P.MODULES)
+        self.assertEqual(published['adminFiles']['index.html'], self.c['parentAdminIndexSha256'])
+
     def test_extra_sources_modules_roles_and_database_writes_are_rejected(self):
         cases = [
             lambda c: c['productionSources'].update({'apps/api/src/auth/changed.ts': 'a' * 64}),
