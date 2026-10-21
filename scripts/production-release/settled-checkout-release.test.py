@@ -20,7 +20,7 @@ P = load('settled-checkout-release.py')
 B = load('settled-checkout-publication.py')
 
 
-class NativeWireHeadersPublicationTests(unittest.TestCase):
+class NativePostDataPublicationTests(unittest.TestCase):
     def setUp(self):
         (P.ROOT / '.runtime').mkdir(exist_ok=True)
         self.c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
@@ -69,7 +69,7 @@ class NativeWireHeadersPublicationTests(unittest.TestCase):
 
     def proof(self):
         files = {n: '1' * 64 for n in self.c['adminParent']['adminFiles']}
-        qa = {'sources': {'commit': P.SOURCE, 'pullRequest': 669, 'runId': '1',
+        qa = {'sources': {'commit': P.SOURCE, 'pullRequest': 671, 'runId': '1',
                           'sourceReceiptSha256': 'a' * 64},
               'release': {'commit': 'b' * 40, 'runId': '2'}}
         return {'version': 1, 'commit': 'b' * 40, 'tree': 'c' * 40,

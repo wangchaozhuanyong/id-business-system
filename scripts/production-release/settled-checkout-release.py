@@ -7,11 +7,11 @@ import re
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-SCOPE = 'BITBROWSER_NATIVE_WIRE_HEADERS_20261021'
-RECIPE = 'native-wire-headers-20261021'
+SCOPE = 'BITBROWSER_NATIVE_POST_DATA_20261021'
+RECIPE = 'native-post-data-20261021'
 CONTRACT_FILE = 'settled-checkout-contract.json'
-CURRENT = 'eebb0fece95225612b558b9dcd3386f1c55a5a5f'
-SOURCE = '3cf4dfab9a28b83b92d4a65c68ef695b66832f52'
+CURRENT = 'e9c944de6845201f73cc71247339ccab69d919dc'
+SOURCE = 'f246c4ce8ec35d52e914d602b3b08a834e10d9d5'
 SOURCE_FILE = 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts'
 TEST_FILE = 'apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts'
 SOURCES = frozenset((SOURCE_FILE,))
@@ -45,7 +45,7 @@ def load(name):
 def validate_contract(c):
     need(c.get('version') == 1 and c.get('status') == 'FROZEN' and c.get('scope') == SCOPE
          and c.get('recipe') == RECIPE and c.get('expectedCurrent') == CURRENT
-         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 669,
+         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 671,
          'CONTRACT_IDENTITY')
     need(set(c.get('productionSources', {})) == SOURCES
          and set(c.get('validationSources', {})) == TESTS
@@ -60,7 +60,7 @@ def validate_contract(c):
          and b['database']['pending'] == 0 and len(b['services']) == 7
          and set(b['proofs']) == {'bitbrowser-history-build-proof.json'}, 'PARENT_SCOPE')
     parent = c['adminParent']
-    need(parent['commit'] == 'eebb0fece95225612b558b9dcd3386f1c55a5a5f'
+    need(parent['commit'] == 'e9c944de6845201f73cc71247339ccab69d919dc'
          and len(parent['adminFiles']) == 263 and 'index.html' in parent['adminFiles']
          and all(re.fullmatch('[a-f0-9]{64}', v) for v in (
              parent['proofSha256'], *parent['adminFiles'].values())), 'ADMIN_PARENT_CHANGED')
@@ -73,7 +73,7 @@ def validate_contract(c):
 def verify_quality(value, commit):
     need(type(value) is dict and set(value) == {'sources', 'release'}
          and value['sources']['commit'] == SOURCE
-         and value['sources']['pullRequest'] == 669
+         and value['sources']['pullRequest'] == 671
          and value['release']['commit'] == commit
          and all(re.fullmatch('[1-9][0-9]*', str(v['runId'])) for v in value.values())
          and re.fullmatch('[a-f0-9]{64}', value['sources']['sourceReceiptSha256']),

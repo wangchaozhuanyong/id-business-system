@@ -1,4 +1,4 @@
-name: BitBrowser Native Wire Header Publication
+name: BitBrowser Native Request Body Publication
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-"""Main-only finite native wire-header publication; no API or payment actions."""
+"""Main-only finite native request-body publication; no API or payment actions."""
 import argparse
 import base64
 import io
@@ -115,6 +115,10 @@ def reconstruct_parent(c):
     b.overlay(admin, {'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts':
                      '5c851af6a9ead952913031fc5230fe46bc547afc0239af1e10ba001dc0f76741'},
               '018f447ef67297ab136e3da4cc601c1bfb59dbf1')
+    # Preserve the deployed wire-header proof before this request-body successor.
+    b.overlay(admin, {'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts':
+                     '7523313cf2e75099da396b6a9a1cfa274985eb252a0af5c0d3ddce568f96a8c9'},
+              'f67e294a523d503f29bcccda434dbc3e53330468')
     F.patch_build_lock(admin, finance)
     need(all(sha((admin / name).read_bytes()) == digest for name, digest in c['sourceParents'].items()), 'BUILD_SOURCE_PARENT_CHANGED')
     return admin, b
@@ -201,10 +205,10 @@ def publish(c):
     path = OUT / 'bitbrowser-history-artifact.tar.gz'
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('原生核价安全诊断：仅输出一次受控状态及错误代码，不记录凭据或账单，不改变放行条件；保留 API 与历史资源，无迁移、付款或订阅操作。\n')
+    notes.write_text('原生计税正文兼容：只读补取同请求被省略的正文，保留原单、账号、账单及金额校验；不重放请求、不记录凭据，无迁移、付款或订阅操作。\n')
     tag = 'bitbrowser-history-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
-            '--title', '核价安全诊断 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
+            '--title', '原生计税正文兼容 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
     plan['artifactUrl'] = 'https://github.com/' + REPO + '/releases/download/' + tag + '/bitbrowser-history-artifact.tar.gz'
     preflight = transport(plan, 'preflight')
     need(preflight['status'] == 'BITBROWSER_HISTORY_PREFLIGHT_VERIFIED', 'PREFLIGHT_FAILED')
