@@ -27,8 +27,8 @@ class SettledCheckoutTests(unittest.TestCase):
 
     def test_exact_frozen_inputs(self):
         B.check(self.c)
-        self.assertEqual(set(self.c['productionSources']), {P.SOURCE_FILE})
-        self.assertEqual(len(P.MODULES), 3)
+        self.assertEqual(set(self.c['productionSources']), P.SOURCES)
+        self.assertEqual(len(P.MODULES), 6)
 
     def test_scope_widening_parent_change_and_side_effects_rejected(self):
         mutations = [
@@ -63,7 +63,7 @@ class SettledCheckoutTests(unittest.TestCase):
 
     def proof(self):
         modules = {n: '1' * 64 for n in P.MODULES}
-        qa = {'sources': {'commit': P.SOURCE, 'pullRequest': 655, 'runId': '1',
+        qa = {'sources': {'commit': P.SOURCE, 'pullRequest': 657, 'runId': '1',
                           'sourceReceiptSha256': 'a' * 64},
               'release': {'commit': 'b' * 40, 'runId': '2'}}
         return {'version': 1, 'commit': 'b' * 40, 'tree': 'c' * 40,
