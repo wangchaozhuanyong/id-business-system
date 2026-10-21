@@ -56,6 +56,7 @@ jobs:
           node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs | tee "$report_root/checkout-navigation.tap"
           node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs | tee "$report_root/debug-checkout.tap"
           node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/checkout-initialization.test.cjs | tee "$report_root/checkout-initialization.tap"
+          node --test --test-reporter=tap apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs | tee "$report_root/checkout-recovery.tap"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: online-checkout-first-open-linux-${{ github.sha }}-${{ github.run_attempt }}

@@ -159,6 +159,7 @@ async function run(runOptions = {}) {
     // 切到有头模式调试：HEADFUL=1 node server.js 或 HEADFUL=1 node index.js
     const DEBUG_HEADFUL = process.env.HEADFUL === '1';
     const CHROMIUM_CHANNEL = (process.env.CHROMIUM_CHANNEL || '').trim();
+    const debugOnly = process.env.CHECKOUT_DEBUG_ONLY === '1';
 
     let proxyCleanup = async () => { };
     let browserSession = null;
@@ -453,7 +454,6 @@ async function run(runOptions = {}) {
         }
 
         // --- Phase 1: Resolve payment parameters ---
-        const debugOnly = process.env.CHECKOUT_DEBUG_ONLY === '1';
         if (debugOnly) {
             console.log('[调试] 支付链接调试模式：浏览器注入 Session → API Checkout → 失败回退 UI → 到付款前停止');
         } else {

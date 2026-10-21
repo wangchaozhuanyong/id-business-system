@@ -2832,7 +2832,7 @@ test('card exclusion diagnostics permits only the six engine sources and its bou
 
 test('first-open diagnostics requires every source and refuses payment or unrelated changes', () => {
   const sources = [...onlineCheckoutFirstOpenPaths, 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'];
-  assert.equal(onlineCheckoutFirstOpenPaths.length, 9);
+  assert.equal(onlineCheckoutFirstOpenPaths.length, 10);
   for (const paths of [sources, [...sources, ...onlineCheckoutFirstOpenControls]]) {
     assert.equal(isOnlineCheckoutFirstOpenOnly(paths), true);
     assert.equal(checkMode(paths, 'same', 'same'), 'recharge');

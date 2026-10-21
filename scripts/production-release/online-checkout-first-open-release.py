@@ -22,7 +22,7 @@ CORE.CONTRACT_FILE = CORE.PREFIX + '-contract.json'
 CORE.WORKFLOW = '.github/workflows/' + CORE.PREFIX + '-validation.yml'
 CORE.FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'checkout-initialization.cjs',
     'test/checkout-form.test.cjs', 'test/checkout-navigation.test.cjs',
-    'test/checkout-initialization.test.cjs', 'test/debug-checkout.test.cjs',
+    'test/checkout-initialization.test.cjs', 'test/checkout-recovery.test.cjs', 'test/debug-checkout.test.cjs',
     'upstream/chatgpt.js', 'upstream/index.js'))
 CORE.ADDED = frozenset(('checkout-initialization.cjs', 'test/checkout-initialization.test.cjs'))
 CORE.CONTROLS = frozenset((*CORE.CONTROLS, *(CORE.PREFIX + '-' + suffix
@@ -32,13 +32,14 @@ CORE.PUBLIC_CONTROLS = frozenset((CORE.WORKFLOW, *CORE.REVIEW_CONTROLS,
     *('scripts/production-release/' + CORE.PREFIX + '-' + suffix
         for suffix in ('build.py', 'release.py', 'release.test.py', 'contract.json'))))
 CORE.INITIALIZATION_TESTS = (*CORE.INITIALIZATION_TESTS, 'test/checkout-form.test.cjs',
-    'test/checkout-navigation.test.cjs', 'test/debug-checkout.test.cjs', 'test/checkout-initialization.test.cjs')
+    'test/checkout-navigation.test.cjs', 'test/debug-checkout.test.cjs', 'test/checkout-initialization.test.cjs', 'test/checkout-recovery.test.cjs')
 CORE.INITIALIZATION_REPORTS = tuple((name, suite, mode, 10 if suite == 'SESSION_ROUTING' else total)
     for name, suite, mode, total in CORE.INITIALIZATION_REPORTS) + (
     ('checkout-form.tap', 'CHECKOUT_FORM', 'native', 134),
     ('checkout-navigation.tap', 'CHECKOUT_NAVIGATION', 'native', 30),
     ('debug-checkout.tap', 'DEBUG_CHECKOUT', 'native', 15),
-    ('checkout-initialization.tap', 'CHECKOUT_INITIALIZATION', 'native', 17))
+    ('checkout-initialization.tap', 'CHECKOUT_INITIALIZATION', 'native', 17),
+    ('checkout-recovery.tap', 'CHECKOUT_RECOVERY', 'native', 47))
 
 
 def __getattr__(name):

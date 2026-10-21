@@ -32,9 +32,9 @@ def browser(c):
 
 
 class Controls(unittest.TestCase):
-    def test_nine_files_two_additions_and_six_preserved_services(self):
+    def test_ten_files_two_additions_and_six_preserved_services(self):
         c = fixtures.contract(); p.validate_contract(c)
-        self.assertEqual(len(p.FILES), 9)
+        self.assertEqual(len(p.FILES), 10)
         self.assertEqual(p.ADDED, {'checkout-initialization.cjs', 'test/checkout-initialization.test.cjs'})
         self.assertEqual(set(c['afterEngineFiles']) - set(c['beforeEngineFiles']), p.ADDED)
         self.assertEqual(len(p.PRESERVED), 6)
@@ -48,9 +48,9 @@ class Controls(unittest.TestCase):
             self.assertNotIn(name, p.FILES)
             self.assertEqual(c['beforeEngineFiles'][name], c['afterEngineFiles'][name])
 
-    def test_review_requires_only_the_exact_twenty_file_delta(self):
+    def test_review_requires_only_the_exact_twenty_one_file_delta(self):
         paths = b.reviewed_paths(p)
-        self.assertEqual(len(paths), 20)
+        self.assertEqual(len(paths), 21)
         self.assertIn(p.WORKFLOW, paths)
         self.assertIn(p.ENGINE + '/checkout-initialization.cjs', paths)
         self.assertNotIn('scripts/production-release/online-checkout-initialization-release.py', paths)
@@ -84,7 +84,7 @@ class Controls(unittest.TestCase):
 
     def test_linux_node22_and_all_launchers_are_required(self):
         c = fixtures.contract(); value = browser(c)
-        self.assertEqual(value['passed'], 278)
+        self.assertEqual(value['passed'], 325)
         self.assertEqual([row[3] for row in p.INITIALIZATION_REPORTS[:3]], [10, 10, 10])
         p.validate_browser(value, fixtures.identity(), c)
         for field, changed in [('platform', 'darwin'), ('nodeVersion', '24.19.0'),

@@ -533,6 +533,8 @@ function checkoutServiceFixture(options = {}) {
           buildCaptchaRequiredError: () => 'Synthetic verification not ready'
         };
       if (name === '../checkout-recovery.cjs') return recovery;
+      if (name === '../checkout-initialization.cjs')
+        return require('../checkout-initialization.cjs');
       if (name === './verification-runtime') return require('../upstream/verification-runtime');
       if (name === '../rpc.cjs') return require('../rpc.cjs');
       throw new Error('Unexpected fixture import ' + name);
@@ -917,6 +919,7 @@ function publicCheckoutFailure(error, submitted = false, confirmed = false) {
   const Service = checkoutServiceFixture();
   const result = runInNewContext('(function(){' + source.slice(start, end) + '})()', {
     e: error,
+    debugOnly: false,
     lastPaymentResult: null,
     paymentSucceeded: false,
     wasSubmitted: () => submitted,
@@ -927,6 +930,16 @@ function publicCheckoutFailure(error, submitted = false, confirmed = false) {
     }
   });
   return require('../security.cjs').sanitizeResult(result);
+}
+
+function existingCheckoutDiagnostics(value) {
+  const { initialization, ...existing } = JSON.parse(JSON.stringify(value));
+  assert.ok(initialization, 'the opener must retain the first-load observation');
+  assert.deepEqual(
+    require('../checkout-initialization.cjs').sanitize(initialization),
+    initialization
+  );
+  return existing;
 }
 
 test('checkout diagnostics retain exact reload failure enums and reject reload states or unknown codes', () => {
@@ -1230,9 +1243,9 @@ for (const [name, code, controls, inspection, count] of [
       candidateCounts: [{ field: 'number', count }],
       inspection
     };
-    assert.deepEqual(JSON.parse(JSON.stringify(error.checkoutOpenDiagnostics)), expected);
+    assert.deepEqual(existingCheckoutDiagnostics(error.checkoutOpenDiagnostics), expected);
     const result = publicCheckoutFailure(error);
-    assert.deepEqual(JSON.parse(JSON.stringify(result.checkoutOpenDiagnostics)), expected);
+    assert.deepEqual(existingCheckoutDiagnostics(result.checkoutOpenDiagnostics), expected);
     assert.equal(result.success, false);
     assert.equal(result.resultUnknown, false);
     assert.equal(creations, 1);
@@ -1244,7 +1257,7 @@ for (const [name, code, controls, inspection, count] of [
       const unknown = publicCheckoutFailure(error, ...state);
       assert.equal(unknown.resultUnknown, true);
       assert.equal(unknown.success, false);
-      assert.deepEqual(JSON.parse(JSON.stringify(unknown.checkoutOpenDiagnostics)), expected);
+      assert.deepEqual(existingCheckoutDiagnostics(unknown.checkoutOpenDiagnostics), expected);
       assert.doesNotMatch(unknown.error, /未提交付款|未.*提交支付/);
     }
   });
@@ -1427,6 +1440,7 @@ test('an unfinished checkout page close goes directly to task context cleanup be
       '(async function(){' + source.slice(start + '    } catch (e) {'.length, end) + '})()',
       {
         e: { code, checkoutOpenCleanupFailed: true },
+        debugOnly: false,
         page: {},
         context: { close: async () => calls.push('context-close') },
         taskSignal: () => undefined,

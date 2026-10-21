@@ -501,6 +501,7 @@ export const onlineCheckoutFirstOpenPaths = Object.freeze(
     'checkout-initialization.cjs',
     'test/checkout-form.test.cjs',
     'test/checkout-initialization.test.cjs',
+    'test/checkout-recovery.test.cjs',
     'test/checkout-navigation.test.cjs',
     'test/debug-checkout.test.cjs',
     'upstream/chatgpt.js',
