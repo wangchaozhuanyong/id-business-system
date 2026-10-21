@@ -871,11 +871,49 @@ function manuallySettledRecoveryFixture() {
     manual_confirmation_accepted: true
   });
   f.history.unshift(paymentJob);
+  f.repository.findJob.mockImplementation(async (_tx: unknown, id: string) =>
+    id === settlement.sourceJobId ? paymentJob : f.source
+  );
   f.records.push(record(`payments/${hash(f.recoveredId)}.json`, paymentJob.result));
   return { ...f, settlement, paymentJob };
 }
 
 describe('identified original checkout after a zero-payment quote failure', () => {
+  it('更换比特连接后用人工结单的历史窗口证明核验来源，不绑定或调用旧连接窗口', async () => {
+    const f = manuallySettledRecoveryFixture();
+    f.repository.retainedProfileForAccount.mockResolvedValue(undefined as never);
+    const before = structuredClone({ records: f.records, history: f.history });
+    const restored = await restoreRechargeAccount(f.input as never);
+    expect(restored.originalCheckoutIdentifier).toBe(f.recoveredId);
+    expect(restored).not.toHaveProperty('ownedProfile');
+    expect(f.repository.updateJob).toHaveBeenCalledExactlyOnceWith(f.tx, f.input.job.id, {
+      accountKey: key,
+      result: { ...f.input.job.result, checkout_identifier: f.recoveredId }
+    });
+    expect({ records: f.records, history: f.history }).toEqual(before);
+  });
+
+  it('当前连接已有独立窗口时保留当前窗口，不用历史窗口覆盖', async () => {
+    const f = manuallySettledRecoveryFixture();
+    const currentProfile = 'f'.repeat(32);
+    f.repository.retainedProfileForAccount.mockResolvedValue({
+      sourceJobId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      profileId: currentProfile,
+      accountKey: key
+    });
+    const restored = await restoreRechargeAccount(f.input as never);
+    expect(restored.ownedProfile?.profileId).toBe(currentProfile);
+    expect(restored.originalCheckoutIdentifier).toBe(f.recoveredId);
+  });
+
+  it('人工结单的原任务不匹配时仍不授予新连接历史豁免', async () => {
+    const f = manuallySettledRecoveryFixture();
+    f.repository.retainedProfileForAccount.mockResolvedValue(undefined as never);
+    f.paymentJob.ownerId = 'another-owner';
+    await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow('原窗口来源未核实');
+    expect(f.repository.updateJob).not.toHaveBeenCalled();
+  });
+
   it('人工确认恢复单失败后仍用原归档证明排除已验证的无编号前序，保留所有原始事实', async () => {
     const f = manuallySettledRecoveryFixture();
     const before = structuredClone({ records: f.records, history: f.history });
