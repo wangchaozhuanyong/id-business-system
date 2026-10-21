@@ -3273,6 +3273,7 @@ export function affectsPart(part, paths) {
     admin:
       /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-(?:auto-recharge|table-layout)\.mjs$)/,
     api: /^(?:apps\/api\/(?!src\/id-business-v2\/(?:auto-recharge\/worker|workspace\/media-resolver)\/)|packages\/shared\/)/,
+    'online-engine': /^apps\/api\/src\/id-business-v2\/online-recharge\/engine\//,
     connector: /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//,
     migration: /^apps\/api\/prisma-mysql\//,
     security: securityPaths

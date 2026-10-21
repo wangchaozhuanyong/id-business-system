@@ -8486,3 +8486,29 @@ test('账务发布控制在真实 PR 与 main 入口只选控制检查', async (
       );
     }
 });
+
+test('线上代充执行器仅在相同测试输入和成功回执下复用，保留实际输入变化的重测', () => {
+  for (const path of [
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-initialization.test.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json',
+    'apps/api/src/id-business-v2/online-recharge/engine/package.json',
+    'scripts/ci-recharge-check.mjs',
+    '.github/workflows/quality.yml',
+    'package.json',
+    'package-lock.json',
+    'eslint.config.mjs',
+    '.npmrc'
+  ])
+    assert.equal(affectsPart('online-engine', [path]), true, path);
+  assert.equal(affectsPart('online-engine', []), false);
+  for (const path of [
+    'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts',
+    'scripts/production-release/online-checkout-first-open-contract.json',
+    'scripts/production-release/online-checkout-first-open-release.py',
+    'scripts/production-release/settled-checkout-contract.json',
+    'docs/ONLINE_RECHARGE.md'
+  ])
+    assert.equal(affectsPart('online-engine', [path]), false, path);
+  assert.throws(() => affectsPart('unknown-part', []), /Unknown check part/);
+});
