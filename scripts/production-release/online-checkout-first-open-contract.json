@@ -6,10 +6,10 @@
     ".gitignore": "ee2666d766b138b1597680a997c7c3f3d1bdf2df69e27c1a6e89850745cb8710",
     "Dockerfile": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
     "README.md": "cd84a0602c8e2c7b4b34dae9db404cf6bb81a2f8cf2921e111b83a87176a2dc5",
-    "SOURCE_MANIFEST.json": "e120f99d77812f7b0efecd1486898db52e6a0307a14807eebf1f4e9f70e803d1",
+    "SOURCE_MANIFEST.json": "6fbb5b50df2e9badea5396baa8001d3ecfb4d87d505b7fc7c5162b0a630c7418",
     "UPSTREAM.json": "2357ff0a121ce916de81aa7cf6303d58ac59666aa530f42083e528b6530f9623",
     "checkout-form.cjs": "6f1797ad7de082dfdfa1e78ec8786543c9911de5f97b4f1b922f423573be7953",
-    "checkout-initialization.cjs": "84e7ff6159ea6e7ff02fe6893cddd31b810ca76997cc1feae5b11a750bf58555",
+    "checkout-initialization.cjs": "e4ea332b526aa7ff53f76a0654e651edd0c608277754545fae62c1e9e34c4d58",
     "checkout-recovery.cjs": "2bdabc723dceacc20c6f36906b15561e863dc055451bfd6919262b908db230f8",
     "confirmation.cjs": "798026e30cb9a907e5cdc7195720f2b758eea83ecf76dbf4ee793eff6c8f318f",
     "credential-client.cjs": "410caab6d4fa7b748d21bea0c21750023ff480e9c408aa54a0fd5fa28e7c1f2b",
@@ -32,7 +32,7 @@
     "test/checkout-card-preparation.test.cjs": "00d94af3b5b61031f997f95824a59d3b5f4eea467bb214b5f80c226002e19324",
     "test/checkout-cs-browser.test.cjs": "7ae537e5a145f2a7188372502ff875b404926d3d9fbe207c2091b442956af04d",
     "test/checkout-form.test.cjs": "ded1e7a20a522dfd40b050511637dc0db7da4dd645630313f8503150d53e527f",
-    "test/checkout-initialization.test.cjs": "b69b4f87348efd3c410de7a3d3b80f66251972d1a51fe8c97e22c25f853ef5a7",
+    "test/checkout-initialization.test.cjs": "5a47f95bd14e0e07c816df66db6ab9fe05e5d279f2e217c2de6df096ca0fed03",
     "test/checkout-interaction.test.cjs": "5bbd47d67a33be8853f03b69dd8174ad6c740cb3c1d7b76fb12acec9d35bc648",
     "test/checkout-load-recovery.test.cjs": "a2165a4f1332d580d003c100e6ea33cab946eb8e0ad5a226653cd55c2ca192d7",
     "test/checkout-navigation.test.cjs": "6602f5751012faa284519b924fb44da94b17ba9327b07ef8c4d13918fe0cf6e1",
@@ -5050,8 +5050,8 @@
     "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
     "online-checkout-actionability-release.test.py": "271add54ce5080ad3e1a20400697361af3ddf63392da8a78a79efdbf7025c827",
     "online-checkout-first-open-build.py": "09a4df95ead8ec9576b8869992f6cea5850e4edb37226bf8b63c18f4e5ae5090",
-    "online-checkout-first-open-release.py": "3e9665feed5b63569d00b76b19ec985a056221c31abedbbf9461aa7c6ff86204",
-    "online-checkout-first-open-release.test.py": "788d4cbf5f36d519469c66807d329bc2056a7976acac5daecb77def06df45e55",
+    "online-checkout-first-open-release.py": "f04b69eedadb455c98b06d9dca5fdf08d7971b51b689710ee9df4d9f7a8a7708",
+    "online-checkout-first-open-release.test.py": "0a156bb3a3f64546a7a06be4d9a6c7fcbfe686fe5db2e80e750c45d1995c66f9",
     "online-checkout-initialization-build.py": "d202ee4e1f00b72eca5eb4d0477e4e15e795d3a23cdaac9193f1ccdc22a4bed9",
     "online-checkout-initialization-release.py": "3dde1aa3b134f87b31fcbe647e7655f2d62ce87513227c49b43189cebd0689f2",
     "online-checkout-initialization-release.test.py": "c866b7da0fecd84583bd4ce7b2b5a0f86a14a07214a2dbb5d945b385626bfd4c",
@@ -5090,19 +5090,19 @@
     "scripts/ci-recharge-scope.test.mjs": "81772ed66b5afe5edb81031e9efce315ca0a053514f5ce927fbbda0d16def803"
   },
   "runtimeSources": {
-    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "e120f99d77812f7b0efecd1486898db52e6a0307a14807eebf1f4e9f70e803d1",
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "6fbb5b50df2e9badea5396baa8001d3ecfb4d87d505b7fc7c5162b0a630c7418",
     "apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs": "6f1797ad7de082dfdfa1e78ec8786543c9911de5f97b4f1b922f423573be7953",
-    "apps/api/src/id-business-v2/online-recharge/engine/checkout-initialization.cjs": "84e7ff6159ea6e7ff02fe6893cddd31b810ca76997cc1feae5b11a750bf58555",
+    "apps/api/src/id-business-v2/online-recharge/engine/checkout-initialization.cjs": "e4ea332b526aa7ff53f76a0654e651edd0c608277754545fae62c1e9e34c4d58",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs": "ded1e7a20a522dfd40b050511637dc0db7da4dd645630313f8503150d53e527f",
-    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-initialization.test.cjs": "b69b4f87348efd3c410de7a3d3b80f66251972d1a51fe8c97e22c25f853ef5a7",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-initialization.test.cjs": "5a47f95bd14e0e07c816df66db6ab9fe05e5d279f2e217c2de6df096ca0fed03",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs": "6602f5751012faa284519b924fb44da94b17ba9327b07ef8c4d13918fe0cf6e1",
     "apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs": "7585522fa546947dd88a38ccd4738a48f128dc0fe4a5a3d65d473a3dc070ce58",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js": "825977f0e9c350e36534fb009726bc3ce7f43143aaa74b0d43a72d62cb012541",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "83ae04357b4121a1f48fd364d28f6554b4b093c9f621115a0260db1430f5f379"
   },
   "scope": "ONLINE_CHECKOUT_FIRST_OPEN",
-  "sourceReviewCommit": "0593c934affc588f9e06511d8148a48596425aef",
-  "sourceReviewTag": "online-checkout-first-open-source-review-0593c934affc",
+  "sourceReviewCommit": "7f3e5a97886808b6e98ce6559ff8b63d93c368fb",
+  "sourceReviewTag": "online-checkout-first-open-source-review-7f3e5a978868",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "upstreamSource": {
@@ -5110,8 +5110,8 @@
     "repository": "https://github.com/nowtostudeyday/PAY-GPT-UPGRADE.git"
   },
   "validationSources": {
-    "docs/ONLINE_RECHARGE.md": "9174f157aeca50a5b35e9ce28e6fafead98a9bba6e1273cae7c72e85ab2e7d7f",
-    "docs/V2_TASKS.md": "2fdbcc30db62a3d758579908883477690b8f89d11f5a289e6eef651e4dcffe13"
+    "docs/ONLINE_RECHARGE.md": "d0483c7123b3a16f6efd28c877df50dc43b6f141979889e6ff74b71dc7429ce7",
+    "docs/V2_TASKS.md": "72c0443a511adea59411e67e609367711118ec5c5810d4c95591c28f5c399834"
   },
   "version": 1,
   "workflowSha256": "605b92685c83c95090bc903262f2882893091d8e7a2ac8c6e3665622a0a8a034"
