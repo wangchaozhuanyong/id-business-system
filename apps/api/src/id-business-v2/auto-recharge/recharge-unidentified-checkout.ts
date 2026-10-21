@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { rechargeDocumentDigest } from './recharge-callback-receipts';
 import { resolvedDeclinedCheckout, resolvedDeclinedPayment } from './recharge-noncharge-proof';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
 
 /** 仅允许在原窗口发现未识别结算，不授予新建单或付款能力。 */
 export function isUnidentifiedUnpaidCheckout(value: unknown): boolean {
@@ -250,6 +251,28 @@ export function hasUnresolvedUnidentifiedCheckoutPayment(
     const roots = records.filter((item) => item.fileKey === rootKey(accountKey, plan));
     const root = roots[0],
       checkout = object(root?.document);
+    const manualPayment = manualRechargeSettlement(payment),
+      manualCheckout = manualRechargeSettlement(checkout);
+    if (
+      manualPayment?.outcome === 'failure' &&
+      manualCheckout?.outcome === 'failure' &&
+      manualPayment.accountKey === accountKey &&
+      manualPayment.plan === plan &&
+      rechargeDocumentDigest(manualPayment) === rechargeDocumentDigest(manualCheckout) &&
+      record.ownerId === ownerId &&
+      record.accountKey === accountKey &&
+      Number.isSafeInteger(record.revision) &&
+      record.revision > 0 &&
+      typeof identifier === 'string' &&
+      checkoutPattern.test(identifier) &&
+      record.fileKey === `payments/${createHash('sha256').update(identifier).digest('hex')}.json` &&
+      roots.length === 1 &&
+      root?.ownerId === ownerId &&
+      root.accountKey === accountKey &&
+      Number.isSafeInteger(root.revision) &&
+      root.revision > 0
+    )
+      return false;
     const metadata = [
       'operator_resolution',
       'resolution_basis',
@@ -502,6 +525,9 @@ export function recoveredCheckoutPredecessor(
   const document = object(record.document),
     currentResult = object(current.result),
     identifier = document.checkout_identifier;
+  const settlement = manualRechargeSettlement(document);
+  // 人工结单只增加一个版本和结论；在内存中恢复当时的观察快照做原摘要核验。
+  const observedRevision = record.revision - (settlement?.outcome === 'failure' ? 1 : 0);
   if (
     current.action !== 'bitbrowser' ||
     current.state !== 'running' ||
@@ -534,7 +560,7 @@ export function recoveredCheckoutPredecessor(
     record.accountKey !== current.accountKey ||
     record.fileKey !== rootKey(current.accountKey, current.plan) ||
     !Number.isSafeInteger(record.revision) ||
-    record.revision < 3 ||
+    observedRevision < 3 ||
     !(current.createdAt instanceof Date) ||
     !Number.isFinite(current.createdAt.getTime()) ||
     hasUnresolvedUnidentifiedCheckoutPayment(records, current.ownerId, current.accountKey)
@@ -555,7 +581,8 @@ export function recoveredCheckoutPredecessor(
     'confirmation_requests_sent'
   ])
     delete marker[key];
-  const markerRecord = { ...record, revision: record.revision - 1, document: marker };
+  if (settlement?.outcome === 'failure') delete marker.manual_settlement;
+  const markerRecord = { ...record, revision: observedRevision - 1, document: marker };
   const source = findUnidentifiedCheckoutSource(
     jobs,
     current.ownerId,
@@ -588,7 +615,7 @@ export function recoveredCheckoutPredecessor(
     authorization.consumed !== true ||
     authorization.checkoutIdentifier !== raw.checkout_identifier ||
     authorization.fileKey !== record.fileKey ||
-    authorization.revision !== record.revision - 2 ||
+    authorization.revision !== observedRevision - 2 ||
     authorization.documentDigest !== marker.retry_of ||
     authorization.archiveFileKey !== archive.fileKey ||
     authorization.markerDigest !== digest ||
@@ -657,6 +684,13 @@ export function recoveredCheckoutPredecessor(
       )
         return false;
       const r = object(item.result);
+      const manual = manualRechargeSettlement(r);
+      if (
+        settlement?.outcome === 'failure' &&
+        manual?.outcome === 'failure' &&
+        rechargeDocumentDigest(manual) === rechargeDocumentDigest(settlement)
+      )
+        return false;
       return (
         (r.payment_attempted !== undefined && r.payment_attempted !== false) ||
         [
