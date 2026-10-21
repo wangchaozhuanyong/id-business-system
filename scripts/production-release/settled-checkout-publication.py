@@ -1,4 +1,4 @@
-"""Main-only, finite API build and native publication of the settled checkout fix."""
+"""Main-only, finite admin build and publication of the observed titlebar repair."""
 import argparse
 import base64
 import io
@@ -44,10 +44,6 @@ def check(c):
         need(re.fullmatch('[a-z][a-z0-9.-]+', name)
              and sha((HERE / name).read_bytes()) == digest, 'CONTROL_CHANGED')
     need(sha((ROOT / WORKFLOW).read_bytes()) == c['workflowSha256'], 'WORKFLOW_CHANGED')
-    need(c['parentOverlay']['sourceCommit'] == '22ba535ccdebdc4cf1abf98fb2cc5c9d9f2bc20b'
-         and set(c['parentOverlay']['productionSources']) == {P.SOURCE_FILE, P.SOURCE_FILE.replace('recharge-account-restore', 'recharge-unidentified-checkout')}
-         and all(digest == sha(git('show', c['parentOverlay']['sourceCommit'] + ':' + name))
-                 for name, digest in c['parentOverlay']['productionSources'].items()), 'PARENT_OVERLAY_CHANGED')
     finance = json.loads((HERE / 'financial-closure-contract.json').read_bytes())
     need(sha((ROOT / 'package-lock.json').read_bytes()) == finance['buildDependencyPatch']['sha256'],
          'BUILD_LOCK_CHANGED')
@@ -72,8 +68,8 @@ def quality(c, commit):
              and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_JOBS_REQUIRED')
         evidence[role] = {'commit': selected, 'runId': str(run['id']), 'runAttempt': str(run['run_attempt'])}
         if role == 'sources':
-            need({'recharge (api)', 'recharge (guards)'} <= {
-                 j['name'] for j in jobs if j['conclusion'] == 'success'}, 'SOURCE_API_QUALITY_REQUIRED')
+            need({'recharge (admin)', 'recharge (guards)'} <= {
+                 j['name'] for j in jobs if j['conclusion'] == 'success'}, 'SOURCE_ADMIN_QUALITY_REQUIRED')
             receipt, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
             need(receipt.get('repository') == REPO and receipt.get('headSha') == selected
                  and receipt.get('pullRequest') == c['sourcePullRequest']
@@ -96,35 +92,27 @@ def reconstruct_parent(c):
     b.OUT.mkdir(mode=0o700)
     legacy = b.load('bitbrowser-history-release.py')
     legacy.select_recipe(legacy.BOUNDED)
-    api, _ = b.reconstruct_bounded_parent(legacy)
+    _, admin = b.reconstruct_bounded_parent(legacy)
     prior = json.loads((HERE / 'bitbrowser-bounded-hold-contract.json').read_bytes())
     manual = json.loads((HERE / 'bitbrowser-manual-contract.json').read_bytes())
     published = json.loads((HERE / 'financial-closure-parent-proof.json').read_bytes())
     finance = json.loads((HERE / 'financial-closure-contract.json').read_bytes())
-    b.overlay(api, {n: v for n, v in prior['productionSources'].items() if n.startswith('apps/api/')}, prior['sourceReviewCommit'])
+    b.overlay(admin, {n: v for n, v in prior['productionSources'].items() if n.startswith('apps/admin/')}, prior['sourceReviewCommit'])
     for name, row in manual['reconstructedParents'].items():
-        if name.startswith('apps/api/'):
-            b.overlay(api, {name: row['sourceSha256']}, row['sourceCommit'])
-    b.overlay(api, {n: v for n, v in published['productionSources'].items()
-                   if n.startswith(('apps/api/', 'packages/shared/'))}, manual['sourceReviewCommit'])
-    b.overlay(api, {n: v for n, v in finance['productionSources'].items() if n.startswith('apps/api/')}, finance['sourceReviewCommit'])
-    b.overlay(api, c['parentOverlay']['productionSources'], c['parentOverlay']['sourceCommit'])
-    F.patch_build_lock(api, finance)
-    need(all(sha((api / name).read_bytes()) == digest for name, digest in c['sourceParents'].items()), 'BUILD_SOURCE_PARENT_CHANGED')
-    return api, b
+        if name.startswith('apps/admin/'):
+            b.overlay(admin, {name: row['sourceSha256']}, row['sourceCommit'])
+    b.overlay(admin, {n: v for n, v in published['productionSources'].items()
+                     if n.startswith(('apps/admin/', 'packages/shared/'))}, manual['sourceReviewCommit'])
+    b.overlay(admin, {n: v for n, v in finance['productionSources'].items() if n.startswith('apps/admin/')}, finance['sourceReviewCommit'])
+    F.patch_build_lock(admin, finance)
+    need(all(sha((admin / name).read_bytes()) == digest for name, digest in c['sourceParents'].items()), 'BUILD_SOURCE_PARENT_CHANGED')
+    return admin, b
 
 
-def inventory_summary(values):
-    return {'count': len(values), 'sha256': sha(P.canonical(values))}
-
-
-def verify_delta(before, after, shared_before, shared_after, client_before, client_after, c):
-    parent = c['baseline']
-    need({n: before.get(n) for n in P.MODULES} == parent['apiModules'], 'NATIVE_PARENT_NOT_REPRODUCED')
-    changes = {n for n in before.keys() | after.keys() if before.get(n) != after.get(n)}
-    need(changes - {'tsconfig.build.tsbuildinfo'} == {n for n in P.MODULES if not n.endswith('.d.ts')}
-         and all(n in after for n in P.MODULES), 'COMPILED_SCOPE_CHANGED')
-    need(shared_before == shared_after and client_before == client_after, 'PRESERVED_RUNTIME_CHANGED')
+def verify_delta(before, after, c):
+    need(before == c['adminParent']['adminFiles'], 'NATIVE_PARENT_NOT_REPRODUCED')
+    need(len(after) >= 250 and 'index.html' in after
+         and after['index.html'] != before['index.html'], 'ADMIN_OUTPUT_UNCHANGED')
 
 
 def build(c):
@@ -133,28 +121,24 @@ def build(c):
     need(not OUT.exists(), 'OUTPUT_EXISTS')
     qa = quality(c, native['commit'])
     OUT.mkdir(parents=True, mode=0o700)
-    api, b = reconstruct_parent(c)
+    admin, b = reconstruct_parent(c)
     h = P.load('recharge-record-release.py')
-    env = {**os.environ, 'NODE_ENV': 'production'}
+    env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + c['adminParent']['commit']}
     for command in (('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
                     ('npm', 'run', 'build', '--workspace', '@apple-business/shared'),
-                    ('npm', 'run', 'prisma:mysql:generate'),
-                    ('npm', 'run', 'build', '--workspace', '@apple-business/api')):
-        subprocess.run(command, cwd=api, env=env, check=True)
-    dist = api / 'apps/api/dist'
+                    ('npm', 'run', 'build', '--workspace', '@apple-business/admin')):
+        subprocess.run(command, cwd=admin, env=env, check=True)
+    dist = admin / 'apps/admin/dist'
     before = h.file_inventory(dist)
-    shared = h.file_inventory(api / 'packages/shared/dist')
-    client = h.file_inventory(api / 'node_modules/.prisma/client')
-    b.overlay(api, c['productionSources'], P.SOURCE)
-    subprocess.run(('npm', 'run', 'build', '--workspace', '@apple-business/api'), cwd=api, env=env, check=True)
+    (OUT / 'parent-admin-reproduction.json').write_text(json.dumps(before, sort_keys=True, indent=2) + '\n')
+    need(before == c['adminParent']['adminFiles'], 'NATIVE_PARENT_NOT_REPRODUCED')
+    b.overlay(admin, c['productionSources'], P.SOURCE)
+    subprocess.run(('npm', 'run', 'build', '--workspace', '@apple-business/admin'), cwd=admin,
+                   env={**env, 'V2_BUILD_ID': 'v2-' + native['commit']}, check=True)
     after = h.file_inventory(dist)
-    verify_delta(before, after, shared, h.file_inventory(api / 'packages/shared/dist'), client,
-                 h.file_inventory(api / 'node_modules/.prisma/client'), c)
+    verify_delta(before, after, c)
     payload = OUT / 'payload'
-    for name in P.MODULES:
-        target = payload / 'api/modules' / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(dist / name, target)
+    shutil.copytree(dist, payload / 'admin/html')
     for name in c['productionSources']:
         target = payload / 'source' / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -162,10 +146,8 @@ def build(c):
     proof = {**native, 'version': 1, 'scope': P.SCOPE, 'recipe': P.RECIPE,
              'contractSha256': sha((HERE / P.CONTRACT_FILE).read_bytes()),
              'productionSources': c['productionSources'], 'controlSources': c['controlPins'],
-             'apiModules': {n: after[n] for n in sorted(P.MODULES)}, 'files': h.file_inventory(payload),
-             'parentModulesReproduced': {n: before[n] for n in sorted(P.MODULES)},
-             'compiledUnselectedUnchanged': True,
-             'baselineSharedUnchanged': True, 'baselineClientUnchanged': True,
+             'apiModules': {}, 'adminFiles': after, 'files': h.file_inventory(payload),
+             'baselineAdminReproduced': True, 'baselineAdminFiles': before,
              'qualityVerification': qa, 'migrationPerformed': False, 'businessActions': 0}
     P.verify_proof(proof, proof, c, payload, h)
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
@@ -208,10 +190,10 @@ def publish(c):
     path = OUT / 'bitbrowser-history-artifact.tar.gz'
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('已核实失败旧单的账号恢复修复：仅一个 API 模块，无迁移、付款或订阅操作。\n')
+    notes.write_text('官网新版标题栏兼容：仅一个管理端源码，保留 API 与历史资源，无迁移、付款或订阅操作。\n')
     tag = 'bitbrowser-history-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
-            '--title', '结单恢复修复 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
+            '--title', '套餐入口兼容 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
     plan['artifactUrl'] = 'https://github.com/' + REPO + '/releases/download/' + tag + '/bitbrowser-history-artifact.tar.gz'
     preflight = transport(plan, 'preflight')
     need(preflight['status'] == 'BITBROWSER_HISTORY_PREFLIGHT_VERIFIED', 'PREFLIGHT_FAILED')
