@@ -19,6 +19,58 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { financialPublicationControlPaths } from './ci-financial-publication-scope.mjs';
+import { financialClosurePaths } from './ci-financial-closure-scope.mjs';
+
+test('账务完整质量检查只选择本轮只读及有限发布控制', () => {
+  const calls = recordGuardCommands('full', [...financialClosurePaths], 'release-controls');
+  for (const name of [
+    'scripts/production-release/financial-closure-readonly.test.py',
+    'scripts/production-release/financial-closure-publication.py',
+    'scripts/production-release/financial-closure-release.test.py'
+  ])
+    assert.ok(
+      calls.some((call) => call.includes(name)),
+      name
+    );
+  assert.equal(
+    calls.some((call) =>
+      call.some((arg) =>
+        /api-admin-scope\.test|online-recharge-ci-build|bitbrowser-manual-build/.test(arg)
+      )
+    ),
+    false
+  );
+});
+
+test('账务发布控制入口不启动旧构造器、数据库或业务验收套件', () => {
+  for (const part of ['guards', 'release-controls']) {
+    const calls = recordGuardCommands('ci-only', [...financialPublicationControlPaths], part);
+    assert.ok(
+      calls.some((call) =>
+        call.includes('scripts/production-release/financial-closure-publication.py')
+      ),
+      part
+    );
+    assert.equal(
+      calls.some((call) =>
+        call.some((arg) =>
+          /online-recharge-ci-build|mysql\.test|acceptance:v2|prisma:mysql:migrate|bitbrowser-manual-build/.test(
+            arg
+          )
+        )
+      ),
+      false,
+      part
+    );
+    assert.equal(
+      calls.some((call) =>
+        call.includes('scripts/production-release/financial-closure-release.test.py')
+      ),
+      part === 'release-controls'
+    );
+  }
+});
 import {
   registrationParityDiagnosticsBase,
   registrationParityDiagnosticsRepairBase,
