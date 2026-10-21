@@ -30,8 +30,67 @@ type NativeAuthIssue =
   | 'account_header_mismatch'
   | 'token_expired_or_missing';
 
+interface NativeAuthProof {
+  issue: NativeAuthIssue;
+  expiresAt: number;
+  recoverable: boolean;
+}
+
+// Retain only verification results, never the Authorization/Cookie header values.
+function nativeAuthProof(headers: PaymentDocument, accountId: string): NativeAuthProof {
+  const header = (name: string) =>
+    Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
+  const failed = (issue: NativeAuthIssue): NativeAuthProof => ({
+    issue,
+    expiresAt: 0,
+    recoverable: false
+  });
+  try {
+    const authorization = String(header('authorization') ?? '');
+    if (!authorization.startsWith('Bearer ')) return failed('token_missing');
+    if (authorization.length > 16384) return failed('token_invalid');
+    const encoded = authorization.slice(7).split('.')[1];
+    if (!encoded) return failed('token_invalid');
+    const claims = JSON.parse(atob(encoded.replace(/-/g, '+').replace(/_/g, '/')));
+    if (claims['https://api.openai.com/auth']?.chatgpt_account_id !== accountId)
+      return failed('token_account_mismatch');
+    const expiresAt = typeof claims.exp === 'number' ? claims.exp * 1000 : 0;
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now())
+      return failed('token_expired_or_missing');
+    if (header('chatgpt-account-id') === undefined)
+      return { issue: 'account_header_missing', expiresAt, recoverable: true };
+    if (header('chatgpt-account-id') !== accountId) return failed('account_header_mismatch');
+    return { issue: 'none', expiresAt, recoverable: false };
+  } catch {
+    return failed('token_invalid');
+  }
+}
+
+function resolvedNativeAuth(base: NativeAuthProof, wire?: NativeAuthProof): NativeAuthProof {
+  // Only an otherwise verified token with an omitted account header can be completed.
+  // A conflicting base token/header is never repaired by a later event.
+  if (!wire || (base.issue !== 'none' && !base.recoverable)) return base;
+  if (wire.issue !== 'none') return { ...wire, recoverable: false };
+  return {
+    issue: 'none',
+    expiresAt: Math.min(base.expiresAt, wire.expiresAt),
+    recoverable: false
+  };
+}
+
+function combinedNativeWire(previous: NativeAuthProof | undefined, next: NativeAuthProof) {
+  if (!previous || next.issue !== 'none') return next;
+  if (previous.issue !== 'none') return previous;
+  return { ...next, expiresAt: Math.min(previous.expiresAt, next.expiresAt) };
+}
+
 interface NativeRequestObservation {
   authIssue: NativeAuthIssue;
+  authExpiresAt: number;
+  authPending: boolean;
+  authFinalized: boolean;
+  authWait?: Promise<void>;
+  releaseAuth?: () => void;
   generation: number;
   version: number;
   sequence: number;
@@ -81,6 +140,11 @@ export class DirectPaymentObserver {
   private nativeInflight = new Set<number>();
   private nativeError?: string;
   private nativeAuthIssue: NativeAuthIssue = 'none';
+  private nativeWireEarly = new Map<string, NativeAuthProof>();
+  private nativeAuthRequests = new Map<
+    string,
+    { base: NativeAuthProof; item: NativeRequestObservation; wire?: NativeAuthProof }
+  >();
   private nativeBillingAnchor?: NativeBillingRequest;
   private nativeQuoteVersion = 0;
   private nativeQuote?: { request: NativeBillingRequest; document: PaymentDocument };
@@ -114,6 +178,17 @@ export class DirectPaymentObserver {
     this.remove = browser.cdp.onEvent((method, params, session) => {
       if (!session || !this.ownsSession(session) || this.closed) return;
       const key = `${session}:${String(params.requestId)}`;
+      if (method === 'Network.requestWillBeSentExtraInfo' && this.nativeBinding) {
+        const proof = nativeAuthProof(paymentObject(params.headers), browser.identity.accountId);
+        const tracked = this.nativeAuthRequests.get(key);
+        if (tracked) this.applyNativeWire(tracked, proof);
+        else {
+          this.nativeWireEarly.set(key, combinedNativeWire(this.nativeWireEarly.get(key), proof));
+          if (this.nativeWireEarly.size > 64)
+            this.nativeWireEarly.delete(this.nativeWireEarly.keys().next().value!);
+        }
+        return;
+      }
       if (method === 'Network.requestWillBeSent') {
         const request = paymentObject(params.request);
         let url: URL;
@@ -139,8 +214,11 @@ export class DirectPaymentObserver {
           /* An unreadable write is never repeated. */
         }
         let accountMatches = false;
-        let nativeAccountMatches = false;
-        let nativeAuthIssue: NativeAuthIssue = 'token_missing';
+        let nativeAuth: NativeAuthProof = {
+          issue: 'token_missing',
+          expiresAt: 0,
+          recoverable: false
+        };
         if (official) {
           const headers = paymentObject(request.headers);
           const header = (name: string) =>
@@ -156,28 +234,10 @@ export class DirectPaymentObserver {
                 browser.identity.accountId &&
               (header('chatgpt-account-id') ?? browser.identity.accountId) ===
                 browser.identity.accountId;
-            nativeAccountMatches =
-              accountMatches &&
-              header('chatgpt-account-id') === browser.identity.accountId &&
-              typeof claims.exp === 'number' &&
-              Number.isFinite(claims.exp) &&
-              claims.exp * 1000 > Date.now();
-            nativeAuthIssue = nativeAccountMatches
-              ? 'none'
-              : !encoded
-                ? 'token_missing'
-                : claims['https://api.openai.com/auth']?.chatgpt_account_id !==
-                    browser.identity.accountId
-                  ? 'token_account_mismatch'
-                  : header('chatgpt-account-id') === undefined
-                    ? 'account_header_missing'
-                    : header('chatgpt-account-id') !== browser.identity.accountId
-                      ? 'account_header_mismatch'
-                      : 'token_expired_or_missing';
           } catch {
             accountMatches = false;
-            nativeAuthIssue = 'token_invalid';
           }
+          nativeAuth = nativeAuthProof(headers, browser.identity.accountId);
         }
         if (
           official &&
@@ -251,13 +311,7 @@ export class DirectPaymentObserver {
             '/backend-api/payments/checkout/taxes',
             '/backend-api/payments/checkout/update_tax_id'
           ].includes(url.pathname)
-            ? this.beginNativeBilling(
-                url.pathname,
-                String(request.method),
-                data,
-                nativeAccountMatches,
-                nativeAuthIssue
-              )
+            ? this.beginNativeBilling(url.pathname, String(request.method), data, nativeAuth, key)
             : undefined;
         // Native requests can contain tax IDs. Keep only their explicit billing projection.
         if (nativeBilling) data = {};
@@ -340,6 +394,7 @@ export class DirectPaymentObserver {
       email: this.browser.identity.email
     };
     this.nativeGeneration++;
+    this.clearNativeAuthentication();
     this.nativeVersion++;
     this.nativeChangedAt = Math.max(Date.now(), this.nativeChangedAt + 1);
     this.nativeObserved = false;
@@ -384,8 +439,8 @@ export class DirectPaymentObserver {
     path: string,
     method: string,
     data: PaymentDocument,
-    accountMatches: boolean,
-    authIssue: NativeAuthIssue
+    base: NativeAuthProof,
+    key: string
   ) {
     const kind = path.endsWith('/taxes') ? 'taxes' : 'tax_id';
     this.nativeVersion++;
@@ -399,18 +454,37 @@ export class DirectPaymentObserver {
       this.nativeBillingAnchor = undefined;
       this.nativeQuoteVersion = 0;
     }
+    const wire = this.nativeWireEarly.get(key);
+    this.nativeWireEarly.delete(key);
+    const auth = resolvedNativeAuth(base, wire);
     const item: NativeRequestObservation = {
       generation: this.nativeGeneration,
       version: this.nativeVersion,
       sequence: this.nativeTaxesSequence,
       kind,
-      authIssue,
+      authIssue: auth.issue,
+      authExpiresAt: auth.expiresAt,
+      authPending: base.recoverable && !wire,
+      authFinalized: false,
       valid: false
     };
-    this.nativeAuthIssue = authIssue;
+    if (item.authPending)
+      item.authWait = new Promise<void>((resolve) => {
+        item.releaseAuth = resolve;
+      });
+    this.nativeAuthRequests.set(key, { base, item, wire });
+    if (this.nativeAuthRequests.size > 64) {
+      const oldest = this.nativeAuthRequests.keys().next().value!;
+      this.nativeAuthRequests.get(oldest)?.item.releaseAuth?.();
+      this.nativeAuthRequests.delete(oldest);
+      this.nativeBillingFailure(item, 'native_billing_observation_overflow');
+      this.fail('native_billing_observation_overflow');
+    }
+    this.nativeAuthIssue = auth.issue;
     this.nativeInflight.add(item.version);
     try {
-      if (!accountMatches) throw new Error('native_billing_account_mismatch');
+      if (auth.issue !== 'none' && !item.authPending)
+        throw new Error('native_billing_account_mismatch');
       if (method !== 'POST') throw new Error('native_billing_method_invalid');
       if (kind === 'taxes') {
         item.billing = nativeBillingRequest(data, this.nativeBinding!);
@@ -430,6 +504,40 @@ export class DirectPaymentObserver {
       );
     }
     return item;
+  }
+  private clearNativeAuthentication() {
+    for (const { item } of this.nativeAuthRequests.values()) item.releaseAuth?.();
+    this.nativeAuthRequests.clear();
+    this.nativeWireEarly.clear();
+  }
+  private applyNativeWire(
+    tracked: { base: NativeAuthProof; item: NativeRequestObservation; wire?: NativeAuthProof },
+    wire: NativeAuthProof
+  ) {
+    const { item, base } = tracked;
+    if (item.generation !== this.nativeGeneration || item.sequence !== this.nativeTaxesSequence)
+      return;
+    tracked.wire = combinedNativeWire(tracked.wire, wire);
+    const proof = resolvedNativeAuth(base, tracked.wire);
+    // Expired waits and failed reads cannot be resurrected by a late event.
+    if (item.authFinalized && item.authIssue !== 'none' && proof.issue === 'none') return;
+    const invalidatesQuote =
+      !item.authPending && item.authIssue === 'none' && proof.issue !== 'none';
+    item.authIssue = proof.issue;
+    item.authExpiresAt = proof.expiresAt;
+    item.authPending = false;
+    item.releaseAuth?.();
+    item.releaseAuth = undefined;
+    item.authWait = undefined;
+    if (item.version === this.nativeVersion) this.nativeAuthIssue = proof.issue;
+    if (proof.issue !== 'none') {
+      this.nativeBillingFailure(item, 'native_billing_account_mismatch');
+      if (invalidatesQuote) {
+        this.nativeVersion++;
+        this.nativeChangedAt = Math.max(Date.now(), this.nativeChangedAt + 1);
+        if (this.armed) this.fail('native_billing_changed_after_confirmation');
+      }
+    }
   }
   private nativeBillingFailure(item: NativeRequestObservation, reason: string) {
     if (
@@ -462,6 +570,33 @@ export class DirectPaymentObserver {
         return;
       if (!this.ownsSession(item.session)) throw new Error('native_billing_session_changed');
       if (!native.valid) return;
+      if (native.authPending && native.authWait) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            native.authWait,
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, 1000);
+            })
+          ]);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+          native.authPending = false;
+          native.releaseAuth = undefined;
+          native.authWait = undefined;
+        }
+      }
+      native.authFinalized = true;
+      if (
+        this.closed ||
+        native.generation !== this.nativeGeneration ||
+        native.sequence !== this.nativeTaxesSequence
+      )
+        return;
+      if (native.authIssue !== 'none' || native.authExpiresAt <= Date.now()) {
+        if (native.authIssue === 'none') native.authIssue = 'token_expired_or_missing';
+        throw new Error('native_billing_account_mismatch');
+      }
       if (item.status < 200 || item.status >= 300) throw new Error('native_billing_http_failed');
       if (item.responseTooLarge) throw new Error('native_billing_response_oversized');
       const body = await this.browser.cdp
@@ -778,6 +913,7 @@ export class DirectPaymentObserver {
     this.closed = true;
     this.remove();
     this.request.clear();
+    this.clearNativeAuthentication();
     this.stripeQuotes.clear();
     this.stripeVersions.clear();
     this.receipts = [];

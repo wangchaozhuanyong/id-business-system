@@ -49,11 +49,11 @@ const response = () => ({
     }
   }
 });
-const token = (account = accountId) =>
+const token = (account = accountId, exp = Math.floor(Date.now() / 1000) + 3600) =>
   'synthetic.' +
   Buffer.from(
     JSON.stringify({
-      exp: Math.floor(Date.now() / 1000) + 3600,
+      exp,
       'https://api.openai.com/auth': { chatgpt_account_id: account }
     })
   ).toString('base64url') +
@@ -162,10 +162,180 @@ function fixture() {
       item.session
     );
   }
-  return { observer, begin, finish, owned, command, remove, bodies };
+  function extra(
+    item: { id: string; session: string },
+    headers: Record<string, string> = {
+      authorization: 'Bearer ' + token(),
+      'chatgpt-account-id': accountId
+    }
+  ) {
+    handler?.('Network.requestWillBeSentExtraInfo', { requestId: item.id, headers }, item.session);
+  }
+  return { observer, begin, finish, extra, owned, command, remove, bodies };
 }
 
 describe('原生计税被动观察与确认版本屏障', () => {
+  it.each(['before', 'after', 'after-finish'] as const)(
+    '基础事件漏账号头时，只接纳同请求完整头证据：%s',
+    async (order) => {
+      const f = fixture();
+      if (order === 'before') f.extra({ id: '1', session: 'owned' });
+      const item = f.begin({ headers: { authorization: 'Bearer ' + token() } });
+      if (order === 'after') f.extra(item);
+      f.finish(item);
+      if (order === 'after-finish') f.extra(item);
+      await f.observer.settle();
+      expect(f.observer.nativeBilling(details).document).toBeDefined();
+      expect(f.observer.nativeBilling(details).error).toBeUndefined();
+      expect(f.command.mock.calls.every(([method]) => method === 'Network.getResponseBody')).toBe(
+        true
+      );
+    }
+  );
+
+  it.each<Record<string, string>>([
+    {},
+    { authorization: 'Bearer ' + token() },
+    { authorization: 'Bearer ' + token('other-account'), 'chatgpt-account-id': accountId },
+    { authorization: 'Bearer ' + token(), 'chatgpt-account-id': 'other-account' },
+    { authorization: 'Bearer ' + token(accountId, 1), 'chatgpt-account-id': accountId }
+  ])('完整头仍须包含同账号有效Token和显式账号头：%j', async (headers) => {
+    const f = fixture();
+    const item = f.begin({ headers: { authorization: 'Bearer ' + token() } });
+    f.extra(item, headers);
+    f.finish(item);
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+    expect(f.observer.nativeBilling(details).error).toBe('native_billing_account_mismatch');
+  });
+
+  it.each([{ account: 'other-account' }, { headerAccount: 'other-account' }])(
+    '基础事件明确冲突不能被完整头修复：%j',
+    async (options) => {
+      const f = fixture();
+      const item = f.begin(options);
+      f.extra(item);
+      f.finish(item);
+      await f.observer.settle();
+      expect(f.observer.nativeBilling(details).document).toBeUndefined();
+      expect(f.observer.nativeBilling(details).error).toBe('native_billing_account_mismatch');
+    }
+  );
+
+  it.each(['no-proof', 'other-request', 'other-session', 'new-generation', 'evicted'] as const)(
+    '缺失或无法精确关联的完整头超时关闭：%s',
+    async (mode) => {
+      vi.useFakeTimers();
+      try {
+        const f = fixture();
+        if (mode === 'other-request') f.extra({ id: 'other', session: 'owned' });
+        if (mode === 'other-session') f.extra({ id: '1', session: 'owned-child' });
+        if (mode === 'new-generation') {
+          f.extra({ id: '1', session: 'owned' });
+          f.observer.trackNativeBilling(checkoutId, 'openai_llc', 'plus', 'PHP');
+        }
+        if (mode === 'evicted')
+          for (let id = 1; id <= 65; id++) f.extra({ id: String(id), session: 'owned' });
+        const item = f.begin({ headers: { authorization: 'Bearer ' + token() } });
+        f.finish(item);
+        expect(f.observer.nativeBilling(details).document).toBeUndefined();
+        const done = f.observer.settle();
+        await vi.advanceTimersByTimeAsync(1001);
+        await done;
+        expect(f.observer.nativeBilling(details).error).toBe('native_billing_account_mismatch');
+        // A receipt after the bounded wait cannot resurrect the failed response.
+        f.extra(item);
+        expect(f.observer.nativeBilling(details).document).toBeUndefined();
+        expect(f.command).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('迟到的冲突完整头使已有报价及确认版本失效', async () => {
+    const f = fixture();
+    const item = f.begin();
+    f.finish(item);
+    await f.observer.settle();
+    const quoted = f.observer.nativeBilling(details);
+    expect(quoted.document).toBeDefined();
+    f.observer.arm();
+    f.extra(item, { authorization: 'Bearer ' + token(), 'chatgpt-account-id': 'other-account' });
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+    expect(() => f.observer.assertNativeBillingVersion(quoted.version)).toThrow();
+    expect(f.observer.failure).toBe('native_billing_changed_after_confirmation');
+  });
+
+  it('冲突的早到完整头不能被随后正常完整头覆盖', async () => {
+    const f = fixture();
+    const item = { id: '1', session: 'owned' };
+    f.extra(item, { authorization: 'Bearer ' + token(), 'chatgpt-account-id': 'other-account' });
+    f.extra(item);
+    f.finish(f.begin({ headers: { authorization: 'Bearer ' + token() } }));
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+    expect(f.observer.nativeBilling(details).error).toBe('native_billing_account_mismatch');
+  });
+
+  it('受控子会话只接纳自己的完整头，且旧计税不能解除新计税在途', async () => {
+    const f = fixture();
+    const older = f.begin({ headers: { authorization: 'Bearer ' + token() } });
+    const latest = f.begin({
+      session: 'owned-child',
+      headers: { authorization: 'Bearer ' + token() }
+    });
+    f.extra(older);
+    f.finish(older);
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+    expect(f.observer.nativeBilling(details).pending).toBe(true);
+    f.extra(latest);
+    f.finish(latest);
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).document).toBeDefined();
+  });
+
+  it('计税与清空税号均等待各自完整头，不以另一个响应替代', async () => {
+    const f = fixture();
+    const tax = f.begin({ headers: { authorization: 'Bearer ' + token() } });
+    const taxId = f.begin({
+      headers: { authorization: 'Bearer ' + token() },
+      path: '/backend-api/payments/checkout/update_tax_id',
+      data: { checkout_session_id: checkoutId, tax_id_info: null }
+    });
+    f.finish(tax);
+    f.finish(taxId, { ...response(), success: true });
+    f.extra(taxId);
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+    f.extra(tax);
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).error).toBeUndefined();
+    expect(f.observer.nativeBilling(details).document).toBeDefined();
+  });
+
+  it('完整头只留验证投影，关闭唤醒等待且不再读取原生body', async () => {
+    const output = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      const f = fixture();
+      f.extra(
+        { id: 'other', session: 'owned' },
+        { authorization: 'Bearer ' + token(), cookie: 'never-retain-wire-cookie' }
+      );
+      const item = f.begin({ headers: { authorization: 'Bearer ' + token() } });
+      f.finish(item);
+      f.observer.close();
+      await f.observer.settle();
+      const saved = JSON.stringify(f.observer, (_key, value) =>
+        value instanceof Map ? [...value.entries()] : value
+      );
+      expect(saved).not.toContain(token());
+      expect(saved).not.toContain('never-retain-wire-cookie');
+      expect(f.command).not.toHaveBeenCalled();
+    } finally {
+      output.mockRestore();
+    }
+  });
+
   it('关闭时的核价诊断仅含安全状态，不泄漏凭据、账号或账单资料', () => {
     const output = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     try {
