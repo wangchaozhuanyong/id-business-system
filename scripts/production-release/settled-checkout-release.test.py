@@ -127,6 +127,33 @@ class SettledCheckoutTests(unittest.TestCase):
                     B.transport({'commit': 'a' * 40, 'workflowRunId': '1'}, 'release')
                 self.assertEqual(send.call_count, 1)
 
+    def test_api_layer_rebuilds_normalized_ancestors_and_checks_runtime_uid(self):
+        import tempfile
+        from types import SimpleNamespace
+        original_load = P.load
+        commands = []
+
+        def build(driver, context, reference, role, before, stage):
+            self.assertIn('COPY overlay/ /', (context / 'Dockerfile').read_text())
+            for name in ('overlay', 'overlay/app', 'overlay/app/apps', 'overlay/app/apps/api',
+                         'overlay/app/apps/api/dist', 'overlay/app/apps/api/dist/nested'):
+                self.assertEqual((context / name).stat().st_mode & 0o777, 0o755)
+            driver.run('docker', 'build', '--network', 'none', str(context))
+
+        driver = SimpleNamespace(run=lambda *a, **kw: commands.append(a) or 'READABLE\n')
+        fake = SimpleNamespace(helpers=lambda: (SimpleNamespace(build_image=build), driver, None))
+        with patch.object(P, 'load', side_effect=lambda name: fake if name == 'bitbrowser-history-release.py' else original_load(name)):
+            p = P.engine(self.c)
+            h, _, _ = p.helpers()
+            with tempfile.TemporaryDirectory(dir=P.ROOT / '.runtime') as name:
+                context = Path(name)
+                (context / 'modules/nested').mkdir(parents=True, mode=0o700)
+                (context / 'modules/nested/test.js').write_text('test')
+                (context / 'Dockerfile').write_text('FROM parent\nCOPY modules/ /app/apps/api/dist/\n')
+                h.build_image(driver, context, 'candidate', 'api', {}, context)
+        self.assertEqual(commands[0][:3], ('docker', 'build', '--no-cache'))
+        self.assertEqual(commands[1][:8], ('docker', 'run', '--rm', '--network', 'none', '--user', '1000:1000', '--entrypoint'))
+
 
 if __name__ == '__main__':
     unittest.main()

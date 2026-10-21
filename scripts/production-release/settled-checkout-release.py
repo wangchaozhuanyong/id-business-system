@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shutil
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -108,6 +109,37 @@ def engine(c):
     p.UPDATED, p.REBOUND, p.PRESERVED = UPDATED, REBOUND, PRESERVED
     p.validate_contract, p.verify_proof = validate_contract, verify_proof
     p.production_sources = lambda contract: contract['productionSources']
+    original_helpers = p.helpers
+
+    def helpers():
+        h, d, retired = original_helpers()
+        original_build = h.build_image
+
+        def image(driver, context, reference, role, before, stage):
+            need(role == 'api', 'API_ONLY_BUILD')
+            dockerfile = context / 'Dockerfile'
+            text = dockerfile.read_text()
+            line = 'COPY modules/ /app/apps/api/dist/'
+            need(text.count(line) == 1, 'API_OVERLAY_LAYOUT')
+            shutil.copytree(context / 'modules', context / 'overlay/app/apps/api/dist')
+            load('recharge-availability-release.py').normalize_image_context(context / 'overlay')
+            dockerfile.write_text(text.replace(line, 'COPY overlay/ /'))
+
+            class FreshApiBuild:
+                def run(self, *args, **kwargs):
+                    need(args[:2] == ('docker', 'build'), 'API_BUILD_COMMAND_CHANGED')
+                    return driver.run(*args[:2], '--no-cache', *args[2:], **kwargs)
+
+            original_build(FreshApiBuild(), context, reference, role, before, stage)
+            code = 'const fs=require("fs");for(const n of ' + json.dumps(sorted(MODULES)) + ')fs.readFileSync("/app/apps/api/dist/"+n);console.log("READABLE")'
+            need(driver.run('docker', 'run', '--rm', '--network', 'none', '--user', '1000:1000',
+                            '--entrypoint', 'node', reference, '-e', code).strip() == 'READABLE',
+                 'NONROOT_API_UNREADABLE')
+
+        h.build_image = image
+        return h, d, retired
+
+    p.helpers = helpers
     # Native baseline, locking, backup, SQL fence, finite image build, smoke,
     # service/source preservation and independent readback remain inherited.
     return p

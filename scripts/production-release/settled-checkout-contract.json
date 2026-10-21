@@ -158,7 +158,7 @@
     "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
     "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
     "settled-checkout-publication.py": "4f8cd9cbb2de5f318db82f7fdbfd505aba015322a69f030ee7b6f20857ccc0e3",
-    "settled-checkout-release.py": "65d237921ea00f1457528e4fcc68edd7e016762f2451c996034f4694ee23fb23"
+    "settled-checkout-release.py": "bb464379cfff149f6d3d13e455d314f618c1c56406ebf4ecca8f7277e328cd3f"
   },
   "engineHealth": {
     "activeTasks": 0,
