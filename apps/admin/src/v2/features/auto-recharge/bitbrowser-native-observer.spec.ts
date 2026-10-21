@@ -176,6 +176,7 @@ describe('原生计税被动观察与确认版本屏障', () => {
       const logged = JSON.stringify(output.mock.calls);
       expect(output.mock.calls).toHaveLength(1);
       expect(logged).toContain('native_billing_account_mismatch');
+      expect(logged).toContain('token_account_mismatch');
       for (const secret of [
         details.number,
         details.cvc,
@@ -192,6 +193,22 @@ describe('原生计税被动观察与确认版本屏障', () => {
     }
   });
 
+  it('诊断区分原生响应读取失败，且不记录传输错误原文', async () => {
+    const output = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      const f = fixture();
+      f.command.mockRejectedValueOnce(new Error('synthetic-private-transport-description'));
+      f.finish(f.begin());
+      await f.observer.settle();
+      f.observer.close();
+      const logged = JSON.stringify(output.mock.calls);
+      expect(logged).toContain('native_billing_body_unavailable');
+      expect(logged).not.toContain('synthetic-private-transport-description');
+      expect(logged).not.toContain(details.number);
+    } finally {
+      output.mockRestore();
+    }
+  });
   it('旧GET账单不能覆盖新taxes完整报价，也不保留响应秘密', async () => {
     const f = fixture();
     const old = response().checkout_session;

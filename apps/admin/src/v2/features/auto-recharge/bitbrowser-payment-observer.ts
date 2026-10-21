@@ -21,7 +21,17 @@ import {
   type StripeQuoteDocument
 } from './bitbrowser-stripe-quote';
 
+type NativeAuthIssue =
+  | 'none'
+  | 'token_missing'
+  | 'token_invalid'
+  | 'token_account_mismatch'
+  | 'account_header_missing'
+  | 'account_header_mismatch'
+  | 'token_expired_or_missing';
+
 interface NativeRequestObservation {
+  authIssue: NativeAuthIssue;
   generation: number;
   version: number;
   sequence: number;
@@ -70,6 +80,7 @@ export class DirectPaymentObserver {
   private nativeTaxesSequence = 0;
   private nativeInflight = new Set<number>();
   private nativeError?: string;
+  private nativeAuthIssue: NativeAuthIssue = 'none';
   private nativeBillingAnchor?: NativeBillingRequest;
   private nativeQuoteVersion = 0;
   private nativeQuote?: { request: NativeBillingRequest; document: PaymentDocument };
@@ -129,6 +140,7 @@ export class DirectPaymentObserver {
         }
         let accountMatches = false;
         let nativeAccountMatches = false;
+        let nativeAuthIssue: NativeAuthIssue = 'token_missing';
         if (official) {
           const headers = paymentObject(request.headers);
           const header = (name: string) =>
@@ -150,8 +162,21 @@ export class DirectPaymentObserver {
               typeof claims.exp === 'number' &&
               Number.isFinite(claims.exp) &&
               claims.exp * 1000 > Date.now();
+            nativeAuthIssue = nativeAccountMatches
+              ? 'none'
+              : !encoded
+                ? 'token_missing'
+                : claims['https://api.openai.com/auth']?.chatgpt_account_id !==
+                    browser.identity.accountId
+                  ? 'token_account_mismatch'
+                  : header('chatgpt-account-id') === undefined
+                    ? 'account_header_missing'
+                    : header('chatgpt-account-id') !== browser.identity.accountId
+                      ? 'account_header_mismatch'
+                      : 'token_expired_or_missing';
           } catch {
             accountMatches = false;
+            nativeAuthIssue = 'token_invalid';
           }
         }
         if (
@@ -230,7 +255,8 @@ export class DirectPaymentObserver {
                 url.pathname,
                 String(request.method),
                 data,
-                nativeAccountMatches
+                nativeAccountMatches,
+                nativeAuthIssue
               )
             : undefined;
         // Native requests can contain tax IDs. Keep only their explicit billing projection.
@@ -320,6 +346,7 @@ export class DirectPaymentObserver {
     this.nativeTaxesSequence = 0;
     this.nativeInflight.clear();
     this.nativeError = undefined;
+    this.nativeAuthIssue = 'none';
     this.nativeQuote = undefined;
     this.nativeBillingAnchor = undefined;
     this.nativeQuoteVersion = 0;
@@ -357,7 +384,8 @@ export class DirectPaymentObserver {
     path: string,
     method: string,
     data: PaymentDocument,
-    accountMatches: boolean
+    accountMatches: boolean,
+    authIssue: NativeAuthIssue
   ) {
     const kind = path.endsWith('/taxes') ? 'taxes' : 'tax_id';
     this.nativeVersion++;
@@ -376,8 +404,10 @@ export class DirectPaymentObserver {
       version: this.nativeVersion,
       sequence: this.nativeTaxesSequence,
       kind,
+      authIssue,
       valid: false
     };
+    this.nativeAuthIssue = authIssue;
     this.nativeInflight.add(item.version);
     try {
       if (!accountMatches) throw new Error('native_billing_account_mismatch');
@@ -408,6 +438,7 @@ export class DirectPaymentObserver {
       item.sequence !== this.nativeTaxesSequence
     )
       return;
+    this.nativeAuthIssue = item.authIssue;
     this.nativeError = /^native_billing_[a-z_]+$/.test(reason)
       ? reason
       : 'native_billing_response_invalid';
@@ -433,12 +464,11 @@ export class DirectPaymentObserver {
       if (!native.valid) return;
       if (item.status < 200 || item.status >= 300) throw new Error('native_billing_http_failed');
       if (item.responseTooLarge) throw new Error('native_billing_response_oversized');
-      const body = await this.browser.cdp.command(
-        'Network.getResponseBody',
-        { requestId },
-        item.session,
-        3000
-      );
+      const body = await this.browser.cdp
+        .command('Network.getResponseBody', { requestId }, item.session, 3000)
+        .catch(() => {
+          throw new Error('native_billing_body_unavailable');
+        });
       if (
         this.closed ||
         native.generation !== this.nativeGeneration ||
@@ -448,13 +478,13 @@ export class DirectPaymentObserver {
       if (!this.ownsSession(item.session)) throw new Error('native_billing_session_changed');
       if (typeof body.body === 'string' && body.body.length > NATIVE_QUOTE_BODY_LIMIT)
         throw new Error('native_billing_response_oversized');
-      if (typeof body.body !== 'string' || body.base64Encoded)
-        throw new Error('native_billing_response_invalid');
+      if (typeof body.body !== 'string') throw new Error('native_billing_body_missing');
+      if (body.base64Encoded) throw new Error('native_billing_body_base64');
       let raw: unknown;
       try {
         raw = JSON.parse(body.body);
       } catch {
-        throw new Error('native_billing_response_invalid');
+        throw new Error('native_billing_body_json_invalid');
       }
       const document = nativeQuoteDocument(raw, native.billing!, this.nativeBinding!, native.kind);
       if (native.version >= this.nativeQuoteVersion) {
@@ -734,12 +764,17 @@ export class DirectPaymentObserver {
   }
   close() {
     if (this.nativeBinding && !this.closed)
-      console.info('[bitbrowser-native-quote]', {
-        observed: this.nativeObserved,
-        pending: this.nativeInflight.size > 0,
-        quoteReady: Boolean(this.nativeQuote),
-        reason: this.nativeError ?? 'none'
-      });
+      console.info(
+        '[bitbrowser-native-quote]',
+        JSON.stringify({
+          observed: this.nativeObserved,
+          pending: this.nativeInflight.size > 0,
+          quoteReady: Boolean(this.nativeQuote),
+          taxesObserved: this.nativeTaxesSequence > 0,
+          authIssue: this.nativeAuthIssue,
+          reason: this.nativeError ?? 'none'
+        })
+      );
     this.closed = true;
     this.remove();
     this.request.clear();
