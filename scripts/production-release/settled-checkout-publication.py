@@ -1,4 +1,4 @@
-"""Main-only, finite admin build and publication of the observed titlebar repair."""
+"""Main-only finite native tax context publication; no API or payment actions."""
 import argparse
 import base64
 import io
@@ -104,6 +104,10 @@ def reconstruct_parent(c):
     b.overlay(admin, {n: v for n, v in published['productionSources'].items()
                      if n.startswith(('apps/admin/', 'packages/shared/'))}, manual['sourceReviewCommit'])
     b.overlay(admin, {n: v for n, v in finance['productionSources'].items() if n.startswith('apps/admin/')}, finance['sourceReviewCommit'])
+    # Reproduce the already-published header repair before applying this successor.
+    b.overlay(admin, {'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-page.ts':
+                     '5e7c50d16146187b2d1c4a5d217974309566a993332e20408cd3c64e0a6a6bdb'},
+              '893da2f6f8a9b06a26f43b13b87cd5cb89fb499d')
     F.patch_build_lock(admin, finance)
     need(all(sha((admin / name).read_bytes()) == digest for name, digest in c['sourceParents'].items()), 'BUILD_SOURCE_PARENT_CHANGED')
     return admin, b
@@ -190,10 +194,10 @@ def publish(c):
     path = OUT / 'bitbrowser-history-artifact.tar.gz'
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('官网新版标题栏兼容：仅一个管理端源码，保留 API 与历史资源，无迁移、付款或订阅操作。\n')
+    notes.write_text('官网计税缺省字段兼容：仅一个管理端源码，明确核实无税号证明，保留 API 与历史资源，无迁移、付款或订阅操作。\n')
     tag = 'bitbrowser-history-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
-            '--title', '套餐入口兼容 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
+            '--title', '计税字段兼容 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
     plan['artifactUrl'] = 'https://github.com/' + REPO + '/releases/download/' + tag + '/bitbrowser-history-artifact.tar.gz'
     preflight = transport(plan, 'preflight')
     need(preflight['status'] == 'BITBROWSER_HISTORY_PREFLIGHT_VERIFIED', 'PREFLIGHT_FAILED')
