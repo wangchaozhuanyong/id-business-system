@@ -1,4 +1,4 @@
-"""One-module successor of the live finance release; no payment or data writes."""
+"""Two-module successor preserving the live release; no payment or data writes."""
 import hashlib
 import importlib.util
 import json
@@ -8,14 +8,17 @@ import shutil
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-SCOPE = 'BITBROWSER_SETTLED_CHECKOUT_20261021'
-RECIPE = 'settled-checkout-20261021'
+SCOPE = 'BITBROWSER_SETTLED_LINEAGE_20261021'
+RECIPE = 'settled-lineage-20261021'
 CONTRACT_FILE = 'settled-checkout-contract.json'
-CURRENT = 'aec7c4adae25394f489337a8c883d3b6be50af7b'
-SOURCE = 'b5de904e778dc0ce4a1f648caa391770130cf4e1'
+CURRENT = 'e5f295ed4fd48f712169f3a6faaae33378f9cd6b'
+SOURCE = '22ba535ccdebdc4cf1abf98fb2cc5c9d9f2bc20b'
 SOURCE_FILE = 'apps/api/src/id-business-v2/auto-recharge/recharge-account-restore.ts'
 TEST_FILE = SOURCE_FILE.replace('.ts', '-settled.spec.ts')
-MODULES = frozenset('id-business-v2/auto-recharge/recharge-account-restore' + s
+SOURCES = frozenset((SOURCE_FILE, SOURCE_FILE.replace('recharge-account-restore', 'recharge-unidentified-checkout')))
+TESTS = frozenset((TEST_FILE, SOURCE_FILE.replace('recharge-account-restore.ts', 'recharge-unidentified-replacement.spec.ts')))
+MODULES = frozenset('id-business-v2/auto-recharge/' + n + s
+                    for n in ('recharge-account-restore', 'recharge-unidentified-checkout')
                     for s in ('.js', '.js.map', '.d.ts'))
 UPDATED = ('api',)
 REBOUND = ('online-recharge',)
@@ -45,11 +48,11 @@ def load(name):
 def validate_contract(c):
     need(c.get('version') == 1 and c.get('status') == 'FROZEN' and c.get('scope') == SCOPE
          and c.get('recipe') == RECIPE and c.get('expectedCurrent') == CURRENT
-         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 655,
+         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 657,
          'CONTRACT_IDENTITY')
-    need(set(c.get('productionSources', {})) == {SOURCE_FILE}
-         and set(c.get('validationSources', {})) == {TEST_FILE}
-         and set(c.get('sourceParents', {})) == {SOURCE_FILE}
+    need(set(c.get('productionSources', {})) == SOURCES
+         and set(c.get('validationSources', {})) == TESTS
+         and set(c.get('sourceParents', {})) == SOURCES
          and set(c.get('apiModules', [])) == MODULES
          and c.get('updatedServices') == list(UPDATED)
          and c.get('reboundServices') == list(REBOUND)
@@ -69,7 +72,7 @@ def validate_contract(c):
 def verify_quality(value, commit):
     need(type(value) is dict and set(value) == {'sources', 'release'}
          and value['sources']['commit'] == SOURCE
-         and value['sources']['pullRequest'] == 655
+         and value['sources']['pullRequest'] == 657
          and value['release']['commit'] == commit
          and all(re.fullmatch('[1-9][0-9]*', str(v['runId'])) for v in value.values())
          and re.fullmatch('[a-f0-9]{64}', value['sources']['sourceReceiptSha256']),
