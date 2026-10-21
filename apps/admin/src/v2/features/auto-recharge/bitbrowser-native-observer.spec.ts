@@ -166,6 +166,32 @@ function fixture() {
 }
 
 describe('原生计税被动观察与确认版本屏障', () => {
+  it('关闭时的核价诊断仅含安全状态，不泄漏凭据、账号或账单资料', () => {
+    const output = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      const f = fixture();
+      f.begin({ account: 'other-account' });
+      f.observer.close();
+      f.observer.close();
+      const logged = JSON.stringify(output.mock.calls);
+      expect(output.mock.calls).toHaveLength(1);
+      expect(logged).toContain('native_billing_account_mismatch');
+      for (const secret of [
+        details.number,
+        details.cvc,
+        details.email,
+        details.line1,
+        details.name,
+        checkoutId,
+        accountId,
+        token()
+      ])
+        expect(logged).not.toContain(secret);
+    } finally {
+      output.mockRestore();
+    }
+  });
+
   it('旧GET账单不能覆盖新taxes完整报价，也不保留响应秘密', async () => {
     const f = fixture();
     const old = response().checkout_session;
