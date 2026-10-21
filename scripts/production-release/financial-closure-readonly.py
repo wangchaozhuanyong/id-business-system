@@ -102,7 +102,7 @@ def observe_server(data):
                '-f', str(current / 'compose.release.json')]
     states = {}
     for role in roles:
-        container = run(*compose, 'ps', '-q', role)
+        container = run(*compose, 'ps', '-a', '-q', role)
         assert re.fullmatch('[a-f0-9]{64}', container)
         row = json.loads(run('docker', 'inspect', container))[0]
         config = {key: row[key] for key in ('Config', 'HostConfig', 'Mounts')}
@@ -131,6 +131,7 @@ def observe_server(data):
         info, separator, _ = url.netloc.rpartition('@')
         assert separator and info
         private_url = urlunsplit(url._replace(netloc=info + '@mysql' + (':' + str(url.port) if url.port else '')))
+        audit = {'status': 'AUDIT_UNAVAILABLE', 'databaseWrites': 0, 'stage': 'CONNECT', 'rule': None}
         result = run('docker', 'exec', '-i', '-w', '/app', states['api']['containerId'],
                      'node', '-e', data['runner'],
                      private_input=json.dumps({'auditUrl': private_url, 'rules': data['rules']}),

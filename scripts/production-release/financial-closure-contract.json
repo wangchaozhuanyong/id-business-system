@@ -42,7 +42,7 @@
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
     "financial-closure-publication.py": "7d5a031132fd9ca1948ae258bcc843a044625646fb0afc2684c25707cfcd5b3d",
-    "financial-closure-readonly.py": "ae79b6186b8acda35479f2ac887b81d43b4b3afbbca7cd920d7695a59aba427b",
+    "financial-closure-readonly.py": "1c1671c48bef5c2ea37a28aa99590781d465157b12833a2ea658d2cc91a13cc0",
     "financial-closure-readonly.test.py": "44e4e901b5c331a86377f8c9fefcd65a82e3f87126b55c1cb77d2114bfd1a1df",
     "financial-closure-release.py": "6b394628a0b6b7d8f08f3e6b885311c1989c428dfc47adb62e5ed0a6488517f2",
     "financial-closure-release.test.py": "aa9331e9dae67464cdf1fac786db06f5167084b0244fd094106aafe998a01bd8",
