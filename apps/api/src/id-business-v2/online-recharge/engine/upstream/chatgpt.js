@@ -437,6 +437,8 @@ function safeCheckoutOpenDiagnostics(value) {
             ...(value.reason === 'http_error' && Number.isInteger(value.httpStatus)
                 && value.httpStatus >= 400 && value.httpStatus <= 599 ? { httpStatus: value.httpStatus } : {})
         };
+        const initialization = require('../checkout-initialization.cjs').sanitize(value.initialization);
+        if (initialization) result.initialization = initialization;
         if (!['readiness', 'final_check'].includes(value.stage)) return result;
         const loading = require('../checkout-recovery.cjs').sanitizeOriginalCheckoutReloadDiagnostics(value.loading);
         if (loading) result.loading = loading;
@@ -517,6 +519,12 @@ function safeCheckoutOpenDiagnostics(value) {
                     clean.complete = false;
                 }
             }
+            if (Array.isArray(probe.failures) && probe.failures.length <= 15)
+                clean.failures = probe.failures.filter(row => row
+                    && ['frame_scan', 'frame_owner', 'control_snapshot'].includes(row.phase)
+                    && ['timeout', 'detached', 'closed', 'aborted', 'read_failed'].includes(row.reason)
+                    && Number.isInteger(row.count) && row.count > 0 && row.count <= 10000)
+                    .map(row => ({ phase: row.phase, reason: row.reason, count: row.count }));
             if (clean.shadowCoverage !== 'open_only' || !clean.numberComparison || !Array.isArray(clean.rows)
                 || ['framesInspected', 'framesFailed', 'complete', 'timedOut', 'aborted', 'pageClosed', 'truncated']
                     .some(key => !Object.hasOwn(clean, key))
@@ -574,7 +582,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             { code: checkout.errorCode || 'CHECKOUT_CREATION_UNKNOWN', checkoutCreationState: checkout.creationState || 'unknown' });
     }
 
-    let budget;
+    let budget, initialization;
     let stage = 'navigation';
     try {
         const url = checkout.checkoutUrl;
@@ -594,6 +602,9 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         });
         const run = (operation) => { budget.assert(); return budget.run(operation()); };
         const originalQuoteId = recovery.quoteIdForUrl(url, recovery.officialCheckoutForPage(page));
+        // Install observation before the first document/SDK request. No routing,
+        // response rewriting, page script injection, or additional network call.
+        initialization = require('../checkout-initialization.cjs').observe(page, { signal: ownerSignal });
         const response = await run(() => page.goto(url, { waitUntil: 'commit', timeout: budget.timeout(90000) }));
         if (!response || typeof response.status !== 'function') throw checkoutOpenError('check_failed');
         const status = response.status();
@@ -686,6 +697,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                         : stage === 'navigation' ? 'network_error' : 'check_failed');
         const checkoutOpenDiagnostics = safeCheckoutOpenDiagnostics({
             ...safeCheckoutOpenDiagnostics(error.checkoutOpenDiagnostics),
+            initialization: initialization?.snapshot(),
             loading: require('../checkout-recovery.cjs').originalCheckoutReloadDiagnostics(page),
             stage, reason, code: error.code, httpStatus: error.httpStatus
         });
@@ -700,10 +712,15 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             not_ready: '原结账页的付款控件尚未加载',
             check_failed: '原结账页打开或验证未完成'
         };
-        throw Object.assign(new Error(`${reasons[reason] || reasons.check_failed}；未另建结账单`),
+        const failure = Object.assign(new Error(`${reasons[reason] || reasons.check_failed}；未另建结账单`),
             { code, checkoutCreationState: 'accepted', checkoutOpenDiagnostics,
                 ...(error.checkoutOpenCleanupFailed ? { checkoutOpenCleanupFailed: true } : {}) });
+        // Only the accepted original URL may travel to the existing encrypted
+        // debug result channel. Never take the current redirect or add it to logs.
+        Object.defineProperty(failure, 'originalCheckoutUrl', { value: checkout.checkoutUrl });
+        throw failure;
     } finally {
+        initialization?.dispose();
         budget?.dispose();
     }
 }

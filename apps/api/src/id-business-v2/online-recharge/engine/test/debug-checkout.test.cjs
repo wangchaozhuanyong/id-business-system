@@ -63,6 +63,50 @@ test('debug keeps its 60 second timeout when no supported final button is presen
   assert.deepEqual(f.effects, { click: 0, fill: 0 });
 });
 
+test('accepted failed debug retains only its original link through the existing protected result channel', async () => {
+  const failureStart = source.indexOf('        const resultUnknown =');
+  const failureEnd = source.indexOf('\n    } finally {', failureStart);
+  assert.ok(failureStart >= 0 && failureEnd > failureStart);
+  const original = 'https://chatgpt.com/checkout/openai_fixture/cs_test_failedDebugOriginal';
+  for (const scenario of [
+    { debugOnly: true, submitted: false, accepted: true, retain: true },
+    { debugOnly: false, submitted: false, accepted: true, retain: false },
+    { debugOnly: true, submitted: true, accepted: true, retain: false },
+    { debugOnly: true, submitted: false, accepted: false, retain: false }
+  ]) {
+    const error = Object.assign(new Error('Payment UI did not initialize'), {
+      code: 'CHECKOUT_OPEN_FAILED',
+      checkoutCreationState: scenario.accepted ? 'accepted' : 'unknown',
+      checkoutOpenDiagnostics: { stage: 'readiness', reason: 'not_ready' }
+    });
+    Object.defineProperty(error, 'originalCheckoutUrl', { value: original });
+    const run = runInNewContext(
+      '(async () => {' + source.slice(failureStart, failureEnd) + '\n})',
+      {
+        e: error,
+        debugOnly: scenario.debugOnly,
+        lastPaymentResult: null,
+        paymentSucceeded: false,
+        wasSubmitted: () => scenario.submitted,
+        require: (name) => {
+          if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => false };
+          if (name === './chatgpt') return require('../upstream/chatgpt');
+          throw new Error('Unexpected failure-path dependency');
+        }
+      }
+    );
+    const result = await run();
+    assert.equal(result.success, false);
+    assert.equal(result.resultUnknown, scenario.submitted);
+    assert.equal(result.checkoutUrl, scenario.retain ? original : undefined);
+    assert.equal(result.error.includes(original), false);
+    const security = require('../security.cjs');
+    const transported = security.sanitizeResult(result);
+    assert.equal(transported.checkoutUrl, scenario.retain ? original : undefined);
+    assert.equal(JSON.stringify(security.sanitize(result)).includes(original), false);
+  }
+});
+
 test('only checkout debug permits an unverified target through the actual index preflight call', async () => {
   const preflightStart = source.indexOf(
     "const preflight = await require('../confirmation.cjs').preflightPayment"

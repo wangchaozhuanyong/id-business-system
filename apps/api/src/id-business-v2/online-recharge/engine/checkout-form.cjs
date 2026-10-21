@@ -1499,12 +1499,28 @@ async function inspectCardExclusions(page, { deadline = Date.now() + 2000, signa
     pageClosed: false,
     truncated: false,
     numberComparison: { semanticEligible: 0, geometryEditable: 0 },
+    failures: [],
     rows: []
+  };
+  const recordFailure = (phase, error) => {
+    const reason = signal?.aborted
+      ? 'aborted'
+      : closed(page)
+        ? 'closed'
+        : error?.code === 'CHECKOUT_FORM_TIMEOUT'
+          ? 'timeout'
+          : /detached|execution context was destroyed/i.test(String(error?.message || ''))
+            ? 'detached'
+            : 'read_failed';
+    const prior = result.failures.find((row) => row.phase === phase && row.reason === reason);
+    if (prior) prior.count = Math.min(10000, prior.count + 1);
+    else result.failures.push({ phase, reason, count: 1 });
   };
   try {
     const frames = page.frames();
     for (const frame of frames.slice(0, 64)) {
       const readDeadline = Math.min(deadline, Date.now() + FRAME_READ_MS);
+      let phase = 'frame_owner';
       try {
         timeout(deadline, signal);
         if (closed(page)) break;
@@ -1528,6 +1544,7 @@ async function inspectCardExclusions(page, { deadline = Date.now() + 2000, signa
             owner.dispose().catch(() => {});
           }
         }
+        phase = 'control_snapshot';
         const snapshot = await within(
           () =>
             frame
@@ -1575,13 +1592,15 @@ async function inspectCardExclusions(page, { deadline = Date.now() + 2000, signa
         }
       } catch (error) {
         result.framesFailed++;
+        recordFailure(phase, error);
         result.timedOut ||= error?.code === 'CHECKOUT_FORM_TIMEOUT' && readDeadline === deadline;
         if (result.timedOut || signal?.aborted || Date.now() >= deadline || closed(page)) break;
       }
     }
     result.truncated ||= frames.length > 64;
-  } catch {
+  } catch (error) {
     result.framesFailed++;
+    recordFailure('frame_scan', error);
   }
   result.timedOut ||= Date.now() >= deadline;
   result.aborted = signal?.aborted === true;

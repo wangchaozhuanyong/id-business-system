@@ -486,6 +486,7 @@ test('exclusion probe is bounded on frame failure and never changes the original
   const result = await inspectCardExclusions(page, { deadline: started + 100 });
   assert.equal(result.complete, false);
   assert.equal(result.framesFailed, 1);
+  assert.deepEqual(result.failures, [{ phase: 'control_snapshot', reason: 'timeout', count: 1 }]);
   assert.equal(result.timedOut, true);
   assert.ok(Date.now() - started < 700);
   assert.equal(before.ready, true);
@@ -524,9 +525,22 @@ test('exclusion probe is bounded on frame failure and never changes the original
     );
     assert.equal(probe.complete, false);
     assert.equal(probe.framesFailed, 1);
+    assert.equal(probe.failures[0].phase, 'control_snapshot');
+    assert.equal(probe.failures[0].reason, 'timeout');
     assert.equal(probe.timedOut, budget === 80);
     assert.equal(laterReads, budget === 80 ? 0 : 1);
   }
+});
+
+test('exclusion probe identifies replaced frames without keeping exception text', async (t) => {
+  const page = await pageFor(t, cardHtml);
+  failFrameRead(t, page.mainFrame(), async () => {
+    throw Error('Execution context was destroyed: PRIVATE_FRAME_DETAILS');
+  });
+  const result = await inspectCardExclusions(page);
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.failures, [{ phase: 'control_snapshot', reason: 'detached', count: 1 }]);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_FRAME_DETAILS|Execution context/);
 });
 
 test('exclusion probe does not mistake a card-labelled checkbox for an editable input', async (t) => {

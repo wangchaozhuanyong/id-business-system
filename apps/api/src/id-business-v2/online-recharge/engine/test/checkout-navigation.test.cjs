@@ -129,6 +129,8 @@ async function fixture(t, options = {}) {
   await context.route('**/*', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (options.scriptAbort && url.href === 'https://js.stripe.com/fixture-initialization.js')
+      return route.abort(options.scriptAbort);
     if (
       request.method() === 'POST' &&
       url.origin === origin &&
@@ -210,13 +212,23 @@ async function fixture(t, options = {}) {
     return { status: () => response.status, text: async () => response.text };
   };
   verificationStats.set(page, stats);
-  const start = () =>
-    openApiCheckout(page, {
-      accessToken: 'synthetic-noncredential',
-      planType: 'pro_20x',
-      country: 'PH',
-      currency: 'PHP'
-    });
+  const start = async () => {
+    const errors = page.listenerCount('pageerror');
+    try {
+      return await openApiCheckout(page, {
+        accessToken: 'synthetic-noncredential',
+        planType: 'pro_20x',
+        country: 'PH',
+        currency: 'PHP'
+      });
+    } finally {
+      assert.equal(
+        page.listenerCount('pageerror'),
+        errors,
+        'opening diagnostics must always remove its observers'
+      );
+    }
+  };
   return { page, context, stats, start, navigation };
 }
 
@@ -226,6 +238,41 @@ function stoppedWithoutPayment(stats) {
   assert.equal(stats.otherWrites, 0);
   assert.equal(stats.unexpected, 0);
 }
+function assertOpeningDiagnostics(actual, expected) {
+  const { initialization, ...existing } = actual;
+  assert.deepEqual(existing, expected);
+  assert.ok(initialization, 'first-open observation must survive the failure projection');
+  assert.deepEqual(
+    require('../checkout-initialization.cjs').sanitize(initialization),
+    initialization
+  );
+}
+
+test('first-open SDK failure reaches the real accepted-checkout result without filling or replacing it', async (t) => {
+  const { stats, start } = await fixture(t, {
+    scriptAbort: 'connectionclosed',
+    maxWaitMs: 4000,
+    readyWaitMs: 700,
+    body: '<h1>Configure your plan</h1><p>PHP 9990</p><div>Payment loading</div><script src="https://js.stripe.com/fixture-initialization.js"></script>'
+  });
+  await assert.rejects(start(), (error) => {
+    assert.equal(error.checkoutCreationState, 'accepted');
+    assert.equal(error.originalCheckoutUrl, originalUrl);
+    assert.equal(JSON.stringify(error).includes(originalUrl), false);
+    assert.equal(error.checkoutOpenDiagnostics.stage, 'readiness');
+    assert.equal(
+      error.checkoutOpenDiagnostics.initialization.firstFailure.endpoint,
+      'stripe_script'
+    );
+    assert.equal(
+      error.checkoutOpenDiagnostics.initialization.firstFailure.code,
+      'CONNECTION_CLOSED'
+    );
+    assert.equal(error.checkoutOpenDiagnostics.candidateCounts[0].count, 0);
+    return true;
+  });
+  stoppedWithoutPayment(stats);
+});
 
 test('native commit reaches actual ready card controls while DOMContentLoaded stays pending', async (t) => {
   const { page, stats, start } = await fixture(t, { pendingModule: true });
@@ -536,7 +583,7 @@ test('a real HTTP error stops before verification even if its document has card 
   const { stats, start } = await fixture(t, { status: 503 });
   await assert.rejects(start(), (error) => {
     assert.equal(error.code, 'CHECKOUT_OPEN_FAILED');
-    assert.deepEqual(error.checkoutOpenDiagnostics, {
+    assertOpeningDiagnostics(error.checkoutOpenDiagnostics, {
       stage: 'navigation',
       reason: 'http_error',
       httpStatus: 503
@@ -557,7 +604,7 @@ for (const redirect of [
     const { stats, start } = await fixture(t, { redirect });
     await assert.rejects(start(), (error) => {
       assert.equal(error.code, 'CHECKOUT_OPEN_FAILED');
-      assert.deepEqual(error.checkoutOpenDiagnostics, {
+      assertOpeningDiagnostics(error.checkoutOpenDiagnostics, {
         stage: 'navigation',
         reason: 'original_changed'
       });
@@ -573,7 +620,10 @@ test('visible login on the original page is a login-stage failure rather than re
   const { stats, start } = await fixture(t, { login: true });
   await assert.rejects(start(), (error) => {
     assert.equal(error.code, 'CHECKOUT_OPEN_FAILED');
-    assert.deepEqual(error.checkoutOpenDiagnostics, { stage: 'login', reason: 'session_required' });
+    assertOpeningDiagnostics(error.checkoutOpenDiagnostics, {
+      stage: 'login',
+      reason: 'session_required'
+    });
     return true;
   });
   assert.equal(stats.verifications, 0);
@@ -584,7 +634,7 @@ test('native navigation network errors retain a controlled phase without leaking
   const { stats, start } = await fixture(t, { abortNavigation: true });
   await assert.rejects(start(), (error) => {
     assert.equal(error.code, 'CHECKOUT_OPEN_FAILED');
-    assert.deepEqual(error.checkoutOpenDiagnostics, {
+    assertOpeningDiagnostics(error.checkoutOpenDiagnostics, {
       stage: 'navigation',
       reason: 'network_error'
     });
@@ -601,7 +651,10 @@ test('a precommit navigation timeout never enters verification', async (t) => {
   t.after(() => hold.resolve());
   await assert.rejects(start(), (error) => {
     assert.equal(error.code, 'CHECKOUT_OPEN_FAILED');
-    assert.deepEqual(error.checkoutOpenDiagnostics, { stage: 'navigation', reason: 'timeout' });
+    assertOpeningDiagnostics(error.checkoutOpenDiagnostics, {
+      stage: 'navigation',
+      reason: 'timeout'
+    });
     return true;
   });
   assert.equal(stats.verifications, 0);
@@ -725,7 +778,10 @@ test('task cancellation during an empty payment region stops within the same pag
   const opening = start();
   const rejected = assert.rejects(opening, (error) => {
     assert.equal(error.code, 'CHECKOUT_OPEN_FAILED');
-    assert.deepEqual(error.checkoutOpenDiagnostics, { stage: 'readiness', reason: 'cancelled' });
+    assertOpeningDiagnostics(error.checkoutOpenDiagnostics, {
+      stage: 'readiness',
+      reason: 'cancelled'
+    });
     return true;
   });
   await page.getByRole('heading', { name: 'Configure your plan' }).waitFor();
