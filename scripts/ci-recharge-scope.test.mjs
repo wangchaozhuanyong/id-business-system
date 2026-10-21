@@ -3141,7 +3141,7 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
           return JSON.stringify({ artifacts: [{ name: 'quality-source-evidence-1', expired: false }] });
         if (args[1].endsWith('/jobs?per_page=100'))
           return JSON.stringify({ jobs: options.historical
-            ? ['guards', 'admin', 'api', 'connector'].map(part => ({ name: 'recharge (' + part + ')', conclusion: 'success' }))
+            ? (options.historicalParts ?? ['guards', 'admin', 'api', 'connector']).map(part => ({ name: 'recharge (' + part + ')', conclusion: options.failedParts?.includes(part) ? 'failure' : 'success' }))
             : [{ name: 'quality', conclusion: 'success' }] });
       }
       throw new Error('Unexpected process: ' + file);
@@ -8511,4 +8511,51 @@ test('线上代充执行器仅在相同测试输入和成功回执下复用，�
   ])
     assert.equal(affectsPart('online-engine', [path]), false, path);
   assert.throws(() => affectsPart('unknown-part', []), /Unknown check part/);
+});
+
+test('线上执行器复用真实 CLI 仅接受准确来源及成功任务，输入变化或失败仍重测', () => {
+  const paths = [
+    ...onlineCheckoutFirstOpenPaths,
+    ...onlineCheckoutFirstOpenControls,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  for (const [changed, historicalParts, failedParts, expected] of [
+    [
+      ['scripts/production-release/online-checkout-first-open-contract.json'],
+      ['guards', 'online-engine'],
+      [],
+      ['online-engine']
+    ],
+    [
+      ['apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js'],
+      ['online-engine'],
+      [],
+      []
+    ],
+    [['scripts/ci-recharge-check.mjs'], ['online-engine'], [], []],
+    [
+      ['apps/api/src/id-business-v2/online-recharge/engine/upstream/package-lock.json'],
+      ['online-engine'],
+      [],
+      []
+    ],
+    [[], ['online-engine'], ['online-engine'], []],
+    [[], [], [], []]
+  ]) {
+    const result = recordScopeClassification(paths, {}, 'pull_request', {
+      historical: true,
+      changed,
+      historicalParts,
+      failedParts
+    });
+    assert.equal(result.result.mode, 'recharge');
+    assert.deepEqual(result.result.checkParts, ['guards', 'online-engine']);
+    assert.deepEqual(result.result.reusedParts, expected);
+    assert.ok(result.gitCalls.some((args) => args[0] === 'merge-tree'));
+    assert.deepEqual(
+      result.apiCalls.filter((endpoint) => endpoint.endsWith('/jobs?per_page=100')),
+      ['repos/fixture/id-business/actions/runs/123/attempts/1/jobs?per_page=100']
+    );
+  }
 });

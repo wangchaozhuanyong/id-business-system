@@ -5894,6 +5894,7 @@ async function main() {
       );
   } else if (process.env.GITHUB_EVENT_NAME === 'pull_request' && mode === 'recharge') {
     const pr = event.pull_request;
+    const reuseParts = selectedParts(paths, undefined, proxyIdentityContext);
     const { workflow_runs: runs } = gh(
       `repos/${repo}/actions/workflows/quality.yml/runs?event=pull_request&branch=${encodeURIComponent(pr.head.ref)}&status=completed&per_page=10`
     );
@@ -5908,7 +5909,7 @@ async function main() {
       const { jobs } = gh(
         `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`
       );
-      for (const part of parts) {
+      for (const part of reuseParts) {
         if (
           reused.has(part) ||
           // Only the GPT candidate binds this complete artifact metadata closure.
@@ -5922,7 +5923,7 @@ async function main() {
           evidence.push({ part, run: run.id, tree });
         }
       }
-      if (reused.size === parts.length) break;
+      if (reused.size === reuseParts.length) break;
     }
   }
   const registrationNativeEvidence = readRegistrationNativeReuse({
