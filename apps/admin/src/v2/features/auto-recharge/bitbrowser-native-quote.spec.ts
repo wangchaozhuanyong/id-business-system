@@ -56,6 +56,7 @@ function response() {
       checkout_state: {
         id: binding.checkoutId,
         currency: 'php',
+        taxIdInfo: null,
         total: { total: { minorUnitsAmount: 98214 } },
         lineItems: [
           {
@@ -115,6 +116,42 @@ describe('原生计税报价只保留双向绑定的完整白名单', () => {
       postal_code: '97402'
     });
   });
+  it('官网省略tax_id时，仅在响应明确没有税号后恢复完整最终核价', async () => {
+    const raw = request();
+    Reflect.deleteProperty(raw, 'tax_id');
+    const projected = nativeBillingRequest(raw, binding);
+    const quote = response();
+    Object.assign(quote.checkout_session.checkout_state, { taxIdInfo: null });
+    const document = nativeQuoteDocument(quote, projected, binding);
+    expect(
+      await verifyNativeDirectQuote(
+        document,
+        binding.checkoutId,
+        binding.entity,
+        'plus',
+        details,
+        'Total due today PHP 982.14\nTax PHP 0.00\nRenews PHP 982.14 / month',
+        'PHP'
+      )
+    ).toMatchObject({ quote: { today: { amount_minor: 98214 }, tax: { amount_minor: 0 } } });
+    expect(JSON.stringify([projected, document])).not.toContain('response-secret');
+    expect(JSON.stringify([projected, document])).not.toContain('synthetic-private-tax-id');
+  });
+  it.each([undefined, '', {}, [], 'synthetic-private-tax-id'])(
+    '省略tax_id时，响应税号证明不为明确null就不能核价：%j',
+    (taxIdInfo) => {
+      const raw = request();
+      Reflect.deleteProperty(raw, 'tax_id');
+      const projected = nativeBillingRequest(raw, binding);
+      const quote = response();
+      if (taxIdInfo === undefined)
+        Reflect.deleteProperty(quote.checkout_session.checkout_state, 'taxIdInfo');
+      else Object.assign(quote.checkout_session.checkout_state, { taxIdInfo });
+      expect(() => nativeQuoteDocument(quote, projected, binding)).toThrow(
+        'native_billing_response_tax_context_unverified'
+      );
+    }
+  );
   it.each([
     { checkout_session_id: 'oaics_other' },
     { processor_entity: 'other_entity' },
@@ -168,6 +205,10 @@ describe('原生计税报价只保留双向绑定的完整白名单', () => {
     ).toThrow(/^native_billing_/);
   });
   it.each([
+    { taxIdInfo: undefined },
+    { taxIdInfo: '' },
+    { taxIdInfo: {} },
+    { taxIdInfo: 'synthetic-private-tax-id' },
     { id: 'oaics_other' },
     { currency: 'USD' },
     { total: {} },

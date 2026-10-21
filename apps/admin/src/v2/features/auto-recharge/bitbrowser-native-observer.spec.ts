@@ -41,6 +41,7 @@ const response = () => ({
     checkout_state: {
       id: checkoutId,
       currency: 'php',
+      taxIdInfo: null,
       total: { total: { minorUnitsAmount: 98214 } },
       lineItems: [{ quantity: 1, recurring: { interval: 'month', intervalCount: 1 } }],
       taxAmounts: [{ minorUnitsAmount: 0 }],
@@ -190,6 +191,27 @@ describe('原生计税被动观察与确认版本屏障', () => {
     changed.checkout_session_id = 'oaics_changed';
     expect(f.observer.nativeBilling(details).document?.checkout_session_id).toBe(checkoutId);
   });
+  it.each([true, false])(
+    '省略tax_id的真实请求只有明确无税号响应才产生报价：%s',
+    async (hasProof) => {
+      const f = fixture();
+      const raw = request();
+      Reflect.deleteProperty(raw, 'tax_id');
+      const quote = response();
+      if (!hasProof) Reflect.deleteProperty(quote.checkout_session.checkout_state, 'taxIdInfo');
+      f.finish(f.begin({ data: raw }), quote);
+      await f.observer.settle();
+      const result = f.observer.nativeBilling(details);
+      expect(result.pending).toBe(false);
+      if (hasProof) {
+        expect(result.document).toMatchObject({ checkout_session_id: checkoutId });
+        expect(result.error).toBeUndefined();
+      } else {
+        expect(result.document).toBeUndefined();
+        expect(result.error).toBe('native_billing_response_tax_context_unverified');
+      }
+    }
+  );
   it('loadingFinished之后body尚未读取完成仍保持pending，旧版本不能确认', async () => {
     const f = fixture();
     const before = f.observer.nativeBilling(details);

@@ -36,7 +36,7 @@ const sameBilling = (actual: Record<string, string>, expected: Record<string, st
 /** Project only the expected account/order and complete billing facts; discard tax IDs. */
 export function nativeBillingRequest(data: unknown, binding: NativeQuoteBinding) {
   const raw = paymentObject(data);
-  need(raw.tax_id === null, 'tax_context_unverified');
+  need(!Object.hasOwn(raw, 'tax_id') || raw.tax_id === null, 'tax_context_unverified');
   need(raw.checkout_session_id === binding.checkoutId, 'request_order_mismatch');
   need(raw.processor_entity === binding.entity, 'request_entity_mismatch');
   need(
@@ -95,6 +95,7 @@ export function nativeQuoteDocument(
       : envelope.success === true,
     'response_invalid'
   );
+  need(state.taxIdInfo === null, 'response_tax_context_unverified');
   need(
     session.checkout_session_id === binding.checkoutId && state.id === binding.checkoutId,
     'response_order_mismatch'
