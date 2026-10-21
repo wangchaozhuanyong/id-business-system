@@ -451,9 +451,7 @@
   "sourceReviewCommit": "2094636fe39edd0a8032a9de07896f2aca96aedf",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "status": "FROZEN",
-  "updatedServices": [
-    "admin"
-  ],
+  "updatedServices": ["admin"],
   "validationSources": {
     "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts": "a49a70c355da7d5c92dc0c2e7ea2218b04badcb45e4edb67761e6ba2a4730a32",
     "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.spec.ts": "b5fd8385484910ac3657ddb54159c31555c7acdb2e369443185d04ffb390d673"
