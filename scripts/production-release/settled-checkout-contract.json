@@ -419,7 +419,7 @@
     "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
     "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
     "settled-checkout-publication.py": "18e4c7c94642462183af0f7021b3479ec350586d180071ab22c33eebe4ab0b27",
-    "settled-checkout-release.py": "89a5aa3f81ca846fd6af69f3d4c5682530889bbfdf1d21d3f37b034ce6ddf3a8"
+    "settled-checkout-release.py": "2ebe1ea4eb072e0a75ecb6edf2328c98c1968102a67e268020c0907875e54dff"
   },
   "engineHealth": {
     "activeTasks": 0,
@@ -439,7 +439,7 @@
     "online-recharge"
   ],
   "productionSources": {
-    "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts": "a36ca22ed12bbab7c7ff6969a8050b535c28b8899362585582ff3344e1b36e54"
+    "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts": "5c851af6a9ead952913031fc5230fe46bc547afc0239af1e10ba001dc0f76741"
   },
   "reboundServices": [],
   "recipe": "native-quote-diagnostic-20261021",
@@ -447,13 +447,13 @@
   "sourceParents": {
     "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts": "b4b27e08d243825ec13a47be2bb830cf16f0f77aeaf37d4d64684c59a153e217"
   },
-  "sourcePullRequest": 666,
-  "sourceReviewCommit": "28a08de1c16895891a306441d320f67b13f14df2",
+  "sourcePullRequest": 668,
+  "sourceReviewCommit": "13c655eb602cbe511fdbaec18ca68dfc659f9f25",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "status": "FROZEN",
   "updatedServices": ["admin"],
   "validationSources": {
-    "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts": "2d969ceb9da51b9927103a5e01c55752b00486a68f736c1f6289521ae10b6335"
+    "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts": "a83620a1e6b782929585053190e5c835d7a89d1f277e29ae9602f916d957014f"
   },
   "version": 1,
   "workflowSha256": "252610785eb741a40b967bd8240a2f9c606b9f82302fce667dc8603fe5c6f2e1"
