@@ -734,12 +734,15 @@ export class DirectPaymentObserver {
   }
   close() {
     if (this.nativeBinding && !this.closed)
-      console.info('[bitbrowser-native-quote]', {
-        observed: this.nativeObserved,
-        pending: this.nativeInflight.size > 0,
-        quoteReady: Boolean(this.nativeQuote),
-        reason: this.nativeError ?? 'none'
-      });
+      console.info(
+        '[bitbrowser-native-quote]',
+        JSON.stringify({
+          observed: this.nativeObserved,
+          pending: this.nativeInflight.size > 0,
+          quoteReady: Boolean(this.nativeQuote),
+          reason: this.nativeError ?? 'none'
+        })
+      );
     this.closed = true;
     this.remove();
     this.request.clear();
