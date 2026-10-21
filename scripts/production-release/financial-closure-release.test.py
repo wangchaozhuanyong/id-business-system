@@ -33,6 +33,16 @@ class FinancialPublicationTests(unittest.TestCase):
         self.assertEqual(len(self.c['parentApiModules']), 5)
         self.assertEqual(len(self.c['apiModules']), 8)
 
+    def test_native_predecessor_projection_is_exact_and_separate_from_billing(self):
+        published = json.loads((HERE / P.PARENT_FILE).read_bytes())
+        parent = json.loads((HERE / 'bitbrowser-manual-contract.json').read_bytes())
+        self.assertEqual(published['commit'], P.CURRENT)
+        self.assertEqual(len(published['productionSources']), 43)
+        self.assertEqual(published['productionSources'], parent['productionSources'])
+        self.assertFalse(set(published['productionSources']) & P.SOURCES)
+        self.assertFalse(set(published['apiModules']) & P.MODULES)
+        self.assertEqual(published['adminFiles']['index.html'], self.c['parentAdminIndexSha256'])
+
     def test_extra_sources_modules_roles_and_database_writes_are_rejected(self):
         cases = [
             lambda c: c['productionSources'].update({'apps/api/src/auth/changed.ts': 'a' * 64}),
@@ -77,6 +87,19 @@ class FinancialPublicationTests(unittest.TestCase):
         capture['baseline']['manifestSha256'] = 'a' * 64
         with self.assertRaisesRegex(RuntimeError, 'PARENT_CAPTURE_CHANGED'):
             p.bounded_runtime_contract(None, None, self.c, {'nativeParentCapture': capture})
+        capture['status'] = 'FINANCIAL_NATIVE_PARENT_FACTS'
+        with self.assertRaisesRegex(RuntimeError, 'NATIVE_PARENT_REQUIRED'):
+            p.bounded_runtime_contract(None, None, self.c, {'nativeParentCapture': capture})
+
+    def test_host_snapshot_and_reconstructed_build_parents_are_separate(self):
+        c = copy.deepcopy(self.c)
+        c['sourceParents'][P.ADMIN_ROOT + 'OnlineResourceView.vue'] = None
+        P.validate_contract(c)
+        self.assertNotEqual(c['sourceParents'], c['buildParents'])
+        self.assertEqual(c['buildParents'], self.c['buildParents'])
+        c['parentApiModules']['id-business-v2/online-recharge/persistence/admin.repository.js'] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'OUTPUT_SCOPE'):
+            P.validate_contract(c)
 
     def test_parent_and_preflight_do_not_activate_services(self):
         p = P.engine(self.c)
@@ -123,7 +146,7 @@ class FinancialPublicationTests(unittest.TestCase):
             'productionIntegrityBefore': self.integrity(),
             'productionSources': c['productionSources'], 'controlSources': c['controlPins'],
             'businessActions': 0, 'migrationPerformed': False, 'apiModules': modules,
-            'parentModulesReproduced': c['parentApiModules'], 'baselineSharedUnchanged': True,
+            'parentModulesReproduced': c['buildParentApiModules'], 'baselineSharedUnchanged': True,
             'baselineClientUnchanged': True, 'baselineAdminIndexSha256': c['parentAdminIndexSha256'],
             'projectedInterfaceCasesPassed': 112, 'adminFiles': admin, 'files': files}
 
@@ -241,6 +264,10 @@ class FinancialPublicationTests(unittest.TestCase):
             self.assertIn(expected, source)
         self.assertNotIn('continue-on-error', source)
         self.assertNotIn('prisma:mysql:migrate:deploy', source)
+        inspection = source.split('  inspect:\n', 1)[1]
+        self.assertIn("inputs.mode == 'inspect'", inspection)
+        self.assertIn('financial-closure-publication.py inspect', inspection)
+        self.assertNotIn('financial-closure-publication.py publish', inspection)
 
 
 if __name__ == '__main__':

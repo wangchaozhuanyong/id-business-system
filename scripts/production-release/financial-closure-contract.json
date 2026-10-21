@@ -1,5 +1,5 @@
 {
-  "apiAdminParentCommit": "523bf8173e46823c05e9641428263f17b1ca3906",
+  "apiAdminParentCommit": "640e0c8ed0a8056769c77c07a03200f4bd6973a7",
   "apiModules": [
     "id-business-v2/online-recharge/admin.controller.d.ts",
     "id-business-v2/online-recharge/admin.service.d.ts",
@@ -22,6 +22,23 @@
     "sourceCommit": "bbd28b70baf257f21ab3845bb3439ddf41357537",
     "toVersion": "1.16.1"
   },
+  "buildParentApiModules": {
+    "id-business-v2/online-recharge/admin.controller.d.ts": "4597d9195be104de9fa892f8e11a67c358a1866b84e825930d584bf7cf67a8ee",
+    "id-business-v2/online-recharge/admin.service.d.ts": "9d403e385e5bc197c3e8a8f9b60125aed833b5b12b5f89471f7ea29535eef255",
+    "id-business-v2/online-recharge/persistence/admin.repository.d.ts": "cceee07cd3636a3fd0f2ebf54971117c015bbf0d89e14a9b4d0a4d64162de696",
+    "id-business-v2/online-recharge/persistence/admin.repository.js": "61cccfd2baa1550bc6bc124d08b5d080b011fee187d79771caa1503e745ad172",
+    "id-business-v2/online-recharge/persistence/admin.repository.js.map": "65f3789de6aad1f133a8f60f736daa8277761216c57922277733d030aee69f2c"
+  },
+  "buildParents": {
+    "apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue": "80253b52b6b1bfc0471153bd0255468aba846220c9e7f0d2e4a2b6520583eba7",
+    "apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue": "fff8d7f8b26414a65fe6ab3e5d9b947c0f4ae20dd1377978890f7cf0555bf2b4",
+    "apps/admin/src/v2/features/online-recharge/V2OnlineOverviewView.vue": "04ca513c116403eee9191f7180d7d684924bc087f8913c7f31cfa75560b5bd90",
+    "apps/admin/src/v2/features/online-recharge/billing-presentation.ts": null,
+    "apps/admin/src/v2/features/online-recharge/sections.ts": "50bad7216c30cf9463ab068ad652cbc7945568c7ca8d3d2cac5c5ea16f9ff357",
+    "apps/admin/src/v2/features/online-recharge/tableSchemas.ts": "2c5fe62f8a0c658a5e401f41bbeeb0442a1aab270ce25f8be006bb0b31c5bc20",
+    "apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts": "a6e41cb4aff060be578bcbef44536c5b73c6f08f7d5550ef0073e0d661f2e067",
+    "apps/api/src/id-business-v2/online-recharge/persistence/billing-summary.ts": null
+  },
   "businessActions": 0,
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
@@ -41,11 +58,12 @@
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
-    "financial-closure-publication.py": "7d5a031132fd9ca1948ae258bcc843a044625646fb0afc2684c25707cfcd5b3d",
+    "financial-closure-parent-proof.json": "382769a914c11543b217cc6b5c6efbd7abc72df402297b55baed55001a2ce619",
+    "financial-closure-publication.py": "8774a602a6d81fc9784478f2cd6deb6cb1d622d94bc2f6b9ea3b8bbffe2f2474",
     "financial-closure-readonly.py": "1c1671c48bef5c2ea37a28aa99590781d465157b12833a2ea658d2cc91a13cc0",
     "financial-closure-readonly.test.py": "44e4e901b5c331a86377f8c9fefcd65a82e3f87126b55c1cb77d2114bfd1a1df",
-    "financial-closure-release.py": "6b394628a0b6b7d8f08f3e6b885311c1989c428dfc47adb62e5ed0a6488517f2",
-    "financial-closure-release.test.py": "aa9331e9dae67464cdf1fac786db06f5167084b0244fd094106aafe998a01bd8",
+    "financial-closure-release.py": "3ae45d6905cc99319cbeb490c32d9d546f27509dac0a80a5ed8a710d8c5f1eef",
+    "financial-closure-release.test.py": "d14b74df290dc9b02751d6445ffdb4ce0398b1f358b045d3a36ce025474fc1ad",
     "online-pending-features-contract.json": "b297597b6c0daab42e51cc01e163621f0c875d264dd3e611374c89388ba3e651",
     "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
     "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
@@ -65,9 +83,9 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
+  "expectedCurrent": "640e0c8ed0a8056769c77c07a03200f4bd6973a7",
   "migrationPerformed": false,
-  "parentAdminIndexSha256": "92475a644baa2248099092d844a7ae00c02cfd5c73acc90c59afb9f89db39a8c",
+  "parentAdminIndexSha256": "041ddc206f20daaf946c730aa904f42f40d42e1359e81ed6bae95995bed44edd",
   "parentApiModules": {
     "id-business-v2/online-recharge/admin.controller.d.ts": "4597d9195be104de9fa892f8e11a67c358a1866b84e825930d584bf7cf67a8ee",
     "id-business-v2/online-recharge/admin.service.d.ts": "9d403e385e5bc197c3e8a8f9b60125aed833b5b12b5f89471f7ea29535eef255",
@@ -81,12 +99,13 @@
     "pending": 0
   },
   "parentImages": {
-    "admin": "sha256:75e55559dc7f3c3ae8418dfdae39b26a7482ad7c1b3257c66b1907938ea0fc79",
-    "api": "sha256:58f577117c87c7bb575e01b656743ff7224cca2ac79301b5a3764d302aae0acb",
+    "admin": "sha256:f129ba20d32049d61f837446b6731775678c2f4b56ec2e95d47a72ed86c669b8",
+    "api": "sha256:e8cb4b85a21d183f69d38465a4281f47b0f508c2b2a3e6135a5f4dfc01e4e9a6",
     "online-recharge": "sha256:9230ff58e604ee4d5200d9ee6611e2fa1419c833faf13b1f5d1f30167c3af3a1"
   },
-  "parentManifestSha256": "f2da51b6175e77edd392e8709f97a28d37375397fe42cbac2086d19b8792c370",
-  "predecessorProofSha256": "21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354",
+  "parentManifestSha256": "cead87c70b31419b175bd094bb1061e3f163ab15bdbe2341d68983bca5a69b55",
+  "parentProofFile": "financial-closure-parent-proof.json",
+  "predecessorProofSha256": "80b3fd7d5a6768b65c5b80054a0dea368e12344699d7735bb0c09490f7814e67",
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
   "productionAuditRules": [
     {
@@ -403,10 +422,17 @@
   "reboundServices": ["online-recharge"],
   "recipe": "financial-billing-20261019",
   "scope": "FINANCIAL_BILLING_CLOSURE_20261019",
+  "sourceParentEvidence": {
+    "commandId": "5382e5b6-b79a-44f6-beb5-f1906db9f2df",
+    "nativeInvocationSha256": "e69c4bf732c72b06d03a323db663cc786cc65ac204ae20b4ef3f80ab71bbd068",
+    "resultSha256": "14fa552912366ce6fbc1e993d6c45bba3d0720352624f073be04c304a905b71b",
+    "runId": "39554067105",
+    "status": "FINANCIAL_NATIVE_PARENT_FACTS"
+  },
   "sourceParents": {
     "apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue": "80253b52b6b1bfc0471153bd0255468aba846220c9e7f0d2e4a2b6520583eba7",
     "apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue": "fff8d7f8b26414a65fe6ab3e5d9b947c0f4ae20dd1377978890f7cf0555bf2b4",
-    "apps/admin/src/v2/features/online-recharge/V2OnlineOverviewView.vue": "04ca513c116403eee9191f7180d7d684924bc087f8913c7f31cfa75560b5bd90",
+    "apps/admin/src/v2/features/online-recharge/V2OnlineOverviewView.vue": null,
     "apps/admin/src/v2/features/online-recharge/billing-presentation.ts": null,
     "apps/admin/src/v2/features/online-recharge/sections.ts": "50bad7216c30cf9463ab068ad652cbc7945568c7ca8d3d2cac5c5ea16f9ff357",
     "apps/admin/src/v2/features/online-recharge/tableSchemas.ts": "2c5fe62f8a0c658a5e401f41bbeeb0442a1aab270ce25f8be006bb0b31c5bc20",
@@ -437,5 +463,5 @@
     "scripts/v2-online-recharge-integrity-mysql.test.mjs": "0269dc0f15814d300f4071045df25a20f65a80cc0e9bb9492ca9f71b3d1bc686"
   },
   "version": 1,
-  "workflowSha256": "b19a558c7ae07b4d5d4c8db3c0081233c579b62040b888d0c0a52d7ee36e6ad3"
+  "workflowSha256": "ab9fe91d54ffe38a2beeb29d77cff13d55c460bd387aef12e5a8b82fa387da2a"
 }

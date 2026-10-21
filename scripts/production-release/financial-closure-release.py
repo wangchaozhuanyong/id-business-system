@@ -14,8 +14,9 @@ SCOPE = 'FINANCIAL_BILLING_CLOSURE_20261019'
 RECIPE = 'financial-billing-20261019'
 CONTRACT_FILE = 'financial-closure-contract.json'
 SOURCE = '7fc353223095b66408b03af0ea117230abba1a63'
-CURRENT = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
-PARENT_PROOF = '21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354'
+CURRENT = '640e0c8ed0a8056769c77c07a03200f4bd6973a7'
+PARENT_PROOF = '80b3fd7d5a6768b65c5b80054a0dea368e12344699d7735bb0c09490f7814e67'
+PARENT_FILE = 'financial-closure-parent-proof.json'
 ADMIN_ROOT = 'apps/admin/src/v2/features/online-recharge/'
 API_ROOT = 'apps/api/src/id-business-v2/online-recharge/'
 SOURCES = frozenset([ADMIN_ROOT + n for n in ('OnlineResourceView.vue', 'OnlineResultDialog.vue',
@@ -54,14 +55,21 @@ def validate_contract(c):
          and c.get('recipe') == RECIPE and c.get('sourceReviewCommit') == SOURCE
          and c.get('expectedCurrent') == CURRENT and c.get('predecessorProofSha256') == PARENT_PROOF,
          'CONTRACT_IDENTITY')
+    need(c.get('parentProofFile') == PARENT_FILE, 'PARENT_PROOF_FILE')
     need(set(c.get('productionSources', {})) == SOURCES
          and set(c.get('sourceParents', {})) == SOURCES
+         and set(c.get('buildParents', {})) == SOURCES
          and all(re.fullmatch('[a-f0-9]{64}', v) for v in c['productionSources'].values())
-         and all(v is None or re.fullmatch('[a-f0-9]{64}', v) for v in c['sourceParents'].values()),
+         and all(v is None or re.fullmatch('[a-f0-9]{64}', v)
+                 for parents in (c['sourceParents'], c['buildParents']) for v in parents.values()),
          'SOURCE_SCOPE')
     need(set(c.get('apiModules', [])) == MODULES
          and set(c.get('parentApiModules', {})) == MODULES - ABSENT
+         and set(c.get('buildParentApiModules', {})) == MODULES - ABSENT
          and all(re.fullmatch('[a-f0-9]{64}', v) for v in c['parentApiModules'].values())
+         and all(re.fullmatch('[a-f0-9]{64}', v) for v in c['buildParentApiModules'].values())
+         and all(c['parentApiModules'][n] == c['buildParentApiModules'][n]
+                 for n in MODULES - ABSENT if n.endswith('.js'))
          and c.get('updatedServices') == ['api', 'admin']
          and c.get('reboundServices') == ['online-recharge']
          and c.get('preservedServices') == ['mysql', 'caddy', 'media-resolver', 'auto-recharge'],
@@ -120,7 +128,7 @@ def verify_proof(proof, plan, c, payload, h):
         and proof.get('businessActions') == 0 and proof.get('migrationPerformed') is False,
         'PROOF_IDENTITY')
     need(set(proof.get('apiModules', {})) == MODULES
-         and proof.get('parentModulesReproduced') == c['parentApiModules']
+         and proof.get('parentModulesReproduced') == c['buildParentApiModules']
          and proof.get('baselineSharedUnchanged') is True and proof.get('baselineClientUnchanged') is True
          and proof.get('baselineAdminIndexSha256') == c['parentAdminIndexSha256']
          and proof.get('projectedInterfaceCasesPassed') == 112, 'BUILD_DELTA_CHANGED')
@@ -137,7 +145,7 @@ def verify_proof(proof, plan, c, payload, h):
     return proof
 
 
-def observe(c, p):
+def observe(c, p, *, diagnostic_only=False):
     """Inspect native provenance and hashes; no service or database writes."""
     validate_contract(c)
     h, d, _ = p.helpers()
@@ -149,15 +157,27 @@ def observe(c, p):
          and sha(raw) == c['parentManifestSha256']
          and sha((current / 'bitbrowser-history-build-proof.json').read_bytes()) == PARENT_PROOF,
          'PUBLISHED_PARENT_CHANGED')
+    need(json.loads((current / 'bitbrowser-history-build-proof.json').read_bytes())
+         == json.loads((HERE / PARENT_FILE).read_bytes()), 'PUBLISHED_PARENT_PROOF_CHANGED')
     states = h.snapshot(d, current)
     need(all(states[n]['image'] == v for n, v in c['parentImages'].items()), 'PARENT_IMAGE_CHANGED')
     h.guards(d, current, states, c)
-    for name, expected in c['sourceParents'].items():
+    sources, unsafe = {}, []
+    for name in sorted(SOURCES):
         path = current / name
-        need(not path.is_symlink() and path.resolve().is_relative_to(current)
-             and (not path.exists() if expected is None else path.is_file() and sha(path.read_bytes()) == expected),
-             'HOST_PARENT_SOURCE_CHANGED')
+        if path.is_symlink() or not path.resolve().is_relative_to(current) or (path.exists() and not path.is_file()):
+            unsafe.append(name)
+        else:
+            sources[name] = sha(path.read_bytes()) if path.is_file() else None
     runtime = p.runtime(d, states)
+    if diagnostic_only:
+        need((BASE / 'current').resolve() == current
+             and (current / 'release-manifest.json').read_bytes() == raw, 'CURRENT_MOVED')
+        return {'status': 'FINANCIAL_NATIVE_PARENT_FACTS', 'commit': CURRENT, 'current': str(current),
+            'manifestSha256': sha(raw), 'predecessorProofSha256': PARENT_PROOF,
+            'sourceParents': sources, 'unsafeSources': unsafe, 'apiModules': runtime['apiModules'],
+            'businessActions': 0, 'databaseWrites': 0}
+    need(not unsafe and sources == c['sourceParents'], 'HOST_PARENT_SOURCE_CHANGED')
     need(runtime['apiModules'] == c['parentApiModules'], 'PARENT_COMPILED_MODULE_CHANGED')
     index = d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
                   '/usr/share/nginx/html/index.html').split()[0]
@@ -188,7 +208,8 @@ def engine(c):
     p.CONTRACT_FILE, p.MODULES = CONTRACT_FILE, MODULES
     p.validate_contract, p.verify_proof, p.verify_mysql = validate_contract, verify_proof, verify_mysql
     p.production_sources = lambda contract: contract['productionSources']
-    p.bounded_capture = lambda driver, helper, contract, plan: observe(contract, p)
+    p.bounded_capture = lambda driver, helper, contract, plan: observe(
+        contract, p, diagnostic_only=plan.get('diagnosticOnly') is True)
 
     def selected_contract(driver, helper, contract, plan):
         capture = plan.get('nativeParentCapture', {})

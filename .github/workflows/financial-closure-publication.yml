@@ -3,6 +3,14 @@ name: Financial Billing Finite Publication
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Publish the finite overlay or read predecessor source facts only
+        required: true
+        default: publish
+        type: choice
+        options:
+          - publish
+          - inspect
       commit:
         description: Exact reviewed main producer commit
         required: true
@@ -22,12 +30,13 @@ concurrency:
 
 jobs:
   validate:
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.mode == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       actions: read
+      pull-requests: read
       id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -88,12 +97,13 @@ jobs:
 
   publish:
     needs: validate
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.mode == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write
       actions: read
+      pull-requests: read
       id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -121,5 +131,44 @@ jobs:
             .deploy/financial-closure/*.json
             .deploy/financial-closure/artifact-notes.md
             .deploy/financial-closure-readonly/
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  inspect:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.mode == 'inspect'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Verify source inspection controls
+        run: python3 -B scripts/production-release/financial-closure-release.test.py
+      - name: Configure existing read access channel
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-finance-inspect-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 900
+      - name: Read finite host and compiled predecessor fingerprints
+        run: python3 -B scripts/production-release/financial-closure-publication.py inspect
+      - name: Preserve original read-only inspection receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: financial-closure-inspection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/financial-closure/*.json
           include-hidden-files: true
           if-no-files-found: warn
