@@ -7,15 +7,15 @@ import re
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-SCOPE = 'BITBROWSER_NATIVE_TAX_CONTEXT_20261021'
-RECIPE = 'native-tax-context-20261021'
+SCOPE = 'BITBROWSER_NATIVE_QUOTE_DIAGNOSTIC_20261021'
+RECIPE = 'native-quote-diagnostic-20261021'
 CONTRACT_FILE = 'settled-checkout-contract.json'
-CURRENT = '1efd4ae44d2ee77043759f6ea9cb807711fd46ae'
-SOURCE = '2094636fe39edd0a8032a9de07896f2aca96aedf'
-SOURCE_FILE = 'apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.ts'
-TEST_FILE = SOURCE_FILE.replace('.ts', '.spec.ts')
+CURRENT = '1532e1a2f329dee8f4f4f8256d6cd14bc0a4d49d'
+SOURCE = '28a08de1c16895891a306441d320f67b13f14df2'
+SOURCE_FILE = 'apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts'
+TEST_FILE = 'apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts'
 SOURCES = frozenset((SOURCE_FILE,))
-TESTS = frozenset((TEST_FILE, 'apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts'))
+TESTS = frozenset((TEST_FILE,))
 MODULES = frozenset()
 UPDATED = ('admin',)
 REBOUND = ()
@@ -45,7 +45,7 @@ def load(name):
 def validate_contract(c):
     need(c.get('version') == 1 and c.get('status') == 'FROZEN' and c.get('scope') == SCOPE
          and c.get('recipe') == RECIPE and c.get('expectedCurrent') == CURRENT
-         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 664,
+         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 666,
          'CONTRACT_IDENTITY')
     need(set(c.get('productionSources', {})) == SOURCES
          and set(c.get('validationSources', {})) == TESTS
@@ -60,7 +60,7 @@ def validate_contract(c):
          and b['database']['pending'] == 0 and len(b['services']) == 7
          and set(b['proofs']) == {'bitbrowser-history-build-proof.json'}, 'PARENT_SCOPE')
     parent = c['adminParent']
-    need(parent['commit'] == '1efd4ae44d2ee77043759f6ea9cb807711fd46ae'
+    need(parent['commit'] == '1532e1a2f329dee8f4f4f8256d6cd14bc0a4d49d'
          and len(parent['adminFiles']) == 263 and 'index.html' in parent['adminFiles']
          and all(re.fullmatch('[a-f0-9]{64}', v) for v in (
              parent['proofSha256'], *parent['adminFiles'].values())), 'ADMIN_PARENT_CHANGED')
@@ -73,7 +73,7 @@ def validate_contract(c):
 def verify_quality(value, commit):
     need(type(value) is dict and set(value) == {'sources', 'release'}
          and value['sources']['commit'] == SOURCE
-         and value['sources']['pullRequest'] == 664
+         and value['sources']['pullRequest'] == 666
          and value['release']['commit'] == commit
          and all(re.fullmatch('[1-9][0-9]*', str(v['runId'])) for v in value.values())
          and re.fullmatch('[a-f0-9]{64}', value['sources']['sourceReceiptSha256']),
