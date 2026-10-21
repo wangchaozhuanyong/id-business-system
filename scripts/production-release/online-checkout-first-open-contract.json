@@ -4715,13 +4715,13 @@
     "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
     "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
     "businessActions": 0,
-    "commit": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
+    "commit": "be4dc7ea9da6b42fbc9f61653cb006d1242b1493",
     "configurationSha256": {
       ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-      "compose.release.json": "06196b3d749b15c0abdd3d0027ce34ca83c54b090954e9a025db73fe9742da02",
+      "compose.release.json": "894800b3664080fec5df0f423ec1216e5a46b80eebc3886ee158c3959fa51222",
       "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
     },
-    "current": "/opt/id-business-v2/releases/20261021T073045Z-e5f295ed4fd4-bitbrowser-history",
+    "current": "/opt/id-business-v2/releases/20261021T075448Z-be4dc7ea9da6-bitbrowser-history",
     "databaseWrites": 0,
     "engineFiles": {
       ".dockerignore": "6eb0e0e877d4ee3c5c6b697383b0280890214db3d80b07d100f7a612d1e62858",
@@ -4843,12 +4843,12 @@
       "rpcConnected": true,
       "stopping": false
     },
-    "freeBytes": 21553106944,
-    "manifestSha256": "a268868bbb750107439f6b201f3114259df8cec39d04396c76d882a2e3cae37d",
+    "freeBytes": 21520056320,
+    "manifestSha256": "ee3ebfcd85f399bd57c6e2ca86747ed335ba8cdbda89bb2316735766da894020",
     "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
-    "preservationReceiptSha256": "d9ce3fac84613a2b5792829053e98c079dcc3853ba68602d8a4cfbb0f50c20f1",
+    "preservationReceiptSha256": "acdd82150181a3ca1f04bcb14da4d034abb75c602bae360fe0398918abf405a2",
     "proofs": {
-      "bitbrowser-history-build-proof.json": "45702f519618f978092aa57eef478d314110007f0322b6664cfe0080aaac8ebf",
+      "bitbrowser-history-build-proof.json": "b47ad6719660bd44ff910fbf9a57c84ad5da3a3bbe27cda15be7273531623274",
       "online-card-control-diagnostics-build-proof.json": "03c5460b365088ced8e77ed61ef2b153d204587d2a398620e9a2a3662b0cc080",
       "online-card-visibility-build-proof.json": "98afb721e1ed84bb6c12a6d6d09da43adffc760ec67e032aa88ff743af95ada4",
       "online-checkout-actionability-build-proof.json": "e2cea0e27318da7e9cb4c143f2cd26d7b87dc9cc90361eb5ef4f0db17d86f388",
@@ -4874,12 +4874,12 @@
         "status": "running"
       },
       "api": {
-        "containerId": "29b66bc429c05749d7e50d5bd26cbf24e3c7a75f519998a1ea641062a389d48b",
+        "containerId": "9475825fa41d53e0f4822df75e6d29fbd64508d1111fb563958dfab9e45db11a",
         "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
         "health": "healthy",
-        "image": "sha256:e9988720d1a87c825c883ac282fbc020b6619509d38c7c2dbf2602a0ec029576",
-        "reference": "id-business-v2-history:e5f295ed4fd48f712169f3a6faaae33378f9cd6b-39562247002-api",
-        "startedAtSha256": "b670746729605f6cb8fafa21feb3e3bf739050600843e3fc7d76cbd2e47e67a2",
+        "image": "sha256:f17b90e92e62c492f12cc2cf2590a2604bc13e6a2da6b78242ddb6f46e8e1fc1",
+        "reference": "id-business-v2-history:be4dc7ea9da6b42fbc9f61653cb006d1242b1493-39565080942-api",
+        "startedAtSha256": "f1df77db8a74e66ee4e5bc98e6a3e48bba7b09e395ae019613b48aa02bc22765",
         "status": "running"
       },
       "auto-recharge": {
@@ -4919,12 +4919,12 @@
         "status": "running"
       },
       "online-recharge": {
-        "containerId": "752eef342110b546a8fa46d4a59c0f4282f4919d5637238776a99550c8804a60",
+        "containerId": "2b5a7ace42ae9f40f6a2ff3c1cbe4800a440d5e08335a4e7d6c354af4381dd74",
         "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
         "health": "healthy",
         "image": "sha256:9230ff58e604ee4d5200d9ee6611e2fa1419c833faf13b1f5d1f30167c3af3a1",
         "reference": "id-business-v2-online-card-visibility:cb38a1ef351b42f98ce86740b2191fd54207fa32-39407073363",
-        "startedAtSha256": "fcaec1c65f8731d8724960e72f8cbf8d0adebc8de5badda8cc77dbf17f36003f",
+        "startedAtSha256": "c1fe69d60fb62f96241caf5af3f3f089064359f7cfd00e7b705c972d0989ba3b",
         "status": "running"
       }
     }
@@ -5050,7 +5050,7 @@
     "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
     "online-checkout-actionability-release.test.py": "271add54ce5080ad3e1a20400697361af3ddf63392da8a78a79efdbf7025c827",
     "online-checkout-first-open-build.py": "09a4df95ead8ec9576b8869992f6cea5850e4edb37226bf8b63c18f4e5ae5090",
-    "online-checkout-first-open-release.py": "4acf85730d347789d0902fd7ad033b6f170ec1562ab714007428c09e8b46c29d",
+    "online-checkout-first-open-release.py": "463df6dbb81dbc8af908e399a34342d1da13b86a23af069b9dc6f83a0ae795bc",
     "online-checkout-first-open-release.test.py": "d3da4b1f37c7f885209ba4bea330fc9f8e0d5ecff76495683a4b4810d24ea3b1",
     "online-checkout-initialization-build.py": "d202ee4e1f00b72eca5eb4d0477e4e15e795d3a23cdaac9193f1ccdc22a4bed9",
     "online-checkout-initialization-release.py": "3dde1aa3b134f87b31fcbe647e7655f2d62ce87513227c49b43189cebd0689f2",
@@ -5076,13 +5076,13 @@
   },
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
   "engineSourceBase": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
-  "expectedCurrent": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
+  "expectedCurrent": "be4dc7ea9da6b42fbc9f61653cb006d1242b1493",
   "frozen": true,
   "migrationPerformed": false,
   "pendingBindings": [],
   "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
   "requiredQualityParts": ["guards", "online-engine"],
-  "reviewBase": "62b79bb3b9b3d91398bd253a9c15b2e4e666994b",
+  "reviewBase": "be4dc7ea9da6b42fbc9f61653cb006d1242b1493",
   "reviewedControlSources": {
     "scripts/ci-online-settings-scope.mjs": "9a2c086de075a20abf3e9e9c780cc6c390c454b54456fb532411eef56a5f4c8a",
     "scripts/ci-online-settings-scope.test.mjs": "3e37edc75352c380ce20cb80e12c40a148a642849c1a789bbce80f454d31332b",
@@ -5102,8 +5102,8 @@
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "c8a8c89a5cc38eed62398c3782547d0f8d6d45c4d8edd982db406fddd93a8d23"
   },
   "scope": "ONLINE_CHECKOUT_FIRST_OPEN",
-  "sourceReviewCommit": "cfd6832b8f2a877f500bfdb5b44edcd5ac99b3af",
-  "sourceReviewTag": "online-checkout-first-open-source-review-cfd6832b8f2a",
+  "sourceReviewCommit": "48e0ae14f53fbbf0b3a4d3d9d2a15b572b4e695e",
+  "sourceReviewTag": "online-checkout-first-open-source-review-48e0ae14f53f",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "upstreamSource": {
