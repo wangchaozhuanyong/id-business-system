@@ -53,6 +53,7 @@ import {
   isOnlineCheckoutInitializationOnly,
   isOnlineCardControlDiagnosticsOnly,
   isOnlineCardVisibilityOnly,
+  isOnlineCheckoutFirstOpenOnly,
   onlineSettingsParts
 } from './ci-online-settings-scope.mjs';
 import { isProxyResultIdentityOnly } from './ci-proxy-result-identity-scope.mjs';
@@ -3112,6 +3113,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isOnlineQueryDeadlineOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCheckoutActionabilityOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCardVisibilityOnly(paths)) return ['guards', 'online-engine'];
+  if (isOnlineCheckoutFirstOpenOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCardControlDiagnosticsOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCheckoutInitializationOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineSettingsControlsOnly(paths)) return ['guards'];
@@ -3271,6 +3273,7 @@ export function affectsPart(part, paths) {
     admin:
       /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-(?:auto-recharge|table-layout)\.mjs$)/,
     api: /^(?:apps\/api\/(?!src\/id-business-v2\/(?:auto-recharge\/worker|workspace\/media-resolver)\/)|packages\/shared\/)/,
+    'online-engine': /^apps\/api\/src\/id-business-v2\/online-recharge\/engine\//,
     connector: /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//,
     migration: /^apps\/api\/prisma-mysql\//,
     security: securityPaths
@@ -5891,6 +5894,7 @@ async function main() {
       );
   } else if (process.env.GITHUB_EVENT_NAME === 'pull_request' && mode === 'recharge') {
     const pr = event.pull_request;
+    const reuseParts = selectedParts(paths, undefined, proxyIdentityContext);
     const { workflow_runs: runs } = gh(
       `repos/${repo}/actions/workflows/quality.yml/runs?event=pull_request&branch=${encodeURIComponent(pr.head.ref)}&status=completed&per_page=10`
     );
@@ -5905,7 +5909,7 @@ async function main() {
       const { jobs } = gh(
         `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`
       );
-      for (const part of parts) {
+      for (const part of reuseParts) {
         if (
           reused.has(part) ||
           // Only the GPT candidate binds this complete artifact metadata closure.
@@ -5919,7 +5923,7 @@ async function main() {
           evidence.push({ part, run: run.id, tree });
         }
       }
-      if (reused.size === parts.length) break;
+      if (reused.size === reuseParts.length) break;
     }
   }
   const registrationNativeEvidence = readRegistrationNativeReuse({
