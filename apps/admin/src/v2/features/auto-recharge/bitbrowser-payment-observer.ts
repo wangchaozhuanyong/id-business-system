@@ -21,6 +21,23 @@ import {
   type StripeQuoteDocument
 } from './bitbrowser-stripe-quote';
 
+const NATIVE_POST_DATA_LIMIT = 65000;
+type NativeBodyState =
+  | 'none'
+  | 'provided'
+  | 'omitted'
+  | 'retrieved'
+  | 'missing'
+  | 'encoded'
+  | 'invalid'
+  | 'oversized'
+  | 'unavailable';
+interface NativeBodySource {
+  state: NativeBodyState;
+  requestId?: string;
+  session: string;
+}
+
 type NativeAuthIssue =
   | 'none'
   | 'token_missing'
@@ -85,6 +102,9 @@ function combinedNativeWire(previous: NativeAuthProof | undefined, next: NativeA
 }
 
 interface NativeRequestObservation {
+  bodyState: NativeBodyState;
+  orderState: 'missing' | 'matches' | 'mismatch';
+  bodyWait?: Promise<void>;
   authIssue: NativeAuthIssue;
   authExpiresAt: number;
   authPending: boolean;
@@ -140,12 +160,17 @@ export class DirectPaymentObserver {
   private nativeInflight = new Set<number>();
   private nativeError?: string;
   private nativeAuthIssue: NativeAuthIssue = 'none';
+  private nativeBodyState: NativeBodyState = 'none';
+  private nativeRequestKind: 'none' | 'taxes' | 'tax_id' = 'none';
+  private nativeOrderState: 'missing' | 'matches' | 'mismatch' = 'missing';
+  private nativeBodiesRecovered = 0;
   private nativeWireEarly = new Map<string, NativeAuthProof>();
   private nativeAuthRequests = new Map<
     string,
     { base: NativeAuthProof; item: NativeRequestObservation; wire?: NativeAuthProof }
   >();
   private nativeBillingAnchor?: NativeBillingRequest;
+  private nativeBillingAnchorWait?: Promise<void>;
   private nativeQuoteVersion = 0;
   private nativeQuote?: { request: NativeBillingRequest; document: PaymentDocument };
   private request = new Map<
@@ -207,10 +232,15 @@ export class DirectPaymentObserver {
           );
         if (!official && !stripe) return;
         let data: PaymentDocument = {};
+        let bodyState: NativeBodyState = 'omitted';
         try {
-          if (typeof request.postData === 'string' && request.postData.length <= 65000)
-            data = paymentObject(JSON.parse(request.postData));
+          if (typeof request.postData === 'string') {
+            bodyState =
+              request.postData.length <= NATIVE_POST_DATA_LIMIT ? 'provided' : 'oversized';
+            if (bodyState === 'provided') data = paymentObject(JSON.parse(request.postData));
+          }
         } catch {
+          bodyState = 'invalid';
           /* An unreadable write is never repeated. */
         }
         let accountMatches = false;
@@ -311,7 +341,14 @@ export class DirectPaymentObserver {
             '/backend-api/payments/checkout/taxes',
             '/backend-api/payments/checkout/update_tax_id'
           ].includes(url.pathname)
-            ? this.beginNativeBilling(url.pathname, String(request.method), data, nativeAuth, key)
+            ? this.beginNativeBilling(url.pathname, String(request.method), data, nativeAuth, key, {
+                state: bodyState,
+                requestId:
+                  typeof params.requestId === 'string' && params.requestId.length <= 256
+                    ? params.requestId
+                    : undefined,
+                session
+              })
             : undefined;
         // Native requests can contain tax IDs. Keep only their explicit billing projection.
         if (nativeBilling) data = {};
@@ -402,8 +439,13 @@ export class DirectPaymentObserver {
     this.nativeInflight.clear();
     this.nativeError = undefined;
     this.nativeAuthIssue = 'none';
+    this.nativeBodyState = 'none';
+    this.nativeRequestKind = 'none';
+    this.nativeOrderState = 'missing';
+    this.nativeBodiesRecovered = 0;
     this.nativeQuote = undefined;
     this.nativeBillingAnchor = undefined;
+    this.nativeBillingAnchorWait = undefined;
     this.nativeQuoteVersion = 0;
   }
   nativeBilling(details: V2RechargeDetails): NativeBillingObservation {
@@ -440,7 +482,8 @@ export class DirectPaymentObserver {
     method: string,
     data: PaymentDocument,
     base: NativeAuthProof,
-    key: string
+    key: string,
+    body: NativeBodySource
   ) {
     const kind = path.endsWith('/taxes') ? 'taxes' : 'tax_id';
     this.nativeVersion++;
@@ -452,12 +495,15 @@ export class DirectPaymentObserver {
       this.nativeQuote = undefined;
       this.nativeError = undefined;
       this.nativeBillingAnchor = undefined;
+      this.nativeBillingAnchorWait = undefined;
       this.nativeQuoteVersion = 0;
     }
     const wire = this.nativeWireEarly.get(key);
     this.nativeWireEarly.delete(key);
     const auth = resolvedNativeAuth(base, wire);
     const item: NativeRequestObservation = {
+      bodyState: body.state,
+      orderState: 'missing',
       generation: this.nativeGeneration,
       version: this.nativeVersion,
       sequence: this.nativeTaxesSequence,
@@ -481,12 +527,47 @@ export class DirectPaymentObserver {
       this.fail('native_billing_observation_overflow');
     }
     this.nativeAuthIssue = auth.issue;
+    this.nativeBodyState = body.state;
+    this.nativeRequestKind = kind;
     this.nativeInflight.add(item.version);
     try {
       if (auth.issue !== 'none' && !item.authPending)
         throw new Error('native_billing_account_mismatch');
       if (method !== 'POST') throw new Error('native_billing_method_invalid');
-      if (kind === 'taxes') {
+      if (body.state === 'invalid') throw new Error('native_billing_request_body_invalid');
+      if (body.state === 'oversized') throw new Error('native_billing_request_body_oversized');
+      const anchorWait = kind === 'tax_id' ? this.nativeBillingAnchorWait : undefined;
+      if (body.state === 'omitted' || anchorWait)
+        item.bodyWait = this.completeNativeBody(item, method, data, body, anchorWait);
+      else this.acceptNativeBody(item, method, data);
+      if (kind === 'taxes') this.nativeBillingAnchorWait = item.bodyWait;
+    } catch (error) {
+      this.nativeBillingFailure(
+        item,
+        error instanceof Error ? error.message : 'native_billing_request_invalid'
+      );
+    }
+    return item;
+  }
+  private acceptNativeBody(item: NativeRequestObservation, method: string, data: PaymentDocument) {
+    if (
+      this.closed ||
+      item.generation !== this.nativeGeneration ||
+      item.sequence !== this.nativeTaxesSequence
+    )
+      return;
+    try {
+      item.orderState =
+        typeof data.checkout_session_id !== 'string'
+          ? 'missing'
+          : data.checkout_session_id === this.nativeBinding!.checkoutId
+            ? 'matches'
+            : 'mismatch';
+      if (item.version === this.nativeVersion) this.nativeOrderState = item.orderState;
+      if (item.authIssue !== 'none' && !item.authPending)
+        throw new Error('native_billing_account_mismatch');
+      if (method !== 'POST') throw new Error('native_billing_method_invalid');
+      if (item.kind === 'taxes') {
         item.billing = nativeBillingRequest(data, this.nativeBinding!);
         this.nativeBillingAnchor = item.billing;
       } else {
@@ -497,13 +578,73 @@ export class DirectPaymentObserver {
         item.billing = this.nativeBillingAnchor;
       }
       item.valid = true;
+      if (item.version === this.nativeVersion) this.nativeBodyState = item.bodyState;
     } catch (error) {
       this.nativeBillingFailure(
         item,
         error instanceof Error ? error.message : 'native_billing_request_invalid'
       );
     }
-    return item;
+  }
+  private async completeNativeBody(
+    item: NativeRequestObservation,
+    method: string,
+    supplied: PaymentDocument,
+    source: NativeBodySource,
+    anchorWait?: Promise<void>
+  ) {
+    try {
+      let data = supplied;
+      if (source.state === 'omitted') {
+        if (!source.requestId) throw new Error('native_billing_request_body_missing');
+        if (!this.ownsSession(source.session)) throw new Error('native_billing_session_changed');
+        const raw = await this.browser.cdp
+          .command(
+            'Network.getRequestPostData',
+            { requestId: source.requestId },
+            source.session,
+            3000
+          )
+          .catch(() => {
+            item.bodyState = 'unavailable';
+            throw new Error('native_billing_request_body_unavailable');
+          });
+        if (
+          this.closed ||
+          item.generation !== this.nativeGeneration ||
+          item.sequence !== this.nativeTaxesSequence
+        )
+          return;
+        if (!this.ownsSession(source.session)) throw new Error('native_billing_session_changed');
+        if (raw.base64Encoded) {
+          item.bodyState = 'encoded';
+          throw new Error('native_billing_request_body_encoded');
+        }
+        if (typeof raw.postData !== 'string' || !raw.postData) {
+          item.bodyState = 'missing';
+          throw new Error('native_billing_request_body_missing');
+        }
+        if (raw.postData.length > NATIVE_POST_DATA_LIMIT) {
+          item.bodyState = 'oversized';
+          throw new Error('native_billing_request_body_oversized');
+        }
+        try {
+          data = paymentObject(JSON.parse(raw.postData));
+        } catch {
+          item.bodyState = 'invalid';
+          throw new Error('native_billing_request_body_invalid');
+        }
+        item.bodyState = 'retrieved';
+        this.nativeBodiesRecovered++;
+      }
+      if (anchorWait) await anchorWait;
+      this.acceptNativeBody(item, method, data);
+    } catch (error) {
+      this.nativeBillingFailure(
+        item,
+        error instanceof Error ? error.message : 'native_billing_request_body_unavailable'
+      );
+    }
   }
   private clearNativeAuthentication() {
     for (const { item } of this.nativeAuthRequests.values()) item.releaseAuth?.();
@@ -547,6 +688,9 @@ export class DirectPaymentObserver {
     )
       return;
     this.nativeAuthIssue = item.authIssue;
+    this.nativeBodyState = item.bodyState;
+    this.nativeRequestKind = item.kind;
+    this.nativeOrderState = item.orderState;
     this.nativeError = /^native_billing_[a-z_]+$/.test(reason)
       ? reason
       : 'native_billing_response_invalid';
@@ -562,6 +706,14 @@ export class DirectPaymentObserver {
   ) {
     const native = item.nativeBilling;
     try {
+      if (
+        this.closed ||
+        native.generation !== this.nativeGeneration ||
+        native.sequence !== this.nativeTaxesSequence
+      )
+        return;
+      if (!this.ownsSession(item.session)) throw new Error('native_billing_session_changed');
+      if (native.bodyWait) await native.bodyWait;
       if (
         this.closed ||
         native.generation !== this.nativeGeneration ||
@@ -907,6 +1059,10 @@ export class DirectPaymentObserver {
           quoteReady: Boolean(this.nativeQuote),
           taxesObserved: this.nativeTaxesSequence > 0,
           authIssue: this.nativeAuthIssue,
+          bodyState: this.nativeBodyState,
+          bodyRecovered: this.nativeBodiesRecovered > 0,
+          requestKind: this.nativeRequestKind,
+          orderState: this.nativeOrderState,
           reason: this.nativeError ?? 'none'
         })
       );
@@ -920,6 +1076,7 @@ export class DirectPaymentObserver {
     this.nativeBinding = undefined;
     this.nativeQuote = undefined;
     this.nativeBillingAnchor = undefined;
+    this.nativeBillingAnchorWait = undefined;
     this.nativeQuoteVersion = 0;
     this.nativeInflight.clear();
     this.nativeError = undefined;

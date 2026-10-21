@@ -64,7 +64,10 @@ function fixture() {
   let sequence = 0;
   const owned = new Set(['owned', 'owned-child']);
   const bodies = new Map<string, Promise<Record<string, unknown>> | Record<string, unknown>>();
+  const postBodies = new Map<string, string>();
   const command = vi.fn(async (_method: string, params: { requestId: string }) => {
+    if (_method === 'Network.getRequestPostData')
+      return { postData: postBodies.get(params.requestId) };
     const result = bodies.get(params.requestId);
     if (!result) throw new Error('synthetic response unavailable');
     return await result;
@@ -99,10 +102,13 @@ function fixture() {
       headers?: Record<string, string>;
       method?: string;
       raw?: string;
+      omitBody?: boolean;
     } = {}
   ) {
     const id = String(++sequence),
       session = options.session ?? 'owned';
+    const postData = options.raw ?? JSON.stringify(options.data ?? request());
+    postBodies.set(id, postData);
     handler?.(
       'Network.requestWillBeSent',
       {
@@ -110,7 +116,8 @@ function fixture() {
         request: {
           url: 'https://chatgpt.com' + (options.path ?? '/backend-api/payments/checkout/taxes'),
           method: options.method ?? 'POST',
-          postData: options.raw ?? JSON.stringify(options.data ?? request()),
+          postData: options.omitBody ? undefined : postData,
+          hasPostData: true,
           headers: options.headers ?? {
             authorization: 'Bearer ' + token(options.account),
             'chatgpt-account-id': options.headerAccount ?? accountId
@@ -175,6 +182,121 @@ function fixture() {
 }
 
 describe('原生计税被动观察与确认版本屏障', () => {
+  it.each([false, true])('被省略的正文只读补取并继续原单验证，补充头=%s', async (extra) => {
+    const f = fixture();
+    const item = f.begin({
+      omitBody: true,
+      ...(extra ? { headers: { authorization: 'Bearer ' + token() } } : {})
+    });
+    f.finish(item);
+    if (extra) f.extra(item);
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).error).toBeUndefined();
+    expect(f.observer.nativeBilling(details).document).toBeDefined();
+    expect(
+      f.command.mock.calls.filter(([method]) => method === 'Network.getRequestPostData')
+    ).toHaveLength(1);
+    expect(
+      f.command.mock.calls.every(([method]) =>
+        ['Network.getRequestPostData', 'Network.getResponseBody'].includes(method)
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    ['missing', undefined, 'native_billing_request_body_missing'],
+    ['invalid', '{invalid', 'native_billing_request_body_invalid'],
+    ['oversized', 'x'.repeat(65001), 'native_billing_request_body_oversized'],
+    [
+      'wrong-order',
+      JSON.stringify({ ...request(), checkout_session_id: 'oaics_other' }),
+      'native_billing_request_order_mismatch'
+    ]
+  ] as const)('补取正文仍须完整且匹配原单：%s', async (_kind, postData, reason) => {
+    const f = fixture();
+    f.command.mockResolvedValueOnce({ postData });
+    f.finish(f.begin({ omitBody: true }));
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).error).toBe(reason);
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+    expect(
+      f.command.mock.calls.filter(([method]) => method === 'Network.getRequestPostData')
+    ).toHaveLength(1);
+  });
+
+  it('已有错误原单正文不能补取另一份正文覆盖', async () => {
+    const f = fixture();
+    f.finish(f.begin({ data: { ...request(), checkout_session_id: 'oaics_other' } }));
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).error).toBe('native_billing_request_order_mismatch');
+    expect(f.command).not.toHaveBeenCalled();
+  });
+
+  it('编码正文不能当成明文JSON采纳', async () => {
+    const f = fixture();
+    f.command.mockResolvedValueOnce({ postData: JSON.stringify(request()), base64Encoded: true });
+    f.finish(f.begin({ omitBody: true }));
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).error).toBe('native_billing_request_body_encoded');
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+  });
+
+  it('补取失败仅回显受控原因，不记录传输错误原文或重试', async () => {
+    const output = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      const f = fixture();
+      f.command.mockRejectedValueOnce(new Error('private-post-data-error-never-log'));
+      f.finish(f.begin({ omitBody: true }));
+      await f.observer.settle();
+      expect(f.observer.nativeBilling(details).error).toBe(
+        'native_billing_request_body_unavailable'
+      );
+      expect(f.command).toHaveBeenCalledTimes(1);
+      f.observer.close();
+      expect(JSON.stringify(output.mock.calls)).not.toContain('private-post-data-error-never-log');
+    } finally {
+      output.mockRestore();
+    }
+  });
+
+  it('税号请求等待同一轮计税正文，不能用缺失锚点或旧计税替代', async () => {
+    const f = fixture();
+    const tax = f.begin({ omitBody: true });
+    const taxId = f.begin({
+      path: '/backend-api/payments/checkout/update_tax_id',
+      data: { checkout_session_id: checkoutId, tax_id_info: null }
+    });
+    f.finish(tax);
+    f.finish(taxId, { ...response(), success: true });
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).error).toBeUndefined();
+    expect(f.observer.nativeBilling(details).document).toBeDefined();
+  });
+
+  it('旧正文迟到不能污染新一轮报价', async () => {
+    const f = fixture();
+    let resolvePost!: (value: Record<string, unknown>) => void;
+    f.command.mockImplementationOnce(
+      async () =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolvePost = resolve;
+        })
+    );
+    const old = f.begin({ omitBody: true });
+    const read = f.command.mock.results[0].value;
+    const latest = f.begin();
+    f.finish(old);
+    f.finish(latest);
+    await f.observer.settle();
+    const version = f.observer.nativeBilling(details).version;
+    resolvePost({ postData: '{invalid' });
+    await read;
+    await Promise.resolve();
+    expect(f.observer.nativeBilling(details).error).toBeUndefined();
+    expect(f.observer.nativeBilling(details).document).toBeDefined();
+    expect(f.observer.nativeBilling(details).version).toBe(version);
+  });
+
   it.each(['before', 'after', 'after-finish'] as const)(
     '基础事件漏账号头时，只接纳同请求完整头证据：%s',
     async (order) => {
