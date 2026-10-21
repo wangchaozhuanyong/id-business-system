@@ -18,12 +18,6 @@ export const financialPublicationControlPaths = Object.freeze([
 export function isFinancialPublicationControlsOnly(paths) {
   return (
     paths.includes('scripts/production-release/financial-closure-contract.json') &&
-    paths.some((name) =>
-      [
-        'scripts/production-release/financial-closure-release.py',
-        'scripts/production-release/financial-closure-publication.py'
-      ].includes(name)
-    ) &&
     new Set(paths).size === paths.length &&
     paths.every((name) => financialPublicationControlPaths.includes(name))
   );

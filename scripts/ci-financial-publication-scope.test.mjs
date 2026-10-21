@@ -34,14 +34,14 @@ test('任何附加业务、支付、权限、依赖、历史发布或未知文�
   }
 });
 
-test('缺少冻结契约、发布实现或重复文件不能取得控制范围', () => {
+test('冻结契约单独更新仍验证控制；缺少契约或重复文件不能取得控制范围', () => {
   assert.equal(isFinancialPublicationControlsOnly([]), false);
   assert.equal(isFinancialPublicationControlsOnly(['docs/V2_TASKS.md']), false);
   assert.equal(
     isFinancialPublicationControlsOnly([
       'scripts/production-release/financial-closure-contract.json'
     ]),
-    false
+    true
   );
   assert.equal(
     isFinancialPublicationControlsOnly([

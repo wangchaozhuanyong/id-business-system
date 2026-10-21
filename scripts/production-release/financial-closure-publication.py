@@ -303,7 +303,7 @@ def build(c):
         # none of these parent sources enter the new eight-file payload.
         b.overlay(context, {n: v for n, v in published['productionSources'].items()
             if n.startswith(('apps/' + role + '/', 'packages/shared/'))}, parent['sourceReviewCommit'])
-        for name, expected in c['sourceParents'].items():
+        for name, expected in c['buildParents'].items():
             if name.startswith('apps/' + role + '/'):
                 target = context / name
                 need(not target.is_symlink() and (not target.exists() if expected is None else target.is_file()
@@ -326,7 +326,7 @@ def build(c):
             (OUT / 'parent-api-reproduction-result.json').write_text(json.dumps(reproduced, sort_keys=True, indent=2) + '\n')
             need(reproduced['apiModules'] == published['apiModules']
                  and reproduced['sharedModules'] == published['sharedModules'], 'PARENT_PUBLICATION_COMPILE_CHANGED')
-            need({n: before[n] for n in P.MODULES - P.ABSENT} == c['parentApiModules']
+            need({n: before[n] for n in P.MODULES - P.ABSENT} == c['buildParentApiModules']
                  and P.ABSENT.isdisjoint(before), 'PARENT_COMPILE_CHANGED')
             baseline['api'] = before
             baseline['shared'] = h.file_inventory(context / 'packages/shared/dist')
@@ -369,7 +369,7 @@ def build(c):
     proof = {**identity, 'version': 1, 'scope': P.SCOPE, 'recipe': P.RECIPE,
         'contractSha256': plan['contractSha256'], 'productionSources': c['productionSources'],
         'controlSources': c['controlPins'], 'apiModules': outputs['api'], 'adminFiles': outputs['admin'],
-        'files': h.file_inventory(payload), 'parentModulesReproduced': c['parentApiModules'],
+        'files': h.file_inventory(payload), 'parentModulesReproduced': c['buildParentApiModules'],
         'baselineSharedUnchanged': True, 'baselineClientUnchanged': True,
         'baselineAdminIndexSha256': c['parentAdminIndexSha256'], 'projectedInterfaceCasesPassed': 112,
         'qualityVerification': qa, 'isolatedMysqlVerification': mysql, 'nativeParentCapture': capture,
@@ -442,14 +442,32 @@ def publish(c):
     print(json.dumps(result, sort_keys=True))
 
 
+def inspect_parent(c):
+    check(c)
+    identity = native_identity()
+    need(os.environ.get('EXPECTED_CURRENT') == P.CURRENT and not OUT.exists(), 'INSPECTION_INPUT_CHANGED')
+    OUT.mkdir(parents=True, mode=0o700)
+    controls = {**c['controlPins'], P.CONTRACT_FILE: sha((HERE / P.CONTRACT_FILE).read_bytes())}
+    plan = {**identity, 'recipe': P.RECIPE, 'contractSha256': controls[P.CONTRACT_FILE],
+            'controlSources': controls, 'diagnosticOnly': True}
+    facts = transport(plan, 'parent', OUT)
+    need(facts.get('status') == 'FINANCIAL_NATIVE_PARENT_FACTS' and facts.get('databaseWrites') == 0
+         and facts.get('commit') == P.CURRENT and facts.get('manifestSha256') == c['parentManifestSha256']
+         and facts.get('predecessorProofSha256') == P.PARENT_PROOF
+         and set(facts.get('sourceParents', {})) | set(facts.get('unsafeSources', [])) == P.SOURCES
+         and set(facts.get('apiModules', {})) <= P.MODULES, 'PARENT_FACTS_INVALID')
+    print(json.dumps({'status': facts['status'], 'businessActions': 0, 'databaseWrites': 0,
+                      'sourceCount': len(facts['sourceParents']), 'unsafeSources': len(facts['unsafeSources'])}))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('check', 'build', 'publish'))
+    parser.add_argument('mode', choices=('check', 'build', 'publish', 'inspect'))
     args = parser.parse_args()
     os.umask(0o077)
     try:
         contract = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
-        {'check': check, 'build': build, 'publish': publish}[args.mode](contract)
+        {'check': check, 'build': build, 'publish': publish, 'inspect': inspect_parent}[args.mode](contract)
     except Exception as error:
         code = str(error)
         print(code if re.fullmatch('FINANCIAL_PUBLICATION_[A-Z0-9_]+', code) else 'FINANCIAL_PUBLICATION_FAILED')
