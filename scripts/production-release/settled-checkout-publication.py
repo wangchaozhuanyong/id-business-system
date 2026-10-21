@@ -44,10 +44,10 @@ def check(c):
         need(re.fullmatch('[a-z][a-z0-9.-]+', name)
              and sha((HERE / name).read_bytes()) == digest, 'CONTROL_CHANGED')
     need(sha((ROOT / WORKFLOW).read_bytes()) == c['workflowSha256'], 'WORKFLOW_CHANGED')
-    need(c['parentOverlay']['sourceCommit'] == 'b5de904e778dc0ce4a1f648caa391770130cf4e1'
-         and set(c['parentOverlay']['productionSources']) == {P.SOURCE_FILE}
-         and c['parentOverlay']['productionSources'][P.SOURCE_FILE]
-         == sha(git('show', c['parentOverlay']['sourceCommit'] + ':' + P.SOURCE_FILE)), 'PARENT_OVERLAY_CHANGED')
+    need(c['parentOverlay']['sourceCommit'] == '22ba535ccdebdc4cf1abf98fb2cc5c9d9f2bc20b'
+         and set(c['parentOverlay']['productionSources']) == {P.SOURCE_FILE, P.SOURCE_FILE.replace('recharge-account-restore', 'recharge-unidentified-checkout')}
+         and all(digest == sha(git('show', c['parentOverlay']['sourceCommit'] + ':' + name))
+                 for name, digest in c['parentOverlay']['productionSources'].items()), 'PARENT_OVERLAY_CHANGED')
     finance = json.loads((HERE / 'financial-closure-contract.json').read_bytes())
     need(sha((ROOT / 'package-lock.json').read_bytes()) == finance['buildDependencyPatch']['sha256'],
          'BUILD_LOCK_CHANGED')
@@ -208,7 +208,7 @@ def publish(c):
     path = OUT / 'bitbrowser-history-artifact.tar.gz'
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('已核实失败旧单的账号恢复修复：仅两个 API 模块，无迁移、付款或订阅操作。\n')
+    notes.write_text('已核实失败旧单的账号恢复修复：仅一个 API 模块，无迁移、付款或订阅操作。\n')
     tag = 'bitbrowser-history-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
             '--title', '结单恢复修复 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')

@@ -13,6 +13,8 @@ import {
 } from './recharge-job-helpers';
 import { cycleContext, readCycleState } from './recharge-cycle-state';
 import { unpaidCheckoutRecoveryIdentifier } from './recharge-checkout-recovery';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
+import { rechargeDocumentDigest } from './recharge-callback-receipts';
 import {
   findUnidentifiedCheckoutSource,
   isUnidentifiedUnpaidCheckout,
@@ -183,15 +185,30 @@ export async function restoreRechargeAccount(input: {
       accountKey,
       job.id
     );
+    let recoveryProfileId = ownedProfile?.profileId;
+    const settlement = manualRechargeSettlement(recoveredRecord.document);
+    if (settlement?.outcome === 'failure') {
+      const source = await repository.findJob(tx, settlement.sourceJobId);
+      const sourceSettlement = manualRechargeSettlement(source?.result);
+      const sourceProfile = object(source?.result).browser_profile_id;
+      if (
+        !source ||
+        source.ownerId !== job.ownerId ||
+        source.accountKey !== accountKey ||
+        source.plan !== job.plan ||
+        source.action !== 'bitbrowser' ||
+        source.state !== 'finished' ||
+        !sourceSettlement ||
+        rechargeDocumentDigest(sourceSettlement) !== rechargeDocumentDigest(settlement) ||
+        !isBrowserProfileId(sourceProfile)
+      )
+        throw new ConflictException('人工结单的原窗口来源未核实，禁止创建新订单');
+      // 仅核验历史归属；不能把旧连接窗口设为本次连接的 ownedProfile。
+      recoveryProfileId = sourceProfile;
+    }
     const recovered =
-      ownedProfile &&
-      recoveredCheckoutPredecessor(
-        history,
-        boundJob,
-        recoveredRecord,
-        records,
-        ownedProfile.profileId
-      );
+      recoveryProfileId &&
+      recoveredCheckoutPredecessor(history, boundJob, recoveredRecord, records, recoveryProfileId);
     if (!recovered) throw new ConflictException('已发现原单的恢复来源尚未完整核实，禁止创建新订单');
     historicalRecoverySourceId = recovered.sourceJobId;
     predecessorJobIds = recovered.predecessorJobIds;
