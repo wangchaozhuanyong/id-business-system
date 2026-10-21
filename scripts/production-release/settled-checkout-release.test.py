@@ -22,6 +22,7 @@ B = load('settled-checkout-publication.py')
 
 class SettledCheckoutTests(unittest.TestCase):
     def setUp(self):
+        (P.ROOT / '.runtime').mkdir(exist_ok=True)
         self.c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
 
     def test_exact_frozen_inputs(self):
