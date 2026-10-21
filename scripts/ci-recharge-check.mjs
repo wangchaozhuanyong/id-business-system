@@ -1,3 +1,4 @@
+import { isSettledCheckoutControlsOnly } from './ci-settled-checkout-scope.mjs';
 import {
   isManualSettlementCandidate,
   hasOnlineRuntimeChange
@@ -217,6 +218,29 @@ if (['guards', 'release-controls'].includes(part) && isFinancialClosureCandidate
     run('python3', ['-B', 'scripts/production-release/financial-closure-readonly.test.py']);
     run('python3', ['-B', 'scripts/production-release/financial-closure-publication.py', 'check']);
     run('python3', ['-B', 'scripts/production-release/financial-closure-release.test.py']);
+  }
+  process.exit(0);
+}
+if (mode === 'ci-only' && isSettledCheckoutControlsOnly(changed)) {
+  if (!['guards', 'release-controls'].includes(part))
+    throw new Error('Unsupported settled checkout control check');
+  run('python3', ['-B', 'scripts/production-release/settled-checkout-publication.py', 'check']);
+  if (part === 'guards') {
+    const files = changed.filter((name) => existsSync(name));
+    const formatted = files.filter((name) => /\.(?:mjs|json|yml)$/.test(name));
+    const linted = files.filter((name) => /\.mjs$/.test(name));
+    if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
+    if (linted.length) npm('exec', '--', 'eslint', ...linted);
+    run('node', [
+      '--test',
+      'scripts/ci-settled-checkout-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    npm('run', 'check:v2-module-architecture');
+    npm('run', 'check:v2-isolation');
+  } else {
+    run('python3', ['-B', 'scripts/production-release/settled-checkout-release.test.py']);
   }
   process.exit(0);
 }
