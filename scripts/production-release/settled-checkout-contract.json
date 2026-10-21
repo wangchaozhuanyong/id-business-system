@@ -285,19 +285,19 @@
       "count": 27,
       "sha256": "46cebf0e0e3bc37a0d49570c56d8f3cb08d2237aa525161665afef7fd5b60cdc"
     },
-    "commit": "a1fc8e6ead6babc0b51cc2d923d1f0ff0b2deb8a",
+    "commit": "5275824b2400f965b3ba9604155c18d3a7bcd5e4",
     "configurationSha256": {
       ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-      "compose.release.json": "000ce33d43188f7e4dda3fa2c07d988782ca1ee1e3e230cb8e193f342d88fe0c",
+      "compose.release.json": "9811dcb56a2b4d0466f0e72f81faa820e61bf17fa2dcb984e6067064fb57251b",
       "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
     },
-    "current": "/opt/id-business-v2/releases/20261021T081316Z-a1fc8e6ead6b-bitbrowser-history",
+    "current": "/opt/id-business-v2/releases/20261021T085226Z-5275824b2400-online-checkout-first-open",
     "database": {
       "columns": "91821bb43685e53ce37e5434e5f3d0936d518b2905590580d3e887d74d6060b6",
       "ledger": "c1cc90e85efac2c9c9ef4c55f9090d3ae2fa4ef79ca2ca3e6292ce03e24a83cb",
       "pending": 0
     },
-    "manifestSha256": "b8da65fe84beafadbb2508ee4491e44f0d5e9a18a6bbe13460f075da2911f751",
+    "manifestSha256": "2a6b835c3e4e7718131d2ea479061d1eb5c54ca5f8165ec12c639abbb8db04fc",
     "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
     "proofs": {
       "bitbrowser-history-build-proof.json": "85e3ab2843ba8fe38a1abb696a6e6ef89dd273c8ccc48f2b8d60001b5c2e0d08"
@@ -367,12 +367,12 @@
         "status": "running"
       },
       "online-recharge": {
-        "containerId": "5e1954db950230e7e4a879aa71f1e746dbb663c2d528f44e77eb122da92e141c",
+        "containerId": "54bf1984275effa1b2cff60556430cc34098677310a6c2c33595ddf59d2d2b95",
         "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
         "health": "healthy",
-        "image": "sha256:9230ff58e604ee4d5200d9ee6611e2fa1419c833faf13b1f5d1f30167c3af3a1",
-        "reference": "id-business-v2-online-card-visibility:cb38a1ef351b42f98ce86740b2191fd54207fa32-39407073363",
-        "startedAtSha256": "0a6940081fc22dab683c92453872afebbcf0b91e7ab9b66498b67370d22a7610",
+        "image": "sha256:bb51a69417d3bbc08c99d4648088e4469e83b064d5742783a6f9a004406a7797",
+        "reference": "id-business-v2-online-checkout-first-open:5275824b2400f965b3ba9604155c18d3a7bcd5e4-39571161930",
+        "startedAtSha256": "056ef048cc4f8469c5249133ea0bf305d8225081ddf79207ef093ee58e303dd4",
         "status": "running"
       }
     },
@@ -419,7 +419,7 @@
     "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
     "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
     "settled-checkout-publication.py": "d4c64436fb00623a53111afe16683161797df1d079a0b177c441d6b4afa6e330",
-    "settled-checkout-release.py": "7eca61e74799a18a2b3be2f4e9187625bfb031da7cddfbddc0460b5751863da7"
+    "settled-checkout-release.py": "11c83690917ddfe3ad2f7823ea384cb431a3fbe784f6a0c50ade3d604a5f0696"
   },
   "engineHealth": {
     "activeTasks": 0,
@@ -428,7 +428,7 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "a1fc8e6ead6babc0b51cc2d923d1f0ff0b2deb8a",
+  "expectedCurrent": "5275824b2400f965b3ba9604155c18d3a7bcd5e4",
   "migrationPerformed": false,
   "preservedServices": [
     "api",
