@@ -5050,7 +5050,7 @@
     "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
     "online-checkout-actionability-release.test.py": "271add54ce5080ad3e1a20400697361af3ddf63392da8a78a79efdbf7025c827",
     "online-checkout-first-open-build.py": "09a4df95ead8ec9576b8869992f6cea5850e4edb37226bf8b63c18f4e5ae5090",
-    "online-checkout-first-open-release.py": "3ebc3aafc3e5ab588e1daf4807399d8c8feedb9fe5026fae773879cb5e0adb3f",
+    "online-checkout-first-open-release.py": "4acf85730d347789d0902fd7ad033b6f170ec1562ab714007428c09e8b46c29d",
     "online-checkout-first-open-release.test.py": "d3da4b1f37c7f885209ba4bea330fc9f8e0d5ecff76495683a4b4810d24ea3b1",
     "online-checkout-initialization-build.py": "d202ee4e1f00b72eca5eb4d0477e4e15e795d3a23cdaac9193f1ccdc22a4bed9",
     "online-checkout-initialization-release.py": "3dde1aa3b134f87b31fcbe647e7655f2d62ce87513227c49b43189cebd0689f2",
@@ -5082,7 +5082,7 @@
   "pendingBindings": [],
   "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
   "requiredQualityParts": ["guards", "online-engine"],
-  "reviewBase": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
+  "reviewBase": "62b79bb3b9b3d91398bd253a9c15b2e4e666994b",
   "reviewedControlSources": {
     "scripts/ci-online-settings-scope.mjs": "9a2c086de075a20abf3e9e9c780cc6c390c454b54456fb532411eef56a5f4c8a",
     "scripts/ci-online-settings-scope.test.mjs": "3e37edc75352c380ce20cb80e12c40a148a642849c1a789bbce80f454d31332b",
@@ -5102,8 +5102,8 @@
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "c8a8c89a5cc38eed62398c3782547d0f8d6d45c4d8edd982db406fddd93a8d23"
   },
   "scope": "ONLINE_CHECKOUT_FIRST_OPEN",
-  "sourceReviewCommit": "78679cb1a727dacf354338e822932114f06d87cd",
-  "sourceReviewTag": "online-checkout-first-open-source-review-78679cb1a727",
+  "sourceReviewCommit": "cfd6832b8f2a877f500bfdb5b44edcd5ac99b3af",
+  "sourceReviewTag": "online-checkout-first-open-source-review-cfd6832b8f2a",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "upstreamSource": {
