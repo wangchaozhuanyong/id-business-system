@@ -2,7 +2,7 @@
 // dependency or existing publisher change into this control-only route.
 export const financialPublicationControlPaths = Object.freeze([
   '.github/workflows/financial-closure-publication.yml',
-  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json', 'parent-proof.json'].map(
     (name) => 'scripts/production-release/financial-closure-' + name
   ),
   'scripts/ci-financial-publication-scope.mjs',

@@ -14,8 +14,9 @@ SCOPE = 'FINANCIAL_BILLING_CLOSURE_20261019'
 RECIPE = 'financial-billing-20261019'
 CONTRACT_FILE = 'financial-closure-contract.json'
 SOURCE = '7fc353223095b66408b03af0ea117230abba1a63'
-CURRENT = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
-PARENT_PROOF = '21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354'
+CURRENT = '640e0c8ed0a8056769c77c07a03200f4bd6973a7'
+PARENT_PROOF = '80b3fd7d5a6768b65c5b80054a0dea368e12344699d7735bb0c09490f7814e67'
+PARENT_FILE = 'financial-closure-parent-proof.json'
 ADMIN_ROOT = 'apps/admin/src/v2/features/online-recharge/'
 API_ROOT = 'apps/api/src/id-business-v2/online-recharge/'
 SOURCES = frozenset([ADMIN_ROOT + n for n in ('OnlineResourceView.vue', 'OnlineResultDialog.vue',
@@ -54,6 +55,7 @@ def validate_contract(c):
          and c.get('recipe') == RECIPE and c.get('sourceReviewCommit') == SOURCE
          and c.get('expectedCurrent') == CURRENT and c.get('predecessorProofSha256') == PARENT_PROOF,
          'CONTRACT_IDENTITY')
+    need(c.get('parentProofFile') == PARENT_FILE, 'PARENT_PROOF_FILE')
     need(set(c.get('productionSources', {})) == SOURCES
          and set(c.get('sourceParents', {})) == SOURCES
          and all(re.fullmatch('[a-f0-9]{64}', v) for v in c['productionSources'].values())
@@ -149,6 +151,8 @@ def observe(c, p):
          and sha(raw) == c['parentManifestSha256']
          and sha((current / 'bitbrowser-history-build-proof.json').read_bytes()) == PARENT_PROOF,
          'PUBLISHED_PARENT_CHANGED')
+    need(json.loads((current / 'bitbrowser-history-build-proof.json').read_bytes())
+         == json.loads((HERE / PARENT_FILE).read_bytes()), 'PUBLISHED_PARENT_PROOF_CHANGED')
     states = h.snapshot(d, current)
     need(all(states[n]['image'] == v for n, v in c['parentImages'].items()), 'PARENT_IMAGE_CHANGED')
     h.guards(d, current, states, c)
