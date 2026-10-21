@@ -9,6 +9,7 @@ class Node {
   children: Node[] = [];
   proCard = false;
   titlebar = false;
+  pageHeader = false;
   blockedAncestor = false;
   pointerEvents = 'auto';
   label?: Node;
@@ -27,6 +28,8 @@ class Node {
   }
   closest(selector: string) {
     if (selector === 'header[data-app-shell-titlebar="true"]') return this.titlebar ? this : null;
+    if (selector === 'header[data-app-shell-titlebar="true"],header#page-header')
+      return this.titlebar || this.pageHeader ? this : null;
     if (selector === 'label') return this.label ?? null;
     if (selector === '[data-testid="pro-pricing-modal-column-top-half"]')
       return this.proCard ? this : null;
@@ -358,6 +361,34 @@ describe('直连官网套餐与付款按钮边界', () => {
     second.titlebar = true;
     expect(inspectDirectPaymentPage('go', 'prepare').kind).toBe('plan_unavailable');
     expect(first.clicks + second.clicks).toBe(0);
+  });
+  it.each(['go', 'plus', 'pro-5x', 'pro-20x', 'pro-500'] as const)(
+    '当前官网 page-header 与侧栏均显示升级时，%s 只打开标题栏菜单一次',
+    (plan) => {
+      const sidebar = new Node('升级');
+      const header = new Node('升级');
+      header.pageHeader = true;
+      const pay = new Node('立即付款');
+      setup([sidebar, header, pay], 'https://chatgpt.com/');
+      expect(inspectDirectPaymentPage(plan, 'prepare')).toEqual({
+        kind: 'menu_opened',
+        preparationAction: 'open_menu'
+      });
+      expect(
+        inspectDirectPaymentPage(plan, 'prepare', undefined, { menuRequested: true }).kind
+      ).toBe('preparation_waiting');
+      expect(inspectDirectPaymentPage(plan, 'create').kind).toBe('plan_unavailable');
+      expect([sidebar.clicks, header.clicks, pay.clicks]).toEqual([0, 1, 0]);
+    }
+  );
+  it('新旧标题栏各有升级按钮时保持歧义保护', () => {
+    const old = new Node('升级');
+    old.titlebar = true;
+    const current = new Node('升级');
+    current.pageHeader = true;
+    setup([old, current], 'https://chatgpt.com/');
+    expect(inspectDirectPaymentPage('plus', 'prepare').kind).toBe('plan_unavailable');
+    expect(old.clicks + current.clicks).toBe(0);
   });
   it('Pro唯一档位可选择，且不点击付款或套餐建单按钮', () => {
     const f = proGroup();
