@@ -13,7 +13,6 @@ import {
 } from './recharge-job-helpers';
 import { cycleContext, readCycleState } from './recharge-cycle-state';
 import { unpaidCheckoutRecoveryIdentifier } from './recharge-checkout-recovery';
-import { resolvedDeclinedCheckout } from './recharge-noncharge-proof';
 import {
   findUnidentifiedCheckoutSource,
   isUnidentifiedUnpaidCheckout,
@@ -166,7 +165,6 @@ export async function restoreRechargeAccount(input: {
   const recoveredRecord = records.find(
     (record) =>
       record.fileKey === `${accountKey}${job.plan === 'plus' ? '' : `-${job.plan}`}.json` &&
-      !resolvedDeclinedCheckout(record.document) &&
       object(record.document).status === 'checkout_created' &&
       object(record.document).checkout_recovered_from_original === true &&
       object(record.document).expired_checkout_replacement !== undefined
