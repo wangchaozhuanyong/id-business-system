@@ -1,0 +1,441 @@
+{
+  "apiAdminParentCommit": "523bf8173e46823c05e9641428263f17b1ca3906",
+  "apiModules": [
+    "id-business-v2/online-recharge/admin.controller.d.ts",
+    "id-business-v2/online-recharge/admin.service.d.ts",
+    "id-business-v2/online-recharge/persistence/admin.repository.d.ts",
+    "id-business-v2/online-recharge/persistence/admin.repository.js",
+    "id-business-v2/online-recharge/persistence/admin.repository.js.map",
+    "id-business-v2/online-recharge/persistence/billing-summary.d.ts",
+    "id-business-v2/online-recharge/persistence/billing-summary.js",
+    "id-business-v2/online-recharge/persistence/billing-summary.js.map"
+  ],
+  "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+  "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
+  "buildDependencyPatch": {
+    "fromVersion": "1.16.0",
+    "package": "follow-redirects",
+    "parentCommit": "523bf8173e46823c05e9641428263f17b1ca3906",
+    "parentSha256": "6104c1be6681361d002145c15c8bd1a15a9741a3b61a4694b3982daf7ba5b70f",
+    "path": "package-lock.json",
+    "sha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
+    "sourceCommit": "bbd28b70baf257f21ab3845bb3439ddf41357537",
+    "toVersion": "1.16.1"
+  },
+  "businessActions": 0,
+  "controlPins": {
+    "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+    "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",
+    "bitbrowser-billing-contract.json": "f5c6dc533372c9972d3421a1d05140d9ee7c1caf8cfdcca0a560ab4a89a87a8b",
+    "bitbrowser-billing-release.py": "5599578f3f795d8d010dbddcd60e320cac0b3735aa7169f3b735109f84549c87",
+    "bitbrowser-bounded-hold-contract.json": "05f33acdd6658e9094712c750803521d66f5dcc8125f68b2a1c8ecd3a60ac2d3",
+    "bitbrowser-entry-start-contract.json": "a7b87f7d009cf223fc9d92603b34caa8aea6d5609d462efbd21c24dda4f9f850",
+    "bitbrowser-existing-address-contract.json": "61b090c8ac0b83ce13f713a62804666c92c22304fe4ea9442b6ccc29b441803c",
+    "bitbrowser-followup-contract.json": "f79066e8b1347366df4ef90243cb55498e10b10898d2be9c952dd4efbced5881",
+    "bitbrowser-history-build.py": "4fc0c3585f3d3bdce23bfb360cc9a925e8a9d100d10f82721ab0a06428adc733",
+    "bitbrowser-history-contract.json": "7b0adc46b435e4e1824c6c142d1948168aa38ebc010a8e81f071abb077b0dc91",
+    "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
+    "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
+    "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
+    "bitbrowser-manual-contract.json": "f1751cb97b5ede81504e06de047f72ea32d3ff1eb16ebf1f156eb7a468188c20",
+    "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
+    "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
+    "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
+    "financial-closure-publication.py": "7d5a031132fd9ca1948ae258bcc843a044625646fb0afc2684c25707cfcd5b3d",
+    "financial-closure-readonly.py": "1c1671c48bef5c2ea37a28aa99590781d465157b12833a2ea658d2cc91a13cc0",
+    "financial-closure-readonly.test.py": "44e4e901b5c331a86377f8c9fefcd65a82e3f87126b55c1cb77d2114bfd1a1df",
+    "financial-closure-release.py": "6b394628a0b6b7d8f08f3e6b885311c1989c428dfc47adb62e5ed0a6488517f2",
+    "financial-closure-release.test.py": "aa9331e9dae67464cdf1fac786db06f5167084b0244fd094106aafe998a01bd8",
+    "online-pending-features-contract.json": "b297597b6c0daab42e51cc01e163621f0c875d264dd3e611374c89388ba3e651",
+    "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
+    "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
+    "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
+    "online-session-preflight-contract.json": "8eba3fd2d53936c084146f57883e06a9c93a049da28834fd75a884be075e8b83",
+    "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
+    "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
+    "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
+    "recharge-record-build.py": "071696a021aa0956c626891b48c207cd68b68d6a4701254e715766cd0d6ec122",
+    "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+    "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c"
+  },
+  "engineHealth": {
+    "activeTasks": 0,
+    "mode": "enabled",
+    "ready": true,
+    "rpcConnected": true,
+    "stopping": false
+  },
+  "expectedCurrent": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
+  "migrationPerformed": false,
+  "parentAdminIndexSha256": "92475a644baa2248099092d844a7ae00c02cfd5c73acc90c59afb9f89db39a8c",
+  "parentApiModules": {
+    "id-business-v2/online-recharge/admin.controller.d.ts": "4597d9195be104de9fa892f8e11a67c358a1866b84e825930d584bf7cf67a8ee",
+    "id-business-v2/online-recharge/admin.service.d.ts": "9d403e385e5bc197c3e8a8f9b60125aed833b5b12b5f89471f7ea29535eef255",
+    "id-business-v2/online-recharge/persistence/admin.repository.d.ts": "cceee07cd3636a3fd0f2ebf54971117c015bbf0d89e14a9b4d0a4d64162de696",
+    "id-business-v2/online-recharge/persistence/admin.repository.js": "61cccfd2baa1550bc6bc124d08b5d080b011fee187d79771caa1503e745ad172",
+    "id-business-v2/online-recharge/persistence/admin.repository.js.map": "65f3789de6aad1f133a8f60f736daa8277761216c57922277733d030aee69f2c"
+  },
+  "parentDatabase": {
+    "columns": "91821bb43685e53ce37e5434e5f3d0936d518b2905590580d3e887d74d6060b6",
+    "ledger": "c1cc90e85efac2c9c9ef4c55f9090d3ae2fa4ef79ca2ca3e6292ce03e24a83cb",
+    "pending": 0
+  },
+  "parentImages": {
+    "admin": "sha256:75e55559dc7f3c3ae8418dfdae39b26a7482ad7c1b3257c66b1907938ea0fc79",
+    "api": "sha256:58f577117c87c7bb575e01b656743ff7224cca2ac79301b5a3764d302aae0acb",
+    "online-recharge": "sha256:9230ff58e604ee4d5200d9ee6611e2fa1419c833faf13b1f5d1f30167c3af3a1"
+  },
+  "parentManifestSha256": "f2da51b6175e77edd392e8709f97a28d37375397fe42cbac2086d19b8792c370",
+  "predecessorProofSha256": "21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354",
+  "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
+  "productionAuditRules": [
+    {
+      "code": "auth_user_phone_storage_invalid",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_expense_display_snapshot_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_expense_display_snapshot_not_protected",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "pending_or_failed_migrations",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "foreign_key_enforcement_disabled",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "order_display_snapshot_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "deleted_option_key_not_namespaced",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "live_option_has_delete_snapshot",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "option_cascade_marker_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "live_service_under_inactive_master",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "active_account_inactive_master",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "open_order_inactive_entity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "activation_order_dimension_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "customer_owned_order_source_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "sold_account_ownership_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "customer_owned_order_duplicate_id_cost",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "customer_service_aggregate_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "account_balance_latest_ledger_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "balance_ledger_chain_discontinuity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "balance_ledger_reversal_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "gift_card_ledger_state_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "order_consumption_state_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "sold_account_order_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "unsafe_active_account_lock",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "account_loss_state_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_balance_latest_ledger_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_ledger_chain_discontinuity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_ledger_reversal_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_wallet_delete_marker_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_inflow_reference_integrity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_inflow_receipt_integrity",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_inflow_posting_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "completed_order_finance_reconciliation_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_journal_unbalanced",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_reversal_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_account_balance_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "soft_delete_audit_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "supplier_wallet_gl_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "gift_card_refund_frozen_source_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "finance_cash_source_currency_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "order_financial_snapshot_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_paid_job_order_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_order_financial_reconciliation_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_subscription_projection_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "fx_exchange_principal_fee_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "cash_historical_cost_evidence_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "historical_cash_adjustment_integrity_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "bank_soft_delete_safety_mismatch",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "audit_immutability_trigger_missing",
+      "scope": "general",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_task_missing",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_status_invalid",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_amount_invalid",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_currency_invalid",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_bill_plan_mismatch",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_checkout_multiple_success_bills",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_third_party_local_bill",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_confirmed_payment_bill_missing",
+      "scope": "online-recharge",
+      "severity": "error"
+    },
+    {
+      "code": "online_success_actual_amount_missing",
+      "scope": "online-recharge",
+      "severity": "warning"
+    },
+    {
+      "code": "online_payment_awaiting_review",
+      "scope": "online-recharge",
+      "severity": "warning"
+    },
+    {
+      "code": "online_success_bill_terminal_task_not_paid",
+      "scope": "online-recharge",
+      "severity": "warning"
+    }
+  ],
+  "productionSources": {
+    "apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue": "1433b93c2b5403ae48dfd150bf27ceafb85167953656feb3a78d1e24301da0b2",
+    "apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue": "b3b6ff682097cdbea1817302608f21fc8de720b2eec3a28471c1fdb6a5621d4e",
+    "apps/admin/src/v2/features/online-recharge/V2OnlineOverviewView.vue": "ea21647055064ff126210aa70dbb0896ac16ca5be35a7db9c67ac0426f88e010",
+    "apps/admin/src/v2/features/online-recharge/billing-presentation.ts": "20311686722f7c9d4f5f8d720675713ba5593b8b2418fed8234d5b9cdba38556",
+    "apps/admin/src/v2/features/online-recharge/sections.ts": "f476b16d28fed3016d9e40e806619ab9f9e64c20bba8c5ab0fb5d18272bbfa63",
+    "apps/admin/src/v2/features/online-recharge/tableSchemas.ts": "d49f56fa250e29045142894f139746d5740d6599c15942d789f3e9445f9df42d",
+    "apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts": "c4a89c652e19283db7e08c26b337276b419434d3286f52820d8520a998791400",
+    "apps/api/src/id-business-v2/online-recharge/persistence/billing-summary.ts": "b1362c14777f23cc6a8ab18e2809e977307d7c2858bcfefedebd5825730ffe9e"
+  },
+  "reboundServices": ["online-recharge"],
+  "recipe": "financial-billing-20261019",
+  "scope": "FINANCIAL_BILLING_CLOSURE_20261019",
+  "sourceParents": {
+    "apps/admin/src/v2/features/online-recharge/OnlineResourceView.vue": "80253b52b6b1bfc0471153bd0255468aba846220c9e7f0d2e4a2b6520583eba7",
+    "apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue": "fff8d7f8b26414a65fe6ab3e5d9b947c0f4ae20dd1377978890f7cf0555bf2b4",
+    "apps/admin/src/v2/features/online-recharge/V2OnlineOverviewView.vue": "04ca513c116403eee9191f7180d7d684924bc087f8913c7f31cfa75560b5bd90",
+    "apps/admin/src/v2/features/online-recharge/billing-presentation.ts": null,
+    "apps/admin/src/v2/features/online-recharge/sections.ts": "50bad7216c30cf9463ab068ad652cbc7945568c7ca8d3d2cac5c5ea16f9ff357",
+    "apps/admin/src/v2/features/online-recharge/tableSchemas.ts": "2c5fe62f8a0c658a5e401f41bbeeb0442a1aab270ce25f8be006bb0b31c5bc20",
+    "apps/api/src/id-business-v2/online-recharge/persistence/admin.repository.ts": "a6e41cb4aff060be578bcbef44536c5b73c6f08f7d5550ef0073e0d661f2e067",
+    "apps/api/src/id-business-v2/online-recharge/persistence/billing-summary.ts": null
+  },
+  "sourceQualityPolicy": "merged-finance-pr-full-quality-and-main-quality-with-exact-accepted-billing-inputs",
+  "sourceReviewCommit": "7fc353223095b66408b03af0ea117230abba1a63",
+  "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+  "status": "FROZEN",
+  "updatedServices": ["api", "admin"],
+  "validation": {
+    "commit": "2a4474c4f9e0ccd38291b1dfffbd4abd70ab4b5d",
+    "pullRequest": 646,
+    "runId": "39544843290"
+  },
+  "validationSources": {
+    ".github/workflows/financial-closure-validation.yml": "3af1de74dc227af5f17a62ea335460e7e39db993df5eebcf7e7ef90137943c44",
+    "apps/admin/src/v2/features/online-recharge/billing-presentation.spec.ts": "369693dc5c405e57f1a2eb79145f0e6b4371f7770dd5a5820d8d6c5f76c0bb72",
+    "apps/admin/src/v2/features/online-recharge/billing-result.spec.ts": "a979e204454f9fc32b9e0be529f7d70eb1aa6f80675cae7f1ef7c09c92dc2ac4",
+    "apps/api/src/id-business-v2/online-recharge/billing.spec.ts": "0197f57ee5c9f18654190dc1cc57f9c29f2f662c1e7804c258c816a46da32645",
+    "apps/api/src/id-business-v2/online-recharge/mysql.integration.spec.ts": "a0d68a413cfa48b76c5ff55a885976044ce27c60467007322ce2b9003b800f91",
+    "scripts/acceptance-v2-financial-integrity.mjs": "191b69ff1d670f05a0dee4e2c1074fcecf13cb0e575e10e887980d08e2065667",
+    "scripts/acceptance-v2-online-billing-ui.mjs": "338ff461ec50688d24e88969c207bf65dae4fd91751c7f301f5ca712d10b5326",
+    "scripts/lib/v2-data-integrity-audit.mjs": "9c982c6f6c4573715d6679d64eb898ea20080430aa18ac42ae093beac181f26e",
+    "scripts/lib/v2-historical-cash-adjustment-audit.mjs": "13367df42cbf58102e8e014afddae32fe73785d9159334e98ed8a2474c2aa569",
+    "scripts/lib/v2-online-recharge-integrity.mjs": "cd1cab3cc38ae7a1f9903abd91be149ecefbe69e53d49ccdb5a7b7a93c905548",
+    "scripts/v2-online-recharge-integrity-mysql.test.mjs": "0269dc0f15814d300f4071045df25a20f65a80cc0e9bb9492ca9f71b3d1bc686"
+  },
+  "version": 1,
+  "workflowSha256": "b19a558c7ae07b4d5d4c8db3c0081233c579b62040b888d0c0a52d7ee36e6ad3"
+}

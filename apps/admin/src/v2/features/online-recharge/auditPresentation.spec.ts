@@ -185,8 +185,8 @@ describe('线上代充审计发现的结果展示', () => {
       { cardLast4: '0002', currency: 'PHP', amount: '24.00', count: 1 }
     ]);
     expect(state.entries).toHaveLength(1);
-    expect(state.entries[0].value).toContain('卡尾号：0001\n币种：USD\n实际金额：190.25\n数量：2');
-    expect(state.entries[0].value).toContain('卡尾号：0002\n币种：PHP\n实际金额：24.00');
+    expect(state.entries[0].value).toContain('卡尾号：0001\n币种：USD\n金额：190.25\n数量：2');
+    expect(state.entries[0].value).toContain('卡尾号：0002\n币种：PHP\n金额：24.00');
     expect(state.entries[0].value).not.toContain('synthetic-secret');
   });
   it('空汇总显示明确空状态', () => {

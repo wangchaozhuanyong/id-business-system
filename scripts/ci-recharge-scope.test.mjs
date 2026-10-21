@@ -8429,3 +8429,41 @@ test('多电脑比特连接保留当前构建与 MySQL 验收，不送入历史 
   ])
     assert.equal(needsOnlineRechargeCiBuild([...paths, extra]), true, extra);
 });
+test('账务修复的真实 CI 入口保留 full 门禁，排除历史 ONLINE 镜像构造', async () => {
+  const { financialClosurePaths } = await import('./ci-financial-closure-scope.mjs');
+  for (const eventName of ['pull_request', 'push']) {
+    const { writes } = recordScopeClassification([...financialClosurePaths], {}, eventName);
+    assert.ok(
+      writes.some(({ contents }) => /(?:^|\n)mode=full\n/.test(contents)),
+      eventName
+    );
+    assert.ok(
+      writes.some(({ contents }) => /(?:^|\n)online_ci_build=false\n/.test(contents)),
+      eventName
+    );
+  }
+});
+test('账务发布控制在真实 PR 与 main 入口只选控制检查', async () => {
+  const { financialPublicationControlPaths } = await import('./ci-financial-publication-scope.mjs');
+  for (const eventName of ['pull_request', 'push']) {
+    const { writes } = recordScopeClassification(
+      [...financialPublicationControlPaths],
+      {},
+      eventName
+    );
+    assert.ok(
+      writes.some(({ contents }) => /(?:^|\n)mode=ci-only\n/.test(contents)),
+      eventName
+    );
+    assert.ok(
+      writes.some(({ contents }) =>
+        /(?:^|\n)check_parts=\["guards","release-controls"\]\n/.test(contents)
+      ),
+      eventName
+    );
+    assert.ok(
+      writes.some(({ contents }) => /(?:^|\n)online_ci_build=false\n/.test(contents)),
+      eventName
+    );
+  }
+});

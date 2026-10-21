@@ -1,4 +1,6 @@
 import { isManualSettlementCandidate } from './ci-bitbrowser-manual-controls.mjs';
+import { isFinancialClosureCandidate } from './ci-financial-closure-scope.mjs';
+import { isFinancialPublicationControlsOnly } from './ci-financial-publication-scope.mjs';
 import { isMailboxVersionOnly, isMailboxVersionControlsOnly } from './ci-mailbox-version-scope.mjs';
 import {
   affectsGptRechargeArtifact,
@@ -1181,6 +1183,8 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isFinancialPublicationControlsOnly(paths)) return false;
+  if (isFinancialClosureCandidate(paths)) return false;
   if (isBitbrowserConnectionProfilesOnly(paths)) return false;
   if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context)) return false;
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context)) return false;
@@ -2307,6 +2311,7 @@ export function bitbrowserBoundedHoldCheckCommands(part, paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (isFinancialPublicationControlsOnly(paths)) return true;
   if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context)) return true;
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context)) return true;
   if (isBitbrowserBoundedHoldMysqlRepairOnly(paths, context)) return true;
@@ -2473,6 +2478,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isFinancialPublicationControlsOnly(paths))
+    return oldSchema === newSchema ? 'ci-only' : 'full';
   if (bitbrowserBoundedHoldSelectedNativeShape(paths))
     return isBitbrowserBoundedHoldSelectedNativeOnly(paths, context) &&
       bitbrowserBoundedHoldSchemaMatches(oldSchema, newSchema)
@@ -3052,6 +3059,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isFinancialPublicationControlsOnly(paths)) return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context))
     return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldNativeDeclarationsOnly(paths, context))
@@ -5943,7 +5951,8 @@ async function main() {
       hasBitbrowserBoundedHoldMysqlRepairScope(paths))
       ? [...parts]
       : mode === 'ci-only' &&
-          (hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
+          (isFinancialPublicationControlsOnly(paths) ||
+            hasBankCardDeletePolicyProof(paths, grantHelperSnapshot) ||
             isBitbrowserHistoryControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserFollowupControlsOnly(paths, proxyIdentityContext) ||
             isBitbrowserEntryStartControlsOnly(paths, proxyIdentityContext) ||
@@ -5971,9 +5980,10 @@ async function main() {
         : onlineBuildProofReusePriorNeedsCiBuild(paths, proxyIdentityContext);
   // END finite ONLINE build-proof reuse classifier admission
 
-  const onlineCiBuild = isManualSettlementCandidate(paths)
-    ? false
-    : needsOnlineRechargeCiBuild(paths);
+  const onlineCiBuild =
+    isManualSettlementCandidate(paths) || isFinancialClosureCandidate(paths)
+      ? false
+      : needsOnlineRechargeCiBuild(paths);
   const browserCandidate = isRegistrationBrowserOnly(paths, proxyIdentityContext);
   const protocolRestoreCandidate = isRegistrationProtocolRestoreOnly(paths, proxyIdentityContext);
   const result = {

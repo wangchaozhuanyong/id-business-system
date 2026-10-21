@@ -1,0 +1,125 @@
+name: Financial Billing Finite Publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main producer commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify frozen publication and counterexamples without database access
+        run: |
+          python3 -B scripts/production-release/financial-closure-publication.py check
+          python3 -B scripts/production-release/financial-closure-release.test.py
+      - run: npx playwright install --with-deps chromium
+      - name: Configure existing production role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-finance-build-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Authenticate prior acceptance and build finite billing overlay
+        run: python3 -B scripts/production-release/financial-closure-publication.py build
+      - name: Preserve native parent receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: financial-closure-parent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/financial-closure/*-intent.json
+            .deploy/financial-closure/*-accepted.json
+            .deploy/financial-closure/*-invocation.json
+            .deploy/financial-closure/*-result.json
+            .deploy/financial-closure/production-counts-before.json
+            .deploy/financial-closure-readonly/
+          include-hidden-files: true
+          if-no-files-found: warn
+      - name: Preserve projected interface acceptance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: financial-closure-projected-interface-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/financial-closure/projected-interface/
+          include-hidden-files: true
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: financial-closure-native-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/financial-closure/bitbrowser-history-artifact.tar.gz
+            .deploy/financial-closure/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-finance-publish-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/financial-closure-publication.py publish
+      - name: Preserve original publication receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: financial-closure-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/financial-closure/*.json
+            .deploy/financial-closure/artifact-notes.md
+            .deploy/financial-closure-readonly/
+          include-hidden-files: true
+          if-no-files-found: warn

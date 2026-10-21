@@ -265,6 +265,7 @@ import {
 import { onlineTableSchemas } from './tableSchemas';
 import type { OnlineAction, OnlineQuery, OnlineRow, OnlineSection } from './contracts';
 import { sharedCardPlanOptions } from './shared-card-plans';
+import { onlineBillingActionResult } from './billing-presentation';
 import '@/v2/styles/records.css';
 import './online-recharge.css';
 const props = defineProps<{ descriptor: { section: OnlineSection; moduleKey: V2ModuleKey } }>();
@@ -499,7 +500,10 @@ async function onSaved(value: Record<string, unknown>) {
     value.id ||
     value.tasks
   ) {
-    result.value = value;
+    result.value =
+      section === 'billing' && selectedAction.value?.key === 'summary' && Array.isArray(value)
+        ? onlineBillingActionResult(value)
+        : value;
     resultOpen.value = true;
   }
   await query.refresh();

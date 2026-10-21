@@ -3,6 +3,8 @@ import {
   hasOnlineRuntimeChange
 } from './ci-bitbrowser-manual-controls.mjs';
 import { isFeatureRetirementPermissionsRepair } from './ci-feature-retirement-scope.mjs';
+import { isFinancialPublicationControlsOnly } from './ci-financial-publication-scope.mjs';
+import { isFinancialClosureCandidate } from './ci-financial-closure-scope.mjs';
 import {
   rejectRetiredRegistrationCommand,
   rejectRetiredRegistrationExecution
@@ -201,6 +203,46 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (['guards', 'release-controls'].includes(part) && isFinancialClosureCandidate(changed)) {
+  // Full Quality retains its application, MySQL, UI, type, test and build jobs.
+  // These new controls belong to the finite billing publisher; unchanged
+  // historical publisher families do not consume the new application tree.
+  if (part === 'guards') {
+    run('node', [
+      '--test',
+      'scripts/ci-financial-closure-scope.test.mjs',
+      'scripts/ci-financial-publication-scope.test.mjs'
+    ]);
+  } else {
+    run('python3', ['-B', 'scripts/production-release/financial-closure-readonly.test.py']);
+    run('python3', ['-B', 'scripts/production-release/financial-closure-publication.py', 'check']);
+    run('python3', ['-B', 'scripts/production-release/financial-closure-release.test.py']);
+  }
+  process.exit(0);
+}
+if (mode === 'ci-only' && isFinancialPublicationControlsOnly(changed)) {
+  if (!['guards', 'release-controls'].includes(part))
+    throw new Error('Unsupported financial publication control check');
+  run('python3', ['-B', 'scripts/production-release/financial-closure-publication.py', 'check']);
+  if (part === 'guards') {
+    const files = changed.filter((name) => existsSync(name));
+    const formatted = files.filter((name) => /\.(?:mjs|json|md|yml)$/.test(name));
+    const linted = files.filter((name) => /\.mjs$/.test(name));
+    if (formatted.length) npm('exec', '--', 'prettier', '--check', ...formatted);
+    if (linted.length) npm('exec', '--', 'eslint', ...linted);
+    run('node', [
+      '--test',
+      'scripts/ci-financial-publication-scope.test.mjs',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    npm('run', 'check:v2-module-architecture');
+    npm('run', 'check:v2-isolation');
+  } else {
+    run('python3', ['-B', 'scripts/production-release/financial-closure-release.test.py']);
+  }
+  process.exit(0);
+}
 // Business quality stays full. Only unchanged historical publishers are excluded
 // from this finite publisher's control step; the Python check verifies all frozen
 // source/control/CI hashes before the matching publication tests run.
