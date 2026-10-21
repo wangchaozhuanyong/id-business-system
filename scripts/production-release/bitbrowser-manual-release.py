@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 BASE = Path('/opt/id-business-v2')
 CURRENT = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
-SOURCE = 'cb38a1ef351b42f98ce86740b2191fd54207fa32'
+SOURCE = 'bbd28b70baf257f21ab3845bb3439ddf41357537'
 PARENT_PROOF = '21ae3a28caa39c7f4c08fdb70b3e20780c4ed639d4d0bc4d11272dbd9d6d0354'
 RECIPE = 'manual-settlement-20261019'
 SCOPE = 'BITBROWSER_MANUAL_SETTLEMENT_20261019'
@@ -51,11 +51,35 @@ def summary(value):
     return {'count': len(value), 'sha256': sha(canonical(value))}
 
 
+def verify_build_dependency_patch(before_raw, after_raw, c):
+    patch = c['buildDependencyPatch']
+    need(sha(before_raw) == patch['parentSha256'] and sha(after_raw) == patch['sha256'],
+        'DEPENDENCY_LOCK_CHANGED')
+    before, after = json.loads(before_raw), json.loads(after_raw)
+    name = 'node_modules/follow-redirects'
+    old, new = before['packages'][name], after['packages'][name]
+    need(old['version'] == '1.16.0' and new['version'] == '1.16.1'
+        and new['resolved'] == 'https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.1.tgz'
+        and re.fullmatch(r'sha512-[A-Za-z0-9+/]+={0,2}', new['integrity']), 'DEPENDENCY_PATCH_VERSION')
+    unchanged = set(old) - {'version', 'resolved', 'integrity'}
+    need(set(old) == set(new) and all(old[key] == new[key] for key in unchanged), 'DEPENDENCY_PATCH_SCOPE')
+    after['packages'][name] = old
+    need(after == before, 'DEPENDENCY_PATCH_SCOPE')
+
+
 def validate_contract(c):
     need(c.get('version') == 1 and c.get('status') == 'FROZEN' and c.get('scope') == SCOPE
         and c.get('recipe') == RECIPE and c.get('expectedCurrent') == CURRENT
         and c.get('sourceReviewCommit') == SOURCE and c.get('predecessorProofSha256') == PARENT_PROOF
         and c.get('migrationPerformed') is False and c.get('businessActions') == 0, 'CONTRACT_IDENTITY')
+    patch = c.get('buildDependencyPatch', {})
+    need(set(patch) == {'path', 'sourceCommit', 'parentCommit', 'parentSha256', 'sha256',
+        'package', 'fromVersion', 'toVersion'} and patch['path'] == 'package-lock.json'
+        and patch['sourceCommit'] == SOURCE and patch['parentCommit'] == c['apiAdminParentCommit']
+        and patch['package'] == 'follow-redirects' and patch['fromVersion'] == '1.16.0'
+        and patch['toVersion'] == '1.16.1'
+        and all(re.fullmatch('[a-f0-9]{64}', patch[key]) for key in ('parentSha256', 'sha256')),
+        'DEPENDENCY_PATCH_CONTRACT')
     need(c.get('sourceQualityPolicy') == 'native-full-candidate-with-exact-reviewed-business-and-main-tree'
         and set(c.get('ciControlPins', {})) == {'scripts/ci-bitbrowser-manual-controls.mjs',
             'scripts/ci-bitbrowser-manual-controls.test.mjs', 'scripts/ci-recharge-scope.mjs',
@@ -114,9 +138,12 @@ function files(root){const out={};function walk(dir){for(const e of fs.readdirSy
 function pick(all,names){return Object.fromEntries(names.filter(n=>n in all).sort().map(n=>[n,all[n]]));}
 function inv(all,except=[]){const o=Object.fromEntries(Object.keys(all).filter(n=>!except.includes(n)).sort().map(n=>[n,all[n]]));return{count:Object.keys(o).length,sha256:hash(JSON.stringify(o))};}
 const api=files('/app/apps/api/dist'),sh=files('/app/packages/shared/dist');
-console.log(JSON.stringify({apiModules:pick(api,selected),apiPreservedInventory:inv(api,selected),sharedModules:pick(sh,shared),sharedPreservedInventory:inv(sh,shared),clientInventory:inv(files('/app/node_modules/.prisma/client'))}));
+let buildOnlyDependencyInstalled=false;
+try{require.resolve('follow-redirects/package.json');buildOnlyDependencyInstalled=true;}catch(error){if(error.code!=='MODULE_NOT_FOUND')throw error;}
+console.log(JSON.stringify({buildOnlyDependencyInstalled,apiModules:pick(api,selected),apiPreservedInventory:inv(api,selected),sharedModules:pick(sh,shared),sharedPreservedInventory:inv(sh,shared),clientInventory:inv(files('/app/node_modules/.prisma/client'))}));
 '''
     out = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', code, timeout=90))
+    need(out.get('buildOnlyDependencyInstalled') is False, 'BUILD_ONLY_DEPENDENCY_IN_RUNTIME')
     admin = load('recharge-checkout-release.py').admin_inventory(d, states['admin'])
     out['adminInventory'] = summary(admin)
     out['nginxSha256'] = d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
@@ -172,6 +199,7 @@ def verify_proof(proof, plan, c, payload, h):
         'contractSha256', 'qualityVerification', 'isolatedMysqlVerification'))
         and proof.get('scope') == SCOPE and proof.get('recipe') == RECIPE
         and proof.get('sources') == c['sources'] and proof.get('productionSources') == c['productionSources']
+        and proof.get('buildDependencyPatch') == c['buildDependencyPatch']
         and proof.get('controlSources') == c['controlPins']
         and proof.get('predecessorProofSha256') == PARENT_PROOF
         and proof.get('businessActions') == 0 and proof.get('migrationPerformed') is False,

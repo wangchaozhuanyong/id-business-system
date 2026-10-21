@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 export const manualReleasePaths = Object.freeze([
   '.github/workflows/bitbrowser-manual-validation.yml',
@@ -14,7 +15,7 @@ export const manualCiPaths = Object.freeze([
 ]);
 
 export function isManualSettlementCandidate(paths, manifest) {
-  if (!manualReleasePaths.every((name) => paths.includes(name))) return false;
+  if (!paths.includes('scripts/production-release/bitbrowser-manual-contract.json')) return false;
   try {
     const c =
       manifest ??
@@ -23,12 +24,27 @@ export function isManualSettlementCandidate(paths, manifest) {
       );
     if (
       c.status !== 'FROZEN' ||
-      c.sourceReviewCommit !== 'cb38a1ef351b42f98ce86740b2191fd54207fa32' ||
+      c.sourceReviewCommit !== 'bbd28b70baf257f21ab3845bb3439ddf41357537' ||
       Object.keys(c.sources ?? {}).length !== 61 ||
       Object.keys(c.productionSources ?? {}).length !== 43
     )
       return false;
-    const allowed = new Set([...Object.keys(c.sources), ...manualReleasePaths, ...manualCiPaths]);
+    const patch = c.buildDependencyPatch;
+    if (
+      patch?.path !== 'package-lock.json' ||
+      patch.sourceCommit !== c.sourceReviewCommit ||
+      patch.package !== 'follow-redirects' ||
+      patch.fromVersion !== '1.16.0' ||
+      patch.toVersion !== '1.16.1' ||
+      patch.sha256 !== createHash('sha256').update(readFileSync(patch.path)).digest('hex')
+    )
+      return false;
+    const allowed = new Set([
+      ...Object.keys(c.sources),
+      patch.path,
+      ...manualReleasePaths,
+      ...manualCiPaths
+    ]);
     return new Set(paths).size === paths.length && paths.every((name) => allowed.has(name));
   } catch {
     return false;

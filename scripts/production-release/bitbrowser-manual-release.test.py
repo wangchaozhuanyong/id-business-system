@@ -27,6 +27,13 @@ class ManualReleaseTests(unittest.TestCase):
         self.assertEqual(len(self.c['productionSources']), 43)
         self.assertEqual(len(self.c['sharedModules']), 4)
 
+    def test_review_anchor_is_on_mainline_before_squash_merging_publisher(self):
+        b = p.load('bitbrowser-manual-build.py')
+        self.assertEqual(b.git('merge-base', p.SOURCE, self.c['reviewBase']).decode().strip(), p.SOURCE)
+        with patch.object(b, 'git', return_value=b'2ecce1a22aab84f0ae4c40a573511567f7309d71\n'):
+            with self.assertRaisesRegex(RuntimeError, 'SOURCE_MAINLINE_REQUIRED'):
+                b.check(self.c)
+
     def test_reject_different_source_parent_or_recipe(self):
         for key in ('sourceReviewCommit', 'expectedCurrent', 'predecessorProofSha256', 'recipe'):
             c = copy.deepcopy(self.c)
@@ -67,6 +74,52 @@ class ManualReleaseTests(unittest.TestCase):
             c[key] = c[key][1:]
             with self.assertRaises(RuntimeError):
                 p.validate_contract(c)
+
+    def test_build_dependency_patch_rejects_other_packages_and_versions_even_with_updated_hash(self):
+        b = p.load('bitbrowser-manual-build.py')
+        patch = self.c['buildDependencyPatch']
+        before = b.git('show', patch['parentCommit'] + ':' + patch['path'])
+        after = (HERE.parents[1] / patch['path']).read_bytes()
+        p.verify_build_dependency_patch(before, after, self.c)
+        for kind in ('other-package', 'version', 'metadata'):
+            changed = json.loads(after)
+            if kind == 'other-package':
+                changed['packages']['node_modules/axios']['version'] = '99.0.0'
+            elif kind == 'version':
+                changed['packages']['node_modules/follow-redirects']['version'] = '1.16.2'
+            else:
+                changed['packages']['node_modules/follow-redirects']['license'] = 'different'
+            raw = json.dumps(changed).encode()
+            c = copy.deepcopy(self.c)
+            c['buildDependencyPatch']['sha256'] = p.sha(raw)
+            with self.assertRaises(RuntimeError):
+                p.verify_build_dependency_patch(before, raw, c)
+        for change in ({'path': 'package.json'}, {'package': 'axios'}, {'toVersion': '1.16.2'}):
+            c = copy.deepcopy(self.c)
+            c['buildDependencyPatch'].update(change)
+            with self.assertRaises(RuntimeError):
+                p.validate_contract(c)
+
+    def test_finite_context_uses_reviewed_lock_and_does_not_overwrite_unknown_parent(self):
+        b = p.load('bitbrowser-manual-build.py')
+        patch = self.c['buildDependencyPatch']
+        before = b.git('show', patch['parentCommit'] + ':' + patch['path'])
+        after = (HERE.parents[1] / patch['path']).read_bytes()
+        with tempfile.TemporaryDirectory(dir=HERE.parents[1] / '.runtime') as temporary:
+            context = Path(temporary)
+            target = context / patch['path']
+            target.write_bytes(before)
+            b.patch_build_lock(context, self.c, p)
+            self.assertEqual(target.read_bytes(), after)
+            target.write_bytes(b'{}')
+            with self.assertRaises(RuntimeError):
+                b.patch_build_lock(context, self.c, p)
+            self.assertEqual(target.read_bytes(), b'{}')
+
+    def test_build_only_dependency_cannot_silently_enter_preserved_server_runtime(self):
+        driver = type('Driver', (), {'run': lambda *args, **kwargs: '{"buildOnlyDependencyInstalled":true}'})()
+        with self.assertRaisesRegex(RuntimeError, 'BUILD_ONLY_DEPENDENCY_IN_RUNTIME'):
+            p.runtime(driver, {'api': {'containerId': 'test'}}, self.c)
 
     def test_manual_mysql_must_be_native_and_not_skipped(self):
         value = {'sourceCommit': p.SOURCE, 'runId': '123', 'testedCommit': 'a' * 40, 'manualTestsPassed': 4,

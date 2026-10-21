@@ -31,6 +31,8 @@ def git(*args):
 def check(c):
     p = load('bitbrowser-manual-release.py')
     p.validate_contract(c)
+    p.need(git('merge-base', p.SOURCE, c['reviewBase']).decode().strip() == p.SOURCE,
+        'SOURCE_MAINLINE_REQUIRED')
     p.need(git('rev-parse', p.SOURCE + '^{tree}').decode().strip() == c['sourceReviewTree'], 'SOURCE_TREE_CHANGED')
     for n, v in c['sources'].items():
         p.need(p.sha((ROOT / n).read_bytes()) == v == p.sha(git('show', p.SOURCE + ':' + n)), 'SOURCE_CHANGED')
@@ -43,11 +45,24 @@ def check(c):
         p.need(p.sha((ROOT / n).read_bytes()) == v, 'CI_CONTROL_CHANGED')
     p.need(p.sha((ROOT / p.WORKFLOW).read_bytes()) == c['workflowSha256']
         and p.sha((ROOT / '.github/workflows/quality.yml').read_bytes()) == c['qualityWorkflowSha256'], 'WORKFLOW_CHANGED')
+    patch = c['buildDependencyPatch']
+    raw = (ROOT / patch['path']).read_bytes()
+    p.need(raw == git('show', p.SOURCE + ':' + patch['path']), 'REVIEWED_DEPENDENCY_LOCK_CHANGED')
+    p.verify_build_dependency_patch(git('show', patch['parentCommit'] + ':' + patch['path']), raw, c)
     changed = set(git('diff', '--name-only', c['reviewBase'], 'HEAD').decode().splitlines())
-    allowed = set(c['sources']) | set(c['ciControlPins']) | {p.WORKFLOW, 'scripts/production-release/' + p.CONTRACT_FILE} | {
+    allowed = set(c['sources']) | set(c['ciControlPins']) | {patch['path'], p.WORKFLOW, 'scripts/production-release/' + p.CONTRACT_FILE} | {
         'scripts/production-release/' + n for n in c['controlPins'] if n.startswith('bitbrowser-manual-')}
     p.need(changed <= allowed and git('merge-base', p.SOURCE, 'HEAD').decode().strip() == p.SOURCE, 'FINITE_SCOPE_CHANGED')
     return p
+
+
+def patch_build_lock(context, c, p):
+    patch = c['buildDependencyPatch']
+    target = context / patch['path']
+    p.need(target.is_file() and not target.is_symlink(), 'DEPENDENCY_LOCK_LAYOUT')
+    raw = (ROOT / patch['path']).read_bytes()
+    p.verify_build_dependency_patch(target.read_bytes(), raw, c)
+    target.write_bytes(raw)
 
 
 def require_quality_jobs(rows, *, source, p):
@@ -97,6 +112,9 @@ def quality(c, p, identity):
     for name, expected in c['sources'].items():
         p.need(p.sha(git('show', producer + ':' + name)) == expected
             == p.sha(git('show', p.SOURCE + ':' + name)), 'REVIEWED_BUSINESS_PROJECTION_CHANGED')
+    patch = c['buildDependencyPatch']
+    p.need(p.sha(git('show', producer + ':' + patch['path'])) == patch['sha256']
+        == p.sha(git('show', p.SOURCE + ':' + patch['path'])), 'REVIEWED_DEPENDENCY_LOCK_CHANGED')
     out = {}
     for role, commit in (('sources', producer), ('release', identity['commit'])):
         runs = github('actions/workflows/quality.yml/runs?head_sha=' + commit)['workflow_runs']
@@ -156,6 +174,7 @@ def main(c):
             p.need(not path.is_symlink() and (not path.exists() if expected is None else path.is_file()
                 and p.sha(path.read_bytes()) == expected), 'RECONSTRUCTED_PARENT_SOURCE_CHANGED')
         b.overlay(context, selected, p.SOURCE)
+        patch_build_lock(context, c, p)
         env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + commit}
         commands = [('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
             ('npm', 'run', 'build', '--workspace', '@apple-business/shared')]
@@ -181,6 +200,7 @@ def main(c):
     proof = {**identity, 'version': 1, 'recipe': p.RECIPE, 'scope': p.SCOPE,
         'contractSha256': p.sha((HERE / p.CONTRACT_FILE).read_bytes()), 'sources': c['sources'],
         'productionSources': c['productionSources'], 'controlSources': c['controlPins'],
+        'buildDependencyPatch': c['buildDependencyPatch'],
         'apiModules': h.file_inventory(payload / 'api/modules'), 'sharedModules': h.file_inventory(payload / 'api/shared'),
         'adminFiles': h.file_inventory(payload / 'admin/html'), 'files': h.file_inventory(payload),
         'qualityVerification': qa, 'isolatedMysqlVerification': mysql, 'nativeParentCapture': capture,
