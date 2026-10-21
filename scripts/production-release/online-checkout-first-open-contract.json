@@ -6,7 +6,7 @@
     ".gitignore": "ee2666d766b138b1597680a997c7c3f3d1bdf2df69e27c1a6e89850745cb8710",
     "Dockerfile": "35638ed559cad7698ae45706503bdb74d3353f65d871f9285be539addc8da569",
     "README.md": "cd84a0602c8e2c7b4b34dae9db404cf6bb81a2f8cf2921e111b83a87176a2dc5",
-    "SOURCE_MANIFEST.json": "6fbb5b50df2e9badea5396baa8001d3ecfb4d87d505b7fc7c5162b0a630c7418",
+    "SOURCE_MANIFEST.json": "9d13eacb870f49ddf349cc5f32e1690b96402fa5dd5ef76986a13212627a4681",
     "UPSTREAM.json": "2357ff0a121ce916de81aa7cf6303d58ac59666aa530f42083e528b6530f9623",
     "checkout-form.cjs": "6f1797ad7de082dfdfa1e78ec8786543c9911de5f97b4f1b922f423573be7953",
     "checkout-initialization.cjs": "e4ea332b526aa7ff53f76a0654e651edd0c608277754545fae62c1e9e34c4d58",
@@ -40,7 +40,7 @@
     "test/checkout-page-loading.test.cjs": "8f2244d5247cc33284e079bb5e32b55a99b7adcf50556c9283b4f0cffbb533ab",
     "test/checkout-recheck.test.cjs": "f0875de784c0e133310bc0f92a428a5b15f1bb41c289d6400317616bcce6df25",
     "test/checkout-recovery-evidence.test.cjs": "f6d92c131c4f1e1b3c17d20ff81e4943bfc84897d6e5880b11d5efd89335bb0b",
-    "test/checkout-recovery.test.cjs": "3d8088085c62e62c98526ecd10929a36e88a0a3b61e2f8cb463a54f4665bef99",
+    "test/checkout-recovery.test.cjs": "cd0bdb7ca81b9ace071c3e61ba49a7c00974a2f3826be11482cb0cc412f0f86d",
     "test/checkout-reload-request-diagnostics.test.cjs": "861251e2f13a5348e4a59aed9731dabf37ae47696b435e8e2b8eb900a64afe5a",
     "test/credentials-main.test.cjs": "a4abbc72402643943455b855b01010b26c6c9441569d82c957b616e4f018fb1c",
     "test/debug-checkout.test.cjs": "7585522fa546947dd88a38ccd4738a48f128dc0fe4a5a3d65d473a3dc070ce58",
@@ -91,7 +91,7 @@
     "upstream/hcaptcha-solver.js": "d4c8d602d9ad8960a3523623918f51161d3b6a523cc65f6164e591b099ec376a",
     "upstream/hcaptcha/solver.py": "d56f4f3f61fe1724351e6ab7d868608af9d1e7b026d7da3c6a1db717e5d378ff",
     "upstream/human-verification.js": "6ca8e13af6369d79ea962fcce6c57417747d42c78bc56c4d77d7637c52a9fdd5",
-    "upstream/index.js": "83ae04357b4121a1f48fd364d28f6554b4b093c9f621115a0260db1430f5f379",
+    "upstream/index.js": "c8a8c89a5cc38eed62398c3782547d0f8d6d45c4d8edd982db406fddd93a8d23",
     "upstream/mysql-store.js": "c5a6c9764a2f4aa4fa977b918f2b032abcb8e0ab068ea29a717100a71a15d60a",
     "upstream/package-lock.json": "4f43bd0c45af37e39bd0a5299ffb9d92c9ec280753630bde226de72173936764",
     "upstream/package.json": "c9e583278c4bf5979fd756fdaf871fd66fe66cbf17ec429575416204f732bb48",
@@ -4715,13 +4715,13 @@
     "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
     "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
     "businessActions": 0,
-    "commit": "aec7c4adae25394f489337a8c883d3b6be50af7b",
+    "commit": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
     "configurationSha256": {
       ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-      "compose.release.json": "8ce2c1852f6ebaa1405560c3e0c5bb7a4a974057900a0c8c87d4e2474def5ecf",
+      "compose.release.json": "06196b3d749b15c0abdd3d0027ce34ca83c54b090954e9a025db73fe9742da02",
       "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
     },
-    "current": "/opt/id-business-v2/releases/20261021T063257Z-aec7c4adae25-bitbrowser-history",
+    "current": "/opt/id-business-v2/releases/20261021T073045Z-e5f295ed4fd4-bitbrowser-history",
     "databaseWrites": 0,
     "engineFiles": {
       ".dockerignore": "6eb0e0e877d4ee3c5c6b697383b0280890214db3d80b07d100f7a612d1e62858",
@@ -4843,12 +4843,12 @@
       "rpcConnected": true,
       "stopping": false
     },
-    "freeBytes": 21604802560,
-    "manifestSha256": "b3ffb31876484b24240760cbc2c80f31e5365ad11fffd8e85c9d374e422b6b81",
+    "freeBytes": 21553106944,
+    "manifestSha256": "a268868bbb750107439f6b201f3114259df8cec39d04396c76d882a2e3cae37d",
     "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
-    "preservationReceiptSha256": "973b3cadbe096f2b111052efcd9bbfddd4adbd15e75cd83988f260f96aa6161f",
+    "preservationReceiptSha256": "d9ce3fac84613a2b5792829053e98c079dcc3853ba68602d8a4cfbb0f50c20f1",
     "proofs": {
-      "bitbrowser-history-build-proof.json": "807ae05bba0be99c605f693acbb94289b61da56c6f98b196c5199c9a54d6c948",
+      "bitbrowser-history-build-proof.json": "45702f519618f978092aa57eef478d314110007f0322b6664cfe0080aaac8ebf",
       "online-card-control-diagnostics-build-proof.json": "03c5460b365088ced8e77ed61ef2b153d204587d2a398620e9a2a3662b0cc080",
       "online-card-visibility-build-proof.json": "98afb721e1ed84bb6c12a6d6d09da43adffc760ec67e032aa88ff743af95ada4",
       "online-checkout-actionability-build-proof.json": "e2cea0e27318da7e9cb4c143f2cd26d7b87dc9cc90361eb5ef4f0db17d86f388",
@@ -4874,12 +4874,12 @@
         "status": "running"
       },
       "api": {
-        "containerId": "8e2162b058ee7ebeaafbe678b247377bc8a32fdcb268fc183ec2d188389139e6",
+        "containerId": "29b66bc429c05749d7e50d5bd26cbf24e3c7a75f519998a1ea641062a389d48b",
         "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
         "health": "healthy",
-        "image": "sha256:d36c81f541cfcb113b14447f41166454efeee04a81ba5ed049851dcece11e664",
-        "reference": "id-business-v2-history:aec7c4adae25394f489337a8c883d3b6be50af7b-39555458030-api",
-        "startedAtSha256": "aeaa8fdb9329a37f3473dc4f8ceb02918be340171279bfc6cb8f97138fa83839",
+        "image": "sha256:e9988720d1a87c825c883ac282fbc020b6619509d38c7c2dbf2602a0ec029576",
+        "reference": "id-business-v2-history:e5f295ed4fd48f712169f3a6faaae33378f9cd6b-39562247002-api",
+        "startedAtSha256": "b670746729605f6cb8fafa21feb3e3bf739050600843e3fc7d76cbd2e47e67a2",
         "status": "running"
       },
       "auto-recharge": {
@@ -4919,12 +4919,12 @@
         "status": "running"
       },
       "online-recharge": {
-        "containerId": "f8aafb24cf4c24bc9399e06e09024c423a1680a152e7db12e6350cd01845f35e",
+        "containerId": "752eef342110b546a8fa46d4a59c0f4282f4919d5637238776a99550c8804a60",
         "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
         "health": "healthy",
         "image": "sha256:9230ff58e604ee4d5200d9ee6611e2fa1419c833faf13b1f5d1f30167c3af3a1",
         "reference": "id-business-v2-online-card-visibility:cb38a1ef351b42f98ce86740b2191fd54207fa32-39407073363",
-        "startedAtSha256": "f4aa1285537eb83c59316a78416998522d3759f89cd2edaffa7a123031d16516",
+        "startedAtSha256": "fcaec1c65f8731d8724960e72f8cbf8d0adebc8de5badda8cc77dbf17f36003f",
         "status": "running"
       }
     }
@@ -5050,8 +5050,8 @@
     "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
     "online-checkout-actionability-release.test.py": "271add54ce5080ad3e1a20400697361af3ddf63392da8a78a79efdbf7025c827",
     "online-checkout-first-open-build.py": "09a4df95ead8ec9576b8869992f6cea5850e4edb37226bf8b63c18f4e5ae5090",
-    "online-checkout-first-open-release.py": "f04b69eedadb455c98b06d9dca5fdf08d7971b51b689710ee9df4d9f7a8a7708",
-    "online-checkout-first-open-release.test.py": "0a156bb3a3f64546a7a06be4d9a6c7fcbfe686fe5db2e80e750c45d1995c66f9",
+    "online-checkout-first-open-release.py": "3ebc3aafc3e5ab588e1daf4807399d8c8feedb9fe5026fae773879cb5e0adb3f",
+    "online-checkout-first-open-release.test.py": "d3da4b1f37c7f885209ba4bea330fc9f8e0d5ecff76495683a4b4810d24ea3b1",
     "online-checkout-initialization-build.py": "d202ee4e1f00b72eca5eb4d0477e4e15e795d3a23cdaac9193f1ccdc22a4bed9",
     "online-checkout-initialization-release.py": "3dde1aa3b134f87b31fcbe647e7655f2d62ce87513227c49b43189cebd0689f2",
     "online-checkout-initialization-release.test.py": "c866b7da0fecd84583bd4ce7b2b5a0f86a14a07214a2dbb5d945b385626bfd4c",
@@ -5076,33 +5076,34 @@
   },
   "engineRoot": "apps/api/src/id-business-v2/online-recharge/engine",
   "engineSourceBase": "cb38a1ef351b42f98ce86740b2191fd54207fa32",
-  "expectedCurrent": "aec7c4adae25394f489337a8c883d3b6be50af7b",
+  "expectedCurrent": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
   "frozen": true,
   "migrationPerformed": false,
   "pendingBindings": [],
   "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
   "requiredQualityParts": ["guards", "online-engine"],
-  "reviewBase": "aec7c4adae25394f489337a8c883d3b6be50af7b",
+  "reviewBase": "e5f295ed4fd48f712169f3a6faaae33378f9cd6b",
   "reviewedControlSources": {
-    "scripts/ci-online-settings-scope.mjs": "5aa86e34685b9c35f89e9d16f1cdf88b1c7cf1fc7dc475c2ef8663dd18d91655",
-    "scripts/ci-online-settings-scope.test.mjs": "2e2700c6260198b5f6f43a9ab29a028190ff4329d623bff78a09235819127da0",
-    "scripts/ci-recharge-scope.mjs": "4c190bc4827b4a5bafa20935ce8a3caf4ef910c552bea6b9c6f0b65c0208ec69",
+    "scripts/ci-online-settings-scope.mjs": "9a2c086de075a20abf3e9e9c780cc6c390c454b54456fb532411eef56a5f4c8a",
+    "scripts/ci-online-settings-scope.test.mjs": "3e37edc75352c380ce20cb80e12c40a148a642849c1a789bbce80f454d31332b",
+    "scripts/ci-recharge-scope.mjs": "198b62b283ef3d16108e7638b28da3189d0333a0ad64eb6d9e87570930d3978c",
     "scripts/ci-recharge-scope.test.mjs": "81772ed66b5afe5edb81031e9efce315ca0a053514f5ce927fbbda0d16def803"
   },
   "runtimeSources": {
-    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "6fbb5b50df2e9badea5396baa8001d3ecfb4d87d505b7fc7c5162b0a630c7418",
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "9d13eacb870f49ddf349cc5f32e1690b96402fa5dd5ef76986a13212627a4681",
     "apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs": "6f1797ad7de082dfdfa1e78ec8786543c9911de5f97b4f1b922f423573be7953",
     "apps/api/src/id-business-v2/online-recharge/engine/checkout-initialization.cjs": "e4ea332b526aa7ff53f76a0654e651edd0c608277754545fae62c1e9e34c4d58",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs": "ded1e7a20a522dfd40b050511637dc0db7da4dd645630313f8503150d53e527f",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-initialization.test.cjs": "5a47f95bd14e0e07c816df66db6ab9fe05e5d279f2e217c2de6df096ca0fed03",
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs": "6602f5751012faa284519b924fb44da94b17ba9327b07ef8c4d13918fe0cf6e1",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs": "cd0bdb7ca81b9ace071c3e61ba49a7c00974a2f3826be11482cb0cc412f0f86d",
     "apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs": "7585522fa546947dd88a38ccd4738a48f128dc0fe4a5a3d65d473a3dc070ce58",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js": "825977f0e9c350e36534fb009726bc3ce7f43143aaa74b0d43a72d62cb012541",
-    "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "83ae04357b4121a1f48fd364d28f6554b4b093c9f621115a0260db1430f5f379"
+    "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "c8a8c89a5cc38eed62398c3782547d0f8d6d45c4d8edd982db406fddd93a8d23"
   },
   "scope": "ONLINE_CHECKOUT_FIRST_OPEN",
-  "sourceReviewCommit": "7f3e5a97886808b6e98ce6559ff8b63d93c368fb",
-  "sourceReviewTag": "online-checkout-first-open-source-review-7f3e5a978868",
+  "sourceReviewCommit": "78679cb1a727dacf354338e822932114f06d87cd",
+  "sourceReviewTag": "online-checkout-first-open-source-review-78679cb1a727",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "upstreamSource": {
@@ -5114,5 +5115,5 @@
     "docs/V2_TASKS.md": "72c0443a511adea59411e67e609367711118ec5c5810d4c95591c28f5c399834"
   },
   "version": 1,
-  "workflowSha256": "605b92685c83c95090bc903262f2882893091d8e7a2ac8c6e3665622a0a8a034"
+  "workflowSha256": "24c52aa7772c22b93806049b098371875eaf0ac3a757b4e1e1c0db60ce84bc69"
 }
