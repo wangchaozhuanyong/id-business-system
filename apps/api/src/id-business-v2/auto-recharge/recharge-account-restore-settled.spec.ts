@@ -92,6 +92,7 @@ function fixture(closed: boolean) {
 describe('人工失败后残留过期单恢复标记', () => {
   it('保留已核实失败账本，允许新任务读取凭据并继续，不能再次核验旧恢复来源', async () => {
     const f = fixture(true);
+    Reflect.deleteProperty(f.record.document, 'expired_checkout_replacement');
     const before = structuredClone([f.record, f.payment]);
     const restored = await f.run();
     expect(restored.originalCheckoutIdentifier).toBe(identifier);

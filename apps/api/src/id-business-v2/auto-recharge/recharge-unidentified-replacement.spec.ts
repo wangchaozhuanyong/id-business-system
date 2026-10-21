@@ -842,7 +842,71 @@ describe('strict archived source with a proven earlier zero-payment predecessor'
   });
 });
 
+function manuallySettledRecoveryFixture() {
+  const f = recoveredPredecessorFixture();
+  const settlement = {
+    version: 1,
+    outcome: 'failure',
+    operationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    sourceJobId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    operatorId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    accountKey: key,
+    identifier: f.recoveredId,
+    plan: 'plus',
+    resolvedAt: '2026-10-21T06:36:00.000Z',
+    requestDigest: 'd'.repeat(64)
+  };
+  f.marker.document.manual_settlement = settlement;
+  f.marker.revision += 1;
+  f.discovery.result.manual_settlement = settlement;
+  const paymentJob = structuredClone(f.discovery);
+  paymentJob.id = settlement.sourceJobId;
+  delete paymentJob.result.checkout_recovered_from_original;
+  Object.assign(paymentJob.result, {
+    status: 'payment_result_unknown',
+    payment_status: 'unknown',
+    payment_attempted: true,
+    payment_requests_sent: 1,
+    confirmation_requests_sent: 1,
+    manual_confirmation_accepted: true
+  });
+  f.history.unshift(paymentJob);
+  f.records.push(record(`payments/${hash(f.recoveredId)}.json`, paymentJob.result));
+  return { ...f, settlement, paymentJob };
+}
+
 describe('identified original checkout after a zero-payment quote failure', () => {
+  it('人工确认恢复单失败后仍用原归档证明排除已验证的无编号前序，保留所有原始事实', async () => {
+    const f = manuallySettledRecoveryFixture();
+    const before = structuredClone({ records: f.records, history: f.history });
+    const restored = await restoreRechargeAccount(f.input as never);
+    expect(restored.originalCheckoutIdentifier).toBe(f.recoveredId);
+    expect(restored).not.toHaveProperty('unidentifiedCheckoutRecovery');
+    expect({ records: f.records, history: f.history }).toEqual(before);
+  });
+
+  it.each([
+    'mismatched-payment-proof',
+    'unsettled-job',
+    'marker-digest',
+    'revision',
+    'missing-history'
+  ])('人工结单后仍拒绝不完整来源链 %s', async (kind) => {
+    const f = manuallySettledRecoveryFixture();
+    if (kind === 'mismatched-payment-proof') {
+      f.records.at(-1)!.document.manual_settlement = {
+        ...f.settlement,
+        operationId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+      };
+    }
+    if (kind === 'unsettled-job') delete f.paymentJob.result.manual_settlement;
+    if (kind === 'marker-digest') f.marker.document.retry_of = 'f'.repeat(64);
+    if (kind === 'revision') f.marker.revision += 1;
+    if (kind === 'missing-history') f.history.splice(f.history.indexOf(f.old), 1);
+    await expect(restoreRechargeAccount(f.input as never)).rejects.toThrow();
+    expect(f.repository.updateJob).not.toHaveBeenCalled();
+  });
+
   it('continues the same identified checkout after attempted -> created -> quote failure without a discovery grant', async () => {
     const f = recoveredPredecessorFixture();
     const createdRecord = structuredClone(f.marker);
