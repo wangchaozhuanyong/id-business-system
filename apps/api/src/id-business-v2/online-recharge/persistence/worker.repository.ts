@@ -205,6 +205,7 @@ export class OnlineRechargeWorkerRepository {
           task.paymentStarted ||
           task.confirmedPaid ||
           Boolean(task.providerOrderId) ||
+          Boolean(task.providerTaskId) ||
           hasRenewalSubmission(task);
         const expiredPayload = task.payload ? object(task.payload) : {};
         await tx.onlineRechargeTask.update({
@@ -542,6 +543,16 @@ export class OnlineRechargeWorkerRepository {
           : args.result
             ? object(args.result)
             : {};
+      // Only the fresh leased row can decide whether an interrupted executor
+      // stopped before submission. An absent child result is not payment proof.
+      const interrupted = args.executorInterrupted === true;
+      const definitiveFailure = !interrupted && args.definitiveFailure === true;
+      if (interrupted) {
+        status = args.executorTerminated === true ? 'failed' : 'awaiting_review';
+        result.success = false;
+        result.code = 'EXECUTOR_INTERRUPTED';
+        delete result.definitiveFailure;
+      }
       const previousResult = row.result ? object(row.result) : {};
       if (
         matchesPaymentEvidence(previousResult.paymentEvidence, row) &&
@@ -590,7 +601,7 @@ export class OnlineRechargeWorkerRepository {
           ['enable', 'disable'].includes(String(payload.action)) &&
           data.autoRenewRaw === (payload.action === 'enable');
         const rejected =
-          args.definitiveFailure === true &&
+          definitiveFailure &&
           result.renewalRejected === true &&
           [401, 403].includes(Number(result.statusCode));
         if ((status === 'failed' && !rejected) || (status === 'succeeded' && !renewalVerified))
@@ -604,9 +615,16 @@ export class OnlineRechargeWorkerRepository {
         status = 'awaiting_review';
       if (
         status === 'failed' &&
-        (row.confirmedPaid || paid || (row.paymentStarted && args.definitiveFailure !== true))
+        (row.confirmedPaid ||
+          paid ||
+          ((row.paymentStarted ||
+            row.providerOrderId ||
+            row.providerTaskId ||
+            hasRenewalSubmission(row)) &&
+            !definitiveFailure))
       )
         status = 'awaiting_review';
+      if (interrupted) result.resultUnknown = status === 'awaiting_review';
       if (status === 'awaiting_credentials' && row.paymentStarted) status = 'awaiting_review';
       if (status === 'awaiting_review' && ['recharge', 'renewal'].includes(row.operation))
         payload.reconciliation = originalRecheckSchedule(payload.reconciliation, new Date());
@@ -633,7 +651,11 @@ export class OnlineRechargeWorkerRepository {
                 ? String(result.message)
                 : redact(
                     String(
-                      args.message ??
+                      (interrupted
+                        ? status === 'failed'
+                          ? '执行器在付款前中断，任务已结束'
+                          : '执行器已中断，外部结果待核对，禁止再次付款'
+                        : args.message) ??
                         result.message ??
                         (status === 'awaiting_review'
                           ? row.operation === 'renewal'
@@ -660,14 +682,7 @@ export class OnlineRechargeWorkerRepository {
           });
       }
       if (row.operation === 'subscription' && typeof payload.recheckTaskId === 'string') {
-        await this.resolveRecheck(
-          tx,
-          row,
-          payload,
-          result,
-          verified,
-          args.definitiveFailure === true
-        );
+        await this.resolveRecheck(tx, row, payload, result, verified, definitiveFailure);
       }
       if (row.operation === 'recharge' && status === 'succeeded')
         await this.orderSync.enqueueInTransaction(tx, row.id);

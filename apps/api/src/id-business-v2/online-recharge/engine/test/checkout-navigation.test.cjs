@@ -287,6 +287,49 @@ test('native commit reaches actual ready card controls while DOMContentLoaded st
   stoppedWithoutPayment(stats);
 });
 
+test('final readiness retains the opening budget and projects incomplete control diagnostics', async (t) => {
+  const f = await fixture(t, { maxWaitMs: 12000 });
+  const ready = human.isCheckoutPaymentReady;
+  let finalReads = 0;
+  human.isCheckoutPaymentReady = async (page, options = {}) => {
+    if (typeof options.onInspection !== 'function') return ready(page, options);
+    finalReads++;
+    assert.ok(
+      options.deadline - Date.now() > 2000,
+      'final check must use the remaining opening budget'
+    );
+    assert.equal(options.signal.aborted, false);
+    throw Object.assign(new Error('synthetic raw error must not be projected'), {
+      code: 'CHECKOUT_CONTROL_READ_FAILED',
+      missing: ['number', 'private-field'],
+      controls: [{ tag: 'input', fields: ['number'], value: 'synthetic-private-value' }],
+      inspection: {
+        complete: false,
+        framesChecked: 3,
+        framesFailed: 1,
+        readPhase: 'frame_scan',
+        rawUrl: 'https://example.invalid/private'
+      }
+    });
+  };
+  t.after(() => {
+    human.isCheckoutPaymentReady = ready;
+  });
+  await assert.rejects(f.start(), (error) => {
+    assert.equal(error.checkoutCreationState, 'accepted');
+    const diagnostics = error.checkoutOpenDiagnostics;
+    assert.equal(diagnostics.stage, 'final_check');
+    assert.equal(diagnostics.code, 'CHECKOUT_CONTROL_READ_FAILED');
+    assert.equal(diagnostics.inspection.complete, false);
+    assert.equal(diagnostics.inspection.framesFailed, 1);
+    assert.deepEqual(diagnostics.missing, ['number']);
+    assert.doesNotMatch(JSON.stringify(diagnostics), /synthetic-private|private-field|rawUrl/);
+    return true;
+  });
+  assert.equal(finalReads, 1);
+  stoppedWithoutPayment(f.stats);
+});
+
 test('commit and visible plan cannot finish opening until delayed actual card controls appear', async (t) => {
   const { page, stats, start } = await fixture(t, { pendingModule: true, delayMs: 1100 });
   let settled = false;

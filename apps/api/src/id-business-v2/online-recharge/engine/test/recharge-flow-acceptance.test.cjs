@@ -1695,8 +1695,19 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
         assert.ok(actual.metrics.authStateTransitions.some((item) => item.phase === 'guest'));
       }
       assert.equal(
-        Object.values(diagnostic).every(
-          (value) => typeof value === 'boolean' || value === diagnostic.reason
+        Object.entries(diagnostic).every(([key, value]) =>
+          key === 'lastAwait'
+            ? [
+                'navigation',
+                'wait',
+                'challenge',
+                'login_controls',
+                'logged_in_ui',
+                'ui_stability',
+                'verification',
+                'session_api'
+              ].includes(value)
+            : typeof value === 'boolean' || value === diagnostic.reason
         ),
         true
       );

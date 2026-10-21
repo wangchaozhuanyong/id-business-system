@@ -287,11 +287,22 @@ async function isCloudflareWallPage(page) {
 /** The same semantic controls decide readiness and perform the eventual fill. */
 async function isCheckoutPaymentReady(page, options = {}) {
     const form = require('../checkout-form.cjs');
-    if (await form.checkoutPageLoadFailed(page, { deadline: options.deadline || Date.now() + 2000, signal: options.signal })) return false;
+    // This read already checks visible load errors and frame completeness before
+    // accepting a unique editable number control. Do not scan every frame twice.
     const result = await form.inspectCardReadiness(page, {
         deadline: options.deadline || Date.now() + 2000,
         signal: options.signal
     });
+    options.onInspection?.(result);
+    if (result.inspection?.contentLoadFailed) return false;
+    if (result.inspection?.complete === false || result.inspection?.framesFailed
+        || result.inspection?.timedOut || result.inspection?.aborted || result.inspection?.pageClosed
+        ) {
+        throw Object.assign(new Error('结账控件检查尚未完整完成'), {
+            code: result.code, inspection: result.inspection,
+            missing: result.missing, controls: result.controls
+        });
+    }
     return result.ready;
 }
 

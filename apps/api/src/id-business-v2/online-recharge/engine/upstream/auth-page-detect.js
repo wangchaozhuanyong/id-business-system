@@ -176,12 +176,16 @@ async function waitForLoggedInChatUi(page, timeoutMs = 15000, options = {}) {
     return false;
 }
 
-async function hasLoggedInSessionApi(page) {
+async function hasLoggedInSessionApi(page, { timeoutMs = 8000 } = {}) {
     try {
-        const data = await page.evaluate(async () => {
-            const response = await fetch('/api/auth/session', { credentials: 'include' });
-            return response.json();
-        });
+        const data = await page.evaluate(async (timeoutMs) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch('/api/auth/session', { credentials: 'include', signal: controller.signal });
+                return await response.json();
+            } finally { clearTimeout(timer); }
+        }, Math.max(1, Math.min(8000, timeoutMs)));
         return Boolean(data?.accessToken || data?.user?.email || data?.user?.id);
     } catch (_) {
         return false;

@@ -127,6 +127,71 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
   return { row, tx, repository, worker, rpc, available, orderSync, encryption };
 }
 
+describe('执行器无结果的事务收尾', () => {
+  it('租约过期但已有渠道任务编号时保留核对，不能重新领取', async () => {
+    const f = fixture({
+      operation: 'recharge',
+      providerTaskId: 'synthetic-upstream-task',
+      leaseExpiresAt: new Date(Date.now() - 1)
+    });
+    f.tx.onlineRechargeTask.findMany.mockResolvedValue([f.row]);
+    await f.worker.claim('replacement-worker');
+    expect(f.row.status).toBe('awaiting_review');
+    expect(f.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalled();
+  });
+  it('已终止且无付款事实的调试结束为失败并释放预约', async () => {
+    const f = fixture({ operation: 'debug', payload: {} });
+    const reply = await f.worker.finish(
+      f.rpc({
+        status: 'awaiting_review',
+        executorInterrupted: true,
+        executorTerminated: true,
+        result: { resultUnknown: true }
+      }),
+      false
+    );
+    expect(reply.status).toBe('failed');
+    expect(f.row.result).toMatchObject({
+      success: false,
+      resultUnknown: false,
+      code: 'EXECUTOR_INTERRUPTED'
+    });
+    expect(f.tx.onlineRechargeCard.updateMany).toHaveBeenCalled();
+    expect(f.row.leaseId).toBeNull();
+  });
+  for (const evidence of [
+    { paymentStarted: true },
+    { confirmedPaid: true },
+    { providerOrderId: 'synthetic-upstream-order' },
+    { providerTaskId: 'synthetic-upstream-task' },
+    { payload: { renewalSubmission: { action: 'disable' } } }
+  ])
+    it(`数据库提交事实覆盖中断旧快照 ${Object.keys(evidence)[0]}`, async () => {
+      const f = fixture({ operation: 'debug', payload: {}, ...evidence });
+      const reply = await f.worker.finish(
+        f.rpc({
+          status: 'failed',
+          executorInterrupted: true,
+          executorTerminated: true,
+          definitiveFailure: true,
+          result: { definitiveFailure: true }
+        }),
+        true
+      );
+      expect(reply.status).toBe('awaiting_review');
+      expect(f.row.result).toMatchObject({ resultUnknown: true });
+      expect(f.row.result).not.toHaveProperty('definitiveFailure');
+      expect(f.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalled();
+    });
+  it('没有终止证明不能释放任务', async () => {
+    const f = fixture({ operation: 'debug', payload: {} });
+    expect(
+      (await f.worker.finish(f.rpc({ executorInterrupted: true, status: 'failed' }), true)).status
+    ).toBe('awaiting_review');
+    expect(f.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('首次充值开始的持久化语音事件', () => {
   function queued(operation: OnlineRechargeTask['operation'] = 'recharge', leaseVersion = 0) {
     const f = fixture({ operation, status: 'queued', leaseVersion, payload: {} });

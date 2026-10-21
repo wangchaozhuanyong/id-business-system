@@ -608,7 +608,7 @@ async function run(runOptions = {}) {
         }
 
     } catch (e) {
-        if (e.checkoutOpenCleanupFailed === true) {
+        if (e.checkoutOpenCleanupFailed === true || e.bootstrapCleanupFailed === true) {
             await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
             if (context) await context.close().catch(() => {});
         }
@@ -627,6 +627,7 @@ async function run(runOptions = {}) {
         const verificationBootstrapCode = e.bootstrapDiagnostics?.reason === 'verification_failed'
             ? require('./verification-runtime').controlledVerificationCode(e.code, null) : null;
         const bootstrapFailure = {
+            NETWORK_TIMEOUT: '官网登录核验超过本次期限，已停止后续操作',
             SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
             SESSION_BOOTSTRAP_FAILED: '官网登录初始化未完成，已停止后续操作',
             SESSION_INVALID: '官网未接受本次账号登录资料，已停止后续操作',
