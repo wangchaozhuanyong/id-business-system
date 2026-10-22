@@ -229,9 +229,9 @@
     {
       "path": "test/checkout-navigation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "aa0093a51481fee49cc981d2d32962e015a385e02d414a756102fd51079ff90a",
+      "adaptedSha256": "fe222e6300fb743ec3d2a03e0a7661493b9650183a41c6c42f2126fc2110c600",
       "changed": true,
-      "reason": "Keep no-submit browser assertions for missing-field and valid CDP deadline termination; verify strict unreadiness, original checkout and zero writes."
+      "reason": "Assert missing-field or deadline closure with exact phase/reason and original checkout; never inspect a page already closed by timeout; retain zero-write checks."
     },
     {
       "path": "test/checkout-outcomes.test.cjs",

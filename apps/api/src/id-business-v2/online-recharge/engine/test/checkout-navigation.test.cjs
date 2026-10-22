@@ -386,6 +386,7 @@ for (const [labelDelay, hiddenLabels] of [
 }
 
 test('preparation never clicks a separator or submit label to manufacture card readiness', async (t) => {
+  let stoppedCode;
   const { page, stats, start } = await fixture(t, {
     readyWaitMs: 700,
     body: `<h1>Configure your plan</h1>
@@ -407,9 +408,14 @@ test('preparation never clicks a separator or submit label to manufacture card r
     );
     assert.equal(error.checkoutCreationState, 'accepted');
     assert.equal(error.originalCheckoutUrl, originalUrl);
+    stoppedCode = error.code;
     return true;
   });
-  assert.equal(await human.isCheckoutPaymentReady(page), false);
+  if (stoppedCode === 'CHECKOUT_FORM_TIMEOUT') assert.equal(page.isClosed(), true);
+  else {
+    assert.equal(page.isClosed(), false);
+    assert.equal(await human.isCheckoutPaymentReady(page), false);
+  }
   assert.equal(stats.unrelatedWrites, 0);
   assert.equal(stats.otherWrites, 0);
   stoppedWithoutPayment(stats);
