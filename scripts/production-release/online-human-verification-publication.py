@@ -35,6 +35,57 @@ need, sha, git, github, execute = P.need, P.sha, F.git, F.github, F.execute
 INSTANCE = E.INSTANCE
 CONTROL_PATHS = frozenset((WORKFLOW, 'scripts/ci-online-settings-scope.mjs', 'scripts/ci-online-settings-scope.test.mjs', *('scripts/production-release/online-human-verification-' + n
     for n in ('release.py', 'publication.py', 'release.test.py', 'contract.json'))))
+HISTORICAL_REVIEW_COMMITS = (
+    '04a284c1d038b2eadd6aef933c6cc26a5bfa6935',
+    '04aa234505adccfe295776245b88fc56feac0588',
+    '091897de2f08338dbbfea79123f2dc2ae8f391e5',
+    '0cfc9d184fc05c57f08d2bae2ff51a11e489d8d1',
+    '0f33f72ae5968bc3e8a17bdba96bc7661eb47de2',
+    '131031a66b626119c7469e66c40e5b27b3cf0025',
+    '1b1b635b2562edfe983590ff9955268f254187bb',
+    '1f22456050e5a712405b3dff37dc43b55e778a92',
+    '217fe5016994d4536178842fde065c87d2bdc73a',
+    '2a4474c4f9e0ccd38291b1dfffbd4abd70ab4b5d',
+    '2bcced63c834187ac5e69e344176da33ff82d4c9',
+    '3317af5de7330c57a926181dd03cded795c4c38f',
+    '3cf2293bdc1fb62ea44196b8a8775d42b1cc5c9c',
+    '3f796a9f79a950caf2dce85d6ee687dc5d48e21b',
+    '4aa49436239ab57e9deb3b5890e645ceeef25149',
+    '619e6c56c38cc5ee38a92f716ed4bdfd54d2f4de',
+    '6d1db82cde92e8c02fea6254289c4b410e94016a',
+    '71abf78eed79b7b052713ed35133a3570dd799ae',
+    '7f419903e9335c00524f5065f46920e8f24f2722',
+    '7fc353223095b66408b03af0ea117230abba1a63',
+    '9857b1b34f1013f400046cc849ad0628b921ead1',
+    '9dffb3e25fb67f86df3d829dabd98bdcf4ca9218',
+    'a1e65b996b0c527a562a14c470b5c7650a00bd25',
+    'adb3a3c7a63054520c284838189d85064e1c019a',
+    'b39ab26351f485856884f86fb67c91ad771a7213',
+    'b3fb8fe13de45a20c897287a0a77d2c253171ec6',
+    'bcd67c4dfe3944aa6c0498699a619395f04ed296',
+    'be11287feb7c2494fc41c9de071fdff9e06563d2',
+    'ce3f04e31f400d4bb714ea0a16f972c53593e3c5',
+    'd59b5c43fa69aedbc1ce2dc4739e1fadd7bf991a',
+    'e0bda43bab61ee6673471cfcffc878d268b70cf5',
+    'e3e8995d0ea3461272eac1e3ee9d5117d6e22e2c',
+    'e474bc8ed3ecc1a942f2eeb54bccab30570ae2af',
+    'e84c7be631f42b82a9174367e93f163fe7299152',
+    'f246c4ce8ec35d52e914d602b3b08a834e10d9d5',
+    'f404926fc4eca91a413ed29567f9048eedceb83e',
+    'f62fa65c20ad93292ad7c09792a4049cda03fab5',
+    'f8a1612d9b465dc5cfb1534c9cc3c5640583cc80',
+    'faea152b038c7ddb1a3199070f9dc7ffb5583c36',
+    'fc51da593302cc8535a5adfe199d7768949eb419',
+)
+
+
+def prefetch_historical_sources():
+    missing = [rev for rev in HISTORICAL_REVIEW_COMMITS if subprocess.run(
+        ['git', 'cat-file', '-t', rev], cwd=ROOT, capture_output=True).returncode != 0]
+    if missing:
+        git('fetch', '--no-tags', '--no-write-fetch-head', 'origin', *missing)
+    need(all(git('cat-file', '-t', rev).strip() == b'commit' for rev in HISTORICAL_REVIEW_COMMITS),
+         'HISTORICAL_SOURCE_TYPE_CHANGED')
 
 
 def check(c):
@@ -114,6 +165,7 @@ def build(c):
     native = identity()
     need(not OUT.exists(), 'OUTPUT_EXISTS')
     qa = quality(c, native['commit'])
+    prefetch_historical_sources()
     OUT.mkdir(parents=True, mode=0o700)
     plan = native_plan(c, native)
     parent = transport(plan, 'parent')

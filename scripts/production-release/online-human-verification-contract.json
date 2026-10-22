@@ -357,7 +357,7 @@
     "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260",
     "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
     "online-human-verification-release.py": "1c8f581e047f2edbb94f1ed38f33f3d9c6d2b7515427f4b4ea906f278aaa8850",
-    "online-human-verification-publication.py": "78ec6ad4a668113542cbcd48c5b050cfcb70d1e1fc5b4dfdff0775de6f8cc695",
+    "online-human-verification-publication.py": "c3e7b14cec36d0904a3ab609c48f95e6b2afbf821bedcc9bf89fde7f88ea6849",
     "online-human-verification-release.test.py": "3d65ac4f7839c673a3db595d33f43f159118594acb748d645ac1091fd6712f49"
   },
   "updatedServices": ["api", "admin", "online-recharge"],
