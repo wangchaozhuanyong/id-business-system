@@ -369,9 +369,9 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "41542697c0862e2315004b3ac184ffc7585f16ed13aa35c7ccc59612aa91ef1b",
+      "adaptedSha256": "fe77ea72a22df22830c6ed156ef2b0d95579907ce960879cc2cf883113a51dac",
       "changed": true,
-      "reason": "Drive the real task child through same-account cookie refresh to exactly one synthetic payment and reconciliation; wrong-account refresh stops before subscription queries, checkout or payment. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-19 Prove the restored guest refresh in the production task child: same homepage Page, exactly one reload, one checkout and one payment action, bound payment and tier evidence, one bill/card count and renewal cleanup; isolated synthetic transport only. 2026-10-19 Assert the controlled task outcome before auth metrics; report only status, controlled error code and whitelisted bootstrap diagnosis fields on failure. 2026-10-19 Run the production task child through CSS-rendered hidden card and billing controls, final amount, one synthetic payment and idempotent settlement; no real services or payment. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
     },
     {
       "path": "test/regressions.test.cjs",
@@ -586,9 +586,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "253332c82f5ec86284252e7a5a01814112e0a10582975a51eba7f8d8ceb51de6",
+      "adaptedSha256": "cda7479b0fd8cf6e24b2f0755264fbbb86b16487be7432f8fed0642d3d314bf7",
       "changed": true,
-      "reason": "Verify the unique canonical Pro CTA independently of its top-half container; require a visible unique Pro card for deferred debug, exact checkout tier and all real payment guards. Keep debug-only region evidence explicit. Authorized administrator business visibility: preserve operational data and mask credentials only.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Present bounded frame/control exclusion counts using Chinese reason labels without sensitive data. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Show original reload and blocked request counts in the existing Chinese failure summary; preserve payment uncertainty. 2026-10-19 Add bounded failure-only semantic exclusion diagnostics and same-snapshot geometry/editability comparison; no admission, filling or payment-policy change. 2026-10-21 Describe the first observed initialization exception and frame-read failure without claiming it is the root cause or weakening payment conditions. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -656,9 +656,9 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "e1ad125bd314a218dfb1b6d5eb37f0bffc1d9585532bff7ccdc7adf13a41d7eb",
+      "adaptedSha256": "ae1b427aec38630546fdf8c54f6ec2804c1812c154b9a4f4b476024d5f0ed8ed",
       "changed": true,
-      "reason": "Adopt only a verified fresh bearer bound to the original account and user across bootstrap, page fetch and routes; classify real session responses before trusting identity; protect refreshed credentials in existing log redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Delegate only exact official Session/CSRF routes to existing specialized handlers through fallback; retain login blocking and all ordinary request headers. 2026-10-19 Restore the frozen upstream single normal guest-homepage refresh after verification; constrain it to the same official homepage, original task deadline and lease cancellation; require logged-in UI after refresh and never reload a visible challenge. 2026-10-19 Classify structured Session responses before incidental profile text; constrain compatibility to canonical official GETs, preserve native writes, Request validation, cancellation and single RequestInit evaluation. 2026-10-19 Reobserve stale guest-only verification verdicts and late guest hydration within the unchanged shared UI and overall deadlines; require the same exact official homepage before recovery succeeds, without additional refresh, verification or payment actions. 2026-10-19 Preserve known login-redirect diagnostics at all exact-homepage recovery fences; checkout and third-party pages remain rejected as navigation failures. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
     },
     {
       "path": "upstream/stripe-payment.js",
@@ -806,6 +806,20 @@
       "adaptedSha256": "dfac0055eb2fd540fc2100ef3778d1e0394ab74e9461e8a9ef08ecef0989367c",
       "changed": true,
       "reason": "2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only."
+    },
+    {
+      "path": "human-verification.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "adaptedSha256": "9a731f145038bd2d56cfe9b6c59b15087c924c448dca297fdca0386a412b09b6",
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
+    },
+    {
+      "path": "test/human-verification.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "adaptedSha256": "24830533e1155596f871e1da433b4d55af691321dded7c1fc54436796bbe0f2e",
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
     }
   ],
   "dependencySecurityPatches": [

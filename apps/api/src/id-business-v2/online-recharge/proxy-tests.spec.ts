@@ -168,6 +168,7 @@ describe('proxy test task lifecycle', () => {
       workers as never,
       {} as never,
       {} as never,
+      {} as never,
       {} as never
     );
     await expect(

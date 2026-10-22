@@ -250,6 +250,7 @@ describe('套餐地区规则与任务快照', () => {
       { withLease: vi.fn((input, work) => work({}, rows[input.taskId])) } as never,
       { runtime: async () => runtime, internal: async () => ({ settings: runtime }) } as never,
       encryption as never,
+      {} as never,
       {} as never
     );
     const configs = await Promise.all(

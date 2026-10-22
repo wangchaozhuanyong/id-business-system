@@ -1,3 +1,4 @@
+import { OnlineRechargeHumanVerification } from './human-verification.service';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, type OnlineRechargeTask } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
@@ -275,6 +276,7 @@ function storageFixture() {
   return { client, rows, transactionOptions };
 }
 
+const humanVerificationServices: OnlineRechargeHumanVerification[] = [];
 function fixture() {
   const storage = storageFixture();
   const config = new ConfigService({
@@ -380,6 +382,8 @@ function fixture() {
     memory,
     sync
   );
+  const humanVerification = new OnlineRechargeHumanVerification(workerRepository, repository);
+  humanVerificationServices.push(humanVerification);
   const worker = new OnlineRechargeWorkerService(
     new OnlineRechargeWorkerRpcRepository(
       {} as never,
@@ -388,7 +392,8 @@ function fixture() {
       workerRepository,
       settings,
       encryption,
-      {} as never
+      {} as never,
+      humanVerification
     )
   );
   const rpc = (method: string, claim?: Row, args: Row = {}) =>
@@ -512,7 +517,10 @@ function fixture() {
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  humanVerificationServices.splice(0).forEach((service) => service.onModuleDestroy());
+});
 
 describe('本地后端链路验收（隔离存储，无官网、银行或数据库连接）', () => {
   it.each([
@@ -682,7 +690,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           actual.result.result.bootstrapDiagnostics ?? authConfirmation?.queryBootstrapDiagnostics;
         expect(actual.result.status).toBe('failed');
         expect(authCode).toBe(
-          authUi === 'challenge' ? 'VERIFICATION_TIMEOUT' : 'SESSION_NOT_CONFIRMED'
+          authUi === 'challenge' ? 'HUMAN_VERIFICATION_REQUIRED' : 'SESSION_NOT_CONFIRMED'
         );
         expect(authDiagnostic).toMatchObject({
           authApiVerified: authUi !== 'unconfirmed',

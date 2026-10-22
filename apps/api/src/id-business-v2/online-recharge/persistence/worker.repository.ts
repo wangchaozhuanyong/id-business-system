@@ -201,6 +201,7 @@ export class OnlineRechargeWorkerRepository {
         take: 100
       });
       for (const task of expired) {
+        const manualInterrupted = task.stage === 'human_verification';
         const uncertain =
           task.paymentStarted ||
           task.confirmedPaid ||
@@ -211,7 +212,7 @@ export class OnlineRechargeWorkerRepository {
         await tx.onlineRechargeTask.update({
           where: { id: task.id },
           data: {
-            status: uncertain ? 'awaiting_review' : 'queued',
+            status: uncertain ? 'awaiting_review' : manualInterrupted ? 'failed' : 'queued',
             leaseOwner: null,
             leaseId: null,
             leaseExpiresAt: null,
@@ -228,7 +229,9 @@ export class OnlineRechargeWorkerRepository {
               : {}),
             message: uncertain
               ? '执行器离线且存在外部提交，等待核对，禁止自动重放'
-              : '执行器离线，尚未提交付款，等待重新领取'
+              : manualInterrupted
+                ? '人工验证执行器离线，本次已停止，请勿重新付款'
+                : '执行器离线，尚未提交付款，等待重新领取'
           }
         });
         if (!uncertain)
@@ -236,6 +239,14 @@ export class OnlineRechargeWorkerRepository {
             where: { leaseOwner: task.id },
             data: { leaseOwner: null, leaseId: null, leaseExpiresAt: null }
           });
+        if (manualInterrupted && !uncertain) {
+          if (task.codeId)
+            await tx.onlineRechargeCode.updateMany({
+              where: { id: task.codeId, taskId: task.id, status: 'reserved' },
+              data: { status: 'available', taskId: null }
+            });
+          await this.repository.log(tx, 'human_verification.interrupted', undefined, task.id);
+        }
       }
       const active = await tx.onlineRechargeTask.count({ where: { status: 'running' } });
       if (active >= Number(settings.maxConcurrent)) return null;

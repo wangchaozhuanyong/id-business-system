@@ -491,7 +491,8 @@ async function run(runOptions = {}) {
         });
 
         const loginInfo = await bootstrapChatGptSession(page, sessionRaw, {
-            sessionData, cookieVerified, signal: taskSignal?.(), deadlineAt: performance.now() + 180000
+            sessionData, cookieVerified, signal: taskSignal?.(), deadlineAt: performance.now() + 180000,
+            onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
         });
         if (loginInfo.email && !email) {
             console.log(`[Info] 账号邮箱: ${loginInfo.email}`);
@@ -632,7 +633,8 @@ async function run(runOptions = {}) {
             SESSION_BOOTSTRAP_FAILED: '官网登录初始化未完成，已停止后续操作',
             SESSION_INVALID: '官网未接受本次账号登录资料，已停止后续操作',
             ACCOUNT_MISMATCH: '官网会话账号或用户与原任务不一致，已停止后续操作',
-            HUMAN_VERIFICATION_REQUIRED: '官网验证尚未完成，已停止后续操作'
+            HUMAN_VERIFICATION_REQUIRED: '官网验证尚未完成，已停止后续操作',
+            HUMAN_VERIFICATION_CANCELLED: '本人验证已停止，本次未提交付款'
         }[e.code] || (verificationBootstrapCode && /^(?:VERIFICATION_|VLM_)/.test(verificationBootstrapCode)
             ? '官网验证尚未完成，已停止后续操作' : undefined);
         const bootstrapDiagnostics = bootstrapFailure
