@@ -68,6 +68,44 @@ class ExecutionRelease(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             P.verify_quality({}, 'b' * 40)
 
+    def test_reused_source_checks_are_pinned_and_controls_are_independent(self):
+        quality = {'sources': {'commit': P.SOURCE_HEAD, 'runId': P.SOURCE_RUN,
+                    'pullRequest': 673, 'sourceReceiptSha256': 'c' * 64},
+                   'controls': {'commit': 'a' * 40, 'runId': '4',
+                    'pullRequest': 674, 'sourceReceiptSha256': 'd' * 64},
+                   'release': {'commit': 'b' * 40, 'runId': '5'}}
+        P.verify_quality(quality, 'b' * 40)
+        for mutate in (lambda q: q.pop('controls'),
+                       lambda q: q['sources'].update(commit='f' * 40),
+                       lambda q: q['sources'].update(runId='1'),
+                       lambda q: q['controls'].pop('sourceReceiptSha256')):
+            bad = copy.deepcopy(quality)
+            mutate(bad)
+            with self.assertRaises(RuntimeError):
+                P.verify_quality(bad, 'b' * 40)
+        self.assertEqual(len(P.CONTROL_PATHS), 8)
+        self.assertFalse(any(n.startswith('apps/') for n in P.CONTROL_PATHS))
+
+    def test_remote_failure_only_exports_controlled_codes_and_trusted_frames(self):
+        plan = {'mode': 'parent', 'controlSources': {'online-execution-release.py': 'a' * 64}}
+        secret = 'synthetic credential and arbitrary private exception message'
+        try:
+            raise RuntimeError(secret)
+        except RuntimeError as error:
+            report = P.failure_report(error, plan)
+        self.assertEqual(report['code'], 'ONLINE_EXECUTION_REMOTE_FAILED')
+        self.assertNotIn(secret, json.dumps(report))
+        self.assertNotIn(str(P.ROOT), json.dumps(report))
+        self.assertEqual(report['frames'], [])
+        try:
+            P.need(False, 'SYNTHETIC_CONTROL_FAILURE')
+        except RuntimeError as error:
+            report = P.failure_report(error, plan)
+        self.assertEqual(report['code'], 'ONLINE_EXECUTION_SYNTHETIC_CONTROL_FAILURE')
+        self.assertEqual(report['frames'][-1]['file'], 'online-execution-release.py')
+        self.assertEqual(report['frames'][-1]['function'], 'need')
+        self.assertEqual(report['businessActions'], 0)
+
     def test_payload_rejects_extra_or_modified_file(self):
         h = P.load('recharge-record-release.py')
         with tempfile.TemporaryDirectory(dir=HERE.parents[1] / '.runtime') as folder:
@@ -89,7 +127,10 @@ class ExecutionRelease(unittest.TestCase):
                 api[name] = P.sha(target.read_bytes())
             parent = {'status': 'ONLINE_EXECUTION_PARENT_VERIFIED', 'commit': P.CURRENT,
                       'baseline': {'apiModules': self.c['nativeParentApiModules']}, 'businessActions': 0}
-            quality = {'sources': {'commit': 'a' * 40, 'runId': '1', 'sourceReceiptSha256': 'c' * 64},
+            quality = {'sources': {'commit': P.SOURCE_HEAD, 'runId': P.SOURCE_RUN,
+                                  'pullRequest': 673, 'sourceReceiptSha256': 'c' * 64},
+                       'controls': {'commit': 'a' * 40, 'runId': '4',
+                                    'pullRequest': 674, 'sourceReceiptSha256': 'd' * 64},
                        'release': {'commit': 'b' * 40, 'runId': '2'}}
             proof = {'commit': 'b' * 40, 'tree': 'd' * 40, 'workflowRunId': '3', 'workflowRunAttempt': '1',
                 'contractSha256': P.sha((HERE / P.CONTRACT_FILE).read_bytes()), 'scope': P.SCOPE, 'recipe': P.RECIPE,
