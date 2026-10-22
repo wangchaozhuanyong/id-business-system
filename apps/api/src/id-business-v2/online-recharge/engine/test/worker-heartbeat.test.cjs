@@ -19,7 +19,13 @@ const settle = async () => {
   for (let count = 0; count < 30; count++) await Promise.resolve();
 };
 
-function fixture({ heartbeat, progress, initialize = async () => {}, claimedExpiry } = {}) {
+function fixture({
+  heartbeat,
+  progress,
+  initialize = async () => {},
+  claimedExpiry,
+  clearContexts = async () => true
+} = {}) {
   let now = 1800000000000;
   const timers = new Set();
   const effects = {
@@ -57,7 +63,7 @@ function fixture({ heartbeat, progress, initialize = async () => {}, claimedExpi
       effects.acquired++;
       return { slotId: 1, cdpUrl: 'http://127.0.0.1:1', port: 1 };
     },
-    clearTaskContexts: async () => {},
+    clearTaskContexts: clearContexts,
     releaseSlot: () => {
       effects.releases++;
     }
@@ -387,6 +393,12 @@ test('child error clears its maximum execution timer as well as heartbeat timers
   const running = f.run();
   await settle();
   f.child.emit('error', new Error('synthetic child start failure'));
+  await settle();
+  assert.equal(
+    f.effects.rpc.some((item) => item.method === 'failJob'),
+    false
+  );
+  await f.advance(5000);
   await running;
   assert.equal(f.effects.rpc.filter((item) => item.method === 'failJob').length, 1);
   assert.equal(f.timerCount(), 0);
@@ -412,3 +424,81 @@ for (const [operation, payload] of [
     assert.equal(f.effects.rpc.filter((r) => r.method === 'completeJob').length, 1);
   });
 }
+
+test('a child exit without result delegates interruption facts to API instead of forcing review', async () => {
+  const f = fixture();
+  const running = f.run();
+  await settle();
+  f.child.exit();
+  await running;
+  const finish = f.effects.rpc.find((item) => item.method === 'completeJob');
+  assert.equal(finish.args.status, 'failed');
+  assert.equal(finish.args.executorInterrupted, true);
+  assert.equal(finish.args.executorTerminated, true);
+  assert.equal(finish.args.definitiveFailure, false);
+  assert.equal(finish.args.result.resultUnknown, undefined);
+});
+test('parent ends an unresponsive login phase independently and waits for child exit', async () => {
+  const f = fixture();
+  const running = f.run();
+  await settle();
+  f.child.emit('message', {
+    type: 'phase',
+    phase: 'session_bootstrap',
+    active: true,
+    lastAwait: 'challenge'
+  });
+  await f.advance(189000);
+  f.child.emit('message', {
+    type: 'phase',
+    phase: 'session_bootstrap',
+    active: true,
+    lastAwait: 'challenge'
+  });
+  await f.advance(999);
+  assert.equal(f.effects.signals.length, 0);
+  await f.advance(1);
+  assert.equal(f.effects.signals[0].signal, 'SIGTERM');
+  assert.equal(
+    f.effects.rpc.some((item) => item.method === 'completeJob'),
+    false
+  );
+  await f.advance(5000);
+  await running;
+  const finish = f.effects.rpc.find((item) => item.method === 'completeJob');
+  assert.equal(finish.args.executorTerminated, true);
+  assert.equal(finish.args.result.bootstrapDiagnostics.lastAwait, 'challenge');
+});
+
+test('an unconfirmed owned-context cleanup cannot release the slot or an interrupted task', async () => {
+  const f = fixture({ clearContexts: () => new Promise(() => {}) });
+  const running = f.run();
+  await settle();
+  f.child.exit();
+  await settle();
+  assert.equal(
+    f.effects.rpc.some((item) => item.method === 'completeJob'),
+    false
+  );
+  await f.advance(3000);
+  await running;
+  const finish = f.effects.rpc.find((item) => item.method === 'completeJob');
+  assert.equal(finish.args.executorInterrupted, true);
+  assert.equal(finish.args.executorTerminated, false);
+  assert.equal(f.effects.releases, 0);
+  assert.equal(f.timerCount(), 0);
+});
+
+test('a completed bootstrap clears its phase timer without affecting the ordinary task limit', async () => {
+  const f = fixture();
+  const running = f.run();
+  await settle();
+  f.child.emit('message', { type: 'phase', phase: 'session_bootstrap', active: true });
+  f.child.emit('message', { type: 'phase', phase: 'session_bootstrap', active: false });
+  await f.advance(200000);
+  assert.equal(f.effects.signals.length, 0);
+  f.complete();
+  await running;
+  assert.equal(f.effects.releases, 1);
+  assert.equal(f.timerCount(), 0);
+});

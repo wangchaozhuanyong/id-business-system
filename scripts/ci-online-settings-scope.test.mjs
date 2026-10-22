@@ -4,8 +4,12 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
+import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 import {
+  onlineExecutionRepairPaths,
+  onlineExecutionRepairControls,
+  isOnlineExecutionRepairOnly,
+  isOnlineExecutionRepairControlsOnly,
   onlineCheckoutFirstOpenPaths,
   onlineCheckoutFirstOpenControls,
   isOnlineCheckoutFirstOpenOnly,
@@ -2918,4 +2922,47 @@ test('card diagnostic timeout repair keeps its manifest, test and frozen contrac
     'apps/api/prisma-mysql/schema.prisma'
   ])
     assert.equal(checkMode([...paths, extra], 'same', 'same'), 'full');
+});
+
+test('execution repair selects API and complete sidecar regression without Admin or legacy image projection', () => {
+  const paths = [...onlineExecutionRepairPaths, ...onlineExecutionRepairControls];
+  assert.equal(isOnlineExecutionRepairOnly(paths), true);
+  assert.equal(isOnlineSettingsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const required of onlineExecutionRepairPaths.filter((path) => path.startsWith('apps/'))) {
+    assert.equal(isOnlineExecutionRepairOnly(paths.filter((path) => path !== required)), false);
+  }
+  const api = onlineSettingsCommands('api', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(api, /prisma:mysql:generate/);
+  assert.match(api, /typecheck/);
+  assert.match(
+    api,
+    /test --workspace @apple-business\/api -- src\/id-business-v2\/online-recharge/
+  );
+  assert.match(api, /playwright.*install --with-deps chromium/);
+  assert.match(api, /build --workspace @apple-business\/api/);
+  const engine = onlineSettingsCommands('online-engine', paths)
+    .map((args) => args.join(' '))
+    .join('\n');
+  assert.match(engine, /--test-concurrency=1/);
+  assert.match(engine, /test:upstream/);
+  assert.match(engine, /ffmpeg/);
+  assert.equal(isOnlineExecutionRepairControlsOnly(onlineExecutionRepairControls), true);
+  assert.deepEqual(selectedParts(onlineExecutionRepairControls), ['guards']);
+  for (const extra of [
+    'package-lock.json',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/v2/other.vue',
+    'apps/api/src/auth/other.ts'
+  ]) {
+    assert.equal(isOnlineExecutionRepairOnly([...paths, extra]), false);
+    assert.equal(
+      isOnlineExecutionRepairControlsOnly([...onlineExecutionRepairControls, extra]),
+      false
+    );
+  }
+  assert.equal(isOnlineExecutionRepairOnly([...paths, paths[0]]), false);
 });

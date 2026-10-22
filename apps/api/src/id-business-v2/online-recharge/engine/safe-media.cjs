@@ -10,6 +10,26 @@ let recorder = null;
 function root() {
   return require('./paths.cjs').mediaRoot();
 }
+// Only files with a completion receipt may be recovered after a child exits.
+// The receipt is written after the mandatory masked capture/encoding completes.
+async function recordCompletedFile(file, buffer) {
+  try {
+    const { createHash } = require('node:crypto');
+    await fs.writeFile(
+      `${file}.ready.json`,
+      JSON.stringify({
+        version: 1,
+        name: path.basename(file),
+        redacted: true,
+        bytes: buffer.length,
+        sha256: createHash('sha256').update(buffer).digest('hex')
+      }),
+      { mode: 0o600 }
+    );
+  } catch {
+    /* Normal evidence delivery still works if an optional receipt fails. */
+  }
+}
 async function start() {
   await fs.mkdir(root(), { recursive: true, mode: 0o700 });
   recorder = {
@@ -135,6 +155,7 @@ async function screenshot(page, prefix = 'stage') {
       });
       if (expired || Date.now() >= deadline) return null;
       await fs.writeFile(file, buffer, { mode: 0o600 });
+      await recordCompletedFile(file, buffer);
       current.frames.push(file);
       result = file;
     } catch {
@@ -248,6 +269,13 @@ async function finish() {
     });
   });
   await fs.unlink(listing).catch(() => {});
+  if (encoded) {
+    try {
+      await recordCompletedFile(output, await fs.readFile(output));
+    } catch {
+      /* Keep completed PNG evidence. */
+    }
+  }
   return encoded ? [...frames, output] : frames;
 }
 module.exports = { start, attach, stage, screenshot, finish, root };

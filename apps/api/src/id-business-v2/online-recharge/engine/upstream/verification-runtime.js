@@ -63,12 +63,21 @@ function createVerificationBudget(options = {}) {
         remaining() { return Math.max(0, deadlineAt - performance.now()); },
         timeout(max = 1000) { assert(); return Math.max(1, Math.floor(Math.min(max, deadlineAt - performance.now()))); },
         assert,
-        async run(promise) {
+        async run(operation) {
             assert();
+            // Factories are started only after checking cancellation. Existing
+            // promise callers remain supported while login uses factories.
+            const promise = typeof operation === 'function' ? operation() : operation;
             return new Promise((resolve, reject) => {
-                const abort = () => reject(controller.signal.reason);
+                const finish = (callback, value) => {
+                    controller.signal.removeEventListener('abort', abort);
+                    callback(value);
+                };
+                const abort = () => finish(reject, controller.signal.reason);
                 controller.signal.addEventListener('abort', abort, { once: true });
-                Promise.resolve(promise).then(resolve, reject).finally(() => controller.signal.removeEventListener('abort', abort));
+                if (controller.signal.aborted) abort();
+                Promise.resolve(promise).then(value => { assert(); finish(resolve, value); }, error => finish(reject, error))
+                    .catch(error => finish(reject, error));
             });
         },
         async wait(ms) {
@@ -258,8 +267,20 @@ async function prepareVerificationPage(page, options = {}) {
 function disposeVerificationPage(page) { pages.get(page)?.dispose(); }
 function verificationState(page) { return pages.get(page); }
 
+async function closeVerificationPage(page, timeoutMs = 2000) {
+    let timer;
+    try {
+        await Promise.race([
+            Promise.resolve().then(() => page.close({ runBeforeUnload: false })),
+            new Promise(resolve => { timer = setTimeout(resolve, timeoutMs); })
+        ]);
+    } catch (_) { /* The parent terminates the task if target cleanup is unconfirmed. */ }
+    finally { clearTimeout(timer); }
+    return page?.isClosed?.() === true;
+}
+
 module.exports = {
-    createVerificationBudget, verificationError, isCheckboxInstruction, isImagePrompt, captchaHost,
+    createVerificationBudget, closeVerificationPage, verificationError, isCheckboxInstruction, isImagePrompt, captchaHost,
     frameKind, frameVisible, inspectCaptchaFrames, prepareVerificationPage,
     disposeVerificationPage, verificationState, controlledVerificationCode, safeVerificationDiagnostics
 };

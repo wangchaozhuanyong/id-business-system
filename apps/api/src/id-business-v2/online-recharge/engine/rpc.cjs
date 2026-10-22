@@ -56,7 +56,7 @@ function scope() {
       }
     : {};
 }
-async function rpc(method, args = {}) {
+async function rpc(method, args = {}, options = {}) {
   taskSignal().throwIfAborted();
   const scoped = { ...args, ...scope() };
   if (transportOverride) return transportOverride(method, scoped);
@@ -77,7 +77,10 @@ async function rpc(method, args = {}) {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-online-recharge-worker': key },
       body: JSON.stringify({ method, args: scoped, ...scope() }),
-      signal: AbortSignal.any([AbortSignal.timeout(20000), taskSignal()])
+      signal: AbortSignal.any([
+        AbortSignal.timeout(Math.max(1, Math.min(20000, options.timeoutMs || 20000))),
+        taskSignal()
+      ])
     });
   } catch {
     taskSignal().throwIfAborted();

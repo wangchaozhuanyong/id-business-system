@@ -104,12 +104,13 @@ async function manageBrowser(task, config) {
     usedGb = (os.totalmem() - os.freemem()) / 1024 ** 3;
   return { success: true, ...(await pool.getDetailedStats({ totalGb, usedGb })) };
 }
-async function uploadEvidence(task, files, artifacts) {
+async function uploadEvidence(task, files, artifacts, options = {}) {
   const mediaRoot = path.resolve(childEnvironment(task).ONLINE_RECHARGE_MEDIA_DIR);
   for (const file of files.slice(-40)) {
+    if ((options.deadline && Date.now() >= options.deadline) || options.active?.() === false) break;
     try {
       const resolved = await fs.realpath(file);
-      if (!resolved.startsWith(`${mediaRoot}${path.sep}`)) continue;
+      if (!resolved.startsWith(`${mediaRoot}${path.sep}`) || options.seen?.has(resolved)) continue;
       const stat = await fs.stat(resolved);
       const kind = resolved.endsWith('.webm')
         ? 'video'
@@ -119,19 +120,70 @@ async function uploadEvidence(task, files, artifacts) {
       if (!stat.isFile() || !kind || stat.size > (kind === 'video' ? 100 : 10) * 1024 * 1024)
         continue;
       const buffer = await fs.readFile(resolved);
-      const artifact = await rpc('evidenceUpload', {
-        ...scope(task),
-        kind,
-        name: path.basename(resolved),
-        mimeType: kind === 'video' ? 'video/webm' : 'image/png',
-        redacted: true,
-        dataBase64: buffer.toString('base64')
-      });
+      const artifact = await rpc(
+        'evidenceUpload',
+        {
+          ...scope(task),
+          kind,
+          name: path.basename(resolved),
+          mimeType: kind === 'video' ? 'video/webm' : 'image/png',
+          redacted: true,
+          dataBase64: buffer.toString('base64')
+        },
+        { timeoutMs: options.deadline ? Math.max(1, options.deadline - Date.now()) : 20000 }
+      );
+      options.seen?.add(resolved);
       artifacts.push(artifact);
     } catch {
       /* A missing diagnostic must never cause another payment. */
     }
   }
+}
+async function completedEvidence(task, deadline) {
+  const mediaRoot = path.resolve(childEnvironment(task).ONLINE_RECHARGE_MEDIA_DIR);
+  const files = [];
+  let total = 0;
+  try {
+    const names = (await fs.readdir(mediaRoot))
+      .filter((name) => /^[a-zA-Z0-9_-]+\.(png|webm)\.ready\.json$/.test(name))
+      .sort()
+      .slice(-40);
+    for (const name of names) {
+      if (Date.now() >= deadline) break;
+      try {
+        const marker = path.join(mediaRoot, name);
+        const markerStat = await fs.lstat(marker);
+        if (!markerStat.isFile() || markerStat.size > 1024) continue;
+        const proof = JSON.parse(await fs.readFile(marker, 'utf8'));
+        if (
+          proof.version !== 1 ||
+          proof.redacted !== true ||
+          proof.name !== name.slice(0, -11) ||
+          !/^[a-f0-9]{64}$/.test(proof.sha256) ||
+          !Number.isInteger(proof.bytes) ||
+          proof.bytes < 1 ||
+          proof.bytes > 20 * 1024 * 1024 ||
+          total + proof.bytes > 20 * 1024 * 1024
+        )
+          continue;
+        const file = path.join(mediaRoot, proof.name);
+        if (!(await fs.lstat(file)).isFile() || (await fs.realpath(file)) !== file) continue;
+        const buffer = await fs.readFile(file);
+        if (
+          buffer.length !== proof.bytes ||
+          require('node:crypto').createHash('sha256').update(buffer).digest('hex') !== proof.sha256
+        )
+          continue;
+        total += buffer.length;
+        files.push(file);
+      } catch {
+        /* Incomplete, unmarked, changed or escaping evidence is not recovered. */
+      }
+    }
+  } catch {
+    /* No completion receipts is an allowed diagnostic outcome. */
+  }
+  return files;
 }
 async function runJob(task, config) {
   task.workerId ||=
@@ -145,6 +197,8 @@ async function runJob(task, config) {
     logs: [],
     artifacts: [],
     evidence: Promise.resolve(),
+    evidenceDeadline: null,
+    evidenceSeen: new Set(),
     result: null,
     lost: false,
     closed: false,
@@ -156,7 +210,32 @@ async function runJob(task, config) {
   let leaseTimer;
   let childStopTimer;
   let childDeadline;
+  let phaseDeadline;
+  let contextCleanup;
+  let contextsCleared = false;
   let childStopRequested = false;
+  async function clearOwnedContexts() {
+    if (!entry.slot) return true;
+    contextCleanup ||= (async () => {
+      let timer;
+      try {
+        contextsCleared = await Promise.race([
+          Promise.resolve()
+            .then(() => pool.clearTaskContexts(entry.slot.slotId))
+            .then((value) => value === true),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve(false), 3000);
+          })
+        ]);
+      } catch {
+        contextsCleared = false;
+      } finally {
+        clearTimeout(timer);
+      }
+      return contextsCleared;
+    })();
+    return contextCleanup;
+  }
   function leaseDiagnostic(phase, error) {
     const code =
       phase === 'lease_expired'
@@ -317,11 +396,37 @@ async function runJob(task, config) {
           // A child can only forget the card currently leased to its task.
           if (credentials.take(String(message.cardId), task.id))
             credentials.forget([String(message.cardId)]);
+        } else if (message?.type === 'phase' && message.phase === 'session_bootstrap') {
+          if (
+            [
+              'navigation',
+              'wait',
+              'challenge',
+              'login_controls',
+              'logged_in_ui',
+              'ui_stability',
+              'verification',
+              'session_api'
+            ].includes(message.lastAwait)
+          )
+            entry.bootstrapAwait = message.lastAwait;
+          if (message.active === true && !phaseDeadline)
+            phaseDeadline = setTimeout(stopChild, 190000);
+          else if (message.active === false) {
+            clearTimeout(phaseDeadline);
+            phaseDeadline = null;
+            if (message.cleanupFailed === true) stopChild();
+          }
         } else if (message?.type === 'log') {
           if (entry.logs.length < 200) entry.logs.push(sanitize(message.log));
         } else if (message?.type === 'evidence' && Array.isArray(message.paths)) {
+          entry.evidenceDeadline ||= Date.now() + 5000;
           entry.evidence = entry.evidence.then(() =>
-            uploadEvidence(task, message.paths, entry.artifacts)
+            uploadEvidence(task, message.paths, entry.artifacts, {
+              deadline: entry.evidenceDeadline,
+              seen: entry.evidenceSeen,
+              active: () => !entry.lost
+            })
           );
         } else if (message?.type === 'result')
           entry.result = { ...sanitize(message), result: sanitizeResult(message.result) };
@@ -335,18 +440,49 @@ async function runJob(task, config) {
       });
       clearTimeout(childDeadline);
     }
+    const executorTerminated = await clearOwnedContexts();
     await flush();
-    await entry.evidence;
+    if (!entry.lost) {
+      const deadline = entry.evidenceDeadline || Date.now() + 5000;
+      let evidenceTimer;
+      try {
+        await Promise.race([
+          entry.evidence
+            .then(async () => {
+              requireLease();
+              await uploadEvidence(task, await completedEvidence(task, deadline), entry.artifacts, {
+                deadline,
+                seen: entry.evidenceSeen,
+                active: () => !entry.lost
+              });
+            })
+            .catch(() => {}),
+          new Promise((resolve) => {
+            evidenceTimer = setTimeout(resolve, Math.max(1, deadline - Date.now()));
+          })
+        ]);
+      } finally {
+        clearTimeout(evidenceTimer);
+      }
+    }
     // 停机中断且子进程没有结果时交由数据库租约恢复：付款前可恢复原任务，已提交则待核对。
     if (entry.lost || (stopping && !entry.result)) return;
     const result = entry.result || {
-      status: 'awaiting_review',
-      result: { resultUnknown: true },
-      message: '执行器中断，等待核对，禁止自动重试'
+      status: 'failed',
+      result: {
+        code: 'EXECUTOR_INTERRUPTED',
+        ...(entry.bootstrapAwait
+          ? { bootstrapDiagnostics: { reason: 'runtime_failed', lastAwait: entry.bootstrapAwait } }
+          : {})
+      },
+      message: '执行器已中断，由服务端核对提交事实'
     };
     requireLease();
     await rpc('completeJob', {
       ...scope(task),
+      ...(!entry.result || !executorTerminated
+        ? { executorInterrupted: true, executorTerminated }
+        : {}),
       status: result.status,
       result: result.result || {},
       message: result.message,
@@ -355,7 +491,25 @@ async function runJob(task, config) {
       evidence: entry.artifacts
     });
   } catch (error) {
-    const uncertain = ['recharge', 'renewal'].includes(task.operation);
+    let terminated =
+      !entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null;
+    if (!terminated) {
+      stopChild();
+      let exitTimer;
+      try {
+        terminated = await Promise.race([
+          new Promise((resolve) => entry.child.once('exit', () => resolve(true))),
+          new Promise((resolve) => {
+            exitTimer = setTimeout(() => resolve(false), 7000);
+          })
+        ]);
+      } finally {
+        clearTimeout(exitTimer);
+      }
+    }
+    // An unresponsive child must never outlive a successful resource release.
+    if (!terminated) return;
+    terminated = await clearOwnedContexts();
     const proxyFailure =
       task.operation === 'proxy_test'
         ? require('./proxy-test.cjs').completionFailure(task, entry.result?.result)
@@ -366,15 +520,11 @@ async function runJob(task, config) {
     if (!entry.lost)
       await rpc('failJob', {
         ...scope(task),
-        status: uncertain ? 'awaiting_review' : 'failed',
-        result:
-          proxyFailure ||
-          (uncertain ? { resultUnknown: true } : { error: '执行器准备或管理操作失败' }),
-        message: proxyFailure
-          ? proxyFailure.error
-          : uncertain
-            ? '执行未能完整确认，请核对任务状态'
-            : '执行未完成，请查看受限诊断'
+        executorInterrupted: !entry.result || !terminated,
+        executorTerminated: terminated,
+        status: proxyFailure ? 'failed' : entry.result?.status || 'failed',
+        result: proxyFailure || entry.result?.result || { code: 'EXECUTOR_INTERRUPTED' },
+        message: proxyFailure ? proxyFailure.error : '执行未完成，请查看受限诊断'
       }).catch(() => {});
   } finally {
     entry.closed = true;
@@ -382,12 +532,15 @@ async function runJob(task, config) {
     clearInterval(logTimer);
     clearTimeout(leaseTimer);
     clearTimeout(childDeadline);
+    clearTimeout(phaseDeadline);
     if (!entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null)
       clearTimeout(childStopTimer);
     credentials.forgetTask(task.id);
-    if (entry.slot) {
-      await pool.clearTaskContexts(entry.slot.slotId).catch(() => {});
-      pool.releaseSlot(entry.slot.slotId);
+    if (
+      entry.slot &&
+      (!entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null)
+    ) {
+      if (await clearOwnedContexts()) pool.releaseSlot(entry.slot.slotId);
     }
     clearSensitive(task);
     if (/^[a-zA-Z0-9_-]{1,100}$/.test(task.id))
@@ -491,6 +644,7 @@ module.exports = {
   childEnvironment,
   runJob,
   uploadEvidence,
+  completedEvidence,
   manageBrowser,
   allocateStandalonePort
 };

@@ -322,10 +322,13 @@ function releaseSlot(slotId) {
 
 async function clearTaskContexts(slotId) {
     const slot = slots.find((s) => s.slotId === slotId);
-    if (!slot) return;
-    for (const context of slot.persistentContext.browser()?.contexts() || []) {
-        if (context !== slot.persistentContext) await context.close().catch(() => {});
-    }
+    if (!slot) return false;
+    const browser = slot.persistentContext.browser();
+    if (!browser) return false;
+    const contexts = browser.contexts().filter(context => context !== slot.persistentContext);
+    const closed = await Promise.allSettled(contexts.map(context => context.close()));
+    return closed.every(result => result.status === 'fulfilled')
+        && browser.contexts().every(context => context === slot.persistentContext);
 }
 
 function acquireSlot(jobKey) {

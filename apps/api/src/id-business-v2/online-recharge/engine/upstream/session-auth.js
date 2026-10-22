@@ -25,6 +25,7 @@ const BOOTSTRAP_REASONS = new Set([
     'visible_login_controls', 'login_not_confirmed', 'navigation_failed',
     'verification_failed', 'page_closed', 'runtime_failed'
 ]);
+const BOOTSTRAP_AWAITS = new Set(['navigation', 'wait', 'challenge', 'login_controls', 'logged_in_ui', 'ui_stability', 'verification', 'session_api']);
 const BOOTSTRAP_FLAGS = [
     'authApiVerified', 'visibleLogin', 'loggedInUi', 'redirectDetected', 'challengeDetected', 'pageClosed',
     'accountCheckHasAccountFacts', 'accountCheckIdentityMatches'
@@ -33,6 +34,7 @@ function safeBootstrapDiagnostics(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
     const result = {};
     if (BOOTSTRAP_REASONS.has(value.reason)) result.reason = value.reason;
+    if (BOOTSTRAP_AWAITS.has(value.lastAwait)) result.lastAwait = value.lastAwait;
     for (const key of BOOTSTRAP_FLAGS) {
         if (typeof value[key] === 'boolean') result[key] = value[key];
     }
@@ -601,9 +603,9 @@ async function assertChatGptLoggedIn(page, label = '页面', diagnostics = {}) {
     }
 }
 
-function attachLoginRedirectGuard(page, onLoginRedirect) {
+function attachLoginRedirectGuard(page, onLoginRedirect, signal, ownerSignal) {
     page.on('framenavigated', async (frame) => {
-        if (frame !== page.mainFrame() || page.isClosed()) {
+        if (signal?.aborted || ownerSignal?.aborted || frame !== page.mainFrame() || page.isClosed()) {
             return;
         }
         const url = frame.url();
@@ -795,13 +797,58 @@ function setupChatGptSessionAuth(context, accessToken) {
  * 打开 ChatGPT 并验证 Session 在浏览器 UI 中生效
  */
 async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
+    const { createVerificationBudget, closeVerificationPage } = require('./verification-runtime');
+    const budget = createVerificationBudget({ signal: options.signal, deadlineAt: options.deadlineAt });
+    const diagnostics = { reason: 'runtime_failed' };
+    const phase = (active, cleanupFailed = false, lastAwait) => {
+        if (process.connected && typeof process.send === 'function') {
+            try { process.send({ type: 'phase', phase: 'session_bootstrap', active, cleanupFailed,
+                ...(lastAwait ? { lastAwait } : {}) }); } catch (_) { /* Parent may have stopped. */ }
+        }
+    };
+    let cleanupFailed = false;
+    phase(true);
+    try {
+        return await budget.run(() => bootstrapSessionWithinBudget(page, sessionRaw, {
+            ...options, ownerSignal: options.signal, signal: budget.signal, deadlineAt: budget.deadlineAt,
+            budget, bootstrapDiagnostics: diagnostics, onAwait: label => phase(true, false, label)
+        }));
+    } catch (error) {
+        const budgetExpired = budget.signal.reason?.code === 'VERIFICATION_TIMEOUT' || budget.remaining() < 1;
+        if (budget.signal.aborted || budgetExpired) {
+            cleanupFailed = !await closeVerificationPage(page);
+            if (cleanupFailed) error.bootstrapCleanupFailed = true;
+        }
+        if (budgetExpired && error.code === 'VERIFICATION_TIMEOUT')
+            error = Object.assign(new Error('登录核验超过本次期限'), { code: 'NETWORK_TIMEOUT', bootstrapCleanupFailed: cleanupFailed });
+        else if (error.code === 'LEASE_LOST' && options.signal?.reason?.code === 'LEASE_LOST')
+            error = Object.assign(options.signal.reason, { bootstrapCleanupFailed: cleanupFailed });
+        error.bootstrapDiagnostics = safeBootstrapDiagnostics({
+            ...diagnostics, ...error.bootstrapDiagnostics, pageClosed: page?.isClosed?.() === true
+        });
+        throw error;
+    } finally {
+        phase(false, cleanupFailed);
+        budget.dispose();
+    }
+}
+
+async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
     const signal = options.signal;
     const deadlineAt = Number.isFinite(options.deadlineAt) ? options.deadlineAt : performance.now() + 180000;
-    const diagnostics = {
+    const diagnostics = options.bootstrapDiagnostics;
+    const run = (label, operation) => {
+        diagnostics.lastAwait = label;
+        options.onAwait?.(label);
+        return options.budget.run(operation);
+    };
+    /* diagnostics are shared with the outer in-flight deadline. */
+    const initialDiagnostics = {
         reason: 'runtime_failed', authApiVerified: options.cookieVerified === true,
         visibleLogin: false, loggedInUi: false, redirectDetected: false,
         challengeDetected: false, pageClosed: false
     };
+    Object.assign(diagnostics, initialDiagnostics);
     const remaining = (cap) => {
         signal?.throwIfAborted();
         const value = Math.min(cap, Math.floor(deadlineAt - performance.now()));
@@ -824,8 +871,8 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
             if (uiWaitRemaining <= 0) return false;
             const started = performance.now();
             try {
-                return await waitForLoggedInChatUi(page, remaining(Math.max(1, Math.floor(uiWaitRemaining))),
-                    { deadlineAt, signal, stopWhen });
+                return await run('ui_stability', () => waitForLoggedInChatUi(page, remaining(Math.max(1, Math.floor(uiWaitRemaining))),
+                    { deadlineAt, signal, stopWhen }));
             } finally {
                 uiWaitRemaining = Math.max(0, uiWaitRemaining - (performance.now() - started));
             }
@@ -836,14 +883,14 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
         }
 
         console.log('🔐 [步骤] 正在使用 Session 登录 ChatGPT...');
-        attachLoginRedirectGuard(page, () => { diagnostics.redirectDetected = true; });
+        attachLoginRedirectGuard(page, () => { diagnostics.redirectDetected = true; }, signal, options.ownerSignal);
 
         diagnostics.reason = 'navigation_failed';
-        await page.goto(`${CHATGPT_ORIGIN}/`, {
+        await run('navigation', () => page.goto(`${CHATGPT_ORIGIN}/`, {
             waitUntil: 'domcontentloaded',
             timeout: remaining(90000)
-        });
-        await page.waitForTimeout(remaining(2500));
+        }));
+        await run('wait', () => options.budget.wait(remaining(2500)));
 
         diagnostics.reason = 'verification_failed';
         const { clearHumanVerification, isBlockingHumanVerificationVisible } = require('./human-verification');
@@ -867,31 +914,31 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
                 remaining(1);
                 assertOfficialHomepage();
                 try {
-                    await assertChatGptLoggedIn(page, '首页', diagnostics);
+                    await run('logged_in_ui', () => assertChatGptLoggedIn(page, '首页', diagnostics));
                     assertOfficialHomepage();
                     return restabilized;
                 } catch (error) {
                     if (error.code !== 'SESSION_NOT_CONFIRMED'
                         || !['visible_login_controls', 'visible_login_content'].includes(error.bootstrapDiagnostics?.reason)
                         || !isOfficialHomepage() || uiWaitRemaining <= 0) throw error;
-                    const challenge = await isBlockingHumanVerificationVisible(page);
+                    const challenge = await run('challenge', () => isBlockingHumanVerificationVisible(page));
                     diagnostics.challengeDetected ||= challenge;
                     if (challenge)
                         throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
                     diagnostics.reason = 'login_not_confirmed';
                     diagnostics.loggedInUi = await waitForStableUi(async () => {
-                        const blocking = await isBlockingHumanVerificationVisible(page);
+                        const blocking = await run('challenge', () => isBlockingHumanVerificationVisible(page));
                         diagnostics.challengeDetected ||= blocking;
                         return blocking;
                     });
                     assertOfficialHomepage();
-                    diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
-                    if (await isBlockingHumanVerificationVisible(page)) {
+                    diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
+                    if (await run('challenge', () => isBlockingHumanVerificationVisible(page))) {
                         diagnostics.challengeDetected = true;
                         throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
                     }
                     if (!diagnostics.loggedInUi) {
-                        await assertChatGptLoggedIn(page, '首页', diagnostics);
+                        await run('logged_in_ui', () => assertChatGptLoggedIn(page, '首页', diagnostics));
                         throw sessionNotConfirmed('尚未取得首页的稳定登录证据，已停止后续操作', 'login_not_confirmed', diagnostics);
                     }
                     restabilized = true;
@@ -901,43 +948,23 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
         const reloadGuestHomepageOnce = async () => {
             remaining(1);
             if (guestHomepageReloaded || page.isClosed?.() || !isOfficialHomepage()) return false;
-            const challenge = await isBlockingHumanVerificationVisible(page);
+            const challenge = await run('challenge', () => isBlockingHumanVerificationVisible(page));
             diagnostics.challengeDetected ||= challenge;
-            if (challenge || !await hasVisibleLoginChrome(page)) return false;
+            if (challenge || !await run('login_controls', () => hasVisibleLoginChrome(page))) return false;
             // A challenge may mount while the guest controls are being read.
-            const challengeBeforeReload = await isBlockingHumanVerificationVisible(page);
+            const challengeBeforeReload = await run('challenge', () => isBlockingHumanVerificationVisible(page));
             diagnostics.challengeDetected ||= challengeBeforeReload;
             remaining(1);
             if (challengeBeforeReload || !isOfficialHomepage()) return false;
             guestHomepageReloaded = true;
             diagnostics.reason = 'navigation_failed';
-            let abortReload;
-            try {
-                await new Promise((resolve, reject) => {
-                    abortReload = () => {
-                        // This Page belongs to the current task. Closing it also
-                        // stops a pending navigation when its lease is cancelled.
-                        Promise.resolve().then(() => page.close()).catch(() => {});
-                        reject(signal.reason);
-                    };
-                    signal?.addEventListener('abort', abortReload, { once: true });
-                    if (signal?.aborted) { abortReload(); return; }
-                    // Both outcomes remain observed after cancellation, so a
-                    // delayed navigation cannot continue login or reject unhandled.
-                    Promise.resolve().then(() => {
-                        signal?.throwIfAborted();
-                        return page.reload({ waitUntil: 'domcontentloaded', timeout: remaining(90000) });
-                    }).then(resolve, reject);
-                });
-            } finally {
-                if (abortReload) signal?.removeEventListener('abort', abortReload);
-            }
+            await run('navigation', () => page.reload({ waitUntil: 'domcontentloaded', timeout: remaining(90000) }));
             remaining(1);
             if (!isOfficialHomepage())
                 throw sessionNotConfirmed('刷新后未在原首页确认登录，已停止后续操作', 'navigation_failed', diagnostics);
-            await page.waitForTimeout(remaining(2000));
+            await run('wait', () => options.budget.wait(remaining(2000)));
             remaining(1);
-            const challengeAfterReload = await isBlockingHumanVerificationVisible(page);
+            const challengeAfterReload = await run('challenge', () => isBlockingHumanVerificationVisible(page));
             diagnostics.challengeDetected ||= challengeAfterReload;
             if (challengeAfterReload) {
                 diagnostics.reason = 'verification_failed';
@@ -949,50 +976,50 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
             diagnostics.reason = 'login_not_confirmed';
             return true;
         };
-        diagnostics.challengeDetected = await isBlockingHumanVerificationVisible(page);
-        diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+        diagnostics.challengeDetected = await run('challenge', () => isBlockingHumanVerificationVisible(page));
+        diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
         if (!diagnostics.challengeDetected && diagnostics.visibleLogin) {
             diagnostics.reason = 'login_not_confirmed';
             diagnostics.loggedInUi = await waitForStableUi(async () => {
-                const challenge = await isBlockingHumanVerificationVisible(page);
+                const challenge = await run('challenge', () => isBlockingHumanVerificationVisible(page));
                 diagnostics.challengeDetected ||= challenge;
                 return challenge;
             });
-            diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+            diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
             // Ordinary guest controls can outlive hydration. Let the one
             // verification result reach the frozen upstream reload transition.
-            if (!diagnostics.visibleLogin && !await isBlockingHumanVerificationVisible(page))
-                await assertChatGptLoggedIn(page, '首页', diagnostics);
+            if (!diagnostics.visibleLogin && !await run('challenge', () => isBlockingHumanVerificationVisible(page)))
+                await run('logged_in_ui', () => assertChatGptLoggedIn(page, '首页', diagnostics));
         }
         diagnostics.reason = 'verification_failed';
-        const blockingVerification = await isBlockingHumanVerificationVisible(page);
+        const blockingVerification = await run('challenge', () => isBlockingHumanVerificationVisible(page));
         diagnostics.challengeDetected ||= blockingVerification;
         if (options.manualVerification === true && blockingVerification)
             throw Object.assign(new Error('官网需要人工验证'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
-        const captchaResult = options.manualVerification === true ? { cleared: true } : await clearHumanVerification(page, {
+        const captchaResult = options.manualVerification === true ? { cleared: true } : await run('verification', () => clearHumanVerification(page, {
             phase: 'session-bootstrap',
             maxWaitMs: remaining(Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 180000)),
             deadlineAt,
             signal,
             maxBypassRounds: 6
-        });
+        }));
         let recoveredGuestTransition = false;
         if (!captchaResult.cleared && captchaResult.code === 'SESSION_INVALID'
             && captchaResult.sessionRequired === true && isOfficialHomepage()
-            && !await isBlockingHumanVerificationVisible(page)) {
+            && !await run('challenge', () => isBlockingHumanVerificationVisible(page))) {
             diagnostics.reason = 'login_not_confirmed';
             await reloadGuestHomepageOnce();
             diagnostics.loggedInUi = await waitForStableUi(async () => {
-                const challenge = await isBlockingHumanVerificationVisible(page);
+                const challenge = await run('challenge', () => isBlockingHumanVerificationVisible(page));
                 diagnostics.challengeDetected ||= challenge;
                 return challenge;
             });
-            if (await isBlockingHumanVerificationVisible(page)) {
+            if (await run('challenge', () => isBlockingHumanVerificationVisible(page))) {
                 diagnostics.reason = 'verification_failed';
                 diagnostics.challengeDetected = true;
                 throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
             }
-            diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+            diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
             await assertCurrentLoggedInUi();
             if (!diagnostics.loggedInUi)
                 throw sessionNotConfirmed('尚未取得首页的稳定登录证据，已停止后续操作', 'login_not_confirmed', diagnostics);
@@ -1000,7 +1027,7 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
         }
         if (!captchaResult.cleared && !recoveredGuestTransition) {
             if (captchaResult.code === 'SESSION_INVALID' && captchaResult.sessionRequired === true
-                && !isOfficialHomepage()) await assertChatGptLoggedIn(page, '首页', diagnostics);
+                && !isOfficialHomepage()) await run('logged_in_ui', () => assertChatGptLoggedIn(page, '首页', diagnostics));
             throw Object.assign(new Error('官网验证未通过，登录核验未完成'), {
                 code: captchaResult.code || 'HUMAN_VERIFICATION_REQUIRED',
                 diagnostics: captchaResult.diagnostics
@@ -1011,15 +1038,15 @@ async function bootstrapChatGptSession(page, sessionRaw, options = {}) {
         await reloadGuestHomepageOnce();
         let uiReady = await waitForStableUi();
         diagnostics.loggedInUi = uiReady;
-        diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+        diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
         uiReady = await assertCurrentLoggedInUi() || uiReady;
 
-        const apiReady = cookieVerified ? await hasLoggedInSessionApi(page) : false;
+        const apiReady = cookieVerified ? await run('session_api', () => hasLoggedInSessionApi(page, { timeoutMs: remaining(8000) })) : false;
         remaining(1);
 
-        diagnostics.visibleLogin = await hasVisibleLoginChrome(page);
+        diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
         uiReady = await assertCurrentLoggedInUi() || uiReady;
-        if (await isBlockingHumanVerificationVisible(page)) {
+        if (await run('challenge', () => isBlockingHumanVerificationVisible(page))) {
             diagnostics.reason = 'verification_failed';
             diagnostics.challengeDetected = true;
             throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });

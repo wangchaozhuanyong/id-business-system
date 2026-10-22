@@ -377,7 +377,7 @@ async function activateSubscription({ page, accessToken, planType, cdkCode, emai
 /**
  * 判断 Checkout 页面是否已正常加载（避免 body 里 incidental "404" 误报）
  */
-async function assertCheckoutPageReady(page, { requireCardReady = true } = {}) {
+async function assertCheckoutPageReady(page, { requireCardReady = true, deadline, signal } = {}) {
     const { isCloudflareWallPage, isCheckoutPaymentReady } = require('./human-verification');
     const currentUrl = page.url();
     const pageText = String(await page.innerText('body', { timeout: 8000 }).catch(() => '') || '');
@@ -403,8 +403,12 @@ async function assertCheckoutPageReady(page, { requireCardReady = true } = {}) {
         require('../checkout-recovery.cjs').quoteIdForUrl(currentUrl);
         return currentUrl;
     }
-    if (await isCheckoutPaymentReady(page)) return currentUrl;
-    throw Object.assign(new Error('无法确认 Checkout 支付表单已加载'), { code: 'CHECKOUT_FORM_NOT_READY' });
+    let readiness;
+    if (await isCheckoutPaymentReady(page, { deadline, signal, onInspection: result => { readiness = result; } })) return currentUrl;
+    throw Object.assign(new Error('无法确认 Checkout 支付表单已加载'), {
+        code: readiness?.inspection?.contentLoadFailed ? 'CHECKOUT_CONTENT_LOAD_FAILED' : 'CHECKOUT_FORM_NOT_READY',
+        inspection: readiness?.inspection, missing: readiness?.missing, controls: readiness?.controls
+    });
 }
 
 const CHECKOUT_OPEN_STAGES = new Set(['navigation', 'login', 'readiness', 'final_check']);
@@ -667,7 +671,10 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         }
 
         stage = 'final_check';
-        const currentUrl = await run(() => assertCheckoutPageReady(page, { requireCardReady: !hostedCheckout }));
+        const currentUrl = await run(() => assertCheckoutPageReady(page, {
+            requireCardReady: !hostedCheckout,
+            deadline: Date.now() + budget.remaining(), signal: budget.signal
+        }));
         await run(() => assertChatGptLoggedIn(page, 'Checkout'));
         budget.assert();
         assertOriginalCheckoutPage(page, url, originalQuoteId, recovery);
@@ -697,6 +704,9 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                         : stage === 'navigation' ? 'network_error' : 'check_failed');
         const checkoutOpenDiagnostics = safeCheckoutOpenDiagnostics({
             ...safeCheckoutOpenDiagnostics(error.checkoutOpenDiagnostics),
+            inspection: error.inspection || error.checkoutOpenDiagnostics?.inspection,
+            missing: error.missing || error.checkoutOpenDiagnostics?.missing,
+            controls: error.controls || error.checkoutOpenDiagnostics?.controls,
             initialization: initialization?.snapshot(),
             loading: require('../checkout-recovery.cjs').originalCheckoutReloadDiagnostics(page),
             stage, reason, code: error.code, httpStatus: error.httpStatus

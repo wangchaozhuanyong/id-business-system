@@ -123,21 +123,23 @@ test('proxy worker never sends another result after the completion lease is lost
   });
 });
 
-test('non-proxy completion failures retain the existing subscription and payment uncertainty contracts', async () => {
+test('non-proxy completion acknowledgement failures retain the received child result for API validation', async () => {
   for (const operation of ['subscription', 'renewal'])
     await withSyntheticWorker(async (worker) => {
       let failure;
       rpc.setTransportForTest(async (method, args) => {
         if (method === 'completeJob') throw new Error('synthetic response lost');
         assert.equal(method, 'failJob');
-        failure = args;
+        failure = structuredClone(args);
         return { ok: true };
       });
       await worker.runJob({ ...task(), operation }, { browserPool: { enabled: false } });
-      assert.equal(failure.status, operation === 'renewal' ? 'awaiting_review' : 'failed');
-      assert.deepEqual(
-        failure.result,
-        operation === 'renewal' ? { resultUnknown: true } : { error: '执行器准备或管理操作失败' }
-      );
+      assert.equal(failure.status, 'succeeded');
+      assert.equal(failure.executorInterrupted, false);
+      assert.equal(failure.executorTerminated, true);
+      assert.deepEqual(failure.result, {
+        success: true,
+        results: [{ proxyId: 'synthetic-proxy', ok: true, ip: '8.8.8.8', latencyMs: 21 }]
+      });
     });
 });
