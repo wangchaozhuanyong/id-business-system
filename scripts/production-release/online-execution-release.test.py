@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import shutil
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('execution_test', HERE / 'online-execution-release.py')
@@ -29,6 +30,24 @@ class ExecutionRelease(unittest.TestCase):
         self.assertEqual(len(P.MODULES), 3)
         self.assertEqual(self.c['updatedServices'], ['api', 'online-recharge'])
 
+    def test_clean_remote_staging_includes_the_exact_parent_contract_and_controls(self):
+        with tempfile.TemporaryDirectory(dir=P.ROOT / '.runtime') as folder:
+            stage = Path(folder)
+            for name, digest in {**self.c['controlPins'],
+                                 P.CONTRACT_FILE: P.sha((HERE / P.CONTRACT_FILE).read_bytes())}.items():
+                self.assertEqual(P.sha((HERE / name).read_bytes()), digest)
+                shutil.copyfile(HERE / name, stage / name)
+            spec = importlib.util.spec_from_file_location('clean_execution_fixture', stage / 'online-execution-release.py')
+            staged = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(staged)
+            staged.validate_contract(self.c)
+            parent = staged.load('settled-checkout-release.py')
+            prior = json.loads((stage / parent.CONTRACT_FILE).read_bytes())
+            parent.validate_contract(prior)
+            for name, digest in self.c['parentPlan']['controlSources'].items():
+                self.assertEqual(P.sha((stage / name).read_bytes()), digest)
+            self.assertEqual(self.c['controlPins'][parent.CONTRACT_FILE], self.c['parentPlan']['contractSha256'])
+
     def test_extra_application(self):
         self.rejected(lambda c: c['productionSources'].update({'apps/admin/src/v2/other.ts': 'a' * 64}))
 
@@ -40,6 +59,9 @@ class ExecutionRelease(unittest.TestCase):
 
     def test_wrong_parent_proof(self):
         self.rejected(lambda c: c['parentPlan'].update(buildProofSha256='a' * 64))
+
+    def test_missing_parent_contract_is_rejected_before_remote_staging(self):
+        self.rejected(lambda c: c['controlPins'].pop('settled-checkout-contract.json'))
 
     def test_migration_rejected(self):
         self.rejected(lambda c: c.update(migrationPerformed=True))
