@@ -166,6 +166,7 @@ async function run(runOptions = {}) {
     let browser = null;
     let context = null;
     let page = null;
+    let authDiagnostics = null;
     let paymentSucceeded = false;
     let lastPaymentResult = null;
 
@@ -490,6 +491,7 @@ async function run(runOptions = {}) {
             console.warn(`⚠️ [系统] 当前页面已关闭，关闭前最后 URL: ${page.url()}`);
         });
 
+        authDiagnostics = require('../subscription-diagnostics.cjs').observeAuthResponses(page, sessionRaw);
         const loginInfo = await bootstrapChatGptSession(page, sessionRaw, {
             sessionData, cookieVerified, signal: taskSignal?.(), deadlineAt: performance.now() + 180000,
             onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
@@ -501,7 +503,10 @@ async function run(runOptions = {}) {
         // Account and exact tier are checked before opening a new checkout. An
         // existing subscription must follow the original plan-change UI.
         const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
-        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, { allowUnverifiedTarget: debugOnly, browserContext: context, page, signal: taskSignal?.() });
+        const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, {
+            allowUnverifiedTarget: debugOnly, browserContext: context, page, signal: taskSignal?.(), sessionRaw,
+            authDiagnostics, onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
+        });
         if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
         const operation = preflight.kind;
         if (!['initial', 'upgrade'].includes(operation)) throw new Error('无法确定首次开通或升级操作');
@@ -727,6 +732,7 @@ async function run(runOptions = {}) {
             ? { debugOnly: true, checkoutUrl: e.originalCheckoutUrl } : {};
         return { ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure ? { errorCode: checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
+        authDiagnostics?.dispose();
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
         // 先关闭 context 以 flush 录像并取回路径，再关浏览器

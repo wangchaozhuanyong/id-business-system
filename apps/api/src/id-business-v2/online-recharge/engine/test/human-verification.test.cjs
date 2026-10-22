@@ -1,5 +1,5 @@
 'use strict';
-/* global window */
+/* global window, document */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const https = require('node:https');
@@ -34,16 +34,22 @@ async function fixture(t, options = {}) {
     clicks = 0,
     closed = false,
     screen;
-  const server = https.createServer({ key, cert }, (request, response) => {
+  const server = https.createServer({ key, cert }, async (request, response) => {
     const url = new URL(request.url, 'https://chatgpt.com');
     requests.push({
       path: url.pathname,
+      method: request.method,
       native: url.searchParams.has('manual_verification'),
       authorization: Boolean(request.headers.authorization),
       closed
     });
     response.setHeader('cache-control', 'no-store');
     if (request.method !== 'GET') return response.writeHead(409).end();
+    if (url.pathname.startsWith('/backend-api/accounts/check/') && options.accountReply) {
+      const reply = await options.accountReply();
+      response.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers });
+      return response.end(typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body));
+    }
     if (url.pathname === '/api/auth/session') {
       response.setHeader('content-type', 'application/json');
       return response.end(JSON.stringify(actual));
@@ -54,7 +60,7 @@ async function fixture(t, options = {}) {
         '<!doctype html><style>body{margin:0}input{position:absolute;left:10px;top:10px;width:25px;height:25px}</style><input aria-label="Synthetic checkbox" type="checkbox" onclick="parent.postMessage(\'synthetic-pass\',\'https://chatgpt.com\')">'
       );
     response.end(
-      `<!doctype html><h1>Verify you are human</h1><p>Cloudflare security check</p><iframe style="width:300px;height:100px;border:0" src="https://challenges.cloudflare.com/turnstile/fixture"></iframe><script>addEventListener('message',event=>{if(event.origin==='https://challenges.cloudflare.com'&&event.data==='synthetic-pass'){document.body.innerHTML='<main><button>New chat</button><textarea id="prompt-textarea"></textarea></main>';window.syntheticClicks=(window.syntheticClicks||0)+1;}})</script>`
+      `<!doctype html>${options.initiallyClear ? '<main><button>New chat</button><textarea id="prompt-textarea"></textarea></main>' : '<h1>Verify you are human</h1><p>Cloudflare security check</p><iframe style="width:300px;height:100px;border:0" src="https://challenges.cloudflare.com/turnstile/fixture"></iframe>'}<script>addEventListener('message',event=>{if(event.origin==='https://challenges.cloudflare.com'&&event.data==='synthetic-pass'){document.body.innerHTML='<main><button>New chat</button><textarea id="prompt-textarea"></textarea></main>';window.syntheticClicks=(window.syntheticClicks||0)+1;}})</script>`
     );
   });
   server.listen(0, '127.0.0.1');
@@ -131,6 +137,195 @@ test('原页人工点击仅作用于验证 iframe，撤销交互后再读取真�
   assert.equal(native.length, 1);
   assert.equal(native[0].closed, true);
   assert.equal(native[0].authorization, false);
+});
+
+for (const mode of [
+  'completed',
+  'preflight',
+  'subscription_identity_mismatch',
+  'identity_mismatch',
+  'still_blocked',
+  'cancelled',
+  'lease_lost',
+  'deadline',
+  'no_actionable_page',
+  'unknown_403',
+  'policy_403',
+  'no_callback'
+]) {
+  test(`订阅403接续：${mode}，仅在原页本人验证及身份复核后追加一次只读查询`, async (t) => {
+    const options = {
+      initiallyClear: true,
+      install: true,
+      cancel: mode === 'cancelled',
+      leaseLost: mode === 'lease_lost',
+      noClick: mode === 'deadline'
+    };
+    const f = await fixture(t, options);
+    let reads = 0,
+      waits = 0;
+    const account = {
+      accounts: {
+        default: {
+          account: { account_id: accountId },
+          entitlement: { has_active_subscription: false, subscription_plan: 'free' },
+          last_active_subscription: {}
+        }
+      }
+    };
+    if (mode === 'subscription_identity_mismatch')
+      account.accounts.default.account.account_id = 'other-account';
+    options.accountReply = async () => {
+      reads++;
+      if (reads > 1 && mode !== 'still_blocked') return { status: 200, body: account };
+      if (mode === 'unknown_403')
+        return { status: 403, body: { error: { message: 'Cloudflare generic wording' } } };
+      if (mode === 'policy_403')
+        return { status: 403, body: { error: { code: 'unsupported_country' } } };
+      if (reads === 1 && mode !== 'no_actionable_page') {
+        await f.page.evaluate(() => {
+          document.body.innerHTML =
+            '<h1>Verify you are human</h1><p>Cloudflare security check</p><iframe style="width:300px;height:100px;border:0" src="https://challenges.cloudflare.com/turnstile/fixture"></iframe>';
+        });
+        await f.page.frameLocator('iframe').getByRole('checkbox').waitFor({ state: 'visible' });
+      }
+      return {
+        status: 403,
+        headers: {
+          'cf-mitigated': 'challenge',
+          'cf-ray': 'synthetic-private-ray',
+          'content-type': 'text/html'
+        },
+        body: '<html>Just a moment</html>'
+      };
+    };
+    const observer = require('../subscription-diagnostics.cjs').observeAuthResponses(
+      f.page,
+      JSON.stringify(session)
+    );
+    t.after(() => observer.dispose());
+    const callback = async (page, opts) => {
+      waits++;
+      assert.equal(page, f.page);
+      assert.equal(page.context(), f.context);
+      const completed = await waitForHumanVerification(page, opts, { rpc: f.rpc });
+      if (mode === 'identity_mismatch') f.actual({ ...session, account: { id: 'other-account' } });
+      return completed;
+    };
+    const queryOptions = {
+      page: f.page,
+      browserContext: f.context,
+      sessionRaw: JSON.stringify(session),
+      authDiagnostics: observer,
+      deadlineAt: performance.now() + (mode === 'deadline' ? 3000 : 10000),
+      ...(mode === 'no_callback' ? {} : { onHumanVerification: callback })
+    };
+    let result;
+    if (['preflight', 'subscription_identity_mismatch'].includes(mode)) {
+      const preflight = await require('../confirmation.cjs').preflightPayment(
+        'pro_5x',
+        token,
+        queryOptions
+      );
+      result = { ok: preflight.allowed, diagnostics: preflight.confirmation.queryDiagnostics };
+      if (mode === 'preflight') assert.equal(preflight.kind, 'initial');
+      else assert.equal(preflight.confirmation.accountId, 'other-account');
+    } else if (mode === 'lease_lost') {
+      await assert.rejects(
+        require('../upstream/subscription-check').querySubscriptionBySession(token, queryOptions),
+        { code: 'LEASE_LOST' }
+      );
+      result = { ok: false, diagnostics: [] };
+    } else
+      result = await require('../upstream/subscription-check').querySubscriptionBySession(
+        token,
+        queryOptions
+      );
+    assert.equal(result.ok, ['completed', 'preflight'].includes(mode));
+    assert.equal(
+      reads,
+      ['completed', 'preflight', 'subscription_identity_mismatch', 'still_blocked'].includes(mode)
+        ? 2
+        : 1
+    );
+    assert.equal(
+      waits,
+      [
+        'completed',
+        'preflight',
+        'subscription_identity_mismatch',
+        'identity_mismatch',
+        'still_blocked',
+        'cancelled',
+        'lease_lost',
+        'deadline'
+      ].includes(mode)
+        ? 1
+        : 0
+    );
+    assert.equal(f.page.isClosed(), false, 'Borrowed original page stays owned by the caller');
+    assert.equal(
+      f.requests.some(
+        (request) => request.method !== 'GET' || /checkout|payment/.test(request.path)
+      ),
+      false
+    );
+    assert.ok(!JSON.stringify(result).includes('synthetic-private-ray'));
+    if (mode === 'completed') {
+      assert.equal(result.diagnostics.at(-1).afterHumanVerification, true);
+      assert.equal(result.diagnostics.at(-1).authResponses.session.matchesTargetAccount, true);
+      assert.deepEqual(result.diagnostics.at(-1).authResponses.csrf, { observed: false });
+      assert.equal(f.requests.filter((request) => request.native).length, 1);
+    }
+    if (mode === 'identity_mismatch') assert.equal(result.errorCode, 'ACCOUNT_MISMATCH');
+    if (mode === 'cancelled') assert.equal(result.errorCode, 'HUMAN_VERIFICATION_CANCELLED');
+    if (mode === 'no_actionable_page')
+      assert.equal(result.diagnostics[0].actionableVerification, false);
+    if (mode === 'unknown_403')
+      assert.equal(result.diagnostics[0].responseFacts.classification, 'UNKNOWN_403');
+    if (mode === 'policy_403')
+      assert.equal(result.diagnostics[0].responseFacts.classification, 'POLICY_OR_REGION_BLOCK');
+  });
+}
+
+test('订阅查询前已存在可操作验证时复用本人入口，不调用自动求解或重复读取', async (t) => {
+  const options = { install: true };
+  const f = await fixture(t, options);
+  let reads = 0,
+    waits = 0;
+  options.accountReply = async () => {
+    reads++;
+    return {
+      status: 200,
+      body: {
+        accounts: {
+          default: {
+            account: { account_id: accountId },
+            entitlement: { has_active_subscription: false, subscription_plan: 'free' },
+            last_active_subscription: {}
+          }
+        }
+      }
+    };
+  };
+  const result = await require('../confirmation.cjs').preflightPayment('pro_5x', token, {
+    page: f.page,
+    browserContext: f.context,
+    sessionRaw: JSON.stringify(session),
+    deadlineAt: performance.now() + 8000,
+    onHumanVerification: async (page, budget) => {
+      waits++;
+      return waitForHumanVerification(page, budget, { rpc: f.rpc });
+    }
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(waits, 1);
+  assert.equal(reads, 1);
+  assert.equal(f.requests.filter((request) => request.native).length, 1);
+  assert.equal(
+    f.requests.some((request) => request.method !== 'GET' || /checkout|payment/.test(request.path)),
+    false
+  );
 });
 test('官网真实身份变化时拒绝继续，页面 Session 同样返回真实账号', async (t) => {
   const f = await fixture(t, { install: true });

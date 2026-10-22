@@ -106,6 +106,8 @@ async function confirmSubscription(targetPlan, token, injected = {}) {
     ...(injected.browserContext ? { browserContext: injected.browserContext } : {}),
     ...(injected.page ? { page: injected.page } : {}),
     ...(injected.signal ? { signal: injected.signal } : {}),
+    ...(injected.onHumanVerification ? { onHumanVerification: injected.onHumanVerification } : {}),
+    ...(injected.authDiagnostics ? { authDiagnostics: injected.authDiagnostics } : {}),
     ...(Number.isFinite(injected.deadlineAt) ? { deadlineAt: injected.deadlineAt } : {}),
     ...(injected.sessionRaw ? { sessionRaw: injected.sessionRaw, allowBrowserFallback: true } : {})
   });

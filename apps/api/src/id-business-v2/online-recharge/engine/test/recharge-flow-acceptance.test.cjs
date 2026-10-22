@@ -1488,10 +1488,11 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
           scene === 'unknown' ? 'awaiting_review' : 'succeeded',
           JSON.stringify(safeOutcome)
         );
-        assert.equal(metrics.loginCookieVerified, 1);
+        // Both the installation probe and bootstrap now use real Session HTTP.
+        assert.equal(metrics.loginCookieVerified, 2);
         if (fixtureOptions.authUi) {
           assert.equal(metrics.authUi, fixtureOptions.authUi);
-          assert.equal(metrics.authProbeIdentityResponses, 1);
+          assert.equal(metrics.authProbeIdentityResponses, 2);
           assert.equal(metrics.authRedirectDocuments, 0);
           if (
             ['transient-login', 'chat-guest-recover', 'guest-until-reload'].includes(
@@ -1514,7 +1515,7 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
           }
         }
         if (fixtureOptions.sessionRefresh) {
-          assert.equal(metrics.refreshedAuthResponses, 1);
+          assert.equal(metrics.refreshedAuthResponses, 2);
           assert.equal(metrics.originalBearerRequests, 0);
           assert.equal(metrics.refreshedBearerRequests >= 2, true);
           assert.equal(actual.result.result.confirmation.observedCanonicalPlan, 'pro_20x');

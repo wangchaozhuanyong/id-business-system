@@ -73,6 +73,8 @@ function fixture({ reads, postStatus = 200, postThrows = false, guardThrows = fa
         return { preparePlaywrightProxy: async () => ({ cleanup: async () => {} }) };
       if (name === '../rpc.cjs') return rpc;
       if (name === '../plans.cjs') return require('../plans.cjs');
+      if (name === '../subscription-diagnostics.cjs')
+        return require('../subscription-diagnostics.cjs');
       throw new Error(`Unexpected import: ${name}`);
     },
     process: { env: {} },
@@ -389,6 +391,8 @@ function queryFixture({
           }
         };
       if (name === '../plans.cjs') return require('../plans.cjs');
+      if (name === '../subscription-diagnostics.cjs')
+        return require('../subscription-diagnostics.cjs');
       throw new Error(`Unexpected transport ${name}`);
     }
   });

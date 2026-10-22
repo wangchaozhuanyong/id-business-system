@@ -124,12 +124,19 @@ test('only checkout debug permits an unverified target through the actual index 
         debugOnly,
         context: {},
         page: {},
+        sessionRaw: 'synthetic-session',
+        authDiagnostics: { snapshot: () => ({}) },
         taskSignal: () => new AbortController().signal,
         require: (moduleName) => {
+          if (moduleName === '../human-verification.cjs')
+            return { waitForHumanVerification: async () => ({ completed: true }) };
           assert.equal(moduleName, '../confirmation.cjs');
           return {
             resolvePaymentCurrency: require('../confirmation.cjs').resolvePaymentCurrency,
             preflightPayment: async (target, token, options) => {
+              assert.equal(options.sessionRaw, 'synthetic-session');
+              assert.equal(typeof options.authDiagnostics.snapshot, 'function');
+              assert.equal(typeof options.onHumanVerification, 'function');
               calls.push({ target, token, allowUnverifiedTarget: options.allowUnverifiedTarget });
               return {
                 allowed: debugOnly,
