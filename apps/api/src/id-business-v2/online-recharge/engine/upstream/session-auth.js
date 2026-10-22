@@ -712,32 +712,8 @@ async function installChatGptSession(context, sessionRaw) {
             localStorage.setItem('oai/apps/chat/bootstrap-session', sessionStr);
         } catch (_) { /* ignore */ }
 
-        const originalFetch = window.fetch.bind(window);
-        window.fetch = async function patchedFetch(input, init) {
-            const raw = input && typeof input.url === 'string' ? input.url : String(input);
-            let url;
-            try { url = new URL(raw, window.location.href); } catch (_) { return originalFetch(input, init); }
-            if (!officialUrl(url.href) || !['/api/auth/session', '/api/auth/csrf'].includes(url.pathname)) {
-                return originalFetch(input, init);
-            }
-            // Preserve native validation (including GET bodies) and cancellation
-            // before returning the read-only compatibility response.
-            const request = new Request(input, init);
-            if (request.method !== 'GET' || request.signal.aborted) return originalFetch(request);
-            if (url.pathname === '/api/auth/session') {
-                return new Response(sessionStr, {
-                    status: 200,
-                    headers: { 'Content-Type': 'application/json' }
-                });
-            }
-            if (url.pathname === '/api/auth/csrf') {
-                return new Response(JSON.stringify({ csrfToken: 'bootstrap-csrf-token' }), {
-                    status: 200,
-                    headers: { 'Content-Type': 'application/json' }
-                });
-            }
-            return originalFetch(input, init);
-        };
+        // Keep the application's native fetch and server-issued CSRF response.
+        // Session compatibility is handled only by the exact network route below.
     }, sessionData);
 
     await context.route(/\/api\/auth\/session(\?.*)?$/, async (route) => {
@@ -753,19 +729,6 @@ async function installChatGptSession(context, sessionRaw) {
         });
     });
 
-    await context.route(/\/api\/auth\/csrf(\?.*)?$/, async (route) => {
-        if (route.request().method() !== 'GET' || !isOfficialSessionUrl(route.request().url())
-            || new URL(route.request().url()).pathname !== '/api/auth/csrf') {
-            await route.continue();
-            return;
-        }
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({ csrfToken: 'bootstrap-csrf-token' })
-        });
-    });
-
     await context.route('**/*', async (route) => {
         const url = route.request().url();
         const resourceType = route.request().resourceType();
@@ -774,9 +737,9 @@ async function installChatGptSession(context, sessionRaw) {
             return;
         }
         if (route.request().method() === 'GET' && isOfficialSessionUrl(url)
-            && /^\/api\/auth\/(session|csrf)$/.test(new URL(url).pathname)) {
+            && new URL(url).pathname === '/api/auth/session') {
             // This last-registered route runs first. Continue would bypass the
-            // dedicated official Session/CSRF handlers registered above.
+            // dedicated official Session handler registered above.
             await route.fallback();
             return;
         }
