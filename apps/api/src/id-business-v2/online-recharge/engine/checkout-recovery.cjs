@@ -994,7 +994,8 @@ async function reloadOriginalCheckout(page, options = {}) {
   } catch (error) {
     throw haltOriginalReload(
       state,
-      error?.code === 'ORIGINAL_PAYMENT_READ_TIMEOUT'
+      error?.code === 'ORIGINAL_PAYMENT_READ_TIMEOUT' ||
+        (state.reloadStarted && !error?.code && error?.name === 'TimeoutError')
         ? reloadFailure('CHECKOUT_RELOAD_TIMEOUT')
         : !state.guardReady && !error?.code
           ? reloadFailure('CHECKOUT_RELOAD_GUARD_UNAVAILABLE')

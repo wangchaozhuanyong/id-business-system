@@ -16,6 +16,7 @@ import { FieldEncryptionService } from '../../../common/crypto/field-encryption.
 import { id, object, text } from '../validation';
 import { onlineProxyCountry } from '../proxy-input';
 import { runtimePlanRegion } from '../plan-region';
+import { OnlineRechargeHumanVerification } from '../human-verification.service';
 
 export function secureEqual(left: unknown, right: string | undefined) {
   if (typeof left !== 'string' || !right || right.length < 32) return false;
@@ -33,7 +34,8 @@ export class OnlineRechargeWorkerRpcRepository {
     private readonly workers: OnlineRechargeWorkerRepository,
     private readonly settings: OnlineRechargeSettingsService,
     private readonly encryption: FieldEncryptionService,
-    private readonly artifacts: OnlineRechargeArtifactsService
+    private readonly artifacts: OnlineRechargeArtifactsService,
+    private readonly humanVerification: OnlineRechargeHumanVerification
   ) {}
   authorize(token: unknown) {
     if (!secureEqual(token, this.config.get<string>('ONLINE_RECHARGE_WORKER_KEY')))
@@ -59,6 +61,11 @@ export class OnlineRechargeWorkerRpcRepository {
       leaseVersion: Number(input.leaseVersion ?? args.leaseVersion)
     };
     switch (rpc.method) {
+      case 'humanVerificationOpen':
+      case 'humanVerificationPoll':
+      case 'humanVerificationAuthorize':
+      case 'humanVerificationClose':
+        return this.humanVerification.worker(rpc);
       case 'claimJob':
         return this.workers.claim(text(args.workerId ?? input.workerId, '执行器编号', 100));
       case 'heartbeat':

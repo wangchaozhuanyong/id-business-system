@@ -5,6 +5,7 @@ import { OnlineRechargeAdminService } from './admin.service';
 import { OnlineRechargeSettingsService } from './settings.service';
 import { OnlineRechargeArtifactsService } from './artifacts.service';
 import { Query } from '@nestjs/common';
+import { OnlineRechargeHumanVerification } from './human-verification.service';
 
 @Controller('id-business-v2/online-recharge/admin')
 @RequirePermissions('id_business_v2.online_recharge.read')
@@ -12,7 +13,8 @@ export class OnlineRechargeAdminController {
   constructor(
     private readonly service: OnlineRechargeAdminService,
     private readonly settings: OnlineRechargeSettingsService,
-    private readonly artifacts: OnlineRechargeArtifactsService
+    private readonly artifacts: OnlineRechargeArtifactsService,
+    private readonly humanVerification: OnlineRechargeHumanVerification
   ) {}
   @Get('overview') @Header('Cache-Control', 'no-store') overview() {
     return this.service.overview();
@@ -38,6 +40,16 @@ export class OnlineRechargeAdminController {
     @CurrentUser() operator: AuthenticatedUser
   ) {
     return this.service.list(section, query, operator);
+  }
+  @Post('jobs/:id/human-verification')
+  @Header('Cache-Control', 'no-store')
+  @RequirePermissions('id_business_v2.online_recharge.manage')
+  humanVerificationAction(
+    @Param('id') taskId: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.humanVerification.admin(taskId, input, operator);
   }
   @Post(':section/:action')
   @Header('Cache-Control', 'no-store')

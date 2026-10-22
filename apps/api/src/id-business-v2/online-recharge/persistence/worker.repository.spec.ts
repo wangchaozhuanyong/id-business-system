@@ -128,6 +128,34 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
 }
 
 describe('执行器无结果的事务收尾', () => {
+  it('人工验证期间执行器离线，付款前结束原任务并释放预约，不重新领取', async () => {
+    const f = fixture({
+      operation: 'recharge',
+      stage: 'human_verification',
+      codeId: 'synthetic-code',
+      leaseExpiresAt: new Date(Date.now() - 1)
+    });
+    f.tx.onlineRechargeTask.findMany.mockResolvedValue([f.row]);
+    await f.worker.claim('replacement-worker');
+    expect(f.row.status).toBe('failed');
+    expect(f.tx.onlineRechargeCode.updateMany).toHaveBeenCalledWith({
+      where: { id: 'synthetic-code', taskId: f.row.id, status: 'reserved' },
+      data: { status: 'available', taskId: null }
+    });
+  });
+  it('人工验证期间离线仍以数据库付款事实为准，已有提交保持原单待核对', async () => {
+    const f = fixture({
+      operation: 'recharge',
+      stage: 'human_verification',
+      paymentStarted: true,
+      leaseExpiresAt: new Date(Date.now() - 1)
+    });
+    f.tx.onlineRechargeTask.findMany.mockResolvedValue([f.row]);
+    await f.worker.claim('replacement-worker');
+    expect(f.row.status).toBe('awaiting_review');
+    expect(f.tx.onlineRechargeCode.updateMany).not.toHaveBeenCalled();
+    expect(f.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalled();
+  });
   it('租约过期但已有渠道任务编号时保留核对，不能重新领取', async () => {
     const f = fixture({
       operation: 'recharge',

@@ -1,0 +1,136 @@
+name: Online Recharge Human Verification Publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main producer commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: synthetic-fixture-only
+          MYSQL_DATABASE: online_recharge_test_human
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -psynthetic-fixture-only"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify finite publication and counterexamples
+        run: |
+          python3 -B scripts/production-release/online-human-verification-publication.py check
+          python3 -B scripts/production-release/online-human-verification-release.test.py
+      - name: Verify transactions in the disposable runner database
+        env:
+          NODE_ENV: test
+          DATABASE_URL: mysql://root:synthetic-fixture-only@127.0.0.1:3306/online_recharge_test_human
+          ONLINE_RECHARGE_MYSQL_TEST: '1'
+          JWT_SECRET: synthetic-fixture-jwt
+          FIELD_ENCRYPTION_KEY: synthetic-field-encryption-fixture
+          HASH_SECRET: synthetic-blind-index-fixture
+        run: |
+          npm run prisma:mysql:generate
+          npm run build --workspace @apple-business/shared
+          npm run prisma:mysql:migrate:deploy
+          npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge/mysql.integration.spec.ts
+      - name: Configure existing role for authenticated parent observation
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-online-human-verification-observe-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Authenticate source checks and build the finite API and executor projection
+        run: python3 -B scripts/production-release/online-human-verification-publication.py build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-human-verification-native-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-human-verification/bitbrowser-history-artifact.tar.gz
+            .deploy/online-human-verification/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Preserve validation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-human-verification-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/online-human-verification/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-session-name: id-business-v2-online-human-verification-publish-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/online-human-verification-publication.py publish
+      - name: Preserve original publication receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-human-verification-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-human-verification/*.json
+            .deploy/online-human-verification/artifact-notes.md
+          include-hidden-files: true
+          if-no-files-found: warn

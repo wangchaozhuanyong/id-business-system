@@ -20,6 +20,16 @@ vi.mock('@/v2/composables/useV2Query', () => ({
 }));
 import { onlineApi } from './api';
 describe('配置检测与执行器请求合同', () => {
+  it('人工验证通过当前鉴权客户端发送正文，不在地址中放凭证或重建任务', async () => {
+    const signal = new AbortController().signal;
+    await onlineApi.humanVerification('synthetic-task', { action: 'view' }, signal);
+    expect(client.post).toHaveBeenCalledWith(
+      '/id-business-v2/online-recharge/admin/jobs/synthetic-task/human-verification',
+      { action: 'view' },
+      { signal }
+    );
+    expect(client.invalidate).not.toHaveBeenCalled();
+  });
   it('语音事件仅通过原有只读入口取游标，传递取消信号且不失效缓存', async () => {
     const signal = new AbortController().signal;
     await onlineApi.rechargeAnnouncements('baseline', signal);

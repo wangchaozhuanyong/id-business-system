@@ -34,6 +34,7 @@ import { RechargeModule } from '../auto-recharge/public-api';
 import { OnlineRechargeOrderSyncService } from './order-sync.service';
 import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repository';
 import { OnlineRechargeReconciliationService } from './reconciliation.service';
+import { OnlineRechargeHumanVerification } from './human-verification.service';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { OnlineRechargeReconciliationService } from './reconciliation.service';
   ],
   exports: [OnlineRechargeSecurityNotificationService],
   providers: [
+    OnlineRechargeHumanVerification,
     OnlineRechargeVendureIntegration,
     FieldEncryptionService,
     OnlineRechargeRepository,

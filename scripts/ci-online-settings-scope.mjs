@@ -1,3 +1,69 @@
+// Closed human-verification change set: keep API, Admin and ONLINE checks complete.
+export const onlineHumanVerificationPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/OnlineHumanVerification.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/OnlineHumanVerification.vue',
+  'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
+  'apps/admin/src/v2/features/online-recharge/api.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/api.ts',
+  'apps/admin/src/v2/features/online-recharge/labels.ts',
+  'apps/admin/src/v2/features/online-recharge/online-recharge.css',
+  'apps/api/src/id-business-v2/online-recharge/admin.controller.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-recovery.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/human-verification.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/human-verification.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-page-loading.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-load-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
+  'apps/api/src/id-business-v2/online-recharge/human-verification.service.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/human-verification.service.ts',
+  'apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/plan-region.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/proxy-country.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/proxy-tests.spec.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineHumanVerificationControls = Object.freeze([
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  '.github/workflows/online-human-verification-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-human-verification-' + name
+  )
+]);
+export function isOnlineHumanVerificationOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    onlineHumanVerificationPaths
+      .filter((path) => path.startsWith('apps/'))
+      .every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        onlineHumanVerificationPaths.includes(path) ||
+        onlineHumanVerificationControls.includes(path)
+    )
+  );
+}
+export function isOnlineHumanVerificationControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((path) =>
+      path.startsWith('scripts/production-release/online-human-verification-')
+    ) &&
+    paths.every((path) => onlineHumanVerificationControls.includes(path))
+  );
+}
+
 // Finite execution repair: API lease finalization plus the existing ONLINE sidecar.
 export const onlineExecutionRepairPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
@@ -1045,6 +1111,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineHumanVerificationOnly(paths)) return true;
   if (isOnlineExecutionRepairOnly(paths)) return true;
   if (
     isOnlineCheckoutFirstOpenOnly(paths) ||
@@ -1090,6 +1157,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineHumanVerificationControlsOnly(paths)) return true;
   if (isOnlineExecutionRepairControlsOnly(paths)) return true;
   if (isOnlineCheckoutFirstOpenControlsOnly(paths)) return true;
   if (isOnlineCardVisibilityControlsOnly(paths)) return true;
@@ -1118,6 +1186,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  const human = isOnlineHumanVerificationOnly(paths);
+  const humanControls = isOnlineHumanVerificationControlsOnly(paths);
   const execution = isOnlineExecutionRepairOnly(paths);
   const executionControls = isOnlineExecutionRepairControlsOnly(paths);
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
@@ -1196,6 +1266,35 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (human || humanControls)
+      return [
+        [
+          'git',
+          'fetch',
+          '--no-tags',
+          '--no-write-fetch-head',
+          'origin',
+          'd08eefd5aa5c718918953ed60b9e34a67e12f327',
+          '40ad028a5ddc6aedd9f8e43d3dd33907e4c9faad',
+          '327bfbc03bd414ae8328f7f2a875bcc4dcd8998d',
+          'bcd67c4dfe3944aa6c0498699a619395f04ed296',
+          '957afa4e7d9c776b0109bf7f217150fd3c545e04',
+          '5930f71e00d178a867526766e16e9aee14077244'
+        ],
+        ...controls,
+        ['python3', '-B', 'scripts/production-release/online-human-verification-release.test.py'],
+        ...(human
+          ? [
+              'check:admin-ui',
+              'check:v2-ui-language',
+              'check:v2-color-contrast',
+              'check:v2-table-standard',
+              'check:v2-loading-standard',
+              'check:v2-module-architecture',
+              'check:v2-isolation'
+            ].map((name) => npm('run', name))
+          : [])
+      ];
     if (execution || executionControls)
       return [
         // These original review commits are not all reachable from main after squash merges.
@@ -1567,6 +1666,27 @@ export function onlineSettingsCommands(part, paths) {
   if (queryDeadline && part !== 'online-engine')
     throw new Error('Unsupported query deadline check part');
   if (testsOnly && ['api', 'admin'].includes(part)) throw new Error('Unsupported tests-only check');
+  if (human && part === 'api') {
+    const upstream = 'apps/api/src/id-business-v2/online-recharge/engine/upstream';
+    return [
+      npm('run', 'prisma:mysql:generate'),
+      npm('run', 'build', '--workspace', '@apple-business/shared'),
+      npm('run', 'typecheck', '--workspace', '@apple-business/api'),
+      npm('ci', '--prefix', upstream, '--ignore-scripts', '--no-audit', '--no-fund'),
+      ['node', upstream + '/node_modules/playwright/cli.js', 'install', '--with-deps', 'chromium'],
+      npm(
+        'run',
+        'test',
+        '--workspace',
+        '@apple-business/api',
+        '--',
+        'src/id-business-v2/online-recharge',
+        'src/id-business-v2/proxy-pool',
+        'src/id-business-v2/bank-card-pool/shared-bank-card.spec.ts'
+      ),
+      npm('run', 'build', '--workspace', '@apple-business/api')
+    ];
+  }
   const shared = npm('run', 'build', '--workspace', '@apple-business/shared');
   if (sessionPreflight) {
     if (part !== 'admin') throw new Error('Unsupported Session preflight check part');

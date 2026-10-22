@@ -9,6 +9,15 @@ import type {
   PublicTask
 } from './contracts';
 const base = '/id-business-v2/online-recharge';
+export interface HumanVerificationView {
+  available: boolean;
+  generation?: string;
+  deadline?: number;
+  owned?: boolean;
+  busy?: boolean;
+  pending?: boolean;
+  screen?: { frameId: string; image: string; width: number; height: number };
+}
 // 保留原接口路径；公司内部入口统一使用后台身份及会话失效处理。
 function internalRequest<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
   return request<T>(
@@ -18,6 +27,11 @@ function internalRequest<T>(path: string, body?: object, signal?: AbortSignal): 
   );
 }
 export const onlineApi = {
+  humanVerification(id: string, body: object, signal?: AbortSignal) {
+    return request<HumanVerificationView>(
+      http.post(`${base}/admin/jobs/${encodeURIComponent(id)}/human-verification`, body, { signal })
+    );
+  },
   rechargeAnnouncements(cursor: string, signal?: AbortSignal) {
     return request<OnlineRechargeVoicePage>(
       http.get(`${base}/admin/runtime-logs`, { params: { voiceCursor: cursor }, signal })

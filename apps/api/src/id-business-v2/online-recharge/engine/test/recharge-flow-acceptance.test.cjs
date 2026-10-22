@@ -70,6 +70,13 @@ function strictRpcFixture(task) {
     assert.equal(args.leaseId, task.leaseId);
     assert.equal(args.leaseVersion, task.leaseVersion);
     switch (method) {
+      case 'humanVerificationOpen':
+        return { generation: 'synthetic-manual-generation' };
+      case 'humanVerificationClose':
+        return { stopped: true };
+      case 'progress':
+        assert.equal(args.stage, 'human_verification');
+        return { ok: true };
       case 'getRuntimeConfig':
         return {
           checkoutMode: 'api',
@@ -1658,7 +1665,7 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
     ['visible-login', 'SESSION_NOT_CONFIRMED'],
     ['login-redirect', 'SESSION_NOT_CONFIRMED'],
     ['unconfirmed', 'SESSION_NOT_CONFIRMED'],
-    ['challenge', 'VERIFICATION_TIMEOUT'],
+    ['challenge', 'HUMAN_VERIFICATION_REQUIRED'],
     ['permanent-guest', 'SESSION_NOT_CONFIRMED'],
     ['late-guest', 'SESSION_NOT_CONFIRMED']
   ])

@@ -243,6 +243,33 @@ test('the only reload uses a navigation timeout capped at ten seconds inside the
   assert.deepEqual(calls, [{ waitUntil: 'domcontentloaded', timeout: 10000 }]);
 });
 
+for (const [name, expected] of [
+  ['TimeoutError', 'CHECKOUT_RELOAD_TIMEOUT'],
+  ['Error', 'CHECKOUT_RELOAD_FAILED']
+]) {
+  test(`native reload ${name} keeps its exact failure and deny-write protection`, async (t) => {
+    const f = await fixture(t);
+    f.page.reload = async () => {
+      throw Object.assign(new Error('SYNTHETIC_PRIVATE_NATIVE_RELOAD'), { name });
+    };
+    await assert.rejects(
+      recovery.reloadOriginalCheckout(f.page, scope({ deadlineAt: performance.now() + 60000 })),
+      (error) => {
+        assert.equal(error.code, expected);
+        assert.doesNotMatch(error.message, /SYNTHETIC_PRIVATE/);
+        return true;
+      }
+    );
+    assert.equal(f.loads(), 1);
+    assert.equal(recovery.originalCheckoutReloadDiagnostics(f.page).reloadAttempts, 1);
+    await attemptWrites(f.page, writes(f.checkoutId));
+    assert.equal(acceptedWrites(f).length, 0);
+    await assert.rejects(recovery.finishOriginalCheckoutReload(f.page, scope()), {
+      code: expected
+    });
+  });
+}
+
 test('the existing native oaics original remains recoverable without inventing an embedded source', async (t) => {
   const f = await fixture(t, { checkoutId: 'oaics_nativeOriginal', source: false });
   await recovery.reloadOriginalCheckout(f.page, scope());

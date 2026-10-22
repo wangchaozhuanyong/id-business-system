@@ -116,21 +116,39 @@ async function fixture(t, body, url = original) {
 }
 
 test('plan, amount, pay button and an unrelated iframe cannot establish card readiness', async (t) => {
-  const { page } = await fixture(
+  let solverCalls = 0;
+  const verification = human(() => solverCalls++);
+  const { page, stats } = await fixture(
     t,
     '<h1>Pro plan</h1><p>Due today PHP 9990</p><button>Pay</button><iframe srcdoc="<input type=email>"></iframe>'
   );
-  assert.equal(await human().isCheckoutPaymentReady(page), false);
-  const result = await human().clearHumanVerification(page, {
+  assert.equal(await verification.isCheckoutPaymentReady(page), false);
+  const expired = await form.inspectCardReadiness(page, { deadline: Date.now() - 1 });
+  assert.equal(expired.ready, false);
+  assert.equal(expired.code, 'CHECKOUT_FORM_TIMEOUT');
+  assert.equal(expired.inspection.timedOut, true);
+  assert.equal(expired.inspection.complete, false);
+  const result = await verification.clearHumanVerification(page, {
     requireCheckoutReady: true,
     checkoutReadyWaitMs: 1200,
     maxWaitMs: 4000,
     isSubmitted: () => false
   });
+  assert.equal(result.cleared, false);
   assert.equal(result.checkoutNotReady, true);
   assert.equal(result.captchaRequired, false);
-  assert.equal(result.code, 'CHECKOUT_FORM_NOT_READY');
-  assert.equal(result.diagnostics.inspection.complete, true);
+  // A late CDP scan may consume the short readiness deadline. It must report
+  // an incomplete timeout, never imply that the unrelated frame proved ready.
+  if (result.code === 'CHECKOUT_FORM_TIMEOUT') {
+    assert.equal(result.diagnostics.inspection.timedOut, true);
+    assert.equal(result.diagnostics.inspection.complete, false);
+  } else {
+    assert.equal(result.code, 'CHECKOUT_FORM_NOT_READY');
+    assert.equal(result.diagnostics.inspection.complete, true);
+  }
+  assert.equal(solverCalls, 0);
+  assert.equal(stats.documents, 1);
+  assert.equal(stats.writes, 0);
 });
 
 test('hidden failure template does not block a usable number field or require later card fields upfront', async (t) => {

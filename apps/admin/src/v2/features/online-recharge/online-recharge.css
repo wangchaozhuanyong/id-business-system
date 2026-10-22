@@ -137,3 +137,22 @@
     padding: var(--v2-layout-control-gap);
   }
 }
+.online-verification-screen {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.online-result .online-verification-screen img {
+  width: auto;
+  max-height: none;
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.online-verification-screen:disabled {
+  cursor: wait;
+}

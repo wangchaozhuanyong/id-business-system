@@ -1,3 +1,9 @@
+import {
+  onlineHumanVerificationPaths,
+  onlineHumanVerificationControls,
+  isOnlineHumanVerificationOnly,
+  isOnlineHumanVerificationControlsOnly
+} from './ci-online-settings-scope.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -2965,4 +2971,62 @@ test('execution repair selects API and complete sidecar regression without Admin
     );
   }
   assert.equal(isOnlineExecutionRepairOnly([...paths, paths[0]]), false);
+});
+
+test('human verification keeps its complete finite API/Admin/ONLINE scope', () => {
+  const paths = [...onlineHumanVerificationPaths, ...onlineHumanVerificationControls];
+  assert.equal(isOnlineHumanVerificationOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const path of onlineHumanVerificationPaths.filter((path) => path.startsWith('apps/')))
+    assert.equal(isOnlineHumanVerificationOnly(paths.filter((item) => item !== path)), false, path);
+  for (const extra of [
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/features/orders/View.vue',
+    'apps/api/prisma-mysql/schema.prisma'
+  ])
+    assert.equal(isOnlineHumanVerificationOnly([...paths, extra]), false, extra);
+  assert.equal(isOnlineHumanVerificationOnly([...paths, paths[0]]), false);
+});
+test('human verification publication-only paths retain control checks', () => {
+  assert.equal(isOnlineHumanVerificationControlsOnly(onlineHumanVerificationControls), true);
+  const commands = onlineSettingsCommands('guards', onlineHumanVerificationControls);
+  assert.ok(
+    commands.some((row) =>
+      row.includes('scripts/production-release/online-human-verification-release.test.py')
+    )
+  );
+});
+test('human verification never omits UI, API browser, or engine guards', () => {
+  const paths = [...onlineHumanVerificationPaths, ...onlineHumanVerificationControls];
+  const guards = onlineSettingsCommands('guards', paths);
+  assert.deepEqual(guards[0].slice(0, 5), [
+    'git',
+    'fetch',
+    '--no-tags',
+    '--no-write-fetch-head',
+    'origin'
+  ]);
+  assert.equal(guards[0].length, 11);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(
+      guards.some((row) => row.includes(name)),
+      name
+    );
+  const api = onlineSettingsCommands('api', paths);
+  assert.ok(api.some((row) => row.includes('install') && row.includes('chromium')));
+  assert.ok(api.some((row) => row.includes('src/id-business-v2/online-recharge')));
+  const admin = onlineSettingsCommands('admin', paths);
+  assert.ok(admin.some((row) => row.includes('src/v2/features/online-recharge')));
+  const engine = onlineSettingsCommands('online-engine', paths);
+  assert.ok(engine.some((row) => row.includes('test:online-recharge:engine')));
 });

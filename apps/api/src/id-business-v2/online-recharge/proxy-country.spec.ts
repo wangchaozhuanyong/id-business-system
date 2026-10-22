@@ -63,6 +63,7 @@ function rpcFixture(
     { withLease: vi.fn((_rpc, work) => work(tx, row)) } as never,
     settings as never,
     encryption as never,
+    {} as never,
     {} as never
   );
   return {

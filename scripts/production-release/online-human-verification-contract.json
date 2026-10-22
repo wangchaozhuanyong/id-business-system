@@ -1,0 +1,392 @@
+{
+  "version": 1,
+  "status": "FROZEN",
+  "scope": "ONLINE_HUMAN_VERIFICATION_20261022",
+  "recipe": "online-human-verification-20261022",
+  "expectedCurrent": "f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b",
+  "sourceReviewCommit": "df0e604794b3068d78ab310ed7dbb4b2469be083",
+  "sourcePullRequest": 676,
+  "productionSources": {
+    "apps/admin/src/v2/features/online-recharge/OnlineHumanVerification.vue": "9276195441ee6ecd02f154efe366bfc494d6a9d5244992639a0c9befb2b6d9dd",
+    "apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue": "4a516ee78b0aff7d1b01700077f6f10a0e19a22b14699db4fbcb903ef9c49d26",
+    "apps/admin/src/v2/features/online-recharge/api.ts": "ad29f3e7220d87b0ae0221f2a6b187a99b69c41bf506a553410ebbddc4b57cf0",
+    "apps/admin/src/v2/features/online-recharge/labels.ts": "f54fffe34b156c92e29875558ddca622bcf5a73e0565baaabdafdb8ca7a89b89",
+    "apps/admin/src/v2/features/online-recharge/online-recharge.css": "4f28bb690eb5e8c0db9a48e8861a1d4896e2f5262e4dc0807907b11077f6eedd",
+    "apps/api/src/id-business-v2/online-recharge/admin.controller.ts": "e4e818d737d848d2d817fe49eb6a119c56c73f09ddde3c9480e1f60d20534485",
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "0b7a1788d63a663fb2918dc6880ea70b9eea7212b65f7c784f8d00ad344d030f",
+    "apps/api/src/id-business-v2/online-recharge/engine/checkout-recovery.cjs": "80973a168da05b76255ba543e29b551d008e5aa0549cd2f6cf21e9c31052bf0f",
+    "apps/api/src/id-business-v2/online-recharge/engine/human-verification.cjs": "9a731f145038bd2d56cfe9b6c59b15087c924c448dca297fdca0386a412b09b6",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-load-recovery.test.cjs": "2e9306203640de5de8c473cf7a019b04a4d04b5690f1f68e4127d14356c8ce6c",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs": "fe222e6300fb743ec3d2a03e0a7661493b9650183a41c6c42f2126fc2110c600",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-page-loading.test.cjs": "74ce6134be94adb45a02cbe665567735dede5bcf0f768258f316ce9bc94c7b88",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/human-verification.test.cjs": "24830533e1155596f871e1da433b4d55af691321dded7c1fc54436796bbe0f2e",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs": "fe77ea72a22df22830c6ed156ef2b0d95579907ce960879cc2cf883113a51dac",
+    "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "cda7479b0fd8cf6e24b2f0755264fbbb86b16487be7432f8fed0642d3d314bf7",
+    "apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js": "ae1b427aec38630546fdf8c54f6ec2804c1812c154b9a4f4b476024d5f0ed8ed",
+    "apps/api/src/id-business-v2/online-recharge/human-verification.service.ts": "026889b95930a123fc9e07640795925612c5059c086ef613afca418bc1f307d3",
+    "apps/api/src/id-business-v2/online-recharge/online-recharge.module.ts": "43a959b19a6dbbdfa65d2f1621729978a99bbdd5f8fa74e7036e392f72b9b241",
+    "apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.ts": "af7d46ea2c04254ff70e4a2923c4f57b3dbcccd650b12f3dbf7f379a7a98f9ea",
+    "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts": "0451fe29291a2022a98d442b6ed4b3b3f645893d567750d759e2e1c56671d979"
+  },
+  "validationSources": {
+    "apps/admin/src/v2/features/online-recharge/OnlineHumanVerification.spec.ts": "a2865d942ab40fe422944db360ab52b2d7d351061347bce607a30571f6b2de0b",
+    "apps/admin/src/v2/features/online-recharge/api.spec.ts": "4599995b246c2682ac5fd50f62e63f12f3f2431f3d6eb9f98ad849035cbf9bd6",
+    "apps/api/src/id-business-v2/online-recharge/human-verification.service.spec.ts": "9b8876329216d5bf62096cca749f90e6239d0a333cd951f121bea91ac95bc670",
+    "apps/api/src/id-business-v2/online-recharge/local-chain-acceptance.spec.ts": "3646d471eddd12cc0407281d6e7789cca6e1dac61915ed487cdd2f4a04993727",
+    "apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.spec.ts": "9d830cf7162170e5cae993b807c9b28d845906fca447dfdb1dcdb6ea3d737497",
+    "apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts": "4ea43cd4cb1c6be257312f5a8fe8ceacd60ed8d8e0c5b0a0df8587f6ab07ed2b",
+    "apps/api/src/id-business-v2/online-recharge/plan-region.spec.ts": "fd2069405283bffea97e16f91ee03e5e565f2eb8cb1c55be6d5cd04f52b23337",
+    "apps/api/src/id-business-v2/online-recharge/proxy-country.spec.ts": "8ab36185863ad17a7b64d637080fa21253649de900628e32ddf3ce5cee085e63",
+    "apps/api/src/id-business-v2/online-recharge/proxy-tests.spec.ts": "b51848799cf8696cfc0b8a4d59faafa1723b6aa84ab0a4c990af774bd7a24739",
+    "docs/ONLINE_RECHARGE.md": "c8071b981d7f3fcaf38e56b6ed200ea55a695738600e9287df55693c54f10eb9",
+    "docs/V2_TASKS.md": "5d3f83027146fa52e72d31c11635f5be2f6740ce36c622b09ce8837cb444b34a"
+  },
+  "parentPlan": {
+    "artifactSha256": "34915d22c3718832611275df3900a99f70baf65d7bbf79d9b5694d46267aa9c4",
+    "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/bitbrowser-history-f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b/bitbrowser-history-artifact.tar.gz",
+    "buildProofSha256": "ceb809fb43fd5872755f9af738d0932711b2f30e67336eee7c18078b7d00cc32",
+    "commit": "f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b",
+    "contractSha256": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
+    "controlSources": {
+      "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+      "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",
+      "bitbrowser-billing-contract.json": "f5c6dc533372c9972d3421a1d05140d9ee7c1caf8cfdcca0a560ab4a89a87a8b",
+      "bitbrowser-billing-release.py": "5599578f3f795d8d010dbddcd60e320cac0b3735aa7169f3b735109f84549c87",
+      "bitbrowser-bounded-hold-contract.json": "05f33acdd6658e9094712c750803521d66f5dcc8125f68b2a1c8ecd3a60ac2d3",
+      "bitbrowser-entry-start-contract.json": "a7b87f7d009cf223fc9d92603b34caa8aea6d5609d462efbd21c24dda4f9f850",
+      "bitbrowser-existing-address-contract.json": "61b090c8ac0b83ce13f713a62804666c92c22304fe4ea9442b6ccc29b441803c",
+      "bitbrowser-followup-contract.json": "f79066e8b1347366df4ef90243cb55498e10b10898d2be9c952dd4efbced5881",
+      "bitbrowser-history-build.py": "4fc0c3585f3d3bdce23bfb360cc9a925e8a9d100d10f82721ab0a06428adc733",
+      "bitbrowser-history-contract.json": "7b0adc46b435e4e1824c6c142d1948168aa38ebc010a8e81f071abb077b0dc91",
+      "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
+      "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
+      "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
+      "bitbrowser-manual-contract.json": "f1751cb97b5ede81504e06de047f72ea32d3ff1eb16ebf1f156eb7a468188c20",
+      "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
+      "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
+      "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
+      "financial-closure-contract.json": "6cc7596811b5b907f13da51d62c920651c5e1389c5b58ed053308362b863b529",
+      "financial-closure-parent-proof.json": "382769a914c11543b217cc6b5c6efbd7abc72df402297b55baed55001a2ce619",
+      "financial-closure-publication.py": "8774a602a6d81fc9784478f2cd6deb6cb1d622d94bc2f6b9ea3b8bbffe2f2474",
+      "financial-closure-readonly.py": "1c1671c48bef5c2ea37a28aa99590781d465157b12833a2ea658d2cc91a13cc0",
+      "financial-closure-readonly.test.py": "44e4e901b5c331a86377f8c9fefcd65a82e3f87126b55c1cb77d2114bfd1a1df",
+      "financial-closure-release.py": "3ae45d6905cc99319cbeb490c32d9d546f27509dac0a80a5ed8a710d8c5f1eef",
+      "financial-closure-release.test.py": "d14b74df290dc9b02751d6445ffdb4ce0398b1f358b045d3a36ce025474fc1ad",
+      "online-checkout-first-open-contract.json": "463aa84d7d9da3b7df6a726b8bef4d4cc771d42a0ff67064acc5d9cdf0aa61f1",
+      "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
+      "online-execution-publication.py": "d78ac85bae2c7862cd118717a398da4200997aa11baadea9401d796d07a62e5d",
+      "online-execution-release.py": "2d0da97adbd0472d8b29a66408968f872494a4de6197bbe2dc961f78db116ee7",
+      "online-pending-features-contract.json": "b297597b6c0daab42e51cc01e163621f0c875d264dd3e611374c89388ba3e651",
+      "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
+      "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
+      "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
+      "online-session-preflight-contract.json": "8eba3fd2d53936c084146f57883e06a9c93a049da28834fd75a884be075e8b83",
+      "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
+      "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
+      "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
+      "recharge-record-build.py": "071696a021aa0956c626891b48c207cd68b68d6a4701254e715766cd0d6ec122",
+      "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+      "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
+      "settled-checkout-contract.json": "1cb35e7d428487fcba8f804f888512dbbaf76d445e6afdba0c6aec03b4769fb3",
+      "settled-checkout-publication.py": "63c902b0ef12282a50a671a9cf5a47718fecb32fa7185b6ef53753e6137c7403",
+      "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260"
+    },
+    "nativeParentCapture": {
+      "baseline": {
+        "adminInventory": {
+          "count": 5175,
+          "sha256": "0102ccc7c6a5caa527e249d3420e1376443335ac9015b02ea0fb85562bb3d14d"
+        },
+        "apiModules": {
+          "id-business-v2/online-recharge/persistence/worker.repository.d.ts": "37bd54208430a2c090e8bafd99f352cac7dfceb0d9ec83998f666dd812109246",
+          "id-business-v2/online-recharge/persistence/worker.repository.js": "352e01695c405110824ca0f78dd3a9160ca3fe83c4d2a85de65b149e2e235397",
+          "id-business-v2/online-recharge/persistence/worker.repository.js.map": "84209f5d94bac9f595c33d3cdc3e4a0b88416c55f70063513dc6a907e617dac9"
+        },
+        "apiPreservedInventory": {
+          "count": 1791,
+          "sha256": "c4f69af30ce4afa64e50bf87bfe5350ea19d4307c3e39141b90c60674d419c4f"
+        },
+        "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+        "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
+        "clientInventory": {
+          "count": 27,
+          "sha256": "46cebf0e0e3bc37a0d49570c56d8f3cb08d2237aa525161665afef7fd5b60cdc"
+        },
+        "commit": "d7d80c357c4954ef28db85e1021a0e19a65ebd81",
+        "configurationSha256": {
+          ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
+          "compose.release.json": "43380e8f0e62d871409a2351cbb068506d95c287cd93c484f9e018042f0c32a3",
+          "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
+        },
+        "current": "/opt/id-business-v2/releases/20261021T130103Z-d7d80c357c49-bitbrowser-history",
+        "database": {
+          "columns": "91821bb43685e53ce37e5434e5f3d0936d518b2905590580d3e887d74d6060b6",
+          "ledger": "c1cc90e85efac2c9c9ef4c55f9090d3ae2fa4ef79ca2ca3e6292ce03e24a83cb",
+          "pending": 0
+        },
+        "manifestSha256": "0f9499ec2c906bd1ef7e7b40f4f1a135f025d642e46de052a95603aaab146a8c",
+        "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
+        "proofs": {
+          "bitbrowser-history-build-proof.json": "9c436cd452cacc54e96964830acceb56f816539147acf766fe7ce866211eda55"
+        },
+        "runtimeConfigurationSha256": {
+          "admin": "8e6f51e912ad90182b3ca4d61888042e0c3d818be1e519accec1ac3367efd521",
+          "api": "36250405495459e6fbf8fb67e7b9381ff4d6b02a3a9c6be8cc037ed5c3a3a35b",
+          "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
+          "caddy": "6d690fc9c6632e8efce0940d26f529ccbbcd1da892931112043491983c8c0df1",
+          "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
+          "mysql": "7c4fc6fea1da1bd857bb2ab0a13486a0d09332f242b38bda895340d4526248bc",
+          "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
+        },
+        "services": {
+          "admin": {
+            "containerId": "041bd352d8c73298dd2cc4b74c374b6addaa5f7b2945b7801208e162481ccb28",
+            "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+            "health": "healthy",
+            "image": "sha256:6c3e918053389a19eec502f4ec73d9cd91f3693703fe16949af7a03054730dc3",
+            "reference": "id-business-v2-history:d7d80c357c4954ef28db85e1021a0e19a65ebd81-39603988497-admin",
+            "startedAtSha256": "d08c3e421b6169ae019148c00d48f84f1424449590331e14c1b4501358252e18",
+            "status": "running"
+          },
+          "api": {
+            "containerId": "41cbfce2cac910c0c30c8c9016fbd428687727c3885132972c0c00eccd826ffd",
+            "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
+            "health": "healthy",
+            "image": "sha256:57d0481f4f3bbfd85e3029f37abe7a5a91d5be9c021ae700af00e3b80673c73a",
+            "reference": "id-business-v2-history:a1fc8e6ead6babc0b51cc2d923d1f0ff0b2deb8a-39567325778-api",
+            "startedAtSha256": "c1b7ef41955ae104893b9d74a1f52d13ada36d4c7acac569c50a0a2a5842f394",
+            "status": "running"
+          },
+          "auto-recharge": {
+            "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+            "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+            "health": "healthy",
+            "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+            "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+            "startedAtSha256": "2e93090ec44036fb777194c57eea84f9503a39ca73a06c38a748f5dd6b54b0b7",
+            "status": "running"
+          },
+          "caddy": {
+            "containerId": "c9a03e8ade2f9fa42fed7881cac7e75d1d0bd01dd9f213123039ce740bb61a3e",
+            "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+            "health": null,
+            "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+            "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+            "startedAtSha256": "5d470338c493fcfd7497483b1b0a89df18192ee4f24cba90c9f9ac38307ca747",
+            "status": "running"
+          },
+          "media-resolver": {
+            "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+            "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+            "health": "healthy",
+            "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+            "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+            "startedAtSha256": "decd8646d9eae7910ed3789d7ae990a13202da1df6c171a10ace75ca43f9ea6f",
+            "status": "running"
+          },
+          "mysql": {
+            "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+            "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+            "health": "healthy",
+            "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+            "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+            "startedAtSha256": "fadf08a3cf1878d9e477f0d1f3f262a12bebdb3d2869429eaac92e5e4418c988",
+            "status": "running"
+          },
+          "online-recharge": {
+            "containerId": "54bf1984275effa1b2cff60556430cc34098677310a6c2c33595ddf59d2d2b95",
+            "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
+            "health": "healthy",
+            "image": "sha256:bb51a69417d3bbc08c99d4648088e4469e83b064d5742783a6f9a004406a7797",
+            "reference": "id-business-v2-online-checkout-first-open:5275824b2400f965b3ba9604155c18d3a7bcd5e4-39571161930",
+            "startedAtSha256": "056ef048cc4f8469c5249133ea0bf305d8225081ddf79207ef093ee58e303dd4",
+            "status": "running"
+          }
+        },
+        "sharedInventory": {
+          "count": 36,
+          "sha256": "2026bd16905ed256440c736da6b821ed022097178786bf67dba52b8356ca8712"
+        }
+      },
+      "businessActions": 0,
+      "commit": "d7d80c357c4954ef28db85e1021a0e19a65ebd81",
+      "parentProofSha256": "9c436cd452cacc54e96964830acceb56f816539147acf766fe7ce866211eda55",
+      "status": "ONLINE_EXECUTION_PARENT_VERIFIED"
+    },
+    "qualityVerification": {
+      "controls": {
+        "commit": "ad0e6560d903a3045a9f8c84fa5ad064763d5066",
+        "pullRequest": 675,
+        "runAttempt": "1",
+        "runId": "39725811392",
+        "sourceReceiptSha256": "49bad51923edf86d7d7412579b265fb0978c2cbd8227786feebd7d23be6b30e0"
+      },
+      "release": {
+        "commit": "f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b",
+        "runAttempt": "1",
+        "runId": "39726037879"
+      },
+      "sources": {
+        "commit": "c9c6d3f6b744b55101ae15cd95975359740c7ead",
+        "pullRequest": 673,
+        "runAttempt": "1",
+        "runId": "39722667668",
+        "sourceReceiptSha256": "74c16170cd65b5a25ad394efe0c649dcf1b7317a886535e1dc74277ea7f2ff54"
+      }
+    },
+    "recipe": "online-execution-20261022",
+    "runtimeBaseline": {
+      "configurationSha256": {
+        ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
+        "compose.release.json": "43380e8f0e62d871409a2351cbb068506d95c287cd93c484f9e018042f0c32a3",
+        "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
+      },
+      "current": "/opt/id-business-v2/releases/20261021T130103Z-d7d80c357c49-bitbrowser-history",
+      "manifestSha256": "0f9499ec2c906bd1ef7e7b40f4f1a135f025d642e46de052a95603aaab146a8c",
+      "services": {
+        "admin": {
+          "containerId": "041bd352d8c73298dd2cc4b74c374b6addaa5f7b2945b7801208e162481ccb28",
+          "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+          "health": "healthy",
+          "image": "sha256:6c3e918053389a19eec502f4ec73d9cd91f3693703fe16949af7a03054730dc3",
+          "reference": "id-business-v2-history:d7d80c357c4954ef28db85e1021a0e19a65ebd81-39603988497-admin",
+          "startedAtSha256": "d08c3e421b6169ae019148c00d48f84f1424449590331e14c1b4501358252e18",
+          "status": "running"
+        },
+        "api": {
+          "containerId": "41cbfce2cac910c0c30c8c9016fbd428687727c3885132972c0c00eccd826ffd",
+          "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
+          "health": "healthy",
+          "image": "sha256:57d0481f4f3bbfd85e3029f37abe7a5a91d5be9c021ae700af00e3b80673c73a",
+          "reference": "id-business-v2-history:a1fc8e6ead6babc0b51cc2d923d1f0ff0b2deb8a-39567325778-api",
+          "startedAtSha256": "c1b7ef41955ae104893b9d74a1f52d13ada36d4c7acac569c50a0a2a5842f394",
+          "status": "running"
+        },
+        "auto-recharge": {
+          "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+          "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+          "health": "healthy",
+          "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+          "startedAtSha256": "2e93090ec44036fb777194c57eea84f9503a39ca73a06c38a748f5dd6b54b0b7",
+          "status": "running"
+        },
+        "caddy": {
+          "containerId": "c9a03e8ade2f9fa42fed7881cac7e75d1d0bd01dd9f213123039ce740bb61a3e",
+          "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+          "health": null,
+          "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+          "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+          "startedAtSha256": "5d470338c493fcfd7497483b1b0a89df18192ee4f24cba90c9f9ac38307ca747",
+          "status": "running"
+        },
+        "media-resolver": {
+          "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+          "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+          "health": "healthy",
+          "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+          "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+          "startedAtSha256": "decd8646d9eae7910ed3789d7ae990a13202da1df6c171a10ace75ca43f9ea6f",
+          "status": "running"
+        },
+        "mysql": {
+          "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+          "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+          "health": "healthy",
+          "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+          "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+          "startedAtSha256": "fadf08a3cf1878d9e477f0d1f3f262a12bebdb3d2869429eaac92e5e4418c988",
+          "status": "running"
+        },
+        "online-recharge": {
+          "containerId": "54bf1984275effa1b2cff60556430cc34098677310a6c2c33595ddf59d2d2b95",
+          "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
+          "health": "healthy",
+          "image": "sha256:bb51a69417d3bbc08c99d4648088e4469e83b064d5742783a6f9a004406a7797",
+          "reference": "id-business-v2-online-checkout-first-open:5275824b2400f965b3ba9604155c18d3a7bcd5e4-39571161930",
+          "startedAtSha256": "056ef048cc4f8469c5249133ea0bf305d8225081ddf79207ef093ee58e303dd4",
+          "status": "running"
+        }
+      }
+    },
+    "tree": "18f1b1f4f2b62518493ea7f17e721abcd23dec3d",
+    "workflowRunAttempt": "1",
+    "workflowRunId": "39726132608"
+  },
+  "controlPins": {
+    "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+    "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",
+    "bitbrowser-billing-contract.json": "f5c6dc533372c9972d3421a1d05140d9ee7c1caf8cfdcca0a560ab4a89a87a8b",
+    "bitbrowser-billing-release.py": "5599578f3f795d8d010dbddcd60e320cac0b3735aa7169f3b735109f84549c87",
+    "bitbrowser-bounded-hold-contract.json": "05f33acdd6658e9094712c750803521d66f5dcc8125f68b2a1c8ecd3a60ac2d3",
+    "bitbrowser-entry-start-contract.json": "a7b87f7d009cf223fc9d92603b34caa8aea6d5609d462efbd21c24dda4f9f850",
+    "bitbrowser-existing-address-contract.json": "61b090c8ac0b83ce13f713a62804666c92c22304fe4ea9442b6ccc29b441803c",
+    "bitbrowser-followup-contract.json": "f79066e8b1347366df4ef90243cb55498e10b10898d2be9c952dd4efbced5881",
+    "bitbrowser-history-build.py": "4fc0c3585f3d3bdce23bfb360cc9a925e8a9d100d10f82721ab0a06428adc733",
+    "bitbrowser-history-contract.json": "7b0adc46b435e4e1824c6c142d1948168aa38ebc010a8e81f071abb077b0dc91",
+    "bitbrowser-history-dispatch.py": "e0c257201abcb57ce6b997d5970ce566b17f3ca8bc9af365253aac1a1b514879",
+    "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
+    "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
+    "bitbrowser-manual-contract.json": "f1751cb97b5ede81504e06de047f72ea32d3ff1eb16ebf1f156eb7a468188c20",
+    "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
+    "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
+    "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
+    "financial-closure-contract.json": "6cc7596811b5b907f13da51d62c920651c5e1389c5b58ed053308362b863b529",
+    "financial-closure-parent-proof.json": "382769a914c11543b217cc6b5c6efbd7abc72df402297b55baed55001a2ce619",
+    "financial-closure-publication.py": "8774a602a6d81fc9784478f2cd6deb6cb1d622d94bc2f6b9ea3b8bbffe2f2474",
+    "financial-closure-readonly.py": "1c1671c48bef5c2ea37a28aa99590781d465157b12833a2ea658d2cc91a13cc0",
+    "financial-closure-readonly.test.py": "44e4e901b5c331a86377f8c9fefcd65a82e3f87126b55c1cb77d2114bfd1a1df",
+    "financial-closure-release.py": "3ae45d6905cc99319cbeb490c32d9d546f27509dac0a80a5ed8a710d8c5f1eef",
+    "financial-closure-release.test.py": "d14b74df290dc9b02751d6445ffdb4ce0398b1f358b045d3a36ce025474fc1ad",
+    "online-checkout-first-open-contract.json": "463aa84d7d9da3b7df6a726b8bef4d4cc771d42a0ff67064acc5d9cdf0aa61f1",
+    "online-execution-publication.py": "d78ac85bae2c7862cd118717a398da4200997aa11baadea9401d796d07a62e5d",
+    "online-execution-release.py": "2d0da97adbd0472d8b29a66408968f872494a4de6197bbe2dc961f78db116ee7",
+    "online-pending-features-contract.json": "b297597b6c0daab42e51cc01e163621f0c875d264dd3e611374c89388ba3e651",
+    "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
+    "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
+    "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
+    "online-session-preflight-contract.json": "8eba3fd2d53936c084146f57883e06a9c93a049da28834fd75a884be075e8b83",
+    "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
+    "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
+    "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
+    "recharge-record-build.py": "071696a021aa0956c626891b48c207cd68b68d6a4701254e715766cd0d6ec122",
+    "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+    "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
+    "settled-checkout-contract.json": "1cb35e7d428487fcba8f804f888512dbbaf76d445e6afdba0c6aec03b4769fb3",
+    "settled-checkout-publication.py": "63c902b0ef12282a50a671a9cf5a47718fecb32fa7185b6ef53753e6137c7403",
+    "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260",
+    "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
+    "online-human-verification-release.py": "11cf6b5e622a14d0a08301e1561b5a33a4a12bf6682b408cb6a9129256a43294",
+    "online-human-verification-publication.py": "f0e230283b14288111df754669a879ea97838161482ca6e1cb984fb2839a0e18",
+    "online-human-verification-release.test.py": "ed6b7d243e108d4adab5ac86f2cb60e61c651e6a4333523e73bbc3faeaa10a9b"
+  },
+  "updatedServices": ["api", "admin", "online-recharge"],
+  "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
+  "reboundServices": [],
+  "businessActions": 0,
+  "migrationPerformed": false,
+  "packageLockSha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
+  "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+  "engineHealth": {
+    "activeTasks": 0,
+    "mode": "enabled",
+    "ready": true,
+    "rpcConnected": true,
+    "stopping": false
+  },
+  "workflowSha256": "bb9258d937abc640efaf33e1b420a15358b2b3b5d773017d446eaf2b32782217",
+  "nativeParentApiModules": {
+    "id-business-v2/online-recharge/admin.controller.d.ts": "3f2ca4076d8e6f38f772dabd5df11919fe53f8e8858bd8316c7ca7d020d58f42",
+    "id-business-v2/online-recharge/admin.controller.js": "8de8391d8de599d0cda54f13aec08fab0112d476b0e809c485a143288f9f4f58",
+    "id-business-v2/online-recharge/admin.controller.js.map": "1871d835753987704ad4a04387ef307085ee85effef69ea901bf76dc7eebdb4f",
+    "id-business-v2/online-recharge/online-recharge.module.d.ts": "21047089a894ddcddd2f3c3849b4d7589f7316e34b9132d21cf4d434b4bedb80",
+    "id-business-v2/online-recharge/online-recharge.module.js": "30fc4488dff4858122ee96b42767c1f65ffead8b3262c730d9c6e0bb4528fb98",
+    "id-business-v2/online-recharge/online-recharge.module.js.map": "d47b3cb15a7c23aecd8ca43f9aeb2bfd754dc0ecf38245e9f9f5e74da99d842c",
+    "id-business-v2/online-recharge/persistence/worker-rpc.repository.d.ts": "b6fb5ee8e67558afff44f7248f0ace491be8cb69789cfc4f04b1256262adb3cf",
+    "id-business-v2/online-recharge/persistence/worker-rpc.repository.js": "0b9e608ea73d6b3584ed9ebf0792f400775cf676e8d630594e9293b5db316044",
+    "id-business-v2/online-recharge/persistence/worker-rpc.repository.js.map": "e21ede793a1da86610f945017ccbd30179fe66c9a6e28fe35182123d909a3b1b",
+    "id-business-v2/online-recharge/persistence/worker.repository.d.ts": "22bf2373b72952d93c4a7387eadcd5cecd96eb57ce96159e24f49a2aa399d8d2",
+    "id-business-v2/online-recharge/persistence/worker.repository.js": "fd7aaf64c4c3bb880ca78216fe009b1ed4f2b71397a6794ee3dcb831b4e1676f",
+    "id-business-v2/online-recharge/persistence/worker.repository.js.map": "477412b037f1d3df230efd2e05f4e89629f0a19ab6f4cdf75d68e611ef90ed20"
+  }
+}

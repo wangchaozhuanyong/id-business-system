@@ -16,6 +16,16 @@
         :error="tracker.error.value"
         @refresh="tracker.refresh"
       />
+      <OnlineHumanVerification
+        v-if="
+          modelValue &&
+          liveTask?.status === 'running' &&
+          liveTask.stage === 'human_verification' &&
+          canVerify
+        "
+        :key="liveTask.id"
+        :task-id="liveTask.id"
+      />
       <section v-if="orderSync" aria-label="充值订单同步">
         <h3>订单同步</h3>
         <p>
@@ -77,6 +87,8 @@ import { useAuthStore } from '@/stores/auth';
 import { canReadOnlineOrders, canManageOnlineOrders } from './orderPermissions';
 import { onlineChangeEntries, onlineFailureLabel, onlineLabel } from './labels';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
+import OnlineHumanVerification from './OnlineHumanVerification.vue';
+import { canUseOnlineAction } from './permissions';
 import { useOnlineTask } from './useOnlineTask';
 import type { PublicTask } from './contracts';
 const props = defineProps<{ modelValue: boolean; result: unknown }>();
@@ -278,6 +290,7 @@ const orderSync = computed(
 );
 const canReadOrders = computed(() => canReadOnlineOrders(auth.user));
 const canSyncOrder = computed(() => canManageOnlineOrders(auth.user));
+const canVerify = computed(() => canUseOnlineAction(auth.user, 'jobs', 'human-verification'));
 watch(
   () => props.result,
   () => {

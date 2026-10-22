@@ -386,7 +386,8 @@ for (const [labelDelay, hiddenLabels] of [
 }
 
 test('preparation never clicks a separator or submit label to manufacture card readiness', async (t) => {
-  const { stats, start } = await fixture(t, {
+  let stoppedCode;
+  const { page, stats, start } = await fixture(t, {
     readyWaitMs: 700,
     body: `<h1>Configure your plan</h1>
       <form action="/fixture-payment-confirm" method="POST">
@@ -395,9 +396,27 @@ test('preparation never clicks a separator or submit label to manufacture card r
       </form>`
   });
   await assert.rejects(start(), (error) => {
-    assert.equal(error.checkoutOpenDiagnostics.code, 'CHECKOUT_FORM_NOT_READY');
+    // This deliberately short real-browser deadline may expire during a CDP
+    // read on a busy runner. Both controlled stops must retain the same no-write
+    // contract; neither is evidence that a card field became actionable.
+    assert.ok(['CHECKOUT_FORM_NOT_READY', 'CHECKOUT_FORM_TIMEOUT'].includes(error.code));
+    assert.equal(error.checkoutOpenDiagnostics.code, error.code);
+    assert.equal(error.checkoutOpenDiagnostics.stage, 'readiness');
+    assert.equal(
+      error.checkoutOpenDiagnostics.reason,
+      error.code === 'CHECKOUT_FORM_TIMEOUT' ? 'timeout' : 'not_ready'
+    );
+    assert.equal(error.checkoutCreationState, 'accepted');
+    assert.equal(error.originalCheckoutUrl, originalUrl);
+    stoppedCode = error.code;
     return true;
   });
+  if (stoppedCode === 'CHECKOUT_FORM_TIMEOUT') assert.equal(page.isClosed(), true);
+  else {
+    assert.equal(page.isClosed(), false);
+    assert.equal(await human.isCheckoutPaymentReady(page), false);
+  }
+  assert.equal(stats.unrelatedWrites, 0);
   assert.equal(stats.otherWrites, 0);
   stoppedWithoutPayment(stats);
 });

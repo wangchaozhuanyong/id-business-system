@@ -12,6 +12,7 @@ describe('受保护原单恢复 RPC', () => {
       workers as never,
       {} as never,
       {} as never,
+      {} as never,
       {} as never
     );
     return { key, workers, rpc };
