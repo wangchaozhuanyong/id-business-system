@@ -1,3 +1,51 @@
+export const onlineRealSessionPaths = Object.freeze([
+  ...[
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'checkout-initialization.cjs',
+    'checkout-recovery.cjs',
+    'upstream/session-auth.js',
+    'upstream/chatgpt.js',
+    'upstream/index.js',
+    ...[
+      'checkout-cs-browser',
+      'checkout-form',
+      'checkout-initialization',
+      'checkout-recovery',
+      'checkout-reload-request-diagnostics',
+      'human-verification',
+      'regressions',
+      'session-routing-browser'
+    ].map((name) => 'test/' + name + '.test.cjs')
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineRealSessionControls = Object.freeze([
+  '.github/workflows/online-real-session-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-real-session-' + name
+  )
+]);
+export function isOnlineRealSessionOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineRealSessionPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every((p) => onlineRealSessionPaths.includes(p) || onlineRealSessionControls.includes(p))
+  );
+}
+export function isOnlineRealSessionControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-real-session-')) &&
+    paths.every((p) => onlineRealSessionControls.includes(p))
+  );
+}
 // Native fetch repair: four executor files and two documents, with finite release controls.
 export const onlineNativeFetchPaths = Object.freeze([
   ...[
@@ -1148,6 +1196,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineRealSessionOnly(paths)) return true;
   if (isOnlineNativeFetchOnly(paths)) return true;
   if (isOnlineHumanVerificationOnly(paths)) return true;
   if (isOnlineExecutionRepairOnly(paths)) return true;
@@ -1195,6 +1244,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineRealSessionControlsOnly(paths)) return true;
   if (isOnlineNativeFetchControlsOnly(paths)) return true;
   if (isOnlineHumanVerificationControlsOnly(paths)) return true;
   if (isOnlineExecutionRepairControlsOnly(paths)) return true;
@@ -1225,6 +1275,62 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isOnlineRealSessionOnly(paths) || isOnlineRealSessionControlsOnly(paths)) {
+    const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+    if (part === 'guards') {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        previous[0],
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        previous.find((command) => command[0] === 'node'),
+        ['python3', '-B', 'scripts/production-release/online-real-session-release.test.py'],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineRealSessionOnly(paths)) {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      return [
+        ...previous.slice(0, 2),
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          ...[
+            'checkout-form',
+            'checkout-initialization',
+            'checkout-recovery',
+            'checkout-cs-browser',
+            'checkout-load-recovery',
+            'checkout-navigation',
+            'checkout-reload-request-diagnostics',
+            'debug-checkout',
+            'regressions',
+            'human-verification',
+            'session-probe',
+            'upstream-session-transition',
+            'session-routing-browser'
+          ].map((n) => engine + '/test/' + n + '.test.cjs')
+        ],
+        ...['standalone', 'pool'].map((mode) => [
+          'env',
+          'SESSION_ROUTING_BROWSER_MODE=' + mode,
+          'node',
+          '--test',
+          '--test-name-pattern=canonical read|later real Session denial|login navigation remains|CSRF-bound synthetic SDK',
+          engine + '/test/session-routing-browser.test.cjs'
+        ]),
+        ['npm', '--prefix', engine, 'run', 'test:upstream']
+      ];
+    }
+    throw new Error('Unsupported real Session check part');
+  }
   if (isOnlineNativeFetchOnly(paths) || isOnlineNativeFetchControlsOnly(paths)) {
     const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
     if (part === 'guards') {

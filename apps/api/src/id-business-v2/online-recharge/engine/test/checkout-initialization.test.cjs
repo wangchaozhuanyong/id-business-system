@@ -58,6 +58,111 @@ test('network errors retain controlled categories only', () => {
   ])
     assert.equal(initialization.networkCode(raw), expected);
 });
+test('route abort records the exact rule and original arguments without changing cancellation', async () => {
+  const { page, main } = fakePage();
+  main.page = () => page;
+  const observer = initialization.observe(page);
+  const req = request(main, origin + '/auth/signin?token=' + canary);
+  req.resourceType = () => 'document';
+  req.failure = () => ({ errorText: 'net::ERR_FAILED' });
+  const argumentsSeen = [];
+  await initialization.abortRoute(
+    {
+      request: () => req,
+      abort: async (...args) => {
+        argumentsSeen.push(args);
+        page.emit('requestfailed', req);
+      }
+    },
+    'SESSION_OFFICIAL_LOGIN'
+  );
+  const result = observer.snapshot();
+  observer.dispose();
+  assert.deepEqual(argumentsSeen, [[]]);
+  assert.equal(result.firstFailure.source, 'our_route_abort');
+  assert.equal(result.firstFailure.failureCode, 'ERR_FAILED');
+  assert.equal(result.firstFailure.ruleId, 'SESSION_OFFICIAL_LOGIN');
+  assert.equal(result.firstFailure.resourceType, 'document');
+  const decisions = result.events.filter((row) => row.event === 'route_abort');
+  assert.deepEqual(
+    decisions.map((row) => row.abortState),
+    ['requested', 'completed']
+  );
+  assert.equal(decisions[0].requestId, result.firstFailure.requestId);
+  assert.equal(JSON.stringify(result).includes(canary), false);
+});
+test('navigation timing stays a same-frame possible relation and never becomes an abort cause', () => {
+  const { page, main } = fakePage();
+  main.url = () => origin + '/checkout/oaics_' + canary;
+  const child = { url: main.url };
+  const observer = initialization.observe(page);
+  const req = request(main);
+  req.failure = () => ({ errorText: 'net::ERR_ABORTED' });
+  page.emit('requestfailed', req);
+  page.emit('framedetached', child);
+  assert.equal(observer.snapshot().firstFailure.navigationRelated, undefined);
+  page.emit('framenavigated', main);
+  const result = observer.snapshot();
+  observer.dispose();
+  assert.equal(result.firstFailure.source, 'unknown_abort');
+  assert.equal(result.firstFailure.failureCode, 'ERR_ABORTED');
+  assert.equal(result.firstFailure.navigationRelated, 'possible');
+  assert.equal(result.firstFailure.ruleId, undefined);
+  assert.equal(JSON.stringify(result).includes(canary), false);
+});
+test('failed route cancellation retains its original error and an explicit failed receipt', async () => {
+  const { page, main } = fakePage();
+  main.page = () => page;
+  const observer = initialization.observe(page);
+  const original = new Error(canary);
+  await assert.rejects(
+    initialization.abortRoute(
+      {
+        request: () => request(main),
+        abort: async () => {
+          throw original;
+        }
+      },
+      'RELOAD_FRAME',
+      'blockedbyclient'
+    ),
+    (error) => error === original
+  );
+  const result = observer.snapshot();
+  observer.dispose();
+  assert.equal(result.events.at(-1).abortState, 'failed');
+  assert.equal(JSON.stringify(result).includes(canary), false);
+});
+test('CDP cancellation is logged without inventing a Playwright request correlation', async () => {
+  const { page, main } = fakePage();
+  const observer = initialization.observe(page);
+  await initialization.observeCancellation(
+    page,
+    request(main),
+    'RELOAD_CDP',
+    async () => {},
+    false
+  );
+  const req = request(main);
+  req.failure = () => ({ errorText: 'net::ERR_ABORTED' });
+  page.emit('requestfailed', req);
+  const result = observer.snapshot();
+  observer.dispose();
+  assert.equal(result.firstFailure.source, 'unknown_abort');
+  assert.ok(
+    result.events.some((row) => row.event === 'route_abort' && row.ruleId === 'RELOAD_CDP')
+  );
+});
+test('route templates discard checkout IDs, arbitrary query names, JWTs and nonofficial paths', () => {
+  for (const [url, template] of [
+    [origin + '/api/auth/session?secret_' + canary + '=value', 'auth_session'],
+    [origin + '/api/auth/csrf', 'auth_csrf'],
+    [origin + '/checkout/openai/cs_live_' + canary, 'checkout_page'],
+    ['https://api.stripe.com/v1/payment_pages/cs_live_' + canary + '/init', 'stripe_init'],
+    ['https://untrusted.invalid/' + canary, 'other']
+  ])
+    assert.equal(initialization.routeTemplate(url), template);
+});
 test('HTTP failures are recorded without requestfailed and without reading bodies or headers', () => {
   const { page, main } = fakePage(),
     observer = initialization.observe(page),

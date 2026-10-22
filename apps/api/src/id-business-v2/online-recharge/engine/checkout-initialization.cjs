@@ -12,6 +12,7 @@ const EVENTS = new Set([
   'frame_attached',
   'frame_navigated',
   'frame_detached',
+  'route_abort',
   'page_closed'
 ]);
 const ENDPOINTS = new Set([
@@ -63,6 +64,119 @@ const DIRECTIVES = new Set([
 ]);
 const MAX_EVENTS = 64;
 const MAX_FAILURE_CLASSES = 32;
+const RULES = new Set([
+  'SESSION_GOOGLE_LOGIN',
+  'SESSION_MICROSOFT_LOGIN',
+  'SESSION_OFFICIAL_LOGIN',
+  'RELOAD_CDP',
+  'RELOAD_CDP_FAILURE',
+  'RELOAD_FRAME',
+  'RECOVERY_READONLY'
+]);
+const RESOURCES = new Set([
+  'document',
+  'stylesheet',
+  'image',
+  'media',
+  'font',
+  'script',
+  'texttrack',
+  'xhr',
+  'fetch',
+  'eventsource',
+  'websocket',
+  'manifest',
+  'other',
+  'unknown'
+]);
+const ROUTES = new Set([
+  'auth_session',
+  'auth_csrf',
+  'checkout_page',
+  'checkout_create',
+  'stripe_elements',
+  'stripe_init',
+  'stripe_confirm',
+  'other'
+]);
+const SOURCES = new Set(['our_route_abort', 'network_or_proxy', 'unknown_abort', 'network_other']);
+const ABORT_STATES = new Set(['requested', 'completed', 'failed']);
+const FAILURE_CODES = new Set([
+  'ERR_FAILED',
+  'ERR_ABORTED',
+  'ERR_BLOCKED_BY_CLIENT',
+  'ERR_BLOCKED_BY_CSP',
+  'ERR_NAME_NOT_RESOLVED',
+  'ERR_PROXY_AUTH_REQUESTED',
+  'ERR_TUNNEL_CONNECTION_FAILED',
+  'ERR_PROXY_CONNECTION_FAILED',
+  'ERR_CERT_AUTHORITY_INVALID',
+  'ERR_CONNECTION_RESET',
+  'ERR_CONNECTION_CLOSED',
+  'ERR_CONNECTION_REFUSED',
+  'ERR_CONNECTION_ABORTED',
+  'ERR_TIMED_OUT',
+  'NS_BINDING_ABORTED',
+  'NS_ERROR_NET_RESET',
+  'NS_ERROR_UNKNOWN_HOST',
+  'OTHER'
+]);
+const abortMarks = new WeakMap();
+const pageObservers = new WeakMap();
+function routeTemplate(raw) {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return 'other';
+    if (
+      ['chatgpt.com', 'openai.com'].some(
+        (host) => url.hostname === host || url.hostname.endsWith('.' + host)
+      )
+    ) {
+      if (url.pathname === '/api/auth/session') return 'auth_session';
+      if (url.pathname === '/api/auth/csrf') return 'auth_csrf';
+      if (url.hostname === 'chatgpt.com' && /^\/checkout\//.test(url.pathname))
+        return 'checkout_page';
+      if (url.hostname === 'chatgpt.com' && url.pathname === '/backend-api/payments/checkout')
+        return 'checkout_create';
+    }
+    const category = endpoint(raw);
+    return ['stripe_elements', 'stripe_init', 'stripe_confirm'].includes(category)
+      ? category
+      : 'other';
+  } catch {
+    return 'other';
+  }
+}
+// Observation wraps the original cancellation without changing its arguments,
+// retrying it, or replacing its error. CDP requests have no Playwright Request
+// identity: record their rule separately rather than guessing a correlation.
+async function observeCancellation(page, request, ruleId, cancel, correlate = true) {
+  const mark = { ruleId, abortState: 'requested' };
+  if (RULES.has(ruleId) && request && typeof request === 'object') {
+    if (correlate) abortMarks.set(request, mark);
+    pageObservers.get(page)?.(request, mark);
+  }
+  try {
+    const result = await cancel();
+    mark.abortState = 'completed';
+    return result;
+  } catch (error) {
+    mark.abortState = 'failed';
+    throw error;
+  } finally {
+    if (RULES.has(ruleId)) pageObservers.get(page)?.(request, mark);
+  }
+}
+function abortRoute(route, ruleId, ...args) {
+  const request = route.request();
+  let page;
+  try {
+    page = request.frame()?.page();
+  } catch {
+    /* Request frame may not exist yet. */
+  }
+  return observeCancellation(page, request, ruleId, () => route.abort(...args));
+}
 const count = (n) => Number.isInteger(n) && n >= 0 && n <= 10000;
 const elapsed = (n) => Number.isInteger(n) && n >= 0 && n <= 3600000;
 const object = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -129,7 +243,16 @@ function safeRow(row) {
           'method',
           'status',
           'code',
-          'directive'
+          'directive',
+          'requestId',
+          'frameId',
+          'resourceType',
+          'routeTemplate',
+          'source',
+          'ruleId',
+          'abortState',
+          'failureCode',
+          'navigationRelated'
         ].includes(k)
     ) ||
     !EVENTS.has(row.event) ||
@@ -140,7 +263,16 @@ function safeRow(row) {
     (row.status !== undefined &&
       (!Number.isInteger(row.status) || row.status < 100 || row.status > 599)) ||
     (row.code !== undefined && !CODES.has(row.code)) ||
-    (row.directive !== undefined && !DIRECTIVES.has(row.directive))
+    (row.directive !== undefined && !DIRECTIVES.has(row.directive)) ||
+    (row.requestId !== undefined && (!count(row.requestId) || row.requestId < 1)) ||
+    (row.frameId !== undefined && (!count(row.frameId) || row.frameId < 1)) ||
+    (row.resourceType !== undefined && !RESOURCES.has(row.resourceType)) ||
+    (row.routeTemplate !== undefined && !ROUTES.has(row.routeTemplate)) ||
+    (row.source !== undefined && !SOURCES.has(row.source)) ||
+    (row.ruleId !== undefined && !RULES.has(row.ruleId)) ||
+    (row.abortState !== undefined && !ABORT_STATES.has(row.abortState)) ||
+    (row.failureCode !== undefined && !FAILURE_CODES.has(row.failureCode)) ||
+    (row.navigationRelated !== undefined && row.navigationRelated !== 'possible')
   )
     return null;
   return { ...row };
@@ -221,7 +353,18 @@ function observe(page, { signal } = {}) {
   const started = performance.now(),
     events = [],
     failureClasses = [],
-    listeners = [];
+    listeners = [],
+    frameIds = new WeakMap(),
+    requestIds = new WeakMap(),
+    navigations = [];
+  let frameSequence = 0,
+    requestSequence = 0;
+  const identity = (map, item, next) => {
+    if (!item || typeof item !== 'object') return undefined;
+    if (!map.has(item)) map.set(item, next());
+    return map.get(item);
+  };
+  const frameId = (frame) => identity(frameIds, frame, () => Math.min(10000, ++frameSequence));
   let stopped = false,
     eventCount = 0,
     readFailures = 0,
@@ -242,9 +385,17 @@ function observe(page, { signal } = {}) {
     if (!firstFailure && isFailure(row)) firstFailure = row;
     if (isFailure(row)) {
       const same = failureClasses.find((previous) =>
-        ['event', 'endpoint', 'frame', 'method', 'status', 'code', 'directive'].every(
-          (key) => previous[key] === row[key]
-        )
+        [
+          'event',
+          'endpoint',
+          'frame',
+          'method',
+          'status',
+          'code',
+          'directive',
+          'source',
+          'ruleId'
+        ].every((key) => previous[key] === row[key])
       );
       if (same) {
         same.count = Math.min(10000, same.count + 1);
@@ -271,9 +422,12 @@ function observe(page, { signal } = {}) {
   const requestData = (request) => {
     const category = endpoint(request.url());
     const method = request.method();
-    let frame = 'unknown';
+    let frame = 'unknown',
+      id;
     try {
-      frame = frameKind(request.frame());
+      const owner = request.frame();
+      frame = frameKind(owner);
+      id = frameId(owner);
     } catch {
       // A navigation request may arrive before its frame exists. Keep its
       // failure/status evidence even when that optional association is absent.
@@ -282,12 +436,25 @@ function observe(page, { signal } = {}) {
     return {
       endpoint: category,
       frame,
+      ...(id ? { frameId: id } : {}),
+      requestId: identity(requestIds, request, () => Math.min(10000, ++requestSequence)),
+      resourceType: RESOURCES.has(request.resourceType?.()) ? request.resourceType() : 'unknown',
+      routeTemplate: routeTemplate(request.url()),
       method: METHODS.has(method) ? method : 'OTHER'
     };
   };
+  const recordAbort = (request, mark) => {
+    try {
+      record({ event: 'route_abort', ...requestData(request), source: 'our_route_abort', ...mark });
+    } catch {
+      readFailures = Math.min(10000, readFailures + 1);
+    }
+  };
+  pageObservers.set(page, recordAbort);
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    if (pageObservers.get(page) === recordAbort) pageObservers.delete(page);
     for (const [name, listener] of listeners) {
       try {
         page.off(name, listener);
@@ -297,6 +464,25 @@ function observe(page, { signal } = {}) {
     }
     signal?.removeEventListener('abort', stop);
   };
+  const related = (row) => {
+    if (
+      row.event !== 'request_failed' ||
+      row.code !== 'ABORTED' ||
+      row.source === 'our_route_abort'
+    )
+      return { ...row };
+    // Same-frame timing is a correlation only, including a detach observed just
+    // after requestfailed. It must never turn into an asserted cause.
+    return {
+      ...row,
+      ...(row.frameId &&
+      navigations.some(
+        (n) => n.frameId === row.frameId && Math.abs(n.elapsedMs - row.elapsedMs) < 1500
+      )
+        ? { navigationRelated: 'possible' }
+        : {})
+    };
+  };
   const snapshot = () =>
     sanitize({
       version: 1,
@@ -304,9 +490,9 @@ function observe(page, { signal } = {}) {
       eventCount,
       readFailures,
       truncated,
-      events: events.map((row) => ({ ...row })),
-      firstFailure: firstFailure ? { ...firstFailure } : null,
-      failureClasses: failureClasses.map((row) => ({ ...row })),
+      events: events.map(related),
+      firstFailure: firstFailure ? related(firstFailure) : null,
+      failureClasses: failureClasses.map(related),
       failureClassesTruncated
     });
   try {
@@ -314,13 +500,29 @@ function observe(page, { signal } = {}) {
     listen('response', (response) =>
       record({ event: 'response', ...requestData(response.request()), status: response.status() })
     );
-    listen('requestfailed', (request) =>
+    listen('requestfailed', (request) => {
+      const errorText = String(request.failure()?.errorText || '');
+      const code = networkCode(errorText);
+      const failureCode =
+        [...FAILURE_CODES].find(
+          (value) => value !== 'OTHER' && new RegExp('\\b' + value + '\\b').test(errorText)
+        ) || 'OTHER';
+      const mark = abortMarks.get(request);
       record({
         event: 'request_failed',
         ...requestData(request),
-        code: networkCode(request.failure()?.errorText)
-      })
-    );
+        code,
+        failureCode,
+        source: mark
+          ? 'our_route_abort'
+          : /^(?:DNS_|PROXY_|TLS_|CONNECTION_)/.test(code)
+            ? 'network_or_proxy'
+            : code === 'ABORTED'
+              ? 'unknown_abort'
+              : 'network_other',
+        ...(mark ? { ...mark } : {})
+      });
+    });
     listen('pageerror', (error) =>
       record({
         event: 'script_error',
@@ -380,9 +582,19 @@ function observe(page, { signal } = {}) {
       ['framenavigated', 'frame_navigated'],
       ['framedetached', 'frame_detached']
     ])
-      listen(name, (frame) =>
-        record({ event, endpoint: endpoint(frame.url()), frame: frameKind(frame) })
-      );
+      listen(name, (frame) => {
+        const id = frameId(frame);
+        if (event !== 'frame_attached') {
+          navigations.push({ frameId: id, elapsedMs: time() });
+          if (navigations.length > MAX_EVENTS) navigations.shift();
+        }
+        record({
+          event,
+          endpoint: endpoint(frame.url()),
+          frame: frameKind(frame),
+          ...(id ? { frameId: id } : {})
+        });
+      });
     listen('close', () => {
       record({ event: 'page_closed', endpoint: 'other', frame: 'main' });
       stop();
@@ -395,4 +607,12 @@ function observe(page, { signal } = {}) {
   }
   return { snapshot, dispose: stop };
 }
-module.exports = { observe, sanitize, endpoint, networkCode };
+module.exports = {
+  observe,
+  sanitize,
+  endpoint,
+  networkCode,
+  abortRoute,
+  observeCancellation,
+  routeTemplate
+};

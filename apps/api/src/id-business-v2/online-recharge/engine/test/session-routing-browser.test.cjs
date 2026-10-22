@@ -166,7 +166,7 @@ const lazyCheckout = `<!doctype html><meta charset="utf-8"><main>
     request.open('GET', '/api/auth/session?phase=checkout-initialization');
     request.onload = () => {
       const session = JSON.parse(request.responseText);
-      if (session.transportResponse || session.user?.id !== '${userId}'
+      if (!session.transportResponse || session.user?.id !== '${userId}'
           || session.account?.id !== '${accountId}') return;
       document.getElementById('auth-state').textContent = 'Synthetic identity confirmed';
       const section = document.getElementById('payment-method');
@@ -183,7 +183,7 @@ const lazyCheckout = `<!doctype html><meta charset="utf-8"><main>
     request.send();
   </script></main>`;
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const transport = [];
   const requests = [];
   const logs = [];
@@ -228,11 +228,18 @@ async function fixture(t) {
         `synthetic-csrf=${nativeCsrf}; Path=/; Secure; HttpOnly; SameSite=Lax`
       );
       response.end(JSON.stringify({ csrfToken: nativeCsrf, transportResponse: true }));
-    } else if (url.pathname === '/api/auth/session' && request.headers.host === 'chatgpt.com') {
+    } else if (
+      url.pathname === '/api/auth/session' &&
+      ['chatgpt.com', 'pay.openai.com', 'api.chatgpt.com'].includes(request.headers.host)
+    ) {
       response.setHeader('content-type', 'application/json');
-      // The installation's real Cookie probe is synthetic too. If a later
-      // request misses its dedicated handler this marker exposes the transport.
-      response.end(JSON.stringify({ ...session, transportResponse: true }));
+      // A native server marker proves the installer never substitutes Session JSON.
+      const denied =
+        options.denyAfterInstall && transport.some((row) => row.path === '/fixture/page');
+      response.statusCode = denied ? 401 : 200;
+      response.end(
+        JSON.stringify(denied ? { nativeDenied: true } : { ...session, transportResponse: true })
+      );
     } else if (url.pathname === '/fixture/challenge-loader.js') {
       response.setHeader('content-type', 'application/javascript');
       response.end('window.__syntheticChallengeResourceLoaded = true;');
@@ -426,7 +433,7 @@ function noBusinessActions(f, { authenticationWrites = false } = {}) {
   assert.equal(f.logs.join('\n').includes(sessionCookie), false);
 }
 
-test('official Session compatibility and native CSRF use their distinct route paths', async (t) => {
+test('official Session and CSRF reach native transport on every canonical read', async (t) => {
   const f = await fixture(t);
   for (const host of ['chatgpt.com', 'pay.openai.com', 'api.chatgpt.com']) {
     for (const query of ['', '?phase=synthetic&return=%2Ffixture%2Fpage']) {
@@ -435,7 +442,7 @@ test('official Session compatibility and native CSRF use their distinct route pa
       assert.equal(auth.body.user?.id === userId, true);
       assert.equal(auth.body.account?.id === accountId, true);
       assert.equal(auth.body.accessToken === accessToken, true);
-      assert.equal(auth.body.transportResponse === true, false);
+      assert.equal(auth.body.transportResponse, true);
       const csrf = await xhr(f.page, `https://${host}/api/auth/csrf${query}`);
       assert.equal(csrf.status, 200);
       assert.equal(csrf.body.csrfToken, nativeCsrf);
@@ -445,13 +452,29 @@ test('official Session compatibility and native CSRF use their distinct route pa
   for (const endpoint of ['session', 'csrf']) {
     const response = await f.page.goto(`${origin}/api/auth/${endpoint}?phase=document`);
     assert.equal(response.status(), 200);
-    assert.equal((await response.json()).transportResponse === true, endpoint === 'csrf');
+    assert.equal((await response.json()).transportResponse, true);
   }
   assert.equal(
     f.transport.some((request) => request.path === '/api/auth/session'),
-    false
+    true
   );
   assert.equal(f.transport.filter((request) => request.path === '/api/auth/csrf').length, 7);
+  noBusinessActions(f);
+});
+test('a later real Session denial is not replaced by bootstrap credentials', async (t) => {
+  const f = await fixture(t, { denyAfterInstall: true });
+  const result = await f.page.evaluate(async () => {
+    const response = await fetch('/api/auth/session');
+    return {
+      status: response.status,
+      body: await response.json(),
+      bootstrapPresent: Boolean(window.__CHATGPT_BOOTSTRAP_SESSION__?.accessToken)
+    };
+  });
+  assert.equal(result.status, 401);
+  assert.equal(result.body.nativeDenied, true);
+  assert.equal(result.body.accessToken, undefined);
+  assert.equal(result.bootstrapPresent, true);
   noBusinessActions(f);
 });
 
@@ -550,7 +573,7 @@ test('authentication writes retain their actual response instead of a synthetic 
   noBusinessActions(f, { authenticationWrites: true });
 });
 
-test('Session compatibility supports URL and Request reads without swallowing native fetch errors', async (t) => {
+test('native Session supports URL and Request reads without swallowing fetch errors', async (t) => {
   const f = await fixture(t);
   const results = await f.page.evaluate(async () => {
     const url = `${window.location.origin}/api/auth/session`;
@@ -574,7 +597,7 @@ test('Session compatibility supports URL and Request reads without swallowing na
   });
   for (const response of results.reads) {
     assert.equal(response.user?.id, userId);
-    assert.equal(response.transportResponse === true, false);
+    assert.equal(response.transportResponse, true);
   }
   assert.deepEqual(results.failures, ['TypeError', 'AbortError']);
   noBusinessActions(f);
@@ -601,6 +624,8 @@ test('authentication RequestInit is read once before deciding whether native tra
 
 test('login navigation remains blocked while ordinary requests keep their native headers', async (t) => {
   const f = await fixture(t);
+  const observer = require('../checkout-initialization.cjs').observe(f.page);
+  t.after(() => observer.dispose());
   const allowed = await xhr(f.page, `${origin}/auth/login?phase=xhr`);
   assert.equal(allowed.body.transportResponse, true);
   const blocked = [
@@ -616,6 +641,20 @@ test('login navigation remains blocked while ordinary requests keep their native
   const baseline = f.transport.length;
   for (const url of blocked) await assert.rejects(f.page.goto(url), /net::ERR_/);
   assert.equal(f.transport.length, baseline);
+  const diagnostics = observer.snapshot();
+  for (const rule of [
+    'SESSION_GOOGLE_LOGIN',
+    'SESSION_MICROSOFT_LOGIN',
+    'SESSION_OFFICIAL_LOGIN'
+  ]) {
+    assert.ok(diagnostics.events.some((row) => row.event === 'route_abort' && row.ruleId === rule));
+    assert.ok(
+      diagnostics.events.some(
+        (row) =>
+          row.event === 'request_failed' && row.ruleId === rule && row.source === 'our_route_abort'
+      )
+    );
+  }
   noBusinessActions(f);
 });
 
@@ -656,7 +695,7 @@ test('authenticated XHR initialization precedes physical ARIA card preparation a
   assert.equal(await f.page.evaluate(() => window.mounts), 1);
   assert.equal(
     f.transport.some((request) => request.path === '/api/auth/session'),
-    false
+    true
   );
   noBusinessActions(f);
 });

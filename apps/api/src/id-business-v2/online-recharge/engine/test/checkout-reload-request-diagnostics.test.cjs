@@ -36,6 +36,8 @@ async function fixture(t, options = {}) {
     require(name) {
       if (name.startsWith('node:')) return require(name);
       if (name === './checkout-form.cjs') return { checkoutPageLoadFailed: async () => true };
+      if (name === './checkout-initialization.cjs')
+        return require('../checkout-initialization.cjs');
       throw new Error('Unexpected offline fixture import');
     }
   });

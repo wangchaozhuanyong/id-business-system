@@ -474,6 +474,13 @@ function safeCheckoutOpenDiagnostics(value) {
                     inspection[key] = value.inspection[key];
             if ([1, 2].includes(value.inspection.readAttempts)) inspection.readAttempts = value.inspection.readAttempts;
             if (CHECKOUT_FORM_READ_PHASES.has(value.inspection.readPhase)) inspection.readPhase = value.inspection.readPhase;
+            if (Array.isArray(value.inspection.readFailures)) {
+                inspection.readFailures = value.inspection.readFailures.slice(0, 32).filter(row => row
+                    && ['frame_scan', 'frame_owner', 'load_state', 'control_snapshot'].includes(row.phase)
+                    && ['timeout', 'detached', 'context_destroyed', 'closed', 'aborted', 'read_failed'].includes(row.reason)
+                    && Number.isInteger(row.count) && row.count > 0 && row.count <= 10000)
+                    .map(row => ({ phase: row.phase, reason: row.reason, count: row.count }));
+            }
             const visibilityReasons = ['zero_geometry', 'hidden', 'inert', 'aria_hidden', 'display_none',
                 'visibility_hidden', 'opacity_zero', 'content_visibility_hidden', 'modal_background'];
             const countGroups = {

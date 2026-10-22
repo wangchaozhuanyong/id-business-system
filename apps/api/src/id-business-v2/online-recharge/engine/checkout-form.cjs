@@ -190,6 +190,7 @@ function inspectionState(page, deadline, signal) {
     framesSkipped: 0,
     framesFailed: 0,
     readAttempts: 1,
+    readFailures: [],
     frameSkipCounts: {},
     controlCounts: { scanned: 0, eligible: 0, locatable: 0, recognized: 0 },
     controlRejectCounts: {},
@@ -198,6 +199,22 @@ function inspectionState(page, deadline, signal) {
     pageClosed: closed(page),
     aborted: signal?.aborted === true
   };
+}
+function frameReadFailure(inspection, phase, error, page, signal) {
+  const reason = signal?.aborted
+    ? 'aborted'
+    : closed(page)
+      ? 'closed'
+      : error?.code === 'CHECKOUT_FORM_TIMEOUT' || error?.name === 'TimeoutError'
+        ? 'timeout'
+        : /execution context was destroyed/i.test(String(error?.message || ''))
+          ? 'context_destroyed'
+          : /detached/i.test(String(error?.message || ''))
+            ? 'detached'
+            : 'read_failed';
+  const prior = inspection.readFailures.find((row) => row.phase === phase && row.reason === reason);
+  if (prior) prior.count = Math.min(10000, prior.count + 1);
+  else inspection.readFailures.push({ phase, reason, count: 1 });
 }
 function inspectionCode(inspection) {
   return inspection.pageClosed
@@ -536,6 +553,7 @@ async function readControlsOnce(page, deadline, state) {
     } catch {
       inspection.framesFailed++;
       inspection.readPhase = 'frame_scan';
+      inspection.readFailures.push({ phase: 'frame_scan', reason: 'read_failed', count: 1 });
     }
   }
   for (const frame of frames) {
@@ -544,16 +562,19 @@ async function readControlsOnce(page, deadline, state) {
     inspection.aborted = state.signal?.aborted === true;
     if (inspection.timedOut || inspection.pageClosed || inspection.aborted) break;
     const frameDeadline = Math.min(deadline, Date.now() + (state.readBudgetMs || FRAME_READ_MS));
+    let phase = 'frame_owner';
     try {
       if (!(await frameVisible(frame, frameDeadline, state.signal, inspection))) {
         inspection.framesSkipped++;
         continue;
       }
+      phase = 'load_state';
       if (await frameLoadFailed(frame, frameDeadline, state.signal)) {
         inspection.contentLoadFailed = true;
         break;
       }
       const all = frame.locator('input,select,textarea,[role="combobox"]');
+      phase = 'control_snapshot';
       const snapshot = await within(
         () => all.evaluateAll(elementRendered, { snapshot: true }),
         frameDeadline,
@@ -605,6 +626,7 @@ async function readControlsOnce(page, deadline, state) {
     } catch (error) {
       inspection.framesFailed++;
       inspection.readPhase = 'frame_scan';
+      frameReadFailure(inspection, phase, error, page, state.signal);
       // Preserve the total-budget timer even if Date observes the preceding tick.
       // A shorter frame read budget remains an incomplete read, not a global timeout.
       inspection.timedOut ||= error?.code === 'CHECKOUT_FORM_TIMEOUT' && frameDeadline === deadline;

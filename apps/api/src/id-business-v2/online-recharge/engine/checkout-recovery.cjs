@@ -649,14 +649,26 @@ async function reloadOriginalCheckout(page, options = {}) {
     const request = {
       url: () => raw.url,
       method: () => raw.method,
+      frame: () => null,
+      resourceType: () => String(event.resourceType || '').toLowerCase(),
       postData: () => raw.postData || ''
     };
     const writing = !['GET', 'HEAD', 'OPTIONS'].includes(raw.method);
     const reject = async (reason) => {
       if (writing) state.blockedWrites += 1;
       recordBlockedRequest(state, request, reason);
-      await cdp
-        .send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
+      await require('./checkout-initialization.cjs')
+        .observeCancellation(
+          page,
+          request,
+          'RELOAD_CDP',
+          () =>
+            cdp.send('Fetch.failRequest', {
+              requestId: event.requestId,
+              errorReason: 'BlockedByClient'
+            }),
+          false
+        )
         .catch(() => {});
     };
     const proceed = () => cdp.send('Fetch.continueRequest', { requestId: event.requestId });
@@ -700,8 +712,22 @@ async function reloadOriginalCheckout(page, options = {}) {
     cdp.on('Fetch.requestPaused', (event) => {
       guard(cdp, event).catch((error) => {
         haltOriginalReload(state, error);
-        cdp
-          .send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' })
+        require('./checkout-initialization.cjs')
+          .observeCancellation(
+            page,
+            {
+              url: () => event.request.url,
+              method: () => event.request.method,
+              frame: () => null
+            },
+            'RELOAD_CDP_FAILURE',
+            () =>
+              cdp.send('Fetch.failRequest', {
+                requestId: event.requestId,
+                errorReason: 'BlockedByClient'
+              }),
+            false
+          )
           .catch(() => {});
       });
     });
@@ -909,7 +935,9 @@ async function reloadOriginalCheckout(page, options = {}) {
     const reject = async (reason) => {
       if (writing) state.blockedWrites += 1;
       recordBlockedRequest(state, request, reason);
-      await route.abort('blockedbyclient').catch(() => {});
+      await require('./checkout-initialization.cjs')
+        .abortRoute(route, 'RELOAD_FRAME', 'blockedbyclient')
+        .catch(() => {});
     };
     try {
       if (state.phase === 'halted') throw reloadFailure(state.code);
@@ -1240,7 +1268,11 @@ async function recoverOriginalPayment(rawRecovery, options = {}) {
     await page.route('**/*', (route) =>
       readOnlyRecoveryRequest(route.request(), recovery)
         ? route.fallback()
-        : route.abort('blockedbyclient')
+        : require('./checkout-initialization.cjs').abortRoute(
+            route,
+            'RECOVERY_READONLY',
+            'blockedbyclient'
+          )
     );
     const login = await bounded(
       () =>
