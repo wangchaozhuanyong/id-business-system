@@ -130,6 +130,34 @@ class HumanRelease(unittest.TestCase):
                          "transport(plan, 'readback')", 'SOURCE_RECEIPT_CHANGED'):
             self.assertIn(required, publication)
 
+    def test_manifest_keeps_role_and_admin_lineage(self):
+        roles = {n: {'commit': 'b' * 40, 'sources': {}, 'parentProjection': {'role': n}}
+                 for n in P.UPDATED}
+        before = {'commit': P.CURRENT, 'sources': {'old': 'a' * 64}}
+        manifest = {'scope': P.SCOPE, 'roleSourceProjections': roles,
+                    'adminSourceProjection': before,
+                    'bitbrowserHistoryPublication': {'commit': 'b' * 40},
+                    'apiCompiledArtifact': {'sha256': 'a' * 64}}
+        result = P.project_manifest(manifest, self.c)
+        self.assertEqual(result['previousAdminSourceProjection'], before)
+        self.assertEqual(result['adminSourceProjection'], result['roleSourceProjections']['admin'])
+        self.assertIsNot(result['adminSourceProjection'], result['roleSourceProjections']['admin'])
+        for role, paths in (('api', P.API), ('admin', P.ADMIN),
+                            ('online-recharge', {P.ENGINE + n for n in P.ENGINE_NAMES})):
+            self.assertEqual(set(result['roleSourceProjections'][role]['sources']), paths)
+            self.assertEqual(result['roleSourceProjections'][role]['parentProjection'], {'role': role})
+        self.assertEqual(result['onlineRechargeCompiledArtifact'], result['apiCompiledArtifact'])
+        with self.assertRaises(RuntimeError):
+            P.project_manifest({**manifest, 'scope': 'other'}, self.c)
+
+    def test_full_admin_inventory_stays_server_bound(self):
+        files = {f'assets/{i}.js': P.sha(str(i).encode()) for i in range(5175)}
+        baseline = {'adminInventory': {'count': len(files), 'sha256': P.sha(P.canonical(files))}}
+        self.assertEqual(P.verify_parent_admin_files(files, baseline), files)
+        for bad in ({}, {**files, 'extra': 'a' * 64}, {**files, 'assets/0.js': 'b' * 64}):
+            with self.assertRaises(RuntimeError):
+                P.verify_parent_admin_files(bad, baseline)
+
 
 if __name__ == '__main__':
     unittest.main()

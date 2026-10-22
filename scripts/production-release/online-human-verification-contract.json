@@ -352,9 +352,9 @@
     "settled-checkout-publication.py": "63c902b0ef12282a50a671a9cf5a47718fecb32fa7185b6ef53753e6137c7403",
     "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260",
     "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
-    "online-human-verification-release.py": "0ab626ede2fcd3f19768cc0aade8801ac9b8203d97423bc2a20a4cfb9cb3a825",
-    "online-human-verification-publication.py": "f29102e057077da6b7b9965c6562a01d410d89574fae6351e3fab343086a727e",
-    "online-human-verification-release.test.py": "d3e67abd1df1df6952a28d602f3ba4f2ed399c506c172bcd37652cabd05d0d90"
+    "online-human-verification-release.py": "a5215596bffb68e04815a8ed1e060921880fb857650e74fe9d38ed7ddb74cfc1",
+    "online-human-verification-publication.py": "f0e230283b14288111df754669a879ea97838161482ca6e1cb984fb2839a0e18",
+    "online-human-verification-release.test.py": "16368426636e9f37c71d474230ea708c6351321a5e3ef557d821dce7c8f48691"
   },
   "updatedServices": ["api", "admin", "online-recharge"],
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],

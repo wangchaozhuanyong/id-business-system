@@ -143,7 +143,8 @@ def build(c):
     run(('npm', 'run', 'build', '--workspace', '@apple-business/admin'), admin,
         {**env, 'V2_BUILD_ID': 'v2-d7d80c357c4954ef28db85e1021a0e19a65ebd81'})
     before_admin = h.file_inventory(admin / 'apps/admin/dist')
-    need(all(parent['baseline']['adminFiles'].get(n) == v for n, v in before_admin.items()), 'NATIVE_ADMIN_NOT_REPRODUCED')
+    need({'count': len(before_admin), 'sha256': sha(P.canonical(before_admin))}
+         == parent['baseline']['adminPublishedInventory'], 'NATIVE_ADMIN_NOT_REPRODUCED')
     for n in P.ADMIN:
         if n.endswith('/OnlineHumanVerification.vue'):
             need(not (admin / n).exists(), 'ADMIN_NEW_SOURCE_EXISTS')

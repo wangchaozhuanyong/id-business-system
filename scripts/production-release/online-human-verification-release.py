@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import traceback
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -133,16 +134,45 @@ def capture(c):
     need(json.loads(raw).get('commit') == CURRENT and current.parent == BASE / 'releases', 'CURRENT_CHANGED')
     states = h.snapshot(d, current)
     normalizer = c['parentPlan']['nativeParentCapture']['baseline']['backupNormalizerPath']
+    admin_files = load('recharge-checkout-release.py').admin_inventory(d, states['admin'])
+    ancestor = c['parentPlan']['nativeParentCapture']['baseline']
+    admin_proof_raw = (Path(ancestor['current']) / 'bitbrowser-history-build-proof.json').read_bytes()
+    need(sha(admin_proof_raw) == ancestor['proofs']['bitbrowser-history-build-proof.json'], 'ADMIN_PARENT_PROOF_CHANGED')
+    published_admin = json.loads(admin_proof_raw)['adminFiles']
+    need(all(admin_files.get(n) == v for n, v in published_admin.items()), 'ADMIN_PARENT_CONTENT_CHANGED')
+    capture_path = HERE / 'online-human-parent-admin-files.json'
+    capture_raw = canonical(admin_files)
+    if capture_path.exists():
+        need(not capture_path.is_symlink() and capture_path.read_bytes() == capture_raw, 'ADMIN_CAPTURE_CHANGED')
+    else:
+        with capture_path.open('xb') as output:
+            output.write(capture_raw)
     baseline = {'commit': CURRENT, 'current': str(current), 'manifestSha256': sha(raw), 'services': states,
         'configurationSha256': {n: sha((current / n).read_bytes()) for n in p.CONFIGURATION},
         'runtimeConfigurationSha256': {n: h.configuration(d, s) for n, s in states.items()},
         'proofs': {'bitbrowser-history-build-proof.json': c['parentPlan']['buildProofSha256']},
         **p.runtime(d, states), 'database': p.database(d, states['api']),
-        'adminFiles': load('recharge-checkout-release.py').admin_inventory(d, states['admin']),
+        'adminPublishedInventory': {'count': len(published_admin), 'sha256': sha(canonical(published_admin))},
         'backupNormalizerPath': normalizer, 'backupNormalizerSha256': sha(Path(normalizer).read_bytes())}
     need(set(baseline['apiModules']) == MODULES - ABSENT and baseline['database']['pending'] == 0
          and shutil.disk_usage(BASE).free > 6 * 1024**3, 'PARENT_NOT_READY')
     return {'status': 'ONLINE_HUMAN_PARENT_VERIFIED', 'commit': CURRENT, 'baseline': baseline, 'businessActions': 0}
+
+
+def verify_parent_admin_files(files, baseline):
+    need(type(files) is dict and {'count': len(files), 'sha256': sha(canonical(files))} == baseline['adminInventory'], 'ADMIN_CAPTURE_CHANGED')
+    return files
+
+
+def project_manifest(manifest, c):
+    need(manifest['scope'] == SCOPE, 'MANIFEST_SCOPE_CHANGED')
+    for role, selected in (('api', API), ('admin', ADMIN), ('online-recharge', {ENGINE + n for n in ENGINE_NAMES})):
+        manifest['roleSourceProjections'][role]['sources'] = {n: c['productionSources'][n] for n in selected}
+    manifest['previousAdminSourceProjection'] = copy.deepcopy(manifest.get('adminSourceProjection'))
+    manifest['adminSourceProjection'] = copy.deepcopy(manifest['roleSourceProjections']['admin'])
+    manifest['onlineHumanVerificationPublication'] = manifest['bitbrowserHistoryPublication']
+    manifest['onlineRechargeCompiledArtifact'] = manifest['apiCompiledArtifact']
+    return manifest
 
 
 def engine(c, plan):
@@ -178,12 +208,7 @@ def engine(c, plan):
             original_build(driver, context, reference, role, before, stage)
         def point(target, stamp):
             path = target / 'release-manifest.json'
-            manifest = json.loads(path.read_bytes())
-            need(manifest['scope'] == SCOPE, 'MANIFEST_SCOPE_CHANGED')
-            for role, selected in (('api', API), ('admin', ADMIN), ('online-recharge', {ENGINE + n for n in ENGINE_NAMES})):
-                manifest['roleSourceProjections'][role]['sources'] = {n: c['productionSources'][n] for n in selected}
-            manifest['onlineHumanVerificationPublication'] = manifest['bitbrowserHistoryPublication']
-            manifest['onlineRechargeCompiledArtifact'] = manifest['apiCompiledArtifact']
+            manifest = project_manifest(json.loads(path.read_bytes()), c)
             path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
             original_point(target, stamp)
         h.build_image, d.point_current = build, point
@@ -203,9 +228,13 @@ def engine(c, plan):
              and {n: h.configuration(d, s) for n, s in states.items()} == b['runtimeConfigurationSha256'], 'SERVICE_SCOPE_CHANGED')
         expected = {n: b[n] for n in ('apiPreservedInventory', 'sharedInventory', 'clientInventory', 'nginxSha256')}
         expected.update(apiModules=proof['apiModules'])
-        merged = {**b['adminFiles'], **proof['adminFiles']}
+        original_admin = verify_parent_admin_files(json.loads((HERE / 'online-human-parent-admin-files.json').read_bytes()), b)
+        merged = {**original_admin, **proof['adminFiles']}
         expected['adminInventory'] = {'count': len(merged), 'sha256': sha(canonical(merged))}
         need(runtime(d, states) == expected and p.database(d, states['api']) == b['database'], 'RUNTIME_CONTENT_CHANGED')
+        with urllib.request.urlopen(urllib.request.Request('https://54-249-61-238.sslip.io/', headers={'Cache-Control': 'no-cache'}), timeout=25) as response:
+            public = response.read(2 * 1024**2 + 1)
+        need(sha(public) == proof['adminFiles']['index.html'] and ('v2-' + proof['commit']).encode() in public, 'PUBLIC_BUILD_CHANGED')
         prior = json.loads((HERE / 'online-execution-contract.json').read_bytes())
         files = {**prior['beforeEngineFiles'], **{n.removeprefix(ENGINE): v for n, v in prior['productionSources'].items() if n.startswith(ENGINE)},
                  **{n.removeprefix(ENGINE): v for n, v in c['productionSources'].items() if n.startswith(ENGINE)}}

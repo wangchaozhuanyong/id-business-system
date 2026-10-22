@@ -3001,6 +3001,14 @@ test('human verification publication-only paths retain control checks', () => {
 test('human verification never omits UI, API browser, or engine guards', () => {
   const paths = [...onlineHumanVerificationPaths, ...onlineHumanVerificationControls];
   const guards = onlineSettingsCommands('guards', paths);
+  assert.deepEqual(guards[0].slice(0, 5), [
+    'git',
+    'fetch',
+    '--no-tags',
+    '--no-write-fetch-head',
+    'origin'
+  ]);
+  assert.equal(guards[0].length, 11);
   for (const name of [
     'check:admin-ui',
     'check:v2-ui-language',
