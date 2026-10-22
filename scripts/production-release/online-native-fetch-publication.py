@@ -59,41 +59,56 @@ def identity():
 
 
 def quality(commit, tree):
-    pr = github('pulls/679')
-    need(pr.get('merged_at') and pr['base']['ref'] == 'main' and pr['merge_commit_sha'] == commit,
-         'MERGED_REVIEW_REQUIRED')
-    head = pr['head']['sha']
-    git('merge-base', '--is-ancestor', P.SOURCE, head)
-    need(set(git('diff', '--name-only', P.SOURCE, head).decode().splitlines()) <= CONTROLS
-         and git('rev-parse', head + '^{tree}').decode().strip() == tree, 'REVIEW_TREE_CHANGED')
-    runs = github('actions/workflows/quality.yml/runs?head_sha=' + head)['workflow_runs']
-    runs = [r for r in runs if r['head_sha'] == head and r['event'] == 'pull_request'
-            and r['status'] == 'completed' and r['conclusion'] == 'success']
-    need(bool(runs), 'QUALITY_REQUIRED')
-    run = runs[0]
-    F.require_run(run, head, '.github/workflows/quality.yml', 'pull_request')
-    jobs = github('actions/runs/' + str(run['id']) + '/attempts/' + str(run['run_attempt']) + '/jobs?per_page=100')['jobs']
-    passed = {j['name'] for j in jobs if j['conclusion'] == 'success'}
-    need({'quality', 'change-scope', 'recharge (guards)', 'recharge (online-engine)'} <= passed
-         and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_JOBS_REQUIRED')
-    evidence, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
-    need(evidence.get('repository') == REPO and evidence.get('headSha') == head
-         and evidence.get('pullRequest') == 679 and evidence.get('testedTree') == tree
-         and evidence.get('runId') == run['id'] and evidence.get('runAttempt') == run['run_attempt'], 'QUALITY_RECEIPT_CHANGED')
+    source = github('pulls/679')
+    need(source.get('merged_at') and source['base']['ref'] == 'main'
+         and source['merge_commit_sha'] == '6815b33712de6e6c06392e6694df86aaa105582b', 'MERGED_SOURCE_REQUIRED')
+    records = {}
+    linked = github('commits/' + commit + '/pulls')
+    selected = [pr for pr in linked if pr.get('merged_at') and pr.get('merge_commit_sha') == commit
+                and pr['base']['ref'] == 'main' and pr['head']['repo']['full_name'] == REPO]
+    need(len(selected) == 1, 'MERGED_CONTROL_REQUIRED')
+    control = selected[0]
+    for role, pr in (('source', source), ('control', control)):
+        head = pr['head']['sha']
+        ancestor = P.SOURCE if pr['number'] == 679 else source['merge_commit_sha']
+        git('merge-base', '--is-ancestor', ancestor, head)
+        need(set(git('diff', '--name-only', P.SOURCE, head).decode().splitlines()) <= CONTROLS,
+             'REVIEW_EXTENSION_CHANGED')
+        expected_tree = git('rev-parse', pr['merge_commit_sha'] + '^{tree}').decode().strip()
+        need(git('rev-parse', head + '^{tree}').decode().strip() == expected_tree, 'REVIEW_TREE_CHANGED')
+        runs = github('actions/workflows/quality.yml/runs?head_sha=' + head)['workflow_runs']
+        runs = [r for r in runs if r['head_sha'] == head and r['event'] == 'pull_request'
+                and r['status'] == 'completed' and r['conclusion'] == 'success']
+        need(bool(runs), 'QUALITY_REQUIRED')
+        run = runs[0]
+        F.require_run(run, head, '.github/workflows/quality.yml', 'pull_request')
+        jobs = github('actions/runs/' + str(run['id']) + '/attempts/' + str(run['run_attempt']) + '/jobs?per_page=100')['jobs']
+        required = {'quality', 'change-scope', 'recharge (guards)'}
+        if role == 'source':
+            required.add('recharge (online-engine)')
+        need(required <= {j['name'] for j in jobs if j['conclusion'] == 'success'}
+             and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_JOBS_REQUIRED')
+        evidence, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
+        need(evidence.get('repository') == REPO and evidence.get('headSha') == head
+             and evidence.get('pullRequest') == pr['number'] and evidence.get('testedTree') == expected_tree
+             and evidence.get('runId') == run['id'] and evidence.get('runAttempt') == run['run_attempt'], 'QUALITY_RECEIPT_CHANGED')
+        records[role] = {'commit': pr['merge_commit_sha'], 'tree': expected_tree, 'pullRequest': pr['number'],
+                         'head': head, 'runId': str(run['id']), 'runAttempt': str(run['run_attempt']),
+                         'sourceReceiptSha256': digest}
+    need(records['control']['tree'] == tree, 'CONTROL_TREE_CHANGED')
     main_runs = github('actions/workflows/quality.yml/runs?head_sha=' + commit)['workflow_runs']
     main_runs = [r for r in main_runs if r['head_sha'] == commit and r['event'] == 'push'
                  and r['status'] == 'completed' and r['conclusion'] == 'success']
     need(bool(main_runs), 'MAIN_QUALITY_REQUIRED')
     F.require_run(main_runs[0], commit, '.github/workflows/quality.yml', 'push')
-    result = {'commit': commit, 'tree': tree, 'pullRequest': 679, 'head': head,
-              'runId': str(run['id']), 'runAttempt': str(run['run_attempt']), 'sourceReceiptSha256': digest}
+    result = {**records['control'], 'sourceVerification': records['source']}
     P.verify_quality(result, commit, tree)
     return result
 
 
 def native_plan(c, native):
     return {**native, 'contractSha256': sha((HERE / P.CONTRACT_FILE).read_bytes()),
-            'controlSources': c['controlPins']}
+            'controlSources': {**c['controlPins'], P.CONTRACT_FILE: sha((HERE / P.CONTRACT_FILE).read_bytes())}}
 
 
 def build(c):

@@ -60,7 +60,11 @@ def validate_contract(c):
 
 
 def verify_quality(q, commit, tree):
-    need(q.get('commit') == commit and q.get('tree') == tree and q.get('pullRequest') == 679
+    need(q.get('commit') == commit and q.get('tree') == tree and isinstance(q.get('pullRequest'), int)
+         and q['pullRequest'] >= 679
+         and q.get('sourceVerification', {}).get('pullRequest') == 679
+         and q['sourceVerification'].get('commit') == '6815b33712de6e6c06392e6694df86aaa105582b'
+         and q['sourceVerification'].get('sourceReceiptSha256') == '765794a16baf2728a7eedba1157ed9924d57b8b51e4b5f18742743723dc75b39'
          and re.fullmatch('[a-f0-9]{40}', q.get('head', ''))
          and re.fullmatch('[a-f0-9]{64}', q.get('sourceReceiptSha256', ''))
          and re.fullmatch('[1-9][0-9]*', q.get('runId', '')), 'QUALITY_REQUIRED')
@@ -124,7 +128,7 @@ def engine(c, plan):
              and all(re.fullmatch('[a-f0-9]{40}', selected.get(n, '')) for n in ('commit', 'tree'))
              and all(re.fullmatch('[1-9][0-9]*', selected.get(n, '')) for n in ('workflowRunId', 'workflowRunAttempt'))
              and selected.get('contractSha256') == sha((HERE / CONTRACT_FILE).read_bytes())
-             and selected.get('controlSources') == contract['controlPins']
+             and selected.get('controlSources') == {**contract['controlPins'], CONTRACT_FILE: sha((HERE / CONTRACT_FILE).read_bytes())}
              and selected.get('artifactUrl') == core.artifact_url(selected['commit'])
              and all(re.fullmatch('[a-f0-9]{64}', selected.get(n, '')) for n in ('artifactSha256', 'buildProofSha256')),
              'PLAN_CHANGED')
@@ -177,7 +181,7 @@ def release(plan, c):
     validate_contract(c)
     if plan['mode'] == 'parent':
         need(plan['contractSha256'] == sha((HERE / CONTRACT_FILE).read_bytes())
-             and plan['controlSources'] == c['controlPins'], 'PARENT_PLAN_CHANGED')
+             and plan['controlSources'] == {**c['controlPins'], CONTRACT_FILE: sha((HERE / CONTRACT_FILE).read_bytes())}, 'PARENT_PLAN_CHANGED')
         return capture(c)
     return engine(c, plan).release(plan, c)
 

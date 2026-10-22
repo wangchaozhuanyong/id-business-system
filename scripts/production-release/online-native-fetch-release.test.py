@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('native_fetch_test_release', HERE / 'online-native-fetch-release.py')
@@ -15,9 +16,11 @@ class NativeFetchPublicationTests(unittest.TestCase):
     def setUp(self):
         self.c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
         self.plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1',
-                     'contractSha256': P.sha((HERE / P.CONTRACT_FILE).read_bytes()), 'controlSources': self.c['controlPins'],
+                     'contractSha256': P.sha((HERE / P.CONTRACT_FILE).read_bytes()), 'controlSources': {**self.c['controlPins'], P.CONTRACT_FILE: P.sha((HERE / P.CONTRACT_FILE).read_bytes())},
                      'qualitySourceEvidence': {'commit': 'a' * 40, 'tree': 'b' * 40, 'pullRequest': 679,
-                         'head': 'c' * 40, 'sourceReceiptSha256': 'd' * 64, 'runId': '122'},
+                         'head': 'c' * 40, 'sourceReceiptSha256': 'd' * 64, 'runId': '122',
+                         'sourceVerification': {'pullRequest': 679, 'commit': '6815b33712de6e6c06392e6694df86aaa105582b',
+                             'sourceReceiptSha256': '765794a16baf2728a7eedba1157ed9924d57b8b51e4b5f18742743723dc75b39'}},
                      'nativeParentCapture': {'status': 'ONLINE_NATIVE_FETCH_PARENT_VERIFIED',
                          'baseline': {'commit': P.CURRENT}}}
         self.proof = {**self.plan, 'scope': P.SCOPE, 'runtimeSources': self.c['runtimeSources'],
@@ -86,6 +89,58 @@ class NativeFetchPublicationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             P.engine(json.loads((HERE / P.CONTRACT_FILE).read_bytes()), bad).validate_plan(
                 bad, json.loads((HERE / P.CONTRACT_FILE).read_bytes()))
+
+    def test_transport_includes_its_own_contract_without_a_self_hash_cycle(self):
+        pub = P.load('online-native-fetch-publication.py')
+        plan = pub.native_plan(self.c, {})
+        self.assertEqual(plan['controlSources'][P.CONTRACT_FILE], P.sha((HERE / P.CONTRACT_FILE).read_bytes()))
+        self.assertNotIn(P.CONTRACT_FILE, self.c['controlPins'])
+        with self.assertRaises(RuntimeError):
+            P.release({**plan, 'mode': 'parent', 'controlSources': self.c['controlPins']}, self.c)
+
+    def test_control_successor_reuses_source_evidence_and_checks_merged_ancestry(self):
+        pub = P.load('online-native-fetch-publication.py')
+        merged = '6815b33712de6e6c06392e6694df86aaa105582b'
+        source_head, control_head = 'c' * 40, 'd' * 40
+        source_tree, tree, commit = 'e' * 40, 'b' * 40, 'a' * 40
+        repo = {'full_name': pub.REPO}
+        source = {'number': 679, 'merged_at': 'synthetic', 'base': {'ref': 'main'},
+                  'merge_commit_sha': merged, 'head': {'sha': source_head, 'repo': repo}}
+        control = {'number': 680, 'merged_at': 'synthetic', 'base': {'ref': 'main'},
+                   'merge_commit_sha': commit, 'head': {'sha': control_head, 'repo': repo}}
+        def run(head, event='pull_request'):
+            return {'id': 123 if head == source_head else 124, 'run_attempt': 1,
+                    'head_sha': head, 'event': event, 'status': 'completed', 'conclusion': 'success',
+                    'path': '.github/workflows/quality.yml', 'repository': repo}
+        def github(path):
+            if path == 'pulls/679': return source
+            if path.startswith('commits/'): return [control]
+            if path.startswith('actions/workflows/'):
+                head = path.split('head_sha=')[1]
+                return {'workflow_runs': [run(head, 'push' if head == commit else 'pull_request')]}
+            if path.endswith('/jobs?per_page=100'):
+                return {'jobs': [{'name': n, 'conclusion': 'success'} for n in
+                    ('quality', 'change-scope', 'recharge (guards)', 'recharge (online-engine)')]}
+            raise AssertionError(path)
+        ancestors = []
+        def git(*args):
+            if args[0] == 'merge-base':
+                ancestors.append(args[2:]); return b''
+            if args[0] == 'diff': return b''
+            if args[0] == 'rev-parse':
+                return (source_tree if args[1].startswith((source_head, merged)) else tree).encode()
+            raise AssertionError(args)
+        def artifact(r, _name, _member):
+            is_source = r['head_sha'] == source_head
+            value = {'repository': pub.REPO, 'headSha': r['head_sha'],
+                     'pullRequest': 679 if is_source else 680, 'testedTree': source_tree if is_source else tree,
+                     'runId': r['id'], 'runAttempt': 1}
+            return value, '765794a16baf2728a7eedba1157ed9924d57b8b51e4b5f18742743723dc75b39'
+        with patch.object(pub, 'github', github), patch.object(pub, 'git', git), patch.object(pub.F, 'artifact_json', artifact):
+            result = pub.quality(commit, tree)
+        self.assertEqual(result['pullRequest'], 680)
+        self.assertEqual(result['sourceVerification']['pullRequest'], 679)
+        self.assertEqual(ancestors, [(P.SOURCE, source_head), (merged, control_head)])
 
     def test_current_control_and_source_checks(self):
         pub = P.load('online-native-fetch-publication.py')
