@@ -26,6 +26,9 @@ ENGINE_FILES = frozenset(('SOURCE_MANIFEST.json', 'rpc.cjs', 'safe-media.cjs', '
         'execution-budget', 'proxy-worker', 'recharge-flow-acceptance', 'worker-heartbeat'))))
 SOURCES = frozenset((WORKER, *(ENGINE + n for n in ENGINE_FILES)))
 VALIDATION = frozenset((WORKER.replace('.ts', '.spec.ts'), 'docs/ONLINE_RECHARGE.md', 'docs/V2_TASKS.md'))
+DECLARATION = 'id-business-v2/online-recharge/persistence/worker.repository.d.ts'
+LOCAL_DECLARATION = '22bf2373b72952d93c4a7387eadcd5cecd96eb57ce96159e24f49a2aa399d8d2'
+NATIVE_DECLARATION = '37bd54208430a2c090e8bafd99f352cac7dfceb0d9ec83998f666dd812109246'
 UPDATED = ('api', 'online-recharge')
 PRESERVED = ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
 HEALTH = {'activeTasks': 0, 'mode': 'enabled', 'ready': True, 'rpcConnected': True, 'stopping': False}
@@ -71,6 +74,23 @@ def validate_contract(c):
     need(all(c['controlPins'].get(n) == v for n, v in inherited['controlPins'].items()), 'PARENT_CONTROLS_CHANGED')
     first = json.loads((HERE / 'online-checkout-first-open-contract.json').read_bytes())
     need(c['beforeEngineFiles'] == first['afterEngineFiles'], 'ENGINE_PARENT_CHANGED')
+    expected_native = {'id-business-v2/online-recharge/' + n: digest
+                       for n, digest in first['baseline']['apiOnlineFiles'].items()
+                       if 'id-business-v2/online-recharge/' + n in MODULES}
+    need(c.get('nativeParentApiModules') == expected_native, 'API_PARENT_CHANGED')
+    verify_parent_modules(c, c.get('buildParentApiModules'), c.get('nativeParentApiModules'))
+
+
+
+def verify_parent_modules(c, local, native):
+    # The retained native declaration predates the current generated type projection.
+    # Runtime JavaScript and its map must reproduce byte-for-byte; the one known
+    # declaration difference is pinned independently, never accepted dynamically.
+    need(type(local) is dict and type(native) is dict and set(local) == set(native) == MODULES
+         and local == c.get('buildParentApiModules') and native == c.get('nativeParentApiModules')
+         and {n for n in MODULES if local[n] != native[n]} == {DECLARATION}
+         and local[DECLARATION] == LOCAL_DECLARATION and native[DECLARATION] == NATIVE_DECLARATION,
+         'PARENT_COMPILE_CHANGED')
 
 
 def verify_quality(value, commit):
@@ -96,7 +116,8 @@ def verify_proof(proof, plan, c, payload, h):
     need(parent.get('status') == 'ONLINE_EXECUTION_PARENT_VERIFIED'
          and parent.get('commit') == CURRENT and parent.get('businessActions') == 0
          and set(proof.get('apiModules', {})) == MODULES
-         and proof.get('parentModulesReproduced') == parent['baseline']['apiModules'], 'PARENT_COMPILE_CHANGED')
+         and proof.get('parentNativeModules') == parent['baseline']['apiModules'], 'PARENT_COMPILE_CHANGED')
+    verify_parent_modules(c, proof.get('parentModulesReproduced'), parent['baseline']['apiModules'])
     engine = {n.removeprefix(ENGINE): v for n, v in c['productionSources'].items() if n.startswith(ENGINE)}
     expected = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
                 **{'online-recharge/source/' + n: v for n, v in engine.items()},
@@ -131,6 +152,7 @@ def capture(c):
         'proofs': {'bitbrowser-history-build-proof.json': c['parentPlan']['buildProofSha256']},
         **p.runtime(d, states), 'database': p.database(d, states['api']),
         'backupNormalizerPath': normalizer, 'backupNormalizerSha256': sha(Path(normalizer).read_bytes())}
+    need(baseline['apiModules'] == c['nativeParentApiModules'], 'API_PARENT_CHANGED')
     need(baseline['database']['pending'] == 0 and shutil.disk_usage(BASE).free > 6 * 1024**3, 'PARENT_NOT_READY')
     return {'status': 'ONLINE_EXECUTION_PARENT_VERIFIED', 'commit': CURRENT, 'baseline': baseline,
             'parentProofSha256': c['parentPlan']['buildProofSha256'], 'businessActions': 0}

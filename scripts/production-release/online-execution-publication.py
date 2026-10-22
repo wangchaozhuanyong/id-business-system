@@ -110,7 +110,7 @@ def build(c):
     before = h.file_inventory(dist)
     selected = {n: before[n] for n in P.MODULES}
     (OUT / 'parent-api-reproduction.json').write_text(json.dumps(selected, sort_keys=True, indent=2) + '\n')
-    need(selected == capture['baseline']['apiModules'], 'PARENT_COMPILE_CHANGED')
+    P.verify_parent_modules(c, selected, capture['baseline']['apiModules'])
     shared = h.file_inventory(context / 'packages/shared/dist')
     client = h.file_inventory(context / 'node_modules/.prisma/client')
     (context / P.WORKER).write_bytes(ROOT.joinpath(P.WORKER).read_bytes())
@@ -137,6 +137,7 @@ def build(c):
         'contractSha256': plan['contractSha256'], 'productionSources': c['productionSources'],
         'controlSources': c['controlPins'], 'apiModules': {n: after[n] for n in P.MODULES},
         'files': h.file_inventory(payload), 'parentModulesReproduced': selected,
+        'parentNativeModules': capture['baseline']['apiModules'],
         'baselineSharedUnchanged': True, 'baselineClientUnchanged': True,
         'qualityVerification': qa, 'nativeParentCapture': capture, 'businessActions': 0, 'migrationPerformed': False}
     P.verify_proof(proof, proof, c, payload, h)

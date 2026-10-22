@@ -1209,7 +1209,8 @@ export function onlineSettingsCommands(part, paths) {
           '40ad028a5ddc6aedd9f8e43d3dd33907e4c9faad',
           '327bfbc03bd414ae8328f7f2a875bcc4dcd8998d',
           'bcd67c4dfe3944aa6c0498699a619395f04ed296',
-          '957afa4e7d9c776b0109bf7f217150fd3c545e04'
+          '957afa4e7d9c776b0109bf7f217150fd3c545e04',
+          '5930f71e00d178a867526766e16e9aee14077244'
         ],
         ...controls,
         ...(paths.some((path) => path.startsWith('scripts/production-release/online-execution-'))

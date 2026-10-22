@@ -56,6 +56,14 @@ class ExecutionRelease(unittest.TestCase):
     def test_services_preserved(self):
         self.rejected(lambda c: c['updatedServices'].append('admin'))
 
+    def test_only_pinned_declaration_difference_is_allowed(self):
+        P.verify_parent_modules(self.c, self.c['buildParentApiModules'], self.c['nativeParentApiModules'])
+        for name in P.MODULES:
+            local = {**self.c['buildParentApiModules'], name: 'f' * 64}
+            with self.assertRaises(RuntimeError):
+                P.verify_parent_modules(self.c, local, self.c['nativeParentApiModules'])
+        self.rejected(lambda c: c['nativeParentApiModules'].update({P.DECLARATION: 'a' * 64}))
+
     def test_quality_required(self):
         with self.assertRaises(RuntimeError):
             P.verify_quality({}, 'b' * 40)
@@ -80,13 +88,14 @@ class ExecutionRelease(unittest.TestCase):
                 target.write_text('synthetic fixture ' + name)
                 api[name] = P.sha(target.read_bytes())
             parent = {'status': 'ONLINE_EXECUTION_PARENT_VERIFIED', 'commit': P.CURRENT,
-                      'baseline': {'apiModules': api}, 'businessActions': 0}
+                      'baseline': {'apiModules': self.c['nativeParentApiModules']}, 'businessActions': 0}
             quality = {'sources': {'commit': 'a' * 40, 'runId': '1', 'sourceReceiptSha256': 'c' * 64},
                        'release': {'commit': 'b' * 40, 'runId': '2'}}
             proof = {'commit': 'b' * 40, 'tree': 'd' * 40, 'workflowRunId': '3', 'workflowRunAttempt': '1',
                 'contractSha256': P.sha((HERE / P.CONTRACT_FILE).read_bytes()), 'scope': P.SCOPE, 'recipe': P.RECIPE,
                 'qualityVerification': quality, 'nativeParentCapture': parent, 'apiModules': api,
-                'parentModulesReproduced': api, 'productionSources': sources, 'controlSources': self.c['controlPins'],
+                'parentModulesReproduced': self.c['buildParentApiModules'],
+                'parentNativeModules': self.c['nativeParentApiModules'], 'productionSources': sources, 'controlSources': self.c['controlPins'],
                 'businessActions': 0, 'migrationPerformed': False,
                 'baselineSharedUnchanged': True, 'baselineClientUnchanged': True, 'files': h.file_inventory(payload)}
             P.verify_proof(proof, proof, self.c, payload, h)
@@ -117,6 +126,31 @@ class ExecutionRelease(unittest.TestCase):
             self.assertEqual(driver.calls[0][:2], ('docker', 'build'))
             with self.assertRaises(RuntimeError):
                 h.build_image(driver, context, 'synthetic-reference', 'admin', {}, stage)
+
+    def test_role_projections_are_written_before_the_atomic_pointer_switch(self):
+        commit = 'b' * 40
+        p = P.engine(self.c, {'commit': commit})
+        _helper, driver, _retired = p.helpers()
+        with tempfile.TemporaryDirectory(dir=P.ROOT / '.runtime') as folder:
+            base = Path(folder)
+            target = base / 'release'
+            target.mkdir()
+            driver.BASE = base
+            manifest = {'scope': P.SCOPE,
+                'roleSourceProjections': {
+                    'api': {'sources': self.c['productionSources']},
+                    'online-recharge': {'commit': commit, 'sources': {}}},
+                'bitbrowserHistoryPublication': {'status': 'synthetic'},
+                'apiCompiledArtifact': {'sha256': 'a' * 64}}
+            (target / 'release-manifest.json').write_text(json.dumps(manifest))
+            driver.point_current(target, 'synthetic-fixture')
+            actual = json.loads((target / 'release-manifest.json').read_bytes())
+            self.assertEqual((base / 'current').resolve(), target)
+            self.assertEqual(actual['roleSourceProjections']['api']['sources'],
+                             {P.WORKER: self.c['productionSources'][P.WORKER]})
+            self.assertEqual(actual['roleSourceProjections']['online-recharge']['sources'],
+                             {n: v for n, v in self.c['productionSources'].items() if n.startswith(P.ENGINE)})
+            self.assertEqual(actual['onlineExecutionPublication'], {'status': 'synthetic'})
 
     def test_existing_protection_engine_is_retained(self):
         p = P.engine(self.c, {})
