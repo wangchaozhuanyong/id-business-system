@@ -1,3 +1,59 @@
+// Finite execution repair: API lease finalization plus the existing ONLINE sidecar.
+export const onlineExecutionRepairPaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/safe-media.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/evidence-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/execution-budget.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/proxy-worker.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/worker-heartbeat.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/auth-page-detect.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/browser-pool.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/verification-runtime.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineExecutionRepairControls = Object.freeze([
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  '.github/workflows/online-execution-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-execution-' + name
+  )
+]);
+export function isOnlineExecutionRepairOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    onlineExecutionRepairPaths
+      .filter((path) => path.startsWith('apps/'))
+      .every((path) => paths.includes(path)) &&
+    paths.every(
+      (path) =>
+        onlineExecutionRepairPaths.includes(path) || onlineExecutionRepairControls.includes(path)
+    )
+  );
+}
+export function isOnlineExecutionRepairControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some(
+      (path) =>
+        onlineExecutionRepairControls.includes(path) && path !== 'scripts/ci-recharge-scope.mjs'
+    ) &&
+    paths.every((path) => onlineExecutionRepairControls.includes(path))
+  );
+}
 const applicationPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/auditPresentation.spec.ts',
   'apps/api/src/id-business-v2/online-recharge/checkout-recovery.spec.ts',
@@ -989,6 +1045,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineExecutionRepairOnly(paths)) return true;
   if (
     isOnlineCheckoutFirstOpenOnly(paths) ||
     isOnlineCardVisibilityOnly(paths) ||
@@ -1033,6 +1090,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineExecutionRepairControlsOnly(paths)) return true;
   if (isOnlineCheckoutFirstOpenControlsOnly(paths)) return true;
   if (isOnlineCardVisibilityControlsOnly(paths)) return true;
   if (isOnlineCardControlDiagnosticsControlsOnly(paths)) return true;
@@ -1060,6 +1118,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  const execution = isOnlineExecutionRepairOnly(paths);
+  const executionControls = isOnlineExecutionRepairControlsOnly(paths);
   const controlsOnly = isOnlineSettingsControlsOnly(paths);
   const firstOpen = isOnlineCheckoutFirstOpenOnly(paths);
   const firstOpenControls = isOnlineCheckoutFirstOpenControlsOnly(paths);
@@ -1136,6 +1196,16 @@ export function onlineSettingsCommands(part, paths) {
         'scripts/ci-change-scope.test.mjs'
       ]
     ];
+    if (execution || executionControls)
+      return [
+        ...controls,
+        ...(paths.some((path) => path.startsWith('scripts/production-release/online-execution-'))
+          ? [['python3', '-B', 'scripts/production-release/online-execution-release.test.py']]
+          : []),
+        ...(execution
+          ? ['check:v2-module-architecture', 'check:v2-isolation'].map((name) => npm('run', name))
+          : [])
+      ];
     if (firstOpen || firstOpenControls)
       return [
         ...controls,
@@ -1501,6 +1571,7 @@ export function onlineSettingsCommands(part, paths) {
     ];
   }
   if (
+    execution ||
     firstOpen ||
     cardVisibility ||
     cardDiagnostics ||

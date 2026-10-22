@@ -34,6 +34,7 @@ import {
   chatgptSalesParts
 } from './ci-chatgpt-sales-scope.mjs';
 import {
+  isOnlineExecutionRepairOnly,
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
   isOnlineSettingsTestsOnly,
@@ -3107,6 +3108,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isChatgptSalesOnly(paths)) return [...chatgptSalesParts];
   if (isSharedBankCardControlsOnly(paths)) return ['guards'];
   if (isSharedBankCardOnly(paths)) return [...sharedBankCardParts];
+  if (isOnlineExecutionRepairOnly(paths)) return ['guards', 'api', 'online-engine'];
   if (isOnlineLegacyCloseOnly(paths)) return ['guards', 'api'];
   if (isOnlineSessionPreflightOnly(paths)) return ['guards', 'admin'];
   if (isOnlineSettingsTestsOnly(paths)) return ['guards', 'online-engine'];
