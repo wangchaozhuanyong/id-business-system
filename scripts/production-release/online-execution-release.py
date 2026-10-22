@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import traceback
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -32,6 +33,13 @@ NATIVE_DECLARATION = '37bd54208430a2c090e8bafd99f352cac7dfceb0d9ec83998f666dd812
 UPDATED = ('api', 'online-recharge')
 PRESERVED = ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
 HEALTH = {'activeTasks': 0, 'mode': 'enabled', 'ready': True, 'rpcConnected': True, 'stopping': False}
+SOURCE_MERGE = 'ab438aac86cb5fd34efd13db4e1260ac15d3f448'
+SOURCE_HEAD = 'c9c6d3f6b744b55101ae15cd95975359740c7ead'
+SOURCE_RUN = '39722667668'
+CONTROL_PATHS = frozenset(('.github/workflows/online-execution-publication.yml',
+    'scripts/ci-online-settings-scope.mjs', 'scripts/ci-online-settings-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs', *('scripts/production-release/online-execution-' + n
+    for n in ('release.py', 'publication.py', 'release.test.py', 'contract.json'))))
 
 
 def need(value, code):
@@ -45,6 +53,20 @@ def sha(raw):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+
+
+def failure_report(error, plan):
+    # Never export exception messages, local absolute paths, command arguments or locals.
+    code = str(error)
+    if not re.fullmatch(r'(?:ONLINE_EXECUTION|SETTLED_CHECKOUT|BITBROWSER_HISTORY|RECHARGE_CHECKOUT|RECHARGE_RECORD|RECHARGE_AVAILABILITY|ONLINE_QUERY_NETWORK|PROXY_RESULT_IDENTITY)_[A-Z0-9_]{1,100}', code):
+        code = 'ONLINE_EXECUTION_REMOTE_FAILED'
+    frames = []
+    for frame in traceback.extract_tb(error.__traceback__):
+        name = Path(frame.filename).name
+        if name in plan['controlSources'] and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}', frame.name):
+            frames.append({'file': name, 'function': frame.name, 'line': frame.lineno})
+    return {'status': 'FAILED', 'code': code, 'mode': plan['mode'], 'businessActions': 0,
+            'exceptionType': type(error).__name__, 'frames': frames[-8:]}
 
 
 def load(name):
@@ -94,12 +116,17 @@ def verify_parent_modules(c, local, native):
 
 
 def verify_quality(value, commit):
-    need(type(value) is dict and set(value) == {'sources', 'release'}
+    need(type(value) is dict and set(value) == {'sources', 'controls', 'release'}
+         and value['sources'].get('commit') == SOURCE_HEAD
+         and str(value['sources'].get('runId')) == SOURCE_RUN
+         and value['sources'].get('pullRequest') == 673
          and value['release'].get('commit') == commit
          and all(re.fullmatch('[a-f0-9]{40}', v.get('commit', ''))
              and re.fullmatch('[1-9][0-9]*', str(v.get('runId', '')))
              for v in value.values())
-         and re.fullmatch('[a-f0-9]{64}', value['sources'].get('sourceReceiptSha256', '')), 'QUALITY_REQUIRED')
+         and all(re.fullmatch('[a-f0-9]{64}', value[n].get('sourceReceiptSha256', ''))
+                 and isinstance(value[n].get('pullRequest'), int) for n in ('sources', 'controls')),
+         'QUALITY_REQUIRED')
 
 
 def verify_proof(proof, plan, c, payload, h):

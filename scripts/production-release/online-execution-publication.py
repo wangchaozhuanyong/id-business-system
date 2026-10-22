@@ -56,28 +56,44 @@ def quality(c, commit):
     need(len(prs) == 1, 'MERGED_SOURCE_REQUIRED')
     pr = prs[0]
     selected = pr['head']['sha']
-    git('merge-base', '--is-ancestor', P.SOURCE, selected)
+    source_pr = github('pulls/673')
+    need(source_pr.get('merged_at') and source_pr['base']['ref'] == 'main'
+         and source_pr['head']['sha'] == P.SOURCE_HEAD
+         and source_pr['merge_commit_sha'] == P.SOURCE_MERGE, 'SOURCE_REVIEW_CHANGED')
+    git('merge-base', '--is-ancestor', P.SOURCE, P.SOURCE_HEAD)
+    git('merge-base', '--is-ancestor', P.SOURCE_MERGE, commit)
+    changed = set(git('diff', '--name-only', P.SOURCE_MERGE, commit).decode().splitlines())
+    need(changed <= P.CONTROL_PATHS, 'SOURCE_EXTENSION_CHANGED')
     evidence = {}
-    for role, head, event in (('sources', selected, 'pull_request'), ('release', commit, 'push')):
+    for role, head, event in (('sources', P.SOURCE_HEAD, 'pull_request'),
+                              ('controls', selected, 'pull_request'), ('release', commit, 'push')):
         runs = github('actions/workflows/quality.yml/runs?head_sha=' + head)['workflow_runs']
         runs = [r for r in runs if r['head_sha'] == head and r['event'] == event
                 and r['status'] == 'completed' and r['conclusion'] == 'success']
         need(bool(runs), 'QUALITY_REQUIRED')
         run = runs[0]
+        if role == 'sources':
+            need(str(run['id']) == P.SOURCE_RUN, 'SOURCE_RUN_CHANGED')
         F.require_run(run, head, '.github/workflows/quality.yml', event)
         jobs = github('actions/runs/' + str(run['id']) + '/attempts/' + str(run['run_attempt']) + '/jobs?per_page=100')['jobs']
         passed = {j['name'] for j in jobs if j['conclusion'] == 'success'}
         need({'quality', 'change-scope'} <= passed
              and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_JOBS_REQUIRED')
-        evidence[role] = {'commit': head, 'runId': str(run['id']), 'runAttempt': str(run['run_attempt'])}
-        if role == 'sources':
-            need({'recharge (guards)', 'recharge (api)', 'recharge (online-engine)'} <= passed, 'SOURCE_QUALITY_REQUIRED')
+        record = {'commit': head, 'runId': str(run['id']), 'runAttempt': str(run['run_attempt'])}
+        if role in ('sources', 'controls'):
+            required = {'recharge (guards)'}
+            if role == 'sources':
+                required |= {'recharge (api)', 'recharge (online-engine)'}
+            need(required <= passed, 'SOURCE_QUALITY_REQUIRED')
             receipt, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
+            number = 673 if role == 'sources' else pr['number']
+            tree_commit = P.SOURCE_MERGE if role == 'sources' else commit
             need(receipt.get('repository') == REPO and receipt.get('headSha') == head
-                 and receipt.get('pullRequest') == pr['number'] and receipt.get('runId') == run['id']
+                 and receipt.get('pullRequest') == number and receipt.get('runId') == run['id']
                  and receipt.get('runAttempt') == run['run_attempt']
-                 and receipt.get('testedTree') == git('rev-parse', commit + '^{tree}').decode().strip(), 'SOURCE_RECEIPT_CHANGED')
-            evidence[role].update(pullRequest=pr['number'], sourceReceiptSha256=digest)
+                 and receipt.get('testedTree') == git('rev-parse', tree_commit + '^{tree}').decode().strip(), 'SOURCE_RECEIPT_CHANGED')
+            record.update(pullRequest=number, sourceReceiptSha256=digest)
+        evidence[role] = record
     P.verify_quality(evidence, commit)
     return evidence
 
@@ -219,9 +235,9 @@ try:
  result=json.dumps(module.release(plan,c),sort_keys=True).encode()
  print(json.dumps({'zlibBase64':base64.b64encode(zlib.compress(result)).decode()}))
 except Exception as error:
- code=str(error)
- if not re.fullmatch('(?:ONLINE_EXECUTION|SETTLED_CHECKOUT|BITBROWSER_HISTORY|RECHARGE_CHECKOUT|RECHARGE_RECORD|RECHARGE_AVAILABILITY|ONLINE_QUERY_NETWORK)_[A-Z0-9_]+',code):code='ONLINE_EXECUTION_REMOTE_FAILED'
- print(json.dumps({'status':'FAILED','code':code,'mode':plan['mode'],'businessActions':0}))
+ report={'status':'FAILED','code':'ONLINE_EXECUTION_REMOTE_FAILED','mode':plan['mode'],'businessActions':0}
+ if 'module' in locals() and hasattr(module,'failure_report'):report=module.failure_report(error,plan)
+ print(json.dumps(report))
  raise SystemExit(1) from None
 '''
     source = 'PLAN=' + repr(base64.b64encode(zlib.compress(json.dumps(selected).encode())).decode())
