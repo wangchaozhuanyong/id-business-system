@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, sep, isAbsolute, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { checkMode, selectedParts } from './ci-recharge-scope.mjs';
+import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 import {
   onlineExecutionRepairPaths,
   onlineExecutionRepairControls,
@@ -2929,6 +2929,10 @@ test('execution repair selects API and complete sidecar regression without Admin
   assert.equal(isOnlineExecutionRepairOnly(paths), true);
   assert.equal(isOnlineSettingsOnly(paths), true);
   assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const required of onlineExecutionRepairPaths.filter((path) => path.startsWith('apps/'))) {
+    assert.equal(isOnlineExecutionRepairOnly(paths.filter((path) => path !== required)), false);
+  }
   const api = onlineSettingsCommands('api', paths)
     .map((args) => args.join(' '))
     .join('\n');

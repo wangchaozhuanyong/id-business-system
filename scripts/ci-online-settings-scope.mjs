@@ -1198,6 +1198,19 @@ export function onlineSettingsCommands(part, paths) {
     ];
     if (execution || executionControls)
       return [
+        // These original review commits are not all reachable from main after squash merges.
+        [
+          'git',
+          'fetch',
+          '--no-tags',
+          '--no-write-fetch-head',
+          'origin',
+          'd08eefd5aa5c718918953ed60b9e34a67e12f327',
+          '40ad028a5ddc6aedd9f8e43d3dd33907e4c9faad',
+          '327bfbc03bd414ae8328f7f2a875bcc4dcd8998d',
+          'bcd67c4dfe3944aa6c0498699a619395f04ed296',
+          '957afa4e7d9c776b0109bf7f217150fd3c545e04'
+        ],
         ...controls,
         ...(paths.some((path) => path.startsWith('scripts/production-release/online-execution-'))
           ? [['python3', '-B', 'scripts/production-release/online-execution-release.test.py']]
