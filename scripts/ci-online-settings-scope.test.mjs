@@ -3050,7 +3050,10 @@ test('native fetch repair checks only guards and executor and rejects unrelated 
   assert.equal(checkMode(paths), 'recharge');
   assert.equal(isOnlineNativeFetchControlsOnly(onlineNativeFetchControls), true);
   assert.deepEqual(selectedParts(onlineNativeFetchControls), ['guards']);
-  const guards = onlineSettingsCommands('guards', paths).flat().join(' ');
+  const guardCommands = onlineSettingsCommands('guards', paths);
+  assert.deepEqual(guardCommands[0].slice(0, 2), ['git', 'fetch']);
+  assert.ok(guardCommands[0].includes('40ad028a5ddc6aedd9f8e43d3dd33907e4c9faad'));
+  const guards = guardCommands.flat().join(' ');
   assert.match(guards, /online-native-fetch-release.test.py/);
   const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
   assert.match(checks, /session-routing-browser.test.cjs/);
