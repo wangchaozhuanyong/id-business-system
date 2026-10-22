@@ -4,7 +4,7 @@
   "scope": "ONLINE_HUMAN_VERIFICATION_20261022",
   "recipe": "online-human-verification-20261022",
   "expectedCurrent": "f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b",
-  "sourceReviewCommit": "e67917a72d03e0e17f0f2e4e038105374e59230f",
+  "sourceReviewCommit": "4b89b347fdff737cb1267c4c3f523a8c67316ede",
   "sourcePullRequest": 676,
   "productionSources": {
     "apps/admin/src/v2/features/online-recharge/OnlineHumanVerification.vue": "9276195441ee6ecd02f154efe366bfc494d6a9d5244992639a0c9befb2b6d9dd",
@@ -13,9 +13,9 @@
     "apps/admin/src/v2/features/online-recharge/labels.ts": "f54fffe34b156c92e29875558ddca622bcf5a73e0565baaabdafdb8ca7a89b89",
     "apps/admin/src/v2/features/online-recharge/online-recharge.css": "4f28bb690eb5e8c0db9a48e8861a1d4896e2f5262e4dc0807907b11077f6eedd",
     "apps/api/src/id-business-v2/online-recharge/admin.controller.ts": "e4e818d737d848d2d817fe49eb6a119c56c73f09ddde3c9480e1f60d20534485",
-    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "6d5ad80abfe78a0a0f237c5259e872725772b5e08925c0104543a3a4c5f40668",
+    "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "9ae7efc8553466e44cb278e78379e4bef8fb440d3ee73698fe36640610156dc1",
     "apps/api/src/id-business-v2/online-recharge/engine/human-verification.cjs": "9a731f145038bd2d56cfe9b6c59b15087c924c448dca297fdca0386a412b09b6",
-    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs": "aa0093a51481fee49cc981d2d32962e015a385e02d414a756102fd51079ff90a",
+    "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs": "fe222e6300fb743ec3d2a03e0a7661493b9650183a41c6c42f2126fc2110c600",
     "apps/api/src/id-business-v2/online-recharge/engine/test/human-verification.test.cjs": "24830533e1155596f871e1da433b4d55af691321dded7c1fc54436796bbe0f2e",
     "apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs": "fe77ea72a22df22830c6ed156ef2b0d95579907ce960879cc2cf883113a51dac",
     "apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js": "cda7479b0fd8cf6e24b2f0755264fbbb86b16487be7432f8fed0642d3d314bf7",
@@ -35,7 +35,7 @@
     "apps/api/src/id-business-v2/online-recharge/plan-region.spec.ts": "fd2069405283bffea97e16f91ee03e5e565f2eb8cb1c55be6d5cd04f52b23337",
     "apps/api/src/id-business-v2/online-recharge/proxy-country.spec.ts": "8ab36185863ad17a7b64d637080fa21253649de900628e32ddf3ce5cee085e63",
     "apps/api/src/id-business-v2/online-recharge/proxy-tests.spec.ts": "b51848799cf8696cfc0b8a4d59faafa1723b6aa84ab0a4c990af774bd7a24739",
-    "docs/ONLINE_RECHARGE.md": "9b560c5a3faef976ff684e16f515e568ae714ccbdea9f8a27b4be277a786bf44",
+    "docs/ONLINE_RECHARGE.md": "8bc4a1def904f008cc7c36bc583dddec9ac3fae80d0881fae907429a7bb052b5",
     "docs/V2_TASKS.md": "8ebf808b2f1c9f991713c51ec381d270d95261cbc288cc343f1479e9467a93cb"
   },
   "parentPlan": {
@@ -353,7 +353,7 @@
     "settled-checkout-publication.py": "63c902b0ef12282a50a671a9cf5a47718fecb32fa7185b6ef53753e6137c7403",
     "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260",
     "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
-    "online-human-verification-release.py": "10df6457b28f739298c5c9b8340fb26feacc312b7632c2620b9b7a16a22b63bf",
+    "online-human-verification-release.py": "a25d5aaed1d364b0b0ad70083a7124675d0daa1fece65d1fa14fad6f2b340778",
     "online-human-verification-publication.py": "f0e230283b14288111df754669a879ea97838161482ca6e1cb984fb2839a0e18",
     "online-human-verification-release.test.py": "9ce656c357a053188d8767e29181ce70b1fe8d1f796897af47ca6a320bc65541"
   },

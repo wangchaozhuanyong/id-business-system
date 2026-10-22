@@ -16,7 +16,7 @@ SCOPE = 'ONLINE_HUMAN_VERIFICATION_20261022'
 RECIPE = 'online-human-verification-20261022'
 CONTRACT_FILE = 'online-human-verification-contract.json'
 CURRENT = 'f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b'
-SOURCE = 'e67917a72d03e0e17f0f2e4e038105374e59230f'
+SOURCE = '4b89b347fdff737cb1267c4c3f523a8c67316ede'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine/'
 API = frozenset('apps/api/src/id-business-v2/online-recharge/' + n + '.ts' for n in (
     'admin.controller', 'human-verification.service', 'online-recharge.module',
