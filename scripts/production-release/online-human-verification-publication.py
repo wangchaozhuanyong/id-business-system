@@ -113,9 +113,9 @@ def quality(c, commit):
     need(set(git('diff', '--name-only', P.SOURCE, head).decode().splitlines()) <= CONTROL_PATHS, 'SOURCE_EXTENSION_CHANGED')
     controls = github('pulls/' + str(P.CONTROL_PR))
     need(controls.get('merged_at') and controls['base']['ref'] == 'main'
-         and controls['base']['sha'] == P.SOURCE_MAIN and controls['merge_commit_sha'] == commit, 'MERGED_CONTROL_REQUIRED')
+         and controls['base']['sha'] == P.CONTROL_BASE and controls['merge_commit_sha'] == commit, 'MERGED_CONTROL_REQUIRED')
     control_head = controls['head']['sha']
-    git('merge-base', '--is-ancestor', P.SOURCE_MAIN, control_head)
+    git('merge-base', '--is-ancestor', P.CONTROL_BASE, control_head)
     control_paths = {'scripts/production-release/online-human-verification-' + n
                      for n in ('release.py', 'publication.py', 'release.test.py', 'contract.json')}
     need(set(git('diff', '--name-only', P.SOURCE_MAIN, control_head).decode().splitlines()) == control_paths
@@ -145,7 +145,7 @@ def quality(c, commit):
                  and receipt.get('testedTree') == expected_tree, 'SOURCE_RECEIPT_CHANGED')
             record.update(pullRequest=number, sourceReceiptSha256=digest)
             record.update({'reviewedBusinessCommit': P.SOURCE, 'mainCommit': P.SOURCE_MAIN} if role == 'sources'
-                          else {'baseCommit': P.SOURCE_MAIN})
+                          else {'baseCommit': P.CONTROL_BASE})
         evidence[role] = record
     P.verify_quality(evidence, commit)
     return evidence
