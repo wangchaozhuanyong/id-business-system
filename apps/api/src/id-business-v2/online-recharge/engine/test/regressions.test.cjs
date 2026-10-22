@@ -109,6 +109,18 @@ async function sessionInstallFixture({
     install: () => module.exports.installChatGptSession(context, JSON.stringify(session))
   };
 }
+test('Session bootstrap preserves the original window.fetch function', async () => {
+  const f = await sessionInstallFixture({ body: { accessToken: sessionBearer() } });
+  await f.install();
+  const nativeFetch = async () => new Response('{}', { status: 401 });
+  const window = { location: { href: 'https://chatgpt.com/' }, fetch: nativeFetch };
+  vm.runInNewContext(
+    `(${f.calls.scripts[0].script.toString()})(${JSON.stringify(f.calls.scripts[0].payload)})`,
+    { window, URL, localStorage: { setItem() {} }, Request, Response }
+  );
+  assert.equal(window.fetch, nativeFetch);
+  assert.equal((await window.fetch('https://chatgpt.com/api/auth/csrf')).status, 401);
+});
 test('verified Cookie refresh supplies the fresh bearer without generic route injection', async () => {
   const refreshed = sessionBearer('fixture-account', 'fixture-user', 'refreshed');
   const body = {
@@ -152,15 +164,15 @@ test('verified Cookie refresh supplies the fresh bearer without generic route in
     }
   });
   assert.equal(routedSession.accessToken, refreshed);
+  const nativeFetch = async () =>
+    new Response(JSON.stringify({ nativeTransport: true }), { status: 401 });
   const window = {
     location: {
       origin: 'https://chatgpt.com',
       href: 'https://chatgpt.com/',
       hostname: 'chatgpt.com'
     },
-    fetch: async () => {
-      throw new Error('Synthetic fixture forbids network');
-    }
+    fetch: nativeFetch
   };
   vm.runInNewContext(
     `(${f.calls.scripts[0].script.toString()})(${JSON.stringify(f.calls.scripts[0].payload)})`,
@@ -173,10 +185,10 @@ test('verified Cookie refresh supplies the fresh bearer without generic route in
       Response
     }
   );
-  assert.equal(
-    (await (await window.fetch('https://chatgpt.com/api/auth/session')).json()).accessToken,
-    refreshed
-  );
+  assert.equal(window.fetch, nativeFetch);
+  const nativeResponse = await window.fetch('https://chatgpt.com/api/auth/session');
+  assert.equal(nativeResponse.status, 401);
+  assert.equal((await nativeResponse.json()).nativeTransport, true);
   assert.equal(f.logs.join('\n').includes(refreshed), false);
   assert.equal(security.redactText(refreshed).includes(refreshed), false);
 });
@@ -193,13 +205,20 @@ test('synthetic session bootstrap is isolated from third-party frames and fetch 
   });
   try {
     const context = await browser.newContext();
-    let thirdPartyFetches = 0;
+    let thirdPartyFetches = 0,
+      nativeSessionFetches = 0;
     await context.route('**/*', async (route) => {
       const url = new URL(route.request().url());
       if (url.origin === 'https://chatgpt.com' && url.pathname === '/') {
         await route.fulfill({
           contentType: 'text/html',
           body: '<main><button>New chat</button><textarea id="prompt-textarea"></textarea></main><iframe src="https://third-party.invalid/frame"></iframe>'
+        });
+      } else if (url.origin === 'https://chatgpt.com' && url.pathname === '/api/auth/session') {
+        nativeSessionFetches++;
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ accessToken: 'synthetic-native-session', nativeTransport: true })
         });
       } else if (url.origin === 'https://third-party.invalid') {
         if (url.pathname === '/api/auth/session') thirdPartyFetches++;
@@ -228,6 +247,11 @@ test('synthetic session bootstrap is isolated from third-party frames and fetch 
         Boolean((await (await fetch('/api/auth/session')).json()).accessToken)
       ),
       true
+    );
+    assert.equal(
+      nativeSessionFetches,
+      1,
+      'The bootstrap script must not replace native fetch responses'
     );
     const frame = page
       .frames()

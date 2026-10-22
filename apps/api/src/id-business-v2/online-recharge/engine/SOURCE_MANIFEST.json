@@ -376,9 +376,9 @@
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "eb478cd1dac60f066797761b323a49caadef74d7b87a68238a82899f925c6fa1",
+      "adaptedSha256": "08f5510119c884b63b2f88f67449a60dde513fae6a115160441d922c8f0c610a",
       "changed": true,
-      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation. 2026-10-19 Use routed real official-origin pages for existing late-verification browser fixtures; retain guest rejection after the one reload and the seventy-three-test total."
+      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation. 2026-10-19 Use routed real official-origin pages for existing late-verification browser fixtures; retain guest rejection after the one reload and the seventy-three-test total. 2026-10-22 Assert native fetch identity and unchanged real responses while retaining refreshed Cookie Session, third-party isolation and native authorization behavior."
     },
     {
       "path": "test/renewal-recheck.test.cjs",
@@ -656,9 +656,9 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "ae1b427aec38630546fdf8c54f6ec2804c1812c154b9a4f4b476024d5f0ed8ed",
+      "adaptedSha256": "32c515d4ea5e19766df601b74b1cfcb93beac007ef30da4d31e63ee65cc4360a",
       "changed": true,
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Remove the page fetch override and synthetic CSRF routing; preserve native fetch and server CSRF/Cookie pairing, retain exact GET Session network compatibility and existing login flow."
     },
     {
       "path": "upstream/stripe-payment.js",
@@ -747,9 +747,9 @@
     {
       "path": "test/session-routing-browser.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ccccb18feead16555df6378086406dcaa0bb37699c06daded94e5d8549c9937a",
+      "adaptedSha256": "217130ac07529d8764ce40c1b1762a7ca3a7c559c14aac5cf63cfb9637fa8dc8",
       "changed": true,
-      "reason": "Synthetic real routing and XHR-to-lazy-card readiness integration across actual native, standalone and pool launchers, DNS fenced and zero checkout/payment writes. 2026-10-19 Real isolated Chromium proves quoted login destinations do not cancel normal document navigation or a synthetic challenge resource; genuine authentication stops remain. 2026-10-19 Real isolated fetch/XHR regressions preserve authentication write responses, exact GET paths, URL/Request inputs, method overrides, single RequestInit evaluation and native failures. 2026-10-19 Exercise rendered hidden card and billing controls through installed native/standalone/pool launchers; assert hidden attributes unchanged, hidden copies empty and zero submit/click/write requests."
+      "reason": "Synthetic real routing and XHR-to-lazy-card readiness integration across actual native, standalone and pool launchers, DNS fenced and zero checkout/payment writes. 2026-10-19 Real isolated Chromium proves quoted login destinations do not cancel normal document navigation or a synthetic challenge resource; genuine authentication stops remain. 2026-10-19 Real isolated fetch/XHR regressions preserve authentication write responses, exact GET paths, URL/Request inputs, method overrides, single RequestInit evaluation and native failures. 2026-10-19 Exercise rendered hidden card and billing controls through installed native/standalone/pool launchers; assert hidden attributes unchanged, hidden copies empty and zero submit/click/write requests. 2026-10-22 Real isolated Chromium proves native CSRF headers/Cookie pairing and cross-origin synthetic SDK card mounting without filling or payment; preserve exact Session route and native authentication writes."
     },
     {
       "path": "test/auth-navigation.test.cjs",

@@ -34,6 +34,7 @@ import {
   chatgptSalesParts
 } from './ci-chatgpt-sales-scope.mjs';
 import {
+  isOnlineNativeFetchOnly,
   isOnlineExecutionRepairOnly,
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
@@ -3064,6 +3065,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isOnlineNativeFetchOnly(paths)) return ['guards', 'online-engine'];
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return ['guards', 'release-controls'];
   if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context))

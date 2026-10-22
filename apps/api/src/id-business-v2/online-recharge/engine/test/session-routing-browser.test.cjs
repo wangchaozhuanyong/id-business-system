@@ -126,6 +126,7 @@ const accessToken = `synthetic.${Buffer.from(
   })
 ).toString('base64url')}.synthetic`;
 const sessionCookie = 'synthetic-route-cookie';
+const nativeCsrf = 'synthetic-server-csrf';
 const session = {
   accessToken,
   account: { id: accountId },
@@ -197,8 +198,36 @@ async function fixture(t) {
     response.setHeader('access-control-allow-origin', '*');
     response.setHeader('access-control-allow-headers', '*');
     response.setHeader('cache-control', 'no-store');
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+    if (url.pathname === '/fixture/sdk-initialize' && request.method === 'POST') {
+      let body = '';
+      request.on('data', (chunk) => {
+        body += chunk;
+      });
+      request.on('end', () => {
+        let paired = false;
+        try {
+          paired =
+            JSON.parse(body).csrfToken === nativeCsrf &&
+            request.headers.cookie?.split('; ').includes(`synthetic-csrf=${nativeCsrf}`);
+        } catch {
+          /* Malformed synthetic initialization is rejected. */
+        }
+        response.writeHead(paired ? 200 : 403, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ initialized: paired }));
+      });
+    } else if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
       response.writeHead(409).end('{}');
+    } else if (
+      url.pathname === '/api/auth/csrf' &&
+      ['chatgpt.com', 'pay.openai.com', 'api.chatgpt.com'].includes(request.headers.host)
+    ) {
+      response.setHeader('content-type', 'application/json');
+      response.setHeader('x-synthetic-csrf-transport', 'native');
+      response.setHeader(
+        'set-cookie',
+        `synthetic-csrf=${nativeCsrf}; Path=/; Secure; HttpOnly; SameSite=Lax`
+      );
+      response.end(JSON.stringify({ csrfToken: nativeCsrf, transportResponse: true }));
     } else if (url.pathname === '/api/auth/session' && request.headers.host === 'chatgpt.com') {
       response.setHeader('content-type', 'application/json');
       // The installation's real Cookie probe is synthetic too. If a later
@@ -210,6 +239,32 @@ async function fixture(t) {
     } else if (url.pathname === '/fixture/lazy-checkout') {
       response.setHeader('content-type', 'text/html');
       response.end(lazyCheckout);
+    } else if (url.pathname === '/fixture/csrf-checkout') {
+      response.setHeader('content-type', 'text/html');
+      response.end(`<!doctype html><main id="state">initializing</main><script>
+        (async () => {
+          const auth = await (await fetch('/api/auth/session')).json();
+          if (auth.account?.id !== '${accountId}') return;
+          const csrf = await (await fetch('/api/auth/csrf?phase=sdk-initialization')).json();
+          const initialized = await fetch('/fixture/sdk-initialize', {
+            method: 'POST', headers: {'content-type': 'application/json'},
+            body: JSON.stringify({csrfToken: csrf.csrfToken})
+          });
+          if (!initialized.ok) {
+            document.getElementById('state').textContent = 'csrf-rejected';
+            return;
+          }
+          const frame = document.createElement('iframe');
+          frame.name = '__privateStripeFrame_synthetic';
+          frame.style = 'width:400px;height:200px';
+          frame.src = 'https://js.stripe.com/fixture/card';
+          frame.onload = () => document.getElementById('state').textContent = 'mounted';
+          document.body.appendChild(frame);
+        })();
+      </script>`);
+    } else if (url.pathname === '/fixture/card') {
+      response.setHeader('content-type', 'text/html');
+      response.end('<!doctype html><label>Card number<input autocomplete="cc-number"></label>');
     } else if ((url.pathname === '/' && !url.search) || url.pathname === '/fixture/page') {
       response.setHeader('content-type', 'text/html');
       response.end('<!doctype html><meta charset="utf-8"><main>Synthetic route fixture</main>');
@@ -231,7 +286,8 @@ async function fixture(t) {
     'chatgpt.com.third-party.invalid',
     'accounts.google.com',
     'login.microsoftonline.com',
-    'challenges.cloudflare.com'
+    'challenges.cloudflare.com',
+    'js.stripe.com'
   ];
   const runtime = await launchFixtureBrowser([
     '--disable-background-networking',
@@ -302,6 +358,53 @@ async function xhr(page, url) {
   );
 }
 
+test('server CSRF response retains native headers and paired Cookie', async (t) => {
+  const f = await fixture(t);
+  const result = await f.page.evaluate(async () => {
+    const response = await fetch('/api/auth/csrf?phase=native-response');
+    return {
+      body: await response.json(),
+      native: response.headers.get('x-synthetic-csrf-transport')
+    };
+  });
+  assert.equal(result.body.csrfToken, nativeCsrf);
+  assert.equal(result.body.transportResponse, true);
+  assert.equal(result.native, 'native');
+  assert.equal(
+    (await f.context.cookies(origin)).find((cookie) => cookie.name === 'synthetic-csrf')?.value,
+    nativeCsrf
+  );
+  assert.equal(f.transport.filter((request) => request.path === '/api/auth/csrf').length, 1);
+  noBusinessActions(f);
+});
+
+test('CSRF-bound synthetic SDK mounts an embedded card without filling or submitting', async (t) => {
+  const f = await fixture(t);
+  await f.page.goto(`${origin}/fixture/csrf-checkout`);
+  await f.page.waitForFunction(() =>
+    ['mounted', 'csrf-rejected'].includes(document.getElementById('state')?.textContent)
+  );
+  assert.equal(await f.page.locator('#state').innerText(), 'mounted');
+  assert.equal((await inspectCardReadiness(f.page, { deadline: Date.now() + 4000 })).ready, true);
+  const frame = f.page
+    .frames()
+    .find((candidate) => new URL(candidate.url()).pathname === '/fixture/card');
+  assert.ok(frame);
+  assert.equal(await frame.locator('input').inputValue(), '');
+  assert.deepEqual(
+    f.requests
+      .filter((request) => !['GET', 'HEAD', 'OPTIONS'].includes(request.method))
+      .map((request) => request.path),
+    ['/fixture/sdk-initialize']
+  );
+  assert.equal(
+    f.requests.some((request) => /^\/backend-api\/payments\//.test(request.path)),
+    false
+  );
+  assert.equal(f.logs.join('\n').includes(accessToken), false);
+  assert.equal(f.logs.join('\n').includes(sessionCookie), false);
+});
+
 function noBusinessActions(f, { authenticationWrites = false } = {}) {
   assert.equal(
     f.requests.some(
@@ -323,7 +426,7 @@ function noBusinessActions(f, { authenticationWrites = false } = {}) {
   assert.equal(f.logs.join('\n').includes(sessionCookie), false);
 }
 
-test('official authentication requests reach dedicated handlers through the real route chain', async (t) => {
+test('official Session compatibility and native CSRF use their distinct route paths', async (t) => {
   const f = await fixture(t);
   for (const host of ['chatgpt.com', 'pay.openai.com', 'api.chatgpt.com']) {
     for (const query of ['', '?phase=synthetic&return=%2Ffixture%2Fpage']) {
@@ -335,19 +438,20 @@ test('official authentication requests reach dedicated handlers through the real
       assert.equal(auth.body.transportResponse === true, false);
       const csrf = await xhr(f.page, `https://${host}/api/auth/csrf${query}`);
       assert.equal(csrf.status, 200);
-      assert.equal(csrf.body.csrfToken === 'bootstrap-csrf-token', true);
-      assert.equal(csrf.body.transportResponse === true, false);
+      assert.equal(csrf.body.csrfToken, nativeCsrf);
+      assert.equal(csrf.body.transportResponse, true);
     }
   }
   for (const endpoint of ['session', 'csrf']) {
     const response = await f.page.goto(`${origin}/api/auth/${endpoint}?phase=document`);
     assert.equal(response.status(), 200);
-    assert.equal((await response.json()).transportResponse === true, false);
+    assert.equal((await response.json()).transportResponse === true, endpoint === 'csrf');
   }
   assert.equal(
-    f.transport.some((request) => /^\/api\/auth\/(?:session|csrf)$/.test(request.path)),
+    f.transport.some((request) => request.path === '/api/auth/session'),
     false
   );
+  assert.equal(f.transport.filter((request) => request.path === '/api/auth/csrf').length, 7);
   noBusinessActions(f);
 });
 
