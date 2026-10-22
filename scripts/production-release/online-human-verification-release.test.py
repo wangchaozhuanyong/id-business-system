@@ -111,7 +111,7 @@ class HumanRelease(unittest.TestCase):
             parent_modules = self.c['nativeParentApiModules']
             quality = {'sources': {'commit': 'a' * 40, 'reviewedBusinessCommit': P.SOURCE, 'mainCommit': P.SOURCE_MAIN,
                        'pullRequest': 676, 'sourceReceiptSha256': 'a' * 64, 'runId': '1'},
-                       'controls': {'commit': 'c' * 40, 'baseCommit': P.SOURCE_MAIN, 'pullRequest': P.CONTROL_PR,
+                       'controls': {'commit': 'c' * 40, 'baseCommit': P.CONTROL_BASE, 'pullRequest': P.CONTROL_PR,
                                     'sourceReceiptSha256': 'c' * 64, 'runId': '3'},
                        'release': {'commit': 'b' * 40, 'runId': '2'}}
             parent = {'status': 'ONLINE_HUMAN_PARENT_VERIFIED', 'commit': P.CURRENT,
@@ -182,7 +182,7 @@ class HumanRelease(unittest.TestCase):
     def test_quality_requires_source_control_and_main_receipts(self):
         value = {'sources': {'commit': 'a' * 40, 'reviewedBusinessCommit': P.SOURCE, 'mainCommit': P.SOURCE_MAIN,
                             'pullRequest': 676, 'sourceReceiptSha256': 'a' * 64, 'runId': '1'},
-                 'controls': {'commit': 'b' * 40, 'baseCommit': P.SOURCE_MAIN, 'pullRequest': P.CONTROL_PR,
+                 'controls': {'commit': 'b' * 40, 'baseCommit': P.CONTROL_BASE, 'pullRequest': P.CONTROL_PR,
                               'sourceReceiptSha256': 'b' * 64, 'runId': '2'},
                  'release': {'commit': 'c' * 40, 'runId': '3'}}
         P.verify_quality(value, 'c' * 40)
@@ -216,7 +216,7 @@ class HumanRelease(unittest.TestCase):
             if path == 'pulls/676':
                 return {'merged_at': 'synthetic', 'base': {'ref': 'main'}, 'merge_commit_sha': P.SOURCE_MAIN, 'head': {'sha': source}}
             if path == 'pulls/' + str(P.CONTROL_PR):
-                return {'merged_at': 'synthetic', 'base': {'ref': 'main', 'sha': P.SOURCE_MAIN}, 'merge_commit_sha': commit, 'head': {'sha': control}}
+                return {'merged_at': 'synthetic', 'base': {'ref': 'main', 'sha': P.CONTROL_BASE}, 'merge_commit_sha': commit, 'head': {'sha': control}}
             if '?head_sha=' in path: return {'workflow_runs': [runs[revisions[path.split('=')[-1]][1]]]}
             n = int(path.split('/')[2])
             names = ['quality', 'change-scope', 'recharge (guards)']
@@ -237,6 +237,30 @@ class HumanRelease(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'SOURCE_RECEIPT_CHANGED'): pub.quality(self.c, commit)
             wrong_tree, missing_engine = False, True
             with self.assertRaisesRegex(RuntimeError, 'SOURCE_QUALITY_REQUIRED'): pub.quality(self.c, commit)
+
+    def test_historical_fetch_is_fixed_missing_only_and_type_checked(self):
+        pub = P.load('online-human-verification-publication.py')
+        self.assertEqual(len(pub.HISTORICAL_REVIEW_COMMITS), 40)
+        missing = 'e0bda43bab61ee6673471cfcffc878d268b70cf5'
+        self.assertIn(missing, pub.HISTORICAL_REVIEW_COMMITS)
+        state = {'fetched': False, 'wrong': False}
+        fetches = []
+        def run(args, **_kwargs):
+            return pub.subprocess.CompletedProcess(args, int(args[-1] == missing and not state['fetched']))
+        def git(*args):
+            if args[0] == 'fetch':
+                fetches.append(args)
+                state['fetched'] = True
+                return b''
+            return b'tree\n' if state['wrong'] else b'commit\n'
+        with patch.object(pub.subprocess, 'run', run), patch.object(pub, 'git', git):
+            pub.prefetch_historical_sources()
+            self.assertEqual(fetches, [('fetch', '--no-tags', '--no-write-fetch-head', 'origin', missing)])
+            pub.prefetch_historical_sources()
+            self.assertEqual(len(fetches), 1)
+            state['wrong'] = True
+            with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_SOURCE_TYPE_CHANGED'):
+                pub.prefetch_historical_sources()
 
 
 if __name__ == '__main__':

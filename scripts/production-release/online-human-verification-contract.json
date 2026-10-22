@@ -356,9 +356,9 @@
     "settled-checkout-publication.py": "63c902b0ef12282a50a671a9cf5a47718fecb32fa7185b6ef53753e6137c7403",
     "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260",
     "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
-    "online-human-verification-release.py": "1c8f581e047f2edbb94f1ed38f33f3d9c6d2b7515427f4b4ea906f278aaa8850",
-    "online-human-verification-publication.py": "78ec6ad4a668113542cbcd48c5b050cfcb70d1e1fc5b4dfdff0775de6f8cc695",
-    "online-human-verification-release.test.py": "3d65ac4f7839c673a3db595d33f43f159118594acb748d645ac1091fd6712f49"
+    "online-human-verification-release.py": "d79599824fc8af1a38fa324db81229237427e4ec67bedb9ac85cec2406dad8e3",
+    "online-human-verification-publication.py": "ed0a1dc3ede653f80ca6a4b419b50bc34f5c9b8130f4dacd7423dc17e46a9b8a",
+    "online-human-verification-release.test.py": "834e0ffa45741e33f2a2428b85d3af9b775c849b9b6b6d709790d82f3211f3ef"
   },
   "updatedServices": ["api", "admin", "online-recharge"],
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
@@ -389,6 +389,6 @@
     "id-business-v2/online-recharge/persistence/worker.repository.js": "fd7aaf64c4c3bb880ca78216fe009b1ed4f2b71397a6794ee3dcb831b4e1676f",
     "id-business-v2/online-recharge/persistence/worker.repository.js.map": "477412b037f1d3df230efd2e05f4e89629f0a19ab6f4cdf75d68e611ef90ed20"
   },
-  "controlPullRequest": 677,
-  "controlBaseCommit": "d7d2c6b5405f500ab614778df8656d81d98f883d"
+  "controlPullRequest": 678,
+  "controlBaseCommit": "a861ef385028aec3e7aeeb9f90d3b57bb840a3a5"
 }
