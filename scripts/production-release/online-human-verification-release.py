@@ -17,6 +17,8 @@ RECIPE = 'online-human-verification-20261022'
 CONTRACT_FILE = 'online-human-verification-contract.json'
 CURRENT = 'f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b'
 SOURCE = 'df0e604794b3068d78ab310ed7dbb4b2469be083'
+SOURCE_MAIN = 'd7d2c6b5405f500ab614778df8656d81d98f883d'
+CONTROL_PR = 677
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine/'
 API = frozenset('apps/api/src/id-business-v2/online-recharge/' + n + '.ts' for n in (
     'admin.controller', 'human-verification.service', 'online-recharge.module',
@@ -69,7 +71,8 @@ def failure_report(error, plan):
 def validate_contract(c):
     need(c.get('version') == 1 and c.get('status') == 'FROZEN' and c.get('scope') == SCOPE
          and c.get('recipe') == RECIPE and c.get('expectedCurrent') == CURRENT
-         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 676, 'CONTRACT_IDENTITY')
+         and c.get('sourceReviewCommit') == SOURCE and c.get('sourcePullRequest') == 676
+         and c.get('controlPullRequest') == CONTROL_PR and c.get('controlBaseCommit') == SOURCE_MAIN, 'CONTRACT_IDENTITY')
     need(set(c.get('productionSources', {})) == SOURCES and len(c.get('validationSources', {})) == 11
          and c.get('updatedServices') == list(UPDATED) and c.get('preservedServices') == list(PRESERVED)
          and c.get('reboundServices') == [] and c.get('businessActions') == 0
@@ -88,9 +91,15 @@ def validate_contract(c):
 
 
 def verify_quality(value, commit):
-    need(set(value) == {'sources', 'release'} and value['sources'].get('reviewedBusinessCommit') == SOURCE and re.fullmatch('[a-f0-9]{40}', value['sources'].get('commit', ''))
-         and value['sources']['pullRequest'] == 676 and value['release']['commit'] == commit
-         and re.fullmatch('[a-f0-9]{64}', value['sources']['sourceReceiptSha256'])
+    need(set(value) == {'sources', 'controls', 'release'}
+         and value['sources'].get('reviewedBusinessCommit') == SOURCE
+         and value['sources'].get('mainCommit') == SOURCE_MAIN
+         and value['sources'].get('pullRequest') == 676
+         and value['controls'].get('pullRequest') == CONTROL_PR
+         and value['controls'].get('baseCommit') == SOURCE_MAIN
+         and all(re.fullmatch('[a-f0-9]{40}', value[n].get('commit', '')) for n in ('sources', 'controls'))
+         and value['release']['commit'] == commit
+         and all(re.fullmatch('[a-f0-9]{64}', value[n].get('sourceReceiptSha256', '')) for n in ('sources', 'controls'))
          and all(re.fullmatch('[1-9][0-9]*', str(v['runId'])) for v in value.values()), 'QUALITY_REQUIRED')
 
 
