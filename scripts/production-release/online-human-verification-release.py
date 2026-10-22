@@ -16,7 +16,7 @@ SCOPE = 'ONLINE_HUMAN_VERIFICATION_20261022'
 RECIPE = 'online-human-verification-20261022'
 CONTRACT_FILE = 'online-human-verification-contract.json'
 CURRENT = 'f2b092ba034d18cfe4fbea6b997ffc46bfb6f99b'
-SOURCE = '807169e411e7de89fc2f5b58b7cf1f8dcf7f0dd2'
+SOURCE = 'e67917a72d03e0e17f0f2e4e038105374e59230f'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine/'
 API = frozenset('apps/api/src/id-business-v2/online-recharge/' + n + '.ts' for n in (
     'admin.controller', 'human-verification.service', 'online-recharge.module',
@@ -24,7 +24,7 @@ API = frozenset('apps/api/src/id-business-v2/online-recharge/' + n + '.ts' for n
 ADMIN = frozenset('apps/admin/src/v2/features/online-recharge/' + n for n in (
     'OnlineHumanVerification.vue', 'OnlineResultDialog.vue', 'api.ts', 'labels.ts', 'online-recharge.css'))
 ENGINE_NAMES = frozenset(('SOURCE_MANIFEST.json', 'human-verification.cjs', 'upstream/index.js',
-    'upstream/session-auth.js', 'test/human-verification.test.cjs', 'test/recharge-flow-acceptance.test.cjs'))
+    'upstream/session-auth.js', 'test/human-verification.test.cjs', 'test/checkout-navigation.test.cjs', 'test/recharge-flow-acceptance.test.cjs'))
 SOURCES = API | ADMIN | frozenset(ENGINE + n for n in ENGINE_NAMES)
 MODULES = frozenset(n.removeprefix('apps/api/src/').removesuffix('.ts') + suffix
                     for n in API for suffix in ('.js', '.js.map', '.d.ts'))

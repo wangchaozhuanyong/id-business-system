@@ -25,7 +25,7 @@ class HumanRelease(unittest.TestCase):
 
     def test_closed_sources_and_services(self):
         P.validate_contract(self.c)
-        self.assertEqual(len(P.SOURCES), 16)
+        self.assertEqual(len(P.SOURCES), 17)
         self.assertEqual(len(P.MODULES), 15)
         self.assertEqual(len(P.ABSENT), 3)
         self.assertEqual(self.c['updatedServices'], ['api', 'admin', 'online-recharge'])
