@@ -1,3 +1,40 @@
+// Native fetch repair: four executor files and two documents, with finite release controls.
+export const onlineNativeFetchPaths = Object.freeze([
+  ...[
+    'SOURCE_MANIFEST.json',
+    'upstream/session-auth.js',
+    'test/regressions.test.cjs',
+    'test/session-routing-browser.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineNativeFetchControls = Object.freeze([
+  '.github/workflows/online-native-fetch-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-native-fetch-' + name
+  )
+]);
+export function isOnlineNativeFetchOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineNativeFetchPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every((p) => onlineNativeFetchPaths.includes(p) || onlineNativeFetchControls.includes(p))
+  );
+}
+export function isOnlineNativeFetchControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-native-fetch-')) &&
+    paths.every((p) => onlineNativeFetchControls.includes(p))
+  );
+}
+
 // Closed human-verification change set: keep API, Admin and ONLINE checks complete.
 export const onlineHumanVerificationPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/OnlineHumanVerification.spec.ts',
@@ -1111,6 +1148,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineNativeFetchOnly(paths)) return true;
   if (isOnlineHumanVerificationOnly(paths)) return true;
   if (isOnlineExecutionRepairOnly(paths)) return true;
   if (
@@ -1157,6 +1195,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineNativeFetchControlsOnly(paths)) return true;
   if (isOnlineHumanVerificationControlsOnly(paths)) return true;
   if (isOnlineExecutionRepairControlsOnly(paths)) return true;
   if (isOnlineCheckoutFirstOpenControlsOnly(paths)) return true;
@@ -1186,6 +1225,71 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isOnlineNativeFetchOnly(paths) || isOnlineNativeFetchControlsOnly(paths)) {
+    const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+    if (part === 'guards') {
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        [
+          'node',
+          '--test',
+          'scripts/ci-online-settings-scope.test.mjs',
+          'scripts/ci-recharge-scope.test.mjs',
+          'scripts/ci-recharge-check.test.mjs',
+          'scripts/ci-change-scope.test.mjs'
+        ],
+        ['python3', '-B', 'scripts/production-release/online-native-fetch-release.test.py'],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineNativeFetchOnly(paths))
+      return [
+        [
+          'npm',
+          'ci',
+          '--prefix',
+          engine + '/upstream',
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund'
+        ],
+        [
+          'node',
+          engine + '/upstream/node_modules/playwright/cli.js',
+          'install',
+          '--with-deps',
+          'chromium'
+        ],
+        [
+          'node',
+          '--test',
+          ...[
+            'session-routing-browser',
+            'regressions',
+            'human-verification',
+            'session-probe',
+            'upstream-session-transition'
+          ].map((n) => engine + '/test/' + n + '.test.cjs')
+        ],
+        ...['standalone', 'pool'].map((mode) => [
+          'env',
+          'SESSION_ROUTING_BROWSER_MODE=' + mode,
+          'node',
+          '--test',
+          '--test-name-pattern=server CSRF|CSRF-bound|official Session compatibility and native CSRF|authenticated XHR initialization',
+          engine + '/test/session-routing-browser.test.cjs'
+        ]),
+        ['npm', '--prefix', engine, 'run', 'test:upstream']
+      ];
+    throw new Error('Unsupported native fetch check part');
+  }
   const human = isOnlineHumanVerificationOnly(paths);
   const humanControls = isOnlineHumanVerificationControlsOnly(paths);
   const execution = isOnlineExecutionRepairOnly(paths);

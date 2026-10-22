@@ -1,4 +1,10 @@
 import {
+  onlineNativeFetchPaths,
+  onlineNativeFetchControls,
+  isOnlineNativeFetchOnly,
+  isOnlineNativeFetchControlsOnly
+} from './ci-online-settings-scope.mjs';
+import {
   onlineHumanVerificationPaths,
   onlineHumanVerificationControls,
   isOnlineHumanVerificationOnly,
@@ -3029,4 +3035,25 @@ test('human verification never omits UI, API browser, or engine guards', () => {
   assert.ok(admin.some((row) => row.includes('src/v2/features/online-recharge')));
   const engine = onlineSettingsCommands('online-engine', paths);
   assert.ok(engine.some((row) => row.includes('test:online-recharge:engine')));
+});
+
+test('native fetch repair checks only guards and executor and rejects unrelated sources', () => {
+  const paths = [...onlineNativeFetchPaths, ...onlineNativeFetchControls];
+  assert.equal(isOnlineNativeFetchOnly(paths), true);
+  assert.equal(isOnlineNativeFetchOnly([...paths, 'apps/api/src/auth/auth.service.ts']), false);
+  assert.equal(isOnlineNativeFetchOnly([...paths, paths[0]]), false);
+  assert.equal(
+    isOnlineNativeFetchOnly(paths.filter((p) => !p.endsWith('/upstream/session-auth.js'))),
+    false
+  );
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.equal(isOnlineNativeFetchControlsOnly(onlineNativeFetchControls), true);
+  assert.deepEqual(selectedParts(onlineNativeFetchControls), ['guards']);
+  const guards = onlineSettingsCommands('guards', paths).flat().join(' ');
+  assert.match(guards, /online-native-fetch-release.test.py/);
+  const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
+  assert.match(checks, /session-routing-browser.test.cjs/);
+  assert.match(checks, /SESSION_ROUTING_BROWSER_MODE=pool/);
+  assert.doesNotMatch(checks, /migrate|api.*typecheck|admin/);
 });
