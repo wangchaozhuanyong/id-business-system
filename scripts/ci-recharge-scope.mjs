@@ -35,6 +35,7 @@ import {
 } from './ci-chatgpt-sales-scope.mjs';
 import {
   isOnlineNativeFetchOnly,
+  isOnlineRealSessionOnly,
   isOnlineExecutionRepairOnly,
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
@@ -3065,6 +3066,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isOnlineRealSessionOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineNativeFetchOnly(paths)) return ['guards', 'online-engine'];
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return ['guards', 'release-controls'];

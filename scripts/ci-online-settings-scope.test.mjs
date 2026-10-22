@@ -5,6 +5,12 @@ import {
   isOnlineNativeFetchControlsOnly
 } from './ci-online-settings-scope.mjs';
 import {
+  onlineRealSessionPaths,
+  onlineRealSessionControls,
+  isOnlineRealSessionOnly,
+  isOnlineRealSessionControlsOnly
+} from './ci-online-settings-scope.mjs';
+import {
   onlineHumanVerificationPaths,
   onlineHumanVerificationControls,
   isOnlineHumanVerificationOnly,
@@ -3057,6 +3063,45 @@ test('native fetch repair checks only guards and executor and rejects unrelated 
   assert.match(guards, /online-native-fetch-release.test.py/);
   const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
   assert.match(checks, /session-routing-browser.test.cjs/);
+  assert.match(checks, /SESSION_ROUTING_BROWSER_MODE=pool/);
+  assert.doesNotMatch(checks, /migrate|api.*typecheck|admin/);
+});
+test('real Session repair checks its complete executor scope without unrelated API or Admin suites', () => {
+  const paths = [...onlineRealSessionPaths, ...onlineRealSessionControls];
+  assert.equal(isOnlineRealSessionOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isOnlineRealSessionControlsOnly(onlineRealSessionControls), true);
+  assert.deepEqual(selectedParts(onlineRealSessionControls), ['guards']);
+  for (const required of onlineRealSessionPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isOnlineRealSessionOnly(paths.filter((p) => p !== required)), false);
+  assert.equal(isOnlineRealSessionOnly([...paths, paths[0]]), false);
+  for (const unrelated of [
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/App.vue',
+    'apps/api/prisma-mysql/schema.prisma'
+  ])
+    assert.equal(isOnlineRealSessionOnly([...paths, unrelated]), false);
+  assert.match(
+    onlineSettingsCommands('guards', paths).flat().join(' '),
+    /online-real-session-release.test.py/
+  );
+  const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
+  for (const name of [
+    'checkout-form',
+    'checkout-initialization',
+    'checkout-recovery',
+    'checkout-cs-browser',
+    'checkout-navigation',
+    'checkout-load-recovery',
+    'checkout-reload-request-diagnostics',
+    'regressions',
+    'human-verification',
+    'session-routing-browser'
+  ])
+    assert.ok(checks.includes(name + '.test.cjs'));
+  assert.match(checks, /test-concurrency=1/);
   assert.match(checks, /SESSION_ROUTING_BROWSER_MODE=pool/);
   assert.doesNotMatch(checks, /migrate|api.*typecheck|admin/);
 });
