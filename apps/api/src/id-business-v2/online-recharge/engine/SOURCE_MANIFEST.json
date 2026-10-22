@@ -68,9 +68,9 @@
     {
       "path": "checkout-recovery.cjs",
       "originalSha256": null,
-      "adaptedSha256": "2bdabc723dceacc20c6f36906b15561e863dc055451bfd6919262b908db230f8",
+      "adaptedSha256": "80973a168da05b76255ba543e29b551d008e5aa0549cd2f6cf21e9c31052bf0f",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Keep all request-admission functions unchanged; collect bounded original-reload rejection operation/reason counters and export a strict credential-free diagnostics projection."
+      "reason": "Preserve the controlled timeout when native navigation expires before the wrapper clock; keep original checkout, single reload and deny-write protection."
     },
     {
       "path": "confirmation.cjs",
@@ -222,9 +222,9 @@
     {
       "path": "test/checkout-load-recovery.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a2165a4f1332d580d003c100e6ea33cab946eb8e0ad5a226653cd55c2ca192d7",
+      "adaptedSha256": "2e9306203640de5de8c473cf7a019b04a4d04b5690f1f68e4127d14356c8ce6c",
       "changed": true,
-      "reason": "Synthetic browser coverage for original-checkout loading, bounded recovery, redirects and single-payment protection. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty."
+      "reason": "Deterministically distinguish native navigation TimeoutError from other errors while retaining exact codes and zero writes after failed reload."
     },
     {
       "path": "test/checkout-navigation.test.cjs",
