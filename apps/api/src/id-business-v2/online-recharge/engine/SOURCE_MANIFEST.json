@@ -243,9 +243,9 @@
     {
       "path": "test/checkout-page-loading.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "8f2244d5247cc33284e079bb5e32b55a99b7adcf50556c9283b4f0cffbb533ab",
+      "adaptedSha256": "74ce6134be94adb45a02cbe665567735dede5bcf0f768258f316ce9bc94c7b88",
       "changed": true,
-      "reason": "Synthetic browser coverage for original-checkout loading, bounded recovery, redirects and single-payment protection. Reject false form readiness; recover one original load before payment and retain controlled diagnostics."
+      "reason": "Verify deterministic expired inspection and exact complete-not-ready versus incomplete-timeout diagnostics; unrelated frames never clear readiness or produce solver calls or writes."
     },
     {
       "path": "test/checkout-recheck.test.cjs",
