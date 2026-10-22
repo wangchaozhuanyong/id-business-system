@@ -229,9 +229,9 @@
     {
       "path": "test/checkout-navigation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "18d0e84df763abe933eccad0893f9fa9b53476572148651530353e7ed9a821d2",
+      "adaptedSha256": "aa0093a51481fee49cc981d2d32962e015a385e02d414a756102fd51079ff90a",
       "changed": true,
-      "reason": "Real Chromium coverage for checkout readiness independent of DOM events, one deadline, exact original identity, visible challenges and cancelled late navigation. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. 2026-10-18 Regression coverage for prepared native checkout, rendered eligibility, same-tree shadow fields, passive masked recording and safe rejection diagnostics. 2026-10-19 Add bounded failure-only semantic exclusion diagnostics and same-snapshot geometry/editability comparison; no admission, filling or payment-policy change. 2026-10-21 Verify first-open diagnostics survive real accepted-checkout failures and all opening outcomes release observers without another checkout or payment. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only."
+      "reason": "Keep no-submit browser assertions for missing-field and valid CDP deadline termination; verify strict unreadiness, original checkout and zero writes."
     },
     {
       "path": "test/checkout-outcomes.test.cjs",
