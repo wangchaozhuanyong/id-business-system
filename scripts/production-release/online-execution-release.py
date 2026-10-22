@@ -92,6 +92,8 @@ def validate_contract(c):
          and c['controlPins'].get('api-admin-scope.py') == c['sqlFenceHelperSha256'], 'PARENT_IDENTITY')
     need(all(re.fullmatch('[a-f0-9]{64}', value) for group in ('productionSources', 'validationSources',
          'controlPins', 'beforeEngineFiles') for value in c[group].values()), 'HASH_INVALID')
+    need(c['controlPins'].get('settled-checkout-contract.json') == c['parentPlan']['contractSha256'],
+         'PARENT_CONTRACT_REQUIRED')
     inherited = json.loads((HERE / 'settled-checkout-contract.json').read_bytes())
     need(all(c['controlPins'].get(n) == v for n, v in inherited['controlPins'].items()), 'PARENT_CONTROLS_CHANGED')
     first = json.loads((HERE / 'online-checkout-first-open-contract.json').read_bytes())
