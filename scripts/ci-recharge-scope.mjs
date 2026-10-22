@@ -36,6 +36,7 @@ import {
 import {
   isOnlineNativeFetchOnly,
   isOnlineRealSessionOnly,
+  isOnlineSubscriptionChallengeOnly,
   isOnlineExecutionRepairOnly,
   isOnlineSettingsOnly,
   isOnlineSettingsControlsOnly,
@@ -3066,6 +3067,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isOnlineSubscriptionChallengeOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineRealSessionOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineNativeFetchOnly(paths)) return ['guards', 'online-engine'];
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
