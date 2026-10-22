@@ -12,6 +12,7 @@ export const onlineHumanVerificationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/human-verification.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/human-verification.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-page-loading.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
   'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
