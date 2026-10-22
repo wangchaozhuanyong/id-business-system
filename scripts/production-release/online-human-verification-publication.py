@@ -33,7 +33,7 @@ E = load('online-execution-publication.py')
 F, S = E.F, E.S
 need, sha, git, github, execute = P.need, P.sha, F.git, F.github, F.execute
 INSTANCE = E.INSTANCE
-CONTROL_PATHS = frozenset((WORKFLOW, *('scripts/production-release/online-human-verification-' + n
+CONTROL_PATHS = frozenset((WORKFLOW, 'scripts/ci-online-settings-scope.mjs', 'scripts/ci-online-settings-scope.test.mjs', *('scripts/production-release/online-human-verification-' + n
     for n in ('release.py', 'publication.py', 'release.test.py', 'contract.json'))))
 
 

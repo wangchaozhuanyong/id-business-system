@@ -71,13 +71,11 @@ class HumanRelease(unittest.TestCase):
             prior.validate_contract(json.loads((stage / prior.CONTRACT_FILE).read_bytes()))
 
     def test_only_new_service_can_be_absent_from_parent(self):
-        native = {n: 'a' * 64 for n in P.MODULES - P.ABSENT}
+        native = self.c['nativeParentApiModules']
         P.verify_parent_modules(native, native)
         with self.assertRaises(RuntimeError):
             P.verify_parent_modules({}, native)
         for n in native:
-            if n.endswith('.d.ts'):
-                continue
             with self.assertRaises(RuntimeError):
                 P.verify_parent_modules({**native, n: 'b' * 64}, native)
 
@@ -105,7 +103,7 @@ class HumanRelease(unittest.TestCase):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text('synthetic-admin-output')
                 admin[n] = P.sha(dest.read_bytes())
-            parent_modules = {n: 'a' * 64 for n in P.MODULES - P.ABSENT}
+            parent_modules = self.c['nativeParentApiModules']
             quality = {'sources': {'commit': 'a' * 40, 'reviewedBusinessCommit': P.SOURCE, 'pullRequest': 676,
                        'sourceReceiptSha256': 'a' * 64, 'runId': '1'}, 'release': {'commit': 'b' * 40, 'runId': '2'}}
             parent = {'status': 'ONLINE_HUMAN_PARENT_VERIFIED', 'commit': P.CURRENT,

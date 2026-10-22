@@ -80,6 +80,7 @@ def validate_contract(c):
          and all(c['controlPins'].get(n) == v for n, v in parent['controlSources'].items())
          and c.get('sqlFenceHelperSha256') == c['controlPins'].get('api-admin-scope.py')
          == '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925', 'PARENT_CONTROLS_CHANGED')
+    need(sha(canonical(c.get('nativeParentApiModules'))) == 'ae4119cb747956559eb48c60fe12161b5a79dfb759851f1610f6c86b0dfbbcb5', 'NATIVE_PARENT_MODULES_CHANGED')
     need(all(re.fullmatch('[a-f0-9]{64}', v) for group in ('productionSources', 'validationSources', 'controlPins')
              for v in c[group].values()), 'HASH_INVALID')
 
@@ -117,8 +118,8 @@ def verify_proof(proof, plan, c, payload, h):
 
 
 def verify_parent_modules(local, native):
-    need(set(native) == MODULES - ABSENT and set(local) == set(native)
-         and all(local[n] == native[n] for n in native if not n.endswith('.d.ts')), 'PARENT_COMPILE_CHANGED')
+    expected = json.loads((HERE / CONTRACT_FILE).read_bytes())['nativeParentApiModules']
+    need(set(native) == MODULES - ABSENT and local == native == expected, 'PARENT_COMPILE_CHANGED')
 
 
 def capture(c):
