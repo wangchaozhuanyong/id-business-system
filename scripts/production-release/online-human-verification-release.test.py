@@ -14,6 +14,10 @@ spec.loader.exec_module(P)
 
 
 class HumanRelease(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        (P.ROOT / '.runtime').mkdir(exist_ok=True)
+
     def setUp(self):
         self.c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
 

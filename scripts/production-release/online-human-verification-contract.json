@@ -358,7 +358,7 @@
     "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
     "online-human-verification-release.py": "11cf6b5e622a14d0a08301e1561b5a33a4a12bf6682b408cb6a9129256a43294",
     "online-human-verification-publication.py": "f0e230283b14288111df754669a879ea97838161482ca6e1cb984fb2839a0e18",
-    "online-human-verification-release.test.py": "ed6b7d243e108d4adab5ac86f2cb60e61c651e6a4333523e73bbc3faeaa10a9b"
+    "online-human-verification-release.test.py": "18fba2c667cb9d08410c2d80be1b785da68db30dcb6bea07677a3abb5d326921"
   },
   "updatedServices": ["api", "admin", "online-recharge"],
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
