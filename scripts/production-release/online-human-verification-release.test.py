@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('human_release_test', HERE / 'online-human-verification-release.py')
@@ -108,8 +109,11 @@ class HumanRelease(unittest.TestCase):
                 dest.write_text('synthetic-admin-output')
                 admin[n] = P.sha(dest.read_bytes())
             parent_modules = self.c['nativeParentApiModules']
-            quality = {'sources': {'commit': 'a' * 40, 'reviewedBusinessCommit': P.SOURCE, 'pullRequest': 676,
-                       'sourceReceiptSha256': 'a' * 64, 'runId': '1'}, 'release': {'commit': 'b' * 40, 'runId': '2'}}
+            quality = {'sources': {'commit': 'a' * 40, 'reviewedBusinessCommit': P.SOURCE, 'mainCommit': P.SOURCE_MAIN,
+                       'pullRequest': 676, 'sourceReceiptSha256': 'a' * 64, 'runId': '1'},
+                       'controls': {'commit': 'c' * 40, 'baseCommit': P.SOURCE_MAIN, 'pullRequest': P.CONTROL_PR,
+                                    'sourceReceiptSha256': 'c' * 64, 'runId': '3'},
+                       'release': {'commit': 'b' * 40, 'runId': '2'}}
             parent = {'status': 'ONLINE_HUMAN_PARENT_VERIFIED', 'commit': P.CURRENT,
                       'baseline': {'apiModules': parent_modules}, 'businessActions': 0}
             proof = {'commit': 'b' * 40, 'tree': 'c' * 40, 'workflowRunId': '2', 'workflowRunAttempt': '1',
@@ -174,6 +178,65 @@ class HumanRelease(unittest.TestCase):
                 P.persist_parent_admin_files(target, files, baseline)
             with self.assertRaises(RuntimeError):
                 P.persist_parent_admin_files(target, {'index.html': 'c' * 64}, baseline)
+
+    def test_quality_requires_source_control_and_main_receipts(self):
+        value = {'sources': {'commit': 'a' * 40, 'reviewedBusinessCommit': P.SOURCE, 'mainCommit': P.SOURCE_MAIN,
+                            'pullRequest': 676, 'sourceReceiptSha256': 'a' * 64, 'runId': '1'},
+                 'controls': {'commit': 'b' * 40, 'baseCommit': P.SOURCE_MAIN, 'pullRequest': P.CONTROL_PR,
+                              'sourceReceiptSha256': 'b' * 64, 'runId': '2'},
+                 'release': {'commit': 'c' * 40, 'runId': '3'}}
+        P.verify_quality(value, 'c' * 40)
+        for change in (lambda v: v.pop('controls'),
+                       lambda v: v['controls'].update(baseCommit='d' * 40),
+                       lambda v: v['controls'].update(pullRequest=676),
+                       lambda v: v['sources'].update(mainCommit='d' * 40)):
+            bad = copy.deepcopy(value)
+            change(bad)
+            with self.assertRaises(RuntimeError):
+                P.verify_quality(bad, 'c' * 40)
+
+    def test_publication_reuses_only_exact_business_and_control_provenance(self):
+        pub = P.load('online-human-verification-publication.py')
+        source, control, commit = 'a' * 40, 'b' * 40, 'c' * 40
+        source_tree, control_tree = 'd' * 40, 'e' * 40
+        revisions = {source: ('sources', 11), control: ('controls', 12), commit: ('release', 13)}
+        runs = {n: {'id': n, 'head_sha': rev, 'run_attempt': 1, 'status': 'completed', 'conclusion': 'success',
+                    'event': 'push' if role == 'release' else 'pull_request'} for rev, (role, n) in revisions.items()}
+        controls = ['scripts/production-release/online-human-verification-' + n
+                    for n in ('release.py', 'publication.py', 'release.test.py', 'contract.json')]
+        extra, wrong_tree, missing_engine = False, False, False
+        def git(*args):
+            if args[0] == 'merge-base': return b''
+            if args[0] == 'diff':
+                selected = controls if args[2] == P.SOURCE_MAIN else list(pub.CONTROL_PATHS)
+                if extra and args[2] == P.SOURCE_MAIN: selected = [*selected, 'apps/api/src/auth/auth.service.ts']
+                return '\n'.join(selected).encode()
+            return ((source_tree if args[1] == P.SOURCE_MAIN + '^{tree}' else control_tree) + '\n').encode()
+        def github(path):
+            if path == 'pulls/676':
+                return {'merged_at': 'synthetic', 'base': {'ref': 'main'}, 'merge_commit_sha': P.SOURCE_MAIN, 'head': {'sha': source}}
+            if path == 'pulls/' + str(P.CONTROL_PR):
+                return {'merged_at': 'synthetic', 'base': {'ref': 'main', 'sha': P.SOURCE_MAIN}, 'merge_commit_sha': commit, 'head': {'sha': control}}
+            if '?head_sha=' in path: return {'workflow_runs': [runs[revisions[path.split('=')[-1]][1]]]}
+            n = int(path.split('/')[2])
+            names = ['quality', 'change-scope', 'recharge (guards)']
+            if n == 11: names += ['recharge (api)', 'recharge (admin)'] + ([] if missing_engine else ['recharge (online-engine)'])
+            return {'jobs': [{'name': name, 'conclusion': 'success'} for name in names]}
+        def artifact(run, *_args):
+            source_role = run['id'] == 11
+            receipt = {'repository': pub.REPO, 'headSha': run['head_sha'], 'pullRequest': 676 if source_role else P.CONTROL_PR,
+                       'runId': run['id'], 'runAttempt': 1,
+                       'testedTree': source_tree if source_role or wrong_tree else control_tree}
+            return receipt, 'f' * 64
+        with patch.object(pub, 'git', git), patch.object(pub, 'github', github), \
+             patch.object(pub.F, 'require_run', lambda *_args: None), patch.object(pub.F, 'artifact_json', artifact):
+            self.assertEqual(set(pub.quality(self.c, commit)), {'sources', 'controls', 'release'})
+            extra = True
+            with self.assertRaisesRegex(RuntimeError, 'CONTROL_EXTENSION_CHANGED'): pub.quality(self.c, commit)
+            extra, wrong_tree = False, True
+            with self.assertRaisesRegex(RuntimeError, 'SOURCE_RECEIPT_CHANGED'): pub.quality(self.c, commit)
+            wrong_tree, missing_engine = False, True
+            with self.assertRaisesRegex(RuntimeError, 'SOURCE_QUALITY_REQUIRED'): pub.quality(self.c, commit)
 
 
 if __name__ == '__main__':

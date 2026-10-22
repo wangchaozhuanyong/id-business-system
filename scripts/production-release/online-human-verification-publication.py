@@ -56,12 +56,21 @@ def identity():
 
 def quality(c, commit):
     pr = github('pulls/676')
-    need(pr.get('merged_at') and pr['base']['ref'] == 'main' and pr['merge_commit_sha'] == commit, 'MERGED_SOURCE_REQUIRED')
+    need(pr.get('merged_at') and pr['base']['ref'] == 'main' and pr['merge_commit_sha'] == P.SOURCE_MAIN, 'MERGED_SOURCE_REQUIRED')
     head = pr['head']['sha']
     git('merge-base', '--is-ancestor', P.SOURCE, head)
     need(set(git('diff', '--name-only', P.SOURCE, head).decode().splitlines()) <= CONTROL_PATHS, 'SOURCE_EXTENSION_CHANGED')
+    controls = github('pulls/' + str(P.CONTROL_PR))
+    need(controls.get('merged_at') and controls['base']['ref'] == 'main'
+         and controls['base']['sha'] == P.SOURCE_MAIN and controls['merge_commit_sha'] == commit, 'MERGED_CONTROL_REQUIRED')
+    control_head = controls['head']['sha']
+    git('merge-base', '--is-ancestor', P.SOURCE_MAIN, control_head)
+    control_paths = {'scripts/production-release/online-human-verification-' + n
+                     for n in ('release.py', 'publication.py', 'release.test.py', 'contract.json')}
+    need(set(git('diff', '--name-only', P.SOURCE_MAIN, control_head).decode().splitlines()) == control_paths
+         and git('rev-parse', control_head + '^{tree}') == git('rev-parse', commit + '^{tree}'), 'CONTROL_EXTENSION_CHANGED')
     evidence = {}
-    for role, selected, event in (('sources', head, 'pull_request'), ('release', commit, 'push')):
+    for role, selected, event in (('sources', head, 'pull_request'), ('controls', control_head, 'pull_request'), ('release', commit, 'push')):
         runs = github('actions/workflows/quality.yml/runs?head_sha=' + selected)['workflow_runs']
         runs = [r for r in runs if r['head_sha'] == selected and r['event'] == event and r['status'] == 'completed' and r['conclusion'] == 'success']
         need(bool(runs), 'QUALITY_REQUIRED')
@@ -71,14 +80,21 @@ def quality(c, commit):
         passed = {j['name'] for j in jobs if j['conclusion'] == 'success'}
         need({'quality', 'change-scope'} <= passed and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_JOBS_REQUIRED')
         record = {'commit': selected, 'runId': str(run['id']), 'runAttempt': str(run['run_attempt'])}
-        if role == 'sources':
-            need('full-quality' in passed or {'recharge (guards)', 'recharge (api)', 'recharge (admin)', 'recharge (online-engine)'} <= passed,
-                 'SOURCE_QUALITY_REQUIRED')
+        if role != 'release':
+            if role == 'sources':
+                need('full-quality' in passed or {'recharge (guards)', 'recharge (api)', 'recharge (admin)', 'recharge (online-engine)'} <= passed,
+                     'SOURCE_QUALITY_REQUIRED')
+            else:
+                need('recharge (guards)' in passed, 'CONTROL_QUALITY_REQUIRED')
             receipt, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
-            need(receipt.get('repository') == REPO and receipt.get('headSha') == head and receipt.get('pullRequest') == 676
+            number = 676 if role == 'sources' else P.CONTROL_PR
+            expected_tree = git('rev-parse', (P.SOURCE_MAIN if role == 'sources' else commit) + '^{tree}').decode().strip()
+            need(receipt.get('repository') == REPO and receipt.get('headSha') == selected and receipt.get('pullRequest') == number
                  and receipt.get('runId') == run['id'] and receipt.get('runAttempt') == run['run_attempt']
-                 and receipt.get('testedTree') == git('rev-parse', commit + '^{tree}').decode().strip(), 'SOURCE_RECEIPT_CHANGED')
-            record.update(pullRequest=676, sourceReceiptSha256=digest, reviewedBusinessCommit=P.SOURCE)
+                 and receipt.get('testedTree') == expected_tree, 'SOURCE_RECEIPT_CHANGED')
+            record.update(pullRequest=number, sourceReceiptSha256=digest)
+            record.update({'reviewedBusinessCommit': P.SOURCE, 'mainCommit': P.SOURCE_MAIN} if role == 'sources'
+                          else {'baseCommit': P.SOURCE_MAIN})
         evidence[role] = record
     P.verify_quality(evidence, commit)
     return evidence
