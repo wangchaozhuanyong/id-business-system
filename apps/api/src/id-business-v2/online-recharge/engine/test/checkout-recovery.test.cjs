@@ -421,6 +421,8 @@ test('real Chromium recovery only reads the same original checkout and blocks pa
       process: { env: { PROXY: 'http://fixed-task-proxy.invalid:8123' } },
       require(name) {
         if (name.startsWith('node:')) return require(name);
+        if (name === './checkout-initialization.cjs')
+          return require('../checkout-initialization.cjs');
         if (name === './plans.cjs') return require('../plans.cjs');
         if (name === './rpc.cjs') return {};
         if (name === './upstream/playwright-proxy')
@@ -941,6 +943,32 @@ function existingCheckoutDiagnostics(value) {
   );
   return existing;
 }
+test('public failure distinguishes an incomplete zero-candidate read and its actual read phase', () => {
+  const Service = checkoutServiceFixture();
+  const diagnostic = Service.safeCheckoutOpenDiagnostics({
+    stage: 'readiness',
+    reason: 'not_ready',
+    code: 'CHECKOUT_CONTROL_READ_FAILED',
+    missing: ['number'],
+    controls: [],
+    inspection: {
+      complete: false,
+      framesFailed: 1,
+      readFailures: [
+        { phase: 'control_snapshot', reason: 'timeout', count: 1, secret: 'SYNTHETIC_PRIVATE' }
+      ]
+    }
+  });
+  const result = publicCheckoutFailure({
+    code: 'CHECKOUT_CONTROL_READ_FAILED',
+    checkoutCreationState: 'accepted',
+    checkoutOpenDiagnostics: diagnostic
+  });
+  assert.match(result.error, /控件读取未完成，不能据此判断卡号输入框不存在/);
+  assert.match(result.error, /已读范围内的卡号候选：0/);
+  assert.match(result.error, /控件快照读取超时1/);
+  assert.doesNotMatch(JSON.stringify(result), /SYNTHETIC_PRIVATE/);
+});
 
 test('checkout diagnostics retain exact reload failure enums and reject reload states or unknown codes', () => {
   const Service = checkoutServiceFixture();

@@ -175,6 +175,8 @@ async function recoverInRealBrowser(receipt) {
     process: { env: { PROXY: 'http://fixed-task-proxy.invalid:8123' } },
     require(name) {
       if (name.startsWith('node:')) return require(name);
+      if (name === './checkout-initialization.cjs')
+        return require('../checkout-initialization.cjs');
       if (name === './plans.cjs') return require('../plans.cjs');
       if (name === './rpc.cjs') return {};
       if (name === './upstream/playwright-proxy')

@@ -132,7 +132,7 @@ test('原页人工点击仅作用于验证 iframe，撤销交互后再读取真�
   assert.equal(native[0].closed, true);
   assert.equal(native[0].authorization, false);
 });
-test('官网真实身份变化时拒绝继续，即使兼容层仍返回原账号', async (t) => {
+test('官网真实身份变化时拒绝继续，页面 Session 同样返回真实账号', async (t) => {
   const f = await fixture(t, { install: true });
   f.actual({ ...session, account: { id: 'other-account' } });
   await assert.rejects(assertOriginalIdentity(f.page, JSON.stringify(session)), {
@@ -141,7 +141,7 @@ test('官网真实身份变化时拒绝继续，即使兼容层仍返回原账�
   assert.equal(f.requests.filter((item) => item.native).length, 1);
   assert.equal(
     await f.page.evaluate(async () => (await (await fetch('/api/auth/session')).json()).account.id),
-    accountId
+    'other-account'
   );
 });
 for (const [label, options, code] of [

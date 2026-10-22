@@ -156,14 +156,20 @@ test('verified Cookie refresh supplies the fresh bearer without generic route in
   });
   assert.equal(continuation, undefined, 'Session routing must preserve native request headers');
   assert.equal(callerHeaders.Authorization, `Bearer ${refreshed}`);
-  let routedSession;
+  let sessionContinued = 0;
   await f.calls.routes[0].handler({
-    request: () => ({ url: () => 'https://chatgpt.com/api/auth/session', method: () => 'GET' }),
-    fulfill: async (options) => {
-      routedSession = JSON.parse(options.body);
-    }
+    request: () => ({
+      url: () => 'https://chatgpt.com/api/auth/session',
+      method: () => 'GET',
+      resourceType: () => 'fetch'
+    }),
+    continue: async () => {
+      sessionContinued++;
+    },
+    fulfill: async () => assert.fail('Session must use the actual server response')
   });
-  assert.equal(routedSession.accessToken, refreshed);
+  assert.equal(sessionContinued, 1);
+  assert.equal(f.calls.routes.length, 1);
   const nativeFetch = async () =>
     new Response(JSON.stringify({ nativeTransport: true }), { status: 401 });
   const window = {
@@ -191,6 +197,23 @@ test('verified Cookie refresh supplies the fresh bearer without generic route in
   assert.equal((await nativeResponse.json()).nativeTransport, true);
   assert.equal(f.logs.join('\n').includes(refreshed), false);
   assert.equal(security.redactText(refreshed).includes(refreshed), false);
+});
+test('complete Session input keeps nested metadata without logging its values', async () => {
+  const original = {
+    statsigContext: { locale: 'synthetic-private-locale', nested: { preserve: true } },
+    marketingEligibility: { synthetic: { private: 'synthetic-private-marketing' } },
+    unknownMetadata: { preserve: [1, 2, 3] }
+  };
+  const f = await sessionInstallFixture({ body: { accessToken: sessionBearer() }, original });
+  const installed = await f.install();
+  for (const [key, value] of Object.entries(original)) {
+    assert.deepEqual(JSON.parse(JSON.stringify(installed.sessionData[key])), value);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.calls.scripts[0].payload[key])), value);
+  }
+  const logs = f.logs.join('\n');
+  assert.match(logs, /statsigContext/);
+  assert.match(logs, /marketingEligibility/);
+  assert.doesNotMatch(logs, /synthetic-private-locale|synthetic-private-marketing|unknownMetadata/);
 });
 test('synthetic session bootstrap is isolated from third-party frames and fetch destinations', async () => {
   const { chromium } = require('../upstream/node_modules/playwright');

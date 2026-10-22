@@ -62,6 +62,36 @@ function failFrameRead(t, frame, read) {
     frame.locator = locator;
   });
 }
+for (const [message, reason] of [
+  ['Frame was detached SYNTHETIC_PRIVATE', 'detached'],
+  ['Execution context was destroyed SYNTHETIC_PRIVATE', 'context_destroyed'],
+  ['SYNTHETIC_PRIVATE', 'read_failed']
+])
+  test(`readiness keeps control snapshot ${reason} separate from zero candidates`, async (t) => {
+    const page = await pageFor(t, '<main>Payment container</main>');
+    failFrameRead(t, page.mainFrame(), async () => {
+      throw new Error(message);
+    });
+    const result = await inspectCardReadiness(page, { deadline: Date.now() + 4000 });
+    assert.equal(result.ready, false);
+    assert.equal(result.inspection.complete, false);
+    assert.equal(result.code, 'CHECKOUT_CONTROL_READ_FAILED');
+    assert.deepEqual(result.inspection.readFailures, [
+      { phase: 'control_snapshot', reason, count: 1 }
+    ]);
+    assert.doesNotMatch(JSON.stringify(result), /SYNTHETIC_PRIVATE/);
+  });
+test('per-frame snapshot timeout is incomplete while the original global budget remains', async (t) => {
+  const page = await pageFor(t, '<main>Payment container</main>');
+  failFrameRead(t, page.mainFrame(), () => new Promise(() => {}));
+  const result = await inspectCardReadiness(page, { deadline: Date.now() + 4000 });
+  assert.equal(result.code, 'CHECKOUT_CONTROL_READ_FAILED');
+  assert.equal(result.inspection.timedOut, false);
+  assert.equal(result.inspection.complete, false);
+  assert.deepEqual(result.inspection.readFailures, [
+    { phase: 'control_snapshot', reason: 'timeout', count: 1 }
+  ]);
+});
 function interceptLoadFailureCount(t, frame, read) {
   const getByText = frame.getByText;
   frame.getByText = function (text, ...options) {

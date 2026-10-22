@@ -1,14 +1,6 @@
 'use strict';
 
 const CHATGPT_ORIGIN = 'https://chatgpt.com';
-function isOfficialSessionUrl(raw) {
-    try {
-        const url = new URL(raw);
-        return url.protocol === 'https:' && !url.port
-            && ['chatgpt.com', 'openai.com'].some((host) =>
-                url.hostname === host || url.hostname.endsWith(`.${host}`));
-    } catch (_) { return false; }
-}
 const {
     isLoginRedirectUrl,
     isHardLoginRedirectUrl,
@@ -694,7 +686,17 @@ async function installChatGptSession(context, sessionRaw) {
         }
     }
 
-    const sessionBody = JSON.stringify(sessionData);
+    // Preserve the complete caller JSON. This observation contains key names
+    // only; never log values or serialize the supplied session into evidence.
+    const knownFields = ['WARNING_BANNER', 'accessToken', 'access_token', 'sessionToken', 'session_token',
+        'account', 'user', 'authProvider', 'expires', 'statsigContext', 'marketingEligibility',
+        'cookies', 'cookieHeader', 'cookie_header', 'deviceId', 'device_id', 'csrfToken', 'csrf_token'];
+    const inputFields = Object.keys(sessionJson || {});
+    console.log('[Session] 输入结构', JSON.stringify({
+        fields: knownFields.filter(key => inputFields.includes(key)),
+        otherFieldCount: inputFields.filter(key => !knownFields.includes(key)).length,
+        sessionTransport: 'native', csrfTransport: 'native', bootstrap: true
+    }));
 
     await context.addInitScript((payload) => {
         const officialUrl = (value) => {
@@ -712,35 +714,19 @@ async function installChatGptSession(context, sessionRaw) {
             localStorage.setItem('oai/apps/chat/bootstrap-session', sessionStr);
         } catch (_) { /* ignore */ }
 
-        // Keep the application's native fetch and server-issued CSRF response.
-        // Session compatibility is handled only by the exact network route below.
+        // Bootstrap storage remains unchanged for this controlled comparison.
+        // Both authentication endpoints and window.fetch use native transport.
     }, sessionData);
-
-    await context.route(/\/api\/auth\/session(\?.*)?$/, async (route) => {
-        if (route.request().method() !== 'GET' || !isOfficialSessionUrl(route.request().url())
-            || new URL(route.request().url()).pathname !== '/api/auth/session') {
-            await route.continue();
-            return;
-        }
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: sessionBody
-        });
-    });
 
     await context.route('**/*', async (route) => {
         const url = route.request().url();
         const resourceType = route.request().resourceType();
         if (shouldBlockLoginNavigation(url, resourceType)) {
-            await route.abort();
-            return;
-        }
-        if (route.request().method() === 'GET' && isOfficialSessionUrl(url)
-            && new URL(url).pathname === '/api/auth/session') {
-            // This last-registered route runs first. Continue would bypass the
-            // dedicated official Session handler registered above.
-            await route.fallback();
+            const host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
+            const ruleId = host === 'accounts.google.com' ? 'SESSION_GOOGLE_LOGIN'
+                : host === 'login.microsoftonline.com' ? 'SESSION_MICROSOFT_LOGIN' : 'SESSION_OFFICIAL_LOGIN';
+            console.log('[Session] 登录导航拦截', JSON.stringify({ ruleId, resourceType }));
+            await require('../checkout-initialization.cjs').abortRoute(route, ruleId);
             return;
         }
         await route.continue();

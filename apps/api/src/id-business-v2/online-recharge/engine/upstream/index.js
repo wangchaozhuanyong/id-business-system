@@ -687,14 +687,23 @@ async function run(runOptions = {}) {
             SDK_INITIALIZATION_FAILED: '支付组件初始化报错', STRIPE_KEY_INVALID: '支付组件公钥配置异常',
             STRIPE_CLIENT_SECRET_INVALID: '支付组件会话参数异常', CORS_BLOCKED: '跨域策略阻止' };
         const firstInitializationFailure = initialization?.firstFailure;
+        const cancellationLabels = { our_route_abort: '命中本系统主动拦截', network_or_proxy: '网络或代理错误',
+            unknown_abort: '取消来源尚未确认', network_other: '其他网络错误' };
         const probeFailureLabels = { timeout: '读取超时', detached: '页面已替换', closed: '页面关闭',
-            aborted: '任务停止', read_failed: '读取失败' };
+            context_destroyed: '页面执行环境已替换', aborted: '任务停止', read_failed: '读取失败' };
+        const readIncomplete = inspection && (inspection.complete === false || inspection.framesFailed > 0
+            || inspection.timedOut || inspection.pageClosed || inspection.aborted);
+        const readFailures = inspection?.readFailures?.map(row =>
+            `${{frame_scan: '页面扫描', frame_owner: '框架容器', load_state: '加载状态', control_snapshot: '控件快照'}[row.phase]}${probeFailureLabels[row.reason]}${row.count}`).join('、');
         const probeFailures = exclusionProbe?.failures?.map(row =>
             `${row.phase === 'frame_owner' ? '框架容器' : row.phase === 'control_snapshot' ? '控件快照' : '页面扫描'}${probeFailureLabels[row.reason]}${row.count}`).join('、');
         const diagnosticDetails = [
             firstInitializationFailure ? `首个观测异常（不等同根因）：${initializationLabels[firstInitializationFailure.endpoint]}${firstInitializationFailure.status ? ` HTTP ${firstInitializationFailure.status}` : ''}${firstInitializationFailure.code ? ` ${initializationCodes[firstInitializationFailure.code]}` : ''}` : '',
+            firstInitializationFailure?.source ? `请求失败来源：${cancellationLabels[firstInitializationFailure.source]}${firstInitializationFailure.ruleId ? `（规则 ${firstInitializationFailure.ruleId}）` : ''}${firstInitializationFailure.navigationRelated === 'possible' ? '；与同一页面导航或卸载时间接近，因果未确认' : ''}` : '',
             checkoutOpenDiagnostics?.missing?.length ? `未就绪字段：${checkoutOpenDiagnostics.missing.map(field => fieldLabels[field]).join('、')}` : '',
-            numberCandidates ? `卡号候选：${numberCandidates.count}` : '',
+            readIncomplete ? '控件读取未完成，不能据此判断卡号输入框不存在' : '',
+            numberCandidates ? `${readIncomplete ? '已读范围内的' : ''}卡号候选：${numberCandidates.count}（仅本次已观察范围）` : '',
+            readFailures ? `控件读取异常：${readFailures}` : '',
             typeof inspection?.framesChecked === 'number' ? `已检查页面数：${inspection.framesChecked}` : '',
             inspection?.framesSkipped > 0 ? `跳过页面数：${inspection.framesSkipped}${skippedReasons ? `（${skippedReasons}）` : ''}` : '',
             typeof inspection?.controlCounts?.scanned === 'number' ? `扫描控件数：${inspection.controlCounts.scanned}` : '',
