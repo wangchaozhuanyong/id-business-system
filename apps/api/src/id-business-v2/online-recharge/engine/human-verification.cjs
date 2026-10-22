@@ -49,6 +49,17 @@ async function challengeTarget(page) {
     await element.dispose?.();
   }
 }
+async function hasActionableHumanVerification(page) {
+  if (!page || page.isClosed() || !homepage(page)) return false;
+  if (!(await require('./upstream/human-verification').isBlockingHumanVerificationVisible(page)))
+    return false;
+  try {
+    await challengeTarget(page);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function sameBox(a, b) {
   return ['x', 'y', 'width', 'height'].every((key) => Math.abs(a[key] - b[key]) < 0.5);
 }
@@ -338,6 +349,7 @@ async function waitForHumanVerification(page, options = {}, injected = {}) {
 }
 module.exports = {
   waitForHumanVerification,
+  hasActionableHumanVerification,
   challengeTarget,
   sameBox,
   homepage,

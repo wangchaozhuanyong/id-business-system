@@ -1,4 +1,10 @@
 import {
+  onlineSubscriptionChallengePaths,
+  onlineSubscriptionChallengeControls,
+  isOnlineSubscriptionChallengeOnly,
+  isOnlineSubscriptionChallengeControlsOnly
+} from './ci-online-settings-scope.mjs';
+import {
   onlineNativeFetchPaths,
   onlineNativeFetchControls,
   isOnlineNativeFetchOnly,
@@ -3099,6 +3105,50 @@ test('real Session repair checks its complete executor scope without unrelated A
     'regressions',
     'human-verification',
     'session-routing-browser'
+  ])
+    assert.ok(checks.includes(name + '.test.cjs'));
+  assert.match(checks, /test-concurrency=1/);
+  assert.match(checks, /SESSION_ROUTING_BROWSER_MODE=pool/);
+  assert.doesNotMatch(checks, /migrate|api.*typecheck|admin/);
+});
+
+test('subscription challenge repair checks its complete executor scope without unrelated API or Admin suites', () => {
+  const paths = [...onlineSubscriptionChallengePaths, ...onlineSubscriptionChallengeControls];
+  assert.equal(isOnlineSubscriptionChallengeOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(
+    isOnlineSubscriptionChallengeControlsOnly(onlineSubscriptionChallengeControls),
+    true
+  );
+  assert.deepEqual(selectedParts(onlineSubscriptionChallengeControls), ['guards']);
+  for (const required of onlineSubscriptionChallengePaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isOnlineSubscriptionChallengeOnly(paths.filter((p) => p !== required)), false);
+  assert.equal(isOnlineSubscriptionChallengeOnly([...paths, paths[0]]), false);
+  for (const unrelated of [
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/App.vue',
+    'apps/api/prisma-mysql/schema.prisma'
+  ])
+    assert.equal(isOnlineSubscriptionChallengeOnly([...paths, unrelated]), false);
+  assert.match(
+    onlineSettingsCommands('guards', paths).flat().join(' '),
+    /online-subscription-challenge-release.test.py/
+  );
+  const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
+  for (const name of [
+    'subscription-diagnostics',
+    'human-verification',
+    'query-network-browser',
+    'renewal-state',
+    'renewal-recheck',
+    'debug-checkout',
+    'regressions',
+    'session-probe',
+    'upstream-session-transition',
+    'session-routing-browser',
+    'recharge-flow-acceptance'
   ])
     assert.ok(checks.includes(name + '.test.cjs'));
   assert.match(checks, /test-concurrency=1/);

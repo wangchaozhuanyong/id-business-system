@@ -1,3 +1,51 @@
+export const onlineSubscriptionChallengePaths = Object.freeze([
+  ...[
+    'SOURCE_MANIFEST.json',
+    'confirmation.cjs',
+    'human-verification.cjs',
+    'subscription-diagnostics.cjs',
+    'test/debug-checkout.test.cjs',
+    'test/human-verification.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs',
+    'test/renewal-state.test.cjs',
+    'test/subscription-diagnostics.test.cjs',
+    'upstream/index.js',
+    'upstream/subscription-check.js'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineSubscriptionChallengeControls = Object.freeze([
+  '.github/workflows/online-subscription-challenge-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-subscription-challenge-' + name
+  )
+]);
+export function isOnlineSubscriptionChallengeOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineSubscriptionChallengePaths
+      .filter((p) => p.startsWith('apps/'))
+      .every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) =>
+        onlineSubscriptionChallengePaths.includes(p) ||
+        onlineSubscriptionChallengeControls.includes(p)
+    )
+  );
+}
+export function isOnlineSubscriptionChallengeControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-subscription-challenge-')) &&
+    paths.every((p) => onlineSubscriptionChallengeControls.includes(p))
+  );
+}
 export const onlineRealSessionPaths = Object.freeze([
   ...[
     'SOURCE_MANIFEST.json',
@@ -1196,6 +1244,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineSubscriptionChallengeOnly(paths)) return true;
   if (isOnlineRealSessionOnly(paths)) return true;
   if (isOnlineNativeFetchOnly(paths)) return true;
   if (isOnlineHumanVerificationOnly(paths)) return true;
@@ -1244,6 +1293,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineSubscriptionChallengeControlsOnly(paths)) return true;
   if (isOnlineRealSessionControlsOnly(paths)) return true;
   if (isOnlineNativeFetchControlsOnly(paths)) return true;
   if (isOnlineHumanVerificationControlsOnly(paths)) return true;
@@ -1275,6 +1325,67 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (
+    isOnlineSubscriptionChallengeOnly(paths) ||
+    isOnlineSubscriptionChallengeControlsOnly(paths)
+  ) {
+    const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+    if (part === 'guards') {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        previous[0],
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        previous.find((command) => command[0] === 'node'),
+        [
+          'python3',
+          '-B',
+          'scripts/production-release/online-subscription-challenge-release.test.py'
+        ],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineSubscriptionChallengeOnly(paths)) {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      return [
+        ...previous.slice(0, 2),
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          ...[
+            'subscription-diagnostics',
+            'human-verification',
+            'query-network-browser',
+            'renewal-state',
+            'renewal-recheck',
+            'debug-checkout',
+            'regressions',
+            'session-probe',
+            'upstream-session-transition',
+            'session-routing-browser',
+            'recharge-flow-acceptance'
+          ].map((n) => engine + '/test/' + n + '.test.cjs')
+        ],
+        ...['standalone', 'pool'].map((mode) => [
+          'env',
+          'SESSION_ROUTING_BROWSER_MODE=' + mode,
+          'node',
+          '--test',
+          '--test-name-pattern=canonical read|later real Session denial|login navigation remains|CSRF-bound synthetic SDK',
+          engine + '/test/session-routing-browser.test.cjs'
+        ]),
+        ['npm', '--prefix', engine, 'run', 'test:upstream']
+      ];
+    }
+    throw new Error('Unsupported subscription challenge check part');
+  }
   if (isOnlineRealSessionOnly(paths) || isOnlineRealSessionControlsOnly(paths)) {
     const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
     if (part === 'guards') {

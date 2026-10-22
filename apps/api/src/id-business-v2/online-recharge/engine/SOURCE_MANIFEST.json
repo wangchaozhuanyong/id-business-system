@@ -75,9 +75,9 @@
     {
       "path": "confirmation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "798026e30cb9a907e5cdc7195720f2b758eea83ecf76dbf4ee793eff6c8f318f",
+      "adaptedSha256": "93fbbdc8f247acd6e5d42b75bdc16b739e87122d3d8f886dae7d752e86f20dd5",
       "changed": true,
-      "reason": "Carry verified expiry into subscription classification and require plan snapshot currency; preserve original upgrade and Pro500 identity guards.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage."
+      "reason": "Carry verified expiry into subscription classification and require plan snapshot currency; preserve original upgrade and Pro500 identity guards.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
     },
     {
       "path": "credential-client.cjs",
@@ -278,9 +278,9 @@
     {
       "path": "test/debug-checkout.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "7585522fa546947dd88a38ccd4738a48f128dc0fe4a5a3d65d473a3dc070ce58",
+      "adaptedSha256": "383a1a29a8c930695ded70124ec4d258982ee483cb743ffa94dd34851b6930f7",
       "changed": true,
-      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions."
+      "reason": "Allow controlled debug to observe current checkout region without authorizing payment; defer exact tier selection only for a unique empty Pro card, verify tier at checkout and retain all real payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
     },
     {
       "path": "test/dispatch.test.cjs",
@@ -369,9 +369,9 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "fe77ea72a22df22830c6ed156ef2b0d95579907ce960879cc2cf883113a51dac",
+      "adaptedSha256": "6610b2d7cab37aab41e13b31165858393da0b647ffdd3cf9e8976c401dd886bf",
       "changed": true,
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. Native Session baseline comparison confirms two real installation/bootstrap reads; update only stale fixture counts, preserve exact request/payment assertions."
     },
     {
       "path": "test/regressions.test.cjs",
@@ -390,9 +390,9 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b42d752231484ddf231a61abdaea373bb345bcf27c3f5dcb895ab38b4fff5916",
+      "adaptedSha256": "783409fb100c9e5aea776de6d5cde03a614cac7c280f02771f25d93a0382bb2f",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. Keep renewal browser query fixture aligned with the pinned upstream 20-second complete-response limit."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. Keep renewal browser query fixture aligned with the pinned upstream 20-second complete-response limit. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
     },
     {
       "path": "test/rpc-response.test.cjs",
@@ -586,9 +586,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "71eeba641e53eff395495c520b313367cc4dbdb76b298f7dce59bf469de4390f",
+      "adaptedSha256": "f5f7ec51fa9f73da530c629b6eae3a743d3c05809ae381a2e9a0324094176213",
       "changed": true,
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Distinguish incomplete observed candidate counts from absence; report known cancellation rules and possible navigation timing without asserting a root cause."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Distinguish incomplete observed candidate counts from absence; report known cancellation rules and possible navigation timing without asserting a root cause. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -670,9 +670,9 @@
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "f88083289b9e79e53cb4ea70db31c36c9e50c756768d121a395029b66b8b5c87",
+      "adaptedSha256": "8745f3112c552a4f5e74d1e1039cc4a1f7f2169a4ecc2e09780fd3c52096aef8",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. Match the pinned upstream 20-second complete-response GET limit within unchanged overall deadlines; exclusive diagnostics use one primary read and reserve one complete comparison without authorizing payments."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. Match the pinned upstream 20-second complete-response GET limit within unchanged overall deadlines; exclusive diagnostics use one primary read and reserve one complete comparison without authorizing payments. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -811,15 +811,29 @@
       "path": "human-verification.cjs",
       "originalSha256": null,
       "changed": true,
-      "adaptedSha256": "9a731f145038bd2d56cfe9b6c59b15087c924c448dca297fdca0386a412b09b6",
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage."
+      "adaptedSha256": "0d4b56c160c419f773486b8c6b5a19d6278d2557052b46f76f6698cbf34a4020",
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
     },
     {
       "path": "test/human-verification.test.cjs",
       "originalSha256": null,
       "changed": true,
-      "adaptedSha256": "e763c04d10d236ec9c98f1b456f8c616010a6e41b05bea8fdebe1fc039fe7319",
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage."
+      "adaptedSha256": "43aecda9b885cb7d86dc9ab6857fa5789b7b85edec97a1aacb7b6ff1bba9329d",
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
+    },
+    {
+      "path": "subscription-diagnostics.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "cff9d7bb6a830a5c3087073236443dc0e3b400888a23e27aedc507b4f0a1ba27",
+      "changed": true,
+      "reason": "Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
+    },
+    {
+      "path": "test/subscription-diagnostics.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "82a3bf94eef9ba83b61e40b7645d4810d33a18289ab57ae0c1132d8f6c6a41e8",
+      "changed": true,
+      "reason": "Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
     }
   ],
   "dependencySecurityPatches": [

@@ -284,14 +284,6 @@ function normalizeResponseBody(data) {
     return data;
 }
 
-function isCloudflareBlock(status, data) {
-    if (status !== 403) {
-        return false;
-    }
-    const text = typeof data === 'string' ? data : JSON.stringify(data || '');
-    return /cloudflare|cf-ray|attention required|just a moment|cf_chl/i.test(text);
-}
-
 const NETWORK_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
     'ECONNABORTED', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE']);
 function transportCode(error) {
@@ -303,7 +295,7 @@ function transportCode(error) {
         ? 'ETIMEDOUT' : 'UNKNOWN';
 }
 function queryErrorCode(error) {
-    if (['HUMAN_VERIFICATION_REQUIRED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH', 'NETWORK_TIMEOUT',
+    if (['HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH', 'NETWORK_TIMEOUT',
         'SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED'].includes(error?.code)) return error.code;
     if (/^(?:VERIFICATION_(?:TIMEOUT|CANCELLED|PAGE_CLOSED|FRAME_AMBIGUOUS|NOT_READY|NETWORK_UNAVAILABLE|PROVIDER_UNAVAILABLE|PROVIDER_REJECTED|RATE_LIMITED|CHALLENGE_REJECTED|CHALLENGE_UNCHANGED|ROUNDS_EXHAUSTED|SOLVER_DISABLED|SOLVER_FAILED|RUNTIME_FAILED|PAGE_BINDING_REQUIRED|PAGE_BINDING_MISMATCH|UNSUPPORTED)|VLM_(?:AUTH_FAILED|RATE_LIMITED|TIMEOUT|NETWORK_UNAVAILABLE|REQUEST_UNSUPPORTED|INVALID_RESPONSE|INVALID_DECISION|PROVIDER_UNAVAILABLE|IMAGE_UNSUPPORTED|NOT_CONFIGURED|API_REJECTED))$/.test(error?.code)) return error.code;
     const network = transportCode(error);
@@ -419,7 +411,9 @@ async function queryGet(read, budget, transport) {
             });
             checkBudget(budget);
             budget.diagnostics.push({ transport, phase: 'account_check', httpStatus: value.status,
-                ...control.observation, attempt, elapsedMs: Math.round(performance.now() - started) });
+                ...control.observation, attempt, elapsedMs: Math.round(performance.now() - started),
+                ...(value.responseFacts ? { responseFacts: value.responseFacts } : {}),
+                ...(budget.afterHumanVerification ? { afterHumanVerification: true } : {}) });
             return value;
         } catch (error) {
             const code = transportCode(error);
@@ -508,7 +502,10 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
                             const bodyStarted = performance.now(), text = await response.text();
                             observation.responseBodyCompleted = true;
                             observation.bodyElapsedMs = Math.round(performance.now() - bodyStarted);
-                            return { status: response.status, text: text.length <= 512 * 1024 ? text : null, observation };
+                            return { status: response.status, text: text.length <= 512 * 1024 ? text : null, observation,
+                                headers: { 'content-type': response.headers.get('content-type'),
+                                    'cf-mitigated': response.headers.get('cf-mitigated'),
+                                    'cf-ray': response.headers.has('cf-ray') ? 'present' : '' } };
                         } catch (error) {
                             if (observation.responseHeadersReceived && !observation.responseBodyCompleted)
                                 observation.bodyElapsedMs = Math.max(0,
@@ -531,7 +528,10 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
                 ...(result.readError === 'ETIMEDOUT' ? { cancellationConfirmed: true } : {})
             });
             if (result.text === null) throw Object.assign(new Error('订阅响应超过限制'), { code: 'RESPONSE_TOO_LARGE' });
-            return { status: result.status, data: normalizeResponseBody(result.text), via: 'browser-page' };
+            const diagnostic = require('../subscription-diagnostics.cjs');
+            const responseFacts = diagnostic.responseFacts(result.status, result.headers, result.text);
+            if ([401, 403].includes(result.status)) diagnostic.logResponseFacts(result.status, responseFacts);
+            return { status: result.status, data: normalizeResponseBody(result.text), via: 'browser-page', responseFacts };
         } finally { page.off?.('request', issued); page.off?.('requestfailed', failed); }
     }, budget, 'browser-page');
 }
@@ -598,6 +598,32 @@ async function closeQueryPage(page) {
     if (!page) return;
     await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
     if (!page.isClosed?.()) await page.close().catch(() => {});
+}
+async function completeOriginalChallenge(page, options, budget, diagnostic) {
+    const manual = require('../human-verification.cjs');
+    const actionable = await boundedQuery(() => manual.hasActionableHumanVerification(page), budget, 'verification_probe');
+    diagnostic.actionableVerification = actionable;
+    diagnostic.manualVerification = 'not_started';
+    if (!actionable || budget.manualVerificationUsed || typeof options.onHumanVerification !== 'function' || !options.sessionRaw)
+        return false;
+    budget.manualVerificationUsed = true;
+    try {
+        diagnostic.manualVerification = 'waiting';
+        const completed = await boundedQuery(() => options.onHumanVerification(page, {
+            signal: budget.signal, deadlineAt: budget.deadlineAt
+        }), budget, 'verification');
+        if (completed?.completed !== true) throw Object.assign(new Error('人工验证未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+        diagnostic.manualVerification = 'completed';
+        // A UI completion alone is never identity or subscription proof.
+        await boundedQuery(() => manual.assertOriginalIdentity(page, options.sessionRaw, {
+            signal: budget.signal, deadlineAt: budget.deadlineAt
+        }), budget, 'session_recheck');
+        diagnostic.manualVerification = 'identity_verified';
+        return true;
+    } catch (error) {
+        diagnostic.manualVerification = diagnostic.manualVerification === 'completed' ? 'identity_unverified' : 'not_completed';
+        throw error;
+    }
 }
 async function withRenewalBrowserContext(accessToken, options, operation) {
     const budget = queryBudget(options);
@@ -700,13 +726,20 @@ async function fetchAccountCheck(accessToken, options = {}) {
         if (page) {
             const verification = require('./human-verification');
             if (await boundedQuery(() => verification.isBlockingHumanVerificationVisible(page), budget, 'verification_probe')) {
-                const result = await boundedQuery(() => verification.clearHumanVerification(page, {
-                    phase: 'subscription-query', deadlineAt: budget.deadlineAt, signal: budget.signal,
-                    maxWaitMs: checkBudget(budget), useVisualSolver: true, requireCheckoutReady: false
-                }), budget, 'verification');
-                if (!result.cleared) throw Object.assign(new Error('订阅查询验证未完成'), {
-                    code: result.code || 'HUMAN_VERIFICATION_REQUIRED', diagnostics: result.diagnostics
-                });
+                if (typeof options.onHumanVerification === 'function') {
+                    const diagnostic = { transport: 'browser-page', phase: 'verification' };
+                    budget.diagnostics.push(diagnostic);
+                    if (!await completeOriginalChallenge(page, options, budget, diagnostic))
+                        throw Object.assign(new Error('原页面没有可接续的本人验证'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+                } else {
+                    const result = await boundedQuery(() => verification.clearHumanVerification(page, {
+                        phase: 'subscription-query', deadlineAt: budget.deadlineAt, signal: budget.signal,
+                        maxWaitMs: checkBudget(budget), useVisualSolver: true, requireCheckoutReady: false
+                    }), budget, 'verification');
+                    if (!result.cleared) throw Object.assign(new Error('订阅查询验证未完成'), {
+                        code: result.code || 'HUMAN_VERIFICATION_REQUIRED', diagnostics: result.diagnostics
+                    });
+                }
             }
             // One primary read plus one complete comparison, only for this task's
             // exclusive diagnostic context. Normal and borrowed contexts retain a retry.
@@ -714,6 +747,15 @@ async function fetchAccountCheck(accessToken, options = {}) {
             let result;
             try { result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget); }
             catch (error) { await compare(page, error); throw error; }
+            if (result.status === 403 && result.responseFacts?.classification === 'CF_CHALLENGE') {
+                const diagnostic = budget.diagnostics.at(-1);
+                if (await completeOriginalChallenge(page, options, budget, diagnostic)) {
+                    const resumed = { ...budget, attempts: 0, maxAttempts: 1, afterHumanVerification: true };
+                    result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, resumed);
+                }
+            }
+            const authReceipts = options.authDiagnostics?.snapshot?.();
+            if (authReceipts && budget.diagnostics.length) budget.diagnostics.at(-1).authResponses = authReceipts;
             await compare(page);
             return { ...result, diagnostics: budget.diagnostics,
                 ...(compareDiagnostics ? { compareDiagnostics } : {}) };
@@ -729,7 +771,11 @@ async function fetchAccountCheck(accessToken, options = {}) {
                 headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' } });
             let data;
             try { data = await response.json(); } catch (_) { data = await response.text().catch(() => ''); }
-            return { status: response.status(), data, via: 'proxy-request' };
+            const diagnostic = require('../subscription-diagnostics.cjs');
+            const status = response.status();
+            const responseFacts = diagnostic.responseFacts(status, response.headers?.() || {}, data);
+            if ([401, 403].includes(status)) diagnostic.logResponseFacts(status, responseFacts);
+            return { status, data, via: 'proxy-request', responseFacts };
         }, budget, 'proxy-request');
         return { ...result, diagnostics: budget.diagnostics };
     } catch (error) {
@@ -770,10 +816,12 @@ async function fetchAccountCheck(accessToken, options = {}) {
             ...(compareDiagnostics ? { compareDiagnostics } : {}),
             ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}),
             verificationDiagnostics: safeVerificationDiagnostics(error.diagnostics),
-            failure: { phase: ['account_check', 'session_install', 'session_bootstrap', 'navigation', 'proxy_prepare',
+            failure: { phase: ['account_check', 'session_install', 'session_bootstrap', 'session_recheck', 'navigation', 'proxy_prepare',
                 'browser_connect', 'context_create', 'page_create', 'request_create', 'verification', 'verification_probe'].includes(error.phase)
                 ? error.phase : 'query', networkCode: transportCode(error) } };
     } finally {
+        if (budget.diagnostics.length && options.authDiagnostics?.snapshot)
+            budget.diagnostics.at(-1).authResponses = options.authDiagnostics.snapshot();
         await closeQueryPage(ownedPage);
         if (ownedContext) await ownedContext.close().catch(() => {});
         if (session) await require('./browser-runtime').closeTaskBrowser(session, session.browser);
@@ -1056,23 +1104,28 @@ async function resumeAutoRenew(accessToken, options = {}) {
     return verifyRenewalUpdate(token, options, subscription, accountId, true);
 }
 
-function mapCheckError(status, data) {
+function mapCheckError(status, data, responseFacts) {
     const body = normalizeResponseBody(data);
+    const facts = responseFacts || require('../subscription-diagnostics.cjs').responseFacts(status, {}, body);
 
     if (status === 401) {
         return { statusCode: 401, errorCode: 'SESSION_INVALID', error: 'Session 无效或已过期，请重新获取 Session' };
     }
 
     if (status === 403) {
-        if (isCloudflareBlock(status, body)) {
+        if (facts.classification === 'CF_CHALLENGE') {
             return {
                 statusCode: 403,
                 errorCode: 'UPSTREAM_BLOCKED', error: '官网风控拦截，订阅状态未能核实，请检查任务代理或人工验证'
             };
         }
+        if (facts.classification === 'AUTH_SESSION_REJECTED')
+            return { statusCode: 403, errorCode: 'SESSION_INVALID', error: '官网明确拒绝当前登录资料，本次未核实账号订阅' };
+        if (facts.classification === 'POLICY_OR_REGION_BLOCK')
+            return { statusCode: 403, errorCode: 'UPSTREAM_FORBIDDEN', error: '官网返回明确的地区或使用策略限制，本次未核实账号订阅' };
         return {
             statusCode: 403,
-            errorCode: 'UPSTREAM_FORBIDDEN', error: '官网拒绝此次查询（403），不能据此确定登录资料已过期'
+            errorCode: 'UPSTREAM_FORBIDDEN', error: '官网拒绝此次查询（403），原因尚未明确，不能据此确定登录资料已过期'
         };
     }
 
@@ -1119,6 +1172,7 @@ async function querySubscriptionBySession(accessToken, options = {}) {
     if (response.errorCode) {
         const messages = {
             HUMAN_VERIFICATION_REQUIRED: '官网需要人工验证，请完成验证后再查询',
+            HUMAN_VERIFICATION_CANCELLED: '人工验证已取消，本次未取得订阅结果',
             NETWORK_TIMEOUT: '订阅查询网络超时，本次未取得账号订阅结果',
             PROXY_UNAVAILABLE: '任务代理连接失败，请检查代理服务',
             SESSION_INVALID: '账号尚未登录或 Session 已失效，请更新登录资料',
@@ -1126,7 +1180,7 @@ async function querySubscriptionBySession(accessToken, options = {}) {
             ...BOOTSTRAP_FAILURE_MESSAGES,
             NETWORK_UNAVAILABLE: '订阅查询网络不可用，本次未取得账号订阅结果'
         };
-        const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403, ACCOUNT_MISMATCH: 409,
+        const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403, HUMAN_VERIFICATION_CANCELLED: 403, ACCOUNT_MISMATCH: 409,
             SESSION_NOT_CONFIRMED: 503, SESSION_BOOTSTRAP_FAILED: 502 };
         const bootstrapDiagnostics = safeBootstrapDiagnostics(response.bootstrapDiagnostics);
         return { ok: false, ...comparison, errorCode: response.errorCode,
@@ -1138,7 +1192,7 @@ async function querySubscriptionBySession(accessToken, options = {}) {
     }
     const body = normalizeResponseBody(response.data);
     if (response.status !== 200) {
-        const mapped = mapCheckError(response.status, body);
+        const mapped = mapCheckError(response.status, body, response.responseFacts);
         return { ok: false, ...mapped, ...comparison, diagnostics: response.diagnostics };
     }
 
