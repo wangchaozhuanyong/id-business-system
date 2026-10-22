@@ -165,6 +165,14 @@ def verify_parent_admin_files(files, baseline):
     return files
 
 
+def persist_parent_admin_files(target, files, baseline):
+    verify_parent_admin_files(files, baseline)
+    path = target / 'online-human-parent-admin-files.json'
+    need(not path.exists() and not path.is_symlink(), 'ADMIN_CAPTURE_EXISTS')
+    with path.open('xb') as output:
+        output.write(canonical(files))
+
+
 def project_manifest(manifest, c):
     need(manifest['scope'] == SCOPE, 'MANIFEST_SCOPE_CHANGED')
     for role, selected in (('api', API), ('admin', ADMIN), ('online-recharge', {ENGINE + n for n in ENGINE_NAMES})):
@@ -210,6 +218,9 @@ def engine(c, plan):
         def point(target, stamp):
             path = target / 'release-manifest.json'
             manifest = project_manifest(json.loads(path.read_bytes()), c)
+            persist_parent_admin_files(target,
+                json.loads((HERE / 'online-human-parent-admin-files.json').read_bytes()),
+                plan['nativeParentCapture']['baseline'])
             path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
             original_point(target, stamp)
         h.build_image, d.point_current = build, point
@@ -229,7 +240,11 @@ def engine(c, plan):
              and {n: h.configuration(d, s) for n, s in states.items()} == b['runtimeConfigurationSha256'], 'SERVICE_SCOPE_CHANGED')
         expected = {n: b[n] for n in ('apiPreservedInventory', 'sharedInventory', 'clientInventory', 'nginxSha256')}
         expected.update(apiModules=proof['apiModules'])
-        original_admin = verify_parent_admin_files(json.loads((HERE / 'online-human-parent-admin-files.json').read_bytes()), b)
+        captured_admin = target / 'online-human-parent-admin-files.json'
+        if not captured_admin.exists():
+            captured_admin = HERE / 'online-human-parent-admin-files.json'
+        need(not captured_admin.is_symlink(), 'ADMIN_CAPTURE_CHANGED')
+        original_admin = verify_parent_admin_files(json.loads(captured_admin.read_bytes()), b)
         merged = {**original_admin, **proof['adminFiles']}
         expected['adminInventory'] = {'count': len(merged), 'sha256': sha(canonical(merged))}
         need(runtime(d, states) == expected and p.database(d, states['api']) == b['database'], 'RUNTIME_CONTENT_CHANGED')

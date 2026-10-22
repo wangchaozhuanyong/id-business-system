@@ -158,6 +158,19 @@ class HumanRelease(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 P.verify_parent_admin_files(bad, baseline)
 
+    def test_parent_admin_inventory_survives_native_stage_cleanup(self):
+        files = {'index.html': 'a' * 64, 'assets/previous.js': 'b' * 64}
+        baseline = {'adminInventory': {'count': len(files), 'sha256': P.sha(P.canonical(files))}}
+        with tempfile.TemporaryDirectory(dir=P.ROOT / '.runtime') as folder:
+            target = Path(folder)
+            P.persist_parent_admin_files(target, files, baseline)
+            saved = json.loads((target / 'online-human-parent-admin-files.json').read_bytes())
+            self.assertEqual(P.verify_parent_admin_files(saved, baseline), files)
+            with self.assertRaises(RuntimeError):
+                P.persist_parent_admin_files(target, files, baseline)
+            with self.assertRaises(RuntimeError):
+                P.persist_parent_admin_files(target, {'index.html': 'c' * 64}, baseline)
+
 
 if __name__ == '__main__':
     unittest.main()

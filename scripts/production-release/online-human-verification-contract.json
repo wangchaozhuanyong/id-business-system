@@ -354,9 +354,9 @@
     "settled-checkout-publication.py": "63c902b0ef12282a50a671a9cf5a47718fecb32fa7185b6ef53753e6137c7403",
     "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260",
     "online-execution-contract.json": "a43f983ff3a29d49e29ec34ee94aa654f4670d65f0d7c9d1b51f0e86f58bd3a5",
-    "online-human-verification-release.py": "b644c6c88954d7fd88904c3a3aa28787cfecdc2174e4dc9f4792c546bde49481",
+    "online-human-verification-release.py": "4292c6bbcdc49626571f6feaf437d0f91b5bf6d1c7a9323b21c32e74306d2be9",
     "online-human-verification-publication.py": "f0e230283b14288111df754669a879ea97838161482ca6e1cb984fb2839a0e18",
-    "online-human-verification-release.test.py": "71f1d26465fa774e5cbf10d6dc777fa878a3b4c74d069128e2d5d9d77f833959"
+    "online-human-verification-release.test.py": "6bb827ce656d8a02c1a92b7602a98ad97504d48549e869273aa417dcf659afc2"
   },
   "updatedServices": ["api", "admin", "online-recharge"],
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
