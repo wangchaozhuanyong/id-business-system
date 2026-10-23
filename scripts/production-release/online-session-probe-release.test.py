@@ -131,6 +131,20 @@ class CheckoutInitPublicationTests(unittest.TestCase):
              patch.object(pub.F, 'artifact_json', return_value=({**receipt, 'testedTree': 'f' * 40}, 'd' * 64)):
             with self.assertRaises(RuntimeError): pub.quality(commit, tree)
 
+    def test_media_mirror_formats_keep_distribution_components_and_signature(self):
+        media = P.load('../ci-online-session-media.py')
+        for uri in ('http://azure.archive.ubuntu.com/ubuntu',
+                    'mirror+file:/etc/apt/mirrors/ubuntu.list',
+                    'https://archive.ubuntu.com/ubuntu'):
+            raw = ('Types: deb\nURIs: ' + uri + '\nSuites: noble noble-updates noble-security\n'
+                   'Components: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n')
+            changed = media.official_sources(raw)
+            self.assertIn('URIs: https://archive.ubuntu.com/ubuntu\n', changed)
+            self.assertEqual([line for line in raw.splitlines() if not line.startswith('URIs:')],
+                             [line for line in changed.splitlines() if not line.startswith('URIs:')])
+        with self.assertRaises(RuntimeError):
+            media.official_sources('Types: deb\nSuites: noble\n')
+
     def test_current_control_and_source_checks(self):
         pub = P.load('online-session-probe-publication.py')
         pub.check(self.c)
