@@ -22,6 +22,7 @@ import {
   type DirectPaymentOperation
 } from './bitbrowser-payment-diagnostics';
 import { directPaymentPageExpression } from './bitbrowser-payment-page';
+import { prepareDirectProTier } from './bitbrowser-pro-tier';
 import { directCheckoutPlanMatches, verifyDirectCheckoutQuote } from './bitbrowser-stripe-quote';
 import {
   directOfficialPlans,
@@ -584,21 +585,31 @@ export async function runDirectPayment(
     }
     if (plan.startsWith('pro-')) {
       operation = 'plan_selection';
-      let tierReady = false;
-      while (Date.now() < deadline) {
-        remaining();
-        const state = await session.evaluate<PageState>(
-          directPaymentPageExpression(plan, 'tier', checkoutId)
-        );
-        if (state.kind === 'tier_ready') {
-          tierReady = true;
-          break;
-        }
-        if (state.kind === 'official_error' || state.kind === 'ambiguous_tier')
-          throw new Error('官网套餐档位未核实。');
-        await waitDirectPayment(session.signal);
-      }
-      if (!tierReady) throw new Error('官网套餐档位未核实。');
+      await prepareDirectProTier({
+        plan,
+        checkoutId,
+        entity,
+        currency: launch.safety.lockedCurrency,
+        deadline,
+        inspect: (action) =>
+          session.evaluate<PageState>(directPaymentPageExpression(plan, action, checkoutId)),
+        read: () => read(`/backend-api/payments/checkout/${entity}/${checkoutId}`),
+        reload: async () => {
+          remaining();
+          const current = await page();
+          if (
+            current.checkoutId !== checkoutId ||
+            current.entity !== entity ||
+            current.kind !== 'page'
+          )
+            throw new Error('existing_checkout_unavailable');
+          remaining();
+          if (hooks.attempted()) throw new Error('原窗口已观察到付款操作，请只读核实原单。');
+          await browser.cdp.command('Page.reload', {}, browser.sessionId);
+        },
+        pause: () => waitDirectPayment(session.signal),
+        remaining
+      });
     }
     operation = 'payment_form';
     await hooks.progress('payment_preparation', report);

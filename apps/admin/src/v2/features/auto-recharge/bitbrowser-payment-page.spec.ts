@@ -352,6 +352,43 @@ describe('直连官网套餐与付款按钮边界', () => {
     expect(inspectDirectPaymentPage('go', 'create').kind).toBe('plan_unavailable');
     expect(header.clicks).toBe(1);
   });
+  it('实测 Go 中文页面：标题栏打开、默认 Business 切个人，再等待准确 Go 入口，准备阶段零建单', () => {
+    const preparation = { menuRequested: false, personalRequested: false };
+    const sidebar = new Node('升级订阅');
+    const header = new Node('升级订阅');
+    header.titlebar = true;
+    setup([sidebar, header], 'https://chatgpt.com/');
+    expect(inspectDirectPaymentPage('go', 'prepare', undefined, preparation)).toEqual({
+      kind: 'menu_opened',
+      preparationAction: 'open_menu'
+    });
+    preparation.menuRequested = true;
+    const personal = new Node('个人', 'radio');
+    personal.attrs['aria-checked'] = 'false';
+    personal.attrs['data-state'] = 'off';
+    const business = new Node('升级至 Business');
+    setup([personal, business], 'https://chatgpt.com/#pricing');
+    expect(inspectDirectPaymentPage('go', 'prepare', undefined, preparation)).toEqual({
+      kind: 'menu_opened',
+      preparationAction: 'select_personal'
+    });
+    preparation.personalRequested = true;
+    expect(inspectDirectPaymentPage('go', 'prepare', undefined, preparation).kind).toBe(
+      'preparation_waiting'
+    );
+    personal.attrs['aria-checked'] = 'true';
+    personal.attrs['data-state'] = 'on';
+    const go = new Node('升级至 Go');
+    const plus = new Node('升级至 Plus');
+    const pro = new Node('升级至 Pro');
+    setup([personal, go, plus, pro], 'https://chatgpt.com/#pricing');
+    for (let read = 0; read < 3; read++)
+      expect(inspectDirectPaymentPage('go', 'prepare', undefined, preparation).kind).toBe(
+        'plan_ready'
+      );
+    expect([header.clicks, sidebar.clicks, personal.clicks]).toEqual([1, 0, 1]);
+    expect([go.clicks, plus.clicks, pro.clicks, business.clicks]).toEqual([0, 0, 0, 0]);
+  });
   it('多个标题栏入口或只有多个普通升级入口时不任意点击', () => {
     const first = new Node('升级订阅');
     const second = new Node('升级订阅');
