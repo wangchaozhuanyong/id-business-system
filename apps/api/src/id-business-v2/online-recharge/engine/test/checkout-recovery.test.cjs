@@ -537,6 +537,9 @@ function checkoutServiceFixture(options = {}) {
       if (name === '../checkout-recovery.cjs') return recovery;
       if (name === '../checkout-initialization.cjs')
         return require('../checkout-initialization.cjs');
+      if (name === '../checkout-await-diagnostics.cjs')
+        return require('../checkout-await-diagnostics.cjs');
+      if (name === '../safe-media.cjs') return require('../safe-media.cjs');
       if (name === './verification-runtime') return require('../upstream/verification-runtime');
       if (name === '../rpc.cjs') return require('../rpc.cjs');
       throw new Error('Unexpected fixture import ' + name);
@@ -927,6 +930,8 @@ function publicCheckoutFailure(error, submitted = false, confirmed = false) {
     wasSubmitted: () => submitted,
     require(name) {
       if (name === './chatgpt') return Service;
+      if (name === '../checkout-await-diagnostics.cjs')
+        return require('../checkout-await-diagnostics.cjs');
       if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => confirmed };
       throw new Error('Unexpected result projection import');
     }
@@ -935,7 +940,9 @@ function publicCheckoutFailure(error, submitted = false, confirmed = false) {
 }
 
 function existingCheckoutDiagnostics(value) {
-  const { initialization, ...existing } = JSON.parse(JSON.stringify(value));
+  const { initialization, awaits, ...existing } = JSON.parse(JSON.stringify(value));
+  if (awaits)
+    assert.deepEqual(require('../checkout-await-diagnostics.cjs').sanitize(awaits), awaits);
   assert.ok(initialization, 'the opener must retain the first-load observation');
   assert.deepEqual(
     require('../checkout-initialization.cjs').sanitize(initialization),
@@ -943,6 +950,54 @@ function existingCheckoutDiagnostics(value) {
   );
   return existing;
 }
+test('public login diagnostics identify the exact pending or failed probe with controlled Chinese labels', () => {
+  const Service = checkoutServiceFixture();
+  for (const state of ['pending', 'read_failed']) {
+    const diagnostic = Service.safeCheckoutOpenDiagnostics({
+      stage: 'login',
+      reason: state === 'pending' ? 'timeout' : 'read_incomplete',
+      code: state === 'pending' ? 'VERIFICATION_TIMEOUT' : 'CHECKOUT_AUTH_READ_FAILED',
+      awaits: {
+        version: 1,
+        elapsedMs: 40,
+        failureCode: state === 'pending' ? 'BUDGET_TIMEOUT' : 'AUTH_READ_FAILED',
+        steps: [
+          {
+            step: 'login_button',
+            state,
+            startedMs: 10,
+            remainingMs: 100,
+            ...(state === 'read_failed'
+              ? {
+                  errorClass: 'context_destroyed',
+                  endedMs: 30,
+                  durationMs: 20,
+                  remainingAfterMs: 80
+                }
+              : {})
+          }
+        ]
+      }
+    });
+    const result = publicCheckoutFailure(
+      Object.assign(new Error('Synthetic read failure'), {
+        code: 'CHECKOUT_OPEN_FAILED',
+        checkoutCreationState: 'accepted',
+        checkoutOpenDiagnostics: diagnostic
+      })
+    );
+    assert.match(
+      result.error,
+      state === 'pending'
+        ? /未完成步骤：登录按钮；已等待 30 毫秒/
+        : /读取失败步骤：登录按钮（页面执行环境已替换）/
+    );
+    assert.doesNotMatch(result.error, /Session.*失效|账号掉线/);
+    assert.deepEqual(result.checkoutOpenDiagnostics.awaits, diagnostic.awaits);
+    assert.equal(result.success, false);
+    assert.equal(result.resultUnknown, false);
+  }
+});
 test('public failure distinguishes an incomplete zero-candidate read and its actual read phase', () => {
   const Service = checkoutServiceFixture();
   const diagnostic = Service.safeCheckoutOpenDiagnostics({
@@ -1484,6 +1539,8 @@ test('an unfinished checkout page close goes directly to task context cleanup be
           if (name === './human-verification')
             return { disposeVerificationPage: () => calls.push('dispose') };
           if (name === './chatgpt') return Service;
+          if (name === '../checkout-await-diagnostics.cjs')
+            return require('../checkout-await-diagnostics.cjs');
           if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => false };
           throw new Error('Unexpected cleanup import');
         }

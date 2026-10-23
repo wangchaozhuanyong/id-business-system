@@ -239,8 +239,11 @@ function stoppedWithoutPayment(stats) {
   assert.equal(stats.unexpected, 0);
 }
 function assertOpeningDiagnostics(actual, expected) {
-  const { initialization, ...existing } = actual;
+  const { initialization, awaits, ...existing } = actual;
   assert.deepEqual(existing, expected);
+  assert.ok(awaits, 'operation timing must survive every opening failure');
+  assert.deepEqual(require('../checkout-await-diagnostics.cjs').sanitize(awaits), awaits);
+  assert.ok(awaits.cleanup.frozenAtMs <= (awaits.cleanup.closeStartedMs ?? Infinity));
   assert.ok(initialization, 'first-open observation must survive the failure projection');
   assert.deepEqual(
     require('../checkout-initialization.cjs').sanitize(initialization),
@@ -271,6 +274,87 @@ test('first-open SDK failure reaches the real accepted-checkout result without f
     assert.equal(error.checkoutOpenDiagnostics.candidateCounts[0].count, 0);
     return true;
   });
+  stoppedWithoutPayment(stats);
+});
+
+test('a stalled login probe is frozen before closing, with no later probe or cleanup event in evidence', async (t) => {
+  const { page, stats, start } = await fixture(t, { maxWaitMs: 1100 });
+  const getByRole = page.getByRole.bind(page);
+  let probes = 0;
+  page.getByRole = (role, options) => {
+    const locator = getByRole(role, options);
+    if (role === 'button' && String(options.name) === String(/^Log in$/i)) {
+      locator.evaluateAll = () => {
+        probes++;
+        return new Promise((resolve, reject) =>
+          page.once('close', () => reject(new Error('Target page closed')))
+        );
+      };
+    }
+    return locator;
+  };
+  await assert.rejects(start(), (error) => {
+    const value = error.checkoutOpenDiagnostics;
+    assert.equal(value.stage, 'login');
+    assert.equal(value.reason, 'timeout');
+    assert.equal(value.awaits.failureCode, 'BUDGET_TIMEOUT');
+    const pending = value.awaits.steps.filter((row) => row.state === 'pending');
+    assert.deepEqual(
+      pending.map((row) => row.step),
+      ['login_gate', 'login_button']
+    );
+    const navigation = value.awaits.steps.find((row) => row.step === 'navigation');
+    assert.equal(navigation.state, 'completed');
+    assert.ok(navigation.remainingAfterMs > 0);
+    assert.equal(value.awaits.pageKind, 'native_checkout');
+    assert.equal(value.awaits.cleanup.closeConfirmed, true);
+    assert.ok(value.awaits.cleanup.closeStartedMs >= value.awaits.cleanup.frozenAtMs);
+    assert.ok(value.awaits.cleanup.closeEndedMs >= value.awaits.cleanup.closeStartedMs);
+    assert.equal(
+      value.initialization.events.some((row) => row.event === 'page_closed'),
+      false
+    );
+    assert.equal(value.initialization.firstFailure, null);
+    return true;
+  });
+  assert.equal(probes, 1);
+  assert.equal(page.isClosed(), true);
+  assert.equal(stats.verifications, 0);
+  stoppedWithoutPayment(stats);
+});
+
+test('a rejected login read stops as incomplete instead of becoming an absent login button', async (t) => {
+  const { page, stats, start } = await fixture(t);
+  const getByRole = page.getByRole.bind(page);
+  let probes = 0;
+  page.getByRole = (role, options) => {
+    const locator = getByRole(role, options);
+    if (role === 'button' && String(options.name) === String(/^Log in$/i)) {
+      locator.evaluateAll = async () => {
+        probes++;
+        throw new Error('Execution context was destroyed PRIVATE_READ_SENTINEL');
+      };
+    }
+    return locator;
+  };
+  await assert.rejects(start(), (error) => {
+    const value = error.checkoutOpenDiagnostics;
+    assert.equal(value.stage, 'login');
+    assert.equal(value.reason, 'read_incomplete');
+    assert.equal(value.awaits.failureCode, 'AUTH_READ_FAILED');
+    assert.equal(value.code, 'CHECKOUT_AUTH_READ_FAILED');
+    const probe = value.awaits.steps.find((row) => row.step === 'login_button');
+    assert.equal(probe.state, 'read_failed');
+    assert.equal(probe.errorClass, 'context_destroyed');
+    assert.equal(
+      value.awaits.steps.some((row) => row.step === 'login_link'),
+      false
+    );
+    assert.doesNotMatch(JSON.stringify(value), /PRIVATE_READ_SENTINEL|cs_test_navigationOriginal/);
+    return true;
+  });
+  assert.equal(probes, 1);
+  assert.equal(stats.verifications, 0);
   stoppedWithoutPayment(stats);
 });
 

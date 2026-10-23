@@ -38,7 +38,8 @@ async function start() {
     chain: Promise.resolve(),
     timer: null,
     stopped: false,
-    busy: false
+    busy: false,
+    capture: { phase: 'idle', phaseAt: Date.now(), chainPending: false }
   };
 }
 function attach(page) {
@@ -62,6 +63,20 @@ async function screenshot(page, prefix = 'stage') {
     return null;
   const current = recorder;
   current.busy = true;
+  const captureState = (current.capture = {
+    phase: 'fonts',
+    phaseAt: Date.now(),
+    startedAt: Date.now(),
+    chainPending: true,
+    captureTimedOut: false,
+    frameIndex: 0,
+    ...(current.capture.finishedAt ? { finishedAt: current.capture.finishedAt } : {})
+  });
+  current.capturePage = page;
+  const phase = (value) => {
+    captureState.phase = value;
+    captureState.phaseAt = Date.now();
+  };
   capturingPages.add(page);
   const deadline = Date.now() + CAPTURE_TIMEOUT_MS;
   let expired = false;
@@ -85,7 +100,9 @@ async function screenshot(page, prefix = 'stage') {
           clearTimeout(timer);
         }
       });
+      captureState.fontsReady = fontsReady === true;
       if (fontsReady !== true || stopped()) return null;
+      phase('frames');
       frames = typeof page.frames === 'function' ? page.frames() : [page];
       const file = path.join(
         root(),
@@ -96,6 +113,8 @@ async function screenshot(page, prefix = 'stage') {
       // A failed frame inspection aborts this capture; credentials never enter page scripts.
       for (const frame of frames) {
         if (stopped()) return null;
+        phase('mask');
+        captureState.frameIndex++;
         await frame.evaluate(() => {
           const credential =
             /(?:password|passwd|access.?token|refresh.?token|session.?token|(?:^|[\s_-])(?:token|session|pan)(?:$|[\s_-])|cookie|authorization|api.?key|secret|cvc|cvv|cc-csc|cc-number|one-time-code|security.?code|card.?number|密码|安全码|卡号|令牌)/i;
@@ -140,6 +159,7 @@ async function screenshot(page, prefix = 'stage') {
         });
       }
       if (stopped()) return null;
+      phase('screenshot');
       const buffer = await page.screenshot({
         fullPage: false,
         // Fast-forwarding or cancelling animations can fire checkout callbacks.
@@ -154,15 +174,19 @@ async function screenshot(page, prefix = 'stage') {
         maskColor: '#142238'
       });
       if (expired || Date.now() >= deadline) return null;
+      phase('write');
       await fs.writeFile(file, buffer, { mode: 0o600 });
       await recordCompletedFile(file, buffer);
       current.frames.push(file);
       result = file;
-    } catch {
+    } catch (error) {
+      captureState.failurePhase = captureState.phase;
+      if (error?.name === 'TimeoutError') captureState.captureTimedOut = true;
       result = null;
     } finally {
       // Keep the actual capture busy until every mask cleanup has settled, even
       // after the optional caller deadline. A later capture must not overlap it.
+      phase('cleanup');
       const cleanup = await Promise.allSettled(
         frames.map((frame) =>
           Promise.resolve().then(() =>
@@ -178,7 +202,10 @@ async function screenshot(page, prefix = 'stage') {
           )
         )
       );
-      if (cleanup.some((item) => item.status === 'rejected')) result = null;
+      if (cleanup.some((item) => item.status === 'rejected')) {
+        captureState.failurePhase ||= 'cleanup';
+        result = null;
+      }
     }
     return result;
   };
@@ -186,6 +213,9 @@ async function screenshot(page, prefix = 'stage') {
     .then(capture)
     .catch(() => null)
     .finally(() => {
+      phase('settled');
+      captureState.chainPending = false;
+      captureState.finishedAt = Date.now();
       current.busy = false;
       capturingPages.delete(page);
     });
@@ -196,6 +226,7 @@ async function screenshot(page, prefix = 'stage') {
       new Promise((resolve) => {
         timer = setTimeout(() => {
           expired = true;
+          captureState.captureTimedOut = true;
           resolve(null);
         }, CAPTURE_TIMEOUT_MS);
       })
@@ -203,6 +234,28 @@ async function screenshot(page, prefix = 'stage') {
   } finally {
     clearTimeout(timer);
   }
+}
+// Node-side state only: querying a stalled page here would stall task cleanup too.
+function diagnostics(page) {
+  const current = recorder;
+  if (!current || (current.capturePage || current.page) !== page) return { available: false };
+  const state = current.capture,
+    now = Date.now();
+  const ago = (value) => Math.min(3600000, Math.max(0, now - value));
+  return {
+    available: true,
+    busy: current.busy,
+    chainPending: state.chainPending,
+    captureTimedOut: state.captureTimedOut === true,
+    ...(typeof state.fontsReady === 'boolean' ? { fontsReady: state.fontsReady } : {}),
+    ...(state.failurePhase ? { failurePhase: state.failurePhase } : {}),
+    phase: state.phase,
+    phaseElapsedMs: ago(state.phaseAt),
+    frameIndex: state.frameIndex || 0,
+    completedFrames: current.frames.length,
+    ...(state.startedAt ? { lastStartedAgoMs: ago(state.startedAt) } : {}),
+    ...(state.finishedAt ? { lastFinishedAgoMs: ago(state.finishedAt) } : {})
+  };
 }
 async function finish() {
   if (!recorder) return [];
@@ -278,4 +331,4 @@ async function finish() {
   }
   return encoded ? [...frames, output] : frames;
 }
-module.exports = { start, attach, stage, screenshot, finish, root };
+module.exports = { start, attach, stage, screenshot, finish, root, diagnostics };

@@ -1,4 +1,8 @@
 import {
+  onlineCheckoutAwaitPaths,
+  onlineCheckoutAwaitControls,
+  isOnlineCheckoutAwaitOnly,
+  isOnlineCheckoutAwaitControlsOnly,
   onlineSubscriptionChallengePaths,
   onlineSubscriptionChallengeControls,
   isOnlineSubscriptionChallengeOnly,
@@ -3149,6 +3153,58 @@ test('subscription challenge repair checks its complete executor scope without u
     'upstream-session-transition',
     'session-routing-browser',
     'recharge-flow-acceptance'
+  ])
+    assert.ok(checks.includes(name + '.test.cjs'));
+  assert.match(checks, /test-concurrency=1/);
+  assert.match(checks, /SESSION_ROUTING_BROWSER_MODE=pool/);
+  assert.doesNotMatch(checks, /migrate|api.*typecheck|admin/);
+});
+
+test('checkout await evidence publishes only the complete executor delta and retains original login/media coverage', () => {
+  const paths = [...onlineCheckoutAwaitPaths, ...onlineCheckoutAwaitControls];
+  assert.equal(isOnlineCheckoutAwaitOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isOnlineCheckoutAwaitControlsOnly(onlineCheckoutAwaitControls), true);
+  assert.deepEqual(selectedParts(onlineCheckoutAwaitControls), ['guards']);
+  for (const required of onlineCheckoutAwaitPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isOnlineCheckoutAwaitOnly(paths.filter((p) => p !== required)), false);
+  assert.equal(isOnlineCheckoutAwaitOnly([...paths, paths[0]]), false);
+  for (const unrelated of [
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/App.vue',
+    'apps/api/prisma-mysql/schema.prisma',
+    '.github/workflows/production-release.yml'
+  ])
+    assert.equal(isOnlineCheckoutAwaitOnly([...paths, unrelated]), false);
+  assert.match(
+    onlineSettingsCommands('guards', paths).flat().join(' '),
+    /online-checkout-await-release.test.py/
+  );
+  const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
+  const commands = onlineSettingsCommands('online-engine', paths);
+  const mediaInstall = commands.findIndex((c) => c[0] === 'sudo' && c.includes('ffmpeg'));
+  assert.ok(mediaInstall >= 0);
+  assert.ok(mediaInstall < commands.findIndex((c) => c.includes('--test')));
+  assert.deepEqual(commands[mediaInstall + 1], ['ffmpeg', '-version']);
+  assert.deepEqual(commands[mediaInstall + 2], ['ffprobe', '-version']);
+  for (const name of [
+    'checkout-await-diagnostics',
+    'checkout-navigation',
+    'checkout-recovery',
+    'debug-checkout',
+    'safe-media-finish',
+    'media-browser',
+    'checkout-initialization',
+    'auth-navigation',
+    'login-evidence-browser',
+    'upstream-session-transition',
+    'execution-budget',
+    'regressions',
+    'session-routing-browser',
+    'human-verification',
+    'unattended-task-control'
   ])
     assert.ok(checks.includes(name + '.test.cjs'));
   assert.match(checks, /test-concurrency=1/);

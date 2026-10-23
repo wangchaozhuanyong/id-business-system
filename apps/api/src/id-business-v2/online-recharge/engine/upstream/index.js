@@ -653,8 +653,13 @@ async function run(runOptions = {}) {
         }[e.code];
         const checkoutOpenDiagnostics = checkoutFailure || e.checkoutCreationState === 'accepted'
             ? require('./chatgpt').safeCheckoutOpenDiagnostics(e.checkoutOpenDiagnostics) : undefined;
-        const openStageLabels = { navigation: '支付页面导航', login: '登录核验', readiness: '支付控件检查', final_check: '结账页最终核验' };
-        const openReasonLabels = { timeout: '超过本次期限', http_error: '收到异常响应', original_changed: '发现原结账单页面变化', session_required: '未通过', cancelled: '已取消', network_error: '网络请求未完成', check_failed: '未通过', page_closed: '页面已关闭', not_ready: '尚未就绪' };
+        const openStageLabels = { navigation: '支付页面导航', login: '登录页面控件读取', readiness: '支付控件检查', final_check: '结账页最终核验' };
+        const openReasonLabels = { timeout: '超过本次期限', http_error: '收到异常响应', original_changed: '发现原结账单页面变化', session_required: '发现登录提示', cancelled: '已取消', network_error: '网络请求未完成', check_failed: '未通过', page_closed: '页面已关闭', not_ready: '尚未就绪', read_incomplete: '未完成' };
+        const awaitDiagnostics = checkoutOpenDiagnostics?.awaits;
+        const pendingRead = awaitDiagnostics?.steps.findLast(row => row.state === 'pending');
+        const failedRead = awaitDiagnostics?.steps.findLast(row => row.state === 'read_failed');
+        const awaitLabels = require('../checkout-await-diagnostics.cjs').LABELS;
+        const readErrorLabels = { timeout: '读取超时', closed: '页面已关闭', detached: '框架已脱离', context_destroyed: '页面执行环境已替换', aborted: '读取已取消', read_failed: '读取失败' };
         const fieldLabels = { number: '卡号', expiry: '有效期', month: '有效月份', year: '有效年份', cvc: '安全码', name: '账单姓名', country: '国家', line1: '街道', city: '城市', postal: '邮编', state: '州/省' };
         const readPhaseLabels = { frame_scan: '页面扫描', candidate_handles: '候选控件获取', candidate_eligibility: '控件可交互性检查', value: '填写结果回读', control_read: '控件读取' };
         const numberCandidates = checkoutOpenDiagnostics?.candidateCounts?.find(item => item.field === 'number');
@@ -703,6 +708,8 @@ async function run(runOptions = {}) {
         const probeFailures = exclusionProbe?.failures?.map(row =>
             `${row.phase === 'frame_owner' ? '框架容器' : row.phase === 'control_snapshot' ? '控件快照' : '页面扫描'}${probeFailureLabels[row.reason]}${row.count}`).join('、');
         const diagnosticDetails = [
+            pendingRead ? `未完成步骤：${awaitLabels[pendingRead.step]}；已等待 ${awaitDiagnostics.elapsedMs - pendingRead.startedMs} 毫秒；开始时剩余 ${pendingRead.remainingMs} 毫秒` : '',
+            failedRead ? `读取失败步骤：${awaitLabels[failedRead.step]}（${readErrorLabels[failedRead.errorClass] || '读取失败'}）` : '',
             firstInitializationFailure ? `首个观测异常（不等同根因）：${initializationLabels[firstInitializationFailure.endpoint]}${firstInitializationFailure.status ? ` HTTP ${firstInitializationFailure.status}` : ''}${firstInitializationFailure.code ? ` ${initializationCodes[firstInitializationFailure.code]}` : ''}` : '',
             firstInitializationFailure?.source ? `请求失败来源：${cancellationLabels[firstInitializationFailure.source]}${firstInitializationFailure.ruleId ? `（规则 ${firstInitializationFailure.ruleId}）` : ''}${firstInitializationFailure.navigationRelated === 'possible' ? '；与同一页面导航或卸载时间接近，因果未确认' : ''}` : '',
             checkoutOpenDiagnostics?.missing?.length ? `未就绪字段：${checkoutOpenDiagnostics.missing.map(field => fieldLabels[field]).join('、')}` : '',

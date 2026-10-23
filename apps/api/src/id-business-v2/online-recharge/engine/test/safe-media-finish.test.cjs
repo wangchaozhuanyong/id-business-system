@@ -299,6 +299,22 @@ for (const phase of ['font-probe', 'pre-mask', 'screenshot', 'write', 'cleanup']
     await entered.promise;
     f.timeoutOptionalCapture();
     assert.equal(await pending, null);
+    const diagnostics = f.media.diagnostics(f.page);
+    assert.equal(diagnostics.available, true);
+    assert.equal(diagnostics.busy, true);
+    assert.equal(diagnostics.chainPending, true);
+    assert.equal(diagnostics.captureTimedOut, true);
+    assert.equal(
+      diagnostics.phase,
+      {
+        'font-probe': 'fonts',
+        'pre-mask': 'mask',
+        screenshot: 'screenshot',
+        write: 'write',
+        cleanup: 'cleanup'
+      }[phase]
+    );
+    assert.equal(f.media.diagnostics({}).available, false);
     const snapshot = {
       fontProbes: f.effects.fontProbes,
       evaluations: f.effects.evaluations,
@@ -321,6 +337,7 @@ for (const phase of ['font-probe', 'pre-mask', 'screenshot', 'write', 'cleanup']
     assert.equal(f.effects.timers.filter((item) => item.milliseconds === 8000).length, 1);
     release.resolve();
     await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.media.diagnostics(f.page).chainPending, false);
     const afterSettle = f.effects.screenshots.length;
     const fresh = await f.media.screenshot(f.page, 'fresh-after-settle');
     assert.ok(fresh?.endsWith('.png'));
@@ -388,6 +405,7 @@ for (const ready of [false, true]) {
     assert.equal(f.effects.fontProbes, 1);
     assert.equal(f.effects.evaluations, ready ? 2 : 0);
     assert.equal(f.effects.screenshots.length, ready ? 1 : 0);
+    assert.equal(f.media.diagnostics(f.page).fontsReady, ready);
     await f.media.finish();
   });
 }
@@ -453,4 +471,15 @@ test('real Chromium with pending module and fonts skips native screenshot before
     released.resolve();
     await browser.close();
   }
+});
+
+test('capture telemetry from another page cannot describe the original task page', async () => {
+  const f = fixture();
+  await f.media.start();
+  f.media.attach(f.page);
+  const otherPage = { ...f.page };
+  await f.media.screenshot(otherPage, 'other-page');
+  assert.equal(f.media.diagnostics(f.page).available, false);
+  assert.equal(f.media.diagnostics(otherPage).available, true);
+  await f.media.finish();
 });

@@ -414,7 +414,7 @@ async function assertCheckoutPageReady(page, { requireCardReady = true, deadline
 const CHECKOUT_OPEN_STAGES = new Set(['navigation', 'login', 'readiness', 'final_check']);
 const CHECKOUT_OPEN_REASONS = new Set([
     'timeout', 'http_error', 'original_changed', 'session_required',
-    'cancelled', 'network_error', 'page_closed', 'not_ready', 'check_failed'
+    'cancelled', 'network_error', 'page_closed', 'not_ready', 'check_failed', 'read_incomplete'
 ]);
 const CHECKOUT_FORM_DIAGNOSTIC_CODES = new Set([
     'CHECKOUT_CARD_NOT_READY', 'CHECKOUT_FORM_NOT_READY', 'CHECKOUT_CONTROL_AMBIGUOUS',
@@ -443,6 +443,9 @@ function safeCheckoutOpenDiagnostics(value) {
         };
         const initialization = require('../checkout-initialization.cjs').sanitize(value.initialization);
         if (initialization) result.initialization = initialization;
+        const awaits = require('../checkout-await-diagnostics.cjs').sanitize(value.awaits);
+        if (awaits) result.awaits = awaits;
+        if (value.code === 'CHECKOUT_AUTH_READ_FAILED') result.code = value.code;
         if (!['readiness', 'final_check'].includes(value.stage)) return result;
         const loading = require('../checkout-recovery.cjs').sanitizeOriginalCheckoutReloadDiagnostics(value.loading);
         if (loading) result.loading = loading;
@@ -593,7 +596,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             { code: checkout.errorCode || 'CHECKOUT_CREATION_UNKNOWN', checkoutCreationState: checkout.creationState || 'unknown' });
     }
 
-    let budget, initialization;
+    let budget, initialization, trace;
     let stage = 'navigation';
     try {
         const url = checkout.checkoutUrl;
@@ -611,12 +614,13 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000),
             signal: ownerSignal
         });
-        const run = (operation) => { budget.assert(); return budget.run(operation()); };
+        trace = require('../checkout-await-diagnostics.cjs').create(budget);
+        const run = (label, operation) => budget.run(() => trace.run(label, operation));
         const originalQuoteId = recovery.quoteIdForUrl(url, recovery.officialCheckoutForPage(page));
         // Install observation before the first document/SDK request. No routing,
         // response rewriting, page script injection, or additional network call.
         initialization = require('../checkout-initialization.cjs').observe(page, { signal: ownerSignal });
-        const response = await run(() => page.goto(url, { waitUntil: 'commit', timeout: budget.timeout(90000) }));
+        const response = await run('navigation', () => page.goto(url, { waitUntil: 'commit', timeout: budget.timeout(90000) }));
         if (!response || typeof response.status !== 'function') throw checkoutOpenError('check_failed');
         const status = response.status();
         if (!Number.isInteger(status) || status < 200 || status >= 400)
@@ -626,7 +630,14 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
 
         stage = 'login';
         const { hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
-        if (await run(() => isCheckoutLoginGate(page)) || await run(() => hasVisibleLoginChrome(page)))
+        const loginObservation = {
+            readProbe: (label, operation) => trace.run(label, operation).catch(error => {
+                if (budget.signal.aborted) throw error;
+                throw Object.assign(new Error('登录页面控件读取未完成'), { code: 'CHECKOUT_AUTH_READ_FAILED' });
+            })
+        };
+        if (await run('login_gate', () => isCheckoutLoginGate(page, loginObservation))
+            || await run('login_chrome', () => hasVisibleLoginChrome(page, loginObservation)))
             throw checkoutOpenError('session_required');
 
         stage = 'readiness';
@@ -634,7 +645,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         // Hosted Checkout can require selecting Card before it creates card fields.
         // Detect load errors now; stripe-payment performs strict readiness after selection.
         const hostedCheckout = ['pay.openai.com', 'checkout.stripe.com'].includes(new URL(page.url()).hostname);
-        const captchaResult = await run(() => clearHumanVerification(page, {
+        const captchaResult = await run('readiness', () => clearHumanVerification(page, {
             phase: 'checkout-open',
             maxWaitMs: budget.remaining(),
             deadlineAt: budget.deadlineAt,
@@ -678,23 +689,48 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         }
 
         stage = 'final_check';
-        const currentUrl = await run(() => assertCheckoutPageReady(page, {
+        const currentUrl = await run('final_page', () => assertCheckoutPageReady(page, {
             requireCardReady: !hostedCheckout,
             deadline: Date.now() + budget.remaining(), signal: budget.signal
         }));
-        await run(() => assertChatGptLoggedIn(page, 'Checkout'));
+        await run('final_auth', () => assertChatGptLoggedIn(page, 'Checkout'));
         budget.assert();
         assertOriginalCheckoutPage(page, url, originalQuoteId, recovery);
         console.log('✅ [步骤] 原结账单的页面和付款控件检查已完成');
         return { checkoutUrl: currentUrl, sessionId: checkout.sessionId };
     } catch (error) {
+        // Freeze existing Node-side evidence before cleanup. Never query title,
+        // text or a new screenshot through the page that has stopped responding.
+        initialization?.dispose();
+        const frozenInitialization = initialization?.snapshot();
+        const awaits = trace?.freeze();
+        if (awaits) {
+            awaits.failureCode = budget.signal.reason?.code === 'VERIFICATION_TIMEOUT' ? 'BUDGET_TIMEOUT'
+                : error.name === 'TimeoutError' ? 'PLAYWRIGHT_TIMEOUT'
+                    : error.code === 'CHECKOUT_AUTH_READ_FAILED' ? 'AUTH_READ_FAILED'
+                        : ['LEASE_LOST', 'VERIFICATION_CANCELLED'].includes(error.code) ? error.code : 'OTHER';
+            awaits.cleanup = { frozenAtMs: trace.elapsed() };
+            awaits.media = require('../safe-media.cjs').diagnostics(page);
+            try {
+                const current = new URL(page.url());
+                awaits.pageKind = page.isClosed?.() ? 'closed'
+                    : require('./auth-page-detect').isCheckoutPageUrl(current.href) ? 'native_checkout'
+                        : ['pay.openai.com', 'checkout.stripe.com'].includes(current.hostname) ? 'hosted_checkout'
+                            : require('./auth-page-detect').isLoginRedirectUrl(current.href) ? 'login' : 'other';
+            } catch (_) { awaits.pageKind = 'unknown'; }
+        }
         const openingInterrupted = budget?.signal.aborted || error.name === 'TimeoutError'
             || ['LEASE_LOST', 'VERIFICATION_TIMEOUT', 'VERIFICATION_CANCELLED', 'CHECKOUT_FORM_ABORTED'].includes(error.code)
             || ['timeout', 'cancelled'].includes(error.checkoutOpenReason);
         if (openingInterrupted && !page.isClosed?.()) {
             // Racing a promise does not cancel Chromium's native navigation. Close
             // only this task page before the caller can release a late response.
+            if (awaits) awaits.cleanup.closeStartedMs = trace.elapsed();
             try { await page.close({ runBeforeUnload: false }); } catch (_) { /* Check the actual target state below. */ }
+            if (awaits) {
+                awaits.cleanup.closeEndedMs = trace.elapsed();
+                awaits.cleanup.closeConfirmed = page.isClosed?.() === true;
+            }
             if (!page.isClosed?.()) {
                 error.checkoutOpenCleanupFailed = true;
                 console.error('[Checkout] 本任务结账页关闭未确认，须完成任务上下文清理');
@@ -707,6 +743,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         const reason = error.checkoutOpenReason
             || (error.name === 'TimeoutError' || error.code === 'VERIFICATION_TIMEOUT' ? 'timeout'
                 : error.code === 'VERIFICATION_CANCELLED' ? 'cancelled'
+                    : error.code === 'CHECKOUT_AUTH_READ_FAILED' ? 'read_incomplete'
                     : page.isClosed?.() ? 'page_closed'
                         : stage === 'navigation' ? 'network_error' : 'check_failed');
         const checkoutOpenDiagnostics = safeCheckoutOpenDiagnostics({
@@ -714,7 +751,8 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             inspection: error.inspection || error.checkoutOpenDiagnostics?.inspection,
             missing: error.missing || error.checkoutOpenDiagnostics?.missing,
             controls: error.controls || error.checkoutOpenDiagnostics?.controls,
-            initialization: initialization?.snapshot(),
+            initialization: frozenInitialization,
+            awaits,
             loading: require('../checkout-recovery.cjs').originalCheckoutReloadDiagnostics(page),
             stage, reason, code: error.code, httpStatus: error.httpStatus
         });
@@ -727,7 +765,8 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             network_error: '原结账页导航网络请求未完成',
             page_closed: '原结账页已关闭',
             not_ready: '原结账页的付款控件尚未加载',
-            check_failed: '原结账页打开或验证未完成'
+            check_failed: '原结账页打开或验证未完成',
+            read_incomplete: '原结账页的登录控件读取未完成'
         };
         const failure = Object.assign(new Error(`${reasons[reason] || reasons.check_failed}；未另建结账单`),
             { code, checkoutCreationState: 'accepted', checkoutOpenDiagnostics,
