@@ -224,7 +224,10 @@ if (['guards', 'release-controls'].includes(part) && isFinancialClosureCandidate
 if (mode === 'ci-only' && isSettledCheckoutControlsOnly(changed)) {
   if (!['guards', 'release-controls'].includes(part))
     throw new Error('Unsupported settled checkout control check');
-  run('python3', ['-B', 'scripts/production-release/settled-checkout-publication.py', 'check']);
+  const controller = changed.includes('scripts/production-release/bitbrowser-quote-contract.json')
+    ? 'bitbrowser-quote'
+    : 'settled-checkout';
+  run('python3', ['-B', 'scripts/production-release/' + controller + '-publication.py', 'check']);
   if (part === 'guards') {
     const files = changed.filter((name) => existsSync(name));
     const formatted = files.filter((name) => /\.(?:mjs|json|yml)$/.test(name));
@@ -240,7 +243,7 @@ if (mode === 'ci-only' && isSettledCheckoutControlsOnly(changed)) {
     npm('run', 'check:v2-module-architecture');
     npm('run', 'check:v2-isolation');
   } else {
-    run('python3', ['-B', 'scripts/production-release/settled-checkout-release.test.py']);
+    run('python3', ['-B', 'scripts/production-release/' + controller + '-release.test.py']);
   }
   process.exit(0);
 }

@@ -95,7 +95,13 @@ export function nativeQuoteDocument(
       : envelope.success === true,
     'response_invalid'
   );
-  need(state.taxIdInfo === null, 'response_tax_context_unverified');
+  // update_tax_id omits the empty field after a successful explicit null request.
+  // The observer accepts that kind only with a verified null request and its latest taxes anchor.
+  // Initial taxes responses must still explicitly prove the absence of a tax ID.
+  need(
+    state.taxIdInfo === null || (kind === 'tax_id' && !Object.hasOwn(state, 'taxIdInfo')),
+    'response_tax_context_unverified'
+  );
   need(
     session.checkout_session_id === binding.checkoutId && state.id === binding.checkoutId,
     'response_order_mismatch'
