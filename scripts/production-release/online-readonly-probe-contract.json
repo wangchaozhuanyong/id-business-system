@@ -316,7 +316,7 @@
     "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
     "online-readonly-probe-publication.py": "eff08204db53c17236e0e3cbd1efeaefe36375b3a7b789cfc3a76a436cb7230f",
-    "online-readonly-probe-release.py": "238ebfd368b292a89c8dfcbcd035378e09aa2c582e37cacca02fb8ff23465fe3",
+    "online-readonly-probe-release.py": "e1a772a255f168d0e8da9db995031db5850dca93b9fb55493cbbf94cbbe948e4",
     "online-readonly-probe-release.test.py": "5780012b77b44a131cb16572ade2c4038cb52f0af5f4ca72fbe6c072edfa385a",
     "online-real-session-contract.json": "0f958bbb2369e986002f76357430aa757a76c29408e01db2181174859e528753",
     "online-real-session-publication.py": "e88b4e4aeca4e787835c97e16e9b702d5109861faa4148e121e92008e4f1459c",
@@ -583,7 +583,7 @@
     "apps/api/src/id-business-v2/online-recharge/engine/test/checkout-readonly-diagnostic.test.cjs": "316b5ac128baa6931bd9c5d8dca63bf7f6aaa3772877d717e80a1849b64fca9d"
   },
   "scope": "ONLINE_READONLY_PROBE_20261023",
-  "sourceReviewCommit": "9f951ebc15a1a78bafc64ec01d39138754114fb5",
+  "sourceReviewCommit": "e65f6daae1d5112c1601d93feb9fc2e60bc53175",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["online-recharge"],
   "validationSources": {
