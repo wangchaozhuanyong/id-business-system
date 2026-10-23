@@ -69,14 +69,41 @@ class QuoteTierPublicationTests(unittest.TestCase):
         self.assertEqual(p.runtime.__code__.co_filename, p.smoke.__code__.co_filename)
 
     def capture(self):
-        ancestor = copy.deepcopy(self.c['parentPlan']['nativeParentCapture']['baseline'])
-        runtime = ancestor.pop('runtime')
-        ancestor.update(runtime)
-        ancestor.update(commit=P.CURRENT, current='/opt/id-business-v2/releases/synthetic-current',
-                        proofs={'online-readonly-probe-build-proof.json': self.c['parentPlan']['buildProofSha256'],
-                                'bitbrowser-history-build-proof.json': P.ADMIN_PROOF})
-        return {'status': 'BITBROWSER_QUOTE_PARENT_VERIFIED', 'baseline': ancestor,
+        return {'status': 'BITBROWSER_QUOTE_PARENT_VERIFIED', 'baseline': copy.deepcopy(self.c['baseline']),
                 'parentPlanSha256': self.c['parentPlanSha256'], 'businessActions': 0}
+
+    def test_frozen_native_baseline_reaches_real_preflight_without_mutating_the_contract(self):
+        import tempfile
+        from types import SimpleNamespace
+        raw = (HERE / P.CONTRACT_FILE).read_bytes()
+        plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '1', 'workflowRunAttempt': '1',
+                'mode': 'preflight', 'recipe': P.RECIPE, 'contractSha256': P.sha(raw),
+                'controlSources': {**self.c['controlPins'], P.CONTRACT_FILE: P.sha(raw)},
+                'nativeParentCapture': self.capture()}
+        p = P.engine(self.c)
+        before = copy.deepcopy(self.c)
+        lock_calls = []
+        def baseline(d, h, contract, expected):
+            self.assertEqual(contract, json.loads(raw))
+            self.assertEqual(contract['baseline'], plan['nativeParentCapture']['baseline'])
+            return None, None, None, {'verified': True}
+        original_load = p.load
+        with tempfile.TemporaryDirectory(dir=P.ROOT / '.runtime') as name:
+            with patch.object(P, 'engine', return_value=p), patch.object(p, 'BASE', Path(name)), \
+                    patch.object(p, 'helpers', return_value=(None, None, None)), \
+                    patch.object(p, 'baseline', side_effect=baseline) as reader, \
+                    patch.object(p, 'load', side_effect=lambda n: SimpleNamespace(
+                        acquire_release_lock=lambda lock: lock_calls.append(lock))
+                        if n == 'recharge-availability-release.py' else original_load(n)):
+                result = P.release(plan, self.c)
+        self.assertEqual(result['status'], 'BITBROWSER_HISTORY_PREFLIGHT_VERIFIED')
+        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(len(lock_calls), 1)
+        self.assertEqual(self.c, before)
+        changed = copy.deepcopy(self.c)
+        changed['baseline']['manifestSha256'] = 'f' * 64
+        with self.assertRaisesRegex(RuntimeError, 'FROZEN_BASELINE_CHANGED'):
+            P.release(plan, changed)
 
     def test_parent_capture_requires_finite_native_identity_before_reading(self):
         raw = (HERE / P.CONTRACT_FILE).read_bytes()

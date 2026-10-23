@@ -280,6 +280,119 @@
     }
   },
   "apiModules": [],
+  "baseline": {
+    "adminInventory": {
+      "count": 5319,
+      "sha256": "87a38eb15ae4284451c0eaa522d1e23a10230e6c41feb56b301d64ec51eeb5f4"
+    },
+    "apiModules": {},
+    "apiPreservedInventory": {
+      "count": 1797,
+      "sha256": "713e4c4d853acaa4ff8c45d87646395e8c4fd291b8934c81f4c4977f30d161be"
+    },
+    "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+    "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
+    "clientInventory": {
+      "count": 27,
+      "sha256": "46cebf0e0e3bc37a0d49570c56d8f3cb08d2237aa525161665afef7fd5b60cdc"
+    },
+    "commit": "3d56674d2ab033f6e2df52e509be327af32559b4",
+    "configurationSha256": {
+      ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
+      "compose.release.json": "b70083ebd830eb32edb682cc9f8cd3992c67627fc80485e5fcf7f83eed9fce95",
+      "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
+    },
+    "current": "/opt/id-business-v2/releases/20261023T172659Z-3d56674d2ab0-online-readonly-probe",
+    "database": {
+      "columns": "91821bb43685e53ce37e5434e5f3d0936d518b2905590580d3e887d74d6060b6",
+      "ledger": "c1cc90e85efac2c9c9ef4c55f9090d3ae2fa4ef79ca2ca3e6292ce03e24a83cb",
+      "pending": 0
+    },
+    "manifestSha256": "828954f5620f5243a79dbc266dd45ba8b856e4e1065eb3fa9b7601e44a7e8a6a",
+    "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
+    "proofs": {
+      "bitbrowser-history-build-proof.json": "354a73bf0427c8c3f94de447cc94695831db51b8a3f5bdb525607fc99c1a86b0",
+      "online-readonly-probe-build-proof.json": "c3d1b16be155eb43e236d2cd79f10aed9696e33a9831792335d840edba1e6de6"
+    },
+    "runtimeConfigurationSha256": {
+      "admin": "8e6f51e912ad90182b3ca4d61888042e0c3d818be1e519accec1ac3367efd521",
+      "api": "36250405495459e6fbf8fb67e7b9381ff4d6b02a3a9c6be8cc037ed5c3a3a35b",
+      "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
+      "caddy": "6d690fc9c6632e8efce0940d26f529ccbbcd1da892931112043491983c8c0df1",
+      "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
+      "mysql": "7c4fc6fea1da1bd857bb2ab0a13486a0d09332f242b38bda895340d4526248bc",
+      "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
+    },
+    "services": {
+      "admin": {
+        "containerId": "b4eea499123e20eac73b42cde8b306a558508705b516f56a8d11ba58c694451d",
+        "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+        "health": "healthy",
+        "image": "sha256:8691373967a89e7167e9a922e4192703907b8e0cad0dfa2ee7e439ed3caab0dc",
+        "reference": "id-business-v2-history:957407e571e7ac629393d6355a09506a196e5f91-39750166040-admin",
+        "startedAtSha256": "bf6e0da9f9200e0394ae955ca99b641614f9df8de82573ab76ea23a1fd486e9e",
+        "status": "running"
+      },
+      "api": {
+        "containerId": "912ae2c5dd6b1e265c2fb7f58443ad6a26d65237925235bb848cca69002cc5bc",
+        "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
+        "health": "healthy",
+        "image": "sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a",
+        "reference": "id-business-v2-history:957407e571e7ac629393d6355a09506a196e5f91-39750166040-api",
+        "startedAtSha256": "8f5a16a220d0c7387fa13dcc199848231b27e69a86b00b1f2c9c1c41835391b0",
+        "status": "running"
+      },
+      "auto-recharge": {
+        "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+        "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+        "health": "healthy",
+        "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+        "startedAtSha256": "2e93090ec44036fb777194c57eea84f9503a39ca73a06c38a748f5dd6b54b0b7",
+        "status": "running"
+      },
+      "caddy": {
+        "containerId": "c9a03e8ade2f9fa42fed7881cac7e75d1d0bd01dd9f213123039ce740bb61a3e",
+        "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+        "health": null,
+        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+        "startedAtSha256": "5d470338c493fcfd7497483b1b0a89df18192ee4f24cba90c9f9ac38307ca747",
+        "status": "running"
+      },
+      "media-resolver": {
+        "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+        "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+        "health": "healthy",
+        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+        "startedAtSha256": "decd8646d9eae7910ed3789d7ae990a13202da1df6c171a10ace75ca43f9ea6f",
+        "status": "running"
+      },
+      "mysql": {
+        "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+        "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+        "health": "healthy",
+        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+        "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+        "startedAtSha256": "fadf08a3cf1878d9e477f0d1f3f262a12bebdb3d2869429eaac92e5e4418c988",
+        "status": "running"
+      },
+      "online-recharge": {
+        "containerId": "e6df79f04d9d0c9fd51d311603227548f572db899f41e3b37e66dbadebf98a27",
+        "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
+        "health": "healthy",
+        "image": "sha256:c3b94a7c5f6fc331ea1467419cb6196c503aaa730957309496cd21cd9c882ca9",
+        "reference": "id-business-v2-online-readonly-probe:3d56674d2ab033f6e2df52e509be327af32559b4-39994791746",
+        "startedAtSha256": "089b31f6d7de5c245599bc57f572a7601decfd81e693e1881a67dceb8df5bf4b",
+        "status": "running"
+      }
+    },
+    "sharedInventory": {
+      "count": 36,
+      "sha256": "2026bd16905ed256440c736da6b821ed022097178786bf67dba52b8356ca8712"
+    }
+  },
   "businessActions": 0,
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
@@ -297,7 +410,7 @@
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
     "bitbrowser-manual-contract.json": "f1751cb97b5ede81504e06de047f72ea32d3ff1eb16ebf1f156eb7a468188c20",
     "bitbrowser-quote-publication.py": "b3bc073f0407847e51e567b3d59e3240aa327b5a923a0841b059a1aba7bb3bf2",
-    "bitbrowser-quote-release.py": "5e4b9156a8a44393db3237c98af41c18efe5dfdca8407031683a45f5a6077f8b",
+    "bitbrowser-quote-release.py": "259529fc5813270c20f88a76a3d3ee21134a87e599b7f2b3aa0a505f89f105c3",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
