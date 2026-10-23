@@ -117,6 +117,55 @@ async function within(operation, deadline, signal) {
     if (onAbort) signal.removeEventListener('abort', onAbort);
   }
 }
+// Opt-in, value-free tracing for an owned readonly diagnostic page. Ordinary
+// payment callers retain their existing deadlines and pure-read retry policy.
+async function observedRead(operation, deadline, signal, state, readOperation, frame) {
+  if (typeof state?.onRead !== 'function' && state?.stopOnReadFailure !== true)
+    return within(operation, deadline, signal);
+  const startedAt = Date.now();
+  let finish;
+  try {
+    finish = state.onRead(
+      {
+        readOperation,
+        startedAt,
+        deadlineAt: deadline,
+        remainingMs: Math.max(0, deadline - startedAt),
+        attempt: state.readAttempt || 1
+      },
+      frame
+    );
+  } catch {
+    // An observer cannot change candidate eligibility or the payment flow.
+  }
+  const end = (row) => {
+    try {
+      if (typeof finish === 'function')
+        finish({
+          ...row,
+          durationMs: Date.now() - startedAt,
+          remainingMs: Math.max(0, deadline - Date.now())
+        });
+    } catch {
+      // Keep observation separate from the operation's outcome.
+    }
+  };
+  try {
+    const result = await within(operation, deadline, signal);
+    end({ state: 'completed' });
+    return result;
+  } catch (error) {
+    error.readOperation = readOperation;
+    const timedOut = error.code === 'CHECKOUT_FORM_TIMEOUT' || error.name === 'TimeoutError';
+    if (state.stopOnReadFailure === true) state.readStopped = true;
+    end({
+      state: 'read_failed',
+      timedOut,
+      errorClass: require('./checkout-await-diagnostics.cjs').errorClass(error)
+    });
+    throw error;
+  }
+}
 function score(meta, key) {
   const ac = normalize(meta.ac),
     identity = normalize(`${meta.id} ${meta.name}`),
@@ -514,14 +563,24 @@ function elementRendered(
     ...(includeRejected ? { rejectedMetas } : {})
   };
 }
-async function frameVisible(frame, deadline, signal, inspection) {
+async function frameVisible(frame, deadline, signal, inspection, state) {
   for (let current = frame; current.parentFrame(); current = current.parentFrame()) {
-    const owner = await within(() => current.frameElement(), deadline, signal);
+    const owner = await observedRead(
+      () => current.frameElement(),
+      deadline,
+      signal,
+      state,
+      'frame_element',
+      current
+    );
     try {
-      const reason = await within(
+      const reason = await observedRead(
         () => owner.evaluate(elementRendered, { reason: true, interaction: true }),
         deadline,
-        signal
+        signal,
+        state,
+        'owner_visibility',
+        current
       );
       if (reason) {
         if (inspection)
@@ -535,11 +594,27 @@ async function frameVisible(frame, deadline, signal, inspection) {
   }
   return true;
 }
-async function frameLoadFailed(frame, deadline, signal) {
+async function frameLoadFailed(frame, deadline, signal, state) {
   const matches = frame.getByText('Content failed to load', { exact: true });
-  const count = await within(() => matches.count(), deadline, signal);
+  const count = await observedRead(
+    () => matches.count(),
+    deadline,
+    signal,
+    state,
+    'load_error_count',
+    frame
+  );
   for (let index = 0; index < count; index++)
-    if (await within(() => matches.nth(index).evaluate(elementRendered), deadline, signal))
+    if (
+      await observedRead(
+        () => matches.nth(index).evaluate(elementRendered),
+        deadline,
+        signal,
+        state,
+        'load_error_visibility',
+        frame
+      )
+    )
       return true;
   return false;
 }
@@ -564,21 +639,24 @@ async function readControlsOnce(page, deadline, state) {
     const frameDeadline = Math.min(deadline, Date.now() + (state.readBudgetMs || FRAME_READ_MS));
     let phase = 'frame_owner';
     try {
-      if (!(await frameVisible(frame, frameDeadline, state.signal, inspection))) {
+      if (!(await frameVisible(frame, frameDeadline, state.signal, inspection, state))) {
         inspection.framesSkipped++;
         continue;
       }
       phase = 'load_state';
-      if (await frameLoadFailed(frame, frameDeadline, state.signal)) {
+      if (await frameLoadFailed(frame, frameDeadline, state.signal, state)) {
         inspection.contentLoadFailed = true;
         break;
       }
       const all = frame.locator('input,select,textarea,[role="combobox"]');
       phase = 'control_snapshot';
-      const snapshot = await within(
+      const snapshot = await observedRead(
         () => all.evaluateAll(elementRendered, { snapshot: true }),
         frameDeadline,
-        state.signal
+        state.signal,
+        state,
+        'control_snapshot',
+        frame
       );
       const { metas, scanned, rejectCounts } = snapshot;
       inspection.controlCounts.scanned += scanned;
@@ -630,7 +708,7 @@ async function readControlsOnce(page, deadline, state) {
       // Preserve the total-budget timer even if Date observes the preceding tick.
       // A shorter frame read budget remains an incomplete read, not a global timeout.
       inspection.timedOut ||= error?.code === 'CHECKOUT_FORM_TIMEOUT' && frameDeadline === deadline;
-      if (inspection.timedOut) break;
+      if (inspection.timedOut || state.readStopped) break;
     }
   }
   inspection.timedOut ||= Date.now() >= deadline;
@@ -649,6 +727,7 @@ async function freshRead(page, deadline, state, read) {
     const previousBudget = state.readBudgetMs;
     try {
       timeout(deadline, state.signal);
+      state.readAttempt = attempt;
       state.readBudgetMs = attempt === 1 ? FRAME_READ_MS : RETRY_READ_MS;
       const result = await read();
       if (state.inspection) state.inspection.readAttempts = attempt;
@@ -662,6 +741,7 @@ async function freshRead(page, deadline, state, read) {
         }
       if (
         attempt === 1 &&
+        !state.readStopped &&
         error.code === 'CHECKOUT_CONTROL_READ_FAILED' &&
         !closed(page) &&
         !state.signal?.aborted &&
@@ -690,14 +770,25 @@ async function readWithin(
   deadline,
   signal,
   readPhase = 'control_read',
-  readBudgetMs = FRAME_READ_MS
+  readBudgetMs = FRAME_READ_MS,
+  state,
+  frame,
+  readOperation = readPhase
 ) {
   try {
-    return await within(operation, Math.min(deadline, Date.now() + readBudgetMs), signal);
+    return await observedRead(
+      operation,
+      Math.min(deadline, Date.now() + readBudgetMs),
+      signal,
+      state,
+      readOperation,
+      frame
+    );
   } catch (error) {
     if (error.code === 'CHECKOUT_FORM_TIMEOUT' && Date.now() < deadline)
       throw Object.assign(failure('CHECKOUT_CONTROL_READ_FAILED', '结账控件读取未完成'), {
-        readPhase
+        readPhase,
+        ...(error.readOperation ? { readOperation: error.readOperation } : {})
       });
     error.readPhase = readPhase;
     throw error;
@@ -799,30 +890,61 @@ async function candidateInteraction(item, handle, key, deadline, state) {
       !(await readWithin(
         () => handle.evaluate(elementRendered, { control: true }),
         deadline,
-        state.signal
+        state.signal,
+        'control_read',
+        FRAME_READ_MS,
+        state,
+        item.frame,
+        'candidate_eligibility'
       ))
     )
       return { reason: 'control_ineligible' };
-    let point = await readWithin(() => handle.evaluate(interactionPoint), deadline, state.signal);
+    let point = await readWithin(
+      () => handle.evaluate(interactionPoint),
+      deadline,
+      state.signal,
+      'control_read',
+      FRAME_READ_MS,
+      state,
+      item.frame,
+      'interaction_point'
+    );
     for (
       let frame = item.frame;
       !point.reason && frame.parentFrame();
       frame = frame.parentFrame()
     ) {
-      const owner = await within(() => frame.frameElement(), deadline, state.signal);
+      const owner = await observedRead(
+        () => frame.frameElement(),
+        deadline,
+        state.signal,
+        state,
+        'frame_element',
+        frame
+      );
       try {
         if (
           !(await readWithin(
             () => owner.evaluate(elementRendered, { interaction: true }),
             deadline,
-            state.signal
+            state.signal,
+            'control_read',
+            FRAME_READ_MS,
+            state,
+            frame,
+            'owner_visibility'
           ))
         )
           return { reason: 'frame_ineligible' };
         point = await readWithin(
           () => owner.evaluate(interactionPoint, point),
           deadline,
-          state.signal
+          state.signal,
+          'control_read',
+          FRAME_READ_MS,
+          state,
+          frame,
+          'owner_interaction_point'
         );
       } finally {
         owner.dispose().catch(() => {});
@@ -834,21 +956,26 @@ async function candidateInteraction(item, handle, key, deadline, state) {
   if (point.reason && ['outside_viewport', 'occluded'].includes(point.reason)) {
     timeout(deadline, state.signal);
     try {
-      await within(
+      await observedRead(
         () =>
           handle.scrollIntoViewIfNeeded({
             timeout: Math.min(500, timeout(deadline, state.signal))
           }),
         deadline,
-        state.signal
+        state.signal,
+        state,
+        'candidate_scroll',
+        item.frame
       );
     } catch {
+      if (state.readStopped)
+        throw failure('CHECKOUT_CONTROL_READ_FAILED', '结账控件读取未完成', [key]);
       timeout(deadline, state.signal);
       throw blocked('scroll_unavailable');
     }
     // Scrolling can mount duplicates, replace a field or open a dialog. Never
     // use the pre-scroll semantic snapshot to choose the field after that action.
-    await within(
+    await observedRead(
       () =>
         handle.evaluate(
           (node) =>
@@ -857,7 +984,10 @@ async function candidateInteraction(item, handle, key, deadline, state) {
             )
         ),
       deadline,
-      state.signal
+      state.signal,
+      state,
+      'scroll_render',
+      item.frame
     );
     const { items, inspection } = await readControlsOnce(item.frame.page(), deadline, state);
     if (inspectionCode(inspection))
@@ -873,7 +1003,12 @@ async function candidateInteraction(item, handle, key, deadline, state) {
       !(await readWithin(
         () => matches[0].el.evaluateAll((nodes, original) => nodes.includes(original), handle),
         deadline,
-        state.signal
+        state.signal,
+        'control_read',
+        FRAME_READ_MS,
+        state,
+        item.frame,
+        'candidate_identity'
       ))
     )
       throw blocked('page_changed');
@@ -893,7 +1028,9 @@ async function uniqueCandidate(items, key, deadline, state) {
       deadline,
       state.signal,
       'candidate_handles',
-      state.readBudgetMs
+      state.readBudgetMs,
+      state,
+      item.frame
     );
     try {
       const readDeadline = Math.min(deadline, Date.now() + (state.readBudgetMs || FRAME_READ_MS));
@@ -904,7 +1041,9 @@ async function uniqueCandidate(items, key, deadline, state) {
             readDeadline,
             state.signal,
             'candidate_eligibility',
-            state.readBudgetMs
+            state.readBudgetMs,
+            state,
+            item.frame
           )
         )
           eligible.push(handle);
@@ -1471,8 +1610,17 @@ async function fillBilling(page, address, name, { deadline = Date.now() + 120000
     state
   );
 }
-async function inspectCardReadiness(page, { deadline = Date.now() + 120000, signal } = {}) {
-  const state = { signal, fields: ['number'], pending: new Set(['number']) };
+async function inspectCardReadiness(
+  page,
+  { deadline = Date.now() + 120000, signal, onRead, stopOnReadFailure = false } = {}
+) {
+  const state = {
+    signal,
+    onRead,
+    stopOnReadFailure,
+    fields: ['number'],
+    pending: new Set(['number'])
+  };
   try {
     const ready = await freshRead(page, deadline, state, async () => {
       const item = await locateOnce(page, 'number', deadline, state);
@@ -1483,7 +1631,9 @@ async function inspectCardReadiness(page, { deadline = Date.now() + 120000, sign
           deadline,
           signal,
           'candidate_eligibility',
-          state.readBudgetMs
+          state.readBudgetMs,
+          state,
+          item.frame
         ))
       );
     });
@@ -1635,8 +1785,12 @@ async function inspectCardExclusions(page, { deadline = Date.now() + 2000, signa
     !result.truncated;
   return result;
 }
-async function loadFailed(page, deadline, signal) {
-  const state = { signal };
+async function loadFailed(page, deadline, signal, options = {}) {
+  const state = {
+    signal,
+    onRead: options.onRead,
+    stopOnReadFailure: options.stopOnReadFailure === true
+  };
   return freshRead(page, deadline, state, async () => {
     const inspection = inspectionState(page, deadline, signal);
     state.inspection = inspection;
@@ -1648,11 +1802,11 @@ async function loadFailed(page, deadline, signal) {
         timeout(deadline, signal);
         if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
         readDeadline = Math.min(deadline, Date.now() + state.readBudgetMs);
-        if (!(await frameVisible(frame, readDeadline, signal, inspection))) {
+        if (!(await frameVisible(frame, readDeadline, signal, inspection, state))) {
           inspection.framesSkipped++;
           continue;
         }
-        const visibleFailure = await frameLoadFailed(frame, readDeadline, signal);
+        const visibleFailure = await frameLoadFailed(frame, readDeadline, signal, state);
         timeout(deadline, signal);
         if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
         inspection.framesChecked++;
@@ -1674,16 +1828,21 @@ async function loadFailed(page, deadline, signal) {
         (error.code === 'CHECKOUT_FORM_TIMEOUT' && readDeadline === deadline);
       inspection.framesFailed++;
       inspection.readPhase = 'frame_scan';
+      if (state.onRead) frameReadFailure(inspection, 'frame_scan', error, page, signal);
       const code = inspectionCode(inspection);
       throw Object.assign(failure(code, '结账加载状态读取未完成'), {
         readPhase: 'frame_scan',
+        ...(error.readOperation ? { readOperation: error.readOperation } : {}),
         inspection
       });
     }
   });
 }
-async function checkoutPageLoadFailed(page, { deadline = Date.now() + 2000, signal } = {}) {
-  return loadFailed(page, deadline, signal);
+async function checkoutPageLoadFailed(
+  page,
+  { deadline = Date.now() + 2000, signal, onRead, stopOnReadFailure = false } = {}
+) {
+  return loadFailed(page, deadline, signal, { onRead, stopOnReadFailure });
 }
 async function verifyCard(page, card, { deadline = Date.now() + 120000 } = {}) {
   const state = {};

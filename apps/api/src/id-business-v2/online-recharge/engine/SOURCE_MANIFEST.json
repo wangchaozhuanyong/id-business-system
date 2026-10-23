@@ -61,9 +61,9 @@
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "84956b4143e942d8bfb314b3d20d3cfe2b22e131ba8a14425c7cdbd75faae0d4",
+      "adaptedSha256": "b41f7d5b1a55c8b1ab389583a2b16a6f1f4a5a19f4265c883a779308bcc0441b",
       "changed": true,
-      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Share rendered eligibility across scanning and preparation; respect descendant visibility overrides and same-tree shadow labels; retain bounded exclusion counters without raw DOM or field values. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-19 Add bounded failure-only semantic exclusion diagnostics and same-snapshot geometry/editability comparison; no admission, filling or payment-policy change. 2026-10-19 Follow computed rendering for CSS-overridden hidden attributes on interactive fields and frame owners; preserve text semantics, hidden templates, inert/disabled/readonly checks, hit tests and single-payment policy. 2026-10-20 Preserve a fired global diagnostic timeout despite a one-millisecond wall-clock lag; keep per-frame failures distinct and stop later reads; deterministic regression, no deadline or admission change. 2026-10-21 Keep bounded per-frame inspection failures with controlled phase/reason counters; no raw exception data or eligibility/deadline changes. 2026-10-22 Classify incomplete control reads by bounded phase/reason counts; preserve 300/1200ms budgets, hidden-frame filtering and all interaction rules."
+      "reason": "Semantic frame-safe checkout form readback and immutable per-task payment cap.; 2026-10-17 controlled checkout form, subscription context and progress repair. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Share rendered eligibility across scanning and preparation; respect descendant visibility overrides and same-tree shadow labels; retain bounded exclusion counters without raw DOM or field values. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-19 Add bounded failure-only semantic exclusion diagnostics and same-snapshot geometry/editability comparison; no admission, filling or payment-policy change. 2026-10-19 Follow computed rendering for CSS-overridden hidden attributes on interactive fields and frame owners; preserve text semantics, hidden templates, inert/disabled/readonly checks, hit tests and single-payment policy. 2026-10-20 Preserve a fired global diagnostic timeout despite a one-millisecond wall-clock lag; keep per-frame failures distinct and stop later reads; deterministic regression, no deadline or admission change. 2026-10-21 Keep bounded per-frame inspection failures with controlled phase/reason counters; no raw exception data or eligibility/deadline changes. 2026-10-22 Classify incomplete control reads by bounded phase/reason counts; preserve 300/1200ms budgets, hidden-frame filtering and all interaction rules. Optional value-free readonly read tracing/preparation observations; default production budgets and retries unchanged."
     },
     {
       "path": "checkout-initialization.cjs",
@@ -71,6 +71,13 @@
       "adaptedSha256": "6f59b5e4809fd39c924af5aadd3e7e8cf06b87e370b62f9052e40ff7ada30a3a",
       "changed": true,
       "reason": "2026-10-21 Passive task-page first-open request, response, script/CSP and frame diagnostics before navigation; bounded fixed enums, no request admission or credential/body/header/URL capture. 2026-10-22 Observe exact route cancellation attempts and completion, request/frame ordinals, fixed route templates and same-frame navigation correlation without asserting causality or retaining raw URLs, headers, bodies or arbitrary parameter names. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior."
+    },
+    {
+      "path": "checkout-readonly-diagnostic.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "820f469f717018311d1380412077bf5eea713e4aeaf15027a5587a02c6fe8ab5",
+      "changed": true,
+      "reason": "Internal owned-page readonly original-checkout diagnostic: retain load pre-check, original scroll preparation, owner deadlines, bounded probe/read evidence and existing full bounded network snapshot; stop after read timeout without payment."
     },
     {
       "path": "checkout-recovery.cjs",
@@ -295,6 +302,13 @@
       "adaptedSha256": "74ce6134be94adb45a02cbe665567735dede5bcf0f768258f316ce9bc94c7b88",
       "changed": true,
       "reason": "Verify deterministic expired inspection and exact complete-not-ready versus incomplete-timeout diagnostics; unrelated frames never clear readiness or produce solver calls or writes."
+    },
+    {
+      "path": "test/checkout-readonly-diagnostic.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "16e0e1185b0992c60d0c4fd6be519dc225edb79fe4fff60f110113802df6d77e",
+      "changed": true,
+      "reason": "Finite readonly diagnostic sequence, deadline, inspection, freeze/close, no payment and first read failure regressions."
     },
     {
       "path": "test/checkout-recheck.test.cjs",
@@ -789,9 +803,9 @@
     {
       "path": "upstream/stripe-payment.js",
       "originalSha256": "007a6ae1abb633fd283e48f4ceac02bf3d2e2fc30aaca87520565b34eb29743e",
-      "adaptedSha256": "37134d91f9ff46485da9b6a3186c7b9d4804ae6c8d7b9329fbe747cf76570ff5",
+      "adaptedSha256": "8515c9953ab71870b0f55f4383c2caf56e765ec1239a6d958f9f19051ad335e2",
       "changed": true,
-      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. 2026-10-18 Scroll only the unique eligible card label under the existing task deadline before readiness; no preparation click or additional payment attempt. 2026-10-18 Prefer a unique accessible card label, then a unique physically rendered ARIA-hidden label only for bounded lazy-mount preparation; assert cancellation before starting reads."
+      "reason": "Read exact whole-peso CLP totals, wait for official Chilean tax total, preserve address country and existing final payment gates.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. 2026-10-18 Scroll only the unique eligible card label under the existing task deadline before readiness; no preparation click or additional payment attempt. 2026-10-18 Prefer a unique accessible card label, then a unique physically rendered ARIA-hidden label only for bounded lazy-mount preparation; assert cancellation before starting reads. Optional value-free readonly read tracing/preparation observations; default production budgets and retries unchanged."
     },
     {
       "path": "upstream/subscription-check.js",

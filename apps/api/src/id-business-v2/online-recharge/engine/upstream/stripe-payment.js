@@ -211,10 +211,14 @@ async function prepareCheckoutCardSection(page, options = {}) {
         deadlineAt: options.deadlineAt,
         signal: options.signal
     });
+    const observation = { operation: 'label_count', labelCount: 0, visibleLabelCount: 0,
+        scrolled: false, complete: false };
     try {
         budget.assert();
         const labels = page.getByText(/^Card number$/i);
         const count = await budget.run(labels.count());
+        observation.labelCount = count;
+        observation.operation = 'label_visibility';
         const visible = [];
         const { elementRendered } = require('../checkout-form.cjs');
         for (let index = 0; index < count; index++) {
@@ -232,10 +236,15 @@ async function prepareCheckoutCardSection(page, options = {}) {
                 if (await budget.run(label.evaluate(elementRendered, { interaction: true }))) visible.push(label);
             }
         }
-        if (visible.length !== 1) return;
+        observation.visibleLabelCount = visible.length;
+        if (visible.length !== 1) { observation.complete = true; return; }
         budget.assert();
+        observation.operation = 'label_scroll';
         await budget.run(visible[0].scrollIntoViewIfNeeded({ timeout: budget.timeout(800) }));
+        observation.scrolled = true;
+        observation.complete = true;
     } catch (error) {
+        observation.errorClass = require('../checkout-await-diagnostics.cjs').errorClass(error);
         if (options.signal?.aborted) throw options.signal.reason || error;
         if (Number.isFinite(options.deadlineAt) && performance.now() >= options.deadlineAt) throw error;
         // A short optional preparation probe must not replace the original opening
@@ -243,6 +252,8 @@ async function prepareCheckoutCardSection(page, options = {}) {
         if (error.code !== 'VERIFICATION_TIMEOUT' && error.name !== 'TimeoutError') throw error;
     } finally {
         budget.dispose();
+        // Optional value-free diagnostic observation; no control text or field values.
+        try { if (typeof options.onPreparation === 'function') options.onPreparation({ ...observation }); } catch (_) { /* observation only */ }
     }
 }
 
