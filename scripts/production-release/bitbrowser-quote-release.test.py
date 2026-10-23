@@ -92,6 +92,14 @@ class QuoteTierPublicationTests(unittest.TestCase):
                     P.release({**plan, field: value}, self.c)
             self.assertEqual(reader.call_count, 1)
 
+    def previous_capture(self):
+        value = self.capture()
+        prior = self.c['previousReadOnlyCapture']
+        value['parentPlanSha256'] = prior['parentPlanSha256']
+        value['baseline']['commit'] = prior['parentCommit']
+        value['baseline']['proofs'] = {'online-readonly-probe-build-proof.json': prior['parentBuildProofSha256']}
+        return value
+
     def test_current_parent_capture_is_required_and_scope_tampering_rejected(self):
         value = self.capture()
         P.verify_capture(value, self.c)
@@ -111,10 +119,9 @@ class QuoteTierPublicationTests(unittest.TestCase):
             P.verify_capture(value, {**self.c, 'baseline': {}})
 
     def test_old_read_only_capture_cannot_authorize_a_new_build_without_active_admin_proof(self):
-        old = self.capture()
-        old['baseline']['proofs'].pop('bitbrowser-history-build-proof.json')
+        old = self.previous_capture()
         P.verify_capture(old, self.c, previous_read_only=True)
-        with self.assertRaisesRegex(RuntimeError, 'PARENT_SCOPE_CHANGED'):
+        with self.assertRaisesRegex(RuntimeError, 'PARENT_CAPTURE_CHANGED'):
             P.verify_capture(old, self.c)
 
     def test_historical_constructor_inputs_are_closed_and_existing_objects_need_no_fetch(self):
@@ -168,8 +175,7 @@ class QuoteTierPublicationTests(unittest.TestCase):
     def test_previous_read_only_receipt_requires_original_identity_success_and_bounded_payload(self):
         import base64
         import zlib
-        value = self.capture()
-        value['baseline']['proofs'].pop('bitbrowser-history-build-proof.json')
+        value = self.previous_capture()
         invocation = {'CommandId': self.c['previousReadOnlyCapture']['commandId'], 'InstanceId': B.INSTANCE,
                       'DocumentName': 'AWS-RunShellScript', 'PluginName': 'aws:runShellScript',
                       'Status': 'Success', 'ResponseCode': 0, 'StandardErrorContent': '',
@@ -187,8 +193,7 @@ class QuoteTierPublicationTests(unittest.TestCase):
         import base64
         import tempfile
         import zlib
-        value = self.capture()
-        value['baseline']['proofs'].pop('bitbrowser-history-build-proof.json')
+        value = self.previous_capture()
         prior = self.c['previousReadOnlyCapture']
         run = {'head_sha': prior['commit'], 'head_branch': 'main', 'event': 'workflow_dispatch',
                'path': B.WORKFLOW, 'status': 'completed', 'conclusion': 'failure', 'run_attempt': 1}

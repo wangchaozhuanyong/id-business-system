@@ -48,7 +48,8 @@ def check(c):
                'scripts/ci-settled-checkout-scope.test.mjs', 'scripts/ci-recharge-check.mjs',
                *('scripts/production-release/bitbrowser-quote-' + suffix for suffix in
                  ('release.py', 'publication.py', 'release.test.py', 'contract.json'))}
-    need(set(git('diff', '--name-only', P.SOURCE, 'HEAD').decode().splitlines()) <= allowed,
+    git('merge-base', '--is-ancestor', P.RELEASE_BASE, 'HEAD')
+    need(set(git('diff', '--name-only', P.RELEASE_BASE, 'HEAD').decode().splitlines()) <= allowed,
          'UNREVIEWED_EXTENSION')
     need(sha((ROOT / '.github/workflows/quality.yml').read_bytes()) == c['qualityWorkflowSha256'],
          'QUALITY_WORKFLOW_CHANGED')
