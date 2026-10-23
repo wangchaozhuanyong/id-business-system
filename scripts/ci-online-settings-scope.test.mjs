@@ -1,4 +1,8 @@
 import {
+  onlineCheckoutInitPaths,
+  onlineCheckoutInitControls,
+  isOnlineCheckoutInitOnly,
+  isOnlineCheckoutInitControlsOnly,
   onlineCheckoutAwaitPaths,
   onlineCheckoutAwaitControls,
   isOnlineCheckoutAwaitOnly,
@@ -3181,6 +3185,58 @@ test('checkout await evidence publishes only the complete executor delta and ret
   assert.match(
     onlineSettingsCommands('guards', paths).flat().join(' '),
     /online-checkout-await-release.test.py/
+  );
+  const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
+  const commands = onlineSettingsCommands('online-engine', paths);
+  const mediaInstall = commands.findIndex((c) => c[0] === 'sudo' && c.includes('ffmpeg'));
+  assert.ok(mediaInstall >= 0);
+  assert.ok(mediaInstall < commands.findIndex((c) => c.includes('--test')));
+  assert.deepEqual(commands[mediaInstall + 1], ['ffmpeg', '-version']);
+  assert.deepEqual(commands[mediaInstall + 2], ['ffprobe', '-version']);
+  for (const name of [
+    'checkout-await-diagnostics',
+    'checkout-navigation',
+    'checkout-recovery',
+    'debug-checkout',
+    'safe-media-finish',
+    'media-browser',
+    'checkout-initialization',
+    'auth-navigation',
+    'login-evidence-browser',
+    'upstream-session-transition',
+    'execution-budget',
+    'regressions',
+    'session-routing-browser',
+    'human-verification',
+    'unattended-task-control'
+  ])
+    assert.ok(checks.includes(name + '.test.cjs'));
+  assert.match(checks, /test-concurrency=1/);
+  assert.match(checks, /SESSION_ROUTING_BROWSER_MODE=pool/);
+  assert.doesNotMatch(checks, /migrate|api.*typecheck|admin/);
+});
+
+test('checkout initialization evidence publishes only the complete executor delta and retains original login/media coverage', () => {
+  const paths = [...onlineCheckoutInitPaths, ...onlineCheckoutInitControls];
+  assert.equal(isOnlineCheckoutInitOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isOnlineCheckoutInitControlsOnly(onlineCheckoutInitControls), true);
+  assert.deepEqual(selectedParts(onlineCheckoutInitControls), ['guards']);
+  for (const required of onlineCheckoutInitPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isOnlineCheckoutInitOnly(paths.filter((p) => p !== required)), false);
+  assert.equal(isOnlineCheckoutInitOnly([...paths, paths[0]]), false);
+  for (const unrelated of [
+    'apps/api/src/auth/auth.service.ts',
+    'apps/admin/src/v2/App.vue',
+    'apps/api/prisma-mysql/schema.prisma',
+    '.github/workflows/production-release.yml'
+  ])
+    assert.equal(isOnlineCheckoutInitOnly([...paths, unrelated]), false);
+  assert.match(
+    onlineSettingsCommands('guards', paths).flat().join(' '),
+    /online-checkout-init-release.test.py/
   );
   const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
   const commands = onlineSettingsCommands('online-engine', paths);
