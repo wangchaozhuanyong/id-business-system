@@ -1634,7 +1634,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       });
       assert.equal(actual.failure, '');
       assert.equal(actual.result.status, 'failed');
-      assert.equal(actual.result.result.code, 'ACCOUNT_MISMATCH');
+      assert.equal(actual.result.result.errorCode, 'ACCOUNT_MISMATCH');
+      assert.equal(actual.result.result.bootstrapDiagnostics.initialSessionProbe.state, 'mismatch');
       assert.equal(actual.metrics.loginCookieVerified, 1);
       assert.equal(actual.metrics.refreshedAuthResponses, 1);
       for (const key of [
@@ -1665,8 +1666,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
   for (const [authUi, expectedCode] of [
     ['visible-login', 'SESSION_NOT_CONFIRMED'],
     ['login-redirect', 'SESSION_NOT_CONFIRMED'],
-    ['unconfirmed', 'SESSION_NOT_CONFIRMED'],
-    ['challenge', 'HUMAN_VERIFICATION_REQUIRED'],
+    ['unconfirmed', 'SESSION_API_UNCONFIRMED'],
+    ['challenge', 'SESSION_VERIFICATION_BLOCKED'],
     ['permanent-guest', 'SESSION_NOT_CONFIRMED'],
     ['late-guest', 'SESSION_NOT_CONFIRMED']
   ])
@@ -1704,18 +1705,21 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       }
       assert.equal(
         Object.entries(diagnostic).every(([key, value]) =>
-          key === 'lastAwait'
-            ? [
-                'navigation',
-                'wait',
-                'challenge',
-                'login_controls',
-                'logged_in_ui',
-                'ui_stability',
-                'verification',
-                'session_api'
-              ].includes(value)
-            : typeof value === 'boolean' || value === diagnostic.reason
+          ['initialSessionProbe', 'homepageSessionProbe'].includes(key)
+            ? JSON.stringify(require('../subscription-diagnostics.cjs').safeSessionProbe(value)) ===
+              JSON.stringify(value)
+            : key === 'lastAwait'
+              ? [
+                  'navigation',
+                  'wait',
+                  'challenge',
+                  'login_controls',
+                  'logged_in_ui',
+                  'ui_stability',
+                  'verification',
+                  'session_api'
+                ].includes(value)
+              : typeof value === 'boolean' || value === diagnostic.reason
         ),
         true
       );

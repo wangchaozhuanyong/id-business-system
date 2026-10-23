@@ -87,6 +87,120 @@ function responseFacts(status, headers = {}, body) {
     classification
   };
 }
+function sessionProbeFacts(status, headers, text, expected = {}) {
+  const facts = responseFacts(status, headers, text);
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+  const object = data && typeof data === 'object' && !Array.isArray(data);
+  const hasIdentity =
+    object &&
+    !data.error &&
+    !data.errors &&
+    [data.accessToken, data.user?.id, data.user?.email].some(
+      (v) => typeof v === 'string' && v.trim()
+    );
+  let observed = {};
+  try {
+    observed =
+      JSON.parse(Buffer.from(data.accessToken.split('.')[1], 'base64url'))[
+        'https://api.openai.com/auth'
+      ] || {};
+  } catch {
+    /* No token identity. */
+  }
+  const accounts = [data?.account?.id, observed.chatgpt_account_id].filter(Boolean);
+  const users = [data?.user?.id, observed.chatgpt_user_id].filter(Boolean);
+  const hasValidUser = Boolean(
+    status === 200 && hasIdentity && typeof data.user?.id === 'string' && data.user.id.trim()
+  );
+  const identityMismatch =
+    hasIdentity &&
+    ((expected.accountId && accounts.some((id) => id !== expected.accountId)) ||
+      (expected.userId && users.some((id) => id !== expected.userId)));
+  const matchesTargetAccount = Boolean(
+    hasValidUser &&
+    expected.accountId &&
+    expected.userId &&
+    accounts.length &&
+    accounts.every((id) => id === expected.accountId) &&
+    users.every((id) => id === expected.userId)
+  );
+  const state =
+    facts.classification === 'CF_CHALLENGE'
+      ? 'challenge'
+      : identityMismatch
+        ? 'mismatch'
+        : status === 401 ||
+            (status === 200 && object && Object.keys(data).length === 0) ||
+            facts.classification === 'AUTH_SESSION_REJECTED'
+          ? 'invalid'
+          : status === 200 && hasIdentity
+            ? 'verified'
+            : status === 403
+              ? 'blocked'
+              : 'unconfirmed';
+  return { state, httpStatus: status, ...facts, hasValidUser, matchesTargetAccount };
+}
+function safeSessionProbe(value) {
+  if (!value || typeof value !== 'object') return undefined;
+  const out = {};
+  if (
+    [
+      'verified',
+      'invalid',
+      'mismatch',
+      'challenge',
+      'blocked',
+      'timeout',
+      'network_error',
+      'unconfirmed'
+    ].includes(value.state)
+  )
+    out.state = value.state;
+  if (Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599)
+    out.httpStatus = value.httpStatus;
+  if (
+    ['application/json', 'text/html', 'text/plain', 'other', 'unknown'].includes(value.contentType)
+  )
+    out.contentType = value.contentType;
+  if (['challenge', 'absent', 'unknown'].includes(value.cfMitigated))
+    out.cfMitigated = value.cfMitigated;
+  for (const key of [
+    'cfRayPresent',
+    'hasValidUser',
+    'matchesTargetAccount',
+    'manualActionable',
+    'manualCompleted',
+    'complete'
+  ])
+    if (typeof value[key] === 'boolean') out[key] = value[key];
+  if (Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0)
+    out.elapsedMs = Math.round(value.elapsedMs);
+  if (
+    [
+      'CF_CHALLENGE',
+      'POLICY_OR_REGION_BLOCK',
+      'AUTH_SESSION_REJECTED',
+      'UNKNOWN_403',
+      'NOT_CLASSIFIED'
+    ].includes(value.classification)
+  )
+    out.classification = value.classification;
+  if (ERROR_CODES.has(value.errorCode) || value.errorCode === 'UNKNOWN')
+    out.errorCode = value.errorCode;
+  if (ERROR_TYPES.has(value.errorType) || value.errorType === 'UNKNOWN')
+    out.errorType = value.errorType;
+  if (value.markers) {
+    out.markers = {};
+    for (const key of ['challengePlatform', 'challengeOptions', 'justAMoment', 'unusualActivity'])
+      if (typeof value.markers[key] === 'boolean') out.markers[key] = value.markers[key];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 function logResponseFacts(status, facts) {
   const categories = {
     CF_CHALLENGE: '明确验证挑战',
@@ -222,4 +336,10 @@ function observeAuthResponses(page, sessionRaw) {
     }
   };
 }
-module.exports = { responseFacts, logResponseFacts, observeAuthResponses };
+module.exports = {
+  responseFacts,
+  sessionProbeFacts,
+  safeSessionProbe,
+  logResponseFacts,
+  observeAuthResponses
+};

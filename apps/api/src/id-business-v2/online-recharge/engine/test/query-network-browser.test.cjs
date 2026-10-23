@@ -198,6 +198,7 @@ function queryWithoutUnrelatedProbe(overrides = {}) {
     Buffer,
     URL,
     Date,
+    AbortController,
     console,
     process: { env: {} },
     require(name) {
@@ -259,6 +260,16 @@ test('real Chromium auth 200 does not authorize a business 401 or any checkout',
   assert.equal(result.diagnostics[0].requestIssued, true);
   assert.equal(result.diagnostics[0].responseHeadersReceived, true);
   assert.equal(result.diagnostics[0].responseBodyCompleted, true);
+  const network = result.diagnostics[0].network;
+  assert.equal(network.available, true);
+  assert.equal(network.originReceiptProven, false);
+  assert.ok(network.events.some((row) => row.event === 'browser_request'));
+  assert.ok(
+    network.events.some((row) => row.event === 'response_headers' && row.httpStatus === 401)
+  );
+  assert.equal(network.proxy.providerStatisticsAvailable, false);
+  assert.equal(typeof result.diagnostics[0].resourceTiming.observed, 'boolean');
+  assert.ok(!JSON.stringify(network).includes(token));
   assert.equal(f.seen.accountRequests.length, 1);
   assert.equal(f.page.isClosed(), false);
   noPayment(f.seen);
@@ -281,9 +292,35 @@ test('real Chromium delayed headers reaches the shared deadline without a checko
   assert.equal(result.diagnostics[0].responseHeadersReceived, false);
   assert.equal(result.diagnostics[0].responseBodyCompleted, false);
   assert.equal(result.diagnostics[0].failurePhase, 'response_headers');
+  assert.equal(result.diagnostics[0].network.available, true);
+  assert.ok(result.diagnostics[0].network.events.some((row) => row.event === 'browser_request'));
+  assert.ok(!result.diagnostics[0].network.events.some((row) => row.event === 'response_headers'));
   assert.equal(result.diagnostics[0].timeoutSource, 'query_deadline');
   await requestAborted(f.seen.accountRequests[0]);
   assert.equal(f.page.isClosed(), false);
+  noPayment(f.seen);
+});
+
+test('unavailable diagnostic attachment and resource timing cannot block the real subscription GET', async (t) => {
+  const f = await fixture(t, (_request, response) => {
+    response.writeHead(200);
+    response.end(JSON.stringify(accountBody));
+  });
+  f.context.newCDPSession = async () => new Promise(() => {});
+  await f.page.evaluate(() => {
+    performance.getEntriesByName = () => {
+      throw Error('synthetic unavailable timing');
+    };
+  });
+  const result = await querySubscriptionBySession(token, {
+    page: f.page,
+    browserContext: f.context,
+    deadlineAt: performance.now() + 2000
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.diagnostics[0].network.available, false);
+  assert.equal(result.diagnostics[0].resourceTiming.observed, false);
+  assert.equal(f.seen.accountRequests.length, 1);
   noPayment(f.seen);
 });
 

@@ -16,6 +16,8 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 const ACCOUNT_CHECK_ATTEMPT_MS = 20000;
 const ACCOUNT_MISMATCH_MESSAGE = '官网会话账号或用户与原任务不一致，已停止后续操作';
 const BOOTSTRAP_FAILURE_MESSAGES = {
+    SESSION_VERIFICATION_BLOCKED: '官网会话验证被阻断，本次未取得订阅结果',
+    SESSION_API_UNCONFIRMED: '独立会话接口与首页均未确认登录，本次未取得订阅结果',
     SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
     SESSION_BOOTSTRAP_FAILED: '官网登录初始化未完成，本次未取得订阅结果'
 };
@@ -296,7 +298,7 @@ function transportCode(error) {
 }
 function queryErrorCode(error) {
     if (['HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH', 'NETWORK_TIMEOUT',
-        'SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED'].includes(error?.code)) return error.code;
+        'SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED', 'SESSION_VERIFICATION_BLOCKED', 'SESSION_API_UNCONFIRMED'].includes(error?.code)) return error.code;
     if (/^(?:VERIFICATION_(?:TIMEOUT|CANCELLED|PAGE_CLOSED|FRAME_AMBIGUOUS|NOT_READY|NETWORK_UNAVAILABLE|PROVIDER_UNAVAILABLE|PROVIDER_REJECTED|RATE_LIMITED|CHALLENGE_REJECTED|CHALLENGE_UNCHANGED|ROUNDS_EXHAUSTED|SOLVER_DISABLED|SOLVER_FAILED|RUNTIME_FAILED|PAGE_BINDING_REQUIRED|PAGE_BINDING_MISMATCH|UNSUPPORTED)|VLM_(?:AUTH_FAILED|RATE_LIMITED|TIMEOUT|NETWORK_UNAVAILABLE|REQUEST_UNSUPPORTED|INVALID_RESPONSE|INVALID_DECISION|PROVIDER_UNAVAILABLE|IMAGE_UNSUPPORTED|NOT_CONFIGURED|API_REJECTED))$/.test(error?.code)) return error.code;
     const network = transportCode(error);
     if (network === 'ETIMEDOUT') return 'NETWORK_TIMEOUT';
@@ -378,6 +380,13 @@ function mergeReadObservation(target, source) {
         if (Number.isSafeInteger(source[key]) && source[key] >= 0 && source[key] <= 180000) target[key] = source[key];
     if (Number.isSafeInteger(source.httpStatus) && source.httpStatus >= 100 && source.httpStatus <= 599)
         target.httpStatus = source.httpStatus;
+    if (source.resourceTiming && typeof source.resourceTiming.observed === 'boolean') {
+        const timing = { observed: source.resourceTiming.observed };
+        for (const key of ['startTime', 'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart', 'responseStart', 'responseEnd'])
+            if (Number.isFinite(source.resourceTiming[key]) && source.resourceTiming[key] >= 0 && source.resourceTiming[key] <= 180000)
+                timing[key] = Math.round(source.resourceTiming[key]);
+        target.resourceTiming = timing;
+    }
 }
 function readFailurePhase(observation) {
     return !observation.requestIssued ? 'request_dispatch'
@@ -442,6 +451,10 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
         const readId = randomUUID();
         const url = buildCheckUrl(timezoneOffsetMin);
         let observed;
+        let network;
+        const networkSetup = new AbortController();
+        const dispatchDeadline = Date.now() + timeoutMs;
+        let readDispatched = false;
         const issued = request => {
             if (request.url() === url && request.method?.() === 'GET') control.observation.requestIssued = true;
         };
@@ -453,6 +466,8 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
         page.on?.('request', issued);
         page.on?.('requestfailed', failed);
         control.cancel = async error => {
+            network?.cancel();
+            networkSetup.abort();
             if (error?.code === 'LEASE_LOST') {
                 // Renderer-side cancellation would queue behind an already
                 // queued read. Close only this task's page at the browser
@@ -461,6 +476,7 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
                 const closing = page.close({ runBeforeUnload: false });
                 return await settledWithin(closing) && page.isClosed?.() === true;
             }
+            if (!readDispatched) return true;
             const cancellation = page.evaluate(async ({ readId }) => {
                 const reads = globalThis.__ID_BUSINESS_SUBSCRIPTION_READS__ ||= new Map();
                 const entry = reads.get(readId);
@@ -480,6 +496,9 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
             finally { clearTimeout(timer); }
         };
         try {
+            network = await require('../subscription-network-diagnostics.cjs').observeSubscriptionNetwork(page, url, { signal: networkSetup.signal });
+            if (networkSetup.signal.aborted) throw Object.assign(new Error('订阅读取准备已停止'), { code: 'NETWORK_TIMEOUT' });
+            readDispatched = true;
             const result = await page.evaluate(async ({ url, token, timeoutMs, readId, timeoutSource, dispatchDeadline }) => {
                 if (location.origin !== 'https://chatgpt.com') return { status: 0, readError: 'ORIGIN_MISMATCH' };
                 const reads = globalThis.__ID_BUSINESS_SUBSCRIPTION_READS__ ||= new Map();
@@ -513,12 +532,25 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
                             return { status: observation.httpStatus || 0,
                                 readError: error.name === 'AbortError' ? 'ETIMEDOUT' : 'NETWORK', observation,
                                 ...(error.name === 'AbortError' ? { timeoutSource: timedOut ? timeoutSource : 'browser_abort' } : {}) };
+                        } finally {
+                            // Zero/absent timing is diagnostic absence, not proof
+                            // that the request did or did not reach the server.
+                            observation.resourceTiming = { observed: false };
+                            try {
+                                const entries = performance.getEntriesByName?.(url, 'resource') || [];
+                                const timing = entries.filter(item => item.startTime >= started).at(-1);
+                                observation.resourceTiming.observed = Boolean(timing);
+                                if (timing) for (const key of ['startTime', 'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart', 'responseStart', 'responseEnd']) {
+                                    const value = timing[key];
+                                    if (Number.isFinite(value)) observation.resourceTiming[key] = value === 0 ? 0 : Math.max(0, Math.round(value - started));
+                                }
+                            } catch (_) { /* Optional timing cannot replace the actual HTTP result. */ }
                         }
                     })();
                     return await entry.done;
                 } finally { clearTimeout(timer); reads.delete(readId); }
             }, { url, token: accessToken, timeoutMs, readId, timeoutSource: control.timeoutSource,
-                dispatchDeadline: Date.now() + timeoutMs });
+                dispatchDeadline });
             mergeReadObservation(control.observation, result.observation);
             if (result.readError) throw Object.assign(new Error('页面订阅读取未完成'), {
                 networkCode: result.readError === 'ETIMEDOUT'
@@ -532,7 +564,10 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
             const responseFacts = diagnostic.responseFacts(result.status, result.headers, result.text);
             if ([401, 403].includes(result.status)) diagnostic.logResponseFacts(result.status, responseFacts);
             return { status: result.status, data: normalizeResponseBody(result.text), via: 'browser-page', responseFacts };
-        } finally { page.off?.('request', issued); page.off?.('requestfailed', failed); }
+        } finally {
+            if (network) { control.observation.network = network.snapshot(); network.dispose(); }
+            page.off?.('request', issued); page.off?.('requestfailed', failed);
+        }
     }, budget, 'browser-page');
 }
 async function compareContextRead(context, accessToken, timezoneOffsetMin, budget) {
@@ -647,9 +682,12 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
             userAgent: session.realUserAgent, locale: 'en-US' }), 'context_create', resource => resource.close());
         page = await acquire(() => prepareQueryPage(context, budget), 'page_create', closeQueryPage);
         const auth = require('./session-auth');
-        const installed = await boundedQuery(() => auth.installChatGptSession(context, options.sessionRaw), budget, 'session_install');
+        const installed = await boundedQuery(() => auth.installChatGptSession(context, options.sessionRaw, {
+            signal: budget.signal, deadlineAt: budget.deadlineAt, onHumanVerification: options.onHumanVerification
+        }), budget, 'session_install');
         const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
             sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
+            initialSessionProbe: installed?.initialSessionProbe, onHumanVerification: options.onHumanVerification,
             deadlineAt: budget.deadlineAt, signal: budget.signal
         }), budget, 'session_bootstrap');
         return await operation(login.session?.accessToken || accessToken, { ...options, page,
@@ -714,11 +752,14 @@ async function fetchAccountCheck(accessToken, options = {}) {
                 userAgent: session.realUserAgent, locale: 'en-US' }), budget, 'context_create');
             ownedPage = page = await prepareQueryPage(ownedContext, budget);
             const auth = require('./session-auth');
-            const installed = await boundedQuery(() => auth.installChatGptSession(ownedContext, options.sessionRaw), budget, 'session_install');
+            const installed = await boundedQuery(() => auth.installChatGptSession(ownedContext, options.sessionRaw, {
+                signal: budget.signal, deadlineAt: budget.deadlineAt, onHumanVerification: options.onHumanVerification
+            }), budget, 'session_install');
             verifiedCookie = installed?.cookieVerified === true;
             accessToken = installed?.sessionData?.accessToken || accessToken;
             const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
                 sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
+                initialSessionProbe: installed?.initialSessionProbe, onHumanVerification: options.onHumanVerification,
                 deadlineAt: budget.deadlineAt, signal: budget.signal
             }), budget, 'session_bootstrap');
             accessToken = login.session?.accessToken || accessToken;

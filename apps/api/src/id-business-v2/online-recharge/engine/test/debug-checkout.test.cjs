@@ -171,6 +171,7 @@ test('only checkout debug permits an unverified target through the actual index 
         accessToken: 'synthetic-token',
         billingCurrency: 'PHP',
         debugOnly,
+        checkoutEvidence: {},
         context: {},
         page: {},
         sessionRaw: 'synthetic-session',

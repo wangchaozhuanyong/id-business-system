@@ -199,6 +199,27 @@ async function hasLoggedInSessionApi(page, { timeoutMs = 8000 } = {}) {
     }
 }
 
+// Native read on the current page. The body stays transient with the caller;
+// diagnostics must use sessionProbeFacts, never persist this return value.
+async function readSessionApi(page, { timeoutMs = 8000 } = {}) {
+    try {
+        return await page.evaluate(async timeout => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeout);
+            try {
+                const response = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store', signal: controller.signal });
+                return { status: response.status, text: await response.text(), headers: {
+                    'content-type': response.headers.get('content-type'),
+                    'cf-mitigated': response.headers.get('cf-mitigated'),
+                    'cf-ray': response.headers.has('cf-ray') ? 'present' : ''
+                } };
+            } catch (error) {
+                return { state: error.name === 'AbortError' ? 'timeout' : 'network_error' };
+            } finally { clearTimeout(timer); }
+        }, Math.max(1, Math.min(8000, timeoutMs)));
+    } catch (_) { return { state: 'network_error' }; }
+}
+
 async function isCheckoutLoginGate(page, options = {}) {
     if (!isCheckoutPageUrl(page.url())) {
         return false;
@@ -215,6 +236,7 @@ function buildSessionNotLoggedInError(contextLabel = '页面') {
 }
 
 module.exports = {
+    readSessionApi,
     SESSION_COOKIE_HINT,
     isLoginRedirectUrl,
     isHardLoginRedirectUrl,

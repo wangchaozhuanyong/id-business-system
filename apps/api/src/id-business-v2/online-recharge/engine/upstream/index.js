@@ -16,7 +16,7 @@ const path = require('path');
  * Stripe Card Pool Payment Activation Flow
  *
  * 核心流程：
- * 1. 代理连通性检查
+ * 1. 代理连通性检查（包含首次最多 5 次，成功即继续，连续失败 5 次才停止）
  * 2. 从 CDK 记录获取 plan_type
  * 3. 创建 Stripe Checkout Session（根据 plan_type）
  * 4. 打开 Stripe Checkout 页面
@@ -220,238 +220,263 @@ async function run(runOptions = {}) {
     // Actual pages are recorded only as mandatory masked screenshot frames.
     await safeMedia.start(browser);
 
-    context = await browser.newContext(contextOptions);
-    const sessionRaw = CONFIG.chatgptSessionJson || CONFIG.chatgptToken;
-    const installResult = await installChatGptSession(context, sessionRaw);
-    const sessionData = installResult?.sessionData || installResult;
-    const cookieVerified = Boolean(installResult?.cookieVerified);
-
-    // ============= 指纹伪装 =============
-    await context.addInitScript((injectedChromeMajor) => {
-        const NavProto = Object.getPrototypeOf(navigator);
-        const ScrProto = Object.getPrototypeOf(screen);
-        const safeDefine = (obj, key, getter) => {
-            try {
-                Object.defineProperty(obj, key, { get: getter, configurable: true });
-            } catch (_) { /* ignore */ }
-        };
-
-        // 隐藏 webdriver
-        try { delete Object.getPrototypeOf(navigator).webdriver; } catch (_) { }
-        safeDefine(NavProto, 'webdriver', () => undefined);
-        try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true }); } catch (_) { }
-
-        // navigator.userAgentData
-        try {
-            const uaData = {
-                brands: [
-                    { brand: 'Not)A;Brand', version: '8' },
-                    { brand: 'Chromium', version: String(injectedChromeMajor) },
-                    { brand: 'Google Chrome', version: String(injectedChromeMajor) }
-                ],
-                mobile: false,
-                platform: 'Windows',
-                getHighEntropyValues: () => Promise.resolve({
-                    architecture: 'x86',
-                    bitness: '64',
-                    mobile: false,
-                    model: '',
-                    platform: 'Windows',
-                    platformVersion: '15.0.0',
-                    wow64: false
-                }),
-                toJSON: () => ({ brands: uaData.brands, mobile: uaData.mobile, platform: uaData.platform })
-            };
-            safeDefine(NavProto, 'userAgentData', () => uaData);
-        } catch (_) { }
-
-        // plugins / mimeTypes
-        try {
-            const pdfMime = Object.create(MimeType.prototype);
-            Object.defineProperties(pdfMime, {
-                type: { get: () => 'application/pdf' },
-                suffixes: { get: () => 'pdf' },
-                description: { get: () => 'Portable Document Format' }
-            });
-            const pdfPlugin = Object.create(Plugin.prototype);
-            Object.defineProperties(pdfPlugin, {
-                name: { get: () => 'Chrome PDF Plugin' },
-                filename: { get: () => 'internal-pdf-viewer' },
-                description: { get: () => 'Portable Document Format' },
-                length: { get: () => 1 },
-                0: { get: () => pdfMime }
-            });
-            pdfPlugin.item = () => pdfMime;
-            pdfPlugin.namedItem = () => pdfMime;
-
-            const fakePlugins = Object.create(PluginArray.prototype);
-            Object.defineProperties(fakePlugins, {
-                length: { get: () => 1 },
-                0: { get: () => pdfPlugin }
-            });
-            fakePlugins.item = () => pdfPlugin;
-            fakePlugins.namedItem = (n) => n === pdfPlugin.name ? pdfPlugin : null;
-            fakePlugins.refresh = () => { };
-
-            const fakeMimeTypes = Object.create(MimeTypeArray.prototype);
-            Object.defineProperties(fakeMimeTypes, {
-                length: { get: () => 1 },
-                0: { get: () => pdfMime }
-            });
-            fakeMimeTypes.item = () => pdfMime;
-            fakeMimeTypes.namedItem = (n) => n === pdfMime.type ? pdfMime : null;
-
-            safeDefine(NavProto, 'plugins', () => fakePlugins);
-            safeDefine(NavProto, 'mimeTypes', () => fakeMimeTypes);
-        } catch (_) { }
-
-        // 语言、平台、硬件
-        safeDefine(NavProto, 'languages', () => ['en-US', 'en']);
-        safeDefine(NavProto, 'language', () => 'en-US');
-        safeDefine(NavProto, 'platform', () => 'Win32');
-        safeDefine(NavProto, 'hardwareConcurrency', () => 8);
-        safeDefine(NavProto, 'deviceMemory', () => 8);
-        safeDefine(NavProto, 'maxTouchPoints', () => 0);
-        safeDefine(NavProto, 'vendor', () => 'Google Inc.');
-
-        // navigator.connection
-        try {
-            const conn = { effectiveType: '4g', rtt: 100, downlink: 10, saveData: false };
-            safeDefine(NavProto, 'connection', () => conn);
-        } catch (_) { }
-
-        // window.chrome
-        try {
-            const fakeChrome = {
-                app: {
-                    isInstalled: false,
-                    InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-                    RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
-                    getDetails: () => null,
-                    getIsInstalled: () => false
-                },
-                runtime: {
-                    OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
-                    OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
-                    PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
-                    PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
-                    PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' },
-                    RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' },
-                    connect: () => { },
-                    sendMessage: () => { }
-                },
-                csi: () => ({ onloadT: Date.now(), pageT: Date.now() - 1000, startE: Date.now() - 2000, tran: 15 }),
-                loadTimes: () => ({
-                    requestTime: Date.now() / 1000 - 2,
-                    startLoadTime: Date.now() / 1000 - 1.5,
-                    commitLoadTime: Date.now() / 1000 - 1,
-                    finishDocumentLoadTime: Date.now() / 1000 - 0.5,
-                    finishLoadTime: Date.now() / 1000,
-                    firstPaintTime: Date.now() / 1000 - 0.3,
-                    firstPaintAfterLoadTime: 0,
-                    navigationType: 'Other',
-                    wasFetchedViaSpdy: true,
-                    wasNpnNegotiated: true,
-                    npnNegotiatedProtocol: 'h2',
-                    wasAlternateProtocolAvailable: false,
-                    connectionInfo: 'h2'
-                })
-            };
-            Object.defineProperty(window, 'chrome', { value: fakeChrome, writable: true, configurable: true });
-        } catch (_) { }
-
-        // permissions.query
-        try {
-            const origQuery = navigator.permissions.query.bind(navigator.permissions);
-            navigator.permissions.query = (params) => {
-                if (params && params.name === 'notifications') {
-                    return Promise.resolve({ state: typeof Notification !== 'undefined' ? Notification.permission : 'default', onchange: null });
-                }
-                return origQuery(params).catch(() => ({ state: 'prompt', onchange: null }));
-            };
-        } catch (_) { }
-
-        // screen
-        safeDefine(ScrProto, 'availHeight', () => 1032);
-        safeDefine(ScrProto, 'availWidth', () => 1920);
-        safeDefine(ScrProto, 'colorDepth', () => 24);
-        safeDefine(ScrProto, 'pixelDepth', () => 24);
-        safeDefine(ScrProto, 'width', () => 1920);
-        safeDefine(ScrProto, 'height', () => 1080);
-
-        // Canvas 微噪声
-        try {
-            const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-            HTMLCanvasElement.prototype.toDataURL = function (...args) {
-                const ctx = this.getContext('2d');
-                if (ctx) {
-                    try {
-                        const w = this.width, h = this.height;
-                        if (w > 0 && h > 0) {
-                            const data = ctx.getImageData(0, 0, 1, 1);
-                            data.data[3] = Math.max(1, data.data[3] - 1);
-                            ctx.putImageData(data, 0, 0);
-                        }
-                    } catch (_) { }
-                }
-                return origToDataURL.apply(this, args);
-            };
-        } catch (_) { }
-
-        // WebGL
-        try {
-            const fakeWebGL = (gl) => {
-                const origGetParameter = gl.getParameter.bind(gl);
-                gl.getParameter = function (param) {
-                    if (param === 0x9245) return 'Google Inc. (Intel)';
-                    if (param === 0x9246) return 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)';
-                    return origGetParameter(param);
-                };
-            };
-            const origGetCtx = HTMLCanvasElement.prototype.getContext;
-            HTMLCanvasElement.prototype.getContext = function (type, ...args) {
-                const ctx = origGetCtx.call(this, type, ...args);
-                if (ctx && (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl')) {
-                    try { fakeWebGL(ctx); } catch (_) { }
-                }
-                return ctx;
-            };
-        } catch (_) { }
-
-        // ChromeDriver 痕迹
-        try {
-            for (const key of Object.keys(window)) {
-                if (/^(cdc_|\$cdc_|_phantom|callPhantom|webdriver-|driver-)/.test(key)) {
-                    try { delete window[key]; } catch (_) { }
-                }
-            }
-        } catch (_) { }
-
-        // Notification.permission
-        try {
-            if (typeof Notification !== 'undefined') {
-                Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
-            }
-        } catch (_) { }
-    }, chromeMajor);
-
     try {
+        context = await browser.newContext(contextOptions);
+        const sessionRaw = CONFIG.chatgptSessionJson || CONFIG.chatgptToken;
+        const installResult = await installChatGptSession(context, sessionRaw, {
+            signal: taskSignal?.(), onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
+        });
+        const sessionData = installResult?.sessionData || installResult;
+        const cookieVerified = Boolean(installResult?.cookieVerified);
+
+        // ============= 指纹伪装 =============
+        await context.addInitScript((injectedChromeMajor) => {
+            const NavProto = Object.getPrototypeOf(navigator);
+            const ScrProto = Object.getPrototypeOf(screen);
+            const safeDefine = (obj, key, getter) => {
+                try {
+                    Object.defineProperty(obj, key, { get: getter, configurable: true });
+                } catch (_) { /* ignore */ }
+            };
+
+            // 隐藏 webdriver
+            try { delete Object.getPrototypeOf(navigator).webdriver; } catch (_) { }
+            safeDefine(NavProto, 'webdriver', () => undefined);
+            try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true }); } catch (_) { }
+
+            // navigator.userAgentData
+            try {
+                const uaData = {
+                    brands: [
+                        { brand: 'Not)A;Brand', version: '8' },
+                        { brand: 'Chromium', version: String(injectedChromeMajor) },
+                        { brand: 'Google Chrome', version: String(injectedChromeMajor) }
+                    ],
+                    mobile: false,
+                    platform: 'Windows',
+                    getHighEntropyValues: () => Promise.resolve({
+                        architecture: 'x86',
+                        bitness: '64',
+                        mobile: false,
+                        model: '',
+                        platform: 'Windows',
+                        platformVersion: '15.0.0',
+                        wow64: false
+                    }),
+                    toJSON: () => ({ brands: uaData.brands, mobile: uaData.mobile, platform: uaData.platform })
+                };
+                safeDefine(NavProto, 'userAgentData', () => uaData);
+            } catch (_) { }
+
+            // plugins / mimeTypes
+            try {
+                const pdfMime = Object.create(MimeType.prototype);
+                Object.defineProperties(pdfMime, {
+                    type: { get: () => 'application/pdf' },
+                    suffixes: { get: () => 'pdf' },
+                    description: { get: () => 'Portable Document Format' }
+                });
+                const pdfPlugin = Object.create(Plugin.prototype);
+                Object.defineProperties(pdfPlugin, {
+                    name: { get: () => 'Chrome PDF Plugin' },
+                    filename: { get: () => 'internal-pdf-viewer' },
+                    description: { get: () => 'Portable Document Format' },
+                    length: { get: () => 1 },
+                    0: { get: () => pdfMime }
+                });
+                pdfPlugin.item = () => pdfMime;
+                pdfPlugin.namedItem = () => pdfMime;
+
+                const fakePlugins = Object.create(PluginArray.prototype);
+                Object.defineProperties(fakePlugins, {
+                    length: { get: () => 1 },
+                    0: { get: () => pdfPlugin }
+                });
+                fakePlugins.item = () => pdfPlugin;
+                fakePlugins.namedItem = (n) => n === pdfPlugin.name ? pdfPlugin : null;
+                fakePlugins.refresh = () => { };
+
+                const fakeMimeTypes = Object.create(MimeTypeArray.prototype);
+                Object.defineProperties(fakeMimeTypes, {
+                    length: { get: () => 1 },
+                    0: { get: () => pdfMime }
+                });
+                fakeMimeTypes.item = () => pdfMime;
+                fakeMimeTypes.namedItem = (n) => n === pdfMime.type ? pdfMime : null;
+
+                safeDefine(NavProto, 'plugins', () => fakePlugins);
+                safeDefine(NavProto, 'mimeTypes', () => fakeMimeTypes);
+            } catch (_) { }
+
+            // 语言、平台、硬件
+            safeDefine(NavProto, 'languages', () => ['en-US', 'en']);
+            safeDefine(NavProto, 'language', () => 'en-US');
+            safeDefine(NavProto, 'platform', () => 'Win32');
+            safeDefine(NavProto, 'hardwareConcurrency', () => 8);
+            safeDefine(NavProto, 'deviceMemory', () => 8);
+            safeDefine(NavProto, 'maxTouchPoints', () => 0);
+            safeDefine(NavProto, 'vendor', () => 'Google Inc.');
+
+            // navigator.connection
+            try {
+                const conn = { effectiveType: '4g', rtt: 100, downlink: 10, saveData: false };
+                safeDefine(NavProto, 'connection', () => conn);
+            } catch (_) { }
+
+            // window.chrome
+            try {
+                const fakeChrome = {
+                    app: {
+                        isInstalled: false,
+                        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+                        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+                        getDetails: () => null,
+                        getIsInstalled: () => false
+                    },
+                    runtime: {
+                        OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
+                        OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+                        PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+                        PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+                        PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' },
+                        RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' },
+                        connect: () => { },
+                        sendMessage: () => { }
+                    },
+                    csi: () => ({ onloadT: Date.now(), pageT: Date.now() - 1000, startE: Date.now() - 2000, tran: 15 }),
+                    loadTimes: () => ({
+                        requestTime: Date.now() / 1000 - 2,
+                        startLoadTime: Date.now() / 1000 - 1.5,
+                        commitLoadTime: Date.now() / 1000 - 1,
+                        finishDocumentLoadTime: Date.now() / 1000 - 0.5,
+                        finishLoadTime: Date.now() / 1000,
+                        firstPaintTime: Date.now() / 1000 - 0.3,
+                        firstPaintAfterLoadTime: 0,
+                        navigationType: 'Other',
+                        wasFetchedViaSpdy: true,
+                        wasNpnNegotiated: true,
+                        npnNegotiatedProtocol: 'h2',
+                        wasAlternateProtocolAvailable: false,
+                        connectionInfo: 'h2'
+                    })
+                };
+                Object.defineProperty(window, 'chrome', { value: fakeChrome, writable: true, configurable: true });
+            } catch (_) { }
+
+            // permissions.query
+            try {
+                const origQuery = navigator.permissions.query.bind(navigator.permissions);
+                navigator.permissions.query = (params) => {
+                    if (params && params.name === 'notifications') {
+                        return Promise.resolve({ state: typeof Notification !== 'undefined' ? Notification.permission : 'default', onchange: null });
+                    }
+                    return origQuery(params).catch(() => ({ state: 'prompt', onchange: null }));
+                };
+            } catch (_) { }
+
+            // screen
+            safeDefine(ScrProto, 'availHeight', () => 1032);
+            safeDefine(ScrProto, 'availWidth', () => 1920);
+            safeDefine(ScrProto, 'colorDepth', () => 24);
+            safeDefine(ScrProto, 'pixelDepth', () => 24);
+            safeDefine(ScrProto, 'width', () => 1920);
+            safeDefine(ScrProto, 'height', () => 1080);
+
+            // Canvas 微噪声
+            try {
+                const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+                HTMLCanvasElement.prototype.toDataURL = function (...args) {
+                    const ctx = this.getContext('2d');
+                    if (ctx) {
+                        try {
+                            const w = this.width, h = this.height;
+                            if (w > 0 && h > 0) {
+                                const data = ctx.getImageData(0, 0, 1, 1);
+                                data.data[3] = Math.max(1, data.data[3] - 1);
+                                ctx.putImageData(data, 0, 0);
+                            }
+                        } catch (_) { }
+                    }
+                    return origToDataURL.apply(this, args);
+                };
+            } catch (_) { }
+
+            // WebGL
+            try {
+                const fakeWebGL = (gl) => {
+                    const origGetParameter = gl.getParameter.bind(gl);
+                    gl.getParameter = function (param) {
+                        if (param === 0x9245) return 'Google Inc. (Intel)';
+                        if (param === 0x9246) return 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+                        return origGetParameter(param);
+                    };
+                };
+                const origGetCtx = HTMLCanvasElement.prototype.getContext;
+                HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+                    const ctx = origGetCtx.call(this, type, ...args);
+                    if (ctx && (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl')) {
+                        try { fakeWebGL(ctx); } catch (_) { }
+                    }
+                    return ctx;
+                };
+            } catch (_) { }
+
+            // ChromeDriver 痕迹
+            try {
+                for (const key of Object.keys(window)) {
+                    if (/^(cdc_|\$cdc_|_phantom|callPhantom|webdriver-|driver-)/.test(key)) {
+                        try { delete window[key]; } catch (_) { }
+                    }
+                }
+            } catch (_) { }
+
+            // Notification.permission
+            try {
+                if (typeof Notification !== 'undefined') {
+                    Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
+                }
+            } catch (_) { }
+        }, chromeMajor);
+
         // --- Phase 0: Proxy Connectivity Check ---
         if (proxyConfig) {
-            console.log('正在检查代理连通性...');
-            try {
-                const probeResponse = await context.request.get("http://api.ipify.org/?format=text", {
-                    timeout: 15000
-                });
-                if (probeResponse.ok()) {
+            // 模块业务规则：只重试原代理的连通性探测，不重启任务或重复建单、付款。
+            const maxProxyAttempts = 5;
+            for (let attempt = 1; attempt <= maxProxyAttempts; attempt++) {
+                taskSignal?.()?.throwIfAborted();
+                console.log(`正在检查代理连通性...（第 ${attempt}/${maxProxyAttempts} 次）`);
+                try {
+                    const probeResponse = await context.request.get("http://api.ipify.org/?format=text", {
+                        timeout: 15000
+                    });
+                    taskSignal?.()?.throwIfAborted();
+                    if (!probeResponse.ok()) {
+                        throw new Error(`代理响应异常: HTTP ${probeResponse.status()}`);
+                    }
                     const ip = (await probeResponse.text()).trim();
-                    console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ip}`);
-                } else {
-                    throw new Error(`代理响应异常: HTTP ${probeResponse.status()}`);
+                    taskSignal?.()?.throwIfAborted();
+                    console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ip}（第 ${attempt}/${maxProxyAttempts} 次）`);
+                    break;
+                } catch (proxyError) {
+                    if (proxyError.code === 'LEASE_LOST' || taskSignal?.()?.aborted) throw proxyError;
+                    // 不把 APIRequestContext 的完整错误、请求头或代理凭据写入次数日志。
+                    const detail = String(proxyError.message || '');
+                    const httpStatus = detail.match(/^代理响应异常: HTTP (\d{3})$/)?.[1];
+                    const reason = httpStatus ? `HTTP ${httpStatus}`
+                        : /socket hang up|ECONNRESET|ERR_CONNECTION_(?:RESET|CLOSED)/i.test(detail) ? '连接被关闭或重置'
+                        : /ETIMEDOUT|timed?\s*out|timeout|ERR_TIMED_OUT/i.test(detail) ? '连接超时'
+                        : /ENOTFOUND|EAI_AGAIN|ERR_NAME_NOT_RESOLVED/i.test(detail) ? '域名解析失败'
+                        : /ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(detail) ? '连接被拒绝'
+                        : /ERR_PROXY|ERR_TUNNEL|proxy authentication|407/i.test(detail) ? '代理认证或隧道连接失败'
+                        : /TLS|SSL|certificate|ERR_CERT/i.test(detail) ? 'TLS 或证书连接失败'
+                        : '网络请求未完成';
+                    console.warn(`[代理检查] 第 ${attempt}/${maxProxyAttempts} 次失败：${reason}；${attempt < maxProxyAttempts ? '继续下一次连接' : '已达尝试上限，停止后续操作'}`);
+                    if (attempt === maxProxyAttempts) {
+                        throw Object.assign(new Error(`代理连通性检查连续 ${maxProxyAttempts} 次失败，已停止后续操作`), {
+                            code: 'PROXY_CONNECTION_FAILED'
+                        });
+                    }
                 }
-            } catch (proxyError) {
-                console.log("    [!] 请检查 PROXY 配置是否正确，或者账号余额是否充足。");
-                throw proxyError;
             }
         }
 
@@ -477,7 +502,7 @@ async function run(runOptions = {}) {
                 // CDK lookup failed, use default
             }
         }
-        if (!['plus', 'pro_5x', 'pro_20x', 'pro_500'].includes(planType)) throw new Error('未提供受支持的准确目标套餐');
+        if (!['go', 'plus', 'pro_5x', 'pro_20x', 'pro_500'].includes(planType)) throw new Error('未提供受支持的准确目标套餐');
 
         // Resolve region and currency (与浏览器 profile 一致)
         const billingCountry = paymentRegion;
@@ -494,9 +519,11 @@ async function run(runOptions = {}) {
 
         authDiagnostics = require('../subscription-diagnostics.cjs').observeAuthResponses(page, sessionRaw);
         const loginInfo = await bootstrapChatGptSession(page, sessionRaw, {
-            sessionData, cookieVerified, signal: taskSignal?.(), deadlineAt: performance.now() + 180000,
+            sessionData, cookieVerified, initialSessionProbe: installResult?.initialSessionProbe,
+            signal: taskSignal?.(), deadlineAt: performance.now() + 180000,
             onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
         });
+        checkoutEvidence.bootstrapDiagnostics = loginInfo.bootstrapDiagnostics;
         if (loginInfo.email && !email) {
             console.log(`[Info] 账号邮箱: ${loginInfo.email}`);
         }
@@ -508,7 +535,7 @@ async function run(runOptions = {}) {
             allowUnverifiedTarget: debugOnly, browserContext: context, page, signal: taskSignal?.(), sessionRaw,
             authDiagnostics, onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
         });
-        if (!preflight.allowed) return { success: false, submitted: false, ...preflight };
+        if (!preflight.allowed) return { ...checkoutEvidence, success: false, submitted: false, ...preflight };
         const operation = preflight.kind;
         if (!['initial', 'upgrade'].includes(operation)) throw new Error('无法确定首次开通或升级操作');
         const expectedCurrency = require('../confirmation.cjs').resolvePaymentCurrency(preflight, billingCurrency, { debugOnly });
@@ -556,7 +583,7 @@ async function run(runOptions = {}) {
 
         const checkoutInitialization = require('../checkout-initialization.cjs').sanitize(checkoutResult?.checkoutInitialization);
         const checkoutAwaits = require('../checkout-await-diagnostics.cjs').sanitize(checkoutResult?.checkoutAwaits);
-        checkoutEvidence = { ...(checkoutInitialization ? { checkoutInitialization } : {}),
+        checkoutEvidence = { ...checkoutEvidence, ...(checkoutInitialization ? { checkoutInitialization } : {}),
             ...(checkoutAwaits ? { checkoutAwaits } : {}) };
         if (debugOnly) {
             await waitForDebugPaymentStep(page);
@@ -635,11 +662,15 @@ async function run(runOptions = {}) {
         }
         // 用 exitCode 而非 process.exit()，确保下方 finally 能完整执行（录像需 context 关闭后才落盘）
         const resultUnknown = wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN';
+        const proxyFailure = e.code === 'PROXY_CONNECTION_FAILED'
+            ? '代理连通性检查连续 5 次失败，已停止后续操作；各次失败原因见运行日志' : undefined;
         const verificationBootstrapCode = e.bootstrapDiagnostics?.reason === 'verification_failed'
             ? require('./verification-runtime').controlledVerificationCode(e.code, null) : null;
         const bootstrapFailure = {
             NETWORK_TIMEOUT: '官网登录核验超过本次期限，已停止后续操作',
             SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
+            SESSION_VERIFICATION_BLOCKED: '官网会话验证被阻断，尚未取得登录成功证据；本次未提交付款',
+            SESSION_API_UNCONFIRMED: '官网首页与独立会话接口均未确认登录；本次未提交付款',
             SESSION_BOOTSTRAP_FAILED: '官网登录初始化未完成，已停止后续操作',
             SESSION_INVALID: '官网未接受本次账号登录资料，已停止后续操作',
             ACCOUNT_MISMATCH: '官网会话账号或用户与原任务不一致，已停止后续操作',
@@ -758,7 +789,7 @@ async function run(runOptions = {}) {
         const debugCheckout = debugOnly && !resultUnknown && e.checkoutCreationState === 'accepted'
             && typeof e.originalCheckoutUrl === 'string'
             ? { debugOnly: true, checkoutUrl: e.originalCheckoutUrl } : {};
-        return { ...checkoutEvidence, ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure ? { errorCode: checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
+        return { ...checkoutEvidence, ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure || proxyFailure ? { errorCode: proxyFailure ? 'PROXY_UNAVAILABLE' : checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || proxyFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
         authDiagnostics?.dispose();
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");

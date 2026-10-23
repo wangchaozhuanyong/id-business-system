@@ -19,6 +19,16 @@ function homepage(page) {
     return false;
   }
 }
+function verificationPage(page, options = {}) {
+  if (options.sessionProbe !== true) return homepage(page);
+  // Only the original, exact Session probe may opt in. Arbitrary auth/login,
+  // checkout pages and query-bearing URLs are never exposed by this entry.
+  try {
+    return page.url() === 'https://chatgpt.com/api/auth/session';
+  } catch {
+    return false;
+  }
+}
 async function challengeTarget(page) {
   const frames = await inspectCaptchaFrames(page);
   const challenges = frames.filter((item) => item.kind === 'challenge');
@@ -49,8 +59,8 @@ async function challengeTarget(page) {
     await element.dispose?.();
   }
 }
-async function hasActionableHumanVerification(page) {
-  if (!page || page.isClosed() || !homepage(page)) return false;
+async function hasActionableHumanVerification(page, options = {}) {
+  if (!page || page.isClosed() || !verificationPage(page, options)) return false;
   if (!(await require('./upstream/human-verification').isBlockingHumanVerificationVisible(page)))
     return false;
   try {
@@ -130,6 +140,7 @@ async function waitForHumanVerification(page, options = {}, injected = {}) {
   const blocked =
     injected.blocked || require('./upstream/human-verification').isBlockingHumanVerificationVisible;
   const target = injected.target || challengeTarget;
+  const originalPage = () => verificationPage(page, options);
   const state = await (injected.prepare || prepareVerificationPage)(page, {
     signal: options.signal
   });
@@ -150,7 +161,7 @@ async function waitForHumanVerification(page, options = {}, injected = {}) {
   };
   const assert = () => {
     budget.assert();
-    if (!active || wasSubmitted() || page.isClosed() || !homepage(page)) throw failure();
+    if (!active || wasSubmitted() || page.isClosed() || !originalPage()) throw failure();
   };
   const navigation = (frame) => {
     if (frame === page.mainFrame()) revoke();
@@ -184,7 +195,7 @@ async function waitForHumanVerification(page, options = {}, injected = {}) {
             timeout: Math.max(1, Math.floor(budget.remaining()))
           })
         );
-        if (!homepage(page) || page.isClosed() || (await budget.run(() => blocked(page))))
+        if (!originalPage() || page.isClosed() || (await budget.run(() => blocked(page))))
           throw failure();
         result = { completed: true };
         break;
@@ -193,7 +204,7 @@ async function waitForHumanVerification(page, options = {}, injected = {}) {
       // the caller still has to recheck the actual account and original preflight.
       if (!(await budget.run(() => blocked(page)))) {
         revoke();
-        if (!homepage(page) || page.isClosed()) throw failure();
+        if (!originalPage() || page.isClosed()) throw failure();
         result = { completed: true };
         break;
       }

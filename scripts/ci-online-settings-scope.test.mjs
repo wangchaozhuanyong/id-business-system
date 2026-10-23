@@ -1,4 +1,11 @@
 import {
+  onlineSessionProbePaths,
+  onlineSessionProbeControls,
+  isOnlineSessionProbeOnly,
+  isOnlineSessionProbeControlsOnly,
+  onlineSettingsCommands as sessionProbeCommands
+} from './ci-online-settings-scope.mjs';
+import {
   onlineCheckoutInitPaths,
   onlineCheckoutInitControls,
   isOnlineCheckoutInitOnly,
@@ -3266,4 +3273,29 @@ test('checkout initialization evidence publishes only the complete executor delt
   assert.match(checks, /test-concurrency=1/);
   assert.match(checks, /SESSION_ROUTING_BROWSER_MODE=pool/);
   assert.doesNotMatch(checks, /migrate|api.*typecheck|admin/);
+});
+
+test('Session probe release selects only finite engine sources and diagnostics', () => {
+  assert.equal(isOnlineSessionProbeOnly(onlineSessionProbePaths), true);
+  assert.equal(checkMode(onlineSessionProbePaths, 'same', 'same'), 'recharge');
+  assert.equal(checkMode(onlineSessionProbePaths, 'old', 'new'), 'full');
+  assert.deepEqual(selectedParts(onlineSessionProbePaths), ['guards', 'online-engine']);
+  assert.equal(
+    isOnlineSessionProbeOnly([...onlineSessionProbePaths, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+  assert.equal(
+    isOnlineSessionProbeOnly([
+      ...onlineSessionProbePaths,
+      'apps/admin/src/v2/features/online-recharge/contracts.ts'
+    ]),
+    false
+  );
+  assert.equal(isOnlineSessionProbeControlsOnly(onlineSessionProbeControls), true);
+  assert.deepEqual(selectedParts(onlineSessionProbeControls), ['guards']);
+  const commands = JSON.stringify(sessionProbeCommands('online-engine', onlineSessionProbePaths));
+  assert.ok(commands.includes('proxy-connectivity-retry.test.cjs'));
+  assert.ok(commands.includes('ci-online-session-media.py'));
+  assert.ok(commands.includes('query-network-browser.test.cjs'));
+  assert.ok(commands.includes('upstream-session-transition.test.cjs'));
 });

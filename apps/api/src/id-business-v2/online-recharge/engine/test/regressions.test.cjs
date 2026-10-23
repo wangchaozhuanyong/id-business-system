@@ -1095,7 +1095,12 @@ test('bootstrap diagnostics keep controlled reasons and real booleans without cr
     assert.equal(safeBootstrapDiagnostics({ accountCheckHttpStatus: status }), undefined);
 });
 test('bootstrap failure keeps its code and safe diagnostics through subscription and final confirmation', async () => {
-  for (const code of ['SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED']) {
+  for (const code of [
+    'SESSION_NOT_CONFIRMED',
+    'SESSION_BOOTSTRAP_FAILED',
+    'SESSION_VERIFICATION_BLOCKED',
+    'SESSION_API_UNCONFIRMED'
+  ]) {
     const diagnostic = {
       reason: code === 'SESSION_NOT_CONFIRMED' ? 'visible_login_content' : 'runtime_failed',
       authApiVerified: true,
@@ -1104,6 +1109,8 @@ test('bootstrap failure keeps its code and safe diagnostics through subscription
       redirectDetected: false,
       challengeDetected: false,
       pageClosed: false,
+      initialSessionProbe: { state: 'blocked', httpStatus: 403, classification: 'UNKNOWN_403' },
+      homepageSessionProbe: { state: 'timeout', complete: false },
       accountCheckHttpStatus: 401,
       accountCheckHasAccountFacts: false,
       accountCheckIdentityMatches: false
