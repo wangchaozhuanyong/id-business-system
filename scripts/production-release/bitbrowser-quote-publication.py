@@ -121,7 +121,7 @@ def previous_capture(invocation, c):
     raw = decoder.decompress(base64.b64decode(envelope['zlibBase64']), 128 * 1024 + 1)
     need(len(raw) <= 128 * 1024 and decoder.eof and not decoder.unused_data, 'PREVIOUS_RECEIPT_BOUND')
     value = json.loads(raw)
-    P.verify_capture(value, c)
+    P.verify_capture(value, c, previous_read_only=True)
     return value
 
 

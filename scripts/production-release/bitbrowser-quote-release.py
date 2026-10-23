@@ -93,15 +93,18 @@ def validate_contract(c):
         for v in group.values()), 'HASH_INVALID')
 
 
-def verify_capture(value, c):
+def verify_capture(value, c, *, previous_read_only=False):
     need(type(value) is dict and set(value) == {'status', 'baseline', 'parentPlanSha256', 'businessActions'}
          and value['status'] == 'BITBROWSER_QUOTE_PARENT_VERIFIED'
          and value['businessActions'] == 0 and value['parentPlanSha256'] == c['parentPlanSha256'], 'PARENT_CAPTURE_CHANGED')
     b = value['baseline']
+    proofs = {'online-readonly-probe-build-proof.json': c['parentPlan']['buildProofSha256']}
+    if not previous_read_only:
+        proofs['bitbrowser-history-build-proof.json'] = ADMIN_PROOF
     need(b['commit'] == CURRENT and Path(b['current']).parent == BASE / 'releases'
          and set(b['services']) == SERVICES and b['apiModules'] == {}
          and b['database']['pending'] == 0
-         and b['proofs'] == {'online-readonly-probe-build-proof.json': c['parentPlan']['buildProofSha256']}
+         and b['proofs'] == proofs
          and set(b['configurationSha256']) == {'.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml'}
          and set(b['runtimeConfigurationSha256']) == SERVICES, 'PARENT_SCOPE_CHANGED')
     if 'baseline' in c:
@@ -140,7 +143,8 @@ def capture(c):
     baseline = {'commit': CURRENT, 'current': str(current), 'manifestSha256': sha(raw), 'services': states,
         'configurationSha256': {n: sha((current / n).read_bytes()) for n in hst.CONFIGURATION},
         'runtimeConfigurationSha256': {n: h.configuration(d, st) for n, st in states.items()},
-        'proofs': {'online-readonly-probe-build-proof.json': sha(proof)}, **hst.runtime(d, states),
+        'proofs': {'online-readonly-probe-build-proof.json': sha(proof),
+                   'bitbrowser-history-build-proof.json': ADMIN_PROOF}, **hst.runtime(d, states),
         'database': hst.database(d, states['api']), 'backupNormalizerPath': str(normalizer),
         'backupNormalizerSha256': sha(normalizer.read_bytes())}
     h.guards(d, current, states, c)

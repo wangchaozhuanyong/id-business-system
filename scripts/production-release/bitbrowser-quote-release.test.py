@@ -73,7 +73,8 @@ class QuoteTierPublicationTests(unittest.TestCase):
         runtime = ancestor.pop('runtime')
         ancestor.update(runtime)
         ancestor.update(commit=P.CURRENT, current='/opt/id-business-v2/releases/synthetic-current',
-                        proofs={'online-readonly-probe-build-proof.json': self.c['parentPlan']['buildProofSha256']})
+                        proofs={'online-readonly-probe-build-proof.json': self.c['parentPlan']['buildProofSha256'],
+                                'bitbrowser-history-build-proof.json': P.ADMIN_PROOF})
         return {'status': 'BITBROWSER_QUOTE_PARENT_VERIFIED', 'baseline': ancestor,
                 'parentPlanSha256': self.c['parentPlanSha256'], 'businessActions': 0}
 
@@ -108,6 +109,13 @@ class QuoteTierPublicationTests(unittest.TestCase):
                 P.verify_capture(changed, self.c)
         with self.assertRaisesRegex(RuntimeError, 'NATIVE_BASELINE_CHANGED'):
             P.verify_capture(value, {**self.c, 'baseline': {}})
+
+    def test_old_read_only_capture_cannot_authorize_a_new_build_without_active_admin_proof(self):
+        old = self.capture()
+        old['baseline']['proofs'].pop('bitbrowser-history-build-proof.json')
+        P.verify_capture(old, self.c, previous_read_only=True)
+        with self.assertRaisesRegex(RuntimeError, 'PARENT_SCOPE_CHANGED'):
+            P.verify_capture(old, self.c)
 
     def test_historical_constructor_inputs_are_closed_and_existing_objects_need_no_fetch(self):
         calls = []
@@ -161,6 +169,7 @@ class QuoteTierPublicationTests(unittest.TestCase):
         import base64
         import zlib
         value = self.capture()
+        value['baseline']['proofs'].pop('bitbrowser-history-build-proof.json')
         invocation = {'CommandId': self.c['previousReadOnlyCapture']['commandId'], 'InstanceId': B.INSTANCE,
                       'DocumentName': 'AWS-RunShellScript', 'PluginName': 'aws:runShellScript',
                       'Status': 'Success', 'ResponseCode': 0, 'StandardErrorContent': '',
