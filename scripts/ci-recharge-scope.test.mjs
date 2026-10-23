@@ -113,6 +113,79 @@ import { createHash } from 'node:crypto';
 import fs, { readFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
+
+// A full branch checkout does not include deleted PR heads. These tests compare
+// their immutable control bytes; fetch only a missing pinned commit, never
+// substitute current sources or relax the production reuse predicates.
+const historicalControlCommits = [
+  'd08eefd5aa5c718918953ed60b9e34a67e12f327',
+  '40ad028a5ddc6aedd9f8e43d3dd33907e4c9faad',
+  '327bfbc03bd414ae8328f7f2a875bcc4dcd8998d',
+  'bcd67c4dfe3944aa6c0498699a619395f04ed296',
+  '957afa4e7d9c776b0109bf7f217150fd3c545e04',
+  '5930f71e00d178a867526766e16e9aee14077244'
+];
+function ensureHistoricalControlCommits(run = execFileSync, env = process.env) {
+  const options = { cwd: new URL('../', import.meta.url), stdio: 'pipe' };
+  for (const commit of historicalControlCommits) {
+    const probe = ['cat-file', '-e', commit + '^{commit}'];
+    try {
+      run('git', probe, options);
+      continue;
+    } catch {
+      assert.equal(env.GITHUB_ACTIONS, 'true', 'Missing pinned historical control commit');
+      assert.equal(env.GITHUB_REPOSITORY, 'wangchaozhuanyong/id-business-system');
+    }
+    run(
+      'git',
+      ['fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', commit],
+      options
+    );
+    run('git', probe, options);
+  }
+}
+ensureHistoricalControlCommits();
+
+test('历史控制原件完整时不访问网络', () => {
+  const calls = [];
+  ensureHistoricalControlCommits((_file, args) => calls.push(args), {});
+  assert.deepEqual(
+    calls,
+    historicalControlCommits.map((sha) => ['cat-file', '-e', sha + '^{commit}'])
+  );
+});
+test('原件缺失时只获取固定提交并重新核实，不替换源码或修改检查条件', () => {
+  const calls = [];
+  let fetched = false;
+  const missing = historicalControlCommits[0];
+  ensureHistoricalControlCommits(
+    (_file, args) => {
+      calls.push(args);
+      if (args[0] === 'fetch') fetched = true;
+      if (args[0] === 'cat-file' && args[2] === missing + '^{commit}' && !fetched)
+        throw new Error('missing');
+    },
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'wangchaozhuanyong/id-business-system' }
+  );
+  assert.deepEqual(calls.slice(0, 3), [
+    ['cat-file', '-e', missing + '^{commit}'],
+    ['fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', missing],
+    ['cat-file', '-e', missing + '^{commit}']
+  ]);
+  assert.equal(calls.filter((args) => args[0] === 'fetch').length, 1);
+});
+test('本地或其他仓库缺失历史原件时明确失败，不自动获取或跳过断言', () => {
+  for (const env of [{}, { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'unrelated/repository' }]) {
+    const calls = [];
+    assert.throws(() =>
+      ensureHistoricalControlCommits((_file, args) => {
+        calls.push(args);
+        throw new Error('missing');
+      }, env)
+    );
+    assert.equal(calls.length, 1);
+  }
+});
 import {
   registrationParityDiagnosticsBase,
   registrationParityDiagnosticsRepairBase,
