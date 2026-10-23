@@ -160,10 +160,10 @@ def publish(c):
     path = OUT / filename
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('线上代充：修正原结账单只读诊断的预算、准备与证据保留，仅更新本轮执行器文件。无迁移或付款。\n')
+    notes.write_text('线上代充：撤掉只读诊断三处首次读取失败即停设置，恢复既有纯读取重试并保留日志。只更新诊断及来源摘要，无迁移或付款。\n')
     tag = PREFIX + '-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
-            '--title', '线上代充只读诊断修复 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
+            '--title', '线上代充诊断重读恢复 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
     plan['artifactUrl'] = 'https://github.com/' + REPO + '/releases/download/' + tag + '/' + filename
     preflight = transport(plan, 'preflight')
     need(preflight['status'] == P.SCOPE + '_PREFLIGHT_VERIFIED', 'PREFLIGHT_FAILED')

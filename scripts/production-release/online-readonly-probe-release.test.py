@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 import json
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -17,7 +18,7 @@ class CheckoutInitPublicationTests(unittest.TestCase):
         self.c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
         self.plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1',
                      'contractSha256': P.sha((HERE / P.CONTRACT_FILE).read_bytes()), 'controlSources': {**self.c['controlPins'], P.CONTRACT_FILE: P.sha((HERE / P.CONTRACT_FILE).read_bytes())},
-                     'qualitySourceEvidence': {'commit': 'a' * 40, 'tree': 'b' * 40, 'pullRequest': 686,
+                     'qualitySourceEvidence': {'commit': 'a' * 40, 'tree': 'b' * 40, 'pullRequest': 687,
                          'head': 'c' * 40, 'sourceReceiptSha256': 'd' * 64, 'runId': '122',
                          'sourceReviewCommit': P.SOURCE},
                      'nativeParentCapture': {'status': 'ONLINE_NATIVE_FETCH_PARENT_VERIFIED',
@@ -29,7 +30,7 @@ class CheckoutInitPublicationTests(unittest.TestCase):
 
     def test_exact_reviewed_files_and_all_other_engine_sources_preserved(self):
         P.validate_contract(self.c)
-        self.assertEqual(len(P.FILES), 5)
+        self.assertEqual(len(P.FILES), 3)
         for n in self.c['beforeEngineFiles'].keys() - P.FILES:
             self.assertEqual(self.c['beforeEngineFiles'][n], self.c['afterEngineFiles'][n])
         self.assertEqual(set(self.c['afterEngineFiles']) - set(self.c['beforeEngineFiles']), P.ADDED)
@@ -102,7 +103,7 @@ class CheckoutInitPublicationTests(unittest.TestCase):
         pub = P.load('online-readonly-probe-publication.py')
         head, commit, tree = 'c' * 40, 'a' * 40, 'b' * 40
         repo = {'full_name': pub.REPO}
-        pr = {'number': 686, 'merged_at': 'synthetic', 'base': {'ref': 'main'},
+        pr = {'number': 687, 'merged_at': 'synthetic', 'base': {'ref': 'main'},
               'merge_commit_sha': commit, 'head': {'sha': head, 'repo': repo}}
         def github(path):
             if path.startswith('commits/'): return [pr]
@@ -120,12 +121,12 @@ class CheckoutInitPublicationTests(unittest.TestCase):
             if args[0] in ('merge-base', 'diff'): return b''
             if args[0] == 'rev-parse': return tree.encode()
             raise AssertionError(args)
-        receipt = {'repository': pub.REPO, 'headSha': head, 'pullRequest': 686,
+        receipt = {'repository': pub.REPO, 'headSha': head, 'pullRequest': 687,
             'testedTree': tree, 'runId': 123, 'runAttempt': 1}
         with patch.object(pub, 'github', github), patch.object(pub, 'git', git), \
              patch.object(pub.F, 'artifact_json', return_value=(receipt, 'd' * 64)):
             result = pub.quality(commit, tree)
-        self.assertEqual(result['pullRequest'], 686)
+        self.assertEqual(result['pullRequest'], 687)
         self.assertEqual(result['sourceReviewCommit'], P.SOURCE)
         with patch.object(pub, 'github', github), patch.object(pub, 'git', git), \
              patch.object(pub.F, 'artifact_json', return_value=({**receipt, 'testedTree': 'f' * 40}, 'd' * 64)):
@@ -148,6 +149,33 @@ class CheckoutInitPublicationTests(unittest.TestCase):
     def test_current_control_and_source_checks(self):
         pub = P.load('online-readonly-probe-publication.py')
         pub.check(self.c)
+
+    def test_parent_uses_its_frozen_controls_and_rejects_changes_before_import(self):
+        with tempfile.TemporaryDirectory() as temp:
+            current = Path(temp)
+            parent_here = current / 'scripts' / 'production-release'
+            parent_here.mkdir(parents=True)
+            module_name = P.PREFIX + '-release.py'
+            (parent_here / module_name).write_text('CONTRACT_FILE = ' + repr(P.CONTRACT_FILE) + '\n')
+            (parent_here / P.CONTRACT_FILE).write_text('{"frozen": true}\n')
+            c = copy.deepcopy(self.c)
+            c['parentPlan']['controlSources'] = {
+                name: P.sha((parent_here / name).read_bytes())
+                for name in (module_name, P.CONTRACT_FILE)}
+            c['parentPlan']['contractSha256'] = c['parentPlan']['controlSources'][P.CONTRACT_FILE]
+            prior, contract = P.load_parent(c, current)
+            self.assertEqual(prior.HERE if hasattr(prior, 'HERE') else Path(prior.__file__).parent, parent_here)
+            self.assertEqual(contract, {'frozen': True})
+            (parent_here / module_name).write_text('raise AssertionError("must not import changed code")\n')
+            with self.assertRaisesRegex(RuntimeError, 'PARENT_CONTROL_CHANGED'):
+                P.load_parent(c, current)
+
+    def test_parent_control_path_escape_is_rejected(self):
+        c = copy.deepcopy(self.c)
+        c['parentPlan']['controlSources'] = {'../outside.py': 'a' * 64}
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(RuntimeError, 'PARENT_CONTROL_CHANGED'):
+                P.load_parent(c, Path(temp))
 
 
 if __name__ == '__main__':
