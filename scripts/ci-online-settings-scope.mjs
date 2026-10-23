@@ -1378,6 +1378,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineSessionProbeOnly(paths)) return true;
   if (isOnlineCheckoutInitOnly(paths)) return true;
   if (isOnlineCheckoutAwaitOnly(paths)) return true;
   if (isOnlineSubscriptionChallengeOnly(paths)) return true;
@@ -1429,6 +1430,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineSessionProbeControlsOnly(paths)) return true;
   if (isOnlineCheckoutInitControlsOnly(paths)) return true;
   if (isOnlineCheckoutAwaitControlsOnly(paths)) return true;
   if (isOnlineSubscriptionChallengeControlsOnly(paths)) return true;

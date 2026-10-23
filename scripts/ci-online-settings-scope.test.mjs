@@ -3277,6 +3277,8 @@ test('checkout initialization evidence publishes only the complete executor delt
 
 test('Session probe release selects only finite engine sources and diagnostics', () => {
   assert.equal(isOnlineSessionProbeOnly(onlineSessionProbePaths), true);
+  assert.equal(checkMode(onlineSessionProbePaths, 'same', 'same'), 'recharge');
+  assert.equal(checkMode(onlineSessionProbePaths, 'old', 'new'), 'full');
   assert.deepEqual(selectedParts(onlineSessionProbePaths), ['guards', 'online-engine']);
   assert.equal(
     isOnlineSessionProbeOnly([...onlineSessionProbePaths, 'apps/api/prisma-mysql/schema.prisma']),
