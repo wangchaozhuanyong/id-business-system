@@ -764,6 +764,14 @@ function checkoutPhaseFixture(page, Service) {
     CONFIG: {},
     loginInfo: { session: { accessToken: 'synthetic-only' } },
     debugOnly: false,
+    checkoutEvidence: {},
+    require(name) {
+      if (name === '../checkout-initialization.cjs')
+        return require('../checkout-initialization.cjs');
+      if (name === '../checkout-await-diagnostics.cjs')
+        return require('../checkout-await-diagnostics.cjs');
+      throw new Error('Unexpected opening evidence dependency');
+    },
     console: { warn() {}, log() {} },
     openApiCheckout: (...args) => Service.openApiCheckout(...args),
     openPricingCheckout: async () => {
@@ -926,6 +934,7 @@ function publicCheckoutFailure(error, submitted = false, confirmed = false) {
     e: error,
     debugOnly: false,
     lastPaymentResult: null,
+    checkoutEvidence: {},
     paymentSucceeded: false,
     wasSubmitted: () => submitted,
     require(name) {
@@ -1533,6 +1542,7 @@ test('an unfinished checkout page close goes directly to task context cleanup be
           throw new Error('No screenshot may delay cleanup');
         },
         lastPaymentResult: null,
+        checkoutEvidence: {},
         paymentSucceeded: false,
         wasSubmitted: () => false,
         require(name) {
@@ -1600,4 +1610,35 @@ test('only a local preparation failure proven before POST retains the existing U
   await phase.pending;
   assert.equal(apiCalls, 0);
   assert.equal(phase.uiCalls(), 1);
+});
+
+test('version two download and pending diagnostics survive the actual public failure projection', () => {
+  const page = new EventEmitter(),
+    main = {};
+  page.mainFrame = () => main;
+  main.url = () => 'https://chatgpt.com/checkout/openai_fixture/cs_test_private';
+  const observer = require('../checkout-initialization.cjs').observe(page);
+  const request = {
+    url: () => 'https://api.stripe.com/v1/elements/sessions?client_secret=private',
+    method: () => 'GET',
+    resourceType: () => 'fetch',
+    frame: () => main
+  };
+  page.emit('request', request);
+  page.emit('response', { request: () => request, status: () => 200 });
+  observer.dispose();
+  const result = publicCheckoutFailure({
+    code: 'CHECKOUT_OPEN_FAILED',
+    checkoutCreationState: 'accepted',
+    checkoutOpenDiagnostics: {
+      stage: 'readiness',
+      reason: 'not_ready',
+      initialization: observer.snapshot()
+    }
+  });
+  assert.equal(result.checkoutOpenDiagnostics.initialization.version, 2);
+  assert.match(result.error, /关键时间线保留2\/2条/);
+  assert.match(result.error, /开始1、响应1、下载完成0、失败0、待完成1/);
+  assert.match(result.error, /支付相关待完成请求：Stripe控件配置，已收HTTP 200/);
+  assert.doesNotMatch(JSON.stringify(result), /client_secret|cs_test_private|https:\/\//);
 });

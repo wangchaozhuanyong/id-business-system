@@ -439,10 +439,14 @@ test('real Chromium distinguishes failed Stripe script connection from absent ca
   assert.equal(stats.payment, 0);
   assert.equal(stats.unexpected, 0);
 });
-test('real Chromium retains an HTTP 503 even when it emits no requestfailed', async (t) => {
+test('real Chromium retains an HTTP 503 independently from a later browser script cancellation', async (t) => {
   const { observer, stats } = await fixture(t, { status: 503 });
   assert.equal(observer.snapshot().firstFailure.endpoint, 'stripe_script');
   assert.equal(observer.snapshot().firstFailure.status, 503);
+  assert.equal(
+    observer.snapshot().requestCounts.find((row) => row.endpoint === 'stripe_script').responses,
+    1
+  );
   assert.equal(stats.payment, 0);
 });
 
@@ -468,6 +472,14 @@ test('real cross-origin Stripe frame initialization is observed without admittin
     .events.find((e) => e.endpoint === 'stripe_init' && e.status === 403);
   assert.equal(failure.method, 'POST');
   assert.equal(failure.frame, 'embedded');
+  assert.equal(failure.ownerEndpoint, 'stripe_frame');
+  assert.ok(
+    observer
+      .snapshot()
+      .criticalEvents.some(
+        (row) => row.event === 'frame_navigated' && row.endpoint === 'stripe_frame'
+      )
+  );
   assert.equal(stats.init, 1);
   assert.equal(stats.payment, 0);
   assert.equal(JSON.stringify(observer.snapshot()).includes(canary), false);
@@ -491,6 +503,13 @@ test('real CSP failure is recorded while the browser policy remains effective', 
 });
 test('a normally mounted synthetic payment control stays usable with the observer installed', async (t) => {
   const { page, observer, stats } = await fixture(t);
+  await assertEventually(() =>
+    observer
+      .snapshot()
+      .criticalEvents.some(
+        (row) => row.event === 'request_finished' && row.endpoint === 'stripe_script'
+      )
+  );
   assert.equal(
     (await form.inspectCardReadiness(page, { deadline: Date.now() + 2000 })).ready,
     true
@@ -499,4 +518,174 @@ test('a normally mounted synthetic payment control stays usable with the observe
   assert.equal(stats.payment, 0);
   assert.equal(stats.init, 0);
   assert.equal(stats.unexpected, 0);
+});
+
+test('response headers do not finish a request; download completion clears its pending entry', () => {
+  const { page, main } = fakePage(),
+    observer = initialization.observe(page);
+  const req = request(main);
+  req.resourceType = () => 'script';
+  page.emit('request', req);
+  page.emit('response', {
+    request: () => req,
+    status: () => 503,
+    headers: forbiddenRead,
+    body: forbiddenRead
+  });
+  const headers = observer.snapshot();
+  assert.equal(headers.version, 2);
+  assert.equal(headers.pendingRequestCount, 1);
+  assert.equal(headers.pendingRequests[0].status, 503);
+  assert.equal(headers.requestCounts[0].finished, 0);
+  page.emit('requestfinished', req);
+  const completed = observer.snapshot();
+  assert.equal(completed.pendingRequestCount, 0);
+  assert.equal(completed.pendingRequests.length, 0);
+  assert.equal(completed.requestCounts[0].finished, 1);
+  assert.equal(completed.requestCounts[0].failed, 0);
+  assert.equal(completed.firstFailure.status, 503);
+  assert.ok(
+    completed.criticalEvents.some((row) => row.event === 'request_finished' && row.durationMs >= 0)
+  );
+  observer.dispose();
+  assert.equal(JSON.stringify(completed).includes(canary), false);
+});
+
+test('general traffic cannot hide later payment requests, frame lifecycle and owning frame category', () => {
+  const { page, main } = fakePage(),
+    observer = initialization.observe(page);
+  for (let n = 0; n < 400; n++)
+    page.emit('request', request(main, origin + '/assets/' + n + canary));
+  const child = { url: () => 'https://js.stripe.com/v3/payment-frame.html?private=' + canary };
+  page.emit('frameattached', child);
+  page.emit('framenavigated', child);
+  const req = request(child, 'https://unclassified.invalid/private/' + canary);
+  req.resourceType = () => 'script';
+  page.emit('request', req);
+  page.emit('requestfailed', req);
+  const snapshot = observer.snapshot();
+  observer.dispose();
+  assert.equal(snapshot.events.length, 64);
+  assert.equal(snapshot.truncated, true);
+  assert.equal(snapshot.criticalTruncated, false);
+  assert.ok(
+    snapshot.criticalEvents.some(
+      (row) => row.event === 'frame_navigated' && row.endpoint === 'stripe_frame'
+    )
+  );
+  assert.equal(snapshot.firstFailure.ownerEndpoint, 'stripe_frame');
+  assert.equal(snapshot.firstFailure.endpoint, 'other');
+  assert.equal(snapshot.firstFailure.resourceType, 'script');
+  assert.equal(snapshot.firstFailure.source, 'network_or_proxy');
+  assert.ok(
+    snapshot.criticalEvents.some(
+      (row) => row.event === 'request_failed' && row.ownerEndpoint === 'stripe_frame'
+    )
+  );
+  assert.equal(JSON.stringify(snapshot).includes(canary), false);
+});
+
+test('bounded pending inventory prioritizes payment evidence and declares missing entries', () => {
+  const { page, main } = fakePage(),
+    observer = initialization.observe(page);
+  for (let n = 0; n < 70; n++) page.emit('request', request(main, origin + '/assets/' + n));
+  const req = request(main, 'https://api.stripe.com/v1/elements/sessions?private=' + canary);
+  page.emit('request', req);
+  page.emit('response', { request: () => req, status: () => 200 });
+  const pending = observer.snapshot();
+  assert.equal(pending.pendingRequestCount, 71);
+  assert.equal(pending.pendingRequests.length, 48);
+  assert.equal(pending.pendingRequestsTruncated, true);
+  assert.ok(
+    pending.pendingRequests.some((row) => row.endpoint === 'stripe_elements' && row.status === 200)
+  );
+  page.emit('requestfailed', req);
+  observer.dispose();
+  const final = observer.snapshot();
+  assert.equal(final.pendingRequestCount, 70);
+  assert.equal(final.requestCounts.find((row) => row.endpoint === 'stripe_elements').failed, 1);
+  assert.equal(
+    final.pendingRequests.some((row) => row.endpoint === 'stripe_elements'),
+    false
+  );
+  page.emit('requestfinished', request(main));
+  assert.deepEqual(observer.snapshot(), final, 'cleanup must not advance frozen timing or counts');
+});
+
+test('critical timeline retains first and latest halves and explicitly marks overflow', () => {
+  const { page, main } = fakePage(),
+    observer = initialization.observe(page);
+  for (let n = 0; n < 150; n++) page.emit('request', request(main));
+  const rows = observer.snapshot();
+  observer.dispose();
+  assert.equal(rows.criticalEvents.length, 96);
+  assert.equal(rows.criticalEventCount, 150);
+  assert.equal(rows.criticalTruncated, true);
+  assert.equal(rows.criticalEvents[0].requestId, 1);
+  assert.equal(rows.criticalEvents.at(-1).requestId, 150);
+});
+
+test('document URLs and non-script Stripe resources are never mislabeled as SDK downloads', () => {
+  assert.equal(initialization.endpoint('https://js.stripe.com/v3/', 'document'), 'stripe_frame');
+  assert.equal(
+    initialization.endpoint('https://js.stripe.com/v3/payment.html?secret=' + canary),
+    'stripe_frame'
+  );
+  assert.equal(
+    initialization.endpoint('https://js.stripe.com/v3/private', 'script'),
+    'stripe_script'
+  );
+  assert.equal(
+    initialization.endpoint('https://js.stripe.com/v3/private', 'fetch'),
+    'stripe_other'
+  );
+});
+
+test('version two rejects uncontrolled nested fields while stored version one remains readable', () => {
+  const { page, main } = fakePage(),
+    observer = initialization.observe(page);
+  page.emit('request', request(main));
+  const value = observer.snapshot();
+  observer.dispose();
+  for (const mutate of [
+    (v) => {
+      v.criticalEvents[0].rawUrl = canary;
+    },
+    (v) => {
+      v.pendingRequests[0].ownerEndpoint = canary;
+    },
+    (v) => {
+      v.requestCounts[0].body = canary;
+    },
+    (v) => {
+      v.requestCounts[0].pending = -1;
+    },
+    (v) => {
+      v.criticalEventCount = 0;
+    },
+    (v) => {
+      v.pendingRequests[0].responseMs = 3600001;
+    }
+  ]) {
+    const invalid = structuredClone(value);
+    mutate(invalid);
+    assert.equal(initialization.sanitize(invalid), undefined);
+  }
+  const legacy = {
+    version: 1,
+    elapsedMs: 20,
+    events: [],
+    firstFailure: null,
+    failureClasses: [],
+    failureClassesTruncated: false,
+    eventCount: 0,
+    readFailures: 0,
+    truncated: false
+  };
+  assert.deepEqual(initialization.sanitize(legacy), legacy);
+  assert.equal(
+    require('../security.cjs').sanitizeResult({ checkoutInitialization: value })
+      .checkoutInitialization.version,
+    2
+  );
 });

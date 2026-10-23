@@ -77,7 +77,47 @@ test('accepted failed debug retains only its original link through the existing 
     const error = Object.assign(new Error('Payment UI did not initialize'), {
       code: 'CHECKOUT_OPEN_FAILED',
       checkoutCreationState: scenario.accepted ? 'accepted' : 'unknown',
-      checkoutOpenDiagnostics: { stage: 'readiness', reason: 'not_ready' }
+      checkoutOpenDiagnostics: {
+        stage: 'readiness',
+        reason: 'not_ready',
+        initialization: {
+          version: 1,
+          elapsedMs: 65886,
+          eventCount: 875,
+          readFailures: 0,
+          truncated: true,
+          events: [],
+          firstFailure: {
+            event: 'request_failed',
+            elapsedMs: 5051,
+            endpoint: 'other',
+            frame: 'embedded',
+            code: 'ABORTED'
+          },
+          failureClasses: [
+            {
+              event: 'csp',
+              elapsedMs: 37154,
+              endpoint: 'other',
+              frame: 'unknown',
+              code: 'BLOCKED_BY_CSP',
+              directive: 'script-src',
+              count: 1,
+              lastElapsedMs: 37154
+            },
+            {
+              event: 'request_failed',
+              elapsedMs: 44013,
+              endpoint: 'other',
+              frame: 'embedded',
+              code: 'CONNECTION_CLOSED',
+              count: 1,
+              lastElapsedMs: 44013
+            }
+          ],
+          failureClassesTruncated: false
+        }
+      }
     });
     Object.defineProperty(error, 'originalCheckoutUrl', { value: original });
     const run = runInNewContext(
@@ -86,6 +126,7 @@ test('accepted failed debug retains only its original link through the existing 
         e: error,
         debugOnly: scenario.debugOnly,
         lastPaymentResult: null,
+        checkoutEvidence: {},
         paymentSucceeded: false,
         wasSubmitted: () => scenario.submitted,
         require: (name) => {
@@ -98,6 +139,12 @@ test('accepted failed debug retains only its original link through the existing 
       }
     );
     const result = await run();
+    assert.match(result.error, /875条/);
+    assert.match(result.error, /旧记录未采集请求下载完成及待完成清单/);
+    assert.match(
+      result.error,
+      /后续观测异常（不等同根因）.*37154毫秒.*内容安全策略阻止.*44013毫秒.*连接关闭/
+    );
     assert.equal(result.success, false);
     assert.equal(result.resultUnknown, scenario.submitted);
     assert.equal(result.checkoutUrl, scenario.retain ? original : undefined);
@@ -180,6 +227,7 @@ for (const currency of ['JPY', null]) {
         '\nawait executePaymentWithRetry(); })',
       {
         debugOnly: true,
+        checkoutEvidence: { checkoutInitialization: { version: 2 } },
         operation: 'initial',
         billingCountry: 'PH',
         page: {},
@@ -205,6 +253,7 @@ for (const currency of ['JPY', null]) {
     assert.equal(result.requestedRegion, 'PH');
     assert.equal(result.observedCurrency, currency);
     assert.equal(result.pricingRegionVerified, false);
+    assert.equal(result.checkoutInitialization.version, 2);
     assert.equal(cardOrPaymentCalls, 0);
   });
 }

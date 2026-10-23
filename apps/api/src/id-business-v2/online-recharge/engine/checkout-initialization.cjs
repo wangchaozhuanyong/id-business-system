@@ -5,6 +5,7 @@ const { performance } = require('node:perf_hooks');
 const EVENTS = new Set([
   'request',
   'response',
+  'request_finished',
   'request_failed',
   'script_error',
   'console_error',
@@ -17,6 +18,7 @@ const EVENTS = new Set([
 ]);
 const ENDPOINTS = new Set([
   'stripe_script',
+  'stripe_frame',
   'stripe_elements',
   'stripe_init',
   'stripe_confirm',
@@ -64,6 +66,8 @@ const DIRECTIVES = new Set([
 ]);
 const MAX_EVENTS = 64;
 const MAX_FAILURE_CLASSES = 32;
+const MAX_CRITICAL_EVENTS = 96;
+const MAX_PENDING_REQUESTS = 48;
 const RULES = new Set([
   'SESSION_GOOGLE_LOGIN',
   'SESSION_MICROSOFT_LOGIN',
@@ -180,12 +184,17 @@ function abortRoute(route, ruleId, ...args) {
 const count = (n) => Number.isInteger(n) && n >= 0 && n <= 10000;
 const elapsed = (n) => Number.isInteger(n) && n >= 0 && n <= 3600000;
 const object = (v) => v && typeof v === 'object' && !Array.isArray(v);
-function endpoint(raw) {
+function endpoint(raw, resourceType) {
   try {
     const url = new URL(raw);
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return 'other';
     const host = url.hostname;
-    if (host === 'js.stripe.com') return 'stripe_script';
+    if (host === 'js.stripe.com') {
+      if (resourceType === 'document' || /\.html$/.test(url.pathname)) return 'stripe_frame';
+      if (resourceType === 'script' || /^\/v3\/?$/.test(url.pathname) || /\.js$/.test(url.pathname))
+        return 'stripe_script';
+      return 'stripe_other';
+    }
     if (host === 'api.stripe.com') {
       if (/^\/v1\/elements\/sessions?$/.test(url.pathname)) return 'stripe_elements';
       if (/^\/v1\/payment_pages\/[^/]+\/init$/.test(url.pathname)) return 'stripe_init';
@@ -252,7 +261,11 @@ function safeRow(row) {
           'ruleId',
           'abortState',
           'failureCode',
-          'navigationRelated'
+          'navigationRelated',
+          'ownerEndpoint',
+          'startedMs',
+          'responseMs',
+          'durationMs'
         ].includes(k)
     ) ||
     !EVENTS.has(row.event) ||
@@ -272,7 +285,13 @@ function safeRow(row) {
     (row.ruleId !== undefined && !RULES.has(row.ruleId)) ||
     (row.abortState !== undefined && !ABORT_STATES.has(row.abortState)) ||
     (row.failureCode !== undefined && !FAILURE_CODES.has(row.failureCode)) ||
-    (row.navigationRelated !== undefined && row.navigationRelated !== 'possible')
+    (row.navigationRelated !== undefined && row.navigationRelated !== 'possible') ||
+    (row.ownerEndpoint !== undefined && !ENDPOINTS.has(row.ownerEndpoint)) ||
+    ['startedMs', 'responseMs', 'durationMs'].some(
+      (key) => row[key] !== undefined && !elapsed(row[key])
+    ) ||
+    (row.startedMs !== undefined && row.startedMs > row.elapsedMs) ||
+    (row.responseMs !== undefined && row.responseMs > row.elapsedMs)
   )
     return null;
   return { ...row };
@@ -294,10 +313,17 @@ function sanitize(value) {
           'failureClassesTruncated',
           'eventCount',
           'readFailures',
-          'truncated'
+          'truncated',
+          'criticalEvents',
+          'criticalEventCount',
+          'criticalTruncated',
+          'requestCounts',
+          'pendingRequests',
+          'pendingRequestCount',
+          'pendingRequestsTruncated'
         ].includes(k)
     ) ||
-    value.version !== 1 ||
+    ![1, 2].includes(value.version) ||
     !elapsed(value.elapsedMs) ||
     !count(value.eventCount) ||
     !count(value.readFailures) ||
@@ -337,8 +363,69 @@ function sanitize(value) {
     value.eventCount < events.length
   )
     return undefined;
+  let extra = {};
+  if (value.version === 2) {
+    if (
+      !Array.isArray(value.criticalEvents) ||
+      value.criticalEvents.length > MAX_CRITICAL_EVENTS ||
+      !count(value.criticalEventCount) ||
+      value.criticalEventCount < value.criticalEvents.length ||
+      typeof value.criticalTruncated !== 'boolean' ||
+      !Array.isArray(value.pendingRequests) ||
+      value.pendingRequests.length > MAX_PENDING_REQUESTS ||
+      !count(value.pendingRequestCount) ||
+      value.pendingRequestCount < value.pendingRequests.length ||
+      typeof value.pendingRequestsTruncated !== 'boolean' ||
+      !Array.isArray(value.requestCounts) ||
+      value.requestCounts.length > ENDPOINTS.size
+    )
+      return undefined;
+    const criticalEvents = value.criticalEvents.map(safeRow);
+    const pendingRequests = value.pendingRequests.map(safeRow);
+    if (
+      criticalEvents.some((row) => !row) ||
+      pendingRequests.some((row) => !row || row.event !== 'request')
+    )
+      return undefined;
+    const requestCounts = value.requestCounts.map((row) => {
+      const keys = ['started', 'responses', 'finished', 'failed', 'pending'];
+      if (
+        !object(row) ||
+        !ENDPOINTS.has(row.endpoint) ||
+        Object.keys(row).some((key) => key !== 'endpoint' && !keys.includes(key)) ||
+        keys.some((key) => !count(row[key]))
+      )
+        return null;
+      return { ...row };
+    });
+    if (
+      requestCounts.some((row) => !row) ||
+      new Set(requestCounts.map((row) => row.endpoint)).size !== requestCounts.length
+    )
+      return undefined;
+    extra = {
+      criticalEvents,
+      criticalEventCount: value.criticalEventCount,
+      criticalTruncated: value.criticalTruncated,
+      requestCounts,
+      pendingRequests,
+      pendingRequestCount: value.pendingRequestCount,
+      pendingRequestsTruncated: value.pendingRequestsTruncated
+    };
+  } else if (
+    [
+      'criticalEvents',
+      'criticalEventCount',
+      'criticalTruncated',
+      'requestCounts',
+      'pendingRequests',
+      'pendingRequestCount',
+      'pendingRequestsTruncated'
+    ].some((key) => key in value)
+  )
+    return undefined;
   return {
-    version: 1,
+    version: value.version,
     elapsedMs: value.elapsedMs,
     eventCount: value.eventCount,
     readFailures: value.readFailures,
@@ -346,7 +433,8 @@ function sanitize(value) {
     events,
     firstFailure,
     failureClasses,
-    failureClassesTruncated: value.failureClassesTruncated
+    failureClassesTruncated: value.failureClassesTruncated,
+    ...extra
   };
 }
 function observe(page, { signal } = {}) {
@@ -356,6 +444,10 @@ function observe(page, { signal } = {}) {
     listeners = [],
     frameIds = new WeakMap(),
     requestIds = new WeakMap(),
+    requestStates = new WeakMap(),
+    pending = new Map(),
+    requestCounts = new Map(),
+    criticalEvents = [],
     navigations = [];
   let frameSequence = 0,
     requestSequence = 0;
@@ -370,8 +462,17 @@ function observe(page, { signal } = {}) {
     readFailures = 0,
     truncated = false,
     failureClassesTruncated = false,
-    firstFailure = null;
+    firstFailure = null,
+    criticalEventCount = 0,
+    criticalTruncated = false,
+    pendingRequestCount = 0,
+    frozenMs;
   const time = () => Math.min(3600000, Math.max(0, Math.floor(performance.now() - started)));
+  const critical = (row) =>
+    /^(?:stripe_|openai_checkout|chatgpt_checkout|verification)/.test(row.endpoint) ||
+    /^frame_/.test(row.event) ||
+    ['script_error', 'console_error', 'csp', 'route_abort'].includes(row.event) ||
+    (row.frame === 'embedded' && row.resourceType === 'script');
   const frameKind = (frame) =>
     !frame ? 'unknown' : frame === page.mainFrame() ? 'main' : 'embedded';
   const record = (data) => {
@@ -394,7 +495,9 @@ function observe(page, { signal } = {}) {
           'code',
           'directive',
           'source',
-          'ruleId'
+          'ruleId',
+          'ownerEndpoint',
+          'resourceType'
         ].every((key) => previous[key] === row[key])
       );
       if (same) {
@@ -406,6 +509,16 @@ function observe(page, { signal } = {}) {
     }
     if (events.length < MAX_EVENTS) events.push(row);
     else truncated = true;
+    if (critical(row)) {
+      criticalEventCount = Math.min(10000, criticalEventCount + 1);
+      // Keep the first half and the latest half. General page traffic cannot
+      // consume this separate payment/frame timeline; overflow stays explicit.
+      if (criticalEvents.length === MAX_CRITICAL_EVENTS) {
+        criticalEvents.splice(MAX_CRITICAL_EVENTS / 2, 1);
+        criticalTruncated = true;
+      }
+      criticalEvents.push(row);
+    }
   };
   const listen = (name, callback) => {
     const safe = (...args) => {
@@ -420,14 +533,19 @@ function observe(page, { signal } = {}) {
     listeners.push([name, safe]);
   };
   const requestData = (request) => {
-    const category = endpoint(request.url());
+    const resourceType = RESOURCES.has(request.resourceType?.())
+      ? request.resourceType()
+      : 'unknown';
+    const category = endpoint(request.url(), resourceType);
     const method = request.method();
     let frame = 'unknown',
-      id;
+      id,
+      ownerEndpoint;
     try {
       const owner = request.frame();
       frame = frameKind(owner);
       id = frameId(owner);
+      ownerEndpoint = endpoint(owner?.url?.(), 'document');
     } catch {
       // A navigation request may arrive before its frame exists. Keep its
       // failure/status evidence even when that optional association is absent.
@@ -437,8 +555,9 @@ function observe(page, { signal } = {}) {
       endpoint: category,
       frame,
       ...(id ? { frameId: id } : {}),
+      ...(ownerEndpoint ? { ownerEndpoint } : {}),
       requestId: identity(requestIds, request, () => Math.min(10000, ++requestSequence)),
-      resourceType: RESOURCES.has(request.resourceType?.()) ? request.resourceType() : 'unknown',
+      resourceType,
       routeTemplate: routeTemplate(request.url()),
       method: METHODS.has(method) ? method : 'OTHER'
     };
@@ -453,6 +572,7 @@ function observe(page, { signal } = {}) {
   pageObservers.set(page, recordAbort);
   const stop = () => {
     if (stopped) return;
+    frozenMs = time();
     stopped = true;
     if (pageObservers.get(page) === recordAbort) pageObservers.delete(page);
     for (const [name, listener] of listeners) {
@@ -485,20 +605,96 @@ function observe(page, { signal } = {}) {
   };
   const snapshot = () =>
     sanitize({
-      version: 1,
-      elapsedMs: time(),
+      version: 2,
+      elapsedMs: frozenMs ?? time(),
       eventCount,
       readFailures,
       truncated,
       events: events.map(related),
       firstFailure: firstFailure ? related(firstFailure) : null,
       failureClasses: failureClasses.map(related),
-      failureClassesTruncated
+      failureClassesTruncated,
+      criticalEvents: criticalEvents.map(related),
+      criticalEventCount,
+      criticalTruncated,
+      requestCounts: [...requestCounts.values()].map((row) => ({ ...row })),
+      pendingRequests: [...pending.values()].map((row) => ({
+        ...row,
+        durationMs: (frozenMs ?? time()) - row.startedMs
+      })),
+      pendingRequestCount,
+      pendingRequestsTruncated: pendingRequestCount > pending.size
     });
+  const countsFor = (category) => {
+    if (!requestCounts.has(category))
+      requestCounts.set(category, {
+        endpoint: category,
+        started: 0,
+        responses: 0,
+        finished: 0,
+        failed: 0,
+        pending: 0
+      });
+    return requestCounts.get(category);
+  };
+  const increment = (row, key, delta = 1) => {
+    row[key] = Math.max(0, Math.min(10000, row[key] + delta));
+  };
+  const lifecycle = (request, event, status) => {
+    const data = requestData(request),
+      at = time(),
+      counters = countsFor(data.endpoint);
+    let state = requestStates.get(request);
+    if (event === 'request' && !state) {
+      state = { startedMs: at, ended: false };
+      requestStates.set(request, state);
+      increment(counters, 'started');
+      increment(counters, 'pending');
+      pendingRequestCount = Math.min(10000, pendingRequestCount + 1);
+      if (pending.size === MAX_PENDING_REQUESTS && critical(data)) {
+        const expendable = [...pending].find(([, row]) => !critical(row));
+        if (expendable) pending.delete(expendable[0]);
+      }
+      if (pending.size < MAX_PENDING_REQUESTS)
+        pending.set(data.requestId, {
+          event: 'request',
+          ...data,
+          elapsedMs: at,
+          startedMs: at
+        });
+    } else if (event === 'response') {
+      increment(counters, 'responses');
+      if (state && !state.ended) state.responseMs = at;
+      const active = pending.get(data.requestId);
+      if (active) Object.assign(active, { responseMs: at, status, elapsedMs: at });
+    } else if (['request_finished', 'request_failed'].includes(event)) {
+      increment(counters, event === 'request_finished' ? 'finished' : 'failed');
+      if (state && !state.ended) {
+        state.ended = true;
+        increment(counters, 'pending', -1);
+        pendingRequestCount = Math.max(0, pendingRequestCount - 1);
+        pending.delete(data.requestId);
+      }
+    }
+    return {
+      ...data,
+      ...(status !== undefined ? { status } : {}),
+      ...(state
+        ? {
+            startedMs: state.startedMs,
+            durationMs: at - state.startedMs,
+            ...(state.responseMs !== undefined ? { responseMs: state.responseMs } : {})
+          }
+        : {})
+    };
+  };
   try {
-    listen('request', (request) => record({ event: 'request', ...requestData(request) }));
+    listen('request', (request) => record({ event: 'request', ...lifecycle(request, 'request') }));
     listen('response', (response) =>
-      record({ event: 'response', ...requestData(response.request()), status: response.status() })
+      record({ event: 'response', ...lifecycle(response.request(), 'response', response.status()) })
+    );
+    listen('requestfinished', (request) =>
+      record({ event: 'request_finished', ...lifecycle(request, 'request_finished') })
     );
     listen('requestfailed', (request) => {
       const errorText = String(request.failure()?.errorText || '');
@@ -510,7 +706,7 @@ function observe(page, { signal } = {}) {
       const mark = abortMarks.get(request);
       record({
         event: 'request_failed',
-        ...requestData(request),
+        ...lifecycle(request, 'request_failed'),
         code,
         failureCode,
         source: mark
@@ -590,7 +786,7 @@ function observe(page, { signal } = {}) {
         }
         record({
           event,
-          endpoint: endpoint(frame.url()),
+          endpoint: endpoint(frame.url(), 'document'),
           frame: frameKind(frame),
           ...(id ? { frameId: id } : {})
         });

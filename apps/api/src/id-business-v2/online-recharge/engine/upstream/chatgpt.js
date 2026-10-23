@@ -697,7 +697,15 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         budget.assert();
         assertOriginalCheckoutPage(page, url, originalQuoteId, recovery);
         console.log('✅ [步骤] 原结账单的页面和付款控件检查已完成');
-        return { checkoutUrl: currentUrl, sessionId: checkout.sessionId };
+        // Preserve the same bounded observation on success for a later comparison.
+        // Completion of an HTTP download is not proof that Elements initialized.
+        initialization.dispose();
+        const checkoutAwaits = trace.freeze();
+        checkoutAwaits.media = require('../safe-media.cjs').diagnostics(page);
+        checkoutAwaits.pageKind = hostedCheckout ? 'hosted_checkout' : 'native_checkout';
+        return { checkoutUrl: currentUrl, sessionId: checkout.sessionId,
+            checkoutInitialization: initialization.snapshot(),
+            checkoutAwaits: require('../checkout-await-diagnostics.cjs').sanitize(checkoutAwaits) };
     } catch (error) {
         // Freeze existing Node-side evidence before cleanup. Never query title,
         // text or a new screenshot through the page that has stopped responding.
