@@ -159,6 +159,10 @@ def reconstruct_parent(c):
     previous = json.loads((HERE / 'settled-checkout-contract.json').read_bytes())
     admin, helper = legacy.reconstruct_parent(previous)
     helper.overlay(admin, previous['productionSources'], previous['sourceReviewCommit'])
+    # The later published human-verification interface is the active Admin parent.
+    # Reproduce it as well; an older index would silently revive older ONLINE UI.
+    overlay = c['adminParent']['sourceOverlay']
+    helper.overlay(admin, overlay['sources'], overlay['commit'])
     need(all(sha((admin / n).read_bytes()) == v for n, v in c['sourceParents'].items())
          and all(not (admin / n).exists() for n in c['absentSources']), 'BUILD_SOURCE_PARENT_CHANGED')
     return admin, helper

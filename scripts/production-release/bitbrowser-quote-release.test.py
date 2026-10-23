@@ -112,7 +112,7 @@ class QuoteTierPublicationTests(unittest.TestCase):
     def test_historical_constructor_inputs_are_closed_and_existing_objects_need_no_fetch(self):
         calls = []
         B.ensure_reconstruction_commits(self.c, lambda *args: calls.append(args) or b'')
-        self.assertEqual(len(calls), 54)
+        self.assertEqual(len(calls), 55)
         self.assertTrue(all(args[:3] == ('git', 'cat-file', '-e') for args in calls))
         for mutate in (lambda c: c['reconstructionCommits'].pop(),
                        lambda c: c['reconstructionCommits'].append('a' * 40),
@@ -120,6 +120,16 @@ class QuoteTierPublicationTests(unittest.TestCase):
             changed = copy.deepcopy(self.c)
             mutate(changed)
             with self.assertRaisesRegex(RuntimeError, 'RECONSTRUCTION_INPUTS_CHANGED'):
+                P.validate_contract(changed)
+
+    def test_published_later_admin_interface_is_part_of_the_exact_parent(self):
+        self.assertEqual(self.c['adminParent']['commit'], '957407e571e7ac629393d6355a09506a196e5f91')
+        self.assertEqual(len(self.c['adminParent']['sourceOverlay']['sources']), 5)
+        for mutate in (lambda c: c['adminParent']['sourceOverlay'].update(commit='a' * 40),
+                       lambda c: c['adminParent']['sourceOverlay']['sources'].clear()):
+            changed = copy.deepcopy(self.c)
+            mutate(changed)
+            with self.assertRaisesRegex(RuntimeError, 'ADMIN_OVERLAY_CHANGED'):
                 P.validate_contract(changed)
 
     def test_missing_constructor_object_fetches_only_the_exact_commit_and_checks_it_again(self):
