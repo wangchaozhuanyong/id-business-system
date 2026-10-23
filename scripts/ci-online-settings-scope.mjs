@@ -1394,6 +1394,9 @@ export function onlineSettingsCommands(part, paths) {
       const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
       return [
         ...previous.slice(0, 2),
+        ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg'],
+        ['ffmpeg', '-version'],
+        ['ffprobe', '-version'],
         [
           'node',
           '--test',

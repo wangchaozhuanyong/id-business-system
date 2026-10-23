@@ -3183,6 +3183,12 @@ test('checkout await evidence publishes only the complete executor delta and ret
     /online-checkout-await-release.test.py/
   );
   const checks = onlineSettingsCommands('online-engine', paths).flat().join(' ');
+  const commands = onlineSettingsCommands('online-engine', paths);
+  const mediaInstall = commands.findIndex((c) => c[0] === 'sudo' && c.includes('ffmpeg'));
+  assert.ok(mediaInstall >= 0);
+  assert.ok(mediaInstall < commands.findIndex((c) => c.includes('--test')));
+  assert.deepEqual(commands[mediaInstall + 1], ['ffmpeg', '-version']);
+  assert.deepEqual(commands[mediaInstall + 2], ['ffprobe', '-version']);
   for (const name of [
     'checkout-await-diagnostics',
     'checkout-navigation',
