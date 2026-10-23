@@ -9,7 +9,7 @@ const {
     isLoginPageContent,
     hasVisibleLoginChrome,
     waitForLoggedInChatUi,
-    hasLoggedInSessionApi
+    readSessionApi
 } = require('./auth-page-detect');
 
 const BOOTSTRAP_REASONS = new Set([
@@ -30,15 +30,20 @@ function safeBootstrapDiagnostics(value) {
     for (const key of BOOTSTRAP_FLAGS) {
         if (typeof value[key] === 'boolean') result[key] = value[key];
     }
+    for (const key of ['initialSessionProbe', 'homepageSessionProbe']) {
+        if (!value[key]) continue;
+        const probe = require('../subscription-diagnostics.cjs').safeSessionProbe(value[key]);
+        if (probe) result[key] = probe;
+    }
     if (Number.isInteger(value.accountCheckHttpStatus)
         && value.accountCheckHttpStatus >= 100 && value.accountCheckHttpStatus <= 599)
         result.accountCheckHttpStatus = value.accountCheckHttpStatus;
     return Object.keys(result).length ? result : undefined;
 }
-function sessionNotConfirmed(message, reason, diagnostics = {}) {
+function sessionNotConfirmed(message, reason, diagnostics = {}, code = 'SESSION_NOT_CONFIRMED') {
     const bootstrapDiagnostics = safeBootstrapDiagnostics({ ...diagnostics, reason });
-    console.warn('[Session] 登录状态尚未确认', { code: 'SESSION_NOT_CONFIRMED', bootstrapDiagnostics });
-    return Object.assign(new Error(message), { code: 'SESSION_NOT_CONFIRMED', bootstrapDiagnostics });
+    console.warn('[Session] 登录状态尚未确认', { code, bootstrapDiagnostics });
+    return Object.assign(new Error(message), { code, bootstrapDiagnostics });
 }
 
 function decodeJwtPayload(token) {
@@ -428,57 +433,67 @@ function collectCookieSpecs(sessionData, sessionJson) {
     return specs;
 }
 
-async function verifyRealSessionApi(context) {
+async function verifyRealSessionApi(context, options = {}) {
     const probe = await context.newPage();
+    const budget = require('./verification-runtime').createVerificationBudget({ ...options, maxWaitMs: 60000 });
+    const deadlineAt = budget.deadlineAt;
+    const remaining = () => budget.timeout(60000);
+    const body = () => budget.run(() => probe.evaluate(() => {
+        const text = document.body?.innerText || '';
+        try { JSON.parse(text); return text; }
+        catch (_) { return document.documentElement?.outerHTML || text; }
+    }));
+    const diagnostic = require('../subscription-diagnostics.cjs');
+    const started = performance.now();
+    let initial;
     try {
-        const response = await probe.goto(`${CHATGPT_COOKIE_URL}/api/auth/session`, {
-            waitUntil: 'domcontentloaded',
-            timeout: 60000
-        });
-        const status = response?.status() || 0;
-        const headers = response?.headers?.() || {};
-        const challengeHeader = String(headers['cf-mitigated'] || '').toLowerCase() === 'challenge';
-        const bodyText = await probe.evaluate(() => document.body?.innerText || '').catch(() => '');
-        let data = null;
-        try {
-            data = JSON.parse(bodyText);
-        } catch (_) {
-            data = null;
+        let response = await budget.run(() => probe.goto(`${CHATGPT_COOKIE_URL}/api/auth/session`, {
+            waitUntil: 'domcontentloaded', timeout: remaining()
+        }));
+        initial = diagnostic.safeSessionProbe({ ...diagnostic.sessionProbeFacts(
+            response?.status() || 0, response?.headers?.() || {}, '', options.expected), complete: false });
+        let bodyText = await body();
+        let facts = diagnostic.sessionProbeFacts(response?.status() || 0, response?.headers?.() || {}, bodyText, options.expected);
+        initial = diagnostic.safeSessionProbe({ ...facts, complete: true, elapsedMs: performance.now() - started });
+        if (facts.state === 'challenge' && typeof options.onHumanVerification === 'function') {
+            const human = require('../human-verification.cjs');
+            initial.manualActionable = await budget.run(() => human.hasActionableHumanVerification(probe, { sessionProbe: true }));
+            if (initial.manualActionable && performance.now() < deadlineAt) {
+                const completed = await budget.run(() => options.onHumanVerification(probe, { signal: budget.signal, deadlineAt, sessionProbe: true }));
+                if (completed?.completed !== true) throw Object.assign(new Error('本人验证尚未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+                options.signal?.throwIfAborted();
+                if (performance.now() >= deadlineAt) throw Object.assign(new Error('登录状态查询超时'), { name: 'TimeoutError' });
+                if (probe.url() !== `${CHATGPT_COOKIE_URL}/api/auth/session`)
+                    throw Object.assign(new Error('原验证页面已改变'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+                response = await budget.run(() => probe.reload({ waitUntil: 'domcontentloaded', timeout: remaining() }));
+                bodyText = await body();
+                facts = diagnostic.sessionProbeFacts(response?.status() || 0, response?.headers?.() || {}, bodyText, options.expected);
+                initial.manualCompleted = facts.state === 'verified';
+            }
         }
-        const sessionObject = data && typeof data === 'object' && !Array.isArray(data);
-        // Session profile values may quote verification wording. Only an actual
-        // challenge response, rather than text inside JSON, is a challenge page.
-        const isCloudflareChallenge = challengeHeader
-            || (!sessionObject && /just a moment|verify you are human/i.test(bodyText));
-        if (isCloudflareChallenge) {
-            return {
-                ok: false,
-                status,
-                challenge: true,
-                code: 'UPSTREAM_BLOCKED',
-                error: `官网要求验证（HTTP ${status}），尚未确认登录状态`
-            };
-        }
-        const hasSessionIdentity = sessionObject && data.error == null && data.errors == null
-            && [data.accessToken, data.user?.email, data.user?.id]
-                .some((value) => typeof value === 'string' && value.trim());
-        if (status === 200 && hasSessionIdentity) {
-            return { ok: true, data, status };
-        }
-        const emptySession = status === 200 && sessionObject && Object.keys(data).length === 0;
-        return {
-            ok: false,
-            status,
-            code: status === 401 || emptySession
-                ? 'SESSION_INVALID' : status === 403 ? 'UPSTREAM_FORBIDDEN' : 'NETWORK_UNAVAILABLE',
-            error: `登录状态尚未核实（HTTP ${status}）`
-        };
+        const diagnostics = diagnostic.safeSessionProbe(facts);
+        console.log('[Session] 首次校验结果', JSON.stringify(initial));
+        if (initial.manualActionable) console.log('[Session] 本人验证后校验结果', JSON.stringify(diagnostics));
+        if (facts.state === 'verified') return { ok: true, data: JSON.parse(bodyText), status: facts.httpStatus, diagnostics, initialDiagnostics: initial };
+        const code = facts.state === 'mismatch' ? 'ACCOUNT_MISMATCH'
+            : facts.state === 'invalid' ? 'SESSION_INVALID'
+                : facts.state === 'challenge' ? 'UPSTREAM_BLOCKED'
+                    : facts.httpStatus === 403 ? 'UPSTREAM_FORBIDDEN' : 'NETWORK_UNAVAILABLE';
+        return { ok: false, status: facts.httpStatus, code, diagnostics, initialDiagnostics: initial,
+            ...(facts.state === 'challenge' ? { challenge: true } : {}),
+            error: `登录状态尚未核实（HTTP ${facts.httpStatus}，分类 ${facts.classification}）` };
     } catch (err) {
-        return { ok: false, code: err.name === 'TimeoutError' ? 'NETWORK_TIMEOUT' : 'NETWORK_UNAVAILABLE',
-            error: err.name === 'TimeoutError' ? '登录状态查询超时' : '登录状态查询网络失败' };
-    } finally {
-        await probe.close().catch(() => {});
-    }
+        if (['LEASE_LOST', 'HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'ACCOUNT_MISMATCH'].includes(err.code) || options.signal?.aborted) {
+            err.bootstrapDiagnostics = { initialSessionProbe: initial };
+            throw err;
+        }
+        const timeout = err.name === 'TimeoutError' || err.code === 'VERIFICATION_TIMEOUT';
+        const diagnostics = { ...initial, state: timeout ? 'timeout' : 'network_error', elapsedMs: performance.now() - started };
+        console.log('[Session] 首次校验结果', JSON.stringify(diagnostics));
+        return { ok: false, code: timeout ? 'NETWORK_TIMEOUT' : 'NETWORK_UNAVAILABLE',
+            diagnostics, initialDiagnostics: initial?.complete ? initial : diagnostics,
+            error: timeout ? '登录状态查询超时' : '登录状态查询网络失败' };
+    } finally { budget.dispose(); await probe.close().catch(() => {}); }
 }
 
 function verifiedSessionPayload(sessionData, accessToken, data) {
@@ -618,10 +633,10 @@ function attachLoginRedirectGuard(page, onLoginRedirect, signal, ownerSignal) {
 }
 
 /**
- * 在浏览器上下文安装 Session：拦截 auth API + 注入 fetch 补丁
+ * 在浏览器上下文安装 Cookie 和页面启动资料；Session/CSRF 使用真实网络
  * 注意：__Secure-next-auth.session-token 是加密 cookie，不能用 accessToken 冒充
  */
-async function installChatGptSession(context, sessionRaw) {
+async function installChatGptSession(context, sessionRaw, options = {}) {
     const resolved = resolveSessionInput(sessionRaw);
     if (!resolved?.accessToken) {
         throw new Error('缺少 Session：请粘贴完整 Session JSON（来自 chatgpt.com/api/auth/session）');
@@ -669,18 +684,24 @@ async function installChatGptSession(context, sessionRaw) {
     }
 
     let cookieVerified = false;
+    let initialSessionProbe;
     if (injectResult.hasSessionToken) {
-        const apiCheck = await verifyRealSessionApi(context);
+        const apiCheck = await verifyRealSessionApi(context, { ...options, expected: {
+            accountId: extractProfileFromToken(token).accountId || sessionData.account?.id,
+            userId: sessionData.user?.id || extractProfileFromToken(token).userId
+        } });
+        initialSessionProbe = apiCheck.initialDiagnostics || apiCheck.diagnostics;
         if (apiCheck.ok) {
-            sessionData = verifiedSessionPayload(sessionData, token, apiCheck.data);
+            try { sessionData = verifiedSessionPayload(sessionData, token, apiCheck.data); }
+            catch (error) { error.bootstrapDiagnostics = { initialSessionProbe }; throw error; }
             token = sessionData.accessToken;
             cookieVerified = true;
             const email = apiCheck.data?.user?.email || '';
             console.log(`[Session] Cookie 校验通过${email ? `: ${email}` : ''}`);
-        } else if (apiCheck.code === 'SESSION_INVALID') {
+        } else if (['SESSION_INVALID', 'ACCOUNT_MISMATCH'].includes(apiCheck.code)) {
             throw Object.assign(new Error(
                 `${apiCheck.error}。请确认 Cookie 未过期，并尽量粘贴浏览器全部 chatgpt.com Cookies（cookies[] 或 cookieHeader）`
-            ), { code: 'SESSION_INVALID' });
+            ), { code: apiCheck.code, bootstrapDiagnostics: { initialSessionProbe } });
         } else {
             console.warn(`[Session] Cookie 在线校验跳过: ${apiCheck.error || 'unknown'}`);
         }
@@ -732,7 +753,7 @@ async function installChatGptSession(context, sessionRaw) {
         await route.continue();
     });
 
-    return { sessionData, cookieVerified };
+    return { sessionData, cookieVerified, initialSessionProbe };
 }
 
 /**
@@ -798,6 +819,7 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
         challengeDetected: false, pageClosed: false
     };
     Object.assign(diagnostics, initialDiagnostics);
+    if (options.initialSessionProbe) diagnostics.initialSessionProbe = options.initialSessionProbe;
     const remaining = (cap) => {
         signal?.throwIfAborted();
         const value = Math.min(cap, Math.floor(deadlineAt - performance.now()));
@@ -810,7 +832,7 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
             throw sessionNotConfirmed('缺少 Session：请提供完整会话资料', 'input_missing', diagnostics);
         }
 
-        const sessionData = options.sessionData || resolved.sessionData;
+        let sessionData = options.sessionData || resolved.sessionData;
         const email = sessionData?.user?.email || extractProfileFromToken(resolved.accessToken).email || '';
         const cookieVerified = options.cookieVerified === true;
         let uiWaitRemaining = cookieVerified ? 12000 : 8000;
@@ -854,6 +876,11 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
         const blockingVerificationVisible = async () => {
             const blocked = await isBlockingHumanVerificationVisible(page);
             if (!blocked || typeof options.onHumanVerification !== 'function') return blocked;
+            if (!await require('../human-verification.cjs').hasActionableHumanVerification(page)) {
+                diagnostics.reason = 'verification_failed';
+                diagnostics.challengeDetected = true;
+                throw Object.assign(new Error('原页没有可操作的本人验证，已停止'), { code: 'SESSION_VERIFICATION_BLOCKED' });
+            }
             if (manualVerificationUsed || !isOfficialHomepage())
                 throw Object.assign(new Error('官网验证尚未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
             manualVerificationUsed = true;
@@ -1003,7 +1030,27 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
         diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
         uiReady = await assertCurrentLoggedInUi() || uiReady;
 
-        const apiReady = cookieVerified ? await run('session_api', () => hasLoggedInSessionApi(page, { timeoutMs: remaining(8000) })) : false;
+        // A failed initial probe never disables the independent current-page read.
+        // CSRF remains passive diagnostic evidence, not a new login gate.
+        const sessionReadStarted = performance.now();
+        const response = await run('session_api', () => readSessionApi(page, { timeoutMs: remaining(8000) }));
+        const diagnostic = require('../subscription-diagnostics.cjs');
+        const profile = extractProfileFromToken(resolved.accessToken);
+        const facts = response.state ? { state: response.state } : diagnostic.sessionProbeFacts(
+            response.status, response.headers, response.text,
+            { accountId: profile.accountId || sessionData.account?.id, userId: sessionData.user?.id || profile.userId });
+        diagnostics.homepageSessionProbe = diagnostic.safeSessionProbe({ ...facts,
+            complete: !response.state, elapsedMs: performance.now() - sessionReadStarted });
+        console.log('[Session] 首页独立校验结果', JSON.stringify(diagnostics.homepageSessionProbe));
+        const apiReady = facts.state === 'verified' && facts.matchesTargetAccount === true;
+        diagnostics.authApiVerified = apiReady;
+        if (facts.state === 'invalid' || facts.state === 'mismatch')
+            throw Object.assign(new Error('官网登录资料未通过原账号核验'), {
+                code: facts.state === 'mismatch' ? 'ACCOUNT_MISMATCH' : 'SESSION_INVALID' });
+        if (apiReady) {
+            sessionData = verifiedSessionPayload(sessionData, resolved.accessToken, JSON.parse(response.text));
+            diagnostics.authApiVerified = true;
+        }
         remaining(1);
 
         diagnostics.visibleLogin = await run('login_controls', () => hasVisibleLoginChrome(page));
@@ -1014,7 +1061,8 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
             throw Object.assign(new Error('官网验证尚未完成，登录核验未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
         }
         if (!uiReady && (guestHomepageReloaded || !apiReady)) {
-            throw sessionNotConfirmed('尚未取得首页的登录成功证据，已停止后续操作', 'login_not_confirmed', diagnostics);
+            throw sessionNotConfirmed('尚未取得首页的登录成功证据，已停止后续操作', 'login_not_confirmed', diagnostics,
+                ['challenge', 'blocked'].includes(facts.state) ? 'SESSION_VERIFICATION_BLOCKED' : 'SESSION_API_UNCONFIRMED');
         }
         if (!uiReady && apiReady) {
             console.log('[Session] 首页 UI 探针未命中，但 /api/auth/session 已确认登录，继续流程');
@@ -1025,6 +1073,7 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
         return {
             email: resolvedEmail,
             session: sessionData,
+            bootstrapDiagnostics: safeBootstrapDiagnostics(diagnostics),
             hasSessionCookie: Boolean(
                 process.env.CHATGPT_SESSION_COOKIE
                 || process.env.CHATGPT_SESSION_TOKEN
@@ -1050,6 +1099,7 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
                 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(code)
                 || /^net::ERR_[A-Z_]+$/.test(String(code || '')));
         const preservedCode = ['SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED', 'SESSION_INVALID',
+            'SESSION_VERIFICATION_BLOCKED', 'SESSION_API_UNCONFIRMED',
             'ACCOUNT_MISMATCH', 'HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE',
             'PROXY_UNAVAILABLE', 'UPSTREAM_BLOCKED', 'UPSTREAM_FORBIDDEN', 'LEASE_LOST'].includes(error.code)
             ? error.code : require('./verification-runtime').controlledVerificationCode(error.code, null);

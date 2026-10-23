@@ -20,6 +20,7 @@ const challenge =
   '<!doctype html><main><h1>Verify you are human</h1><p>Cloudflare security check</p><input type="checkbox"></main>';
 const session = {
   accessToken: 'synthetic-session-transition-access-token',
+  account: { id: 'synthetic-session-transition-account' },
   user: { id: 'synthetic-session-transition-user', email: 'transition@example.invalid' },
   sessionToken: 'synthetic-session-transition-cookie'
 };
@@ -79,8 +80,14 @@ async function fixture(t, options = {}) {
       state.writes++;
       return route.abort();
     }
-    if (url.origin === origin && url.pathname === '/api/auth/session')
-      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
+    if (url.origin === origin && url.pathname === '/api/auth/session') {
+      state.sessionReads = (state.sessionReads || 0) + 1;
+      return route.fulfill({
+        status: options.sessionStatus || 200,
+        contentType: 'application/json',
+        body: JSON.stringify(options.sessionReply || session)
+      });
+    }
     if (url.origin === origin && url.pathname === '/') {
       state.homeLoads++;
       state.cookiePresent.push(
@@ -106,9 +113,11 @@ async function fixture(t, options = {}) {
                 : options.emptyAfterReload
                   ? '<!doctype html><main></main>'
                   : ready
-            : options.readyInitially
-              ? ready
-              : guest;
+            : options.emptyInitially
+              ? '<!doctype html><main></main>'
+              : options.readyInitially
+                ? ready
+                : guest;
       try {
         return await route.fulfill({ contentType: 'text/html', body });
       } catch (error) {
@@ -169,9 +178,9 @@ async function fixture(t, options = {}) {
               await showTransientGuest(args[0]);
             return result;
           },
-          hasLoggedInSessionApi: async (...args) => {
+          readSessionApi: async (...args) => {
             if (activeSignal?.aborted) state.uiReadsAfterCancel++;
-            const result = await authPage.hasLoggedInSessionApi(...args);
+            const result = await authPage.readSessionApi(...args);
             if (options.guestAfterSessionApi && !state.transientGuestShown)
               await showTransientGuest(args[0]);
             return result;
@@ -189,6 +198,8 @@ async function fixture(t, options = {}) {
           }
         };
       if (name === './verification-runtime') return require('../upstream/verification-runtime');
+      if (name === '../subscription-diagnostics.cjs')
+        return require('../subscription-diagnostics.cjs');
       throw Error('Unexpected synthetic dependency');
     }
   });
@@ -251,6 +262,68 @@ test('a guest homepage becomes authenticated after exactly one same-page reload'
   noBusinessActions(f);
 });
 
+test('an initial 403 or timeout cannot skip the independent homepage Session GET', async (t) => {
+  for (const initialSessionProbe of [
+    { state: 'blocked', httpStatus: 403, classification: 'UNKNOWN_403' },
+    { state: 'timeout' }
+  ]) {
+    const f = await fixture(t, { readyInitially: true, cleared: true });
+    const result = await f.run({ initialSessionProbe });
+    assert.equal(f.state.sessionReads, 1);
+    assert.equal(result.bootstrapDiagnostics.initialSessionProbe.state, initialSessionProbe.state);
+    assert.equal(result.bootstrapDiagnostics.homepageSessionProbe.state, 'verified');
+    assert.equal(result.bootstrapDiagnostics.homepageSessionProbe.matchesTargetAccount, true);
+    assert.equal(result.bootstrapDiagnostics.authApiVerified, true);
+    assert.equal(f.state.reloads, 0);
+    noBusinessActions(f);
+  }
+});
+
+test('a blank homepage plus unknown 403 retains both Session receipts and stops as blocked', async (t) => {
+  const f = await fixture(t, {
+    emptyInitially: true,
+    cleared: true,
+    sessionStatus: 403,
+    sessionReply: { error: { message: 'synthetic-private-error' } }
+  });
+  await assert.rejects(f.run({ initialSessionProbe: { state: 'timeout' } }), (error) => {
+    assert.equal(error.code, 'SESSION_VERIFICATION_BLOCKED');
+    assert.equal(error.bootstrapDiagnostics.initialSessionProbe.state, 'timeout');
+    assert.equal(error.bootstrapDiagnostics.homepageSessionProbe.classification, 'UNKNOWN_403');
+    assert.equal(error.bootstrapDiagnostics.homepageSessionProbe.complete, true);
+    assert.equal(error.bootstrapDiagnostics.authApiVerified, false);
+    assert.ok(!JSON.stringify(error.bootstrapDiagnostics).includes('synthetic-private-error'));
+    return true;
+  });
+  assert.equal(f.state.sessionReads, 1);
+  noBusinessActions(f);
+});
+
+test('a later real Session rejection or identity mismatch overrides a logged-in UI', async (t) => {
+  for (const [sessionStatus, sessionReply, code] of [
+    [401, { error: { code: 'invalid_session' } }, 'SESSION_INVALID'],
+    [200, { ...session, account: { id: 'other-account' } }, 'ACCOUNT_MISMATCH']
+  ]) {
+    const f = await fixture(t, {
+      readyInitially: true,
+      cleared: true,
+      sessionStatus,
+      sessionReply
+    });
+    await assert.rejects(
+      f.run({ initialSessionProbe: { state: 'blocked', httpStatus: 403 } }),
+      (error) => {
+        assert.equal(error.code, code);
+        assert.equal(error.bootstrapDiagnostics.initialSessionProbe.httpStatus, 403);
+        assert.ok(error.bootstrapDiagnostics.homepageSessionProbe);
+        return true;
+      }
+    );
+    assert.equal(f.state.sessionReads, 1);
+    noBusinessActions(f);
+  }
+});
+
 test('the frozen upstream reload transition reaches login in the same synthetic context', async (t) => {
   const f = await fixture(t);
   await f.page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
@@ -310,7 +383,7 @@ test('a homepage still showing guest controls after reload stops with login diag
 test('a verified Cookie cannot replace logged-in UI after the single homepage refresh', async (t) => {
   const f = await fixture(t, { cleared: true, emptyAfterReload: true });
   await assert.rejects(f.run({ cookieVerified: true }), (error) => {
-    assert.equal(error.code, 'SESSION_NOT_CONFIRMED');
+    assert.equal(error.code, 'SESSION_API_UNCONFIRMED');
     assert.equal(error.bootstrapDiagnostics.authApiVerified, true);
     assert.equal(error.bootstrapDiagnostics.loggedInUi, false);
     return true;

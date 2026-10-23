@@ -51,6 +51,12 @@ async function fixture(t, options = {}) {
       return response.end(typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body));
     }
     if (url.pathname === '/api/auth/session') {
+      if (options.sessionChallenge && !options.sessionChallengeCleared) {
+        response.writeHead(403, { 'content-type': 'text/html', 'cf-mitigated': 'challenge' });
+        return response.end(
+          `<h1>Verify you are human</h1><p>Cloudflare security check</p>${options.noActionableSession ? '' : '<iframe style="width:300px;height:100px;border:0" src="https://challenges.cloudflare.com/turnstile/fixture"></iframe>'}<script>addEventListener('message',event=>{if(event.origin==='https://challenges.cloudflare.com'&&event.data==='synthetic-pass')document.body.innerHTML='<main>Verified</main>';})</script>`
+        );
+      }
       response.setHeader('content-type', 'application/json');
       return response.end(JSON.stringify(actual));
     }
@@ -138,6 +144,60 @@ test('原页人工点击仅作用于验证 iframe，撤销交互后再读取真�
   assert.equal(native[0].closed, true);
   assert.equal(native[0].authorization, false);
 });
+
+for (const mode of ['completed', 'no_actionable', 'identity_mismatch', 'cancelled']) {
+  test(`首次Session挑战接续：${mode}，保留首次分类并仅在原探针页面完成人工验证`, async (t) => {
+    const options = {
+      initiallyClear: true,
+      sessionChallenge: true,
+      noActionableSession: mode === 'no_actionable',
+      cancel: mode === 'cancelled'
+    };
+    const f = await fixture(t, options);
+    let originalProbe,
+      waits = 0;
+    const pending = installChatGptSession(f.context, JSON.stringify(session), {
+      deadlineAt: performance.now() + 10000,
+      onHumanVerification: async (page, opts) => {
+        waits++;
+        originalProbe = page;
+        assert.equal(page.context(), f.context);
+        assert.equal(page.url(), 'https://chatgpt.com/api/auth/session');
+        assert.equal(opts.sessionProbe, true);
+        const result = await waitForHumanVerification(page, opts, { rpc: f.rpc });
+        options.sessionChallengeCleared = true;
+        if (mode === 'identity_mismatch')
+          f.actual({ ...session, account: { id: 'other-account' } });
+        return result;
+      }
+    });
+    if (['identity_mismatch', 'cancelled'].includes(mode)) {
+      await assert.rejects(pending, (error) => {
+        assert.equal(
+          error.code,
+          mode === 'cancelled' ? 'HUMAN_VERIFICATION_CANCELLED' : 'ACCOUNT_MISMATCH'
+        );
+        assert.equal(error.bootstrapDiagnostics.initialSessionProbe.classification, 'CF_CHALLENGE');
+        return true;
+      });
+    } else {
+      const result = await pending;
+      assert.equal(result.cookieVerified, mode === 'completed');
+      assert.equal(result.initialSessionProbe.classification, 'CF_CHALLENGE');
+      assert.equal(result.initialSessionProbe.manualActionable, mode === 'completed');
+      if (mode === 'completed') assert.equal(result.initialSessionProbe.manualCompleted, true);
+    }
+    assert.equal(waits, mode === 'no_actionable' ? 0 : 1);
+    assert.equal(
+      f.requests.filter((row) => row.path === '/api/auth/session').length,
+      ['completed', 'identity_mismatch'].includes(mode) ? 2 : 1
+    );
+    assert.ok(f.requests.every((row) => row.method === 'GET'));
+    assert.ok(!f.requests.some((row) => /checkout|payment/.test(row.path)));
+    if (originalProbe) assert.equal(originalProbe.isClosed(), true);
+    assert.equal(f.context.pages().length, 1);
+  });
+}
 
 for (const mode of [
   'completed',

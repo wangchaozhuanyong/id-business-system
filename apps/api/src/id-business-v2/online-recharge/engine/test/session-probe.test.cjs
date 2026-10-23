@@ -11,13 +11,14 @@ const source = fs.readFileSync(filename, 'utf8');
 const sandbox = {
   module: { exports: {} },
   require(name) {
-    assert.equal(name, './auth-page-detect');
-    return {};
+    if (name === './auth-page-detect') return {};
+    return require(path.resolve(path.dirname(filename), name));
   },
   console: { log() {}, warn() {} },
   process: { env: {} },
   Buffer,
-  URL
+  URL,
+  performance
 };
 // Expose the private probe only in this isolated test evaluation. Production
 // exports and all browser/network transports remain untouched.
@@ -83,8 +84,11 @@ test('an explicit Cloudflare challenge response header is not overridden by Sess
   assert.equal(result.code, 'UPSTREAM_BLOCKED');
 });
 
-test('real HTML challenge wording still requires verification', async () => {
-  for (const heading of ['Verify you are human', 'Just a moment']) {
+test('specific HTML challenge markers require verification without relying on generic wording', async () => {
+  for (const heading of [
+    '<script src="/cdn-cgi/challenge-platform/example"></script>',
+    '<script>window._cf_chl_opt={}</script>'
+  ]) {
     const result = await probe({
       status: 403,
       headers: { 'content-type': 'text/html' },
@@ -94,6 +98,17 @@ test('real HTML challenge wording still requires verification', async () => {
     assert.equal(result.challenge, true);
     assert.equal(result.code, 'UPSTREAM_BLOCKED');
   }
+});
+
+test('generic HTML wording alone stays unknown with its marker evidence retained', async () => {
+  const result = await probe({
+    status: 403,
+    headers: { 'content-type': 'text/html' },
+    body: 'Just a moment'
+  });
+  assert.equal(result.code, 'UPSTREAM_FORBIDDEN');
+  assert.equal(result.diagnostics.classification, 'UNKNOWN_403');
+  assert.equal(result.diagnostics.markers.justAMoment, true);
 });
 
 test('401, unrelated 403, empty Session and other HTTP failures retain their classifications', async () => {
@@ -133,7 +148,14 @@ test('navigation failures close the probe Page and retain network classification
 });
 
 test('body-read failure cannot become a valid Session and still closes the probe Page', async () => {
-  const result = await probe({ bodyError: new Error('synthetic-body-read-failure') });
+  const result = await probe({
+    status: 403,
+    headers: { 'cf-mitigated': 'challenge' },
+    bodyError: new Error('synthetic-body-read-failure')
+  });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'NETWORK_UNAVAILABLE');
+  assert.equal(result.initialDiagnostics.httpStatus, 403);
+  assert.equal(result.initialDiagnostics.cfMitigated, 'challenge');
+  assert.equal(result.initialDiagnostics.complete, false);
 });
