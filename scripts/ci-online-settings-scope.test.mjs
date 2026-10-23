@@ -3295,6 +3295,7 @@ test('Session probe release selects only finite engine sources and diagnostics',
   assert.deepEqual(selectedParts(onlineSessionProbeControls), ['guards']);
   const commands = JSON.stringify(sessionProbeCommands('online-engine', onlineSessionProbePaths));
   assert.ok(commands.includes('proxy-connectivity-retry.test.cjs'));
+  assert.ok(commands.includes('ci-online-session-media.py'));
   assert.ok(commands.includes('query-network-browser.test.cjs'));
   assert.ok(commands.includes('upstream-session-transition.test.cjs'));
 });

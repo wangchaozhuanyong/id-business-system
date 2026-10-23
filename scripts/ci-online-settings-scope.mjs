@@ -29,6 +29,7 @@ export const onlineSessionProbeControls = Object.freeze([
   ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-session-probe-' + name
   )
+  'scripts/ci-online-session-media.py',
 ]);
 export function isOnlineSessionProbeOnly(paths) {
   return (
@@ -1489,7 +1490,7 @@ export function onlineSettingsCommands(part, paths) {
       const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
       return [
         ...previous.slice(0, 2),
-        ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg'],
+        ['python3', '-B', 'scripts/ci-online-session-media.py'],
         ['ffmpeg', '-version'],
         ['ffprobe', '-version'],
         [
