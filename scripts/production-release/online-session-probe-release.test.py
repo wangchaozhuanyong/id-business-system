@@ -29,7 +29,7 @@ class CheckoutInitPublicationTests(unittest.TestCase):
 
     def test_exact_reviewed_files_and_all_other_engine_sources_preserved(self):
         P.validate_contract(self.c)
-        self.assertEqual(len(P.FILES), 16)
+        self.assertEqual(len(P.FILES), 17)
         for n in self.c['beforeEngineFiles'].keys() - P.FILES:
             self.assertEqual(self.c['beforeEngineFiles'][n], self.c['afterEngineFiles'][n])
         self.assertEqual(set(self.c['afterEngineFiles']) - set(self.c['beforeEngineFiles']), P.ADDED)

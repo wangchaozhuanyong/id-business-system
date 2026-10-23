@@ -4,6 +4,7 @@ export const onlineSessionProbePaths = Object.freeze([
     'human-verification.cjs',
     'subscription-diagnostics.cjs',
     'subscription-network-diagnostics.cjs',
+    'test/debug-checkout.test.cjs',
     'test/human-verification.test.cjs',
     'test/proxy-connectivity-retry.test.cjs',
     'test/query-network-browser.test.cjs',
