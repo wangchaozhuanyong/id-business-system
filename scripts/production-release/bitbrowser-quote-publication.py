@@ -94,7 +94,64 @@ def identity():
     return F.native_identity()
 
 
+def ensure_reconstruction_commits(c, runner=execute):
+    P.validate_contract(c)
+    for commit in c['reconstructionCommits']:
+        probe = ('git', 'cat-file', '-e', commit + '^{commit}')
+        try:
+            runner(*probe)
+            continue
+        except subprocess.CalledProcessError:
+            need(os.environ.get('GITHUB_ACTIONS') == 'true'
+                 and os.environ.get('GITHUB_REPOSITORY') == REPO, 'MISSING_HISTORICAL_SOURCE')
+        runner('git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', commit)
+        runner(*probe)
+
+
+def previous_capture(invocation, c):
+    prior = c['previousReadOnlyCapture']
+    need(invocation.get('CommandId') == prior['commandId'] and invocation.get('InstanceId') == INSTANCE
+         and invocation.get('DocumentName') == 'AWS-RunShellScript'
+         and invocation.get('PluginName') == 'aws:runShellScript' and invocation.get('Status') == 'Success'
+         and type(invocation.get('ResponseCode')) is int and invocation['ResponseCode'] == 0
+         and invocation.get('StandardErrorContent') == '', 'PREVIOUS_RECEIPT_IDENTITY')
+    envelope = json.loads(invocation['StandardOutputContent'])
+    need(set(envelope) == {'zlibBase64'} and len(envelope['zlibBase64']) < 24000, 'PREVIOUS_RECEIPT_LAYOUT')
+    decoder = zlib.decompressobj()
+    raw = decoder.decompress(base64.b64decode(envelope['zlibBase64']), 128 * 1024 + 1)
+    need(len(raw) <= 128 * 1024 and decoder.eof and not decoder.unused_data, 'PREVIOUS_RECEIPT_BOUND')
+    value = json.loads(raw)
+    P.verify_capture(value, c, previous_read_only=True)
+    return value
+
+
+def recover_previous_capture(c):
+    # Recover the accepted read-only result. Never resend its command or reuse
+    # this old baseline for a new switch; build() captures a fresh parent next.
+    prior = c['previousReadOnlyCapture']
+    run = github('actions/runs/' + str(prior['runId']))
+    need(run['head_sha'] == prior['commit'] and run['head_branch'] == 'main'
+         and run['event'] == 'workflow_dispatch' and run['path'] == WORKFLOW
+         and run['status'] == 'completed' and run['conclusion'] == 'failure'
+         and run['run_attempt'] == prior['runAttempt'], 'PREVIOUS_RUN_CHANGED')
+    job = github('actions/jobs/' + str(prior['jobId']))
+    need(job['run_id'] == prior['runId'] and job['name'] == 'validate'
+         and job['status'] == 'completed' and job['conclusion'] == 'failure', 'PREVIOUS_JOB_CHANGED')
+    log = execute('gh', 'api', 'repos/' + REPO + '/actions/jobs/' + str(prior['jobId']) + '/logs')
+    need(sha(log) == prior['logSha256'], 'PREVIOUS_LOG_CHANGED')
+    accepted = [json.loads(line[line.index('{'):]) for line in log.decode().splitlines()
+                if 'acceptedCommandId' in line]
+    need(accepted == [{'acceptedCommandId': prior['commandId'], 'mode': 'parent'}], 'PREVIOUS_COMMAND_CHANGED')
+    raw = execute('aws', '--region', 'ap-northeast-1', 'ssm', 'get-command-invocation',
+                  '--command-id', prior['commandId'], '--instance-id', INSTANCE, '--output', 'json')
+    value = previous_capture(json.loads(raw), c)
+    (OUT / 'previous-parent-invocation.json').write_bytes(raw)
+    (OUT / 'previous-parent-result.json').write_text(json.dumps(value, sort_keys=True, indent=2) + '\n')
+    print(json.dumps({'status': 'PREVIOUS_READONLY_CAPTURE_RECOVERED', 'commandId': prior['commandId']}), flush=True)
+
+
 def reconstruct_parent(c):
+    ensure_reconstruction_commits(c)
     # Reuse the immutable published constructor, then complete its own overlay.
     legacy = load('settled-checkout-publication.py')
     legacy.OUT = OUT / 'parent-source'
@@ -102,6 +159,10 @@ def reconstruct_parent(c):
     previous = json.loads((HERE / 'settled-checkout-contract.json').read_bytes())
     admin, helper = legacy.reconstruct_parent(previous)
     helper.overlay(admin, previous['productionSources'], previous['sourceReviewCommit'])
+    # The later published human-verification interface is the active Admin parent.
+    # Reproduce it as well; an older index would silently revive older ONLINE UI.
+    overlay = c['adminParent']['sourceOverlay']
+    helper.overlay(admin, overlay['sources'], overlay['commit'])
     need(all(sha((admin / n).read_bytes()) == v for n, v in c['sourceParents'].items())
          and all(not (admin / n).exists() for n in c['absentSources']), 'BUILD_SOURCE_PARENT_CHANGED')
     return admin, helper
@@ -119,11 +180,12 @@ def build(c):
     need(not OUT.exists(), 'OUTPUT_EXISTS')
     qa = quality(c, native['commit'])
     OUT.mkdir(parents=True, mode=0o700)
+    recover_previous_capture(c)
+    admin, b = reconstruct_parent(c)
     parent_plan = {**native, 'recipe': P.RECIPE, 'contractSha256': sha((HERE / P.CONTRACT_FILE).read_bytes()),
                    'controlSources': {**c['controlPins'], P.CONTRACT_FILE: sha((HERE / P.CONTRACT_FILE).read_bytes())}}
     capture = transport(parent_plan, 'parent')
     P.verify_capture(capture, c)
-    admin, b = reconstruct_parent(c)
     h = P.load('recharge-record-release.py')
     env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + c['adminParent']['commit']}
     for command in (('npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
