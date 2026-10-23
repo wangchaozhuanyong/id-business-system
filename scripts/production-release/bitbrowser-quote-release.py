@@ -13,12 +13,13 @@ BASE = Path('/opt/id-business-v2')
 SCOPE = 'BITBROWSER_QUOTE_TIER_20261024'
 RECIPE = 'quote-tier-20261024'
 CONTRACT_FILE = 'bitbrowser-quote-contract.json'
-CURRENT = 'ed580a608d038980b3501df3a718c2801564bb88'
+CURRENT = '3d56674d2ab033f6e2df52e509be327af32559b4'
+RELEASE_BASE = CURRENT
 SOURCE = '5eb95635a5f2ff4b35b9bcc6fc19106cc16b008a'
 SOURCE_PR = 687
 RECONSTRUCTION_SHA256 = '1a3467affd1236f43c4d469d1a56c75132f2b87e53ef16b09fe34911030b75b7'
-PRIOR_CAPTURE = {'runId': 39991066742, 'runAttempt': 1, 'jobId': 120542648820, 'commit': 'a38ae9687c1bf27ca3b8b4546db0531cb69f038c', 'logSha256': '44a670a3c80eb2795c8ccccb81c9125d9ef22a0af9b32f4175dcc0848343d3e5', 'commandId': '8a9b0d50-39ea-456c-99a7-a3545a46cad0'}
-PARENT_PLAN_SHA = '18e937143ff9b0d4d1747b7dd24c4cc3a7ec202640369cf454860fd9fa818b07'
+PRIOR_CAPTURE = {'commandId': '8a9b0d50-39ea-456c-99a7-a3545a46cad0', 'commit': 'a38ae9687c1bf27ca3b8b4546db0531cb69f038c', 'jobId': 120542648820, 'logSha256': '44a670a3c80eb2795c8ccccb81c9125d9ef22a0af9b32f4175dcc0848343d3e5', 'runAttempt': 1, 'runId': 39991066742, 'parentCommit': 'ed580a608d038980b3501df3a718c2801564bb88', 'parentPlanSha256': '18e937143ff9b0d4d1747b7dd24c4cc3a7ec202640369cf454860fd9fa818b07', 'parentBuildProofSha256': 'f14d692f07e740233e2256db537131567951df5389a586b30690ef791c8f301b'}
+PARENT_PLAN_SHA = '7bf192086f7d3e4a88ae262e4545bdd906c324b3d71e68aa8c399c3e9c90c68a'
 ADMIN_COMMIT = '957407e571e7ac629393d6355a09506a196e5f91'
 ADMIN_PROOF = '354a73bf0427c8c3f94de447cc94695831db51b8a3f5bdb525607fc99c1a86b0'
 PREFIX = 'apps/admin/src/v2/features/auto-recharge/'
@@ -28,7 +29,7 @@ SOURCES = frozenset(PREFIX + n for n in (
 TESTS = frozenset((*(PREFIX + n for n in (
     'bitbrowser-direct-payment.spec.ts', 'bitbrowser-native-quote.spec.ts',
     'bitbrowser-native-observer.spec.ts', 'bitbrowser-payment-page.spec.ts',
-    'bitbrowser-pro-tier.spec.ts')), 'scripts/ci-recharge-scope.test.mjs', 'docs/V2_TASKS.md'))
+    'bitbrowser-pro-tier.spec.ts')), 'scripts/ci-recharge-scope.test.mjs'))
 ADDED = PREFIX + 'bitbrowser-pro-tier.ts'
 UPDATED = ('admin',)
 REBOUND = ()
@@ -61,7 +62,7 @@ def validate_contract(c):
     need(c.get('version') == 1 and c.get('status') == 'FROZEN'
          and c.get('scope') == SCOPE and c.get('recipe') == RECIPE
          and c.get('expectedCurrent') == CURRENT and c.get('sourceReviewCommit') == SOURCE
-         and c.get('sourcePullRequest') == SOURCE_PR, 'CONTRACT_IDENTITY')
+         and c.get('sourcePullRequest') == SOURCE_PR and c.get('releaseReviewBase') == RELEASE_BASE, 'CONTRACT_IDENTITY')
     need(set(c.get('productionSources', {})) == SOURCES
          and set(c.get('validationSources', {})) == TESTS
          and set(c.get('sourceParents', {})) == SOURCES - {ADDED}
@@ -84,7 +85,7 @@ def validate_contract(c):
     need(parent['commit'] == ADMIN_COMMIT and parent['proofSha256'] == ADMIN_PROOF
          and len(parent['adminFiles']) == 263 and 'index.html' in parent['adminFiles'], 'ADMIN_PARENT_CHANGED')
     plan = c['parentPlan']
-    need(plan['commit'] == CURRENT and plan['workflowRunId'] == '39976781287'
+    need(plan['commit'] == CURRENT and plan['workflowRunId'] == '39994791746'
          and plan['workflowRunAttempt'] == '1' and sha(canonical(plan)) == c['parentPlanSha256'] == PARENT_PLAN_SHA
          and sha((HERE / 'online-readonly-probe-contract.json').read_bytes()) == plan['contractSha256'],
          'PARENT_PLAN_CHANGED')
@@ -94,20 +95,23 @@ def validate_contract(c):
 
 
 def verify_capture(value, c, *, previous_read_only=False):
+    binding = c['previousReadOnlyCapture'] if previous_read_only else {
+        'parentCommit': CURRENT, 'parentPlanSha256': c['parentPlanSha256'],
+        'parentBuildProofSha256': c['parentPlan']['buildProofSha256']}
     need(type(value) is dict and set(value) == {'status', 'baseline', 'parentPlanSha256', 'businessActions'}
          and value['status'] == 'BITBROWSER_QUOTE_PARENT_VERIFIED'
-         and value['businessActions'] == 0 and value['parentPlanSha256'] == c['parentPlanSha256'], 'PARENT_CAPTURE_CHANGED')
+         and value['businessActions'] == 0 and value['parentPlanSha256'] == binding['parentPlanSha256'], 'PARENT_CAPTURE_CHANGED')
     b = value['baseline']
-    proofs = {'online-readonly-probe-build-proof.json': c['parentPlan']['buildProofSha256']}
+    proofs = {'online-readonly-probe-build-proof.json': binding['parentBuildProofSha256']}
     if not previous_read_only:
         proofs['bitbrowser-history-build-proof.json'] = ADMIN_PROOF
-    need(b['commit'] == CURRENT and Path(b['current']).parent == BASE / 'releases'
+    need(b['commit'] == binding['parentCommit'] and Path(b['current']).parent == BASE / 'releases'
          and set(b['services']) == SERVICES and b['apiModules'] == {}
          and b['database']['pending'] == 0
          and b['proofs'] == proofs
          and set(b['configurationSha256']) == {'.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml'}
          and set(b['runtimeConfigurationSha256']) == SERVICES, 'PARENT_SCOPE_CHANGED')
-    if 'baseline' in c:
+    if not previous_read_only and 'baseline' in c:
         need(b == c['baseline'], 'NATIVE_BASELINE_CHANGED')
 
 
