@@ -1,4 +1,8 @@
 import {
+  onlineReadonlyProbePaths,
+  onlineReadonlyProbeControls,
+  isOnlineReadonlyProbeOnly,
+  isOnlineReadonlyProbeControlsOnly,
   onlineSessionProbePaths,
   onlineSessionProbeControls,
   isOnlineSessionProbeOnly,
@@ -3298,4 +3302,29 @@ test('Session probe release selects only finite engine sources and diagnostics',
   assert.ok(commands.includes('ci-online-session-media.py'));
   assert.ok(commands.includes('query-network-browser.test.cjs'));
   assert.ok(commands.includes('upstream-session-transition.test.cjs'));
+});
+
+test('readonly probe release scopes finite executor sources without API or migration', () => {
+  assert.equal(isOnlineReadonlyProbeOnly(onlineReadonlyProbePaths), true);
+  assert.equal(checkMode(onlineReadonlyProbePaths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(onlineReadonlyProbePaths), ['guards', 'online-engine']);
+  assert.equal(
+    isOnlineReadonlyProbeOnly([...onlineReadonlyProbePaths, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+  assert.equal(isOnlineReadonlyProbeOnly(onlineReadonlyProbePaths.slice(1)), false);
+  const commands = JSON.stringify(sessionProbeCommands('online-engine', onlineReadonlyProbePaths));
+  for (const name of [
+    'checkout-readonly-diagnostic',
+    'checkout-form',
+    'checkout-card-preparation',
+    'checkout-interaction'
+  ])
+    assert.ok(commands.includes(name + '.test.cjs'));
+  assert.doesNotMatch(commands, /migrate|typecheck/);
+});
+
+test('readonly probe publication controls alone only select guards', () => {
+  assert.equal(isOnlineReadonlyProbeControlsOnly(onlineReadonlyProbeControls), true);
+  assert.deepEqual(selectedParts(onlineReadonlyProbeControls), ['guards']);
 });
