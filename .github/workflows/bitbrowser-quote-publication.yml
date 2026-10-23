@@ -64,6 +64,16 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+      - name: Preserve native parent checks even when building fails
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bitbrowser-quote-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/bitbrowser-quote/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
   publish:
     needs: validate
     if: github.ref == 'refs/heads/main' && inputs.commit == github.sha

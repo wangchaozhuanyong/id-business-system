@@ -16,6 +16,8 @@ CONTRACT_FILE = 'bitbrowser-quote-contract.json'
 CURRENT = 'ed580a608d038980b3501df3a718c2801564bb88'
 SOURCE = '5eb95635a5f2ff4b35b9bcc6fc19106cc16b008a'
 SOURCE_PR = 687
+RECONSTRUCTION_SHA256 = '8f81748ca60224c4435e62d0ecc86f08d4d0c3a578d8b056ebb50483c14b4d0b'
+PRIOR_CAPTURE = {'runId': 39991066742, 'runAttempt': 1, 'jobId': 120542648820, 'commit': 'a38ae9687c1bf27ca3b8b4546db0531cb69f038c', 'logSha256': '44a670a3c80eb2795c8ccccb81c9125d9ef22a0af9b32f4175dcc0848343d3e5', 'commandId': '8a9b0d50-39ea-456c-99a7-a3545a46cad0'}
 PARENT_PLAN_SHA = '18e937143ff9b0d4d1747b7dd24c4cc3a7ec202640369cf454860fd9fa818b07'
 ADMIN_COMMIT = 'd7d80c357c4954ef28db85e1021a0e19a65ebd81'
 ADMIN_PROOF = '9c436cd452cacc54e96964830acceb56f816539147acf766fe7ce866211eda55'
@@ -69,6 +71,11 @@ def validate_contract(c):
     need(c.get('migrationPerformed') is False and c.get('businessActions') == 0
          and c['sqlFenceHelperSha256'] == c['controlPins']['api-admin-scope.py']
          == '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925', 'SIDE_EFFECT_SCOPE')
+    refs = c.get('reconstructionCommits', [])
+    need(type(refs) is list and len(refs) == 54 and refs == sorted(set(refs))
+         and all(re.fullmatch('[a-f0-9]{40}', v) for v in refs)
+         and sha(canonical(refs)) == RECONSTRUCTION_SHA256
+         and c.get('previousReadOnlyCapture') == PRIOR_CAPTURE, 'RECONSTRUCTION_INPUTS_CHANGED')
     parent = c['adminParent']
     need(parent['commit'] == ADMIN_COMMIT and parent['proofSha256'] == ADMIN_PROOF
          and len(parent['adminFiles']) == 263 and 'index.html' in parent['adminFiles'], 'ADMIN_PARENT_CHANGED')

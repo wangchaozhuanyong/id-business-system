@@ -109,6 +109,61 @@ class QuoteTierPublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'NATIVE_BASELINE_CHANGED'):
             P.verify_capture(value, {**self.c, 'baseline': {}})
 
+    def test_historical_constructor_inputs_are_closed_and_existing_objects_need_no_fetch(self):
+        calls = []
+        B.ensure_reconstruction_commits(self.c, lambda *args: calls.append(args) or b'')
+        self.assertEqual(len(calls), 54)
+        self.assertTrue(all(args[:3] == ('git', 'cat-file', '-e') for args in calls))
+        for mutate in (lambda c: c['reconstructionCommits'].pop(),
+                       lambda c: c['reconstructionCommits'].append('a' * 40),
+                       lambda c: c['previousReadOnlyCapture'].update(commandId='other')):
+            changed = copy.deepcopy(self.c)
+            mutate(changed)
+            with self.assertRaisesRegex(RuntimeError, 'RECONSTRUCTION_INPUTS_CHANGED'):
+                P.validate_contract(changed)
+
+    def test_missing_constructor_object_fetches_only_the_exact_commit_and_checks_it_again(self):
+        import os
+        import subprocess
+        calls = []
+        fetched = False
+        missing = self.c['reconstructionCommits'][0]
+        def runner(*args):
+            nonlocal fetched
+            calls.append(args)
+            if args[:2] == ('git', 'fetch'):
+                fetched = True
+            elif args[-1] == missing + '^{commit}' and not fetched:
+                raise subprocess.CalledProcessError(128, args)
+            return b''
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': B.REPO}):
+            B.ensure_reconstruction_commits(self.c, runner)
+        self.assertEqual(calls[:3], [
+            ('git', 'cat-file', '-e', missing + '^{commit}'),
+            ('git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', missing),
+            ('git', 'cat-file', '-e', missing + '^{commit}')])
+        self.assertEqual(sum(args[:2] == ('git', 'fetch') for args in calls), 1)
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}):
+            with self.assertRaisesRegex(RuntimeError, 'MISSING_HISTORICAL_SOURCE'):
+                B.ensure_reconstruction_commits(self.c, lambda *args: (_ for _ in ()).throw(subprocess.CalledProcessError(128, args)))
+
+    def test_previous_read_only_receipt_requires_original_identity_success_and_bounded_payload(self):
+        import base64
+        import zlib
+        value = self.capture()
+        invocation = {'CommandId': self.c['previousReadOnlyCapture']['commandId'], 'InstanceId': B.INSTANCE,
+                      'DocumentName': 'AWS-RunShellScript', 'PluginName': 'aws:runShellScript',
+                      'Status': 'Success', 'ResponseCode': 0, 'StandardErrorContent': '',
+                      'StandardOutputContent': json.dumps({'zlibBase64': base64.b64encode(zlib.compress(P.canonical(value))).decode()})}
+        self.assertEqual(B.previous_capture(invocation, self.c), value)
+        for field, replacement in [('CommandId', 'other'), ('InstanceId', 'other'), ('Status', 'InProgress'),
+                                   ('ResponseCode', False), ('ResponseCode', 1), ('StandardErrorContent', 'unknown')]:
+            with self.assertRaisesRegex(RuntimeError, 'PREVIOUS_RECEIPT_IDENTITY'):
+                B.previous_capture({**invocation, field: replacement}, self.c)
+        expanded = {**invocation, 'StandardOutputContent': json.dumps({'zlibBase64': base64.b64encode(zlib.compress(b' ' * (128 * 1024 + 1))).decode()})}
+        with self.assertRaisesRegex(RuntimeError, 'PREVIOUS_RECEIPT_BOUND'):
+            B.previous_capture(expanded, self.c)
+
     def proof(self):
         files = {n: '1' * 64 for n in self.c['adminParent']['adminFiles']}
         qa = {'sources': {'commit': P.SOURCE, 'pullRequest': P.SOURCE_PR, 'runId': '1',
