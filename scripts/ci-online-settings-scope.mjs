@@ -28,8 +28,8 @@ export const onlineSessionProbeControls = Object.freeze([
   'scripts/ci-recharge-scope.mjs',
   ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-session-probe-' + name
-  )
-  'scripts/ci-online-session-media.py',
+  ),
+  'scripts/ci-online-session-media.py'
 ]);
 export function isOnlineSessionProbeOnly(paths) {
   return (
