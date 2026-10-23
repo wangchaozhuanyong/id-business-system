@@ -227,15 +227,15 @@ async function inspectOriginalCheckout(page, options = {}) {
       if (flags.expired) throw failure('CHECKOUT_EXPIRED');
       if (flags.challenge) throw failure('HUMAN_VERIFICATION_REQUIRED');
       // Retain the formal pre-check. Only its owner deadline replaces the
-      // temporary fixed two-second full-frame scan. No recovery/reload is invoked.
+      // temporary fixed two-second full-frame scan. Keep the formal once-only
+      // pure-read retry; no checkout recovery/reload is invoked.
       const preDeadline = remainingDeadline();
       if (
         await run('load_precheck', preDeadline, () =>
           form.checkoutPageLoadFailed(page, {
             deadline: preDeadline,
             signal: budget.signal,
-            onRead,
-            stopOnReadFailure: true
+            onRead
           })
         )
       )
@@ -256,8 +256,7 @@ async function inspectOriginalCheckout(page, options = {}) {
         form.inspectCardReadiness(page, {
           deadline: readDeadline,
           signal: budget.signal,
-          onRead,
-          stopOnReadFailure: true
+          onRead
         })
       );
       result.cardReadiness = {
@@ -281,8 +280,7 @@ async function inspectOriginalCheckout(page, options = {}) {
             form.checkoutPageLoadFailed(page, {
               deadline: finalDeadline,
               signal: budget.signal,
-              onRead,
-              stopOnReadFailure: true
+              onRead
             })
           )
         )

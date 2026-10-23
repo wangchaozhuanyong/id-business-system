@@ -11,14 +11,14 @@ HERE = Path(__file__).resolve().parent
 BASE = Path('/opt/id-business-v2')
 PREFIX = 'online-readonly-probe'
 SCOPE = 'ONLINE_READONLY_PROBE_20261023'
-CURRENT = 'b716563aa1e74daba2d92a2ce0b6f53d49133ff9'
-SOURCE = '791a653da72fcf6eb662098a76484ccc1008d2f3'
+CURRENT = 'ed580a608d038980b3501df3a718c2801564bb88'
+SOURCE = 'e65f6daae1d5112c1601d93feb9fc2e60bc53175'
 CONTRACT_FILE = PREFIX + '-contract.json'
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine/'
-FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-form.cjs', 'checkout-readonly-diagnostic.cjs', 'upstream/stripe-payment.js', 'test/checkout-readonly-diagnostic.test.cjs'))
-ADDED = frozenset(('checkout-readonly-diagnostic.cjs', 'test/checkout-readonly-diagnostic.test.cjs'))
+FILES = frozenset(('SOURCE_MANIFEST.json', 'checkout-readonly-diagnostic.cjs', 'test/checkout-readonly-diagnostic.test.cjs'))
+ADDED = frozenset()
 PRESERVED = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
-PARENT_PROOF = '3b3a957dba9712234c7dc8c98009a09f76470c91cdb05c2afd3f572e7b494d26'
+PARENT_PROOF = 'f14d692f07e740233e2256db537131567951df5389a586b30690ef791c8f301b'
 
 
 def need(value, code):
@@ -52,7 +52,7 @@ def validate_contract(c):
          and c['runtimeSources'] == {ENGINE + n: after[n] for n in FILES}
          and set(c['validationSources']) == {'docs/V2_TASKS.md', 'docs/ONLINE_RECHARGE.md'}
          and c['parentPlan']['commit'] == CURRENT
-         and c['parentPlan']['workflowRunId'] == '39950241661'
+         and c['parentPlan']['workflowRunId'] == '39976781287'
          and c['parentPlan']['buildProofSha256'] == PARENT_PROOF
          and c['sqlFenceHelperSha256'] == c['controlPins']['api-admin-scope.py']
          == '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925', 'FINITE_SCOPE')
@@ -63,7 +63,7 @@ def validate_contract(c):
 
 def verify_quality(q, commit, tree):
     need(q.get('commit') == commit and q.get('tree') == tree and type(q.get('pullRequest')) is int
-         and q['pullRequest'] > 685 and q.get('sourceReviewCommit') == SOURCE
+         and q['pullRequest'] > 686 and q.get('sourceReviewCommit') == SOURCE
          and re.fullmatch('[a-f0-9]{40}', q.get('head', ''))
          and re.fullmatch('[a-f0-9]{64}', q.get('sourceReceiptSha256', ''))
          and re.fullmatch('[1-9][0-9]*', q.get('runId', '')), 'QUALITY_REQUIRED')
@@ -84,15 +84,32 @@ def verify_proof(proof, plan, c, files):
          and proof['nativeParentCapture']['baseline']['commit'] == CURRENT, 'PARENT_CHANGED')
 
 
+def load_parent(c, current):
+    # Read the predecessor with its own immutable controls, not this successor's
+    # replaced module. Authenticate every helper before importing any of them.
+    parent_here = current / 'scripts' / 'production-release'
+    for name, digest in c['parentPlan']['controlSources'].items():
+        path = parent_here / name
+        need(Path(name).name == name and not path.is_symlink() and path.is_file()
+             and sha(path.read_bytes()) == digest, 'PARENT_CONTROL_CHANGED')
+    need(sha((parent_here / CONTRACT_FILE).read_bytes()) == c['parentPlan']['contractSha256'],
+         'PARENT_CONTRACT_CHANGED')
+    spec = importlib.util.spec_from_file_location('readonly_probe_frozen_parent', parent_here / (PREFIX + '-release.py'))
+    prior = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prior)
+    return prior, json.loads((parent_here / prior.CONTRACT_FILE).read_bytes())
+
+
 def capture(c):
-    prior = load('online-session-probe-release.py')
-    parent = prior.release({**c['parentPlan'], 'mode': 'readback'},
-                           json.loads((HERE / prior.CONTRACT_FILE).read_bytes()))
-    need(parent.get('status') == 'ONLINE_SESSION_PROBE_20261023_INDEPENDENT_READBACK_VERIFIED', 'PARENT_READBACK_FAILED')
+    current = (BASE / 'current').resolve(strict=True)
+    need(current.parent == BASE / 'releases', 'PARENT_PATH_CHANGED')
+    prior, parent_contract = load_parent(c, current)
+    parent = prior.release({**c['parentPlan'], 'mode': 'readback'}, parent_contract)
+    need(parent.get('status') == SCOPE + '_INDEPENDENT_READBACK_VERIFIED', 'PARENT_READBACK_FAILED')
     history = load('bitbrowser-history-release.py')
     history.MODULES = frozenset()
     h, d, _ = history.helpers()
-    current = (BASE / 'current').resolve(strict=True)
+    need((BASE / 'current').resolve(strict=True) == current, 'PARENT_MOVED')
     raw = (current / 'release-manifest.json').read_bytes()
     need(current.parent == BASE / 'releases' and json.loads(raw).get('commit') == CURRENT, 'CURRENT_CHANGED')
     states = h.snapshot(d, current)
@@ -104,7 +121,7 @@ def capture(c):
         'runtime': history.runtime(d, states), 'database': history.database(d, states['api']),
         'backupNormalizerPath': ancestor['backupNormalizerPath'],
         'backupNormalizerSha256': ancestor['backupNormalizerSha256']}
-    need(sha((current / 'online-session-probe-build-proof.json').read_bytes()) == PARENT_PROOF
+    need(sha((current / (PREFIX + '-build-proof.json')).read_bytes()) == PARENT_PROOF
          and baseline['database']['pending'] == 0 and shutil.disk_usage(BASE).free > 6 * 1024**3, 'PARENT_NOT_READY')
     h.guards(d, current, states, c)
     need((BASE / 'current').resolve() == current and h.snapshot(d, current) == states, 'PARENT_MOVED')
