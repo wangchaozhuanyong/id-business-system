@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { V2RechargeDetails } from './contracts';
-import { paymentObject, verifyNativeDirectQuote } from './bitbrowser-payment-evidence';
+import {
+  directOfficialPlans,
+  paymentObject,
+  verifyNativeDirectQuote
+} from './bitbrowser-payment-evidence';
 import {
   nativeBillingDetails,
   nativeBillingRequest,
@@ -263,4 +267,55 @@ describe('原生计税报价只保留双向绑定的完整白名单', () => {
         /^native_billing_/
       );
   });
+  it.each(['go', 'plus', 'pro-5x', 'pro-20x', 'pro-500'] as const)(
+    '%s 清空税号成功回执省略空 taxIdInfo 时，仍校验完整原单、账单及金额',
+    async (plan) => {
+      const planBinding = { ...binding, plan };
+      const session = response().checkout_session;
+      session.plan_name = directOfficialPlans[plan];
+      Reflect.deleteProperty(session.checkout_state, 'taxIdInfo');
+      const projected = nativeBillingRequest(request(), planBinding);
+      const document = nativeQuoteDocument(
+        { success: true, checkout_session: session },
+        projected,
+        planBinding,
+        'tax_id'
+      );
+      await expect(
+        verifyNativeDirectQuote(
+          document,
+          binding.checkoutId,
+          binding.entity,
+          plan,
+          details,
+          'Total due today PHP 982.14\nTax PHP 0.00\nRenews PHP 982.14 / month',
+          'PHP'
+        )
+      ).resolves.toMatchObject({ quote: { plan, today: { amount_minor: 98214 } } });
+      expect(JSON.stringify(document)).not.toContain('response-secret');
+      expect(() =>
+        nativeQuoteDocument(
+          { using_automatic_tax: false, checkout_session: session },
+          projected,
+          planBinding,
+          'taxes'
+        )
+      ).toThrow('native_billing_response_tax_context_unverified');
+    }
+  );
+  it.each([undefined, '', {}, [], false, 'synthetic-tax-id'])(
+    '清空税号响应显式包含非 null 值时仍拒绝：%j',
+    (taxIdInfo) => {
+      const session = response().checkout_session;
+      Object.assign(session.checkout_state, { taxIdInfo });
+      expect(() =>
+        nativeQuoteDocument(
+          { success: true, checkout_session: session },
+          nativeBillingRequest(request(), binding),
+          binding,
+          'tax_id'
+        )
+      ).toThrow('native_billing_response_tax_context_unverified');
+    }
+  );
 });

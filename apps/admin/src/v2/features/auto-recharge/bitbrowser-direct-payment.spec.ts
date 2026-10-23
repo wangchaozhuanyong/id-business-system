@@ -872,6 +872,60 @@ describe('人工核实或官网明确拒付原单后的正常入口', () => {
 });
 
 describe('网页充值执行器原单与单次付款契约', () => {
+  it.each([true, false])(
+    'Pro 旧报价恢复=%s，原单同步完成前不能填卡或申请付款确认',
+    async (recovers) => {
+      const f = fixture({ plan: 'pro-20x', noRecord: true });
+      const evaluate = mock.evaluate.getMockImplementation()!;
+      let refreshed = false;
+      mock.command.mockImplementation(async (method: string) => {
+        if (method === 'Page.reload') refreshed = true;
+        return {};
+      });
+      mock.evaluate.mockImplementation(async (expression: string) => {
+        const value = await evaluate(expression);
+        if (
+          expression.startsWith('read:/backend-api/payments/checkout/') &&
+          expression.endsWith(newId)
+        )
+          return {
+            ...value,
+            data: {
+              ...value.data,
+              plan_name: 'chatgptpro',
+              checkout_state: {
+                id: newId,
+                currency: 'usd',
+                total: { total: { minorUnitsAmount: 2000 } },
+                taxAmounts: [{ minorUnitsAmount: 0 }]
+              }
+            }
+          };
+        if (expression === 'page:inspect') {
+          const amount = recovers && refreshed ? '20.00' : '10.00';
+          return {
+            ...value,
+            text: `Total due today USD ${amount}\nTax USD 0.00\nRenews USD ${amount} / month`
+          };
+        }
+        return value;
+      });
+      mock.fill.mockImplementation(async () => {
+        expect(refreshed).toBe(true);
+        return { state: details.state };
+      });
+      f.confirm.mockRejectedValue(new Error('synthetic_pre_payment_stop'));
+      await expect(f.run()).rejects.toThrow();
+      expect(mock.command.mock.calls.filter(([method]) => method === 'Page.reload')).toHaveLength(
+        1
+      );
+      expect(mock.fill).toHaveBeenCalledTimes(recovers ? 1 : 0);
+      expect(f.confirm).toHaveBeenCalledTimes(recovers ? 1 : 0);
+      expect(f.events.filter((event) => event === 'create_clicked')).toHaveLength(1);
+      expect(f.events).not.toContain('payment_clicked');
+      expect(mock.observer.confirmationRequests).toBe(0);
+    }
+  );
   it('申请过期换单前先持久回传本轮核实的免费套餐、账号及原单绑定', async () => {
     const f = fixture();
     let persisted: Record<string, unknown> = {};

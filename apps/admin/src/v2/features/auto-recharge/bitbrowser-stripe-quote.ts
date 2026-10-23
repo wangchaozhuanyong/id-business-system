@@ -76,6 +76,7 @@ export async function verifyDirectCheckoutQuote(
   tierVerified = false,
   billingVerified = false
 ) {
+  if (plan.startsWith('pro-') && !tierVerified) throw new Error('official_pro_tier_unverified');
   if (!checkoutId.startsWith('cs_'))
     return verifyNativeDirectQuote(data, checkoutId, entity, plan, details, text, lockedCurrency);
   const envelope = paymentObject(data);
@@ -88,7 +89,6 @@ export async function verifyDirectCheckoutQuote(
     session.payment_status !== 'unpaid'
   )
     throw new Error('checkout_response_plan_unverified');
-  if (plan.startsWith('pro-') && !tierVerified) throw new Error('official_pro_tier_unverified');
   if (!stripe) throw new Error('official_checkout_quote_unavailable');
   if (stripe.checkoutId !== checkoutId)
     throw new Error('official_checkout_quote_binding_unverified');

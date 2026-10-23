@@ -608,6 +608,65 @@ describe('原生计税被动观察与确认版本屏障', () => {
     expect(f.observer.nativeBilling(details).document).toEqual(previous.document);
     expect(f.command).toHaveBeenCalledTimes(2);
   });
+  it('实测清空税号响应省略 taxIdInfo，严格 null 请求后恢复同单最新完整报价', async () => {
+    const f = fixture();
+    f.finish(f.begin());
+    await f.observer.settle();
+    const previous = f.observer.nativeBilling(details);
+    const item = f.begin({
+      path: '/backend-api/payments/checkout/update_tax_id',
+      data: { checkout_session_id: checkoutId, tax_id_info: null }
+    });
+    expect(f.observer.nativeBilling(details).pending).toBe(true);
+    const session = response().checkout_session;
+    Reflect.deleteProperty(session.checkout_state, 'taxIdInfo');
+    f.finish(item, { success: true, checkout_session: session });
+    await f.observer.settle();
+    const latest = f.observer.nativeBilling(details);
+    expect(latest).toMatchObject({ observed: true, pending: false });
+    expect(latest.error).toBeUndefined();
+    expect(latest.document).toEqual(previous.document);
+    expect(() => f.observer.assertNativeBillingVersion(previous.version)).toThrow();
+    expect(() => f.observer.assertNativeBillingVersion(latest.version)).not.toThrow();
+    expect(f.observer.confirmationRequests).toBe(0);
+    expect(JSON.stringify(latest.document)).not.toContain('never-retain-processor-secret');
+  });
+  it('缺少先前计税请求锚点，不能仅凭省略税号的成功响应核价', async () => {
+    const f = fixture();
+    const session = response().checkout_session;
+    Reflect.deleteProperty(session.checkout_state, 'taxIdInfo');
+    f.finish(
+      f.begin({
+        path: '/backend-api/payments/checkout/update_tax_id',
+        data: { checkout_session_id: checkoutId, tax_id_info: null }
+      }),
+      { success: true, checkout_session: session }
+    );
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details)).toMatchObject({
+      error: 'native_billing_tax_context_unverified'
+    });
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+  });
+  it('先前计税税号证明失败，后续省略字段的清空回执不能清除该失败', async () => {
+    const f = fixture();
+    const session = response().checkout_session;
+    Reflect.deleteProperty(session.checkout_state, 'taxIdInfo');
+    f.finish(f.begin(), { using_automatic_tax: false, checkout_session: session });
+    await f.observer.settle();
+    f.finish(
+      f.begin({
+        path: '/backend-api/payments/checkout/update_tax_id',
+        data: { checkout_session_id: checkoutId, tax_id_info: null }
+      }),
+      { success: true, checkout_session: session }
+    );
+    await f.observer.settle();
+    expect(f.observer.nativeBilling(details).error).toBe(
+      'native_billing_response_tax_context_unverified'
+    );
+    expect(f.observer.nativeBilling(details).document).toBeUndefined();
+  });
   it('tax_id最新响应可以更新金额，迟到taxes不能覆盖它', async () => {
     const f = fixture();
     const taxes = f.begin();
