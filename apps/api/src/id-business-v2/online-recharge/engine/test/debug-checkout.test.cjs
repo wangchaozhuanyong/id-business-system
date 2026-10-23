@@ -91,6 +91,8 @@ test('accepted failed debug retains only its original link through the existing 
         require: (name) => {
           if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => false };
           if (name === './chatgpt') return require('../upstream/chatgpt');
+          if (name === '../checkout-await-diagnostics.cjs')
+            return require('../checkout-await-diagnostics.cjs');
           throw new Error('Unexpected failure-path dependency');
         }
       }

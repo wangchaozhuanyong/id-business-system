@@ -111,7 +111,13 @@ async function renderedAuthCandidate(locator, options = {}) {
 }
 
 /** 未登录访客 UI：仅检测可见的 Log in / Sign up 控件，不用 body 全文（已登录页 HTML 里也可能含这些词） */
-async function hasVisibleLoginChrome(page) {
+async function readLoginProbe(label, locator, options) {
+    const operation = () => renderedAuthCandidate(locator(), { excludeConversation: true });
+    if (typeof options.readProbe !== 'function') return operation().catch(() => false);
+    return options.readProbe(label, operation);
+}
+
+async function hasVisibleLoginChrome(page, options = {}) {
     if (!page || (typeof page.isClosed === 'function' && page.isClosed())) {
         return false;
     }
@@ -123,8 +129,9 @@ async function hasVisibleLoginChrome(page) {
         () => page.getByText(/^Sign up for free$/i),
         () => page.getByText(/Get responses tailored to you/i)
     ];
-    for (const probe of probes) {
-        if (await renderedAuthCandidate(probe(), { excludeConversation: true }).catch(() => false)) {
+    for (const [index, probe] of probes.entries()) {
+        const label = ['login_button', 'login_link', 'signup_button', 'signup_link', 'signup_text', 'tailored_text'][index];
+        if (await readLoginProbe(label, probe, options)) {
             return true;
         }
     }
@@ -192,19 +199,15 @@ async function hasLoggedInSessionApi(page, { timeoutMs = 8000 } = {}) {
     }
 }
 
-async function isCheckoutLoginGate(page) {
+async function isCheckoutLoginGate(page, options = {}) {
     if (!isCheckoutPageUrl(page.url())) {
         return false;
     }
-    if (await hasVisibleLoginChrome(page)) {
+    if (await hasVisibleLoginChrome(page, options)) {
         return true;
     }
-    try {
-        return await renderedAuthCandidate(page.getByText(/Sign in to continue|Log in to continue|登录后继续/i),
-            { excludeConversation: true });
-    } catch (_) {
-        return false;
-    }
+    return readLoginProbe('login_text',
+        () => page.getByText(/Sign in to continue|Log in to continue|登录后继续/i), options);
 }
 
 function buildSessionNotLoggedInError(contextLabel = '页面') {
