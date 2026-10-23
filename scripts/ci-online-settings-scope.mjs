@@ -1,3 +1,41 @@
+export const onlineReadonlyProbePaths = Object.freeze([
+  ...[
+    'SOURCE_MANIFEST.json',
+    'checkout-form.cjs',
+    'checkout-readonly-diagnostic.cjs',
+    'upstream/stripe-payment.js',
+    'test/checkout-readonly-diagnostic.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineReadonlyProbeControls = Object.freeze([
+  '.github/workflows/online-readonly-probe-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-readonly-probe-' + name
+  )
+]);
+export function isOnlineReadonlyProbeOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineReadonlyProbePaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) => onlineReadonlyProbePaths.includes(p) || onlineReadonlyProbeControls.includes(p)
+    )
+  );
+}
+export function isOnlineReadonlyProbeControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-readonly-probe-')) &&
+    paths.every((p) => onlineReadonlyProbeControls.includes(p))
+  );
+}
 export const onlineSessionProbePaths = Object.freeze([
   ...[
     'SOURCE_MANIFEST.json',
@@ -1380,6 +1418,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineReadonlyProbeOnly(paths)) return true;
   if (isOnlineSessionProbeOnly(paths)) return true;
   if (isOnlineCheckoutInitOnly(paths)) return true;
   if (isOnlineCheckoutAwaitOnly(paths)) return true;
@@ -1432,6 +1471,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineReadonlyProbeControlsOnly(paths)) return true;
   if (isOnlineSessionProbeControlsOnly(paths)) return true;
   if (isOnlineCheckoutInitControlsOnly(paths)) return true;
   if (isOnlineCheckoutAwaitControlsOnly(paths)) return true;
@@ -1467,6 +1507,43 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isOnlineReadonlyProbeOnly(paths) || isOnlineReadonlyProbeControlsOnly(paths)) {
+    if (part === 'guards') {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        previous[0],
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        previous.find((command) => command[0] === 'node'),
+        ['python3', '-B', 'scripts/production-release/online-readonly-probe-release.test.py'],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineReadonlyProbeOnly(paths)) {
+      const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+      return [
+        ...onlineSettingsCommands(part, onlineSessionProbePaths),
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          ...[
+            'checkout-readonly-diagnostic',
+            'checkout-form',
+            'checkout-card-preparation',
+            'checkout-interaction'
+          ].map((n) => engine + '/test/' + n + '.test.cjs')
+        ]
+      ];
+    }
+    throw new Error('Unsupported readonly checkout diagnostic check part');
+  }
   if (isOnlineSessionProbeOnly(paths) || isOnlineSessionProbeControlsOnly(paths)) {
     const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
     if (part === 'guards') {
