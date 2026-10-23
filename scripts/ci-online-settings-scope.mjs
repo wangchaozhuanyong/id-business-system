@@ -1,3 +1,47 @@
+export const onlineCheckoutAwaitPaths = Object.freeze([
+  ...[
+    'SOURCE_MANIFEST.json',
+    'checkout-await-diagnostics.cjs',
+    'safe-media.cjs',
+    'test/checkout-await-diagnostics.test.cjs',
+    'test/checkout-navigation.test.cjs',
+    'test/checkout-recovery.test.cjs',
+    'test/debug-checkout.test.cjs',
+    'test/safe-media-finish.test.cjs',
+    'upstream/auth-page-detect.js',
+    'upstream/chatgpt.js',
+    'upstream/index.js'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineCheckoutAwaitControls = Object.freeze([
+  '.github/workflows/online-checkout-await-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-checkout-await-' + name
+  )
+]);
+export function isOnlineCheckoutAwaitOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineCheckoutAwaitPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) => onlineCheckoutAwaitPaths.includes(p) || onlineCheckoutAwaitControls.includes(p)
+    )
+  );
+}
+export function isOnlineCheckoutAwaitControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-checkout-await-')) &&
+    paths.every((p) => onlineCheckoutAwaitControls.includes(p))
+  );
+}
 export const onlineSubscriptionChallengePaths = Object.freeze([
   ...[
     'SOURCE_MANIFEST.json',
@@ -1244,6 +1288,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineCheckoutAwaitOnly(paths)) return true;
   if (isOnlineSubscriptionChallengeOnly(paths)) return true;
   if (isOnlineRealSessionOnly(paths)) return true;
   if (isOnlineNativeFetchOnly(paths)) return true;
@@ -1293,6 +1338,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCheckoutAwaitControlsOnly(paths)) return true;
   if (isOnlineSubscriptionChallengeControlsOnly(paths)) return true;
   if (isOnlineRealSessionControlsOnly(paths)) return true;
   if (isOnlineNativeFetchControlsOnly(paths)) return true;
@@ -1325,6 +1371,64 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isOnlineCheckoutAwaitOnly(paths) || isOnlineCheckoutAwaitControlsOnly(paths)) {
+    const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+    if (part === 'guards') {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        previous[0],
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        previous.find((command) => command[0] === 'node'),
+        ['python3', '-B', 'scripts/production-release/online-checkout-await-release.test.py'],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineCheckoutAwaitOnly(paths)) {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      return [
+        ...previous.slice(0, 2),
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          ...[
+            'checkout-await-diagnostics',
+            'checkout-navigation',
+            'checkout-recovery',
+            'debug-checkout',
+            'safe-media-finish',
+            'media-browser',
+            'checkout-initialization',
+            'auth-navigation',
+            'login-evidence-browser',
+            'upstream-session-transition',
+            'execution-budget',
+            'regressions',
+            'session-routing-browser',
+            'human-verification',
+            'unattended-task-control'
+          ].map((n) => engine + '/test/' + n + '.test.cjs')
+        ],
+        ...['standalone', 'pool'].map((mode) => [
+          'env',
+          'SESSION_ROUTING_BROWSER_MODE=' + mode,
+          'node',
+          '--test',
+          '--test-name-pattern=canonical read|later real Session denial|login navigation remains|CSRF-bound synthetic SDK',
+          engine + '/test/session-routing-browser.test.cjs'
+        ]),
+        ['npm', '--prefix', engine, 'run', 'test:upstream']
+      ];
+    }
+    throw new Error('Unsupported checkout await check part');
+  }
   if (
     isOnlineSubscriptionChallengeOnly(paths) ||
     isOnlineSubscriptionChallengeControlsOnly(paths)
