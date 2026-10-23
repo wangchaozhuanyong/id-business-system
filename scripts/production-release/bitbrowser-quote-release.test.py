@@ -125,10 +125,14 @@ class QuoteTierPublicationTests(unittest.TestCase):
             P.verify_capture(old, self.c)
 
     def test_historical_constructor_inputs_are_closed_and_existing_objects_need_no_fetch(self):
+        import subprocess
         calls = []
-        B.ensure_reconstruction_commits(self.c, lambda *args: calls.append(args) or b'')
+        def runner(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, b'commit\n', b'')
+        B.ensure_reconstruction_commits(self.c, runner)
         self.assertEqual(len(calls), 55)
-        self.assertTrue(all(args[:3] == ('git', 'cat-file', '-e') for args in calls))
+        self.assertTrue(all(args[:3] == ['git', 'cat-file', '-t'] for args in calls))
         for mutate in (lambda c: c['reconstructionCommits'].pop(),
                        lambda c: c['reconstructionCommits'].append('a' * 40),
                        lambda c: c['previousReadOnlyCapture'].update(commandId='other')):
@@ -136,6 +140,50 @@ class QuoteTierPublicationTests(unittest.TestCase):
             mutate(changed)
             with self.assertRaisesRegex(RuntimeError, 'RECONSTRUCTION_INPUTS_CHANGED'):
                 P.validate_contract(changed)
+
+    def test_missing_constructor_objects_use_real_exit_codes_and_a_single_pinned_fetch(self):
+        import os
+        import subprocess
+        calls = []
+        fetched = False
+        missing = self.c['reconstructionCommits'][0]
+        def runner(args, **kwargs):
+            nonlocal fetched
+            calls.append(args)
+            if args[:2] == ['git', 'fetch']:
+                fetched = True
+            elif args[-1] == missing and not fetched:
+                return subprocess.CompletedProcess(args, 128, b'', b'missing')
+            return subprocess.CompletedProcess(args, 0, b'commit\n', b'')
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': B.REPO}):
+            B.ensure_reconstruction_commits(self.c, runner)
+        self.assertEqual(calls[-2:], [
+            ['git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', missing],
+            ['git', 'cat-file', '-t', missing]])
+        self.assertEqual(sum(args[:2] == ['git', 'fetch'] for args in calls), 1)
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}):
+            with self.assertRaisesRegex(RuntimeError, 'MISSING_HISTORICAL_SOURCE'):
+                B.ensure_reconstruction_commits(self.c, lambda args, **kw: subprocess.CompletedProcess(args, 128, b'', b'missing'))
+        with self.assertRaisesRegex(RuntimeError, 'HISTORICAL_SOURCE_TYPE_CHANGED'):
+            B.ensure_reconstruction_commits(self.c, lambda args, **kw: subprocess.CompletedProcess(args, 0, b'blob\n', b''))
+
+    def test_real_empty_git_repository_fetches_all_pinned_constructor_commits_offline(self):
+        import os
+        import subprocess
+        import tempfile
+        # Prepare the immutable source fixture in fresh CI checkouts first.
+        # The isolated transfer below then uses a local Git origin only.
+        B.ensure_reconstruction_commits(self.c)
+        with tempfile.TemporaryDirectory(dir=P.ROOT / '.runtime') as name:
+            root = Path(name)
+            subprocess.run(['git', 'init', '--bare', '--quiet', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'remote', 'add', 'origin', str(P.ROOT)], check=True)
+            with patch.object(B, 'ROOT', root), patch.dict(os.environ, {
+                    'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': B.REPO}):
+                B.ensure_reconstruction_commits(self.c)
+                self.assertFalse((root / 'FETCH_HEAD').exists())
+                for commit in self.c['reconstructionCommits']:
+                    self.assertEqual(subprocess.check_output(['git', '-C', str(root), 'cat-file', '-t', commit]).strip(), b'commit')
 
     def test_published_later_admin_interface_is_part_of_the_exact_parent(self):
         self.assertEqual(self.c['adminParent']['commit'], '957407e571e7ac629393d6355a09506a196e5f91')
@@ -146,31 +194,6 @@ class QuoteTierPublicationTests(unittest.TestCase):
             mutate(changed)
             with self.assertRaisesRegex(RuntimeError, 'ADMIN_OVERLAY_CHANGED'):
                 P.validate_contract(changed)
-
-    def test_missing_constructor_object_fetches_only_the_exact_commit_and_checks_it_again(self):
-        import os
-        import subprocess
-        calls = []
-        fetched = False
-        missing = self.c['reconstructionCommits'][0]
-        def runner(*args):
-            nonlocal fetched
-            calls.append(args)
-            if args[:2] == ('git', 'fetch'):
-                fetched = True
-            elif args[-1] == missing + '^{commit}' and not fetched:
-                raise subprocess.CalledProcessError(128, args)
-            return b''
-        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': B.REPO}):
-            B.ensure_reconstruction_commits(self.c, runner)
-        self.assertEqual(calls[:3], [
-            ('git', 'cat-file', '-e', missing + '^{commit}'),
-            ('git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', missing),
-            ('git', 'cat-file', '-e', missing + '^{commit}')])
-        self.assertEqual(sum(args[:2] == ('git', 'fetch') for args in calls), 1)
-        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}):
-            with self.assertRaisesRegex(RuntimeError, 'MISSING_HISTORICAL_SOURCE'):
-                B.ensure_reconstruction_commits(self.c, lambda *args: (_ for _ in ()).throw(subprocess.CalledProcessError(128, args)))
 
     def test_previous_read_only_receipt_requires_original_identity_success_and_bounded_payload(self):
         import base64

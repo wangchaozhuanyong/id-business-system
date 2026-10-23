@@ -95,18 +95,26 @@ def identity():
     return F.native_identity()
 
 
-def ensure_reconstruction_commits(c, runner=execute):
+def ensure_reconstruction_commits(c, runner=subprocess.run):
     P.validate_contract(c)
+    missing = []
+    options = {'cwd': ROOT, 'capture_output': True}
     for commit in c['reconstructionCommits']:
-        probe = ('git', 'cat-file', '-e', commit + '^{commit}')
-        try:
-            runner(*probe)
-            continue
-        except subprocess.CalledProcessError:
-            need(os.environ.get('GITHUB_ACTIONS') == 'true'
-                 and os.environ.get('GITHUB_REPOSITORY') == REPO, 'MISSING_HISTORICAL_SOURCE')
-        runner('git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', commit)
-        runner(*probe)
+        result = runner(['git', 'cat-file', '-t', commit], **options)
+        if result.returncode == 0:
+            need(result.stdout.strip() == b'commit', 'HISTORICAL_SOURCE_TYPE_CHANGED')
+        else:
+            need(result.returncode == 128, 'HISTORICAL_SOURCE_PROBE_FAILED')
+            missing.append(commit)
+    if not missing:
+        return
+    need(os.environ.get('GITHUB_ACTIONS') == 'true'
+         and os.environ.get('GITHUB_REPOSITORY') == REPO, 'MISSING_HISTORICAL_SOURCE')
+    result = runner(['git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', *missing], **options)
+    need(result.returncode == 0, 'HISTORICAL_SOURCE_FETCH_FAILED')
+    for commit in missing:
+        result = runner(['git', 'cat-file', '-t', commit], **options)
+        need(result.returncode == 0 and result.stdout.strip() == b'commit', 'HISTORICAL_SOURCE_TYPE_CHANGED')
 
 
 def previous_capture(invocation, c):
