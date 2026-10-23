@@ -1,3 +1,52 @@
+export const onlineSessionProbePaths = Object.freeze([
+  ...[
+    'SOURCE_MANIFEST.json',
+    'human-verification.cjs',
+    'subscription-diagnostics.cjs',
+    'subscription-network-diagnostics.cjs',
+    'test/human-verification.test.cjs',
+    'test/proxy-connectivity-retry.test.cjs',
+    'test/query-network-browser.test.cjs',
+    'test/recharge-flow-acceptance.test.cjs',
+    'test/regressions.test.cjs',
+    'test/session-probe.test.cjs',
+    'test/subscription-network-diagnostics.test.cjs',
+    'test/upstream-session-transition.test.cjs',
+    'upstream/auth-page-detect.js',
+    'upstream/index.js',
+    'upstream/session-auth.js',
+    'upstream/subscription-check.js'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineSessionProbeControls = Object.freeze([
+  '.github/workflows/online-session-probe-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-session-probe-' + name
+  )
+]);
+export function isOnlineSessionProbeOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineSessionProbePaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) => onlineSessionProbePaths.includes(p) || onlineSessionProbeControls.includes(p)
+    )
+  );
+}
+export function isOnlineSessionProbeControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-session-probe-')) &&
+    paths.every((p) => onlineSessionProbeControls.includes(p))
+  );
+}
 export const onlineCheckoutInitPaths = Object.freeze([
   ...[
     'SOURCE_MANIFEST.json',
@@ -1414,6 +1463,73 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isOnlineSessionProbeOnly(paths) || isOnlineSessionProbeControlsOnly(paths)) {
+    const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+    if (part === 'guards') {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        previous[0],
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        previous.find((command) => command[0] === 'node'),
+        ['python3', '-B', 'scripts/production-release/online-session-probe-release.test.py'],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineSessionProbeOnly(paths)) {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      return [
+        ...previous.slice(0, 2),
+        ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg'],
+        ['ffmpeg', '-version'],
+        ['ffprobe', '-version'],
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          ...[
+            'proxy-connectivity-retry',
+            'session-probe',
+            'subscription-network-diagnostics',
+            'subscription-diagnostics',
+            'query-network-browser',
+            'regressions',
+            'checkout-await-diagnostics',
+            'checkout-navigation',
+            'checkout-recovery',
+            'debug-checkout',
+            'safe-media-finish',
+            'media-browser',
+            'checkout-initialization',
+            'auth-navigation',
+            'login-evidence-browser',
+            'upstream-session-transition',
+            'execution-budget',
+            'regressions',
+            'session-routing-browser',
+            'human-verification',
+            'unattended-task-control'
+          ].map((n) => engine + '/test/' + n + '.test.cjs')
+        ],
+        ...['standalone', 'pool'].map((mode) => [
+          'env',
+          'SESSION_ROUTING_BROWSER_MODE=' + mode,
+          'node',
+          '--test',
+          '--test-name-pattern=canonical read|later real Session denial|login navigation remains|CSRF-bound synthetic SDK',
+          engine + '/test/session-routing-browser.test.cjs'
+        ]),
+        ['npm', '--prefix', engine, 'run', 'test:upstream']
+      ];
+    }
+    throw new Error('Unsupported checkout initialization check part');
+  }
   if (isOnlineCheckoutInitOnly(paths) || isOnlineCheckoutInitControlsOnly(paths)) {
     const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
     if (part === 'guards') {
