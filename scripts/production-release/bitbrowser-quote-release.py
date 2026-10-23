@@ -1,5 +1,4 @@
 """Finite Go tax-clear and Pro tier successor; only the Admin image may change."""
-import copy
 import hashlib
 import importlib.util
 import json
@@ -22,6 +21,7 @@ PRIOR_CAPTURE = {'commandId': '8a9b0d50-39ea-456c-99a7-a3545a46cad0', 'commit': 
 PARENT_PLAN_SHA = '7bf192086f7d3e4a88ae262e4545bdd906c324b3d71e68aa8c399c3e9c90c68a'
 ADMIN_COMMIT = '957407e571e7ac629393d6355a09506a196e5f91'
 ADMIN_PROOF = '354a73bf0427c8c3f94de447cc94695831db51b8a3f5bdb525607fc99c1a86b0'
+BASELINE_SHA256 = '0c02c1b16296b1b6a79c33718d069323344edda83dcde63d6f3cc3dd2a475a49'
 PREFIX = 'apps/admin/src/v2/features/auto-recharge/'
 SOURCES = frozenset(PREFIX + n for n in (
     'bitbrowser-direct-payment.ts', 'bitbrowser-native-quote.ts',
@@ -92,6 +92,8 @@ def validate_contract(c):
     need(all(re.fullmatch('[a-f0-9]{64}', v) for group in (
         c['productionSources'], c['validationSources'], c['sourceParents'], c['controlPins'], parent['adminFiles'])
         for v in group.values()), 'HASH_INVALID')
+    need(type(c.get('baseline')) is dict and sha(canonical(c['baseline'])) == BASELINE_SHA256,
+         'FROZEN_BASELINE_CHANGED')
 
 
 def verify_capture(value, c, *, previous_read_only=False):
@@ -213,5 +215,7 @@ def release(plan, c):
     if plan['mode'] == 'parent':
         return capture(c)
     verify_capture(plan.get('nativeParentCapture'), c)
-    runtime = {**copy.deepcopy(c), 'baseline': copy.deepcopy(plan['nativeParentCapture']['baseline'])}
-    return engine(runtime).release(plan, runtime)
+    # The authenticated parent is frozen in the contract, then checked again by
+    # capture/build and by the inherited server preflight under its release lock.
+    # Pass the exact frozen object through the legacy raw-contract seal.
+    return engine(c).release(plan, c)
