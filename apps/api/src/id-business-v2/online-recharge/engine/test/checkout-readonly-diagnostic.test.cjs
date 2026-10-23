@@ -59,13 +59,13 @@ function fixture(overrides = {}) {
     async checkoutPageLoadFailed(_page, options) {
       calls.push('load');
       assert.ok(options.deadline - Date.now() > 2000);
-      assert.equal(options.stopOnReadFailure, true);
+      assert.notEqual(options.stopOnReadFailure, true);
       return false;
     },
     async inspectCardReadiness(_page, options) {
       calls.push('ready');
       assert.ok(options.deadline - Date.now() <= 2000);
-      assert.equal(options.stopOnReadFailure, true);
+      assert.notEqual(options.stopOnReadFailure, true);
       return { ready: true, code: 'CHECKOUT_CARD_READY', inspection: complete };
     },
     ...overrides.form
@@ -245,7 +245,7 @@ test('owner abort freezes a pending probe, closes the owned page, and ignores la
   assert.deepEqual(f.calls, ['freeze', 'close']);
 });
 
-test('actual form diagnostic stops after its first failed frame without the normal pure-read retry', async () => {
+test('traced readiness retains the normal once-only pure-read retry', async () => {
   let count = 0,
     later = 0;
   const first = {
@@ -266,11 +266,88 @@ test('actual form diagnostic stops after its first failed frame without the norm
   const page = { isClosed: () => false, frames: () => [first, second] };
   const result = await realForm.inspectCardReadiness(page, {
     deadline: Date.now() + 3000,
-    onRead: () => () => {},
-    stopOnReadFailure: true
+    onRead: () => () => {}
   });
   assert.equal(result.code, 'CHECKOUT_CONTROL_READ_FAILED');
-  assert.equal(result.inspection.readAttempts, 1);
-  assert.equal(count, 1);
-  assert.equal(later, 0);
+  assert.equal(result.inspection.readAttempts, 2);
+  assert.equal(count, 2);
+  assert.equal(later, 2);
+});
+
+test('readonly pre-check and final check recover once and retain both read attempts', async () => {
+  let reads = 0;
+  const frame = {
+    parentFrame: () => null,
+    getByText: () => ({
+      count: async () => {
+        if (++reads % 2 === 1) throw Object.assign(new Error('private'), { name: 'TimeoutError' });
+        return 0;
+      }
+    })
+  };
+  const f = fixture({
+    form: {
+      async checkoutPageLoadFailed(page, options) {
+        f.calls.push('load');
+        return realForm.checkoutPageLoadFailed(page, options);
+      }
+    }
+  });
+  f.page.frames = () => [frame];
+  f.page.mainFrame = () => frame;
+  const result = await f.run();
+  assert.equal(result.ok, true);
+  assert.equal(result.stopStage, 'before_payment');
+  assert.equal(reads, 4);
+  assert.deepEqual(f.calls, ['load', 'prepare', 'ready', 'load', 'freeze']);
+  const trace = Array.from(result.trace.reads);
+  assert.deepEqual(
+    trace.map((row) => row.attempt),
+    [1, 2, 1, 2]
+  );
+  assert.deepEqual(
+    trace.map((row) => row.state),
+    ['read_failed', 'completed', 'read_failed', 'completed']
+  );
+  for (const row of trace) {
+    assert.equal(row.operation, 'load_error_count');
+    assert.ok(row.readBudgetMs > 0 && row.readBudgetMs <= (row.attempt === 1 ? 300 : 1200));
+    if (row.attempt === 2) assert.ok(row.readBudgetMs > 300);
+  }
+  assert.equal(result.paymentClicks, 0);
+  assert.equal(result.cardFilled, false);
+  assert.equal(f.page.isClosed(), false);
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
+test('readonly pre-check stops after the normal retry also fails', async () => {
+  let reads = 0;
+  const frame = {
+    parentFrame: () => null,
+    getByText: () => ({
+      count: async () => {
+        reads++;
+        throw Object.assign(new Error('private'), { name: 'TimeoutError' });
+      }
+    })
+  };
+  const f = fixture({
+    form: {
+      async checkoutPageLoadFailed(page, options) {
+        f.calls.push('load');
+        return realForm.checkoutPageLoadFailed(page, options);
+      }
+    }
+  });
+  f.page.frames = () => [frame];
+  f.page.mainFrame = () => frame;
+  const result = await f.run();
+  assert.equal(result.ok, false);
+  assert.equal(result.failedProbe, 'load_precheck');
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_READ_FAILED');
+  assert.equal(result.failureInspection.readAttempts, 2);
+  assert.equal(result.failedRead.attempt, 2);
+  assert.equal(reads, 2);
+  assert.deepEqual(f.calls, ['load', 'freeze', 'close']);
+  assert.equal(result.pageCloseConfirmed, true);
 });
