@@ -425,7 +425,20 @@ test('commit and visible plan cannot finish opening until delayed actual card co
   assert.equal(await page.locator('input[autocomplete="cc-number"]').count(), 0);
   assert.equal(settled, false);
   assert.equal(await human.isCheckoutPaymentReady(page), false);
-  await opening;
+  const completed = await opening;
+  assert.equal(completed.checkoutInitialization.version, 2);
+  assert.deepEqual(
+    require('../checkout-initialization.cjs').sanitize(completed.checkoutInitialization),
+    completed.checkoutInitialization
+  );
+  assert.deepEqual(
+    require('../checkout-await-diagnostics.cjs').sanitize(completed.checkoutAwaits),
+    completed.checkoutAwaits
+  );
+  assert.equal(completed.checkoutAwaits.pageKind, 'native_checkout');
+  assert.equal(completed.checkoutAwaits.steps.at(-1).step, 'final_auth');
+  assert.equal(completed.checkoutAwaits.steps.at(-1).state, 'completed');
+  assert.equal(completed.checkoutAwaits.media.available, false);
   assert.equal(await human.isCheckoutPaymentReady(page), true);
   assert.equal(stats.domContentLoaded, 0);
   stoppedWithoutPayment(stats);
