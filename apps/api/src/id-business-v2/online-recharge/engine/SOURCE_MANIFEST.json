@@ -75,9 +75,9 @@
     {
       "path": "checkout-readonly-diagnostic.cjs",
       "originalSha256": null,
-      "adaptedSha256": "820f469f717018311d1380412077bf5eea713e4aeaf15027a5587a02c6fe8ab5",
+      "adaptedSha256": "66d0b8f9565dff4c62b0c6fc2d52fa0e5b4175f4f279d2340cb21b71dbae388d",
       "changed": true,
-      "reason": "Internal owned-page readonly original-checkout diagnostic: retain load pre-check, original scroll preparation, owner deadlines, bounded probe/read evidence and existing full bounded network snapshot; stop after read timeout without payment."
+      "reason": "Internal owned-page readonly original-checkout diagnostic: retain load pre-check, original scroll preparation, owner deadlines, bounded probe/read evidence and existing full bounded network snapshot; stop after read timeout without payment. 2026-10-23 Restore the existing once-only pure-read retry in readonly diagnostics; retain failed and recovered read traces without changing shared form or payment behavior."
     },
     {
       "path": "checkout-recovery.cjs",
@@ -306,9 +306,9 @@
     {
       "path": "test/checkout-readonly-diagnostic.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "16e0e1185b0992c60d0c4fd6be519dc225edb79fe4fff60f110113802df6d77e",
+      "adaptedSha256": "316b5ac128baa6931bd9c5d8dca63bf7f6aaa3772877d717e80a1849b64fca9d",
       "changed": true,
-      "reason": "Finite readonly diagnostic sequence, deadline, inspection, freeze/close, no payment and first read failure regressions."
+      "reason": "Finite readonly diagnostic sequence, deadline, inspection, freeze/close, no payment and first read failure regressions. 2026-10-23 Restore the existing once-only pure-read retry in readonly diagnostics; retain failed and recovered read traces without changing shared form or payment behavior."
     },
     {
       "path": "test/checkout-recheck.test.cjs",

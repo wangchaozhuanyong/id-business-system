@@ -3313,6 +3313,14 @@ test('readonly probe release scopes finite executor sources without API or migra
     false
   );
   assert.equal(isOnlineReadonlyProbeOnly(onlineReadonlyProbePaths.slice(1)), false);
+  for (const name of ['checkout-form.cjs', 'upstream/stripe-payment.js'])
+    assert.equal(
+      isOnlineReadonlyProbeOnly([
+        ...onlineReadonlyProbePaths,
+        'apps/api/src/id-business-v2/online-recharge/engine/' + name
+      ]),
+      false
+    );
   const commands = JSON.stringify(sessionProbeCommands('online-engine', onlineReadonlyProbePaths));
   for (const name of [
     'checkout-readonly-diagnostic',

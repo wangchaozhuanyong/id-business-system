@@ -1,9 +1,7 @@
 export const onlineReadonlyProbePaths = Object.freeze([
   ...[
     'SOURCE_MANIFEST.json',
-    'checkout-form.cjs',
     'checkout-readonly-diagnostic.cjs',
-    'upstream/stripe-payment.js',
     'test/checkout-readonly-diagnostic.test.cjs'
   ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
   'docs/ONLINE_RECHARGE.md',
