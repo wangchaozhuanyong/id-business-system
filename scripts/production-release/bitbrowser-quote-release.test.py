@@ -73,7 +73,8 @@ class QuoteTierPublicationTests(unittest.TestCase):
         runtime = ancestor.pop('runtime')
         ancestor.update(runtime)
         ancestor.update(commit=P.CURRENT, current='/opt/id-business-v2/releases/synthetic-current',
-                        proofs={'online-readonly-probe-build-proof.json': self.c['parentPlan']['buildProofSha256']})
+                        proofs={'online-readonly-probe-build-proof.json': self.c['parentPlan']['buildProofSha256'],
+                                'bitbrowser-history-build-proof.json': P.ADMIN_PROOF})
         return {'status': 'BITBROWSER_QUOTE_PARENT_VERIFIED', 'baseline': ancestor,
                 'parentPlanSha256': self.c['parentPlanSha256'], 'businessActions': 0}
 
@@ -108,6 +109,79 @@ class QuoteTierPublicationTests(unittest.TestCase):
                 P.verify_capture(changed, self.c)
         with self.assertRaisesRegex(RuntimeError, 'NATIVE_BASELINE_CHANGED'):
             P.verify_capture(value, {**self.c, 'baseline': {}})
+
+    def test_old_read_only_capture_cannot_authorize_a_new_build_without_active_admin_proof(self):
+        old = self.capture()
+        old['baseline']['proofs'].pop('bitbrowser-history-build-proof.json')
+        P.verify_capture(old, self.c, previous_read_only=True)
+        with self.assertRaisesRegex(RuntimeError, 'PARENT_SCOPE_CHANGED'):
+            P.verify_capture(old, self.c)
+
+    def test_historical_constructor_inputs_are_closed_and_existing_objects_need_no_fetch(self):
+        calls = []
+        B.ensure_reconstruction_commits(self.c, lambda *args: calls.append(args) or b'')
+        self.assertEqual(len(calls), 55)
+        self.assertTrue(all(args[:3] == ('git', 'cat-file', '-e') for args in calls))
+        for mutate in (lambda c: c['reconstructionCommits'].pop(),
+                       lambda c: c['reconstructionCommits'].append('a' * 40),
+                       lambda c: c['previousReadOnlyCapture'].update(commandId='other')):
+            changed = copy.deepcopy(self.c)
+            mutate(changed)
+            with self.assertRaisesRegex(RuntimeError, 'RECONSTRUCTION_INPUTS_CHANGED'):
+                P.validate_contract(changed)
+
+    def test_published_later_admin_interface_is_part_of_the_exact_parent(self):
+        self.assertEqual(self.c['adminParent']['commit'], '957407e571e7ac629393d6355a09506a196e5f91')
+        self.assertEqual(len(self.c['adminParent']['sourceOverlay']['sources']), 5)
+        for mutate in (lambda c: c['adminParent']['sourceOverlay'].update(commit='a' * 40),
+                       lambda c: c['adminParent']['sourceOverlay']['sources'].clear()):
+            changed = copy.deepcopy(self.c)
+            mutate(changed)
+            with self.assertRaisesRegex(RuntimeError, 'ADMIN_OVERLAY_CHANGED'):
+                P.validate_contract(changed)
+
+    def test_missing_constructor_object_fetches_only_the_exact_commit_and_checks_it_again(self):
+        import os
+        import subprocess
+        calls = []
+        fetched = False
+        missing = self.c['reconstructionCommits'][0]
+        def runner(*args):
+            nonlocal fetched
+            calls.append(args)
+            if args[:2] == ('git', 'fetch'):
+                fetched = True
+            elif args[-1] == missing + '^{commit}' and not fetched:
+                raise subprocess.CalledProcessError(128, args)
+            return b''
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': B.REPO}):
+            B.ensure_reconstruction_commits(self.c, runner)
+        self.assertEqual(calls[:3], [
+            ('git', 'cat-file', '-e', missing + '^{commit}'),
+            ('git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', missing),
+            ('git', 'cat-file', '-e', missing + '^{commit}')])
+        self.assertEqual(sum(args[:2] == ('git', 'fetch') for args in calls), 1)
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}):
+            with self.assertRaisesRegex(RuntimeError, 'MISSING_HISTORICAL_SOURCE'):
+                B.ensure_reconstruction_commits(self.c, lambda *args: (_ for _ in ()).throw(subprocess.CalledProcessError(128, args)))
+
+    def test_previous_read_only_receipt_requires_original_identity_success_and_bounded_payload(self):
+        import base64
+        import zlib
+        value = self.capture()
+        value['baseline']['proofs'].pop('bitbrowser-history-build-proof.json')
+        invocation = {'CommandId': self.c['previousReadOnlyCapture']['commandId'], 'InstanceId': B.INSTANCE,
+                      'DocumentName': 'AWS-RunShellScript', 'PluginName': 'aws:runShellScript',
+                      'Status': 'Success', 'ResponseCode': 0, 'StandardErrorContent': '',
+                      'StandardOutputContent': json.dumps({'zlibBase64': base64.b64encode(zlib.compress(P.canonical(value))).decode()})}
+        self.assertEqual(B.previous_capture(invocation, self.c), value)
+        for field, replacement in [('CommandId', 'other'), ('InstanceId', 'other'), ('Status', 'InProgress'),
+                                   ('ResponseCode', False), ('ResponseCode', 1), ('StandardErrorContent', 'unknown')]:
+            with self.assertRaisesRegex(RuntimeError, 'PREVIOUS_RECEIPT_IDENTITY'):
+                B.previous_capture({**invocation, field: replacement}, self.c)
+        expanded = {**invocation, 'StandardOutputContent': json.dumps({'zlibBase64': base64.b64encode(zlib.compress(b' ' * (128 * 1024 + 1))).decode()})}
+        with self.assertRaisesRegex(RuntimeError, 'PREVIOUS_RECEIPT_BOUND'):
+            B.previous_capture(expanded, self.c)
 
     def proof(self):
         files = {n: '1' * 64 for n in self.c['adminParent']['adminFiles']}

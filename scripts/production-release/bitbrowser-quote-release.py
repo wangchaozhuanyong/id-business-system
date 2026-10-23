@@ -16,9 +16,11 @@ CONTRACT_FILE = 'bitbrowser-quote-contract.json'
 CURRENT = 'ed580a608d038980b3501df3a718c2801564bb88'
 SOURCE = '5eb95635a5f2ff4b35b9bcc6fc19106cc16b008a'
 SOURCE_PR = 687
+RECONSTRUCTION_SHA256 = '1a3467affd1236f43c4d469d1a56c75132f2b87e53ef16b09fe34911030b75b7'
+PRIOR_CAPTURE = {'runId': 39991066742, 'runAttempt': 1, 'jobId': 120542648820, 'commit': 'a38ae9687c1bf27ca3b8b4546db0531cb69f038c', 'logSha256': '44a670a3c80eb2795c8ccccb81c9125d9ef22a0af9b32f4175dcc0848343d3e5', 'commandId': '8a9b0d50-39ea-456c-99a7-a3545a46cad0'}
 PARENT_PLAN_SHA = '18e937143ff9b0d4d1747b7dd24c4cc3a7ec202640369cf454860fd9fa818b07'
-ADMIN_COMMIT = 'd7d80c357c4954ef28db85e1021a0e19a65ebd81'
-ADMIN_PROOF = '9c436cd452cacc54e96964830acceb56f816539147acf766fe7ce866211eda55'
+ADMIN_COMMIT = '957407e571e7ac629393d6355a09506a196e5f91'
+ADMIN_PROOF = '354a73bf0427c8c3f94de447cc94695831db51b8a3f5bdb525607fc99c1a86b0'
 PREFIX = 'apps/admin/src/v2/features/auto-recharge/'
 SOURCES = frozenset(PREFIX + n for n in (
     'bitbrowser-direct-payment.ts', 'bitbrowser-native-quote.ts',
@@ -69,7 +71,16 @@ def validate_contract(c):
     need(c.get('migrationPerformed') is False and c.get('businessActions') == 0
          and c['sqlFenceHelperSha256'] == c['controlPins']['api-admin-scope.py']
          == '50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925', 'SIDE_EFFECT_SCOPE')
+    refs = c.get('reconstructionCommits', [])
+    need(type(refs) is list and len(refs) == 55 and refs == sorted(set(refs))
+         and all(re.fullmatch('[a-f0-9]{40}', v) for v in refs)
+         and sha(canonical(refs)) == RECONSTRUCTION_SHA256
+         and c.get('previousReadOnlyCapture') == PRIOR_CAPTURE, 'RECONSTRUCTION_INPUTS_CHANGED')
     parent = c['adminParent']
+    published = json.loads((HERE / 'online-human-verification-contract.json').read_bytes())
+    need(parent.get('sourceOverlay') == {'commit': published['sourceReviewCommit'],
+         'sources': {n: v for n, v in published['productionSources'].items() if n.startswith('apps/admin/')}}
+         and published['sourceReviewCommit'] == 'df0e604794b3068d78ab310ed7dbb4b2469be083', 'ADMIN_OVERLAY_CHANGED')
     need(parent['commit'] == ADMIN_COMMIT and parent['proofSha256'] == ADMIN_PROOF
          and len(parent['adminFiles']) == 263 and 'index.html' in parent['adminFiles'], 'ADMIN_PARENT_CHANGED')
     plan = c['parentPlan']
@@ -82,15 +93,18 @@ def validate_contract(c):
         for v in group.values()), 'HASH_INVALID')
 
 
-def verify_capture(value, c):
+def verify_capture(value, c, *, previous_read_only=False):
     need(type(value) is dict and set(value) == {'status', 'baseline', 'parentPlanSha256', 'businessActions'}
          and value['status'] == 'BITBROWSER_QUOTE_PARENT_VERIFIED'
          and value['businessActions'] == 0 and value['parentPlanSha256'] == c['parentPlanSha256'], 'PARENT_CAPTURE_CHANGED')
     b = value['baseline']
+    proofs = {'online-readonly-probe-build-proof.json': c['parentPlan']['buildProofSha256']}
+    if not previous_read_only:
+        proofs['bitbrowser-history-build-proof.json'] = ADMIN_PROOF
     need(b['commit'] == CURRENT and Path(b['current']).parent == BASE / 'releases'
          and set(b['services']) == SERVICES and b['apiModules'] == {}
          and b['database']['pending'] == 0
-         and b['proofs'] == {'online-readonly-probe-build-proof.json': c['parentPlan']['buildProofSha256']}
+         and b['proofs'] == proofs
          and set(b['configurationSha256']) == {'.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml'}
          and set(b['runtimeConfigurationSha256']) == SERVICES, 'PARENT_SCOPE_CHANGED')
     if 'baseline' in c:
@@ -109,6 +123,10 @@ def capture(c):
     current = (BASE / 'current').resolve(strict=True)
     raw = (current / 'release-manifest.json').read_bytes()
     need(current.parent == BASE / 'releases' and json.loads(raw)['commit'] == CURRENT, 'CURRENT_CHANGED')
+    manifest = json.loads(raw)
+    need(manifest['roleSourceProjections']['admin']['commit'] == ADMIN_COMMIT
+         and sha((current / 'bitbrowser-history-build-proof.json').read_bytes()) == ADMIN_PROOF,
+         'ACTIVE_ADMIN_PARENT_CHANGED')
     states = h.snapshot(d, current)
     ancestor = c['parentPlan']['nativeParentCapture']['baseline']
     proof = (current / 'online-readonly-probe-build-proof.json').read_bytes()
@@ -125,7 +143,8 @@ def capture(c):
     baseline = {'commit': CURRENT, 'current': str(current), 'manifestSha256': sha(raw), 'services': states,
         'configurationSha256': {n: sha((current / n).read_bytes()) for n in hst.CONFIGURATION},
         'runtimeConfigurationSha256': {n: h.configuration(d, st) for n, st in states.items()},
-        'proofs': {'online-readonly-probe-build-proof.json': sha(proof)}, **hst.runtime(d, states),
+        'proofs': {'online-readonly-probe-build-proof.json': sha(proof),
+                   'bitbrowser-history-build-proof.json': ADMIN_PROOF}, **hst.runtime(d, states),
         'database': hst.database(d, states['api']), 'backupNormalizerPath': str(normalizer),
         'backupNormalizerSha256': sha(normalizer.read_bytes())}
     h.guards(d, current, states, c)
