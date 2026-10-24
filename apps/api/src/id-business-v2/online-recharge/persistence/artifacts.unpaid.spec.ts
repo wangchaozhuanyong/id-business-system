@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { OnlineRechargeArtifactsRepository } from './artifacts.repository';
 const project = resolve(__dirname, '../../../../../..');
@@ -52,13 +52,18 @@ function input(value: unknown) {
 describe('不付款诊断文件合同', () => {
   it('有效受控报告通过原证据接口保存，不连接数据库', async () => {
     const root = join(project, '.runtime/unpaid-validation-20261024');
+    await mkdir(root, { recursive: true });
     const directory = await mkdtemp(join(root, 'artifact-'));
-    const f = fixture(directory);
-    const result = await f.repository.upload(input(report));
-    expect(result.kind).toBe('diagnostic');
-    expect(result.filename).toMatch(/\.json$/);
-    expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(f.tx.onlineRechargeEvent.create).toHaveBeenCalledOnce();
+    try {
+      const f = fixture(directory);
+      const result = await f.repository.upload(input(report));
+      expect(result.kind).toBe('diagnostic');
+      expect(result.filename).toMatch(/\.json$/);
+      expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(f.tx.onlineRechargeEvent.create).toHaveBeenCalledOnce();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
   for (const extra of [
     { rawBody: 'forbidden' },
