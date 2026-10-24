@@ -68,3 +68,20 @@ test('exact checkout resume repair retains API and complete engine checks withou
   );
   assert.match(JSON.stringify(unpaidValidationCommands('api', paths)), /typecheck/);
 });
+
+test('checkout resume publication checks only its finite controls and preserves business gates', () => {
+  const paths = unpaidValidationControls.filter((p) => p.includes('online-checkout-resume-'));
+  assert.equal(paths.length, 6);
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  const commands = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(commands, /online-checkout-resume-release.test.py/);
+  assert.doesNotMatch(commands, /prisma|migrate|workspace|financial-integrity/);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/checkout-preparation.ts',
+    'scripts/production-release/unreviewed-publication.py',
+    'apps/api/prisma-mysql/schema.prisma'
+  ])
+    assert.equal(isUnpaidValidationControlsOnly([...paths, extra]), false);
+});
