@@ -1,3 +1,4 @@
+import { isUnpaidValidationOnly } from './ci-unpaid-validation-scope.mjs';
 import { isSettledCheckoutControlsOnly } from './ci-settled-checkout-scope.mjs';
 import { isManualSettlementCandidate } from './ci-bitbrowser-manual-controls.mjs';
 import { isFinancialClosureCandidate } from './ci-financial-closure-scope.mjs';
@@ -3077,6 +3078,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isUnpaidValidationOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
   if (isOnlineCountryInteractionOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCountryInteractionControlsOnly(paths)) return ['guards'];
   if (isOnlineCheckoutErrorPageOnly(paths)) return ['guards', 'online-engine'];
