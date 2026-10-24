@@ -1,3 +1,41 @@
+export const onlineCountryInteractionPaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineCountryInteractionControls = Object.freeze([
+  '.github/workflows/online-country-interaction-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/production-release/online-country-interaction-release.py',
+  'scripts/production-release/online-country-interaction-publication.py',
+  'scripts/production-release/online-country-interaction-release.test.py',
+  'scripts/production-release/online-country-interaction-contract.json'
+]);
+export function isOnlineCountryInteractionOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineCountryInteractionPaths
+      .filter((p) => p.startsWith('apps/'))
+      .every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) =>
+        onlineCountryInteractionPaths.includes(p) || onlineCountryInteractionControls.includes(p)
+    )
+  );
+}
+export function isOnlineCountryInteractionControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-country-interaction-')) &&
+    paths.every((p) => onlineCountryInteractionControls.includes(p))
+  );
+}
 export const onlineCheckoutErrorPagePaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
   'apps/api/src/id-business-v2/online-recharge/engine/checkout-page-state.cjs',
@@ -1461,6 +1499,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineCountryInteractionOnly(paths)) return true;
   if (isOnlineCheckoutErrorPageOnly(paths)) return true;
   if (isOnlineReadonlyProbeOnly(paths)) return true;
   if (isOnlineSessionProbeOnly(paths)) return true;
@@ -1515,6 +1554,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCountryInteractionControlsOnly(paths)) return true;
   if (isOnlineCheckoutErrorPageControlsOnly(paths)) return true;
   if (isOnlineReadonlyProbeControlsOnly(paths)) return true;
   if (isOnlineSessionProbeControlsOnly(paths)) return true;
@@ -1552,6 +1592,43 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isOnlineCountryInteractionOnly(paths) || isOnlineCountryInteractionControlsOnly(paths)) {
+    const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+    if (part === 'guards') {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        previous[0],
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        previous.find((command) => command[0] === 'node'),
+        ['python3', '-B', 'scripts/production-release/online-country-interaction-release.test.py'],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineCountryInteractionOnly(paths)) {
+      const setup = onlineSettingsCommands(part, onlineNativeFetchPaths).slice(0, 2);
+      return [
+        ...setup,
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          ...['checkout-form', 'checkout-readonly-diagnostic', 'checkout-readiness-wait'].map(
+            (n) => engine + '/test/' + n + '.test.cjs'
+          )
+        ],
+        ['npm', '--prefix', engine, 'run', 'test:upstream']
+      ];
+    }
+    throw new Error('Unsupported country interaction check part');
+  }
+
   if (isOnlineCheckoutErrorPageOnly(paths) || isOnlineCheckoutErrorPageControlsOnly(paths)) {
     const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
     if (part === 'guards') {

@@ -34,6 +34,8 @@ import {
   chatgptSalesParts
 } from './ci-chatgpt-sales-scope.mjs';
 import {
+  isOnlineCountryInteractionOnly,
+  isOnlineCountryInteractionControlsOnly,
   isOnlineCheckoutErrorPageOnly,
   isOnlineCheckoutErrorPageControlsOnly,
   isOnlineReadonlyProbeOnly,
@@ -3075,6 +3077,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isOnlineCountryInteractionOnly(paths)) return ['guards', 'online-engine'];
+  if (isOnlineCountryInteractionControlsOnly(paths)) return ['guards'];
   if (isOnlineCheckoutErrorPageOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCheckoutErrorPageControlsOnly(paths)) return ['guards'];
   if (isOnlineReadonlyProbeOnly(paths)) return ['guards', 'online-engine'];
