@@ -1,3 +1,8 @@
+import {
+  isUnpaidValidationOnly,
+  isUnpaidValidationControlsOnly,
+  unpaidValidationCommands
+} from './ci-unpaid-validation-scope.mjs';
 export const onlineCountryInteractionPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
   'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
@@ -1499,6 +1504,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isUnpaidValidationOnly(paths)) return true;
   if (isOnlineCountryInteractionOnly(paths)) return true;
   if (isOnlineCheckoutErrorPageOnly(paths)) return true;
   if (isOnlineReadonlyProbeOnly(paths)) return true;
@@ -1554,6 +1560,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isUnpaidValidationControlsOnly(paths)) return true;
   if (isOnlineCountryInteractionControlsOnly(paths)) return true;
   if (isOnlineCheckoutErrorPageControlsOnly(paths)) return true;
   if (isOnlineReadonlyProbeControlsOnly(paths)) return true;
@@ -1592,6 +1599,8 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isUnpaidValidationOnly(paths) || isUnpaidValidationControlsOnly(paths))
+    return unpaidValidationCommands(part, paths);
   if (isOnlineCountryInteractionOnly(paths) || isOnlineCountryInteractionControlsOnly(paths)) {
     const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
     if (part === 'guards') {

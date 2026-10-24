@@ -51,9 +51,14 @@ async function isLoginPageContent(page) {
         return await renderedAuthCandidate(page.locator(
             'h1,h2,h3,h4,h5,h6,[role="heading"],form,[role="dialog"],dialog,button,a,[role="button"],[role="link"]'
         ), { loginContent: true, excludeConversation: true });
-    } catch (_) {
-        return false;
+    } catch (error) {
+        throw loginReadFailure(error, 'login_content');
     }
+}
+
+function loginReadFailure(error, probe) {
+    if (['LEASE_LOST', 'VERIFICATION_CANCELLED', 'VERIFICATION_TIMEOUT', 'CHECKOUT_AUTH_READ_FAILED'].includes(error.code)) return error;
+    return Object.assign(new Error('登录页面读取失败'), { code: 'CHECKOUT_AUTH_READ_FAILED', readClass: 'read_failed', probe });
 }
 
 async function renderedAuthCandidate(locator, options = {}) {
@@ -113,7 +118,10 @@ async function renderedAuthCandidate(locator, options = {}) {
 /** 未登录访客 UI：仅检测可见的 Log in / Sign up 控件，不用 body 全文（已登录页 HTML 里也可能含这些词） */
 async function readLoginProbe(label, locator, options) {
     const operation = () => renderedAuthCandidate(locator(), { excludeConversation: true });
-    if (typeof options.readProbe !== 'function') return operation().catch(() => false);
+    if (typeof options.readProbe !== 'function') return operation().catch(error => {
+        if (['LEASE_LOST', 'VERIFICATION_CANCELLED', 'VERIFICATION_TIMEOUT'].includes(error.code)) throw error;
+        throw Object.assign(new Error('登录控件读取失败'), { code: 'CHECKOUT_AUTH_READ_FAILED', readClass: 'read_failed', probe: label });
+    });
     return options.readProbe(label, operation);
 }
 
@@ -153,7 +161,7 @@ async function hasLoggedInChatUi(page) {
         () => page.getByText(/Due today/i)
     ];
     for (const probe of probes) {
-        if (await renderedAuthCandidate(probe()).catch(() => false)) {
+        if (await renderedAuthCandidate(probe()).catch(error => { throw loginReadFailure(error, 'logged_in_ui'); })) {
             return true;
         }
     }

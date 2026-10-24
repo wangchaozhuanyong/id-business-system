@@ -147,6 +147,7 @@ function clearTask() {
   taskAbortController = new AbortController();
 }
 module.exports = {
+  isUnpaidValidation: () => require('./unpaid-validation.cjs').enabled(taskContext),
   rpc,
   configureTask,
   clearTask,

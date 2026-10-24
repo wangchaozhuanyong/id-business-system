@@ -34,6 +34,7 @@ function fixture({
     forks: 0,
     sent: 0,
     diagnostics: [],
+    files: new Map(),
     releases: 0,
     acquired: 0
   };
@@ -119,10 +120,24 @@ function fixture({
     setTimeout: (callback, milliseconds) => timer(callback, milliseconds, false),
     clearTimeout: (handle) => timers.delete(handle),
     require(name) {
+      if (name === './unpaid-validation.cjs') return require('../unpaid-validation.cjs');
       if (name === 'node:path') return path;
       if (name === 'node:os') return { hostname: () => 'synthetic-host' };
       if (name === 'node:net') return {};
-      if (name === 'node:fs/promises') return { mkdir: async () => {}, rm: async () => {} };
+      if (name === 'node:fs/promises')
+        return {
+          mkdir: async () => {},
+          rm: async () => {},
+          writeFile: async (file, value) => {
+            effects.files.set(file, Buffer.from(value));
+          },
+          realpath: async (file) => file,
+          stat: async (file) => ({
+            isFile: () => true,
+            size: effects.files.get(file)?.length || 0
+          }),
+          readFile: async (file) => effects.files.get(file)
+        };
       if (name === 'node:child_process')
         return {
           fork: () => {
@@ -501,4 +516,42 @@ test('a completed bootstrap clears its phase timer without affecting the ordinar
   await running;
   assert.equal(f.effects.releases, 1);
   assert.equal(f.timerCount(), 0);
+});
+
+for (const phase of ['login', 'billing_fill'])
+  test(`unpaid interrupted ${phase} retains classified diagnostic before completion`, async () => {
+    const f = fixture();
+    f.task.payload = { validationMode: 'ready_before_payment' };
+    const running = f.run();
+    await settle();
+    f.child.emit('message', {
+      type: 'validation_stage',
+      stage: phase,
+      at: new Date(f.now()).toISOString()
+    });
+    f.child.exit();
+    await running;
+    const finished = f.effects.rpc.find((row) => row.method === 'completeJob');
+    assert.equal(finished.args.status, 'failed');
+    assert.equal(finished.args.executorInterrupted, true);
+    assert.equal(finished.args.result.validationReport.failureClass, 'EXECUTOR_INTERRUPTED');
+    assert.equal(finished.args.result.validationReport.lastStage, phase);
+    const upload = f.effects.rpc.findIndex((row) => row.method === 'evidenceUpload');
+    const complete = f.effects.rpc.findIndex((row) => row.method === 'completeJob');
+    assert.ok(upload >= 0 && upload < complete);
+    const report = JSON.parse([...f.effects.files.values()][0]);
+    assert.equal(report.outcome, 'failed_with_class');
+    assert.equal(report.executorTerminated, true);
+  });
+
+test('unpaid supervisor stops at ten minutes and never inherits the ordinary thirty-minute wait', async () => {
+  const f = fixture();
+  f.task.payload = { validationMode: 'ready_before_payment' };
+  const running = f.run();
+  await settle();
+  await f.advance(600000);
+  assert.equal(f.effects.signals[0]?.signal, 'SIGTERM');
+  await f.advance(5000);
+  await running;
+  assert.equal(f.effects.rpc.find((row) => row.method === 'completeJob').args.status, 'failed');
 });

@@ -102,7 +102,7 @@ test('observed probes keep the same order and matching options without enabling 
   );
 });
 
-test('observed read failures propagate while unobserved bootstrap callers retain their existing behavior', async () => {
+test('observed and unobserved login reads both preserve failure instead of reporting absence', async () => {
   let calls = 0;
   const page = {
     isClosed: () => false,
@@ -123,6 +123,9 @@ test('observed read failures propagate while unobserved bootstrap callers retain
     auth.hasVisibleLoginChrome(page, { readProbe: (_, operation) => operation() })
   );
   assert.equal(calls, 1);
-  assert.equal(await auth.hasVisibleLoginChrome(page), false);
-  assert.equal(calls, 7);
+  await assert.rejects(
+    auth.hasVisibleLoginChrome(page),
+    (error) => error.code === 'CHECKOUT_AUTH_READ_FAILED' && error.readClass === 'read_failed'
+  );
+  assert.equal(calls, 2);
 });

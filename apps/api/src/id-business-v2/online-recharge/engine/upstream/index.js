@@ -160,6 +160,8 @@ async function run(runOptions = {}) {
     const DEBUG_HEADFUL = process.env.HEADFUL === '1';
     const CHROMIUM_CHANNEL = (process.env.CHROMIUM_CHANNEL || '').trim();
     const debugOnly = process.env.CHECKOUT_DEBUG_ONLY === '1';
+    const validation = runOptions.unpaidValidation === true ? require('../unpaid-validation.cjs') : null;
+    const verificationHandler = validation ? validation.automaticVerification : require('../human-verification.cjs').waitForHumanVerification;
 
     let proxyCleanup = async () => { };
     let browserSession = null;
@@ -171,6 +173,7 @@ async function run(runOptions = {}) {
     let lastPaymentResult = null;
     let checkoutEvidence = {};
 
+    validation?.stage('proxy');
     const preparedProxy = await preparePlaywrightProxy(CONFIG.proxy);
     proxyCleanup = preparedProxy.cleanup;
     const proxyConfig = preparedProxy.proxyConfig;
@@ -223,8 +226,9 @@ async function run(runOptions = {}) {
     try {
         context = await browser.newContext(contextOptions);
         const sessionRaw = CONFIG.chatgptSessionJson || CONFIG.chatgptToken;
+        validation?.stage('login');
         const installResult = await installChatGptSession(context, sessionRaw, {
-            signal: taskSignal?.(), onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
+            signal: taskSignal?.(), onHumanVerification: verificationHandler
         });
         const sessionData = installResult?.sessionData || installResult;
         const cookieVerified = Boolean(installResult?.cookieVerified);
@@ -439,6 +443,7 @@ async function run(runOptions = {}) {
         }, chromeMajor);
 
         // --- Phase 0: Proxy Connectivity Check ---
+        validation?.stage('proxy');
         if (proxyConfig) {
             // 模块业务规则：只重试原代理的连通性探测，不重启任务或重复建单、付款。
             const maxProxyAttempts = 5;
@@ -510,6 +515,7 @@ async function run(runOptions = {}) {
 
         console.log(`[1] 套餐类型: ${planType}, 地区: ${paymentRegion}, 币种: ${billingCurrency}`);
 
+        validation?.stage('login');
         page = await context.newPage();
         await require('./human-verification').prepareVerificationPage?.(page, { signal: taskSignal?.() });
         safeMedia.attach(page);
@@ -521,7 +527,7 @@ async function run(runOptions = {}) {
         const loginInfo = await bootstrapChatGptSession(page, sessionRaw, {
             sessionData, cookieVerified, initialSessionProbe: installResult?.initialSessionProbe,
             signal: taskSignal?.(), deadlineAt: performance.now() + 180000,
-            onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
+            onHumanVerification: verificationHandler
         });
         checkoutEvidence.bootstrapDiagnostics = loginInfo.bootstrapDiagnostics;
         if (loginInfo.email && !email) {
@@ -531,9 +537,10 @@ async function run(runOptions = {}) {
         // Account and exact tier are checked before opening a new checkout. An
         // existing subscription must follow the original plan-change UI.
         const accessToken = String(loginInfo.session?.accessToken || CONFIG.chatgptToken).trim();
+        validation?.stage('preflight');
         const preflight = await require('../confirmation.cjs').preflightPayment(planType, accessToken, {
-            allowUnverifiedTarget: debugOnly, browserContext: context, page, signal: taskSignal?.(), sessionRaw,
-            authDiagnostics, onHumanVerification: require('../human-verification.cjs').waitForHumanVerification
+            allowUnverifiedTarget: debugOnly && !validation, browserContext: context, page, signal: taskSignal?.(), sessionRaw,
+            authDiagnostics, onHumanVerification: verificationHandler
         });
         if (!preflight.allowed) return { ...checkoutEvidence, success: false, submitted: false, ...preflight };
         const operation = preflight.kind;
@@ -546,6 +553,7 @@ async function run(runOptions = {}) {
         let checkoutResult = null;
         const planNameOverride = String(CONFIG.planNameOverride || '').trim() || undefined;
 
+        validation?.stage('checkout_create');
         if (checkoutMode !== 'ui' && operation === 'initial' && planType !== 'pro_500') {
             try {
                 checkoutResult = await openApiCheckout(page, {
@@ -554,7 +562,8 @@ async function run(runOptions = {}) {
                     country: billingCountry,
                     currency: billingCurrency,
                     planNameOverride,
-                    verifyPage: true
+                    verifyPage: true,
+                    ...(validation ? { onCheckoutCreated: () => validation.stage('checkout_open') } : {})
                 });
                 checkoutOpened = true;
             } catch (apiError) {
@@ -585,6 +594,9 @@ async function run(runOptions = {}) {
         const checkoutAwaits = require('../checkout-await-diagnostics.cjs').sanitize(checkoutResult?.checkoutAwaits);
         checkoutEvidence = { ...checkoutEvidence, ...(checkoutInitialization ? { checkoutInitialization } : {}),
             ...(checkoutAwaits ? { checkoutAwaits } : {}) };
+        if (validation) {
+            return { ...checkoutEvidence, ...await validation.prepare(page, { signal: taskSignal?.() }) };
+        }
         if (debugOnly) {
             await waitForDebugPaymentStep(page);
             const observedDue = await require('./stripe-payment').readCheckoutDueAmount(page);
@@ -667,6 +679,8 @@ async function run(runOptions = {}) {
         const verificationBootstrapCode = e.bootstrapDiagnostics?.reason === 'verification_failed'
             ? require('./verification-runtime').controlledVerificationCode(e.code, null) : null;
         const bootstrapFailure = {
+            CHALLENGE_BLOCKED: '官网验证未完成，已停止本次不付款验证',
+            CHECKOUT_AUTH_READ_FAILED: '登录控件读取失败，已停止后续操作',
             NETWORK_TIMEOUT: '官网登录核验超过本次期限，已停止后续操作',
             SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
             SESSION_VERIFICATION_BLOCKED: '官网会话验证被阻断，尚未取得登录成功证据；本次未提交付款',
@@ -684,7 +698,9 @@ async function run(runOptions = {}) {
             CHECKOUT_RECOVERY_INVALID: '原结账单来源或付款绑定无效，未提交付款',
             CHECKOUT_RECOVERY_UNSUPPORTED: '当前结账单来源尚未通过核验，未提交付款',
             CHECKOUT_CREATION_UNKNOWN: '官网建单结果未确认，已停止；未再次建单或提交付款',
-            CHECKOUT_CREATION_REJECTED: '官网拒绝创建本次结账单，未提交付款',
+            CHECKOUT_CREATION_REJECTED: e.code === 'CHECKOUT_CREATION_REJECTED'
+                ? require('../checkout-creation-diagnostics.cjs').message(e.checkoutCreationDiagnostics)
+                : '官网拒绝创建本次结账单，未提交付款',
             CHECKOUT_OPEN_FAILED: '原结账单已创建，页面验证未完成；未重复建单或提交付款'
         }[e.code];
         const checkoutOpenDiagnostics = checkoutFailure || e.checkoutCreationState === 'accepted'
@@ -789,8 +805,9 @@ async function run(runOptions = {}) {
         const debugCheckout = debugOnly && !resultUnknown && e.checkoutCreationState === 'accepted'
             && typeof e.originalCheckoutUrl === 'string'
             ? { debugOnly: true, checkoutUrl: e.originalCheckoutUrl } : {};
-        return { ...checkoutEvidence, ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure || proxyFailure ? { errorCode: proxyFailure ? 'PROXY_UNAVAILABLE' : checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || proxyFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
+        return { ...checkoutEvidence, ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, ...(validation ? { validationErrorCode: e.code, validationMissing: Array.isArray(e.missing) ? e.missing.filter(key => ['number', 'expiry', 'cvc', 'country', 'line1', 'city', 'postal', 'name', 'state'].includes(key)) : undefined, challengeDetected: e.challengeDetected === true } : {}), ...(e.checkoutCreationDiagnostics ? { checkoutCreationDiagnostics: require('../checkout-creation-diagnostics.cjs').safe(e.checkoutCreationDiagnostics) } : {}), pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure || proxyFailure ? { errorCode: proxyFailure ? 'PROXY_UNAVAILABLE' : checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || proxyFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
+        validation?.stage('cleanup');
         authDiagnostics?.dispose();
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});

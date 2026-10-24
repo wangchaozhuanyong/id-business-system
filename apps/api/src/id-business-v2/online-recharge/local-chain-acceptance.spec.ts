@@ -517,6 +517,32 @@ function fixture() {
   };
 }
 
+describe('不付款模式相邻的提交容量合同', () => {
+  it('等待安全码的其他账号不占运行名额，真实服务链仍能受理新任务', async () => {
+    const f = fixture();
+    f.storage.rows('onlineRechargeTask').push({
+      id: randomUUID(),
+      operation: 'recharge',
+      status: 'awaiting_credentials',
+      sessionIdentityHash: 'other-fixture-account',
+      paymentStarted: false,
+      leaseOwner: null,
+      leaseId: null,
+      leaseExpiresAt: null
+    });
+    expect(await f.tasks.publicConfig()).toMatchObject({
+      active: 0,
+      queued: 0,
+      awaitingCredentials: 1
+    });
+    const claim = await f.start(false);
+    expect(f.row(claim).status).toBe('running');
+    expect(
+      f.storage.rows('onlineRechargeTask').filter((row) => row.status === 'running')
+    ).toHaveLength(1);
+  });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   humanVerificationServices.splice(0).forEach((service) => service.onModuleDestroy());
@@ -690,7 +716,11 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
           actual.result.result.bootstrapDiagnostics ?? authConfirmation?.queryBootstrapDiagnostics;
         expect(actual.result.status).toBe('failed');
         expect(authCode).toBe(
-          authUi === 'challenge' ? 'HUMAN_VERIFICATION_REQUIRED' : 'SESSION_NOT_CONFIRMED'
+          authUi === 'challenge'
+            ? 'SESSION_VERIFICATION_BLOCKED'
+            : authUi === 'unconfirmed'
+              ? 'SESSION_API_UNCONFIRMED'
+              : 'SESSION_NOT_CONFIRMED'
         );
         expect(authDiagnostic).toMatchObject({
           authApiVerified: authUi !== 'unconfirmed',
@@ -804,8 +834,8 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
       expect(actual.metrics.formReadFailures).toEqual([]);
       if (scene === 'refresh') {
         expect(actual.metrics).toMatchObject({
-          loginCookieVerified: 1,
-          refreshedAuthResponses: 1,
+          loginCookieVerified: 2,
+          refreshedAuthResponses: 2,
           originalBearerRequests: 0
         });
         expect(actual.metrics.refreshedBearerRequests).toBeGreaterThanOrEqual(2);
@@ -813,7 +843,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
       if (['hidden-login', 'transient-login', 'chat-guest-recover'].includes(scene)) {
         expect(actual.metrics).toMatchObject({
           authUi,
-          authProbeIdentityResponses: 1,
+          authProbeIdentityResponses: 2,
           authRedirectDocuments: 0
         });
         if (['transient-login', 'chat-guest-recover'].includes(scene)) {
@@ -828,7 +858,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
       }
       if (scene === 'prepared') {
         expect(actual.metrics).toMatchObject({
-          loginCookieVerified: 1,
+          loginCookieVerified: 2,
           checkboxClicks: 1,
           checkboxCleared: true,
           cardMounts: 1,
@@ -840,7 +870,7 @@ describe('本地后端链路验收（隔离存储，无官网、银行或数据�
       }
       if (scene === 'readiness') {
         expect(actual.metrics).toMatchObject({
-          loginCookieVerified: 1,
+          loginCookieVerified: 2,
           checkboxClicks: 1,
           checkboxCleared: true,
           checkoutDomContentLoaded: 0,

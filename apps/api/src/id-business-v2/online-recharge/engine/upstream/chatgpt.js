@@ -210,20 +210,22 @@ class ChatGPTService {
                 data: payload
             });
 
-            const bodyText = await response.text().catch(() => "");
+            let bodyReadComplete = true;
+            const bodyText = await response.text().catch(() => { bodyReadComplete = false; return ""; });
             const parsed = parseCheckoutApiResponse(response.status(), bodyText);
 
             if (!parsed.ok) {
+            const checkoutCreationDiagnostics = require("../checkout-creation-diagnostics.cjs").create(response.status(), response.headers?.() || {}, bodyText, bodyReadComplete);
                 const detail = parsed.error;
                 console.error(`[-] 订单创建失败 (Status: ${parsed.status})`);
-                console.error(`    响应: ${detail}`);
+                console.error(require("../checkout-creation-diagnostics.cjs").message(checkoutCreationDiagnostics));
                 if (String(detail).includes('not_eligible') || String(detail).includes('Offer not found')) {
                     console.error("❌ [提示] 该账号不符合当前套餐/地区订阅条件");
                 } else if (String(detail).includes('permission') || String(detail).includes('already_subscribed')) {
                     console.error("❌ [提示] 该账号可能已订阅或无权重复开通");
                 }
                 const rejected = [400, 401, 403, 404, 405, 409, 422, 429].includes(parsed.status);
-                return { sessionId: null, checkoutUrl: null, error: detail,
+                return { sessionId: null, checkoutUrl: null, error: require("../checkout-creation-diagnostics.cjs").message(checkoutCreationDiagnostics), checkoutCreationDiagnostics,
                     errorCode: parsed.errorCode || (rejected ? 'CHECKOUT_CREATION_REJECTED' : 'CHECKOUT_CREATION_UNKNOWN'),
                     creationState: rejected ? 'rejected' : 'unknown' };
             }
@@ -576,7 +578,7 @@ function assertOriginalCheckoutPage(page, originalUrl, originalQuoteId, recovery
  * 通过 API 注入 billing_details 创建 Checkout，并打开 chatgpt.com/checkout。
  * 文档提交只表示开始加载；原单身份、登录与真实控件仍须在同一期限内核实。
  */
-async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true }) {
+async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true, onCheckoutCreated }) {
     const { assertChatGptLoggedIn } = require('./session-auth');
     const token = String(accessToken || '').trim();
     if (!token) {
@@ -593,9 +595,10 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
     const checkout = await gpt.createCheckoutSession(planType, region, billingCurrency, planNameOverride);
     if (!checkout.checkoutUrl) {
         throw Object.assign(new Error('API 创建 Checkout 失败，未取得可核实的原单来源'),
-            { code: checkout.errorCode || 'CHECKOUT_CREATION_UNKNOWN', checkoutCreationState: checkout.creationState || 'unknown' });
+            { code: checkout.errorCode || 'CHECKOUT_CREATION_UNKNOWN', checkoutCreationState: checkout.creationState || 'unknown', checkoutCreationDiagnostics: checkout.checkoutCreationDiagnostics });
     }
 
+    if (typeof onCheckoutCreated === 'function') onCheckoutCreated();
     let budget, initialization, trace;
     let stage = 'navigation';
     try {
@@ -680,6 +683,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                                 : captchaResult.checkoutNotReady ? 'not_ready' : 'check_failed';
             throw Object.assign(new Error(err), {
                 code: captchaResult.code,
+                challengeDetected: captchaResult.challengeDetected === true,
                 checkoutOpenReason,
                 checkoutOpenDiagnostics: safeCheckoutOpenDiagnostics({
                     stage, reason: checkoutOpenReason, code: captchaResult.code,
@@ -778,7 +782,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             read_incomplete: '原结账页的登录控件读取未完成'
         };
         const failure = Object.assign(new Error(`${reasons[reason] || reasons.check_failed}；未另建结账单`),
-            { code, checkoutCreationState: 'accepted', checkoutOpenDiagnostics,
+            { code, challengeDetected: error.challengeDetected === true, checkoutCreationState: 'accepted', checkoutOpenDiagnostics,
                 ...(error.checkoutOpenCleanupFailed ? { checkoutOpenCleanupFailed: true } : {}) });
         // Only the accepted original URL may travel to the existing encrypted
         // debug result channel. Never take the current redirect or add it to logs.

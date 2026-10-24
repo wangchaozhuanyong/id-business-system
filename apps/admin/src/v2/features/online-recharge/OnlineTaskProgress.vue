@@ -48,6 +48,12 @@
     />
     <p v-if="error" role="alert" class="online-error">{{ error }}</p>
     <p v-if="resultIssue" role="status" class="online-error">{{ resultIssue }}</p>
+    <dl v-if="validationEntries.length" class="online-status-grid">
+      <template v-for="entry in validationEntries" :key="entry.label">
+        <dt>{{ entry.label }}</dt>
+        <dd class="online-wrap">{{ entry.value }}</dd>
+      </template>
+    </dl>
     <p v-if="task.status === 'awaiting_review'">
       原单结果待核对，请保留当前任务和兑换码，使用原任务核对，不要重新付款。
     </p>
@@ -82,6 +88,7 @@ import {
   onlineReconciliationReason,
   onlineSubscriptionDetails
 } from './labels';
+import { unpaidValidationEntries } from './unpaid-validation-labels';
 const props = defineProps<{ task?: PublicTask; connected?: boolean; error?: string }>();
 defineEmits<{ refresh: [] }>();
 const labels: Record<string, string> = {
@@ -119,6 +126,7 @@ const changeEntries = computed(() =>
   })
 );
 const resultIssue = computed(() => onlineResultIssue(details.value));
+const validationEntries = computed(() => unpaidValidationEntries(details.value.validationReport));
 const results = computed(() =>
   Object.entries(details.value)
     .filter(([key]) => labels[key])

@@ -16,9 +16,10 @@
         </p>
         <p v-else>先验证兑换码，再提交完整会话资料。同档、降档或当前套餐不明时停止执行。</p>
         <p>
-          当前任务 {{ config.data.value?.activeJobs ?? 0 }}／{{
+          运行中 {{ config.data.value?.activeJobs ?? 0 }}／{{
             config.data.value?.capacity ?? 0
-          }}；容量已满时请稍后再提交。
+          }}；排队 {{ config.data.value?.queued ?? 0 }}；等待资料
+          {{ config.data.value?.awaitingCredentials ?? 0 }}，等待资料不占运行名额。
         </p>
         <el-form
           label-position="left"

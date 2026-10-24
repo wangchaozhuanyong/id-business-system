@@ -80,6 +80,7 @@ async function worker(root, { duplicateIpc = false } = {}) {
     setInterval,
     clearInterval,
     require(name) {
+      if (name === './unpaid-validation.cjs') return require('../unpaid-validation.cjs');
       if (name === 'node:path') return path;
       if (name === 'node:crypto') return { createHash };
       if (name === 'node:fs/promises') return fs;
