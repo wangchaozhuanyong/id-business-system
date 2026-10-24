@@ -12,10 +12,15 @@ const manifest = 'deploy/aws/account-migration-controls-20261024.json';
 const base = 'a046d8413e3cb6c3edd6429dbdb922593dc32064';
 const digest = raw => createHash('sha256').update(raw).digest('hex');
 
-async function fixture(run) {
+async function fixture(run, followup = false) {
   mkdirSync(temporary, { recursive: true });
   const directory = mkdtempSync(join(temporary, 'fixture-'));
-  const files = {
+  const files = followup ? {
+    '.github/workflows/production-release.yml': 'role: target-account\n',
+    'scripts/ci-recharge-check.mjs': '// readonly dispatcher fixture\n',
+    'scripts/ci-aws-account-migration-scope.test.mjs': '// readonly scope fixture\n',
+    'scripts/production-release/unpublished-component-runtime-diagnostic.test.py': '# readonly fixture\n'
+  } : {
     '.github/workflows/production-release.yml': 'role: target-account\n',
     'scripts/production-release/release-storage.py': '# scoped controller fixture\n',
     'deploy/aws/release-artifact-storage-proof-20261024.json': '{"private":true}\n'
@@ -27,9 +32,11 @@ async function fixture(run) {
     }
     cpSync(join(root, modulePath), join(directory, modulePath));
     files[modulePath] = readFileSync(join(directory, modulePath));
-    const record = { version: 1, sourceCommit: base, sourceAccount: '079740175286',
+    const record = { version: followup ? 2 : 1, sourceCommit: base, sourceAccount: '079740175286',
       targetAccount: '098208446664', files: Object.fromEntries(
         Object.entries(files).map(([name, raw]) => [name, digest(raw)])) };
+    if (followup) record.controlBase = '0adff9b5ff2bb09360b5e37b3064c02025586528';
+    mkdirSync(dirname(join(directory, manifest)), { recursive: true });
     const save = () => writeFileSync(join(directory, manifest), JSON.stringify(record));
     save();
     const scope = await import(pathToFileURL(join(directory, modulePath)).href);
@@ -75,4 +82,22 @@ test('wrong account identity and malformed proof hashes are rejected', () => fix
   record.targetAccount = '098208446664';
   record.files[Object.keys(record.files)[0]] = 'not-a-hash'; save();
   assert.equal(check(paths, { base }), false);
+}));
+
+const followupBase = '0adff9b5ff2bb09360b5e37b3064c02025586528';
+test('the exact merged migration parent admits only the pinned readonly follow-up', () => fixture(({ record, save, paths, check }) => {
+  record.version = 2; record.controlBase = followupBase; save();
+  assert.equal(check(paths, { base: followupBase }), true);
+  assert.equal(check(paths, { base }), false);
+}, true));
+test('an unreviewed follow-up base or manifest version is rejected', () => fixture(({ record, save, paths, check }) => {
+  record.version = 2; record.controlBase = 'f'.repeat(40); save();
+  assert.equal(check(paths, { base: record.controlBase }), false);
+  record.version = 3; record.controlBase = followupBase; save();
+  assert.equal(check(paths, { base: followupBase }), false);
+}, true));
+
+test('readonly follow-up cannot admit another controller even when all hashes match', () => fixture(({ record, save, paths, check }) => {
+  record.version = 2; record.controlBase = followupBase; save();
+  assert.equal(check(paths, { base: followupBase }), false);
 }));

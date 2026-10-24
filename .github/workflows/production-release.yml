@@ -2284,7 +2284,64 @@ jobs:
               print(json.dumps({'fixedMaintenanceBaselineProof': side}, separators=(',', ':')))
               raise SystemExit(0)
           previous_manifest = json.loads((Path(manifest['previousRelease']) / 'release-manifest.json').read_text())
-          protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)
+          def readonly_manifest_image_id(image):
+              if not isinstance(image, dict):
+                  raise ValueError('Read-only manifest image record unavailable')
+              identifiers = [image[key] for key in ('digest', 'imageId') if key in image]
+              if (not identifiers or any(not isinstance(value, str)
+                      or not re.fullmatch(r'sha256:[a-f0-9]{64}', value) for value in identifiers)
+                      or len(set(identifiers)) != 1):
+                  raise ValueError('Read-only manifest image identity unavailable or conflicting')
+              return identifiers[0]
+
+          def readonly_migration_baseline_facts(directory, manifest):
+              # This bounded observation grants no historical publication authority.
+              expected_commit = '9bf179b2c6dbf643404cf083171f7d3fee88944e'
+              expected_instance = 'i-0838cebf64f0e2a89'
+              expected_images = {'api': 'sha256:3c0c9a253784e8203785b031dc3c1226a95f3665c40649c5e8a7f894ba956e51', 'admin': 'sha256:bc196ea2c7169998a30eeea3ef85d839042f811253ab1a6ad2fbf7653c643ab6', 'online-recharge': 'sha256:86fd607ad566f32d437a2cd7799566beab6f2ef8fea56e890e7db5fc06cf1b39', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}
+              if manifest.get('commit') != expected_commit or set(manifest.get('images', {})) != set(expected_images):
+                  raise ValueError('Migration read-only baseline unavailable')
+              before_directory = directory.resolve()
+              original = (directory / 'release-manifest.json').read_bytes()
+              if json.loads(original) != manifest:
+                  raise ValueError('Migration read-only manifest changed')
+              identity = json.loads(read('aws', 'sts', 'get-caller-identity', '--region', 'ap-northeast-1', '--output', 'json'))
+              if identity.get('Account') != '098208446664' or not identity.get('Arn', '').endswith('/' + expected_instance):
+                  raise ValueError('Migration read-only AWS owner unavailable')
+              states = {}
+              for service, expected_image in expected_images.items():
+                  if readonly_manifest_image_id(manifest['images'][service]) != expected_image:
+                      raise ValueError('Migration read-only manifest image differs')
+                  container = read('docker', 'compose', '--env-file', str(directory / '.env.aws.production'),
+                      '-f', str(directory / 'docker-compose.aws-mysql.yml'),
+                      '-f', str(directory / 'compose.release.json'), 'ps', '-q', service)
+                  if not re.fullmatch(r'[a-f0-9]{12,64}', container):
+                      raise ValueError('Migration read-only service identity unavailable')
+                  fields = read('docker', 'inspect', '--format',
+                      '{{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}', container).split()
+                  expected_fields = [expected_image, 'running'] + ([] if service == 'caddy' else ['healthy'])
+                  if fields != expected_fields:
+                      raise ValueError('Migration read-only service image or health differs')
+                  states[service] = {'image': fields[0], 'status': fields[1], 'health': fields[2] if len(fields) == 3 else None}
+              for retired in ('auto-registration', 'migrate'):
+                  if read('docker', 'ps', '--filter', 'label=com.docker.compose.service=' + retired, '--format', '{{.ID}}'):
+                      raise ValueError('Migration read-only retired service is running')
+              timers = {}
+              for name in ('id-business-v2-mysql-backup.timer', 'id-business-v2-mysql-backup-verify.timer'):
+                  timers[name] = read('systemctl', 'is-active', name)
+                  if timers[name] != 'active':
+                      raise ValueError('Migration read-only backup timer unavailable')
+              if directory.resolve() != before_directory or (directory / 'release-manifest.json').read_bytes() != original:
+                  raise ValueError('Migration read-only manifest changed')
+              return {'account': '098208446664', 'instance': expected_instance, 'currentCommit': expected_commit,
+                  'manifestSha256': hashlib.sha256(original).hexdigest(), 'services': states, 'backupTimers': timers,
+                  'retiredRegistrationRunning': False, 'migratorRunning': False, 'formalReleaseVerified': False}
+
+          if manifest.get('commit') == '9bf179b2c6dbf643404cf083171f7d3fee88944e':
+              print(json.dumps({'migrationReadOnlyFacts': readonly_migration_baseline_facts(base / 'current', manifest)}, separators=(',', ':')))
+              raise SystemExit(0)
+
+          protected_image_ids = {readonly_manifest_image_id(image) for release in (manifest, previous_manifest)
               for image in release.get('images', {}).values()}
           protected_image_ids.update(manifest.get('rollback', {}).get('images', {}).values())
           usage = shutil.disk_usage(base)
@@ -2383,6 +2440,57 @@ jobs:
               'containers': containers, 'images': images, 'services': states,
               'dockerUsage': read('docker', 'system', 'df', '--format', '{{json .}}').splitlines()}, False), separators=(',', ':')))
           '''
+          migration_receiver_program = r'''
+          def closed_migration_readonly_facts(value):
+              keys = {'account', 'instance', 'currentCommit', 'manifestSha256', 'services', 'backupTimers',
+                  'retiredRegistrationRunning', 'migratorRunning', 'formalReleaseVerified'}
+              expected_images = {'api': 'sha256:3c0c9a253784e8203785b031dc3c1226a95f3665c40649c5e8a7f894ba956e51', 'admin': 'sha256:bc196ea2c7169998a30eeea3ef85d839042f811253ab1a6ad2fbf7653c643ab6', 'online-recharge': 'sha256:86fd607ad566f32d437a2cd7799566beab6f2ef8fea56e890e7db5fc06cf1b39', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}
+              if (not isinstance(value, dict) or set(value) != keys or value['account'] != '098208446664'
+                      or value['instance'] != 'i-0838cebf64f0e2a89'
+                      or value['currentCommit'] != '9bf179b2c6dbf643404cf083171f7d3fee88944e'
+                      or not isinstance(value['manifestSha256'], str)
+                      or not re.fullmatch(r'[a-f0-9]{64}', value['manifestSha256'])
+                      or any(value[key] is not False for key in ('retiredRegistrationRunning', 'migratorRunning', 'formalReleaseVerified'))
+                      or value['backupTimers'] != {'id-business-v2-mysql-backup.timer': 'active', 'id-business-v2-mysql-backup-verify.timer': 'active'}
+                      or not isinstance(value['services'], dict) or set(value['services']) != set(expected_images)):
+                  raise ValueError('Migration read-only receipt unavailable')
+              for name, image in expected_images.items():
+                  if value['services'][name] != {'image': image, 'status': 'running', 'health': None if name == 'caddy' else 'healthy'}:
+                      raise ValueError('Migration read-only receipt service differs')
+              return value
+
+          def readonly_migration_receipts(output, succeeded):
+              if not succeeded:
+                  return readonly_maintenance_baseline_receipts(output, False)
+              try:
+                  lines = output.strip().splitlines()
+                  observed = json.loads(lines[1]) if len(lines) >= 2 else None
+              except Exception:
+                  return readonly_maintenance_baseline_receipts(output, True)
+              if not isinstance(observed, dict) or 'migrationReadOnlyFacts' not in observed:
+                  return readonly_maintenance_baseline_receipts(output, True)
+              try:
+                  if len(lines) != 2 or len(output.encode()) > 24000:
+                      raise ValueError()
+                  def unique(items):
+                      result = {}
+                      for key, item in items:
+                          if key in result:
+                              raise ValueError()
+                          result[key] = item
+                      return result
+                  def invalid(_value):
+                      raise ValueError()
+                  value = json.loads(lines[1], object_pairs_hook=unique, parse_constant=invalid)
+                  first = json.loads(lines[0], object_pairs_hook=unique, parse_constant=invalid)
+                  lock = readonly_maintenance_baseline_receipts(lines[0], False)[0]
+                  if set(value) != {'migrationReadOnlyFacts'} or first != lock:
+                      raise ValueError()
+                  return [lock, {'migrationReadOnlyFacts': closed_migration_readonly_facts(value['migrationReadOnlyFacts'])}]
+              except Exception:
+                  raise RuntimeError('Migration read-only diagnostic output unavailable') from None
+
+          '''
           payload = base64.b64encode(lzma.compress(program.encode('utf-8'), preset=6)).decode('ascii')
           decoder = ('import base64,lzma;exec(compile(lzma.decompress(base64.b64decode('
               + repr(payload) + ',validate=True)),"<readonly-diagnostics>","exec"))')
@@ -2396,12 +2504,12 @@ jobs:
                       'closed_current_maintenance_readback', 'readonly_maintenance_receipts',
                       'closed_maintenance_baseline_proof', 'readonly_maintenance_baseline_receipts')
               or isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith('PROOF_')]
-          filter_program = 'import hashlib,json,re,sys\n' + '\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\n'
+          filter_program = 'import hashlib,json,re,sys\n' + '\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\n' + migration_receiver_program
           filter_program += ('output=sys.stdin.read(24001)\n'
-              'for receipt in readonly_maintenance_baseline_receipts(output, False):\n'
+              'for receipt in readonly_migration_receipts(output, False):\n'
               '    print(json.dumps(receipt, separators=(",", ":")), flush=True)\n'
               'if sys.argv[1] == "0":\n'
-              '    for receipt in readonly_maintenance_baseline_receipts(output, True)[1:]:\n'
+              '    for receipt in readonly_migration_receipts(output, True)[1:]:\n'
               '        print(json.dumps(receipt, separators=(",", ":")), flush=True)\n')
           Path('.deploy/production-release/readonly-diagnostics-filter.py').write_text(filter_program)
           PY
