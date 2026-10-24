@@ -120,6 +120,9 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
+import { awsAccountMigrationControlManifest, isAwsAccountMigrationControlsOnly } from './ci-aws-account-migration-scope.mjs';
+export { awsAccountMigrationControlManifest, isAwsAccountMigrationControlsOnly };
+
 export const registrationTerminalStopBase = '6da10d2e4bd9de6df145899648e234000f84b72b';
 export const registrationTerminalStopTree = 'afa73ff2e4c258b811e310873daab8c71fc72bba';
 export const registrationTerminalStopRepairBase = 'aa8431d67fad57ff7f439150deced567ca65d8cf';
@@ -1200,6 +1203,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isAwsAccountMigrationControlsOnly(paths, context)) return false;
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return false;
   if (isFinancialClosureCandidate(paths)) return false;
@@ -1837,7 +1841,8 @@ export const releaseArtifactRetentionControls = Object.freeze([
   'scripts/production-release/release-artifact-retention-transport.py',
   'scripts/production-release/release-artifact-retention-transport.test.py',
   '.github/workflows/release-artifact-retention.yml',
-  'deploy/aws/release-artifact-storage-proof-20261014.json'
+  'deploy/aws/release-artifact-storage-proof-20261014.json',
+  'deploy/aws/release-artifact-storage-proof-20261024.json'
 ]);
 const releaseArtifactRetentionSupport = new Set([
   ...releaseArtifactRetentionControls,
@@ -2329,6 +2334,7 @@ export function bitbrowserBoundedHoldCheckCommands(part, paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (isAwsAccountMigrationControlsOnly(paths, context)) return true;
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return true;
   if (isBitbrowserBoundedHoldSelectedNativeOnly(paths, context)) return true;
@@ -3079,6 +3085,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isUnpaidValidationOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
+  if (isAwsAccountMigrationControlsOnly(paths, context)) return ['guards'];
   if (isOnlineCountryInteractionOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCountryInteractionControlsOnly(paths)) return ['guards'];
   if (isOnlineCheckoutErrorPageOnly(paths)) return ['guards', 'online-engine'];

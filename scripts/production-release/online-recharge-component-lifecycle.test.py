@@ -30,7 +30,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 COMMAND = '11111111-2222-3333-4444-555555555555'
-REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+REPOSITORY = '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 
 
 def load(name):
@@ -140,7 +140,7 @@ class ContinuousLifecycleTests(unittest.TestCase):
                             'GITHUB_RUN_ID': self.p['workflowRunId'],
                             'GITHUB_RUN_ATTEMPT': self.p['workflowRunAttempt'],
                             'AWS_REGION': 'ap-northeast-1',
-                            'PRODUCTION_INSTANCE_ID': self.auth['instanceId'],
+                            'PRODUCTION_INSTANCE_ID': r.INSTANCE,
                             'API_FAULT_RESTORE_APPROVED': 'true',
                             'QUALITY_RUN_ID': '456', 'RELEASE_REPOSITORY': REPOSITORY}, clear=True)):
             patcher.start(); self.addCleanup(patcher.stop)
@@ -174,9 +174,9 @@ class ContinuousLifecycleTests(unittest.TestCase):
             'applicationInputSha256': r.c.APPLICATION_SHA256, 'onlineInputSha256': r.c.ONLINE_SHA256,
             'onlinePublished': False, 'migrationPerformed': False, 'databaseGrantsChanged': False,
             'executionMigrationPlan': [], 'businessActions': 0}
-        self.preflight_native = native(self.receipt, COMMAND, self.auth['instanceId'])
+        self.preflight_native = native(self.receipt, COMMAND, r.INSTANCE)
         self.transport = client.validate_native(self.core, self.preflight_native, 'preflight',
-            self.p, COMMAND, self.auth['instanceId'])
+            self.p, COMMAND, r.INSTANCE)
 
     def download(self, commit):
         if commit == self.p['commit']:
@@ -196,6 +196,10 @@ class ContinuousLifecycleTests(unittest.TestCase):
             return (self.p['commit'] + '\trefs/heads/main\n').encode()
         if args[0] == 'aws':
             self.aws.append(args)
+            if 's3' in args and 'cp' in args:
+                if self.auth['invocationBytesSha256'] in args[-3]: return self.origin
+                if self.current_auth['invocationBytesSha256'] in args[-3]: return self.current
+                raise AssertionError('unexpected sealed origin archive')
             if 'send-command' in args:
                 return (COMMAND + '\n').encode()
             if 'get-command-invocation' in args:
@@ -309,9 +313,9 @@ class ContinuousLifecycleTests(unittest.TestCase):
         self.assertEqual([raw for _, raw, _ in writes], [self.origin, self.current])
         self.assertTrue(all(raw == saved for _, raw, saved in writes))
         returned = self.returned_receipt()
-        self.return_native = native(returned, COMMAND, self.auth['instanceId'])
+        self.return_native = native(returned, COMMAND, r.INSTANCE)
         result = client.validate_native(self.core, self.return_native, 'readback', self.p,
-                                        COMMAND, self.auth['instanceId'])
+                                        COMMAND, r.INSTANCE)
         client.write_once(self.core, self.directory / 'readback.json', result)
         self.assertEqual(self.core.closed_json(self.core.private_bytes(self.directory / 'readback.json'))['receipt'], returned)
         self.assertEqual(returned['buildProofBytesSha256'], r.c.digest(self.core.private_bytes(self.directory / r.PROOF)))
@@ -530,7 +534,7 @@ class ContinuousLifecycleTests(unittest.TestCase):
         self.assertEqual(len([a for a in self.aws if 'send-command' in a]), 1)
         metadata = self.core.closed_json(self.core.private_bytes(output / (r.PREFIX + '-readback-invocation-metadata.json')))
         self.assertEqual(metadata['commandId'], COMMAND)
-        self.return_native = native(self.returned_receipt(), COMMAND, self.auth['instanceId'])
+        self.return_native = native(self.returned_receipt(), COMMAND, r.INSTANCE)
         ended = client.validate_native(self.core, self.return_native, 'readback', self.p,
             metadata['commandId'], metadata['instanceId'])
         self.assertEqual(ended['status'], 'Success')
@@ -546,16 +550,16 @@ class ContinuousLifecycleTests(unittest.TestCase):
         self.assertEqual(self.aws, [])
 
     def test_truncated_wire_wrong_identity_and_rejected_native_never_pass_readback(self):
-        good = native(self.returned_receipt(), COMMAND, self.auth['instanceId'])
+        good = native(self.returned_receipt(), COMMAND, r.INSTANCE)
         changed = json.loads(good); changed['StandardOutputContent'] = changed['StandardOutputContent'][:-4]
         identity = json.loads(good); identity['CommandId'] = '00000000-0000-0000-0000-000000000000'
         rejected = {'version': 1, 'scope': r.SCOPE, 'kind': r.KIND,
             'status': 'ONLINE_RECHARGE_COMPONENT_REJECTED',
             'code': 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'}
         for raw in (good[:-1], encoded(changed), encoded(identity),
-                    native(rejected, COMMAND, self.auth['instanceId'], failed=True)):
+                    native(rejected, COMMAND, r.INSTANCE, failed=True)):
             with self.subTest(size=len(raw)), self.assertRaises((RuntimeError, ValueError)):
-                client.validate_native(self.core, raw, 'readback', self.p, COMMAND, self.auth['instanceId'])
+                client.validate_native(self.core, raw, 'readback', self.p, COMMAND, r.INSTANCE)
         self.assertEqual(self.aws, [])
 
     def test_original_failed_native_aws_trailer_is_authenticated_failure_without_replay(self):
@@ -564,18 +568,18 @@ class ContinuousLifecycleTests(unittest.TestCase):
             'code': 'ONLINE_RECHARGE_COMPONENT_PROTECTED_OPERATION_FAILED'}
         trailer = 'failed to run commands: exit status 1'
         self.assertEqual(len(trailer.encode()), 37)
-        raw = native(rejected, COMMAND, self.auth['instanceId'], failed=True, stderr=trailer)
+        raw = native(rejected, COMMAND, r.INSTANCE, failed=True, stderr=trailer)
         # The old frozen validator reproduces the actual evidence rejection.
         with self.assertRaisesRegex(RuntimeError, 'INVOCATION_INVALID'):
-            self.core.validate_invocation(raw, COMMAND, self.auth['instanceId'], status='Failed')
-        result = client.validate_failure_native(self.core, raw, self.p, COMMAND, self.auth['instanceId'])
+            self.core.validate_invocation(raw, COMMAND, r.INSTANCE, status='Failed')
+        result = client.validate_failure_native(self.core, raw, self.p, COMMAND, r.INSTANCE)
         self.assertEqual(result['status'], 'Failed')
         self.assertEqual(result['invocationBytesSha256'], r.c.digest(raw))
         self.assertEqual(base64.b64decode(result['invocationRawBase64']), raw)
         self.assertEqual(result['receipt'], rejected)
         self.assertFalse(result['automaticRetryAllowed'])
         trace = {'phase': 'authenticate-native', 'accepted': True,
-            'commandId': COMMAND, 'instanceId': self.auth['instanceId'], **client.native_details(raw)}
+            'commandId': COMMAND, 'instanceId': r.INSTANCE, **client.native_details(raw)}
         summary = client.diagnostic_failure(client.NativeFailure(result), 'preflight', self.p, trace)
         self.assertEqual(summary['code'], rejected['code'])
         self.assertEqual(summary['outcome'], 'COMMAND_FAILED')
@@ -588,9 +592,9 @@ class ContinuousLifecycleTests(unittest.TestCase):
             changed = json.loads(raw); change(changed)
             with self.assertRaisesRegex(RuntimeError, 'INVOCATION_INVALID'):
                 r.validate_component_invocation(self.core, encoded(changed), COMMAND,
-                                                self.auth['instanceId'], status='Failed')
+                                                r.INSTANCE, status='Failed')
         with self.assertRaisesRegex(RuntimeError, 'INVOCATION_INVALID'):
-            client.validate_native(self.core, raw, 'readback', self.p, COMMAND, self.auth['instanceId'])
+            client.validate_native(self.core, raw, 'readback', self.p, COMMAND, r.INSTANCE)
         self.return_native = raw
         output = self.directory / '.deploy/production-release'
         output.mkdir(parents=True, mode=0o700)

@@ -8632,3 +8632,4 @@ test('线上执行器复用真实 CLI 仅接受准确来源及成功任务，输
     );
   }
 });
+import './ci-aws-account-migration-scope.test.mjs';

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 OUT = ROOT / '.deploy/bitbrowser-billing-publication'
 REPO = 'wangchaozhuanyong/id-business-system'
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 
 
 def need(value, code):

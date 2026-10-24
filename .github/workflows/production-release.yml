@@ -149,9 +149,9 @@ jobs:
       # Match the original AWS CLI receipt bytes without changing production timezones.
       TZ: Asia/Kuala_Lumpur
       AWS_REGION: ap-northeast-1
-      RELEASE_ROLE_ARN: arn:aws:iam::079740175286:role/id-business-v2-github-release
-      RELEASE_REPOSITORY: 079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release
-      PRODUCTION_INSTANCE_ID: i-05836da38606e633c
+      RELEASE_ROLE_ARN: arn:aws:iam::098208446664:role/id-business-v2-github-release
+      RELEASE_REPOSITORY: 098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release
+      PRODUCTION_INSTANCE_ID: i-0838cebf64f0e2a89
       RELEASE_COMMIT: ${{ inputs.commit }}
       EXPECTED_CURRENT: ${{ inputs.expected_current }}
       HISTORICAL_EXCEPTION: ${{ inputs.historical_exception }}
@@ -2346,7 +2346,7 @@ jobs:
                   if image.get('digest') in {item['id'] for item in unused_images}:
                       release_image_evidence.append({'imageId': image['digest'], 'service': service,
                           'commit': old.get('commit'), 'releaseTag': old.get('releaseTag')})
-          repository = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+          repository = '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
           images = []
           for line in read('docker', 'image', 'ls', '--format', '{{json .}}').splitlines():
               image = json.loads(line)

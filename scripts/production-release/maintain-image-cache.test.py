@@ -1918,7 +1918,7 @@ class FixedBootstrapCacheTests(unittest.TestCase):
                 self.assertEqual(node.value.value,'import ast,base64,fcntl,hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\n')
                 node.value.value=node.value.value.replace('ast,base64,','ast,');projected.add(name)
             elif name in ('constants','old_names'):
-                added=('FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256',
+                added=('HISTORICAL_REPOSITORY','FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256',
                     'H_RECOVERY_DEPENDENCIES','H_RECOVERY_DEPENDENCIES_SHA256') \
                     if name=='constants' else ('historical_online_cold_dependencies','failed_online_recovery_dependencies','observed_h_recovery_dependencies','generic_cache_closed')
                 self.assertEqual([value.value for value in node.value.elts if value.value in added],list(added))
@@ -2327,7 +2327,7 @@ class HistoricalOnlineColdDependencyTests(unittest.TestCase):
         patcher=patch.object(cache,'BASE',self.base);patcher.start();self.addCleanup(patcher.stop)
         self.images=copy.deepcopy(cache.HISTORICAL_ONLINE_COLD_DEPENDENCIES)
         self.workspace=self.base/'releases/20261009T103426Z-0a03fa28e6b8'
-        origin_rows={image['service']:{'reference':cache.REPOSITORY+':'+tag,'digest':image['imageId']}
+        origin_rows={image['service']:{'reference':cache.HISTORICAL_REPOSITORY+':'+tag,'digest':image['imageId']}
             for tag,image in self.images.items() if tag.startswith('0a03')}
         self.origin={'commit':'0a03fa28e6b844a18833d5c63f1de700f091fc64',
             'sourceTree':'668ca1570a8e4898e7f473198087ec549c270239','images':origin_rows}
@@ -2368,8 +2368,8 @@ class HistoricalOnlineColdDependencyTests(unittest.TestCase):
         self.commands.append(args)
         self.assertEqual(args[:5],('docker','image','inspect','--format','{{.Id}}'))
         value=args[-1]
-        if value.startswith(cache.REPOSITORY+':'):
-            return self.images[value[len(cache.REPOSITORY)+1:]]['imageId']
+        if value.startswith(cache.HISTORICAL_REPOSITORY+':'):
+            return self.images[value[len(cache.HISTORICAL_REPOSITORY)+1:]]['imageId']
         return value
 
     def collect(self,command=None):
@@ -2380,11 +2380,11 @@ class HistoricalOnlineColdDependencyTests(unittest.TestCase):
         import hashlib
         result=self.collect();ids={row['imageId'] for row in self.images.values()}
         self.assertEqual(set(result['imageIds']),ids|{'sha256:'+'3'*64})
-        self.assertEqual(len([c for c in self.commands if c[-1].startswith(cache.REPOSITORY+':')]),8)
+        self.assertEqual(len([c for c in self.commands if c[-1].startswith(cache.HISTORICAL_REPOSITORY+':')]),8)
         self.failed.assert_called_once()
         for path in (self.policy_path,self.workspace/'release-manifest.json',self.workspace/'api-workspace-build-proof.json'):
             self.assertEqual(result['evidenceSha256'][str(path.relative_to(self.base))],hashlib.sha256(path.read_bytes()).hexdigest())
-        inventory=[{'id':row['imageId'],'repoTags':[cache.REPOSITORY+':'+tag]} for tag,row in self.images.items()]
+        inventory=[{'id':row['imageId'],'repoTags':[cache.HISTORICAL_REPOSITORY+':'+tag]} for tag,row in self.images.items()]
         unrelated='f'*40+'-999-1-api';inventory.append({'id':'sha256:'+'6'*64,'repoTags':[cache.REPOSITORY+':'+unrelated]})
         plan=cache.make_plan(self.manifest['commit'],self.previous,set(result['imageIds']),inventory,result)
         self.assertEqual([row['tag'] for row in plan['items']],[unrelated])
@@ -2402,7 +2402,7 @@ class HistoricalOnlineColdDependencyTests(unittest.TestCase):
     def test_unaffected_manifest_does_not_load_or_protect_historical_dependencies(self):
         self.current('7'*40);self.policy_path.unlink()
         result=self.collect();self.assertEqual(result['imageIds'],['sha256:'+'3'*64])
-        self.assertFalse(any(c[-1].startswith(cache.REPOSITORY+':') for c in self.commands))
+        self.assertFalse(any(c[-1].startswith(cache.HISTORICAL_REPOSITORY+':') for c in self.commands))
         self.failed.assert_not_called()
 
     def test_each_missing_or_changed_exact_tag_blocks_without_delete_or_pull(self):
@@ -2411,7 +2411,7 @@ class HistoricalOnlineColdDependencyTests(unittest.TestCase):
                 self.commands.clear()
                 def unavailable(*args):
                     value=self.command(*args)
-                    return 'sha256:'+'f'*64 if args[-1]==cache.REPOSITORY+':'+tag else value
+                    return 'sha256:'+'f'*64 if args[-1]==cache.HISTORICAL_REPOSITORY+':'+tag else value
                 with self.assertRaisesRegex(RuntimeError,'Required historical ONLINE cold dependency image is unavailable'):
                     self.collect(unavailable)
                 self.assertTrue(self.commands)

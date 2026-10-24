@@ -31,7 +31,7 @@ def load(name):
 P = load(PREFIX + '-release.py')
 F = load('financial-closure-publication.py')
 need, sha, git, github, execute = P.need, P.sha, F.git, F.github, F.execute
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 CONTROLS = frozenset((WORKFLOW, 'scripts/ci-online-session-media.py', 'scripts/ci-online-settings-scope.mjs',
     'scripts/ci-online-settings-scope.test.mjs', 'scripts/ci-recharge-scope.mjs',
     *('scripts/production-release/' + PREFIX + '-' + suffix

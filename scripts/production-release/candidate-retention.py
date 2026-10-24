@@ -18,7 +18,7 @@ import stat
 from pathlib import Path
 
 
-REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+REPOSITORY = '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 RECORD_KIND = 'DISK_CANDIDATE_RECORD_V1'
 REGISTRY_KIND = 'DISK_CANDIDATE_REGISTRY_V1'
 PUBLICATION_KIND = 'DISK_CANDIDATE_PUBLICATION_V1'
