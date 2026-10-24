@@ -153,7 +153,10 @@ class CheckoutInitPublicationTests(unittest.TestCase):
         # The completed one-off contract remains sealed to its original AWS
         # resources. Migration must not silently reseal or replay that release.
         extension = set(pub.git('diff', '--name-only', P.SOURCE, 'HEAD').decode().splitlines())
-        refusal = 'UNREVIEWED_EXTENSION' if not extension <= pub.CONTROLS else 'CONTROL_CHANGED'
+        source_drift = any(P.sha((pub.ROOT / name).read_bytes()) != expected
+                           for name, expected in {**self.c['runtimeSources'], **self.c['validationSources']}.items())
+        refusal = ('ONLINE_CHECKOUT_ERROR_PAGE_SOURCE_CHANGED' if source_drift else
+                   'UNREVIEWED_EXTENSION' if not extension <= pub.CONTROLS else 'CONTROL_CHANGED')
         with self.assertRaisesRegex(RuntimeError, refusal):
             pub.check(self.c)
         projected = copy.deepcopy(self.c)
@@ -184,7 +187,22 @@ class CheckoutInitPublicationTests(unittest.TestCase):
             if arguments == ('diff', '--name-only', P.SOURCE, 'HEAD'):
                 return git('diff', '--name-only', P.SOURCE, published)
             return git(*arguments)
-        with patch.object(pub, 'git', side_effect=archived_scope):
+        archived_sources = {}
+        for name, expected in {**self.c['runtimeSources'], **self.c['validationSources']}.items():
+            raw = git('show', published + ':' + name)
+            self.assertEqual(P.sha(raw), expected)
+            archived_sources[(pub.ROOT / name).resolve()] = raw
+        manifest_path = pub.ROOT / P.ENGINE / 'SOURCE_MANIFEST.json'
+        archived_sources[manifest_path.resolve()] = git('show', published + ':' + str(manifest_path.relative_to(pub.ROOT)))
+        read_bytes = Path.read_bytes
+        def historical_bytes(path):
+            selected = archived_sources.get(path.resolve())
+            return selected if selected is not None else read_bytes(path)
+        # A later reviewed engine release is unrelated to the frozen one-off.
+        # The current source must fail closed; the original sealed source fixture
+        # must still satisfy its exact validator with translated controls.
+        with patch.object(pub, 'git', side_effect=archived_scope), \
+             patch.object(Path, 'read_bytes', historical_bytes):
             pub.check(projected)
 
     def test_parent_native_hash_and_identity_are_independent(self):

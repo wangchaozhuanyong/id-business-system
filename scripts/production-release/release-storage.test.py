@@ -541,6 +541,15 @@ class ExistingReadbackContractTests(unittest.TestCase):
         witness = self.online.scope._RESTORED_B_WITNESS['policy']['failedProducer']
         value = selected(); value.update(producer=witness,
             batch='-'.join(witness[key] for key in ('commit', 'workflowRunId', 'workflowRunAttempt')))
+        with self.assertRaisesRegex(storage.StorageRejected, 'STORAGE_BUILD_IMAGE_DRIFT'):
+            storage.proof_images(value, build)
+        # Preserve the sealed source witness; only a copied fixture uses the
+        # destination repository. Historical evidence is never publication input.
+        build = copy.deepcopy(build)
+        for role, image in build['images'].items():
+            reference = image['reference']
+            self.assertTrue(reference.startswith('079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:'))
+            image['reference'] = reference.replace('079740175286.dkr.ecr.', '098208446664.dkr.ecr.', 1)
         module, images = storage.proof_images(value, build)
         self.assertEqual(module, 'online-recharge')
         self.assertEqual(set(images), {'api', 'admin', 'migrate', 'online-recharge'})
