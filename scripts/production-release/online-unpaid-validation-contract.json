@@ -369,10 +369,10 @@
     "online-subscription-challenge-publication.py": "fe9c10367feda1f9ca1577b339021f78d0373a8b513351cfe78d6b7d06a9a209",
     "online-subscription-challenge-release.py": "9111eae04aca42cb191933005337a531e8b07bd198540c18df2e7c0aadefa207",
     "online-subscription-challenge-release.test.py": "2a0a51565bde4738af88f0e80dab3377825b4299489d9f4f5a617eac8281f9a7",
-    "online-unpaid-validation-build.py": "d64265ea6b3e8814da5f2da96f3858267db0320f1a34b8c2c99dcd0604d998b0",
+    "online-unpaid-validation-build.py": "f5ee063f8591f2cab963c957c44f18eb5ff1c42e723f1aa80998856f7b3c2a66",
     "online-unpaid-validation-publication.py": "467fa77025073f720a4fd8758dd6c008d70c05eeb9a5757d281418d23da7f852",
-    "online-unpaid-validation-release.py": "33b4cb37f7129a7c0aa4ce8a1897c8776be77378768a55428036325c3e0757a5",
-    "online-unpaid-validation-release.test.py": "c8b6399d525209929a4c5f7f4a27861e77ffcc409b4627e915cda99748df288d",
+    "online-unpaid-validation-release.py": "130edf2feb66b3b70bec00a5aa7231c0cb4db23e8a42bdb5958e93ff41dfc2d5",
+    "online-unpaid-validation-release.test.py": "17e36d7ed70b9b874cb2738b72890406445b22ef38a912a514a3778ed7ff2691",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
     "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
@@ -541,5 +541,14 @@
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["api", "admin", "online-recharge"],
   "version": 1,
-  "workflowSha256": "afe6b5f3169c7383855a210cc6001dde66e83ddff39be61f47d0cd19f6e20ddd"
+  "workflowSha256": "afe6b5f3169c7383855a210cc6001dde66e83ddff39be61f47d0cd19f6e20ddd",
+  "publishedApiDeclaration": {
+    "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-pending-features-0d76d6ca0c287750d2d04f16c80e9d63a334b84b/online-pending-features-artifact.tar.gz",
+    "artifactSha256": "9901b8c6f4c81f3c22efb7fc92b85c77cca84002bd5d90b14efe6e56598e4610"
+  },
+  "apiDeclarationOnly": {
+    "id-business-v2/online-recharge/artifacts.service.d.ts": "41ccd2ee74051c6caf20053fb42d86bc295727904edd82e1efcd736bade19704",
+    "id-business-v2/online-recharge/public.controller.d.ts": "ccd768704715d1631bad0e724afbe6ca107f2121f1756446346cc606c45d4198",
+    "id-business-v2/online-recharge/tasks.service.d.ts": "c040c72afaa067f069f06e4527b1af65bb38490ad3bd4c1ee7653f12abee925c"
+  }
 }
