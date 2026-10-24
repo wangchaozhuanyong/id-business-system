@@ -8,9 +8,11 @@ export function isAwsAccountMigrationControlsOnly(paths, context) {
   try {
     const rootFile = (path) => new URL('../' + path, import.meta.url);
     const record = JSON.parse(readFileSync(rootFile(awsAccountMigrationControlManifest), 'utf8'));
-    if (record.version !== 1 || record.sourceCommit !== 'a046d8413e3cb6c3edd6429dbdb922593dc32064'
+    const controlBase = record.version === 1 ? record.sourceCommit : record.version === 2
+      && record.controlBase === '08981a5407d77baac2e8f2b596ff6cc2a040d8de' ? record.controlBase : null;
+    if (!controlBase || record.sourceCommit !== 'a046d8413e3cb6c3edd6429dbdb922593dc32064'
         || record.sourceAccount !== '079740175286' || record.targetAccount !== '098208446664'
-        || (context?.base && context.base !== record.sourceCommit)
+        || (context?.base && context.base !== controlBase)
         || !record.files || Array.isArray(record.files)) return false;
     const entries = Object.entries(record.files);
     if (!entries.length || entries.length > 128 || paths.length !== entries.length + 1

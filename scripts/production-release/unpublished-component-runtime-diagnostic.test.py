@@ -1,4 +1,5 @@
 """Offline only: synthetic runtime, mocked AWS transport, parsed workflow."""
+import ast
 import base64
 import copy
 import gzip
@@ -6,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import stat
@@ -474,6 +476,43 @@ class TransportTests(Fixture):
         self.assertEqual(sum('send-command' in args for args in self.calls), 1)
 
 
+class ManifestImageSchemaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        script = "const fs=require('fs'),y=require('js-yaml');const w=y.load(fs.readFileSync('.github/workflows/production-release.yml','utf8'));console.log(JSON.stringify(w.jobs.release.steps.find(x=>x.name==='Read production release diagnostics').run));"
+        step = json.loads(subprocess.check_output(['node', '-'], input=script, cwd=ROOT, text=True))
+        source = step.split("python3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        program = next(ast.literal_eval(n.value) for n in ast.parse(source).body
+                       if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'program' for t in n.targets))
+        node = next(n for n in ast.parse(program).body
+                    if isinstance(n, ast.FunctionDef) and n.name == 'readonly_manifest_image_id')
+        namespace = {'re': re}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), '<isolated-readonly-image-helper>', 'exec'), namespace)
+        cls.identifier = staticmethod(namespace['readonly_manifest_image_id'])
+
+    def test_both_observed_manifest_formats_resolve_the_same_exact_image_identity(self):
+        for key in ('digest', 'imageId'):
+            for value in ('sha256:' + 'a' * 64, 'sha256:' + 'b' * 64):
+                self.assertEqual(self.identifier({key: value, 'reference': 'public-fixture:tag'}), value)
+
+    def test_duplicate_matching_identity_is_accepted_and_conflicts_are_rejected(self):
+        value = 'sha256:' + 'a' * 64
+        self.assertEqual(self.identifier({'digest': value, 'imageId': value}), value)
+        with self.assertRaisesRegex(ValueError, 'conflicting'):
+            self.identifier({'digest': value, 'imageId': 'sha256:' + 'b' * 64})
+
+    def test_missing_or_malformed_identity_is_closed_even_when_the_other_field_is_valid(self):
+        for record in ({}, {'reference': 'public:tag'}, {'digest': None}, {'imageId': 'latest'},
+                       {'digest': 'sha256:' + 'a' * 64, 'imageId': None}):
+            with self.subTest(record=record), self.assertRaises(ValueError):
+                self.identifier(record)
+
+    def test_non_record_values_are_rejected(self):
+        for record in (None, [], 'sha256:' + 'a' * 64):
+            with self.assertRaises(ValueError):
+                self.identifier(record)
+
+
 class WorkflowTests(unittest.TestCase):
     def test_workflow_diagnostic_inherits_all_gates_and_no_write_steps(self):
         script = r"""
@@ -616,6 +655,9 @@ const confirmActiveOnlyForFiniteInputs = current.on.workflow_dispatch.inputs.ope
 });
 const legacyGateSuffix = " && inputs.expected_current != '" + confirmBaseline + "'";
 const oldLegacyGate = replaceOnce(byName(steps, legacyName).if, legacyGateSuffix, '');
+const originalImageCollector = "protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)\n    for image in release.get('images', {}).values()}";
+const compatibleImageCollector = "def readonly_manifest_image_id(image):\n    if not isinstance(image, dict):\n        raise ValueError('Read-only manifest image record unavailable')\n    identifiers = [image[key] for key in ('digest', 'imageId') if key in image]\n    if (not identifiers or any(not isinstance(value, str)\n            or not re.fullmatch(r'sha256:[a-f0-9]{64}', value) for value in identifiers)\n            or len(set(identifiers)) != 1):\n        raise ValueError('Read-only manifest image identity unavailable or conflicting')\n    return identifiers[0]\n\nprotected_image_ids = {readonly_manifest_image_id(image) for release in (manifest, previous_manifest)\n    for image in release.get('images', {}).values()}";
+const expectedLegacyRun = replaceOnce(byName(old.jobs.release.steps, legacyName).run, originalImageCollector, compatibleImageCollector);
 const adminNames = ['Read finite Admin successor baseline facts', 'Save finite Admin successor read-only evidence', legacyName, readbackName];
 const runtimeByBaseline = ['', '60e164b75d1eedaab440c17139bf9ba55de08c61', '31d2c6885a45817cd40d23fce8d6145bc9f18af2'].map(expected_current => {
  const selected = new Proxy({...inputs, expected_current}, {get: (v, k) => v[k] ?? ''});
@@ -627,7 +669,7 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
  options: current.on.workflow_dispatch.inputs.operation.options.filter(o => !['verify_recharge_flow', 'release_recharge_flow'].includes(o)),
  oldOptions: old.on.workflow_dispatch.inputs.operation.options,
  oldStepsRetained: old.jobs.release.steps.every(o => steps.some(s => s.name === o.name)), changed,
- legacyOnlyGateChanged: JSON.stringify(without(byName(steps, legacyName), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, legacyName), 'if')),
+ legacyGateAndBoundedImageSchemaOnlyChanged: JSON.stringify(without(byName(steps, legacyName), 'if')) === JSON.stringify({...without(byName(old.jobs.release.steps, legacyName), 'if'), run: expectedLegacyRun}),
  readbackOnlyApiOriginChanged: JSON.stringify(without(readback, 'run')) === JSON.stringify(without(oldReadback, 'run')) && validatesReadback(readback.run),
  diskGateOnlyChanged, enabledByInstalled: ['false', 'true'].map(installed => enabledFor(inputs, installed)),
  rechargeOnlyGateChanged: ['Build images on the GitHub runner', 'Push immutable images', 'Deploy through the production instance'].every(name => JSON.stringify(without(byName(steps, name), 'if')) === JSON.stringify(without(byName(old.jobs.release.steps, name), 'if'))),
@@ -665,7 +707,7 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
             'Verify or maintain recoverable unused project image cache',
             'Maintain service rollback image cache independently after fixed release'])
         self.assertTrue(value['rechargeOnlyGateChanged'])
-        self.assertTrue(value['legacyOnlyGateChanged'])
+        self.assertTrue(value['legacyGateAndBoundedImageSchemaOnlyChanged'])
         self.assertTrue(value['readbackOnlyApiOriginChanged'])
         self.assertTrue(value['confirmReadbackValidated'])
         self.assertEqual(value['confirmTamperRejections'], [True] * 7)

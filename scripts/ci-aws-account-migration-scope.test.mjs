@@ -76,3 +76,16 @@ test('wrong account identity and malformed proof hashes are rejected', () => fix
   record.files[Object.keys(record.files)[0]] = 'not-a-hash'; save();
   assert.equal(check(paths, { base }), false);
 }));
+
+const followupBase = '08981a5407d77baac2e8f2b596ff6cc2a040d8de';
+test('the exact merged migration parent admits only the pinned readonly follow-up', () => fixture(({ record, save, paths, check }) => {
+  record.version = 2; record.controlBase = followupBase; save();
+  assert.equal(check(paths, { base: followupBase }), true);
+  assert.equal(check(paths, { base }), false);
+}));
+test('an unreviewed follow-up base or manifest version is rejected', () => fixture(({ record, save, paths, check }) => {
+  record.version = 2; record.controlBase = 'f'.repeat(40); save();
+  assert.equal(check(paths, { base: record.controlBase }), false);
+  record.version = 3; record.controlBase = followupBase; save();
+  assert.equal(check(paths, { base: followupBase }), false);
+}));
