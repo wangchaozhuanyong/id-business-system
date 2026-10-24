@@ -36,6 +36,8 @@ class RuntimeTests(unittest.TestCase):
                         patch.object(r, 'RUNTIME_ADAPTER_READY', False)):
             patcher.start(); self.addCleanup(patcher.stop)
         self.auth = copy.deepcopy(r.c.AUTHENTICATED_PREDECESSOR)
+        instance = patch.object(r, 'INSTANCE', self.auth['instanceId'])
+        instance.start(); self.addCleanup(instance.stop)
         self.admin_auth = copy.deepcopy(r.c.AUTHENTICATED_ADMIN_SUCCESSOR)
         self.p = {'commit': 'a' * 40, 'sourceTree': 'b' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1'}
         self.repo = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'

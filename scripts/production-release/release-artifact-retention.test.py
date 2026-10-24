@@ -44,7 +44,7 @@ class Fixture(unittest.TestCase):
             path = self.current / name; path.write_bytes(raw); path.chmod(0o600)
         (self.root / 'current').symlink_to(self.current)
         lock = self.root / '.deploy.lock'; lock.write_bytes(b'lock'); lock.chmod(0o600)
-        source = HERE.parent.parent / 'deploy/aws/release-artifact-storage-proof-20261014.json'
+        source = HERE.parent.parent / 'deploy/aws/release-artifact-storage-proof-20261024.json'
         self.proof = json.loads(source.read_bytes()); self.proof['bucket'] = 'fixture-private-bucket'
         self.proof_path = self.root / 'cloud-proof.json'; self.proof_path.write_bytes(native.canonical(self.proof)); self.proof_path.chmod(0o600)
         self.proof_sha = native.sha(self.proof_path.read_bytes())

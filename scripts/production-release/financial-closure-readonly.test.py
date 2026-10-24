@@ -117,7 +117,7 @@ class FinancialReadonlyTests(unittest.TestCase):
         self.assertIn("inputs.mode == 'production-readonly'", block)
         self.assertIn('contents: read', block)
         self.assertNotIn('contents: write', block)
-        self.assertIn('arn:aws:iam::079740175286:role/id-business-v2-github-release', block)
+        self.assertIn('arn:aws:iam::098208446664:role/id-business-v2-github-release', block)
         self.assertNotIn('release.py', block)
 
 

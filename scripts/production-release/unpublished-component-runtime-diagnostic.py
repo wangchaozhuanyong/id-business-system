@@ -179,7 +179,7 @@ PREFIX = 'unpublished-component-runtime-diagnostic'
 SCOPE = 'UNPUBLISHED_COMPONENT_RUNTIME_DIAGNOSTIC'
 OPERATION = 'diagnose_unpublished_component_runtime'
 REGION = 'ap-northeast-1'
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 ROLES = ('admin', 'api', 'auto-recharge', 'auto-registration', 'caddy', 'media-resolver', 'mysql')
 STATE_FIELDS = frozenset(('containerId', 'image', 'reference', 'status', 'health',
                          'startedAtSha256', 'environmentSha256', 'configurationSha256'))

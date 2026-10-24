@@ -20,13 +20,13 @@ import zlib
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent.parent
 BASE = Path('/opt/id-business-v2')
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 REGION = 'ap-northeast-1'
-ACCOUNT = '079740175286'
+ACCOUNT = '098208446664'
 GITHUB_REPOSITORY = 'wangchaozhuanyong/id-business-system'
 REPOSITORY = ACCOUNT + '.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 NATIVE_PATH = 'scripts/production-release/release-artifact-retention.py'
-PROOF_PATH = 'deploy/aws/release-artifact-storage-proof-20261014.json'
+PROOF_PATH = 'deploy/aws/release-artifact-storage-proof-20261024.json'
 PATHS = (NATIVE_PATH, PROOF_PATH)
 SOURCE_PATHS = (*PATHS, 'scripts/production-release/release-artifact-retention-transport.py',
                 'scripts/production-release/disk-retention-transport.py',

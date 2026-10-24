@@ -128,6 +128,24 @@ def actual_restart_bytes():
                  (ACTUAL_RESTART_GET_GZIP_BASE64, ACTUAL_RESTART_LIST_GZIP_BASE64))
 
 
+class MigratedOriginArchiveTests(unittest.TestCase):
+    def test_only_the_new_private_archive_is_read_and_original_bytes_are_returned(self):
+        original = b'original sealed receipt bytes'
+        sha = r.digest(original)
+        with patch.object(r, 'command_raw', return_value=original) as query:
+            self.assertEqual(r.archived_origin(sha), original)
+            query.assert_called_once_with('aws', '--region', r.REGION, 's3', 'cp',
+                's3://id-business-v2-backups-098208446664-ap-northeast-1/'
+                'release-native-origins/20261024/' + sha + '.json', '-', '--only-show-errors')
+
+    def test_invalid_archive_key_stops_before_any_cloud_request(self):
+        for value in ('../receipt', 'a' * 63, 'A' * 64, None):
+            with self.subTest(value=value), patch.object(r, 'command_raw') as query:
+                with self.assertRaisesRegex(RuntimeError, 'ORIGIN_ARCHIVE_KEY_INVALID'):
+                    r.archived_origin(value)
+                query.assert_not_called()
+
+
 class Boundaries(unittest.TestCase):
     def setUp(self):
         self.receipt = {'adminImageId': 'sha256:' + 'a' * 64, 'apiImageId': 'sha256:' + 'b' * 64,
@@ -141,7 +159,7 @@ class Boundaries(unittest.TestCase):
                                  'payload': base64.b64encode(zlib.compress(raw)).decode()}) + '\n'
         self.stdout_sha = r.digest(self.output.encode())
         self.command = '12345678-1234-1234-1234-123456789012'
-        self.native = {'CommandId': self.command, 'InstanceId': r.INSTANCE, 'DocumentName': 'AWS-RunShellScript',
+        self.native = {'CommandId': self.command, 'InstanceId': r.ORIGIN_INSTANCE, 'DocumentName': 'AWS-RunShellScript',
             'PluginName': 'aws:runShellScript', 'Status': 'Success', 'ResponseCode': 0,
             'StandardErrorContent': '', 'StandardOutputContent': self.output}
         self.raw = json.dumps(self.native, indent=4).encode() + b'\n'
@@ -297,7 +315,7 @@ class Boundaries(unittest.TestCase):
             'onlinePublished': False, 'migrationPerformed': False, 'businessActions': 0}
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        invocation = dict(self.native, StandardOutputContent=json.dumps(receipt, sort_keys=True, separators=(',', ':')) + '\n',
+        invocation = dict(self.native, InstanceId=r.INSTANCE, StandardOutputContent=json.dumps(receipt, sort_keys=True, separators=(',', ':')) + '\n',
                           ExecutionStartDateTime=now, ExecutionEndDateTime=now)
         transport = c.make_transport(json.dumps(invocation).encode(), self.command, r.INSTANCE)
         proof = {'version': 1, 'scope': c.BUILD_SCOPE, 'commit': commit, 'sourceTree': tree,
@@ -578,7 +596,7 @@ class NativeRestartTests(unittest.TestCase):
             path = folder / name; path.write_bytes(raw); path.chmod(0o644)
             self.pins[name] = r.digest(raw)
         self.receipt = {'version': 1, 'scope': 'UNPUBLISHED_COMPONENT_SAME_CONTAINER_RESTART',
-            'status': 'SAME_CONTAINER_RESTART_VERIFIED', 'instanceId': r.INSTANCE,
+            'status': 'SAME_CONTAINER_RESTART_VERIFIED', 'instanceId': r.ORIGIN_INSTANCE,
             'sourceCommit': self.authority['sourceCommit'], 'sourceTree': self.authority['sourceTree'],
             'sourcePinsSha256': c.fingerprint(self.pins), 'services': copy.deepcopy(self.states),
             'configurationModels': models, 'legacyConfigurationSha256': {n: row['configurationSha256'] for n, row in self.old.items()},
@@ -592,12 +610,12 @@ class NativeRestartTests(unittest.TestCase):
         carrier = 'import base64,gzip;exec(gzip.decompress(base64.b64decode(' + repr(base64.b64encode(gzip.compress(program, mtime=0)).decode()) + ')))'
         self.program = program
         self.parameters = {'commands': ['python3 -B -c ' + shlex.quote(carrier)], 'executionTimeout': ['600']}
-        self.native = {'CommandId': self.command, 'InstanceId': r.INSTANCE, 'DocumentName': 'AWS-RunShellScript',
+        self.native = {'CommandId': self.command, 'InstanceId': r.ORIGIN_INSTANCE, 'DocumentName': 'AWS-RunShellScript',
             'PluginName': 'aws:runShellScript', 'Status': 'Success', 'ResponseCode': 0,
             'ExecutionStartDateTime': '2000-01-01T00:00:00Z', 'ExecutionEndDateTime': '2000-01-01T00:00:01Z',
             'StandardErrorContent': ''}
         self.command_list = {'Commands': [{'CommandId': self.command, 'DocumentName': 'AWS-RunShellScript',
-            'Status': 'Success', 'StatusDetails': 'Success', 'InstanceIds': [r.INSTANCE], 'Targets': [],
+            'Status': 'Success', 'StatusDetails': 'Success', 'InstanceIds': [r.ORIGIN_INSTANCE], 'Targets': [],
             'TargetCount': 1, 'CompletedCount': 1, 'ErrorCount': 0, 'DeliveryTimedOutCount': 0,
             'Parameters': self.parameters}]}
         self.seal()
@@ -681,7 +699,7 @@ class NativeRestartTests(unittest.TestCase):
                 (self.native, 'Status', 'Failed'), (self.native, 'ResponseCode', False),
                 (self.native, 'StandardErrorContent', 'error'), (self.native, 'InstanceId', 'i-other'),
                 (self.command_list['Commands'][0], 'TargetCount', True),
-                (self.command_list['Commands'][0], 'InstanceIds', [r.INSTANCE, 'i-other'])):
+                (self.command_list['Commands'][0], 'InstanceIds', [r.ORIGIN_INSTANCE, 'i-other'])):
             had, before = key in target, copy.deepcopy(target.get(key))
             target[key] = value; self.seal()
             with self.subTest(key=key), self.assertRaises(RuntimeError): self.authenticate()
@@ -865,8 +883,9 @@ class PublishedComponentTransportTests(unittest.TestCase):
              patch.object(core, 'validate_component_predecessor_native') as validate:
             self.assertEqual(r.component_predecessor_bytes(core), raw)
             validate.assert_called_once_with(raw)
-            query.assert_called_once_with('aws', '--region', r.REGION, 'ssm', 'get-command-invocation',
-                '--command-id', core.COMPONENT_PREDECESSOR['commandId'], '--instance-id', r.INSTANCE, '--output', 'json')
+            query.assert_called_once_with('aws', '--region', r.REGION, 's3', 'cp',
+                's3://id-business-v2-backups-098208446664-ap-northeast-1/release-native-origins/20261024/'
+                + core.COMPONENT_PREDECESSOR['invocationBytesSha256'] + '.json', '-', '--only-show-errors')
 
     def test_legacy_and_unknown_producer_do_not_receive_component_origin(self):
         core = r.load('unpublished-component-successor.py')

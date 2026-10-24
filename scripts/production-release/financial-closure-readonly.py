@@ -12,7 +12,7 @@ import time
 import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 REGION = 'ap-northeast-1'
 REPOSITORY = 'wangchaozhuanyong/id-business-system'
 FROZEN_RULES = '9c982c6f6c4573715d6679d64eb898ea20080430aa18ac42ae093beac181f26e'

@@ -20,7 +20,8 @@ import sys
 import time
 import zlib
 
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
+ORIGIN_INSTANCE = 'i-05836da38606e633c'
 REGION = 'ap-northeast-1'
 CONTRACT_FIELDS = frozenset(('currentRelease', 'manifestSha256', 'adminPredecessorRelease',
     'adminPredecessorManifestSha256', 'adminPublicationSha256', 'hotfixPublicationSha256',
@@ -121,7 +122,7 @@ def validate_hotfix_native(raw, contract):
     need(digest(raw) == contract['hotfixReadbackInvocationBytesSha256'], 'HOTFIX_Q_CHANGED')
     value = c.closed_json(raw, 128 * 1024)
     need(value.get('CommandId') == contract['hotfixReadbackCommandId']
-         and value.get('InstanceId') == INSTANCE and value.get('DocumentName') == 'AWS-RunShellScript'
+         and value.get('InstanceId') == ORIGIN_INSTANCE and value.get('DocumentName') == 'AWS-RunShellScript'
          and value.get('PluginName') == 'aws:runShellScript' and value.get('Status') == 'Success'
          and type(value.get('ResponseCode')) is int and value['ResponseCode'] == 0
          and value.get('StandardErrorContent') == '', 'HOTFIX_Q_CHANGED')
@@ -156,7 +157,7 @@ def historical_b(d, contract):
     raw = c.private_bytes(d.BASE / relative, cap=65536)
     need(digest(raw) == expected['nativeInvocationSha256'], 'B_ORIGIN_CHANGED')
     native = c.closed_json(raw, 65536)
-    need(native.get('CommandId') == expected['nativeReadbackCommandId'] and native.get('InstanceId') == INSTANCE
+    need(native.get('CommandId') == expected['nativeReadbackCommandId'] and native.get('InstanceId') == ORIGIN_INSTANCE
          and native.get('DocumentName') == 'AWS-RunShellScript' and native.get('PluginName') == 'aws:runShellScript'
          and native.get('Status') == 'Success' and type(native.get('ResponseCode')) is int
          and native['ResponseCode'] == 0 and native.get('StandardErrorContent') == ''
@@ -196,7 +197,7 @@ def validate_restart_material(c, invocation_raw, command_list_raw):
                  for k in ('sourceCommit', 'sourceTree')), 'RESTART_NATIVE_NOT_SEALED')
     need(digest(invocation_raw) == authority['invocationBytesSha256']
          and digest(command_list_raw) == authority['commandListBytesSha256'], 'RESTART_NATIVE_BYTES_CHANGED')
-    native, receipt = c.validate_invocation(invocation_raw, authority['commandId'], INSTANCE)
+    native, receipt = c.validate_invocation(invocation_raw, authority['commandId'], ORIGIN_INSTANCE)
     commands = c.closed_json(command_list_raw, 128 * 1024)
     need(set(commands) == {'Commands'} and type(commands['Commands']) is list
          and len(commands['Commands']) == 1, 'RESTART_COMMAND_LIST_CHANGED')
@@ -204,7 +205,7 @@ def validate_restart_material(c, invocation_raw, command_list_raw):
     need(type(command) is dict and command.get('CommandId') == authority['commandId']
          and command.get('DocumentName') == 'AWS-RunShellScript'
          and command.get('Status') == command.get('StatusDetails') == 'Success'
-         and command.get('InstanceIds') == [INSTANCE] and command.get('Targets') == []
+         and command.get('InstanceIds') == [ORIGIN_INSTANCE] and command.get('Targets') == []
          and all(type(command.get(k)) is int and command[k] == expected for k, expected in
                  (('TargetCount', 1), ('CompletedCount', 1), ('ErrorCount', 0), ('DeliveryTimedOutCount', 0))),
          'RESTART_COMMAND_LIST_CHANGED')
@@ -239,7 +240,7 @@ def validate_restart_material(c, invocation_raw, command_list_raw):
          and type(receipt['version']) is int and receipt['version'] == 1
          and receipt['scope'] == 'UNPUBLISHED_COMPONENT_SAME_CONTAINER_RESTART'
          and receipt['status'] == 'SAME_CONTAINER_RESTART_VERIFIED'
-         and receipt['instanceId'] == INSTANCE and receipt['sourceCommit'] == authority['sourceCommit']
+         and receipt['instanceId'] == ORIGIN_INSTANCE and receipt['sourceCommit'] == authority['sourceCommit']
          and receipt['sourceTree'] == authority['sourceTree']
          and receipt['sourcePinsSha256'] == authority['sourcePinsSha256']
          and c.fingerprint(receipt) == authority['receiptSha256']
@@ -542,26 +543,30 @@ def read_input_bundle(plan, base=None):
     return proof, transport
 
 
+def archived_origin(expected_sha):
+    """Read migrated original bytes; callers retain their original identity and byte checks."""
+    need(type(expected_sha) is str and re.fullmatch('[a-f0-9]{64}', expected_sha), 'ORIGIN_ARCHIVE_KEY_INVALID')
+    uri = ('s3://id-business-v2-backups-098208446664-ap-northeast-1/'
+           'release-native-origins/20261024/' + expected_sha + '.json')
+    return command_raw('aws', '--region', REGION, 's3', 'cp', uri, '-', '--only-show-errors')
+
+
 def restart_origin_bytes(c):
     if NATIVE_RESTART_AUTHORITY is None:
         return None
     command_id = NATIVE_RESTART_AUTHORITY['commandId']
-    raw_get = command_raw('aws', '--region', REGION, 'ssm', 'get-command-invocation',
-        '--command-id', command_id, '--instance-id', INSTANCE, '--output', 'json')
-    raw_list = command_raw('aws', '--region', REGION, 'ssm', 'list-commands',
-        '--command-id', command_id, '--output', 'json')
+    raw_get = archived_origin(NATIVE_RESTART_AUTHORITY['invocationBytesSha256'])
+    raw_list = archived_origin(NATIVE_RESTART_AUTHORITY['commandListBytesSha256'])
     validate_restart_material(c, raw_get, raw_list)
     return raw_get, raw_list
 
 
 def component_predecessor_bytes(c):
     # Only the exact already published component may use this new origin.
-    # The instance has no GetCommandInvocation permission; the trusted runner
-    # carries the original ended bytes through the existing private writer.
+    # The trusted runner carries the sealed, migrated original bytes through the private writer.
     if os.environ.get('EXPECTED_CURRENT') != c.COMPONENT_PREDECESSOR['producer']['commit']:
         return None
-    raw = command_raw('aws', '--region', REGION, 'ssm', 'get-command-invocation',
-        '--command-id', c.COMPONENT_PREDECESSOR['commandId'], '--instance-id', INSTANCE, '--output', 'json')
+    raw = archived_origin(c.COMPONENT_PREDECESSOR['invocationBytesSha256'])
     c.validate_component_predecessor_native(raw)
     return raw
 
@@ -602,9 +607,7 @@ def parameters(mode, environment=None, *, input_artifacts=None):
                         '"--preflight",base64.b64encode(_transport_raw).decode()]')
     # Only source files from the exact checked-out GitHub commit are fetched;
     # the existing descriptor writer rejects aliases, symlinks and byte drift.
-    raw_origin = command_raw('aws', '--region', REGION, 'ssm', 'get-command-invocation',
-        '--command-id', c.BASELINE_CONTRACT['hotfixReadbackCommandId'], '--instance-id', INSTANCE,
-        '--output', 'json')
+    raw_origin = archived_origin(c.BASELINE_CONTRACT['hotfixReadbackInvocationBytesSha256'])
     validate_hotfix_native(raw_origin, c.BASELINE_CONTRACT)
     origin_path = ('/opt/id-business-v2/.staging/component-hotfix-origin-'
                    + c.BASELINE_CONTRACT['hotfixReadbackInvocationBytesSha256'] + '/invocation.json')

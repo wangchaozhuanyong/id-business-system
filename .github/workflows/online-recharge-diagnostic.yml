@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 10
     env:
       AWS_REGION: ap-northeast-1
-      PRODUCTION_INSTANCE_ID: i-05836da38606e633c
+      PRODUCTION_INSTANCE_ID: i-0838cebf64f0e2a89
       GH_TOKEN: ${{ github.token }}
       EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
       EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
@@ -42,7 +42,7 @@ jobs:
       - name: Assume existing release role for original result lookup
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: arn:aws:iam::079740175286:role/id-business-v2-github-release
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
           role-session-name: id-business-v2-diagnostic-${{ github.run_id }}
           aws-region: ap-northeast-1
 

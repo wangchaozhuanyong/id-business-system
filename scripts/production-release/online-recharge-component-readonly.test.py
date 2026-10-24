@@ -197,6 +197,7 @@ def selected_fixture(env=None):
         validate_invocation=Mock(side_effect=lambda raw, *unused, **kw: ({}, copy.deepcopy(
             CURRENT_RECEIPT if raw == CURRENT_RAW else ORIGIN_RECEIPT))))
     with patch.dict(os.environ, ENV if env is None else env, clear=True), \
+            patch.object(client.r, 'INSTANCE', INSTANCE), \
             patch.object(client.r, 'authority', return_value=copy.deepcopy(AUTHORITY)), \
             patch.object(client.r, 'current_authority', return_value=copy.deepcopy(CURRENT_AUTHORITY)), \
             patch.object(client.r, 'current_predecessor', return_value=CURRENT), \
@@ -306,8 +307,9 @@ class ComponentClientTests(unittest.TestCase):
         with selected_fixture() as core, patch.object(client, 'command_raw', side_effect=[ORIGIN, CURRENT_RAW]) as command:
             self.assertEqual(client.predecessor_native(core), ORIGIN)
             self.assertEqual(client.current_native(core), CURRENT_RAW)
-            self.assertEqual(command.call_args_list[0].args[6], COMMAND)
-            self.assertEqual(command.call_args_list[1].args[6], CURRENT_COMMAND)
+            prefix = 's3://id-business-v2-backups-098208446664-ap-northeast-1/release-native-origins/20261024/'
+            self.assertEqual(command.call_args_list[0].args[5], prefix + AUTHORITY['invocationBytesSha256'] + '.json')
+            self.assertEqual(command.call_args_list[1].args[5], prefix + CURRENT_AUTHORITY['invocationBytesSha256'] + '.json')
             self.assertEqual(core.validate_invocation.call_args_list[0].args, (ORIGIN, COMMAND, INSTANCE))
             self.assertEqual(core.validate_invocation.call_args_list[1].args, (CURRENT_RAW, CURRENT_COMMAND, INSTANCE))
         with selected_fixture() as core, patch.object(client, 'command_raw', return_value=ORIGIN):

@@ -147,8 +147,63 @@ class CheckoutInitPublicationTests(unittest.TestCase):
             media.official_sources('Types: deb\nSuites: noble\n')
 
     def test_current_control_and_source_checks(self):
+        import ast
         pub = P.load('online-checkout-error-page-publication.py')
-        pub.check(self.c)
+        published = '6ef7131512dc60179f2df6154338bf1973de95b5'
+        # The completed one-off contract remains sealed to its original AWS
+        # resources. Migration must not silently reseal or replay that release.
+        extension = set(pub.git('diff', '--name-only', P.SOURCE, 'HEAD').decode().splitlines())
+        source_drift = any(P.sha((pub.ROOT / name).read_bytes()) != expected
+                           for name, expected in {**self.c['runtimeSources'], **self.c['validationSources']}.items())
+        refusal = ('ONLINE_CHECKOUT_ERROR_PAGE_SOURCE_CHANGED' if source_drift else
+                   'UNREVIEWED_EXTENSION' if not extension <= pub.CONTROLS else 'CONTROL_CHANGED')
+        with self.assertRaisesRegex(RuntimeError, refusal):
+            pub.check(self.c)
+        projected = copy.deepcopy(self.c)
+        translate = lambda raw: raw.replace(b'079740175286', b'098208446664').replace(
+            b'i-05836da38606e633c', b'i-0838cebf64f0e2a89')
+        for name, expected in self.c['controlPins'].items():
+            original = pub.git('show', published + ':scripts/production-release/' + name)
+            self.assertEqual(P.sha(original), expected)
+            current = (pub.HERE / name).read_bytes()
+            if name == Path(__file__).name:
+                trees = [ast.parse(raw) for raw in (original, current)]
+                for tree in trees:
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.ClassDef):
+                            node.body = [method for method in node.body if not (
+                                isinstance(method, ast.FunctionDef)
+                                and method.name == 'test_current_control_and_source_checks')]
+                self.assertEqual(ast.dump(trees[0]), ast.dump(trees[1]))
+            elif current != original:
+                self.assertEqual(current, translate(original))
+            projected['controlPins'][name] = P.sha(current)
+        workflow = pub.git('show', published + ':' + pub.WORKFLOW)
+        self.assertEqual(P.sha(workflow), self.c['workflowSha256'])
+        self.assertEqual((pub.ROOT / pub.WORKFLOW).read_bytes(), translate(workflow))
+        projected['workflowSha256'] = P.sha(translate(workflow))
+        git = pub.git
+        def archived_scope(*arguments):
+            if arguments == ('diff', '--name-only', P.SOURCE, 'HEAD'):
+                return git('diff', '--name-only', P.SOURCE, published)
+            return git(*arguments)
+        archived_sources = {}
+        for name, expected in {**self.c['runtimeSources'], **self.c['validationSources']}.items():
+            raw = git('show', published + ':' + name)
+            self.assertEqual(P.sha(raw), expected)
+            archived_sources[(pub.ROOT / name).resolve()] = raw
+        manifest_path = pub.ROOT / P.ENGINE / 'SOURCE_MANIFEST.json'
+        archived_sources[manifest_path.resolve()] = git('show', published + ':' + str(manifest_path.relative_to(pub.ROOT)))
+        read_bytes = Path.read_bytes
+        def historical_bytes(path):
+            selected = archived_sources.get(path.resolve())
+            return selected if selected is not None else read_bytes(path)
+        # A later reviewed engine release is unrelated to the frozen one-off.
+        # The current source must fail closed; the original sealed source fixture
+        # must still satisfy its exact validator with translated controls.
+        with patch.object(pub, 'git', side_effect=archived_scope), \
+             patch.object(Path, 'read_bytes', historical_bytes):
+            pub.check(projected)
 
     def test_parent_native_hash_and_identity_are_independent(self):
         manifest = json.dumps({'commit': P.CURRENT}).encode()
