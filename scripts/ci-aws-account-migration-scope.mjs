@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-export const awsAccountMigrationReadOnlyBase = '9bf179b2c6dbf643404cf083171f7d3fee88944e';
+export const awsAccountMigrationReadOnlyBase = '0adff9b5ff2bb09360b5e37b3064c02025586528';
 const readonlyControlPaths = new Set([
   '.github/workflows/production-release.yml',
   'scripts/ci-aws-account-migration-scope.mjs',

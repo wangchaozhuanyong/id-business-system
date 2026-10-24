@@ -35,7 +35,7 @@ async function fixture(run, followup = false) {
     const record = { version: followup ? 2 : 1, sourceCommit: base, sourceAccount: '079740175286',
       targetAccount: '098208446664', files: Object.fromEntries(
         Object.entries(files).map(([name, raw]) => [name, digest(raw)])) };
-    if (followup) record.controlBase = '9bf179b2c6dbf643404cf083171f7d3fee88944e';
+    if (followup) record.controlBase = '0adff9b5ff2bb09360b5e37b3064c02025586528';
     mkdirSync(dirname(join(directory, manifest)), { recursive: true });
     const save = () => writeFileSync(join(directory, manifest), JSON.stringify(record));
     save();
@@ -84,7 +84,7 @@ test('wrong account identity and malformed proof hashes are rejected', () => fix
   assert.equal(check(paths, { base }), false);
 }));
 
-const followupBase = '9bf179b2c6dbf643404cf083171f7d3fee88944e';
+const followupBase = '0adff9b5ff2bb09360b5e37b3064c02025586528';
 test('the exact merged migration parent admits only the pinned readonly follow-up', () => fixture(({ record, save, paths, check }) => {
   record.version = 2; record.controlBase = followupBase; save();
   assert.equal(check(paths, { base: followupBase }), true);

@@ -1,14 +1,14 @@
 {
   "version": 2,
   "sourceCommit": "a046d8413e3cb6c3edd6429dbdb922593dc32064",
-  "controlBase": "9bf179b2c6dbf643404cf083171f7d3fee88944e",
+  "controlBase": "0adff9b5ff2bb09360b5e37b3064c02025586528",
   "sourceAccount": "079740175286",
   "targetAccount": "098208446664",
   "purpose": "Only the six-file readonly migration follow-up at the current merged parent; unchanged business and historical publisher checks are reused",
   "files": {
     ".github/workflows/production-release.yml": "46c50a3084c9e9aeff5a30fc865d92fe16386aa368de549784bebe72ce395774",
-    "scripts/ci-aws-account-migration-scope.mjs": "30fb1037a4ab27f416d53832293dbc7203b12857acb8b4ab8e8902f0adfa3f9b",
-    "scripts/ci-aws-account-migration-scope.test.mjs": "b3a26649b021efb309774319630b0fab512c8c627307194dc5c5a36c9e761552",
+    "scripts/ci-aws-account-migration-scope.mjs": "ec28018dca59bb057046c990cce0f1c41ece5ddb7be50ae88a2babf83871361f",
+    "scripts/ci-aws-account-migration-scope.test.mjs": "a228a0d8ebdd7bf3dbd9c1ad03c413789de589c247ea28be32a9a9f93765b8e3",
     "scripts/ci-recharge-check.mjs": "e5fa636989956b8d88e1b3b32a59ff9ab268e147e83af1247192eee39339da40",
     "scripts/production-release/unpublished-component-runtime-diagnostic.test.py": "7d246bb3b4c88878fed709cd0e9515c217c21592e667369478d3bdf97e5bedc0"
   }
