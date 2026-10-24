@@ -1,4 +1,10 @@
 import {
+  onlineCheckoutErrorPagePaths,
+  onlineCheckoutErrorPageControls,
+  isOnlineCheckoutErrorPageOnly,
+  isOnlineCheckoutErrorPageControlsOnly
+} from './ci-online-settings-scope.mjs';
+import {
   onlineReadonlyProbePaths,
   onlineReadonlyProbeControls,
   isOnlineReadonlyProbeOnly,
@@ -3335,4 +3341,30 @@ test('readonly probe release scopes finite executor sources without API or migra
 test('readonly probe publication controls alone only select guards', () => {
   assert.equal(isOnlineReadonlyProbeControlsOnly(onlineReadonlyProbeControls), true);
   assert.deepEqual(selectedParts(onlineReadonlyProbeControls), ['guards']);
+});
+
+test('checkout error page scopes only its finite executor and release controls', () => {
+  const paths = [...onlineCheckoutErrorPagePaths, ...onlineCheckoutErrorPageControls];
+  assert.equal(isOnlineCheckoutErrorPageOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+  ])
+    assert.equal(isOnlineCheckoutErrorPageOnly([...paths, extra]), false);
+  assert.equal(isOnlineCheckoutErrorPageOnly(paths.slice(1)), false);
+  assert.equal(isOnlineCheckoutErrorPageControlsOnly(onlineCheckoutErrorPageControls), true);
+  assert.deepEqual(selectedParts(onlineCheckoutErrorPageControls), ['guards']);
+  const commands = JSON.stringify(sessionProbeCommands('online-engine', paths));
+  for (const n of [
+    'checkout-navigation',
+    'checkout-page-loading',
+    'checkout-readonly-diagnostic',
+    'debug-checkout',
+    'verification-state'
+  ])
+    assert.ok(commands.includes(n + '.test.cjs'));
+  assert.doesNotMatch(commands, /prisma|migrate|build --workspace/);
 });

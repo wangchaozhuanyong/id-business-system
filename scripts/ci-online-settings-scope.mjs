@@ -1,3 +1,48 @@
+export const onlineCheckoutErrorPagePaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-page-state.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-readonly-diagnostic.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-page-loading.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-readonly-diagnostic.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/verification-state.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export const onlineCheckoutErrorPageControls = Object.freeze([
+  '.github/workflows/online-checkout-error-page-publication.yml',
+  'scripts/ci-online-settings-scope.mjs',
+  'scripts/ci-online-settings-scope.test.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/production-release/online-checkout-error-page-release.py',
+  'scripts/production-release/online-checkout-error-page-publication.py',
+  'scripts/production-release/online-checkout-error-page-release.test.py',
+  'scripts/production-release/online-checkout-error-page-contract.json'
+]);
+export function isOnlineCheckoutErrorPageOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    onlineCheckoutErrorPagePaths
+      .filter((p) => p.startsWith('apps/'))
+      .every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) => onlineCheckoutErrorPagePaths.includes(p) || onlineCheckoutErrorPageControls.includes(p)
+    )
+  );
+}
+export function isOnlineCheckoutErrorPageControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some((p) => p.startsWith('scripts/production-release/online-checkout-error-page-')) &&
+    paths.every((p) => onlineCheckoutErrorPageControls.includes(p))
+  );
+}
 export const onlineReadonlyProbePaths = Object.freeze([
   ...[
     'SOURCE_MANIFEST.json',
@@ -1416,6 +1461,7 @@ export function isOnlineLegacyCloseOnly(paths) {
   );
 }
 export function isOnlineSettingsOnly(paths) {
+  if (isOnlineCheckoutErrorPageOnly(paths)) return true;
   if (isOnlineReadonlyProbeOnly(paths)) return true;
   if (isOnlineSessionProbeOnly(paths)) return true;
   if (isOnlineCheckoutInitOnly(paths)) return true;
@@ -1469,6 +1515,7 @@ export function isOnlineSettingsOnly(paths) {
   );
 }
 export function isOnlineSettingsControlsOnly(paths) {
+  if (isOnlineCheckoutErrorPageControlsOnly(paths)) return true;
   if (isOnlineReadonlyProbeControlsOnly(paths)) return true;
   if (isOnlineSessionProbeControlsOnly(paths)) return true;
   if (isOnlineCheckoutInitControlsOnly(paths)) return true;
@@ -1505,6 +1552,47 @@ export function isOnlineSettingsControlsOnly(paths) {
 }
 export const onlineSettingsParts = Object.freeze(['guards', 'api', 'admin', 'online-engine']);
 export function onlineSettingsCommands(part, paths) {
+  if (isOnlineCheckoutErrorPageOnly(paths) || isOnlineCheckoutErrorPageControlsOnly(paths)) {
+    const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+    if (part === 'guards') {
+      const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
+      const formatted = paths.filter(
+        (p) => /\.(?:mjs|cjs|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      const linted = paths.filter(
+        (p) => /\.(?:mjs|cjs)$/.test(p) && !p.includes('/engine/upstream/')
+      );
+      return [
+        previous[0],
+        ...(formatted.length ? [['npm', 'exec', '--', 'prettier', '--check', ...formatted]] : []),
+        ...(linted.length ? [['npm', 'exec', '--', 'eslint', ...linted]] : []),
+        previous.find((command) => command[0] === 'node'),
+        ['python3', '-B', 'scripts/production-release/online-checkout-error-page-release.test.py'],
+        ...['check:v2-module-architecture', 'check:v2-isolation'].map((n) => ['npm', 'run', n])
+      ];
+    }
+    if (part === 'online-engine' && isOnlineCheckoutErrorPageOnly(paths)) {
+      const setup = onlineSettingsCommands(part, onlineNativeFetchPaths).slice(0, 2);
+      return [
+        ...setup,
+        [
+          'node',
+          '--test',
+          '--test-concurrency=1',
+          ...[
+            'checkout-navigation',
+            'checkout-page-loading',
+            'checkout-readonly-diagnostic',
+            'debug-checkout',
+            'verification-state'
+          ].map((n) => engine + '/test/' + n + '.test.cjs')
+        ],
+        ['npm', '--prefix', engine, 'run', 'test:upstream']
+      ];
+    }
+    throw new Error('Unsupported checkout error page check part');
+  }
+
   if (isOnlineReadonlyProbeOnly(paths) || isOnlineReadonlyProbeControlsOnly(paths)) {
     if (part === 'guards') {
       const previous = onlineSettingsCommands(part, onlineNativeFetchPaths);
