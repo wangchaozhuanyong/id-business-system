@@ -65,6 +65,21 @@ def identity():
     return F.native_identity()
 
 
+def verified_source_quality(c):
+    binding=c['sourceQuality'];pr=github('pulls/697')
+    git('merge-base','--is-ancestor',P.SOURCE,binding['head'])
+    need(pr.get('merged_at') and pr['merge_commit_sha']==binding['mergeCommit'] and pr['head']['sha']==binding['head'],'SOURCE_MERGE_CHANGED')
+    for n,v in c['sources'].items():
+        need(sha(git('show',binding['head']+':'+n))==v,'SOURCE_QA_INPUT_CHANGED')
+    run=github('actions/runs/'+binding['runId'])
+    F.require_run(run,binding['head'],'.github/workflows/quality.yml','pull_request')
+    need(str(run['run_attempt'])==binding['runAttempt'] and run['conclusion']=='success','SOURCE_QA_REQUIRED')
+    jobs=github('actions/runs/'+binding['runId']+'/attempts/'+binding['runAttempt']+'/jobs?per_page=100')['jobs']
+    need({'quality','change-scope','recharge (guards)','recharge (api)','recharge (admin)','recharge (online-engine)'}<={j['name'] for j in jobs if j['conclusion']=='success'},'SOURCE_QA_PARTS_REQUIRED')
+    receipt,digest=F.artifact_json(run,'quality-source-evidence-'+binding['runAttempt'],'evidence.json')
+    need(digest==binding['sourceReceiptSha256'] and receipt['repository']==REPO and receipt['pullRequest']==697 and receipt['headSha']==binding['head'],'SOURCE_QA_RECEIPT_CHANGED')
+    return binding
+
 def quality(commit, tree):
     linked = github('commits/' + commit + '/pulls')
     selected = [pr for pr in linked if pr.get('merged_at') and pr.get('merge_commit_sha') == commit
@@ -72,9 +87,15 @@ def quality(commit, tree):
     need(len(selected) == 1, 'MERGED_SOURCE_REQUIRED')
     pr = selected[0]
     head = pr['head']['sha']
-    git('merge-base', '--is-ancestor', P.SOURCE, head)
+    c=json.loads((HERE/P.CONTRACT_FILE).read_bytes())
+    git('merge-base', '--is-ancestor', P.SOURCE if pr['number']==697 else c['sourceQuality']['mergeCommit'], head)
     reviewed_extensions(head,json.loads((HERE/P.CONTRACT_FILE).read_bytes()))
     need(git('rev-parse', head + '^{tree}').decode().strip() == tree, 'REVIEW_TREE_CHANGED')
+    c=json.loads((HERE/P.CONTRACT_FILE).read_bytes())
+    source_verification=None
+    if pr['number']!=697:
+        need(set(git('diff','--name-only',pr['base']['sha'],head).decode().splitlines())<=CONTROLS,'CONTROL_PR_BUSINESS_CHANGED')
+        source_verification=verified_source_quality(c)
     evidence = None
     for sha_value, event in ((head, 'pull_request'), (commit, 'push')):
         runs = github('actions/workflows/quality.yml/runs?head_sha=' + sha_value)['workflow_runs']
@@ -85,7 +106,9 @@ def quality(commit, tree):
         F.require_run(run, sha_value, '.github/workflows/quality.yml', event)
         jobs = github('actions/runs/' + str(run['id']) + '/attempts/' + str(run['run_attempt']) + '/jobs?per_page=100')['jobs']
         required = {'quality', 'change-scope'}
-        if event == 'pull_request': required |= {'recharge (guards)', 'recharge (api)', 'recharge (admin)', 'recharge (online-engine)'}
+        if event == 'pull_request':
+            required.add('recharge (guards)')
+            if source_verification is None:required|={'recharge (api)','recharge (admin)','recharge (online-engine)'}
         need(required <= {j['name'] for j in jobs if j['conclusion'] == 'success'}
              and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_JOBS_REQUIRED')
         if event == 'pull_request':
@@ -96,7 +119,8 @@ def quality(commit, tree):
                  'QUALITY_RECEIPT_CHANGED')
             evidence = {'commit': commit, 'tree': tree, 'pullRequest': pr['number'], 'head': head,
                 'runId': str(run['id']), 'runAttempt': str(run['run_attempt']),
-                'sourceReviewCommit': P.SOURCE, 'sourceReceiptSha256': digest}
+                'sourceReviewCommit': P.SOURCE, 'sourceReceiptSha256': digest,
+                **({'sourceVerification':source_verification} if source_verification else {})}
     P.verify_quality(evidence, commit, tree)
     return evidence
 
@@ -146,7 +170,7 @@ def publish(c):
     path = OUT / filename
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('线上代充：保留账单国家控件滚动分类并允许一次严格重新定位。仅更新本轮 Admin、API 和执行器，无迁移或付款。\n')
+    notes.write_text('线上代充：自动填写卡与账单后停在付款按钮就绪；快速分类退出并回收证据。仅更新本轮 Admin、API 和执行器，无迁移或付款。\n')
     tag = PREFIX + '-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
             '--title', '线上代充自动不付款验收 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')

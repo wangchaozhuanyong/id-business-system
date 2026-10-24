@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isUnpaidValidationControlsOnly,
   unpaidValidationPaths,
   unpaidValidationControls,
   isUnpaidValidationOnly,
@@ -30,4 +31,18 @@ test('unpaid batch retains all four affected checks and refuses unrelated inputs
   assert.match(commands, /test:online-recharge:engine/);
   assert.match(commands, /check:v2-loading-standard/);
   assert.doesNotMatch(commands, /migrate|financial-integrity|verify:production/);
+});
+
+test('baseline-only follow-up requires controls and cannot admit business changes', () => {
+  const paths = ['scripts/production-release/online-unpaid-validation-contract.json'];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isUnpaidValidationControlsOnly([...paths, unpaidValidationPaths[0]]), false);
+  assert.throws(() => unpaidValidationCommands('api', paths));
+  assert.doesNotMatch(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /prisma|migrate|workspace|test:online-recharge:engine/
+  );
 });

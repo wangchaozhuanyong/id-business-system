@@ -32,7 +32,9 @@ def validate_contract(c):
  need({ENGINE+n:v for n,v in c['afterEngineFiles'].items() if c['beforeEngineFiles'].get(n)!=v}=={n:v for n,v in c['sources'].items() if n.startswith(ENGINE)},'ENGINE_DELTA')
  need(c['sqlFenceHelperSha256']=='50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925','FENCE_CHANGED')
 def verify_quality(q,commit,tree):
- need(q.get('commit')==commit and q.get('tree')==tree and q.get('pullRequest')==697 and q.get('sourceReviewCommit')==SOURCE and re.fullmatch('[a-f0-9]{64}',q.get('sourceReceiptSha256','')),'QUALITY_REQUIRED')
+ need(q.get('commit')==commit and q.get('tree')==tree and isinstance(q.get('pullRequest'),int) and q['pullRequest']>=697 and q.get('sourceReviewCommit')==SOURCE and re.fullmatch('[a-f0-9]{64}',q.get('sourceReceiptSha256','')),'QUALITY_REQUIRED')
+ if q['pullRequest']!=697:
+  need(q.get('sourceVerification')==json.loads((HERE/CONTRACT_FILE).read_bytes())['sourceQuality'],'SOURCE_QA_BINDING_REQUIRED')
 def verify_proof(proof,plan,c,files):
  validate_contract(c);verify_quality(proof['qualitySourceEvidence'],plan['commit'],plan['tree'])
  need(proof.get('nativeParentCapture')==plan.get('nativeParentCapture') and proof['nativeParentCapture']['manifestSha256']==c['manifestSha256'],'PARENT_CHANGED')
@@ -98,3 +100,11 @@ def observe_target(c):
         'backupNormalizerPath':normalizer,'backupNormalizerExists':Path(normalizer).is_file(),
         'publishedOverlays':[{'proofFile':'online-country-interaction-build-proof.json','proofSha256':sha((current/'online-country-interaction-build-proof.json').read_bytes())}],
         'businessActions':0,'migrationPerformed':False}
+
+def failure_report(error,plan):
+    import traceback
+    code=str(error)
+    if not re.fullmatch(r'(?:ONLINE_UNPAID|ONLINE_CHECKOUT|RECHARGE_RECORD|RECHARGE_AVAILABILITY|PROXY_RESULT_IDENTITY|ONLINE_QUERY_NETWORK)_[A-Z0-9_]{1,110}',code):code='ONLINE_UNPAID_REMOTE_FAILED'
+    frames=[{'file':Path(f.filename).name,'function':f.name,'line':f.lineno}
+        for f in traceback.extract_tb(error.__traceback__) if Path(f.filename).name in plan['controlSources']]
+    return {'status':'FAILED','code':code,'exceptionType':type(error).__name__,'mode':plan['mode'],'frames':frames[-8:],'businessActions':0}
