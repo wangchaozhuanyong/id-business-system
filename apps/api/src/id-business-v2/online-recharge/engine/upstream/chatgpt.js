@@ -414,7 +414,7 @@ async function assertCheckoutPageReady(page, { requireCardReady = true, deadline
 const CHECKOUT_OPEN_STAGES = new Set(['navigation', 'login', 'readiness', 'final_check']);
 const CHECKOUT_OPEN_REASONS = new Set([
     'timeout', 'http_error', 'original_changed', 'session_required',
-    'cancelled', 'network_error', 'page_closed', 'not_ready', 'check_failed', 'read_incomplete'
+    'cancelled', 'network_error', 'page_closed', 'not_ready', 'check_failed', 'read_incomplete', 'error_page'
 ]);
 const CHECKOUT_FORM_DIAGNOSTIC_CODES = new Set([
     'CHECKOUT_CARD_NOT_READY', 'CHECKOUT_FORM_NOT_READY', 'CHECKOUT_CONTROL_AMBIGUOUS',
@@ -660,7 +660,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
         }));
         if (!captchaResult.cleared) {
             let exclusionProbe;
-            if (captchaResult.checkoutNotReady && budget.remaining() > 0 && !page.isClosed?.()) {
+            if (captchaResult.checkoutNotReady && !captchaResult.checkoutErrorPage && budget.remaining() > 0 && !page.isClosed?.()) {
                 try {
                     exclusionProbe = await require('../checkout-form.cjs').inspectCardExclusions(page, {
                         deadline: Date.now() + Math.min(2000, budget.remaining()), signal: budget.signal
@@ -672,7 +672,8 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                 : captchaResult.checkoutNotReady
                     ? 'Checkout 支付表单未能加载，请检查网络或稍后重试'
                     : buildCaptchaRequiredError();
-            const checkoutOpenReason = captchaResult.code === 'VERIFICATION_TIMEOUT' || /_TIMEOUT$/.test(captchaResult.code || '') ? 'timeout'
+            const checkoutOpenReason = captchaResult.checkoutErrorPage ? 'error_page'
+                : captchaResult.code === 'VERIFICATION_TIMEOUT' || /_TIMEOUT$/.test(captchaResult.code || '') ? 'timeout'
                     : ['VERIFICATION_CANCELLED', 'CHECKOUT_FORM_ABORTED'].includes(captchaResult.code) ? 'cancelled'
                         : ['VERIFICATION_PAGE_CLOSED', 'CHECKOUT_PAGE_CLOSED'].includes(captchaResult.code) ? 'page_closed'
                             : captchaResult.sessionRequired ? 'session_required'

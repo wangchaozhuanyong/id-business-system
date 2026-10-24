@@ -690,7 +690,7 @@ async function run(runOptions = {}) {
         const checkoutOpenDiagnostics = checkoutFailure || e.checkoutCreationState === 'accepted'
             ? require('./chatgpt').safeCheckoutOpenDiagnostics(e.checkoutOpenDiagnostics) : undefined;
         const openStageLabels = { navigation: '支付页面导航', login: '登录页面控件读取', readiness: '支付控件检查', final_check: '结账页最终核验' };
-        const openReasonLabels = { timeout: '超过本次期限', http_error: '收到异常响应', original_changed: '发现原结账单页面变化', session_required: '发现登录提示', cancelled: '已取消', network_error: '网络请求未完成', check_failed: '未通过', page_closed: '页面已关闭', not_ready: '尚未就绪', read_incomplete: '未完成' };
+        const openReasonLabels = { timeout: '超过本次期限', http_error: '收到异常响应', original_changed: '发现原结账单页面变化', session_required: '发现登录提示', cancelled: '已取消', network_error: '网络请求未完成', check_failed: '未通过', page_closed: '页面已关闭', not_ready: '尚未就绪', read_incomplete: '未完成', error_page: '显示官网结账错误页（原因尚未确定）' };
         const awaitDiagnostics = checkoutOpenDiagnostics?.awaits;
         const pendingRead = awaitDiagnostics?.steps.findLast(row => row.state === 'pending');
         const failedRead = awaitDiagnostics?.steps.findLast(row => row.state === 'read_failed');

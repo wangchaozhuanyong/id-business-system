@@ -75,6 +75,7 @@ function fixture(overrides = {}) {
     require(name) {
       if (name === 'node:perf_hooks') return { performance };
       if (name === './checkout-form.cjs') return form;
+      if (name === './checkout-page-state.cjs') return require('../checkout-page-state.cjs');
       if (name === './checkout-await-diagnostics.cjs') return { errorClass };
       if (name === './upstream/verification-runtime') return runtime;
       if (name === './upstream/stripe-payment')
@@ -203,6 +204,18 @@ test('official form timeout is a distinct observed result and does not start sca
   const result = await f.run();
   assert.equal(result.errorCode, 'PAYMENT_FORM_LOAD_TIMEOUT');
   assert.deepEqual(f.calls, ['freeze', 'close']);
+});
+
+test('official processing error page stops before scanning or waiting for absent inputs', async () => {
+  const f = fixture();
+  f.page.evaluate = async () => ({ processingError: true });
+  const result = await f.run();
+  assert.equal(result.errorCode, 'CHECKOUT_CONTENT_LOAD_FAILED');
+  assert.equal(result.failedProbe, 'page_flags');
+  assert.equal(result.pageFlags.processingError, true);
+  assert.deepEqual(f.calls, ['freeze', 'close']);
+  assert.equal(result.cardFilled, false);
+  assert.equal(result.paymentClicks, 0);
 });
 
 test('optional preparation read failure stops this diagnostic', async () => {

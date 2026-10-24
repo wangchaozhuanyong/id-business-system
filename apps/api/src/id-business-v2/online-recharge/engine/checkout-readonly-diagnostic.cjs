@@ -5,6 +5,7 @@ const form = require('./checkout-form.cjs');
 const { errorClass } = require('./checkout-await-diagnostics.cjs');
 const { createVerificationBudget } = require('./upstream/verification-runtime');
 const { prepareCheckoutCardSection } = require('./upstream/stripe-payment');
+const { checkoutPageFlags } = require('./checkout-page-state.cjs');
 
 const CODES = new Set([
   'CHECKOUT_FORM_TIMEOUT',
@@ -210,22 +211,13 @@ async function inspectOriginalCheckout(page, options = {}) {
       budget.assert();
       const remainingDeadline = () => Date.now() + budget.remaining();
       const flags = await run('page_flags', remainingDeadline(), () =>
-        page.evaluate(() => {
-          const text = globalThis.document.body?.innerText || '';
-          return {
-            formTimeout: /payment form took too long to load/i.test(text),
-            expired: /checkout session.*expired|session has expired|this checkout.*expired/i.test(
-              text
-            ),
-            configurePlan: /configure your plan|配置你的套餐/i.test(text),
-            challenge: /just a moment|verify you are human|验证您是人类/i.test(text)
-          };
-        })
+        page.evaluate(checkoutPageFlags)
       );
       result.pageFlags = flags;
       if (flags.formTimeout) throw failure('PAYMENT_FORM_LOAD_TIMEOUT');
       if (flags.expired) throw failure('CHECKOUT_EXPIRED');
       if (flags.challenge) throw failure('HUMAN_VERIFICATION_REQUIRED');
+      if (flags.processingError) throw failure('CHECKOUT_CONTENT_LOAD_FAILED');
       // Retain the formal pre-check. Only its owner deadline replaces the
       // temporary fixed two-second full-frame scan. Keep the formal once-only
       // pure-read retry; no checkout recovery/reload is invoked.
