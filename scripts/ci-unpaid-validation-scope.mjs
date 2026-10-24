@@ -15,8 +15,10 @@ export const unpaidValidationPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-await-diagnostics.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/evidence-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/renewal-state.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/unpaid-validation.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/worker-heartbeat.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/unpaid-validation.cjs',
@@ -123,6 +125,7 @@ export function unpaidValidationCommands(part, paths) {
     ];
   if (part === 'online-engine')
     return [
+      npm('ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'),
       npm('ci', '--prefix', engine + '/upstream', '--ignore-scripts', '--no-audit', '--no-fund'),
       [
         'node',

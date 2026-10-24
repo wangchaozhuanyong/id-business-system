@@ -11,7 +11,7 @@ class FinitePublication(unittest.TestCase):
  def setUp(self):self.c=json.loads((HERE/p.CONTRACT_FILE).read_bytes())
  def test_exact_reviewed_batch(self):
   p.validate_contract(self.c)
-  self.assertEqual(len(self.c['sources']),35)
+  self.assertEqual(len(self.c['sources']),37)
   self.assertEqual(self.c['updatedServices'],['api','admin','online-recharge'])
  def test_changed_sources_rejected(self):
   self.c['sources']['apps/api/src/id-business-v2/online-recharge/engine/payment-safety.cjs']='a'*64

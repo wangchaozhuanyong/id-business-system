@@ -9,7 +9,7 @@ HERE=Path(__file__).resolve().parent
 PREFIX='online-unpaid-validation'
 SCOPE='ONLINE_UNPAID_VALIDATION_20261024'
 CURRENT='a046d8413e3cb6c3edd6429dbdb922593dc32064'
-SOURCE='204bf1ef761f45e3308db6afdf08699d7d07bfbb'
+SOURCE='a00a3e0edeb9e3c83055103333ee35772bc0b5c6'
 CONTRACT_FILE=PREFIX+'-contract.json'
 ENGINE='apps/api/src/id-business-v2/online-recharge/engine/'
 UPDATED=('api','admin','online-recharge')
@@ -24,8 +24,8 @@ def load(name):
 def validate_contract(c):
  need(c['scope']==SCOPE and c['expectedCurrent']==CURRENT and c['sourceReviewCommit']==SOURCE,'IDENTITY')
  need(c['updatedServices']==list(UPDATED) and c['preservedServices']==list(PRESERVED) and c['migrationPerformed'] is False and c['businessActions']==0,'SIDE_EFFECT_SCOPE')
- need(sha(canonical(c['sources']))=='5b88b525bc9e0d1abd4d244443fe68bb00aa580389ee5decf339ef7cc5c76c5f','SOURCE_HASHES_CHANGED')
- need(len(c['sources'])==35 and all(n.startswith(('apps/admin/src/v2/features/online-recharge/','apps/api/src/id-business-v2/online-recharge/','docs/')) and '..' not in Path(n).parts and re.fullmatch('[a-f0-9]{64}',v) for n,v in c['sources'].items()),'SOURCE_SCOPE')
+ need(sha(canonical(c['sources']))=='68fd5094a1589880e469d216eedcb5ea7a08ac2ff1a9e30063b10c610cde0a4a','SOURCE_HASHES_CHANGED')
+ need(len(c['sources'])==37 and all(n.startswith(('apps/admin/src/v2/features/online-recharge/','apps/api/src/id-business-v2/online-recharge/','docs/')) and '..' not in Path(n).parts and re.fullmatch('[a-f0-9]{64}',v) for n,v in c['sources'].items()),'SOURCE_SCOPE')
  need(c['apiModules']==['id-business-v2/online-recharge/persistence/'+n+'.js' for n in ('artifacts.repository','tasks.repository','worker.repository')],'MODULE_SCOPE')
  need(set(c['beforeEngineFiles'])<=set(c['afterEngineFiles']) and all(c['afterEngineFiles'].get(n)==v for n,v in c['beforeEngineFiles'].items() if ENGINE+n not in c['sources']),'ENGINE_SCOPE')
  need({ENGINE+n:v for n,v in c['afterEngineFiles'].items() if c['beforeEngineFiles'].get(n)!=v}=={n:v for n,v in c['sources'].items() if n.startswith(ENGINE)},'ENGINE_DELTA')
@@ -40,6 +40,7 @@ def release(plan,c):
  validate_contract(c)
  if plan['mode']=='parent':
   core=load('online-checkout-release.py');h=load('recharge-record-release.py');h.SERVICES=SERVICES
+  retired=load('online-query-network-release.py');h.guards=lambda d,directory,states,selected:retired.retired_guards(d,directory,states,selected,h)
   d=h.load_utilities(HERE/'remote-deploy.py',c['controlPins']['remote-deploy.py'])
   core.baseline(d,c,h)
   return {'status':'ONLINE_UNPAID_PARENT_VERIFIED','manifestSha256':c['manifestSha256'],'businessActions':0}
@@ -48,7 +49,11 @@ def release(plan,c):
  original=core.load
  def helpers(name):
   m=original(name)
-  if name=='recharge-record-release.py':m.SERVICES=SERVICES
+  retired=load('online-query-network-release.py')
+  if name=='recharge-record-release.py':
+   m.SERVICES=SERVICES
+   m.guards=lambda d,directory,states,selected:retired.retired_guards(d,directory,states,selected,m)
+  elif name=='proxy-result-identity-release.py':m.claim_markers=retired.claim_retired_markers
   return m
  core.load=helpers
  def artifact(selected):
