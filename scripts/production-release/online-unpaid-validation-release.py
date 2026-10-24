@@ -23,6 +23,7 @@ def load(name):
  s=importlib.util.spec_from_file_location('unpaid_'+name.replace('-','_'),HERE/name);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 def validate_contract(c):
  need(c['scope']==SCOPE and c['expectedCurrent']==CURRENT and c['sourceReviewCommit']==SOURCE,'IDENTITY')
+ need(c['awsTargetAccount']=='098208446664' and c['awsTargetInstance']=='i-0838cebf64f0e2a89','AWS_TARGET_CHANGED')
  need(c['updatedServices']==list(UPDATED) and c['preservedServices']==list(PRESERVED) and c['migrationPerformed'] is False and c['businessActions']==0,'SIDE_EFFECT_SCOPE')
  need(sha(canonical(c['sources']))=='68fd5094a1589880e469d216eedcb5ea7a08ac2ff1a9e30063b10c610cde0a4a','SOURCE_HASHES_CHANGED')
  need(len(c['sources'])==37 and all(n.startswith(('apps/admin/src/v2/features/online-recharge/','apps/api/src/id-business-v2/online-recharge/','docs/')) and '..' not in Path(n).parts and re.fullmatch('[a-f0-9]{64}',v) for n,v in c['sources'].items()),'SOURCE_SCOPE')
@@ -38,6 +39,7 @@ def verify_proof(proof,plan,c,files):
  core=load('online-checkout-release.py');core.SCOPE=SCOPE;core.verify_proof(proof,plan,c,files)
 def release(plan,c):
  validate_contract(c)
+ if plan['mode']=='observe':return observe_target(c)
  if plan['mode']=='parent':
   core=load('online-checkout-release.py');h=load('recharge-record-release.py');h.SERVICES=SERVICES
   retired=load('online-query-network-release.py');h.guards=lambda d,directory,states,selected:retired.retired_guards(d,directory,states,selected,h)
@@ -65,3 +67,34 @@ def release(plan,c):
  result=core.release(plan,c)
  result['status']=result['status'].replace('ONLINE_CHECKOUT_',SCOPE+'_')
  return result
+
+def observe_target(c):
+    current=(Path('/opt/id-business-v2')/'current').resolve(strict=True)
+    need(current.parent==Path('/opt/id-business-v2/releases'),'TARGET_PATH_CHANGED')
+    h=load('recharge-record-release.py');h.SERVICES=SERVICES
+    d=load('remote-deploy.py');retired=load('online-query-network-release.py')
+    states=h.snapshot(d,current)
+    retired.retired_guards(d,current,states,c,h)
+    load('proxy-result-identity-release.py').engine_content(d,states['online-recharge'],c['beforeEngineFiles'])
+    live=load('recharge-checkout-release.py').admin_inventory(d,states['admin'])
+    admin=json.loads((current/'bitbrowser-history-build-proof.json').read_bytes())['adminFiles']
+    need(all(live.get(n)==v for n,v in admin.items()),'ADMIN_PROOF_CHANGED')
+    before_api={}
+    for name in c['apiModules']:
+        for ext in ('.js','.js.map','.d.ts'):
+            path=name.removesuffix('.js')+ext
+            before_api[path.removeprefix('id-business-v2/online-recharge/')]=d.run('docker','exec',states['api']['containerId'],'sha256sum','/app/apps/api/dist/'+path).split()[0]
+    legacy=json.loads((current/'scripts/production-release/online-country-interaction-contract.json').read_bytes())
+    normalizer=legacy['parentPlan']['nativeParentCapture']['baseline']['backupNormalizerPath']
+    env=json.loads(d.run('docker','inspect',states['api']['containerId']))[0]['Config']['Env']
+    public_url=next(v.split('=',1)[1] for v in env if v.startswith('APP_PUBLIC_URL='))
+    raw=(current/'release-manifest.json').read_bytes()
+    return {'status':'ONLINE_UNPAID_TARGET_OBSERVED','publicUrl':public_url,
+        'current':str(current),'expectedCurrent':json.loads(raw)['commit'],'manifestSha256':sha(raw),
+        'services':states,'configurationSha256':{n:sha((current/n).read_bytes()) for n in ('.env.aws.production','compose.release.json','docker-compose.aws-mysql.yml')},
+        'runtimeConfigurationSha256':{n:h.configuration(d,state) for n,state in states.items()},
+        'beforeApiOnlineFiles':before_api,'baselineAdminFilesSha256':h.fingerprint(admin),
+        'nginxSha256':d.run('docker','exec',states['admin']['containerId'],'sha256sum','/etc/nginx/conf.d/default.conf').split()[0],
+        'backupNormalizerPath':normalizer,'backupNormalizerExists':Path(normalizer).is_file(),
+        'publishedOverlays':[{'proofFile':'online-country-interaction-build-proof.json','proofSha256':sha((current/'online-country-interaction-build-proof.json').read_bytes())}],
+        'businessActions':0,'migrationPerformed':False}

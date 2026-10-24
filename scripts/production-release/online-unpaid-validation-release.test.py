@@ -19,7 +19,7 @@ class FinitePublication(unittest.TestCase):
  def test_dependency_and_migration_not_included(self):
   self.assertTrue(all(not n.endswith(('package.json','schema.prisma')) and '/migrations/' not in n for n in self.c['sources']))
  def test_identity_or_payment_action_rejected(self):
-  for key,value in [('expectedCurrent','a'*40),('sourceReviewCommit','b'*40),('migrationPerformed',True),('businessActions',1)]:
+  for key,value in [('expectedCurrent','a'*40),('sourceReviewCommit','b'*40),('migrationPerformed',True),('businessActions',1),('awsTargetAccount','079740175286'),('awsTargetInstance','i-05836da38606e633c')]:
    c=copy.deepcopy(self.c);c[key]=value
    with self.assertRaises(RuntimeError):p.validate_contract(c)
  def test_unmodified_engine_sources_preserved(self):
@@ -31,6 +31,11 @@ class FinitePublication(unittest.TestCase):
  def test_modules_not_broadened(self):
   self.c['apiModules'].append('auth/auth.service.js')
   with self.assertRaises(RuntimeError):p.validate_contract(self.c)
+ def test_observation_does_not_enter_a_build_or_publish_job(self):
+  workflow=(HERE.parents[1]/'.github/workflows/online-unpaid-validation-publication.yml').read_text()
+  self.assertIn('if: inputs.inspect_only',workflow)
+  self.assertIn('&& !inputs.inspect_only',workflow)
+  self.assertIn('publication.py observe',workflow)
  def test_source_and_control_pins_match_saved_files(self):
   for n,v in self.c['controlPins'].items():self.assertEqual(p.sha((HERE/n).read_bytes()),v,n)
 if __name__=='__main__':unittest.main()

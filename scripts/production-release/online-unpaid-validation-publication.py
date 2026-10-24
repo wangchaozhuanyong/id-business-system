@@ -31,18 +31,31 @@ def load(name):
 P = load(PREFIX + '-release.py')
 F = load('financial-closure-publication.py')
 need, sha, git, github, execute = P.need, P.sha, F.git, F.github, F.execute
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 CONTROLS = frozenset((WORKFLOW, 'scripts/ci-online-settings-scope.mjs',
     'scripts/ci-online-settings-scope.test.mjs', 'scripts/ci-recharge-scope.mjs', 'scripts/ci-unpaid-validation-scope.mjs', 'scripts/ci-unpaid-validation-scope.test.mjs',
     *('scripts/production-release/' + PREFIX + '-' + suffix
       for suffix in ('release.py', 'publication.py', 'release.test.py', 'contract.json', 'build.py'))))
 
 
+
+def reviewed_extensions(commit, c):
+    changes=set(git('diff','--name-only',P.SOURCE,commit).decode().splitlines())
+    manifest='deploy/aws/account-migration-controls-20261024.json'
+    raw=git('show',commit+':'+manifest)
+    need(sha(raw)==c['migrationControlsSha256'],'MIGRATION_CONTROLS_CHANGED')
+    record=json.loads(raw)
+    need(record['targetAccount']=='098208446664' and record['sourceCommit']==P.CURRENT,'MIGRATION_TARGET_CHANGED')
+    extra=changes-CONTROLS
+    need(extra<=set(record['files'])|{manifest},'UNREVIEWED_EXTENSION')
+    for n in extra-{manifest}:
+        need(sha(git('show',commit+':'+n))==record['files'][n],'MIGRATION_EXTENSION_CHANGED')
+
 def check(c):
     P.validate_contract(c)
     for n,v in c['sources'].items():
         need(sha((ROOT/n).read_bytes())==v==sha(git('show',P.SOURCE+':'+n)),'SOURCE_CHANGED')
-    need(set(git('diff','--name-only',P.SOURCE,'HEAD').decode().splitlines())<=CONTROLS,'UNREVIEWED_EXTENSION')
+    reviewed_extensions('HEAD',c)
     need(all(sha((HERE/n).read_bytes())==v for n,v in c['controlPins'].items()),'CONTROL_CHANGED')
     need(sha((ROOT/WORKFLOW).read_bytes())==c['workflowSha256'] and sha((ROOT/'package-lock.json').read_bytes())==c['packageLockSha256'],'BUILD_INPUT_CHANGED')
 
@@ -60,8 +73,7 @@ def quality(commit, tree):
     pr = selected[0]
     head = pr['head']['sha']
     git('merge-base', '--is-ancestor', P.SOURCE, head)
-    need(set(git('diff', '--name-only', P.SOURCE, head).decode().splitlines()) <= CONTROLS,
-         'REVIEW_EXTENSION_CHANGED')
+    reviewed_extensions(head,json.loads((HERE/P.CONTRACT_FILE).read_bytes()))
     need(git('rev-parse', head + '^{tree}').decode().strip() == tree, 'REVIEW_TREE_CHANGED')
     evidence = None
     for sha_value, event in ((head, 'pull_request'), (commit, 'push')):
@@ -228,12 +240,21 @@ except Exception as error:
     raise RuntimeError('ONLINE_UNPAID_VALIDATION_RESULT_PENDING')
 
 
+
+def observe(c):
+    check(c)
+    need(json.loads(execute('aws','sts','get-caller-identity','--output','json'))['Account']=='098208446664','AWS_ACCOUNT_CHANGED')
+    native=identity();need(not OUT.exists(),'OUTPUT_EXISTS');OUT.mkdir(parents=True,mode=0o700)
+    result=transport(native_plan(c,native),'observe')
+    need(result['status']=='ONLINE_UNPAID_TARGET_OBSERVED','OBSERVATION_FAILED')
+    print(json.dumps({'status':result['status'],'commit':native['commit'],'publicUrl':result['publicUrl'],'businessActions':0}))
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("check", "build", "publish"))
+    parser.add_argument("mode", choices=("check", "build", "publish", "observe"))
     mode = parser.parse_args().mode
     c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
-    {"check": check, "build": build, "publish": publish}[mode](c)
+    {"check": check, "build": build, "publish": publish, "observe": observe}[mode](c)
 
 
 if __name__ == "__main__":
