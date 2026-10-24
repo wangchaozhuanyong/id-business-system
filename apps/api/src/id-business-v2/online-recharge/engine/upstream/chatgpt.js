@@ -212,10 +212,10 @@ class ChatGPTService {
 
             let bodyReadComplete = true;
             const bodyText = await response.text().catch(() => { bodyReadComplete = false; return ""; });
-            const checkoutCreationDiagnostics = require("../checkout-creation-diagnostics.cjs").create(response.status(), response.headers?.() || {}, bodyText, bodyReadComplete);
             const parsed = parseCheckoutApiResponse(response.status(), bodyText);
 
             if (!parsed.ok) {
+            const checkoutCreationDiagnostics = require("../checkout-creation-diagnostics.cjs").create(response.status(), response.headers?.() || {}, bodyText, bodyReadComplete);
                 const detail = parsed.error;
                 console.error(`[-] 订单创建失败 (Status: ${parsed.status})`);
                 console.error(require("../checkout-creation-diagnostics.cjs").message(checkoutCreationDiagnostics));
@@ -578,7 +578,7 @@ function assertOriginalCheckoutPage(page, originalUrl, originalQuoteId, recovery
  * 通过 API 注入 billing_details 创建 Checkout，并打开 chatgpt.com/checkout。
  * 文档提交只表示开始加载；原单身份、登录与真实控件仍须在同一期限内核实。
  */
-async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true }) {
+async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true, onCheckoutCreated }) {
     const { assertChatGptLoggedIn } = require('./session-auth');
     const token = String(accessToken || '').trim();
     if (!token) {
@@ -593,12 +593,12 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
     const recovery = require('../checkout-recovery.cjs');
     recovery.rememberOfficialCheckout(page, null);
     const checkout = await gpt.createCheckoutSession(planType, region, billingCurrency, planNameOverride);
-    if (require('../rpc.cjs').isUnpaidValidation?.()) require('../unpaid-validation.cjs').stage('checkout_open');
     if (!checkout.checkoutUrl) {
         throw Object.assign(new Error('API 创建 Checkout 失败，未取得可核实的原单来源'),
             { code: checkout.errorCode || 'CHECKOUT_CREATION_UNKNOWN', checkoutCreationState: checkout.creationState || 'unknown', checkoutCreationDiagnostics: checkout.checkoutCreationDiagnostics });
     }
 
+    if (typeof onCheckoutCreated === 'function') onCheckoutCreated();
     let budget, initialization, trace;
     let stage = 'navigation';
     try {

@@ -537,6 +537,8 @@ function checkoutServiceFixture(options = {}) {
       if (name === '../checkout-recovery.cjs') return recovery;
       if (name === '../checkout-initialization.cjs')
         return require('../checkout-initialization.cjs');
+      if (name === '../checkout-creation-diagnostics.cjs')
+        return require('../checkout-creation-diagnostics.cjs');
       if (name === '../checkout-await-diagnostics.cjs')
         return require('../checkout-await-diagnostics.cjs');
       if (name === '../safe-media.cjs') return require('../safe-media.cjs');
@@ -733,6 +735,7 @@ test('an invalid successful creation response cannot fall back to a second UI ch
       CONFIG: {},
       loginInfo: { session: {} },
       debugOnly: false,
+      validation: null,
       console: { warn() {}, log() {} },
       openApiCheckout: async () => {
         apiCalls++;
@@ -764,10 +767,13 @@ function checkoutPhaseFixture(page, Service) {
     CONFIG: {},
     loginInfo: { session: { accessToken: 'synthetic-only' } },
     debugOnly: false,
+    validation: null,
     checkoutEvidence: {},
     require(name) {
       if (name === '../checkout-initialization.cjs')
         return require('../checkout-initialization.cjs');
+      if (name === '../checkout-creation-diagnostics.cjs')
+        return require('../checkout-creation-diagnostics.cjs');
       if (name === '../checkout-await-diagnostics.cjs')
         return require('../checkout-await-diagnostics.cjs');
       throw new Error('Unexpected opening evidence dependency');
@@ -933,12 +939,15 @@ function publicCheckoutFailure(error, submitted = false, confirmed = false) {
   const result = runInNewContext('(function(){' + source.slice(start, end) + '})()', {
     e: error,
     debugOnly: false,
+    validation: null,
     lastPaymentResult: null,
     checkoutEvidence: {},
     paymentSucceeded: false,
     wasSubmitted: () => submitted,
     require(name) {
       if (name === './chatgpt') return Service;
+      if (name === '../checkout-creation-diagnostics.cjs')
+        return require('../checkout-creation-diagnostics.cjs');
       if (name === '../checkout-await-diagnostics.cjs')
         return require('../checkout-await-diagnostics.cjs');
       if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => confirmed };
@@ -1533,6 +1542,7 @@ test('an unfinished checkout page close goes directly to task context cleanup be
       {
         e: { code, checkoutOpenCleanupFailed: true },
         debugOnly: false,
+        validation: null,
         page: {},
         context: { close: async () => calls.push('context-close') },
         taskSignal: () => undefined,
@@ -1549,6 +1559,8 @@ test('an unfinished checkout page close goes directly to task context cleanup be
           if (name === './human-verification')
             return { disposeVerificationPage: () => calls.push('dispose') };
           if (name === './chatgpt') return Service;
+          if (name === '../checkout-creation-diagnostics.cjs')
+            return require('../checkout-creation-diagnostics.cjs');
           if (name === '../checkout-await-diagnostics.cjs')
             return require('../checkout-await-diagnostics.cjs');
           if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => false };

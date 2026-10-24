@@ -26,7 +26,9 @@ async function execute(task, cfg) {
     case 'debug':
       return require('./upstream/index').run({
         paymentLimit: payload.paymentLimit,
-        unpaidValidation: require('./unpaid-validation.cjs').enabled(task)
+        ...(task.payload?.validationMode === 'ready_before_payment'
+          ? { unpaidValidation: true }
+          : {})
       });
     case 'subscription':
       if (payload.recheckTaskId)
@@ -145,9 +147,10 @@ async function execute(task, cfg) {
 }
 async function runTask(task) {
   configureTask(task);
-  const validation = require('./unpaid-validation.cjs').enabled(task)
-    ? require('./unpaid-validation.cjs')
-    : null;
+  const validation =
+    task.operation === 'debug' && task.payload?.validationMode === 'ready_before_payment'
+      ? require('./unpaid-validation.cjs')
+      : null;
   validation?.start(send);
   rememberSecrets(task);
   rememberSecrets(task.code, 'secret');

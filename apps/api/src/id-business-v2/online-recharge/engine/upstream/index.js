@@ -562,7 +562,8 @@ async function run(runOptions = {}) {
                     country: billingCountry,
                     currency: billingCurrency,
                     planNameOverride,
-                    verifyPage: true
+                    verifyPage: true,
+                    ...(validation ? { onCheckoutCreated: () => validation.stage('checkout_open') } : {})
                 });
                 checkoutOpened = true;
             } catch (apiError) {
