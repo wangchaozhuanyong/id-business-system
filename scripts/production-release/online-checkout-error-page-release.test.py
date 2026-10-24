@@ -147,8 +147,45 @@ class CheckoutInitPublicationTests(unittest.TestCase):
             media.official_sources('Types: deb\nSuites: noble\n')
 
     def test_current_control_and_source_checks(self):
+        import ast
         pub = P.load('online-checkout-error-page-publication.py')
-        pub.check(self.c)
+        published = '6ef7131512dc60179f2df6154338bf1973de95b5'
+        # The completed one-off contract remains sealed to its original AWS
+        # resources. Migration must not silently reseal or replay that release.
+        extension = set(pub.git('diff', '--name-only', P.SOURCE, 'HEAD').decode().splitlines())
+        refusal = 'UNREVIEWED_EXTENSION' if not extension <= pub.CONTROLS else 'CONTROL_CHANGED'
+        with self.assertRaisesRegex(RuntimeError, refusal):
+            pub.check(self.c)
+        projected = copy.deepcopy(self.c)
+        translate = lambda raw: raw.replace(b'079740175286', b'098208446664').replace(
+            b'i-05836da38606e633c', b'i-0838cebf64f0e2a89')
+        for name, expected in self.c['controlPins'].items():
+            original = pub.git('show', published + ':scripts/production-release/' + name)
+            self.assertEqual(P.sha(original), expected)
+            current = (pub.HERE / name).read_bytes()
+            if name == Path(__file__).name:
+                trees = [ast.parse(raw) for raw in (original, current)]
+                for tree in trees:
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.ClassDef):
+                            node.body = [method for method in node.body if not (
+                                isinstance(method, ast.FunctionDef)
+                                and method.name == 'test_current_control_and_source_checks')]
+                self.assertEqual(ast.dump(trees[0]), ast.dump(trees[1]))
+            elif current != original:
+                self.assertEqual(current, translate(original))
+            projected['controlPins'][name] = P.sha(current)
+        workflow = pub.git('show', published + ':' + pub.WORKFLOW)
+        self.assertEqual(P.sha(workflow), self.c['workflowSha256'])
+        self.assertEqual((pub.ROOT / pub.WORKFLOW).read_bytes(), translate(workflow))
+        projected['workflowSha256'] = P.sha(translate(workflow))
+        git = pub.git
+        def archived_scope(*arguments):
+            if arguments == ('diff', '--name-only', P.SOURCE, 'HEAD'):
+                return git('diff', '--name-only', P.SOURCE, published)
+            return git(*arguments)
+        with patch.object(pub, 'git', side_effect=archived_scope):
+            pub.check(projected)
 
     def test_parent_native_hash_and_identity_are_independent(self):
         manifest = json.dumps({'commit': P.CURRENT}).encode()

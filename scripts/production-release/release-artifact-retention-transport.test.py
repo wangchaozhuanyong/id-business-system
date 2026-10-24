@@ -529,7 +529,7 @@ class WorkflowTests(unittest.TestCase):
         text = (transport.PROJECT / '.github/workflows/release-artifact-retention.yml').read_text()
         self.assertIn('group: id-business-v2-production-release', text); self.assertIn('cancel-in-progress: false', text)
         self.assertIn("if: github.ref == 'refs/heads/main'", text); self.assertIn('role-duration-seconds: 3600', text)
-        self.assertIn("RELEASE_ACCOUNT_ID: '079740175286'", text); self.assertIn('role/id-business-v2-github-release', text)
+        self.assertIn("RELEASE_ACCOUNT_ID: '098208446664'", text); self.assertIn('role/id-business-v2-github-release', text)
         source = text.index('run: bash scripts/production-release/check-source.sh')
         selection = text.index('release-artifact-retention-transport.py --validate-only')
         credentials = text.index('uses: aws-actions/configure-aws-credentials@')

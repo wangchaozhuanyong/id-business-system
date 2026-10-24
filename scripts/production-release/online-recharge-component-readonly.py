@@ -131,7 +131,8 @@ def selected(mode):
            and os.environ.get('HISTORICAL_EXCEPTION', 'none') == 'none'
            and os.environ.get('RELEASE_ADMIN_ONLY', 'false') == 'false'
            and os.environ.get('AWS_REGION') == 'ap-northeast-1'
-           and os.environ.get('PRODUCTION_INSTANCE_ID') == a['instanceId'] == current['instanceId']
+           and os.environ.get('PRODUCTION_INSTANCE_ID') == r.INSTANCE
+           and a['instanceId'] == current['instanceId']
            and not any(os.environ.get(name) for name in FORBIDDEN), 'SELECTION_INVALID')
     flag = os.environ.get('API_FAULT_RESTORE_APPROVED', 'false')
     r.need(flag in ('false', 'true'), 'SELECTION_INVALID')
@@ -207,8 +208,11 @@ def validate_sealed_native(core, a, raw):
 
 
 def sealed_native(core, a):
-    raw = command_raw('aws', '--region', os.environ['AWS_REGION'], 'ssm', 'get-command-invocation',
-        '--command-id', a['commandId'], '--instance-id', a['instanceId'], '--output', 'json')
+    digest = a['invocationBytesSha256']
+    r.need(type(digest) is str and re.fullmatch('[0-9a-f]{64}', digest), 'PREDECESSOR_NATIVE_CHANGED')
+    raw = command_raw('aws', '--region', os.environ['AWS_REGION'], 's3', 'cp',
+        's3://id-business-v2-backups-098208446664-ap-northeast-1/'
+        'release-native-origins/20261024/' + digest + '.json', '-', '--only-show-errors')
     return validate_sealed_native(core, a, raw)
 
 

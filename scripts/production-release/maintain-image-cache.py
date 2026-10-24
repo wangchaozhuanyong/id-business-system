@@ -15,7 +15,9 @@ import subprocess
 import time
 
 BASE = Path('/opt/id-business-v2')
-REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+REPOSITORY = '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
+# Frozen recovery proofs retain the original local Docker aliases and byte seals.
+HISTORICAL_REPOSITORY = '079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release'
 POLICY = 'current-service-rollback-explicit-dependencies-ecr-cache-v2'
 GENERIC_CACHE_RESULT_LIMIT = 512 * 1024
 GENERIC_CACHE_OUTPUT_LIMIT = 23500
@@ -337,7 +339,7 @@ def failed_online_recovery_dependencies(evidence):
     require(compose == expected, 'Failed ONLINE compose differs from original plus official images')
     images = set()
     for service, image in proof['images'].items():
-        reference = REPOSITORY + ':08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-' + service
+        reference = HISTORICAL_REPOSITORY + ':08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1-' + service
         require(type(image) is dict and image.get('reference') == reference
             and type(image.get('imageId')) is str and IMAGE_ID.fullmatch(image['imageId'])
             and compose['services'].get(service) == {'image': reference, 'pull_policy': 'never'},
@@ -392,7 +394,7 @@ def historical_online_cold_dependencies(directory, manifest, evidence):
             'Historical ONLINE dependency identity changed')
         source = proofs[image['sourceCommit']]
         row = source.get('images', {}).get(image['service'], {})
-        reference = REPOSITORY + ':' + tag
+        reference = HISTORICAL_REPOSITORY + ':' + tag
         require(source.get('commit') == image['sourceCommit'] and source.get('sourceTree') == image['sourceTree']
             and row.get('imageId') == image['imageId'] and row.get('reference') == reference,
             'Historical ONLINE dependency build proof changed')
@@ -1748,7 +1750,7 @@ def parameters(producer, *, source=None, expected_current=CACHE_BASELINE,
         'remote':'import hashlib,json,re\n'+module.storage_selected(raw[CACHE_PINS[6]],('require','historical_fingerprint','service_state'))}
     header='import ast,base64,fcntl,hashlib,json,os,re,shutil,stat,subprocess,time,types\nfrom pathlib import Path\n'
     own=raw[CACHE_PINS[1]].decode(); storage=raw[CACHE_PINS[2]].decode()
-    constants=('BASE','REPOSITORY','POLICY','IMAGE_ID','TAG','FIXED_REGISTRATION_IDS','FIXED_RECHARGE_IDS','ORDER_ARCHIVE_SEAL_RELATIVE',
+    constants=('BASE','REPOSITORY','HISTORICAL_REPOSITORY','POLICY','IMAGE_ID','TAG','FIXED_REGISTRATION_IDS','FIXED_RECHARGE_IDS','ORDER_ARCHIVE_SEAL_RELATIVE',
         'FAILED_ONLINE_RECOVERY_DEPENDENCY','HISTORICAL_ONLINE_COLD_DEPENDENCIES','HISTORICAL_ONLINE_COLD_POLICY_SHA256',
         'H_RECOVERY_DEPENDENCIES','H_RECOVERY_DEPENDENCIES_SHA256')
     for node in ast.parse(own).body:

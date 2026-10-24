@@ -40,7 +40,7 @@ PRIOR_BUNDLE = '89ba4b0cbb3fe204bef628646b4263af0e12bffcafd9fac1408f02bf47223787
 
 FORWARD_COMMAND = 'ba29bee4-9b71-4ad3-9647-fbcd55a72110'
 
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 
 BIND_DESTINATIONS = ('/app/.runtime/auto-registration', '/app/.runtime/online-recharge')
 

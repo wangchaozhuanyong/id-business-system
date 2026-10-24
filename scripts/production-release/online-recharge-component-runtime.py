@@ -36,6 +36,7 @@ def load(filename):
 c = load('online-recharge-component-consumer.py')
 # A real predecessor seal alone is insufficient while lifecycle review is open.
 RUNTIME_ADAPTER_READY = True
+INSTANCE = 'i-0838cebf64f0e2a89'
 SCOPE = 'ONLINE_RECHARGE'
 KIND = c.KIND
 PREFIX = 'online-recharge-component'
@@ -398,7 +399,7 @@ def validate_preflight(core, transport, p, expected):
         'PREFLIGHT_TRANSPORT_CHANGED')
     raw = base64.b64decode(transport['invocationRawBase64'], validate=True)
     need(c.digest(raw) == transport['invocationBytesSha256'], 'PREFLIGHT_NATIVE_CHANGED')
-    need(transport['instanceId'] == a['instanceId'], 'PREFLIGHT_INSTANCE_CHANGED')
+    need(transport['instanceId'] == INSTANCE, 'PREFLIGHT_INSTANCE_CHANGED')
     _invocation, receipt = validate_component_invocation(core, raw, transport['commandId'], transport['instanceId'])
     need(receipt == transport['serverReceipt'] and receipt.get('kind') == KIND
          and receipt.get('producer') == p and receipt.get('scope') == SCOPE

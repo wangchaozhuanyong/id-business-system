@@ -257,7 +257,7 @@ class EcrIdentityTests(unittest.TestCase):
 
     def remote(self):
         raw = storage.canonical(self.manifest).decode()
-        return {'failures': [], 'images': [{'registryId': '079740175286',
+        return {'failures': [], 'images': [{'registryId': '098208446664',
             'repositoryName': 'id-business-v2-release', 'imageId': {
                 'imageTag': self.reference.split(':', 1)[1],
                 'imageDigest': 'sha256:' + storage.hashlib.sha256(raw.encode()).hexdigest()}, 'imageManifest': raw}]}
@@ -593,7 +593,9 @@ class OrdinaryComponentStorageTests(unittest.TestCase):
             patch.object(storage, 'OUTPUT', self.root / '.deploy/production-release/storage'),
             patch.object(storage, 'online_component_module', return_value=self.online),
             patch.dict(os.environ, {'GITHUB_REPOSITORY': storage.GITHUB_REPOSITORY,
-                                  'RELEASE_ADMIN_ONLY': 'false'}),
+                                  'RELEASE_ADMIN_ONLY': 'false',
+                                  'RELEASE_REPOSITORY': storage.REPOSITORY,
+                                  'PRODUCTION_INSTANCE_ID': storage.INSTANCE}),
             patch.object(self.online, 'command_raw', side_effect=self.fixture.command)):
             patcher.start(); self.addCleanup(patcher.stop)
         directory = self.module.working_directory(self.root)
@@ -651,7 +653,7 @@ class OrdinaryComponentStorageTests(unittest.TestCase):
                     manifest = storage.canonical({'schemaVersion': 2,
                         'config': {'digest': identity, 'size': 10},
                         'layers': [{'digest': 'sha256:' + '2' * 64, 'size': 20}]}).decode()
-                    return {'failures': [], 'images': [{'registryId': '079740175286',
+                    return {'failures': [], 'images': [{'registryId': '098208446664',
                         'repositoryName': 'id-business-v2-release', 'imageId': {'imageTag': tag,
                         'imageDigest': 'sha256:' + storage.hashlib.sha256(manifest.encode()).hexdigest()},
                         'imageManifest': manifest}]}

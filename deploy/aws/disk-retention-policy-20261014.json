@@ -3,7 +3,7 @@
   "version": 1,
   "approved": false,
   "sourceSha256": "30f3ed367b58847a980e1608b78987172b1476cddbd3d3134780e5b7b68d3bd1",
-  "maintainerSha256": "4ecd23b5688db65447fe8418aa29f061a5d2667312b68ecb56d9b1272e95562b",
+  "maintainerSha256": "ef8269b5bceafd3cad3c46f0f492a12e4128ee5bc9f9d8782ce8d40a8485eee6",
   "protectedCandidateBatches": ["08419dcbe85212a203906c86c98e5c3ae0695d72-38160127343-1"],
   "supersededOnlineBatches": [
     "28a3ba4ffd17d36001b1104c97394f5ae871d73d-37933246605-1",
@@ -20,5 +20,5 @@
     "localBackupsBytes": 1073741824,
     "systemLogsBytes": 1073741824
   },
-  "candidateRegistrySha256": "998a8092ab5aa67496b674f374b992bedc003c7d54b9316e0476ed6fbfb2441a"
+  "candidateRegistrySha256": "7f3d1d69dd5f8c3ec035df59ad3141dc585e2bd86a60c0652719e1bdfb95b372"
 }

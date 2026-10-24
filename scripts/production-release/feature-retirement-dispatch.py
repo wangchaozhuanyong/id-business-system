@@ -15,7 +15,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / '.deploy/feature-retirement-release'
 REPOSITORY = 'wangchaozhuanyong/id-business-system'
-INSTANCE = 'i-05836da38606e633c'
+INSTANCE = 'i-0838cebf64f0e2a89'
 REGION = 'ap-northeast-1'
 WORKFLOW = '.github/workflows/feature-retirement-validation.yml'
 CONTRACT = 'scripts/production-release/feature-retirement-contract.json'

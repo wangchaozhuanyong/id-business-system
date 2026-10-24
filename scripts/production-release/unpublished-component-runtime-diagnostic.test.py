@@ -483,7 +483,10 @@ const yaml = require('js-yaml');
 const current = yaml.load(fs.readFileSync('.github/workflows/production-release.yml', 'utf8'));
 // The reviewed diagnostic entry is immutable. HEAD may already contain it,
 // and unrelated successor entries must not change this read-only path.
-const old = yaml.load(cp.execFileSync('git', ['show', '302b65945d39ef8b1e08c2e35a64c5a89a41e455:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
+const original = yaml.load(cp.execFileSync('git', ['show', '302b65945d39ef8b1e08c2e35a64c5a89a41e455:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
+if (original.jobs.release.env.RELEASE_ROLE_ARN !== 'arn:aws:iam::079740175286:role/id-business-v2-github-release' ||
+    original.jobs.release.env.PRODUCTION_INSTANCE_ID !== 'i-05836da38606e633c') throw Error('Migration source identity changed');
+const old = JSON.parse(JSON.stringify(original).replaceAll('079740175286', '098208446664').replaceAll('i-05836da38606e633c', 'i-0838cebf64f0e2a89'));
 const operation = 'diagnose_unpublished_component_runtime';
 const inputs = new Proxy({operation, historical_exception: 'none', reuse_image_run: ''}, {get: (v, k) => v[k] ?? ''});
 const always = () => true;
@@ -642,7 +645,9 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         self.assertEqual(value['permissions'], value['oldPermissions'])
         self.assertEqual(value['jobIf'], "github.ref == 'refs/heads/main'")
         self.assertEqual(value['jobEnv'].pop('TZ'), 'Asia/Kuala_Lumpur')
-        self.assertEqual(value['jobEnv'], value['oldJobEnv'])
+        expected_env = {key: item.replace('079740175286', '098208446664').replace(
+            'i-05836da38606e633c', 'i-0838cebf64f0e2a89') for key, item in value['oldJobEnv'].items()}
+        self.assertEqual(value['jobEnv'], expected_env)
         self.assertEqual(value['options'], value['oldOptions'])
         self.assertIn(m.OPERATION, value['options'])
         self.assertTrue(value['oldStepsRetained'])
