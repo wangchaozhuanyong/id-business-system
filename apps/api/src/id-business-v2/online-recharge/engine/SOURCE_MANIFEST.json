@@ -474,7 +474,7 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a06121e9ca9c68d4f3a4dbc3ba5d7e07712ec67e099d5a7b1b51d99e5ea54b15",
+      "adaptedSha256": "8c54f45f92ad26222d76c87f9648c0c58343a3f0e18a550838dc81d156f43c33",
       "changed": true,
       "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. Native Session baseline comparison confirms two real installation/bootstrap reads; update only stale fixture counts, preserve exact request/payment assertions.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
     },
@@ -901,7 +901,7 @@
     {
       "path": "test/unpaid-validation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "6c14c015754fe3d78452f808cf40e78e76ff17fa74bc021148c00c6eae446c78",
+      "adaptedSha256": "8c64b08a43438bd6b63c2c4a43151e3c69a5c53dd19fcd1ed0622b786d1f9b12",
       "changed": true,
       "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: retain checkout preparation and incomplete-read evidence across credential resume."
     },

@@ -258,7 +258,16 @@ test('actual task runner and native checkout path stop before any payment action
   task.operation = 'debug';
   task.payload.validationMode = 'ready_before_payment';
   const actual = await harness.runSyntheticRecharge('success', { task });
-  assert.equal(actual.result.status, 'succeeded');
+  assert.equal(actual.failure, '', 'fixture RPC must accept the independent debug protocol');
+  assert.equal(
+    actual.result.status,
+    'succeeded',
+    JSON.stringify({
+      code: actual.result.result?.errorCode,
+      failureClass: actual.result.result?.validationReport?.failureClass,
+      lastStage: actual.result.result?.validationReport?.lastStage
+    })
+  );
   assert.equal(actual.result.result.validationReport.outcome, 'ready_before_payment');
   assert.equal(actual.metrics.checkoutCreations, 1);
   assert.equal(actual.metrics.actualPaymentClicks, 0);

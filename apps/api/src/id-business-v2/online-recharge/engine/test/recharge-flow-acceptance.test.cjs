@@ -128,7 +128,7 @@ function strictRpcFixture(task) {
           return { preflightReady: true, cardId: fixtureCard, cardLast4: '4242' };
         }
         assert.equal(credentialsChecked, true);
-        assert.equal(preparationState, 'created');
+        if (task.operation === 'recharge') assert.equal(preparationState, 'created');
         return {
           id: fixtureCard,
           card_number: '4242424242424242',
