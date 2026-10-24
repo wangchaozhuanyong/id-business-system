@@ -484,11 +484,17 @@ class ManifestImageSchemaTests(unittest.TestCase):
         source = step.split("python3 - <<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
         program = next(ast.literal_eval(n.value) for n in ast.parse(source).body
                        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'program' for t in n.targets))
-        node = next(n for n in ast.parse(program).body
-                    if isinstance(n, ast.FunctionDef) and n.name == 'readonly_manifest_image_id')
-        namespace = {'re': re}
-        exec(compile(ast.Module(body=[node], type_ignores=[]), '<isolated-readonly-image-helper>', 'exec'), namespace)
+        receiver_program = next(ast.literal_eval(n.value) for n in ast.parse(source).body
+            if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'migration_receiver_program' for t in n.targets))
+        nodes = [n for n in ast.parse(program + '\n' + receiver_program).body if isinstance(n, ast.FunctionDef)
+                 and n.name in ('readonly_manifest_image_id', 'readonly_migration_baseline_facts', 'closed_migration_readonly_facts', 'readonly_migration_receipts')]
+        namespace = {'re': re, 'json': json, 'hashlib': __import__('hashlib')}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), '<isolated-readonly-image-helper>', 'exec'), namespace)
+        cls.namespace = namespace
         cls.identifier = staticmethod(namespace['readonly_manifest_image_id'])
+        cls.modern = staticmethod(namespace['readonly_migration_baseline_facts'])
+        cls.close_facts = staticmethod(namespace['closed_migration_readonly_facts'])
+        cls.receipts = staticmethod(namespace['readonly_migration_receipts'])
 
     def test_both_observed_manifest_formats_resolve_the_same_exact_image_identity(self):
         for key in ('digest', 'imageId'):
@@ -511,6 +517,92 @@ class ManifestImageSchemaTests(unittest.TestCase):
         for record in (None, [], 'sha256:' + 'a' * 64):
             with self.assertRaises(ValueError):
                 self.identifier(record)
+
+
+    def observed_migration_fixture(self, *, change=None, mutate_manifest=False):
+        images = {'api': 'sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a', 'admin': 'sha256:5237f36e7eaaade222c25fa5d0d3c2a2e317e0ba4272ab4065b01b9db60b7e37', 'online-recharge': 'sha256:16626eaaacd5a7d0f1cd059ed94efad818414dd28397395caaeeecbe120ab2d7', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}
+        with tempfile.TemporaryDirectory(prefix='migration-readonly-', dir=TMP) as folder:
+            directory = Path(folder)
+            manifest = {'commit': 'a046d8413e3cb6c3edd6429dbdb922593dc32064',
+                'images': {name: {('digest' if name in ('api', 'admin', 'online-recharge') else 'imageId'): image}
+                           for name, image in images.items()}}
+            (directory / 'release-manifest.json').write_bytes(raw(manifest))
+            calls = []
+            containers = {str(i + 1) * 64: name for i, name in enumerate(images)}
+            def read(*args):
+                calls.append(args)
+                if args[0] == 'aws':
+                    owner = {'Account': '098208446664', 'Arn': 'arn:aws:sts::098208446664:assumed-role/migration-fixture/i-0838cebf64f0e2a89'}
+                    if change == 'owner': owner['Account'] = '079740175286'
+                    if change == 'instance': owner['Arn'] = owner['Arn'].replace('i-0838cebf64f0e2a89', 'i-other')
+                    return json.dumps(owner)
+                if args[:2] == ('docker', 'compose'):
+                    return next(cid for cid, name in containers.items() if name == args[-1])
+                if args[:2] == ('docker', 'inspect'):
+                    name = containers[args[-1]]; image = images[name]
+                    if change == 'image' and name == 'api': image = 'sha256:' + 'f' * 64
+                    health = '' if name == 'caddy' else ('unhealthy' if change == 'health' and name == 'api' else 'healthy')
+                    return image + ' running ' + health
+                if args[:2] == ('docker', 'ps'):
+                    return 'a' * 64 if change in ('auto-registration', 'migrate') and args[3].endswith('=' + change) else ''
+                if args[0] == 'systemctl':
+                    if mutate_manifest: (directory / 'release-manifest.json').write_bytes(b'{}')
+                    return 'inactive' if change == 'timer' else 'active'
+                raise AssertionError('Unexpected observation operation')
+            with mock.patch.dict(self.namespace, read=read):
+                return self.modern(directory, manifest), calls
+
+    def test_current_migration_facts_bind_both_formats_all_services_backups_and_no_release_authority(self):
+        facts, calls = self.observed_migration_fixture()
+        self.assertEqual(len(facts['services']), 7)
+        self.assertFalse(facts['formalReleaseVerified'])
+        self.assertFalse(facts['retiredRegistrationRunning'])
+        self.assertFalse(facts['migratorRunning'])
+        self.assertTrue(all(c[0] in ('aws', 'docker', 'systemctl') for c in calls))
+        self.assertFalse(any(c[:2] in (('docker', 'start'), ('docker', 'rm'), ('systemctl', 'start')) for c in calls))
+
+    def test_current_migration_facts_reject_wrong_owner_instance_images_or_health(self):
+        for change in ('owner', 'instance', 'image', 'health'):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.observed_migration_fixture(change=change)
+
+    def test_current_migration_facts_reject_running_retired_services_or_inactive_backups(self):
+        for change in ('auto-registration', 'migrate', 'timer'):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.observed_migration_fixture(change=change)
+
+    def test_current_migration_facts_reject_manifest_replacement_during_observation(self):
+        with self.assertRaisesRegex(ValueError, 'manifest changed'):
+            self.observed_migration_fixture(mutate_manifest=True)
+
+
+    def test_current_migration_wire_is_explicitly_non_authorizing_and_keeps_the_original_lock(self):
+        facts, _calls = self.observed_migration_fixture()
+        lock = {'releaseLock': {'status': 'UNLOCKED', 'holders': []}}
+        output = json.dumps(lock) + '\n' + json.dumps({'migrationReadOnlyFacts': facts})
+        fallback = mock.Mock(return_value=[lock])
+        with mock.patch.dict(self.namespace, readonly_maintenance_baseline_receipts=fallback):
+            self.assertEqual(self.receipts(output, True), [lock, {'migrationReadOnlyFacts': facts}])
+        fallback.assert_called_once_with(json.dumps(lock), False)
+        self.assertIs(facts['formalReleaseVerified'], False)
+
+    def test_current_migration_wire_rejects_extra_data_authority_drift_and_invalid_health(self):
+        facts, _calls = self.observed_migration_fixture()
+        changed = []
+        for key, value in (('formalReleaseVerified', True), ('formalReleaseVerified', 0),
+                           ('account', '079740175286'), ('currentCommit', 'f' * 40), ('privateValue', SECRET)):
+            item = copy.deepcopy(facts); item[key] = value; changed.append(item)
+        item = copy.deepcopy(facts); item['services']['api']['health'] = 'unhealthy'; changed.append(item)
+        for item in changed:
+            with self.assertRaises(ValueError): self.close_facts(item)
+
+    def test_unknown_or_failed_output_delegates_to_the_original_closed_historical_receiver(self):
+        sentinel = [{'originalClosedReceiver': True}]
+        fallback = mock.Mock(return_value=sentinel)
+        with mock.patch.dict(self.namespace, readonly_maintenance_baseline_receipts=fallback):
+            self.assertIs(self.receipts('legacy-output', True), sentinel)
+            self.assertIs(self.receipts('failed-output', False), sentinel)
+        self.assertEqual(fallback.call_args_list, [mock.call('legacy-output', True), mock.call('failed-output', False)])
 
 
 class WorkflowTests(unittest.TestCase):
@@ -656,8 +748,14 @@ const confirmActiveOnlyForFiniteInputs = current.on.workflow_dispatch.inputs.ope
 const legacyGateSuffix = " && inputs.expected_current != '" + confirmBaseline + "'";
 const oldLegacyGate = replaceOnce(byName(steps, legacyName).if, legacyGateSuffix, '');
 const originalImageCollector = "protected_image_ids = {image['digest'] for release in (manifest, previous_manifest)\n    for image in release.get('images', {}).values()}";
-const compatibleImageCollector = "def readonly_manifest_image_id(image):\n    if not isinstance(image, dict):\n        raise ValueError('Read-only manifest image record unavailable')\n    identifiers = [image[key] for key in ('digest', 'imageId') if key in image]\n    if (not identifiers or any(not isinstance(value, str)\n            or not re.fullmatch(r'sha256:[a-f0-9]{64}', value) for value in identifiers)\n            or len(set(identifiers)) != 1):\n        raise ValueError('Read-only manifest image identity unavailable or conflicting')\n    return identifiers[0]\n\nprotected_image_ids = {readonly_manifest_image_id(image) for release in (manifest, previous_manifest)\n    for image in release.get('images', {}).values()}";
-const expectedLegacyRun = replaceOnce(byName(old.jobs.release.steps, legacyName).run, originalImageCollector, compatibleImageCollector);
+const compatibleImageCollector = "def readonly_manifest_image_id(image):\n    if not isinstance(image, dict):\n        raise ValueError('Read-only manifest image record unavailable')\n    identifiers = [image[key] for key in ('digest', 'imageId') if key in image]\n    if (not identifiers or any(not isinstance(value, str)\n            or not re.fullmatch(r'sha256:[a-f0-9]{64}', value) for value in identifiers)\n            or len(set(identifiers)) != 1):\n        raise ValueError('Read-only manifest image identity unavailable or conflicting')\n    return identifiers[0]\n\ndef readonly_migration_baseline_facts(directory, manifest):\n    # This bounded observation grants no historical publication authority.\n    expected_commit = 'a046d8413e3cb6c3edd6429dbdb922593dc32064'\n    expected_instance = 'i-0838cebf64f0e2a89'\n    expected_images = {'api': 'sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a', 'admin': 'sha256:5237f36e7eaaade222c25fa5d0d3c2a2e317e0ba4272ab4065b01b9db60b7e37', 'online-recharge': 'sha256:16626eaaacd5a7d0f1cd059ed94efad818414dd28397395caaeeecbe120ab2d7', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}\n    if manifest.get('commit') != expected_commit or set(manifest.get('images', {})) != set(expected_images):\n        raise ValueError('Migration read-only baseline unavailable')\n    before_directory = directory.resolve()\n    original = (directory / 'release-manifest.json').read_bytes()\n    if json.loads(original) != manifest:\n        raise ValueError('Migration read-only manifest changed')\n    identity = json.loads(read('aws', 'sts', 'get-caller-identity', '--region', 'ap-northeast-1', '--output', 'json'))\n    if identity.get('Account') != '098208446664' or not identity.get('Arn', '').endswith('/' + expected_instance):\n        raise ValueError('Migration read-only AWS owner unavailable')\n    states = {}\n    for service, expected_image in expected_images.items():\n        if readonly_manifest_image_id(manifest['images'][service]) != expected_image:\n            raise ValueError('Migration read-only manifest image differs')\n        container = read('docker', 'compose', '--env-file', str(directory / '.env.aws.production'),\n            '-f', str(directory / 'docker-compose.aws-mysql.yml'),\n            '-f', str(directory / 'compose.release.json'), 'ps', '-q', service)\n        if not re.fullmatch(r'[a-f0-9]{12,64}', container):\n            raise ValueError('Migration read-only service identity unavailable')\n        fields = read('docker', 'inspect', '--format',\n            '{{.Image}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}', container).split()\n        expected_fields = [expected_image, 'running'] + ([] if service == 'caddy' else ['healthy'])\n        if fields != expected_fields:\n            raise ValueError('Migration read-only service image or health differs')\n        states[service] = {'image': fields[0], 'status': fields[1], 'health': fields[2] if len(fields) == 3 else None}\n    for retired in ('auto-registration', 'migrate'):\n        if read('docker', 'ps', '--filter', 'label=com.docker.compose.service=' + retired, '--format', '{{.ID}}'):\n            raise ValueError('Migration read-only retired service is running')\n    timers = {}\n    for name in ('id-business-v2-mysql-backup.timer', 'id-business-v2-mysql-backup-verify.timer'):\n        timers[name] = read('systemctl', 'is-active', name)\n        if timers[name] != 'active':\n            raise ValueError('Migration read-only backup timer unavailable')\n    if directory.resolve() != before_directory or (directory / 'release-manifest.json').read_bytes() != original:\n        raise ValueError('Migration read-only manifest changed')\n    return {'account': '098208446664', 'instance': expected_instance, 'currentCommit': expected_commit,\n        'manifestSha256': hashlib.sha256(original).hexdigest(), 'services': states, 'backupTimers': timers,\n        'retiredRegistrationRunning': False, 'migratorRunning': False, 'formalReleaseVerified': False}\n\nif manifest.get('commit') == 'a046d8413e3cb6c3edd6429dbdb922593dc32064':\n    print(json.dumps({'migrationReadOnlyFacts': readonly_migration_baseline_facts(base / 'current', manifest)}, separators=(',', ':')))\n    raise SystemExit(0)\n\nprotected_image_ids = {readonly_manifest_image_id(image) for release in (manifest, previous_manifest)\n    for image in release.get('images', {}).values()}";
+const migrationReceiverProgram = "def closed_migration_readonly_facts(value):\n    keys = {'account', 'instance', 'currentCommit', 'manifestSha256', 'services', 'backupTimers',\n        'retiredRegistrationRunning', 'migratorRunning', 'formalReleaseVerified'}\n    expected_images = {'api': 'sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a', 'admin': 'sha256:5237f36e7eaaade222c25fa5d0d3c2a2e317e0ba4272ab4065b01b9db60b7e37', 'online-recharge': 'sha256:16626eaaacd5a7d0f1cd059ed94efad818414dd28397395caaeeecbe120ab2d7', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}\n    if (not isinstance(value, dict) or set(value) != keys or value['account'] != '098208446664'\n            or value['instance'] != 'i-0838cebf64f0e2a89'\n            or value['currentCommit'] != 'a046d8413e3cb6c3edd6429dbdb922593dc32064'\n            or not isinstance(value['manifestSha256'], str)\n            or not re.fullmatch(r'[a-f0-9]{64}', value['manifestSha256'])\n            or any(value[key] is not False for key in ('retiredRegistrationRunning', 'migratorRunning', 'formalReleaseVerified'))\n            or value['backupTimers'] != {'id-business-v2-mysql-backup.timer': 'active', 'id-business-v2-mysql-backup-verify.timer': 'active'}\n            or not isinstance(value['services'], dict) or set(value['services']) != set(expected_images)):\n        raise ValueError('Migration read-only receipt unavailable')\n    for name, image in expected_images.items():\n        if value['services'][name] != {'image': image, 'status': 'running', 'health': None if name == 'caddy' else 'healthy'}:\n            raise ValueError('Migration read-only receipt service differs')\n    return value\n\ndef readonly_migration_receipts(output, succeeded):\n    if not succeeded:\n        return readonly_maintenance_baseline_receipts(output, False)\n    try:\n        lines = output.strip().splitlines()\n        observed = json.loads(lines[1]) if len(lines) >= 2 else None\n    except Exception:\n        return readonly_maintenance_baseline_receipts(output, True)\n    if not isinstance(observed, dict) or 'migrationReadOnlyFacts' not in observed:\n        return readonly_maintenance_baseline_receipts(output, True)\n    try:\n        if len(lines) != 2 or len(output.encode()) > 24000:\n            raise ValueError()\n        def unique(items):\n            result = {}\n            for key, item in items:\n                if key in result:\n                    raise ValueError()\n                result[key] = item\n            return result\n        def invalid(_value):\n            raise ValueError()\n        value = json.loads(lines[1], object_pairs_hook=unique, parse_constant=invalid)\n        first = json.loads(lines[0], object_pairs_hook=unique, parse_constant=invalid)\n        lock = readonly_maintenance_baseline_receipts(lines[0], False)[0]\n        if set(value) != {'migrationReadOnlyFacts'} or first != lock:\n            raise ValueError()\n        return [lock, {'migrationReadOnlyFacts': closed_migration_readonly_facts(value['migrationReadOnlyFacts'])}]\n    except Exception:\n        raise RuntimeError('Migration read-only diagnostic output unavailable') from None\n\n";
+const originalPayloadLine = "payload = base64.b64encode(lzma.compress(program.encode('utf-8'), preset=6)).decode('ascii')";
+const receiverAssignment = "migration_receiver_program = r'''\n" + migrationReceiverProgram + "'''\n";
+const originalFilterLine = "filter_program = 'import hashlib,json,re,sys\\n' + '\\n'.join(ast.get_source_segment(program, node) for node in receivers) + '\\n'";
+const expectedLegacyRun = replaceOnce(replaceOnce(replaceOnce(byName(old.jobs.release.steps, legacyName).run, originalImageCollector, compatibleImageCollector), originalPayloadLine, receiverAssignment + originalPayloadLine), originalFilterLine, originalFilterLine + ' + migration_receiver_program')
+ .replace('for receipt in readonly_maintenance_baseline_receipts(output, False)', 'for receipt in readonly_migration_receipts(output, False)')
+ .replace('for receipt in readonly_maintenance_baseline_receipts(output, True)', 'for receipt in readonly_migration_receipts(output, True)');
 const adminNames = ['Read finite Admin successor baseline facts', 'Save finite Admin successor read-only evidence', legacyName, readbackName];
 const runtimeByBaseline = ['', '60e164b75d1eedaab440c17139bf9ba55de08c61', '31d2c6885a45817cd40d23fce8d6145bc9f18af2'].map(expected_current => {
  const selected = new Proxy({...inputs, expected_current}, {get: (v, k) => v[k] ?? ''});
