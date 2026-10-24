@@ -45,7 +45,7 @@
     "deploy/aws/release-artifact-storage-proof-20261024.json": "c031472d67b174e1b7976b1d84ac5d5a78e89585e7841005808efdc7b0a49404",
     "scripts/ci-aws-account-migration-scope.mjs": "f5777197641666e90dc49c77ba6a9a72fe497ba51f8b8e2fb4b8e8b9bfd9c39a",
     "scripts/ci-aws-account-migration-scope.test.mjs": "c99f07a751f2175f67fbebcc1f0fff6d1e6321622888843e36c1bf8809d4eb4e",
-    "scripts/ci-recharge-check.mjs": "2fe761803850abaefffb1d0e3e1b24ff1fe1ef71ff3141914632f273f0fad563",
+    "scripts/ci-recharge-check.mjs": "df4c9b26ab5c192fad7d63d43fbea26d10d53eccd9840b2fe7fce05a1b027b2e",
     "scripts/ci-recharge-scope.mjs": "9a388b8f05bdea7d1c819ac3a4b87e54e2fff123caf5f489020cea2e378d60db",
     "scripts/ci-recharge-scope.test.mjs": "f5d4a1a4cd47cae2ed4b6dab0ee3b0a4968de893d1113d5b17f5beb6c711aa7d",
     "scripts/production-release/account-login-dispatch.py": "ffde86d17b6789e6e1622c7f35fac71594af3913c9c6298048d02408d7121373",

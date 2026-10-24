@@ -103,7 +103,7 @@ import {
 import { isRechargeBillingOnly } from './ci-recharge-billing-scope.mjs';
 import { isSharedProxyPoolOnly, sharedProxyAdminCommand } from './ci-shared-proxy-scope.mjs';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   adminCheckCommands,
@@ -208,6 +208,8 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
 if (isAwsAccountMigrationControlsOnly(changed, { base })) {
   if (part !== 'guards' || mode !== 'ci-only')
     throw new Error('Migration control checks require the exact finite guard selection');
+  // Private-I/O fixtures require this project-owned parent on a fresh runner.
+  mkdirSync(new URL('../.runtime/online-component-continuation-20261014/', import.meta.url), { recursive: true, mode: 0o700 });
   for (const [file, args] of awsAccountMigrationGuardCommands) run(file, args);
   process.exit(0);
 }
