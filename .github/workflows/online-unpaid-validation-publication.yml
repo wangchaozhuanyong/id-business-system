@@ -12,6 +12,12 @@ on:
         required: true
         type: string
 
+      finalize_accepted:
+        description: Finish only the exact already-switched candidate, without rebuilding or restarting
+        type: boolean
+        required: true
+        default: false
+
       inspect_only:
         description: Read-only target baseline observation before publishing
         type: boolean
@@ -57,13 +63,16 @@ jobs:
           role-session-name: id-business-v2-session-probe-observe-${{ github.run_id }}
           aws-region: ap-northeast-1
       - name: Observe migrated production target without a deployment
-        if: inputs.inspect_only
+        if: inputs.inspect_only && !inputs.finalize_accepted
         run: python3 -B scripts/production-release/online-unpaid-validation-publication.py observe
+      - name: Finalize the verified accepted switch without another deployment
+        if: inputs.finalize_accepted
+        run: python3 -B scripts/production-release/online-unpaid-validation-publication.py finalize
       - name: Authenticate checks and reproduce the three component inputs
-        if: ${{ !inputs.inspect_only }}
+        if: ${{ !inputs.inspect_only && !inputs.finalize_accepted }}
         run: python3 -B scripts/production-release/online-unpaid-validation-publication.py build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: ${{ !inputs.inspect_only }}
+        if: ${{ !inputs.inspect_only && !inputs.finalize_accepted }}
         with:
           name: online-unpaid-validation-native-${{ github.sha }}-${{ github.run_attempt }}
           path: |
@@ -82,7 +91,7 @@ jobs:
 
   publish:
     needs: validate
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && !inputs.inspect_only
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && !inputs.inspect_only && !inputs.finalize_accepted
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

@@ -370,9 +370,9 @@
     "online-subscription-challenge-release.py": "9111eae04aca42cb191933005337a531e8b07bd198540c18df2e7c0aadefa207",
     "online-subscription-challenge-release.test.py": "2a0a51565bde4738af88f0e80dab3377825b4299489d9f4f5a617eac8281f9a7",
     "online-unpaid-validation-build.py": "f5ee063f8591f2cab963c957c44f18eb5ff1c42e723f1aa80998856f7b3c2a66",
-    "online-unpaid-validation-publication.py": "b3a55f94883cc73d7003f5a67e9782635933a19b359daeb7f099e3ae2c888112",
-    "online-unpaid-validation-release.py": "342bd45ccfb326dd10a1d558fa5d85b64b6f342a56e60d4bc75cb51a24f9476b",
-    "online-unpaid-validation-release.test.py": "71937cc51324bd2b7e5d9d36cda051e4545c6e8deb02e298767051ca9819666e",
+    "online-unpaid-validation-publication.py": "cbae2d43766b3734dafab2da3c8a7ba95918ad4d155c976ed9314826e53f24a4",
+    "online-unpaid-validation-release.py": "869d40d287567eeb901aae413d366444ca077431a433341312fcc90ec8cd4e56",
+    "online-unpaid-validation-release.test.py": "866821e6ddc02f2f43807f7c0b1cc129713bf65eed69bf511ceaf1f253fb789c",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
     "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
@@ -541,7 +541,7 @@
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["api", "admin", "online-recharge"],
   "version": 1,
-  "workflowSha256": "afe6b5f3169c7383855a210cc6001dde66e83ddff39be61f47d0cd19f6e20ddd",
+  "workflowSha256": "4f2e7168976ca77a4b3446ce6e63dae66f942e4bbde5e232ba18a7c12dfabba7",
   "publishedApiDeclaration": {
     "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-pending-features-0d76d6ca0c287750d2d04f16c80e9d63a334b84b/online-pending-features-artifact.tar.gz",
     "artifactSha256": "9901b8c6f4c81f3c22efb7fc92b85c77cca84002bd5d90b14efe6e56598e4610"
@@ -684,6 +684,12 @@
       "workflowRunId": "40103226091"
     },
     "planSha256": "55b1ea0eef778fc9f981f777b2fce68cbf142e6a97a809d6a88acaf40d627bc6",
-    "failedCommandId": "6a05ffac-e9da-4583-a4f1-94c2efca0fe0"
+    "failedCommandId": "6a05ffac-e9da-4583-a4f1-94c2efca0fe0",
+    "observation": {
+      "runId": "40104249172",
+      "runAttempt": "1",
+      "commit": "0ec513bbebcbb0931a14d396e268b9e4bab40733",
+      "resultSha256": "3cab990cd0e5cbdc2ddc20c77ed6133c2cc8c9afee9e485c211407527ebc97fc"
+    }
   }
 }
