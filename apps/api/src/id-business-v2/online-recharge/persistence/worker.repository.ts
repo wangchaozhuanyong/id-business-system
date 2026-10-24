@@ -33,6 +33,7 @@ import { safeProxyTestTaskResult } from '../../proxy-pool/public-api';
 import { OnlineRechargeOrderSyncService } from '../order-sync.service';
 import { taskPlanRegion } from '../plan-region';
 import { checkoutRecovery } from '../checkout-recovery';
+import { checkoutPreparation } from '../checkout-preparation';
 import { originalRecheckSchedule } from '../reconciliation';
 import { acquireMysqlTransactionLock } from '../../../common/prisma/mysql-transaction-lock';
 import {
@@ -380,12 +381,53 @@ export class OnlineRechargeWorkerRepository {
         typeof args.stage === 'string'
           ? redact(text(args.stage, '执行阶段', 100)).slice(0, 100)
           : row.stage;
+      let preparedPayload: Record<string, unknown> | undefined;
+      let preparedState: 'creating' | 'created' | undefined;
+      if (args.checkoutPreparation !== undefined) {
+        if (row.operation !== 'recharge' || row.provider !== 'local' || row.paymentStarted)
+          throw new ConflictException('当前任务不能保存付款前原单记录');
+        const next = checkoutPreparation(args.checkoutPreparation);
+        preparedState = next.state;
+        const accountId = sessionAccountId(this.encryption.decrypt(row.sessionEncrypted));
+        if (!accountId) throw new ConflictException('原账号标识未确认，不能保存结账单');
+        const previous = this.readCheckoutPreparation(row);
+        if (next.state === 'creating') {
+          if (previous) throw new ConflictException('已有建单记录，禁止再次建单');
+          if (
+            row.leaseVersion > 1 &&
+            (await tx.onlineRechargeEvent.findFirst({
+              where: { taskId: row.id, message: { contains: '[ChatGPT] 创建 Checkout Session:' } }
+            }))
+          )
+            throw new ConflictException('旧任务已执行建单但未保留原单记录，禁止再次建单');
+        } else if (
+          !previous ||
+          (previous.state === 'created' && previous.checkoutUrl !== next.checkoutUrl)
+        )
+          throw new ConflictException('原结账单记录已变化，禁止替换');
+        preparedPayload = {
+          ...object(row.payload ?? {}),
+          checkoutPreparationEncrypted: this.encryption.encrypt(
+            JSON.stringify({
+              ...next,
+              taskId: row.id,
+              plan: row.plan,
+              sessionIdentityHash: row.sessionIdentityHash,
+              accountId
+            })
+          )
+        };
+        await this.repository.log(tx, 'worker.checkout_preparation', undefined, row.id, {
+          state: next.state
+        });
+      }
       await tx.onlineRechargeTask.update({
         where: { id: row.id },
         data: {
           progress,
           message,
           stage,
+          ...(preparedPayload ? { payload: preparedPayload as Prisma.InputJsonObject } : {}),
           ...(args.providerOrderId
             ? { providerOrderId: text(args.providerOrderId, '上游订单编号', 128) }
             : {}),
@@ -403,8 +445,28 @@ export class OnlineRechargeWorkerRepository {
             metadata: sanitize({ logs: args.logs }) as Prisma.InputJsonValue
           }
         });
-      return { ok: true };
+      return { ok: true, ...(preparedState ? { checkoutPreparationState: preparedState } : {}) };
     });
+  }
+  readCheckoutPreparation(row: OnlineRechargeTask) {
+    const encrypted = object(row.payload ?? {}).checkoutPreparationEncrypted;
+    if (encrypted === undefined) return undefined;
+    try {
+      if (typeof encrypted !== 'string') throw new Error('invalid');
+      const value = object(JSON.parse(this.encryption.decrypt(encrypted) || ''));
+      const accountId = sessionAccountId(this.encryption.decrypt(row.sessionEncrypted));
+      if (
+        !accountId ||
+        value.accountId !== accountId ||
+        value.taskId !== row.id ||
+        value.plan !== row.plan ||
+        value.sessionIdentityHash !== row.sessionIdentityHash
+      )
+        throw new Error('mismatch');
+      return checkoutPreparation(value);
+    } catch {
+      throw new ConflictException('原结账单准备记录与当前任务不一致，禁止重新建单');
+    }
   }
   async beforeSubmit(rpc: OnlineRechargeWorkerRpc) {
     return this.withLease(rpc, async (tx, row) => {
@@ -1075,6 +1137,16 @@ export class OnlineRechargeWorkerRepository {
           }
         });
         return { pendingCredentials: true, cardId: card.id, id: undefined };
+      }
+      if (args.preflightOnly === true) {
+        await tx.onlineRechargeTask.update({
+          where: { id: row.id },
+          data: { cardId: card.id, cardLast4: card.last4 }
+        });
+        await this.repository.log(tx, 'worker.cards.preflight', undefined, row.id, {
+          cardId: card.id
+        });
+        return { id: card.id, last4: card.last4, cvcAvailable: hasCvc };
       }
       if (!(await hasCapacity(card))) return null;
       const existingLease = card.leaseOwner === row.id ? card : null;

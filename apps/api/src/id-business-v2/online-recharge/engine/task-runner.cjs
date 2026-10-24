@@ -22,7 +22,13 @@ async function execute(task, cfg) {
     case 'recharge':
       if (task.provider === 'third_party')
         return require('./third-party.cjs').executeThirdParty(task, cfg, { progress });
-      return require('./upstream/index').run({ paymentLimit: payload.paymentLimit });
+      return require('./upstream/index').run({
+        paymentLimit: payload.paymentLimit,
+        checkoutPersistence: {
+          previous: cfg.checkoutPreparation,
+          save: (value) => rpc('progress', { checkoutPreparation: value })
+        }
+      });
     case 'debug':
       return require('./upstream/index').run({
         paymentLimit: payload.paymentLimit,

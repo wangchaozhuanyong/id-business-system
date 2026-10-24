@@ -222,9 +222,9 @@
     {
       "path": "task-runner.cjs",
       "originalSha256": null,
-      "adaptedSha256": "c863b76f10ae8c445a3a63851f6527af6f8849587e24f28b8d647ccdd9ccce10",
+      "adaptedSha256": "5d8e850569f82e69febfce5ef8f2e59c3bbcd1eb3921f319d245dc8ceaa75364",
       "changed": true,
-      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection."
+      "reason": "Pass task-frozen payment region and plan expected currency into the isolated task subprocess; clear expected currency at exit.; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "test/auth-navigation.test.cjs",
@@ -299,9 +299,9 @@
     {
       "path": "test/checkout-page-loading.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a90ccbf421684ad100354933a9f08430e7ddd5779070b976edfda45cc6e95b28",
+      "adaptedSha256": "a868a7149caf8077cdf31d4b119634711e099b934e15bfcc5a0a4b0d815ce054",
       "changed": true,
-      "reason": "Verify deterministic expired inspection and exact complete-not-ready versus incomplete-timeout diagnostics; unrelated frames never clear readiness or produce solver calls or writes."
+      "reason": "Verify deterministic expired inspection and exact complete-not-ready versus incomplete-timeout diagnostics; unrelated frames never clear readiness or produce solver calls or writes. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "test/checkout-readonly-diagnostic.test.cjs",
@@ -327,9 +327,9 @@
     {
       "path": "test/checkout-recovery.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "de3a24850c608b17203dcf7f77621f5b50470c2b369b59e2f89e24d9492324bf",
+      "adaptedSha256": "4405996772f1b84950ea14f46012875d6d64d3b14c5be53730ad0cd1fd0cb44a",
       "changed": true,
-      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Regression coverage for prepared native checkout, rendered eligibility, same-tree shadow fields, passive masked recording and safe rejection diagnostics. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Verify original-reload diagnostics survive accepted-checkout and result projection; reject unbounded/raw diagnostics and retain zero duplicate payment. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior."
+      "reason": "Unattended verification, bounded cancellation and original-checkout read-only reconciliation; synthetic regression coverage. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Regression coverage for prepared native checkout, rendered eligibility, same-tree shadow fields, passive masked recording and safe rejection diagnostics. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Verify original-reload diagnostics survive accepted-checkout and result projection; reject unbounded/raw diagnostics and retain zero duplicate payment. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "test/checkout-reload-request-diagnostics.test.cjs",
@@ -677,9 +677,9 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "4fc7866117f86778c971791330c098a30d8527429a23d8dd7a3921402334b26d",
+      "adaptedSha256": "4ff01b0163837fd8340156839a3f8000bcaed8169737a53486e25e3d2768b0bc",
       "changed": true,
-      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Prepare the card section before strict original-checkout readiness and preserve bounded exclusion diagnostics through the opening result. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Carry strictly projected original-reload rejection diagnostics through the existing accepted-checkout failure result; never create or submit another checkout. 2026-10-19 Add bounded failure-only semantic exclusion diagnostics and same-snapshot geometry/editability comparison; no admission, filling or payment-policy change. 2026-10-21 Install passive initialization observation before original checkout navigation and preserve only its strict evidence projection; keep existing checkout and payment policy. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only. 2026-10-22 Preserve bounded control-read failure phase/reason counts in existing checkout diagnostics. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection."
+      "reason": "Never estimate Chilean checkout amounts from numeric plan names; require official quote. 2026-10-17 embedded checkout source binding, exact original payment evidence and read-only recovery; stop duplicate checkout creation on accepted or uncertain POST; synthetic regression coverage. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty.; 2026-10-18 restore frozen upstream field aliases and preserve controlled checkout diagnostics; isolated browser and service-chain regressions, no payment-policy change. Preserve the existing controlled original-checkout reload failure codes through the diagnostic projection. 2026-10-18 Prepare the card section before strict original-checkout readiness and preserve bounded exclusion diagnostics through the opening result. 2026-10-18 Use shared physical actionability and composed modal/hit checks for visible ARIA-hidden fields; no trial clicks, fail closed on blocked/changed candidates, bounded credential-free diagnostics and offline browser regressions. 2026-10-18 Carry strictly projected original-reload rejection diagnostics through the existing accepted-checkout failure result; never create or submit another checkout. 2026-10-19 Add bounded failure-only semantic exclusion diagnostics and same-snapshot geometry/editability comparison; no admission, filling or payment-policy change. 2026-10-21 Install passive initialization observation before original checkout navigation and preserve only its strict evidence projection; keep existing checkout and payment policy. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only. 2026-10-22 Preserve bounded control-read failure phase/reason counts in existing checkout diagnostics. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "upstream/chile-money.js",
@@ -719,23 +719,23 @@
     {
       "path": "upstream/human-verification.js",
       "originalSha256": "13056c91e1e2a77563ca29206446c783ee33774003555422bb2694d7fb9cd317",
-      "adaptedSha256": "9f94f78caae153daf6e16cd30c71ef11e2bf643f5e53d92b083de24a9547f723",
+      "adaptedSha256": "073fd7499b97befe0d5d037a5d2b619769b40b41a5836f07a25ac0f769fe2562",
       "changed": true,
-      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Perform caller-supplied card-section preparation before readiness inspection within the original opening deadline; retain verification and payment guards. 2026-10-19 Exclude ordinary conversation/composer text from verification wording while retaining actual challenge instructions, dialogs and controls. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection."
+      "reason": "冻结原版保持不变。; 2026-10-17 unattended verification and original-checkout reconciliation. Reject false form readiness; recover one original load before payment and retain controlled diagnostics. Bound original-checkout opening, distinguish hidden verification residue from rendered challenges, reject incomplete load reads, close interrupted task pages and preserve payment uncertainty. 2026-10-18 Perform caller-supplied card-section preparation before readiness inspection within the original opening deadline; retain verification and payment guards. 2026-10-19 Exclude ordinary conversation/composer text from verification wording while retaining actual challenge instructions, dialogs and controls. 2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "ce4abbf885cc0c6a6dd13a50b7d0344285de1a5eceabf70c196f6532e598f8c0",
+      "adaptedSha256": "5d84b9ef941607327e5e9fbba00a557006ccc7ece8cc01ab40617509e05a5b99",
       "changed": true,
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Distinguish incomplete observed candidate counts from absence; report known cancellation rules and possible navigation timing without asserting a root cause. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Distinguish incomplete observed candidate counts from absence; report known cancellation rules and possible navigation timing without asserting a root cause. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "upstream/mysql-store.js",
       "originalSha256": "b8d120cdafac6884da0bf9ef2f062965f89b17efcb6f1978f3831a4d3c0267b9",
-      "adaptedSha256": "c5a6c9764a2f4aa4fa977b918f2b032abcb8e0ab068ea29a717100a71a15d60a",
+      "adaptedSha256": "567be8c29ec66ae02a930164babddab854c15d6c6d5f1c6f7477fb7bb837cf59",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。"
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "upstream/package-lock.json",
@@ -887,9 +887,9 @@
     {
       "path": "checkout-page-state.cjs",
       "originalSha256": null,
-      "adaptedSha256": "0eef680157f02a2327323fc73cfbd78007bd8cfd58292c6108584ea32a5d6da8",
+      "adaptedSha256": "07c7997fa89185dd99509d994b3ceddfcd588bc62d33d7667160d7439b3129a1",
       "changed": true,
-      "reason": "Recognize the observed official terminal checkout error with fixed boolean flags; no credentials, reload, form writes or payment outcome inference."
+      "reason": "Recognize the observed official terminal checkout error with fixed boolean flags; no credentials, reload, form writes or payment outcome inference. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     },
     {
       "path": "checkout-creation-diagnostics.cjs",
@@ -901,16 +901,30 @@
     {
       "path": "test/unpaid-validation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "e4df3ca7e6ebcc0566303864ab077125da40bc7131a55a4ca36a9b79e022c45f",
+      "adaptedSha256": "6c14c015754fe3d78452f808cf40e78e76ff17fa74bc021148c00c6eae446c78",
       "changed": true,
-      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission."
+      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: retain checkout preparation and incomplete-read evidence across credential resume."
     },
     {
       "path": "unpaid-validation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "33b26520877e633cca3f38627d48177e595e8ea9b282773a86b22f6a03140847",
+      "adaptedSha256": "21323317bc1f5ad0c3522959a4a98d192f340697a8f4da34006873ed68f9017d",
       "changed": true,
-      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission."
+      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
+    },
+    {
+      "path": "checkout-preparation.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "014f2f7060f1af6e1c364300db8fa2f68bbd46d44255a783b83f8f0875dece4f",
+      "changed": true,
+      "reason": "2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
+    },
+    {
+      "path": "test/checkout-preparation.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "93511fa06a6f5ab6c849146c927c2f1d2dd1dbb7cb5512039ae94354ed7c550f",
+      "changed": true,
+      "reason": "2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines."
     }
   ],
   "dependencySecurityPatches": [

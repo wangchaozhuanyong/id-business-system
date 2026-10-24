@@ -553,8 +553,13 @@ async function run(runOptions = {}) {
         let checkoutResult = null;
         const planNameOverride = String(CONFIG.planNameOverride || '').trim() || undefined;
 
+        if (operation === 'initial' && (!debugOnly || validation)) {
+            validation?.stage('card_readiness');
+            await store.preflightCard();
+        }
         validation?.stage('checkout_create');
-        if (checkoutMode !== 'ui' && operation === 'initial' && planType !== 'pro_500') {
+        if (runOptions.checkoutPersistence?.previous
+            || (checkoutMode !== 'ui' && operation === 'initial' && planType !== 'pro_500')) {
             try {
                 checkoutResult = await openApiCheckout(page, {
                     accessToken: loginInfo.session?.accessToken || CONFIG.chatgptToken,
@@ -563,6 +568,7 @@ async function run(runOptions = {}) {
                     currency: billingCurrency,
                     planNameOverride,
                     verifyPage: true,
+                    ...(runOptions.checkoutPersistence ? { checkoutPersistence: runOptions.checkoutPersistence } : {}),
                     ...(validation ? { onCheckoutCreated: () => validation.stage('checkout_open') } : {})
                 });
                 checkoutOpened = true;
@@ -800,7 +806,7 @@ async function run(runOptions = {}) {
             loading?.blockedWrites ? `受保护恢复拦截请求数：${loading.blockedWrites}` : ''
         ].filter(Boolean).join('；');
         const checkoutFailureMessage = checkoutOpenDiagnostics
-            ? `原结账单已创建，${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}；已停止后续操作${diagnosticDetails ? `（${diagnosticDetails}）` : ''}`
+            ? `原结账单已创建，${checkoutOpenDiagnostics.code === 'CHECKOUT_PLAN_PREPARING' ? '官网仍在准备套餐，付款表单尚未显示' : `${openStageLabels[checkoutOpenDiagnostics.stage]}${openReasonLabels[checkoutOpenDiagnostics.reason]}`}；已停止后续操作${diagnosticDetails ? `（${diagnosticDetails}）` : ''}`
             : resultUnknown && checkoutFailure ? '结账单检查未完成，付款结果待核对；已停止后续操作' : checkoutFailure;
         const debugCheckout = debugOnly && !resultUnknown && e.checkoutCreationState === 'accepted'
             && typeof e.originalCheckoutUrl === 'string'

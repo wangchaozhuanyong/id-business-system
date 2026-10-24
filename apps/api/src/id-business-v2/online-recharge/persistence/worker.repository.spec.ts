@@ -89,6 +89,7 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
       upsert: vi.fn(async () => ({ id: 'synthetic-bill' }))
     },
     onlineRechargeEvent: {
+      findFirst: vi.fn(async () => null),
       findUnique: vi.fn(async () => null),
       create: vi.fn(async () => null),
       upsert: vi.fn(async () => null)
@@ -126,6 +127,102 @@ function fixture(overrides: Partial<OnlineRechargeTask> = {}, original?: OnlineR
   });
   return { row, tx, repository, worker, rpc, available, orderSync, encryption };
 }
+
+describe('建单前安全码预检和原单保存', () => {
+  it('缺少安全码在预检阶段进入既有待补资料状态，不占卡或解密卡资料', async () => {
+    const f = fixture({ operation: 'recharge', payload: {}, cardId: randomUUID() });
+    f.available.mockResolvedValue([]);
+    const result = await f.worker.reserveCard(f.rpc({ preflightOnly: true }));
+    expect(result).toMatchObject({ pendingCredentials: true });
+    expect(f.row.status).toBe('awaiting_credentials');
+    expect(f.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalled();
+    expect(f.encryption.decrypt).not.toHaveBeenCalled();
+  });
+  it('不付款模式缺码保持快速失败口径，不转入等待', async () => {
+    const f = fixture({
+      operation: 'debug',
+      payload: { validationMode: 'ready_before_payment' },
+      cardId: randomUUID()
+    });
+    f.available.mockResolvedValue([]);
+    expect(await f.worker.reserveCard(f.rpc({ preflightOnly: true }))).toEqual({
+      pendingCredentials: true
+    });
+    expect(f.row.status).toBe('running');
+    expect(f.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalled();
+  });
+  it('有效安全码只绑定候选卡，不领取资料或占租约', async () => {
+    const f = fixture({ operation: 'recharge', payload: {}, cardId: randomUUID() });
+    expect(await f.worker.reserveCard(f.rpc({ preflightOnly: true }))).toMatchObject({
+      id: f.row.cardId,
+      cvcAvailable: true
+    });
+    expect(f.tx.onlineRechargeCard.updateMany).not.toHaveBeenCalled();
+    expect(f.encryption.decrypt).not.toHaveBeenCalled();
+  });
+  function preparationFixture() {
+    const f = fixture({ operation: 'recharge', payload: {} });
+    const stored = new Map<string, string>();
+    f.encryption.encrypt.mockImplementation((value) => {
+      const key = randomUUID();
+      stored.set(key, value);
+      return key;
+    });
+    f.encryption.decrypt.mockImplementation((value) =>
+      value === 'synthetic-encrypted-session' ? syntheticSession : stored.get(String(value)) || ''
+    );
+    return f;
+  }
+  const created = {
+    state: 'created',
+    checkoutUrl: 'https://chatgpt.com/checkout/openai_llc/cs_test_syntheticOriginal',
+    checkoutSource: {
+      kind: 'official_checkout_response',
+      checkoutId: 'cs_test_syntheticOriginal',
+      processorEntity: 'openai_llc'
+    }
+  };
+  it('先保存意图，响应后立即加密保存原单；补码重新领取仍读到同一原单', async () => {
+    const f = preparationFixture();
+    await f.worker.progress(f.rpc({ checkoutPreparation: { state: 'creating' } }));
+    await f.worker.progress(f.rpc({ checkoutPreparation: created }));
+    f.row.leaseVersion++;
+    expect(f.worker.readCheckoutPreparation(f.row)).toMatchObject(created);
+    expect(JSON.stringify(f.row.payload)).not.toContain('https://');
+    await expect(
+      f.worker.progress(f.rpc({ checkoutPreparation: { state: 'creating' } }))
+    ).rejects.toThrow('禁止再次建单');
+  });
+  it('账号、任务或目标套餐变化时拒绝读取原单', async () => {
+    const f = preparationFixture();
+    await f.worker.progress(f.rpc({ checkoutPreparation: { state: 'creating' } }));
+    f.row.plan = 'pro_20x';
+    expect(() => f.worker.readCheckoutPreparation(f.row)).toThrow('不一致');
+  });
+  it('旧任务已有建单日志且没有原单记录时禁止补码后再建单', async () => {
+    const f = preparationFixture();
+    f.row.leaseVersion = 2;
+    f.tx.onlineRechargeEvent.findFirst.mockResolvedValue({ id: 'synthetic-event' } as never);
+    await expect(
+      f.worker.progress(f.rpc({ checkoutPreparation: { state: 'creating' } }))
+    ).rejects.toThrow('旧任务已执行建单');
+  });
+  it('拒绝伪造官网地址和缺少官方来源的内嵌 Stripe 原单', async () => {
+    const f = preparationFixture();
+    await f.worker.progress(f.rpc({ checkoutPreparation: { state: 'creating' } }));
+    for (const bad of [
+      {
+        ...created,
+        checkoutUrl: 'https://chatgpt.com.attacker.invalid/checkout/x/oaics_synthetic'
+      },
+      { state: 'created', checkoutUrl: created.checkoutUrl }
+    ]) {
+      await expect(f.worker.progress(f.rpc({ checkoutPreparation: bad }))).rejects.toThrow(
+        '准备记录无效'
+      );
+    }
+  });
+});
 
 describe('执行器无结果的事务收尾', () => {
   it('人工验证期间执行器离线，付款前结束原任务并释放预约，不重新领取', async () => {

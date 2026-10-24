@@ -419,7 +419,7 @@ const CHECKOUT_OPEN_REASONS = new Set([
     'cancelled', 'network_error', 'page_closed', 'not_ready', 'check_failed', 'read_incomplete', 'error_page'
 ]);
 const CHECKOUT_FORM_DIAGNOSTIC_CODES = new Set([
-    'CHECKOUT_CARD_NOT_READY', 'CHECKOUT_FORM_NOT_READY', 'CHECKOUT_CONTROL_AMBIGUOUS',
+    'CHECKOUT_CARD_NOT_READY', 'CHECKOUT_FORM_NOT_READY', 'CHECKOUT_PLAN_PREPARING', 'CHECKOUT_CONTROL_AMBIGUOUS',
     'CHECKOUT_CONTROL_READ_FAILED', 'CHECKOUT_CONTROL_BLOCKED', 'CHECKOUT_PAGE_CLOSED', 'CHECKOUT_FORM_ABORTED',
     'CHECKOUT_FORM_TIMEOUT', 'CHECKOUT_FORM_DATA_MISSING', 'CHECKOUT_CONTENT_LOAD_FAILED',
     'CHECKOUT_RELOAD_TIMEOUT', 'CHECKOUT_RELOAD_PAYMENT_STARTED', 'CHECKOUT_RELOAD_ALREADY_ATTEMPTED',
@@ -578,7 +578,7 @@ function assertOriginalCheckoutPage(page, originalUrl, originalQuoteId, recovery
  * 通过 API 注入 billing_details 创建 Checkout，并打开 chatgpt.com/checkout。
  * 文档提交只表示开始加载；原单身份、登录与真实控件仍须在同一期限内核实。
  */
-async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true, onCheckoutCreated }) {
+async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true, onCheckoutCreated, checkoutPersistence }) {
     const { assertChatGptLoggedIn } = require('./session-auth');
     const token = String(accessToken || '').trim();
     if (!token) {
@@ -592,7 +592,9 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
     const gpt = new ChatGPTService(page.context().request, token);
     const recovery = require('../checkout-recovery.cjs');
     recovery.rememberOfficialCheckout(page, null);
-    const checkout = await gpt.createCheckoutSession(planType, region, billingCurrency, planNameOverride);
+    const create = () => gpt.createCheckoutSession(planType, region, billingCurrency, planNameOverride);
+    const checkout = checkoutPersistence
+        ? await require('../checkout-preparation.cjs').acquire(checkoutPersistence, create) : await create();
     if (!checkout.checkoutUrl) {
         throw Object.assign(new Error('API 创建 Checkout 失败，未取得可核实的原单来源'),
             { code: checkout.errorCode || 'CHECKOUT_CREATION_UNKNOWN', checkoutCreationState: checkout.creationState || 'unknown', checkoutCreationDiagnostics: checkout.checkoutCreationDiagnostics });
@@ -750,7 +752,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
             }
         }
         if (error.code === 'LEASE_LOST') throw Object.assign(error, { checkoutCreationState: 'accepted' });
-        const loadingFailure = /^CHECKOUT_(?:RELOAD_|CONTENT_LOAD_FAILED|FORM_|CONTROL_|CARD_|PAGE_CLOSED)/.test(error.code || '');
+        const loadingFailure = /^CHECKOUT_(?:RELOAD_|CONTENT_LOAD_FAILED|FORM_|CONTROL_|CARD_|PLAN_PREPARING|PAGE_CLOSED)/.test(error.code || '');
         const code = loadingFailure || ['CHECKOUT_RECOVERY_INVALID', 'CHECKOUT_RECOVERY_UNSUPPORTED'].includes(error.code)
             ? error.code : 'CHECKOUT_OPEN_FAILED';
         const reason = error.checkoutOpenReason

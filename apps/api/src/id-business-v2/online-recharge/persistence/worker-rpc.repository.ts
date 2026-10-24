@@ -107,6 +107,12 @@ export class OnlineRechargeWorkerRpcRepository {
           return row;
         });
         const config = await this.settings.runtime();
+        const checkoutPreparation =
+          task.operation === 'recharge' &&
+          task.provider === 'local' &&
+          object(task.payload ?? {}).checkoutPreparationEncrypted !== undefined
+            ? this.workers.readCheckoutPreparation(task)
+            : undefined;
         const route = runtimePlanRegion(
           task.payload ? object(task.payload) : {},
           task.plan,
@@ -116,6 +122,7 @@ export class OnlineRechargeWorkerRpcRepository {
         return route
           ? {
               ...config,
+              ...(checkoutPreparation ? { checkoutPreparation } : {}),
               region: route.paymentRegion,
               paymentRegion: route.paymentRegion,
               proxyCountryCode: route.proxyCountryCode,
@@ -126,7 +133,7 @@ export class OnlineRechargeWorkerRpcRepository {
                 currency: route.expectedCurrency
               }
             }
-          : config;
+          : { ...config, ...(checkoutPreparation ? { checkoutPreparation } : {}) };
       }
       case 'getCardPolicy':
         await this.assertLease(rpc);

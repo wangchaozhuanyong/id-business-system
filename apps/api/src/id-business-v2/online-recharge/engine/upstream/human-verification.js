@@ -875,7 +875,7 @@ async function clearHumanVerification(page, options = {}) {
     const attempted = new Set();
     const clicked = new WeakSet();
     let rounds = 0, lastCode = 'VERIFICATION_NOT_READY', platformUsed = false, solverDiagnostics = {}, completedKey = null;
-    let checkoutWaiting = false, readiness = null, challengeObserved = false;
+    let checkoutWaiting = false, readiness = null, challengeObserved = false, preparingCheckout = false;
     const unknown = (code, retryable = false) => ({ cleared: false, captchaRequired: true,
         code, retryable, rounds, challengeDetected: challengeObserved, diagnostics: { state: lastCode, revision: state.revision, ...solverDiagnostics } });
     const checkoutFailure = (code) => ({ cleared: false, captchaRequired: false,
@@ -885,7 +885,7 @@ async function clearHumanVerification(page, options = {}) {
         diagnostics: { state: code,
             ...(readiness?.inspection ? { inspection: readiness.inspection } : {}),
             ...(recovery ? recovery.originalCheckoutReloadDiagnostics(page) : {}) } });
-    const pendingCheckoutCode = () => !readiness || readiness.code === 'CHECKOUT_CARD_NOT_READY'
+    const pendingCheckoutCode = () => preparingCheckout ? 'CHECKOUT_PLAN_PREPARING' : !readiness || readiness.code === 'CHECKOUT_CARD_NOT_READY'
         ? 'CHECKOUT_FORM_NOT_READY' : readiness.code;
     try {
         state = await budget.run(prepareVerificationPage(page, { signal: options.signal || budget.signal }));
@@ -895,13 +895,15 @@ async function clearHumanVerification(page, options = {}) {
                 ? checkoutFailure('CHECKOUT_PAGE_CLOSED') : unknown('VERIFICATION_PAGE_CLOSED');
             if (await budget.run(isCheckoutLoginGate(page)) || await budget.run(hasVisibleLoginChrome(page)))
                 return { ...unknown('SESSION_INVALID'), sessionRequired: true, message: buildSessionNotLoggedInError('验证页面') };
-            if (checkCheckoutLoad && (!options.isSubmitted || !options.isSubmitted())
-                && (await budget.run(() => page.evaluate(require('../checkout-page-state.cjs').checkoutPageFlags))).processingError) {
+            const pageFlags = checkCheckoutLoad
+                ? await budget.run(() => page.evaluate(require('../checkout-page-state.cjs').checkoutPageFlags)) : {};
+            preparingCheckout = pageFlags.preparing === true;
+            if (checkCheckoutLoad && (!options.isSubmitted || !options.isSubmitted()) && pageFlags.processingError) {
                 // An official terminal page has no card form to wait for. Do not
                 // reload it or interpret it as an issuer decline/expired session.
                 return { ...checkoutFailure('CHECKOUT_CONTENT_LOAD_FAILED'), checkoutErrorPage: true, missing: [], controls: [] };
             }
-            if (checkCheckoutLoad && await budget.run(form.checkoutPageLoadFailed(page, { deadline: Date.now() + budget.remaining(), signal: budget.signal }))) {
+            if (checkCheckoutLoad && !pageFlags.preparing && await budget.run(form.checkoutPageLoadFailed(page, { deadline: Date.now() + budget.remaining(), signal: budget.signal }))) {
                 checkoutWaiting = true;
                 if (!recovery) return checkoutFailure('CHECKOUT_CONTENT_LOAD_FAILED');
                 await budget.run(recovery.reloadOriginalCheckout(page, reloadOptions));
@@ -914,6 +916,16 @@ async function clearHumanVerification(page, options = {}) {
                 && item.checkboxCount === 1 && !item.checked);
             if (images.length || boxes.length) { checkoutWaiting = false; challengeObserved = true; }
             if (images.length > 1 || boxes.length > 1) return unknown('VERIFICATION_FRAME_AMBIGUOUS');
+            if (requireCheckoutReady && pageFlags.preparing && !pageFlags.challenge
+                && !frames.some(item => item.raster || !item.checked)) {
+                checkoutWaiting = true;
+                // The official loading screen has no payment controls yet. Wait
+                // within the existing readiness deadline, without scanning its
+                // half-mounted frames or changing any frame/visibility budget.
+                if (Date.now() >= checkoutDeadline) return checkoutFailure('CHECKOUT_PLAN_PREPARING');
+                await budget.wait(Math.min(500, Math.max(1, checkoutDeadline - Date.now())));
+                continue;
+            }
             if (!frames.some((item) => item.raster || !item.checked)
                 && await budget.run(isVerificationCleared(page, { requireCheckoutReady: false }))) {
                 if (!requireCheckoutReady)
@@ -983,7 +995,12 @@ async function clearHumanVerification(page, options = {}) {
         return checkoutWaiting ? checkoutFailure(pendingCheckoutCode()) : unknown('VERIFICATION_TIMEOUT', true);
     } catch (error) {
         if (error?.code === 'LEASE_LOST') throw error;
-        if (/^CHECKOUT_[A-Z0-9_]+$/.test(error?.code || '')) return checkoutFailure(error.code);
+        if (/^CHECKOUT_[A-Z0-9_]+$/.test(error?.code || '')) {
+            // Preserve failed reads as failed reads; they are not an empty form.
+            readiness = { ...readiness, ...(error.inspection ? { inspection: error.inspection } : {}),
+                ...(error.missing ? { missing: error.missing } : {}), ...(error.controls ? { controls: error.controls } : {}) };
+            return checkoutFailure(error.code);
+        }
         if (checkoutWaiting && error?.code === 'VERIFICATION_TIMEOUT')
             return checkoutFailure(pendingCheckoutCode());
         if (checkCheckoutLoad && page.isClosed?.()) return checkoutFailure('CHECKOUT_PAGE_CLOSED');

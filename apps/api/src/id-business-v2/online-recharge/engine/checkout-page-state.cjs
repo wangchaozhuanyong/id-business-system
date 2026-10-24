@@ -9,7 +9,8 @@ function checkoutPageFlags() {
     expired: /checkout session.*expired|session has expired|this checkout.*expired/i.test(text),
     configurePlan: /configure your plan|配置你的套餐/i.test(text),
     challenge: /just a moment|verify you are human|验证您是人类/i.test(text),
-    processingError: false
+    processingError: false,
+    preparing: false
   };
   let url;
   try {
@@ -44,7 +45,14 @@ function checkoutPageFlags() {
     const box = node.getBoundingClientRect();
     return box.width > 0 && box.height > 0;
   };
-  const message = [...document.querySelectorAll('p,div,span,h1,h2,[role="alert"]')].some(
+  const nodes = [...document.querySelectorAll('p,div,span,h1,h2,[role="alert"]')];
+  flags.preparing = nodes.some(
+    (node) =>
+      /^(?:Getting your plan ready|正在准备你的套餐|正在准备您的套餐)[.!。…]*$/i.test(
+        node.textContent.trim()
+      ) && visible(node)
+  );
+  const message = nodes.some(
     (node) =>
       /^There was an error processing your payment\.?$/.test(node.textContent.trim()) &&
       visible(node)

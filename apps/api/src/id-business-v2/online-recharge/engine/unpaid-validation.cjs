@@ -49,6 +49,8 @@ const CODES = [
   'CHECKOUT_CREATION_REJECTED',
   'CHECKOUT_OPEN_FAILED',
   'CHECKOUT_CARD_NOT_READY',
+  'CHECKOUT_PLAN_PREPARING',
+  'CHECKOUT_FORM_NOT_READY',
   'CHECKOUT_CONTROL_READ_FAILED',
   'CHECKOUT_CONTROL_BLOCKED',
   'CHECKOUT_CONTENT_LOAD_FAILED',
@@ -120,6 +122,8 @@ function classify(result = {}, lastStage) {
   )
     return 'READ_INCOMPLETE';
   if (code === 'CHECKOUT_CARD_NOT_READY') return 'CARD_NOT_READY';
+  if (['CHECKOUT_PLAN_PREPARING', 'CHECKOUT_FORM_NOT_READY'].includes(code))
+    return 'PAYMENT_COMPONENT_NOT_LOADED';
   if (lastStage === 'billing_fill') return 'BILLING_FILL_FAILED';
   if (lastStage === 'card_fill' || lastStage === 'card_readiness') return 'CARD_NOT_READY';
   if (lastStage === 'button_ready') return 'BUTTON_NOT_READY';
@@ -204,6 +208,13 @@ function finish(result = {}, snapshot = current) {
           )
           .slice(0, 9)
       : [],
+    ...(result.checkoutOpenDiagnostics
+      ? {
+          checkoutOpenDiagnostics: require('./upstream/chatgpt').safeCheckoutOpenDiagnostics(
+            result.checkoutOpenDiagnostics
+          )
+        }
+      : {}),
     ...(Number.isInteger(result.checkoutCreationDiagnostics?.httpStatus)
       ? { httpStatus: result.checkoutCreationDiagnostics.httpStatus }
       : {})
