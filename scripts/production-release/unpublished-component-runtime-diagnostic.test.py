@@ -483,7 +483,8 @@ const yaml = require('js-yaml');
 const current = yaml.load(fs.readFileSync('.github/workflows/production-release.yml', 'utf8'));
 // The reviewed diagnostic entry is immutable. HEAD may already contain it,
 // and unrelated successor entries must not change this read-only path.
-const original = yaml.load(cp.execFileSync('git', ['show', '302b65945d39ef8b1e08c2e35a64c5a89a41e455:.github/workflows/production-release.yml'], {encoding: 'utf8'}));
+const originalText = __EXACT_ORIGINAL_WORKFLOW__;
+const original = yaml.load(originalText);
 if (original.jobs.release.env.RELEASE_ROLE_ARN !== 'arn:aws:iam::079740175286:role/id-business-v2-github-release' ||
     original.jobs.release.env.PRODUCTION_INSTANCE_ID !== 'i-05836da38606e633c') throw Error('Migration source identity changed');
 const old = JSON.parse(JSON.stringify(original).replaceAll('079740175286', '098208446664').replaceAll('i-05836da38606e633c', 'i-0838cebf64f0e2a89'));
@@ -637,6 +638,10 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
  confirmStepsValidated: validatesConfirmSteps(confirmSteps), confirmInactiveForOld, confirmActiveOnlyForFiniteInputs,
  added: steps.filter(s => !old.jobs.release.steps.some(o => o.name === s.name) && !confirmNames.includes(s.name)), enabled, oldEnabled}));
 """
+        fixture_spec = importlib.util.spec_from_file_location('original_diagnostic_workflow', PATH.with_name('original-diagnostic-workflow-302b6594.py'))
+        fixture = importlib.util.module_from_spec(fixture_spec); fixture_spec.loader.exec_module(fixture)
+        self.assertEqual(fixture.SOURCE_COMMIT, '302b65945d39ef8b1e08c2e35a64c5a89a41e455')
+        script = script.replace('__EXACT_ORIGINAL_WORKFLOW__', json.dumps(fixture.RAW.decode()))
         result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         value = json.loads(result.stdout)
