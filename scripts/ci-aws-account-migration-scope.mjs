@@ -15,7 +15,7 @@ export function isAwsAccountMigrationControlsOnly(paths, context) {
     const entries = Object.entries(record.files);
     if (!entries.length || entries.length > 128 || paths.length !== entries.length + 1
         || new Set(paths).size !== paths.length) return false;
-    const allowed = /^(?:\.github\/workflows\/[\w.-]+\.yml|scripts\/production-release\/[\w.-]+\.(?:py|mjs|sh)|scripts\/ci-(?:recharge-scope|aws-account-migration-scope)(?:\.test)?\.mjs|deploy\/aws\/(?:disk-retention-policy-20261014|release-artifact-storage-proof-20261024)\.json)$/;
+    const allowed = /^(?:\.github\/workflows\/[\w.-]+\.yml|scripts\/production-release\/[\w.-]+\.(?:py|mjs|sh)|scripts\/ci-(?:recharge-scope|recharge-check|aws-account-migration-scope)(?:\.test)?\.mjs|deploy\/aws\/(?:disk-retention-policy-20261014|release-artifact-storage-proof-20261024)\.json)$/;
     return entries.every(([path, expected]) => {
       if (!allowed.test(path) || !paths.includes(path) || !/^[a-f0-9]{64}$/.test(expected))
         return false;
@@ -25,3 +25,19 @@ export function isAwsAccountMigrationControlsOnly(paths, context) {
     });
   } catch { return false; }
 }
+
+// These suites exercise changed routing/storage behavior. Historical one-off
+// business contracts are still sealed and retain their normal checks elsewhere.
+export const awsAccountMigrationGuardCommands = Object.freeze([
+  ['node', ['--test', 'scripts/ci-recharge-scope.test.mjs']],
+  ['node', ['--test', 'scripts/ci-recharge-release.test.mjs']],
+  ...[
+    'maintain-image-cache', 'release-storage',
+    'online-recharge-component-readonly', 'online-recharge-component-runtime',
+    'online-recharge-component-lifecycle',
+    'unpublished-component-runtime-diagnostic', 'unpublished-component-successor-readonly',
+    'financial-closure-readonly', 'release-artifact-retention',
+    'release-artifact-retention-transport',
+    'online-checkout-error-page-release', 'online-country-interaction-release'
+  ].map(name => ['python3', ['-B', 'scripts/production-release/' + name + '.test.py']])
+]);

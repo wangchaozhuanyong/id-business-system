@@ -1,3 +1,4 @@
+import { isAwsAccountMigrationControlsOnly, awsAccountMigrationGuardCommands } from './ci-aws-account-migration-scope.mjs';
 import { isSettledCheckoutControlsOnly } from './ci-settled-checkout-scope.mjs';
 import {
   isManualSettlementCandidate,
@@ -204,6 +205,12 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (isAwsAccountMigrationControlsOnly(changed, { base })) {
+  if (part !== 'guards' || mode !== 'ci-only')
+    throw new Error('Migration control checks require the exact finite guard selection');
+  for (const [file, args] of awsAccountMigrationGuardCommands) run(file, args);
+  process.exit(0);
+}
 if (['guards', 'release-controls'].includes(part) && isFinancialClosureCandidate(changed)) {
   // Full Quality retains its application, MySQL, UI, type, test and build jobs.
   // These new controls belong to the finite billing publisher; unchanged
