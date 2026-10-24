@@ -101,7 +101,7 @@
     "scripts/production-release/settled-checkout-publication.py": "68d2e49d7883d7188dab12db2528942af5ff018fc9f819d3198d53eeb8ca1200",
     "scripts/production-release/shared-bank-card-dispatch.py": "30518b505f87f7411b76a1626cab207a1a7cb8ab48aa636891a6501cd603403a",
     "scripts/production-release/unpublished-component-runtime-diagnostic.py": "62c721bd3d9fca1a84051c2ecc13eb866856412e95df0ba1febe884256996f4e",
-    "scripts/production-release/unpublished-component-runtime-diagnostic.test.py": "7f67fcae3bce4157edd14bcb54e85a8fb2d9d9c411249f960df1948952bf565b",
+    "scripts/production-release/unpublished-component-runtime-diagnostic.test.py": "951cf3207c5f708a760b4c4c19a97d432d824fa84f97000a2c152818e3063a4a",
     "scripts/production-release/unpublished-component-successor-readonly.py": "b6f215283303cf8d0a3e749341e5209327ba5f8ba68e10620d1768268af009d7",
     "scripts/production-release/unpublished-component-successor-readonly.test.py": "48da6925fd1436b05d683fb2d69e9a9f7c45d2cd4da78c8a4d75088aa675ce74",
     "scripts/production-release/workspace-drag-dispatch.py": "12f144b9d1d630d1c6a112ca16e9b0c54c8f3b6f88ca8e37c7b091a264090522"

@@ -642,7 +642,7 @@ console.log(JSON.stringify({concurrency: current.concurrency, oldConcurrency: ol
         fixture = importlib.util.module_from_spec(fixture_spec); fixture_spec.loader.exec_module(fixture)
         self.assertEqual(fixture.SOURCE_COMMIT, '302b65945d39ef8b1e08c2e35a64c5a89a41e455')
         script = script.replace('__EXACT_ORIGINAL_WORKFLOW__', json.dumps(fixture.RAW.decode()))
-        result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(['node', '-'], input=script, cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         value = json.loads(result.stdout)
         self.assertEqual(value['concurrency'], value['oldConcurrency'])
