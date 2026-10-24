@@ -120,7 +120,10 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
-import { awsAccountMigrationControlManifest, isAwsAccountMigrationControlsOnly } from './ci-aws-account-migration-scope.mjs';
+import {
+  awsAccountMigrationControlManifest,
+  isAwsAccountMigrationControlsOnly
+} from './ci-aws-account-migration-scope.mjs';
 export { awsAccountMigrationControlManifest, isAwsAccountMigrationControlsOnly };
 
 export const registrationTerminalStopBase = '6da10d2e4bd9de6df145899648e234000f84b72b';
