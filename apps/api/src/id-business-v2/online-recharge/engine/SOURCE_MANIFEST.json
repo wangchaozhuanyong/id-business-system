@@ -474,7 +474,7 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "666b0d02e6da9d6ac3388b95dc7b734247c39d82b0d440544ab841ef10fd5605",
+      "adaptedSha256": "a06121e9ca9c68d4f3a4dbc3ba5d7e07712ec67e099d5a7b1b51d99e5ea54b15",
       "changed": true,
       "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. Native Session baseline comparison confirms two real installation/bootstrap reads; update only stale fixture counts, preserve exact request/payment assertions.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
     },

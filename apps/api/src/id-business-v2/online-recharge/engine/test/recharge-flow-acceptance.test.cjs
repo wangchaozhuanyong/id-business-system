@@ -64,7 +64,9 @@ function strictRpcFixture(task) {
   let admitted = false,
     renewalAdmitted = false,
     usage = 0,
-    bills = 0;
+    bills = 0,
+    preparationState = null,
+    credentialsChecked = false;
   return async (method, args) => {
     assert.equal(args.taskId, task.id);
     assert.equal(args.leaseId, task.leaseId);
@@ -75,6 +77,29 @@ function strictRpcFixture(task) {
       case 'humanVerificationClose':
         return { stopped: true };
       case 'progress':
+        if (args.checkoutPreparation) {
+          assert.equal(admitted, false);
+          assert.equal(credentialsChecked, true);
+          const next = args.checkoutPreparation;
+          if (next.state === 'creating') {
+            assert.equal(preparationState, null);
+            assert.deepEqual(next, { state: 'creating' });
+          } else {
+            assert.equal(next.state, 'created');
+            assert.equal(preparationState, 'creating');
+            assert.ok(next.checkoutUrl.startsWith(origin + '/checkout/'));
+            assert.equal(next.checkoutSource.kind, 'official_checkout_response');
+            assert.equal(
+              new URL(next.checkoutUrl).pathname,
+              '/checkout/' +
+                next.checkoutSource.processorEntity +
+                '/' +
+                next.checkoutSource.checkoutId
+            );
+          }
+          preparationState = next.state;
+          return { ok: true, checkoutPreparationState: preparationState };
+        }
         assert.equal(args.stage, 'human_verification');
         return { ok: true };
       case 'getRuntimeConfig':
@@ -96,6 +121,14 @@ function strictRpcFixture(task) {
       case 'listAddresses':
         return [{ ...fixtureAddress }];
       case 'reserveCard':
+        if (args.preflightOnly) {
+          assert.equal(preparationState, null);
+          assert.equal(credentialsChecked, false);
+          credentialsChecked = true;
+          return { preflightReady: true, cardId: fixtureCard, cardLast4: '4242' };
+        }
+        assert.equal(credentialsChecked, true);
+        assert.equal(preparationState, 'created');
         return {
           id: fixtureCard,
           card_number: '4242424242424242',
@@ -264,6 +297,10 @@ async function runSyntheticRecharge(scene, options = {}) {
       actions.push({
         method: message.method,
         taskScoped: args.taskId === task.id,
+        ...(args.preflightOnly === true ? { preflightOnly: true } : {}),
+        ...(args.checkoutPreparation
+          ? { checkoutPreparationState: args.checkoutPreparation.state }
+          : {}),
         ...(args.stage ? { stage: args.stage } : {}),
         ...(args.paymentEvidence
           ? { paymentEvidenceVerified: args.paymentEvidence.verified === true }
@@ -1596,7 +1633,22 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
           ).length,
           scene === 'unknown' ? 0 : 1
         );
-        assert.equal(actual.actions.filter((item) => item.method === 'reserveCard').length, 1);
+        assert.equal(
+          actual.actions.filter((item) => item.method === 'reserveCard' && item.preflightOnly)
+            .length,
+          1
+        );
+        assert.equal(
+          actual.actions.filter((item) => item.method === 'reserveCard' && !item.preflightOnly)
+            .length,
+          1
+        );
+        assert.deepEqual(
+          actual.actions
+            .filter((item) => item.checkoutPreparationState)
+            .map((item) => item.checkoutPreparationState),
+          ['creating', 'created']
+        );
         if (scene === 'unknown') {
           assert.equal(actual.result.status, 'awaiting_review');
           assert.equal(actual.result.result.resultUnknown, true);

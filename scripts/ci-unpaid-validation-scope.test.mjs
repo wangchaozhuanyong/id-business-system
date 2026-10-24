@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isUnpaidValidationControlsOnly,
   unpaidValidationPaths,
+  checkoutResumePaths,
   unpaidValidationControls,
   isUnpaidValidationOnly,
   unpaidValidationCommands
@@ -45,4 +46,25 @@ test('baseline-only follow-up requires controls and cannot admit business change
     JSON.stringify(unpaidValidationCommands('guards', paths)),
     /prisma|migrate|workspace|test:online-recharge:engine/
   );
+});
+
+test('exact checkout resume repair retains API and complete engine checks without an Admin change', () => {
+  const paths = [
+    ...checkoutResumePaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  for (const path of checkoutResumePaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== path)), false);
+  assert.equal(isUnpaidValidationOnly([...paths, 'apps/admin/src/auth/session.ts']), false);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
+  assert.match(JSON.stringify(unpaidValidationCommands('api', paths)), /typecheck/);
 });
