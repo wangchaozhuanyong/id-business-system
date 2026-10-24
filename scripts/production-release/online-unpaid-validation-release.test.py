@@ -46,6 +46,16 @@ class FinitePublication(unittest.TestCase):
   self.assertFalse(p.configuration_equivalence(h,None,{},p.sha(p.canonical(old)))['matched'])
   old=copy.deepcopy(body);old['HostConfig']['Dns']=['192.0.2.1']
   self.assertFalse(p.configuration_equivalence(h,None,{},p.sha(p.canonical(old)))['matched'])
+ def test_unconfirmed_observation_cannot_enter_finalization(self):
+  for observation in ({'allConfigurationMatched':False,'status':'ONLINE_UNPAID_ACCEPTED_SWITCH_OBSERVED'},{'allConfigurationMatched':True,'status':'UNKNOWN'}):
+   with self.assertRaises(RuntimeError):p.finalize_accepted_switch({'acceptedObservation':observation},self.c)
+ def test_finalization_contains_no_container_or_schema_mutation(self):
+  import ast,inspect,textwrap
+  tree=ast.parse(textwrap.dedent(inspect.getsource(p.finalize_accepted_switch)))
+  calls={node.func.attr for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)}
+  self.assertTrue({'compose','build_image','fresh_scoped_backup','sql_fence_class'}.isdisjoint(calls))
+  workflow=(HERE.parents[1]/'.github/workflows/online-unpaid-validation-publication.yml').read_text()
+  self.assertIn('!inputs.inspect_only && !inputs.finalize_accepted',workflow)
  def test_observation_does_not_enter_a_build_or_publish_job(self):
   workflow=(HERE.parents[1]/'.github/workflows/online-unpaid-validation-publication.yml').read_text()
   self.assertIn('if: inputs.inspect_only',workflow)
