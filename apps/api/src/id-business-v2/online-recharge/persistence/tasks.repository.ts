@@ -198,19 +198,20 @@ export class OnlineRechargeTasksRepository {
   }
   async publicConfig() {
     const { settings } = await this.settings.internal();
-    const active = await this.repository.read((db) =>
-      db.onlineRechargeTask.count({
-        where: {
-          operation: 'recharge',
-          status: { in: ['queued', 'running', 'awaiting_credentials'] }
-        }
-      })
+    const [active, queued, awaitingCredentials] = await this.repository.read((db) =>
+      Promise.all(
+        (['running', 'queued', 'awaiting_credentials'] as const).map((status) =>
+          db.onlineRechargeTask.count({ where: { operation: 'recharge', status } })
+        )
+      )
     );
     return {
       maintenance: settings.maintenance,
-      maintenanceDrain: settings.maintenance === true && active > 0,
+      maintenanceDrain: settings.maintenance === true && active + queued + awaitingCredentials > 0,
       maxConcurrent: settings.maxConcurrent,
       active,
+      queued,
+      awaitingCredentials,
       paymentRegion: settings.paymentRegion,
       plans: ONLINE_RECHARGE_PLANS.map((key) => ({ key, label: ONLINE_RECHARGE_PLAN_LABELS[key] }))
     };
@@ -364,7 +365,7 @@ export class OnlineRechargeTasksRepository {
         const active = await tx.onlineRechargeTask.count({
           where: {
             operation: 'recharge',
-            status: { in: ['queued', 'running', 'awaiting_credentials'] }
+            status: 'running'
           }
         });
         if (active >= Number(settings.maxConcurrent))
@@ -386,6 +387,12 @@ export class OnlineRechargeTasksRepository {
       if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
         throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
+      if (input.validationMode !== undefined && input.validationMode !== 'link_only') {
+        if (!operator || operation !== 'debug' || input.validationMode !== 'ready_before_payment')
+          throw new BadRequestException('不付款验收仅支持管理端调试任务');
+        if (code) throw new BadRequestException('不付款验收不使用兑换码');
+        payload.validationMode = 'ready_before_payment';
+      }
       if (queryTransportMode) payload.queryTransportMode = queryTransportMode;
       if (operation === 'recharge' && !settings.gptApiEnabled) payload.checkoutRecoveryVersion = 1;
       if (integrationSource) payload.integrationSource = integrationSource;

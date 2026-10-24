@@ -126,12 +126,15 @@ test('accepted failed debug retains only its original link through the existing 
       {
         e: error,
         debugOnly: scenario.debugOnly,
+        validation: null,
         lastPaymentResult: null,
         checkoutEvidence: {},
         paymentSucceeded: false,
         wasSubmitted: () => scenario.submitted,
         require: (name) => {
           if (name === '../rpc.cjs') return { wasPaymentConfirmed: () => false };
+          if (name === '../checkout-creation-diagnostics.cjs')
+            return require('../checkout-creation-diagnostics.cjs');
           if (name === './chatgpt') return require('../upstream/chatgpt');
           if (name === '../checkout-await-diagnostics.cjs')
             return require('../checkout-await-diagnostics.cjs');
@@ -173,6 +176,8 @@ test('only checkout debug permits an unverified target through the actual index 
         accessToken: 'synthetic-token',
         billingCurrency: 'PHP',
         debugOnly,
+        validation: null,
+        verificationHandler: async () => ({ completed: true }),
         checkoutEvidence: {},
         context: {},
         page: {},

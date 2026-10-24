@@ -123,6 +123,24 @@ const action = computed<OnlineAction>(() => ({
   key: 'start',
   label: '生成支付链接',
   fields: [
+    {
+      key: 'validationMode',
+      label: '验证范围',
+      type: 'select',
+      initial: 'ready_before_payment',
+      required: true,
+      options: [
+        { value: 'ready_before_payment', label: '自动填卡及账单，付款前停止' },
+        { value: 'link_only', label: '仅生成支付链接' }
+      ],
+      help: '自动验证缺资料或遇到未完成的官网验证会直接结束，不进入人工等待，不点击付款。'
+    },
+    {
+      key: 'cardId',
+      label: '验证银行卡',
+      type: 'card-select',
+      help: '留空按套餐自动选卡；使用已有账单资料和仍有效的临时安全码。'
+    },
     { key: 'session', label: '完整会话资料', type: 'textarea', required: true, transient: true },
     {
       key: 'plan',

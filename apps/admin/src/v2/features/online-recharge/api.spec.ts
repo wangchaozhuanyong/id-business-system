@@ -121,12 +121,16 @@ describe('配置检测与执行器请求合同', () => {
       maintenance: false,
       maxConcurrent: 2,
       active: 1,
+      queued: 2,
+      awaitingCredentials: 3,
       paymentRegion: 'PH'
     });
     expect(await onlineApi.publicConfig(signal)).toMatchObject({
       maintenanceMode: false,
       capacity: 2,
       activeJobs: 1,
+      queued: 2,
+      awaitingCredentials: 3,
       region: 'PH'
     });
     expect(client.get).toHaveBeenCalledWith('/id-business-v2/online-recharge/public/config', {

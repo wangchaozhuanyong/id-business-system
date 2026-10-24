@@ -14,6 +14,7 @@ const {
   rememberSecrets,
   redactText
 } = require('./security.cjs');
+const unpaid = require('./unpaid-validation.cjs');
 const active = new Map();
 let stopping = false;
 let pool = null;
@@ -112,11 +113,14 @@ async function uploadEvidence(task, files, artifacts, options = {}) {
       const resolved = await fs.realpath(file);
       if (!resolved.startsWith(`${mediaRoot}${path.sep}`) || options.seen?.has(resolved)) continue;
       const stat = await fs.stat(resolved);
-      const kind = resolved.endsWith('.webm')
-        ? 'video'
-        : resolved.endsWith('.png')
-          ? 'screenshot'
-          : null;
+      const kind =
+        unpaid.enabled(task) && resolved.endsWith('.json')
+          ? 'diagnostic'
+          : resolved.endsWith('.webm')
+            ? 'video'
+            : resolved.endsWith('.png')
+              ? 'screenshot'
+              : null;
       if (!stat.isFile() || !kind || stat.size > (kind === 'video' ? 100 : 10) * 1024 * 1024)
         continue;
       const buffer = await fs.readFile(resolved);
@@ -126,7 +130,12 @@ async function uploadEvidence(task, files, artifacts, options = {}) {
           ...scope(task),
           kind,
           name: path.basename(resolved),
-          mimeType: kind === 'video' ? 'video/webm' : 'image/png',
+          mimeType:
+            kind === 'diagnostic'
+              ? 'application/json'
+              : kind === 'video'
+                ? 'video/webm'
+                : 'image/png',
           redacted: true,
           dataBase64: buffer.toString('base64')
         },
@@ -202,7 +211,10 @@ async function runJob(task, config) {
     result: null,
     lost: false,
     closed: false,
-    slot: null
+    slot: null,
+    validation: unpaid.enabled(task)
+      ? { format: 'unpaid-validation-v1', startedAt: new Date().toISOString(), timeline: [] }
+      : null
   };
   active.set(task.id, entry);
   let leaseUntil = 0;
@@ -235,6 +247,45 @@ async function runJob(task, config) {
       return contextsCleared;
     })();
     return contextCleanup;
+  }
+  async function validationEvidence(executorTerminated) {
+    if (entry.validation && !entry.lost && !entry.validationRecorded) {
+      entry.validationRecorded = true;
+      const report =
+        entry.result?.result?.validationReport ||
+        unpaid.finish({ code: 'EXECUTOR_INTERRUPTED' }, entry.validation);
+      report.executorTerminated = executorTerminated;
+      try {
+        report.sourceManifestSha256 = require('node:crypto')
+          .createHash('sha256')
+          .update(await fs.readFile(path.join(__dirname, 'SOURCE_MANIFEST.json')))
+          .digest('hex');
+      } catch {
+        /* Missing source evidence is not a different business result. */
+      }
+      if (!entry.result)
+        entry.result = {
+          status: 'failed',
+          result: { code: 'EXECUTOR_INTERRUPTED', validationReport: report }
+        };
+      else entry.result.result.validationReport = report;
+      try {
+        const file = path.join(
+          childEnvironment(task).ONLINE_RECHARGE_MEDIA_DIR,
+          'unpaid-validation.json'
+        );
+        await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+        await fs.writeFile(file, JSON.stringify(report), { mode: 0o600 });
+        requireLease();
+        await uploadEvidence(task, [file], entry.artifacts, {
+          deadline: Date.now() + 5000,
+          active: () => !entry.lost
+        });
+        report.diagnosticUploaded = entry.artifacts.some((item) => item.kind === 'diagnostic');
+      } catch {
+        report.diagnosticUploaded = false;
+      }
+    }
   }
   function leaseDiagnostic(phase, error) {
     const code =
@@ -335,7 +386,14 @@ async function runJob(task, config) {
     flushBusy = true;
     const logs = entry.logs.splice(0, 40);
     try {
-      await rpc('progress', { ...scope(task), logs, message: logs.at(-1).text });
+      await rpc('progress', {
+        ...scope(task),
+        logs,
+        message: logs.at(-1).text,
+        ...(entry.validation?.timeline.at(-1)
+          ? { stage: entry.validation.timeline.at(-1).stage }
+          : {})
+      });
     } catch {
       /* Heartbeat owns lease failure handling. */
     } finally {
@@ -388,7 +446,24 @@ async function runJob(task, config) {
       });
       entry.child = child;
       child.on('message', (message) => {
-        if (message?.type === 'credential') {
+        if (message?.type === 'validation_stage' && entry.validation) {
+          if (
+            unpaid.STAGES.includes(message.stage) &&
+            typeof message.at === 'string' &&
+            Number.isFinite(Date.parse(message.at)) &&
+            entry.validation.timeline.length < 32
+          ) {
+            const previous = entry.validation.timeline.at(-1);
+            if (previous) previous.endedAt = message.at;
+            entry.validation.timeline.push({ stage: message.stage, startedAt: message.at });
+            if (entry.logs.length < 200)
+              entry.logs.push({
+                level: 'info',
+                timestamp: message.at,
+                text: `不付款验证执行到第 ${unpaid.STAGES.indexOf(message.stage) + 1} 个阶段，尚未提交付款`
+              });
+          }
+        } else if (message?.type === 'credential') {
           const cvc = !entry.lost ? credentials.take(String(message.cardId), task.id) : '';
           if (child.connected)
             child.send({ type: 'credential', requestId: message.requestId, cvc });
@@ -431,7 +506,8 @@ async function runJob(task, config) {
         } else if (message?.type === 'result')
           entry.result = { ...sanitize(message), result: sanitizeResult(message.result) };
       });
-      childDeadline = setTimeout(stopChild, 30 * 60 * 1000);
+      // Only the new non-payment mode has this bounded supervisor; existing payment deadlines are unchanged.
+      childDeadline = setTimeout(stopChild, entry.validation ? 10 * 60 * 1000 : 30 * 60 * 1000);
       await new Promise((resolve, reject) => {
         child.once('error', reject);
         child.once('exit', resolve);
@@ -441,6 +517,8 @@ async function runJob(task, config) {
       clearTimeout(childDeadline);
     }
     const executorTerminated = await clearOwnedContexts();
+    const missingResult = !entry.result;
+    await validationEvidence(executorTerminated);
     await flush();
     if (!entry.lost) {
       const deadline = entry.evidenceDeadline || Date.now() + 5000;
@@ -480,7 +558,7 @@ async function runJob(task, config) {
     requireLease();
     await rpc('completeJob', {
       ...scope(task),
-      ...(!entry.result || !executorTerminated
+      ...(missingResult || !executorTerminated
         ? { executorInterrupted: true, executorTerminated }
         : {}),
       status: result.status,
@@ -517,6 +595,7 @@ async function runJob(task, config) {
     if (proxyFailure && error?.code === 'LEASE_LOST') loseLease('lease_lost', error);
     if (!entry.lost && (!leaseUntil || Date.now() >= leaseUntil - LEASE_SAFETY_MS))
       loseLease('lease_expired');
+    if (!entry.lost) await validationEvidence(terminated);
     if (!entry.lost)
       await rpc('failJob', {
         ...scope(task),

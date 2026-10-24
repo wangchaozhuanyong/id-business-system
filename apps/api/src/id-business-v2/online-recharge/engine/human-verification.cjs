@@ -136,6 +136,8 @@ async function assertOriginalIdentity(page, sessionRaw, options = {}) {
   }
 }
 async function waitForHumanVerification(page, options = {}, injected = {}) {
+  if (require('./rpc.cjs').isUnpaidValidation?.())
+    return require('./unpaid-validation.cjs').automaticVerification(page, options);
   const call = injected.rpc || rpc;
   const blocked =
     injected.blocked || require('./upstream/human-verification').isBlockingHumanVerificationVisible;

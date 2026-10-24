@@ -202,6 +202,9 @@ export class OnlineRechargeWorkerRepository {
       });
       for (const task of expired) {
         const manualInterrupted = task.stage === 'human_verification';
+        const unpaidInterrupted =
+          task.operation === 'debug' &&
+          object(task.payload ?? {}).validationMode === 'ready_before_payment';
         const uncertain =
           task.paymentStarted ||
           task.confirmedPaid ||
@@ -212,7 +215,50 @@ export class OnlineRechargeWorkerRepository {
         await tx.onlineRechargeTask.update({
           where: { id: task.id },
           data: {
-            status: uncertain ? 'awaiting_review' : manualInterrupted ? 'failed' : 'queued',
+            status: uncertain
+              ? 'awaiting_review'
+              : manualInterrupted || unpaidInterrupted
+                ? 'failed'
+                : 'queued',
+            ...(unpaidInterrupted && !uncertain
+              ? {
+                  progress: 100,
+                  stage: 'finished',
+                  result: {
+                    success: false,
+                    code: 'EXECUTOR_INTERRUPTED',
+                    validationReport: {
+                      format: 'unpaid-validation-v1',
+                      outcome: 'failed_with_class',
+                      failureClass: 'EXECUTOR_INTERRUPTED',
+                      failureCode: 'EXECUTOR_INTERRUPTED',
+                      startedAt: (task.createdAt ?? new Date()).toISOString(),
+                      endedAt: new Date().toISOString(),
+                      lastStage: [
+                        'input',
+                        'proxy',
+                        'login',
+                        'preflight',
+                        'checkout_create',
+                        'checkout_open',
+                        'card_readiness',
+                        'card_fill',
+                        'billing_fill',
+                        'button_ready',
+                        'cleanup'
+                      ].includes(task.stage ?? '')
+                        ? task.stage
+                        : 'input',
+                      timeline: [],
+                      cardVerified: false,
+                      billingVerified: false,
+                      buttonReady: false,
+                      submitted: false,
+                      diagnosticUploaded: false
+                    }
+                  }
+                }
+              : {}),
             leaseOwner: null,
             leaseId: null,
             leaseExpiresAt: null,
@@ -229,9 +275,11 @@ export class OnlineRechargeWorkerRepository {
               : {}),
             message: uncertain
               ? '执行器离线且存在外部提交，等待核对，禁止自动重放'
-              : manualInterrupted
-                ? '人工验证执行器离线，本次已停止，请勿重新付款'
-                : '执行器离线，尚未提交付款，等待重新领取'
+              : unpaidInterrupted
+                ? '不付款验证执行器离线，任务已结束；诊断文件未完整回收，不自动重跑'
+                : manualInterrupted
+                  ? '人工验证执行器离线，本次已停止，请勿重新付款'
+                  : '执行器离线，尚未提交付款，等待重新领取'
           }
         });
         if (!uncertain)
@@ -1011,6 +1059,11 @@ export class OnlineRechargeWorkerRepository {
       if (!card) return null;
       const hasCvc = (await this.memory.available([card.id])).includes(card.id);
       if (!hasCvc && args.requireCvc !== false) {
+        if (
+          row.operation === 'debug' &&
+          object(row.payload ?? {}).validationMode === 'ready_before_payment'
+        )
+          return { pendingCredentials: true };
         await tx.onlineRechargeTask.update({
           where: { id: row.id },
           data: {

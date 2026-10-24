@@ -875,9 +875,9 @@ async function clearHumanVerification(page, options = {}) {
     const attempted = new Set();
     const clicked = new WeakSet();
     let rounds = 0, lastCode = 'VERIFICATION_NOT_READY', platformUsed = false, solverDiagnostics = {}, completedKey = null;
-    let checkoutWaiting = false, readiness = null;
+    let checkoutWaiting = false, readiness = null, challengeObserved = false;
     const unknown = (code, retryable = false) => ({ cleared: false, captchaRequired: true,
-        code, retryable, rounds, diagnostics: { state: lastCode, revision: state.revision, ...solverDiagnostics } });
+        code, retryable, rounds, challengeDetected: challengeObserved, diagnostics: { state: lastCode, revision: state.revision, ...solverDiagnostics } });
     const checkoutFailure = (code) => ({ cleared: false, captchaRequired: false,
         checkoutNotReady: true, code, rounds,
         missing: readiness?.missing || ['number'], controls: readiness?.controls || [],
@@ -912,7 +912,7 @@ async function clearHumanVerification(page, options = {}) {
                 && item.prompts.some((prompt) => !isCheckboxInstruction(prompt)));
             const boxes = frames.filter((item) => ['checkbox', 'turnstile'].includes(item.kind)
                 && item.checkboxCount === 1 && !item.checked);
-            if (images.length || boxes.length) checkoutWaiting = false;
+            if (images.length || boxes.length) { checkoutWaiting = false; challengeObserved = true; }
             if (images.length > 1 || boxes.length > 1) return unknown('VERIFICATION_FRAME_AMBIGUOUS');
             if (!frames.some((item) => item.raster || !item.checked)
                 && await budget.run(isVerificationCleared(page, { requireCheckoutReady: false }))) {
