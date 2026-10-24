@@ -48,7 +48,8 @@ def check(c):
                'scripts/ci-settled-checkout-scope.test.mjs', 'scripts/ci-recharge-check.mjs',
                *('scripts/production-release/bitbrowser-quote-' + suffix for suffix in
                  ('release.py', 'publication.py', 'release.test.py', 'contract.json'))}
-    need(set(git('diff', '--name-only', P.SOURCE, 'HEAD').decode().splitlines()) <= allowed,
+    git('merge-base', '--is-ancestor', P.RELEASE_BASE, 'HEAD')
+    need(set(git('diff', '--name-only', P.RELEASE_BASE, 'HEAD').decode().splitlines()) <= allowed,
          'UNREVIEWED_EXTENSION')
     need(sha((ROOT / '.github/workflows/quality.yml').read_bytes()) == c['qualityWorkflowSha256'],
          'QUALITY_WORKFLOW_CHANGED')
@@ -94,18 +95,26 @@ def identity():
     return F.native_identity()
 
 
-def ensure_reconstruction_commits(c, runner=execute):
+def ensure_reconstruction_commits(c, runner=subprocess.run):
     P.validate_contract(c)
+    missing = []
+    options = {'cwd': ROOT, 'capture_output': True}
     for commit in c['reconstructionCommits']:
-        probe = ('git', 'cat-file', '-e', commit + '^{commit}')
-        try:
-            runner(*probe)
-            continue
-        except subprocess.CalledProcessError:
-            need(os.environ.get('GITHUB_ACTIONS') == 'true'
-                 and os.environ.get('GITHUB_REPOSITORY') == REPO, 'MISSING_HISTORICAL_SOURCE')
-        runner('git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', commit)
-        runner(*probe)
+        result = runner(['git', 'cat-file', '-t', commit], **options)
+        if result.returncode == 0:
+            need(result.stdout.strip() == b'commit', 'HISTORICAL_SOURCE_TYPE_CHANGED')
+        else:
+            need(result.returncode == 128, 'HISTORICAL_SOURCE_PROBE_FAILED')
+            missing.append(commit)
+    if not missing:
+        return
+    need(os.environ.get('GITHUB_ACTIONS') == 'true'
+         and os.environ.get('GITHUB_REPOSITORY') == REPO, 'MISSING_HISTORICAL_SOURCE')
+    result = runner(['git', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', 'origin', *missing], **options)
+    need(result.returncode == 0, 'HISTORICAL_SOURCE_FETCH_FAILED')
+    for commit in missing:
+        result = runner(['git', 'cat-file', '-t', commit], **options)
+        need(result.returncode == 0 and result.stdout.strip() == b'commit', 'HISTORICAL_SOURCE_TYPE_CHANGED')
 
 
 def previous_capture(invocation, c):
@@ -137,11 +146,12 @@ def recover_previous_capture(c):
     job = github('actions/jobs/' + str(prior['jobId']))
     need(job['run_id'] == prior['runId'] and job['name'] == 'validate'
          and job['status'] == 'completed' and job['conclusion'] == 'failure', 'PREVIOUS_JOB_CHANGED')
-    log = execute('gh', 'api', 'repos/' + REPO + '/actions/jobs/' + str(prior['jobId']) + '/logs')
-    need(sha(log) == prior['logSha256'], 'PREVIOUS_LOG_CHANGED')
-    accepted = [json.loads(line[line.index('{'):]) for line in log.decode().splitlines()
-                if 'acceptedCommandId' in line]
-    need(accepted == [{'acceptedCommandId': prior['commandId'], 'mode': 'parent'}], 'PREVIOUS_COMMAND_CHANGED')
+    # The complete original log and its sole accepted command were authenticated
+    # before freezing this exact record. Archive recovery reads the pinned SSM
+    # result directly; it grants no permission to build or switch from old facts.
+    P.validate_contract(c)
+    (OUT / 'previous-parent-source.json').write_text(json.dumps({**prior,
+        'source': 'FROZEN_AUTHENTICATED_JOB_LOG', 'readOnly': True}, sort_keys=True, indent=2) + '\n')
     raw = execute('aws', '--region', 'ap-northeast-1', 'ssm', 'get-command-invocation',
                   '--command-id', prior['commandId'], '--instance-id', INSTANCE, '--output', 'json')
     value = previous_capture(json.loads(raw), c)

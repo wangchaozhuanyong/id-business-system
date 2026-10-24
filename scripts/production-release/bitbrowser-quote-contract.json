@@ -280,6 +280,119 @@
     }
   },
   "apiModules": [],
+  "baseline": {
+    "adminInventory": {
+      "count": 5319,
+      "sha256": "87a38eb15ae4284451c0eaa522d1e23a10230e6c41feb56b301d64ec51eeb5f4"
+    },
+    "apiModules": {},
+    "apiPreservedInventory": {
+      "count": 1797,
+      "sha256": "713e4c4d853acaa4ff8c45d87646395e8c4fd291b8934c81f4c4977f30d161be"
+    },
+    "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+    "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
+    "clientInventory": {
+      "count": 27,
+      "sha256": "46cebf0e0e3bc37a0d49570c56d8f3cb08d2237aa525161665afef7fd5b60cdc"
+    },
+    "commit": "3d56674d2ab033f6e2df52e509be327af32559b4",
+    "configurationSha256": {
+      ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
+      "compose.release.json": "b70083ebd830eb32edb682cc9f8cd3992c67627fc80485e5fcf7f83eed9fce95",
+      "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
+    },
+    "current": "/opt/id-business-v2/releases/20261023T172659Z-3d56674d2ab0-online-readonly-probe",
+    "database": {
+      "columns": "91821bb43685e53ce37e5434e5f3d0936d518b2905590580d3e887d74d6060b6",
+      "ledger": "c1cc90e85efac2c9c9ef4c55f9090d3ae2fa4ef79ca2ca3e6292ce03e24a83cb",
+      "pending": 0
+    },
+    "manifestSha256": "828954f5620f5243a79dbc266dd45ba8b856e4e1065eb3fa9b7601e44a7e8a6a",
+    "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
+    "proofs": {
+      "bitbrowser-history-build-proof.json": "354a73bf0427c8c3f94de447cc94695831db51b8a3f5bdb525607fc99c1a86b0",
+      "online-readonly-probe-build-proof.json": "c3d1b16be155eb43e236d2cd79f10aed9696e33a9831792335d840edba1e6de6"
+    },
+    "runtimeConfigurationSha256": {
+      "admin": "8e6f51e912ad90182b3ca4d61888042e0c3d818be1e519accec1ac3367efd521",
+      "api": "36250405495459e6fbf8fb67e7b9381ff4d6b02a3a9c6be8cc037ed5c3a3a35b",
+      "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
+      "caddy": "6d690fc9c6632e8efce0940d26f529ccbbcd1da892931112043491983c8c0df1",
+      "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
+      "mysql": "7c4fc6fea1da1bd857bb2ab0a13486a0d09332f242b38bda895340d4526248bc",
+      "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
+    },
+    "services": {
+      "admin": {
+        "containerId": "b4eea499123e20eac73b42cde8b306a558508705b516f56a8d11ba58c694451d",
+        "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+        "health": "healthy",
+        "image": "sha256:8691373967a89e7167e9a922e4192703907b8e0cad0dfa2ee7e439ed3caab0dc",
+        "reference": "id-business-v2-history:957407e571e7ac629393d6355a09506a196e5f91-39750166040-admin",
+        "startedAtSha256": "bf6e0da9f9200e0394ae955ca99b641614f9df8de82573ab76ea23a1fd486e9e",
+        "status": "running"
+      },
+      "api": {
+        "containerId": "912ae2c5dd6b1e265c2fb7f58443ad6a26d65237925235bb848cca69002cc5bc",
+        "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
+        "health": "healthy",
+        "image": "sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a",
+        "reference": "id-business-v2-history:957407e571e7ac629393d6355a09506a196e5f91-39750166040-api",
+        "startedAtSha256": "8f5a16a220d0c7387fa13dcc199848231b27e69a86b00b1f2c9c1c41835391b0",
+        "status": "running"
+      },
+      "auto-recharge": {
+        "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+        "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+        "health": "healthy",
+        "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+        "startedAtSha256": "2e93090ec44036fb777194c57eea84f9503a39ca73a06c38a748f5dd6b54b0b7",
+        "status": "running"
+      },
+      "caddy": {
+        "containerId": "c9a03e8ade2f9fa42fed7881cac7e75d1d0bd01dd9f213123039ce740bb61a3e",
+        "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+        "health": null,
+        "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+        "startedAtSha256": "5d470338c493fcfd7497483b1b0a89df18192ee4f24cba90c9f9ac38307ca747",
+        "status": "running"
+      },
+      "media-resolver": {
+        "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+        "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+        "health": "healthy",
+        "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+        "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+        "startedAtSha256": "decd8646d9eae7910ed3789d7ae990a13202da1df6c171a10ace75ca43f9ea6f",
+        "status": "running"
+      },
+      "mysql": {
+        "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+        "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+        "health": "healthy",
+        "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+        "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+        "startedAtSha256": "fadf08a3cf1878d9e477f0d1f3f262a12bebdb3d2869429eaac92e5e4418c988",
+        "status": "running"
+      },
+      "online-recharge": {
+        "containerId": "e6df79f04d9d0c9fd51d311603227548f572db899f41e3b37e66dbadebf98a27",
+        "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
+        "health": "healthy",
+        "image": "sha256:c3b94a7c5f6fc331ea1467419cb6196c503aaa730957309496cd21cd9c882ca9",
+        "reference": "id-business-v2-online-readonly-probe:3d56674d2ab033f6e2df52e509be327af32559b4-39994791746",
+        "startedAtSha256": "089b31f6d7de5c245599bc57f572a7601decfd81e693e1881a67dceb8df5bf4b",
+        "status": "running"
+      }
+    },
+    "sharedInventory": {
+      "count": 36,
+      "sha256": "2026bd16905ed256440c736da6b821ed022097178786bf67dba52b8356ca8712"
+    }
+  },
   "businessActions": 0,
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
@@ -296,8 +409,8 @@
     "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
     "bitbrowser-history-release.test.py": "82c057cfc9e1e16a0f40c35aa53067bf85256b5d68d690d83cba662d6378d4f2",
     "bitbrowser-manual-contract.json": "f1751cb97b5ede81504e06de047f72ea32d3ff1eb16ebf1f156eb7a468188c20",
-    "bitbrowser-quote-publication.py": "2ecb0eadbcb9c705cce97b6dd129794cd49bfa4f1259ac182bbcd36125164761",
-    "bitbrowser-quote-release.py": "99d5fcb5acc930862e5dbb73691abd8eb7e11f1a083923f0192a3f2f430c07ca",
+    "bitbrowser-quote-publication.py": "b3bc073f0407847e51e567b3d59e3240aa327b5a923a0841b059a1aba7bb3bf2",
+    "bitbrowser-quote-release.py": "259529fc5813270c20f88a76a3d3ee21134a87e599b7f2b3aa0a505f89f105c3",
     "bitbrowser-recovery-build.py": "6bcbd936e05f48d605223ca95cbea0621162157ea56ad229c7aa8eef35608df0",
     "bitbrowser-recovery-contract.json": "32128879704885ddba87f3cd356bc7736dddadeb71e27b7cc445aa9f1bb4b46a",
     "bitbrowser-recovery-release.py": "0f68e090d85b7418778d7264acbeedc78db96dd7d97f7fa5e38aaf67ec203cf6",
@@ -342,10 +455,10 @@
     "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
     "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
-    "online-readonly-probe-contract.json": "9be5df8d746cab99707502b6ca7476c0330655876fc7c537834894ff9269f7e2",
-    "online-readonly-probe-publication.py": "9927dc3fc6c34e5542c423974ef89ce0fd3a7d713971b61cd59f8d5622847f8a",
-    "online-readonly-probe-release.py": "e6f5e93714a1665867bfabfd103f7a60a8a64530c534604991929cec979c26de",
-    "online-readonly-probe-release.test.py": "9b93834bd5ea4f1fbc6f84888d2f237dbf6a450c8c46bd3cd6d1ac414b856efc",
+    "online-readonly-probe-contract.json": "ee58228884a21568ad5f987cf27f61430bcde8143e248214d21780ec886e2c39",
+    "online-readonly-probe-publication.py": "eff08204db53c17236e0e3cbd1efeaefe36375b3a7b789cfc3a76a436cb7230f",
+    "online-readonly-probe-release.py": "e1a772a255f168d0e8da9db995031db5850dca93b9fb55493cbbf94cbbe948e4",
+    "online-readonly-probe-release.test.py": "5780012b77b44a131cb16572ade2c4038cb52f0af5f4ca72fbe6c072edfa385a",
     "online-real-session-contract.json": "0f958bbb2369e986002f76357430aa757a76c29408e01db2181174859e528753",
     "online-real-session-publication.py": "e88b4e4aeca4e787835c97e16e9b702d5109861faa4148e121e92008e4f1459c",
     "online-real-session-release.py": "631c6abf9e14cd0d420ac994f8dc7af39886b7f16df8ca5d53bcb75b6b0f837a",
@@ -378,14 +491,14 @@
     "rpcConnected": true,
     "stopping": false
   },
-  "expectedCurrent": "ed580a608d038980b3501df3a718c2801564bb88",
+  "expectedCurrent": "3d56674d2ab033f6e2df52e509be327af32559b4",
   "migrationPerformed": false,
   "parentPlan": {
-    "artifactSha256": "246a125f591c3fd775727e6aeb1c77e99de406b78fb3ac7ccb482234e58c57f5",
-    "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-readonly-probe-ed580a608d038980b3501df3a718c2801564bb88/online-readonly-probe-artifact.tar.gz",
-    "buildProofSha256": "f14d692f07e740233e2256db537131567951df5389a586b30690ef791c8f301b",
-    "commit": "ed580a608d038980b3501df3a718c2801564bb88",
-    "contractSha256": "9be5df8d746cab99707502b6ca7476c0330655876fc7c537834894ff9269f7e2",
+    "artifactSha256": "91359fb780d7e3ce4561b539a1347af1045ebfd68adc0534bf08a0ac80e8061e",
+    "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-readonly-probe-3d56674d2ab033f6e2df52e509be327af32559b4/online-readonly-probe-artifact.tar.gz",
+    "buildProofSha256": "c3d1b16be155eb43e236d2cd79f10aed9696e33a9831792335d840edba1e6de6",
+    "commit": "3d56674d2ab033f6e2df52e509be327af32559b4",
+    "contractSha256": "ee58228884a21568ad5f987cf27f61430bcde8143e248214d21780ec886e2c39",
     "controlSources": {
       "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
       "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",
@@ -445,10 +558,10 @@
       "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
       "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
       "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
-      "online-readonly-probe-contract.json": "9be5df8d746cab99707502b6ca7476c0330655876fc7c537834894ff9269f7e2",
-      "online-readonly-probe-publication.py": "9927dc3fc6c34e5542c423974ef89ce0fd3a7d713971b61cd59f8d5622847f8a",
-      "online-readonly-probe-release.py": "e6f5e93714a1665867bfabfd103f7a60a8a64530c534604991929cec979c26de",
-      "online-readonly-probe-release.test.py": "9b93834bd5ea4f1fbc6f84888d2f237dbf6a450c8c46bd3cd6d1ac414b856efc",
+      "online-readonly-probe-contract.json": "ee58228884a21568ad5f987cf27f61430bcde8143e248214d21780ec886e2c39",
+      "online-readonly-probe-publication.py": "eff08204db53c17236e0e3cbd1efeaefe36375b3a7b789cfc3a76a436cb7230f",
+      "online-readonly-probe-release.py": "e1a772a255f168d0e8da9db995031db5850dca93b9fb55493cbbf94cbbe948e4",
+      "online-readonly-probe-release.test.py": "5780012b77b44a131cb16572ade2c4038cb52f0af5f4ca72fbe6c072edfa385a",
       "online-real-session-contract.json": "0f958bbb2369e986002f76357430aa757a76c29408e01db2181174859e528753",
       "online-real-session-publication.py": "e88b4e4aeca4e787835c97e16e9b702d5109861faa4148e121e92008e4f1459c",
       "online-real-session-release.py": "631c6abf9e14cd0d420ac994f8dc7af39886b7f16df8ca5d53bcb75b6b0f837a",
@@ -478,19 +591,19 @@
       "baseline": {
         "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
         "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
-        "commit": "b716563aa1e74daba2d92a2ce0b6f53d49133ff9",
+        "commit": "ed580a608d038980b3501df3a718c2801564bb88",
         "configurationSha256": {
           ".env.aws.production": "3f3c22ac671ef185ffc98677ef3a2facce244e476e4583b8e7d16ff1deb00392",
-          "compose.release.json": "07bf3aa8ba7fd48d7ec70c2f765b8c0fa22e4f6cea17eee27d90ab279764fb89",
+          "compose.release.json": "59c43edc3d5168c56c4ec3ad5a6c0d566280b0dd75965d5e2eedd7742e8556a3",
           "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
         },
-        "current": "/opt/id-business-v2/releases/20261023T120328Z-b716563aa1e7-online-session-probe",
+        "current": "/opt/id-business-v2/releases/20261023T151807Z-ed580a608d03-online-readonly-probe",
         "database": {
           "columns": "91821bb43685e53ce37e5434e5f3d0936d518b2905590580d3e887d74d6060b6",
           "ledger": "c1cc90e85efac2c9c9ef4c55f9090d3ae2fa4ef79ca2ca3e6292ce03e24a83cb",
           "pending": 0
         },
-        "manifestSha256": "3d0088c9b437173a6d404ee83283010dc552dd6ab68a97e78f1662de8f3cbfd0",
+        "manifestSha256": "0b7ad861f209493c01ddf2a913eb0f1d1a0a011eb92a3ecf271d02ef57946b82",
         "runtime": {
           "adminInventory": {
             "count": 5319,
@@ -576,12 +689,12 @@
             "status": "running"
           },
           "online-recharge": {
-            "containerId": "08df8e3e62d6c66ccdbaf03bab4a3e43f33cbaf3d9fc19376ed4c0499aef5079",
+            "containerId": "56db37fefa4dc53b1323ab385ec49e3b397dfa4ca9a321f26e497189117d10e6",
             "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
             "health": "healthy",
-            "image": "sha256:b0e0a44bf2cec35dcc168204550fb194d48d3ff82712696a32eb3f06f9027cf8",
-            "reference": "id-business-v2-online-session-probe:b716563aa1e74daba2d92a2ce0b6f53d49133ff9-39950241661",
-            "startedAtSha256": "681edcd19d2fc8aac8bac846de7e15268b15792f2aff20614fd19656f3733a1d",
+            "image": "sha256:b5b95bf9cde6417c438d8390dba9f1a0f68ab6a37e3849eca9f8a2efbd211a42",
+            "reference": "id-business-v2-online-readonly-probe:ed580a608d038980b3501df3a718c2801564bb88-39976781287",
+            "startedAtSha256": "42f7e6f942bccbb4399cb0849ec8821722ff4e75fb04a3738b2a0261292a1b43",
             "status": "running"
           }
         }
@@ -590,20 +703,20 @@
       "status": "ONLINE_NATIVE_FETCH_PARENT_VERIFIED"
     },
     "qualitySourceEvidence": {
-      "commit": "ed580a608d038980b3501df3a718c2801564bb88",
-      "head": "e64105a49ec2a936a91bc69263f9a7833c1e2020",
-      "pullRequest": 686,
+      "commit": "3d56674d2ab033f6e2df52e509be327af32559b4",
+      "head": "ff55524de9707ba2feb11f564e47a17c8b00060a",
+      "pullRequest": 688,
       "runAttempt": "1",
-      "runId": "39975086134",
-      "sourceReceiptSha256": "df19363ec5c9187a231b3219b43aab35f547e3f4aecffbf390913a36687ee226",
-      "sourceReviewCommit": "791a653da72fcf6eb662098a76484ccc1008d2f3",
-      "tree": "9eddbe3e9c207ab615e8de97f2d3d6844eefc9ee"
+      "runId": "39994208339",
+      "sourceReceiptSha256": "91410a409f0788f2fb70f2f64389ae49560f898d4b8ac8a08395af0ffcc47805",
+      "sourceReviewCommit": "e65f6daae1d5112c1601d93feb9fc2e60bc53175",
+      "tree": "d1dc341e752aa855627be202849556f89fd125bd"
     },
-    "tree": "9eddbe3e9c207ab615e8de97f2d3d6844eefc9ee",
+    "tree": "d1dc341e752aa855627be202849556f89fd125bd",
     "workflowRunAttempt": "1",
-    "workflowRunId": "39976781287"
+    "workflowRunId": "39994791746"
   },
-  "parentPlanSha256": "18e937143ff9b0d4d1747b7dd24c4cc3a7ec202640369cf454860fd9fa818b07",
+  "parentPlanSha256": "7bf192086f7d3e4a88ae262e4545bdd906c324b3d71e68aa8c399c3e9c90c68a",
   "preservedServices": [
     "api",
     "mysql",
@@ -617,6 +730,9 @@
     "commit": "a38ae9687c1bf27ca3b8b4546db0531cb69f038c",
     "jobId": 120542648820,
     "logSha256": "44a670a3c80eb2795c8ccccb81c9125d9ef22a0af9b32f4175dcc0848343d3e5",
+    "parentBuildProofSha256": "f14d692f07e740233e2256db537131567951df5389a586b30690ef791c8f301b",
+    "parentCommit": "ed580a608d038980b3501df3a718c2801564bb88",
+    "parentPlanSha256": "18e937143ff9b0d4d1747b7dd24c4cc3a7ec202640369cf454860fd9fa818b07",
     "runAttempt": 1,
     "runId": 39991066742
   },
@@ -686,6 +802,7 @@
     "f67e294a523d503f29bcccda434dbc3e53330468",
     "faea152b038c7ddb1a3199070f9dc7ffb5583c36"
   ],
+  "releaseReviewBase": "3d56674d2ab033f6e2df52e509be327af32559b4",
   "scope": "BITBROWSER_QUOTE_TIER_20261024",
   "sourceParents": {
     "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts": "cec0557347c361981f95300f2d2bfa395bcc0f55f3f8fefc2180315fd0c50cc3",
@@ -703,7 +820,6 @@
     "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.spec.ts": "232593043655657dfdb5e5e3f65efe751b9386f6bac0a99c277df228d7622fdb",
     "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-page.spec.ts": "88a7bd8b44aab377c3e56b9b82a8e09a94d17ff0417536dd092295584c371c2f",
     "apps/admin/src/v2/features/auto-recharge/bitbrowser-pro-tier.spec.ts": "1fcc62a696138a7fd287f41cdc5acc13513d3343a555293246dec6fd0a8c77b3",
-    "docs/V2_TASKS.md": "dc0e59b4c2c5869c123720bf84bb6b5c2fb9546d4873f44288cc4e1bf4f09990",
     "scripts/ci-recharge-scope.test.mjs": "972372edaef6a3c81c72da324730cbe0313a3447529f31e4feecf02d8cd89af1"
   },
   "version": 1,
