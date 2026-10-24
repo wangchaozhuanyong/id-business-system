@@ -74,6 +74,7 @@ def release(plan,c):
 def observe_target(c):
     current=(Path('/opt/id-business-v2')/'current').resolve(strict=True)
     need(current.parent==Path('/opt/id-business-v2/releases'),'TARGET_PATH_CHANGED')
+    if c.get('acceptedSwitch'):return observe_accepted_switch(c)
     h=load('recharge-record-release.py');h.SERVICES=SERVICES
     d=load('remote-deploy.py');retired=load('online-query-network-release.py')
     states=h.snapshot(d,current)
@@ -109,3 +110,38 @@ def failure_report(error,plan):
     frames=[{'file':Path(f.filename).name,'function':f.name,'line':f.lineno}
         for f in traceback.extract_tb(error.__traceback__) if Path(f.filename).name in plan['controlSources']]
     return {'status':'FAILED','code':code,'exceptionType':type(error).__name__,'mode':plan['mode'],'frames':frames[-8:],'businessActions':0}
+
+
+def configuration_equivalence(h,d,state,expected):
+    import itertools,copy
+    fingerprint=h.fingerprint
+    try:
+        h.fingerprint=lambda v:v
+        model=h.configuration(d,state)
+    finally:h.fingerprint=fingerprint
+    binds=model['HostConfig'].get('Binds')
+    orders=list(itertools.permutations(binds)) if isinstance(binds,list) and 1<len(binds)<=5 else [binds]
+    fields=[n for n in ('Dns','DnsOptions','DnsSearch') if n in model['HostConfig'] and model['HostConfig'][n] in (None,[])]
+    for order in orders:
+        for values in itertools.product((None,[]),repeat=len(fields)):
+            candidate=copy.deepcopy(model);changes=[]
+            if binds is not None:candidate['HostConfig']['Binds']=list(order)
+            for name,value in zip(fields,values):
+                if type(candidate['HostConfig'][name]) is not type(value):changes.append('HostConfig.'+name)
+                candidate['HostConfig'][name]=copy.deepcopy(value)
+            if fingerprint(candidate)==expected:return {'exact':fingerprint(model)==expected,'matched':True,'representationOnly':changes,'bindOrderOnly':tuple(order)!=tuple(binds) if isinstance(binds,list) else False}
+    return {'exact':False,'matched':False,'representationOnly':[],'bindOrderOnly':False}
+
+
+def observe_accepted_switch(c):
+    accepted=c['acceptedSwitch'];plan=accepted['plan'];base=Path('/opt/id-business-v2')
+    need(sha(canonical(plan))==accepted['planSha256'] and plan['commit']=='9bf179b2c6dbf643404cf083171f7d3fee88944e' and plan['workflowRunId']=='40103226091','ACCEPTED_IDENTITY')
+    stage=base/'.staging'/('online-checkout-'+plan['commit']+'-'+plan['workflowRunId'])
+    journal=json.loads((stage/'switch-state.json').read_bytes())
+    need(journal['status']=='SWITCH_FAILED' and journal['previous']==c['current'] and (base/'current').resolve()==Path(c['current']),'ACCEPTED_JOURNAL_CHANGED')
+    target=Path(journal['target']);need(target.parent==base/'releases' and target.name.endswith(plan['commit'][:12]+'-online-checkout'),'ACCEPTED_TARGET_CHANGED')
+    need(sha((stage/'content/payload/build-proof.json').read_bytes())==plan['buildProofSha256'],'ACCEPTED_PROOF_CHANGED')
+    h=load('recharge-record-release.py');h.SERVICES=SERVICES;d=load('remote-deploy.py')
+    states=h.snapshot(d,target)
+    models={role:configuration_equivalence(h,d,state,c['runtimeConfigurationSha256'][role]) for role,state in states.items()}
+    return {'status':'ONLINE_UNPAID_ACCEPTED_SWITCH_OBSERVED','current':str((base/'current').resolve()),'target':str(target),'journalStatus':journal['status'],'services':states,'configuration':models,'allConfigurationMatched':all(v['matched'] for v in models.values()),'businessActions':0,'containersRecreated':False}

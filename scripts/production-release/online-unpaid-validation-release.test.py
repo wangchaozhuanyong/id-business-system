@@ -34,6 +34,18 @@ class FinitePublication(unittest.TestCase):
  def test_indirect_declarations_cannot_include_executable_or_unrelated_files(self):
   self.c['apiDeclarationOnly']['auth/auth.service.js']='a'*64
   with self.assertRaises(RuntimeError):p.validate_contract(self.c)
+ def test_empty_dns_probe_keeps_every_other_configuration_field(self):
+  from types import SimpleNamespace
+  body={'Config':{'Env':['synthetic=value']},'HostConfig':{'Dns':[],'DnsOptions':[],'DnsSearch':[],'Binds':['b','a'],'ReadonlyRootfs':True},'Mounts':[]}
+  h=SimpleNamespace(fingerprint=lambda v:p.sha(p.canonical(v)))
+  h.configuration=lambda _d,_s:h.fingerprint(copy.deepcopy(body))
+  old=copy.deepcopy(body);old['HostConfig']['Dns']=None;old['HostConfig']['Binds']=['a','b']
+  result=p.configuration_equivalence(h,None,{},p.sha(p.canonical(old)))
+  self.assertTrue(result['matched']);self.assertEqual(result['representationOnly'],['HostConfig.Dns']);self.assertTrue(result['bindOrderOnly'])
+  old['HostConfig']['ReadonlyRootfs']=False
+  self.assertFalse(p.configuration_equivalence(h,None,{},p.sha(p.canonical(old)))['matched'])
+  old=copy.deepcopy(body);old['HostConfig']['Dns']=['192.0.2.1']
+  self.assertFalse(p.configuration_equivalence(h,None,{},p.sha(p.canonical(old)))['matched'])
  def test_observation_does_not_enter_a_build_or_publish_job(self):
   workflow=(HERE.parents[1]/'.github/workflows/online-unpaid-validation-publication.yml').read_text()
   self.assertIn('if: inputs.inspect_only',workflow)
