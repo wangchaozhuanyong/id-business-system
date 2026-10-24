@@ -1,4 +1,10 @@
 import {
+  onlineCountryInteractionPaths,
+  onlineCountryInteractionControls,
+  isOnlineCountryInteractionOnly,
+  isOnlineCountryInteractionControlsOnly
+} from './ci-online-settings-scope.mjs';
+import {
   onlineCheckoutErrorPagePaths,
   onlineCheckoutErrorPageControls,
   isOnlineCheckoutErrorPageOnly,
@@ -3365,6 +3371,26 @@ test('checkout error page scopes only its finite executor and release controls',
     'debug-checkout',
     'verification-state'
   ])
+    assert.ok(commands.includes(n + '.test.cjs'));
+  assert.doesNotMatch(commands, /prisma|migrate|build --workspace/);
+});
+
+test('country interaction scopes only its finite executor and publication controls', () => {
+  const paths = [...onlineCountryInteractionPaths, ...onlineCountryInteractionControls];
+  assert.equal(isOnlineCountryInteractionOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+  ])
+    assert.equal(isOnlineCountryInteractionOnly([...paths, extra]), false);
+  assert.equal(isOnlineCountryInteractionOnly(paths.slice(1)), false);
+  assert.equal(isOnlineCountryInteractionControlsOnly(onlineCountryInteractionControls), true);
+  assert.deepEqual(selectedParts(onlineCountryInteractionControls), ['guards']);
+  const commands = JSON.stringify(sessionProbeCommands('online-engine', paths));
+  for (const n of ['checkout-form', 'checkout-readonly-diagnostic', 'checkout-readiness-wait'])
     assert.ok(commands.includes(n + '.test.cjs'));
   assert.doesNotMatch(commands, /prisma|migrate|build --workspace/);
 });
