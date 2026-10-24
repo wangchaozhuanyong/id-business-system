@@ -270,15 +270,28 @@ def observe(c):
     need(json.loads(execute('aws','sts','get-caller-identity','--output','json'))['Account']=='098208446664','AWS_ACCOUNT_CHANGED')
     native=identity();need(not OUT.exists(),'OUTPUT_EXISTS');OUT.mkdir(parents=True,mode=0o700)
     result=transport(native_plan(c,native),'observe')
-    need(result['status']=='ONLINE_UNPAID_TARGET_OBSERVED','OBSERVATION_FAILED')
+    need(result['status']==('ONLINE_UNPAID_ACCEPTED_SWITCH_OBSERVED' if c.get('acceptedSwitch') else 'ONLINE_UNPAID_TARGET_OBSERVED'),'OBSERVATION_FAILED')
     print(json.dumps({'status':result['status'],'commit':native['commit'],'publicUrl':result['publicUrl'],'businessActions':0}))
+
+def finalize(c):
+    check(c);native=identity();quality(native['commit'],native['tree'])
+    binding=c['acceptedSwitch']['observation'];run=github('actions/runs/'+binding['runId'])
+    F.require_run(run,binding['commit'],WORKFLOW,'workflow_dispatch')
+    need(run['conclusion']=='success' and str(run['run_attempt'])==binding['runAttempt'],'OBSERVATION_RUN_CHANGED')
+    observation,digest=F.artifact_json(run,PREFIX+'-validation-'+binding['runId']+'-'+binding['runAttempt'],'observe-result.json')
+    need(digest==binding['resultSha256'] and observation['allConfigurationMatched'],'OBSERVATION_CHANGED')
+    need(not OUT.exists(),'OUTPUT_EXISTS');OUT.mkdir(parents=True,mode=0o700)
+    plan={**native_plan(c,native),'acceptedObservation':observation}
+    result=transport(plan,'finalize');need(result['status']=='ONLINE_UNPAID_FORWARD_FINALIZED','FINALIZATION_FAILED')
+    readback=transport(plan,'finalize_readback');need(readback['status']=='ONLINE_UNPAID_FINALIZATION_READBACK_VERIFIED','FINALIZATION_READBACK_FAILED')
+    print(json.dumps(readback))
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("check", "build", "publish", "observe"))
+    parser.add_argument("mode", choices=("check", "build", "publish", "observe", "finalize"))
     mode = parser.parse_args().mode
     c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
-    {"check": check, "build": build, "publish": publish, "observe": observe}[mode](c)
+    {"check": check, "build": build, "publish": publish, "observe": observe, "finalize": finalize}[mode](c)
 
 
 if __name__ == "__main__":
