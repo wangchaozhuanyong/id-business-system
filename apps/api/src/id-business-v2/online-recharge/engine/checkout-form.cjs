@@ -523,6 +523,7 @@ function elementRendered(
         ).slice(0, 160),
         tag: n.tagName.toLowerCase(),
         role: n.getAttribute('role'),
+        inShadowRoot: Boolean(n.getRootNode()?.host),
         scope,
         owner,
         readOnly: Boolean(n.readOnly),
@@ -620,6 +621,9 @@ async function frameLoadFailed(frame, deadline, signal, state) {
 }
 async function readControlsOnce(page, deadline, state) {
   const inspection = inspectionState(page, deadline, state.signal);
+  if (state.interactionChecks?.length) inspection.interactionChecks = state.interactionChecks;
+  if (state.interactionRejectCounts)
+    inspection.interactionRejectCounts = state.interactionRejectCounts;
   const result = [];
   let frames = [];
   if (!inspectionCode(inspection)) {
@@ -742,6 +746,7 @@ async function freshRead(page, deadline, state, read) {
       if (
         attempt === 1 &&
         !state.readStopped &&
+        error.interactionRecovery !== true &&
         error.code === 'CHECKOUT_CONTROL_READ_FAILED' &&
         !closed(page) &&
         !state.signal?.aborted &&
@@ -870,15 +875,31 @@ function interactionPoint(element, child) {
   }
   for (let node = hit; node; node = node.parentElement || node.getRootNode()?.host)
     if (node === element) return { x, y, width, height };
-  return { reason: 'occluded' };
-}
-async function candidateInteraction(item, handle, key, deadline, state) {
-  const blocked = (reason) => {
-    if (state.inspection) {
-      state.inspection.interactionRejectCounts ||= {};
-      state.inspection.interactionRejectCounts[reason] =
-        (state.inspection.interactionRejectCounts[reason] || 0) + 1;
+  return {
+    reason: 'occluded',
+    blocker: {
+      tag: ['DIV', 'SPAN', 'INPUT', 'SELECT', 'BUTTON', 'IFRAME', 'DIALOG'].includes(hit?.tagName)
+        ? hit.tagName.toLowerCase()
+        : 'other',
+      role: ['dialog', 'combobox', 'listbox', 'option'].includes(hit?.getAttribute('role'))
+        ? hit.getAttribute('role')
+        : 'other',
+      containsTarget: Boolean(hit?.contains(element))
     }
+  };
+}
+function scrollErrorClass(error) {
+  const message = String(error?.message || '');
+  if (/frame.*(?:detached|navigat)/i.test(message)) return 'frame_changed';
+  if (/execution context.*destroyed/i.test(message)) return 'context_destroyed';
+  if (/detached|not attached/i.test(message)) return 'node_detached';
+  return error?.name === 'TimeoutError' ? 'scroll_timeout' : 'other';
+}
+async function candidateInteraction(item, handle, key, deadline, state, allowScroll = true) {
+  const blocked = (reason) => {
+    state.interactionRejectCounts ||= {};
+    state.interactionRejectCounts[reason] = (state.interactionRejectCounts[reason] || 0) + 1;
+    if (state.inspection) state.inspection.interactionRejectCounts = state.interactionRejectCounts;
     return failure(
       'CHECKOUT_CONTROL_BLOCKED',
       `${labels[key]}当前被遮挡或无法核实交互，未继续填写`,
@@ -953,8 +974,34 @@ async function candidateInteraction(item, handle, key, deadline, state) {
     return point;
   };
   let point = await readPoint();
+  if (!point.reason) return;
+  state.interactionFrames ||= new Map();
+  if (!state.interactionFrames.has(item.frame))
+    state.interactionFrames.set(item.frame, state.interactionFrames.size + 1);
+  const trace = {
+    field: key,
+    tag: ['input', 'select', 'textarea', 'button'].includes(item.meta.tag)
+      ? item.meta.tag
+      : 'other',
+    role: item.meta.role === 'combobox' ? 'combobox' : 'other',
+    type: ['text', 'tel', 'number', 'password', 'select-one', 'select-multiple'].includes(
+      item.meta.type
+    )
+      ? item.meta.type
+      : 'other',
+    inShadowRoot: item.meta.inShadowRoot === true,
+    frameId: state.interactionFrames.get(item.frame),
+    frameKind: item.frame.parentFrame() ? 'embedded' : 'main',
+    initialReason: point.reason || 'none',
+    ...(point.blocker ? { blocker: point.blocker } : {})
+  };
+  state.interactionChecks ||= [];
+  if (state.interactionChecks.length < 32) state.interactionChecks.push(trace);
+  if (state.inspection) state.inspection.interactionChecks = state.interactionChecks;
   if (point.reason && ['outside_viewport', 'occluded'].includes(point.reason)) {
+    if (!allowScroll) throw blocked(point.reason);
     timeout(deadline, state.signal);
+    const scrollStarted = Date.now();
     try {
       await observedRead(
         () =>
@@ -967,10 +1014,23 @@ async function candidateInteraction(item, handle, key, deadline, state) {
         'candidate_scroll',
         item.frame
       );
-    } catch {
+      trace.scroll = { state: 'completed', durationMs: Date.now() - scrollStarted };
+    } catch (error) {
+      trace.scroll = {
+        state: 'failed',
+        durationMs: Date.now() - scrollStarted,
+        errorClass: scrollErrorClass(error)
+      };
       if (state.readStopped)
         throw failure('CHECKOUT_CONTROL_READ_FAILED', '结账控件读取未完成', [key]);
       timeout(deadline, state.signal);
+      if (closed(item.frame.page())) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭', [key]);
+      state.scrollRecoveryUsed ||= new Set();
+      if (!state.scrollRecoveryUsed.has(key)) {
+        state.scrollRecoveryUsed.add(key);
+        trace.recovery = 'requested';
+        return { relocate: true, trace };
+      }
       throw blocked('scroll_unavailable');
     }
     // Scrolling can mount duplicates, replace a field or open a dialog. Never
@@ -1013,10 +1073,11 @@ async function candidateInteraction(item, handle, key, deadline, state) {
     )
       throw blocked('page_changed');
     point = await readPoint();
+    trace.afterScrollReason = point.reason || 'none';
   }
   if (point.reason) throw blocked(point.reason);
 }
-async function uniqueCandidate(items, key, deadline, state) {
+async function uniqueCandidate(items, key, deadline, state, allowScroll = true) {
   const matches = candidatesFor(items, key);
   if (matches.length > 1)
     throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}有多个可见候选，未继续填写`, [key]);
@@ -1051,7 +1112,33 @@ async function uniqueCandidate(items, key, deadline, state) {
         throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}无法唯一定位，未继续填写`, [
           key
         ]);
-      await candidateInteraction(item, eligible[0], key, deadline, state);
+      const interaction = await candidateInteraction(
+        item,
+        eligible[0],
+        key,
+        deadline,
+        state,
+        allowScroll
+      );
+      if (interaction?.relocate) {
+        // The failed scroll has settled. Re-read once, without another scroll,
+        // and never fill/select/click using the discarded original handle.
+        try {
+          const fresh = await readControlsOnce(item.frame.page(), deadline, state);
+          const code = inspectionCode(fresh.inspection);
+          if (code) throw failure(code, '结账控件读取未完成', [key]);
+          const next = await uniqueCandidate(fresh.items, key, deadline, state, false);
+          if (!next) throw failure('CHECKOUT_CONTROL_BLOCKED', `${labels[key]}重新定位失败`, [key]);
+          interaction.trace.recovery = 'ready';
+          interaction.trace.frameChanged = next.frame !== item.frame;
+          return next;
+        } catch (error) {
+          interaction.trace.recovery =
+            error.code === 'CHECKOUT_CONTROL_READ_FAILED' ? 'read_incomplete' : 'blocked';
+          error.interactionRecovery = true;
+          throw error;
+        }
+      }
       state.handles ||= new Set();
       state.handles.add(eligible[0]);
       return { ...item, el: eligible[0] };

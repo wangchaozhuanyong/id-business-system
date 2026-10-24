@@ -28,6 +28,31 @@ const addressHtml =
   '<input autocomplete="billing name"><input autocomplete="billing address-line1"><input autocomplete="billing address-level2"><input autocomplete="billing postal-code"><select autocomplete="billing address-level1"><option value="">Choose</option><option value="OR">Oregon</option></select>';
 const countryHtml =
   '<select autocomplete="billing country"><option value="PH">Philippines</option><option value="US">United States</option></select>';
+function interceptCountryScroll(t, page, scroll) {
+  const frame = page.mainFrame(),
+    locator = frame.locator;
+  let calls = 0;
+  frame.locator = function (selector, ...options) {
+    const result = locator.call(this, selector, ...options);
+    if (selector.includes('[autocomplete="billing country"]')) {
+      const handles = result.elementHandles.bind(result);
+      result.elementHandles = async () => {
+        const list = await handles();
+        for (const handle of list)
+          handle.scrollIntoViewIfNeeded = async () => {
+            calls++;
+            return scroll(handle);
+          };
+        return list;
+      };
+    }
+    return result;
+  };
+  t.after(() => {
+    frame.locator = locator;
+  });
+  return () => calls;
+}
 let browser;
 test.before(async () => {
   browser = await chromium.launch({
@@ -50,6 +75,150 @@ async function pageFor(t, html) {
 }
 const iframe = (html) =>
   `<iframe style="width:900px;height:600px" srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>`;
+
+for (const replacement of [false, true])
+  test(`billing re-locates once after settled scroll failure, replacement=${replacement}`, async (t) => {
+    const page = await pageFor(
+      t,
+      countryHtml + addressHtml + '<div id="cover" style="position:fixed;inset:0"></div>'
+    );
+    const count = interceptCountryScroll(t, page, async (handle) => {
+      await page.locator('#cover').evaluate((node) => node.remove());
+      if (replacement) await handle.evaluate((node) => node.replaceWith(node.cloneNode(true)));
+      const error = new Error(
+        replacement ? 'Element is not attached SYNTHETIC_PRIVATE' : 'SYNTHETIC_PRIVATE'
+      );
+      error.name = replacement ? 'Error' : 'TimeoutError';
+      throw error;
+    });
+    const result = await fillBilling(page, address, 'Synthetic Name', {
+      deadline: Date.now() + 4000
+    });
+    assert.equal(result.ok, true);
+    assert.equal(count(), 1, 'recovery must not perform a second scroll');
+    assert.equal(await page.locator('[autocomplete="billing country"]').inputValue(), 'US');
+    assert.equal(
+      await page.locator('[autocomplete="billing name"]').inputValue(),
+      'Synthetic Name'
+    );
+  });
+
+for (const [name, message, expectedClass] of [
+  ['TimeoutError', 'SYNTHETIC_PRIVATE', 'scroll_timeout'],
+  ['Error', 'Element is not attached SYNTHETIC_PRIVATE', 'node_detached'],
+  ['Error', 'Frame was detached SYNTHETIC_PRIVATE', 'frame_changed'],
+  ['Error', 'Execution context was destroyed SYNTHETIC_PRIVATE', 'context_destroyed'],
+  ['Error', 'SYNTHETIC_PRIVATE', 'other']
+])
+  test(`persistent country obstruction preserves ${expectedClass} and blocks without a second scroll`, async (t) => {
+    const page = await pageFor(
+      t,
+      countryHtml + addressHtml + '<div id="cover" style="position:fixed;inset:0"></div>'
+    );
+    const count = interceptCountryScroll(t, page, async () => {
+      throw Object.assign(new Error(message), { name });
+    });
+    const result = await fillBilling(page, address, 'Synthetic Name', {
+      deadline: Date.now() + 4000
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, 'CHECKOUT_CONTROL_BLOCKED');
+    assert.deepEqual(result.missing, ['country']);
+    assert.equal(count(), 1);
+    const [first, second] = result.inspection.interactionChecks;
+    assert.equal(first.field, 'country');
+    assert.equal(first.tag, 'select');
+    assert.equal(first.frameKind, 'main');
+    assert.equal(first.initialReason, 'occluded');
+    assert.deepEqual(first.blocker, { tag: 'div', role: 'other', containsTarget: false });
+    assert.equal(first.scroll.errorClass, expectedClass);
+    assert.ok(first.scroll.durationMs >= 0);
+    assert.equal(first.recovery, 'blocked');
+    assert.equal(second.initialReason, 'occluded');
+    assert.equal(result.inspection.timedOut, false);
+    assert.equal(await page.locator('[autocomplete="billing country"]').inputValue(), 'PH');
+    assert.equal(await page.locator('[autocomplete="billing name"]').inputValue(), '');
+    assert.doesNotMatch(JSON.stringify(result), /SYNTHETIC_PRIVATE/);
+  });
+
+test('country scroll recovery rejects newly ambiguous candidates before selecting', async (t) => {
+  const page = await pageFor(
+    t,
+    countryHtml + addressHtml + '<div id="cover" style="position:fixed;inset:0"></div>'
+  );
+  const count = interceptCountryScroll(t, page, async (handle) => {
+    await page.locator('#cover').evaluate((node) => node.remove());
+    await handle.evaluate((node) => node.after(node.cloneNode(true)));
+    throw Object.assign(new Error('SYNTHETIC_PRIVATE'), { name: 'TimeoutError' });
+  });
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_AMBIGUOUS');
+  assert.equal(count(), 1);
+  assert.deepEqual(
+    await page
+      .locator('[autocomplete="billing country"]')
+      .evaluateAll((nodes) => nodes.map((n) => n.value)),
+    ['PH', 'PH']
+  );
+});
+
+test('incomplete country recovery does not restart the interaction through pure-read retries', async (t) => {
+  const page = await pageFor(
+    t,
+    countryHtml + addressHtml + '<div id="cover" style="position:fixed;inset:0"></div>'
+  );
+  let recovering = false,
+    snapshots = 0;
+  const count = interceptCountryScroll(t, page, async () => {
+    recovering = true;
+    throw Object.assign(new Error('SYNTHETIC_PRIVATE'), { name: 'TimeoutError' });
+  });
+  const frame = page.mainFrame(),
+    locator = frame.locator;
+  frame.locator = function (selector, ...options) {
+    const result = locator.call(this, selector, ...options);
+    if (selector === 'input,select,textarea,[role="combobox"]') {
+      const evaluateAll = result.evaluateAll.bind(result);
+      result.evaluateAll = async (...args) => {
+        snapshots++;
+        if (recovering) throw new Error('Frame was detached SYNTHETIC_PRIVATE');
+        return evaluateAll(...args);
+      };
+    }
+    return result;
+  };
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_READ_FAILED');
+  assert.equal(count(), 1);
+  assert.equal(snapshots, 2);
+  assert.equal(result.inspection.complete, false);
+  assert.equal(result.inspection.interactionChecks[0].recovery, 'read_incomplete');
+  assert.doesNotMatch(JSON.stringify(result), /SYNTHETIC_PRIVATE/);
+});
+
+test('country scroll failure after cancellation stops before recovery', async (t) => {
+  const page = await pageFor(
+    t,
+    countryHtml + addressHtml + '<div id="cover" style="position:fixed;inset:0"></div>'
+  );
+  const controller = new AbortController();
+  const count = interceptCountryScroll(t, page, async () => {
+    controller.abort();
+    throw Object.assign(new Error('SYNTHETIC_PRIVATE'), { name: 'TimeoutError' });
+  });
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000,
+    signal: controller.signal
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_FORM_ABORTED');
+  assert.equal(count(), 1);
+  assert.equal(result.inspection.interactionChecks[0].recovery, undefined);
+  assert.equal(await page.locator('[autocomplete="billing country"]').inputValue(), 'PH');
+});
 
 function failFrameRead(t, frame, read) {
   const locator = frame.locator;
