@@ -2296,9 +2296,9 @@ jobs:
 
           def readonly_migration_baseline_facts(directory, manifest):
               # This bounded observation grants no historical publication authority.
-              expected_commit = 'a046d8413e3cb6c3edd6429dbdb922593dc32064'
+              expected_commit = '9bf179b2c6dbf643404cf083171f7d3fee88944e'
               expected_instance = 'i-0838cebf64f0e2a89'
-              expected_images = {'api': 'sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a', 'admin': 'sha256:5237f36e7eaaade222c25fa5d0d3c2a2e317e0ba4272ab4065b01b9db60b7e37', 'online-recharge': 'sha256:16626eaaacd5a7d0f1cd059ed94efad818414dd28397395caaeeecbe120ab2d7', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}
+              expected_images = {'api': 'sha256:3c0c9a253784e8203785b031dc3c1226a95f3665c40649c5e8a7f894ba956e51', 'admin': 'sha256:bc196ea2c7169998a30eeea3ef85d839042f811253ab1a6ad2fbf7653c643ab6', 'online-recharge': 'sha256:86fd607ad566f32d437a2cd7799566beab6f2ef8fea56e890e7db5fc06cf1b39', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}
               if manifest.get('commit') != expected_commit or set(manifest.get('images', {})) != set(expected_images):
                   raise ValueError('Migration read-only baseline unavailable')
               before_directory = directory.resolve()
@@ -2337,7 +2337,7 @@ jobs:
                   'manifestSha256': hashlib.sha256(original).hexdigest(), 'services': states, 'backupTimers': timers,
                   'retiredRegistrationRunning': False, 'migratorRunning': False, 'formalReleaseVerified': False}
 
-          if manifest.get('commit') == 'a046d8413e3cb6c3edd6429dbdb922593dc32064':
+          if manifest.get('commit') == '9bf179b2c6dbf643404cf083171f7d3fee88944e':
               print(json.dumps({'migrationReadOnlyFacts': readonly_migration_baseline_facts(base / 'current', manifest)}, separators=(',', ':')))
               raise SystemExit(0)
 
@@ -2444,10 +2444,10 @@ jobs:
           def closed_migration_readonly_facts(value):
               keys = {'account', 'instance', 'currentCommit', 'manifestSha256', 'services', 'backupTimers',
                   'retiredRegistrationRunning', 'migratorRunning', 'formalReleaseVerified'}
-              expected_images = {'api': 'sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a', 'admin': 'sha256:5237f36e7eaaade222c25fa5d0d3c2a2e317e0ba4272ab4065b01b9db60b7e37', 'online-recharge': 'sha256:16626eaaacd5a7d0f1cd059ed94efad818414dd28397395caaeeecbe120ab2d7', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}
+              expected_images = {'api': 'sha256:3c0c9a253784e8203785b031dc3c1226a95f3665c40649c5e8a7f894ba956e51', 'admin': 'sha256:bc196ea2c7169998a30eeea3ef85d839042f811253ab1a6ad2fbf7653c643ab6', 'online-recharge': 'sha256:86fd607ad566f32d437a2cd7799566beab6f2ef8fea56e890e7db5fc06cf1b39', 'auto-recharge': 'sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e', 'media-resolver': 'sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56', 'caddy': 'sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510', 'mysql': 'sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb'}
               if (not isinstance(value, dict) or set(value) != keys or value['account'] != '098208446664'
                       or value['instance'] != 'i-0838cebf64f0e2a89'
-                      or value['currentCommit'] != 'a046d8413e3cb6c3edd6429dbdb922593dc32064'
+                      or value['currentCommit'] != '9bf179b2c6dbf643404cf083171f7d3fee88944e'
                       or not isinstance(value['manifestSha256'], str)
                       or not re.fullmatch(r'[a-f0-9]{64}', value['manifestSha256'])
                       or any(value[key] is not False for key in ('retiredRegistrationRunning', 'migratorRunning', 'formalReleaseVerified'))

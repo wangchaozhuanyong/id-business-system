@@ -6,10 +6,10 @@
   "targetAccount": "098208446664",
   "purpose": "Only the six-file readonly migration follow-up at the current merged parent; unchanged business and historical publisher checks are reused",
   "files": {
-    ".github/workflows/production-release.yml": "46c50a3084c9e9aeff5a30fc865d92fe16386aa368de549784bebe72ce395774",
+    ".github/workflows/production-release.yml": "aa38787821d9127b3aad699e71a88900617ba0eb51d5f7075f0ef43875ec36db",
     "scripts/ci-aws-account-migration-scope.mjs": "ec28018dca59bb057046c990cce0f1c41ece5ddb7be50ae88a2babf83871361f",
     "scripts/ci-aws-account-migration-scope.test.mjs": "a228a0d8ebdd7bf3dbd9c1ad03c413789de589c247ea28be32a9a9f93765b8e3",
     "scripts/ci-recharge-check.mjs": "e5fa636989956b8d88e1b3b32a59ff9ab268e147e83af1247192eee39339da40",
-    "scripts/production-release/unpublished-component-runtime-diagnostic.test.py": "7d246bb3b4c88878fed709cd0e9515c217c21592e667369478d3bdf97e5bedc0"
+    "scripts/production-release/unpublished-component-runtime-diagnostic.test.py": "1e8b60f2fe3328d2ddfc1cb87a4ad164ba291fb9ac9e9f6634e71d9952a37777"
   }
 }
