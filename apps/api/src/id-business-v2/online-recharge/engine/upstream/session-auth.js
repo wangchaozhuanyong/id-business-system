@@ -483,7 +483,7 @@ async function verifyRealSessionApi(context, options = {}) {
             ...(facts.state === 'challenge' ? { challenge: true } : {}),
             error: `登录状态尚未核实（HTTP ${facts.httpStatus}，分类 ${facts.classification}）` };
     } catch (err) {
-        if (['LEASE_LOST', 'HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'ACCOUNT_MISMATCH'].includes(err.code) || options.signal?.aborted) {
+        if (['CHALLENGE_BLOCKED', 'LEASE_LOST', 'HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'ACCOUNT_MISMATCH'].includes(err.code) || options.signal?.aborted) {
             err.bootstrapDiagnostics = { initialSessionProbe: initial };
             throw err;
         }
@@ -1100,7 +1100,7 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
                 || /^net::ERR_[A-Z_]+$/.test(String(code || '')));
         const preservedCode = ['SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED', 'SESSION_INVALID',
             'SESSION_VERIFICATION_BLOCKED', 'SESSION_API_UNCONFIRMED',
-            'ACCOUNT_MISMATCH', 'HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE',
+            'CHECKOUT_AUTH_READ_FAILED', 'CHALLENGE_BLOCKED', 'ACCOUNT_MISMATCH', 'HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE',
             'PROXY_UNAVAILABLE', 'UPSTREAM_BLOCKED', 'UPSTREAM_FORBIDDEN', 'LEASE_LOST'].includes(error.code)
             ? error.code : require('./verification-runtime').controlledVerificationCode(error.code, null);
         if (!preservedCode && !network) {

@@ -61,9 +61,9 @@
       <div v-if="files.length" class="online-files">
         <article v-for="file in files" :key="file.id">
           <strong>{{ file.name }}</strong
-          ><AppButton variant="soft" :loading="fileBusy === file.id" @click="openFile(file)"
-            >查看文件</AppButton
-          >
+          ><AppButton variant="soft" :loading="fileBusy === file.id" @click="openFile(file)">{{
+            file.kind === 'diagnostic' ? '下载诊断' : '查看文件'
+          }}</AppButton>
         </article>
       </div>
       <img v-if="mediaUrl && mediaKind === 'image'" :src="mediaUrl" alt="任务执行截图" />
@@ -495,6 +495,15 @@ async function openFile(file: FileRecord) {
     const response = await http.get(path, { responseType: 'blob' });
     clear();
     mediaUrl.value = URL.createObjectURL(response.data);
+    if (file.kind === 'diagnostic') {
+      const link = document.createElement('a');
+      link.href = mediaUrl.value;
+      link.download = '不付款验证诊断.json';
+      link.click();
+      mediaKind.value = 'diagnostic';
+      copyStatus.value = '诊断文件已下载';
+      return;
+    }
     mediaKind.value = file.kind === 'video' ? 'video' : 'image';
   } catch {
     copyStatus.value = '文件读取失败，请重试';

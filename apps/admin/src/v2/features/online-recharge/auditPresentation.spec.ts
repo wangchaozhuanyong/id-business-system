@@ -39,6 +39,7 @@ vi.mock('@/v2/composables/useV2Query', async () => {
   };
 });
 import OnlineResultDialog from './OnlineResultDialog.vue';
+import { http } from '@/api/client';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import V2OnlineOverviewView from './V2OnlineOverviewView.vue';
 
@@ -82,6 +83,28 @@ function resultState(result: unknown) {
 }
 
 describe('线上代充审计发现的结果展示', () => {
+  it('诊断文件作为 JSON 下载，不当成图片预览', async () => {
+    const click = vi.fn();
+    const link = { href: '', download: '', click };
+    vi.stubGlobal('document', { createElement: () => link });
+    vi.mocked(http.get).mockResolvedValueOnce({
+      data: new Blob(['{}'], { type: 'application/json' })
+    } as never);
+    const state = mount<{
+      openFile: (file: unknown) => Promise<void>;
+      mediaKind: string;
+      copyStatus: string;
+    }>(OnlineResultDialog, () => ({ modelValue: true, result: {} }));
+    try {
+      await state.openFile({ id: 'fixture-diagnostic', kind: 'diagnostic' });
+      expect(click).toHaveBeenCalledOnce();
+      expect(link.download).toBe('不付款验证诊断.json');
+      expect(state.mediaKind).toBe('diagnostic');
+      expect(state.copyStatus).toBe('诊断文件已下载');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it('展示超时发生的网络阶段与只读对照，过滤原始响应和凭据', () => {
     const state = resultState({
       ok: false,

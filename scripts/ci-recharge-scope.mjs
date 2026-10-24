@@ -1,3 +1,4 @@
+import { isUnpaidValidationOnly } from './ci-unpaid-validation-scope.mjs';
 import { isSettledCheckoutControlsOnly } from './ci-settled-checkout-scope.mjs';
 import { isManualSettlementCandidate } from './ci-bitbrowser-manual-controls.mjs';
 import { isFinancialClosureCandidate } from './ci-financial-closure-scope.mjs';
@@ -119,7 +120,10 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { matchesSourceEvidence, recordedPullRequestBase } from './ci-recharge-evidence.mjs';
 
-import { awsAccountMigrationControlManifest, isAwsAccountMigrationControlsOnly } from './ci-aws-account-migration-scope.mjs';
+import {
+  awsAccountMigrationControlManifest,
+  isAwsAccountMigrationControlsOnly
+} from './ci-aws-account-migration-scope.mjs';
 export { awsAccountMigrationControlManifest, isAwsAccountMigrationControlsOnly };
 
 export const registrationTerminalStopBase = '6da10d2e4bd9de6df145899648e234000f84b72b';
@@ -3083,6 +3087,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isUnpaidValidationOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
   if (isAwsAccountMigrationControlsOnly(paths, context)) return ['guards'];
   if (isOnlineCountryInteractionOnly(paths)) return ['guards', 'online-engine'];
   if (isOnlineCountryInteractionControlsOnly(paths)) return ['guards'];

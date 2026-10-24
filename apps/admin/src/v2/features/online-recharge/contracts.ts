@@ -91,6 +91,8 @@ export interface PublicConfig {
   maintenanceMode?: boolean;
   available?: boolean;
   activeJobs?: number;
+  queued?: number;
+  awaitingCredentials?: number;
   capacity?: number;
   region?: string;
   currency?: string;

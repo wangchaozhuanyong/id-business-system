@@ -158,6 +158,17 @@ function fixture(selectedId?: string) {
 }
 
 describe('线上代充保留比特未决付款的共享额度', () => {
+  it('不付款验收缺少临时安全码时不写入人工等待状态', async () => {
+    const f = fixture(firstId);
+    Object.assign(f.task, {
+      operation: 'debug',
+      payload: { cardId: firstId, validationMode: 'ready_before_payment' }
+    });
+    f.memory.available.mockResolvedValueOnce([]);
+    expect(await f.worker.reserveCard(f.rpc)).toMatchObject({ pendingCredentials: true });
+    expect(f.task.status).toBe('running');
+    expect(f.tx.onlineRechargeTask.update).not.toHaveBeenCalled();
+  });
   it.each(['fresh', 'prior', 'resumed'])(
     '自动分配跳过 NOWAIT 忙卡并实际预留下一张：%s',
     async (route) => {

@@ -187,6 +187,25 @@ describe('执行器无结果的事务收尾', () => {
     expect(f.tx.onlineRechargeCard.updateMany).toHaveBeenCalled();
     expect(f.row.leaseId).toBeNull();
   });
+  it('不付款验收执行器离线后分类结束，不能重新排队创建第二单', async () => {
+    const f = fixture({
+      operation: 'debug',
+      payload: { validationMode: 'ready_before_payment' },
+      stage: 'checkout_open',
+      leaseExpiresAt: new Date(Date.now() - 1)
+    });
+    f.tx.onlineRechargeTask.findMany.mockResolvedValue([f.row]);
+    await f.worker.claim('replacement-worker');
+    expect(f.row.status).toBe('failed');
+    expect(f.row.result).toMatchObject({
+      code: 'EXECUTOR_INTERRUPTED',
+      validationReport: {
+        outcome: 'failed_with_class',
+        lastStage: 'checkout_open',
+        diagnosticUploaded: false
+      }
+    });
+  });
   for (const evidence of [
     { paymentStarted: true },
     { confirmedPaid: true },

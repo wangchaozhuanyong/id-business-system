@@ -24,7 +24,12 @@ async function execute(task, cfg) {
         return require('./third-party.cjs').executeThirdParty(task, cfg, { progress });
       return require('./upstream/index').run({ paymentLimit: payload.paymentLimit });
     case 'debug':
-      return require('./upstream/index').run({ paymentLimit: payload.paymentLimit });
+      return require('./upstream/index').run({
+        paymentLimit: payload.paymentLimit,
+        ...(task.payload?.validationMode === 'ready_before_payment'
+          ? { unpaidValidation: true }
+          : {})
+      });
     case 'subscription':
       if (payload.recheckTaskId)
         return require('./confirmation.cjs').recheck(task, cfg, { sessionRaw: task.session });
@@ -142,6 +147,11 @@ async function execute(task, cfg) {
 }
 async function runTask(task) {
   configureTask(task);
+  const validation =
+    task.operation === 'debug' && task.payload?.validationMode === 'ready_before_payment'
+      ? require('./unpaid-validation.cjs')
+      : null;
+  validation?.start(send);
   rememberSecrets(task);
   rememberSecrets(task.code, 'secret');
   rememberSecrets(process.env.ONLINE_RECHARGE_WORKER_KEY, 'secret');
@@ -162,6 +172,7 @@ async function runTask(task) {
       captcha_platform_timeout: config.hcaptcha?.platform_timeout
     };
     phase = 'proxy';
+    validation?.stage('proxy');
     const proxy = ['recharge', 'debug', 'subscription', 'renewal'].includes(task.operation)
       ? (await require('./upstream/mysql-store').getActiveProxy()) || ''
       : '';
@@ -196,7 +207,20 @@ async function runTask(task) {
     );
     phase = 'execution';
     executionStarted = true;
-    const result = await execute(task, config);
+    let result = await execute(task, config);
+    if (validation) {
+      if (wasSubmitted() || require('./rpc.cjs').wasPaymentConfirmed())
+        throw new ResultUnknownError('不付款模式提交状态异常，必须核对');
+      const validationReport = validation.finish(result);
+      result = {
+        ...result,
+        validationReport,
+        success: validationReport.outcome === 'ready_before_payment',
+        pendingCredentials: false,
+        resultUnknown: false,
+        error: validation.message(validationReport)
+      };
+    }
     if (require('./rpc.cjs').taskSignal().aborted) return;
     if (task.operation === 'recharge' && !result?.resultUnknown && !result?.pendingCredentials) {
       const event = result?.success
@@ -229,13 +253,15 @@ async function runTask(task) {
       status,
       result: sanitizeResult(result),
       message:
-        status === 'succeeded'
-          ? '执行完成'
-          : status === 'awaiting_review'
-            ? '外部结果待核对，禁止重试'
-            : status === 'pending_credentials'
-              ? '等待补齐本次临时安全码'
-              : '执行未完成'
+        validation && result?.validationReport
+          ? validation.message(result.validationReport)
+          : status === 'succeeded'
+            ? '执行完成'
+            : status === 'awaiting_review'
+              ? '外部结果待核对，禁止重试'
+              : status === 'pending_credentials'
+                ? '等待补齐本次临时安全码'
+                : '执行未完成'
     });
   } catch (error) {
     // Cancellation has no business outcome. The parent/server lease recovery
@@ -265,14 +291,22 @@ async function runTask(task) {
     send({
       type: 'result',
       status:
-        error.code === 'PENDING_CREDENTIALS'
+        error.code === 'PENDING_CREDENTIALS' && !validation
           ? 'pending_credentials'
           : wasSubmitted() ||
               require('./rpc.cjs').wasPaymentConfirmed() ||
               error.code === 'RESULT_UNKNOWN'
             ? 'awaiting_review'
             : 'failed',
-      result: proxyFailure || sanitizeResult({ code: error.code || 'EXECUTION_FAILED', phase }),
+      result:
+        proxyFailure ||
+        sanitizeResult({
+          code: error.code || 'EXECUTION_FAILED',
+          phase,
+          ...(validation && !wasSubmitted() && !require('./rpc.cjs').wasPaymentConfirmed()
+            ? { validationReport: validation.finish(error) }
+            : {})
+        }),
       message: proxyFailure ? proxyFailure.error : '执行未完成，请查看受限诊断'
     });
   } finally {
