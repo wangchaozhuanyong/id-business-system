@@ -58,8 +58,23 @@ export function isUnpaidValidationOnly(paths) {
     paths.every((p) => unpaidValidationPaths.includes(p) || unpaidValidationControls.includes(p))
   );
 }
+export function isUnpaidValidationControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some(
+      (p) =>
+        p.startsWith('scripts/production-release/online-unpaid-validation-') ||
+        p.startsWith('scripts/ci-unpaid-validation-') ||
+        p === '.github/workflows/online-unpaid-validation-publication.yml'
+    ) &&
+    paths.every((p) => unpaidValidationControls.includes(p))
+  );
+}
 export function unpaidValidationCommands(part, paths) {
-  if (!isUnpaidValidationOnly(paths)) throw new Error('Unsupported unpaid validation scope');
+  const controlsOnly = isUnpaidValidationControlsOnly(paths);
+  if (!isUnpaidValidationOnly(paths) && !controlsOnly)
+    throw new Error('Unsupported unpaid validation scope');
   const npm = (...args) => ['npm', ...args];
   const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
   if (part === 'guards') {
@@ -70,22 +85,26 @@ export function unpaidValidationCommands(part, paths) {
       (p) => /\.(?:mjs|cjs|ts|vue)$/.test(p) && !p.includes('/engine/upstream/')
     );
     return [
-      npm('exec', '--', 'prettier', '--check', ...formatted),
-      npm('exec', '--', 'eslint', ...linted),
+      ...(formatted.length ? [npm('exec', '--', 'prettier', '--check', ...formatted)] : []),
+      ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
-      ...[
-        'check:admin-ui',
-        'check:v2-ui-language',
-        'check:v2-color-contrast',
-        'check:v2-table-standard',
-        'check:v2-loading-standard',
-        'check:v2-module-architecture',
-        'check:v2-isolation',
-        'test:online-recharge:controls'
-      ].map((n) => npm('run', n))
+      ...(controlsOnly
+        ? ['check:v2-module-architecture', 'check:v2-isolation']
+        : [
+            'check:admin-ui',
+            'check:v2-ui-language',
+            'check:v2-color-contrast',
+            'check:v2-table-standard',
+            'check:v2-loading-standard',
+            'check:v2-module-architecture',
+            'check:v2-isolation',
+            'test:online-recharge:controls'
+          ]
+      ).map((n) => npm('run', n))
     ];
   }
+  if (controlsOnly) throw new Error('Control-only update cannot select application checks');
   if (part === 'api')
     return [
       npm('run', 'prisma:mysql:generate'),

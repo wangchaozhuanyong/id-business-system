@@ -284,7 +284,7 @@
   "beforeEngineVerified": true,
   "businessActions": 0,
   "configurationSha256": {
-    ".env.aws.production": "0af19526d5303a0c90556b6ffb6c11d9fa3e26e9c6a0b140e3891febb2e3106e",
+    ".env.aws.production": "7de277c90700f62ac334282c2ff8331d110755d1a41d32422f73c4c172f0f03e",
     "compose.release.json": "24849b9e2139ea34857a74321ee9ba2e473a05a25c7eb2600e8ddc5aeef851b1",
     "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
   },
@@ -370,9 +370,9 @@
     "online-subscription-challenge-release.py": "9111eae04aca42cb191933005337a531e8b07bd198540c18df2e7c0aadefa207",
     "online-subscription-challenge-release.test.py": "2a0a51565bde4738af88f0e80dab3377825b4299489d9f4f5a617eac8281f9a7",
     "online-unpaid-validation-build.py": "d64265ea6b3e8814da5f2da96f3858267db0320f1a34b8c2c99dcd0604d998b0",
-    "online-unpaid-validation-publication.py": "7ae7387e599417c824551357c36af513d85ab372ab210e43d8aaab7ad12a44d5",
-    "online-unpaid-validation-release.py": "a81f6690110df296ebc9a5e0c61f6ee5a7ef53187bd02aa411562aeade003010",
-    "online-unpaid-validation-release.test.py": "51efa078f8e70fe43bdf2c9e01d601529f2dd78a6f35dcb28f56b807a61f72c1",
+    "online-unpaid-validation-publication.py": "467fa77025073f720a4fd8758dd6c008d70c05eeb9a5757d281418d23da7f852",
+    "online-unpaid-validation-release.py": "33b4cb37f7129a7c0aa4ce8a1897c8776be77378768a55428036325c3e0757a5",
+    "online-unpaid-validation-release.test.py": "c8b6399d525209929a4c5f7f4a27861e77ffcc409b4627e915cda99748df288d",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
     "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
@@ -398,9 +398,16 @@
   "manifestSha256": "e73d67476666e9e26ef446f7360efd795bf17198be264e0f8520bb5100ecfdef",
   "migrationControlsSha256": "808684d4c04342904f7626586aa4baf476f308f2509146ffdca40dee70aaec4c",
   "migrationPerformed": false,
+  "nativeObservation": {
+    "commit": "5620990a32820be82e3921d90489fdbc029119b9",
+    "resultSha256": "be285aaffdc862a1e84cc20c70dd45c1f5999c64c590dbb792b9f13e500b7e3d",
+    "runAttempt": "1",
+    "runId": "40101148365"
+  },
   "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
   "packageLockSha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
+  "publicUrl": "https://54-249-61-238.sslip.io",
   "publishedOverlays": [
     {
       "proofFile": "online-country-interaction-build-proof.json",
@@ -410,11 +417,11 @@
   "reviewBase": "aeb64212d1d626e643eb2993d6c7963f7e37fc86",
   "runtimeConfigurationSha256": {
     "admin": "a7993007d2d0ab0f565b215ae3ace7b980f350ac2cd05933d9e0025ecd8c6843",
-    "api": "8857651291690bbd66b780a08117343d4ea1ba011700f179dbc423dbf9c03f61",
+    "api": "c1fe40a0fbfdebdb74bee5c624a3f152cc4f05a87cffc47e3ab8abf80fc5a8b3",
     "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
-    "caddy": "88ce71d5f0e9c5c02690c3d12d60042787f0919b5bbd13369c95988e17c74bee",
+    "caddy": "37b12e50ce33d08e21ecd1b6107dc6654b900c16b349069a14e64ec9fb00c6ed",
     "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
-    "mysql": "7c4fc6fea1da1bd857bb2ab0a13486a0d09332f242b38bda895340d4526248bc",
+    "mysql": "3e43803f56bcc5f3f5624ac0f0a433a1c4efffc74634f1dc1b984ac15444980b",
     "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
   },
   "scope": "ONLINE_UNPAID_VALIDATION_20261024",
@@ -425,16 +432,16 @@
       "health": "healthy",
       "image": "sha256:5237f36e7eaaade222c25fa5d0d3c2a2e317e0ba4272ab4065b01b9db60b7e37",
       "reference": "id-business-v2-history:c87e5ec2268ae9f6509a5545bb8e961be49837f1-40000374044-admin",
-      "startedAtSha256": "6c9b4ea0367598839fa9f3952f87d4b1d7e0cf17b7d183e4a63865432272fe42",
+      "startedAtSha256": "48dc3d34b9ad4a6af981a58cbf8e239ed2c83cdcc84d521b5174fd8c24190329",
       "status": "running"
     },
     "api": {
-      "containerId": "f55b95f6a10adefcc02a336cdadcd3985d86bc0eae62526a1ad20e3a2139fade",
-      "environmentSha256": "b842cf16de29ad1a7665f58e7d07e3513b4506b87ed22149384ee773f0663b61",
+      "containerId": "912ae2c5dd6b1e265c2fb7f58443ad6a26d65237925235bb848cca69002cc5bc",
+      "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
       "health": "healthy",
       "image": "sha256:a2cd3a9de4416390f69172a797e56ba95e97f10387191904d9cceb36ff32dc2a",
       "reference": "id-business-v2-history:957407e571e7ac629393d6355a09506a196e5f91-39750166040-api",
-      "startedAtSha256": "031b3517c00f1ad68bf729c584d291771d71e36b22e7ab0edda223b1396335da",
+      "startedAtSha256": "1fc1e11be8428b9e2806f8011bf30b310a2db1d70b8c3aedb7d07bf768c93099",
       "status": "running"
     },
     "auto-recharge": {
@@ -443,16 +450,16 @@
       "health": "healthy",
       "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
       "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
-      "startedAtSha256": "2ed0b8f6979adf03cbf4451bc693d183d8d261edbbeeb79c850407b10f31f9db",
+      "startedAtSha256": "ce57fbedd4aacfbacce4a7e2234c19872954a1c13647e187fd0bc16be1913c98",
       "status": "running"
     },
     "caddy": {
-      "containerId": "629ce0a6cd593cd36fa80051493efc381f7e275b087d66cc8535d9f40493b9f3",
-      "environmentSha256": "8421125c5623b2fa4fe2f433f1df963a24f9e83acdd5670e20778169ff0badda",
+      "containerId": "c9a03e8ade2f9fa42fed7881cac7e75d1d0bd01dd9f213123039ce740bb61a3e",
+      "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
       "health": null,
       "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
       "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
-      "startedAtSha256": "b8fa18f2de57cf7f267ecd7a8fd4e4eed5342b093fd36a69933370346eeb28e5",
+      "startedAtSha256": "bab6dc0fcb271e0af4ea79f24bfeb1406617f22f36db7f845984b0c9fcc80476",
       "status": "running"
     },
     "media-resolver": {
@@ -461,7 +468,7 @@
       "health": "healthy",
       "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
       "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
-      "startedAtSha256": "b88bc40f92fad6e08db490cfaccbe97b2feb25638fdffebcff94cfd0d3853e10",
+      "startedAtSha256": "881f72435aeafd10dc248f7627ee1a72fef579e81a5435e86291213ea9886c8c",
       "status": "running"
     },
     "mysql": {
@@ -470,18 +477,26 @@
       "health": "healthy",
       "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
       "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
-      "startedAtSha256": "945489c5a26fe2213ba3c89b79b4106a736527cc672b4304d84b40fa94e7e4f6",
+      "startedAtSha256": "d3a18b6873a7e69811c62fc3eb0af7086eda8573ee2d8fbba743631cb47910d2",
       "status": "running"
     },
     "online-recharge": {
-      "containerId": "05107a89449e232cc3e292b076fc68977e8b8118fe020a2ebd29f1cc5376814d",
+      "containerId": "5ce1994e93da584a183578dd357a7c28c856a82668963447144ba1953a585cf6",
       "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
       "health": "healthy",
       "image": "sha256:16626eaaacd5a7d0f1cd059ed94efad818414dd28397395caaeeecbe120ab2d7",
       "reference": "id-business-v2-online-country-interaction:a046d8413e3cb6c3edd6429dbdb922593dc32064-40084114674",
-      "startedAtSha256": "db15794c683d8e6dcaa34738f36234b57ab087613ad7438924b6164ecb85f58a",
+      "startedAtSha256": "c1a5e17f050c2b3afb273a1fae036d1661a7b12b0f380a29be29b710b9c6ea45",
       "status": "running"
     }
+  },
+  "sourceQuality": {
+    "head": "8bbf12ebad245c4ccd532ba78cd07493ca02d25f",
+    "mergeCommit": "5620990a32820be82e3921d90489fdbc029119b9",
+    "pullRequest": 697,
+    "runAttempt": "1",
+    "runId": "40100356391",
+    "sourceReceiptSha256": "c1c968290748c9f4649426e17c6b5004e1b8f46789aefb1c744d12b946d907a1"
   },
   "sourceReviewCommit": "a00a3e0edeb9e3c83055103333ee35772bc0b5c6",
   "sources": {

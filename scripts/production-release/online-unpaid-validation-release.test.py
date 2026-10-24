@@ -36,6 +36,16 @@ class FinitePublication(unittest.TestCase):
   self.assertIn('if: inputs.inspect_only',workflow)
   self.assertIn('&& !inputs.inspect_only',workflow)
   self.assertIn('publication.py observe',workflow)
+ def test_control_publication_requires_authenticated_prior_source_qa_binding(self):
+  q={'commit':'a'*40,'tree':'b'*40,'pullRequest':698,'sourceReviewCommit':p.SOURCE,'sourceReceiptSha256':'c'*64}
+  with self.assertRaises(RuntimeError):p.verify_quality(q,q['commit'],q['tree'])
+  q['sourceVerification']=self.c['sourceQuality'];p.verify_quality(q,q['commit'],q['tree'])
+  q['sourceVerification']={**q['sourceVerification'],'head':'d'*40}
+  with self.assertRaises(RuntimeError):p.verify_quality(q,q['commit'],q['tree'])
+ def test_unknown_failure_never_outputs_raw_error_text(self):
+  report=p.failure_report(ValueError('synthetic-private-message'),{'mode':'preflight','controlSources':{}})
+  self.assertEqual(report['code'],'ONLINE_UNPAID_REMOTE_FAILED')
+  self.assertNotIn('synthetic-private-message',str(report))
  def test_source_and_control_pins_match_saved_files(self):
   for n,v in self.c['controlPins'].items():self.assertEqual(p.sha((HERE/n).read_bytes()),v,n)
 if __name__=='__main__':unittest.main()
