@@ -270,7 +270,7 @@ def observe(c):
     need(json.loads(execute('aws','sts','get-caller-identity','--output','json'))['Account']=='098208446664','AWS_ACCOUNT_CHANGED')
     native=identity();need(not OUT.exists(),'OUTPUT_EXISTS');OUT.mkdir(parents=True,mode=0o700)
     result=transport(native_plan(c,native),'observe')
-    need(result['status']=='ONLINE_UNPAID_TARGET_OBSERVED','OBSERVATION_FAILED')
+    need(result['status']==('ONLINE_UNPAID_ACCEPTED_SWITCH_OBSERVED' if c.get('acceptedSwitch') else 'ONLINE_UNPAID_TARGET_OBSERVED'),'OBSERVATION_FAILED')
     print(json.dumps({'status':result['status'],'commit':native['commit'],'publicUrl':result['publicUrl'],'businessActions':0}))
 
 def main():

@@ -144,4 +144,4 @@ def observe_accepted_switch(c):
     h=load('recharge-record-release.py');h.SERVICES=SERVICES;d=load('remote-deploy.py')
     states=h.snapshot(d,target)
     models={role:configuration_equivalence(h,d,state,c['runtimeConfigurationSha256'][role]) for role,state in states.items()}
-    return {'status':'ONLINE_UNPAID_ACCEPTED_SWITCH_OBSERVED','current':str((base/'current').resolve()),'target':str(target),'journalStatus':journal['status'],'services':states,'configuration':models,'allConfigurationMatched':all(v['matched'] for v in models.values()),'businessActions':0,'containersRecreated':False}
+    return {'status':'ONLINE_UNPAID_ACCEPTED_SWITCH_OBSERVED','publicUrl':c['publicUrl'],'current':str((base/'current').resolve()),'target':str(target),'journalStatus':journal['status'],'services':states,'configuration':models,'allConfigurationMatched':all(v['matched'] for v in models.values()),'businessActions':0,'containersRecreated':False}
