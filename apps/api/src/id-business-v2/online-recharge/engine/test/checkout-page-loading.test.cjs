@@ -11,11 +11,14 @@ const runtime = require('../upstream/verification-runtime');
 const platform = require('../upstream/captcha-platform');
 const form = require('../checkout-form.cjs');
 const recovery = require('../checkout-recovery.cjs');
+const { checkoutPageFlags } = require('../checkout-page-state.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../upstream/human-verification.js'), 'utf8');
 const stripeSource = fs.readFileSync(path.join(__dirname, '../upstream/stripe-payment.js'), 'utf8');
 const original = 'https://chatgpt.com/checkout/openai_llc/cs_test_loadingOriginal';
 const failureHtml = '<h1>Content failed to load</h1><button>Try again</button>';
 const readyHtml = '<label>Card number<input autocomplete="cc-number"></label>';
+const processingErrorHtml =
+  '<p>There was an error processing your payment</p><a href="https://chatgpt.com/">Return to ChatGPT</a>';
 let browser;
 
 test.before(async () => {
@@ -114,6 +117,90 @@ async function fixture(t, body, url = original) {
   t.after(() => runtime.disposeVerificationPage(page));
   return { page, stats };
 }
+
+test('observed official terminal error stops before readiness, reload or payment', async (t) => {
+  let prepare = 0,
+    solver = 0;
+  const { page, stats } = await fixture(t, processingErrorHtml);
+  const flags = await page.evaluate(checkoutPageFlags);
+  assert.equal(flags.processingError, true);
+  assert.equal(flags.expired, false, 'generic processing error is not proof of expiration');
+  const result = await human(() => solver++).clearHumanVerification(page, {
+    requireCheckoutReady: true,
+    allowCheckoutReload: true,
+    maxWaitMs: 5000,
+    isSubmitted: () => false,
+    prepareCheckout: async () => prepare++
+  });
+  assert.equal(result.code, 'CHECKOUT_CONTENT_LOAD_FAILED');
+  assert.equal(result.checkoutErrorPage, true);
+  assert.equal(result.captchaRequired, false);
+  assert.deepEqual(Array.from(result.missing), []);
+  assert.equal(prepare, 0);
+  assert.equal(solver, 0);
+  assert.equal(stats.documents, 1);
+  assert.equal(stats.writes, 0);
+});
+
+test('terminal error evidence requires both visible exact message and return control', async (t) => {
+  for (const body of [
+    '<p>There was an error processing your payment</p>',
+    '<a href="/">Return to ChatGPT</a>',
+    '<p>Example: There was an error processing your payment</p><a href="/">Return to ChatGPT</a>',
+    '<div hidden>' + processingErrorHtml + '</div>',
+    '<div style="opacity:0">' + processingErrorHtml + '</div>',
+    '<div inert>' + processingErrorHtml + '</div>',
+    '<article>' + processingErrorHtml + '</article>',
+    '<section data-message-author-role="assistant">' + processingErrorHtml + '</section>'
+  ]) {
+    const { page } = await fixture(t, body);
+    assert.equal((await page.evaluate(checkoutPageFlags)).processingError, false);
+  }
+});
+
+test('terminal checkout classification excludes home and non-official origins', async (t) => {
+  for (const url of [
+    'https://chatgpt.com/',
+    'https://chatgpt.com.attacker.invalid/checkout/fixture'
+  ]) {
+    const { page } = await fixture(t, processingErrorHtml, url);
+    assert.equal((await page.evaluate(checkoutPageFlags)).processingError, false);
+  }
+});
+
+test('hidden processing error cannot block real editable fields and no text or values leave the probe', async (t) => {
+  const { page } = await fixture(
+    t,
+    '<div hidden>' +
+      processingErrorHtml +
+      '</div>' +
+      readyHtml +
+      '<input value="synthetic-private-canary">'
+  );
+  const flags = await page.evaluate(checkoutPageFlags);
+  assert.equal(flags.processingError, false);
+  assert.ok(Object.values(flags).every((value) => typeof value === 'boolean'));
+  assert.doesNotMatch(JSON.stringify(flags), /canary|https:|processing your payment|Return to/);
+  const result = await human().clearHumanVerification(page, {
+    requireCheckoutReady: true,
+    maxWaitMs: 4000,
+    isSubmitted: () => false
+  });
+  assert.equal(result.cleared, true);
+});
+
+test('post-submit processing page is not reclassified as a new prepayment failure', async (t) => {
+  const { page, stats } = await fixture(t, processingErrorHtml);
+  const result = await human().clearHumanVerification(page, {
+    requireCheckoutReady: true,
+    checkoutReadyWaitMs: 500,
+    maxWaitMs: 2000,
+    isSubmitted: () => true
+  });
+  assert.equal(result.checkoutErrorPage, undefined);
+  assert.equal(stats.documents, 1);
+  assert.equal(stats.writes, 0);
+});
 
 test('plan, amount, pay button and an unrelated iframe cannot establish card readiness', async (t) => {
   let solverCalls = 0;

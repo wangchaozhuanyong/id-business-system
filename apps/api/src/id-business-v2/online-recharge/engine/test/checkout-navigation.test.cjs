@@ -251,6 +251,21 @@ function assertOpeningDiagnostics(actual, expected) {
   );
 }
 
+test('accepted HTTP 200 error page retains error-page classification without replacing checkout or payment', async (t) => {
+  const { stats, start } = await fixture(t, {
+    body: '<p>There was an error processing your payment</p><a href="https://chatgpt.com/">Return to ChatGPT</a>'
+  });
+  await assert.rejects(start(), (error) => {
+    assert.equal(error.checkoutCreationState, 'accepted');
+    assert.equal(error.checkoutOpenDiagnostics.reason, 'error_page');
+    assert.equal(error.checkoutOpenDiagnostics.code, 'CHECKOUT_CONTENT_LOAD_FAILED');
+    assert.deepEqual(error.checkoutOpenDiagnostics.missing, []);
+    return true;
+  });
+  assert.equal(stats.documents, 1);
+  stoppedWithoutPayment(stats);
+});
+
 test('first-open SDK failure reaches the real accepted-checkout result without filling or replacing it', async (t) => {
   const { stats, start } = await fixture(t, {
     scriptAbort: 'connectionclosed',

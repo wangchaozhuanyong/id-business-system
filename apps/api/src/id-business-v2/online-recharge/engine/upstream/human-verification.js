@@ -895,6 +895,12 @@ async function clearHumanVerification(page, options = {}) {
                 ? checkoutFailure('CHECKOUT_PAGE_CLOSED') : unknown('VERIFICATION_PAGE_CLOSED');
             if (await budget.run(isCheckoutLoginGate(page)) || await budget.run(hasVisibleLoginChrome(page)))
                 return { ...unknown('SESSION_INVALID'), sessionRequired: true, message: buildSessionNotLoggedInError('验证页面') };
+            if (checkCheckoutLoad && (!options.isSubmitted || !options.isSubmitted())
+                && (await budget.run(() => page.evaluate(require('../checkout-page-state.cjs').checkoutPageFlags))).processingError) {
+                // An official terminal page has no card form to wait for. Do not
+                // reload it or interpret it as an issuer decline/expired session.
+                return { ...checkoutFailure('CHECKOUT_CONTENT_LOAD_FAILED'), checkoutErrorPage: true, missing: [], controls: [] };
+            }
             if (checkCheckoutLoad && await budget.run(form.checkoutPageLoadFailed(page, { deadline: Date.now() + budget.remaining(), signal: budget.signal }))) {
                 checkoutWaiting = true;
                 if (!recovery) return checkoutFailure('CHECKOUT_CONTENT_LOAD_FAILED');

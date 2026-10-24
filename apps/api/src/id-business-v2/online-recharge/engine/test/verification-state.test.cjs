@@ -44,6 +44,7 @@ function human(
       if (name === './verification-runtime') return runtime;
       if (name === './auth-page-detect') return require('../upstream/auth-page-detect');
       if (name === '../checkout-form.cjs') return require('../checkout-form.cjs');
+      if (name === '../checkout-page-state.cjs') return require('../checkout-page-state.cjs');
       throw Error(name);
     },
     URL,

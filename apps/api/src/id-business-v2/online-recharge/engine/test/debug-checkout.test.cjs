@@ -72,14 +72,15 @@ test('accepted failed debug retains only its original link through the existing 
     { debugOnly: true, submitted: false, accepted: true, retain: true },
     { debugOnly: false, submitted: false, accepted: true, retain: false },
     { debugOnly: true, submitted: true, accepted: true, retain: false },
-    { debugOnly: true, submitted: false, accepted: false, retain: false }
+    { debugOnly: true, submitted: false, accepted: false, retain: false },
+    { debugOnly: true, submitted: false, accepted: true, retain: true, terminalPage: true }
   ]) {
     const error = Object.assign(new Error('Payment UI did not initialize'), {
       code: 'CHECKOUT_OPEN_FAILED',
       checkoutCreationState: scenario.accepted ? 'accepted' : 'unknown',
       checkoutOpenDiagnostics: {
         stage: 'readiness',
-        reason: 'not_ready',
+        reason: scenario.terminalPage ? 'error_page' : 'not_ready',
         initialization: {
           version: 1,
           elapsedMs: 65886,
@@ -146,6 +147,7 @@ test('accepted failed debug retains only its original link through the existing 
       /后续观测异常（不等同根因）.*37154毫秒.*内容安全策略阻止.*44013毫秒.*连接关闭/
     );
     assert.equal(result.success, false);
+    if (scenario.terminalPage) assert.match(result.error, /官网结账错误页（原因尚未确定）/);
     assert.equal(result.resultUnknown, scenario.submitted);
     assert.equal(result.checkoutUrl, scenario.retain ? original : undefined);
     assert.equal(result.error.includes(original), false);
