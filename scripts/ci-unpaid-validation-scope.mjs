@@ -69,7 +69,11 @@ export const unpaidValidationControls = Object.freeze([
   'scripts/production-release/online-unpaid-validation-build.py',
   'scripts/production-release/online-unpaid-validation-publication.py',
   'scripts/production-release/online-unpaid-validation-release.test.py',
-  'scripts/production-release/online-unpaid-validation-contract.json'
+  'scripts/production-release/online-unpaid-validation-contract.json',
+  '.github/workflows/online-checkout-resume-publication.yml',
+  ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-checkout-resume-' + name
+  )
 ]);
 export function isUnpaidValidationOnly(paths) {
   return (
@@ -88,6 +92,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-checkout-resume-') ||
+        p === '.github/workflows/online-checkout-resume-publication.yml' ||
         p.startsWith('scripts/production-release/online-unpaid-validation-') ||
         p.startsWith('scripts/ci-unpaid-validation-') ||
         p === '.github/workflows/online-unpaid-validation-publication.yml'
@@ -113,6 +119,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-checkout-resume-'))
+        ? [['python3', '-B', 'scripts/production-release/online-checkout-resume-release.test.py']]
+        : []),
       ...(controlsOnly
         ? ['check:v2-module-architecture', 'check:v2-isolation']
         : [
