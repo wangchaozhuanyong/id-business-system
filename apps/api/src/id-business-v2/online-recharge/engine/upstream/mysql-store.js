@@ -67,6 +67,12 @@ module.exports = {
   getCardPolicy: () => rpc('getCardPolicy'),
   verifyCdkDetails: (cdk) => rpc('verifyCdkDetails', { code: cdk }),
   getActiveProxy,
+  preflightCard: async () => {
+    const result = await rpc('reserveCard', { preflightOnly: true });
+    if (result?.pendingCredentials) throw Object.assign(new Error('等待补齐本次临时安全码'), { code: 'PENDING_CREDENTIALS' });
+    if (!result) throw Object.assign(new Error('缺少可用银行卡'), { code: 'INPUT_MISSING' });
+    return result;
+  },
   getAppConfigValue: (key, fallback) => key === 'last_used_address_id' ? rpc('getAppConfigValue', { key, fallback }) : Promise.reject(new Error('不允许读取该配置')),
   setAppConfigValue: (key, value) => key === 'last_used_address_id' ? rpc('setAppConfigValue', { key, value }) : Promise.reject(new Error('不允许写入该配置')),
   reserveCard, requireCardCvc, releaseCard, clearCredentials,

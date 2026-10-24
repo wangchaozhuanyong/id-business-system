@@ -109,6 +109,55 @@ test('read incomplete takes precedence over a zero candidate at card stage', () 
   );
 });
 
+test('不付款报告保留准备状态和控件读取诊断，移除未允许的正文及链接', () => {
+  const snapshot = () => ({
+    format: 'unpaid-validation-v1',
+    startedAt: new Date().toISOString(),
+    timeline: [{ stage: 'checkout_open', startedAt: new Date().toISOString() }]
+  });
+  const preparing = validation.finish(
+    {
+      errorCode: 'CHECKOUT_PLAN_PREPARING',
+      checkoutOpenDiagnostics: {
+        stage: 'readiness',
+        reason: 'not_ready',
+        code: 'CHECKOUT_PLAN_PREPARING',
+        rawBody: 'private diagnostic text',
+        checkoutUrl: 'https://example.invalid/private'
+      }
+    },
+    snapshot()
+  );
+  assert.equal(preparing.failureClass, 'PAYMENT_COMPONENT_NOT_LOADED');
+  assert.equal(preparing.failureCode, 'CHECKOUT_PLAN_PREPARING');
+  assert.equal(preparing.checkoutOpenDiagnostics.code, 'CHECKOUT_PLAN_PREPARING');
+  assert.equal(JSON.stringify(preparing).includes('private'), false);
+  const incomplete = validation.finish(
+    {
+      errorCode: 'CHECKOUT_CONTROL_READ_FAILED',
+      checkoutOpenDiagnostics: {
+        stage: 'readiness',
+        reason: 'not_ready',
+        code: 'CHECKOUT_CONTROL_READ_FAILED',
+        inspection: {
+          complete: false,
+          framesFailed: 1,
+          framesChecked: 0,
+          framesSkipped: 0,
+          timedOut: true,
+          aborted: false,
+          pageClosed: false,
+          readPhase: 'frame_scan'
+        }
+      }
+    },
+    snapshot()
+  );
+  assert.equal(incomplete.failureClass, 'READ_INCOMPLETE');
+  assert.equal(incomplete.checkoutOpenDiagnostics.inspection.complete, false);
+  assert.equal(incomplete.checkoutOpenDiagnostics.inspection.framesFailed, 1);
+});
+
 test('report keeps ISO times through the ordinary result sanitizer', () => {
   validation.start();
   validation.stage('login');
@@ -209,7 +258,16 @@ test('actual task runner and native checkout path stop before any payment action
   task.operation = 'debug';
   task.payload.validationMode = 'ready_before_payment';
   const actual = await harness.runSyntheticRecharge('success', { task });
-  assert.equal(actual.result.status, 'succeeded');
+  assert.equal(actual.failure, '', 'fixture RPC must accept the independent debug protocol');
+  assert.equal(
+    actual.result.status,
+    'succeeded',
+    JSON.stringify({
+      code: actual.result.result?.errorCode,
+      failureClass: actual.result.result?.validationReport?.failureClass,
+      lastStage: actual.result.result?.validationReport?.lastStage
+    })
+  );
   assert.equal(actual.result.result.validationReport.outcome, 'ready_before_payment');
   assert.equal(actual.metrics.checkoutCreations, 1);
   assert.equal(actual.metrics.actualPaymentClicks, 0);

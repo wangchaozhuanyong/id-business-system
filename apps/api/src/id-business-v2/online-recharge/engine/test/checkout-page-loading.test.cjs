@@ -1,5 +1,5 @@
 'use strict';
-/* global window */
+/* global window, document */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -32,7 +32,7 @@ test.before(async () => {
 });
 test.after(async () => browser?.close());
 
-function human(onSolver = () => {}) {
+function human(onSolver = () => {}, formOverride = form) {
   const module = { exports: {} };
   runInNewContext(source, {
     module,
@@ -42,6 +42,7 @@ function human(onSolver = () => {}) {
     console: { log() {} },
     process: { env: { HEADFUL: '0' } },
     require(name) {
+      if (name === '../checkout-form.cjs') return formOverride;
       if (name === './hcaptcha-solver')
         return {
           isHcaptchaSolverEnabled: () => true,
@@ -117,6 +118,100 @@ async function fixture(t, body, url = original) {
   t.after(() => runtime.disposeVerificationPage(page));
   return { page, stats };
 }
+
+test('官网准备套餐时等待状态结束，再读取卡号，不刷新或提交', async (t) => {
+  const { page, stats } = await fixture(t, '<h1>Getting your plan ready</h1>');
+  let scansWhilePreparing = 0;
+  const verification = human(
+    () => {
+      throw Error('Unexpected solver');
+    },
+    {
+      ...form,
+      inspectCardReadiness: async (...args) => {
+        if ((await page.evaluate(checkoutPageFlags)).preparing) scansWhilePreparing++;
+        return form.inspectCardReadiness(...args);
+      }
+    }
+  );
+  await page.evaluate((html) => {
+    setTimeout(() => {
+      document.body.innerHTML = html;
+    }, 600);
+  }, readyHtml);
+  const result = await verification.clearHumanVerification(page, {
+    maxWaitMs: 5000,
+    checkoutReadyWaitMs: 3500,
+    requireCheckoutReady: true,
+    checkCheckoutLoad: true
+  });
+  assert.equal(result.cleared, true);
+  assert.equal(scansWhilePreparing, 0);
+  assert.equal(stats.documents, 1);
+  assert.equal(stats.writes, 0);
+});
+test('一直停在官网准备套餐时在原期限分类退出，完全不扫描空表单', async (t) => {
+  const { page, stats } = await fixture(t, '<h1>Getting your plan ready</h1>');
+  let scans = 0;
+  const verification = human(
+    () => {
+      throw Error('Unexpected solver');
+    },
+    {
+      ...form,
+      inspectCardReadiness: async () => {
+        scans++;
+        throw Error('Unexpected control scan');
+      },
+      checkoutPageLoadFailed: async () => {
+        throw Error('Unexpected empty form scan');
+      }
+    }
+  );
+  const result = await verification.clearHumanVerification(page, {
+    maxWaitMs: 3000,
+    checkoutReadyWaitMs: 800,
+    requireCheckoutReady: true,
+    checkCheckoutLoad: true
+  });
+  assert.equal(result.cleared, false);
+  assert.equal(result.code, 'CHECKOUT_PLAN_PREPARING');
+  assert.equal(scans, 0);
+  assert.equal(stats.writes, 0);
+  assert.equal(stats.documents, 1);
+});
+
+test('准备状态只认可官网可见完整提示，隐藏提示不阻挡真实卡号', async (t) => {
+  const { page } = await fixture(t, '<div hidden>Getting your plan ready</div>' + readyHtml);
+  assert.equal((await page.evaluate(checkoutPageFlags)).preparing, false);
+  const result = await human().clearHumanVerification(page, {
+    maxWaitMs: 3000,
+    checkoutReadyWaitMs: 2000,
+    requireCheckoutReady: true,
+    checkCheckoutLoad: true
+  });
+  assert.equal(result.cleared, true);
+});
+test('读取异常保留 inspection，不退化为控件不存在', async (t) => {
+  const { page } = await fixture(t, readyHtml);
+  const verification = human(() => {}, {
+    ...form,
+    checkoutPageLoadFailed: async () => {
+      throw Object.assign(new Error('synthetic incomplete read'), {
+        code: 'CHECKOUT_CONTROL_READ_FAILED',
+        inspection: { complete: false, framesFailed: 1, readPhase: 'frame_scan' }
+      });
+    }
+  });
+  const result = await verification.clearHumanVerification(page, {
+    maxWaitMs: 3000,
+    requireCheckoutReady: true,
+    checkCheckoutLoad: true
+  });
+  assert.equal(result.code, 'CHECKOUT_CONTROL_READ_FAILED');
+  assert.equal(result.inspection.complete, false);
+  assert.equal(result.inspection.framesFailed, 1);
+});
 
 test('observed official terminal error stops before readiness, reload or payment', async (t) => {
   let prepare = 0,

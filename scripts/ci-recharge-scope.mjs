@@ -3090,7 +3090,10 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
-  if (isUnpaidValidationOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
+  if (isUnpaidValidationOnly(paths))
+    return paths.some((p) => p.startsWith('apps/admin/'))
+      ? ['guards', 'api', 'admin', 'online-engine']
+      : ['guards', 'api', 'online-engine'];
   if (isUnpaidValidationControlsOnly(paths)) return ['guards'];
   if (isAwsAccountMigrationControlsOnly(paths, context)) return ['guards'];
   if (isOnlineCountryInteractionOnly(paths)) return ['guards', 'online-engine'];

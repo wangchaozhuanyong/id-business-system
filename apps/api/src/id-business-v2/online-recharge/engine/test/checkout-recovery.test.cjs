@@ -736,6 +736,8 @@ test('an invalid successful creation response cannot fall back to a second UI ch
       loginInfo: { session: {} },
       debugOnly: false,
       validation: null,
+      store: { preflightCard: async () => ({ id: 'synthetic-card' }) },
+      runOptions: {},
       console: { warn() {}, log() {} },
       openApiCheckout: async () => {
         apiCalls++;
@@ -752,7 +754,11 @@ test('an invalid successful creation response cannot fall back to a second UI ch
   }
 });
 
-function checkoutPhaseFixture(page, Service) {
+function checkoutPhaseFixture(
+  page,
+  Service,
+  preflightCard = async () => ({ id: 'synthetic-card' })
+) {
   const source = fs.readFileSync(path.join(__dirname, '../upstream/index.js'), 'utf8');
   const start = source.indexOf('        // --- Phase 2: API 创建 Checkout');
   const end = source.indexOf('\n        if (debugOnly)', start);
@@ -768,6 +774,8 @@ function checkoutPhaseFixture(page, Service) {
     loginInfo: { session: { accessToken: 'synthetic-only' } },
     debugOnly: false,
     validation: null,
+    store: { preflightCard },
+    runOptions: {},
     checkoutEvidence: {},
     require(name) {
       if (name === '../checkout-initialization.cjs')
@@ -787,6 +795,26 @@ function checkoutPhaseFixture(page, Service) {
   });
   return { pending, uiCalls: () => uiCalls };
 }
+
+test('正式建单路径在缺少安全码时不建单、不打开付款页或转入 UI 建单', async () => {
+  let posts = 0;
+  const phase = checkoutPhaseFixture(
+    {},
+    {
+      openApiCheckout: async () => {
+        posts++;
+      }
+    },
+    async () => {
+      throw Object.assign(new Error('synthetic missing credentials'), {
+        code: 'PENDING_CREDENTIALS'
+      });
+    }
+  );
+  await assert.rejects(phase.pending, { code: 'PENDING_CREDENTIALS' });
+  assert.equal(posts, 0);
+  assert.equal(phase.uiCalls(), 0);
+});
 
 test('the official hosted opener defers strict card readiness until payment-method selection', async () => {
   let verificationOptions,

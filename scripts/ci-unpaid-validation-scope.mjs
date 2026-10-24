@@ -38,6 +38,27 @@ export const unpaidValidationPaths = Object.freeze([
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ]);
+export const checkoutResumePaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/checkout-preparation.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-page-state.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-preparation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-page-loading.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-preparation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/unpaid-validation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/unpaid-validation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/mysql-store.js',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker-rpc.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
+  'docs/V2_TASKS.md'
+]);
 export const unpaidValidationControls = Object.freeze([
   'scripts/ci-online-settings-scope.mjs',
   'scripts/ci-recharge-scope.mjs',
@@ -54,8 +75,11 @@ export function isUnpaidValidationOnly(paths) {
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
-    unpaidValidationPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
-    paths.every((p) => unpaidValidationPaths.includes(p) || unpaidValidationControls.includes(p))
+    [unpaidValidationPaths, checkoutResumePaths].some(
+      (batch) =>
+        batch.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+        paths.every((p) => batch.includes(p) || unpaidValidationControls.includes(p))
+    )
   );
 }
 export function isUnpaidValidationControlsOnly(paths) {
