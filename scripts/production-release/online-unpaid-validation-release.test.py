@@ -31,6 +31,9 @@ class FinitePublication(unittest.TestCase):
  def test_modules_not_broadened(self):
   self.c['apiModules'].append('auth/auth.service.js')
   with self.assertRaises(RuntimeError):p.validate_contract(self.c)
+ def test_indirect_declarations_cannot_include_executable_or_unrelated_files(self):
+  self.c['apiDeclarationOnly']['auth/auth.service.js']='a'*64
+  with self.assertRaises(RuntimeError):p.validate_contract(self.c)
  def test_observation_does_not_enter_a_build_or_publish_job(self):
   workflow=(HERE.parents[1]/'.github/workflows/online-unpaid-validation-publication.yml').read_text()
   self.assertIn('if: inputs.inspect_only',workflow)
