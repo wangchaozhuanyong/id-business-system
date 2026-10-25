@@ -289,7 +289,7 @@
     "id-business-v2/workspace/vendure-mailbox-list.js.map": "1f1aa75b985f6c6797ab2d2b6e0cbcddd62b0a72f834eb682e50c6a1954f8607"
   },
   "businessActions": 0,
-  "controlBase": "2581f4e6a5f01aec692c5856a3aa7a70307a714b",
+  "controlBase": "67277d6c507f3bbfcd827070dfe6f1631f1904bc",
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",
@@ -315,7 +315,7 @@
     "financial-closure-readonly.test.py": "8dfa396a1b9e601418184edbd4bedab1460cc9a888473a5e9adfb4d82948402f",
     "financial-closure-release.py": "3ae45d6905cc99319cbeb490c32d9d546f27509dac0a80a5ed8a710d8c5f1eef",
     "financial-closure-release.test.py": "d14b74df290dc9b02751d6445ffdb4ce0398b1f358b045d3a36ce025474fc1ad",
-    "mail-query-release.py": "ff5c29564952e242db5c135473e7a463cb42a1511004c6fc40fef2a104511631",
+    "mail-query-release.py": "12f1f9be1f1084656d5032db6bc4f46df18f4aca489d101a771ef3af3b6546eb",
     "online-card-read-diagnostics-build.py": "db251051c3d5dc6174478f7f0890b6c6042c3e13ef5a00154803092de34d33f7",
     "online-card-read-diagnostics-contract.json": "068da4938a05b1791e3fa1832a375c1c6ca46d34077efb9ed62db59621e62681",
     "online-card-read-diagnostics-publication.py": "13b88ff3a326ce630030fcc40e7cc0074b854725470afed0d9eee30f18b3a175",
@@ -442,7 +442,7 @@
   "scope": "MAIL_QUERY_20261026",
   "sourceProjectionSha256": "5a5f75b1e6ff76087c3bd50111de3415133539d9576b8a5ef6bbd89a920995f6",
   "sourcePullRequest": 721,
-  "sourceReviewCommit": "2581f4e6a5f01aec692c5856a3aa7a70307a714b",
+  "sourceReviewCommit": "67277d6c507f3bbfcd827070dfe6f1631f1904bc",
   "sources": {
     "apps/admin/src/v2/components/workspace/V2MailBody.vue": "d87030e4808767bfaf8077d3ee8200b62071b4cfddd801f79b06c4d3fdc621ec",
     "apps/admin/src/v2/components/workspace/V2MailMessageList.vue": "a9eb83579ba1bd2005848350319646fe94df56a973499300fdcb737c708336cb",
