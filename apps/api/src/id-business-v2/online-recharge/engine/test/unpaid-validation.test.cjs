@@ -430,3 +430,72 @@ test('form report caps step history and discards selectors, values and raw excep
   assert.equal(safe.steps.at(-1).durationMs, 59);
   assert.equal(JSON.stringify(safe).includes('PRIVATE'), false);
 });
+
+for (const code of [
+  'PROXY_CONNECTION_FAILED',
+  'PROFILE_IDENTITY_MISSING',
+  'PROFILE_PROXY_INVALID',
+  'PROFILE_BUSY',
+  'PROFILE_EXIT_CHANGED',
+  'PROFILE_BINDING_INVALID',
+  'PROFILE_DIRECTORY_INVALID',
+  'PROFILE_LAUNCH_FAILED',
+  'PROFILE_CLEANUP_FAILED'
+])
+  test(`proxy/profile failure ${code} keeps its exact controlled reason`, () => {
+    const report = validation.finish(
+      { validationErrorCode: code },
+      {
+        format: 'unpaid-validation-v1',
+        startedAt: '2026-10-25T08:26:28.000Z',
+        timeline: [{ stage: 'proxy', startedAt: '2026-10-25T08:26:28.000Z' }]
+      }
+    );
+    assert.equal(report.failureCode, code);
+    assert.equal(
+      report.failureClass,
+      ['PROXY_CONNECTION_FAILED', 'PROFILE_PROXY_INVALID', 'PROFILE_EXIT_CHANGED'].includes(code)
+        ? 'PROXY_UNAVAILABLE'
+        : 'BROWSER_PROFILE_UNAVAILABLE'
+    );
+    assert.equal(report.lastStage, 'proxy');
+    assert.equal(report.outcome, 'failed_with_class');
+    assert.equal(report.submitted, false);
+    assert.doesNotMatch(validation.message(report), /其他执行异常|UNKNOWN|PROFILE_/);
+    if (code === 'PROFILE_EXIT_CHANGED')
+      assert.match(validation.message(report), /出口.*绑定不一致/);
+    if (code === 'PROXY_CONNECTION_FAILED') assert.match(validation.message(report), /连续5次失败/);
+  });
+
+test('unknown profile-like errors remain unknown instead of entering the allowed list', () => {
+  const report = validation.finish(
+    { validationErrorCode: 'PROFILE_PRIVATE_ARBITRARY' },
+    {
+      format: 'unpaid-validation-v1',
+      startedAt: '2026-10-25T08:26:28.000Z',
+      timeline: [{ stage: 'proxy', startedAt: '2026-10-25T08:26:28.000Z' }]
+    }
+  );
+  assert.equal(report.failureCode, 'UNKNOWN');
+  assert.equal(report.failureClass, 'OTHER');
+  assert.doesNotMatch(JSON.stringify(report), /PRIVATE_ARBITRARY/);
+});
+
+for (const code of ['PROFILE_EXIT_CHANGED', 'PROFILE_LAUNCH_FAILED', 'PROXY_CONNECTION_FAILED'])
+  test(`native task child propagates ${code} without checkout or payment`, async () => {
+    const harness = require('./recharge-flow-acceptance.test.cjs');
+    const task = harness.syntheticTask('success');
+    task.operation = 'debug';
+    task.payload.validationMode = 'ready_before_payment';
+    const actual = await harness.runSyntheticRecharge('success', { task, profileFailure: code });
+    assert.equal(actual.failure, '');
+    assert.equal(actual.result.status, 'failed');
+    const report = actual.result.result.validationReport;
+    assert.equal(report.failureCode, code);
+    assert.equal(report.lastStage, 'proxy');
+    assert.notEqual(report.failureClass, 'OTHER');
+    assert.equal(report.submitted, false);
+    assert.equal(actual.metrics.checkoutCreations, 0);
+    assert.equal(actual.metrics.actualPaymentClicks, 0);
+    assert.equal(actual.metrics.paymentRequests, 0);
+  });

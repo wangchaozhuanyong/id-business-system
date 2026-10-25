@@ -464,6 +464,8 @@ async function run(runOptions = {}) {
         const verificationBootstrapCode = e.bootstrapDiagnostics?.reason === 'verification_failed'
             ? require('./verification-runtime').controlledVerificationCode(e.code, null) : null;
         const bootstrapFailure = {
+            PROFILE_PROXY_INVALID: '代理绑定格式无效，未继续执行',
+            PROFILE_CLEANUP_FAILED: '浏览器关闭未确认，会话尚未释放',
             PROFILE_IDENTITY_MISSING: '缺少账号及用户标识，不能复用浏览器会话',
             PROFILE_BUSY: '同一账号与代理的浏览器正在使用，本次未继续',
             PROFILE_EXIT_CHANGED: '代理出口与浏览器会话绑定不一致，已停止；未切换代理',

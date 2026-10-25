@@ -17,6 +17,7 @@ const CLASSES = [
   'NONE',
   'INPUT_MISSING',
   'PROXY_UNAVAILABLE',
+  'BROWSER_PROFILE_UNAVAILABLE',
   'LOGIN_READ_FAILED',
   'LOGIN_UNCONFIRMED',
   'CHECKOUT_REJECTED',
@@ -33,6 +34,15 @@ const CLASSES = [
 const CODES = [
   'UNKNOWN',
   ...CLASSES,
+  'PROXY_CONNECTION_FAILED',
+  'PROFILE_IDENTITY_MISSING',
+  'PROFILE_PROXY_INVALID',
+  'PROFILE_BUSY',
+  'PROFILE_EXIT_CHANGED',
+  'PROFILE_BINDING_INVALID',
+  'PROFILE_DIRECTORY_INVALID',
+  'PROFILE_LAUNCH_FAILED',
+  'PROFILE_CLEANUP_FAILED',
   'PENDING_CREDENTIALS',
   'CHECKOUT_FORM_DATA_MISSING',
   'CHECKOUT_AUTH_READ_FAILED',
@@ -183,8 +193,16 @@ function classify(result = {}, lastStage) {
     return 'INPUT_MISSING';
   if (code === 'CHECKOUT_AUTH_READ_FAILED' || code === 'LOGIN_READ_FAILED')
     return 'LOGIN_READ_FAILED';
-  if (code === 'PROXY_CONNECTION_FAILED' || code === 'PROXY_UNAVAILABLE')
+  if (
+    [
+      'PROXY_CONNECTION_FAILED',
+      'PROXY_UNAVAILABLE',
+      'PROFILE_PROXY_INVALID',
+      'PROFILE_EXIT_CHANGED'
+    ].includes(code)
+  )
     return 'PROXY_UNAVAILABLE';
+  if (CODES.includes(code) && code.startsWith('PROFILE_')) return 'BROWSER_PROFILE_UNAVAILABLE';
   if (code === 'CHECKOUT_CREATION_REJECTED') return 'CHECKOUT_REJECTED';
   if (code === 'CHECKOUT_CREATION_UNKNOWN') return 'CHECKOUT_CREATION_UNKNOWN';
   if (code === 'EXECUTOR_INTERRUPTED') return 'EXECUTOR_INTERRUPTED';
@@ -412,7 +430,8 @@ function message(report) {
   const labels = {
     NONE: '卡号和账单已回读，付款按钮就绪，未提交付款',
     INPUT_MISSING: '所需资料缺失或已失效',
-    PROXY_UNAVAILABLE: '代理连接失败',
+    PROXY_UNAVAILABLE: '代理检查未通过',
+    BROWSER_PROFILE_UNAVAILABLE: '专用浏览器不可用',
     LOGIN_READ_FAILED: '登录页面读取失败',
     LOGIN_UNCONFIRMED: '登录状态未确认',
     CHECKOUT_REJECTED: '官网拒绝建单',
@@ -425,6 +444,17 @@ function message(report) {
     CHALLENGE_BLOCKED: '官网验证未完成',
     EXECUTOR_INTERRUPTED: '执行器中断',
     OTHER: '其他执行异常，详见诊断'
+  };
+  const codeLabels = {
+    PROXY_CONNECTION_FAILED: '代理连通性检查连续5次失败，已停止后续操作',
+    PROFILE_IDENTITY_MISSING: '缺少账号及用户标识，不能复用浏览器会话',
+    PROFILE_PROXY_INVALID: '代理绑定格式无效，未继续执行',
+    PROFILE_BUSY: '同一账号与代理的浏览器正在使用，本次未继续',
+    PROFILE_EXIT_CHANGED: '代理出口与浏览器会话绑定不一致，已停止；未切换代理',
+    PROFILE_BINDING_INVALID: '浏览器出口绑定记录无效，已停止',
+    PROFILE_DIRECTORY_INVALID: '浏览器会话目录无效，已停止',
+    PROFILE_LAUNCH_FAILED: '专用浏览器启动未完成，请检查运行环境',
+    PROFILE_CLEANUP_FAILED: '浏览器关闭未确认，会话尚未释放'
   };
   const failed = report.formDiagnostics?.steps?.findLast((row) => row.state === 'failed');
   const fieldLabel = {
@@ -460,7 +490,7 @@ function message(report) {
       : '';
   return report.failureClass === 'NONE'
     ? labels.NONE
-    : `不付款验证已结束：${labels[report.failureClass] || labels.OTHER}${detail}${report.httpStatus ? `（HTTP ${report.httpStatus}）` : ''}`;
+    : `不付款验证已结束：${codeLabels[report.failureCode] || labels[report.failureClass] || labels.OTHER}${detail}${report.httpStatus ? `（HTTP ${report.httpStatus}）` : ''}`;
 }
 module.exports = {
   message,
