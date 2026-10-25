@@ -3,6 +3,12 @@ name: Online Recharge Proxy Failure Evidence Publication
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Complete only the omitted Admin switch of accepted run 40178946393
+        required: true
+        type: choice
+        default: observe
+        options: [observe, complete, publish]
       commit:
         description: Exact reviewed main commit
         required: true
@@ -22,7 +28,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.mode == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -72,7 +78,7 @@ jobs:
 
   publish:
     needs: validate
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.mode == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -104,5 +110,45 @@ jobs:
           path: |
             .deploy/online-proxy-failure-evidence/*.json
             .deploy/online-proxy-failure-evidence/artifact-notes.md
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  complete-accepted:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.mode != 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify finite accepted-operation completion
+        run: |
+          python3 -B scripts/production-release/online-proxy-failure-evidence-publication.py check
+          python3 -B scripts/production-release/online-proxy-failure-evidence-release.test.py
+      - name: Configure existing production release role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-proxy-complete-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Read original receipt then complete Admin only and independently read back
+        env:
+          COMPLETION_MODE: ${{ inputs.mode }}
+        run: python3 -B scripts/production-release/online-proxy-failure-evidence-publication.py "$COMPLETION_MODE"
+      - name: Preserve completion original receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-proxy-failure-evidence-completion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/online-proxy-failure-evidence/*.json
           include-hidden-files: true
           if-no-files-found: warn

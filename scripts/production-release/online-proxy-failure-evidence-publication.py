@@ -234,9 +234,36 @@ except Exception as error:
     raise RuntimeError('ONLINE_CHECKOUT_RESULT_PENDING')
 
 
+def recover(c, complete=False):
+    check(c)
+    native=identity()
+    qa=quality(native['commit'],native['tree'])
+    accepted=c['acceptedRecovery']
+    run=github('actions/runs/'+accepted['failedRunId'])
+    need(run['conclusion']=='failure' and run['head_sha']==accepted['plan']['commit'],'ORIGINAL_RUN_CHANGED')
+    invocation=json.loads(execute('aws','--region','ap-northeast-1','ssm','get-command-invocation',
+        '--command-id',accepted['commandId'],'--instance-id',INSTANCE,'--output','json'))
+    need(invocation['Status']=='Failed' and invocation['ResponseCode']==1
+         and invocation['CommandId']==accepted['commandId'] and invocation['InstanceId']==INSTANCE
+         and json.loads(invocation['StandardOutputContent'])['code']==accepted['failureCode'],'ORIGINAL_FAILURE_CHANGED')
+    need(not OUT.exists(),'OUTPUT_EXISTS')
+    OUT.mkdir(parents=True,mode=0o700)
+    plan={**native_plan(c,native),'qualitySourceEvidence':qa}
+    observed=transport(plan,'recovery_observe')
+    need(observed['status']=='ONLINE_PROXY_ACCEPTED_SWITCH_OBSERVED','OBSERVATION_REQUIRED')
+    if not complete:
+        print(json.dumps({'status':'ONLINE_PROXY_RECOVERY_OBSERVED','businessActions':0}));return
+    result=transport({**plan,'acceptedObservation':observed},'recovery_complete')
+    need(result['status']=='ONLINE_PROXY_FORWARD_COMPLETED','COMPLETION_REQUIRED')
+    readback=transport({**plan,'acceptedObservation':result['observation']},'recovery_readback')
+    need(readback['status']=='ONLINE_PROXY_COMPLETION_READBACK_VERIFIED','COMPLETION_READBACK_REQUIRED')
+    print(json.dumps({'status':'ONLINE_PROXY_FAILURE_EVIDENCE_PUBLISHED','commit':accepted['plan']['commit'],
+                     'controlCommit':native['commit'],'businessActions':0,'migrationPerformed':False}))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('check', 'build', 'publish'))
+    parser.add_argument('mode', choices=('check', 'build', 'publish', 'observe', 'complete'))
     args = parser.parse_args()
     contract = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
-    {'check': check, 'build': build, 'publish': publish}[args.mode](contract)
+    {'check': check, 'build': build, 'publish': publish, 'observe': lambda c:recover(c), 'complete': lambda c:recover(c,True)}[args.mode](contract)
