@@ -28,6 +28,32 @@ TEST_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 class BillingPublicationTests(unittest.TestCase):
+    def test_current_maintenance_is_exclusive_and_never_requires_retired_registration_volume(self):
+        plan = dict(commit='a' * 40, workflowRunId='123')
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path, patch.object(P, 'BASE', Path(path)):
+            receipt = P.claim_maintenance(plan)
+            marker = Path(path) / 'maintenance.json'
+            raw = marker.read_bytes()
+            self.assertEqual(receipt['paths'], [str(marker)])
+            self.assertEqual(receipt['ownerSha256'], P.sha(raw))
+            self.assertEqual(json.loads(raw), {'scope': P.SCOPE, **plan})
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                P.claim_maintenance({**plan, 'workflowRunId': '456'})
+            self.assertEqual(marker.read_bytes(), raw)
+            helper = P.load('proxy-result-identity-release.py')
+            helper.release_markers(receipt)
+            self.assertFalse(marker.exists())
+            protected = Path(path) / 'foreign'
+            protected.write_text('preserve')
+            marker.symlink_to(protected)
+            with self.assertRaises(OSError):
+                P.claim_maintenance(plan)
+            self.assertEqual(protected.read_text(), 'preserve')
+        source = (HERE / 'recharge-plan-billing-release.py').read_text()
+        self.assertNotIn('p.claim_markers(', source)
+        self.assertIn("p.sql_fence_class(", source)
+
     def test_source_quality_requires_every_selected_part_and_rejects_any_failed_job(self):
         required = [{'quality', 'full-quality'},
                     {'quality', 'recharge (guards)', 'recharge (admin)', 'recharge (api)', 'recharge (migration)'}]
