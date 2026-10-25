@@ -4,6 +4,8 @@ import {
   cardReadDiagnosticsPaths,
   proxyFailureEvidencePaths,
   persistentProfilePaths,
+  profileEgressLifecyclePaths,
+  isProfileEgressLifecycleOnly,
   isPersistentProfileOnly,
   isUnpaidValidationControlsOnly,
   unpaidValidationPaths,
@@ -13,6 +15,38 @@ import {
   unpaidValidationCommands
 } from './ci-unpaid-validation-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
+test('egress lifecycle batch checks Admin and full engine without an unrelated API or database job', () => {
+  const paths = [
+    ...profileEgressLifecyclePaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(isProfileEgressLifecycleOnly(paths), true);
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = JSON.stringify(
+    selectedParts(paths).flatMap((part) => unpaidValidationCommands(part, paths))
+  );
+  for (const name of [
+    'check:v2-loading-standard',
+    'check:v2-ui-language',
+    'check:admin-ui',
+    'test:online-recharge:engine'
+  ])
+    assert.ok(commands.includes(name));
+  assert.doesNotMatch(commands, /migrate|financial-integrity|prisma:mysql/);
+  for (const missing of profileEgressLifecyclePaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isProfileEgressLifecycleOnly(paths.filter((p) => p !== missing)), false);
+  assert.equal(isProfileEgressLifecycleOnly([...paths, paths[0]]), false);
+  assert.equal(
+    isProfileEgressLifecycleOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+});
 test('unpaid batch retains all four affected checks and refuses unrelated inputs', () => {
   const paths = [...unpaidValidationPaths, ...unpaidValidationControls];
   assert.equal(isUnpaidValidationOnly(paths), true);

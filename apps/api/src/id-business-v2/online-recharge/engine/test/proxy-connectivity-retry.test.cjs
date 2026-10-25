@@ -256,7 +256,7 @@ for (const debugOnly of [false, true]) {
     assert.equal(result.success, false);
     assert.equal(result.resultUnknown, false);
     assert.equal(result.errorCode, 'PROXY_UNAVAILABLE');
-    assert.match(result.error, /连续 5 次失败/);
+    assert.match(result.error, /已用尽 5 次/);
     assert.equal(f.logs.filter((line) => line.includes('次失败：')).length, 5);
     assert.equal(f.logs.filter((line) => line.includes('继续下一次连接')).length, 4);
     assert.equal(f.logs.filter((line) => line.includes('已达尝试上限')).length, 1);

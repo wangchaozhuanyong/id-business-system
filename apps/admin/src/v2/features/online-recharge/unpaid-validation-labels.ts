@@ -36,7 +36,7 @@ const failures: Record<string, string> = {
   OTHER: '其他执行异常，详见诊断'
 };
 const failureDetails: Record<string, string> = {
-  PROXY_CONNECTION_FAILED: '代理连通性检查连续5次失败，已停止后续操作',
+  PROXY_CONNECTION_FAILED: '代理连通性检测已用尽5次，仍未完成核验，已停止后续操作',
   PROFILE_IDENTITY_MISSING: '缺少账号及用户标识，不能复用浏览器会话',
   PROFILE_PROXY_INVALID: '代理绑定格式无效，未继续执行',
   PROFILE_BUSY: '同一账号与代理的浏览器正在使用，本次未继续',

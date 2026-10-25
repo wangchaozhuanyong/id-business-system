@@ -65,16 +65,52 @@ async function prepareDirectory(root, key) {
   return directory;
 }
 
-async function verifyExit(context, directory, signal) {
-  const receipt = path.join(directory, '.exit-binding.json');
-  let previous;
+async function readBinding(file, selection = false) {
   try {
-    previous = JSON.parse(await fs.readFile(receipt, 'utf8'));
+    const value = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (
+      value?.version !== 1 ||
+      (selection
+        ? !/^Exit-[a-f0-9]{32}$/.test(value.profile || '')
+        : !/^[a-f0-9]{64}$/.test(value.exitHash || ''))
+    )
+      throw new Error('invalid binding');
+    return value;
   } catch (error) {
     if (error.code !== 'ENOENT') throw fault('PROFILE_BINDING_INVALID', '浏览器出口绑定记录无效');
+    return null;
   }
-  for (let attempt = 1; attempt <= 5; attempt++) {
+}
+
+async function writeBinding(file, value) {
+  const temporary = `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    await fs.writeFile(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+    await fs.rename(temporary, file);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}
+
+async function prepareFreshProfile(directory, profile) {
+  const target = path.join(directory, profile);
+  await fs.mkdir(target, { mode: 0o700 });
+  await fs.writeFile(
+    path.join(target, 'Preferences'),
+    JSON.stringify({
+      credentials_enable_service: false,
+      profile: { password_manager_enabled: false },
+      autofill: { profile_enabled: false, credit_card_enabled: false }
+    }),
+    { mode: 0o600, flag: 'wx' }
+  );
+  return target;
+}
+
+async function probeExit(context, signal, attempts) {
+  while (attempts.used < 5) {
     signal?.throwIfAborted();
+    const attempt = ++attempts.used;
     console.log(`正在检查代理连通性...（第 ${attempt}/5 次）`);
     let response;
     try {
@@ -83,25 +119,18 @@ async function verifyExit(context, directory, signal) {
       const ip = (await response.text()).trim();
       if (!net.isIP(ip)) throw new Error('invalid probe');
       signal?.throwIfAborted();
-      const exitHash = digest(ip.toLowerCase());
-      if (previous && previous.exitHash !== exitHash)
-        throw fault(
-          'PROFILE_EXIT_CHANGED',
-          '当前代理出口与浏览器会话绑定不一致，已停止；未切换代理'
-        );
-      if (!previous)
-        await fs.writeFile(receipt, JSON.stringify({ version: 1, exitHash }), { mode: 0o600 });
       console.log(`代理连接成功! 代理公网 IP 已核验（第 ${attempt}/5 次）`);
-      return;
+      return digest(ip.toLowerCase());
     } catch (error) {
-      if (signal?.aborted || error.code?.startsWith('PROFILE_')) throw error;
+      if (signal?.aborted || String(error.code || '').startsWith('PROFILE_')) throw error;
       console.warn(`[代理检查] 第 ${attempt}/5 次请求未完成`);
       if (attempt === 5)
-        throw fault('PROXY_CONNECTION_FAILED', '代理连通性检查连续 5 次失败，已停止后续操作');
+        throw fault('PROXY_CONNECTION_FAILED', '代理连通性检测已用尽 5 次，仍未完成核验，已停止');
     } finally {
       await response?.dispose().catch(() => {});
     }
   }
+  throw fault('PROXY_CONNECTION_FAILED', '代理连通性检测已用尽 5 次，仍未完成核验，已停止');
 }
 
 async function launchProfile(chromium, options) {
@@ -113,13 +142,8 @@ async function launchProfile(chromium, options) {
   let context,
     browserPid,
     closed = false;
-  const close = async () => {
-    if (closed) return;
-    if (!context) {
-      active.delete(directory);
-      closed = true;
-      return;
-    }
+  const closeOwnedBrowser = async () => {
+    if (!context) return;
     let timer;
     try {
       const finished = await Promise.race([
@@ -144,18 +168,32 @@ async function launchProfile(chromium, options) {
       }
       if (context.browser()?.isConnected())
         throw fault('PROFILE_CLEANUP_FAILED', '浏览器关闭未确认，未释放会话');
-      active.delete(directory);
-      closed = true;
+      context = undefined;
+      browserPid = undefined;
     } finally {
       clearTimeout(timer);
     }
   };
-  try {
+  const close = async () => {
+    if (closed) return;
+    await closeOwnedBrowser();
+    active.delete(directory);
+    closed = true;
+  };
+  const selectionFile = path.join(directory, '.active-profile.json');
+  const launch = async (profile) => {
+    options.signal?.throwIfAborted();
     context = await chromium.launchPersistentContext(directory, {
       // Use full Chromium in headed and headless runs; headless-shell does not provide
       // the same cross-process profile exclusivity in the isolated regression.
       channel: options.channel || 'chromium',
-      ...options.launchOptions
+      ...options.launchOptions,
+      args: [
+        ...(options.launchOptions?.args || []).filter(
+          (arg) => !arg.startsWith('--profile-directory=')
+        ),
+        `--profile-directory=${profile}`
+      ]
     });
     // Chrome's native profile lock also excludes concurrent worker processes.
     const cdp = await context.browser().newBrowserCDPSession();
@@ -169,7 +207,46 @@ async function launchProfile(chromium, options) {
     } finally {
       await cdp.detach();
     }
-    await verifyExit(context, directory, options.signal);
+    // The native user-data-dir lock is stable across profile generations. A worker
+    // that read an old selection before another worker restarted must not use it.
+    const selected = (await readBinding(selectionFile, true))?.profile || 'Default';
+    if (selected !== profile) throw fault('PROFILE_BUSY', '浏览器会话分区已更新，请稍后重试');
+  };
+  try {
+    const selection = await readBinding(selectionFile, true);
+    const profile = selection?.profile || 'Default';
+    const receipt = path.join(
+      profile === 'Default' ? directory : path.join(directory, profile),
+      '.exit-binding.json'
+    );
+    let previous = await readBinding(receipt);
+    if (selection && !previous) throw fault('PROFILE_BINDING_INVALID', '浏览器出口绑定记录缺失');
+    const attempts = { used: 0 };
+    await launch(profile);
+    // Receipt reads before the native lock can be stale when another worker has
+    // just finished. Re-read after ownership is established, before any probe.
+    previous = await readBinding(receipt);
+    if (selection && !previous) throw fault('PROFILE_BINDING_INVALID', '浏览器出口绑定记录缺失');
+    const exitHash = await probeExit(context, options.signal, attempts);
+    if (previous && previous.exitHash !== exitHash) {
+      if (attempts.used === 5)
+        throw fault('PROFILE_EXIT_CHANGED', '代理出口发生变化，当前检测次数不足以确认新会话');
+      const next = `Exit-${crypto.randomBytes(16).toString('hex')}`;
+      const fresh = await prepareFreshProfile(directory, next);
+      await writeBinding(path.join(fresh, '.exit-binding.json'), { version: 1, exitHash });
+      options.signal?.throwIfAborted();
+      // Publish while still holding Chromium's native lock. Preserve every old
+      // profile; never copy cookies/storage/clearance into the new partition.
+      await writeBinding(selectionFile, { version: 1, profile: next });
+      console.log('[浏览器会话] 代理出口变化，启用独立资料分区并重新核验登录');
+      await closeOwnedBrowser();
+      await launch(next);
+      if ((await probeExit(context, options.signal, attempts)) !== exitHash)
+        throw fault('PROFILE_EXIT_CHANGED', '新浏览器启动后代理出口再次变化，已停止；未切换代理');
+    } else if (!previous) {
+      await writeBinding(receipt, { version: 1, exitHash });
+    }
+    options.signal?.throwIfAborted();
     return { context, close, profileKey: key };
   } catch (error) {
     await close();
@@ -177,7 +254,7 @@ async function launchProfile(chromium, options) {
       throw fault('PROFILE_BUSY', '同一账号与代理的浏览器正在使用，请稍后重试');
     // Launch errors can contain paths/arguments/proxy credentials. Do not propagate them.
     if (
-      error.code?.startsWith('PROFILE_') ||
+      String(error.code || '').startsWith('PROFILE_') ||
       error.code === 'PROXY_CONNECTION_FAILED' ||
       options.signal?.aborted
     )

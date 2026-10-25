@@ -180,7 +180,7 @@ test(
 );
 
 test(
-  'exclusive profile rejects concurrent use and egress change before any official request',
+  'exclusive profile rejects concurrent use across an egress partition change',
   { timeout: 30000 },
   async () => {
     await fs.mkdir(base, { recursive: true });
@@ -192,8 +192,8 @@ test(
       assert.equal(current.counts().officialRequests, 0);
       await current.close();
       current = null;
-      await assert.rejects(fixture(root, { exit: '192.0.2.11' }), { code: 'PROFILE_EXIT_CHANGED' });
-      current = await fixture(root);
+      current = await fixture(root, { exit: '192.0.2.11' });
+      await assert.rejects(fixture(root), { code: 'PROFILE_BUSY' });
       assert.equal(current.counts().officialRequests, 0);
     } finally {
       await current?.close();
@@ -210,7 +210,9 @@ test(
     const root = await fs.mkdtemp(path.join(base, 'challenge-'));
     let current;
     try {
-      current = await fixture(root, { sessionStatus: 403 });
+      current = await fixture(root);
+      await current.close();
+      current = await fixture(root, { sessionStatus: 403, exit: '192.0.2.11' });
       await current.context.addCookies([
         {
           name: '__Secure-next-auth.session-token',
@@ -404,7 +406,7 @@ test(
 test('Chromium profile lock excludes a second worker process', { timeout: 30000 }, async () => {
   await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(base, 'process-lock-'));
-  const current = await fixture(root);
+  let current = await fixture(root);
   try {
     const { execFile } = require('node:child_process');
     const { promisify } = require('node:util');
@@ -415,6 +417,9 @@ test('Chromium profile lock excludes a second worker process', { timeout: 30000 
         await session.close(); process.exitCode = 2;
       }).catch(error => { process.exitCode = error.code === 'PROFILE_BUSY' ? 0 : 3; });
     `;
+    await promisify(execFile)(process.execPath, ['-e', script], { timeout: 10000 });
+    await current.close();
+    current = await fixture(root, { exit: '192.0.2.11' });
     await promisify(execFile)(process.execPath, ['-e', script], { timeout: 10000 });
     assert.equal(
       current.context.browser().isConnected(),
@@ -496,14 +501,18 @@ test(
   }
 );
 
-test('persistent proxy keeps five request retries but stops an established exit mismatch immediately', async () => {
+test('persistent proxy rechecks a fresh partition and shares five request attempts across restart', async () => {
   await fs.mkdir(base, { recursive: true });
   const root = await fs.mkdtemp(path.join(base, 'proxy-evidence-'));
   let calls = 0;
   let connected = false;
+  let launches = 0;
+  let onLaunch = async () => {};
   let probe = async () => '192.0.2.10';
   const native = {
     async launchPersistentContext() {
+      launches++;
+      await onLaunch();
       connected = true;
       const browser = {
         isConnected: () => connected,
@@ -535,14 +544,26 @@ test('persistent proxy keeps five request retries but stops an established exit 
       if (calls === 1) throw new Error('synthetic connection reset');
       return '192.0.2.11';
     };
+    const fresh = await launchProfile(native, { ...options, root });
+    assert.equal(calls, 3, 'one failed probe, a new exit, and a fresh-browser confirmation');
+    await fresh.close();
+    assert.equal(connected, false);
+    calls = 0;
+    probe = async () => (calls === 1 ? '192.0.2.12' : '192.0.2.13');
     await assert.rejects(launchProfile(native, { ...options, root }), {
       code: 'PROFILE_EXIT_CHANGED'
     });
-    assert.equal(
-      calls,
-      2,
-      'a successful second probe with changed exit stops before attempt three'
-    );
+    assert.equal(calls, 2, 'a second exit change cannot start a third browser');
+    assert.equal(connected, false);
+    calls = 0;
+    probe = async () => {
+      if (calls === 1) return '192.0.2.14';
+      throw new Error('synthetic connection reset');
+    };
+    await assert.rejects(launchProfile(native, { ...options, root }), {
+      code: 'PROXY_CONNECTION_FAILED'
+    });
+    assert.equal(calls, 5, 'the fresh-browser probe cannot reset the five-attempt counter');
     assert.equal(connected, false);
     calls = 0;
     probe = async () => {
@@ -553,7 +574,191 @@ test('persistent proxy keeps five request retries but stops an established exit 
     });
     assert.equal(calls, 5, 'connection errors still receive all five attempts');
     assert.equal(connected, false);
+    const directory = path.join(root, binding(raw, options.proxyBinding));
+    const selectionFile = path.join(directory, '.active-profile.json');
+    const selected = JSON.parse(await fs.readFile(selectionFile, 'utf8'));
+    calls = launches = 0;
+    onLaunch = async () => {
+      await fs.writeFile(
+        path.join(directory, selected.profile, '.exit-binding.json'),
+        JSON.stringify({
+          version: 1,
+          exitHash: require('node:crypto').createHash('sha256').update('192.0.2.15').digest('hex')
+        })
+      );
+    };
+    probe = async () => '192.0.2.15';
+    const latest = await launchProfile(native, { ...options, root });
+    assert.equal(
+      launches,
+      1,
+      'receipt is re-read after the native lock instead of using a stale hash'
+    );
+    await latest.close();
+    calls = launches = 0;
+    onLaunch = async () =>
+      fs.writeFile(
+        selectionFile,
+        JSON.stringify({ version: 1, profile: `Exit-${'f'.repeat(32)}` })
+      );
+    await assert.rejects(launchProfile(native, { ...options, root }), { code: 'PROFILE_BUSY' });
+    assert.equal(calls, 0, 'a stale selection cannot reach a probe or official request');
+    assert.equal(connected, false);
+    await fs.writeFile(selectionFile, JSON.stringify(selected));
+    calls = launches = 0;
+    const controller = new AbortController();
+    onLaunch = async () => {
+      if (launches === 2) controller.abort();
+    };
+    probe = async () => '192.0.2.16';
+    await assert.rejects(launchProfile(native, { ...options, root, signal: controller.signal }), {
+      name: 'AbortError'
+    });
+    assert.equal(calls, 1, 'cancelled fresh browser does not start another probe');
+    assert.equal(connected, false);
+    calls = launches = 0;
+    onLaunch = async () => {};
+    probe = async () => {
+      if (calls < 5) throw new Error('synthetic connection reset');
+      return '192.0.2.17';
+    };
+    await assert.rejects(launchProfile(native, { ...options, root }), {
+      code: 'PROFILE_EXIT_CHANGED'
+    });
+    assert.equal(calls, 5);
+    assert.equal(launches, 1, 'cannot restart without a remaining confirmation attempt');
+    assert.equal(connected, false);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  'egress change isolates native cookies/storage, preserves old data, and reuses the new partition',
+  { timeout: 60000 },
+  async () => {
+    await fs.mkdir(base, { recursive: true });
+    const root = await fs.mkdtemp(path.join(base, 'egress-partition-'));
+    const directory = path.join(root, binding(raw, options.proxyBinding));
+    let current, legacy;
+    try {
+      current = await fixture(root);
+      await current.context.addCookies([
+        {
+          name: 'cf_clearance',
+          value: 'synthetic-old-clearance',
+          url: 'https://chatgpt.com',
+          httpOnly: true,
+          secure: true,
+          expires: Date.now() / 1000 + 3600
+        },
+        {
+          name: '__Secure-next-auth.session-token',
+          value: 'synthetic-old-session',
+          url: 'https://chatgpt.com',
+          httpOnly: true,
+          secure: true,
+          expires: Date.now() / 1000 + 3600
+        }
+      ]);
+      let page = await current.context.newPage();
+      await page.goto('https://chatgpt.com/');
+      await page.evaluate(() => localStorage.setItem('old-partition', 'synthetic-private-state'));
+      await current.close();
+      current = await fixture(root, { exit: '192.0.2.11' });
+      assert.deepEqual(await current.context.cookies('https://chatgpt.com'), []);
+      page = await current.context.newPage();
+      await page.goto('https://chatgpt.com/');
+      assert.equal(await page.evaluate(() => localStorage.getItem('old-partition')), null);
+      const installed = await auth.installChatGptSession(current.context, raw, {
+        nativeSession: true,
+        preserveStoredSession: true,
+        onHumanVerification: current.manual
+      });
+      assert.equal(installed.cookieVerified, true);
+      assert.equal(installed.initialSessionProbe.matchesTargetAccount, true);
+      assert.equal(
+        current.counts().officialRequests,
+        1,
+        'the fresh partition still verifies the real Session endpoint'
+      );
+      assert.equal(current.counts().manualCalls, 0);
+      await page.evaluate(() => localStorage.setItem('new-partition', 'synthetic-new-state'));
+      const selected = JSON.parse(
+        await fs.readFile(path.join(directory, '.active-profile.json'), 'utf8')
+      );
+      assert.match(selected.profile, /^Exit-[a-f0-9]{32}$/);
+      const prefs = JSON.parse(
+        await fs.readFile(path.join(directory, selected.profile, 'Preferences'), 'utf8')
+      );
+      assert.equal(prefs.autofill.credit_card_enabled, false);
+      assert.equal(
+        (await fs.stat(path.join(directory, '.active-profile.json'))).mode & 0o777,
+        0o600
+      );
+      await current.close();
+      current = await fixture(root, { exit: '192.0.2.11' });
+      page = await current.context.newPage();
+      await page.goto('https://chatgpt.com/');
+      assert.equal(
+        await page.evaluate(() => localStorage.getItem('new-partition')),
+        'synthetic-new-state'
+      );
+      assert.deepEqual(
+        JSON.parse(await fs.readFile(path.join(directory, '.active-profile.json'), 'utf8')),
+        selected
+      );
+      await current.close();
+      current = null;
+      // Read the retained old native partition offline; recovery never deletes or
+      // transfers its credential database to the new partition.
+      legacy = await chromium.launchPersistentContext(directory, {
+        ...options.launchOptions,
+        channel: 'chromium',
+        args: [...options.launchOptions.args, '--profile-directory=Default']
+      });
+      assert.equal(
+        (await legacy.cookies()).find((c) => c.name === 'cf_clearance')?.value,
+        'synthetic-old-clearance'
+      );
+      assert.equal(
+        (await legacy.cookies()).find((c) => c.name === '__Secure-next-auth.session-token')?.value,
+        'synthetic-old-session'
+      );
+    } finally {
+      await current?.close();
+      await legacy?.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+);
+
+test('invalid binding metadata fails before browser launch or network and is not overwritten', async () => {
+  await fs.mkdir(base, { recursive: true });
+  for (const [file, value] of [
+    ['.exit-binding.json', {}],
+    ['.exit-binding.json', { version: 1, exitHash: 'not-a-hash' }],
+    ['.active-profile.json', { version: 1, profile: '../another-profile' }],
+    ['.active-profile.json', { version: 1, profile: `Exit-${'a'.repeat(32)}` }]
+  ]) {
+    const root = await fs.mkdtemp(path.join(base, 'invalid-binding-'));
+    try {
+      const directory = path.join(root, binding(raw, options.proxyBinding));
+      await fs.mkdir(directory);
+      const serialized = JSON.stringify(value);
+      await fs.writeFile(path.join(directory, file), serialized);
+      await assert.rejects(
+        launchProfile(
+          { launchPersistentContext: () => assert.fail('must not launch') },
+          { ...options, root }
+        ),
+        {
+          code: 'PROFILE_BINDING_INVALID'
+        }
+      );
+      assert.equal(await fs.readFile(path.join(directory, file), 'utf8'), serialized);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   }
 });

@@ -1,5 +1,6 @@
 import {
   isPersistentProfileOnly,
+  isProfileEgressLifecycleOnly,
   isUnpaidValidationOnly,
   isUnpaidValidationControlsOnly
 } from './ci-unpaid-validation-scope.mjs';
@@ -3091,6 +3092,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isProfileEgressLifecycleOnly(paths)) return ['guards', 'admin', 'online-engine'];
   if (isPersistentProfileOnly(paths)) return ['guards', 'online-engine'];
   if (isUnpaidValidationOnly(paths))
     return paths.some((p) => p.startsWith('apps/admin/'))
