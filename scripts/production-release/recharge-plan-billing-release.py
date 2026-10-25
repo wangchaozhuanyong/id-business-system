@@ -190,6 +190,66 @@ def load_migration_image(d, proof, plan, stage):
     return value['reference']
 
 
+def restore_pre_migration_running_state(d, h, previous, before, markers):
+    # No schema or image has been applied. Restore only the same stopped
+    # containers, after checking their image and environment ownership.
+    for role in ('api', 'online-recharge'):
+        expected = before[role]
+        row = json.loads(d.run('docker', 'inspect', expected['containerId']))[0]
+        need(row['Id'] == expected['containerId'] and row['Image'] == expected['image']
+             and fingerprint(sorted(row['Config']['Env'])) == expected['environmentSha256'],
+             'PRE_MIGRATION_CONTAINER_CHANGED')
+        if not row['State']['Running']:
+            need(row['State']['Status'] in ('exited', 'created'), 'PRE_MIGRATION_CONTAINER_STATE')
+            d.run('docker', 'start', expected['containerId'])
+        d.wait_healthy(previous, role)
+    after = h.snapshot(d, previous)
+    need(all(after[n] == before[n] for n in PRESERVED)
+         and all(all(after[n][key] == before[n][key] for key in
+                     ('containerId', 'image', 'reference', 'environmentSha256', 'status', 'health'))
+                 for n in ('api', 'online-recharge')), 'PRE_MIGRATION_RESTORATION_CHANGED')
+    load('proxy-result-identity-release.py').release_markers(markers)
+    return {'sameContainers': True, 'sameImages': True, 'migrationPerformed': False,
+            'after': after, 'businessActions': 0}
+
+
+def stop_with_profile(d, previous, before, lock, fence):
+    try:
+        recovery = load('online-profile-lock-recovery.py')
+        return load('online-checkout-release.py').stop_recharge_and_recover(
+            d, previous, before, lock, fence, recovery)
+    except Exception as error:
+        code = str(error)
+        code = code if re.fullmatch('[A-Z_]{1,160}', code) else type(error).__name__.upper()
+        raise RuntimeError('RECHARGE_PLAN_BILLING_STOP_' + code) from None
+
+
+def diagnose_stop(d, h, previous, before, lock, plan):
+    # A separate, bounded diagnostic: no build, migration, image switch or
+    # application request. Always restore the same original containers.
+    stage = BASE / '.staging' / (PREFIX + '-diagnostic-' + plan['commit'] + '-' + plan['workflowRunId'])
+    need(not stage.exists(), 'DIAGNOSTIC_ALREADY_ACCEPTED')
+    stage.mkdir(mode=0o700)
+    p = load('proxy-result-identity-release.py')
+    fence = p.sql_fence_class({'sqlFenceHelperSha256': plan['controlSources']['api-admin-scope.py']})(d, previous)
+    markers = claim_maintenance(plan)
+    result = {'commit': plan['commit'], 'businessActions': 0, 'migrationPerformed': False}
+    try:
+        fence.acquire()
+        result['profile'] = stop_with_profile(d, previous, before, lock, fence)
+        result['status'] = 'BILLING_STOP_DIAGNOSTIC_VERIFIED'
+    except Exception as error:
+        result['status'] = 'BILLING_STOP_DIAGNOSTIC_FAILED'
+        code = str(error)
+        result['code'] = code if re.fullmatch('[A-Z_]{1,180}', code) else 'DETAIL_SUPPRESSED'
+        raise
+    finally:
+        fence.close()
+        result['restoration'] = restore_pre_migration_running_state(d, h, previous, before, markers)
+        (stage / 'diagnostic.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
+    return result
+
+
 def migrate(d, target, c, journal, database):
     verify_db(db_state(d, target, database), c)
     journal.write_text(json.dumps({'phase': 'SQL_STARTED', 'name': c['migration']['name']}) + '\n')
@@ -229,7 +289,7 @@ console.log(JSON.stringify({validator:typeof r.validateRechargeBitBrowserStart==
 def release(plan):
     os.umask(0o077)
     c = json.loads((HERE / CONTRACT).read_bytes())
-    need(c['scope'] == SCOPE and plan['mode'] in ('preflight', 'release', 'readback')
+    need(c['scope'] == SCOPE and plan['mode'] in ('preflight', 'release', 'readback', 'diagnose')
          and re.fullmatch('[a-f0-9]{40}', plan['commit']) and re.fullmatch('[a-f0-9]{40}', plan['tree'])
          and re.fullmatch('[1-9][0-9]*', plan['workflowRunId'])
          and re.fullmatch('[1-9][0-9]*', plan['workflowRunAttempt']), 'PLAN_IDENTITY')
@@ -254,6 +314,8 @@ def release(plan):
             smoke(d, h, target, states, json.loads(raw), c)
             return {'status': 'BILLING_INDEPENDENT_READBACK_VERIFIED', 'commit': plan['commit'], 'migrationPerformed': True, 'businessActions': 0}
         previous, manifest_raw, before = baseline(d, h, c)
+        if plan['mode'] == 'diagnose':
+            return diagnose_stop(d, h, previous, before, lock, plan)
         if plan['mode'] == 'preflight':
             return {'status': 'BILLING_PREFLIGHT_VERIFIED', 'commit': plan['commit'], 'parentManifestSha256': sha(manifest_raw), 'businessActions': 0}
         stage = BASE / '.staging' / (PREFIX + '-' + plan['commit'] + '-' + plan['workflowRunId'])
@@ -318,10 +380,15 @@ def release(plan):
         markers = claim_maintenance(plan)
         journal = stage / 'switch-state.json'
         journal.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target)}) + '\n')
+        sql_started = False
         try:
             fence.acquire()
-            recovery = load('online-profile-lock-recovery.py')
-            profile = load('online-checkout-release.py').stop_recharge_and_recover(d, previous, before, lock, fence, recovery)
+            # Keep precise stages and normalize private Rejected subclasses to
+            # their bounded public code instead of losing the failure reason.
+            journal.write_text(json.dumps({'status': 'STOPPING', 'target': str(target)}) + '\n')
+            profile = stop_with_profile(d, previous, before, lock, fence)
+            journal.write_text(json.dumps({'status': 'PROFILE_VERIFIED', 'target': str(target), 'profile': profile}) + '\n')
+            sql_started = True
             migrate(d, target, c, stage / 'migration-operation.json', database)
             d.compose(target, 'up', '-d', '--no-deps', 'api', 'admin', timeout=180)
             d.wait_healthy(target, 'api')
@@ -335,8 +402,15 @@ def release(plan):
                      and after[role]['environmentSha256'] == before[role]['environmentSha256'], 'SERVICE_CONFIGURATION_CHANGED')
             need(all(after[n]['image'] == images[n]['imageId'] for n in images)
                  and after['online-recharge']['image'] == before['online-recharge']['image'], 'SERVICE_IMAGE_CHANGED')
-        except BaseException:
-            journal.write_text(json.dumps({'status': 'SWITCH_FAILED', 'target': str(target), 'automaticRollback': False}) + '\n')
+        except BaseException as error:
+            failure = {'status': 'SWITCH_FAILED', 'target': str(target), 'automaticRollback': False,
+                       'exceptionType': type(error).__name__, 'sqlStarted': sql_started}
+            code = str(error)
+            failure['code'] = code if re.fullmatch('[A-Z_]{1,180}', code) else 'DETAIL_SUPPRESSED'
+            if not sql_started:
+                fence.close()
+                failure['runningStateRestoration'] = restore_pre_migration_running_state(d, h, previous, before, markers)
+            journal.write_text(json.dumps(failure, sort_keys=True) + '\n')
             raise
         finally:
             fence.close()
