@@ -127,6 +127,10 @@ export const proxyFailureEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export const unpaidValidationControls = Object.freeze([
+  '.github/workflows/online-profile-egress-publication.yml',
+  ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-profile-egress-' + name
+  ),
   'scripts/ci-online-settings-scope.mjs',
   'scripts/ci-recharge-scope.mjs',
   'scripts/ci-unpaid-validation-scope.mjs',
@@ -200,6 +204,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-profile-egress-') ||
+        p === '.github/workflows/online-profile-egress-publication.yml' ||
         p.startsWith('scripts/production-release/online-proxy-failure-evidence-') ||
         p === '.github/workflows/online-proxy-failure-evidence-publication.yml' ||
         p.startsWith('scripts/production-release/online-card-read-diagnostics-') ||
@@ -233,6 +239,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-profile-egress-'))
+        ? [['python3', '-B', 'scripts/production-release/online-profile-egress-release.test.py']]
+        : []),
       ...(paths.some((p) => p.includes('online-proxy-failure-evidence-'))
         ? [
             [
