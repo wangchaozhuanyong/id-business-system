@@ -2342,7 +2342,28 @@ export function bitbrowserBoundedHoldCheckCommands(part, paths) {
   throw new Error('Unsupported bounded BitBrowser source check part');
 }
 
+export const mailQueryPublicationControls = Object.freeze([
+  '.github/workflows/mail-query-publication.yml',
+  ...['build.py', 'publication.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/mail-query-' + name
+  )
+]);
+const mailQueryPublicationSupport = new Set([
+  ...mailQueryPublicationControls,
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs'
+]);
+
+export function isMailQueryPublicationControlsOnly(paths) {
+  return (
+    paths.some((path) => mailQueryPublicationControls.includes(path)) &&
+    paths.every((path) => mailQueryPublicationSupport.has(path))
+  );
+}
+
 export function isCiOnly(paths, context) {
+  if (isMailQueryPublicationControlsOnly(paths)) return true;
   if (isAwsAccountMigrationControlsOnly(paths, context)) return true;
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return true;
@@ -3105,6 +3126,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];
   if (isProfileLockRecoveryOnly(paths)) return ['guards', 'online-engine'];
   if (isProfileEgressLifecycleOnly(paths)) return ['guards', 'admin', 'online-engine'];
   if (isPersistentProfileOnly(paths)) return ['guards', 'online-engine'];
