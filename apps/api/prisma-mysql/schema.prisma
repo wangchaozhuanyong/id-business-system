@@ -3016,7 +3016,7 @@ model IdBusinessV2BankRechargeCard {
   currency IdBusinessV2BankRechargeCurrency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
   orders   IdBusinessV2BankRechargeOrder[]
   rechargeJobs IdBusinessV2RechargeJob[]
-  billingAddress IdBusinessV2RechargeAddress? @relation(fields: [billingAddressId], references: [id], onDelete: SetNull)
+  billingAddress IdBusinessV2RechargeAddress? @relation(fields: [billingAddressId], references: [id], onDelete: SetNull, map: "recharge_card_billing_address_nullable_fkey")
 
   @@index([active, label])
   @@map("id_business_v2_bank_recharge_cards")
@@ -3171,7 +3171,7 @@ model IdBusinessV2RechargeAddressUse {
   usedAt DateTime @default(now()) @map("used_at") @db.DateTime(6)
 
   job IdBusinessV2RechargeJob @relation(fields: [jobId], references: [id], onDelete: Restrict)
-  address IdBusinessV2RechargeAddress? @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  address IdBusinessV2RechargeAddress? @relation(fields: [addressId], references: [id], onDelete: SetNull, map: "recharge_address_use_nullable_fkey")
 
   @@index([addressId, usedAt])
   @@map("id_business_v2_recharge_address_uses")

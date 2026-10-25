@@ -19,9 +19,9 @@ UPDATE `id_business_v2_recharge_address_uses` SET `address_reference` = `address
 ALTER TABLE `id_business_v2_recharge_address_uses`
  DROP FOREIGN KEY `id_business_v2_recharge_address_uses_address_id_fkey`,
  MODIFY `address_id` CHAR(36) NULL,
- ADD CONSTRAINT `id_business_v2_recharge_address_uses_address_id_fkey` FOREIGN KEY (`address_id`)
+ ADD CONSTRAINT `recharge_address_use_nullable_fkey` FOREIGN KEY (`address_id`)
  REFERENCES `id_business_v2_recharge_addresses` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE `id_business_v2_bank_recharge_cards`
  DROP FOREIGN KEY `id_business_v2_bank_recharge_cards_billing_address_id_fkey`,
- ADD CONSTRAINT `id_business_v2_bank_recharge_cards_billing_address_id_fkey` FOREIGN KEY (`billing_address_id`)
+ ADD CONSTRAINT `recharge_card_billing_address_nullable_fkey` FOREIGN KEY (`billing_address_id`)
  REFERENCES `id_business_v2_recharge_addresses` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
