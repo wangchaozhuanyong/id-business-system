@@ -302,3 +302,131 @@ test('actual task runner classifies an unsolved visible challenge without human 
     false
   );
 });
+
+test('form read diagnostics survive preparation, classification and ordinary result projection', async () => {
+  const inspection = {
+    complete: false,
+    framesFailed: 1,
+    framesChecked: 2,
+    readAttempts: 2,
+    readPhase: 'candidate_eligibility',
+    readFailures: [{ phase: 'control_snapshot', reason: 'timeout', count: 1 }],
+    rawValue: 'PRIVATE_SECRET'
+  };
+  const formDiagnostics = {
+    inspection,
+    steps: [
+      { field: 'number', phase: 'readback', state: 'completed', matched: true },
+      {
+        field: 'expiry',
+        phase: 'precheck',
+        state: 'failed',
+        frameId: 2,
+        frameKind: 'embedded',
+        candidateCount: 1,
+        readPhase: 'candidate_eligibility',
+        errorClass: 'timeout',
+        durationMs: 300,
+        rawValue: 'PRIVATE_SECRET'
+      }
+    ]
+  };
+  validation.start();
+  const fakeCard = {
+    id: 'fixture',
+    card_number: '4242424242424242',
+    card_expiry: '12/30',
+    card_cvc: '123',
+    card_holder: 'Synthetic',
+    billing_address: { country: 'PH', line1: 'Synthetic', city: 'Synthetic', postal_code: '1000' }
+  };
+  let captured;
+  try {
+    await validation.prepare(
+      {},
+      {
+        store: { reserveCard: async () => fakeCard, releaseCard: async () => {} },
+        payment: { prepareCheckoutCardSection: async () => {} },
+        form: {
+          fillCard: async () => ({
+            ok: false,
+            errorCode: 'CHECKOUT_CONTROL_READ_FAILED',
+            missing: ['expiry', 'cvc'],
+            inspection,
+            formDiagnostics
+          })
+        }
+      }
+    );
+    assert.fail('must stop before billing and button checks');
+  } catch (error) {
+    captured = error;
+  }
+  assert.equal(captured.formDiagnostics, formDiagnostics);
+  const report = validation.finish({
+    validationErrorCode: captured.code,
+    validationMissing: captured.missing,
+    formDiagnostics: validation.safeFormDiagnostics(captured.formDiagnostics)
+  });
+  const projected = require('../security.cjs').sanitizeResult({
+    validationReport: report
+  }).validationReport;
+  assert.equal(projected.failureClass, 'READ_INCOMPLETE');
+  assert.equal(projected.formDiagnostics.inspection.readPhase, 'candidate_eligibility');
+  assert.deepEqual(projected.formDiagnostics.inspection.readFailures, [
+    { phase: 'control_snapshot', reason: 'timeout', count: 1 }
+  ]);
+  assert.equal(projected.formDiagnostics.steps.at(-1).field, 'expiry');
+  assert.equal(projected.formDiagnostics.steps.at(-1).phase, 'precheck');
+  assert.equal(
+    projected.formDiagnostics.steps.some((row) => row.field === 'cvc'),
+    false
+  );
+  assert.equal(JSON.stringify(projected).includes('PRIVATE_SECRET'), false);
+  assert.equal(projected.submitted, false);
+  assert.match(validation.message(projected), /有效期／交互前检查／读取超时/);
+  assert.equal(
+    validation.classify({ code: 'CHECKOUT_CONTROL_READ_FAILED' }, 'card_fill'),
+    'READ_INCOMPLETE'
+  );
+});
+
+test('native task child retains filling diagnostics through index catch and result', async () => {
+  const harness = require('./recharge-flow-acceptance.test.cjs');
+  const task = harness.syntheticTask('success');
+  task.operation = 'debug';
+  task.payload.validationMode = 'ready_before_payment';
+  const actual = await harness.runSyntheticRecharge('success', { task, formReadFailure: true });
+  assert.equal(actual.failure, '');
+  assert.equal(actual.result.status, 'failed');
+  const report = actual.result.result.validationReport;
+  assert.equal(report.failureCode, 'CHECKOUT_CONTROL_READ_FAILED');
+  assert.equal(report.failureClass, 'READ_INCOMPLETE');
+  assert.equal(report.formDiagnostics.inspection.readPhase, 'candidate_eligibility');
+  assert.equal(report.formDiagnostics.steps.at(-1).field, 'expiry');
+  assert.equal(report.formDiagnostics.steps.at(-1).phase, 'precheck');
+  assert.equal(JSON.stringify(report).includes('PRIVATE_RAW_ERROR'), false);
+  assert.equal(report.submitted, false);
+  assert.equal(actual.metrics.checkoutCreations, 1);
+  assert.equal(actual.metrics.actualPaymentClicks, 0);
+  assert.equal(actual.metrics.paymentRequests, 0);
+});
+
+test('form report caps step history and discards selectors, values and raw exceptions', () => {
+  const safe = validation.safeFormDiagnostics({
+    steps: Array.from({ length: 60 }, (_, i) => ({
+      field: 'expiry',
+      phase: 'precheck',
+      state: 'failed',
+      durationMs: i,
+      selector: 'PRIVATE_SELECTOR',
+      value: 'PRIVATE_VALUE',
+      error: 'PRIVATE_ERROR'
+    })),
+    inspection: { complete: false, rawBody: 'PRIVATE_BODY' }
+  });
+  assert.equal(safe.steps.length, 32);
+  assert.equal(safe.steps[0].durationMs, 28);
+  assert.equal(safe.steps.at(-1).durationMs, 59);
+  assert.equal(JSON.stringify(safe).includes('PRIVATE'), false);
+});

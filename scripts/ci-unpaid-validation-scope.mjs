@@ -85,11 +85,29 @@ export const persistentProfilePaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/browser-profile.test.cjs'
 ]);
+export const cardReadDiagnosticsPaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/unpaid-validation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/unpaid-validation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.unpaid.spec.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
 export const unpaidValidationControls = Object.freeze([
   'scripts/ci-online-settings-scope.mjs',
   'scripts/ci-recharge-scope.mjs',
   'scripts/ci-unpaid-validation-scope.mjs',
   'scripts/ci-unpaid-validation-scope.test.mjs',
+  '.github/workflows/online-card-read-diagnostics-publication.yml',
+  ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-card-read-diagnostics-' + name
+  ),
   '.github/workflows/online-persistent-profile-publication.yml',
   ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-persistent-profile-' + name
@@ -109,7 +127,12 @@ export function isUnpaidValidationOnly(paths) {
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
-    [unpaidValidationPaths, checkoutResumePaths, persistentProfilePaths].some(
+    [
+      unpaidValidationPaths,
+      checkoutResumePaths,
+      persistentProfilePaths,
+      cardReadDiagnosticsPaths
+    ].some(
       (batch) =>
         batch.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
         paths.every((p) => batch.includes(p) || unpaidValidationControls.includes(p))
@@ -132,6 +155,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-card-read-diagnostics-') ||
+        p === '.github/workflows/online-card-read-diagnostics-publication.yml' ||
         p.startsWith('scripts/production-release/online-persistent-profile-') ||
         p === '.github/workflows/online-persistent-profile-publication.yml' ||
         p.startsWith('scripts/production-release/online-checkout-resume-') ||
@@ -161,6 +186,15 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-card-read-diagnostics-'))
+        ? [
+            [
+              'python3',
+              '-B',
+              'scripts/production-release/online-card-read-diagnostics-release.test.py'
+            ]
+          ]
+        : []),
       ...(paths.some((p) => p.includes('online-persistent-profile-'))
         ? [
             [
@@ -173,11 +207,18 @@ export function unpaidValidationCommands(part, paths) {
       ...(paths.some((p) => p.includes('online-checkout-resume-'))
         ? [['python3', '-B', 'scripts/production-release/online-checkout-resume-release.test.py']]
         : []),
-      ...(controlsOnly || isPersistentProfileOnly(paths)
+      ...(controlsOnly ||
+      isPersistentProfileOnly(paths) ||
+      (cardReadDiagnosticsPaths
+        .filter((p) => p.startsWith('apps/'))
+        .every((p) => paths.includes(p)) &&
+        paths.every(
+          (p) => cardReadDiagnosticsPaths.includes(p) || unpaidValidationControls.includes(p)
+        ))
         ? [
             'check:v2-module-architecture',
             'check:v2-isolation',
-            ...(isPersistentProfileOnly(paths) ? ['test:online-recharge:controls'] : [])
+            ...(!controlsOnly ? ['test:online-recharge:controls'] : [])
           ]
         : [
             'check:admin-ui',

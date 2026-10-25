@@ -434,6 +434,44 @@ const CHECKOUT_FORM_READ_PHASES = new Set([
     'frame_scan', 'candidate_handles', 'candidate_eligibility', 'value', 'control_read'
 ]);
 
+function safeCheckoutFormInspection(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const inspection = {};
+    for (const key of ['complete', 'contentLoadFailed', 'timedOut', 'pageClosed', 'aborted'])
+        if (typeof value[key] === 'boolean') inspection[key] = value[key];
+    for (const key of ['framesChecked', 'framesSkipped', 'framesFailed'])
+        if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 10000)
+            inspection[key] = value[key];
+    if ([1, 2].includes(value.readAttempts)) inspection.readAttempts = value.readAttempts;
+    if (CHECKOUT_FORM_READ_PHASES.has(value.readPhase)) inspection.readPhase = value.readPhase;
+    if (Array.isArray(value.readFailures)) {
+        inspection.readFailures = value.readFailures.slice(0, 32).filter(row => row
+            && ['frame_scan', 'frame_owner', 'load_state', 'control_snapshot'].includes(row.phase)
+            && ['timeout', 'detached', 'context_destroyed', 'closed', 'aborted', 'read_failed'].includes(row.reason)
+            && Number.isInteger(row.count) && row.count > 0 && row.count <= 10000)
+            .map(row => ({ phase: row.phase, reason: row.reason, count: row.count }));
+    }
+    const visibilityReasons = ['zero_geometry', 'hidden', 'inert', 'aria_hidden', 'display_none',
+        'visibility_hidden', 'opacity_zero', 'content_visibility_hidden', 'modal_background'];
+    const countGroups = {
+        frameSkipCounts: visibilityReasons,
+        controlCounts: ['scanned', 'eligible', 'locatable', 'recognized'],
+        controlRejectCounts: [...visibilityReasons, 'aria_disabled', 'disabled', 'readonly', 'excluded_type', 'no_locator'],
+        interactionRejectCounts: ['occluded', 'outside_viewport', 'unsupported_transform', 'unsupported_geometry',
+            'control_ineligible', 'frame_ineligible', 'scroll_unavailable', 'page_changed']
+    };
+    for (const [group, keys] of Object.entries(countGroups)) {
+        const raw = value[group];
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+        const clean = {};
+        for (const key of keys)
+            if (Object.hasOwn(raw, key) && Number.isInteger(raw[key]) && raw[key] >= 0 && raw[key] <= 10000)
+                clean[key] = raw[key];
+        if (Object.keys(clean).length) inspection[group] = clean;
+    }
+    return Object.keys(inspection).length ? inspection : undefined;
+}
+
 function safeCheckoutOpenDiagnostics(value) {
     try {
         if (!value || !CHECKOUT_OPEN_STAGES.has(value.stage) || !CHECKOUT_OPEN_REASONS.has(value.reason)) return undefined;
@@ -470,42 +508,8 @@ function safeCheckoutOpenDiagnostics(value) {
                 field, count: result.controls.filter(control => control.fields.includes(field)).length
             }));
         }
-        if (value.inspection && typeof value.inspection === 'object' && !Array.isArray(value.inspection)) {
-            const inspection = {};
-            for (const key of ['complete', 'contentLoadFailed', 'timedOut', 'pageClosed', 'aborted'])
-                if (typeof value.inspection[key] === 'boolean') inspection[key] = value.inspection[key];
-            for (const key of ['framesChecked', 'framesSkipped', 'framesFailed'])
-                if (Number.isInteger(value.inspection[key]) && value.inspection[key] >= 0 && value.inspection[key] <= 10000)
-                    inspection[key] = value.inspection[key];
-            if ([1, 2].includes(value.inspection.readAttempts)) inspection.readAttempts = value.inspection.readAttempts;
-            if (CHECKOUT_FORM_READ_PHASES.has(value.inspection.readPhase)) inspection.readPhase = value.inspection.readPhase;
-            if (Array.isArray(value.inspection.readFailures)) {
-                inspection.readFailures = value.inspection.readFailures.slice(0, 32).filter(row => row
-                    && ['frame_scan', 'frame_owner', 'load_state', 'control_snapshot'].includes(row.phase)
-                    && ['timeout', 'detached', 'context_destroyed', 'closed', 'aborted', 'read_failed'].includes(row.reason)
-                    && Number.isInteger(row.count) && row.count > 0 && row.count <= 10000)
-                    .map(row => ({ phase: row.phase, reason: row.reason, count: row.count }));
-            }
-            const visibilityReasons = ['zero_geometry', 'hidden', 'inert', 'aria_hidden', 'display_none',
-                'visibility_hidden', 'opacity_zero', 'content_visibility_hidden', 'modal_background'];
-            const countGroups = {
-                frameSkipCounts: visibilityReasons,
-                controlCounts: ['scanned', 'eligible', 'locatable', 'recognized'],
-                controlRejectCounts: [...visibilityReasons, 'aria_disabled', 'disabled', 'readonly', 'excluded_type', 'no_locator'],
-                interactionRejectCounts: ['occluded', 'outside_viewport', 'unsupported_transform', 'unsupported_geometry',
-                    'control_ineligible', 'frame_ineligible', 'scroll_unavailable', 'page_changed']
-            };
-            for (const [group, keys] of Object.entries(countGroups)) {
-                const raw = value.inspection[group];
-                if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-                const clean = {};
-                for (const key of keys)
-                    if (Object.hasOwn(raw, key) && Number.isInteger(raw[key]) && raw[key] >= 0 && raw[key] <= 10000)
-                        clean[key] = raw[key];
-                if (Object.keys(clean).length) inspection[group] = clean;
-            }
-            if (Object.keys(inspection).length) result.inspection = inspection;
-        }
+        const inspection = safeCheckoutFormInspection(value.inspection);
+        if (inspection) result.inspection = inspection;
         const probe = value.exclusionProbe;
         if (probe && typeof probe === 'object' && !Array.isArray(probe)) {
             const clean = {};
@@ -805,3 +809,5 @@ module.exports.buildCheckoutPayload = buildCheckoutPayload;
 module.exports.formatApiErrorDetail = formatApiErrorDetail;
 
 module.exports.safeCheckoutOpenDiagnostics = safeCheckoutOpenDiagnostics;
+
+module.exports.safeCheckoutFormInspection = safeCheckoutFormInspection;
