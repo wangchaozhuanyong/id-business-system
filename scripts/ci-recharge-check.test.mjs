@@ -1,4 +1,8 @@
 import {
+  rechargePlanBillingPublicationControls,
+  rechargePlanBillingSourcePaths
+} from './ci-recharge-plan-billing-scope.mjs';
+import {
   registrationProtocolRestoreRepairBase,
   registrationProtocolRestoreRepairTree,
   registrationProtocolRestoreRepairPaths,
@@ -21,6 +25,50 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { financialPublicationControlPaths } from './ci-financial-publication-scope.mjs';
 import { financialClosurePaths } from './ci-financial-closure-scope.mjs';
+
+test('账单排重发布控制走真实入口且不重复应用或数据库检查', () => {
+  const calls = recordGuardCommands('ci-only', [...rechargePlanBillingPublicationControls]);
+  assert.ok(
+    calls.some((call) =>
+      call.includes('scripts/production-release/recharge-plan-billing-release.test.py')
+    )
+  );
+  assert.equal(
+    calls.some((call) =>
+      call.some((arg) =>
+        /acceptance:v2|prisma:mysql|@apple-business\/api|@apple-business\/admin/.test(arg)
+      )
+    ),
+    false
+  );
+});
+
+test('账单迁移源码入口保留全部界面规则及共享卡回归', () => {
+  const paths = [...rechargePlanBillingSourcePaths];
+  const guards = recordGuardCommands('recharge', paths);
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(
+      guards.some((call) => call.includes(name)),
+      name
+    );
+  assert.equal(
+    guards.some((call) =>
+      call.includes('scripts/production-release/online-recharge-scope.test.py')
+    ),
+    false
+  );
+  const api = recordGuardCommands('recharge', paths, 'api');
+  assert.ok(api.some((call) => call.includes('src/id-business-v2/bank-card-pool')));
+  assert.ok(api.some((call) => call.includes('typecheck')));
+});
 
 test('账务完整质量检查只选择本轮只读及有限发布控制', () => {
   const calls = recordGuardCommands('full', [...financialClosurePaths], 'release-controls');

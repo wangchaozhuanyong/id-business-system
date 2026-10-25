@@ -70,6 +70,9 @@ export async function resolveLocalRechargeCard(
     lockedCurrency: string;
     plan: string;
     id: string;
+    addressId?: string;
+    ownerId?: string;
+    billingAllocationId?: string;
   },
   names?: RechargeNameService
 ) {
@@ -81,7 +84,10 @@ export async function resolveLocalRechargeCard(
         input.billingName!,
         input.lockedCurrency,
         input.plan,
-        input.id
+        input.id,
+        input.billingAllocationId && input.ownerId && input.addressId
+          ? { id: input.billingAllocationId, ownerId: input.ownerId, addressId: input.addressId }
+          : undefined
       )
     : null;
 }
@@ -96,10 +102,12 @@ export async function finalizeRechargeCardBilling(
   cards?: BankRechargeCardService,
   names?: RechargeNameService
 ) {
+  if (object(job.result).billing_allocation_id) return;
   if (!job.cardId || !job.billingNameEncrypted || !cards || verifiedOrder?.cardId !== job.cardId)
     return;
   const addressId = object(job.result).addressId;
   if (typeof addressId !== 'string') return;
+  if (await cards.wasBillingAddressCleared?.(tx, job.id, addressId)) return;
   // 与姓名匹配、卡登记保持相同顺序，避免先锁卡片再等待姓名锁。
   await names?.lock(tx);
   const bound = await cards.bindVerifiedBilling(

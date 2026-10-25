@@ -1,13 +1,17 @@
 import { onScopeDispose, ref, watch, type Ref } from 'vue';
 import { bankRechargeApi } from './bank-recharge-api';
 import { rechargeFieldError } from './recharge-form';
-import type { V2RechargeDetails } from './contracts';
+import type { V2RechargeDetails, V2RechargeAddress } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
 
 export function useRechargeNameMatch(
   details: Ref<V2RechargeDetails>,
   selectedCardId: Ref<string>,
-  locked: Ref<boolean>
+  locked: Ref<boolean>,
+  allocation?: {
+    request: () => { allocationKey: string; addressId?: string };
+    apply: (value: { id: string; address: V2RechargeAddress }) => void;
+  }
 ) {
   const loading = ref(false);
   const error = ref('');
@@ -21,17 +25,18 @@ export function useRechargeNameMatch(
   let lastMatchedNumber = '';
   const canonical = () => details.value.number.replace(/[ -]/g, '');
 
-  async function match() {
+  async function match(force = false) {
     const number = canonical();
     if (rechargeFieldError('number', number)) return;
     if (
+      !force &&
       lastMatchedNumber === number &&
       !error.value &&
       details.value.name &&
       (!confirmed.value || details.value.name === matchedName)
     )
       return;
-    if (pending && matchingNumber === number) return pending;
+    if (!force && pending && matchingNumber === number) return pending;
     const revision = ++generation;
     matchingNumber = number;
     const originalName = details.value.name;
@@ -39,14 +44,23 @@ export function useRechargeNameMatch(
     error.value = '';
     const work = (async () => {
       try {
-        const result = await bankRechargeApi.matchCardName(number);
+        const result = allocation
+          ? await bankRechargeApi.matchCardName(number, allocation.request())
+          : await bankRechargeApi.matchCardName(number);
         if (disposed || revision !== generation || canonical() !== number) return;
         applying.value = true;
         try {
           lastMatchedNumber = number;
           confirmed.value = result.confirmed;
           selectedCardId.value = result.cardId ?? '';
-          if (result.confirmed || details.value.name === originalName || !details.value.name) {
+          if (result.allocationId && result.address)
+            allocation?.apply({ id: result.allocationId, address: result.address });
+          if (
+            result.allocationId ||
+            result.confirmed ||
+            details.value.name === originalName ||
+            !details.value.name
+          ) {
             details.value.name = result.name;
             matchedName = result.name;
           }

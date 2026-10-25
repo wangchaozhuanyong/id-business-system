@@ -97,6 +97,10 @@ export class BankRechargeCardRepository {
       take
     });
   }
+  async wasBillingAddressCleared(tx: V2CommandTransaction, jobId: string, addressId: string) {
+    const usage = await tx.idBusinessV2RechargeAddressUse.findUnique({ where: { jobId } });
+    return Boolean(usage && !usage.addressId && usage.addressReference === addressId);
+  }
   countOrders(id: string) {
     return this.prisma.idBusinessV2BankRechargeOrder.count({
       where: {

@@ -8,7 +8,7 @@ import type {
   V2RechargeBitBrowserSettings,
   V2RechargeJob
 } from './contracts';
-import type { BankChatgptAccount } from './bank-recharge-api';
+import type { BankChatgptAccount, SharedPaymentCard } from './bank-recharge-api';
 import type { RechargeProxyItem } from './recharge-proxy-api';
 import { useAutoRecharge } from './useAutoRecharge';
 import { clearV2SessionDrafts, useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
@@ -285,6 +285,15 @@ const bankCurrencies = ref({
     { code: 'PHP', name: '菲律宾比索', minorUnits: 2, active: true }
   ]
 });
+const paymentCards = ref<{ items: SharedPaymentCard[] }>({ items: [] });
+const sharedCard = (id = 'card-a', allowedPlans = ['plus']): SharedPaymentCard => ({
+  id,
+  allowedPlans,
+  label: '合成银行卡',
+  last4: '4444',
+  active: true,
+  hasNumber: true
+});
 let scope = effectScope();
 let flow: ReturnType<typeof useAutoRecharge>;
 
@@ -375,7 +384,8 @@ beforeEach(() => {
   mock.totpQuery = queryResult(savedTotp);
   mock.bankAccountsQuery = queryResult(bankAccounts);
   mock.bankCurrenciesQuery = queryResult(bankCurrencies);
-  mock.paymentCardsQuery = queryResult(ref({ items: [] }));
+  paymentCards.value = { items: [] };
+  mock.paymentCardsQuery = queryResult(paymentCards);
   mock.proxyCountriesQuery = queryResult(ref({ items: ['PH'] }));
   mock.proxiesQuery = {
     ...queryResult(
@@ -652,6 +662,7 @@ describe('比特浏览器充值入口', () => {
       cardId: 'bound-card',
       billingAddressId: address.id
     });
+    paymentCards.value.items = [sharedCard()];
     await flow.selectSavedCard('card-a');
     await flow.nameMatch.ensureReady();
     expect(flow.details.value.name).toBe('Historic Person');
@@ -718,9 +729,13 @@ describe('比特浏览器充值入口', () => {
       cardId: 'legacy-card-a',
       billingAddressId: address.id
     });
+    paymentCards.value.items = [sharedCard()];
     await flow.selectSavedCard('card-a');
     await nextTick();
-    expect(mock.matchCardName).toHaveBeenCalledExactlyOnceWith('5555555555554444');
+    expect(mock.matchCardName).toHaveBeenCalledExactlyOnceWith(
+      '5555555555554444',
+      expect.objectContaining({ allocationKey: expect.any(String) })
+    );
     expect(flow.details.value.name).toBe('Library Person');
     expect(flow.selectedPaymentCardId.value).toBe('card-a');
     flow.details.value.number = '4111111111111111';
@@ -743,14 +758,18 @@ describe('比特浏览器充值入口', () => {
         state: 'New Hampshire',
         postalCode: '03060'
       };
-      mock.generateAddresses.mockResolvedValueOnce({ count: 1, items: [generated] });
-      (mock.addressesQuery.refresh as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-        addresses.value.items = [generated];
+      mock.matchCardName.mockResolvedValueOnce({
+        name: 'New Person',
+        confirmed: false,
+        cardId: null,
+        billingAddressId: generated.id,
+        allocationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        address: generated
       });
       fillForm();
       await flow.nameMatch.ensureReady();
       await vi.waitFor(() => expect(flow.selectedAddressId.value).toBe('generated'));
-      expect(mock.generateAddresses).toHaveBeenCalledExactlyOnceWith(1);
+      expect(mock.generateAddresses).not.toHaveBeenCalled();
       expect(flow.selectedAddressId.value).toBe('generated');
       expect(flow.details.value).toMatchObject({
         country: 'US',
@@ -773,18 +792,20 @@ describe('比特浏览器充值入口', () => {
     expect(mock.generateAddresses).not.toHaveBeenCalled();
     expect(mock.matchCardName).not.toHaveBeenCalled();
     mock.matchCardName.mockResolvedValueOnce({
-      name: 'Historic Person',
-      confirmed: true,
-      cardId: 'bound-card',
-      billingAddressId: 'missing-bound-address'
+      name: 'New Person',
+      confirmed: false,
+      cardId: null,
+      billingAddressId: address.id,
+      allocationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      address
     });
     flow.operationMode.value = 'payment';
     await flow.nameMatch.ensureReady();
     await nextTick();
     await nextTick();
     expect(flow.canGenerateAddress.value).toBe(true);
-    await vi.waitFor(() => expect(mock.generateAddresses).toHaveBeenCalledOnce());
-    expect(flow.selectedAddress.value).toBeUndefined();
+    expect(mock.generateAddresses).not.toHaveBeenCalled();
+    expect(flow.selectedAddress.value?.id).toBe(address.id);
   });
   it('手工选择地址后，迟到的生成结果不能覆盖选择', async () => {
     mock.matchCardName.mockResolvedValueOnce({
@@ -842,6 +863,7 @@ describe('比特浏览器充值入口', () => {
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
   });
   it('切换支付币种保留已选卡、有效期和账单地址，只清理临时安全码', async () => {
+    paymentCards.value.items = [sharedCard()];
     await flow.selectSavedCard('card-a');
     await nextTick();
     flow.details.value.cvc = '123';
@@ -864,6 +886,7 @@ describe('比特浏览器充值入口', () => {
       expiry: '12/30',
       allowedPlans: ['pro_20x']
     });
+    paymentCards.value.items = [sharedCard()];
     await flow.selectSavedCard('card-a');
     expect(flow.error.value).toContain('不适用当前套餐');
     expect(flow.selectedPaymentCardId.value).toBe('');
@@ -874,6 +897,172 @@ describe('比特浏览器充值入口', () => {
     expect(flow.details.value.number).toBe('');
     expect(flow.details.value.cvc).toBe('');
     expect(mock.startBitBrowser).not.toHaveBeenCalled();
+  });
+  it('自动匹配当前套餐的可用卡，排除其他套餐、停用和资料不完整的卡', async () => {
+    paymentCards.value.items = [
+      sharedCard('pro-only', ['pro_20x']),
+      { ...sharedCard('disabled'), active: false },
+      { ...sharedCard('incomplete'), hasNumber: false },
+      sharedCard()
+    ];
+    await nextTick();
+    await nextTick();
+    expect(flow.savedPaymentCards.value.map((card) => card.id)).toEqual(['card-a']);
+    expect(mock.managedCardDetail).toHaveBeenCalledExactlyOnceWith('card-a', 'plus');
+    expect(flow.selectedPaymentCardId.value).toBe('card-a');
+    expect(flow.details.value.number).toBe('5555555555554444');
+    expect(mock.startBitBrowser).not.toHaveBeenCalled();
+  });
+  it.each(['pro-5x', 'pro-500'] as const)(
+    '%s 同时自动匹配智利国家、币种、代理和适用银行卡',
+    async (selectedPlan) => {
+      bankCurrencies.value.items.push({
+        code: 'CLP',
+        name: '智利比索',
+        minorUnits: 0,
+        active: true
+      });
+      const proxies = mock.proxiesQuery.data as Ref<{ items: RechargeProxyItem[]; total: number }>;
+      proxies.value = {
+        items: [{ ...proxies.value.items[0]!, id: 'proxy-cl', countryCode: 'CL' }],
+        total: 1
+      };
+      const sharedPlan = selectedPlan.replace(/-/g, '_');
+      mock.managedCardDetail.mockResolvedValueOnce({
+        id: 'chile-card',
+        status: 'active',
+        allowedPlans: [sharedPlan],
+        number: '4111111111111111',
+        expiry: '12/30',
+        billingName: 'Test User'
+      });
+      flow.plan.value = selectedPlan;
+      paymentCards.value.items = [
+        sharedCard('wrong-card', ['plus']),
+        sharedCard('chile-card', [sharedPlan])
+      ];
+      await nextTick();
+      await nextTick();
+      expect(flow.selectedProxyCountryCode.value).toBe('CL');
+      expect(flow.lockedCurrency.value).toBe('CLP');
+      expect(flow.selectedProxyId.value).toBe('proxy-cl');
+      expect(flow.selectedPaymentCardId.value).toBe('chile-card');
+      expect(flow.savedPaymentCards.value.map((card) => card.id)).toEqual(['chile-card']);
+      expect(mock.startBitBrowser).not.toHaveBeenCalled();
+    }
+  );
+  it('回填本次分配的姓名和地址，提交携带分配编号；明确拒付后重试换新资料', async () => {
+    const firstAllocation = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const secondAllocation = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const firstAddress = {
+      ...address,
+      id: '33333333-3333-4333-8333-333333333333',
+      line1: '1050 Main St'
+    };
+    const secondAddress = {
+      ...address,
+      id: '44444444-4444-4444-8444-444444444444',
+      line1: '1060 Main St'
+    };
+    mock.matchCardName.mockResolvedValueOnce({
+      name: 'First Person',
+      confirmed: false,
+      cardId: null,
+      billingAddressId: firstAddress.id,
+      allocationId: firstAllocation,
+      address: firstAddress
+    });
+    fillForm();
+    await nextTick();
+    await nextTick();
+    expect(flow.details.value.name).toBe('First Person');
+    expect(flow.selectedAddress.value?.id).toBe(firstAddress.id);
+    await flow.start();
+    expect(mock.preparePaymentCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ billingAllocationId: firstAllocation, name: 'First Person' })
+    );
+    const firstRequest = mock.startBitBrowser.mock.lastCall![0];
+    expect(firstRequest.billingAllocationId).toBe(firstAllocation);
+    jobs.value.items = [
+      {
+        ...job('finished', { status: 'payment_failed', payment_status: 'declined' }),
+        id: firstRequest.id
+      }
+    ];
+    await nextTick();
+    expect(flow.details.value.name).toBe('First Person');
+    mock.matchCardName.mockResolvedValueOnce({
+      name: 'Second Person',
+      confirmed: false,
+      cardId: null,
+      billingAddressId: secondAddress.id,
+      allocationId: secondAllocation,
+      address: secondAddress
+    });
+    await flow.start();
+    expect(flow.selectedAddress.value?.id).toBe(secondAddress.id);
+    expect(mock.preparePaymentCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ billingAllocationId: secondAllocation, name: 'Second Person' })
+    );
+    expect(mock.startBitBrowser).toHaveBeenCalledTimes(2);
+  });
+  it('不在当前套餐候选列表中的卡无法手动选择', async () => {
+    paymentCards.value.items = [sharedCard('plus-only')];
+    flow.plan.value = 'pro-20x';
+    await flow.selectSavedCard('plus-only');
+    await nextTick();
+    expect(flow.savedPaymentCards.value).toEqual([]);
+    expect(mock.managedCardDetail).not.toHaveBeenCalled();
+    expect(flow.selectedPaymentCardId.value).toBe('');
+    expect(flow.error.value).toContain('不适用当前套餐');
+  });
+  it('切换套餐立即清卡并自动匹配新套餐，迟到的旧卡详情不能回填', async () => {
+    let finish!: (value: unknown) => void;
+    mock.managedCardDetail.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve))
+    );
+    paymentCards.value.items = [sharedCard()];
+    await nextTick();
+    flow.details.value.cvc = '123';
+    flow.plan.value = 'pro-20x';
+    expect(flow.selectedPaymentCardId.value).toBe('');
+    expect(flow.details.value.cvc).toBe('');
+    mock.managedCardDetail.mockResolvedValueOnce({
+      id: 'pro-card',
+      status: 'active',
+      allowedPlans: ['pro_20x'],
+      number: '4111111111111111',
+      expiry: '12/30',
+      billingName: 'Test User'
+    });
+    paymentCards.value.items = [sharedCard('pro-card', ['pro_20x'])];
+    await nextTick();
+    await nextTick();
+    finish({
+      id: 'card-a',
+      status: 'active',
+      allowedPlans: ['plus'],
+      number: '5555555555554444',
+      expiry: '12/30'
+    });
+    await nextTick();
+    expect(flow.selectedPaymentCardId.value).toBe('pro-card');
+    expect(flow.details.value.number).toBe('4111111111111111');
+    expect(mock.managedCardDetail).toHaveBeenLastCalledWith('pro-card', 'pro-20x');
+  });
+  it('手填卡号和仅登录模式不被自动选卡覆盖，加载失败不取卡', async () => {
+    flow.details.value.number = '4111111111111111';
+    paymentCards.value.items = [sharedCard()];
+    await nextTick();
+    expect(mock.managedCardDetail).not.toHaveBeenCalled();
+    flow.operationMode.value = 'open_browser';
+    flow.details.value.number = '';
+    await nextTick();
+    expect(mock.managedCardDetail).not.toHaveBeenCalled();
+    (mock.paymentCardsQuery.error as Ref<unknown>).value = new Error('读取失败');
+    flow.operationMode.value = 'payment';
+    await nextTick();
+    expect(mock.managedCardDetail).not.toHaveBeenCalled();
   });
   it('银行卡和地址通过校验后显示就绪，不再要求重复补齐', async () => {
     fillForm();

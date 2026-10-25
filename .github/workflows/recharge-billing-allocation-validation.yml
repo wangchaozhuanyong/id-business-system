@@ -1,0 +1,50 @@
+name: Recharge Billing Allocation Database
+on:
+  pull_request:
+    paths:
+      - 'apps/api/src/id-business-v2/auto-recharge/**'
+      - 'apps/api/prisma-mysql/**'
+      - '.github/workflows/recharge-billing-allocation-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/src/id-business-v2/auto-recharge/**'
+      - 'apps/api/prisma-mysql/**'
+      - '.github/workflows/recharge-billing-allocation-validation.yml'
+permissions:
+  contents: read
+concurrency:
+  group: billing-allocation-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  billing-allocation-mysql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: allocation-ci-fixture
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: id_business_v2_billing_allocation_${{ github.run_id }}
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pallocation-ci-fixture"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      DATABASE_URL: mysql://root:allocation-ci-fixture@127.0.0.1:3306/id_business_v2_billing_allocation_${{ github.run_id }}
+      V2_BILLING_ALLOCATION_TEST_DATABASE_URL: mysql://root:allocation-ci-fixture@127.0.0.1:3306/id_business_v2_billing_allocation_${{ github.run_id }}
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit
+      - run: npm run build --workspace @apple-business/shared
+      - run: npm run prisma:generate
+      - name: Apply migrations only to the disposable runner database
+        run: npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
+      - name: Verify migration, concurrent uniqueness, audit rollback, deletion and replay
+        run: npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-billing-allocation.mysql.integration.spec.ts

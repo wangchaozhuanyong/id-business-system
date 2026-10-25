@@ -642,6 +642,7 @@ export interface V2RechargeDirectPaymentGrant {
 }
 
 export interface V2RechargeBitBrowserStart {
+  billingAllocationId?: string;
   directMode?: boolean;
   subscriptionCycleProtocol?: 1;
   connectionProfileId?: string | null;
