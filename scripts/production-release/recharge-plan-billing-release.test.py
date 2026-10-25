@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 
@@ -28,6 +29,73 @@ TEST_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 class BillingPublicationTests(unittest.TestCase):
+    def test_stop_preserves_rejected_codes_and_suppresses_private_exception_messages(self):
+        class Rejected(RuntimeError):
+            pass
+        for error, code in [(Rejected('ONLINE_CHECKOUT_PROFILE_VOLUME_IN_USE'), 'ONLINE_CHECKOUT_PROFILE_VOLUME_IN_USE'),
+                            (TypeError('private-fixture-value'), 'TYPEERROR')]:
+            helper = SimpleNamespace(stop_recharge_and_recover=__import__('unittest').mock.Mock(side_effect=error))
+            with patch.object(P, 'load', side_effect=[object(), helper]):
+                with self.assertRaisesRegex(RuntimeError, '^RECHARGE_PLAN_BILLING_STOP_' + code + '$'):
+                    P.stop_with_profile(object(), object(), {}, object(), object())
+
+    def test_diagnostic_always_restores_original_running_state_without_migration(self):
+        for fails in (False, True):
+            with self.subTest(fails=fails), tempfile.TemporaryDirectory(dir=TEST_ROOT) as path:
+                base = Path(path);(base / '.staging').mkdir()
+                fence = SimpleNamespace(acquire=__import__('unittest').mock.Mock(), close=__import__('unittest').mock.Mock())
+                helper = SimpleNamespace(sql_fence_class=lambda *_: lambda *_: fence)
+                plan = dict(commit='a' * 40, workflowRunId='123', controlSources={'api-admin-scope.py': 'b' * 64})
+                restore = __import__('unittest').mock.Mock(return_value={'sameContainers': True, 'businessActions': 0})
+                with patch.object(P, 'BASE', base), patch.object(P, 'load', return_value=helper), \
+                     patch.object(P, 'claim_maintenance', return_value={'owned': True}), \
+                     patch.object(P, 'restore_pre_migration_running_state', restore), \
+                     patch.object(P, 'migrate') as migration, \
+                     patch.object(P, 'stop_with_profile', side_effect=RuntimeError('BOUNDED_FAILURE') if fails else None, return_value={'profilesRecovered': 0}):
+                    if fails:
+                        with self.assertRaisesRegex(RuntimeError, 'BOUNDED_FAILURE'):
+                            P.diagnose_stop(object(), object(), Path('/owned'), {}, object(), plan)
+                    else:
+                        self.assertEqual(P.diagnose_stop(object(), object(), Path('/owned'), {}, object(), plan)['status'], 'BILLING_STOP_DIAGNOSTIC_VERIFIED')
+                    restore.assert_called_once()
+                    fence.close.assert_called_once()
+                    migration.assert_not_called()
+                receipt = json.loads(next((base / '.staging').glob('*/diagnostic.json')).read_bytes())
+                self.assertFalse(receipt['migrationPerformed'])
+                self.assertEqual(receipt['businessActions'], 0)
+
+    def test_pre_sql_interruption_only_restores_the_same_containers_and_checks_ownership(self):
+        env = ['SYNTHETIC_FIXTURE=1']
+        before = copy.deepcopy(C['baseline']['services'])
+        for role in ('api', 'online-recharge'):
+            before[role]['environmentSha256'] = P.fingerprint(env)
+        class Driver:
+            def __init__(self, foreign=False):
+                self.commands, self.foreign = [], foreign
+            def run(self, *args, **kwargs):
+                self.commands.append(args)
+                if args[:2] == ('docker', 'inspect'):
+                    expected = next(v for v in before.values() if v['containerId'] == args[2])
+                    return json.dumps([{'Id': args[2], 'Image': 'foreign' if self.foreign else expected['image'],
+                        'Config': {'Env': env}, 'State': {'Running': False, 'Status': 'exited'}}])
+                return ''
+            def wait_healthy(self, *args):
+                pass
+        d = Driver()
+        h = SimpleNamespace(snapshot=lambda *_: before)
+        release_marker = __import__('unittest').mock.Mock()
+        with patch.object(P, 'load', return_value=SimpleNamespace(release_markers=release_marker)):
+            result = P.restore_pre_migration_running_state(d, h, Path('/owned'), before, {'owned': True})
+        self.assertTrue(result['sameContainers'])
+        self.assertFalse(result['migrationPerformed'])
+        self.assertEqual([x for x in d.commands if x[:2] == ('docker', 'start')],
+                         [('docker', 'start', before[n]['containerId']) for n in ('api', 'online-recharge')])
+        release_marker.assert_called_once_with({'owned': True})
+        d = Driver(foreign=True)
+        with self.assertRaisesRegex(RuntimeError, 'PRE_MIGRATION_CONTAINER_CHANGED'):
+            P.restore_pre_migration_running_state(d, h, Path('/owned'), before, {})
+        self.assertFalse(any(x[:2] == ('docker', 'start') for x in d.commands))
+
     def test_current_maintenance_is_exclusive_and_never_requires_retired_registration_volume(self):
         plan = dict(commit='a' * 40, workflowRunId='123')
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path, patch.object(P, 'BASE', Path(path)):
