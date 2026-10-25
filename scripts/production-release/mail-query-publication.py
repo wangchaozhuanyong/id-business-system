@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 import time
 import zipfile
@@ -47,6 +48,56 @@ def check(c):
     need(all(sha((HERE / n).read_bytes()) == v for n,v in c['controlPins'].items()), 'CONTROL_CHANGED')
     need(sha((ROOT / WORKFLOW).read_bytes()) == c['workflowSha256']
          and sha((ROOT / 'package-lock.json').read_bytes()) == c['packageLockSha256'], 'BUILD_INPUT_CHANGED')
+
+
+def reuse_environment(evidence):
+    # Environment ambiguity requires fresh checks; raw job logs are never persisted or printed.
+    try:
+        jobs=github('actions/runs/'+evidence['runId']+'/attempts/'+evidence['runAttempt']+'/jobs?per_page=100')['jobs']
+        rows=[j for j in jobs if j['name']=='recharge (guards)' and j['status']=='completed' and j['conclusion']=='success']
+        if len(rows)!=1:return None
+        raw=execute('gh','api','repos/'+REPO+'/actions/jobs/'+str(rows[0]['id'])+'/logs')
+        if len(raw)>16*1024**2:return None
+        lines=[re.sub(r'^\d{4}-\d{2}-\d{2}T\S+\s?','',line) for line in raw.decode().splitlines()]
+        def group(name):
+            starts=[i for i,line in enumerate(lines) if line=='##[group]'+name]
+            if len(starts)!=1:return []
+            end=next(i for i in range(starts[0]+1,len(lines)) if lines[i]=='##[endgroup]')
+            return lines[starts[0]+1:end]
+        def field(values,prefix):
+            matches=[line.removeprefix(prefix).strip() for line in values if line.startswith(prefix)]
+            return matches[0] if len(matches)==1 else None
+        image, tools=group('Runner Image'),group('Environment details')
+        expected={'image':field(image,'Image: '),'imageVersion':field(image,'Version: '),
+                  'node':field(tools,'node: '),'npm':field(tools,'npm: '),'platform':'linux'}
+        image_os=os.environ.get('ImageOS','')
+        actual={'image':'ubuntu-'+image_os.removeprefix('ubuntu')+'.04' if re.fullmatch('ubuntu[0-9]{2}',image_os) else None,
+                'imageVersion':os.environ.get('ImageVersion'),
+                'node':execute('node','--version').decode().strip(),'npm':execute('npm','--version').decode().strip(),'platform':sys.platform}
+        if any(v is None for v in expected.values()) or expected!=actual:return None
+        return {'matched':actual,'guardLogSha256':sha(raw),'guardJobId':str(rows[0]['id'])}
+    except Exception:
+        return None
+
+
+def guard_reuse(c):
+    need(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('GITHUB_REPOSITORY')==REPO,'NATIVE_GUARD_REQUIRED')
+    git('fetch','--no-tags','origin','refs/pull/721/head')
+    check(c)
+    source=github('pulls/721')
+    need(source.get('merged_at') and source['head']['sha']==P.SOURCE,'SOURCE_MERGE_REQUIRED')
+    tree=git('rev-parse',P.SOURCE+'^{tree}').decode().strip()
+    evidence=verified_run(P.SOURCE,'pull_request',tree,721)
+    def retained_inputs(ref):
+        rows=git('ls-tree','-r',ref).decode().splitlines()
+        return '\n'.join(row for row in rows if row.split('\t',1)[1] not in CONTROLS).encode()
+    original,current=retained_inputs(P.SOURCE),retained_inputs('HEAD')
+    environment=reuse_environment(evidence) if original==current else None
+    result={'status':'MAIL_QUERY_UNCHANGED_HISTORICAL_GUARDS_REUSED' if environment else 'MAIL_QUERY_FRESH_HISTORICAL_GUARDS_REQUIRED',
+            'reused':bool(environment),'source':evidence,'retainedInputsSha256':sha(original),
+            'currentInputsSha256':sha(current),'environment':environment,'businessActions':0}
+    print(json.dumps(result,sort_keys=True))
+    return result
 
 
 def identity():
@@ -248,7 +299,8 @@ except Exception as error:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('check', 'build', 'publish'))
+    parser.add_argument('mode', choices=('check', 'build', 'publish', 'verify-guard-reuse'))
     args = parser.parse_args()
     contract = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
-    {'check': check, 'build': build, 'publish': publish}[args.mode](contract)
+    result={'check': check, 'build': build, 'publish': publish, 'verify-guard-reuse':guard_reuse}[args.mode](contract)
+    if args.mode=='verify-guard-reuse' and not result['reused']:raise SystemExit(3)

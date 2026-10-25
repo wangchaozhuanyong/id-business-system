@@ -1945,6 +1945,19 @@ if (
     'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
   ]);
 }
+let mailQueryHistoricalGuardReuse = false;
+if (isMailQueryPublicationControlsOnly(changed) && ['guards', 'release-controls'].includes(part)) {
+  try {
+    run('python3', [
+      '-B',
+      'scripts/production-release/mail-query-publication.py',
+      'verify-guard-reuse'
+    ]);
+    mailQueryHistoricalGuardReuse = true;
+  } catch (error) {
+    if (error.status !== 3) throw error;
+  }
+}
 if (
   part === 'guards' &&
   !releaseArtifactOnly &&
@@ -1988,6 +2001,7 @@ if (
     run('node', ['--test', 'scripts/v2-release-mailbox-audit.test.mjs']);
   }
   if (
+    !mailQueryHistoricalGuardReuse &&
     changed.some(
       (path) =>
         path.startsWith('scripts/production-release/') ||
@@ -2168,6 +2182,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
   if (
+    !mailQueryHistoricalGuardReuse &&
     changed.some(
       (path) =>
         path.startsWith('scripts/production-release/') ||

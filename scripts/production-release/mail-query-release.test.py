@@ -257,5 +257,68 @@ class AvailabilityTests(unittest.TestCase):
             with self.subTest(role=role),self.assertRaises(RuntimeError):m.verify_availability(c,states,original)
 
 
+class GuardReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.pub=m.load('mail-query-publication.py')
+        self.rows=b'100644 blob '+b'a'*40+b'\tscripts/production-release/api-admin-scope.py\n'
+        self.current=self.rows
+        def git(*args):
+            if args[0]=='fetch':return b''
+            if args[0]=='rev-parse':return m.SOURCE_TREE.encode()
+            if args[0]=='ls-tree':return self.rows if args[-1]==m.SOURCE else self.current
+            raise AssertionError(args)
+        self.log=('2026-10-26T00:00:00Z ##[group]Runner Image\n'
+                  '2026-10-26T00:00:00Z Image: ubuntu-24.04\n'
+                  '2026-10-26T00:00:00Z Version: fixture-image\n'
+                  '2026-10-26T00:00:00Z ##[endgroup]\n'
+                  '2026-10-26T00:00:00Z ##[group]Environment details\n'
+                  '2026-10-26T00:00:00Z node: v24.21.0\n'
+                  '2026-10-26T00:00:00Z npm: 11.19.0\n'
+                  '2026-10-26T00:00:00Z ##[endgroup]\n').encode()
+        def execute(*args):
+            if args==('node','--version'):return b'v24.21.0'
+            if args==('npm','--version'):return b'11.19.0'
+            if args[0]=='gh' and args[-1].endswith('/logs'):return self.log
+            raise AssertionError(args)
+        def github(path):
+            if path=='pulls/721':return {'merged_at':'fixture','head':{'sha':m.SOURCE}}
+            return {'jobs':[{'id':456,'name':'recharge (guards)','status':'completed','conclusion':'success'}]}
+        self.stack=ExitStack();self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.dict(self.pub.os.environ,{'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':self.pub.REPO,'ImageOS':'ubuntu24','ImageVersion':'fixture-image'}))
+        self.stack.enter_context(patch.object(self.pub.sys,'platform','linux'))
+        self.stack.enter_context(patch.object(self.pub,'git',side_effect=git))
+        self.stack.enter_context(patch.object(self.pub,'execute',side_effect=execute))
+        self.stack.enter_context(patch.object(self.pub,'check'))
+        self.stack.enter_context(patch.object(self.pub,'github',side_effect=github))
+        self.qa=self.stack.enter_context(patch.object(self.pub,'verified_run',return_value={'runId':'123','runAttempt':'1','sourceReceiptSha256':'a'*64}))
+        self.stack.enter_context(patch('builtins.print'))
+
+    def test_reuse_requires_complete_native_source_qa_identical_inputs_and_environment(self):
+        result=self.pub.guard_reuse({})
+        self.qa.assert_called_once_with(m.SOURCE,'pull_request',m.SOURCE_TREE,721)
+        self.assertTrue(result['reused'])
+        self.assertEqual(result['environment']['guardLogSha256'],m.sha(self.log))
+        self.assertEqual(result['retainedInputsSha256'],m.sha(self.rows.rstrip(b'\n')))
+
+    def test_changed_legacy_helper_requires_fresh_checks(self):
+        self.current=self.rows.replace(b'a'*40,b'b'*40)
+        self.assertFalse(self.pub.guard_reuse({})['reused'])
+
+    def test_environment_change_or_unmeasured_logs_requires_fresh_checks(self):
+        with patch.dict(self.pub.os.environ,{'ImageVersion':'another-image'}):
+            self.assertFalse(self.pub.guard_reuse({})['reused'])
+        self.log=b'no measured environment'
+        self.assertFalse(self.pub.guard_reuse({})['reused'])
+
+    def test_failed_native_source_quality_cannot_be_replaced_by_reuse(self):
+        self.qa.side_effect=RuntimeError('MAIL_QUERY_QUALITY_REQUIRED')
+        with self.assertRaisesRegex(RuntimeError,'QUALITY_REQUIRED'):self.pub.guard_reuse({})
+
+    def test_local_or_other_repository_cannot_supply_native_reuse_evidence(self):
+        with patch.dict(self.pub.os.environ,{'GITHUB_REPOSITORY':'other/repository'}):
+            with self.assertRaisesRegex(RuntimeError,'NATIVE_GUARD_REQUIRED'):self.pub.guard_reuse({})
+        self.qa.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

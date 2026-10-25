@@ -1211,7 +1211,8 @@ function recordGuardCommands(
     restoreFixture = false,
     protocolRepairFixture = false,
     flowV4Fixture = false,
-    terminalStopFixture = false
+    terminalStopFixture = false,
+    mailQueryInputsChanged = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -1464,6 +1465,9 @@ function recordGuardCommands(
         return paths.join('\\n');
       }
       calls.push([file, ...args]);
+      if (${JSON.stringify(mailQueryInputsChanged)} && args.includes('verify-guard-reuse')) {
+        const error = new Error('SYNTHETIC_CHANGED_REUSE_INPUTS'); error.status = 3; throw error;
+      }
       if ([file, ...args].join(' ') === process.env.GUARD_TEST_FAIL_COMMAND)
         throw new Error('SYNTHETIC_COMMAND_FAILURE');
       return '';
@@ -4143,9 +4147,7 @@ test('finite mailbox publisher checks retain native guards without selecting a d
   assert.ok(
     commands.some((row) => row.includes('scripts/production-release/mail-query-release.test.py'))
   );
-  assert.ok(
-    commands.some((row) => row.includes('scripts/production-release/api-admin-scope.test.py'))
-  );
+  assert.ok(commands.some((row) => row.includes('verify-guard-reuse')));
   assert.ok(
     commands.some((row) => row.includes('scripts/production-release/remote-deploy.test.py'))
   );
@@ -4155,11 +4157,34 @@ test('finite mailbox publisher checks retain native guards without selecting a d
     ),
     false
   );
+  assert.equal(
+    commands.some((row) => row.includes('scripts/production-release/api-admin-scope.test.py')),
+    false
+  );
+  const fresh = recordGuardCommands('ci-only', paths, 'guards', { mailQueryInputsChanged: true });
+  assert.ok(
+    fresh.some((row) => row.includes('scripts/production-release/api-admin-scope.test.py'))
+  );
+  assert.throws(
+    () =>
+      recordGuardCommands('ci-only', paths, 'guards', {
+        failCommand:
+          'python3 -B scripts/production-release/mail-query-publication.py verify-guard-reuse'
+      }),
+    /SYNTHETIC_COMMAND_FAILURE/
+  );
   const mixed = recordGuardCommands('ci-only', [
     ...paths,
     'apps/api/src/id-business-v2/online-recharge/engine/healthcheck.cjs'
   ]);
   assert.ok(
     mixed.some((row) => row.includes('scripts/production-release/online-recharge-scope.test.py'))
+  );
+  assert.ok(
+    mixed.some((row) => row.includes('scripts/production-release/api-admin-scope.test.py'))
+  );
+  assert.equal(
+    mixed.some((row) => row.includes('verify-guard-reuse')),
+    false
   );
 });
