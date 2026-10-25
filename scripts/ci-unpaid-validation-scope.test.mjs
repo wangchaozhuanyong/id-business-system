@@ -288,3 +288,22 @@ test('country evidence batch requires Admin API and engine checks without unrela
   assert.equal(isUnpaidValidationOnly([...paths, paths[0]]), false);
   assert.equal(isUnpaidValidationOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']), false);
 });
+
+test('country evidence publication is finite and keeps its contract test', () => {
+  const paths = [
+    '.github/workflows/online-country-evidence-publication.yml',
+    ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+      (n) => 'scripts/production-release/online-country-evidence-' + n
+    ),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.ok(
+    JSON.stringify(unpaidValidationCommands('guards', paths)).includes(
+      'online-country-evidence-release.test.py'
+    )
+  );
+  assert.equal(isUnpaidValidationControlsOnly([...paths, countryEvidencePaths[0]]), false);
+});
