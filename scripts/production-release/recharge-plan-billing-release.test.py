@@ -23,9 +23,37 @@ P = load('recharge-plan-billing-release.py')
 B = load('recharge-plan-billing-build.py')
 U = load('recharge-plan-billing-publication.py')
 C = json.loads((HERE / 'recharge-plan-billing-contract.json').read_bytes())
+TEST_ROOT = HERE.parents[1] / '.runtime/recharge-plan-billing-release-20261026/control-tests'
+TEST_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 class BillingPublicationTests(unittest.TestCase):
+    def test_current_maintenance_is_exclusive_and_never_requires_retired_registration_volume(self):
+        plan = dict(commit='a' * 40, workflowRunId='123')
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path, patch.object(P, 'BASE', Path(path)):
+            receipt = P.claim_maintenance(plan)
+            marker = Path(path) / 'maintenance.json'
+            raw = marker.read_bytes()
+            self.assertEqual(receipt['paths'], [str(marker)])
+            self.assertEqual(receipt['ownerSha256'], P.sha(raw))
+            self.assertEqual(json.loads(raw), {'scope': P.SCOPE, **plan})
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                P.claim_maintenance({**plan, 'workflowRunId': '456'})
+            self.assertEqual(marker.read_bytes(), raw)
+            helper = P.load('proxy-result-identity-release.py')
+            helper.release_markers(receipt)
+            self.assertFalse(marker.exists())
+            protected = Path(path) / 'foreign'
+            protected.write_text('preserve')
+            marker.symlink_to(protected)
+            with self.assertRaises(OSError):
+                P.claim_maintenance(plan)
+            self.assertEqual(protected.read_text(), 'preserve')
+        source = (HERE / 'recharge-plan-billing-release.py').read_text()
+        self.assertNotIn('p.claim_markers(', source)
+        self.assertIn("p.sql_fence_class(", source)
+
     def test_source_quality_requires_every_selected_part_and_rejects_any_failed_job(self):
         required = [{'quality', 'full-quality'},
                     {'quality', 'recharge (guards)', 'recharge (admin)', 'recharge (api)', 'recharge (migration)'}]
@@ -84,6 +112,9 @@ class BillingPublicationTests(unittest.TestCase):
                  'baselineApiGroups': c['baseline']['apiGroups']['groups'], 'baselineAdminFiles': admin,
                  'apiModules': modules, 'adminFiles': admin, 'prismaClientFiles': {'index.js': 'c' * 64},
                  'controlSources': {}, 'migrationImage': '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release@sha256:' + 'd' * 64}
+        proof['migrationTransport'] = dict(file=P.PREFIX + '-migration.tar.gz', bytes=10,
+            sha256='e' * 64, imageId='sha256:' + 'f' * 64,
+            reference='098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + plan['commit'] + '-123-billing-migrate')
         files = {**{'api/modules/' + n: v for n, v in modules.items()},
                  'api/prisma-client/index.js': 'c' * 64, 'admin/html/index.html': 'a' * 64,
                  **{'source/' + n: v for n, v in c['sources'].items()}}
@@ -110,7 +141,7 @@ class BillingPublicationTests(unittest.TestCase):
             def current_job_database(self, *args):
                 raise AssertionError('API is stopped; use already validated schema')
         d = Driver()
-        with tempfile.TemporaryDirectory() as path, patch.object(P, 'db_state', return_value={}), patch.object(P, 'verify_db'):
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path, patch.object(P, 'db_state', return_value={}), patch.object(P, 'verify_db'):
             journal = Path(path) / 'operation.json'
             P.migrate(d, Path('/owned'), C, journal, 'validated_database')
             self.assertEqual(json.loads(journal.read_text())['phase'], 'VERIFIED')
@@ -130,13 +161,48 @@ class BillingPublicationTests(unittest.TestCase):
             archive.addfile(info, io.BytesIO(b'x') if info.size else None)
         return stream.getvalue()
 
+    def test_migration_transport_rejects_wrong_scope_hash_size_image_and_replay(self):
+        raw = b'controlled-native-docker-save-fixture'
+        value = dict(file=P.PREFIX + '-migration.tar.gz', bytes=len(raw), sha256=P.sha(raw),
+                     imageId='sha256:' + 'f' * 64,
+                     reference='098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + 'a' * 40 + '-123-billing-migrate')
+        proof = dict(commit='a' * 40, workflowRunId='123', migrationTransport=value)
+        plan = dict(artifactUrl='https://github.com/wangchaozhuanyong/id-business-system/releases/download/' + P.PREFIX + '-' + 'a' * 40 + '/' + P.PREFIX + '-artifact.tar.gz')
+        class Driver:
+            def __init__(self, image=value['imageId']):
+                self.commands, self.image = [], image
+            def run(self, *args, **kwargs):
+                self.commands.append(args)
+                return json.dumps([{'Id': self.image}]) if args[:3] == ('docker', 'image', 'inspect') else ''
+        for field, bad in [('file', '../outside'), ('bytes', 513 * 1024**2),
+                           ('reference', 'unreviewed:tag'), ('sha256', 'bad'), ('imageId', 'unreviewed')]:
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'TRANSPORT_SCOPE'):
+                P.verify_migration_transport({**proof, 'migrationTransport': {**value, field: bad}})
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path, patch.object(P.urllib.request, 'urlopen', return_value=io.BytesIO(raw)) as download:
+            d = Driver()
+            self.assertEqual(P.load_migration_image(d, proof, plan, Path(path)), value['reference'])
+            self.assertTrue(download.call_args.args[0].endswith('/' + value['file']))
+            self.assertEqual(d.commands[0][:2], ('docker', 'load'))
+            with self.assertRaisesRegex(RuntimeError, 'ALREADY_ACCEPTED'):
+                P.load_migration_image(d, proof, plan, Path(path))
+        for content, expected in [(raw + b'oversize', 'TRANSPORT_SIZE'),
+                                  (b'0' * len(raw), 'TRANSPORT_HASH')]:
+            with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path, patch.object(P.urllib.request, 'urlopen', return_value=io.BytesIO(content)):
+                d = Driver()
+                with self.assertRaisesRegex(RuntimeError, expected):
+                    P.load_migration_image(d, proof, plan, Path(path))
+                self.assertEqual(d.commands, [])
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path, patch.object(P.urllib.request, 'urlopen', return_value=io.BytesIO(raw)):
+            with self.assertRaisesRegex(RuntimeError, 'TRANSPORT_IMAGE'):
+                P.load_migration_image(Driver('sha256:' + '0' * 64), proof, plan, Path(path))
+
     def test_archive_rejects_escape_links_and_replay(self):
         for name, kind in [('payload/../../escaped', tarfile.REGTYPE),
                            ('/payload/absolute', tarfile.REGTYPE), ('payload/link', tarfile.SYMTYPE)]:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as path:
+            with self.subTest(name=name), tempfile.TemporaryDirectory(dir=TEST_ROOT) as path:
                 with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_PATH'):
                     P.safe_payload(self.archive(name, kind), Path(path) / 'content')
-        with tempfile.TemporaryDirectory() as path:
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as path:
             folder = Path(path) / 'content'
             P.safe_payload(self.archive('payload/owned'), folder)
             with self.assertRaisesRegex(RuntimeError, 'ALREADY_ACCEPTED'):
@@ -149,12 +215,18 @@ class BillingPublicationTests(unittest.TestCase):
         self.assertIn("inputs.commit == github.sha", workflow)
         self.assertIn('arn:aws:iam::098208446664:role/id-business-v2-github-release', workflow)
         self.assertIn('docker build --target migration', workflow)
+        self.assertIn('docker save "$image"', workflow)
+        release = (HERE / 'recharge-plan-billing-release.py').read_text()
+        self.assertIn("d.run('docker', 'load'", release)
+        self.assertNotIn("d.run('docker', 'pull'", release)
         self.assertNotIn('workflow_run:', workflow)
         publication = (HERE / 'recharge-plan-billing-publication.py').read_text()
         self.assertIn("command('preflight'", publication)
         self.assertIn("command('readback'", publication)
         self.assertIn('MAIN_MOVED_BEFORE_PUBLICATION', publication)
         self.assertIn('SSM_PENDING_DO_NOT_REPEAT', publication)
+        self.assertIn('capture_output=True, timeout=600', publication)
+        self.assertIn('ARTIFACT_UPLOAD_FAILED_DO_NOT_REPEAT', publication)
         self.assertNotIn('rollback(', (HERE / 'recharge-plan-billing-release.py').read_text())
 
     def test_runtime_group_hashes_ignore_non_executable_declaration_noise(self):
