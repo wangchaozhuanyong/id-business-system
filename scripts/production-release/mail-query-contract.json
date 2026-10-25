@@ -289,6 +289,7 @@
     "id-business-v2/workspace/vendure-mailbox-list.js.map": "1f1aa75b985f6c6797ab2d2b6e0cbcddd62b0a72f834eb682e50c6a1954f8607"
   },
   "businessActions": 0,
+  "controlBase": "2581f4e6a5f01aec692c5856a3aa7a70307a714b",
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "bitbrowser-billing-build.py": "2df615df0f3f4968059d0e246d0fca731045fb615f034d7f336648349a8470fb",

@@ -42,7 +42,8 @@ def check(c):
     need(set(c['sources']) == set(load('mail-query-build.py').SOURCES), 'SOURCE_SCOPE_CHANGED')
     need(all(sha((ROOT / n).read_bytes()) == v == sha(git('show', P.SOURCE + ':' + n))
          for n,v in c['sources'].items()), 'SOURCE_CHANGED')
-    need(set(git('diff','--name-only',P.SOURCE,'HEAD').decode().splitlines()) <= CONTROLS, 'UNREVIEWED_EXTENSION')
+    git('merge-base','--is-ancestor',c['controlBase'],'HEAD')
+    need(set(git('diff','--name-only',c['controlBase'],'HEAD').decode().splitlines()) <= CONTROLS, 'UNREVIEWED_EXTENSION')
     need(all(sha((HERE / n).read_bytes()) == v for n,v in c['controlPins'].items()), 'CONTROL_CHANGED')
     need(sha((ROOT / WORKFLOW).read_bytes()) == c['workflowSha256']
          and sha((ROOT / 'package-lock.json').read_bytes()) == c['packageLockSha256'], 'BUILD_INPUT_CHANGED')
