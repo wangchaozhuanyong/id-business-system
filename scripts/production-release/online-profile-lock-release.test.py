@@ -104,6 +104,50 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(report['code'], 'ONLINE_PROFILE_LOCK_UNCONFIRMED')
         self.assertNotIn('cookie', json.dumps(report))
 
+    def test_real_loader_uses_only_global_marker_after_registration_retirement(self):
+        output = HERE.parents[1] / '.runtime/profile-lock-recovery-20261025/publication-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory, patch.object(r, 'BASE', Path(directory)):
+            owner = r.load('proxy-result-identity-release.py')
+            d = SimpleNamespace(run=Mock(side_effect=AssertionError('No legacy mount inspection')))
+            receipt = owner.claim_markers(d, {}, self.plan)
+            self.assertEqual(receipt['paths'], [str(Path(directory) / 'maintenance.json')])
+            self.assertTrue(receipt['registrationRetired'])
+            self.assertEqual(json.loads(Path(receipt['paths'][0]).read_bytes())['scope'], r.SCOPE)
+            with self.assertRaises(FileExistsError):
+                owner.claim_markers(d, {}, self.plan)
+            owner.release_markers(receipt)
+            self.assertFalse(Path(receipt['paths'][0]).exists())
+            d.run.assert_not_called()
+
+    def test_real_loader_retired_guards_reject_restored_mount_and_active_tasks(self):
+        output = HERE.parents[1] / '.runtime/profile-lock-recovery-20261025/publication-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        states = {role: {'containerId': role + '-cid'} for role in r.SERVICES}
+        row = {'Config': {'Labels': {'com.docker.compose.project': 'synthetic-id'}},
+               'Mounts': [], 'NetworkSettings': {'Networks': {'synthetic-id-default': {}}}}
+        def read(*args):
+            if args[1] == 'inspect': return json.dumps([row])
+            if args[1] in ('ps', 'exec'): return ''
+            raise AssertionError('Unexpected runtime read')
+        d = SimpleNamespace(run=Mock(side_effect=read), assert_no_active_recharge=Mock(),
+                            compose=Mock(return_value='{"busy":0}'))
+        with tempfile.TemporaryDirectory(dir=output) as directory, patch.object(r, 'BASE', Path(directory)):
+            h = r.load('recharge-record-release.py')
+            self.assertEqual(h.SERVICES, r.SERVICES)
+            with patch.object(h, 'engine_idle'):
+                h.guards(d, Path(directory), states, self.c)
+                d.assert_no_active_recharge.assert_called_once()
+                d.compose.return_value = '{"busy":1}'
+                with self.assertRaisesRegex(RuntimeError, 'ONLINE_TASK_ACTIVE'):
+                    h.guards(d, Path(directory), states, self.c)
+                d.compose.return_value = '{"busy":0}'
+                row['Mounts'] = [{'Destination': '/app/.runtime/auto-registration'}]
+                with self.assertRaisesRegex(RuntimeError, 'RETIRED_MOUNT_RETURNED'):
+                    h.guards(d, Path(directory), states, self.c)
+        report = r.failure_report(RuntimeError('ONLINE_QUERY_NETWORK_RETIRED_MOUNT_RETURNED'), {'mode': 'release'})
+        self.assertEqual(report['code'], 'ONLINE_QUERY_NETWORK_RETIRED_MOUNT_RETURNED')
+
     def fixture(self, recovery_error=None):
         output = HERE.parents[1] / '.runtime/profile-lock-recovery-20261025/publication-tests'
         output.mkdir(parents=True, exist_ok=True)
