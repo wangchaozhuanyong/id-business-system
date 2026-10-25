@@ -278,6 +278,13 @@
     "id-business-v2/online-recharge/persistence/worker.repository.js": "42c3b8ab5d4c5f7a962197054936d82e36025824c6c7b125cb100cffe205d904",
     "id-business-v2/online-recharge/persistence/worker.repository.js.map": "27f84f8515615d48a67530d95be20f892730a335fe300647a4263b16546a1f49"
   },
+  "availabilityRecovery": {
+    "originalCommit": "da673aa85b426734db125154cf8b258698356e6d",
+    "originalRun": "40210674985",
+    "path": "/opt/id-business-v2/.staging/profile-lock-entry-da673aa85b426734db125154cf8b258698356e6d-40210674985/availability-restored-direct-2d479d39cfff3a4715f41f440ba5c6979165e814.json",
+    "sha256": "0297ba07718ed27d669170667094291ec02179134c9ace81b045c850733b4ca0",
+    "source": "2d479d39cfff3a4715f41f440ba5c6979165e814"
+  },
   "awsTargetAccount": "098208446664",
   "awsTargetInstance": "i-0838cebf64f0e2a89",
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
@@ -369,8 +376,8 @@
     "online-profile-egress-release.test.py": "825f72828e61af26c5735f1423901b262fbe13d82fc133f30e6e129104550a7d",
     "online-profile-lock-publication.py": "e1aaa3ddfb225d1138a939a2354bbb2b28e6af8671d4e792848f985f583ca8c6",
     "online-profile-lock-recovery.py": "427af2a6d8b3752e9ca8409b3d2abac171840c05466acc81f7c54e1239422ef8",
-    "online-profile-lock-release.py": "f599cde59ba222b0b93cc50c2d678a1f1668136788d596688327cadc46e91e5f",
-    "online-profile-lock-release.test.py": "3e52b55c94c528df158af3a30973c80baf97f0e51055823522c87a61fbafec32",
+    "online-profile-lock-release.py": "e298c7c755eeaab741833204d44dbe10b53c5e2ff5a8c835426008f9aeb25ca0",
+    "online-profile-lock-release.test.py": "601754058842ac6601cea8cfcf55a56571fb492f81d0166169f390fc5a2c6e33",
     "online-proxy-failure-evidence-build.py": "270aede6196b24f43fa8233572482a710041793b64a102635ca7f11fb6148a8b",
     "online-proxy-failure-evidence-contract.json": "a772586e2931923aa44d30115a6fe49f40c83c8e7c5427a73ca74313839ebcf4",
     "online-proxy-failure-evidence-publication.py": "776cce1125367da52b29960222cf1f47111de061a73e2c7ed335d85b3e8ad5ae",
