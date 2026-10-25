@@ -108,7 +108,7 @@ const description = computed(() => {
     ? '上游暂不支持健康检查，邮件列表仍可正常读取。'
     : status === 'unavailable'
       ? '健康状态暂时无法核验，邮件列表仍可读取；可刷新状态重试。'
-      : '健康状态截至本次检查时间；刷新列表读取已入库邮件，立即同步从邮箱补收。';
+      : '健康状态截至本次检查时间；查询和刷新收件记录会先同步邮箱，再读取最新邮件。';
 });
 let refreshing: Promise<unknown> | undefined;
 function refreshHealth() {
