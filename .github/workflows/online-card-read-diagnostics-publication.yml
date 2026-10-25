@@ -1,0 +1,108 @@
+name: Online Recharge Card Read Diagnostics Publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Verify finite source and publication adapter
+        run: |
+          python3 -B scripts/production-release/online-card-read-diagnostics-publication.py check
+          python3 -B scripts/production-release/online-card-read-diagnostics-release.test.py
+      - name: Configure existing production observation role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-card-read-diagnostics-observe-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Authenticate checks, capture current runtime and reproduce API inputs
+        run: python3 -B scripts/production-release/online-card-read-diagnostics-publication.py build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-card-read-diagnostics-native-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-card-read-diagnostics/online-card-read-diagnostics-artifact.tar.gz
+            .deploy/online-card-read-diagnostics/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Preserve original observation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-card-read-diagnostics-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/online-card-read-diagnostics/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production release role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-card-read-diagnostics-publish-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/online-card-read-diagnostics-publication.py publish
+      - name: Preserve original release receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-card-read-diagnostics-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-card-read-diagnostics/*.json
+            .deploy/online-card-read-diagnostics/artifact-notes.md
+          include-hidden-files: true
+          if-no-files-found: warn
