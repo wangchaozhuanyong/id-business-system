@@ -628,14 +628,7 @@
     "workflowRunAttempt": "1",
     "workflowRunId": "40125577641"
   },
-  "preservedServices": [
-    "api",
-    "admin",
-    "mysql",
-    "caddy",
-    "media-resolver",
-    "auto-recharge"
-  ],
+  "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
   "runtimeSources": {
     "apps/api/src/id-business-v2/online-recharge/engine/.env.example": "5901cd64db6ba7254b872679c3b294f8d54f840131211d1f6335b744b4921159",
     "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "b46e4fd0bd82822a4762caeb07e69b2497c684cefa8e3c99f52e7ec411229625",
@@ -663,9 +656,7 @@
   "sourcePullRequest": 705,
   "sourceReviewCommit": "47b28b0361ba0e3dd2d24e9e947c17a6ef3b61eb",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-  "updatedServices": [
-    "online-recharge"
-  ],
+  "updatedServices": ["online-recharge"],
   "validationSources": {
     ".env.example": "0c644471ed3ba5901012af6249778113f55ddf087213d34b3ef68491ac236778",
     "docs/ONLINE_RECHARGE.md": "0c99b627cfe22b78398aad0cc96102d78d6d619fdd56b6ff151901191f642397",
