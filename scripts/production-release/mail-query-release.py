@@ -52,6 +52,31 @@ def verify_proof(proof, plan, c, files):
     need(files == expected and sha(canonical(c['sources'])) == c['sourceProjectionSha256'], 'PAYLOAD_SCOPE_CHANGED')
 
 
+def verify_availability(c, states, original):
+    binding=c.get('availabilityRecovery')
+    if states==original and binding is None:return None
+    need(type(binding) is dict,'PARENT_SERVICES_CHANGED')
+    path=Path(binding['path'])
+    need(path.parent.resolve()==(BASE/'.staging').resolve() and not path.is_symlink()
+         and re.fullmatch('mail-query-original-availability-[1-9][0-9]*[.]json',path.name), 'RECOVERY_PATH_CHANGED')
+    raw=path.read_bytes();need(sha(raw)==binding['sha256'],'RECOVERY_PROOF_CHANGED')
+    recovery=json.loads(raw)
+    need(recovery['status']=='ORIGINAL_SERVICE_AVAILABILITY_RESTORED' and recovery['commit']==CURRENT
+         and recovery['manifestSha256']==c['parentFiles']['release-manifest.json']
+         and recovery['before']==original and recovery['after']==states
+         and recovery['imagesRebuilt'] is False and recovery['migrationPerformed'] is False
+         and recovery['versionRolledBack'] is False and type(recovery['businessActions']) is int
+         and recovery['businessActions']==0,'RECOVERY_IDENTITY_CHANGED')
+    need(set(states)==set(original),'RECOVERY_SERVICES_CHANGED')
+    for role,state in states.items():
+        if role in ('api','online-recharge'):
+            need({k:v for k,v in state.items() if k!='startedAtSha256'}==
+                 {k:v for k,v in original[role].items() if k!='startedAtSha256'}
+                 and state['status']=='running' and state['health']=='healthy','RECOVERY_SERVICE_CHANGED')
+        else:need(state==original[role],'RECOVERY_PRESERVED_SERVICE_CHANGED')
+    return binding['sha256']
+
+
 def snapshot(c):
     profile = load('online-profile-lock-release.py')
     prior = json.loads((HERE / 'online-profile-lock-contract.json').read_bytes())
@@ -68,7 +93,7 @@ def snapshot(c):
          and manifest['profileLockPublication'] == receipt and receipt['commit'] == CURRENT
          and receipt['imagesRebuilt'] is False and receipt['businessActions'] == 0, 'PARENT_IDENTITY_CHANGED')
     states = h.snapshot(d, previous)
-    need(states == receipt['after'], 'PARENT_SERVICES_CHANGED')
+    recovery_sha=verify_availability(c,states,receipt['after'])
     h.guards(d, previous, states, prior)
     profile.content(d, states, prior, h, p)
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
@@ -86,6 +111,7 @@ def snapshot(c):
         need(name.startswith(root) and name.removeprefix(root) in c['apiModules'], 'MODULE_PATH_CHANGED')
         modules[name.removeprefix(root)] = digest
     need(set(modules) == set(c['apiModules']) and modules == c['baselineApiModules'], 'MAILBOX_BASELINE_CHANGED')
+    if recovery_sha:captured['availabilityRecoverySha256']=recovery_sha
     captured['businessActions'] = 0
     captured['apiModules'] = modules
     captured['nginxSha256'] = d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',

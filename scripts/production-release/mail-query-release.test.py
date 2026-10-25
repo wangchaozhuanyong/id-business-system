@@ -228,5 +228,34 @@ class ProofTests(unittest.TestCase):
         h.guards.assert_not_called();profile.content.assert_not_called()
 
 
+class AvailabilityTests(unittest.TestCase):
+    def fixture(self):
+        parent=HERE.parents[1]/'.runtime/mail-query-availability-tests';parent.mkdir(parents=True,exist_ok=True)
+        temporary=tempfile.TemporaryDirectory(dir=parent);self.addCleanup(temporary.cleanup)
+        base=Path(temporary.name);(base/'.staging').mkdir()
+        patcher=patch.object(m,'BASE',base);patcher.start();self.addCleanup(patcher.stop)
+        original={role:{'containerId':role,'image':'same-image','reference':'same-reference','environmentSha256':'same-env',
+                  'startedAtSha256':'old-start','status':'running','health':'healthy'}
+                  for role in ('api','online-recharge','admin','mysql','caddy','media-resolver','auto-recharge')}
+        states=copy.deepcopy(original)
+        for role in ('api','online-recharge'):states[role]['startedAtSha256']='new-start'
+        recovery={'status':'ORIGINAL_SERVICE_AVAILABILITY_RESTORED','commit':m.CURRENT,
+            'manifestSha256':'a'*64,'before':original,'after':states,'imagesRebuilt':False,
+            'migrationPerformed':False,'versionRolledBack':False,'businessActions':0}
+        path=base/'.staging/mail-query-original-availability-123.json';path.write_text(json.dumps(recovery))
+        c={'parentFiles':{'release-manifest.json':'a'*64},'availabilityRecovery':{'path':str(path),'sha256':m.sha(path.read_bytes())}}
+        return c,states,original,path,recovery
+
+    def test_exact_authorized_original_container_restart_proof_is_accepted(self):
+        c,states,original,path,recovery=self.fixture()
+        self.assertEqual(m.verify_availability(c,states,original),c['availabilityRecovery']['sha256'])
+
+    def test_recovery_receipt_cannot_authorize_different_images_or_other_service_restarts(self):
+        for role,key,value in [('api','image','other-image'),('admin','startedAtSha256','another-start')]:
+            c,states,original,path,recovery=self.fixture();states[role][key]=value
+            recovery['after']=states;path.write_text(json.dumps(recovery));c['availabilityRecovery']['sha256']=m.sha(path.read_bytes())
+            with self.subTest(role=role),self.assertRaises(RuntimeError):m.verify_availability(c,states,original)
+
+
 if __name__ == '__main__':
     unittest.main()
