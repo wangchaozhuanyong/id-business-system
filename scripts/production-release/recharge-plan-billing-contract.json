@@ -71,7 +71,7 @@
         "health": "healthy",
         "image": "sha256:9e0f9c41f9225120fffb88e4fbd3aac62f4257f25c793b14c39b323bc1eaa786",
         "reference": "id-business-v2-online-checkout:034f737d551412928e99f589370b937f2b263593-40195956428-api",
-        "startedAtSha256": "5a47c1058b387e481b857e8811169eef30daa73c705839914c83c072de86c9bd",
+        "startedAtSha256": "6293d4c80b1312889570680949538b6eedf1594d28f29e5ebd5f837bb29b1fa0",
         "status": "running"
       },
       "auto-recharge": {
@@ -116,7 +116,7 @@
         "health": "healthy",
         "image": "sha256:fdad2a9abef167483b3d3c60e4c1df502e266ea7b7523a61982b5b4bcd008b5a",
         "reference": "id-business-v2-online-checkout:034f737d551412928e99f589370b937f2b263593-40195956428-online-recharge",
-        "startedAtSha256": "cb7179fef811291bef0afba0409be62df2f2aa0388b9317a9012db3fba1e0dbe",
+        "startedAtSha256": "a0cbf0e14f8ecb7801f8a1c5952cfc3863c471176a452f9a52f1261a62eca6e9",
         "status": "running"
       }
     }
