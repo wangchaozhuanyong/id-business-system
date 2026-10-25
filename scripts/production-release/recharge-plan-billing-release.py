@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import tarfile
+import time
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -216,6 +217,22 @@ def restore_pre_migration_running_state(d, h, previous, before, markers):
 def stop_with_profile(d, previous, before, lock, fence):
     try:
         recovery = load('online-profile-lock-recovery.py')
+        original_recover = recovery.recover
+
+        def stable_recover(*args):
+            for attempt in range(3):
+                try:
+                    result = original_recover(*args)
+                    return {**result, 'inventoryReadRetries': attempt}
+                except Exception as error:
+                    # This exact guard precedes every quarantine write in the
+                    # pinned helper. Re-read the complete inventory; never
+                    # ignore changed writers, mounts, ownership or lock state.
+                    if str(error) != 'ONLINE_CHECKOUT_PROFILE_HOST_INVENTORY_CHANGED' or attempt == 2:
+                        raise
+                    time.sleep(1)
+
+        recovery.recover = stable_recover
         return load('online-checkout-release.py').stop_recharge_and_recover(
             d, previous, before, lock, fence, recovery)
     except Exception as error:

@@ -35,9 +35,36 @@ class BillingPublicationTests(unittest.TestCase):
         for error, code in [(Rejected('ONLINE_CHECKOUT_PROFILE_VOLUME_IN_USE'), 'ONLINE_CHECKOUT_PROFILE_VOLUME_IN_USE'),
                             (TypeError('private-fixture-value'), 'TYPEERROR')]:
             helper = SimpleNamespace(stop_recharge_and_recover=__import__('unittest').mock.Mock(side_effect=error))
-            with patch.object(P, 'load', side_effect=[object(), helper]):
+            with patch.object(P, 'load', side_effect=[SimpleNamespace(recover=lambda *_: {}), helper]):
                 with self.assertRaisesRegex(RuntimeError, '^RECHARGE_PLAN_BILLING_STOP_' + code + '$'):
                     P.stop_with_profile(object(), object(), {}, object(), object())
+
+    def test_inventory_drift_only_repeats_readonly_preparation_and_keeps_every_writer_guard(self):
+        mock = __import__('unittest').mock.Mock
+        for errors, count, succeeds in [
+            ([RuntimeError('ONLINE_CHECKOUT_PROFILE_HOST_INVENTORY_CHANGED'), {'profilesRecovered': 0}], 2, True),
+            ([RuntimeError('ONLINE_CHECKOUT_PROFILE_HOST_INVENTORY_CHANGED')] * 3, 3, False),
+            ([RuntimeError('ONLINE_CHECKOUT_PROFILE_VOLUME_IN_USE')], 1, False),
+            ([RuntimeError('ONLINE_CHECKOUT_PROFILE_LOCK_OWNER_ACTIVE')], 1, False)
+        ]:
+            actual = mock(side_effect=errors)
+            recovery = SimpleNamespace(recover=actual)
+            helper = SimpleNamespace(stop_recharge_and_recover=lambda *args: args[-1].recover())
+            with patch.object(P, 'load', side_effect=[recovery, helper]), patch.object(P.time, 'sleep'):
+                if succeeds:
+                    result = P.stop_with_profile(object(), object(), {}, object(), object())
+                    self.assertEqual(result['inventoryReadRetries'], 1)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        P.stop_with_profile(object(), object(), {}, object(), object())
+                self.assertEqual(actual.call_count, count)
+        import ast
+        source = (HERE / 'online-profile-lock-recovery.py').read_text()
+        node = next(v for v in ast.parse(source).body if isinstance(v, ast.FunctionDef) and v.name == 'recover')
+        text = ast.get_source_segment(source, node)
+        self.assertLess(text.index('HOST_INVENTORY_CHANGED'), text.index('quarantine('))
+        self.assertEqual(text.count('HOST_INVENTORY_CHANGED'), 1)
+        self.assertEqual(text.count('quarantine('), 1)
 
     def test_diagnostic_always_restores_original_running_state_without_migration(self):
         for fails in (False, True):
