@@ -97,9 +97,14 @@ class PublicationTests(unittest.TestCase):
                 return args[-1]
             self.assertEqual(args[0], 'start')
             rows[args[-1]]['State']['Status'] = 'running'
+        def run(*args, **_kwargs):
+            if args[1] == 'inspect': return json.dumps([rows[args[-1]]])
+            self.assertEqual(args[:2], ('docker', 'start'))
+            rows[args[-1]]['State']['Status'] = 'running'
+            return args[-1]
         d = SimpleNamespace(service_state=Mock(side_effect=AssertionError('Running-only snapshot not allowed')),
                             compose=Mock(side_effect=compose), wait_healthy=Mock(),
-                            run=Mock(side_effect=lambda *args: json.dumps([rows[args[-1]]])),
+                            run=Mock(side_effect=run),
                             historical_fingerprint=Mock(return_value='e'))
         r.start_existing(d, Path('/synthetic-release'), before)
         self.assertEqual([c.args[1] for c in d.compose.call_args_list], ['ps', 'ps'])
@@ -107,7 +112,8 @@ class PublicationTests(unittest.TestCase):
         rows['api']['State']['Status'] = 'exited'
         rows['online-recharge']['State']['Status'] = 'exited'
         r.start_existing(d, Path('/synthetic-release'), before)
-        self.assertEqual([c.args[-1] for c in d.compose.call_args_list if c.args[1] == 'start'], list(r.UPDATED))
+        self.assertEqual([c.args[-1] for c in d.run.call_args_list if c.args[1] == 'start'], list(r.UPDATED))
+        self.assertTrue(all(c.args[1] == 'ps' for c in d.compose.call_args_list))
         d.service_state.assert_not_called()
         rows['api']['Image'] = 'different'
         d.compose.reset_mock()
@@ -119,6 +125,46 @@ class PublicationTests(unittest.TestCase):
         report = r.failure_report(RuntimeError('synthetic-private-cookie-details'), {'mode': 'release'})
         self.assertEqual(report['code'], 'ONLINE_PROFILE_LOCK_UNCONFIRMED')
         self.assertNotIn('cookie', json.dumps(report))
+
+    def test_native_availability_receipt_admits_only_start_time_changes(self):
+        output = HERE.parents[1] / '.runtime/profile-lock-recovery-20261025/publication-tests'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory, patch.object(r, 'BASE', Path(directory)):
+            base = Path(directory)
+            path = base / '.staging/recovery.json'
+            path.parent.mkdir()
+            original = {n: {'containerId': n, 'image': n + '-image', 'status': 'running',
+                            'environmentSha256': 'e', 'startedAtSha256': 'before'} for n in r.SERVICES}
+            states = copy.deepcopy(original)
+            for n in r.UPDATED: states[n]['startedAtSha256'] = 'restored'
+            c = copy.deepcopy(self.c)
+            expected = c['availabilityRecovery']
+            expected['path'] = str(path)
+            value = {'status': 'ORIGINAL_SERVICE_AVAILABILITY_RESTORED', 'operation': 'DOCKER_START_EXACT_ORIGINAL',
+                     'source': expected['source'], 'originalCommit': expected['originalCommit'],
+                     'originalRun': expected['originalRun'], 'current': str(base / 'releases/previous'),
+                     'manifestSha256': 'manifest', 'before': original, 'after': states,
+                     'imagesChanged': False, 'pointerChanged': False, 'businessActions': 0}
+            def write(record):
+                path.write_text(json.dumps(record))
+                expected['sha256'] = r.sha(path.read_bytes())
+            write(value)
+            r.verify_availability_recovery(c, base / 'releases/previous', states, original, 'manifest')
+            path.write_text('changed')
+            with self.assertRaisesRegex(RuntimeError, 'RECOVERY_RECEIPT_CHANGED'):
+                r.verify_availability_recovery(c, base / 'releases/previous', states, original, 'manifest')
+            for field, wrong in [('source', 'unreviewed'), ('originalRun', 'different'), ('imagesChanged', True),
+                                 ('pointerChanged', True), ('businessActions', True), ('manifestSha256', 'different')]:
+                write({**value, field: wrong})
+                with self.assertRaisesRegex(RuntimeError, 'RECOVERY_RECEIPT_CHANGED'):
+                    r.verify_availability_recovery(c, base / 'releases/previous', states, original, 'manifest')
+            for role, key in [('api', 'image'), ('online-recharge', 'containerId'),
+                              ('api', 'environmentSha256'), ('admin', 'startedAtSha256')]:
+                changed = copy.deepcopy(states)
+                changed[role][key] = 'changed'
+                write({**value, 'after': changed})
+                with self.assertRaisesRegex(RuntimeError, 'RECOVERY_SERVICE_CHANGED'):
+                    r.verify_availability_recovery(c, base / 'releases/previous', changed, original, 'manifest')
 
     def test_real_loader_uses_only_global_marker_after_registration_retirement(self):
         output = HERE.parents[1] / '.runtime/profile-lock-recovery-20261025/publication-tests'
@@ -207,12 +253,19 @@ class PublicationTests(unittest.TestCase):
             events.append('publish-pointer')
             (base / 'current').unlink()
             (base / 'current').symlink_to(target)
+        def docker(*args, **_kwargs):
+            selected = next(value for value in live.values() if value['containerId'] == args[-1])
+            if args[1] == 'start':
+                role = next(name for name, value in live.items() if value is selected)
+                compose(previous, 'start', role)
+                return args[-1]
+            self.assertEqual(args[:2], ('docker', 'inspect'))
+            return json.dumps([{'Id': selected['containerId'], 'Image': selected['image'],
+                'Config': {'Image': selected['reference'], 'Env': ['SYNTHETIC=1']},
+                'State': {'Status': selected['status']}}])
         d = SimpleNamespace(compose=Mock(side_effect=compose), wait_healthy=Mock(),
                             service_state=lambda _dir, name, **kw: copy.deepcopy(live[name]),
-                            run=lambda *_args: json.dumps([{'Id': value['containerId'], 'Image': value['image'],
-                                'Config': {'Image': value['reference'], 'Env': ['SYNTHETIC=1']},
-                                'State': {'Status': value['status']}} for value in live.values()
-                                if value['containerId'] == _args[-1]]),
+                            run=docker,
                             historical_fingerprint=lambda _value: 'd' * 64,
                             point_current=Mock(side_effect=point))
         real_h = load('recharge-record-release.py')

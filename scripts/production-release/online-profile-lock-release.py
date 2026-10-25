@@ -24,7 +24,8 @@ SEALED = {'sources': '10cfbdbdda55a8bc3a535a97490a6cdcbaf1f8382cc1889fecff3d0242
           'expectedImages': '9940d75486da717a7c953acc2cc84069f2305160a55a2315bcf87b7aa00d5e97',
           'engineFiles': '55ce8ffd86e45424c7d8ccf3e7bd2c0d186a1db77e37c9443fd4a134062c00a5',
           'apiFiles': 'bfa992316eeb42c6c36872f9143fa0ac8d8b8cac1fcf001484586143bb2f11b7',
-          'adminFiles': '01d14361018ee8cfe13f7fc6d16c33197476853b9f550be1d84e8557b27b4024'}
+          'adminFiles': '01d14361018ee8cfe13f7fc6d16c33197476853b9f550be1d84e8557b27b4024',
+          'availabilityRecovery': 'adf8734c754247be57db47e2b2cdf31e4feff1289cb1eea13d78f49a10382298'}
 
 
 def need(value, code):
@@ -114,15 +115,40 @@ def capture(d, c, h, p):
     receipt = json.loads((previous / 'online-checkout-preservation.json').read_bytes())
     states = h.snapshot(d, previous)
     need(receipt['commit'] == CURRENT and receipt['artifactSha256'] == c['parentArtifact']['artifactSha256']
-         and receipt['buildProofSha256'] == c['parentArtifact']['buildProofSha256'] and states == receipt['after'],
+         and receipt['buildProofSha256'] == c['parentArtifact']['buildProofSha256'],
          'PARENT_SERVICES_CHANGED')
+    verify_availability_recovery(c, previous, states, receipt['after'], sha(raw))
     h.guards(d, previous, states, c)
     content(d, states, c, h, p)
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     return {'current': str(previous), 'expectedCurrent': CURRENT, 'manifestSha256': sha(raw),
+            'availabilityRecoverySha256': c['availabilityRecovery']['sha256'],
             'services': states, 'configurationSha256': {name: sha((previous / name).read_bytes())
                 for name in ('.env.aws.production', 'compose.release.json', 'docker-compose.aws-mysql.yml')},
             'runtimeConfigurationSha256': {name: h.configuration(d, value) for name, value in states.items()}}
+
+
+def verify_availability_recovery(c, previous, states, original, manifest_sha):
+    # Keep the old preservation receipt immutable. Admit only the exact native
+    # proof of restoring these same containers, not arbitrary startup drift.
+    expected = c['availabilityRecovery']
+    path = Path(expected['path'])
+    need(path.is_relative_to(BASE / '.staging') and not path.is_symlink(), 'RECOVERY_PATH_CHANGED')
+    raw = path.read_bytes()
+    need(sha(raw) == expected['sha256'], 'RECOVERY_RECEIPT_CHANGED')
+    value = json.loads(raw)
+    need(value.get('status') == 'ORIGINAL_SERVICE_AVAILABILITY_RESTORED'
+         and value.get('operation') == 'DOCKER_START_EXACT_ORIGINAL'
+         and value.get('source') == expected['source'] and value.get('originalCommit') == expected['originalCommit']
+         and value.get('originalRun') == expected['originalRun'] and value.get('current') == str(previous)
+         and value.get('manifestSha256') == manifest_sha and value.get('before') == original
+         and value.get('after') == states and value.get('imagesChanged') is False
+         and value.get('pointerChanged') is False and type(value.get('businessActions')) is int
+         and value['businessActions'] == 0 and set(states) == set(SERVICES), 'RECOVERY_RECEIPT_CHANGED')
+    need(all(states[n] == original[n] for n in PRESERVED)
+         and all({k: v for k, v in states[n].items() if k != 'startedAtSha256'} ==
+                 {k: v for k, v in original[n].items() if k != 'startedAtSha256'} for n in UPDATED),
+         'RECOVERY_SERVICE_CHANGED')
 
 
 def verify_proof(proof, plan, c, files):
@@ -167,7 +193,9 @@ def start_existing(d, directory, before):
              and d.historical_fingerprint(sorted(env)) == before[role]['environmentSha256']
              and row.get('State', {}).get('Status') in ('running', 'exited'), 'CONTAINER_CHANGED')
         if row['State']['Status'] == 'exited':
-            d.compose(directory, 'start', role, timeout=90)
+            # Do not expand Compose's service/dependency graph during recovery.
+            # The selection, image, reference and environment were checked above.
+            d.run('docker', 'start', selected, timeout=90)
         d.wait_healthy(directory, role)
 
 
