@@ -114,4 +114,74 @@ class ProxyFailureReleaseTests(unittest.TestCase):
             with self.assertRaises(RuntimeError): p.validate_contract(changed)
 
 
+    def test_original_normal_publication_cannot_be_repeated(self):
+        with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_RELEASE_ALREADY_ACCEPTED'):
+            p.release({'mode':'release'}, self.c)
+
+    def test_recovery_only_changes_admin_and_finishes_original_version_once(self):
+        import tempfile,types,base64,hashlib
+        from unittest.mock import patch
+        root = HERE.parents[1] / '.runtime/proxy-failure-evidence-20261025/recovery-fixtures'
+        root.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as tmp:
+            base=Path(tmp);previous=base/'releases/previous';target=base/'releases/target';stage=base/'stage'
+            for path in (previous,target,stage):path.mkdir(parents=True)
+            (base/'current').symlink_to(previous)
+            original=self.c['acceptedRecovery']['plan'];images={r:{'reference':r+'-candidate','imageId':r+'-new'} for r in p.UPDATED}
+            before={r:{'image':r+'-old','reference':r+'-old'} for r in (*p.UPDATED,*p.PRESERVED)}
+            states=copy.deepcopy(before)
+            for role in ('api','online-recharge'):states[role]={'image':images[role]['imageId'],'reference':images[role]['reference']}
+            observed={'status':'ONLINE_PROXY_ACCEPTED_SWITCH_OBSERVED','allConfigurationMatched':True,'services':copy.deepcopy(states)}
+            old={'services':before,'manifestSha256':p.sha(b'{"images":{}}'),'expectedCurrent':p.CURRENT,'sources':{},'engineRoot':self.c['engineRoot']}
+            for path in (previous,target):(path/'release-manifest.json').write_bytes(b'{"images":{}}')
+            journal={'status':'SWITCH_FAILED','target':str(target),'previous':str(previous),'businessActions':0}
+            (stage/'switch-state.json').write_text(json.dumps(journal))
+            backup_dir=base/'backups'/('recharge-record-'+original['commit']+'-'+original['workflowRunId']);backup_dir.mkdir(parents=True)
+            raw=b'synthetic backup';backup_path=backup_dir/'fixture.sql.gz';backup_path.write_bytes(raw)
+            backup={'path':str(backup_path),'size':len(raw),'sha256':p.sha(raw),'s3Bucket':'fixture','s3Key':'fixture'}
+            (backup_dir/'backup-operation.json').write_text('{"status":"VERIFIED"}')
+            (backup_dir/'backup-verification.json').write_text(json.dumps(backup))
+            calls=[]
+            def compose(directory,*args,**kwargs):
+                self.assertEqual(directory,target);self.assertEqual(args,('up','-d','--no-deps','admin'))
+                calls.append('admin');states['admin']={'image':images['admin']['imageId'],'reference':images['admin']['reference']}
+            def point(directory,stamp):
+                self.assertEqual(directory,target);(base/'current').unlink();(base/'current').symlink_to(target)
+            d=types.SimpleNamespace(compose=compose,wait_healthy=lambda directory,role: self.assertEqual(role,'admin'),assert_no_active_recharge=lambda _:None,
+                environment_values=lambda _:{},point_current=point,run=lambda *a,**kw:json.dumps({'ContentLength':len(raw),'ChecksumSHA256':base64.b64encode(hashlib.sha256(raw).digest()).decode(),'ServerSideEncryption':'AES256'}))
+            h=types.SimpleNamespace(snapshot=lambda *_:copy.deepcopy(states),engine_idle=lambda *a,**kw:None,guards=lambda *a:None)
+            def smoke(*a):
+                for role in p.UPDATED:self.assertEqual(states[role]['image'],images[role]['imageId'])
+            def load(name):
+                if name=='online-unpaid-validation-release.py':return types.SimpleNamespace(configuration_equivalence=lambda *a:{'matched':True})
+                if name=='online-query-network-release.py':return types.SimpleNamespace(SCOPE='fixture')
+                if name=='proxy-result-identity-release.py':return types.SimpleNamespace(verify_markers=lambda _:calls.append('verify_marker'),release_markers=lambda _:calls.append('release_marker'))
+                if name=='recharge-availability-release.py':return types.SimpleNamespace(acquire_release_lock=lambda _:None)
+                raise AssertionError(name)
+            core=types.SimpleNamespace(load=load,smoke=smoke)
+            def material(_):return original,old,stage,json.loads((stage/'switch-state.json').read_text()),target,previous,b'{}',{},h,d,core,images
+            with patch.object(p,'BASE',base),patch.object(p,'load',load),patch.object(p,'recovery_material',material):
+                changed={**observed,'services':{**observed['services'],'api':{'image':'unexpected'}}}
+                with self.assertRaisesRegex(RuntimeError,'OBSERVED_SERVICES_CHANGED'):
+                    p.recovery_complete({'mode':'recovery_complete','commit':'c'*40,'acceptedObservation':changed},self.c)
+                self.assertEqual(calls,[])
+                result=p.recovery_complete({'mode':'recovery_complete','commit':'c'*40,'acceptedObservation':observed},self.c)
+                self.assertEqual(result['status'],'ONLINE_PROXY_FORWARD_COMPLETED');self.assertFalse(result['apiExecutorRecreated'])
+                self.assertEqual(calls.count('admin'),1)
+                self.assertEqual((base/'current').resolve(),target)
+                readback=p.recovery_complete({'mode':'recovery_readback','commit':'c'*40,'acceptedObservation':result['observation']},self.c)
+                self.assertEqual(readback['status'],'ONLINE_PROXY_COMPLETION_READBACK_VERIFIED')
+                with self.assertRaises(RuntimeError):p.recovery_complete({'mode':'recovery_complete','commit':'c'*40,'acceptedObservation':result['observation']},self.c)
+                self.assertEqual(calls.count('admin'),1)
+
+    def test_recovery_is_bound_to_original_operation_and_never_rebuilds(self):
+        source=(HERE/'online-proxy-failure-evidence-release.py').read_text()
+        self.assertIn("original['workflowRunId'] == '40178946393'",source)
+        self.assertIn("not (stage/'forward-finalization.json').exists()",source)
+        recovery=source.split('def recovery_complete(',1)[1]
+        self.assertNotIn('build_image',recovery);self.assertNotIn('fresh_scoped_backup',recovery)
+        self.assertEqual(recovery.count('d.compose('),1)
+        self.assertIn("d.compose(target,'up','-d','--no-deps','admin'",recovery)
+
+
 if __name__ == '__main__': unittest.main()

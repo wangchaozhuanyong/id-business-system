@@ -150,8 +150,149 @@ def capture_parent(plan, c):
 
 
 def release(plan, c):
+    validate_contract(c)
+    if plan['mode'] == 'recovery_observe': return recovery_snapshot(c)
+    if plan['mode'] in ('recovery_complete', 'recovery_readback'): return recovery_complete(plan,c)
+    need(not c.get('acceptedRecovery'), 'ORIGINAL_RELEASE_ALREADY_ACCEPTED')
     return core().release(plan, c)
 
 
 def failure_report(error, plan):
     return core().failure_report(error, plan)
+
+def recovery_material(c):
+    import importlib.util
+    accepted = c['acceptedRecovery']; original = accepted['plan']
+    need(sha(canonical(original)) == accepted['planSha256'] == 'f6e90663cbd2f0fc2b953d462e119c410a625f2fbc2b711efa6201370ac96bc7'
+         and accepted['commandId'] == '84f5966d-b539-4099-b243-d8be39fe9e3f'
+         and original['commit'] == 'd84159da515e915b0734f5dcd5fe3d9ed4f843aa'
+         and original['workflowRunId'] == '40178946393', 'ACCEPTED_IDENTITY')
+    entry = BASE / '.staging' / ('checkout-resume-entry-' + original['commit'] + '-' + original['workflowRunId'])
+    need(all(sha((entry/n).read_bytes()) == v for n,v in original['controlSources'].items()), 'ORIGINAL_CONTROLS_CHANGED')
+    spec = importlib.util.spec_from_file_location('accepted_original_release', entry / (PREFIX + '-release.py'))
+    original_module = importlib.util.module_from_spec(spec); spec.loader.exec_module(original_module)
+    core = original_module.core()
+    raw = (entry / CONTRACT_FILE).read_bytes()
+    need(sha(raw) == original['contractSha256'], 'ORIGINAL_CONTRACT_CHANGED')
+    old = {**json.loads(raw), **original['nativeParentCapture']['baseline']}
+    original_module.validate_contract(old)
+    stage = BASE / '.staging' / ('online-checkout-' + original['commit'] + '-' + original['workflowRunId'])
+    journal = json.loads((stage/'switch-state.json').read_bytes())
+    target = Path(journal['target']); previous = Path(old['current'])
+    need(target.parent == BASE/'releases' and target.name.endswith(original['commit'][:12]+'-online-checkout')
+         and journal.get('previous',str(previous)) == str(previous), 'ACCEPTED_TARGET_CHANGED')
+    payload=stage/'content/payload'; proof_raw=(payload/'build-proof.json').read_bytes()
+    need(sha(proof_raw) == original['buildProofSha256'], 'ORIGINAL_PROOF_CHANGED')
+    proof=json.loads(proof_raw); h=core.load('recharge-record-release.py')
+    files=h.file_inventory(payload);files.pop('build-proof.json');original_module.verify_proof(proof,original,old,files)
+    d=h.load_utilities(entry/'remote-deploy.py',original['controlSources']['remote-deploy.py'])
+    images={}
+    for role in UPDATED:
+        built=json.loads((stage/(role+'-image-build.json')).read_bytes())
+        need(built['status']=='BUILT' and built['baseImageId']==old['services'][role]['image'],'ORIGINAL_IMAGE_BUILD_CHANGED')
+        image=json.loads(d.run('docker','image','inspect',built['reference']))[0]
+        parent=json.loads(d.run('docker','image','inspect',built['baseImageId']))[0]
+        core.verify_image(parent,image,original)
+        images[role]={'reference':built['reference'],'imageId':image['Id']}
+    return original,old,stage,journal,target,previous,proof_raw,proof,h,d,core,images
+
+
+def recovery_snapshot(c):
+    original,old,stage,journal,target,previous,raw,proof,h,d,core,images=recovery_material(c)
+    with (BASE/'.deploy.lock').open('a') as lock:
+        core.load('recharge-availability-release.py').acquire_release_lock(lock)
+        need(journal == {'status':'SWITCH_FAILED','target':str(target),'previous':str(previous),'businessActions':0}
+             and (BASE/'current').resolve()==previous and not (stage/'forward-finalization.json').exists(),'ACCEPTED_JOURNAL_CHANGED')
+        states=h.snapshot(d,target)
+        need(all(states[r] == old['services'][r] for r in PRESERVED),'PRESERVED_SERVICE_CHANGED')
+        need(all(states[r]['image']==images[r]['imageId'] for r in ('api','online-recharge'))
+             and states['admin']==old['services']['admin'],'PARTIAL_SWITCH_CHANGED')
+        helper=load('online-unpaid-validation-release.py')
+        models={r:helper.configuration_equivalence(h,d,s,old['runtimeConfigurationSha256'][r]) for r,s in states.items()}
+        need(all(v['matched'] for v in models.values()),'RUNTIME_CONFIGURATION_CHANGED')
+        core.read_hashes(d,states['api']['containerId'],'/app/apps/api/dist/',proof['apiModules'])
+        core.read_hashes(d,states['admin']['containerId'],'/usr/share/nginx/html/',proof['baselineAdminFiles'])
+        core.load('proxy-result-identity-release.py').engine_content(d,states['online-recharge'],old['afterEngineFiles'])
+        return {'status':'ONLINE_PROXY_ACCEPTED_SWITCH_OBSERVED','commit':original['commit'],'target':str(target),
+                'previous':str(previous),'services':states,'configuration':models,'allConfigurationMatched':True,
+                'adminPending':True,'containersRecreated':False,'businessActions':0}
+
+
+def recovery_complete(plan,c):
+    import datetime,base64
+    observed=plan['acceptedObservation']
+    need(observed['status']=='ONLINE_PROXY_ACCEPTED_SWITCH_OBSERVED' and observed['allConfigurationMatched'] is True,'OBSERVATION_REQUIRED')
+    original,old,stage,journal,target,previous,raw,proof,h,d,core,images=recovery_material(c)
+    helper=load('online-unpaid-validation-release.py')
+    loader=core.load
+    def qualified(name):
+        value=loader(name)
+        if name=='shared-bank-card-release.py':
+            value.configuration_matches=lambda selected,transport,state,expected:helper.configuration_equivalence(selected,transport,state,expected)['matched']
+        return value
+    core.load=qualified
+    with (BASE/'.deploy.lock').open('a') as lock:
+        core.load('recharge-availability-release.py').acquire_release_lock(lock)
+        states=h.snapshot(d,target)
+        need(states==observed['services'],'OBSERVED_SERVICES_CHANGED')
+        if plan['mode']=='recovery_readback':
+            receipt=json.loads((target/'online-checkout-preservation.json').read_bytes())
+            need((BASE/'current').resolve()==target and receipt['after']==states
+                 and receipt['commit']==original['commit'] and journal['status']=='DEPLOYED','FINALIZE_READBACK_CHANGED')
+            core.smoke(d,target,states,proof,old,h);h.guards(d,target,states,old)
+            return {'status':'ONLINE_PROXY_COMPLETION_READBACK_VERIFIED','commit':original['commit'],
+                    'controlCommit':plan['commit'],'updatedServices':list(UPDATED),'preservedServices':list(PRESERVED),
+                    'migrationPerformed':False,'businessActions':0}
+        need(plan['mode']=='recovery_complete' and journal=={'status':'SWITCH_FAILED','target':str(target),'previous':str(previous),'businessActions':0}
+             and (BASE/'current').resolve()==previous and not (stage/'forward-finalization.json').exists(),'COMPLETION_ALREADY_ACCEPTED_OR_MOVED')
+        need(all(states[r]==old['services'][r] for r in PRESERVED)
+             and all(states[r]['image']==images[r]['imageId'] for r in ('api','online-recharge'))
+             and states['admin']==old['services']['admin'],'PARTIAL_SWITCH_CHANGED')
+        manifest_raw=(previous/'release-manifest.json').read_bytes()
+        need(sha(manifest_raw)==old['manifestSha256'] and (target/'release-manifest.json').read_bytes()==manifest_raw,'ORIGINAL_MANIFEST_CHANGED')
+        backup_dir=BASE/'backups'/('recharge-record-'+original['commit']+'-'+original['workflowRunId'])
+        need(json.loads((backup_dir/'backup-operation.json').read_bytes())['status']=='VERIFIED','ORIGINAL_BACKUP_UNVERIFIED')
+        backup=json.loads((backup_dir/'backup-verification.json').read_bytes());backup_path=Path(backup['path'])
+        need(backup_path.parent==backup_dir and backup_path.is_file() and not backup_path.is_symlink(),'ORIGINAL_BACKUP_PATH_CHANGED')
+        backup_raw=backup_path.read_bytes()
+        need(len(backup_raw)==backup['size'] and sha(backup_raw)==backup['sha256'],'ORIGINAL_BACKUP_CHANGED')
+        env=d.environment_values(previous/'.env.aws.production')
+        head=json.loads(d.run('aws','s3api','head-object','--region',env.get('MYSQL_BACKUP_S3_REGION') or 'ap-northeast-1','--bucket',backup['s3Bucket'],'--key',backup['s3Key'],'--checksum-mode','ENABLED',timeout=60))
+        need(head.get('ContentLength')==len(backup_raw) and head.get('ChecksumSHA256')==base64.b64encode(hashlib.sha256(backup_raw).digest()).decode() and head.get('ServerSideEncryption')=='AES256','ORIGINAL_BACKUP_S3_CHANGED')
+        retired=load('online-query-network-release.py')
+        marker_raw=json.dumps({'scope':retired.SCOPE,'commit':original['commit'],'workflowRunId':original['workflowRunId']},sort_keys=True).encode()
+        marker={'paths':[str(BASE/'maintenance.json')],'ownerSha256':sha(marker_raw)}
+        markers=load('proxy-result-identity-release.py');markers.verify_markers(marker)
+        d.assert_no_active_recharge(target);h.engine_idle(d,states['online-recharge'],old,wait_connected=True)
+        intent={'status':'STARTED','commit':original['commit'],'controlCommit':plan['commit'],'observationSha256':sha(canonical(observed)),
+                'containersToUpdate':['admin'],'apiExecutorRecreated':False,'backupRepeated':False,'migrationPerformed':False,'businessActions':0}
+        intent_path=stage/'forward-finalization.json'
+        with intent_path.open('x') as f:
+            json.dump(intent,f,sort_keys=True);f.flush();__import__('os').fsync(f.fileno())
+        # Only the omitted Admin switch is performed. Never restart API/executor or repeat backup/build.
+        d.compose(target,'up','-d','--no-deps','admin',timeout=180);d.wait_healthy(target,'admin')
+        after=h.snapshot(d,target)
+        need(all(after[r]['image']==images[r]['imageId'] for r in UPDATED),'COMPLETION_IMAGE_CHANGED')
+        core.smoke(d,target,after,proof,old,h)
+        markers.release_markers(marker);h.guards(d,target,after,old)
+        receipt={'status':'DEPLOYED','commit':original['commit'],'before':old['services'],'after':after,'images':images,
+                 'backup':backup,'artifactSha256':original['artifactSha256'],'buildProofSha256':original['buildProofSha256'],
+                 'preservedServices':list(PRESERVED),'migrationPerformed':False,'businessActions':0,'controlCommit':plan['commit']}
+        (target/'online-checkout-preservation.json').write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
+        (target/'online-checkout-build-proof.json').write_bytes(raw)
+        manifest=json.loads(manifest_raw);manifest.update(commit=original['commit'],sourceTree=original['tree'],sourceBranch='main',scope=SCOPE,
+            previousCommit=old['expectedCurrent'],previousRelease=str(previous),previousManifestSha256=sha(manifest_raw),status='DEPLOYED',
+            servicesUpdated=list(UPDATED),newMigrations=[],migrationPerformed=False,paymentActions=0,onlineSettingsPublication=receipt)
+        for role in UPDATED:
+            manifest['images'][role]={'reference':images[role]['reference'],'digest':images[role]['imageId'],'sourceCommit':original['commit']}
+            projections=manifest.setdefault('roleSourceProjections',{})
+            projections[role]={'kind':'PUBLISHED_PREDECESSOR_PLUS_ONLINE_SETTINGS','commit':original['commit'],'parentProjection':projections.get(role),
+                'buildProofSha256':original['buildProofSha256'],'sources':{n:v for n,v in old['sources'].items() if
+                    (n.startswith('apps/admin/') if role=='admin' else n.startswith(old['engineRoot']+'/') if role=='online-recharge' else n.startswith('apps/api/') and not n.startswith(old['engineRoot']+'/'))}}
+        (target/'release-manifest.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
+        stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ');d.point_current(target,stamp+'-online-checkout')
+        (stage/'switch-state.json').write_text(json.dumps({'status':'DEPLOYED','target':str(target),'commit':original['commit']})+'\n')
+        intent['status']='FINALIZED';intent_path.write_text(json.dumps(intent,sort_keys=True,indent=2)+'\n')
+        return {'status':'ONLINE_PROXY_FORWARD_COMPLETED','commit':original['commit'],'controlCommit':plan['commit'],
+                'apiExecutorRecreated':False,'adminUpdated':True,'migrationPerformed':False,'businessActions':0,
+                'observation':{**observed,'services':after,'adminPending':False}}
