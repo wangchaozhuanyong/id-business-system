@@ -106,6 +106,14 @@ def smoke(d, target, before, states, proof, c, prior, h, p, captured):
     equivalence = load('online-unpaid-validation-release.py').configuration_equivalence
     need(all(equivalence(h,d,state,captured['runtimeConfigurationSha256'][role])['matched']
          for role,state in states.items()), 'RUNTIME_CONFIGURATION_CHANGED')
+    code = """const {syncVendureMailboxScope}=require('/app/apps/api/dist/id-business-v2/workspace/vendure-mailbox-list.js');
+(async()=>{const ids=[];const client={primaryAccounts:async()=>[{id:'fixture-primary',status:'ACTIVE'},{id:'fixture-disabled',status:'DISABLED'}],virtualEmails:async()=>[{id:'fixture-alias',primaryAccountId:'fixture-primary'}]};
+await syncVendureMailboxScope(client,{virtualEmailId:'fixture-alias'},async id=>{ids.push(id);return {success:true};});
+let invalid=false,failed=false;try{await syncVendureMailboxScope(client,{virtualEmailId:'missing'},async()=>{throw Error('unexpected');});}catch(e){invalid=e.getStatus?.()===400;}
+try{await syncVendureMailboxScope(client,{},async()=>({success:false}));}catch(e){failed=e.getStatus?.()===503;}
+console.log(JSON.stringify({selected:ids.length===1&&ids[0]==='fixture-primary',invalid,failed,businessActions:0}));})().catch(()=>process.exit(1));"""
+    need(json.loads(d.run('docker','exec',states['api']['containerId'],'node','-e',code))
+         == {'selected':True,'invalid':True,'failed':True,'businessActions':0}, 'MAILBOX_RUNTIME_SMOKE_FAILED')
     h.engine_idle(d, states['online-recharge'], prior, wait_connected=True)
 
 
