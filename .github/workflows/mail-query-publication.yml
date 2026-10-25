@@ -97,7 +97,9 @@ jobs:
           role-session-name: id-business-v2-mail-query-publish-${{ github.run_id }}
           aws-region: ap-northeast-1
       - name: Publish once and independently read back
-        run: python3 -B scripts/production-release/mail-query-publication.py publish
+        run: |
+          git fetch --no-tags origin refs/pull/721/head
+          python3 -B scripts/production-release/mail-query-publication.py publish
       - name: Preserve original release receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

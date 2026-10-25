@@ -88,6 +88,7 @@ def quality(commit, tree):
            and r['merge_commit_sha'] == commit and r['base']['ref'] == 'main' and r['head']['repo']['full_name'] == REPO]
     need(len(prs) == 1, 'MERGED_CONTROL_REQUIRED')
     pr = prs[0]
+    git('fetch','--no-tags','origin','refs/pull/' + str(pr['number']) + '/head')
     need(set(git('diff', '--name-only', pr['base']['sha'], pr['head']['sha']).decode().splitlines()) <= CONTROLS, 'CONTROL_PR_BUSINESS_CHANGED')
     need(git('rev-parse', pr['head']['sha'] + '^{tree}').decode().strip() == tree, 'REVIEW_TREE_CHANGED')
     control = verified_run(pr['head']['sha'], 'pull_request', tree, pr['number'])
