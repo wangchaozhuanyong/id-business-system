@@ -9,7 +9,6 @@ from pathlib import Path
 import re
 import shutil
 import tarfile
-import tempfile
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -33,6 +32,18 @@ def sha(raw):
 
 def fingerprint(value):
     return sha(json.dumps(value, sort_keys=True, separators=(',', ':')).encode())
+
+
+def claim_maintenance(plan):
+    # The registration module and its volume are retired. This publication owns
+    # only the existing global marker; the SQL fence protects live recharge work.
+    path = BASE / 'maintenance.json'
+    raw = json.dumps({'scope': SCOPE, 'commit': plan['commit'],
+                      'workflowRunId': plan['workflowRunId']}, sort_keys=True).encode()
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'wb') as output:
+        output.write(raw)
+    return {'paths': [str(path)], 'ownerSha256': sha(raw), 'globalFileRole': 'PUBLICATION_OWNERSHIP_ONLY'}
 
 
 def load(name):
@@ -140,7 +151,43 @@ def validate_proof(proof, plan, c, files):
                 **{'source/' + n: v for n, v in c['sources'].items()},
                 **{'controls/' + n: v for n, v in proof['controlSources'].items()}}
     need(files == expected == proof['files'] and proof['contractSha256'] == sha((HERE / CONTRACT).read_bytes()), 'PAYLOAD_HASH')
+    verify_migration_transport(proof)
     return proof
+
+
+def verify_migration_transport(proof):
+    value = proof['migrationTransport']
+    expected_reference = ('098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:'
+                          + proof['commit'] + '-' + proof['workflowRunId'] + '-billing-migrate')
+    need(set(value) == {'file', 'sha256', 'bytes', 'imageId', 'reference'}
+         and value['file'] == PREFIX + '-migration.tar.gz'
+         and type(value['bytes']) is int and 0 < value['bytes'] <= 512 * 1024**2
+         and re.fullmatch('[a-f0-9]{64}', value['sha256'])
+         and re.fullmatch('sha256:[a-f0-9]{64}', value['imageId'])
+         and value['reference'] == expected_reference, 'MIGRATION_TRANSPORT_SCOPE')
+    return value
+
+
+def load_migration_image(d, proof, plan, stage):
+    value = verify_migration_transport(proof)
+    path = stage / value['file']
+    need(not path.exists(), 'MIGRATION_TRANSPORT_ALREADY_ACCEPTED')
+    url = plan['artifactUrl'].rsplit('/', 1)[0] + '/' + value['file']
+    digest, total = hashlib.sha256(), 0
+    with urllib.request.urlopen(url, timeout=120) as response, path.open('xb') as output:
+        while True:
+            block = response.read(1024**2)
+            if not block:
+                break
+            total += len(block)
+            need(total <= value['bytes'] and total <= 512 * 1024**2, 'MIGRATION_TRANSPORT_SIZE')
+            digest.update(block)
+            output.write(block)
+    need(total == value['bytes'] and digest.hexdigest() == value['sha256'], 'MIGRATION_TRANSPORT_HASH')
+    d.run('docker', 'load', '--input', str(path), timeout=300)
+    image = json.loads(d.run('docker', 'image', 'inspect', value['reference']))[0]
+    need(image['Id'] == value['imageId'], 'MIGRATION_TRANSPORT_IMAGE')
+    return value['reference']
 
 
 def migrate(d, target, c, journal, database):
@@ -239,20 +286,13 @@ def release(plan):
             need(built['RootFS']['Layers'][:len(parent['RootFS']['Layers'])] == parent['RootFS']['Layers'], 'IMAGE_PARENT')
             load('recharge-billing-release.py').verify_image_configuration(parent['Config'], built['Config'])
             images[role] = {'reference': reference, 'imageId': built['Id']}
-        # Standard ECR login stays in an ephemeral Docker credential directory.
-        with tempfile.TemporaryDirectory(prefix='id-billing-ecr-') as credentials:
-            docker_env = {**os.environ, 'DOCKER_CONFIG': credentials}
-            password = d.run('aws', 'ecr', 'get-login-password', '--region', 'ap-northeast-1')
-            d.run('docker', 'login', '--username', 'AWS', '--password-stdin',
-                  '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com',
-                  env=docker_env, input_data=password + '\n')
-            d.run('docker', 'pull', proof['migrationImage'], env=docker_env, timeout=300)
+        migration_reference = load_migration_image(d, proof, plan, stage)
         code = ("const fs=require('fs'),c=require('crypto');const files="
                 + json.dumps({c['migration']['path']: c['migration']['sha256'],
                               'apps/api/prisma-mysql/schema.prisma': c['sources']['apps/api/prisma-mysql/schema.prisma']})
                 + ";if(!Object.entries(files).every(([n,v])=>c.createHash('sha256').update(fs.readFileSync('/app/'+n)).digest('hex')===v))process.exit(1);console.log('MIGRATION_SOURCE_VERIFIED');")
         need(d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--entrypoint', 'node',
-                   proof['migrationImage'], '-e', code) == 'MIGRATION_SOURCE_VERIFIED', 'MIGRATION_IMAGE_SOURCE')
+                   migration_reference, '-e', code) == 'MIGRATION_SOURCE_VERIFIED', 'MIGRATION_IMAGE_SOURCE')
         backup = h.fresh_scoped_backup(d, previous, plan, normalizer_path=Path(c['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_REQUIRED')
         baseline(d, h, c)
@@ -269,14 +309,13 @@ def release(plan):
         override = json.loads((target / 'compose.release.json').read_bytes())
         for role in images:
             override['services'][role]['image'] = images[role]['reference']
-        override['services']['migrate']['image'] = proof['migrationImage']
+        override['services']['migrate']['image'] = migration_reference
         a.write_release_override(target / 'compose.release.json', override)
         for name in plan['controlSources']:
             (target / 'scripts/production-release' / name).write_bytes((HERE / name).read_bytes())
         p = load('proxy-result-identity-release.py')
-        p.SCOPE = SCOPE
-        markers = p.claim_markers(d, before, plan)
         fence = p.sql_fence_class({'sqlFenceHelperSha256': plan['controlSources']['api-admin-scope.py']})(d, previous)
+        markers = claim_maintenance(plan)
         journal = stage / 'switch-state.json'
         journal.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target)}) + '\n')
         try:
@@ -329,8 +368,9 @@ def release(plan):
             projections = manifest.setdefault('roleSourceProjections', {})
             projections[role] = {'kind': SCOPE, 'commit': plan['commit'], 'parentProjection': projections.get(role),
                 'buildProofSha256': plan['buildProofSha256'], 'sources': {n: v for n, v in c['sources'].items() if n.startswith('apps/' + role + '/')}}
-        migration_image = json.loads(d.run('docker', 'image', 'inspect', proof['migrationImage']))[0]
-        manifest['images']['migrate'] = {'reference': proof['migrationImage'], 'digest': migration_image['Id'], 'sourceCommit': plan['commit']}
+        migration_image = json.loads(d.run('docker', 'image', 'inspect', migration_reference))[0]
+        manifest['images']['migrate'] = {'reference': migration_reference, 'digest': migration_image['Id'],
+                                       'registryDigest': proof['migrationImage'], 'sourceCommit': plan['commit']}
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         d.point_current(target, stamp + '-billing-plan')
         journal.write_text(json.dumps({'status': 'DEPLOYED', 'commit': plan['commit'], 'target': str(target)}) + '\n')

@@ -63,6 +63,11 @@ jobs:
           digest="$(aws ecr describe-images --repository-name id-business-v2-release --image-ids imageTag="$GITHUB_SHA-$GITHUB_RUN_ID-billing-migrate" --query 'imageDetails[0].imageDigest' --output text)"
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
           echo "MIGRATION_IMAGE=$registry/id-business-v2-release@$digest" >> "$GITHUB_ENV"
+          mkdir -p .runtime/recharge-plan-billing-migration
+          docker save "$image" | gzip -1 > .runtime/recharge-plan-billing-migration/image.tar.gz
+          echo "MIGRATION_ARCHIVE=$GITHUB_WORKSPACE/.runtime/recharge-plan-billing-migration/image.tar.gz" >> "$GITHUB_ENV"
+          echo "MIGRATION_LOCAL_REFERENCE=$image" >> "$GITHUB_ENV"
+          echo "MIGRATION_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$image")" >> "$GITHUB_ENV"
       - name: Reproduce the published source and rebuild the reviewed main delta
         run: python3 -B scripts/production-release/recharge-plan-billing-publication.py build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -71,6 +76,7 @@ jobs:
           path: |
             .deploy/recharge-plan-billing/recharge-plan-billing-artifact.tar.gz
             .deploy/recharge-plan-billing/artifact-sha256.txt
+            .deploy/recharge-plan-billing/recharge-plan-billing-migration.tar.gz
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
