@@ -85,6 +85,19 @@ export const persistentProfilePaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/browser-profile.test.cjs'
 ]);
+export const profileEgressLifecyclePaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/browser-profile.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/proxy-connectivity-retry.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/unpaid-validation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/unpaid-validation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
 export const cardReadDiagnosticsPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
   'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
@@ -149,6 +162,7 @@ export function isUnpaidValidationOnly(paths) {
       unpaidValidationPaths,
       checkoutResumePaths,
       persistentProfilePaths,
+      profileEgressLifecyclePaths,
       cardReadDiagnosticsPaths,
       proxyFailureEvidencePaths
     ].some(
@@ -166,6 +180,18 @@ export function isPersistentProfileOnly(paths) {
       .filter((p) => p.startsWith('apps/') || p === '.env.example')
       .every((p) => paths.includes(p)) &&
     paths.every((p) => persistentProfilePaths.includes(p) || unpaidValidationControls.includes(p))
+  );
+}
+export function isProfileEgressLifecycleOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    profileEgressLifecyclePaths
+      .filter((p) => p.startsWith('apps/'))
+      .every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) => profileEgressLifecyclePaths.includes(p) || unpaidValidationControls.includes(p)
+    )
   );
 }
 export function isUnpaidValidationControlsOnly(paths) {

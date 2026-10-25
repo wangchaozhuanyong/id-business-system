@@ -44,7 +44,7 @@ describe('代理与专用浏览器的具体停止原因', () => {
     ['PROFILE_IDENTITY_MISSING', '缺少账号及用户标识'],
     ['PROFILE_BINDING_INVALID', '浏览器出口绑定记录无效'],
     ['PROFILE_DIRECTORY_INVALID', '浏览器会话目录无效'],
-    ['PROXY_CONNECTION_FAILED', '代理连通性检查连续5次失败']
+    ['PROXY_CONNECTION_FAILED', '代理连通性检测已用尽5次']
   ])('%s 显示中文原因', (failureCode, text) => {
     const rows = unpaidValidationEntries({
       format: 'unpaid-validation-v1',

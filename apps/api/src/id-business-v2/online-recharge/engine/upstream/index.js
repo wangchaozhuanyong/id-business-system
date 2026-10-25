@@ -460,7 +460,7 @@ async function run(runOptions = {}) {
         // 用 exitCode 而非 process.exit()，确保下方 finally 能完整执行（录像需 context 关闭后才落盘）
         const resultUnknown = wasSubmitted() || require('../rpc.cjs').wasPaymentConfirmed() || paymentSucceeded || e.code === 'RESULT_UNKNOWN';
         const proxyFailure = e.code === 'PROXY_CONNECTION_FAILED'
-            ? '代理连通性检查连续 5 次失败，已停止后续操作；各次失败原因见运行日志' : undefined;
+            ? '代理连通性检测已用尽 5 次，仍未完成核验，已停止后续操作；检测详情见运行日志' : undefined;
         const verificationBootstrapCode = e.bootstrapDiagnostics?.reason === 'verification_failed'
             ? require('./verification-runtime').controlledVerificationCode(e.code, null) : null;
         const bootstrapFailure = {

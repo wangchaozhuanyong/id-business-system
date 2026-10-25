@@ -464,7 +464,7 @@ for (const code of [
     assert.doesNotMatch(validation.message(report), /其他执行异常|UNKNOWN|PROFILE_/);
     if (code === 'PROFILE_EXIT_CHANGED')
       assert.match(validation.message(report), /出口.*绑定不一致/);
-    if (code === 'PROXY_CONNECTION_FAILED') assert.match(validation.message(report), /连续5次失败/);
+    if (code === 'PROXY_CONNECTION_FAILED') assert.match(validation.message(report), /已用尽5次/);
   });
 
 test('unknown profile-like errors remain unknown instead of entering the allowed list', () => {
