@@ -177,6 +177,16 @@ def build():
     for name in controls:
         (payload / 'controls').mkdir(exist_ok=True)
         shutil.copyfile(HERE / name, payload / 'controls' / name)
+    migration = Path(os.environ['MIGRATION_ARCHIVE'])
+    need(migration.is_file() and not migration.is_symlink()
+         and migration.resolve().is_relative_to(ROOT / '.runtime')
+         and 0 < migration.stat().st_size <= 512 * 1024**2, 'MIGRATION_ARCHIVE')
+    migration_file = PREFIX + '-migration.tar.gz'
+    shutil.copyfile(migration, OUT / migration_file)
+    transport = {'file': migration_file, 'bytes': migration.stat().st_size,
+                 'sha256': sha(migration.read_bytes()),
+                 'imageId': os.environ['MIGRATION_IMAGE_ID'],
+                 'reference': os.environ['MIGRATION_LOCAL_REFERENCE']}
     proof = {'version': 1, 'scope': c['scope'], 'commit': commit,
              'sourceLayout': 'PUBLISHED_PREDECESSOR_WITH_REVIEWED_MAIN_BILLING_OVERLAY',
              'tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
@@ -186,7 +196,8 @@ def build():
              'apiModules': {n: after_api[n] for n in sorted(selected)}, 'adminFiles': after_admin,
              'prismaClientFiles': inventory(payload / 'api/prisma-client'),
              'controlSources': inventory(payload / 'controls'), 'files': inventory(payload),
-             'migrationImage': os.environ['MIGRATION_IMAGE'], 'businessActions': 0}
+             'migrationImage': os.environ['MIGRATION_IMAGE'], 'migrationTransport': transport,
+             'businessActions': 0}
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
     bundle = OUT / (PREFIX + '-artifact.tar.gz')
     with tarfile.open(bundle, 'w:gz') as archive:
