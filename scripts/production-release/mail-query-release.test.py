@@ -186,11 +186,10 @@ class ProofTests(unittest.TestCase):
         prior=json.loads((HERE/'online-profile-lock-contract.json').read_bytes())
         states={n:{'image':v,'containerId':'synthetic-'+n,'status':'running','health':None if n=='caddy' else 'healthy'}
                 for n,v in prior['expectedImages'].items()}
-        receipt={'commit':m.CURRENT,'imagesRebuilt':False,'after':states,'businessActions':0}
-        files={'release-manifest.json':{'commit':m.CURRENT,'status':'DEPLOYED','profileLockPublication':receipt},
-               'online-profile-lock-preservation.json':receipt,
-               'online-profile-lock-build-proof.json':{'commit':m.CURRENT},
-               'online-checkout-build-proof.json':{'commit':'034f737d551412928e99f589370b937f2b263593'}}
+        receipt={'commit':m.CURRENT,'status':'BILLING_DEPLOYED','migrationPerformed':True,'after':states,'businessActions':0}
+        files={'release-manifest.json':{'commit':m.CURRENT,'status':'DEPLOYED','scope':'RECHARGE_PLAN_BILLING_20261026','actualDeployment':receipt},
+               'recharge-plan-billing-preservation.json':receipt,
+               'recharge-plan-billing-build-proof.json':{'commit':m.CURRENT,'adminFiles':self.c['adminFiles']}}
         for name,value in files.items():(previous/name).write_text(json.dumps(value))
         for name in ('.env.aws.production','compose.release.json','docker-compose.aws-mysql.yml'):
             (previous/name).write_text('synthetic configuration only')
@@ -201,10 +200,12 @@ class ProofTests(unittest.TestCase):
             return '\n'.join(value+'  /app/apps/api/dist/'+name for name,value in c['baselineApiModules'].items())
         d=SimpleNamespace(run=Mock(side_effect=run))
         h=SimpleNamespace(snapshot=Mock(return_value=copy.deepcopy(states)),guards=Mock(),configuration=lambda *_:'opaque-hash')
-        profile=SimpleNamespace(helpers=Mock(return_value=(h,d,SimpleNamespace())),content=Mock())
+        profile=SimpleNamespace(helpers=Mock(return_value=(h,d,SimpleNamespace(read_hashes=Mock()))),content=Mock(),engine_content=Mock())
+        billing=SimpleNamespace(smoke=Mock());profile.billing=billing
         stack=ExitStack();self.addCleanup(stack.close)
         stack.enter_context(patch.object(m,'BASE',base));stack.enter_context(patch.object(m,'load',return_value=profile))
         stack.enter_context(patch.object(m.shutil,'disk_usage',return_value=SimpleNamespace(free=7*1024**3)))
+        stack.enter_context(patch.object(m,'published_billing',return_value=(billing,{},files['recharge-plan-billing-build-proof.json'])))
         return c,previous,h,profile
 
     def test_new_official_parent_retains_both_runtime_and_control_publication_proofs(self):
@@ -213,11 +214,11 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(captured['expectedCurrent'],m.CURRENT)
         self.assertEqual(captured['apiModules'],c['baselineApiModules'])
         self.assertEqual(captured['businessActions'],0)
-        profile.content.assert_called_once();h.guards.assert_called_once()
+        profile.billing.smoke.assert_called_once();profile.content.assert_not_called()
 
     def test_parent_receipt_bytes_cannot_change_after_native_binding(self):
         c,previous,h,profile=self.native_snapshot_fixture()
-        path=previous/'online-profile-lock-preservation.json';path.write_bytes(path.read_bytes()+b' ')
+        path=previous/'recharge-plan-billing-preservation.json';path.write_bytes(path.read_bytes()+b' ')
         with self.assertRaisesRegex(RuntimeError,'PARENT_PROOF_CHANGED'):m.snapshot(c)
         h.snapshot.assert_not_called()
 
@@ -225,7 +226,47 @@ class ProofTests(unittest.TestCase):
         c,previous,h,profile=self.native_snapshot_fixture()
         h.snapshot.return_value['api']['containerId']='another-container'
         with self.assertRaisesRegex(RuntimeError,'PARENT_SERVICES_CHANGED'):m.snapshot(c)
-        h.guards.assert_not_called();profile.content.assert_not_called()
+        h.guards.assert_not_called();profile.billing.smoke.assert_not_called()
+
+
+class PublishedBillingTests(unittest.TestCase):
+    def setUp(self):
+        parent=HERE.parents[1]/'.runtime/mail-query-billing-binding-tests'
+        parent.mkdir(parents=True,exist_ok=True)
+        temporary=tempfile.TemporaryDirectory(dir=parent);self.addCleanup(temporary.cleanup)
+        self.root=Path(temporary.name);self.controls=self.root/'scripts/production-release'
+        self.controls.mkdir(parents=True)
+        contract={'sources':{'apps/api/reviewed.ts':'a'*64}}
+        (self.controls/'recharge-plan-billing-contract.json').write_text(json.dumps(contract))
+        (self.controls/'recharge-plan-billing-release.py').write_text("PUBLISHED_IDENTITY = 'synthetic-verified-parent'\n")
+        self.proof={'commit':m.CURRENT,'scope':'RECHARGE_PLAN_BILLING_20261026','sources':contract['sources'],
+                    'contractSha256':m.sha((self.controls/'recharge-plan-billing-contract.json').read_bytes()),
+                    'controlSources':{p.name:m.sha(p.read_bytes()) for p in self.controls.iterdir()}}
+        self.bind()
+
+    def bind(self):
+        path=self.root/'recharge-plan-billing-build-proof.json';path.write_text(json.dumps(self.proof))
+        self.c={'parentFiles':{path.name:m.sha(path.read_bytes())}}
+
+    def test_only_the_recorded_published_helper_is_loaded(self):
+        module,contract,proof=m.published_billing(self.root,self.c)
+        self.assertEqual(module.PUBLISHED_IDENTITY,'synthetic-verified-parent')
+        self.assertEqual(contract['sources'],proof['sources'])
+
+    def test_mutated_helper_and_contract_are_rejected_before_import(self):
+        for name in ('recharge-plan-billing-release.py','recharge-plan-billing-contract.json'):
+            path=self.controls/name;original=path.read_bytes();path.write_bytes(original+b' ')
+            with self.subTest(name=name),self.assertRaisesRegex(RuntimeError,'BILLING_CONTROL_CHANGED'):
+                m.published_billing(self.root,self.c)
+            path.write_bytes(original)
+
+    def test_another_release_cannot_replace_the_published_parent(self):
+        self.proof['commit']='f'*40;self.bind()
+        with self.assertRaisesRegex(RuntimeError,'BILLING_IDENTITY_CHANGED'):m.published_billing(self.root,self.c)
+
+    def test_proof_bytes_must_match_the_native_parent(self):
+        path=self.root/'recharge-plan-billing-build-proof.json';path.write_bytes(path.read_bytes()+b' ')
+        with self.assertRaisesRegex(RuntimeError,'BILLING_PROOF_CHANGED'):m.published_billing(self.root,self.c)
 
 
 class AvailabilityTests(unittest.TestCase):

@@ -13,9 +13,9 @@ BASE = Path('/opt/id-business-v2')
 SCOPE = 'MAIL_QUERY_20261026'
 PREFIX = 'mail-query'
 CONTRACT_FILE = 'mail-query-contract.json'
-CURRENT = 'e317136851edfe3b49c0c44a8deed01b7de62a53'
-SOURCE = '798e701c8c01d599fe18cd814c54afb35a10f01b'
-SOURCE_TREE = '0d6e931296ebda00b79b018b1294ee50c11922e5'
+CURRENT = '21f63083dd8044726811f6d055b3da675ced31d7'
+SOURCE = 'cdf58bd2867bb0649464e568ebfef9209ab106ff'
+SOURCE_TREE = '814c7fe4b89290ee5a9ebc2d7569199868fbb33b'
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge')
 
 
@@ -77,25 +77,47 @@ def verify_availability(c, states, original):
     return binding['sha256']
 
 
+def published_billing(directory, c):
+    raw = (directory / 'recharge-plan-billing-build-proof.json').read_bytes()
+    need(sha(raw) == c['parentFiles']['recharge-plan-billing-build-proof.json'], 'BILLING_PROOF_CHANGED')
+    proof = json.loads(raw)
+    need(proof['commit'] == CURRENT and proof['scope'] == 'RECHARGE_PLAN_BILLING_20261026', 'BILLING_IDENTITY_CHANGED')
+    controls = directory / 'scripts/production-release'
+    for name in ('recharge-plan-billing-release.py', 'recharge-plan-billing-contract.json'):
+        need(sha((controls / name).read_bytes()) == proof['controlSources'][name], 'BILLING_CONTROL_CHANGED')
+    spec = importlib.util.spec_from_file_location('mail_query_published_billing', controls / 'recharge-plan-billing-release.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    contract_raw = (controls / 'recharge-plan-billing-contract.json').read_bytes()
+    contract = json.loads(contract_raw)
+    need(sha(contract_raw) == proof['contractSha256'] and contract['sources'] == proof['sources'], 'BILLING_CONTRACT_CHANGED')
+    return module, contract, proof
+
+
 def snapshot(c):
     profile = load('online-profile-lock-release.py')
     prior = json.loads((HERE / 'online-profile-lock-contract.json').read_bytes())
     h, d, p = profile.helpers(prior)
     previous = (BASE / 'current').resolve(strict=True)
     need(previous.parent == BASE / 'releases' and str(previous) == c['parentRelease'], 'CURRENT_PATH_CHANGED')
-    parent_files = {'release-manifest.json', 'online-profile-lock-preservation.json',
-                    'online-profile-lock-build-proof.json', 'online-checkout-build-proof.json'}
+    parent_files = {'release-manifest.json', 'recharge-plan-billing-preservation.json',
+                    'recharge-plan-billing-build-proof.json'}
     need(set(c['parentFiles']) == parent_files and all(
          sha((previous / name).read_bytes()) == digest for name,digest in c['parentFiles'].items()), 'PARENT_PROOF_CHANGED')
     manifest = json.loads((previous / 'release-manifest.json').read_bytes())
-    receipt = json.loads((previous / 'online-profile-lock-preservation.json').read_bytes())
+    receipt = json.loads((previous / 'recharge-plan-billing-preservation.json').read_bytes())
     need(manifest['commit'] == c['expectedCurrent'] == CURRENT and manifest['status'] == 'DEPLOYED'
-         and manifest['profileLockPublication'] == receipt and receipt['commit'] == CURRENT
-         and receipt['imagesRebuilt'] is False and receipt['businessActions'] == 0, 'PARENT_IDENTITY_CHANGED')
+         and manifest['scope'] == 'RECHARGE_PLAN_BILLING_20261026'
+         and manifest['actualDeployment'] == receipt and receipt['commit'] == CURRENT
+         and receipt['status'] == 'BILLING_DEPLOYED' and receipt['migrationPerformed'] is True
+         and receipt['businessActions'] == 0, 'PARENT_IDENTITY_CHANGED')
     states = h.snapshot(d, previous)
     recovery_sha=verify_availability(c,states,receipt['after'])
-    h.guards(d, previous, states, prior)
-    profile.content(d, states, prior, h, p)
+    billing, billing_contract, billing_proof = published_billing(previous, c)
+    need(c['adminFiles'] == billing_proof['adminFiles'], 'BILLING_ADMIN_CHANGED')
+    billing.smoke(d, h, previous, states, billing_proof, billing_contract)
+    p.read_hashes(d, states['api']['containerId'], '/app/apps/api/dist/', prior['apiFiles'])
+    load('proxy-result-identity-release.py').engine_content(d, states['online-recharge'], prior['engineFiles'])
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     captured = {'current':str(previous), 'expectedCurrent':CURRENT,
         'manifestSha256':c['parentFiles']['release-manifest.json'], 'parentFiles':c['parentFiles'],
@@ -126,6 +148,10 @@ def smoke(d, target, before, states, proof, c, prior, h, p, captured):
     p.read_hashes(d, states['api']['containerId'], '/app/apps/api/dist/', proof['apiModules'])
     p.read_hashes(d, states['api']['containerId'], '/app/apps/api/dist/', prior['apiFiles'])
     p.read_hashes(d, states['admin']['containerId'], '/usr/share/nginx/html/', proof['adminFiles'])
+    billing, billing_contract, billing_proof = published_billing(target, c)
+    billing.verify_files(d, states['api']['containerId'], '/app/apps/api/dist/', billing_proof['apiModules'])
+    billing.verify_files(d, states['api']['containerId'], '/app/node_modules/.prisma/client/', billing_proof['prismaClientFiles'])
+    billing.verify_db(billing.db_state(d, target), billing_contract, True)
     load('proxy-result-identity-release.py').engine_content(d, states['online-recharge'], prior['engineFiles'])
     need(d.run('docker','exec',states['admin']['containerId'],'sha256sum','/etc/nginx/conf.d/default.conf').split()[0]
          == captured['nginxSha256'], 'NGINX_CHANGED')

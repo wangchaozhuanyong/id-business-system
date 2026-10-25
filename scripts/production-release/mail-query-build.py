@@ -11,7 +11,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-CURRENT = '034f737d551412928e99f589370b937f2b263593'
+CURRENT = '21f63083dd8044726811f6d055b3da675ced31d7'
 REVIEW_BASE = 'e3171368'
 API = tuple('apps/api/src/id-business-v2/workspace/' + n + '.ts' for n in (
     'dto/id-business-v2-vendure-mailbox.dto', 'id-business-v2-mail-viewer.service',
@@ -41,34 +41,60 @@ def git(*args):
     return subprocess.check_output(['git', *args], cwd=ROOT)
 
 
+def compile_context(context, role, commit):
+    env={**os.environ,'NODE_ENV':'production','V2_BUILD_ID':'v2-'+commit}
+    commands=[['npm','run','build','--workspace','packages/shared']]
+    if role=='api':commands.append(['npm','run','prisma:mysql:generate'])
+    commands.append(['npm','run','build','--workspace','apps/'+role])
+    for command in commands:subprocess.run(command,cwd=context,env=env,check=True)
+
+
 def build(plan, out):
     need(not out.exists(), 'BUILD_OUTPUT_EXISTS')
     out.mkdir(parents=True, mode=0o700)
-    published = ROOT / '.codex-worktrees/mail-query-published-build'
-    need(not published.exists(), 'BASE_SOURCE_EXISTS')
-    subprocess.run(['git', 'worktree', 'add', '--detach', str(published), CURRENT], cwd=ROOT, check=True)
-    recipe = load(published / 'scripts/production-release/online-country-evidence-build.py')
-    h = load(HERE / 'recharge-record-release.py')
-    current_contract = json.loads((HERE / 'online-profile-lock-contract.json').read_bytes())
-    binding = current_contract['parentArtifact']
-    with urllib.request.urlopen(binding['artifactUrl'], timeout=60) as response:
-        raw = response.read(24 * 1024**2 + 1)
-    need(h.digest(raw) == binding['artifactSha256'], 'PUBLISHED_ARTIFACT_CHANGED')
-    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
-        proof_raw = archive.extractfile('payload/build-proof.json').read()
-    need(h.digest(proof_raw) == binding['buildProofSha256'], 'PUBLISHED_PROOF_CHANGED')
-    proof = json.loads(proof_raw)
-    c = json.loads((published / 'scripts/production-release/online-country-evidence-contract.json').read_bytes())
-    baseline_out = out / 'baseline'
-    baseline_out.mkdir()
-    recipe.build(c, proof, proof['qualitySourceEvidence'], proof['nativeParentCapture'], baseline_out)
-    return overlay(plan, out, baseline_out)
+    published=ROOT/'.codex-worktrees/mail-query-published-build'
+    need(not published.exists(),'BASE_SOURCE_EXISTS')
+    subprocess.run(['git','worktree','add','--detach',str(published),CURRENT],cwd=ROOT,check=True)
+    recipe=load(published/'scripts/production-release/recharge-plan-billing-build.py')
+    h=load(HERE/'recharge-record-release.py')
+    current=json.loads((HERE/'mail-query-contract.json').read_bytes())
+    binding=current['parentNativeArtifact']
+    with urllib.request.urlopen(binding['url'],timeout=60) as response:raw=response.read(96*1024**2+1)
+    need(h.digest(raw)==binding['sha256'],'PUBLISHED_ARTIFACT_CHANGED')
+    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:proof_raw=archive.extractfile('payload/build-proof.json').read()
+    need(h.digest(proof_raw)==binding['buildProofSha256'],'PUBLISHED_PROOF_CHANGED')
+    proof=json.loads(proof_raw)
+    need(proof['commit']==CURRENT and proof['workflowRunId']==binding['workflowRunId'],'PUBLISHED_IDENTITY_CHANGED')
+    parent=json.loads((published/'scripts/production-release/recharge-plan-billing-contract.json').read_bytes())
+    need(proof['sources']==parent['sources'],'PUBLISHED_SOURCE_CHANGED')
+    recipe.OUT=out/'baseline';recipe.OUT.mkdir()
+    api,admin=recipe.reconstruct(parent)
+    recipe.compile(api,'api',parent['baselineAdminBuildCommit'])
+    recipe.compile(admin,'admin',parent['baselineAdminBuildCommit'])
+    before=h.file_inventory(api/'apps/api/dist')
+    need(recipe.runtime_groups(before)==proof['baselineApiGroups'] and
+         h.file_inventory(admin/'apps/admin/dist')==proof['baselineAdminFiles'],'PUBLISHED_BASE_NOT_REPRODUCED')
+    for role,context in [('api',api),('admin',admin)]:
+        selected={n:v for n,v in parent['sources'].items() if n.startswith(('apps/'+role+'/', 'packages/shared/'))}
+        recipe.overlay(context,selected,CURRENT)
+        compile_context(context,role,CURRENT)
+    after=h.file_inventory(api/'apps/api/dist')
+    changed={n for n in before.keys()|after.keys() if before.get(n)!=after.get(n)}
+    need(not (before.keys()-after.keys()) and all(n in proof['apiModules'] or n.endswith('.d.ts')
+         or n=='tsconfig.build.tsbuildinfo' for n in changed),'PUBLISHED_RUNTIME_SCOPE_CHANGED')
+    need(all(after.get(n)==v for n,v in proof['apiModules'].items())
+         and h.file_inventory(admin/'apps/admin/dist')==proof['adminFiles']==current['adminFiles'],
+         'PUBLISHED_RUNTIME_NOT_REPRODUCED')
+    # Generator paths can differ on this fresh compiler context; the runtime client is retained in the parent image.
+    need(h.digest((api/'node_modules/.prisma/client/schema.prisma').read_bytes())==proof['prismaClientFiles']['schema.prisma'],
+         'PUBLISHED_SCHEMA_CHANGED')
+    return overlay(plan,out,recipe.OUT,admin_context=admin,api_context=api)
 
 
-def overlay(plan, out, baseline_out, admin_context=None):
+def overlay(plan, out, baseline_out, admin_context=None, api_context=None):
     h = load(HERE / 'recharge-record-release.py')
-    current_contract = json.loads((HERE / 'online-profile-lock-contract.json').read_bytes())
-    api = baseline_out / 'api-context'
+    current_contract = json.loads((HERE / 'mail-query-contract.json').read_bytes())
+    api = api_context or baseline_out / 'api-context'
     if admin_context is None:
         candidates = [p.parent.parent for p in (baseline_out / 'admin-source').rglob('apps/admin')
                       if p.parent.parent.name == 'admin-baseline' and (p.parent.parent / 'package.json').is_file()]
