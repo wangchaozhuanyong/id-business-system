@@ -48,6 +48,14 @@ class PublicationTests(unittest.TestCase):
         proof = self.proof()
         r.verify_proof(proof, self.plan, self.c, proof['files'])
 
+    def test_current_publication_controls_match_live_reviewed_files(self):
+        # The legacy contract uses its historical bundle; this publication must
+        # independently check every current executable control and its new helper.
+        for name, digest in self.c['controlPins'].items():
+            self.assertEqual(r.sha((HERE / name).read_bytes()), digest, name)
+        for name in ('online-checkout-release.py', 'online-profile-lock-recovery.py'):
+            self.assertEqual(self.c['controlPins'][name], self.c['sources']['scripts/production-release/' + name])
+
     def test_rejects_account_instance_source_parent_images_or_business_scope_changes(self):
         for field, value in [('awsTargetAccount', '000000000000'), ('awsTargetInstance', 'i-other'),
                              ('sourceReviewCommit', 'f' * 40), ('expectedCurrent', 'f' * 40),

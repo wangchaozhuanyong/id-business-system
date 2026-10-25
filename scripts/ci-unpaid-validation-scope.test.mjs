@@ -20,6 +20,7 @@ import {
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 test('profile lock publication checks only its finite controls and refuses runtime changes', () => {
   const paths = [
+    'scripts/production-release/online-unpaid-validation-release.test.py',
     '.github/workflows/online-profile-lock-publication.yml',
     ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
       (name) => 'scripts/production-release/online-profile-lock-' + name

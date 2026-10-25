@@ -32,6 +32,7 @@ P = load(PREFIX + '-release.py')
 F = load('financial-closure-publication.py')
 need, sha, git, github, execute = P.need, P.sha, F.git, F.github, F.execute
 CONTROLS = frozenset((WORKFLOW, 'scripts/ci-unpaid-validation-scope.mjs', 'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/production-release/online-unpaid-validation-release.test.py',
     *('scripts/production-release/' + PREFIX + '-' + suffix for suffix in
       ('release.py', 'publication.py', 'release.test.py', 'contract.json'))))
 
