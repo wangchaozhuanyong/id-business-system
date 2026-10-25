@@ -43,6 +43,16 @@ def load(name):
     spec = importlib.util.spec_from_file_location('profile_lock_' + name.replace('-', '_'), HERE / name)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if name in ('recharge-record-release.py', 'proxy-result-identity-release.py'):
+        # Match the deployed publisher's retired-registration boundary. The
+        # legacy marker requires a volume that the current API must not mount.
+        retired = load('online-query-network-release.py')
+        retired.BASE, retired.SCOPE, retired.SERVICES = BASE, SCOPE, SERVICES
+        if name == 'recharge-record-release.py':
+            module.SERVICES = SERVICES
+            module.guards = lambda d, directory, states, c: retired.retired_guards(d, directory, states, c, module)
+        else:
+            module.claim_markers = retired.claim_retired_markers
     return module
 
 
@@ -260,5 +270,5 @@ def release(plan, c):
 
 
 def failure_report(error, plan):
-    code = str(error) if re.fullmatch(r'(?:ONLINE_PROFILE_LOCK|ONLINE_CHECKOUT_PROFILE)_[A-Z_]{1,100}', str(error)) else 'ONLINE_PROFILE_LOCK_UNCONFIRMED'
+    code = str(error) if re.fullmatch(r'(?:ONLINE_PROFILE_LOCK|ONLINE_CHECKOUT_PROFILE|ONLINE_QUERY_NETWORK)_[A-Z_]{1,100}', str(error)) else 'ONLINE_PROFILE_LOCK_UNCONFIRMED'
     return {'status': 'FAILED', 'code': code, 'mode': plan.get('mode'), 'businessActions': 0}
