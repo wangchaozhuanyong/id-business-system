@@ -14,8 +14,8 @@ SCOPE = 'MAIL_QUERY_20261026'
 PREFIX = 'mail-query'
 CONTRACT_FILE = 'mail-query-contract.json'
 CURRENT = 'e317136851edfe3b49c0c44a8deed01b7de62a53'
-SOURCE = '08bc23aec2947c6119d5c51d93cdb6d1e77c3d53'
-SOURCE_TREE = 'bb716ea55be6562fda531755e89fb09e5ec76dc1'
+SOURCE = '2581f4e6a5f01aec692c5856a3aa7a70307a714b'
+SOURCE_TREE = '311ce78f5d8930de3e5241efd0fa104bee5a6e82'
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge')
 
 

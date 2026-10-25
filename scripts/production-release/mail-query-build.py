@@ -19,7 +19,8 @@ API = tuple('apps/api/src/id-business-v2/workspace/' + n + '.ts' for n in (
     'vendure-mailbox-list'))
 ADMIN = tuple('apps/admin/src/v2/' + n for n in (
     'components/workspace/V2MailBody.vue', 'components/workspace/V2MailMessageList.vue',
-    'components/workspace/mail-viewer.ts', 'features/auto-recharge/VendureMailboxManager.vue'))
+    'components/workspace/mail-viewer.ts', 'features/auto-recharge/VendureMailboxManager.vue',
+    'features/auto-recharge/VendureMailboxHealth.vue'))
 SHARED = ('packages/shared/src/v2/vendure-mailbox.ts',)
 SOURCES = (*API, *ADMIN, *SHARED)
 
