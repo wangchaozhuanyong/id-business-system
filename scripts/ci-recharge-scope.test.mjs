@@ -8650,3 +8650,24 @@ test('线上执行器复用真实 CLI 仅接受准确来源及成功任务，输
   }
 });
 import './ci-aws-account-migration-scope.test.mjs';
+
+test('mailbox checks do not rebuild an unrelated historical ONLINE image for selector and fixture repairs', () => {
+  const paths = [
+    'apps/admin/src/v2/components/workspace/V2MailBody.vue',
+    'apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue',
+    'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts',
+    'packages/shared/src/v2/vendure-mailbox.ts',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/production-release/online-recharge-component-diagnostic.test.py',
+    'scripts/production-release/online-recharge-component-recovery.test.py'
+  ];
+  assert.equal(checkMode(paths), 'mailbox');
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const changed of [
+    'apps/api/Dockerfile.mysql',
+    'apps/api/src/id-business-v2/online-recharge/worker.ts',
+    'scripts/production-release/online-recharge-component-runtime.py'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([...paths, changed]), true, changed);
+});
