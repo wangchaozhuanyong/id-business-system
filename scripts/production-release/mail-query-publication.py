@@ -32,7 +32,7 @@ P = load(PREFIX + '-release.py')
 F = load('financial-closure-publication.py')
 need, sha, git, github, execute = P.need, P.sha, F.git, F.github, F.execute
 CONTROLS = frozenset((WORKFLOW,
-    'scripts/ci-recharge-scope.mjs','scripts/ci-recharge-scope.test.mjs','scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-scope.mjs','scripts/ci-recharge-scope.test.mjs','scripts/ci-recharge-check.mjs','scripts/ci-recharge-check.test.mjs',
     *('scripts/production-release/mail-query-' + suffix for suffix in
       ('release.py','publication.py','build.py','release.test.py','contract.json'))))
 

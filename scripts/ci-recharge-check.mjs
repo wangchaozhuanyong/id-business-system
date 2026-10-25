@@ -197,7 +197,8 @@ import {
   isBitbrowserBoundedHoldSourceOnly,
   bitbrowserBoundedHoldSchemaMatches,
   bitbrowserBoundedHoldCheckCommands,
-  isMailboxOnly
+  isMailboxOnly,
+  isMailQueryPublicationControlsOnly
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -222,15 +223,16 @@ const mailboxFixtureControlPaths = new Set([
   'scripts/production-release/online-recharge-component-recovery.test.py'
 ]);
 const isolatedMailboxControlChecks =
-  mode === 'mailbox' &&
-  isMailboxOnly(changed) &&
-  changed.every((path) =>
-    path.startsWith('scripts/') || path.startsWith('.github/')
-      ? mailboxFixtureControlPaths.has(path)
-      : path.startsWith('apps/') ||
-        path === 'packages/shared/src/v2/vendure-mailbox.ts' ||
-        /^docs\/.*\.md$/.test(path)
-  );
+  isMailQueryPublicationControlsOnly(changed) ||
+  (mode === 'mailbox' &&
+    isMailboxOnly(changed) &&
+    changed.every((path) =>
+      path.startsWith('scripts/') || path.startsWith('.github/')
+        ? mailboxFixtureControlPaths.has(path)
+        : path.startsWith('apps/') ||
+          path === 'packages/shared/src/v2/vendure-mailbox.ts' ||
+          /^docs\/.*\.md$/.test(path)
+    ));
 if (isAwsAccountMigrationControlsOnly(changed, { base })) {
   if (part !== 'guards' || mode !== 'ci-only')
     throw new Error('Migration control checks require the exact finite guard selection');

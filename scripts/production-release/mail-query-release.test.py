@@ -114,7 +114,9 @@ class ProofTests(unittest.TestCase):
         finite=SimpleNamespace(claim_markers=None,release_markers=Mock(side_effect=remove),sql_fence_class=lambda _:lambda *_:fence)
         retired=SimpleNamespace(SCOPE=None,claim_retired_markers=Mock(side_effect=claim))
         available=SimpleNamespace(acquire_release_lock=Mock(),normalize_image_context=Mock())
-        modules={'recharge-availability-release.py':available,'proxy-result-identity-release.py':finite,'online-query-network-release.py':retired}
+        modules={'recharge-availability-release.py':available,'proxy-result-identity-release.py':finite,'online-query-network-release.py':retired,
+                 'online-profile-lock-release.py':SimpleNamespace(helpers=lambda _:(h,d,p))}
+        (control/'online-profile-lock-contract.json').write_text('{}')
         stack=ExitStack();self.addCleanup(stack.close)
         stack.enter_context(patch.object(m,'BASE',base));stack.enter_context(patch.object(m,'HERE',control))
         stack.enter_context(patch.object(m,'load',side_effect=lambda name:modules[name]))
@@ -142,6 +144,17 @@ class ProofTests(unittest.TestCase):
         self.assertEqual([x.args[1] for x in d.wait_healthy.call_args_list],['api','admin','online-recharge'])
         self.assertFalse(marker.exists());d.point_current.assert_called_once()
 
+    def test_independent_readback_binds_running_state_and_formal_source_tree(self):
+        plan,c,d,fence,marker,base=self.switch_fixture()
+        m.release(plan,c)
+        target=d.point_current.call_args.args[0];(base/'current').symlink_to(target,target_is_directory=True)
+        result=m.release({**plan,'mode':'readback'},c)
+        self.assertEqual(result['status'],'MAIL_QUERY_INDEPENDENT_READBACK_VERIFIED')
+        manifest=target/'release-manifest.json';value=json.loads(manifest.read_bytes())
+        value['sourceTree']='e'*40;manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError,'READBACK_CHANGED'):
+            m.release({**plan,'mode':'readback'},c)
+
     def test_failed_switch_keeps_owned_marker_and_never_moves_pointer_or_rolls_back(self):
         plan,c,d,fence,marker,base=self.switch_fixture(fail=True)
         with self.assertRaisesRegex(RuntimeError,'synthetic startup failed'):m.release(plan,c)
@@ -149,6 +162,55 @@ class ProofTests(unittest.TestCase):
         journal=list((base/'.staging').rglob('switch-state.json'));self.assertEqual(len(journal),1)
         value=json.loads(journal[0].read_bytes());self.assertEqual(value['status'],'NEEDS_FORWARD_DIAGNOSIS')
         self.assertFalse(value['rollbackPerformed'])
+
+    def native_snapshot_fixture(self):
+        parent=HERE.parents[1]/'.runtime/mail-query-parent-tests';parent.mkdir(parents=True,exist_ok=True)
+        temporary=tempfile.TemporaryDirectory(dir=parent);self.addCleanup(temporary.cleanup)
+        base=Path(temporary.name);previous=base/'releases/published';previous.mkdir(parents=True)
+        (base/'current').symlink_to(previous,target_is_directory=True)
+        prior=json.loads((HERE/'online-profile-lock-contract.json').read_bytes())
+        states={n:{'image':v,'containerId':'synthetic-'+n,'status':'running','health':None if n=='caddy' else 'healthy'}
+                for n,v in prior['expectedImages'].items()}
+        receipt={'commit':m.CURRENT,'imagesRebuilt':False,'after':states,'businessActions':0}
+        files={'release-manifest.json':{'commit':m.CURRENT,'status':'DEPLOYED','profileLockPublication':receipt},
+               'online-profile-lock-preservation.json':receipt,
+               'online-profile-lock-build-proof.json':{'commit':m.CURRENT},
+               'online-checkout-build-proof.json':{'commit':'034f737d551412928e99f589370b937f2b263593'}}
+        for name,value in files.items():(previous/name).write_text(json.dumps(value))
+        for name in ('.env.aws.production','compose.release.json','docker-compose.aws-mysql.yml'):
+            (previous/name).write_text('synthetic configuration only')
+        c={**self.c,'parentRelease':str(previous),'parentFiles':{n:m.sha((previous/n).read_bytes()) for n in files},
+           'baselineApiModules':self.proof['baselineApiModules']}
+        def run(*args,**kwargs):
+            if args[-1]=='/etc/nginx/conf.d/default.conf':return 'f'*64+'  '+args[-1]
+            return '\n'.join(value+'  /app/apps/api/dist/'+name for name,value in c['baselineApiModules'].items())
+        d=SimpleNamespace(run=Mock(side_effect=run))
+        h=SimpleNamespace(snapshot=Mock(return_value=copy.deepcopy(states)),guards=Mock(),configuration=lambda *_:'opaque-hash')
+        profile=SimpleNamespace(helpers=Mock(return_value=(h,d,SimpleNamespace())),content=Mock())
+        stack=ExitStack();self.addCleanup(stack.close)
+        stack.enter_context(patch.object(m,'BASE',base));stack.enter_context(patch.object(m,'load',return_value=profile))
+        stack.enter_context(patch.object(m.shutil,'disk_usage',return_value=SimpleNamespace(free=7*1024**3)))
+        return c,previous,h,profile
+
+    def test_new_official_parent_retains_both_runtime_and_control_publication_proofs(self):
+        c,previous,h,profile=self.native_snapshot_fixture()
+        captured,*_=m.snapshot(c)
+        self.assertEqual(captured['expectedCurrent'],m.CURRENT)
+        self.assertEqual(captured['apiModules'],c['baselineApiModules'])
+        self.assertEqual(captured['businessActions'],0)
+        profile.content.assert_called_once();h.guards.assert_called_once()
+
+    def test_parent_receipt_bytes_cannot_change_after_native_binding(self):
+        c,previous,h,profile=self.native_snapshot_fixture()
+        path=previous/'online-profile-lock-preservation.json';path.write_bytes(path.read_bytes()+b' ')
+        with self.assertRaisesRegex(RuntimeError,'PARENT_PROOF_CHANGED'):m.snapshot(c)
+        h.snapshot.assert_not_called()
+
+    def test_new_parent_requires_exact_recorded_containers_before_build_or_switch(self):
+        c,previous,h,profile=self.native_snapshot_fixture()
+        h.snapshot.return_value['api']['containerId']='another-container'
+        with self.assertRaisesRegex(RuntimeError,'PARENT_SERVICES_CHANGED'):m.snapshot(c)
+        h.guards.assert_not_called();profile.content.assert_not_called()
 
 
 if __name__ == '__main__':

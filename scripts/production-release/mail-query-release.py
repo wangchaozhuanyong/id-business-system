@@ -13,9 +13,9 @@ BASE = Path('/opt/id-business-v2')
 SCOPE = 'MAIL_QUERY_20261026'
 PREFIX = 'mail-query'
 CONTRACT_FILE = 'mail-query-contract.json'
-CURRENT = '034f737d551412928e99f589370b937f2b263593'
-SOURCE = 'c317b04a694b2e520f5b62408d70b23c28634d28'
-SOURCE_TREE = '7a290f29997cce608bad330669d948722c1e4ca5'
+CURRENT = 'e317136851edfe3b49c0c44a8deed01b7de62a53'
+SOURCE = 'cef4b3af29e7487bdab7f068455ad3b7fd618381'
+SOURCE_TREE = 'eb2ca9ef4253c9bdff56003e8f7530a559a1d216'
 PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge')
 
 
@@ -56,8 +56,27 @@ def snapshot(c):
     profile = load('online-profile-lock-release.py')
     prior = json.loads((HERE / 'online-profile-lock-contract.json').read_bytes())
     h, d, p = profile.helpers(prior)
-    captured = profile.capture(d, prior, h, p)
-    states = captured['services']
+    previous = (BASE / 'current').resolve(strict=True)
+    need(previous.parent == BASE / 'releases' and str(previous) == c['parentRelease'], 'CURRENT_PATH_CHANGED')
+    parent_files = {'release-manifest.json', 'online-profile-lock-preservation.json',
+                    'online-profile-lock-build-proof.json', 'online-checkout-build-proof.json'}
+    need(set(c['parentFiles']) == parent_files and all(
+         sha((previous / name).read_bytes()) == digest for name,digest in c['parentFiles'].items()), 'PARENT_PROOF_CHANGED')
+    manifest = json.loads((previous / 'release-manifest.json').read_bytes())
+    receipt = json.loads((previous / 'online-profile-lock-preservation.json').read_bytes())
+    need(manifest['commit'] == c['expectedCurrent'] == CURRENT and manifest['status'] == 'DEPLOYED'
+         and manifest['profileLockPublication'] == receipt and receipt['commit'] == CURRENT
+         and receipt['imagesRebuilt'] is False and receipt['businessActions'] == 0, 'PARENT_IDENTITY_CHANGED')
+    states = h.snapshot(d, previous)
+    need(states == receipt['after'], 'PARENT_SERVICES_CHANGED')
+    h.guards(d, previous, states, prior)
+    profile.content(d, states, prior, h, p)
+    need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
+    captured = {'current':str(previous), 'expectedCurrent':CURRENT,
+        'manifestSha256':c['parentFiles']['release-manifest.json'], 'parentFiles':c['parentFiles'],
+        'services':states, 'configurationSha256':{name:sha((previous / name).read_bytes())
+            for name in ('.env.aws.production','compose.release.json','docker-compose.aws-mysql.yml')},
+        'runtimeConfigurationSha256':{name:h.configuration(d,state) for name,state in states.items()}}
     root = '/app/apps/api/dist/'
     lines = d.run('docker', 'exec', states['api']['containerId'], 'sha256sum',
                   *(root + n for n in c['apiModules'])).splitlines()
@@ -66,7 +85,7 @@ def snapshot(c):
         digest, name = line.split('  ', 1)
         need(name.startswith(root) and name.removeprefix(root) in c['apiModules'], 'MODULE_PATH_CHANGED')
         modules[name.removeprefix(root)] = digest
-    need(set(modules) == set(c['apiModules']), 'MODULES_MISSING')
+    need(set(modules) == set(c['apiModules']) and modules == c['baselineApiModules'], 'MAILBOX_BASELINE_CHANGED')
     captured['businessActions'] = 0
     captured['apiModules'] = modules
     captured['nginxSha256'] = d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
@@ -101,7 +120,8 @@ def release(plan, c):
             manifest = json.loads((target / 'release-manifest.json').read_bytes())
             receipt = json.loads((target / 'mail-query-preservation.json').read_bytes())
             raw = (target / 'mail-query-build-proof.json').read_bytes()
-            need(manifest['commit'] == plan['commit'] and manifest['scope'] == SCOPE
+            need(manifest['commit'] == receipt['commit'] == plan['commit'] and manifest['scope'] == SCOPE
+                 and manifest.get('sourceTree') == plan['tree']
                  and sha(raw) == plan['buildProofSha256'], 'READBACK_CHANGED')
             profile = load('online-profile-lock-release.py')
             prior = json.loads((HERE / 'online-profile-lock-contract.json').read_bytes())

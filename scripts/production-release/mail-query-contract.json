@@ -276,6 +276,18 @@
     "id-business-v2/workspace/vendure-mailbox-list.js",
     "id-business-v2/workspace/vendure-mailbox-list.js.map"
   ],
+  "baselineApiModules": {
+    "id-business-v2/workspace/dto/id-business-v2-vendure-mailbox.dto.js": "caa5fd08eaaeba7816a7cd210c261bf58af41ce8160829c7c4c009c7f649e415",
+    "id-business-v2/workspace/dto/id-business-v2-vendure-mailbox.dto.js.map": "1542661d1c664ad40f4028fa440a95b28d4821da60fcf47b419fbd54b8ce33ad",
+    "id-business-v2/workspace/id-business-v2-mail-viewer.service.js": "73f9e377078f4859e98ae8a7c27deec30c8a708fc834367eb92abe9cd85b5206",
+    "id-business-v2/workspace/id-business-v2-mail-viewer.service.js.map": "f00d9d70f7edcfec82189cc6328a87b06ae43d16031664192c5b266070b3fd7a",
+    "id-business-v2/workspace/id-business-v2-vendure-mailbox.service.js": "2bb3cf655fb0cf616b9413e7081db04aa305a408232be3d812b6c60a91b6a419",
+    "id-business-v2/workspace/id-business-v2-vendure-mailbox.service.js.map": "f2986272f7e3d3f7e10388ac5431f28957a26c6af588d51ff32dd663e773d7c4",
+    "id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.js": "12ec4b10839009c38c782697157ed0228439fa5d38f26f6bacf045bbce93db9a",
+    "id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.js.map": "992d2d25f63d82e22f4260fb17dce7c4b0f8d7f9c393593b40b59dc1275763c8",
+    "id-business-v2/workspace/vendure-mailbox-list.js": "48db928d5d88ee030e2228906cc91ae388c7266f716bf5eba2f888a947522134",
+    "id-business-v2/workspace/vendure-mailbox-list.js.map": "1f1aa75b985f6c6797ab2d2b6e0cbcddd62b0a72f834eb682e50c6a1954f8607"
+  },
   "businessActions": 0,
   "controlPins": {
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
@@ -302,7 +314,7 @@
     "financial-closure-readonly.test.py": "8dfa396a1b9e601418184edbd4bedab1460cc9a888473a5e9adfb4d82948402f",
     "financial-closure-release.py": "3ae45d6905cc99319cbeb490c32d9d546f27509dac0a80a5ed8a710d8c5f1eef",
     "financial-closure-release.test.py": "d14b74df290dc9b02751d6445ffdb4ce0398b1f358b045d3a36ce025474fc1ad",
-    "mail-query-release.py": "1c081723b486bd0e0e6aaafa6fda0567316260f6e7db009b2ed3b729e956fcfb",
+    "mail-query-release.py": "680457ae1ddc4ef158fe35fe6686753801216fd6d25d69fc4a63bad9a1875cde",
     "online-card-read-diagnostics-build.py": "db251051c3d5dc6174478f7f0890b6c6042c3e13ef5a00154803092de34d33f7",
     "online-card-read-diagnostics-contract.json": "068da4938a05b1791e3fa1832a375c1c6ca46d34077efb9ed62db59621e62681",
     "online-card-read-diagnostics-publication.py": "13b88ff3a326ce630030fcc40e7cc0074b854725470afed0d9eee30f18b3a175",
@@ -408,13 +420,28 @@
     "settled-checkout-release.py": "0e77dae48f1e5966b331b9f1081183771b5e29129732cfe8d9968d2d30088260",
     "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852"
   },
-  "expectedCurrent": "034f737d551412928e99f589370b937f2b263593",
+  "expectedCurrent": "e317136851edfe3b49c0c44a8deed01b7de62a53",
   "migrationPerformed": false,
   "packageLockSha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
+  "parentFiles": {
+    "online-checkout-build-proof.json": "44b8a3ad814351478382c66795f8cf4df20d47890ed13cf5553f316f8fddf270",
+    "online-profile-lock-build-proof.json": "fc6f55086679d0e045d5e3ab42943374d9754faea2df4d00cf7fcd37cf87e330",
+    "online-profile-lock-preservation.json": "4bdb1d73cefba14d315b7e7e42b51ba07aaf4ad017048f714314d6f258242e4e",
+    "release-manifest.json": "4e0ece0409ba4c56ec0cbf7caf73940338e7bbc8be85c4b5bbcd3181ec7cf018"
+  },
+  "parentNativeArtifact": {
+    "buildProofSha256": "fc6f55086679d0e045d5e3ab42943374d9754faea2df4d00cf7fcd37cf87e330",
+    "sha256": "cae015d2cb4e7e73b39e39a5bee458123c8cc54bd7c0e003734d205f676d80cd",
+    "url": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-profile-lock-e317136851edfe3b49c0c44a8deed01b7de62a53/online-profile-lock-artifact.tar.gz",
+    "workflowRunId": "40216137669"
+  },
+  "parentNativeReadCommand": "bdbc914e-f285-431f-935b-41b7ae8db556",
+  "parentRelease": "/opt/id-business-v2/releases/20261025T172424Z-e317136851ed-profile-lock",
+  "parentSuccessfulRun": "40216137669",
   "scope": "MAIL_QUERY_20261026",
   "sourceProjectionSha256": "cc902154e51a35ccb1666cffd05eef0a1df3ac83b4180ce63394f0741d671a9a",
   "sourcePullRequest": 721,
-  "sourceReviewCommit": "c317b04a694b2e520f5b62408d70b23c28634d28",
+  "sourceReviewCommit": "cef4b3af29e7487bdab7f068455ad3b7fd618381",
   "sources": {
     "apps/admin/src/v2/components/workspace/V2MailBody.vue": "d87030e4808767bfaf8077d3ee8200b62071b4cfddd801f79b06c4d3fdc621ec",
     "apps/admin/src/v2/components/workspace/V2MailMessageList.vue": "a9eb83579ba1bd2005848350319646fe94df56a973499300fdcb737c708336cb",

@@ -7307,7 +7307,6 @@ test('checkout actionability selects finite engine checks and cannot hide neighb
   );
   assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
-  assert.equal(needsOnlineRechargeCiBuild(controls), false);
   for (const missing of sources)
     assert.equal(
       checkMode(
@@ -7339,7 +7338,6 @@ test('query deadline repair selects only guards and engine without narrowing unr
   const controls = onlineQueryDeadlineControls.filter((path) => !path.startsWith('scripts/ci-'));
   assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
-  assert.equal(needsOnlineRechargeCiBuild(controls), false);
   assert.equal(checkMode(paths, 'before', 'after'), 'full');
   for (const extra of [
     'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
@@ -8659,10 +8657,12 @@ test('finite mailbox publication retains guards and rejects application or adjac
     ),
     'scripts/ci-recharge-scope.mjs',
     'scripts/ci-recharge-scope.test.mjs',
-    'scripts/ci-recharge-check.mjs'
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs'
   ];
   assert.equal(checkMode(controls), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(controls), false);
   for (const path of [
     'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts',
     'apps/admin/src/v2/features/orders/V2OrdersView.vue',

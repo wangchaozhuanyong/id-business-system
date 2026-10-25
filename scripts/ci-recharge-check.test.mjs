@@ -4079,3 +4079,39 @@ test('mailbox fixture repairs retain their actual component tests without rerunn
     engine.some((row) => row.includes('scripts/production-release/online-recharge-scope.test.py'))
   );
 });
+
+test('finite mailbox publisher checks retain native guards without selecting a different historical ONLINE publisher', () => {
+  const paths = [
+    '.github/workflows/mail-query-publication.yml',
+    ...['build.py', 'publication.py', 'release.py', 'release.test.py', 'contract.json'].map(
+      (name) => 'scripts/production-release/mail-query-' + name
+    ),
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ];
+  const commands = recordGuardCommands('ci-only', paths);
+  assert.ok(
+    commands.some((row) => row.includes('scripts/production-release/mail-query-release.test.py'))
+  );
+  assert.ok(
+    commands.some((row) => row.includes('scripts/production-release/api-admin-scope.test.py'))
+  );
+  assert.ok(
+    commands.some((row) => row.includes('scripts/production-release/remote-deploy.test.py'))
+  );
+  assert.equal(
+    commands.some((row) =>
+      row.includes('scripts/production-release/online-recharge-scope.test.py')
+    ),
+    false
+  );
+  const mixed = recordGuardCommands('ci-only', [
+    ...paths,
+    'apps/api/src/id-business-v2/online-recharge/engine/healthcheck.cjs'
+  ]);
+  assert.ok(
+    mixed.some((row) => row.includes('scripts/production-release/online-recharge-scope.test.py'))
+  );
+});

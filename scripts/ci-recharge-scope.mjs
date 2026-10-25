@@ -1212,6 +1212,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isMailQueryPublicationControlsOnly(paths)) return false;
   if (isAwsAccountMigrationControlsOnly(paths, context)) return false;
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return false;
@@ -2364,7 +2365,8 @@ const mailQueryPublicationSupport = new Set([
   ...mailQueryPublicationControls,
   'scripts/ci-recharge-scope.mjs',
   'scripts/ci-recharge-scope.test.mjs',
-  'scripts/ci-recharge-check.mjs'
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs'
 ]);
 
 export function isMailQueryPublicationControlsOnly(paths) {
