@@ -32,7 +32,7 @@ services=('api','admin','online-recharge','auto-recharge','media-resolver','mysq
 def snapshot():
  result={}
  for name in services:
-  container=compose('ps','-q',name)
+  container=compose('ps','-a','-q',name)
   assert re.fullmatch('[a-f0-9]{12,64}',container)
   data=json.loads(run('docker','inspect',container))[0]
   result[name]={'containerId':data['Id'],'image':data['Image'],'status':data['State']['Status'],'health':data['State'].get('Health',{}).get('Status'),'environmentSha256':sha(canonical(sorted(data['Config']['Env']))),'startedAtSha256':sha(data['State']['StartedAt'].encode())}
