@@ -285,7 +285,7 @@
     {
       "path": "test/checkout-navigation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "9673de989f108d25b5a724e25b7472f8f7a13241f867a7cb6e894d0c518d94a4",
+      "adaptedSha256": "00e0bf1bad2e5ee06fe00aa752d7b5a78717f0292092038e913104d36f6c31b2",
       "changed": true,
       "reason": "Assert missing-field or deadline closure with exact phase/reason and original checkout; never inspect a page already closed by timeout; retain zero-write checks. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior."
     },

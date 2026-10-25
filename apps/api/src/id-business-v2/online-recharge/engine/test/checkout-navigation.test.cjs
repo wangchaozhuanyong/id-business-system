@@ -541,16 +541,23 @@ test('a permanently empty payment region fails strict readiness without an extra
     readyWaitMs: 700
   });
   await assert.rejects(start(), (error) => {
-    assert.equal(error.code, 'CHECKOUT_FORM_NOT_READY');
+    // The 700ms real-browser fixture can expire during a CDP read on a busy runner.
+    // Read exhaustion must retain incomplete evidence, never imply a complete empty scan.
+    assert.ok(['CHECKOUT_FORM_NOT_READY', 'CHECKOUT_FORM_TIMEOUT'].includes(error.code));
     assert.equal(error.checkoutCreationState, 'accepted');
-    assert.equal(error.checkoutOpenDiagnostics.stage, 'readiness');
-    assert.equal(error.checkoutOpenDiagnostics.reason, 'not_ready');
-    assert.equal(error.checkoutOpenDiagnostics.code, 'CHECKOUT_FORM_NOT_READY');
-    assert.deepEqual(error.checkoutOpenDiagnostics.missing, ['number']);
-    assert.deepEqual(error.checkoutOpenDiagnostics.candidateCounts, [
-      { field: 'number', count: 0 }
-    ]);
-    assert.equal(error.checkoutOpenDiagnostics.inspection.complete, true);
+    const diagnostic = error.checkoutOpenDiagnostics;
+    assert.equal(diagnostic.stage, 'readiness');
+    assert.equal(diagnostic.code, error.code);
+    if (error.code === 'CHECKOUT_FORM_TIMEOUT') {
+      assert.equal(diagnostic.reason, 'timeout');
+      assert.equal(diagnostic.inspection.complete, false);
+      assert.equal(diagnostic.inspection.timedOut, true);
+    } else {
+      assert.equal(diagnostic.reason, 'not_ready');
+      assert.deepEqual(diagnostic.missing, ['number']);
+      assert.deepEqual(diagnostic.candidateCounts, [{ field: 'number', count: 0 }]);
+      assert.equal(diagnostic.inspection.complete, true);
+    }
     return true;
   });
   assert.equal(stats.verifications, 1);

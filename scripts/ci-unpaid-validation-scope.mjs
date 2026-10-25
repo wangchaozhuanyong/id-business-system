@@ -66,6 +66,7 @@ export const persistentProfilePaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/safe-media.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/evidence-recovery.test.cjs',
   'apps/api/src/id-business-v2/online-recharge/engine/test/execution-budget.test.cjs',
