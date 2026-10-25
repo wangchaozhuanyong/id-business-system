@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import traceback
 import urllib.request
 
 HERE = Path(__file__).resolve().parent
@@ -152,10 +153,20 @@ def verify_after(d, target, before, c, h, p, baseline):
 def start_existing(d, directory, before):
     # Retain exact containers, images, namespace target IDs and all configuration.
     for role in UPDATED:
-        state = d.service_state(directory, role, include_container_id=True, include_environment_hash=True)
-        need(all(state[key] == before[role][key] for key in ('image', 'reference', 'containerId', 'environmentSha256'))
-             and state['status'] in ('running', 'exited'), 'CONTAINER_CHANGED')
-        if state['status'] == 'exited':
+        # The generic service_state uses `compose ps -q`, which omits stopped
+        # containers. Inspect the exact original selection before starting it.
+        selected = d.compose(directory, 'ps', '--all', '--quiet', role).strip()
+        need(selected == before[role]['containerId'], 'CONTAINER_CHANGED')
+        rows = json.loads(d.run('docker', 'inspect', selected))
+        need(type(rows) is list and len(rows) == 1, 'CONTAINER_CHANGED')
+        row = rows[0]
+        env = row.get('Config', {}).get('Env')
+        need(row.get('Id') == selected and row.get('Image') == before[role]['image']
+             and row['Config'].get('Image') == before[role]['reference']
+             and type(env) is list and bool(env) and all(type(value) is str for value in env)
+             and d.historical_fingerprint(sorted(env)) == before[role]['environmentSha256']
+             and row.get('State', {}).get('Status') in ('running', 'exited'), 'CONTAINER_CHANGED')
+        if row['State']['Status'] == 'exited':
             d.compose(directory, 'start', role, timeout=90)
         d.wait_healthy(directory, role)
 
@@ -232,7 +243,7 @@ def release(plan, c):
             recovered = p.stop_recharge_and_recover(d, previous, baseline['services'], lock, fence, recovery)
             start_existing(d, target, baseline['services'])
             after = verify_after(d, target, baseline['services'], c, h, p, baseline)
-        except BaseException:
+        except BaseException as error:
             fence.close()
             # Restore service availability only: same containers and images, no code/data rollback.
             restored = False
@@ -243,6 +254,7 @@ def release(plan, c):
                 restored = True
             finally:
                 journal.write_text(json.dumps({'status': 'FAILED', 'servicesRestored': restored,
+                                               'failure': failure_report(error, plan),
                                                'businessActions': 0}) + '\n')
                 if restored:
                     owner.release_markers(marker)
@@ -271,4 +283,11 @@ def release(plan, c):
 
 def failure_report(error, plan):
     code = str(error) if re.fullmatch(r'(?:ONLINE_PROFILE_LOCK|ONLINE_CHECKOUT_PROFILE|ONLINE_QUERY_NETWORK)_[A-Z_]{1,100}', str(error)) else 'ONLINE_PROFILE_LOCK_UNCONFIRMED'
-    return {'status': 'FAILED', 'code': code, 'mode': plan.get('mode'), 'businessActions': 0}
+    kind = type(error).__name__
+    allowed = ('RuntimeError', 'CalledProcessError', 'TimeoutExpired', 'FileNotFoundError',
+               'PermissionError', 'AttributeError', 'KeyError', 'TypeError', 'ValueError', 'JSONDecodeError')
+    frames = [{'file': Path(frame.filename).name, 'line': frame.lineno}
+              for frame in traceback.extract_tb(error.__traceback__)
+              if Path(frame.filename).name in plan.get('controlSources', {})][-4:]
+    return {'status': 'FAILED', 'code': code, 'mode': plan.get('mode'),
+            'errorClass': kind if kind in allowed else 'OTHER', 'sourceFrames': frames, 'businessActions': 0}

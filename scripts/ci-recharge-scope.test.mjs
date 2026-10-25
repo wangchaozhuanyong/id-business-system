@@ -4392,6 +4392,14 @@ test('Vendure mailbox integration runs only its shared, admin, API and guard che
     'scripts/ci-recharge-check.mjs',
     'scripts/ci-recharge-scope.mjs'
   ];
+  paths.push(
+    'apps/admin/src/v2/components/workspace/V2MailBody.vue',
+    'apps/admin/src/v2/components/workspace/V2MailMessageList.vue',
+    'apps/admin/src/v2/components/workspace/mail-viewer.ts',
+    'apps/admin/src/v2/components/workspace/mail-viewer.spec.ts',
+    'apps/admin/src/v2/components/workspace/workspace-ui.contract.spec.ts',
+    'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts'
+  );
   assert.equal(isMailboxOnly(paths), true);
   assert.equal(checkMode(paths, schema, schema), 'mailbox');
   assert.deepEqual(adminCheckCommands('mailbox', paths), [
@@ -4404,7 +4412,9 @@ test('Vendure mailbox integration runs only its shared, admin, API and guard che
       '--',
       'src/api/requestPolicy.spec.ts',
       'src/v2/features/registry.spec.ts',
-      'src/v2/features/auto-recharge/vendure-mailbox-ui.contract.spec.ts'
+      'src/v2/features/auto-recharge/vendure-mailbox-ui.contract.spec.ts',
+      'src/v2/components/workspace/mail-viewer.spec.ts',
+      'src/v2/components/workspace/workspace-ui.contract.spec.ts'
     ],
     ['run', 'build', '--workspace', '@apple-business/admin']
   ]);
@@ -4412,6 +4422,13 @@ test('Vendure mailbox integration runs only its shared, admin, API and guard che
     isMailboxOnly([...paths, 'apps/api/src/id-business-v2/orders/order.service.ts']),
     false
   );
+  for (const name of [
+    'apps/admin/src/v2/components/workspace/V2ManagedMailboxPanel.vue',
+    'apps/api/src/id-business-v2/workspace/unrelated-helper.ts',
+    'apps/api/prisma-mysql/schema.prisma'
+  ]) {
+    assert.equal(checkMode([...paths, name], schema, schema), 'full', name);
+  }
 });
 test('CI-only repairs do not select application or migration suites', () => {
   assert.equal(

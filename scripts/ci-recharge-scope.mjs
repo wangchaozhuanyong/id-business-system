@@ -2502,12 +2502,22 @@ export function isAdminOnly(paths) {
   );
 }
 
+const mailboxViewerPaths = new Set([
+  'apps/admin/src/v2/components/workspace/V2MailBody.vue',
+  'apps/admin/src/v2/components/workspace/V2MailMessageList.vue',
+  'apps/admin/src/v2/components/workspace/mail-viewer.ts',
+  'apps/admin/src/v2/components/workspace/mail-viewer.spec.ts',
+  'apps/admin/src/v2/components/workspace/workspace-ui.contract.spec.ts',
+  'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts'
+]);
 const mailboxPaths =
   /^(?:\.env\.(?:example|aws\.production\.example)|docker-compose\.aws-mysql\.yml|apps\/admin\/src\/api\/requestPolicy(?:\.spec)?\.ts|apps\/admin\/src\/v2\/features\/(?:feature|registry(?:\.spec)?|runtimeRegistry|tableSchemas)\.ts|apps\/admin\/src\/v2\/features\/auto-recharge\/(?:V2VendureMailboxView\.vue|VendureMailboxManager\.vue|vendure-mailbox[^/]*)|apps\/api\/src\/id-business-v2\/workspace\/(?:dto\/id-business-v2-vendure-mailbox\.dto\.ts|id-business-v2-(?:mail-viewer\.service(?:\.spec)?|public-vendure-mailbox\.controller|vendure-mailbox\.(?:controller|service)(?:\.spec)?|workspace\.module)\.ts|providers\/id-business-v2-vendure-mailbox\.client(?:\.spec)?\.ts)|packages\/shared\/src\/(?:index\.ts|v2\/vendure-mailbox\.ts))$/;
 export function isMailboxOnly(paths) {
   return (
-    paths.some((path) => mailboxPaths.test(path)) &&
-    paths.every((path) => mailboxPaths.test(path) || isCiOnly([path]))
+    paths.some((path) => mailboxPaths.test(path) || mailboxViewerPaths.has(path)) &&
+    paths.every(
+      (path) => mailboxPaths.test(path) || mailboxViewerPaths.has(path) || isCiOnly([path])
+    )
   );
 }
 
@@ -2764,7 +2774,9 @@ export function adminCheckCommands(mode, paths) {
       '--',
       'src/api/requestPolicy.spec.ts',
       'src/v2/features/registry.spec.ts',
-      'src/v2/features/auto-recharge/vendure-mailbox-ui.contract.spec.ts'
+      'src/v2/features/auto-recharge/vendure-mailbox-ui.contract.spec.ts',
+      'src/v2/components/workspace/mail-viewer.spec.ts',
+      'src/v2/components/workspace/workspace-ui.contract.spec.ts'
     ]);
     commands.push(['run', 'build', '--workspace', '@apple-business/admin']);
     return commands;
