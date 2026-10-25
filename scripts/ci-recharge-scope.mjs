@@ -1217,6 +1217,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isMailQueryPublicationControlsOnly(paths)) return false;
   if (isRechargePlanBillingSourcePaths(paths) || isRechargePlanBillingPublicationOnly(paths))
     return false;
   if (isAwsAccountMigrationControlsOnly(paths, context)) return false;
@@ -2361,7 +2362,29 @@ export function bitbrowserBoundedHoldCheckCommands(part, paths) {
   throw new Error('Unsupported bounded BitBrowser source check part');
 }
 
+export const mailQueryPublicationControls = Object.freeze([
+  '.github/workflows/mail-query-publication.yml',
+  ...['build.py', 'publication.py', 'release.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/mail-query-' + name
+  )
+]);
+const mailQueryPublicationSupport = new Set([
+  ...mailQueryPublicationControls,
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs'
+]);
+
+export function isMailQueryPublicationControlsOnly(paths) {
+  return (
+    paths.some((path) => mailQueryPublicationControls.includes(path)) &&
+    paths.every((path) => mailQueryPublicationSupport.has(path))
+  );
+}
+
 export function isCiOnly(paths, context) {
+  if (isMailQueryPublicationControlsOnly(paths)) return true;
   if (isRechargePlanBillingPublicationOnly(paths)) return true;
   if (isAwsAccountMigrationControlsOnly(paths, context)) return true;
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
@@ -3129,6 +3152,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];
   if (isRechargePlanBillingSourcePaths(paths)) return ['guards', 'admin', 'api', 'migration'];
   if (isRechargePlanBillingPublicationOnly(paths)) return ['guards'];
   if (isProfileLockRecoveryOnly(paths)) return ['guards', 'online-engine'];

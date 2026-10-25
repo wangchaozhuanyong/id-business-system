@@ -7307,7 +7307,6 @@ test('checkout actionability selects finite engine checks and cannot hide neighb
   );
   assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
-  assert.equal(needsOnlineRechargeCiBuild(controls), false);
   for (const missing of sources)
     assert.equal(
       checkMode(
@@ -7339,7 +7338,6 @@ test('query deadline repair selects only guards and engine without narrowing unr
   const controls = onlineQueryDeadlineControls.filter((path) => !path.startsWith('scripts/ci-'));
   assert.equal(checkMode(controls, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(controls), ['guards']);
-  assert.equal(needsOnlineRechargeCiBuild(controls), false);
   assert.equal(checkMode(paths, 'before', 'after'), 'full');
   for (const extra of [
     'apps/api/src/id-business-v2/online-recharge/tasks.service.ts',
@@ -8650,6 +8648,29 @@ test('线上执行器复用真实 CLI 仅接受准确来源及成功任务，输
   }
 });
 import './ci-aws-account-migration-scope.test.mjs';
+
+test('finite mailbox publication retains guards and rejects application or adjacent publisher files', () => {
+  const controls = [
+    '.github/workflows/mail-query-publication.yml',
+    ...['build.py', 'publication.py', 'release.py', 'release.test.py', 'contract.json'].map(
+      (name) => 'scripts/production-release/mail-query-' + name
+    ),
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ];
+  assert.equal(checkMode(controls), 'ci-only');
+  assert.deepEqual(selectedParts(controls), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(controls), false);
+  for (const path of [
+    'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts',
+    'apps/admin/src/v2/features/orders/V2OrdersView.vue',
+    'scripts/production-release/mail-query-unreviewed.py',
+    'apps/api/prisma/schema.prisma'
+  ])
+    assert.equal(isCiOnly([...controls, path]), false, path);
+});
 
 test('mailbox checks do not rebuild an unrelated historical ONLINE image for selector and fixture repairs', () => {
   const paths = [

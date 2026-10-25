@@ -201,7 +201,8 @@ import {
   isBitbrowserBoundedHoldSourceOnly,
   bitbrowserBoundedHoldSchemaMatches,
   bitbrowserBoundedHoldCheckCommands,
-  isMailboxOnly
+  isMailboxOnly,
+  isMailQueryPublicationControlsOnly
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -226,15 +227,16 @@ const mailboxFixtureControlPaths = new Set([
   'scripts/production-release/online-recharge-component-recovery.test.py'
 ]);
 const isolatedMailboxControlChecks =
-  mode === 'mailbox' &&
-  isMailboxOnly(changed) &&
-  changed.every((path) =>
-    path.startsWith('scripts/') || path.startsWith('.github/')
-      ? mailboxFixtureControlPaths.has(path)
-      : path.startsWith('apps/') ||
-        path === 'packages/shared/src/v2/vendure-mailbox.ts' ||
-        /^docs\/.*\.md$/.test(path)
-  );
+  isMailQueryPublicationControlsOnly(changed) ||
+  (mode === 'mailbox' &&
+    isMailboxOnly(changed) &&
+    changed.every((path) =>
+      path.startsWith('scripts/') || path.startsWith('.github/')
+        ? mailboxFixtureControlPaths.has(path)
+        : path.startsWith('apps/') ||
+          path === 'packages/shared/src/v2/vendure-mailbox.ts' ||
+          /^docs\/.*\.md$/.test(path)
+    ));
 if (isAwsAccountMigrationControlsOnly(changed, { base })) {
   if (part !== 'guards' || mode !== 'ci-only')
     throw new Error('Migration control checks require the exact finite guard selection');
@@ -1943,6 +1945,19 @@ if (
     'scripts/production-release/online-recharge-component-diagnostic-entry.test.mjs'
   ]);
 }
+let mailQueryHistoricalGuardReuse = false;
+if (isMailQueryPublicationControlsOnly(changed) && ['guards', 'release-controls'].includes(part)) {
+  try {
+    run('python3', [
+      '-B',
+      'scripts/production-release/mail-query-publication.py',
+      'verify-guard-reuse'
+    ]);
+    mailQueryHistoricalGuardReuse = true;
+  } catch (error) {
+    if (error.status !== 3) throw error;
+  }
+}
 if (
   part === 'guards' &&
   !releaseArtifactOnly &&
@@ -1986,6 +2001,7 @@ if (
     run('node', ['--test', 'scripts/v2-release-mailbox-audit.test.mjs']);
   }
   if (
+    !mailQueryHistoricalGuardReuse &&
     changed.some(
       (path) =>
         path.startsWith('scripts/production-release/') ||
@@ -2051,6 +2067,8 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   if (part === 'release-controls') run('node', ['--test', 'scripts/ci-recharge-release.test.mjs']);
   releaseArtifactRetentionChecks();
 } else if (part === 'guards') {
+  if (changed.some((path) => path.includes('mail-query-')))
+    run('python3', ['-B', 'scripts/production-release/mail-query-release.test.py']);
   rechargeFlowSuccessorControls();
   ownedMysqlTestControls();
   releaseMaintenanceControls();
@@ -2164,6 +2182,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   // Full npm test already runs backup, finite history and its nested remote
   // deployment suite. Add only the missing preparation/retirement controls.
   if (
+    !mailQueryHistoricalGuardReuse &&
     changed.some(
       (path) =>
         path.startsWith('scripts/production-release/') ||
