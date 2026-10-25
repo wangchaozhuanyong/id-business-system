@@ -115,7 +115,90 @@ function validFormDiagnostics(value: unknown): boolean {
       'page_changed'
     ]
   };
+  const interactionReasons = ['none', ...groups.interactionRejectCounts];
+  const validInteraction = (row: unknown): boolean => {
+    if (
+      !record(row) ||
+      !oneOf(row.field, stepEnums.field) ||
+      !oneOf(row.initialReason, interactionReasons)
+    )
+      return false;
+    const enums: Record<string, string[]> = {
+      field: stepEnums.field,
+      initialReason: interactionReasons,
+      afterScrollReason: interactionReasons,
+      tag: ['input', 'select', 'textarea', 'button', 'other'],
+      role: ['combobox', 'other'],
+      type: ['text', 'tel', 'number', 'password', 'select-one', 'select-multiple', 'other'],
+      frameKind: ['main', 'embedded'],
+      recovery: ['requested', 'ready', 'read_incomplete', 'blocked']
+    };
+    return Object.entries(row).every(([key, v]) => {
+      if (Object.hasOwn(enums, key)) return oneOf(v, enums[key]);
+      if (key === 'frameId') return count(v);
+      if (['inShadowRoot', 'frameChanged'].includes(key)) return typeof v === 'boolean';
+      if (key === 'scroll')
+        return (
+          record(v) &&
+          Object.keys(v).every((k) => ['state', 'durationMs', 'errorClass'].includes(k)) &&
+          oneOf(v.state, ['completed', 'failed']) &&
+          count(v.durationMs, 600000) &&
+          (v.errorClass === undefined ||
+            oneOf(v.errorClass, [
+              'scroll_timeout',
+              'node_detached',
+              'frame_changed',
+              'context_destroyed',
+              'other'
+            ]))
+        );
+      if (key === 'blocker')
+        return (
+          record(v) &&
+          Object.keys(v).length === 3 &&
+          oneOf(v.tag, ['div', 'span', 'input', 'select', 'button', 'iframe', 'dialog', 'other']) &&
+          oneOf(v.role, ['dialog', 'combobox', 'listbox', 'option', 'other']) &&
+          typeof v.containsTarget === 'boolean'
+        );
+      if (key === 'pointChecks')
+        return (
+          Array.isArray(v) &&
+          v.length <= 8 &&
+          v.every(
+            (point) =>
+              record(point) &&
+              Object.keys(point).every((k) =>
+                ['scope', 'depth', 'reason', 'geometry'].includes(k)
+              ) &&
+              oneOf(point.scope, ['control', 'frame_owner']) &&
+              count(point.depth, 32) &&
+              oneOf(point.reason, interactionReasons) &&
+              (point.geometry === undefined ||
+                (record(point.geometry) &&
+                  Object.entries(point.geometry).every(
+                    ([k, n]) =>
+                      [
+                        'left',
+                        'top',
+                        'width',
+                        'height',
+                        'viewportWidth',
+                        'viewportHeight',
+                        'x',
+                        'y'
+                      ].includes(k) &&
+                      typeof n === 'number' &&
+                      Number.isInteger(n) &&
+                      Math.abs(n) <= 1000000
+                  )))
+          )
+        );
+      return false;
+    });
+  };
   return Object.entries(value.inspection).every(([key, v]) => {
+    if (key === 'interactionChecks')
+      return Array.isArray(v) && v.length <= 8 && v.every(validInteraction);
     if (['complete', 'contentLoadFailed', 'timedOut', 'pageClosed', 'aborted'].includes(key))
       return typeof v === 'boolean';
     if (['framesChecked', 'framesSkipped', 'framesFailed'].includes(key)) return count(v);
@@ -141,6 +224,49 @@ function validFormDiagnostics(value: unknown): boolean {
       Object.entries(v).every(([name, n]) => groups[key].includes(name) && count(n))
     );
   });
+}
+
+function validEvidenceUploads(value: unknown): boolean {
+  const reasons = [
+    'timeout',
+    'network_error',
+    'http_error',
+    'response_invalid',
+    'lease_lost',
+    'operation_rejected',
+    'file_unavailable',
+    'path_rejected',
+    'file_rejected',
+    'deadline_exhausted',
+    'unknown'
+  ];
+  return (
+    Array.isArray(value) &&
+    value.length <= 32 &&
+    value.every((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+      const row = entry as Record<string, unknown>;
+      return (
+        typeof row.kind === 'string' &&
+        ['screenshot', 'video', 'diagnostic', 'batch'].includes(row.kind) &&
+        typeof row.outcome === 'string' &&
+        ['uploaded', 'failed', 'skipped'].includes(row.outcome) &&
+        (row.outcome === 'uploaded' ||
+          (typeof row.reason === 'string' && reasons.includes(row.reason))) &&
+        Object.entries(row).every(([key, v]) => {
+          if (['kind', 'outcome'].includes(key)) return typeof v === 'string';
+          if (key === 'reason') return typeof v === 'string' && reasons.includes(v);
+          if (key === 'durationMs')
+            return Number.isInteger(v) && Number(v) >= 0 && Number(v) <= 600000;
+          if (key === 'httpStatus')
+            return Number.isInteger(v) && Number(v) >= 100 && Number(v) <= 599;
+          if (key === 'remainingFiles')
+            return Number.isInteger(v) && Number(v) >= 1 && Number(v) <= 40;
+          return false;
+        })
+      );
+    })
+  );
 }
 
 @Injectable()
@@ -234,7 +360,8 @@ export class OnlineRechargeArtifactsRepository {
         'httpStatus',
         'executorTerminated',
         'sourceManifestSha256',
-        'formDiagnostics'
+        'formDiagnostics',
+        'evidenceUploads'
       ];
       const stages = [
         'input',
@@ -333,6 +460,7 @@ export class OnlineRechargeArtifactsRepository {
                 ].includes(String(key))
             ))) ||
         (report.formDiagnostics !== undefined && !validFormDiagnostics(report.formDiagnostics)) ||
+        (report.evidenceUploads !== undefined && !validEvidenceUploads(report.evidenceUploads)) ||
         !stages.includes(String(report.lastStage)) ||
         !timestamp(report.startedAt) ||
         !timestamp(report.endedAt) ||

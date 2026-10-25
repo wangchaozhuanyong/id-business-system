@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cardReadDiagnosticsPaths,
+  countryEvidencePaths,
   proxyFailureEvidencePaths,
   persistentProfilePaths,
   profileEgressLifecyclePaths,
@@ -259,4 +260,31 @@ test('proxy failure publication is finite controls only and requires its contrac
     /online-proxy-failure-evidence-release.test.py/
   );
   assert.equal(isUnpaidValidationControlsOnly([...paths, proxyFailureEvidencePaths[0]]), false);
+});
+
+test('country evidence batch requires Admin API and engine checks without unrelated migration', () => {
+  const paths = [
+    ...countryEvidencePaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = JSON.stringify(
+    selectedParts(paths).flatMap((part) => unpaidValidationCommands(part, paths))
+  );
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-loading-standard',
+    'test:online-recharge:engine'
+  ])
+    assert.ok(commands.includes(name));
+  assert.doesNotMatch(commands, /migrate|financial-integrity|verify:production/);
+  for (const missing of countryEvidencePaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== missing)), false);
+  assert.equal(isUnpaidValidationOnly([...paths, paths[0]]), false);
+  assert.equal(isUnpaidValidationOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']), false);
 });

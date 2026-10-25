@@ -9,6 +9,93 @@ const auth = require('../upstream/auth-page-detect');
 const { openApiCheckout } = require('../upstream/chatgpt');
 const { chromium } = require('../upstream/node_modules/playwright');
 
+test('country interaction trace survives report and IPC projection without raw field values', () => {
+  const interaction = {
+    field: 'country',
+    tag: 'select',
+    frameKind: 'embedded',
+    frameId: 1,
+    initialReason: 'outside_viewport',
+    afterScrollReason: 'outside_viewport',
+    scroll: { state: 'completed', durationMs: 42, rawMessage: 'SYNTHETIC_PRIVATE' },
+    recovery: 'blocked',
+    pointChecks: [
+      {
+        scope: 'frame_owner',
+        depth: 1,
+        reason: 'outside_viewport',
+        geometry: {
+          top: 900,
+          left: 0,
+          width: 400,
+          height: 200,
+          viewportWidth: 1280,
+          viewportHeight: 720,
+          inputValue: 'SYNTHETIC_PRIVATE'
+        }
+      }
+    ],
+    inputValue: 'SYNTHETIC_PRIVATE'
+  };
+  const report = validation.finish(
+    {
+      code: 'CHECKOUT_CONTROL_BLOCKED',
+      missing: ['country'],
+      formDiagnostics: {
+        inspection: { complete: true, interactionChecks: [interaction] },
+        steps: [{ field: 'country', phase: 'precheck', state: 'failed' }]
+      }
+    },
+    {
+      format: 'unpaid-validation-v1',
+      startedAt: new Date().toISOString(),
+      timeline: [{ stage: 'billing_fill', startedAt: new Date().toISOString() }]
+    }
+  );
+  const safe = require('../security.cjs').sanitizeResult({
+    validationReport: report
+  }).validationReport;
+  assert.equal(safe.failureClass, 'BILLING_FILL_FAILED');
+  assert.equal(safe.failureCode, 'CHECKOUT_CONTROL_BLOCKED');
+  const actual = safe.formDiagnostics.inspection.interactionChecks[0];
+  assert.equal(actual.initialReason, 'outside_viewport');
+  assert.equal(actual.scroll.state, 'completed');
+  assert.equal(actual.pointChecks[0].scope, 'frame_owner');
+  assert.equal(actual.pointChecks[0].geometry.top, 900);
+  assert.doesNotMatch(JSON.stringify(safe), /SYNTHETIC_PRIVATE|inputValue|rawMessage/);
+  assert.equal(safe.submitted, false);
+});
+
+test('interaction evidence has a fixed size even for many nested frames', () => {
+  const point = {
+    scope: 'control',
+    depth: 0,
+    reason: 'outside_viewport',
+    geometry: {
+      top: 1000000,
+      left: -1000000,
+      width: 1000000,
+      height: 1000000,
+      viewportWidth: 1000000,
+      viewportHeight: 1000000,
+      x: 1000000,
+      y: 1000000
+    }
+  };
+  const trace = {
+    field: 'country',
+    initialReason: 'outside_viewport',
+    pointChecks: Array(50).fill(point)
+  };
+  const result = validation.safeFormDiagnostics({
+    inspection: { interactionChecks: Array(50).fill(trace) },
+    steps: []
+  });
+  assert.equal(result.inspection.interactionChecks.length, 8);
+  assert.equal(result.inspection.interactionChecks[0].pointChecks.length, 8);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 20000);
+});
+
 test('mode is opt-in and cannot turn a recharge into a debug result', () => {
   assert.equal(
     validation.enabled({ operation: 'debug', payload: { validationMode: 'ready_before_payment' } }),

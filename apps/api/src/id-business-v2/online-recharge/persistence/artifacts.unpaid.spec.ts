@@ -114,6 +114,105 @@ const formDiagnostics = {
   ]
 };
 
+const countryTrace = {
+  field: 'country',
+  initialReason: 'outside_viewport',
+  afterScrollReason: 'outside_viewport',
+  tag: 'select',
+  frameKind: 'embedded',
+  frameId: 1,
+  scroll: { state: 'completed', durationMs: 40 },
+  pointChecks: [
+    {
+      scope: 'frame_owner',
+      depth: 1,
+      reason: 'outside_viewport',
+      geometry: {
+        left: 10,
+        top: 900,
+        width: 400,
+        height: 200,
+        viewportWidth: 1280,
+        viewportHeight: 720
+      }
+    }
+  ]
+};
+const countryDiagnostics = {
+  inspection: { complete: true, interactionChecks: [countryTrace] },
+  steps: [
+    { field: 'country', phase: 'precheck', state: 'failed', tag: 'select', frameKind: 'embedded' }
+  ]
+};
+const uploadDiagnostics = [
+  { kind: 'diagnostic', outcome: 'failed', reason: 'http_error', httpStatus: 500, durationMs: 30 },
+  { kind: 'batch', outcome: 'skipped', reason: 'deadline_exhausted', remainingFiles: 20 }
+];
+describe('国家控件交互和附件上传诊断贯通', () => {
+  it('保留视口位置和固定上传错误，无须真实任务或数据库', async () => {
+    const root = join(project, '.runtime/country-evidence-20261025/api-artifacts');
+    await mkdir(root, { recursive: true });
+    const directory = await mkdtemp(join(root, 'fixture-'));
+    try {
+      const f = fixture(directory);
+      const value = {
+        ...report,
+        lastStage: 'billing_fill',
+        failureClass: 'BILLING_FILL_FAILED',
+        failureCode: 'CHECKOUT_CONTROL_BLOCKED',
+        missing: ['country'],
+        formDiagnostics: countryDiagnostics,
+        evidenceUploads: uploadDiagnostics
+      };
+      const result = await f.repository.upload(input(value));
+      const { readFile } = await import('node:fs/promises');
+      const saved = JSON.parse(await readFile(join(directory, result.filename), 'utf8'));
+      expect(saved.formDiagnostics).toEqual(countryDiagnostics);
+      expect(saved.evidenceUploads).toEqual(uploadDiagnostics);
+      expect(saved.submitted).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  for (const trace of [
+    { ...countryTrace, inputValue: 'PRIVATE' },
+    { ...countryTrace, scroll: { ...countryTrace.scroll, message: 'PRIVATE' } },
+    {
+      ...countryTrace,
+      pointChecks: [{ ...countryTrace.pointChecks[0], geometry: { top: 'PRIVATE' } }]
+    },
+    { ...countryTrace, pointChecks: Array(9).fill(countryTrace.pointChecks[0]) }
+  ])
+    it('拒绝交互记录中的原始资料和超出界限的数据', async () => {
+      const f = fixture(join(project, '.runtime/country-evidence-20261025/api-artifacts'));
+      await expect(
+        f.repository.upload(
+          input({
+            ...report,
+            formDiagnostics: {
+              ...countryDiagnostics,
+              inspection: { complete: true, interactionChecks: [trace] }
+            }
+          })
+        )
+      ).rejects.toThrow('诊断文件字段无效');
+      expect(f.workers.withLease).not.toHaveBeenCalled();
+    });
+  for (const evidenceUploads of [
+    [{ ...uploadDiagnostics[0], responseBody: 'PRIVATE' }],
+    [{ ...uploadDiagnostics[0], reason: 'PRIVATE' }],
+    [{ ...uploadDiagnostics[0], httpStatus: 999 }],
+    Array(33).fill(uploadDiagnostics[0])
+  ])
+    it('拒绝上传原始异常、正文、无效状态和无界记录', async () => {
+      const f = fixture(join(project, '.runtime/country-evidence-20261025/api-artifacts'));
+      await expect(f.repository.upload(input({ ...report, evidenceUploads }))).rejects.toThrow(
+        '诊断文件字段无效'
+      );
+      expect(f.workers.withLease).not.toHaveBeenCalled();
+    });
+});
+
 describe('填卡读取诊断落盘', () => {
   it('允许字段阶段和完整读取分类通过现有证据入口保存', async () => {
     const root = join(project, '.runtime/card-read-diagnostics-20261025/api-artifacts');

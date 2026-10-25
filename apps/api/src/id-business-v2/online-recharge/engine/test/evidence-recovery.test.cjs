@@ -34,7 +34,7 @@ async function completed(dir, name, contents = 'synthetic masked image') {
   );
   return file;
 }
-async function worker(root, { duplicateIpc = false } = {}) {
+async function worker(root, { duplicateIpc = false, validation = false, upload } = {}) {
   const effects = [],
     module = { exports: {} };
   const task = {
@@ -47,6 +47,7 @@ async function worker(root, { duplicateIpc = false } = {}) {
     leaseExpiresAt: new Date(Date.now() + 90000).toISOString()
   };
   const child = new EventEmitter();
+  if (validation) task.payload = { validationMode: 'ready_before_payment' };
   child.exitCode = null;
   child.signalCode = null;
   child.connected = true;
@@ -57,6 +58,21 @@ async function worker(root, { duplicateIpc = false } = {}) {
         child.emit('message', message);
         child.emit('message', message);
       }
+      if (validation)
+        child.emit('message', {
+          type: 'result',
+          status: 'failed',
+          result: {
+            validationReport: require('../unpaid-validation.cjs').finish(
+              { code: 'CHECKOUT_CONTROL_BLOCKED' },
+              {
+                format: 'unpaid-validation-v1',
+                startedAt: new Date().toISOString(),
+                timeline: [{ stage: 'billing_fill', startedAt: new Date().toISOString() }]
+              }
+            )
+          }
+        });
       child.exitCode = 0;
       child.emit('exit', 0);
     });
@@ -91,7 +107,8 @@ async function worker(root, { duplicateIpc = false } = {}) {
         return {
           rpc: async (method, args) => {
             effects.push({ method, args });
-            return { ok: true, id: 'synthetic-artifact' };
+            if (method === 'evidenceUpload' && upload) return upload(args);
+            return { ok: true, id: 'synthetic-artifact', kind: args.kind };
           }
         };
       if (name === './credentials.cjs') return { forgetTask() {} };
@@ -112,6 +129,48 @@ async function worker(root, { duplicateIpc = false } = {}) {
   });
   return { ...module.exports, task, effects };
 }
+
+test('diagnostic upload failure is retained in task result without retry or payment calls', async (t) => {
+  const root = await directory(t),
+    w = await worker(root, {
+      validation: true,
+      upload: async () => {
+        throw Object.assign(new Error('SYNTHETIC_PRIVATE'), {
+          evidenceFailureClass: 'http_error',
+          httpStatus: 500
+        });
+      }
+    });
+  await w.runJob(w.task, { browserPool: { enabled: true, size: 1 } });
+  const finish = w.effects.find((row) => row.method === 'completeJob');
+  assert.equal(finish.args.status, 'failed');
+  const report = finish.args.result.validationReport;
+  assert.equal(report.diagnosticUploaded, false);
+  assert.equal(report.evidenceUploads.length, 1);
+  assert.equal(report.evidenceUploads[0].kind, 'diagnostic');
+  assert.equal(report.evidenceUploads[0].reason, 'http_error');
+  assert.equal(report.evidenceUploads[0].httpStatus, 500);
+  assert.equal(w.effects.filter((row) => row.method === 'evidenceUpload').length, 1);
+  assert.doesNotMatch(JSON.stringify(report), /SYNTHETIC_PRIVATE/);
+  assert.equal(
+    w.effects.some((row) => row.method === 'beforeExternalSubmit'),
+    false
+  );
+});
+
+test('exhausted media deadline reports unattempted files instead of pretending they were read', async (t) => {
+  const root = await directory(t),
+    w = await worker(root),
+    diagnostics = [];
+  await w.uploadEvidence(w.task, ['first.png', 'second.png'], [], {
+    deadline: Date.now() - 1,
+    diagnostics
+  });
+  assert.equal(w.effects.length, 0);
+  assert.equal(diagnostics[0].outcome, 'skipped');
+  assert.equal(diagnostics[0].reason, 'deadline_exhausted');
+  assert.equal(diagnostics[0].remainingFiles, 2);
+});
 
 test('a masked capture writes a private completion receipt before media finish', async (t) => {
   const root = await directory(t),

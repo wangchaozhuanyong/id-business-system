@@ -56,6 +56,14 @@ function scope() {
       }
     : {};
 }
+function evidenceFailure(error, method, failureClass, httpStatus) {
+  if (method === 'evidenceUpload') {
+    error.evidenceFailureClass = failureClass;
+    if (Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599)
+      error.httpStatus = httpStatus;
+  }
+  return error;
+}
 async function rpc(method, args = {}, options = {}) {
   taskSignal().throwIfAborted();
   const scoped = { ...args, ...scope() };
@@ -72,38 +80,62 @@ async function rpc(method, args = {}, options = {}) {
   )
     throw new Error('内部接口须使用受保护连接');
   let response;
+  const requestSignal = AbortSignal.any([
+    AbortSignal.timeout(Math.max(1, Math.min(20000, options.timeoutMs || 20000))),
+    taskSignal()
+  ]);
   try {
     response = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-online-recharge-worker': key },
       body: JSON.stringify({ method, args: scoped, ...scope() }),
-      signal: AbortSignal.any([
-        AbortSignal.timeout(Math.max(1, Math.min(20000, options.timeoutMs || 20000))),
-        taskSignal()
-      ])
+      signal: requestSignal
     });
   } catch {
     taskSignal().throwIfAborted();
-    throw submitted
+    const error = submitted
       ? new ResultUnknownError('外部提交后的内部连接中断，等待核对')
       : new Error('内部执行接口暂不可用');
+    throw evidenceFailure(
+      error,
+      method,
+      requestSignal.reason?.name === 'TimeoutError' ? 'timeout' : 'network_error'
+    );
   }
   if ([401, 403, 409, 410].includes(response.status)) {
     const error = new LeaseLostError();
     // The parent multiplexes independent leases and has no task context. A
     // rejected parent request must not cancel every later polling/heartbeat RPC.
     if (taskContext) abortTask(error);
-    throw error;
+    throw evidenceFailure(error, method, 'lease_lost', response.status);
   }
-  if (!response.ok) throw new Error(`内部执行接口失败 ${response.status}`);
+  if (!response.ok)
+    throw evidenceFailure(
+      new Error(`内部执行接口失败 ${response.status}`),
+      method,
+      'http_error',
+      response.status
+    );
   // Nest sends null (and empty strings) as an empty successful HTTP body.
   // Only methods whose contract permits absence may accept that response.
-  const raw = await response.text();
+  const raw = await response.text().catch((error) => {
+    throw evidenceFailure(
+      error,
+      method,
+      requestSignal.reason?.name === 'TimeoutError' ? 'timeout' : 'response_invalid',
+      response.status
+    );
+  });
   let body;
   if (!raw.trim()) {
     if (['claimJob', 'getActiveProxy', 'reserveCard'].includes(method)) return null;
     if (method === 'getAppConfigValue') return '';
-    throw Object.assign(new Error('内部执行接口返回了空响应'), { code: 'RPC_RESPONSE_INVALID' });
+    throw evidenceFailure(
+      Object.assign(new Error('内部执行接口返回了空响应'), { code: 'RPC_RESPONSE_INVALID' }),
+      method,
+      'response_invalid',
+      response.status
+    );
   }
   if (
     ['getPaymentRegion', 'getAppConfigValue'].includes(method) &&
@@ -113,16 +145,26 @@ async function rpc(method, args = {}, options = {}) {
   try {
     body = JSON.parse(raw);
   } catch {
-    throw Object.assign(new Error('内部执行接口响应格式无效'), { code: 'RPC_RESPONSE_INVALID' });
+    throw evidenceFailure(
+      Object.assign(new Error('内部执行接口响应格式无效'), { code: 'RPC_RESPONSE_INVALID' }),
+      method,
+      'response_invalid',
+      response.status
+    );
   }
   if (body === null) return null;
   if (body.ok === false || body.success === false) {
     if (body.code === 'LEASE_LOST') {
       const error = new LeaseLostError();
       if (taskContext) abortTask(error);
-      throw error;
+      throw evidenceFailure(error, method, 'lease_lost', response.status);
     }
-    throw new Error('内部执行操作未完成');
+    throw evidenceFailure(
+      new Error('内部执行操作未完成'),
+      method,
+      'operation_rejected',
+      response.status
+    );
   }
   if (Object.prototype.hasOwnProperty.call(body, 'result')) return body.result;
   if (Object.prototype.hasOwnProperty.call(body, 'data')) return body.data;
