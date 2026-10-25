@@ -144,6 +144,10 @@ export const countryEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export const unpaidValidationControls = Object.freeze([
+  '.github/workflows/online-profile-lock-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-profile-lock-' + name
+  ),
   '.github/workflows/online-country-evidence-publication.yml',
   ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-country-evidence-' + name
@@ -250,6 +254,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-profile-lock-') ||
+        p === '.github/workflows/online-profile-lock-publication.yml' ||
         p.startsWith('scripts/production-release/online-country-evidence-') ||
         p === '.github/workflows/online-country-evidence-publication.yml' ||
         p.startsWith('scripts/production-release/online-profile-egress-') ||
@@ -324,6 +330,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-profile-lock-'))
+        ? [['python3', '-B', 'scripts/production-release/online-profile-lock-release.test.py']]
+        : []),
       ...(paths.some((p) => p.includes('online-country-evidence-'))
         ? [['python3', '-B', 'scripts/production-release/online-country-evidence-release.test.py']]
         : []),

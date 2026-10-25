@@ -18,6 +18,33 @@ import {
   unpaidValidationCommands
 } from './ci-unpaid-validation-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
+test('profile lock publication checks only its finite controls and refuses runtime changes', () => {
+  const paths = [
+    'scripts/production-release/online-unpaid-validation-release.test.py',
+    '.github/workflows/online-profile-lock-publication.yml',
+    ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+      (name) => 'scripts/production-release/online-profile-lock-' + name
+    ),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.ok(
+    JSON.stringify(unpaidValidationCommands('guards', paths)).includes(
+      'online-profile-lock-release.test.py'
+    )
+  );
+  assert.equal(
+    isUnpaidValidationControlsOnly([
+      ...paths,
+      'scripts/production-release/online-profile-lock-recovery.py'
+    ]),
+    false
+  );
+});
 test('offline profile recovery selects host guards and native browser tests only', () => {
   const paths = [
     ...profileLockRecoveryPaths,

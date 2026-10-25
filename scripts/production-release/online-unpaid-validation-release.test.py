@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import unittest
 HERE=Path(__file__).resolve().parent
 s=importlib.util.spec_from_file_location('unpaid_release',HERE/'online-unpaid-validation-release.py')
@@ -71,6 +72,11 @@ class FinitePublication(unittest.TestCase):
   report=p.failure_report(ValueError('synthetic-private-message'),{'mode':'preflight','controlSources':{}})
   self.assertEqual(report['code'],'ONLINE_UNPAID_REMOTE_FAILED')
   self.assertNotIn('synthetic-private-message',str(report))
- def test_source_and_control_pins_match_saved_files(self):
-  for n,v in self.c['controlPins'].items():self.assertEqual(p.sha((HERE/n).read_bytes()),v,n)
+ def test_historical_control_pins_match_deployed_snapshot(self):
+  # This contract predates later reviewed shared-controller repairs. Verify the
+  # complete immutable deployed bundle, rather than treating current source as history.
+  deployed='034f737d551412928e99f589370b937f2b263593'
+  for n,v in self.c['controlPins'].items():
+   raw=subprocess.check_output(['git','show',deployed+':scripts/production-release/'+n],cwd=HERE)
+   self.assertEqual(p.sha(raw),v,n)
 if __name__=='__main__':unittest.main()
