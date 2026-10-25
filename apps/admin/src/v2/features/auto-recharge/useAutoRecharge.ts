@@ -169,6 +169,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     loginMethod: 'json' as 'json' | 'password',
     selectedBankAccountId: '',
     selectedPaymentCardId: '',
+    billingAllocationKey: crypto.randomUUID(),
+    billingAllocation: null as { id: string; address: V2RechargeAddress } | null,
+    needsNewBillingAllocation: false,
     manualAddressSelectionRevision: 0,
     selectedBankAccountEmail: '',
     jsonInput: '',
@@ -201,6 +204,9 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     loginMethod,
     selectedBankAccountId,
     selectedPaymentCardId,
+    billingAllocationKey,
+    billingAllocation,
+    needsNewBillingAllocation,
     manualAddressSelectionRevision,
     selectedBankAccountEmail,
     jsonInput,
@@ -360,7 +366,12 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
 
   const jobs = computed(() => query.data.value?.items ?? []);
   const availableAddresses = computed(() =>
-    (addressQuery.data.value?.items ?? [])
+    [
+      ...(billingAllocation.value ? [billingAllocation.value.address] : []),
+      ...(addressQuery.data.value?.items ?? []).filter(
+        (item) => item.id !== billingAllocation.value?.address.id
+      )
+    ]
       .filter(
         (item) =>
           (item.status === 'unused' &&
@@ -402,6 +413,15 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
 
   async function selectSavedCard(id: string) {
     if (disposed || busy.value || active.value) return;
+    if (
+      id &&
+      (paymentCardsQuery.phase.value !== 'ready' ||
+        paymentCardsQuery.error.value ||
+        !savedPaymentCards.value.some((card) => card.id === id))
+    ) {
+      error.value = '这张银行卡当前不可用或不适用当前套餐，请重新选择';
+      return;
+    }
     const generation = ++paymentCardGeneration;
     selectedPaymentCardId.value = id;
     paymentCardLoading.value = Boolean(id);
@@ -430,9 +450,11 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       details.value.number = card.number;
       details.value.expiry = card.expiry;
       details.value.cvc = '';
-      if (card.billingName) details.value.name = card.billingName;
       // 卡号监听会清除旧选择；完整资料写入后再登记本次卡号对应的编号。
       selectedPaymentCardId.value = id;
+      await nextTick();
+      if (!disposed && generation === paymentCardGeneration && selectedPaymentCardId.value === id)
+        options.clearPaymentValidation?.();
     } catch (cause) {
       if (!disposed && generation === paymentCardGeneration && selectedPaymentCardId.value === id) {
         selectedPaymentCardId.value = '';
@@ -444,19 +466,26 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   }
   function markAddressSelectionManual() {
     manualAddressSelectionRevision.value++;
+    billingAllocationKey.value = crypto.randomUUID();
+    billingAllocation.value = null;
+    void nameMatch.retry(true);
   }
   watch(lockedCurrency, () => {
     // 卡片支持跨币种；付款上下文变化仅清理本次临时安全码。
     details.value.cvc = '';
   });
-  watch(plan, () => {
-    paymentCardGeneration++;
-    paymentCardLoading.value = false;
-    selectedPaymentCardId.value = '';
-    details.value.number = '';
-    details.value.expiry = '';
-    details.value.cvc = '';
-  });
+  watch(
+    plan,
+    () => {
+      paymentCardGeneration++;
+      paymentCardLoading.value = false;
+      selectedPaymentCardId.value = '';
+      details.value.number = '';
+      details.value.expiry = '';
+      details.value.cvc = '';
+    },
+    { flush: 'sync' }
+  );
   const selectedBankAccount = computed(() =>
     savedBankAccounts.value.find((item) => item.id === selectedBankAccountId.value)
   );
@@ -519,6 +548,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   );
   const proxyRegionLocked = computed(() => formLocked.value || active.value);
   const proxyRegion = useRechargeProxyRegion({
+    plan,
+    paymentMode: computed(() => operationMode.value === 'payment'),
     currency: lockedCurrency,
     country: selectedProxyCountryCode,
     proxyId: selectedProxyId,
@@ -530,6 +561,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     query: proxiesQuery
   });
   const {
+    planRegionLocked,
     countries: availableProxyCountries,
     defaultCountries: defaultCountryOptions,
     proxies: availableProxies,
@@ -573,7 +605,22 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   const nameMatch = useRechargeNameMatch(
     details,
     ref(''),
-    computed(() => formLocked.value || active.value || operationMode.value !== 'payment')
+    computed(() => formLocked.value || active.value || operationMode.value !== 'payment'),
+    {
+      request: () => ({
+        allocationKey: billingAllocationKey.value,
+        ...(manualAddressSelectionRevision.value > 0 &&
+        selectedAddressId.value &&
+        selectedAddressId.value !== billingAllocation.value?.address.id
+          ? { addressId: selectedAddressId.value }
+          : {})
+      }),
+      apply: (allocation) => {
+        billingAllocation.value = allocation;
+        addressSource.value = 'library';
+        selectedAddressId.value = allocation.address.id;
+      }
+    }
   );
   const canGenerateAddress = computed(
     () =>
@@ -585,15 +632,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
   );
   const addressGeneration = useRechargeAddressGeneration({
     allowed: canGenerateAddress,
-    automatic: computed(
-      () =>
-        canGenerateAddress.value &&
-        addressQuery.phase.value === 'ready' &&
-        !addressQuery.error.value &&
-        Boolean(details.value.name) &&
-        !rechargeFieldError('number', details.value.number) &&
-        availableAddresses.value.length === 0
-    ),
+    // 自动补充由账单分配事务统一完成；保留现有手动生成入口。
+    automatic: computed(() => false),
     context: () => [
       details.value.number.replace(/[ -]/g, ''),
       selectedPaymentCardId.value,
@@ -608,6 +648,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     select: (id) => {
       addressSource.value = 'library';
       selectedAddressId.value = id;
+      markAddressSelectionManual();
     }
   });
   function generateBillingAddress() {
@@ -618,6 +659,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     () => details.value.number.replace(/[ -]/g, ''),
     () => {
       selectedPaymentCardId.value = '';
+      billingAllocation.value = null;
     },
     { flush: 'sync' }
   );
@@ -1037,6 +1079,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
           execution.settledJobId = paymentJob.id;
           execution.completePaymentSave = null;
           paymentJobId.value = '';
+          if (billingAllocation.value) needsNewBillingAllocation.value = true;
           return;
         }
       }
@@ -1055,6 +1098,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         jsonInput.value = '';
         jsonError.value = '';
         selectedPaymentCardId.value = '';
+        billingAllocationKey.value = crypto.randomUUID();
+        billingAllocation.value = null;
         authorizeSinglePayment.value = false;
         // 清理已提交快照后，为下一笔输入重新登记同一表单。
         formDraft.open('new', { ...formDraft.form });
@@ -1210,8 +1255,26 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     return refreshing;
   }
 
+  async function start() {
+    if (
+      needsNewBillingAllocation.value &&
+      billingAllocation.value &&
+      !busy.value &&
+      !active.value
+    ) {
+      billingAllocationKey.value = crypto.randomUUID();
+      billingAllocation.value = null;
+      manualAddressSelectionRevision.value = 0;
+      selectedAddressId.value = '';
+      await nameMatch.retry(true);
+      if (nameMatch.error.value || disposed) return;
+      needsNewBillingAllocation.value = false;
+    }
+    await startPayment();
+  }
+
   const connectionVersion = () => JSON.stringify(settingsQuery.data.value ?? null);
-  const { start } = useRechargePaymentStart({
+  const { start: startPayment } = useRechargePaymentStart({
     canStart,
     busy,
     error,
@@ -1227,7 +1290,8 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         ? {
             name: details.value.name,
             addressId: selectedAddress.value.id,
-            cardId: selectedPaymentCardId.value
+            cardId: selectedPaymentCardId.value,
+            billingAllocationId: billingAllocation.value?.id
           }
         : undefined,
     ensureNameReady: () => nameMatch.ensureReady(),
@@ -1248,6 +1312,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
             ? { proxyId: selectedProxyId.value, proxyCountryCode: selectedProxyCountryCode.value }
             : {}),
           billingName: details.value.name,
+          ...(billingAllocation.value ? { billingAllocationId: billingAllocation.value.id } : {}),
           expectedEmail: details.value.email,
           ...(loginMethod.value === 'password'
             ? { chatgptAccountId: selectedBankAccountId.value, useSavedCredentials: true }
@@ -1788,6 +1853,37 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     { deep: true, immediate: true, flush: 'post' }
   );
 
+  watch(
+    [savedPaymentCards, paymentCardsQuery.phase, operationMode, plan],
+    () => {
+      if (
+        disposed ||
+        busy.value ||
+        active.value ||
+        operationMode.value !== 'payment' ||
+        paymentCardLoading.value ||
+        paymentCardsQuery.phase.value !== 'ready' ||
+        paymentCardsQuery.error.value
+      )
+        return;
+      // 刷新后已停用、占用或不再适用的共享卡不能继续留在表单中。
+      if (
+        selectedPaymentCardId.value &&
+        !savedPaymentCards.value.some((card) => card.id === selectedPaymentCardId.value)
+      ) {
+        selectedPaymentCardId.value = '';
+        details.value.number = '';
+        details.value.expiry = '';
+        details.value.cvc = '';
+      }
+      // 保留手填卡号与会话草稿；仅空白表单自动取服务端排序后的首张可用卡。
+      if (selectedPaymentCardId.value || details.value.number.trim()) return;
+      const card = savedPaymentCards.value[0];
+      if (card) void selectSavedCard(card.id);
+    },
+    { immediate: true, flush: 'post' }
+  );
+
   onScopeDispose(() => {
     disposed = true;
     directRecheckController?.abort();
@@ -1845,6 +1941,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     defaultCountryOptions,
     proxyRegionLocked,
     proxyRegionError,
+    planRegionLocked,
     proxySelectionNote,
     selectedProxyCountryCode,
     selectedProxyId,

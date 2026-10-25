@@ -143,6 +143,7 @@
                 v-model:plan="plan"
                 v-model:currency="lockedCurrency"
                 :currencies="availableCurrencyOptions"
+                :region-locked="planRegionLocked"
                 :error="
                   bankCurrenciesQuery.error.value
                     ? getApiErrorMessage(bankCurrenciesQuery.error.value)
@@ -154,6 +155,7 @@
                 v-model:country-code="selectedProxyCountryCode"
                 v-model:proxy-id="selectedProxyId"
                 :countries="availableProxyCountries"
+                :country-locked="planRegionLocked"
                 :login-country-restriction="loginCountryRestriction"
                 :proxies="availableProxies"
                 :loading="
@@ -421,6 +423,7 @@ const {
   defaultCountryOptions,
   proxyRegionLocked,
   proxyRegionError,
+  planRegionLocked,
   proxySelectionNote,
   selectedProxyCountryCode,
   selectedProxyId,

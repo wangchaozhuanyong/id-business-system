@@ -2,7 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../../auth/auth.types';
@@ -15,6 +16,7 @@ import {
   normalizeV2ExpectedUpdatedAt,
   type V2CommandTransaction
 } from '../runtime/public-api';
+import { RechargeBillingRepository } from './persistence/recharge-billing.repository';
 import { RechargeNameRepository } from './persistence/recharge-name.repository';
 import { generateRechargeBillingName } from './recharge-billing-generator';
 import { cardNumber, cardExpiry } from './bank-recharge-card-validation';
@@ -23,7 +25,8 @@ import {
   bankRechargeCurrency,
   bankRechargeId,
   bankRechargeObject,
-  bankRechargeText
+  bankRechargeText,
+  bankRechargeUuid
 } from './bank-recharge-validation';
 
 @Injectable()
@@ -33,7 +36,8 @@ export class RechargeNameService {
     private readonly transactions: V2CommandTransactionManager,
     private readonly audit: V2TransactionalAuditService,
     private readonly encryption: FieldEncryptionService,
-    private readonly pool: SharedBankCardRepository
+    private readonly pool: SharedBankCardRepository,
+    @Optional() private readonly billing?: RechargeBillingRepository
   ) {}
   private name(value: unknown) {
     return bankRechargeText(value, '姓名', 120).replace(/\s+/g, ' ');
@@ -166,12 +170,50 @@ export class RechargeNameService {
   }
   async match(value: unknown, operator: AuthenticatedUser) {
     const input = bankRechargeObject(value);
-    if (Object.keys(input).some((key) => key !== 'number'))
+    if (Object.keys(input).some((key) => !['number', 'allocationKey', 'addressId'].includes(key)))
       throw new BadRequestException('银行卡匹配资料格式无效');
     const number = cardNumber(input.number);
     return this.transactions.execute(
       async (tx) => {
         await this.repository.lock(tx);
+        if (this.billing) {
+          if (
+            typeof input.allocationKey !== 'string' ||
+            !bankRechargeUuid.test(input.allocationKey)
+          )
+            throw new ConflictException('请刷新充值页后重新分配本次账单资料');
+          if (
+            input.addressId !== undefined &&
+            (typeof input.addressId !== 'string' || !bankRechargeUuid.test(input.addressId))
+          )
+            throw new BadRequestException('地址编号无效');
+          const numberHash = this.encryption.hash(number)!;
+          const card = await this.repository.card(tx, numberHash);
+          if (card) await this.pool.assertLegacyAvailable(tx, card);
+          const result = await this.billing.allocate(tx, {
+            key: input.allocationKey,
+            numberHash,
+            ownerId: operator.id,
+            addressId: input.addressId as string | undefined
+          });
+          await this.audit.append(tx, {
+            userId: operator.id,
+            module: 'id_business_v2',
+            action: 'id_business_v2.auto_recharge.billing.allocate',
+            objectType: 'recharge_billing_allocation',
+            objectId: result.allocation.id,
+            afterData: { generated: result.generated, removed: result.removed },
+            remark: '分配本次不重复账单资料，保留永久排重指纹'
+          });
+          return {
+            name: this.encryption.decrypt(result.allocation.nameEncrypted),
+            confirmed: false,
+            cardId: card?.id ?? null,
+            billingAddressId: result.allocation.addressId,
+            allocationId: result.allocation.id,
+            address: result.allocation.address
+          };
+        }
         const numberHash = this.encryption.hash(number)!;
         const card = await this.repository.card(tx, numberHash);
         if (card) await this.pool.assertLegacyAvailable(tx, card);
@@ -213,7 +255,8 @@ export class RechargeNameService {
     const input = bankRechargeObject(value);
     if (
       Object.keys(input).some(
-        (key) => !['number', 'expiry', 'name', 'currencyCode', 'plan'].includes(key)
+        (key) =>
+          !['number', 'expiry', 'name', 'currencyCode', 'plan', 'billingAllocationId'].includes(key)
       )
     )
       throw new BadRequestException('银行卡登记资料格式无效');
@@ -225,6 +268,14 @@ export class RechargeNameService {
           this.encryption.hash(cardNumber(input.number))!,
           typeof input.plan === 'string' ? input.plan : undefined
         );
+        if (this.billing) {
+          bankRechargeId(input.billingAllocationId, '账单分配编号');
+          await this.billing.verify(tx, String(input.billingAllocationId), {
+            numberHash: this.encryption.hash(cardNumber(input.number))!,
+            name: this.name(input.name),
+            ownerId: operator.id
+          });
+        }
         const card = await this.prepareCard(
           tx,
           {
@@ -233,7 +284,8 @@ export class RechargeNameService {
             name: this.name(input.name),
             currencyCode: bankRechargeCurrency(input.currencyCode)
           },
-          operator
+          operator,
+          Boolean(this.billing)
         );
         return { cardId: card.id };
       },
@@ -251,18 +303,29 @@ export class RechargeNameService {
     name: string,
     currency: string,
     plan?: string,
-    jobId?: string
+    jobId?: string,
+    billingContext?: { id: string; ownerId: string; addressId: string }
   ) {
     await this.repository.lock(tx);
     const card = await this.repository.cardById(tx, id);
     bankRechargeCurrency(currency);
     if (!card || !card.numberHash) throw new ConflictException('所选银行卡资料不完整');
+    if (this.billing) {
+      if (!billingContext) throw new ConflictException('请刷新充值页后分配本次账单资料');
+      await this.billing.verify(tx, billingContext.id, {
+        numberHash: card.numberHash,
+        name: this.name(name),
+        ownerId: billingContext.ownerId,
+        addressId: billingContext.addressId,
+        jobId
+      });
+    }
     const binding = await this.repository.binding(tx, card.numberHash);
     for (const fixed of [
       card.billingNameEncrypted,
       binding?.confirmed ? binding.nameEncrypted : null
     ]) {
-      if (fixed && this.encryption.decrypt(fixed) !== this.name(name))
+      if (!billingContext && fixed && this.encryption.decrypt(fixed) !== this.name(name))
         throw new ConflictException('账单姓名与银行卡历史绑定不一致');
     }
     if (plan && jobId) await this.pool.reserveLegacy(tx, card, plan, jobId);
@@ -272,7 +335,8 @@ export class RechargeNameService {
   async prepareCard(
     tx: V2CommandTransaction,
     value: { number: string; expiry: string; name: string; currencyCode: string },
-    operator: AuthenticatedUser
+    operator: AuthenticatedUser,
+    freshBilling = false
   ) {
     await this.repository.lock(tx);
     const number = cardNumber(value.number);
@@ -284,7 +348,11 @@ export class RechargeNameService {
       card?.billingNameEncrypted,
       binding?.confirmed ? binding.nameEncrypted : null
     ]) {
-      if (fixedName && this.encryption.decrypt(fixedName) !== this.name(value.name))
+      if (
+        !freshBilling &&
+        fixedName &&
+        this.encryption.decrypt(fixedName) !== this.name(value.name)
+      )
         throw new ConflictException('账单姓名与银行卡历史绑定不一致');
     }
     if (card) {

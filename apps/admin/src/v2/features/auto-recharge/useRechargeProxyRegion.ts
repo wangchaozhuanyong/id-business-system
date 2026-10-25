@@ -4,6 +4,8 @@ import type { RechargeProxyItem } from './recharge-proxy-api';
 import { proxyCountryCurrencies, proxyCountryLabel } from './recharge-proxy-options';
 
 interface ProxyRegionContext {
+  plan?: Ref<string>;
+  paymentMode?: Readonly<Ref<boolean>>;
   currency: Ref<string>;
   country: Ref<string>;
   proxyId: Ref<string>;
@@ -23,6 +25,11 @@ interface ProxyRegionContext {
 
 export function useRechargeProxyRegion(context: ProxyRegionContext) {
   let synchronizing = false;
+  const planRegionLocked = computed(
+    () =>
+      context.paymentMode?.value !== false &&
+      ['pro-5x', 'pro-500'].includes(context.plan?.value ?? '')
+  );
   const currencyEnabled = (code: string) =>
     context.currencies.value.some((item) => item.value === code);
   function fromCountry() {
@@ -78,7 +85,7 @@ export function useRechargeProxyRegion(context: ProxyRegionContext) {
   watch(
     context.defaultCountry,
     (code) => {
-      context.country.value = code;
+      if (!planRegionLocked.value) context.country.value = code;
     },
     { flush: 'sync' }
   );
@@ -94,6 +101,21 @@ export function useRechargeProxyRegion(context: ProxyRegionContext) {
       }
     },
     { deep: true }
+  );
+
+  watch(
+    [() => context.plan?.value, planRegionLocked, context.locked],
+    (_current, previous) => {
+      if (context.locked.value) return;
+      if (planRegionLocked.value) {
+        context.country.value = 'CL';
+        fromCountry();
+      } else if (previous?.[1]) {
+        context.country.value = context.defaultCountry.value;
+        fromCountry();
+      }
+    },
+    { immediate: true, flush: 'sync' }
   );
 
   const countries = computed(() => {
@@ -126,6 +148,8 @@ export function useRechargeProxyRegion(context: ProxyRegionContext) {
     )
   );
   const countryCurrencyError = computed(() => {
+    if (planRegionLocked.value && context.country.value !== 'CL')
+      return '当前套餐须使用智利代理和智利比索，请重新选择套餐。';
     const currency = proxyCountryCurrencies[context.country.value];
     if (!currency) return '所选币种或国家暂无对应关系，请选择支持的国家和币种。';
     if (!currencyEnabled(currency))
@@ -161,6 +185,7 @@ export function useRechargeProxyRegion(context: ProxyRegionContext) {
     return '';
   });
   return {
+    planRegionLocked,
     countries,
     defaultCountries,
     proxies,

@@ -7,13 +7,18 @@ import {
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import type { V2CommandTransaction } from '../../runtime/public-api';
 import type { V2RechargeAddressListQuery, V2RechargeAddressStatus } from '@apple-business/shared';
+import { Optional } from '@nestjs/common';
+import { RechargeBillingRepository } from './recharge-billing.repository';
 import { RECHARGE_ADDRESS_LOCATION } from '../recharge-address-validation';
 import { randomUUID } from 'node:crypto';
 import { generateRechargeBillingAddress } from '../recharge-billing-generator';
 
 @Injectable()
 export class RechargeAddressRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly billing?: RechargeBillingRepository
+  ) {}
 
   private async ownerScope(
     client: Pick<Prisma.TransactionClient, 'securitySetting'>,
@@ -83,11 +88,21 @@ export class RechargeAddressRepository {
   }
 
   async markUsed(tx: V2CommandTransaction, ownerId: string, id: string, jobId?: string) {
+    if (jobId) {
+      const prior = await tx.idBusinessV2RechargeAddressUse.findUnique({ where: { jobId } });
+      if (prior) {
+        if ((prior.addressId ?? prior.addressReference) !== id || prior.ownerId !== ownerId)
+          throw new ConflictException('同一充值任务不能更换账单地址');
+        const priorAddress = { id, status: 'used' };
+        return { before: priorAddress, after: priorAddress, changed: false };
+      }
+    }
     const address = await tx.idBusinessV2RechargeAddress.findFirst({
       where: { id, ownerId: await this.ownerScope(tx, ownerId) }
     });
     if (!address) throw new NotFoundException('找不到本次充值使用的地址');
     if (address.status === 'disabled') throw new ConflictException('账单地址已停用');
+    await this.billing?.rememberUsedAddress(tx, address, ownerId);
     if (jobId) {
       const prior = await tx.idBusinessV2RechargeAddressUse.findUnique({ where: { jobId } });
       if (prior) {
@@ -96,7 +111,7 @@ export class RechargeAddressRepository {
         return { before: address, after: address, changed: false };
       }
       await tx.idBusinessV2RechargeAddressUse.create({
-        data: { jobId, addressId: id, ownerId }
+        data: { jobId, addressId: id, addressReference: id, ownerId }
       });
     } else if (address.status === 'used') {
       return { before: address, after: address, changed: false };
@@ -113,6 +128,7 @@ export class RechargeAddressRepository {
     const where: Prisma.IdBusinessV2RechargeAddressWhereInput = {
       ownerId: ownerScope,
       ...(query.status === 'all' ? {} : { status: query.status }),
+      ...(query.status === 'unused' ? { billingAllocations: { none: {} } } : {}),
       ...(query.keyword ? { line1: { contains: query.keyword } } : {})
     };
     const [items, total, unused, used, disabled] = await this.prisma.$transaction([
@@ -141,6 +157,21 @@ export class RechargeAddressRepository {
 
   async createMany(tx: V2CommandTransaction, ownerId: string, streets: string[]) {
     await assertEmployeeBusinessWriter(tx, ownerId);
+    if (this.billing) {
+      await this.billing.lock(tx);
+      const unique: string[] = [];
+      for (const line1 of streets) {
+        if (
+          !(await this.billing.isHistoricalAddress(tx, {
+            line1,
+            line2: null,
+            ...RECHARGE_ADDRESS_LOCATION
+          }))
+        )
+          unique.push(line1);
+      }
+      streets = unique;
+    }
     const now = new Date();
     return tx.idBusinessV2RechargeAddress.createMany({
       data: streets.map((line1) => ({
@@ -165,6 +196,11 @@ export class RechargeAddressRepository {
         ownerId,
         status: 'unused'
       }));
+      if (this.billing) {
+        await this.billing.lock(tx);
+        for (let index = data.length - 1; index >= 0; index--)
+          if (await this.billing.isHistoricalAddress(tx, data[index]!)) data.splice(index, 1);
+      }
       await tx.idBusinessV2RechargeAddress.createMany({ data, skipDuplicates: true });
       items.push(
         ...(await tx.idBusinessV2RechargeAddress.findMany({
@@ -190,6 +226,7 @@ export class RechargeAddressRepository {
     if (address.status === 'used' && status !== 'used') {
       throw new ConflictException('已使用地址不能恢复为可用状态');
     }
+    if (status === 'used') await this.billing?.rememberUsedAddress(tx, address, ownerId);
     if (address.status === status) return { before: address, after: address };
     const after = await tx.idBusinessV2RechargeAddress.update({
       where: { id },

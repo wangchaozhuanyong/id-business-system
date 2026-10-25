@@ -8,6 +8,7 @@ import { BankRechargeLifecycleRepository } from './persistence/bank-recharge-lif
 import { BankRechargeFeesService } from './bank-recharge-fees.service';
 import { Module } from '@nestjs/common';
 import { RechargeNameService } from './recharge-name.service';
+import { RechargeBillingRepository } from './persistence/recharge-billing.repository';
 import { RechargeNameRepository } from './persistence/recharge-name.repository';
 import { RechargeNameController } from './recharge-name.controller';
 import { RechargeCardRemovalService } from './recharge-card-removal.service';
@@ -67,6 +68,7 @@ import { BankRechargePricingService } from './bank-recharge-pricing.service';
     V2IdentityService,
     RechargeNameService,
     RechargeNameRepository,
+    RechargeBillingRepository,
     RechargeCardRemovalService,
     RechargeCardRemovalRepository,
     BankRechargeFeesService,

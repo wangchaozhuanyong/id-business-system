@@ -152,6 +152,9 @@ export class BankRechargeCardService {
     return { available: true };
   }
 
+  wasBillingAddressCleared(tx: V2CommandTransaction, jobId: string, addressId: string) {
+    return this.repository.wasBillingAddressCleared(tx, jobId, addressId);
+  }
   billingIdentity(tx: V2CommandTransaction, id: string) {
     return this.repository.findInTransaction(tx, id);
   }
