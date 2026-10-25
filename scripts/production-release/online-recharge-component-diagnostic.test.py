@@ -167,6 +167,7 @@ class DiagnosticTests(unittest.TestCase):
                 + ':scripts/production-release/' + name], cwd=HERE.parents[1])) if producer is not P
                 else r.c.digest((HERE / name).read_bytes()) for name in helpers}
         with patch.object(r.c, 'SEALED_ORDINARY_COMPONENT', a), patch.object(r.c, 'ADMIN_SUCCESSOR', current), \
+                patch.object(r, 'INSTANCE', a['instanceId']), \
                 patch.dict(client.os.environ, env, clear=True), patch.object(client, 'helper_pins',
                     side_effect=pins):
             params = client.parameters(mode, core, producer, input_artifacts=(saved['proof'], saved['preflight'])
