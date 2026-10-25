@@ -58,6 +58,10 @@ function childEnvironment(task) {
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(task.id)) throw new Error('任务临时目录标识无效');
   env.ONLINE_RECHARGE_RUNTIME_DIR = path.join(transientRoot(), 'tasks', task.id);
   env.ONLINE_RECHARGE_MEDIA_DIR = path.join(mediaRoot(), task.id);
+  // Parent-owned persistent storage must never inherit the child's /tmp runtime root.
+  env.ONLINE_RECHARGE_PROFILE_ROOT = process.env.ONLINE_RECHARGE_PROFILE_ROOT
+    ? require('./paths.cjs').resolveProjectPath(process.env.ONLINE_RECHARGE_PROFILE_ROOT)
+    : path.join(runtimeRoot(), 'browser-profiles');
   return env;
 }
 async function configurePool(config) {
@@ -420,12 +424,7 @@ async function runJob(task, config) {
         (task.operation === 'recharge' && task.provider !== 'third_party');
       await configurePool(config);
       requireLease();
-      if (requiresBrowser && pool.isEnabled()) {
-        await pool.initBrowserPool();
-        requireLease();
-        entry.slot = await pool.acquireSlot(task.id);
-        requireLease();
-      }
+      // Account tasks own a persistent context; the generic warm pool is not an account session.
       const env = require('./upstream/browser-runtime').buildWorkerRuntimeEnv(
         childEnvironment(task),
         entry.slot,

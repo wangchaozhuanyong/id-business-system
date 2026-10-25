@@ -794,3 +794,19 @@ inert、模态边界、命中位置和唯一候选检查，不修改官网属性
 前检、卡号就绪读取和就绪后复检撤掉显式 `stopOnReadFailure: true`，继续使用共享表单原有 300ms 初读、失败后最多一次 1200ms 纯读取重试；没有扩大总期限，也没有新增页面重载或交互重试。首次失败和重试均保留在脱敏日志，重试后仍未完成则沿用原错误分类、冻结和关页收尾。
 
 本轮只调整内部诊断调用及回归用例，并更新来源摘要；共享表单、正式付款调用、登录、代理和控件规则未变。没有新增接口、数据库结构、迁移、配置或依赖，没有提交、推送、发布、新增官网结账单或付款。检查记录归 `.runtime/checkout-readonly-retry-restore-20261023/`；线上恢复尚未验证。
+
+## 2026-10-25 专用持久化浏览器（本地候选，尚未发布）
+
+账号充值、调试、订阅读取和续费任务由 worker 分配专用持久化浏览器，不再把通用预热池当作账号会话。目录默认为父 worker 的 `ONLINE_RECHARGE_RUNTIME_DIR/browser-profiles`，可用可选 `ONLINE_RECHARGE_PROFILE_ROOT` 指定项目内受限绝对目录；已有部署的 runtime 命名卷可直接承载，无新增卷或数据库迁移。子进程 `/tmp` 任务目录只放临时产物，profile 不随任务清理。
+
+目录名为账号、用户、原始代理连接（包括固定代理 session）及 channel 的 SHA256 摘要，不含原始身份或代理凭据。浏览器原生文件会保存登录状态，根目录及 profile 权限 0700；应用绑定元数据权限 0600，只保存出口地址摘要。初始化关闭密码管理及银行卡/地址自动填充保存。不得把 profile 当证据上传或输出 Cookie/Token。更换账号、代理连接或 channel 使用另一目录；相同连接返回不同出口时停止并报告，不自动更换代理或复制验证 Cookie。
+
+使用 Playwright 原生完整 Chromium：持久化模式默认 `channel: chromium`，避免无头 shell 与完整浏览器在 profile 互斥上的差异；同目录跨进程互斥已用真实浏览器隔离验证。同进程也拒绝重复使用，目录不使用临时任务编号。既有 `CHROMIUM_CHANNEL=chrome` 可选已安装的系统 Chrome；当前镜像只安装 Chromium，本轮不假定服务器已有 Chrome，也不修改镜像安装步骤。
+
+取消执行入口和通用启动器的 stealth、AutomationControlled、固定 Windows client hints 及重复环境属性伪装，保留原生自动化标记；不以隐藏 webdriver 或第三方检测分数作为验收。保留区域 locale/timezone 业务配置，不手工覆盖 UA。持久化账号路径先核验已存 Cookie 的真实 Session：有效用户和原账号均匹配才复用，不用旧任务 Cookie 覆盖刷新后的状态；明确失效才导入本次输入。该路径跳过伪造 bootstrap 会话缓存及登录导航 abort；Session/CSRF 使用真实网络，订阅 GET 仍在同一已登录页面执行并携带必要鉴权。一般旧兼容入口保留，不把它作为新账号任务路径。
+
+明确收到 `cf-mitigated: challenge` 或允许列表挑战证据时，付款前快速退出为失败且保留 `CHALLENGE_BLOCKED`，不进入人工等待或 `awaiting_review`。只传递已有分诊和已完成脱敏图片，不等待新截图或视频编码；关闭原生 context 后才释放 profile，正常关闭卡住时仅终止当前 CDP 核实的自有浏览器 PID，再核实断开。付款已经提交/确认或结果未知的保护优先，不因挑战改成普通失败。没有新增状态，也没有改建单和支付提交重试规则。
+
+本轮不触发官网访问、创建 Checkout、选择银行卡或付款，不部署、不迁移。本地三次 profile 重开、HttpOnly Cookie/存储恢复、同账号真实 Session 合成回执、账号隔离、出口不一致、原生跨进程互斥、挑战退出及关闭兜底验证只证明执行器行为。持久化不能保证官网不再挑战，也不能证明上一笔真实 403 的成因已解决；后续线上验收应分别记录 Session/订阅真实回执、challenge_blocked、运行阶段及资源释放结果。
+
+参考：[Playwright 持久化上下文](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context)、[完整 Chromium 与无头 shell](https://playwright.dev/docs/browsers)、[Cloudflare clearance](https://developers.cloudflare.com/cloudflare-challenges/concepts/clearance/)。

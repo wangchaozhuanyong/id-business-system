@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  persistentProfilePaths,
+  isPersistentProfileOnly,
   isUnpaidValidationControlsOnly,
   unpaidValidationPaths,
   checkoutResumePaths,
@@ -84,4 +86,36 @@ test('checkout resume publication checks only its finite controls and preserves 
     'apps/api/prisma-mysql/schema.prisma'
   ])
     assert.equal(isUnpaidValidationControlsOnly([...paths, extra]), false);
+});
+
+test('persistent account browser candidate keeps complete engine checks without unrelated API/Admin or database work', () => {
+  const paths = [
+    ...persistentProfilePaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(isPersistentProfileOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/auth/session.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js'
+  ])
+    assert.equal(isPersistentProfileOnly([...paths, extra]), false);
+  for (const required of persistentProfilePaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isPersistentProfileOnly(paths.filter((p) => p !== required)), false);
+  const guards = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(guards, /check:v2-module-architecture/);
+  assert.match(guards, /test:online-recharge:controls/);
+  assert.doesNotMatch(guards, /prisma|migrate|check:v2-color-contrast/);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
+  assert.equal(
+    checkMode([...paths, 'apps/api/prisma-mysql/schema.prisma'], 'before', 'after'),
+    'full'
+  );
 });

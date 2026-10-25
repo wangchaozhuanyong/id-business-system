@@ -228,7 +228,12 @@ async function runTask(task) {
       };
     }
     if (require('./rpc.cjs').taskSignal().aborted) return;
-    if (task.operation === 'recharge' && !result?.resultUnknown && !result?.pendingCredentials) {
+    if (
+      task.operation === 'recharge' &&
+      !result?.resultUnknown &&
+      !result?.pendingCredentials &&
+      result?.errorCode !== 'CHALLENGE_BLOCKED'
+    ) {
       const event = result?.success
         ? 'success'
         : result?.cardPoolEmpty

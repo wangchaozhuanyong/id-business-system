@@ -16,6 +16,11 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 const ACCOUNT_CHECK_ATTEMPT_MS = 20000;
 const ACCOUNT_MISMATCH_MESSAGE = '官网会话账号或用户与原任务不一致，已停止后续操作';
 const BOOTSTRAP_FAILURE_MESSAGES = {
+    CHALLENGE_BLOCKED: '官网要求进一步验证，已停止本次任务；未提交付款',
+    PROFILE_BUSY: '同一账号与代理的浏览器正在使用，本次未继续',
+    PROFILE_EXIT_CHANGED: '代理出口与浏览器会话绑定不一致，已停止；未切换代理',
+    PROFILE_LAUNCH_FAILED: '专用浏览器启动未完成，请检查运行环境',
+    PROFILE_IDENTITY_MISSING: '缺少账号及用户标识，不能复用浏览器会话',
     SESSION_VERIFICATION_BLOCKED: '官网会话验证被阻断，本次未取得订阅结果',
     SESSION_API_UNCONFIRMED: '独立会话接口与首页均未确认登录，本次未取得订阅结果',
     SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
@@ -297,6 +302,7 @@ function transportCode(error) {
         ? 'ETIMEDOUT' : 'UNKNOWN';
 }
 function queryErrorCode(error) {
+    if (Object.hasOwn(BOOTSTRAP_FAILURE_MESSAGES, error?.code || '')) return error.code;
     if (['HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH', 'NETWORK_TIMEOUT',
         'SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED', 'SESSION_VERIFICATION_BLOCKED', 'SESSION_API_UNCONFIRMED'].includes(error?.code)) return error.code;
     if (/^(?:VERIFICATION_(?:TIMEOUT|CANCELLED|PAGE_CLOSED|FRAME_AMBIGUOUS|NOT_READY|NETWORK_UNAVAILABLE|PROVIDER_UNAVAILABLE|PROVIDER_REJECTED|RATE_LIMITED|CHALLENGE_REJECTED|CHALLENGE_UNCHANGED|ROUNDS_EXHAUSTED|SOLVER_DISABLED|SOLVER_FAILED|RUNTIME_FAILED|PAGE_BINDING_REQUIRED|PAGE_BINDING_MISMATCH|UNSUPPORTED)|VLM_(?:AUTH_FAILED|RATE_LIMITED|TIMEOUT|NETWORK_UNAVAILABLE|REQUEST_UNSUPPORTED|INVALID_RESPONSE|INVALID_DECISION|PROVIDER_UNAVAILABLE|IMAGE_UNSUPPORTED|NOT_CONFIGURED|API_REJECTED))$/.test(error?.code)) return error.code;
@@ -676,18 +682,19 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
         prepared = await acquire(() => preparePlaywrightProxy(String(process.env.PROXY || '').trim()),
             'proxy_prepare', resource => resource.cleanup());
         session = await acquire(() => runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig,
-            headful: process.env.HEADFUL === '1' }), 'browser_connect',
+            headful: process.env.HEADFUL === '1', sessionRaw: options.sessionRaw, signal: budget.signal }), 'browser_connect',
             resource => runtime.closeTaskBrowser(resource, resource.browser));
-        context = await acquire(() => session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
-            userAgent: session.realUserAgent, locale: 'en-US' }), 'context_create', resource => resource.close());
+        context = await acquire(() => session.context || session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
+            locale: 'en-US' }), 'context_create', resource => resource.close());
         page = await acquire(() => prepareQueryPage(context, budget), 'page_create', closeQueryPage);
         const auth = require('./session-auth');
         const installed = await boundedQuery(() => auth.installChatGptSession(context, options.sessionRaw, {
-            signal: budget.signal, deadlineAt: budget.deadlineAt, onHumanVerification: options.onHumanVerification
+            signal: budget.signal, deadlineAt: budget.deadlineAt, onHumanVerification: options.onHumanVerification,
+            nativeSession: Boolean(session.context), preserveStoredSession: Boolean(session.context)
         }), budget, 'session_install');
         const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
             sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
-            initialSessionProbe: installed?.initialSessionProbe, onHumanVerification: options.onHumanVerification,
+            initialSessionProbe: installed?.initialSessionProbe, nativeSession: Boolean(session.context), onHumanVerification: session.context ? async () => { throw Object.assign(new Error('官网要求进一步验证'), { code: 'CHALLENGE_BLOCKED' }); } : options.onHumanVerification,
             deadlineAt: budget.deadlineAt, signal: budget.signal
         }), budget, 'session_bootstrap');
         return await operation(login.session?.accessToken || accessToken, { ...options, page,
@@ -703,10 +710,13 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
                 : BOOTSTRAP_FAILURE_MESSAGES[errorCode] || '续费操作未能完成核验，请核对原任务，禁止重复提交' };
     } finally {
         finished = true;
-        await closeQueryPage(page);
-        if (context) await context.close().catch(() => {});
-        if (session) await runtime.closeTaskBrowser(session, session.browser).catch(() => {});
-        if (prepared) await prepared.cleanup().catch(() => {});
+        try {
+            if (!session?.context) {
+                await closeQueryPage(page);
+                if (context) await context.close().catch(() => {});
+            }
+            if (session) await runtime.closeTaskBrowser(session, session.browser);
+        } finally { if (prepared) await prepared.cleanup().catch(() => {}); }
     }
 }
 async function fetchAccountCheck(accessToken, options = {}) {
@@ -747,19 +757,20 @@ async function fetchAccountCheck(accessToken, options = {}) {
             cleanup = prepared.cleanup;
             const runtime = require('./browser-runtime');
             session = await boundedQuery(() => runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig,
-                headful: process.env.HEADFUL === '1' }), budget, 'browser_connect');
-            ownedContext = await boundedQuery(() => session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
-                userAgent: session.realUserAgent, locale: 'en-US' }), budget, 'context_create');
+                headful: process.env.HEADFUL === '1', sessionRaw: options.sessionRaw, signal: budget.signal }), budget, 'browser_connect');
+            ownedContext = await boundedQuery(() => session.context || session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
+                locale: 'en-US' }), budget, 'context_create');
             ownedPage = page = await prepareQueryPage(ownedContext, budget);
             const auth = require('./session-auth');
             const installed = await boundedQuery(() => auth.installChatGptSession(ownedContext, options.sessionRaw, {
-                signal: budget.signal, deadlineAt: budget.deadlineAt, onHumanVerification: options.onHumanVerification
+                signal: budget.signal, deadlineAt: budget.deadlineAt, onHumanVerification: options.onHumanVerification,
+                nativeSession: Boolean(session.context), preserveStoredSession: Boolean(session.context)
             }), budget, 'session_install');
             verifiedCookie = installed?.cookieVerified === true;
             accessToken = installed?.sessionData?.accessToken || accessToken;
             const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
                 sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
-                initialSessionProbe: installed?.initialSessionProbe, onHumanVerification: options.onHumanVerification,
+                initialSessionProbe: installed?.initialSessionProbe, nativeSession: Boolean(session.context), onHumanVerification: session.context ? async () => { throw Object.assign(new Error('官网要求进一步验证'), { code: 'CHALLENGE_BLOCKED' }); } : options.onHumanVerification,
                 deadlineAt: budget.deadlineAt, signal: budget.signal
             }), budget, 'session_bootstrap');
             accessToken = login.session?.accessToken || accessToken;
@@ -767,6 +778,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
         if (page) {
             const verification = require('./human-verification');
             if (await boundedQuery(() => verification.isBlockingHumanVerificationVisible(page), budget, 'verification_probe')) {
+                if (process.env.ONLINE_RECHARGE_PROFILE_ROOT && !require('../rpc.cjs').wasSubmitted())
+                    throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED' });
                 if (typeof options.onHumanVerification === 'function') {
                     const diagnostic = { transport: 'browser-page', phase: 'verification' };
                     budget.diagnostics.push(diagnostic);
@@ -789,6 +802,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
             try { result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget); }
             catch (error) { await compare(page, error); throw error; }
             if (result.status === 403 && result.responseFacts?.classification === 'CF_CHALLENGE') {
+                if (process.env.ONLINE_RECHARGE_PROFILE_ROOT && !require('../rpc.cjs').wasSubmitted())
+                    throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED' });
                 const diagnostic = budget.diagnostics.at(-1);
                 if (await completeOriginalChallenge(page, options, budget, diagnostic)) {
                     const resumed = { ...budget, attempts: 0, maxAttempts: 1, afterHumanVerification: true };
@@ -863,11 +878,16 @@ async function fetchAccountCheck(accessToken, options = {}) {
     } finally {
         if (budget.diagnostics.length && options.authDiagnostics?.snapshot)
             budget.diagnostics.at(-1).authResponses = options.authDiagnostics.snapshot();
-        await closeQueryPage(ownedPage);
-        if (ownedContext) await ownedContext.close().catch(() => {});
-        if (session) await require('./browser-runtime').closeTaskBrowser(session, session.browser);
-        if (requestContext) await requestContext.dispose().catch(() => {});
-        await cleanup().catch(() => {});
+        try {
+            if (!session?.context) {
+                await closeQueryPage(ownedPage);
+                if (ownedContext) await ownedContext.close().catch(() => {});
+            }
+            if (session) await require('./browser-runtime').closeTaskBrowser(session, session.browser);
+        } finally {
+            if (requestContext) await requestContext.dispose().catch(() => {});
+            await cleanup().catch(() => {});
+        }
     }
 }
 

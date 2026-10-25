@@ -7,10 +7,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { chromium } = require('playwright');
 
-chromium.use(StealthPlugin());
 
 const DEFAULT_POOL_SIZE = 2;
 const BASE_PORT = Number(process.env.BROWSER_POOL_BASE_PORT || 19222);
@@ -133,7 +131,6 @@ async function collectSlotDetail(slot) {
 
 function buildLaunchArgs(port) {
     const args = [
-        '--disable-blink-features=AutomationControlled',
         `--remote-debugging-port=${port}`
     ];
     if (process.env.HEADFUL !== '1' || process.env.RUNNING_IN_DOCKER === '1') {

@@ -1579,6 +1579,7 @@ test('an unfinished checkout page close goes directly to task context cleanup be
           calls.push('screenshot');
           throw new Error('No screenshot may delay cleanup');
         },
+        challengeBlocked: false,
         lastPaymentResult: null,
         checkoutEvidence: {},
         paymentSucceeded: false,

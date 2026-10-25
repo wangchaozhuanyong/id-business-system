@@ -177,6 +177,8 @@ test('only checkout debug permits an unverified target through the actual index 
         billingCurrency: 'PHP',
         debugOnly,
         validation: null,
+        nativeSession: false,
+        challengeBlocked: false,
         verificationHandler: async () => ({ completed: true }),
         checkoutEvidence: {},
         context: {},

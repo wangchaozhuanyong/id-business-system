@@ -82,7 +82,7 @@ function buildDebugScreenshotPath(prefix) {
 }
 
 // 关闭 context 后把录像重命名为带任务标识的稳定文件名，并输出路径供 server 解析
-async function finalizeVideo() { return safeMedia.finish(); }
+async function finalizeVideo(options = {}) { return safeMedia.finish(options); }
 
 function getAvailableDebugPage(context, preferredPage) {
     if (preferredPage && !preferredPage.isClosed()) {
@@ -161,7 +161,10 @@ async function run(runOptions = {}) {
     const CHROMIUM_CHANNEL = (process.env.CHROMIUM_CHANNEL || '').trim();
     const debugOnly = process.env.CHECKOUT_DEBUG_ONLY === '1';
     const validation = runOptions.unpaidValidation === true ? require('../unpaid-validation.cjs') : null;
-    const verificationHandler = validation ? validation.automaticVerification : require('../human-verification.cjs').waitForHumanVerification;
+    const nativeSession = Boolean(process.env.ONLINE_RECHARGE_PROFILE_ROOT);
+    const verificationHandler = nativeSession ? async () => {
+        throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED', challengeDetected: true });
+    } : validation ? validation.automaticVerification : require('../human-verification.cjs').waitForHumanVerification;
 
     let proxyCleanup = async () => { };
     let browserSession = null;
@@ -172,279 +175,47 @@ async function run(runOptions = {}) {
     let paymentSucceeded = false;
     let lastPaymentResult = null;
     let checkoutEvidence = {};
+    let challengeBlocked = false;
 
     validation?.stage('proxy');
-    const preparedProxy = await preparePlaywrightProxy(CONFIG.proxy);
-    proxyCleanup = preparedProxy.cleanup;
-    const proxyConfig = preparedProxy.proxyConfig;
-
-    if (proxyConfig) {
-        console.log(`🌐 [系统] 代理已配置${preparedProxy.relayed ? '（SOCKS→本地 HTTP 中继）' : ''}`);
-    }
-
-    browserSession = await connectTaskBrowser({
-        proxyConfig,
-        headful: DEBUG_HEADFUL,
-        chromiumChannel: CHROMIUM_CHANNEL
-    });
-    applyCdpEnv(browserSession);
-    browser = browserSession.browser;
-
-    const realUserAgent = browserSession.realUserAgent;
-
-    const viewport = { width: 1920, height: 1080 };
-    const matched = realUserAgent.match(/Chrome\/(\d+)/);
-    const chromeMajor = matched ? Number(matched[1]) : 147;
-
-    const paymentRegion = String(CONFIG.paymentRegionOverride || '').trim().toUpperCase()
-        || await store.getPaymentRegion();
-    const regionCfg = getRegionConfig(paymentRegion);
-    const browserProfile = getRegionBrowserProfile(paymentRegion);
-
-    const contextOptions = {
-        userAgent: realUserAgent,
-        viewport,
-        locale: browserProfile.locale,
-        timezoneId: browserProfile.timezoneId,
-        screen: { width: 1920, height: 1080 },
-        deviceScaleFactor: 1,
-        isMobile: false,
-        hasTouch: false,
-        extraHTTPHeaders: {
-            'sec-ch-ua': `"Not)A;Brand";v="8", "Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}"`,
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"'
-        }
-    };
-    if (proxyConfig) {
-        contextOptions.proxy = proxyConfig;
-    }
-
-    // Actual pages are recorded only as mandatory masked screenshot frames.
-    await safeMedia.start(browser);
-
     try {
-        context = await browser.newContext(contextOptions);
+        const preparedProxy = await preparePlaywrightProxy(CONFIG.proxy);
+        proxyCleanup = preparedProxy.cleanup;
+        const proxyConfig = preparedProxy.proxyConfig;
+
+        if (proxyConfig) {
+            console.log(`🌐 [系统] 代理已配置${preparedProxy.relayed ? '（SOCKS→本地 HTTP 中继）' : ''}`);
+        }
+
+        const paymentRegion = String(CONFIG.paymentRegionOverride || '').trim().toUpperCase()
+            || await store.getPaymentRegion();
+        const regionCfg = getRegionConfig(paymentRegion);
+        const browserProfile = getRegionBrowserProfile(paymentRegion);
+
+        const contextOptions = { viewport: { width: 1920, height: 1080 },
+            locale: browserProfile.locale, timezoneId: browserProfile.timezoneId,
+            ...(proxyConfig ? { proxy: proxyConfig } : {}) };
+        browserSession = await connectTaskBrowser({ proxyConfig, headful: DEBUG_HEADFUL,
+            chromiumChannel: CHROMIUM_CHANNEL, contextOptions, signal: taskSignal?.() });
+        applyCdpEnv(browserSession);
+        browser = browserSession.browser;
+
+        // Actual pages are recorded only as mandatory masked screenshot frames.
+        await safeMedia.start(browser);
+
+        context = browserSession.context || await browser.newContext(contextOptions);
         const sessionRaw = CONFIG.chatgptSessionJson || CONFIG.chatgptToken;
         validation?.stage('login');
         const installResult = await installChatGptSession(context, sessionRaw, {
-            signal: taskSignal?.(), onHumanVerification: verificationHandler
+            signal: taskSignal?.(), onHumanVerification: verificationHandler,
+            nativeSession, preserveStoredSession: nativeSession
         });
         const sessionData = installResult?.sessionData || installResult;
         const cookieVerified = Boolean(installResult?.cookieVerified);
 
-        // ============= 指纹伪装 =============
-        await context.addInitScript((injectedChromeMajor) => {
-            const NavProto = Object.getPrototypeOf(navigator);
-            const ScrProto = Object.getPrototypeOf(screen);
-            const safeDefine = (obj, key, getter) => {
-                try {
-                    Object.defineProperty(obj, key, { get: getter, configurable: true });
-                } catch (_) { /* ignore */ }
-            };
-
-            // 隐藏 webdriver
-            try { delete Object.getPrototypeOf(navigator).webdriver; } catch (_) { }
-            safeDefine(NavProto, 'webdriver', () => undefined);
-            try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true }); } catch (_) { }
-
-            // navigator.userAgentData
-            try {
-                const uaData = {
-                    brands: [
-                        { brand: 'Not)A;Brand', version: '8' },
-                        { brand: 'Chromium', version: String(injectedChromeMajor) },
-                        { brand: 'Google Chrome', version: String(injectedChromeMajor) }
-                    ],
-                    mobile: false,
-                    platform: 'Windows',
-                    getHighEntropyValues: () => Promise.resolve({
-                        architecture: 'x86',
-                        bitness: '64',
-                        mobile: false,
-                        model: '',
-                        platform: 'Windows',
-                        platformVersion: '15.0.0',
-                        wow64: false
-                    }),
-                    toJSON: () => ({ brands: uaData.brands, mobile: uaData.mobile, platform: uaData.platform })
-                };
-                safeDefine(NavProto, 'userAgentData', () => uaData);
-            } catch (_) { }
-
-            // plugins / mimeTypes
-            try {
-                const pdfMime = Object.create(MimeType.prototype);
-                Object.defineProperties(pdfMime, {
-                    type: { get: () => 'application/pdf' },
-                    suffixes: { get: () => 'pdf' },
-                    description: { get: () => 'Portable Document Format' }
-                });
-                const pdfPlugin = Object.create(Plugin.prototype);
-                Object.defineProperties(pdfPlugin, {
-                    name: { get: () => 'Chrome PDF Plugin' },
-                    filename: { get: () => 'internal-pdf-viewer' },
-                    description: { get: () => 'Portable Document Format' },
-                    length: { get: () => 1 },
-                    0: { get: () => pdfMime }
-                });
-                pdfPlugin.item = () => pdfMime;
-                pdfPlugin.namedItem = () => pdfMime;
-
-                const fakePlugins = Object.create(PluginArray.prototype);
-                Object.defineProperties(fakePlugins, {
-                    length: { get: () => 1 },
-                    0: { get: () => pdfPlugin }
-                });
-                fakePlugins.item = () => pdfPlugin;
-                fakePlugins.namedItem = (n) => n === pdfPlugin.name ? pdfPlugin : null;
-                fakePlugins.refresh = () => { };
-
-                const fakeMimeTypes = Object.create(MimeTypeArray.prototype);
-                Object.defineProperties(fakeMimeTypes, {
-                    length: { get: () => 1 },
-                    0: { get: () => pdfMime }
-                });
-                fakeMimeTypes.item = () => pdfMime;
-                fakeMimeTypes.namedItem = (n) => n === pdfMime.type ? pdfMime : null;
-
-                safeDefine(NavProto, 'plugins', () => fakePlugins);
-                safeDefine(NavProto, 'mimeTypes', () => fakeMimeTypes);
-            } catch (_) { }
-
-            // 语言、平台、硬件
-            safeDefine(NavProto, 'languages', () => ['en-US', 'en']);
-            safeDefine(NavProto, 'language', () => 'en-US');
-            safeDefine(NavProto, 'platform', () => 'Win32');
-            safeDefine(NavProto, 'hardwareConcurrency', () => 8);
-            safeDefine(NavProto, 'deviceMemory', () => 8);
-            safeDefine(NavProto, 'maxTouchPoints', () => 0);
-            safeDefine(NavProto, 'vendor', () => 'Google Inc.');
-
-            // navigator.connection
-            try {
-                const conn = { effectiveType: '4g', rtt: 100, downlink: 10, saveData: false };
-                safeDefine(NavProto, 'connection', () => conn);
-            } catch (_) { }
-
-            // window.chrome
-            try {
-                const fakeChrome = {
-                    app: {
-                        isInstalled: false,
-                        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-                        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
-                        getDetails: () => null,
-                        getIsInstalled: () => false
-                    },
-                    runtime: {
-                        OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
-                        OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
-                        PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
-                        PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
-                        PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' },
-                        RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' },
-                        connect: () => { },
-                        sendMessage: () => { }
-                    },
-                    csi: () => ({ onloadT: Date.now(), pageT: Date.now() - 1000, startE: Date.now() - 2000, tran: 15 }),
-                    loadTimes: () => ({
-                        requestTime: Date.now() / 1000 - 2,
-                        startLoadTime: Date.now() / 1000 - 1.5,
-                        commitLoadTime: Date.now() / 1000 - 1,
-                        finishDocumentLoadTime: Date.now() / 1000 - 0.5,
-                        finishLoadTime: Date.now() / 1000,
-                        firstPaintTime: Date.now() / 1000 - 0.3,
-                        firstPaintAfterLoadTime: 0,
-                        navigationType: 'Other',
-                        wasFetchedViaSpdy: true,
-                        wasNpnNegotiated: true,
-                        npnNegotiatedProtocol: 'h2',
-                        wasAlternateProtocolAvailable: false,
-                        connectionInfo: 'h2'
-                    })
-                };
-                Object.defineProperty(window, 'chrome', { value: fakeChrome, writable: true, configurable: true });
-            } catch (_) { }
-
-            // permissions.query
-            try {
-                const origQuery = navigator.permissions.query.bind(navigator.permissions);
-                navigator.permissions.query = (params) => {
-                    if (params && params.name === 'notifications') {
-                        return Promise.resolve({ state: typeof Notification !== 'undefined' ? Notification.permission : 'default', onchange: null });
-                    }
-                    return origQuery(params).catch(() => ({ state: 'prompt', onchange: null }));
-                };
-            } catch (_) { }
-
-            // screen
-            safeDefine(ScrProto, 'availHeight', () => 1032);
-            safeDefine(ScrProto, 'availWidth', () => 1920);
-            safeDefine(ScrProto, 'colorDepth', () => 24);
-            safeDefine(ScrProto, 'pixelDepth', () => 24);
-            safeDefine(ScrProto, 'width', () => 1920);
-            safeDefine(ScrProto, 'height', () => 1080);
-
-            // Canvas 微噪声
-            try {
-                const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-                HTMLCanvasElement.prototype.toDataURL = function (...args) {
-                    const ctx = this.getContext('2d');
-                    if (ctx) {
-                        try {
-                            const w = this.width, h = this.height;
-                            if (w > 0 && h > 0) {
-                                const data = ctx.getImageData(0, 0, 1, 1);
-                                data.data[3] = Math.max(1, data.data[3] - 1);
-                                ctx.putImageData(data, 0, 0);
-                            }
-                        } catch (_) { }
-                    }
-                    return origToDataURL.apply(this, args);
-                };
-            } catch (_) { }
-
-            // WebGL
-            try {
-                const fakeWebGL = (gl) => {
-                    const origGetParameter = gl.getParameter.bind(gl);
-                    gl.getParameter = function (param) {
-                        if (param === 0x9245) return 'Google Inc. (Intel)';
-                        if (param === 0x9246) return 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)';
-                        return origGetParameter(param);
-                    };
-                };
-                const origGetCtx = HTMLCanvasElement.prototype.getContext;
-                HTMLCanvasElement.prototype.getContext = function (type, ...args) {
-                    const ctx = origGetCtx.call(this, type, ...args);
-                    if (ctx && (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl')) {
-                        try { fakeWebGL(ctx); } catch (_) { }
-                    }
-                    return ctx;
-                };
-            } catch (_) { }
-
-            // ChromeDriver 痕迹
-            try {
-                for (const key of Object.keys(window)) {
-                    if (/^(cdc_|\$cdc_|_phantom|callPhantom|webdriver-|driver-)/.test(key)) {
-                        try { delete window[key]; } catch (_) { }
-                    }
-                }
-            } catch (_) { }
-
-            // Notification.permission
-            try {
-                if (typeof Notification !== 'undefined') {
-                    Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true });
-                }
-            } catch (_) { }
-        }, chromeMajor);
-
         // --- Phase 0: Proxy Connectivity Check ---
-        validation?.stage('proxy');
-        if (proxyConfig) {
+        if (!browserSession.context) validation?.stage('proxy');
+        if (proxyConfig && !browserSession.context) {
             // 模块业务规则：只重试原代理的连通性探测，不重启任务或重复建单、付款。
             const maxProxyAttempts = 5;
             for (let attempt = 1; attempt <= maxProxyAttempts; attempt++) {
@@ -525,7 +296,7 @@ async function run(runOptions = {}) {
 
         authDiagnostics = require('../subscription-diagnostics.cjs').observeAuthResponses(page, sessionRaw);
         const loginInfo = await bootstrapChatGptSession(page, sessionRaw, {
-            sessionData, cookieVerified, initialSessionProbe: installResult?.initialSessionProbe,
+            sessionData, cookieVerified, initialSessionProbe: installResult?.initialSessionProbe, nativeSession,
             signal: taskSignal?.(), deadlineAt: performance.now() + 180000,
             onHumanVerification: verificationHandler
         });
@@ -542,7 +313,13 @@ async function run(runOptions = {}) {
             allowUnverifiedTarget: debugOnly && !validation, browserContext: context, page, signal: taskSignal?.(), sessionRaw,
             authDiagnostics, onHumanVerification: verificationHandler
         });
-        if (!preflight.allowed) return { ...checkoutEvidence, success: false, submitted: false, ...preflight };
+        if (!preflight.allowed) {
+            challengeBlocked = nativeSession && (preflight.confirmation?.queryErrorCode === 'CHALLENGE_BLOCKED'
+                || preflight.confirmation?.verificationDiagnostics?.classification === 'CF_CHALLENGE');
+            return { ...checkoutEvidence, success: false, submitted: false, ...preflight,
+                ...(challengeBlocked ? { errorCode: 'CHALLENGE_BLOCKED', challengeDetected: true,
+                    error: '官网要求进一步验证，已停止本次任务；未提交付款' } : {}) };
+        }
         const operation = preflight.kind;
         if (!['initial', 'upgrade'].includes(operation)) throw new Error('无法确定首次开通或升级操作');
         const expectedCurrency = require('../confirmation.cjs').resolvePaymentCurrency(preflight, billingCurrency, { debugOnly });
@@ -669,9 +446,11 @@ async function run(runOptions = {}) {
             if (context) await context.close().catch(() => {});
         }
         if (e.code === 'LEASE_LOST' || taskSignal?.()?.aborted) throw e;
+        challengeBlocked = e.code === 'CHALLENGE_BLOCKED' && !wasSubmitted()
+            && !require('../rpc.cjs').wasPaymentConfirmed();
         console.error("❌ [运行时错误]:", e.message);
         try {
-            const errorShot = e.checkoutOpenCleanupFailed === true ? null : await captureDebugScreenshot(context, page, 'error');
+            const errorShot = challengeBlocked || e.checkoutOpenCleanupFailed === true ? null : await captureDebugScreenshot(context, page, 'error');
             if (errorShot) {
                 console.log(`FAILURE_SCREENSHOT: ${errorShot}`);
             }
@@ -685,7 +464,13 @@ async function run(runOptions = {}) {
         const verificationBootstrapCode = e.bootstrapDiagnostics?.reason === 'verification_failed'
             ? require('./verification-runtime').controlledVerificationCode(e.code, null) : null;
         const bootstrapFailure = {
-            CHALLENGE_BLOCKED: '官网验证未完成，已停止本次不付款验证',
+            PROFILE_IDENTITY_MISSING: '缺少账号及用户标识，不能复用浏览器会话',
+            PROFILE_BUSY: '同一账号与代理的浏览器正在使用，本次未继续',
+            PROFILE_EXIT_CHANGED: '代理出口与浏览器会话绑定不一致，已停止；未切换代理',
+            PROFILE_BINDING_INVALID: '浏览器出口绑定记录无效，已停止',
+            PROFILE_DIRECTORY_INVALID: '浏览器会话目录无效，已停止',
+            PROFILE_LAUNCH_FAILED: '专用浏览器启动未完成，请检查运行环境',
+            CHALLENGE_BLOCKED: '官网要求进一步验证，已停止本次任务；未提交付款',
             CHECKOUT_AUTH_READ_FAILED: '登录控件读取失败，已停止后续操作',
             NETWORK_TIMEOUT: '官网登录核验超过本次期限，已停止后续操作',
             SESSION_NOT_CONFIRMED: '官网首页的登录状态尚未确认，已停止后续操作',
@@ -811,18 +596,18 @@ async function run(runOptions = {}) {
         const debugCheckout = debugOnly && !resultUnknown && e.checkoutCreationState === 'accepted'
             && typeof e.originalCheckoutUrl === 'string'
             ? { debugOnly: true, checkoutUrl: e.originalCheckoutUrl } : {};
-        return { ...checkoutEvidence, ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, ...(validation ? { validationErrorCode: e.code, validationMissing: Array.isArray(e.missing) ? e.missing.filter(key => ['number', 'expiry', 'cvc', 'country', 'line1', 'city', 'postal', 'name', 'state'].includes(key)) : undefined, challengeDetected: e.challengeDetected === true } : {}), ...(e.checkoutCreationDiagnostics ? { checkoutCreationDiagnostics: require('../checkout-creation-diagnostics.cjs').safe(e.checkoutCreationDiagnostics) } : {}), pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure || proxyFailure ? { errorCode: proxyFailure ? 'PROXY_UNAVAILABLE' : checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || proxyFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
+        return { ...checkoutEvidence, ...debugCheckout, ...(lastPaymentResult?.paymentEvidence ? { paymentEvidence: lastPaymentResult.paymentEvidence, confirmation: lastPaymentResult.confirmation, cardLast4: lastPaymentResult.cardLast4, confirmedPaid: lastPaymentResult.confirmedPaid === true, subscriptionChangedVerified: lastPaymentResult.subscriptionChangedVerified === true } : {}), success: false, ...(e.code === 'CHALLENGE_BLOCKED' && !resultUnknown ? { challengeDetected: true } : {}), ...(validation ? { validationErrorCode: e.code, validationMissing: Array.isArray(e.missing) ? e.missing.filter(key => ['number', 'expiry', 'cvc', 'country', 'line1', 'city', 'postal', 'name', 'state'].includes(key)) : undefined, challengeDetected: e.challengeDetected === true || (e.code === 'CHALLENGE_BLOCKED' && !resultUnknown) } : {}), ...(e.checkoutCreationDiagnostics ? { checkoutCreationDiagnostics: require('../checkout-creation-diagnostics.cjs').safe(e.checkoutCreationDiagnostics) } : {}), pendingCredentials: e.code === 'PENDING_CREDENTIALS', resultUnknown, ...(checkoutFailure || checkoutOpenDiagnostics || bootstrapFailure || proxyFailure ? { errorCode: proxyFailure ? 'PROXY_UNAVAILABLE' : checkoutFailure ? e.code : checkoutOpenDiagnostics ? 'CHECKOUT_OPEN_FAILED' : e.code } : {}), ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}), ...(bootstrapDiagnostics ? { bootstrapDiagnostics } : {}), error: checkoutFailureMessage || bootstrapFailure || proxyFailure || (e.code === 'LEASE_LOST' ? '任务租约已失效' : '执行未完成，请查看受限诊断') };
     } finally {
         validation?.stage('cleanup');
         authDiagnostics?.dispose();
         console.log("👋 [系统] 流程结束，正在关闭浏览器...");
         await Promise.resolve(require('./human-verification').disposeVerificationPage?.(page)).catch(() => {});
         // 先关闭 context 以 flush 录像并取回路径，再关浏览器
-        const evidence = await finalizeVideo(context, page, { deleteOnSuccess: paymentSucceeded }).catch(() => []);
+        const evidence = await finalizeVideo({ fast: challengeBlocked }).catch(() => []);
         if (typeof process.send === 'function') process.send({ type: 'evidence', paths: evidence });
-        if (context) await context.close().catch(() => {});
-        await closeTaskBrowser(browserSession, browser);
-        await proxyCleanup();
+        if (context && !browserSession?.context) await context.close().catch(() => {});
+        try { await closeTaskBrowser(browserSession, browser); }
+        finally { await proxyCleanup(); }
     }
 }
 

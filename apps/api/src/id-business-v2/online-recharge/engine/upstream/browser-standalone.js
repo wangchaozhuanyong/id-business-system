@@ -4,10 +4,7 @@
  * 独立浏览器模式：每任务冷启动 Chromium（不经浏览器池）
  */
 
-const { chromium } = require('playwright-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-
-chromium.use(StealthPlugin());
+const { chromium } = require('playwright');
 
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 
@@ -36,7 +33,6 @@ async function connectStandaloneBrowser(options = {}) {
     const cdpPort = String(options.cdpPort || process.env.CDP_PORT || '9222').trim();
 
     const launchArgs = [
-        '--disable-blink-features=AutomationControlled',
         `--remote-debugging-port=${cdpPort}`
     ];
     if (!headful || process.env.RUNNING_IN_DOCKER === '1') {
@@ -54,7 +50,16 @@ async function connectStandaloneBrowser(options = {}) {
         launchOptions.proxy = options.proxyConfig;
     }
 
-    const browser = await chromium.launch(launchOptions);
+    let profile;
+    if (options.profileRoot) {
+        profile = await require('../browser-profile.cjs').launchProfile(chromium, {
+            root: options.profileRoot, sessionRaw: options.sessionRaw,
+            proxyBinding: options.proxyBinding, channel: chromiumChannel, signal: options.signal,
+            launchOptions: { ...launchOptions, viewport: { width: 1920, height: 1080 },
+                ...options.contextOptions }
+        });
+    }
+    const browser = profile ? profile.context.browser() : await chromium.launch(launchOptions);
     const cdpUrl = `http://127.0.0.1:${cdpPort}`;
 
     if (headful) {
@@ -63,12 +68,13 @@ async function connectStandaloneBrowser(options = {}) {
     console.log(`🚀 [Browser/standalone] 已启动独立 Chromium (CDP ${cdpUrl})`);
 
     return {
-        mode: 'standalone',
+        mode: profile ? 'persistent' : 'standalone',
+        ...(profile ? { context: profile.context, close: profile.close, profileKey: profile.profileKey } : {}),
         browser,
         ownsBrowser: true,
         cdpUrl,
         cdpPort,
-        realUserAgent: await probeUserAgent(browser)
+        realUserAgent: profile ? undefined : await probeUserAgent(browser)
     };
 }
 

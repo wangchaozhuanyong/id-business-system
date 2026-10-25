@@ -39,11 +39,11 @@ async function launchFixtureBrowser(args) {
     const browser = await chromium.launch({ headless: !headful, args });
     return { browser, close: () => closeOwnedBrowser(browser) };
   }
-  const { chromium: extraChromium } = require('../upstream/node_modules/playwright-extra');
+  const { chromium: extraChromium } = require('../upstream/node_modules/playwright');
   const method = browserMode === 'pool' ? 'launchPersistentContext' : 'launch';
   const original = extraChromium[method];
-  // Execute the actual installed launcher and its plugins. This test-only
-  // wrapper appends egress isolation; it does not substitute a native launcher.
+  // Execute the actual native launcher. This test-only
+  // wrapper appends egress isolation; it does not alter authentication or browser properties.
   extraChromium[method] = function (...parameters) {
     const index = method === 'launch' ? 0 : 1;
     parameters[index] = {

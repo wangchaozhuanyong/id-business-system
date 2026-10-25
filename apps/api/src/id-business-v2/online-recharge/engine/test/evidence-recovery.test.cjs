@@ -85,7 +85,7 @@ async function worker(root, { duplicateIpc = false } = {}) {
       if (name === 'node:crypto') return { createHash };
       if (name === 'node:fs/promises') return fs;
       if (name === 'node:os') return { hostname: () => 'synthetic-host' };
-      if (name === 'node:net') return {};
+      if (name === 'node:net') return require('node:net');
       if (name === 'node:child_process') return { fork: () => child };
       if (name === './rpc.cjs')
         return {
