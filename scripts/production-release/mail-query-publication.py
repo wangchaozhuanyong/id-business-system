@@ -74,7 +74,7 @@ def reuse_environment(evidence):
         actual={'image':'ubuntu-'+image_os.removeprefix('ubuntu')+'.04' if re.fullmatch('ubuntu[0-9]{2}',image_os) else None,
                 'imageVersion':os.environ.get('ImageVersion'),
                 'node':execute('node','--version').decode().strip(),'npm':execute('npm','--version').decode().strip(),'platform':sys.platform}
-        if any(v is None for v in expected.values()) or expected!=actual:return None
+        if not all(expected.values()) or expected!=actual:return None
         return {'matched':actual,'guardLogSha256':sha(raw),'guardJobId':str(rows[0]['id'])}
     except Exception:
         return None
