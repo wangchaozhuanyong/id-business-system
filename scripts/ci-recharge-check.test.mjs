@@ -4044,3 +4044,35 @@ test('selected native runner rejects every missing extra duplicate moved and sch
       );
   }
 });
+
+test('mailbox fixture repairs retain their actual component tests without rerunning unrelated production workers', () => {
+  const fixtures = [
+    'scripts/production-release/online-recharge-component-diagnostic.test.py',
+    'scripts/production-release/online-recharge-component-recovery.test.py'
+  ];
+  const paths = [
+    'apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    ...fixtures
+  ];
+  const commands = recordGuardCommands('mailbox', paths);
+  for (const name of [
+    ...fixtures,
+    'scripts/production-release/online-recharge-component-recovery-readonly.test.py',
+    'scripts/production-release/online-recharge-component-lifecycle.test.py'
+  ])
+    assert.ok(
+      commands.some((row) => row.includes(name)),
+      name
+    );
+  assert.equal(
+    commands.some((row) => row.includes('test:online-recharge:controls')),
+    false
+  );
+  const engine = recordGuardCommands('mailbox', [
+    ...paths,
+    'apps/api/src/id-business-v2/online-recharge/engine/healthcheck.cjs'
+  ]);
+  assert.ok(engine.some((row) => row.includes('test:online-recharge:controls')));
+});

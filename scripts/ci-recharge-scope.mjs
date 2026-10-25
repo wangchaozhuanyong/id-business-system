@@ -1297,7 +1297,7 @@ export function needsOnlineRechargeCiBuild(paths, context) {
       (path) =>
         !onlineCiBuildInputs.has(path) ||
         onlineCiBuildTestInputs.has(path) ||
-        path === 'scripts/ci-recharge-scope.mjs'
+        ['scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-check.mjs'].includes(path)
     )
   )
     return false;

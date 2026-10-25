@@ -8659,6 +8659,8 @@ test('mailbox checks do not rebuild an unrelated historical ONLINE image for sel
     'packages/shared/src/v2/vendure-mailbox.ts',
     'scripts/ci-recharge-scope.mjs',
     'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
     'scripts/production-release/online-recharge-component-diagnostic.test.py',
     'scripts/production-release/online-recharge-component-recovery.test.py'
   ];
