@@ -3,6 +3,7 @@
     <el-select
       :model-value="countryCode"
       aria-label="选择代理国家"
+      :disabled="countryLocked"
       name="recharge-proxy-region"
       autocomplete="off"
       placeholder="选择国家后查看该国代理"
@@ -70,6 +71,7 @@ import { proxyCountryLabel, proxyKindLabels, proxyProtocolLabel } from './rechar
 import V2RechargeProxyDetailDrawer from './V2RechargeProxyDetailDrawer.vue';
 
 defineProps<{
+  countryLocked?: boolean;
   countryCode: string;
   proxyId: string;
   defaultProxyId?: string;

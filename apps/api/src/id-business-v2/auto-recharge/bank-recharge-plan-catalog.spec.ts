@@ -66,13 +66,40 @@ describe('手工套餐记录不扩大自动充值权限', () => {
       vi.useRealTimers();
     }
   });
+  it.each(['pro-5x', 'pro-500'])('%s 拒绝绕过智利地区要求，智利比索保留零位小数', (plan) => {
+    const input = {
+      id: accountId,
+      plan,
+      addressId: accountId,
+      windowName: '合成窗口',
+      lockedCurrency: 'CLP',
+      proxyCountryCode: 'CL',
+      proxyId: accountId,
+      authorizeSinglePayment: true
+    };
+    expect(validateRechargeBitBrowserStart(input)).toMatchObject({
+      plan,
+      lockedCurrency: 'CLP',
+      proxyCountryCode: 'CL'
+    });
+    expect(() => validateRechargeBitBrowserStart({ ...input, lockedCurrency: 'PHP' })).toThrow(
+      '智利'
+    );
+    expect(() => validateRechargeBitBrowserStart({ ...input, proxyCountryCode: 'PH' })).toThrow(
+      '智利'
+    );
+    expect(() =>
+      validateRechargeBitBrowserStart({ ...input, proxyCountryCode: undefined, proxyId: undefined })
+    ).toThrow('智利');
+  });
   it.each(['go', 'pro-500'])('%s 可进入本机执行器，仍要求单次授权与币种', (plan) => {
     const input = {
       id: accountId,
       plan,
       addressId: accountId,
       windowName: '500 档测试',
-      lockedCurrency: 'MYR',
+      lockedCurrency: plan === 'pro-500' ? 'CLP' : 'MYR',
+      ...(plan === 'pro-500' ? { proxyCountryCode: 'CL', proxyId: accountId } : {}),
       authorizeSinglePayment: true
     };
     expect(validateRechargeBitBrowserStart(input)).toMatchObject({ plan });

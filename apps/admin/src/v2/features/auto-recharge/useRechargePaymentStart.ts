@@ -33,7 +33,9 @@ interface PaymentStartContext {
   apiProtocol: () => number | undefined;
   connectionVersion: () => string;
   editVersion: () => number;
-  verifiedDetails: () => { name: string; addressId: string; cardId: string } | undefined;
+  verifiedDetails: () =>
+    | { name: string; addressId: string; cardId: string; billingAllocationId?: string }
+    | undefined;
   ensureNameReady: () => Promise<void>;
   checkSavedConnection: (current: () => boolean) => Promise<string[]>;
   beginPaymentSave: (id: string) => () => void;
@@ -132,6 +134,7 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
       payment.name = verified.name;
       input.billingName = verified.name;
       input.addressId = verified.addressId;
+      if (verified.billingAllocationId) input.billingAllocationId = verified.billingAllocationId;
       const rememberPaymentSave = context.beginPaymentSave(id);
       await bankRechargeApi.checkCardAvailability(payment.number);
       if (!current()) return;
@@ -140,6 +143,7 @@ export function useRechargePaymentStart(context: PaymentStartContext) {
       if (!current()) return;
       checkConnectionSnapshot();
       const paymentCard = await bankRechargeApi.preparePaymentCard({
+        ...(input.billingAllocationId ? { billingAllocationId: input.billingAllocationId } : {}),
         number: payment.number,
         expiry: payment.expiry,
         name: payment.name,

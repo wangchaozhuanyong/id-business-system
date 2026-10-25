@@ -23,6 +23,7 @@
     <el-select
       :model-value="currency"
       aria-label="选择锁定币种"
+      :disabled="regionLocked"
       filterable
       @update:model-value="$emit('update:currency', $event)"
     >
@@ -34,6 +35,7 @@
       />
     </el-select>
   </el-form-item>
+  <p v-if="regionLocked" class="recharge-note">当前套餐自动使用智利代理和智利比索。</p>
   <p v-if="error" class="recharge-error" role="alert">
     {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
   </p>
@@ -45,6 +47,7 @@ import type { V2RechargePlan } from './contracts';
 import { rechargePlanOptions } from './recharge-plan-options';
 
 defineProps<{
+  regionLocked?: boolean;
   plan: V2RechargePlan;
   currency: string;
   currencies: { value: string; label: string }[];
