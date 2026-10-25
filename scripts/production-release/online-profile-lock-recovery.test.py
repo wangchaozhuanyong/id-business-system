@@ -244,6 +244,34 @@ class RecoveryTests(unittest.TestCase):
             self.recover()
         self.untouched()
 
+    def test_same_mount_entries_in_a_different_docker_order_are_not_drift(self):
+        self.native_links()
+        self.container['Mounts'].append({'Type':'bind','Source':str(self.root/'unrelated-config'),
+                                        'Destination':'/etc/synthetic-config','RW':False})
+        original=r.inventory;calls=0
+        def reordered(*args):
+            nonlocal calls
+            calls+=1
+            if calls==2:self.container['Mounts'].reverse()
+            return original(*args)
+        with patch.object(r,'inventory',side_effect=reordered):
+            self.assertEqual(self.recover()['lockEntriesArchived'],3)
+
+    def test_changed_mount_permission_remains_real_drift_before_any_recovery(self):
+        self.native_links()
+        extra={'Type':'bind','Source':str(self.root/'unrelated-config'),
+               'Destination':'/etc/synthetic-config','RW':False}
+        self.container['Mounts'].append(extra)
+        original=r.inventory;calls=0
+        def changed(*args):
+            nonlocal calls
+            calls+=1
+            if calls==2:extra['RW']=True
+            return original(*args)
+        with patch.object(r,'inventory',side_effect=changed):
+            with self.assertRaisesRegex(RuntimeError,'HOST_INVENTORY_CHANGED'):self.recover()
+        self.untouched()
+
     def test_inventory_drift_stops_before_mutation(self):
         self.native_links()
         original = r.inventory

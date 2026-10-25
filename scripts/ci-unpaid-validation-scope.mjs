@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
 // Exact unpaid validation batch. Adding another business path restores full checks.
 export const unpaidValidationPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
@@ -248,7 +251,33 @@ export function isProfileEgressLifecycleOnly(paths) {
     )
   );
 }
+const profileInventoryRepairPaths = new Set([
+  'scripts/production-release/online-profile-lock-recovery.py',
+  'scripts/production-release/online-profile-lock-recovery.test.py',
+  'scripts/production-release/online-profile-lock-release.test.py',
+  'scripts/ci-unpaid-validation-scope.mjs',
+  'scripts/ci-unpaid-validation-scope.test.mjs'
+]);
+export function isProfileInventoryControlRepair(paths, options = {}) {
+  if (
+    paths.length !== profileInventoryRepairPaths.size ||
+    new Set(paths).size !== paths.length ||
+    !paths.every((path) => profileInventoryRepairPaths.has(path))
+  )
+    return false;
+  const digest =
+    options.helperSha256 ??
+    createHash('sha256')
+      .update(
+        readFileSync(
+          new URL('./production-release/online-profile-lock-recovery.py', import.meta.url)
+        )
+      )
+      .digest('hex');
+  return digest === 'bda837bfe6b6b8ca91f356fe780c13d75de15928d017a1fe6780d7b481065b58';
+}
 export function isUnpaidValidationControlsOnly(paths) {
+  if (isProfileInventoryControlRepair(paths)) return true;
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
@@ -332,6 +361,9 @@ export function unpaidValidationCommands(part, paths) {
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
       ...(paths.some((p) => p.includes('online-profile-lock-'))
         ? [['python3', '-B', 'scripts/production-release/online-profile-lock-release.test.py']]
+        : []),
+      ...(paths.some((p) => /online-profile-lock-recovery(?:\.test)?\.py$/.test(p))
+        ? [['python3', '-B', 'scripts/production-release/online-profile-lock-recovery.test.py']]
         : []),
       ...(paths.some((p) => p.includes('online-country-evidence-'))
         ? [['python3', '-B', 'scripts/production-release/online-country-evidence-release.test.py']]

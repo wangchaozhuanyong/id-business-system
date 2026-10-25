@@ -11,6 +11,7 @@ import {
   isProfileEgressLifecycleOnly,
   isPersistentProfileOnly,
   isUnpaidValidationControlsOnly,
+  isProfileInventoryControlRepair,
   unpaidValidationPaths,
   checkoutResumePaths,
   unpaidValidationControls,
@@ -371,4 +372,36 @@ test('country evidence publication is finite and keeps its contract test', () =>
     )
   );
   assert.equal(isUnpaidValidationControlsOnly([...paths, countryEvidencePaths[0]]), false);
+});
+
+test('profile inventory control repair executes its recovery regression suite', () => {
+  const paths = [
+    'scripts/production-release/online-profile-lock-recovery.py',
+    'scripts/production-release/online-profile-lock-recovery.test.py',
+    'scripts/production-release/online-profile-lock-release.test.py',
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.equal(isProfileInventoryControlRepair(paths, { helperSha256: '0'.repeat(64) }), false);
+  assert.equal(
+    isProfileInventoryControlRepair([
+      ...paths,
+      'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs'
+    ]),
+    false
+  );
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = unpaidValidationCommands('guards', paths);
+  assert.ok(
+    commands.some((row) =>
+      row.includes('scripts/production-release/online-profile-lock-recovery.test.py')
+    )
+  );
+  assert.equal(
+    commands.some((row) => row.some((arg) => /migrate|prisma|workspace.*api/.test(arg))),
+    false
+  );
 });

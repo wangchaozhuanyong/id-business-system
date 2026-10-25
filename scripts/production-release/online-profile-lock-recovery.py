@@ -104,9 +104,12 @@ def inventory(d, container_id):
                  labels['com.docker.compose.project'], 'VOLUME_SHARED')
             if service == 'online-recharge':
                 users.append((item['Id'], item['Config']['Hostname']))
-    # Include all container states/hostnames, so an owner appearing during recovery is drift.
-    stamp = sorted((c['Id'], c['Config']['Hostname'], stopped(c),
-                    c['State'].get('Pid'), json.dumps(c.get('Mounts'), sort_keys=True)) for c in containers)
+    # Docker may reorder the same mount entries between inspect calls.
+    # Preserve every field while comparing the mount set in a stable order.
+    need(all(isinstance(c.get('Mounts'), list) for c in containers), 'INVENTORY_INVALID')
+    stamp = sorted((c['Id'], c['Config']['Hostname'], stopped(c), c['State'].get('Pid'),
+                    json.dumps(sorted(c['Mounts'], key=lambda mount: json.dumps(mount, sort_keys=True)),
+                               sort_keys=True)) for c in containers)
     return source, tuple(sorted(users)), tuple(stamp)
 
 
