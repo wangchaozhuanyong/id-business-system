@@ -1,0 +1,48 @@
+name: Mailbox Publication Read-only Observation
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact latest main source revision
+        required: true
+        type: string
+      expected_current:
+        description: Expected current production revision
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+jobs:
+  observe:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Validate bounded read-only source
+        run: python3 -B scripts/production-release/mail-query-observe.test.py
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-mail-query-observe-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Read exact mailbox publication baseline without business writes
+        run: python3 -B scripts/production-release/mail-query-observe.py
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mail-query-observation-${{ github.run_id }}
+          path: .deploy/mail-query-observe/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
