@@ -82,3 +82,81 @@ describe('不付款诊断文件合同', () => {
     await expect(f.repository.upload(input(report))).rejects.toThrow('仅支持不付款验收任务');
   });
 });
+
+const formDiagnostics = {
+  inspection: {
+    complete: false,
+    framesFailed: 1,
+    framesChecked: 2,
+    readAttempts: 2,
+    readPhase: 'candidate_eligibility',
+    readFailures: [{ phase: 'control_snapshot', reason: 'timeout', count: 1 }],
+    controlCounts: { scanned: 6, eligible: 3 }
+  },
+  steps: [
+    { field: 'number', phase: 'readback', state: 'completed', matched: true },
+    {
+      field: 'expiry',
+      phase: 'precheck',
+      state: 'failed',
+      readPhase: 'candidate_eligibility',
+      errorClass: 'timeout',
+      frameId: 2,
+      frameKind: 'embedded',
+      candidateCount: 1,
+      visible: true,
+      readOnly: false,
+      inShadowRoot: false,
+      locatorKind: 'autocomplete',
+      tag: 'input',
+      durationMs: 300
+    }
+  ]
+};
+
+describe('填卡读取诊断落盘', () => {
+  it('允许字段阶段和完整读取分类通过现有证据入口保存', async () => {
+    const root = join(project, '.runtime/card-read-diagnostics-20261025/api-artifacts');
+    await mkdir(root, { recursive: true });
+    const directory = await mkdtemp(join(root, 'fixture-'));
+    try {
+      const f = fixture(directory);
+      const data = {
+        ...report,
+        lastStage: 'card_fill',
+        failureClass: 'READ_INCOMPLETE',
+        failureCode: 'CHECKOUT_CONTROL_READ_FAILED',
+        missing: ['expiry', 'cvc'],
+        formDiagnostics
+      };
+      const result = await f.repository.upload(input(data));
+      expect(result.kind).toBe('diagnostic');
+      const { readFile } = await import('node:fs/promises');
+      const saved = JSON.parse(await readFile(join(directory, result.filename), 'utf8'));
+      expect(saved.formDiagnostics).toEqual(formDiagnostics);
+      expect(saved.submitted).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  for (const unsafe of [
+    { ...formDiagnostics, rawBody: 'PRIVATE' },
+    { ...formDiagnostics, steps: [{ ...formDiagnostics.steps[1], constructor: 'PRIVATE' }] },
+    { ...formDiagnostics, inspection: { constructor: 'PRIVATE' } },
+    { ...formDiagnostics, inspection: { ...formDiagnostics.inspection, value: 'PRIVATE' } },
+    { ...formDiagnostics, steps: [{ ...formDiagnostics.steps[1], value: 'PRIVATE' }] },
+    { ...formDiagnostics, steps: [{ ...formDiagnostics.steps[1], errorClass: 'PRIVATE' }] },
+    { ...formDiagnostics, steps: Array(33).fill(formDiagnostics.steps[1]) },
+    {
+      ...formDiagnostics,
+      inspection: { ...formDiagnostics.inspection, controlCounts: { secret: 1 } }
+    }
+  ])
+    it('拒绝原始值、未允许异常、额外字段和无界数据', async () => {
+      const f = fixture(join(project, '.runtime/card-read-diagnostics-20261025/api-artifacts'));
+      await expect(
+        f.repository.upload(input({ ...report, formDiagnostics: unsafe }))
+      ).rejects.toThrow('诊断文件字段无效');
+      expect(f.workers.withLease).not.toHaveBeenCalled();
+    });
+});

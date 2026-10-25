@@ -166,6 +166,53 @@ async function observedRead(operation, deadline, signal, state, readOperation, f
     throw error;
   }
 }
+// Passive field-level observations; no extra page reads or altered read deadlines.
+async function fieldStep(state, field, phase, operation) {
+  const step = { field, phase, state: 'pending' };
+  const candidate = state.formSteps?.at(-1);
+  if (phase === 'input' && candidate?.field === field && candidate.state === 'completed')
+    for (const key of [
+      'frameId',
+      'frameKind',
+      'tag',
+      'role',
+      'inShadowRoot',
+      'readOnly',
+      'locatorKind',
+      'candidateCount',
+      'eligibleCount',
+      'visible'
+    ])
+      if (candidate[key] !== undefined) step[key] = candidate[key];
+  const started = Date.now();
+  state.formSteps ||= [];
+  state.formSteps.push(step);
+  if (state.formSteps.length > 32) state.formSteps.shift();
+  const previous = state.formStep;
+  state.formStep = step;
+  try {
+    const result = await operation();
+    step.state = 'completed';
+    return result;
+  } catch (error) {
+    step.state = 'failed';
+    step.errorClass = require('./checkout-await-diagnostics.cjs').errorClass(error);
+    if (
+      [
+        'frame_scan',
+        'candidate_handles',
+        'candidate_eligibility',
+        'value',
+        'control_read'
+      ].includes(error.readPhase)
+    )
+      step.readPhase = error.readPhase;
+    throw error;
+  } finally {
+    step.durationMs = Math.min(600000, Math.max(0, Date.now() - started));
+    state.formStep = previous;
+  }
+}
 function score(meta, key) {
   const ac = normalize(meta.ac),
     identity = normalize(`${meta.id} ${meta.name}`),
@@ -700,7 +747,12 @@ async function readControlsOnce(page, deadline, state) {
           inspection.controlCounts.locatable++;
           if (Object.keys(rules).some((key) => score(meta, key) > 0))
             inspection.controlCounts.recognized++;
-          result.push({ frame, el, meta });
+          result.push({
+            frame,
+            el,
+            meta,
+            locatorKind: attribute?.[0] || (meta.label ? 'label' : 'placeholder')
+          });
         } else
           inspection.controlRejectCounts.no_locator =
             (inspection.controlRejectCounts.no_locator || 0) + 1;
@@ -1079,9 +1131,29 @@ async function candidateInteraction(item, handle, key, deadline, state, allowScr
 }
 async function uniqueCandidate(items, key, deadline, state, allowScroll = true) {
   const matches = candidatesFor(items, key);
+  if (state.formStep) state.formStep.candidateCount = matches.length;
   if (matches.length > 1)
     throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}有多个可见候选，未继续填写`, [key]);
   const item = matches[0];
+  const step = state.formStep;
+  if (step) {
+    step.candidateCount = matches.length;
+    if (item) {
+      state.formFrames ||= new Map();
+      if (!state.formFrames.has(item.frame))
+        state.formFrames.set(item.frame, state.formFrames.size + 1);
+      Object.assign(step, {
+        frameId: state.formFrames.get(item.frame),
+        frameKind: item.frame.parentFrame() ? 'embedded' : 'main',
+        tag: ['input', 'select', 'textarea'].includes(item.meta.tag) ? item.meta.tag : 'other',
+        role: item.meta.role === 'combobox' ? 'combobox' : null,
+        inShadowRoot: item.meta.inShadowRoot === true,
+        readOnly: item.meta.readOnly === true,
+        locatorKind: item.locatorKind
+      });
+      if (step.phase === 'locate') step.phase = 'precheck';
+    }
+  }
   if (item) {
     const eligible = [];
     const handles = await readWithin(
@@ -1108,6 +1180,10 @@ async function uniqueCandidate(items, key, deadline, state, allowScroll = true) 
           )
         )
           eligible.push(handle);
+      if (step) {
+        step.eligibleCount = eligible.length;
+        if (eligible.length === 1) step.visible = true;
+      }
       if (eligible.length !== 1)
         throw failure('CHECKOUT_CONTROL_AMBIGUOUS', `${labels[key]}无法唯一定位，未继续填写`, [
           key
@@ -1169,13 +1245,17 @@ async function locateOnce(page, key, deadline, state) {
   return uniqueCandidate(items, key, deadline, state);
 }
 async function locate(page, key, deadline, state = {}) {
-  return freshRead(page, deadline, state, () => locateOnce(page, key, deadline, state));
+  return fieldStep(state, key, 'locate', () =>
+    freshRead(page, deadline, state, () => locateOnce(page, key, deadline, state))
+  );
 }
-async function readField(page, key, deadline, state) {
-  return freshRead(page, deadline, state, async () => {
-    const item = await locateOnce(page, key, deadline, state);
-    return { item, current: item ? await value(item, deadline, state) : null };
-  });
+async function readField(page, key, deadline, state, phase = 'readback') {
+  return fieldStep(state, key, phase, () =>
+    freshRead(page, deadline, state, async () => {
+      const item = await locateOnce(page, key, deadline, state);
+      return { item, current: item ? await value(item, deadline, state) : null };
+    })
+  );
 }
 async function value(item, deadline, state = {}) {
   timeout(deadline, state.signal);
@@ -1388,7 +1468,7 @@ async function selectBoundBillingOption(item, key, expected, deadline, state) {
   }
 }
 async function write(page, key, expected, deadline, state = {}) {
-  const { item, current } = await readField(page, key, deadline, state);
+  const { item, current } = await readField(page, key, deadline, state, 'locate');
   if (!item) return false;
   if (
     current.valid &&
@@ -1396,65 +1476,73 @@ async function write(page, key, expected, deadline, state = {}) {
       (current.label && matches(key, current.label, expected)))
   )
     return true;
-  if (item.meta.tag === 'select') {
-    const options = await readWithin(
-      () =>
-        item.el.evaluate((n) =>
-          Array.from(n.options || []).map((option) => ({
-            value: option.value,
-            label: option.textContent || ''
-          }))
-        ),
-      deadline,
-      state.signal
-    );
-    const option = options.find(
-      (o) => matches(key, o.value, expected) || matches(key, o.label, expected)
-    );
-    if (!option) throw new Error(`${labels[key]}没有与资料一致的选项`);
-    await item.el.selectOption(option.value, { timeout: timeout(deadline, state.signal) });
-  } else if (
-    (item.meta.role === 'combobox' && !['input', 'textarea'].includes(item.meta.tag)) ||
-    (['country', 'state'].includes(key) &&
-      (item.meta.role === 'combobox' ||
-        (await readWithin(
-          () =>
-            item.el.evaluate((n) =>
-              Boolean(n.getAttribute('aria-controls') || n.getAttribute('aria-owns'))
-            ),
-          deadline,
-          state.signal
-        ))))
-  ) {
-    if (item.meta.readOnly && item.meta.tag === 'input') {
-      await item.el.press('ArrowDown', { timeout: timeout(deadline, state.signal) });
+  return fieldStep(state, key, 'input', async () => {
+    state.formStep.method =
+      item.meta.tag === 'select'
+        ? 'select_option'
+        : item.meta.role === 'combobox'
+          ? 'combobox'
+          : 'fill';
+    if (item.meta.tag === 'select') {
+      const options = await readWithin(
+        () =>
+          item.el.evaluate((n) =>
+            Array.from(n.options || []).map((option) => ({
+              value: option.value,
+              label: option.textContent || ''
+            }))
+          ),
+        deadline,
+        state.signal
+      );
+      const option = options.find(
+        (o) => matches(key, o.value, expected) || matches(key, o.label, expected)
+      );
+      if (!option) throw new Error(`${labels[key]}没有与资料一致的选项`);
+      await item.el.selectOption(option.value, { timeout: timeout(deadline, state.signal) });
+    } else if (
+      (item.meta.role === 'combobox' && !['input', 'textarea'].includes(item.meta.tag)) ||
+      (['country', 'state'].includes(key) &&
+        (item.meta.role === 'combobox' ||
+          (await readWithin(
+            () =>
+              item.el.evaluate((n) =>
+                Boolean(n.getAttribute('aria-controls') || n.getAttribute('aria-owns'))
+              ),
+            deadline,
+            state.signal
+          ))))
+    ) {
+      if (item.meta.readOnly && item.meta.tag === 'input') {
+        await item.el.press('ArrowDown', { timeout: timeout(deadline, state.signal) });
+      } else {
+        await item.el.click({ timeout: timeout(deadline, state.signal) });
+        if (item.meta.tag === 'input')
+          await item.el.fill(String(expected), { timeout: timeout(deadline, state.signal) });
+      }
+      await selectBoundBillingOption(item, key, expected, deadline, state);
     } else {
-      await item.el.click({ timeout: timeout(deadline, state.signal) });
-      if (item.meta.tag === 'input')
-        await item.el.fill(String(expected), { timeout: timeout(deadline, state.signal) });
+      const maxLength =
+        key === 'year'
+          ? await readWithin(() => item.el.getAttribute('maxlength'), deadline, state.signal)
+          : null;
+      const text =
+        key === 'year'
+          ? maxLength === '2'
+            ? String(expected).slice(-2)
+            : String(expected).length === 2
+              ? '20' + expected
+              : String(expected)
+          : String(expected);
+      await item.el.fill(text, { timeout: timeout(deadline, state.signal) });
+      // An input handler may replace this exact node. Never fall back to another
+      // node for Tab; the next semantic readback will rediscover its replacement.
+      if (await readWithin(() => item.el.evaluate((n) => n.isConnected), deadline, state.signal))
+        await item.el.press('Tab', { timeout: timeout(deadline, state.signal) });
     }
-    await selectBoundBillingOption(item, key, expected, deadline, state);
-  } else {
-    const maxLength =
-      key === 'year'
-        ? await readWithin(() => item.el.getAttribute('maxlength'), deadline, state.signal)
-        : null;
-    const text =
-      key === 'year'
-        ? maxLength === '2'
-          ? String(expected).slice(-2)
-          : String(expected).length === 2
-            ? '20' + expected
-            : String(expected)
-        : String(expected);
-    await item.el.fill(text, { timeout: timeout(deadline, state.signal) });
-    // An input handler may replace this exact node. Never fall back to another
-    // node for Tab; the next semantic readback will rediscover its replacement.
-    if (await readWithin(() => item.el.evaluate((n) => n.isConnected), deadline, state.signal))
-      await item.el.press('Tab', { timeout: timeout(deadline, state.signal) });
-  }
-  if (key === 'country') state.countryRevision = (state.countryRevision || 0) + 1;
-  return true;
+    if (key === 'country') state.countryRevision = (state.countryRevision || 0) + 1;
+    return true;
+  });
 }
 async function verify(page, expected, deadline, providedState) {
   const state = providedState || {};
@@ -1476,6 +1564,8 @@ async function verify(page, expected, deadline, providedState) {
       )
         missing.push(key);
       else state.pending?.delete(key);
+      const step = state.formSteps?.at(-1);
+      if (step?.field === key && step.phase === 'readback') step.matched = !missing.includes(key);
     }
     return missing;
   } finally {
@@ -1565,7 +1655,18 @@ function failedResult(page, error, deadline, state) {
           ? pending
           : error.failedFields || [...(state.fields || [])],
     controls: state.controls || [],
-    inspection
+    inspection,
+    formDiagnostics: {
+      inspection: {
+        ...inspection,
+        readFailures: (inspection.readFailures || []).map((row) => ({ ...row })),
+        frameSkipCounts: { ...inspection.frameSkipCounts },
+        controlCounts: { ...inspection.controlCounts },
+        controlRejectCounts: { ...inspection.controlRejectCounts },
+        interactionRejectCounts: { ...inspection.interactionRejectCounts }
+      },
+      steps: (state.formSteps || []).map((step) => ({ ...step }))
+    }
   };
 }
 async function guarded(page, action, deadline, state) {

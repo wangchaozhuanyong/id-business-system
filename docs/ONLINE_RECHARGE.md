@@ -810,3 +810,9 @@ inert、模态边界、命中位置和唯一候选检查，不修改官网属性
 本轮不触发官网访问、创建 Checkout、选择银行卡或付款，不部署、不迁移。本地三次 profile 重开、HttpOnly Cookie/存储恢复、同账号真实 Session 合成回执、账号隔离、出口不一致、原生跨进程互斥、挑战退出及关闭兜底验证只证明执行器行为。持久化不能保证官网不再挑战，也不能证明上一笔真实 403 的成因已解决；后续线上验收应分别记录 Session/订阅真实回执、challenge_blocked、运行阶段及资源释放结果。
 
 参考：[Playwright 持久化上下文](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context)、[完整 Chromium 与无头 shell](https://playwright.dev/docs/browsers)、[Cloudflare clearance](https://developers.cloudflare.com/cloudflare-challenges/concepts/clearance/)。
+
+### 2026-10-25 填卡读取阶段诊断
+
+不付款验收的控件读取失败保留为READ_INCOMPLETE，并在原任务结果及下载JSON的formDiagnostics中保留受控inspection与最多32条字段步骤。步骤区分定位、交互前检查、输入、填写后回读，记录非敏感frame序号、候选/可交互数量及匹配布尔值；已有中文结果说明显示实际失败字段和阶段。missing列表仅指未完成字段，不等于每个字段都已尝试或都失败。
+
+此项只修诊断传递与失败分类，不调整选择器、300/1200ms读取预算、总期限、可见性、重试、CSP或付款行为。API的既有诊断文件上传合同同步接受并校验formDiagnostics；后续发布须配套更新API和执行器，否则新诊断文件可能被旧API合同拒绝。无数据库迁移、依赖或环境变量变化。本地回归不能证明官网控件读取已经恢复。

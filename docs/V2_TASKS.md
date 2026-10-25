@@ -2196,3 +2196,11 @@ migration 已在本地开发库和生产环境应用。2026-08-12 已使用两�
 - 付款前明确挑战使用既有 CHALLENGE_BLOCKED 分类，保留分诊、跳过人工等待及失败通知耗时，收回原浏览器和代理。快速媒体收尾只交接已完成脱敏 PNG，不等待录像编码。付款已经提交后的待核对优先级不变。
 - 新增可选环境变量 ONLINE_RECHARGE_PROFILE_ROOT，两处 .env.example 只含空占位。没有新增 API、数据库表列、迁移或依赖；不改付款按钮点击、单次提交、confirmedPaid、账单、CVC、CSP、iframe 可见性或总业务期限。
 - 隔离验证和本轮报告归 `.runtime/persistent-profile-fix-20261025/`。合成回执不代表官网返回 200、挑战减少或真实充值恢复，线上验收待另行发布授权。
+
+## V2-ONLINE-CARD-READ-DIAGNOSTICS-20261025（填卡读取诊断贯通）
+
+- 用户授权修复真实不付款任务972ba012的诊断缺口：现有填卡模块已返回inspection，但执行器catch只投影错误码和未完成字段，导致读取不完整被汇总成卡号未就绪。原始missing=[expiry,cvc]只表示尚未完成，不能证明两个字段都读取失败。
+- 保留填卡inspection/readPhase/readFailures/readAttempts及有界字段步骤，经既有结果投影进入不付款JSON；明确CHECKOUT_CONTROL_READ_FAILED分类为READ_INCOMPLETE。现有证据上传合同增加对应枚举、计数、布尔字段校验，避免新报告被拒绝。
+- 复用已有操作结果做被动阶段记录：定位、交互前检查、输入、回读；保留候选/可交互数量、frame序号/类别、控件及定位方式类别、shadow标记、耗时、受控错误和匹配布尔值。最多保留32步，不记录原始selector、URL、DOM、异常正文或卡片值。
+- 读取预算、纯读取重试、选择器、可见性、CSP、登录、填写顺序、付款提交和确认规则不变；不增加并发读取或Promise.race取消假象。无新公共接口、数据库表字段、迁移、依赖或环境变量。
+- 本地检查和报告位于.runtime/card-read-diagnostics-20261025；此轮不提交、推送、发布或操作官网结账单/付款。真实故障的具体读取原因仍待发布后新证据核验。

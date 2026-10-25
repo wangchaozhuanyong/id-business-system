@@ -80,6 +80,83 @@ function stage(value) {
   current.timeline.push({ stage: value, startedAt: now });
   current.emit({ type: 'validation_stage', stage: value, at: now });
 }
+// Reuse the existing controlled inspection projection; never copy DOM, values or errors.
+function safeFormDiagnostics(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const inspection = require('./upstream/chatgpt').safeCheckoutFormInspection(value.inspection);
+  const fields = [
+    'number',
+    'expiry',
+    'month',
+    'year',
+    'cvc',
+    'country',
+    'line1',
+    'city',
+    'postal',
+    'name',
+    'state'
+  ];
+  const phases = ['locate', 'precheck', 'input', 'readback'];
+  const readPhases = [
+    'frame_scan',
+    'candidate_handles',
+    'candidate_eligibility',
+    'value',
+    'control_read'
+  ];
+  const steps = Array.isArray(value.steps)
+    ? value.steps
+        .slice(-32)
+        .filter(
+          (row) =>
+            row &&
+            fields.includes(row.field) &&
+            phases.includes(row.phase) &&
+            ['pending', 'completed', 'failed'].includes(row.state)
+        )
+        .map((row) => {
+          const step = { field: row.field, phase: row.phase, state: row.state };
+          for (const key of ['durationMs', 'frameId', 'candidateCount', 'eligibleCount'])
+            if (
+              Number.isInteger(row[key]) &&
+              row[key] >= 0 &&
+              row[key] <= (key === 'durationMs' ? 600000 : 10000)
+            )
+              step[key] = row[key];
+          for (const key of ['inShadowRoot', 'readOnly', 'visible', 'matched'])
+            if (typeof row[key] === 'boolean') step[key] = row[key];
+          const enums = {
+            frameKind: ['main', 'embedded'],
+            tag: ['input', 'select', 'textarea', 'other'],
+            role: ['combobox'],
+            locatorKind: [
+              'id',
+              'data-elements-stable-field-name',
+              'data-testid',
+              'autocomplete',
+              'name',
+              'label',
+              'placeholder'
+            ],
+            method: ['fill', 'select_option', 'combobox'],
+            readPhase: readPhases,
+            errorClass: [
+              'timeout',
+              'closed',
+              'detached',
+              'context_destroyed',
+              'aborted',
+              'read_failed'
+            ]
+          };
+          for (const [key, allowed] of Object.entries(enums))
+            if (allowed.includes(row[key])) step[key] = row[key];
+          return step;
+        })
+    : [];
+  return inspection || steps.length ? { ...(inspection ? { inspection } : {}), steps } : undefined;
+}
 function classify(result = {}, lastStage) {
   const code =
     result.validationErrorCode ||
@@ -117,6 +194,8 @@ function classify(result = {}, lastStage) {
   )
     return 'PAYMENT_COMPONENT_NOT_LOADED';
   if (
+    code === 'CHECKOUT_CONTROL_READ_FAILED' ||
+    result.formDiagnostics?.inspection?.complete === false ||
     result.inspection?.complete === false ||
     result.checkoutOpenDiagnostics?.inspection?.complete === false
   )
@@ -159,6 +238,7 @@ function finish(result = {}, snapshot = current) {
         },
         lastStage
       );
+  const formDiagnostics = safeFormDiagnostics(result.formDiagnostics);
   const missing =
     result.validationMissing || result.missing || result.checkoutOpenDiagnostics?.missing;
   return {
@@ -208,6 +288,7 @@ function finish(result = {}, snapshot = current) {
           )
           .slice(0, 9)
       : [],
+    ...(formDiagnostics ? { formDiagnostics } : {}),
     ...(result.checkoutOpenDiagnostics
       ? {
           checkoutOpenDiagnostics: require('./upstream/chatgpt').safeCheckoutOpenDiagnostics(
@@ -295,7 +376,8 @@ async function prepare(
         throw Object.assign(new Error('付款前资料检查未完成'), {
           code: result.errorCode,
           missing: result.missing,
-          inspection: result.inspection
+          inspection: result.inspection,
+          formDiagnostics: result.formDiagnostics
         });
     };
     stage('card_fill');
@@ -344,9 +426,41 @@ function message(report) {
     EXECUTOR_INTERRUPTED: '执行器中断',
     OTHER: '其他执行异常，详见诊断'
   };
+  const failed = report.formDiagnostics?.steps?.findLast((row) => row.state === 'failed');
+  const fieldLabel = {
+    number: '卡号',
+    expiry: '有效期',
+    month: '有效月份',
+    year: '有效年份',
+    cvc: '安全码',
+    country: '国家',
+    line1: '街道',
+    city: '城市',
+    postal: '邮编',
+    name: '账单姓名',
+    state: '州省'
+  }[failed?.field];
+  const phaseLabel = {
+    locate: '定位',
+    precheck: '交互前检查',
+    input: '输入',
+    readback: '填写后回读'
+  }[failed?.phase];
+  const errorLabel = {
+    timeout: '读取超时',
+    closed: '页面已关闭',
+    detached: '控件已脱离',
+    context_destroyed: '页面执行环境已替换',
+    aborted: '读取已取消',
+    read_failed: '读取失败'
+  }[failed?.errorClass];
+  const detail =
+    report.failureClass === 'READ_INCOMPLETE' && fieldLabel && phaseLabel
+      ? `（${[fieldLabel, phaseLabel, errorLabel].filter(Boolean).join('／')}）`
+      : '';
   return report.failureClass === 'NONE'
     ? labels.NONE
-    : `不付款验证已结束：${labels[report.failureClass] || labels.OTHER}${report.httpStatus ? `（HTTP ${report.httpStatus}）` : ''}`;
+    : `不付款验证已结束：${labels[report.failureClass] || labels.OTHER}${detail}${report.httpStatus ? `（HTTP ${report.httpStatus}）` : ''}`;
 }
 module.exports = {
   message,
@@ -355,6 +469,7 @@ module.exports = {
   stage,
   finish,
   classify,
+  safeFormDiagnostics,
   automaticVerification,
   prepare,
   buttonReady,

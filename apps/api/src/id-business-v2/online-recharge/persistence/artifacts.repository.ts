@@ -11,6 +11,138 @@ import { OnlineRechargeRepository } from './online-recharge.repository';
 import { id, object, text } from '../validation';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 
+// This existing diagnostic upload accepts enums/counts only, never field values or DOM.
+function validFormDiagnostics(value: unknown): boolean {
+  type RecordValue = Record<string, unknown>;
+  const record = (v: unknown): v is RecordValue =>
+    !!v && typeof v === 'object' && !Array.isArray(v);
+  const count = (v: unknown, max = 10000) =>
+    Number.isInteger(v) && Number(v) >= 0 && Number(v) <= max;
+  const oneOf = (v: unknown, values: readonly string[]) =>
+    typeof v === 'string' && values.includes(v);
+  const readPhases = [
+    'frame_scan',
+    'candidate_handles',
+    'candidate_eligibility',
+    'value',
+    'control_read'
+  ];
+  const errors = ['timeout', 'detached', 'context_destroyed', 'closed', 'aborted', 'read_failed'];
+  if (!record(value) || Object.keys(value).some((key) => !['inspection', 'steps'].includes(key)))
+    return false;
+  if (!Array.isArray(value.steps) || value.steps.length > 32) return false;
+  const stepEnums: Record<string, string[]> = {
+    field: [
+      'number',
+      'expiry',
+      'month',
+      'year',
+      'cvc',
+      'country',
+      'line1',
+      'city',
+      'postal',
+      'name',
+      'state'
+    ],
+    phase: ['locate', 'precheck', 'input', 'readback'],
+    state: ['pending', 'completed', 'failed'],
+    frameKind: ['main', 'embedded'],
+    tag: ['input', 'select', 'textarea', 'other'],
+    role: ['combobox'],
+    locatorKind: [
+      'id',
+      'data-elements-stable-field-name',
+      'data-testid',
+      'autocomplete',
+      'name',
+      'label',
+      'placeholder'
+    ],
+    method: ['fill', 'select_option', 'combobox'],
+    readPhase: readPhases,
+    errorClass: errors
+  };
+  if (
+    value.steps.some(
+      (step) =>
+        !record(step) ||
+        !['field', 'phase', 'state'].every((key) => key in step) ||
+        Object.entries(step).some(([key, v]) =>
+          Object.hasOwn(stepEnums, key)
+            ? !oneOf(v, stepEnums[key])
+            : ['durationMs', 'frameId', 'candidateCount', 'eligibleCount'].includes(key)
+              ? !count(v, key === 'durationMs' ? 600000 : 10000)
+              : ['inShadowRoot', 'readOnly', 'visible', 'matched'].includes(key)
+                ? typeof v !== 'boolean'
+                : true
+        )
+    )
+  )
+    return false;
+  if (value.inspection === undefined) return true;
+  if (!record(value.inspection)) return false;
+  const visibility = [
+    'zero_geometry',
+    'hidden',
+    'inert',
+    'aria_hidden',
+    'display_none',
+    'visibility_hidden',
+    'opacity_zero',
+    'content_visibility_hidden',
+    'modal_background'
+  ];
+  const groups: Record<string, string[]> = {
+    frameSkipCounts: visibility,
+    controlCounts: ['scanned', 'eligible', 'locatable', 'recognized'],
+    controlRejectCounts: [
+      ...visibility,
+      'aria_disabled',
+      'disabled',
+      'readonly',
+      'excluded_type',
+      'no_locator'
+    ],
+    interactionRejectCounts: [
+      'occluded',
+      'outside_viewport',
+      'unsupported_transform',
+      'unsupported_geometry',
+      'control_ineligible',
+      'frame_ineligible',
+      'scroll_unavailable',
+      'page_changed'
+    ]
+  };
+  return Object.entries(value.inspection).every(([key, v]) => {
+    if (['complete', 'contentLoadFailed', 'timedOut', 'pageClosed', 'aborted'].includes(key))
+      return typeof v === 'boolean';
+    if (['framesChecked', 'framesSkipped', 'framesFailed'].includes(key)) return count(v);
+    if (key === 'readAttempts') return v === 1 || v === 2;
+    if (key === 'readPhase') return oneOf(v, readPhases);
+    if (key === 'readFailures')
+      return (
+        Array.isArray(v) &&
+        v.length <= 32 &&
+        v.every(
+          (row) =>
+            record(row) &&
+            Object.keys(row).length === 3 &&
+            oneOf(row.phase, ['frame_scan', 'frame_owner', 'load_state', 'control_snapshot']) &&
+            oneOf(row.reason, errors) &&
+            count(row.count) &&
+            Number(row.count) > 0
+        )
+      );
+    return (
+      Object.hasOwn(groups, key) &&
+      record(v) &&
+      Object.entries(v).every(([name, n]) => groups[key].includes(name) && count(n))
+    );
+  });
+}
+
 @Injectable()
 export class OnlineRechargeArtifactsRepository {
   constructor(
@@ -101,7 +233,8 @@ export class OnlineRechargeArtifactsRepository {
         'submitted',
         'httpStatus',
         'executorTerminated',
-        'sourceManifestSha256'
+        'sourceManifestSha256',
+        'formDiagnostics'
       ];
       const stages = [
         'input',
@@ -189,6 +322,7 @@ export class OnlineRechargeArtifactsRepository {
                   'state'
                 ].includes(String(key))
             ))) ||
+        (report.formDiagnostics !== undefined && !validFormDiagnostics(report.formDiagnostics)) ||
         !stages.includes(String(report.lastStage)) ||
         !timestamp(report.startedAt) ||
         !timestamp(report.endedAt) ||

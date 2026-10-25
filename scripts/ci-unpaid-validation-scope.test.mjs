@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  cardReadDiagnosticsPaths,
   persistentProfilePaths,
   isPersistentProfileOnly,
   isUnpaidValidationControlsOnly,
@@ -118,4 +119,46 @@ test('persistent account browser candidate keeps complete engine checks without 
     checkMode([...paths, 'apps/api/prisma-mysql/schema.prisma'], 'before', 'after'),
     'full'
   );
+});
+
+test('exact card read diagnostic repair requires API and complete engine checks', () => {
+  const paths = [
+    ...cardReadDiagnosticsPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+  for (const p of cardReadDiagnosticsPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((n) => n !== p)), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js',
+    'apps/admin/src/auth/session.ts'
+  ])
+    assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
+  assert.match(JSON.stringify(unpaidValidationCommands('api', paths)), /typecheck/);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
+  assert.doesNotMatch(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /check:admin-ui|migrate/
+  );
+});
+
+test('card read diagnostic publication cannot include business files or skip its contract test', () => {
+  const paths = unpaidValidationControls.filter((p) => p.includes('online-card-read-diagnostics-'));
+  assert.equal(paths.length, 6);
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /online-card-read-diagnostics-release.test.py/
+  );
+  assert.throws(() => unpaidValidationCommands('api', paths));
+  assert.equal(isUnpaidValidationControlsOnly([...paths, cardReadDiagnosticsPaths[0]]), false);
 });

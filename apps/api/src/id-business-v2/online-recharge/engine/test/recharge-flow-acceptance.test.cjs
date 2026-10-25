@@ -199,6 +199,7 @@ function strictRpcFixture(task) {
 // over this child IPC boundary into the supplied handler and are never logged.
 async function runSyntheticRecharge(scene, options = {}) {
   assert.ok(['success', 'recover', 'unknown', 'readiness'].includes(scene));
+  assert.ok(options.formReadFailure == null || options.formReadFailure === true);
   const cardFields = options.cardFields || 'standard';
   assert.ok(
     [
@@ -336,6 +337,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     type: 'fixture_start',
     task,
     diagnosticDelay: options.diagnosticDelay,
+    formReadFailure: options.formReadFailure,
     cardFields,
     billingFields,
     sessionRefresh,
@@ -484,7 +486,8 @@ async function fixtureChild(
   cardFields = 'standard',
   billingFields = 'standard',
   sessionRefresh = null,
-  authUi = null
+  authUi = null,
+  formReadFailure = false
 ) {
   const { chromium, request } = require('../upstream/node_modules/playwright');
   const rpc = require('../rpc.cjs');
@@ -630,6 +633,38 @@ async function fixtureChild(
   for (const stage of ['verify', 'verifyCard', 'fillCard', 'fillBilling']) {
     const original = form[stage];
     form[stage] = async (...args) => {
+      if (stage === 'fillCard' && formReadFailure)
+        return {
+          ok: false,
+          errorCode: 'CHECKOUT_CONTROL_READ_FAILED',
+          missing: ['expiry', 'cvc'],
+          inspection: {
+            complete: false,
+            framesFailed: 1,
+            readPhase: 'candidate_eligibility',
+            readAttempts: 2
+          },
+          formDiagnostics: {
+            inspection: {
+              complete: false,
+              framesFailed: 1,
+              readPhase: 'candidate_eligibility',
+              readAttempts: 2
+            },
+            steps: [
+              {
+                field: 'expiry',
+                phase: 'precheck',
+                state: 'failed',
+                frameKind: 'embedded',
+                frameId: 2,
+                errorClass: 'timeout',
+                readPhase: 'candidate_eligibility',
+                rawValue: 'PRIVATE_RAW_ERROR'
+              }
+            ]
+          }
+        };
       let restore;
       const priorStage = activeFormStage;
       activeFormStage = stage;
@@ -1405,7 +1440,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       message.cardFields,
       message.billingFields,
       message.sessionRefresh,
-      message.authUi
+      message.authUi,
+      message.formReadFailure
     ).then(
       () => process.exit(0),
       (error) => {

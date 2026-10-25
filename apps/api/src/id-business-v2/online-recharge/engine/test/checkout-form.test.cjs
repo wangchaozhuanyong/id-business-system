@@ -2169,3 +2169,82 @@ test('actual submit boundary rereads the official amount and stops before any cl
     delete require.cache[modulePath];
   }
 });
+
+for (const phase of ['locate', 'precheck', 'input', 'readback'])
+  test(`fill diagnostics identify expiry ${phase} without field values or payment`, async (t) => {
+    const page = await pageFor(t, cardHtml + '<button type="submit">Pay</button>');
+    const frame = page.mainFrame();
+    const original = frame.locator;
+    let scans = 0,
+      expiryReads = 0;
+    frame.locator = function (selector, ...args) {
+      const locator = original.call(this, selector, ...args);
+      if (phase === 'locate' && selector === 'input,select,textarea,[role="combobox"]') {
+        const scan = locator.evaluateAll.bind(locator);
+        locator.evaluateAll = async (...readArgs) => {
+          if (++scans >= 3) throw new Error('PRIVATE_RAW_ERROR');
+          return scan(...readArgs);
+        };
+      }
+      if (selector.includes('[autocomplete="cc-exp"]')) {
+        const getHandles = locator.elementHandles.bind(locator);
+        locator.elementHandles = async (...handleArgs) => {
+          const handles = await getHandles(...handleArgs);
+          for (const handle of handles) {
+            if (phase === 'input')
+              handle.fill = async () => {
+                throw Object.assign(new Error('PRIVATE_RAW_ERROR'), {
+                  code: 'CHECKOUT_CONTROL_READ_FAILED',
+                  readPhase: 'control_read'
+                });
+              };
+            const evaluate = handle.evaluate.bind(handle);
+            handle.evaluate = async (...readArgs) => {
+              if (
+                (phase === 'precheck' && readArgs[1]?.control === true) ||
+                (phase === 'readback' &&
+                  String(readArgs[0]).includes('aria-valuetext') &&
+                  ++expiryReads >= 2)
+              )
+                throw Object.assign(new Error('PRIVATE_RAW_ERROR'), {
+                  code: 'CHECKOUT_CONTROL_READ_FAILED'
+                });
+              return evaluate(...readArgs);
+            };
+          }
+          return handles;
+        };
+      }
+      return locator;
+    };
+    t.after(() => {
+      frame.locator = original;
+    });
+    const result = await fillCard(page, card, { deadline: Date.now() + 5000 });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, 'CHECKOUT_CONTROL_READ_FAILED');
+    const evidence = require('../unpaid-validation.cjs').safeFormDiagnostics(
+      result.formDiagnostics
+    );
+    const failed = evidence.steps.findLast((step) => step.state === 'failed');
+    assert.equal(failed.field, 'expiry');
+    assert.equal(failed.phase, phase);
+    assert.equal(evidence.inspection.complete, false);
+    assert.equal(
+      evidence.steps.some(
+        (step) => step.field === 'number' && step.phase === 'readback' && step.matched === true
+      ),
+      true
+    );
+    assert.equal(JSON.stringify(evidence).includes('PRIVATE_RAW_ERROR'), false);
+    for (const secret of [card.number, card.expiry, card.cvc])
+      assert.equal(JSON.stringify(evidence).includes(JSON.stringify(secret)), false);
+    if (phase === 'locate') {
+      assert.equal(await page.locator('[autocomplete="cc-csc"]').inputValue(), '');
+      assert.deepEqual(result.missing, ['expiry', 'cvc']);
+      assert.equal(
+        evidence.steps.some((step) => step.field === 'cvc'),
+        false
+      );
+    }
+  });
