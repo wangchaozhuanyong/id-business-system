@@ -4075,4 +4075,7 @@ test('mailbox fixture repairs retain their actual component tests without rerunn
     'apps/api/src/id-business-v2/online-recharge/engine/healthcheck.cjs'
   ]);
   assert.ok(engine.some((row) => row.includes('test:online-recharge:controls')));
+  assert.ok(
+    engine.some((row) => row.includes('scripts/production-release/online-recharge-scope.test.py'))
+  );
 });
