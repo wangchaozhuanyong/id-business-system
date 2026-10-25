@@ -34,6 +34,18 @@ def fingerprint(value):
     return sha(json.dumps(value, sort_keys=True, separators=(',', ':')).encode())
 
 
+def claim_maintenance(plan):
+    # The registration module and its volume are retired. This publication owns
+    # only the existing global marker; the SQL fence protects live recharge work.
+    path = BASE / 'maintenance.json'
+    raw = json.dumps({'scope': SCOPE, 'commit': plan['commit'],
+                      'workflowRunId': plan['workflowRunId']}, sort_keys=True).encode()
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'wb') as output:
+        output.write(raw)
+    return {'paths': [str(path)], 'ownerSha256': sha(raw), 'globalFileRole': 'PUBLICATION_OWNERSHIP_ONLY'}
+
+
 def load(name):
     spec = importlib.util.spec_from_file_location('billing_release_' + name.replace('-', '_'), HERE / name)
     module = importlib.util.module_from_spec(spec)
@@ -302,9 +314,8 @@ def release(plan):
         for name in plan['controlSources']:
             (target / 'scripts/production-release' / name).write_bytes((HERE / name).read_bytes())
         p = load('proxy-result-identity-release.py')
-        p.SCOPE = SCOPE
-        markers = p.claim_markers(d, before, plan)
         fence = p.sql_fence_class({'sqlFenceHelperSha256': plan['controlSources']['api-admin-scope.py']})(d, previous)
+        markers = claim_maintenance(plan)
         journal = stage / 'switch-state.json'
         journal.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target)}) + '\n')
         try:
