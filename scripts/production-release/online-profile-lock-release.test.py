@@ -1,5 +1,6 @@
 """Offline publication, unchanged-image startup and recovery-failure tests."""
 import copy
+from functools import lru_cache
 import importlib.util
 import io
 import json
@@ -24,9 +25,22 @@ def load(name):
 r = load('online-profile-lock-release.py')
 
 
+@lru_cache(maxsize=None)
+def published_control(name):
+    return subprocess.check_output(['git','show',
+        'e317136851edfe3b49c0c44a8deed01b7de62a53:scripts/production-release/'+name],cwd=HERE.parents[1])
+
+
 class PublicationTests(unittest.TestCase):
     def setUp(self):
         self.c = json.loads((HERE / r.CONTRACT_FILE).read_bytes())
+        output=HERE.parents[1]/'.runtime/profile-lock-recovery-20261025/published-controls'
+        output.mkdir(parents=True,exist_ok=True)
+        temporary=tempfile.TemporaryDirectory(dir=output);self.addCleanup(temporary.cleanup)
+        reviewed=Path(temporary.name)
+        for name,digest in {**self.c['controlPins'],r.CONTRACT_FILE:r.sha((HERE/r.CONTRACT_FILE).read_bytes())}.items():
+            raw=published_control(name);self.assertEqual(r.sha(raw),digest,name);(reviewed/name).write_bytes(raw)
+        patcher=patch.object(r,'HERE',reviewed);patcher.start();self.addCleanup(patcher.stop)
         self.qa = {'source': {'head': r.SOURCE, 'tree': r.SOURCE_TREE, 'pullRequest': 717,
                              'runId': '123', 'sourceReceiptSha256': 'f' * 64},
                    'control': {'head': 'c' * 40, 'tree': 'b' * 40, 'pullRequest': 718,
@@ -48,13 +62,18 @@ class PublicationTests(unittest.TestCase):
         proof = self.proof()
         r.verify_proof(proof, self.plan, self.c, proof['files'])
 
-    def test_current_publication_controls_match_live_reviewed_files(self):
-        # The legacy contract uses its historical bundle; this publication must
-        # independently check every current executable control and its new helper.
+    def test_published_publication_controls_match_the_immutable_reviewed_bundle(self):
+        # The historical publisher retains its original seal; later helpers are
+        # tested separately against their current source and cannot alter that seal.
         for name, digest in self.c['controlPins'].items():
-            self.assertEqual(r.sha((HERE / name).read_bytes()), digest, name)
+            self.assertEqual(r.sha((r.HERE / name).read_bytes()), digest, name)
         for name in ('online-checkout-release.py', 'online-profile-lock-recovery.py'):
             self.assertEqual(self.c['controlPins'][name], self.c['sources']['scripts/production-release/' + name])
+
+    def test_old_publication_rejects_the_changed_current_helper_without_resealing_history(self):
+        with patch.object(r,'HERE',HERE):
+            with self.assertRaisesRegex(RuntimeError,'CONTROL_CHANGED'):
+                r.release({**self.plan,'mode':'parent'},self.c)
 
     def test_rejects_account_instance_source_parent_images_or_business_scope_changes(self):
         for field, value in [('awsTargetAccount', '000000000000'), ('awsTargetInstance', 'i-other'),
