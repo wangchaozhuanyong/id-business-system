@@ -1,4 +1,5 @@
 import {
+  isProfileLockRecoveryOnly,
   isPersistentProfileOnly,
   isProfileEgressLifecycleOnly,
   isUnpaidValidationOnly,
@@ -3092,6 +3093,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isProfileLockRecoveryOnly(paths)) return ['guards', 'online-engine'];
   if (isProfileEgressLifecycleOnly(paths)) return ['guards', 'admin', 'online-engine'];
   if (isPersistentProfileOnly(paths)) return ['guards', 'online-engine'];
   if (isUnpaidValidationOnly(paths))
