@@ -72,10 +72,10 @@ class ProofTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=parent)
         self.addCleanup(temporary.cleanup)
         base = Path(temporary.name);(base/'.staging').mkdir(); previous=base/'releases/original';previous.mkdir(parents=True)
-        captured={'current':str(previous),'apiModules':self.proof['baselineApiModules'],'services':{},'businessActions':0}
+        captured={'current':str(previous),'apiModules':self.proof['baselineApiModules'],'services':{},'businessActions':0,'manifestSha256':'a'*64}
         for role in (*m.PRESERVED,'api','admin','online-recharge'):
             captured['services'][role]={'image':'old-'+role,'containerId':'container-'+role,'environmentSha256':'same'}
-        (previous/'release-manifest.json').write_text(json.dumps({'commit':m.CURRENT,'images':{},'roleSourceProjections':{}}))
+        (previous/'release-manifest.json').write_text(json.dumps({'commit':m.CURRENT,'images':{},'roleSourceProjections':{},'applicationCommit':'old-app','controlCommit':'old-control','version':'old-version','buildProofSha256':'old-proof','acceptedSwitchCommandId':'old-command'}))
         (previous/'compose.release.json').write_text(json.dumps({'services':{n:{'image':'old-'+n} for n in captured['services']}}))
         control=base/'controls';control.mkdir();(control/m.CONTRACT_FILE).write_text(json.dumps(self.c))
         source=base/'payload';source.mkdir()
@@ -140,6 +140,12 @@ class ProofTests(unittest.TestCase):
         plan,c,d,fence,marker,base=self.switch_fixture()
         result=m.release(plan,c)
         self.assertEqual(result['status'],'MAIL_QUERY_DEPLOYED')
+        manifest=json.loads(next((base/'releases').glob('*mail-query/release-manifest.json')).read_bytes())
+        self.assertEqual({manifest[n] for n in ('commit','applicationCommit','controlCommit')},{plan['commit']})
+        self.assertEqual(manifest['version'],'v2-'+plan['commit'])
+        self.assertEqual(manifest['buildProofSha256'],plan['buildProofSha256'])
+        self.assertEqual(manifest['apiCompiledArtifact'],manifest['adminCompiledArtifact'])
+        self.assertNotIn('acceptedSwitchCommandId',manifest)
         calls=[call.args[1:] for call in d.compose.call_args_list]
         self.assertEqual(calls[:2],[('stop','online-recharge'),('stop','api')])
         self.assertEqual(calls[2],('up','-d','--no-deps','--no-build','--pull','never','api','admin'))

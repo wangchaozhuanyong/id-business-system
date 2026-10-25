@@ -129,8 +129,11 @@ def release(plan, c):
             receipt = json.loads((target / 'mail-query-preservation.json').read_bytes())
             raw = (target / 'mail-query-build-proof.json').read_bytes()
             need(manifest['commit'] == receipt['commit'] == plan['commit'] and manifest['scope'] == SCOPE
+                 and all(manifest.get(n) == plan['commit'] for n in ('applicationCommit','controlCommit'))
+                 and manifest.get('version') == 'v2-'+plan['commit']
+                 and manifest.get('actualDeployment') == receipt
                  and manifest.get('sourceTree') == plan['tree']
-                 and sha(raw) == plan['buildProofSha256'], 'READBACK_CHANGED')
+                 and manifest.get('buildProofSha256') == sha(raw) == plan['buildProofSha256'], 'READBACK_CHANGED')
             profile = load('online-profile-lock-release.py')
             prior = json.loads((HERE / 'online-profile-lock-contract.json').read_bytes())
             h,d,p = profile.helpers(prior)
@@ -218,9 +221,19 @@ def release(plan, c):
         (target/'mail-query-preservation.json').write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
         (target/'mail-query-build-proof.json').write_bytes(raw_proof)
         manifest=json.loads((previous/'release-manifest.json').read_bytes())
-        manifest.update(commit=plan['commit'],sourceTree=plan['tree'],scope=SCOPE,status='DEPLOYED',sourceBranch='main',
-            previousCommit=CURRENT,previousRelease=str(previous),servicesUpdated=['api','admin'],servicesRebound=['online-recharge'],
-            newMigrations=[],migrationPerformed=False,paymentActions=0,compiledArtifact={'url':url,'sha256':plan['artifactSha256']})
+        artifact={'url':url,'sha256':plan['artifactSha256'],'validationRun':plan['workflowRunId']}
+        manifest.update(commit=plan['commit'],applicationCommit=plan['commit'],controlCommit=plan['commit'],
+            version='v2-'+plan['commit'],sourceTree=plan['tree'],scope=SCOPE,status='DEPLOYED',sourceBranch='main',
+            sourceLayout='PUBLISHED_PREDECESSOR_WITH_REVIEWED_MAIN_MAILBOX_OVERLAY',
+            deploymentMethod='NATIVE_MAIN_REBUILD_AND_SSM_FORWARD',validationRun=plan['workflowRunId'],
+            previousCommit=CURRENT,previousRelease=str(previous),previousManifestSha256=captured['manifestSha256'],
+            servicesUpdated=['api','admin'],servicesRebound=['online-recharge'],actualDeployment=receipt,
+            sourceProjection={'changedSources':c['sources'],'apiModules':proof['apiModules'],
+                              'buildProofSha256':plan['buildProofSha256']},
+            newMigrations=[],migrationPerformed=False,paymentActions=0,buildProofSha256=plan['buildProofSha256'],
+            compiledArtifact=artifact,apiCompiledArtifact=artifact,adminCompiledArtifact=artifact)
+        for name in ('acceptedSwitchCommandId','publicationFinalization','deploymentRun'):
+            manifest.pop(name,None)
         for role in images:
             manifest['images'][role]={'reference':images[role]['reference'],'digest':images[role]['imageId'],'sourceCommit':plan['commit']}
             projections=manifest.setdefault('roleSourceProjections',{})
