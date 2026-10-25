@@ -455,6 +455,12 @@ async function verifyRealSessionApi(context, options = {}) {
         let bodyText = await body();
         let facts = diagnostic.sessionProbeFacts(response?.status() || 0, response?.headers?.() || {}, bodyText, options.expected);
         initial = diagnostic.safeSessionProbe({ ...facts, complete: true, elapsedMs: performance.now() - started });
+        if (facts.state === 'challenge' && options.nativeSession) {
+            throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), {
+                code: 'CHALLENGE_BLOCKED', challengeDetected: true,
+                bootstrapDiagnostics: { initialSessionProbe: initial }
+            });
+        }
         if (facts.state === 'challenge' && typeof options.onHumanVerification === 'function') {
             const human = require('../human-verification.cjs');
             initial.manualActionable = await budget.run(() => human.hasActionableHumanVerification(probe, { sessionProbe: true }));
@@ -493,7 +499,11 @@ async function verifyRealSessionApi(context, options = {}) {
         return { ok: false, code: timeout ? 'NETWORK_TIMEOUT' : 'NETWORK_UNAVAILABLE',
             diagnostics, initialDiagnostics: initial?.complete ? initial : diagnostics,
             error: timeout ? '登录状态查询超时' : '登录状态查询网络失败' };
-    } finally { budget.dispose(); await probe.close().catch(() => {}); }
+    } finally {
+        budget.dispose();
+        if (options.nativeSession) await require('./verification-runtime').closeVerificationPage(probe);
+        else await probe.close().catch(() => {});
+    }
 }
 
 function verifiedSessionPayload(sessionData, accessToken, data) {
@@ -664,6 +674,29 @@ async function installChatGptSession(context, sessionRaw, options = {}) {
         );
     }
 
+    const expected = {
+        accountId: extractProfileFromToken(token).accountId || sessionData.account?.id,
+        userId: sessionData.user?.id || extractProfileFromToken(token).userId
+    };
+    if (options.preserveStoredSession) {
+        const cookies = await context.cookies(CHATGPT_ORIGIN);
+        if (cookies.some(item => isSessionTokenCookieName(item.name))) {
+            const stored = await verifyRealSessionApi(context, { ...options, expected });
+            if (stored.ok && stored.diagnostics?.hasValidUser === true
+                && stored.diagnostics?.matchesTargetAccount === true) {
+                const verified = verifiedSessionPayload(sessionData, token, stored.data);
+                return { sessionData: verified, cookieVerified: true,
+                    initialSessionProbe: stored.initialDiagnostics || stored.diagnostics };
+            }
+            if (stored.code !== 'SESSION_INVALID') {
+                throw Object.assign(new Error(stored.code === 'ACCOUNT_MISMATCH'
+                    ? '已保存浏览器会话与任务账号不一致' : '已保存浏览器会话尚未通过官网核验'), {
+                    code: stored.code || 'SESSION_API_UNCONFIRMED',
+                    bootstrapDiagnostics: { initialSessionProbe: stored.initialDiagnostics || stored.diagnostics }
+                });
+            }
+        }
+    }
     const injectResult = await injectChatGptCookies(context, cookieSpecs);
 
     const sessionTokenFailed = injectResult.failed?.filter((item) => isSessionTokenCookieName(item.name)) || [];
@@ -716,43 +749,45 @@ async function installChatGptSession(context, sessionRaw, options = {}) {
     console.log('[Session] 输入结构', JSON.stringify({
         fields: knownFields.filter(key => inputFields.includes(key)),
         otherFieldCount: inputFields.filter(key => !knownFields.includes(key)).length,
-        sessionTransport: 'native', csrfTransport: 'native', bootstrap: true
+        sessionTransport: 'native', csrfTransport: 'native', bootstrap: options.nativeSession !== true
     }));
 
-    await context.addInitScript((payload) => {
-        const officialUrl = (value) => {
+    if (!options.nativeSession) {
+        await context.addInitScript((payload) => {
+            const officialUrl = (value) => {
+                try {
+                    const url = new URL(value, window.location.href);
+                    return url.protocol === 'https:' && !url.port
+                        && ['chatgpt.com', 'openai.com'].some((host) =>
+                            url.hostname === host || url.hostname.endsWith(`.${host}`));
+                } catch (_) { return false; }
+            };
+            if (!officialUrl(window.location.href)) return;
+            const sessionStr = JSON.stringify(payload);
             try {
-                const url = new URL(value, window.location.href);
-                return url.protocol === 'https:' && !url.port
-                    && ['chatgpt.com', 'openai.com'].some((host) =>
-                        url.hostname === host || url.hostname.endsWith(`.${host}`));
-            } catch (_) { return false; }
-        };
-        if (!officialUrl(window.location.href)) return;
-        const sessionStr = JSON.stringify(payload);
-        try {
-            window.__CHATGPT_BOOTSTRAP_SESSION__ = payload;
-            localStorage.setItem('oai/apps/chat/bootstrap-session', sessionStr);
-        } catch (_) { /* ignore */ }
+                window.__CHATGPT_BOOTSTRAP_SESSION__ = payload;
+                localStorage.setItem('oai/apps/chat/bootstrap-session', sessionStr);
+            } catch (_) { /* ignore */ }
 
-        // Bootstrap storage remains unchanged for this controlled comparison.
-        // Both authentication endpoints and window.fetch use native transport.
-    }, sessionData);
+            // Bootstrap storage remains unchanged for this controlled comparison.
+            // Both authentication endpoints and window.fetch use native transport.
+        }, sessionData);
 
-    await context.route('**/*', async (route) => {
-        const url = route.request().url();
-        const resourceType = route.request().resourceType();
-        if (shouldBlockLoginNavigation(url, resourceType)) {
-            const host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
-            const ruleId = host === 'accounts.google.com' ? 'SESSION_GOOGLE_LOGIN'
-                : host === 'login.microsoftonline.com' ? 'SESSION_MICROSOFT_LOGIN' : 'SESSION_OFFICIAL_LOGIN';
-            console.log('[Session] 登录导航拦截', JSON.stringify({ ruleId, resourceType }));
-            await require('../checkout-initialization.cjs').abortRoute(route, ruleId);
-            return;
-        }
-        await route.continue();
-    });
+        await context.route('**/*', async (route) => {
+            const url = route.request().url();
+            const resourceType = route.request().resourceType();
+            if (shouldBlockLoginNavigation(url, resourceType)) {
+                const host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
+                const ruleId = host === 'accounts.google.com' ? 'SESSION_GOOGLE_LOGIN'
+                    : host === 'login.microsoftonline.com' ? 'SESSION_MICROSOFT_LOGIN' : 'SESSION_OFFICIAL_LOGIN';
+                console.log('[Session] 登录导航拦截', JSON.stringify({ ruleId, resourceType }));
+                await require('../checkout-initialization.cjs').abortRoute(route, ruleId);
+                return;
+            }
+            await route.continue();
+        });
 
+    }
     return { sessionData, cookieVerified, initialSessionProbe };
 }
 
@@ -875,6 +910,11 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
         let manualVerificationUsed = false;
         const blockingVerificationVisible = async () => {
             const blocked = await isBlockingHumanVerificationVisible(page);
+            if (blocked && options.nativeSession) {
+                diagnostics.reason = 'verification_failed';
+                diagnostics.challengeDetected = true;
+                throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED' });
+            }
             if (!blocked || typeof options.onHumanVerification !== 'function') return blocked;
             if (!await require('../human-verification.cjs').hasActionableHumanVerification(page)) {
                 diagnostics.reason = 'verification_failed';
@@ -985,7 +1025,7 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
         diagnostics.challengeDetected ||= blockingVerification;
         if (options.manualVerification === true && blockingVerification)
             throw Object.assign(new Error('官网需要人工验证'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
-        const captchaResult = options.manualVerification === true ? { cleared: true } : await run('verification', () => clearHumanVerification(page, {
+        const captchaResult = options.nativeSession || options.manualVerification === true ? { cleared: true } : await run('verification', () => clearHumanVerification(page, {
             phase: 'session-bootstrap',
             maxWaitMs: remaining(Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 180000)),
             deadlineAt,
@@ -1044,6 +1084,11 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
         console.log('[Session] 首页独立校验结果', JSON.stringify(diagnostics.homepageSessionProbe));
         const apiReady = facts.state === 'verified' && facts.matchesTargetAccount === true;
         diagnostics.authApiVerified = apiReady;
+        if (facts.state === 'challenge' && options.nativeSession) {
+            diagnostics.reason = 'verification_failed';
+            diagnostics.challengeDetected = true;
+            throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED' });
+        }
         if (facts.state === 'invalid' || facts.state === 'mismatch')
             throw Object.assign(new Error('官网登录资料未通过原账号核验'), {
                 code: facts.state === 'mismatch' ? 'ACCOUNT_MISMATCH' : 'SESSION_INVALID' });

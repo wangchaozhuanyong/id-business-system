@@ -194,8 +194,7 @@ test('pool cleanup confirms every owned context closed before reporting success'
     require(name) {
       if (name === 'fs') return fs;
       if (name === 'path') return path;
-      if (name === 'playwright-extra') return { chromium: { use() {} } };
-      if (name === 'puppeteer-extra-plugin-stealth') return () => ({});
+      if (name === 'playwright') return { chromium: {} };
       throw Error(`Unexpected module ${name}`);
     }
   });

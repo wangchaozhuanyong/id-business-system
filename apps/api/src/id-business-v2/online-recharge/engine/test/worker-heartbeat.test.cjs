@@ -123,7 +123,21 @@ function fixture({
       if (name === './unpaid-validation.cjs') return require('../unpaid-validation.cjs');
       if (name === 'node:path') return path;
       if (name === 'node:os') return { hostname: () => 'synthetic-host' };
-      if (name === 'node:net') return {};
+      if (name === 'node:net')
+        return {
+          createServer: () => ({
+            once(_event, callback) {
+              this.failed = callback;
+            },
+            listen(_port, _host, ready) {
+              Promise.resolve().then(initialize).then(ready, this.failed);
+            },
+            address: () => ({ port: 9222 }),
+            close(done) {
+              done();
+            }
+          })
+        };
       if (name === 'node:fs/promises')
         return {
           mkdir: async () => {},
@@ -140,7 +154,8 @@ function fixture({
         };
       if (name === 'node:child_process')
         return {
-          fork: () => {
+          fork: (_file, _args, options) => {
+            effects.childEnv = options.env;
             effects.forks++;
             return child;
           }
@@ -162,7 +177,7 @@ function fixture({
           redactText: (value) => value
         };
       if (name === './upstream/browser-pool') return pool;
-      if (name === './upstream/browser-runtime') return { buildWorkerRuntimeEnv: (env) => env };
+      if (name === './upstream/browser-runtime') return require('../upstream/browser-runtime');
       throw new Error(`Unexpected module: ${name}`);
     }
   });
@@ -425,17 +440,19 @@ for (const [operation, payload] of [
   ['renewal', { action: 'enable' }],
   ['renewal', { action: 'disable' }]
 ]) {
-  test(`${operation} ${payload.action || 'query'} reserves and releases one existing browser slot`, async () => {
+  test(`${operation} ${payload.action || 'query'} owns a dedicated persistent browser without consuming a generic pool slot`, async () => {
     const f = fixture();
     f.task.operation = operation;
     f.task.payload = payload;
     const running = f.run();
     await settle();
-    assert.equal(f.effects.acquired, 1);
+    assert.equal(f.effects.acquired, 0);
+    assert.match(f.effects.childEnv.ONLINE_RECHARGE_PROFILE_ROOT, /browser-profiles$/);
+    assert.equal(f.effects.childEnv.BROWSER_POOL, '0');
     assert.equal(f.effects.forks, 1);
     f.complete({ ok: true });
     await running;
-    assert.equal(f.effects.releases, 1);
+    assert.equal(f.effects.releases, 0);
     assert.equal(f.effects.rpc.filter((r) => r.method === 'completeJob').length, 1);
   });
 }
@@ -485,21 +502,22 @@ test('parent ends an unresponsive login phase independently and waits for child 
   assert.equal(finish.args.result.bootstrapDiagnostics.lastAwait, 'challenge');
 });
 
-test('an unconfirmed owned-context cleanup cannot release the slot or an interrupted task', async () => {
-  const f = fixture({ clearContexts: () => new Promise(() => {}) });
+test('generic pool cleanup cannot delay a terminated dedicated-browser task', async () => {
+  let poolCleanupCalls = 0;
+  const f = fixture({
+    clearContexts: () => {
+      poolCleanupCalls++;
+      return new Promise(() => {});
+    }
+  });
   const running = f.run();
   await settle();
   f.child.exit();
-  await settle();
-  assert.equal(
-    f.effects.rpc.some((item) => item.method === 'completeJob'),
-    false
-  );
-  await f.advance(3000);
   await running;
   const finish = f.effects.rpc.find((item) => item.method === 'completeJob');
   assert.equal(finish.args.executorInterrupted, true);
-  assert.equal(finish.args.executorTerminated, false);
+  assert.equal(finish.args.executorTerminated, true);
+  assert.equal(poolCleanupCalls, 0);
   assert.equal(f.effects.releases, 0);
   assert.equal(f.timerCount(), 0);
 });
@@ -514,7 +532,7 @@ test('a completed bootstrap clears its phase timer without affecting the ordinar
   assert.equal(f.effects.signals.length, 0);
   f.complete();
   await running;
-  assert.equal(f.effects.releases, 1);
+  assert.equal(f.effects.releases, 0);
   assert.equal(f.timerCount(), 0);
 });
 

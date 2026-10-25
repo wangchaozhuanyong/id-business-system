@@ -2185,3 +2185,14 @@ migration 已在本地开发库和生产环境应用。2026-08-12 已使用两�
 - 只扩展现有内部 `progress` / `getRuntimeConfig` 的原单准备资料，不新增公共接口、数据库表、迁移或环境变量；原单准备记录与付款前已核价恢复资料分开，不能作为已付款证据。
 - 本轮检查记录归 `.runtime/checkout-resume-fix-20261025/`。未提交、推送、发布或新增真实充值；本地通过不代表官网准备页面的上游原因已经解决。
 - 本地验收：结账／恢复／不付款链路 91/91、验证状态 80/80、API 预检／原单／卡容量 94/94、模块控制 17/17 通过；源码摘要 131 项一致，限定 lint、上游语法、格式、架构及隔离通过。共享依赖的 Prisma 客户端包含另一工作区的 Go 类型，因此按当前 schema 在本项目 `.runtime` 生成隔离客户端完成 API 类型检查和 Nest 编译构建，未连接数据库或改写共享依赖。API 与执行器须配套发布；旧 API 不确认准备记录时，新执行器不会发起建单。
+
+## V2-ONLINE-PERSISTENT-PROFILE-20261025（账号与代理绑定浏览器会话，本地候选）
+
+- 用户明确授权修正版登录执行器实现及隔离验证。本轮不提交、推送、创建 PR、发布或操作官网订单/付款。
+- 本地账号任务改用专用持久化上下文；以账号、用户、原代理连接及浏览器 channel 的摘要隔离目录。父 worker 从已有持久化 runtime 卷派生 profile 根目录，子进程的临时 runtime 清理不会删除它；账号任务不再领取通用热浏览器池槽位。
+- 使用原生 Playwright、完整 Chromium（含无头模式）及浏览器原生目录锁，停用 stealth、AutomationControlled 标志、重复 UA/client hints/Canvas/WebGL 等注入。保留已有 CHROMIUM_CHANNEL 可选系统 Chrome；本轮不安装系统 Chrome 或改生产镜像。
+- 同一原代理最多五次连接探测，成功即继续；已绑定 profile 的出口摘要变化即停止，不切换出口、不搬运 Cookie。正常关闭未完成时仅终止经自有 CDP 核实的浏览器进程，再确认断开；同账号跨进程并发由原生 profile 锁拒绝。
+- 原 profile 已有 Cookie 时，先读真实 Session，核实有效用户及原账号匹配后复用官网刷新后的 Cookie；仅明确无效时重新导入该任务资料。持久化路径不写伪造 bootstrap 缓存、不拦截正常登录导航，保留真实 Session/CSRF、页内订阅 GET 与 Bearer 鉴权。
+- 付款前明确挑战使用既有 CHALLENGE_BLOCKED 分类，保留分诊、跳过人工等待及失败通知耗时，收回原浏览器和代理。快速媒体收尾只交接已完成脱敏 PNG，不等待录像编码。付款已经提交后的待核对优先级不变。
+- 新增可选环境变量 ONLINE_RECHARGE_PROFILE_ROOT，两处 .env.example 只含空占位。没有新增 API、数据库表列、迁移或依赖；不改付款按钮点击、单次提交、confirmedPaid、账单、CVC、CSP、iframe 可见性或总业务期限。
+- 隔离验证和本轮报告归 `.runtime/persistent-profile-fix-20261025/`。合成回执不代表官网返回 200、挑战减少或真实充值恢复，线上验收待另行发布授权。

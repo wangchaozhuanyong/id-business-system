@@ -26,7 +26,7 @@ async function connectTaskBrowser(options = {}) {
     const env = options.env || process.env;
     const mode = resolveBrowserRuntimeMode(env);
 
-    if (mode === 'pool') {
+    if (mode === 'pool' && !env.ONLINE_RECHARGE_PROFILE_ROOT) {
         return connectPoolBrowser({
             poolCdpUrl: env.BROWSER_POOL_CDP_URL,
             poolSlotId: env.BROWSER_POOL_SLOT
@@ -35,6 +35,10 @@ async function connectTaskBrowser(options = {}) {
 
     return connectStandaloneBrowser({
         proxyConfig: options.proxyConfig,
+        profileRoot: env.ONLINE_RECHARGE_PROFILE_ROOT,
+        sessionRaw: options.sessionRaw || env.CHATGPT_SESSION_JSON || env.CHATGPT_TOKEN,
+        proxyBinding: env.PROXY || '', signal: options.signal,
+        contextOptions: options.contextOptions,
         headful: options.headful,
         chromiumChannel: options.chromiumChannel || env.CHROMIUM_CHANNEL,
         cdpPort: env.CDP_PORT
@@ -52,6 +56,10 @@ function applyCdpEnv(session) {
 }
 
 async function closeTaskBrowser(session, browser) {
+    if (session?.close) {
+        await session.close();
+        return;
+    }
     if (!browser) {
         return;
     }

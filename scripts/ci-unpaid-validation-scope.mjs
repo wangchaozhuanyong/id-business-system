@@ -59,11 +59,41 @@ export const checkoutResumePaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.ts',
   'docs/V2_TASKS.md'
 ]);
+export const persistentProfilePaths = Object.freeze([
+  '.env.example',
+  'apps/api/src/id-business-v2/online-recharge/engine/.env.example',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/safe-media.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/task-runner.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-navigation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/debug-checkout.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/evidence-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/execution-budget.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/session-routing-browser.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/worker-heartbeat.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/browser-pool-client.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/browser-pool.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/browser-runtime.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/browser-standalone.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/subscription-check.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md',
+  'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/browser-profile.test.cjs'
+]);
 export const unpaidValidationControls = Object.freeze([
   'scripts/ci-online-settings-scope.mjs',
   'scripts/ci-recharge-scope.mjs',
   'scripts/ci-unpaid-validation-scope.mjs',
   'scripts/ci-unpaid-validation-scope.test.mjs',
+  '.github/workflows/online-persistent-profile-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-persistent-profile-' + name
+  ),
   '.github/workflows/online-unpaid-validation-publication.yml',
   'scripts/production-release/online-unpaid-validation-release.py',
   'scripts/production-release/online-unpaid-validation-build.py',
@@ -79,11 +109,21 @@ export function isUnpaidValidationOnly(paths) {
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
-    [unpaidValidationPaths, checkoutResumePaths].some(
+    [unpaidValidationPaths, checkoutResumePaths, persistentProfilePaths].some(
       (batch) =>
         batch.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
         paths.every((p) => batch.includes(p) || unpaidValidationControls.includes(p))
     )
+  );
+}
+export function isPersistentProfileOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    persistentProfilePaths
+      .filter((p) => p.startsWith('apps/') || p === '.env.example')
+      .every((p) => paths.includes(p)) &&
+    paths.every((p) => persistentProfilePaths.includes(p) || unpaidValidationControls.includes(p))
   );
 }
 export function isUnpaidValidationControlsOnly(paths) {
@@ -92,6 +132,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-persistent-profile-') ||
+        p === '.github/workflows/online-persistent-profile-publication.yml' ||
         p.startsWith('scripts/production-release/online-checkout-resume-') ||
         p === '.github/workflows/online-checkout-resume-publication.yml' ||
         p.startsWith('scripts/production-release/online-unpaid-validation-') ||
@@ -119,11 +161,24 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-persistent-profile-'))
+        ? [
+            [
+              'python3',
+              '-B',
+              'scripts/production-release/online-persistent-profile-release.test.py'
+            ]
+          ]
+        : []),
       ...(paths.some((p) => p.includes('online-checkout-resume-'))
         ? [['python3', '-B', 'scripts/production-release/online-checkout-resume-release.test.py']]
         : []),
-      ...(controlsOnly
-        ? ['check:v2-module-architecture', 'check:v2-isolation']
+      ...(controlsOnly || isPersistentProfileOnly(paths)
+        ? [
+            'check:v2-module-architecture',
+            'check:v2-isolation',
+            ...(isPersistentProfileOnly(paths) ? ['test:online-recharge:controls'] : [])
+          ]
         : [
             'check:admin-ui',
             'check:v2-ui-language',

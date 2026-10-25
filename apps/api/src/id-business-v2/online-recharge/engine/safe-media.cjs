@@ -257,12 +257,14 @@ function diagnostics(page) {
     ...(state.finishedAt ? { lastFinishedAgoMs: ago(state.finishedAt) } : {})
   };
 }
-async function finish() {
+async function finish(options = {}) {
   if (!recorder) return [];
   const current = recorder;
   recorder = null;
   current.stopped = true;
   clearInterval(current.timer);
+  // Challenge exit hands off only already completed, masked PNGs. Browser close cancels pending reads.
+  if (options.fast === true) return [...current.frames];
   let captureTimer;
   const settled = await Promise.race([
     current.chain.then(

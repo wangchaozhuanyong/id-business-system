@@ -4,11 +4,9 @@
  * 浏览器池客户端：子进程通过 CDP 接入 server 预热的 Chromium 槽位
  */
 
-const { chromium } = require('playwright-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { chromium } = require('playwright');
 const { probeUserAgent, DEFAULT_UA } = require('./browser-standalone');
 
-chromium.use(StealthPlugin());
 
 /**
  * @param {object} options
