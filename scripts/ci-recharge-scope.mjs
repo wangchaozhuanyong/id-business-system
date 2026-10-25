@@ -1289,6 +1289,18 @@ export function needsOnlineRechargeCiBuild(paths, context) {
     )
   )
     return false;
+  // Mailbox checks build the current API/Admin, not the historical ONLINE image.
+  // A selector or synthetic control fixture may accompany this bounded scope.
+  if (
+    isMailboxOnly(paths) &&
+    paths.every(
+      (path) =>
+        !onlineCiBuildInputs.has(path) ||
+        onlineCiBuildTestInputs.has(path) ||
+        ['scripts/ci-recharge-scope.mjs', 'scripts/ci-recharge-check.mjs'].includes(path)
+    )
+  )
+    return false;
   // Ordinary frontend changes keep the complete Admin build/UI checks. A
   // selector repair may accompany them, but real image/build inputs may not.
   if (
