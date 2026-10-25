@@ -11,6 +11,11 @@ on:
         description: Exact deployed predecessor commit
         required: true
         type: string
+      profile_diagnostic_only:
+        description: Diagnose fenced stop and restore the same containers without migration or publication
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -52,6 +57,7 @@ jobs:
           aws-region: ap-northeast-1
           role-duration-seconds: 3600
       - name: Build the migration tool from this exact main commit
+        if: ${{ !inputs.profile_diagnostic_only }}
         run: |
           set -Eeuo pipefail
           python3 -B scripts/production-release/recharge-plan-billing-publication.py check
@@ -69,8 +75,10 @@ jobs:
           echo "MIGRATION_LOCAL_REFERENCE=$image" >> "$GITHUB_ENV"
           echo "MIGRATION_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$image")" >> "$GITHUB_ENV"
       - name: Reproduce the published source and rebuild the reviewed main delta
+        if: ${{ !inputs.profile_diagnostic_only }}
         run: python3 -B scripts/production-release/recharge-plan-billing-publication.py build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !inputs.profile_diagnostic_only }}
         with:
           name: recharge-plan-billing-${{ github.sha }}-${{ github.run_attempt }}
           path: |
@@ -81,7 +89,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Publish once, migrate only the reviewed SQL and independently read back
+        if: ${{ !inputs.profile_diagnostic_only }}
         run: python3 -B scripts/production-release/recharge-plan-billing-publication.py publish
+      - name: Diagnose fenced stop and restore the same original containers
+        if: inputs.profile_diagnostic_only
+        run: python3 -B scripts/production-release/recharge-plan-billing-publication.py diagnose
       - name: Preserve native publication receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

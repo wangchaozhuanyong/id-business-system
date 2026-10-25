@@ -87,7 +87,7 @@ try:
  (root/'plan.json').write_text(json.dumps(plan,sort_keys=True));(root/'plan.json').chmod(0o600)
  result=subprocess.run(['python3','-B',str(root/'recharge-plan-billing-release.py'),str(root/'plan.json')],capture_output=True,text=True)
  if result.returncode:
-  lines=result.stderr.splitlines();codes=[x.split(': ',1)[-1] for x in lines if 'RuntimeError: ' in x]
+  lines=result.stderr.splitlines();codes=[m[1] for x in lines if (m:=re.search(r': ((?:RECHARGE_|ONLINE_|PROXY_|API_ADMIN_)[A-Z0-9_]{1,170})$',x))]
   print(json.dumps({'status':'FAILED','mode':MODE,'reason':codes[-1] if codes and len(codes[-1])<180 else 'OUTPUT_SUPPRESSED'}));sys.exit(1)
  value=json.loads(result.stdout);print(json.dumps(value,sort_keys=True))
 except Exception as error:
@@ -122,6 +122,17 @@ def main(mode):
     c = json.loads(B.CONTRACT.read_bytes())
     B.check(c)
     native, quality = identity_and_quality(c)
+    if mode == 'diagnose':
+        names = ['remote-deploy.py', 'recharge-record-release.py', 'recharge-availability-release.py',
+                 'recharge-source-recovery-release.py', 'recharge-billing-release.py', 'online-checkout-release.py',
+                 'online-profile-lock-recovery.py', 'proxy-result-identity-release.py', 'api-admin-scope.py',
+                 'recharge-plan-billing-release.py', 'recharge-plan-billing-contract.json']
+        sources = {name: B.sha((HERE / name).read_bytes()) for name in names}
+        OUT.mkdir(parents=True, exist_ok=True)
+        plan = {**native, 'contractSha256': B.sha(B.CONTRACT.read_bytes()), 'controlSources': sources}
+        result = command('diagnose', plan, sources)
+        print(json.dumps(result, sort_keys=True))
+        return
     if mode == 'check':
         print(json.dumps({'status': 'BILLING_SOURCE_CHECKED', 'commit': native['commit']}))
         return
@@ -158,5 +169,5 @@ def main(mode):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['check', 'build', 'publish'])
+    parser.add_argument('mode', choices=['check', 'build', 'publish', 'diagnose'])
     main(parser.parse_args().mode)
