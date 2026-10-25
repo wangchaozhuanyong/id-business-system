@@ -160,3 +160,52 @@ describe('填卡读取诊断落盘', () => {
       expect(f.workers.withLease).not.toHaveBeenCalled();
     });
 });
+
+describe('代理与专用浏览器失败分类落盘', () => {
+  for (const code of [
+    'PROXY_CONNECTION_FAILED',
+    'PROFILE_IDENTITY_MISSING',
+    'PROFILE_PROXY_INVALID',
+    'PROFILE_BUSY',
+    'PROFILE_EXIT_CHANGED',
+    'PROFILE_BINDING_INVALID',
+    'PROFILE_DIRECTORY_INVALID',
+    'PROFILE_LAUNCH_FAILED',
+    'PROFILE_CLEANUP_FAILED'
+  ])
+    it(`保存受控分类 ${code}，不丢成未知`, async () => {
+      const root = join(project, '.runtime/proxy-failure-evidence-20261025/api-artifacts');
+      await mkdir(root, { recursive: true });
+      const directory = await mkdtemp(join(root, 'fixture-'));
+      try {
+        const f = fixture(directory);
+        const data = {
+          ...report,
+          lastStage: 'proxy',
+          failureClass: [
+            'PROXY_CONNECTION_FAILED',
+            'PROFILE_PROXY_INVALID',
+            'PROFILE_EXIT_CHANGED'
+          ].includes(code)
+            ? 'PROXY_UNAVAILABLE'
+            : 'BROWSER_PROFILE_UNAVAILABLE',
+          failureCode: code
+        };
+        const result = await f.repository.upload(input(data));
+        const { readFile } = await import('node:fs/promises');
+        const saved = JSON.parse(await readFile(join(directory, result.filename), 'utf8'));
+        expect(saved.failureCode).toBe(code);
+        expect(saved.failureClass).toBe(data.failureClass);
+        expect(saved.submitted).toBe(false);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  it('未知前缀不扩大允许列表', async () => {
+    const f = fixture(join(project, '.runtime/proxy-failure-evidence-20261025/api-artifacts'));
+    await expect(
+      f.repository.upload(input({ ...report, failureCode: 'PROFILE_PRIVATE_ARBITRARY' }))
+    ).rejects.toThrow('诊断文件字段无效');
+    expect(f.workers.withLease).not.toHaveBeenCalled();
+  });
+});

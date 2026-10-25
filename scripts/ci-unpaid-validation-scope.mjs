@@ -99,11 +99,29 @@ export const cardReadDiagnosticsPaths = Object.freeze([
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ]);
+export const proxyFailureEvidencePaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/browser-profile.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/unpaid-validation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/unpaid-validation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/index.js',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.unpaid.spec.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
 export const unpaidValidationControls = Object.freeze([
   'scripts/ci-online-settings-scope.mjs',
   'scripts/ci-recharge-scope.mjs',
   'scripts/ci-unpaid-validation-scope.mjs',
   'scripts/ci-unpaid-validation-scope.test.mjs',
+  '.github/workflows/online-proxy-failure-evidence-publication.yml',
+  ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-proxy-failure-evidence-' + name
+  ),
   '.github/workflows/online-card-read-diagnostics-publication.yml',
   ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-card-read-diagnostics-' + name
@@ -131,7 +149,8 @@ export function isUnpaidValidationOnly(paths) {
       unpaidValidationPaths,
       checkoutResumePaths,
       persistentProfilePaths,
-      cardReadDiagnosticsPaths
+      cardReadDiagnosticsPaths,
+      proxyFailureEvidencePaths
     ].some(
       (batch) =>
         batch.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
@@ -155,6 +174,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-proxy-failure-evidence-') ||
+        p === '.github/workflows/online-proxy-failure-evidence-publication.yml' ||
         p.startsWith('scripts/production-release/online-card-read-diagnostics-') ||
         p === '.github/workflows/online-card-read-diagnostics-publication.yml' ||
         p.startsWith('scripts/production-release/online-persistent-profile-') ||
@@ -186,6 +207,15 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-proxy-failure-evidence-'))
+        ? [
+            [
+              'python3',
+              '-B',
+              'scripts/production-release/online-proxy-failure-evidence-release.test.py'
+            ]
+          ]
+        : []),
       ...(paths.some((p) => p.includes('online-card-read-diagnostics-'))
         ? [
             [

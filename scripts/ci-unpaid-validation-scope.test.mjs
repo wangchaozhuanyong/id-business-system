@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cardReadDiagnosticsPaths,
+  proxyFailureEvidencePaths,
   persistentProfilePaths,
   isPersistentProfileOnly,
   isUnpaidValidationControlsOnly,
@@ -161,4 +162,48 @@ test('card read diagnostic publication cannot include business files or skip its
   );
   assert.throws(() => unpaidValidationCommands('api', paths));
   assert.equal(isUnpaidValidationControlsOnly([...paths, cardReadDiagnosticsPaths[0]]), false);
+});
+
+test('proxy failure evidence selects API Admin engine and all UI guardrails', () => {
+  const paths = [
+    ...proxyFailureEvidencePaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  for (const required of proxyFailureEvidencePaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== required)), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/admin/src/auth/session.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js'
+  ])
+    assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
+  const guards = JSON.stringify(unpaidValidationCommands('guards', paths));
+  for (const name of [
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(guards.includes(name));
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+});
+
+test('proxy failure publication is finite controls only and requires its contract tests', () => {
+  const paths = unpaidValidationControls.filter((p) =>
+    p.includes('online-proxy-failure-evidence-')
+  );
+  assert.equal(paths.length, 6);
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /online-proxy-failure-evidence-release.test.py/
+  );
+  assert.equal(isUnpaidValidationControlsOnly([...paths, proxyFailureEvidencePaths[0]]), false);
 });

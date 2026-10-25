@@ -474,9 +474,9 @@
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5ec44a9fca78d841a94d5a445e1b5394398c49331304b16fc1664ca478c04f06",
+      "adaptedSha256": "10c43be188df52a9d35586b20d1fd73c3fd21b6713eccb5fdd7e29683bef32cb",
       "changed": true,
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. Native Session baseline comparison confirms two real installation/bootstrap reads; update only stale fixture counts, preserve exact request/payment assertions.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. Native Session baseline comparison confirms two real installation/bootstrap reads; update only stale fixture counts, preserve exact request/payment assertions.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons through unpaid reports; isolated child, artifact and UI regressions; no retry, binding, login or payment behavior changes."
     },
     {
       "path": "test/regressions.test.cjs",
@@ -726,9 +726,9 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "6c74d14a2c1c6556a9f7af30ec7fadefdce66497b74c71b7beb9bd9ab394c398",
+      "adaptedSha256": "a37333706dc9d0aca2c772e50fe26a75e1707dd7e9bf627d66cdcabde87802d2",
       "changed": true,
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Distinguish incomplete observed candidate counts from absence; report known cancellation rules and possible navigation timing without asserting a root cause. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior."
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Distinguish incomplete observed candidate counts from absence; report known cancellation rules and possible navigation timing without asserting a root cause. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons through unpaid reports; isolated child, artifact and UI regressions; no retry, binding, login or payment behavior changes."
     },
     {
       "path": "upstream/mysql-store.js",
@@ -901,16 +901,16 @@
     {
       "path": "test/unpaid-validation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "0c890b7175f044bdf1d8555c1e04bcb845b44879722bde0811cbb1103d995935",
+      "adaptedSha256": "134f0c1411bb4ead603a2b047ca44226170c3d8f6ec7bad5d41b761fcf5f7dbd",
       "changed": true,
-      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: retain checkout preparation and incomplete-read evidence across credential resume. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior."
+      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: retain checkout preparation and incomplete-read evidence across credential resume. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons through unpaid reports; isolated child, artifact and UI regressions; no retry, binding, login or payment behavior changes."
     },
     {
       "path": "unpaid-validation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "57f92ff781668356ef71c304d3f30cbec7947797bd5769f9aaecf5e4a60fb19e",
+      "adaptedSha256": "21a756ccc0c2b833ce505f1be428bceb39f9f14dac769c1a8041b76a34d29003",
       "changed": true,
-      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior."
+      "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons through unpaid reports; isolated child, artifact and UI regressions; no retry, binding, login or payment behavior changes."
     },
     {
       "path": "checkout-preparation.cjs",
@@ -936,9 +936,9 @@
     {
       "path": "test/browser-profile.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "34cee02e583ab18ff21eb61e43d27daf982439aff3472926351814fc28fc9c75",
+      "adaptedSha256": "9c0a30db9b24b2107a5a42b4db08e969d0faca1a931292f82894b69b9b370216",
       "changed": true,
-      "reason": "Account-bound native persistent browser state and isolated lifecycle regression verification."
+      "reason": "Account-bound native persistent browser state and isolated lifecycle regression verification. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons; test unchanged five-request retries and early exit-binding failure without business requests."
     }
   ],
   "dependencySecurityPatches": [

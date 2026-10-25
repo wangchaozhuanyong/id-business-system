@@ -495,3 +495,65 @@ test(
     }
   }
 );
+
+test('persistent proxy keeps five request retries but stops an established exit mismatch immediately', async () => {
+  await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, 'proxy-evidence-'));
+  let calls = 0;
+  let connected = false;
+  let probe = async () => '192.0.2.10';
+  const native = {
+    async launchPersistentContext() {
+      connected = true;
+      const browser = {
+        isConnected: () => connected,
+        newBrowserCDPSession: async () => ({
+          send: async () => ({ arguments: [] }),
+          detach: async () => {}
+        })
+      };
+      return {
+        browser: () => browser,
+        close: async () => {
+          connected = false;
+        },
+        request: {
+          get: async () => {
+            calls++;
+            const ip = await probe();
+            return { ok: () => true, text: async () => ip, dispose: async () => {} };
+          }
+        }
+      };
+    }
+  };
+  try {
+    const first = await launchProfile(native, { ...options, root });
+    await first.close();
+    calls = 0;
+    probe = async () => {
+      if (calls === 1) throw new Error('synthetic connection reset');
+      return '192.0.2.11';
+    };
+    await assert.rejects(launchProfile(native, { ...options, root }), {
+      code: 'PROFILE_EXIT_CHANGED'
+    });
+    assert.equal(
+      calls,
+      2,
+      'a successful second probe with changed exit stops before attempt three'
+    );
+    assert.equal(connected, false);
+    calls = 0;
+    probe = async () => {
+      throw new Error('synthetic connection reset');
+    };
+    await assert.rejects(launchProfile(native, { ...options, root }), {
+      code: 'PROXY_CONNECTION_FAILED'
+    });
+    assert.equal(calls, 5, 'connection errors still receive all five attempts');
+    assert.equal(connected, false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

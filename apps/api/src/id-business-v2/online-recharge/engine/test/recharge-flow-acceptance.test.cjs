@@ -200,6 +200,12 @@ function strictRpcFixture(task) {
 async function runSyntheticRecharge(scene, options = {}) {
   assert.ok(['success', 'recover', 'unknown', 'readiness'].includes(scene));
   assert.ok(options.formReadFailure == null || options.formReadFailure === true);
+  assert.ok(
+    options.profileFailure == null ||
+      ['PROFILE_EXIT_CHANGED', 'PROFILE_LAUNCH_FAILED', 'PROXY_CONNECTION_FAILED'].includes(
+        options.profileFailure
+      )
+  );
   const cardFields = options.cardFields || 'standard';
   assert.ok(
     [
@@ -338,6 +344,7 @@ async function runSyntheticRecharge(scene, options = {}) {
     task,
     diagnosticDelay: options.diagnosticDelay,
     formReadFailure: options.formReadFailure,
+    profileFailure: options.profileFailure,
     cardFields,
     billingFields,
     sessionRefresh,
@@ -487,7 +494,8 @@ async function fixtureChild(
   billingFields = 'standard',
   sessionRefresh = null,
   authUi = null,
-  formReadFailure = false
+  formReadFailure = false,
+  profileFailure = null
 ) {
   const { chromium, request } = require('../upstream/node_modules/playwright');
   const rpc = require('../rpc.cjs');
@@ -1303,6 +1311,8 @@ async function fixtureChild(
   request.newContext = async (options) => transport(options?.extraHTTPHeaders, false);
   const runtime = require('../upstream/browser-runtime');
   runtime.connectTaskBrowser = async () => {
+    if (profileFailure)
+      throw Object.assign(new Error('PRIVATE_PROFILE_ERROR'), { code: profileFailure });
     browser = await chromium.launch({
       headless: true,
       args: [
@@ -1441,7 +1451,8 @@ if (process.env.RECHARGE_FLOW_FIXTURE_CHILD === '1') {
       message.billingFields,
       message.sessionRefresh,
       message.authUi,
-      message.formReadFailure
+      message.formReadFailure,
+      message.profileFailure
     ).then(
       () => process.exit(0),
       (error) => {
