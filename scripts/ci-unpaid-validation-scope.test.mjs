@@ -15,6 +15,25 @@ import {
   unpaidValidationCommands
 } from './ci-unpaid-validation-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
+test('profile egress publication controls require their contract tests and cannot admit business input', () => {
+  const paths = [
+    '.github/workflows/online-profile-egress-publication.yml',
+    ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+      (name) => 'scripts/production-release/online-profile-egress-' + name
+    ),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.ok(
+    JSON.stringify(unpaidValidationCommands('guards', paths)).includes(
+      'online-profile-egress-release.test.py'
+    )
+  );
+  assert.equal(isUnpaidValidationControlsOnly([...paths, profileEgressLifecyclePaths[0]]), false);
+});
 test('egress lifecycle batch checks Admin and full engine without an unrelated API or database job', () => {
   const paths = [
     ...profileEgressLifecyclePaths,
