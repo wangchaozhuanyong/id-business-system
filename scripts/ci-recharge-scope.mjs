@@ -2546,6 +2546,7 @@ export function isAdminOnly(paths) {
 }
 
 const mailboxViewerPaths = new Set([
+  'apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue',
   'apps/admin/src/v2/components/workspace/V2MailBody.vue',
   'apps/admin/src/v2/components/workspace/V2MailMessageList.vue',
   'apps/admin/src/v2/components/workspace/mail-viewer.ts',

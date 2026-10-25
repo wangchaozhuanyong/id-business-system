@@ -8694,3 +8694,10 @@ test('mailbox checks do not rebuild an unrelated historical ONLINE image for sel
   ])
     assert.equal(needsOnlineRechargeCiBuild([...paths, changed]), true, changed);
 });
+
+// The existing mailbox health help changes with the active refresh behavior.
+test('mailbox health help retains the required scoped admin and guard checks', () => {
+  const paths = ['apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue'];
+  assert.equal(isMailboxOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+});
