@@ -315,7 +315,7 @@
     "financial-closure-readonly.test.py": "8dfa396a1b9e601418184edbd4bedab1460cc9a888473a5e9adfb4d82948402f",
     "financial-closure-release.py": "3ae45d6905cc99319cbeb490c32d9d546f27509dac0a80a5ed8a710d8c5f1eef",
     "financial-closure-release.test.py": "d14b74df290dc9b02751d6445ffdb4ce0398b1f358b045d3a36ce025474fc1ad",
-    "mail-query-release.py": "c4a1c7138fbcd64072cd705c9082dd28e58052840a288783698cc920b400151d",
+    "mail-query-release.py": "ffa8228c754407f3cb2f4d4c32b4c26c4d1951de29bb4e2dfbb8803b06034e47",
     "online-card-read-diagnostics-build.py": "db251051c3d5dc6174478f7f0890b6c6042c3e13ef5a00154803092de34d33f7",
     "online-card-read-diagnostics-contract.json": "068da4938a05b1791e3fa1832a375c1c6ca46d34077efb9ed62db59621e62681",
     "online-card-read-diagnostics-publication.py": "13b88ff3a326ce630030fcc40e7cc0074b854725470afed0d9eee30f18b3a175",

@@ -193,16 +193,14 @@ def release(plan, c):
         finite=load('proxy-result-identity-release.py')
         retired=load('online-query-network-release.py');retired.SCOPE=SCOPE
         finite.claim_markers=retired.claim_retired_markers
+        recovery=p.profile_recovery_source(plan)
         marker=finite.claim_markers(d,before,plan)
         fence=finite.sql_fence_class(prior)(d,previous)
         journal=stage/'switch-state.json'
         journal.write_text(json.dumps({'status':'SWITCH_STARTED','target':str(target)})+'\n')
         try:
             fence.acquire();fence.check_idle()
-            d.compose(previous,'stop','online-recharge',timeout=90)
-            fence.check_idle()
-            d.compose(previous,'stop','api',timeout=90)
-            fence.check_idle();fence.close()
+            recovered=p.stop_recharge_and_recover(d,previous,before,lock,fence,recovery)
             d.compose(target,'up','-d','--no-deps','--no-build','--pull','never','api','admin',timeout=180)
             for role in ('api','admin'):d.wait_healthy(target,role)
             d.compose(target,'up','-d','--no-deps','--no-build','--pull','never','--force-recreate','online-recharge',timeout=180)
@@ -216,7 +214,7 @@ def release(plan, c):
         finally:
             fence.close()
         finite.release_markers(marker);h.guards(d,target,after,prior)
-        receipt={'commit':plan['commit'],'before':before,'after':after,'images':images,'backup':backup,'businessActions':0}
+        receipt={'commit':plan['commit'],'before':before,'after':after,'images':images,'backup':backup,'profileLockRecovery':recovered,'businessActions':0}
         (target/'mail-query-preservation.json').write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
         (target/'mail-query-build-proof.json').write_bytes(raw_proof)
         manifest=json.loads((previous/'release-manifest.json').read_bytes())

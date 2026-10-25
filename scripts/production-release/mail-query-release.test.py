@@ -66,7 +66,7 @@ class ProofTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             m.verify_proof({**self.proof,'files':files},self.plan,self.c,files)
 
-    def switch_fixture(self, fail=False):
+    def switch_fixture(self, fail=False, fail_recovery=False):
         parent = HERE.parents[1] / '.runtime/mail-query-switch-tests'
         parent.mkdir(parents=True,exist_ok=True)
         temporary = tempfile.TemporaryDirectory(dir=parent)
@@ -106,7 +106,10 @@ class ProofTests(unittest.TestCase):
             target=destination/'payload';shutil.copytree(source,target);return target
         h=SimpleNamespace(safe_archive=extract,file_inventory=m.H.file_inventory,base_image_reference=lambda *_:'synthetic:base',
             build_image=Mock(),fresh_scoped_backup=Mock(return_value={'s3Verified':True}),snapshot=Mock(return_value=after),guards=Mock())
-        p=SimpleNamespace(verify_image=Mock())
+        recovery=SimpleNamespace(recover=Mock(return_value={'recoveredLocks':0}))
+        if fail_recovery:recovery.recover.side_effect=RuntimeError('synthetic recovery failed')
+        p=SimpleNamespace(verify_image=Mock(),profile_recovery_source=lambda _:recovery,
+            stop_recharge_and_recover=m.load('online-checkout-release.py').stop_recharge_and_recover)
         fence=SimpleNamespace(acquire=Mock(),check_idle=Mock(),close=Mock())
         marker=base/'maintenance.json'
         def claim(*args):marker.write_text('synthetic owned marker');return {'paths':[str(marker)]}
@@ -162,6 +165,12 @@ class ProofTests(unittest.TestCase):
         journal=list((base/'.staging').rglob('switch-state.json'));self.assertEqual(len(journal),1)
         value=json.loads(journal[0].read_bytes());self.assertEqual(value['status'],'NEEDS_FORWARD_DIAGNOSIS')
         self.assertFalse(value['rollbackPerformed'])
+
+    def test_profile_recovery_failure_cannot_start_new_images_or_move_the_current_pointer(self):
+        plan,c,d,fence,marker,base=self.switch_fixture(fail_recovery=True)
+        with self.assertRaisesRegex(RuntimeError,'synthetic recovery failed'):m.release(plan,c)
+        self.assertTrue(marker.exists());d.point_current.assert_not_called();fence.close.assert_called()
+        self.assertFalse(any(call.args[1]=='up' for call in d.compose.call_args_list))
 
     def native_snapshot_fixture(self):
         parent=HERE.parents[1]/'.runtime/mail-query-parent-tests';parent.mkdir(parents=True,exist_ok=True)
