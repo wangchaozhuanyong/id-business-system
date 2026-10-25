@@ -124,6 +124,7 @@ class RecoveryTests(unittest.TestCase):
             buildProofBytesSha256=m.r.c.digest(self.context['proofRaw']))
         self.stack = ExitStack(); self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.object(m, 'ORIGIN', self.origin))
+        self.stack.enter_context(patch.object(m.r, 'INSTANCE', self.origin['instanceId']))
         self.stack.enter_context(patch('subprocess.run', side_effect=AssertionError('external process forbidden in unit fixture')))
         self.stack.enter_context(patch('subprocess.Popen', side_effect=AssertionError('external process forbidden in unit fixture')))
         self.stack.enter_context(patch('sqlite3.connect', side_effect=AssertionError('database connection forbidden in unit fixture')))
@@ -612,6 +613,7 @@ class RecoveryTests(unittest.TestCase):
             workspace_api_identity=lambda *args, **kwargs: current_identity,
             workspace_private_inspect=lambda *args, **kwargs: inspection))
         self.transport['instanceId'] = old_auth['instanceId']; self.origin['instanceId'] = old_auth['instanceId']
+        self.stack.enter_context(patch.object(m.r, 'INSTANCE', old_auth['instanceId']))
         self.f_native = self.native(self.pref, command=self.transport['commandId'])
         self.transport.update(invocationRawBase64=base64.b64encode(self.f_native).decode(),
             invocationBytesSha256=m.r.c.digest(self.f_native))
@@ -732,6 +734,7 @@ class RecoveryTests(unittest.TestCase):
             # Synthetic seals are confined to this fixture. The archived control
             # implementation and every archived source/parameter byte remain real.
             archived_runtime = generator.__globals__['r']
+            archived_runtime.INSTANCE = self.origin['instanceId']
             archived_runtime.c.SEALED_ORDINARY_COMPONENT = copy.deepcopy(m.r.c.SEALED_ORDINARY_COMPONENT)
             archived_runtime.c.ADMIN_SUCCESSOR = copy.deepcopy(m.r.c.ADMIN_SUCCESSOR)
             generator.__globals__['recovery'] = m

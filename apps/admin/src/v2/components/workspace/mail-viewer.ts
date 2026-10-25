@@ -152,3 +152,63 @@ function normalizePlainText(value: string) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
+
+export interface MailBodyPart {
+  text: string;
+  href?: string;
+}
+
+export function safeMailLink(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) return undefined;
+    if (url.username || url.password) return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+export function mailBodyParts(value: string): MailBodyPart[] {
+  const parts: MailBodyPart[] = [];
+  function appendText(text: string) {
+    const pattern = /https?:\/\/[^\s<>"']+/gi;
+    let start = 0;
+    for (const match of text.matchAll(pattern)) {
+      const index = match.index!;
+      if (index > start) parts.push({ text: text.slice(start, index) });
+      const url = match[0].replace(/[.,;!?，。；！？）)]+$/, '');
+      parts.push({ text: url, href: safeMailLink(url) });
+      start = index + url.length;
+    }
+    if (start < text.length) parts.push({ text: text.slice(start) });
+  }
+  if (!/<[a-z][\s\S]*>/i.test(value)) {
+    appendText(value);
+    return parts;
+  }
+  if (typeof DOMParser === 'undefined') {
+    appendText(mailBodyToPlainText(value));
+    return parts;
+  }
+  const document = new DOMParser().parseFromString(value, 'text/html');
+  document.querySelectorAll(REMOVED_ELEMENTS).forEach((element) => element.remove());
+  function visit(node: Node) {
+    if (node.nodeType === 3) {
+      appendText(node.textContent || '');
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const element = node as Element;
+    if (element.tagName === 'A') {
+      const href = safeMailLink(element.getAttribute('href') || '');
+      parts.push({ text: element.textContent || href || '', ...(href ? { href } : {}) });
+      return;
+    }
+    if (['BR', 'HR'].includes(element.tagName)) parts.push({ text: '\n' });
+    element.childNodes.forEach(visit);
+    if (element.matches(BLOCK_ELEMENTS)) parts.push({ text: '\n' });
+  }
+  document.body.childNodes.forEach(visit);
+  return parts;
+}

@@ -36,7 +36,7 @@ const ALIAS_FIELDS = `
   codeExpiresAt codeResetIntervalDays remainingDays lastQueriedAt lastQueriedIp mailCount lastMailReceivedAt
 `;
 const MAIL_FIELDS = `
-  id createdAt updatedAt primaryAccountId virtualEmailId messageId fromAddress fromName subject bodyText
+  id createdAt updatedAt primaryAccountId virtualEmailId messageId fromAddress fromName subject bodyText bodyHtml
   extractedCode receivedAt isRead isStarred
 `;
 
@@ -237,7 +237,7 @@ export class IdBusinessV2VendureMailboxClient {
       `query IdBusinessPublicMailboxQuery($queryCode: String!) {
         icloudQueryMails(queryCode: $queryCode) {
           success message targetType aliasEmail primaryEmail codeExpiresAt remainingDays totalEmails
-          items { id virtualEmailId fromAddress fromName subject receivedAt extractedCode bodyText targetEmail }
+          items { id virtualEmailId fromAddress fromName subject receivedAt extractedCode bodyText bodyHtml targetEmail }
           virtualEmailsList { id aliasEmail note }
         }
       }`,

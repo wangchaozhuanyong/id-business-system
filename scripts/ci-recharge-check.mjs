@@ -200,7 +200,8 @@ import {
   isBitbrowserBoundedHoldControlsOnly,
   isBitbrowserBoundedHoldSourceOnly,
   bitbrowserBoundedHoldSchemaMatches,
-  bitbrowserBoundedHoldCheckCommands
+  bitbrowserBoundedHoldCheckCommands,
+  isMailboxOnly
 } from './ci-recharge-scope.mjs';
 
 const [part, base] = process.argv.slice(2);
@@ -214,6 +215,26 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+// These two fixture changes execute their component suites above. They do not
+// alter the frozen ONLINE publisher, its runtime, or its archived application.
+const mailboxFixtureControlPaths = new Set([
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs',
+  'scripts/production-release/online-recharge-component-diagnostic.test.py',
+  'scripts/production-release/online-recharge-component-recovery.test.py'
+]);
+const isolatedMailboxControlChecks =
+  mode === 'mailbox' &&
+  isMailboxOnly(changed) &&
+  changed.every((path) =>
+    path.startsWith('scripts/') || path.startsWith('.github/')
+      ? mailboxFixtureControlPaths.has(path)
+      : path.startsWith('apps/') ||
+        path === 'packages/shared/src/v2/vendure-mailbox.ts' ||
+        /^docs\/.*\.md$/.test(path)
+  );
 if (isAwsAccountMigrationControlsOnly(changed, { base })) {
   if (part !== 'guards' || mode !== 'ci-only')
     throw new Error('Migration control checks require the exact finite guard selection');
@@ -1996,6 +2017,7 @@ if (
     run('python3', ['-B', 'scripts/production-release/formal-runtime-package.test.py']);
   }
   if (
+    !isolatedMailboxControlChecks &&
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
     onlineRecoveryGrantControls();
@@ -2097,7 +2119,11 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   if (
     changed.some(
       (path) =>
-        path.includes('online-recharge') ||
+        (path.includes('online-recharge') &&
+          ![
+            'scripts/production-release/online-recharge-component-diagnostic.test.py',
+            'scripts/production-release/online-recharge-component-recovery.test.py'
+          ].includes(path)) ||
         /^scripts\/check-v2-(?:table|loading|input-retention|decimal)-standard/.test(path)
     )
   )
@@ -2169,6 +2195,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     run('python3', ['-B', 'scripts/production-release/formal-runtime-package.test.py']);
   }
   if (
+    !isolatedMailboxControlChecks &&
     changed.some((path) => path.includes('online-recharge') || onlineReleaseControlPaths.has(path))
   ) {
     onlineRecoveryGrantControls();

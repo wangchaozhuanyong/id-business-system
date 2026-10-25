@@ -4392,6 +4392,14 @@ test('Vendure mailbox integration runs only its shared, admin, API and guard che
     'scripts/ci-recharge-check.mjs',
     'scripts/ci-recharge-scope.mjs'
   ];
+  paths.push(
+    'apps/admin/src/v2/components/workspace/V2MailBody.vue',
+    'apps/admin/src/v2/components/workspace/V2MailMessageList.vue',
+    'apps/admin/src/v2/components/workspace/mail-viewer.ts',
+    'apps/admin/src/v2/components/workspace/mail-viewer.spec.ts',
+    'apps/admin/src/v2/components/workspace/workspace-ui.contract.spec.ts',
+    'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts'
+  );
   assert.equal(isMailboxOnly(paths), true);
   assert.equal(checkMode(paths, schema, schema), 'mailbox');
   assert.deepEqual(adminCheckCommands('mailbox', paths), [
@@ -4404,7 +4412,9 @@ test('Vendure mailbox integration runs only its shared, admin, API and guard che
       '--',
       'src/api/requestPolicy.spec.ts',
       'src/v2/features/registry.spec.ts',
-      'src/v2/features/auto-recharge/vendure-mailbox-ui.contract.spec.ts'
+      'src/v2/features/auto-recharge/vendure-mailbox-ui.contract.spec.ts',
+      'src/v2/components/workspace/mail-viewer.spec.ts',
+      'src/v2/components/workspace/workspace-ui.contract.spec.ts'
     ],
     ['run', 'build', '--workspace', '@apple-business/admin']
   ]);
@@ -4412,6 +4422,13 @@ test('Vendure mailbox integration runs only its shared, admin, API and guard che
     isMailboxOnly([...paths, 'apps/api/src/id-business-v2/orders/order.service.ts']),
     false
   );
+  for (const name of [
+    'apps/admin/src/v2/components/workspace/V2ManagedMailboxPanel.vue',
+    'apps/api/src/id-business-v2/workspace/unrelated-helper.ts',
+    'apps/api/prisma-mysql/schema.prisma'
+  ]) {
+    assert.equal(checkMode([...paths, name], schema, schema), 'full', name);
+  }
 });
 test('CI-only repairs do not select application or migration suites', () => {
   assert.equal(
@@ -8633,3 +8650,33 @@ test('线上执行器复用真实 CLI 仅接受准确来源及成功任务，输
   }
 });
 import './ci-aws-account-migration-scope.test.mjs';
+
+test('mailbox checks do not rebuild an unrelated historical ONLINE image for selector and fixture repairs', () => {
+  const paths = [
+    'apps/admin/src/v2/components/workspace/V2MailBody.vue',
+    'apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue',
+    'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts',
+    'packages/shared/src/v2/vendure-mailbox.ts',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/production-release/online-recharge-component-diagnostic.test.py',
+    'scripts/production-release/online-recharge-component-recovery.test.py'
+  ];
+  assert.equal(checkMode(paths), 'mailbox');
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const changed of [
+    'apps/api/Dockerfile.mysql',
+    'apps/api/src/id-business-v2/online-recharge/worker.ts',
+    'scripts/production-release/online-recharge-component-runtime.py'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([...paths, changed]), true, changed);
+});
+
+// The existing mailbox health help changes with the active refresh behavior.
+test('mailbox health help retains the required scoped admin and guard checks', () => {
+  const paths = ['apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue'];
+  assert.equal(isMailboxOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
+});

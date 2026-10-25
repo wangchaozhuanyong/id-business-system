@@ -341,3 +341,57 @@ describe('IdBusinessV2VendureMailboxService', () => {
     expect(error.message).toContain('不要重复提交');
   });
 });
+
+describe('manual inbox refresh', () => {
+  function setup() {
+    const client = {
+      primaryAccounts: vi.fn().mockResolvedValue([
+        { id: 'p1', status: 'ACTIVE' },
+        { id: 'p2', status: 'ACTIVE' },
+        { id: 'disabled', status: 'DISABLED' }
+      ]),
+      virtualEmails: vi.fn().mockResolvedValue([{ id: 'v1', primaryAccountId: 'p2' }]),
+      syncPrimary: vi.fn().mockResolvedValue({ success: true, syncedCount: 1, error: null }),
+      receivedMails: vi.fn().mockResolvedValue([])
+    };
+    const audit = { append: vi.fn() };
+    const manager = { execute: vi.fn(async (work: (tx: unknown) => Promise<void>) => work({})) };
+    return {
+      client,
+      audit,
+      service: new IdBusinessV2VendureMailboxService(
+        client as never,
+        manager as never,
+        audit as never
+      )
+    };
+  }
+  it('syncs only the selected alias owner before reading and audits the sync', async () => {
+    const { client, service, audit } = setup();
+    await service.listMails({ virtualEmailId: 'v1', refresh: 'true' }, operator);
+    expect(client.syncPrimary).toHaveBeenCalledExactlyOnceWith('p2');
+    expect(client.syncPrimary.mock.invocationCallOrder[0]).toBeLessThan(
+      client.receivedMails.mock.invocationCallOrder[0]!
+    );
+    expect(audit.append).toHaveBeenCalledOnce();
+  });
+  it('syncs all enabled accounts for an unfiltered refresh, but never for event reads', async () => {
+    const { client, service } = setup();
+    await service.listMails({}, operator);
+    expect(client.syncPrimary).not.toHaveBeenCalled();
+    await service.listMails({ refresh: true }, operator);
+    expect(client.syncPrimary.mock.calls.map(([id]) => id)).toEqual(['p1', 'p2']);
+  });
+  it('rejects a mismatched scope and sync failures without presenting stale data as current', async () => {
+    const { client, service } = setup();
+    await expect(
+      service.listMails({ primaryAccountId: 'p1', virtualEmailId: 'v1', refresh: true }, operator)
+    ).rejects.toThrow('不匹配');
+    expect(client.syncPrimary).not.toHaveBeenCalled();
+    client.syncPrimary.mockResolvedValueOnce({ success: false, syncedCount: 0, error: null });
+    await expect(
+      service.listMails({ primaryAccountId: 'p1', refresh: true }, operator)
+    ).rejects.toThrow('同步失败');
+    expect(client.receivedMails).not.toHaveBeenCalled();
+  });
+});
