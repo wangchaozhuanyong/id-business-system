@@ -469,6 +469,52 @@ function safeCheckoutFormInspection(value) {
                 clean[key] = raw[key];
         if (Object.keys(clean).length) inspection[group] = clean;
     }
+    if (Array.isArray(value.interactionChecks)) {
+        const reasons = ['none', ...countGroups.interactionRejectCounts];
+        const bounded = (n, max = 10000) => Number.isInteger(n) && n >= 0 && n <= max;
+        const geometryKeys = ['left', 'top', 'width', 'height', 'viewportWidth', 'viewportHeight', 'x', 'y'];
+        inspection.interactionChecks = value.interactionChecks.slice(-8)
+            .filter(row => row && CHECKOUT_FORM_DIAGNOSTIC_FIELDS.has(row.field) && reasons.includes(row.initialReason))
+            .map(row => {
+                const clean = { field: row.field, initialReason: row.initialReason };
+                const enums = {
+                    tag: ['input', 'select', 'textarea', 'button', 'other'],
+                    role: ['combobox', 'other'],
+                    type: ['text', 'tel', 'number', 'password', 'select-one', 'select-multiple', 'other'],
+                    frameKind: ['main', 'embedded'],
+                    afterScrollReason: reasons,
+                    recovery: ['requested', 'ready', 'read_incomplete', 'blocked']
+                };
+                for (const [key, allowed] of Object.entries(enums))
+                    if (allowed.includes(row[key])) clean[key] = row[key];
+                if (bounded(row.frameId)) clean.frameId = row.frameId;
+                for (const key of ['inShadowRoot', 'frameChanged'])
+                    if (typeof row[key] === 'boolean') clean[key] = row[key];
+                if (row.scroll && ['completed', 'failed'].includes(row.scroll.state)
+                    && bounded(row.scroll.durationMs, 600000)) {
+                    clean.scroll = { state: row.scroll.state, durationMs: row.scroll.durationMs };
+                    if (['scroll_timeout', 'node_detached', 'frame_changed', 'context_destroyed', 'other'].includes(row.scroll.errorClass))
+                        clean.scroll.errorClass = row.scroll.errorClass;
+                }
+                if (row.blocker && ['div', 'span', 'input', 'select', 'button', 'iframe', 'dialog', 'other'].includes(row.blocker.tag)
+                    && ['dialog', 'combobox', 'listbox', 'option', 'other'].includes(row.blocker.role)
+                    && typeof row.blocker.containsTarget === 'boolean')
+                    clean.blocker = { tag: row.blocker.tag, role: row.blocker.role, containsTarget: row.blocker.containsTarget };
+                if (Array.isArray(row.pointChecks))
+                    clean.pointChecks = row.pointChecks.slice(-8)
+                        .filter(point => point && ['control', 'frame_owner'].includes(point.scope)
+                            && bounded(point.depth, 32) && reasons.includes(point.reason))
+                        .map(point => {
+                            const result = { scope: point.scope, depth: point.depth, reason: point.reason };
+                            if (point.geometry && typeof point.geometry === 'object' && !Array.isArray(point.geometry))
+                                result.geometry = Object.fromEntries(geometryKeys
+                                    .filter(key => Number.isInteger(point.geometry[key]) && Math.abs(point.geometry[key]) <= 1000000)
+                                    .map(key => [key, point.geometry[key]]));
+                            return result;
+                        });
+                return clean;
+            });
+    }
     return Object.keys(inspection).length ? inspection : undefined;
 }
 

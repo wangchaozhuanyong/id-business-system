@@ -860,6 +860,22 @@ function interactionPoint(element, child) {
   const width = win.innerWidth,
     height = win.innerHeight;
   let x, y;
+  const observed = (result) => ({
+    ...result,
+    geometry: Object.fromEntries(
+      Object.entries({
+        left: box.left,
+        top: box.top,
+        width: box.width,
+        height: box.height,
+        viewportWidth: width,
+        viewportHeight: height,
+        ...(Number.isFinite(x) && Number.isFinite(y) ? { x, y } : {})
+      })
+        .filter(([, value]) => Number.isFinite(value) && Math.abs(value) <= 1000000)
+        .map(([key, value]) => [key, Math.round(value)])
+    )
+  });
   if (child) {
     // Axis-aligned scale/translation has a deterministic content-box mapping.
     // Perspective/rotation/skew/zoom cannot be proved by a bounding rectangle.
@@ -870,14 +886,14 @@ function interactionPoint(element, child) {
         (style.rotate && !['none', '0deg'].includes(style.rotate)) ||
         (style.zoom && !['normal', '1'].includes(style.zoom))
       )
-        return { reason: 'unsupported_transform' };
+        return observed({ reason: 'unsupported_transform' });
       if (style.scale && style.scale !== 'none')
         if (
           style.scale
             .split(/\s+/)
             .some((part) => !Number.isFinite(Number(part)) || Number(part) <= 0)
         )
-          return { reason: 'unsupported_transform' };
+          return observed({ reason: 'unsupported_transform' });
       if (style.transform && style.transform !== 'none') {
         const matrix = new win.DOMMatrixReadOnly(style.transform);
         if (
@@ -887,7 +903,7 @@ function interactionPoint(element, child) {
           Math.abs(matrix.b) > 1e-8 ||
           Math.abs(matrix.c) > 1e-8
         )
-          return { reason: 'unsupported_transform' };
+          return observed({ reason: 'unsupported_transform' });
       }
     }
     const style = win.getComputedStyle(element);
@@ -900,7 +916,7 @@ function interactionPoint(element, child) {
         (key) => parseFloat(style[key]) !== 0
       )
     )
-      return { reason: 'unsupported_geometry' };
+      return observed({ reason: 'unsupported_geometry' });
     x =
       box.left +
       ((element.clientLeft + (child.x * element.clientWidth) / child.width) * box.width) /
@@ -914,11 +930,11 @@ function interactionPoint(element, child) {
       right = Math.min(width, box.right),
       top = Math.max(0, box.top),
       bottom = Math.min(height, box.bottom);
-    if (right <= left || bottom <= top) return { reason: 'outside_viewport' };
+    if (right <= left || bottom <= top) return observed({ reason: 'outside_viewport' });
     x = (left + right) / 2;
     y = (top + bottom) / 2;
   }
-  if (x < 0 || y < 0 || x >= width || y >= height) return { reason: 'outside_viewport' };
+  if (x < 0 || y < 0 || x >= width || y >= height) return observed({ reason: 'outside_viewport' });
   let hit = doc.elementFromPoint(x, y);
   while (hit?.shadowRoot?.elementFromPoint) {
     const inner = hit.shadowRoot.elementFromPoint(x, y);
@@ -926,8 +942,8 @@ function interactionPoint(element, child) {
     hit = inner;
   }
   for (let node = hit; node; node = node.parentElement || node.getRootNode()?.host)
-    if (node === element) return { x, y, width, height };
-  return {
+    if (node === element) return observed({ x, y, width, height });
+  return observed({
     reason: 'occluded',
     blocker: {
       tag: ['DIV', 'SPAN', 'INPUT', 'SELECT', 'BUTTON', 'IFRAME', 'DIALOG'].includes(hit?.tagName)
@@ -938,7 +954,7 @@ function interactionPoint(element, child) {
         : 'other',
       containsTarget: Boolean(hit?.contains(element))
     }
-  };
+  });
 }
 function scrollErrorClass(error) {
   const message = String(error?.message || '');
@@ -948,6 +964,17 @@ function scrollErrorClass(error) {
   return error?.name === 'TimeoutError' ? 'scroll_timeout' : 'other';
 }
 async function candidateInteraction(item, handle, key, deadline, state, allowScroll = true) {
+  const pointChecks = [];
+  const rememberPoint = (point, scope, depth) => {
+    if (pointChecks.length < 16)
+      pointChecks.push({
+        scope,
+        depth,
+        reason: point.reason || 'none',
+        ...(point.geometry ? { geometry: point.geometry } : {})
+      });
+    return point;
+  };
   const blocked = (reason) => {
     state.interactionRejectCounts ||= {};
     state.interactionRejectCounts[reason] = (state.interactionRejectCounts[reason] || 0) + 1;
@@ -982,11 +1009,14 @@ async function candidateInteraction(item, handle, key, deadline, state, allowScr
       item.frame,
       'interaction_point'
     );
+    rememberPoint(point, 'control', 0);
+    let depth = 0;
     for (
       let frame = item.frame;
       !point.reason && frame.parentFrame();
       frame = frame.parentFrame()
     ) {
+      depth++;
       const owner = await observedRead(
         () => frame.frameElement(),
         deadline,
@@ -1008,7 +1038,7 @@ async function candidateInteraction(item, handle, key, deadline, state, allowScr
             'owner_visibility'
           ))
         )
-          return { reason: 'frame_ineligible' };
+          return rememberPoint({ reason: 'frame_ineligible' }, 'frame_owner', depth);
         point = await readWithin(
           () => owner.evaluate(interactionPoint, point),
           deadline,
@@ -1019,6 +1049,7 @@ async function candidateInteraction(item, handle, key, deadline, state, allowScr
           frame,
           'owner_interaction_point'
         );
+        rememberPoint(point, 'frame_owner', depth);
       } finally {
         owner.dispose().catch(() => {});
       }
@@ -1045,6 +1076,7 @@ async function candidateInteraction(item, handle, key, deadline, state, allowScr
     frameId: state.interactionFrames.get(item.frame),
     frameKind: item.frame.parentFrame() ? 'embedded' : 'main',
     initialReason: point.reason || 'none',
+    pointChecks,
     ...(point.blocker ? { blocker: point.blocker } : {})
   };
   state.interactionChecks ||= [];

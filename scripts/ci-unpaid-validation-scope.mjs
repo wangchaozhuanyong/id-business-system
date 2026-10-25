@@ -126,6 +126,23 @@ export const proxyFailureEvidencePaths = Object.freeze([
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ]);
+export const countryEvidencePaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/rpc.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/evidence-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/rpc-response.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/unpaid-validation.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.unpaid.spec.ts',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
 export const unpaidValidationControls = Object.freeze([
   '.github/workflows/online-profile-egress-publication.yml',
   ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
@@ -168,7 +185,8 @@ export function isUnpaidValidationOnly(paths) {
       persistentProfilePaths,
       profileEgressLifecyclePaths,
       cardReadDiagnosticsPaths,
-      proxyFailureEvidencePaths
+      proxyFailureEvidencePaths,
+      countryEvidencePaths
     ].some(
       (batch) =>
         batch.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&

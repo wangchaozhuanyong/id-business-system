@@ -7,6 +7,51 @@ const rpc = require('../rpc.cjs');
 const originalFetch = global.fetch;
 const originalEnv = { ...process.env };
 const engine = path.join(__dirname, '..');
+
+for (const [status, failureClass] of [
+  [400, 'http_error'],
+  [403, 'lease_lost'],
+  [429, 'http_error'],
+  [500, 'http_error']
+])
+  test(`evidence HTTP ${status} retains only status and a fixed transport class`, async () => {
+    global.fetch = async () => new Response('SYNTHETIC_PRIVATE', { status });
+    await assert.rejects(rpc.rpc('evidenceUpload'), (error) => {
+      assert.equal(error.evidenceFailureClass, failureClass);
+      assert.equal(error.httpStatus, status);
+      assert.doesNotMatch(error.message, /SYNTHETIC_PRIVATE/);
+      return true;
+    });
+    assert.equal(rpc.wasSubmitted(), false);
+  });
+
+test('evidence distinguishes malformed response, network failure and request deadline', async () => {
+  global.fetch = async () => new Response('SYNTHETIC_PRIVATE');
+  await assert.rejects(rpc.rpc('evidenceUpload'), {
+    evidenceFailureClass: 'response_invalid',
+    httpStatus: 200
+  });
+  global.fetch = async () => {
+    throw new Error('SYNTHETIC_PRIVATE');
+  };
+  await assert.rejects(rpc.rpc('evidenceUpload'), { evidenceFailureClass: 'network_error' });
+  await assert.rejects(rpc.rpc('getRuntimeConfig'), (error) => {
+    assert.equal(error.evidenceFailureClass, undefined);
+    return true;
+  });
+  global.fetch = async (_, { signal }) =>
+    new Promise((resolve, reject) => {
+      const keepAlive = setTimeout(resolve, 1000);
+      signal.addEventListener('abort', () => {
+        clearTimeout(keepAlive);
+        reject(signal.reason);
+      });
+    });
+  await assert.rejects(rpc.rpc('evidenceUpload', {}, { timeoutMs: 5 }), {
+    evidenceFailureClass: 'timeout'
+  });
+  assert.equal(rpc.wasSubmitted(), false);
+});
 test.before(() => {
   process.env.ONLINE_RECHARGE_RPC_URL = 'http://127.0.0.1/rpc';
   process.env.ONLINE_RECHARGE_WORKER_KEY = 'synthetic-worker-key';

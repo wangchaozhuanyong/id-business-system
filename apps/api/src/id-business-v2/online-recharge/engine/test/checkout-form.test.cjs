@@ -76,6 +76,41 @@ async function pageFor(t, html) {
 const iframe = (html) =>
   `<iframe style="width:900px;height:600px" srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>`;
 
+test('embedded country reports the outer viewport that blocks it without selecting', async (t) => {
+  const page = await pageFor(
+    t,
+    '<div style="height:2000px"></div>' + iframe(countryHtml + addressHtml)
+  );
+  const frame = page.frames()[1],
+    locator = frame.locator;
+  frame.locator = function (selector, ...args) {
+    const result = locator.call(this, selector, ...args);
+    if (selector.includes('[autocomplete="billing country"]')) {
+      const handles = result.elementHandles.bind(result);
+      result.elementHandles = async () => {
+        const all = await handles();
+        for (const handle of all) handle.scrollIntoViewIfNeeded = async () => {};
+        return all;
+      };
+    }
+    return result;
+  };
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_BLOCKED');
+  const trace = result.inspection.interactionChecks[0];
+  assert.equal(trace.initialReason, 'outside_viewport');
+  assert.equal(trace.scroll.state, 'completed');
+  assert.equal(trace.afterScrollReason, 'outside_viewport');
+  assert.equal(trace.pointChecks[0].scope, 'control');
+  assert.equal(trace.pointChecks[0].reason, 'none');
+  assert.equal(trace.pointChecks[1].scope, 'frame_owner');
+  assert.equal(trace.pointChecks[1].reason, 'outside_viewport');
+  assert.ok(trace.pointChecks[1].geometry.top > trace.pointChecks[1].geometry.viewportHeight);
+  assert.equal(await frame.locator('[autocomplete="billing country"]').inputValue(), 'PH');
+});
+
 for (const replacement of [false, true])
   test(`billing re-locates once after settled scroll failure, replacement=${replacement}`, async (t) => {
     const page = await pageFor(
@@ -130,6 +165,9 @@ for (const [name, message, expectedClass] of [
     assert.equal(first.tag, 'select');
     assert.equal(first.frameKind, 'main');
     assert.equal(first.initialReason, 'occluded');
+    assert.equal(first.pointChecks[0].scope, 'control');
+    assert.equal(first.pointChecks[0].reason, 'occluded');
+    assert.equal(Number.isInteger(first.pointChecks[0].geometry.viewportHeight), true);
     assert.deepEqual(first.blocker, { tag: 'div', role: 'other', containsTarget: false });
     assert.equal(first.scroll.errorClass, expectedClass);
     assert.ok(first.scroll.durationMs >= 0);

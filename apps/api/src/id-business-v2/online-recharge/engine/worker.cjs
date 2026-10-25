@@ -111,13 +111,34 @@ async function manageBrowser(task, config) {
 }
 async function uploadEvidence(task, files, artifacts, options = {}) {
   const mediaRoot = path.resolve(childEnvironment(task).ONLINE_RECHARGE_MEDIA_DIR);
-  for (const file of files.slice(-40)) {
-    if ((options.deadline && Date.now() >= options.deadline) || options.active?.() === false) break;
+  const selected = files.slice(-40);
+  const record = (row) => {
+    if (!Array.isArray(options.diagnostics)) return;
+    options.diagnostics.push(row);
+    if (options.diagnostics.length > 32) options.diagnostics.shift();
+  };
+  for (const [index, file] of selected.entries()) {
+    if ((options.deadline && Date.now() >= options.deadline) || options.active?.() === false) {
+      record({
+        kind: 'batch',
+        outcome: 'skipped',
+        reason: options.active?.() === false ? 'lease_lost' : 'deadline_exhausted',
+        remainingFiles: selected.length - index
+      });
+      break;
+    }
+    const started = Date.now();
+    let kind = 'batch',
+      phase = 'file_read';
     try {
       const resolved = await fs.realpath(file);
-      if (!resolved.startsWith(`${mediaRoot}${path.sep}`) || options.seen?.has(resolved)) continue;
+      if (!resolved.startsWith(`${mediaRoot}${path.sep}`)) {
+        record({ kind, outcome: 'skipped', reason: 'path_rejected' });
+        continue;
+      }
+      if (options.seen?.has(resolved)) continue;
       const stat = await fs.stat(resolved);
-      const kind =
+      kind =
         unpaid.enabled(task) && resolved.endsWith('.json')
           ? 'diagnostic'
           : resolved.endsWith('.webm')
@@ -125,9 +146,12 @@ async function uploadEvidence(task, files, artifacts, options = {}) {
             : resolved.endsWith('.png')
               ? 'screenshot'
               : null;
-      if (!stat.isFile() || !kind || stat.size > (kind === 'video' ? 100 : 10) * 1024 * 1024)
+      if (!stat.isFile() || !kind || stat.size > (kind === 'video' ? 100 : 10) * 1024 * 1024) {
+        record({ kind: kind || 'batch', outcome: 'skipped', reason: 'file_rejected' });
         continue;
+      }
       const buffer = await fs.readFile(resolved);
+      phase = 'upload';
       const artifact = await rpc(
         'evidenceUpload',
         {
@@ -147,8 +171,35 @@ async function uploadEvidence(task, files, artifacts, options = {}) {
       );
       options.seen?.add(resolved);
       artifacts.push(artifact);
-    } catch {
-      /* A missing diagnostic must never cause another payment. */
+      record({
+        kind,
+        outcome: 'uploaded',
+        durationMs: Math.min(600000, Math.max(0, Date.now() - started))
+      });
+    } catch (error) {
+      const reason = [
+        'timeout',
+        'network_error',
+        'http_error',
+        'response_invalid',
+        'lease_lost',
+        'operation_rejected'
+      ].includes(error.evidenceFailureClass)
+        ? error.evidenceFailureClass
+        : error.code === 'LEASE_LOST'
+          ? 'lease_lost'
+          : phase === 'file_read'
+            ? 'file_unavailable'
+            : 'unknown';
+      record({
+        kind: kind || 'batch',
+        outcome: 'failed',
+        reason,
+        durationMs: Math.min(600000, Math.max(0, Date.now() - started)),
+        ...(Number.isInteger(error.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599
+          ? { httpStatus: error.httpStatus }
+          : {})
+      });
     }
   }
 }
@@ -212,6 +263,7 @@ async function runJob(task, config) {
     evidence: Promise.resolve(),
     evidenceDeadline: null,
     evidenceSeen: new Set(),
+    evidenceUploads: [],
     result: null,
     lost: false,
     closed: false,
@@ -273,6 +325,7 @@ async function runJob(task, config) {
           result: { code: 'EXECUTOR_INTERRUPTED', validationReport: report }
         };
       else entry.result.result.validationReport = report;
+      report.evidenceUploads = entry.evidenceUploads.map((row) => ({ ...row }));
       try {
         const file = path.join(
           childEnvironment(task).ONLINE_RECHARGE_MEDIA_DIR,
@@ -283,12 +336,20 @@ async function runJob(task, config) {
         requireLease();
         await uploadEvidence(task, [file], entry.artifacts, {
           deadline: Date.now() + 5000,
-          active: () => !entry.lost
+          active: () => !entry.lost,
+          diagnostics: entry.evidenceUploads
         });
         report.diagnosticUploaded = entry.artifacts.some((item) => item.kind === 'diagnostic');
-      } catch {
+      } catch (error) {
         report.diagnosticUploaded = false;
+        entry.evidenceUploads.push({
+          kind: 'diagnostic',
+          outcome: 'failed',
+          reason: error.code === 'LEASE_LOST' ? 'lease_lost' : 'file_unavailable'
+        });
+        if (entry.evidenceUploads.length > 32) entry.evidenceUploads.shift();
       }
+      report.evidenceUploads = entry.evidenceUploads.map((row) => ({ ...row }));
     }
   }
   function leaseDiagnostic(phase, error) {
@@ -499,7 +560,8 @@ async function runJob(task, config) {
             uploadEvidence(task, message.paths, entry.artifacts, {
               deadline: entry.evidenceDeadline,
               seen: entry.evidenceSeen,
-              active: () => !entry.lost
+              active: () => !entry.lost,
+              diagnostics: entry.evidenceUploads
             })
           );
         } else if (message?.type === 'result')
@@ -530,7 +592,8 @@ async function runJob(task, config) {
               await uploadEvidence(task, await completedEvidence(task, deadline), entry.artifacts, {
                 deadline,
                 seen: entry.evidenceSeen,
-                active: () => !entry.lost
+                active: () => !entry.lost,
+                diagnostics: entry.evidenceUploads
               });
             })
             .catch(() => {}),
@@ -555,6 +618,10 @@ async function runJob(task, config) {
       message: '执行器已中断，由服务端核对提交事实'
     };
     requireLease();
+    if (entry.validation && result.result?.validationReport)
+      result.result.validationReport.evidenceUploads = entry.evidenceUploads.map((row) => ({
+        ...row
+      }));
     await rpc('completeJob', {
       ...scope(task),
       ...(missingResult || !executorTerminated
