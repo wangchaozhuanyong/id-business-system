@@ -89,15 +89,31 @@ class PublicationTests(unittest.TestCase):
     def test_start_existing_checks_identity_and_does_not_repeat_start_for_running_containers(self):
         before = {name: {'image': 'i', 'reference': 'r', 'containerId': name, 'environmentSha256': 'e',
                          'status': 'running'} for name in r.UPDATED}
-        d = SimpleNamespace(service_state=Mock(side_effect=lambda _directory, name, **kw: before[name]),
-                            compose=Mock(), wait_healthy=Mock())
+        rows = {name: {'Id': name, 'Image': 'i', 'Config': {'Image': 'r', 'Env': ['SYNTHETIC=1']},
+                       'State': {'Status': 'running'}} for name in r.UPDATED}
+        def compose(_directory, *args, **_kwargs):
+            if args[0] == 'ps':
+                self.assertEqual(args[1:3], ('--all', '--quiet'))
+                return args[-1]
+            self.assertEqual(args[0], 'start')
+            rows[args[-1]]['State']['Status'] = 'running'
+        d = SimpleNamespace(service_state=Mock(side_effect=AssertionError('Running-only snapshot not allowed')),
+                            compose=Mock(side_effect=compose), wait_healthy=Mock(),
+                            run=Mock(side_effect=lambda *args: json.dumps([rows[args[-1]]])),
+                            historical_fingerprint=Mock(return_value='e'))
         r.start_existing(d, Path('/synthetic-release'), before)
-        d.compose.assert_not_called()
+        self.assertEqual([c.args[1] for c in d.compose.call_args_list], ['ps', 'ps'])
         self.assertEqual(d.wait_healthy.call_count, 2)
-        d.service_state.side_effect = lambda _directory, name, **kw: {**before[name], 'image': 'different'}
+        rows['api']['State']['Status'] = 'exited'
+        rows['online-recharge']['State']['Status'] = 'exited'
+        r.start_existing(d, Path('/synthetic-release'), before)
+        self.assertEqual([c.args[-1] for c in d.compose.call_args_list if c.args[1] == 'start'], list(r.UPDATED))
+        d.service_state.assert_not_called()
+        rows['api']['Image'] = 'different'
+        d.compose.reset_mock()
         with self.assertRaisesRegex(RuntimeError, 'CONTAINER_CHANGED'):
             r.start_existing(d, Path('/synthetic-release'), before)
-        d.compose.assert_not_called()
+        self.assertEqual([c.args[1] for c in d.compose.call_args_list], ['ps'])
 
     def test_unknown_exception_details_never_leave_the_report(self):
         report = r.failure_report(RuntimeError('synthetic-private-cookie-details'), {'mode': 'release'})
@@ -175,7 +191,11 @@ class PublicationTests(unittest.TestCase):
         plan = copy.deepcopy(self.plan)
         plan['nativeParentCapture']['baseline'] = baseline
         events = []
-        def compose(_directory, command, name, **_kwargs):
+        def compose(_directory, command, *args, **_kwargs):
+            if command == 'ps':
+                self.assertEqual(args[:2], ('--all', '--quiet'))
+                return live[args[-1]]['containerId']
+            name = args[0]
             events.append(command + ':' + name)
             self.assertIn(command, ('start', 'stop'))
             self.assertIn(name, r.UPDATED)
@@ -189,6 +209,11 @@ class PublicationTests(unittest.TestCase):
             (base / 'current').symlink_to(target)
         d = SimpleNamespace(compose=Mock(side_effect=compose), wait_healthy=Mock(),
                             service_state=lambda _dir, name, **kw: copy.deepcopy(live[name]),
+                            run=lambda *_args: json.dumps([{'Id': value['containerId'], 'Image': value['image'],
+                                'Config': {'Image': value['reference'], 'Env': ['SYNTHETIC=1']},
+                                'State': {'Status': value['status']}} for value in live.values()
+                                if value['containerId'] == _args[-1]]),
+                            historical_fingerprint=lambda _value: 'd' * 64,
                             point_current=Mock(side_effect=point))
         real_h = load('recharge-record-release.py')
         h = SimpleNamespace(snapshot=lambda _d, _directory: copy.deepcopy(live),
@@ -291,6 +316,12 @@ class PublicationTests(unittest.TestCase):
         self.assertIn('cancel-in-progress: false', workflow)
         self.assertIn('needs: validate', workflow)
         self.assertIn('inputs.commit == github.sha', workflow)
+        diagnostic = workflow.split('  original-diagnostic:', 1)[1]
+        self.assertIn("inputs.operation == 'read_original_diagnostic'", diagnostic)
+        self.assertIn('get-command-invocation', diagnostic)
+        self.assertIn('9fb9dfc0-01da-4053-9274-452d58d4e444', diagnostic)
+        self.assertNotIn('send-command', diagnostic)
+        self.assertNotIn('publish\n', diagnostic)
 
 
 if __name__ == '__main__':

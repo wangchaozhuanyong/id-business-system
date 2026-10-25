@@ -369,8 +369,8 @@
     "online-profile-egress-release.test.py": "825f72828e61af26c5735f1423901b262fbe13d82fc133f30e6e129104550a7d",
     "online-profile-lock-publication.py": "e1aaa3ddfb225d1138a939a2354bbb2b28e6af8671d4e792848f985f583ca8c6",
     "online-profile-lock-recovery.py": "427af2a6d8b3752e9ca8409b3d2abac171840c05466acc81f7c54e1239422ef8",
-    "online-profile-lock-release.py": "3dff22856bdd99cc5af1e3cd855954b4e6c3730a7f6146d329922375c9a1f513",
-    "online-profile-lock-release.test.py": "d384f8657fd99131b62739317ab1d87e84ec49f10b87aa657fe3284553076a3f",
+    "online-profile-lock-release.py": "f599cde59ba222b0b93cc50c2d678a1f1668136788d596688327cadc46e91e5f",
+    "online-profile-lock-release.test.py": "3e52b55c94c528df158af3a30973c80baf97f0e51055823522c87a61fbafec32",
     "online-proxy-failure-evidence-build.py": "270aede6196b24f43fa8233572482a710041793b64a102635ca7f11fb6148a8b",
     "online-proxy-failure-evidence-contract.json": "a772586e2931923aa44d30115a6fe49f40c83c8e7c5427a73ca74313839ebcf4",
     "online-proxy-failure-evidence-publication.py": "776cce1125367da52b29960222cf1f47111de061a73e2c7ed335d85b3e8ad5ae",
@@ -591,5 +591,5 @@
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["api", "online-recharge"],
   "version": 1,
-  "workflowSha256": "197e2e4cac960cb3419c1c5bc5e7cb19cc1822f593653ef63476cfcf69c8c093"
+  "workflowSha256": "470046a4e52728f071dd91085b8384dfb810f4e4005bbc5f7a2fd6d7d02d49d2"
 }
