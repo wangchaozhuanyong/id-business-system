@@ -1,0 +1,104 @@
+name: Online Recharge Persistent Profile Publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify finite source and publication adapter
+        run: |
+          python3 -B scripts/production-release/online-persistent-profile-publication.py check
+          python3 -B scripts/production-release/online-persistent-profile-release.test.py
+      - name: Configure existing production observation role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-persistent-profile-observe-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Authenticate source checks and package the reviewed executor files
+        run: python3 -B scripts/production-release/online-persistent-profile-publication.py build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-persistent-profile-native-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-persistent-profile/online-persistent-profile-artifact.tar.gz
+            .deploy/online-persistent-profile/artifact-sha256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Preserve original observation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-persistent-profile-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/online-persistent-profile/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Configure existing production release role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-persistent-profile-publish-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Publish once and independently read back
+        run: python3 -B scripts/production-release/online-persistent-profile-publication.py publish
+      - name: Preserve original release receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: online-persistent-profile-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/online-persistent-profile/*.json
+            .deploy/online-persistent-profile/artifact-notes.md
+          include-hidden-files: true
+          if-no-files-found: warn
