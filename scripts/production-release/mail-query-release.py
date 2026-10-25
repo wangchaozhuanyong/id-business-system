@@ -67,6 +67,7 @@ def snapshot(c):
         need(name.startswith(root) and name.removeprefix(root) in c['apiModules'], 'MODULE_PATH_CHANGED')
         modules[name.removeprefix(root)] = digest
     need(set(modules) == set(c['apiModules']), 'MODULES_MISSING')
+    captured['businessActions'] = 0
     captured['apiModules'] = modules
     captured['nginxSha256'] = d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
                                   '/etc/nginx/conf.d/default.conf').split()[0]

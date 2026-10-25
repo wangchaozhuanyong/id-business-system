@@ -72,7 +72,7 @@ class ProofTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=parent)
         self.addCleanup(temporary.cleanup)
         base = Path(temporary.name);(base/'.staging').mkdir(); previous=base/'releases/original';previous.mkdir(parents=True)
-        captured={'current':str(previous),'apiModules':self.proof['baselineApiModules'],'services':{}}
+        captured={'current':str(previous),'apiModules':self.proof['baselineApiModules'],'services':{},'businessActions':0}
         for role in (*m.PRESERVED,'api','admin','online-recharge'):
             captured['services'][role]={'image':'old-'+role,'containerId':'container-'+role,'environmentSha256':'same'}
         (previous/'release-manifest.json').write_text(json.dumps({'commit':m.CURRENT,'images':{},'roleSourceProjections':{}}))
@@ -123,6 +123,13 @@ class ProofTests(unittest.TestCase):
         response=Mock();response.__enter__=Mock(return_value=SimpleNamespace(read=lambda _:b'archive'));response.__exit__=Mock(return_value=False)
         stack.enter_context(patch.object(m.urllib.request,'urlopen',return_value=response))
         return plan,c,d,fence,marker,base
+
+    def test_parent_and_preflight_retain_identical_native_capture(self):
+        plan,c,d,fence,marker,base=self.switch_fixture()
+        parent=m.release({**plan,'mode':'parent'},c)
+        result=m.release({**plan,'mode':'preflight','nativeParentCapture':parent},c)
+        self.assertEqual(result['status'],'MAIL_QUERY_PREFLIGHT_VERIFIED')
+        d.compose.assert_not_called();d.point_current.assert_not_called()
 
     def test_switch_starts_both_web_roles_and_rebinds_original_engine(self):
         plan,c,d,fence,marker,base=self.switch_fixture()
