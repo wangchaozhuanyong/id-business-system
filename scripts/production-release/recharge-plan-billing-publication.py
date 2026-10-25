@@ -141,9 +141,11 @@ def main(mode):
     migration = OUT / proof['migrationTransport']['file']
     B.need(migration.is_file() and migration.stat().st_size == proof['migrationTransport']['bytes']
            and B.sha(migration.read_bytes()) == proof['migrationTransport']['sha256'], 'MIGRATION_TRANSPORT_CHANGED')
-    F.execute('gh', 'release', 'create', tag, str(bundle), str(OUT / 'artifact-sha256.txt'), str(migration),
+    upload = subprocess.run(['gh', 'release', 'create', tag, str(bundle), str(OUT / 'artifact-sha256.txt'), str(migration),
               '--repo', REPO, '--target', native['commit'], '--title', tag,
-              '--notes', '经检查的套餐联动与账单永久排重构建；不包含真实付款或测试业务记录。')
+              '--notes', '经检查的套餐联动与账单永久排重构建；不包含真实付款或测试业务记录。'],
+              cwd=ROOT, capture_output=True, timeout=600)
+    B.need(upload.returncode == 0, 'ARTIFACT_UPLOAD_FAILED_DO_NOT_REPEAT')
     plan = {**native, 'contractSha256': B.sha(B.CONTRACT.read_bytes()), 'controlSources': proof['controlSources'],
             'artifactSha256': B.sha(bundle.read_bytes()), 'buildProofSha256': B.sha(raw),
             'artifactUrl': 'https://github.com/' + REPO + '/releases/download/' + tag + '/' + bundle.name}

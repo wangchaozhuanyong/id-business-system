@@ -199,6 +199,8 @@ class BillingPublicationTests(unittest.TestCase):
         self.assertIn("command('readback'", publication)
         self.assertIn('MAIN_MOVED_BEFORE_PUBLICATION', publication)
         self.assertIn('SSM_PENDING_DO_NOT_REPEAT', publication)
+        self.assertIn('capture_output=True, timeout=600', publication)
+        self.assertIn('ARTIFACT_UPLOAD_FAILED_DO_NOT_REPEAT', publication)
         self.assertNotIn('rollback(', (HERE / 'recharge-plan-billing-release.py').read_text())
 
     def test_runtime_group_hashes_ignore_non_executable_declaration_noise(self):
