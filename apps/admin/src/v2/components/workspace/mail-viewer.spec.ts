@@ -3,6 +3,8 @@ import {
   classifyMailQueryCode,
   filterMailViewerMessages,
   mailBodyToPlainText,
+  mailBodyParts,
+  safeMailLink,
   parseMailQueryCode,
   parseMailQueryCodeLines,
   resolveMailViewerLimit
@@ -64,4 +66,35 @@ describe('mailBodyToPlainText', () => {
     expect(filterMailViewerMessages(items, 'alias-1')).toEqual([items[0]]);
     expect(filterMailViewerMessages(items, '')).toEqual(items);
   });
+});
+
+describe('mail links', () => {
+  it('keeps full query parameters and rejects executable or relative links', () => {
+    expect(safeMailLink('https://example.invalid/login?a=1&b=2#continue')).toBe(
+      'https://example.invalid/login?a=1&b=2#continue'
+    );
+    for (const url of [
+      'javascript:alert(1)',
+      'data:text/html,abc',
+      '/admin',
+      '//example.invalid',
+      'https://user:pass@example.invalid'
+    ])
+      expect(safeMailLink(url)).toBeUndefined();
+  });
+  it('makes plain URLs clickable without including trailing punctuation', () => {
+    const parts = mailBodyParts('访问 https://example.invalid/path?a=1&b=2。 完成');
+    expect(parts.filter((part) => part.href)).toEqual([
+      { text: 'https://example.invalid/path?a=1&b=2', href: 'https://example.invalid/path?a=1&b=2' }
+    ]);
+    expect(parts.map((part) => part.text).join('')).toBe(
+      '访问 https://example.invalid/path?a=1&b=2。 完成'
+    );
+  });
+});
+
+it('preserves literal URL query parameters in plain text', () => {
+  expect(mailBodyParts('https://example.invalid/?copy=1&not=2')[0]?.href).toBe(
+    'https://example.invalid/?copy=1&not=2'
+  );
 });

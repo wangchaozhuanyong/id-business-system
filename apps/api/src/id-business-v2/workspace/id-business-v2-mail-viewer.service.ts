@@ -147,7 +147,10 @@ export class IdBusinessV2MailViewerService {
       email: result.aliasEmail || result.primaryEmail || items[0]?.targetEmail || 'iCloud 邮箱',
       items: items.map((item) => ({
         id: item.id,
-        body: item.bodyText || (item.extractedCode ? `验证码：${item.extractedCode}` : ''),
+        body:
+          item.bodyHtml ||
+          item.bodyText ||
+          (item.extractedCode ? `验证码：${item.extractedCode}` : ''),
         extractedCode: item.extractedCode,
         from: item.fromName ? `${item.fromName} <${item.fromAddress}>` : item.fromAddress,
         savedAt: item.receivedAt,

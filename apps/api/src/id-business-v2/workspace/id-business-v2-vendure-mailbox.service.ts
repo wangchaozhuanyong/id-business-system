@@ -32,7 +32,11 @@ import type {
 import { IdBusinessV2VendureMailboxClient } from './providers/id-business-v2-vendure-mailbox.client';
 import { ensureVendureAccountAliases } from './id-business-v2-vendure-account-import';
 import { mailboxAuthorizationValid } from './mailbox-verification';
-import { paginateVendureMailboxes, vendureMailboxIncludes } from './vendure-mailbox-list';
+import {
+  paginateVendureMailboxes,
+  vendureMailboxIncludes,
+  syncVendureMailboxScope
+} from './vendure-mailbox-list';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIMARY_STATUSES = new Set(['ACTIVE', 'DISABLED', 'AUTH_ERROR', 'SYNCING']);
@@ -154,6 +158,11 @@ export class IdBusinessV2VendureMailboxService {
     const primaryAccountId = this.optionalId(dto.primaryAccountId);
     const virtualEmailId = this.optionalId(dto.virtualEmailId);
     const unassignedOnly = this.boolean(dto.unassignedOnly);
+    if (this.boolean(dto.refresh)) {
+      await syncVendureMailboxScope(this.client, { primaryAccountId, virtualEmailId }, (id) =>
+        this.primaryAction(id, 'sync', operator)
+      );
+    }
     let limit = 500;
     let mails = await this.client.receivedMails({
       primaryAccountId,

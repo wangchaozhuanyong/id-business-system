@@ -316,7 +316,7 @@ describe('personal workspace UI contract', () => {
     expect(managedMailboxBatchDrawer).toContain('逐个授权并导入');
     expect(managedMailboxBatchDrawer).toContain('startMicrosoftMailboxAuthorization');
     expect(publicMailboxView).toContain('<V2MailQueryPanel');
-    expect(mailMessageList).toContain('mailBodyToPlainText(item.body)');
+    expect(mailMessageList).toContain('<V2MailBody :body="item.body" />');
     expect(mailMessageList).toContain('一键复制');
     expect(mailMessageList).toContain("result.targetType === 'PRIMARY'");
     expect(mailQueryPanel).toContain('固定显示该邮箱最近 5 封邮件');

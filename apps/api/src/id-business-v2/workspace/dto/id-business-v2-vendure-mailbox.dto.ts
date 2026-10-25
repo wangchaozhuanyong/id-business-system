@@ -6,6 +6,7 @@ export interface ListIdBusinessV2VendureMailboxDto {
   primaryAccountId?: unknown;
   virtualEmailId?: unknown;
   unassignedOnly?: unknown;
+  refresh?: unknown;
 }
 
 export interface CreateIdBusinessV2VendureMailboxPrimaryDto {

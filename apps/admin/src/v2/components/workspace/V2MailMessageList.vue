@@ -88,7 +88,7 @@
                   <el-icon><CopyDocument /></el-icon>
                 </AppButton>
               </div>
-              <pre>{{ mailBodyToPlainText(item.body) || '（无正文）' }}</pre>
+              <V2MailBody :body="item.body" />
             </div>
           </div>
         </details>
@@ -98,6 +98,7 @@
 </template>
 
 <script setup lang="ts">
+import V2MailBody from './V2MailBody.vue';
 import { computed, ref, watch } from 'vue';
 import {
   isV2MailboxVerificationCode,

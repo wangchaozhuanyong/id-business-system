@@ -1078,7 +1078,7 @@
                   <span v-else>验证码未识别</span>
                 </div>
 
-                <div v-if="mail.bodyText" class="vendure-relay-mail-body-wrapper">
+                <div v-if="mail.bodyHtml || mail.bodyText" class="vendure-relay-mail-body-wrapper">
                   <AppButton
                     class="vendure-relay-toggle-body-btn"
                     variant="ghost"
@@ -1087,7 +1087,7 @@
                     <span>{{ expandedMailIds.has(mail.id) ? '收起正文' : '展开正文' }}</span>
                   </AppButton>
                   <div v-if="expandedMailIds.has(mail.id)" class="vendure-relay-mail-body">
-                    <pre>{{ mail.bodyText }}</pre>
+                    <V2MailBody :body="mail.bodyHtml || mail.bodyText || ''" />
                   </div>
                 </div>
               </div>
@@ -1294,7 +1294,7 @@
         </dd>
         <dt>正文</dt>
         <dd>
-          <pre>{{ selectedMail.bodyText || '无纯文本正文' }}</pre>
+          <V2MailBody :body="selectedMail.bodyHtml || selectedMail.bodyText || ''" />
         </dd>
       </dl>
     </el-drawer>
@@ -1312,6 +1312,8 @@
 
 <script setup lang="ts">
 import V2SearchInput from '@/v2/components/V2SearchInput.vue';
+import V2MailBody from '../../components/workspace/V2MailBody.vue';
+
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import {
   isV2MailboxVerificationCode,
@@ -1439,6 +1441,7 @@ const aliasQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxAlias>>
       { signal }
     )
 });
+let syncBeforeMailRead = true;
 const mailQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxMail>>({
   moduleKey: 'vendure-mailbox',
   scope: 'vendure-mailbox',
@@ -1454,18 +1457,27 @@ const mailQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxMail>>({
     }),
   enabled: () => ready.value && activeTab.value === 'mails',
   trackRouteData: false,
-  query: ({ signal }) =>
-    vendureMailboxApi.mails(
-      {
-        page: page.value,
-        pageSize: pageSize.value,
-        q: keyword.value,
-        primaryAccountId: primaryAccountId.value,
-        virtualEmailId: virtualEmailId.value,
-        unassignedOnly: unassignedOnly.value
-      },
-      { signal }
-    )
+  query: ({ signal }) => {
+    const refresh = syncBeforeMailRead;
+    syncBeforeMailRead = false;
+    return vendureMailboxApi
+      .mails(
+        {
+          page: page.value,
+          pageSize: pageSize.value,
+          q: keyword.value,
+          primaryAccountId: primaryAccountId.value,
+          virtualEmailId: virtualEmailId.value,
+          unassignedOnly: unassignedOnly.value,
+          refresh
+        },
+        { signal }
+      )
+      .catch((error: unknown) => {
+        if (refresh) syncBeforeMailRead = true;
+        throw error;
+      });
+  }
 });
 
 const activeQuery = computed(() =>
@@ -1500,15 +1512,21 @@ const viewKey = computed(
     `${activeTab.value}:${page.value}:${pageSize.value}:${keyword.value}:${status.value}:${primaryAccountId.value}:${virtualEmailId.value}:${unassignedOnly.value}`
 );
 
-watch(activeTab, (tab) => {
-  page.value = 1;
-  keywordInput.value = '';
-  keyword.value = '';
-  statusInput.value = '';
-  status.value = '';
-  if (tab !== 'mails' || !preserveMailScopeOnNextTabChange) virtualEmailId.value = '';
-  preserveMailScopeOnNextTabChange = false;
-});
+watch(
+  activeTab,
+  (tab) => {
+    if (tab === 'mails') syncBeforeMailRead = true;
+    page.value = 1;
+    keywordInput.value = '';
+    keyword.value = '';
+    statusInput.value = '';
+    status.value = '';
+    if (tab !== 'mails' || !preserveMailScopeOnNextTabChange) virtualEmailId.value = '';
+    preserveMailScopeOnNextTabChange = false;
+    if (tab === 'mails' && ready.value) void mailQuery.refresh();
+  },
+  { flush: 'sync' }
+);
 watch(
   viewKey,
   () => {
@@ -1528,6 +1546,8 @@ watch(
   { flush: 'post' }
 );
 function applyFilters() {
+  if (activeTab.value === 'mails') syncBeforeMailRead = true;
+
   const changed =
     page.value !== 1 ||
     keyword.value !== keywordInput.value.trim() ||
@@ -1539,9 +1559,11 @@ function applyFilters() {
   else healthRefreshVersion.value += 1;
 }
 function refreshCurrentList() {
+  if (activeTab.value === 'mails') syncBeforeMailRead = true;
   healthRefreshVersion.value += 1;
   return activeQuery.value.refresh();
 }
+
 watch(page, (value) => {
   if (value === 1) mailChangesPending.value = false;
 });
@@ -1643,6 +1665,7 @@ interface RelayQueryResult {
     receivedAt: string;
     extractedCode?: string;
     bodyText?: string;
+    bodyHtml?: string;
     targetEmail?: string;
   }>;
 }
@@ -1741,6 +1764,7 @@ function formatPublicQueryResult(
       receivedAt: m.receivedAt,
       extractedCode: m.extractedCode ?? undefined,
       bodyText: m.bodyText ?? undefined,
+      bodyHtml: m.bodyHtml ?? undefined,
       targetEmail: m.targetEmail || res.aliasEmail || undefined
     }))
   };
@@ -1844,6 +1868,7 @@ async function handleRelayQuery(background = false) {
             receivedAt: m.receivedAt,
             extractedCode: m.extractedCode ?? undefined,
             bodyText: m.bodyText ?? undefined,
+            bodyHtml: m.bodyHtml ?? undefined,
             targetEmail: targetEmail(m)
           }))
         };

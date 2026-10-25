@@ -131,6 +131,7 @@ export interface V2VendureMailboxMail {
   fromName: string;
   subject: string;
   bodyText: string | null;
+  bodyHtml?: string | null;
   extractedCode: string | null;
   receivedAt: string;
   isRead: boolean;
@@ -153,6 +154,7 @@ export interface V2VendureMailboxListQuery {
   primaryAccountId?: string;
   virtualEmailId?: string;
   unassignedOnly?: boolean;
+  refresh?: boolean;
 }
 
 export interface CreateV2VendureMailboxPrimaryInput {
@@ -234,6 +236,7 @@ export interface V2VendureMailboxPublicMail {
   receivedAt: string;
   extractedCode: string | null;
   bodyText: string | null;
+  bodyHtml?: string | null;
   targetEmail: string;
 }
 
