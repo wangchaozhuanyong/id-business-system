@@ -341,7 +341,7 @@
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
     "online-persistent-profile-publication.py": "4d21991e554d17dce5a42cf44f907abcc488bb15a2b08552df1d82b234320f04",
     "online-persistent-profile-release.py": "7c7be9b26ba0262ad749b90cae5b0087c1efda434fb818df51c181d370275aab",
-    "online-persistent-profile-release.test.py": "ee5e85b140252a248f3a9380c40d6bd9aa4c895399da4608ab16b8f31d33cb2c",
+    "online-persistent-profile-release.test.py": "538fedcfcc6eb48cfab354301631f8e0466621cdb0f182bd41bb460c576205f8",
     "online-query-network-build.py": "4d794fe219f33857363a0fad076a5862e7750d868f3d6467bb80fa9b3845de4b",
     "online-query-network-contract.json": "7e8941bc62d1530a9866d3d832095dc0eb6757c3576442912179d474848d1b32",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
@@ -628,7 +628,14 @@
     "workflowRunAttempt": "1",
     "workflowRunId": "40125577641"
   },
-  "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
+  "preservedServices": [
+    "api",
+    "admin",
+    "mysql",
+    "caddy",
+    "media-resolver",
+    "auto-recharge"
+  ],
   "runtimeSources": {
     "apps/api/src/id-business-v2/online-recharge/engine/.env.example": "5901cd64db6ba7254b872679c3b294f8d54f840131211d1f6335b744b4921159",
     "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "b46e4fd0bd82822a4762caeb07e69b2497c684cefa8e3c99f52e7ec411229625",
@@ -656,12 +663,14 @@
   "sourcePullRequest": 705,
   "sourceReviewCommit": "47b28b0361ba0e3dd2d24e9e947c17a6ef3b61eb",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-  "updatedServices": ["online-recharge"],
+  "updatedServices": [
+    "online-recharge"
+  ],
   "validationSources": {
     ".env.example": "0c644471ed3ba5901012af6249778113f55ddf087213d34b3ef68491ac236778",
     "docs/ONLINE_RECHARGE.md": "0c99b627cfe22b78398aad0cc96102d78d6d619fdd56b6ff151901191f642397",
     "docs/V2_TASKS.md": "ee7aa82a0ca617fc55eac706812c0d15439b8c0a31ad8b45dfe9d453180b5ff3"
   },
   "version": 1,
-  "workflowSha256": "28a89b87120b1dd45447c03f5ce8487810f8e00c35990cadd3d6d6f7fb5e3f34"
+  "workflowSha256": "adff86dc6e734020636fe305c386b2ecc5a430454807a232896e6a34b399a784"
 }

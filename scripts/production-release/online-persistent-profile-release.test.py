@@ -88,4 +88,10 @@ class PersistentProfilePublicationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             core.validate_plan({**plan, 'artifactUrl': 'https://example.invalid/replaced'}, self.c)
 
+    def test_both_workflow_jobs_receive_expected_production_version(self):
+        workflow = (HERE.parents[1] / '.github/workflows/online-persistent-profile-publication.yml').read_text()
+        for job in ('validate', 'publish'):
+            body = workflow.split('  ' + job + ':\n', 1)[1].split('\n  publish:', 1)[0]
+            self.assertIn('      EXPECTED_CURRENT: ${{ inputs.expected_current }}', body)
+
 if __name__ == '__main__': unittest.main()
