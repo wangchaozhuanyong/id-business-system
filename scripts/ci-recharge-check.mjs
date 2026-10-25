@@ -1,5 +1,9 @@
-import { isAwsAccountMigrationControlsOnly, awsAccountMigrationGuardCommands,
-  awsAccountMigrationReadOnlyBase, awsAccountMigrationReadOnlyGuardCommands } from './ci-aws-account-migration-scope.mjs';
+import {
+  isAwsAccountMigrationControlsOnly,
+  awsAccountMigrationGuardCommands,
+  awsAccountMigrationReadOnlyBase,
+  awsAccountMigrationReadOnlyGuardCommands
+} from './ci-aws-account-migration-scope.mjs';
 import { isSettledCheckoutControlsOnly } from './ci-settled-checkout-scope.mjs';
 import {
   isManualSettlementCandidate,
@@ -210,9 +214,14 @@ if (isAwsAccountMigrationControlsOnly(changed, { base })) {
   if (part !== 'guards' || mode !== 'ci-only')
     throw new Error('Migration control checks require the exact finite guard selection');
   // Private-I/O fixtures require this project-owned parent on a fresh runner.
-  mkdirSync(new URL('../.runtime/online-component-continuation-20261014/', import.meta.url), { recursive: true, mode: 0o700 });
-  const commands = base === awsAccountMigrationReadOnlyBase
-    ? awsAccountMigrationReadOnlyGuardCommands : awsAccountMigrationGuardCommands;
+  mkdirSync(new URL('../.runtime/online-component-continuation-20261014/', import.meta.url), {
+    recursive: true,
+    mode: 0o700
+  });
+  const commands =
+    base === awsAccountMigrationReadOnlyBase
+      ? awsAccountMigrationReadOnlyGuardCommands
+      : awsAccountMigrationGuardCommands;
   for (const [file, args] of commands) run(file, args);
   process.exit(0);
 }
