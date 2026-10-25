@@ -1,4 +1,9 @@
 import {
+  isRechargePlanBillingPublicationOnly,
+  isRechargePlanBillingSource,
+  isRechargePlanBillingSourcePaths
+} from './ci-recharge-plan-billing-scope.mjs';
+import {
   isProfileLockRecoveryOnly,
   isPersistentProfileOnly,
   isProfileEgressLifecycleOnly,
@@ -1213,6 +1218,8 @@ function isBitbrowserConnectionProfilesOnly(paths) {
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
   if (isMailQueryPublicationControlsOnly(paths)) return false;
+  if (isRechargePlanBillingSourcePaths(paths) || isRechargePlanBillingPublicationOnly(paths))
+    return false;
   if (isAwsAccountMigrationControlsOnly(paths, context)) return false;
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return false;
@@ -2378,6 +2385,7 @@ export function isMailQueryPublicationControlsOnly(paths) {
 
 export function isCiOnly(paths, context) {
   if (isMailQueryPublicationControlsOnly(paths)) return true;
+  if (isRechargePlanBillingPublicationOnly(paths)) return true;
   if (isAwsAccountMigrationControlsOnly(paths, context)) return true;
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return true;
@@ -2557,6 +2565,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRechargePlanBillingSourcePaths(paths))
+    return isRechargePlanBillingSource(paths, oldSchema, newSchema) ? 'recharge' : 'full';
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
     return oldSchema === newSchema ? 'ci-only' : 'full';
   if (bitbrowserBoundedHoldSelectedNativeShape(paths))
@@ -3024,6 +3034,7 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isRechargePlanBillingSource(paths, oldSchema, newSchema)) return true;
   if (isProxyResultIdentityOnly(paths)) return oldSchema === newSchema;
   if (isRechargeCheckoutOnly(paths)) return oldSchema === newSchema;
   if (isRechargeBillingOnly(paths)) return true;
@@ -3141,6 +3152,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];
+  if (isRechargePlanBillingSourcePaths(paths)) return ['guards', 'admin', 'api', 'migration'];
+  if (isRechargePlanBillingPublicationOnly(paths)) return ['guards'];
   if (isProfileLockRecoveryOnly(paths)) return ['guards', 'online-engine'];
   if (isProfileEgressLifecycleOnly(paths)) return ['guards', 'admin', 'online-engine'];
   if (isPersistentProfileOnly(paths)) return ['guards', 'online-engine'];

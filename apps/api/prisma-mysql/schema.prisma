@@ -3016,7 +3016,7 @@ model IdBusinessV2BankRechargeCard {
   currency IdBusinessV2BankRechargeCurrency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
   orders   IdBusinessV2BankRechargeOrder[]
   rechargeJobs IdBusinessV2RechargeJob[]
-  billingAddress IdBusinessV2RechargeAddress? @relation(fields: [billingAddressId], references: [id], onDelete: Restrict)
+  billingAddress IdBusinessV2RechargeAddress? @relation(fields: [billingAddressId], references: [id], onDelete: SetNull, map: "recharge_card_billing_address_nullable_fkey")
 
   @@index([active, label])
   @@map("id_business_v2_bank_recharge_cards")
@@ -3154,6 +3154,7 @@ model IdBusinessV2RechargeAddress {
 
   billingCards IdBusinessV2BankRechargeCard[]
   uses IdBusinessV2RechargeAddressUse[]
+  billingAllocations IdBusinessV2RechargeBillingAllocation[]
 
   @@unique([ownerId, line1])
   @@index([ownerId, status, createdAt])
@@ -3164,12 +3165,13 @@ model IdBusinessV2RechargeAddress {
 model IdBusinessV2RechargeAddressUse {
   id String @id @default(uuid()) @db.Char(36)
   jobId String @unique @map("job_id") @db.VarChar(36)
-  addressId String @map("address_id") @db.Char(36)
+  addressId String? @map("address_id") @db.Char(36)
+  addressReference String? @map("address_reference") @db.Char(36)
   ownerId String @map("owner_id") @db.VarChar(191)
   usedAt DateTime @default(now()) @map("used_at") @db.DateTime(6)
 
   job IdBusinessV2RechargeJob @relation(fields: [jobId], references: [id], onDelete: Restrict)
-  address IdBusinessV2RechargeAddress @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  address IdBusinessV2RechargeAddress? @relation(fields: [addressId], references: [id], onDelete: SetNull, map: "recharge_address_use_nullable_fkey")
 
   @@index([addressId, usedAt])
   @@map("id_business_v2_recharge_address_uses")
@@ -3290,4 +3292,20 @@ model IdBusinessV2ProxyAlias {
   proxyId String @map("proxy_id") @db.Char(36)
   @@index([proxyId])
   @@map("id_business_v2_proxy_aliases")
+}
+
+model IdBusinessV2RechargeBillingAllocation {
+  id String @id @default(uuid()) @db.Char(36)
+  requestKey String? @unique @map("request_key") @db.VarChar(160)
+  ownerId String @map("owner_id") @db.VarChar(191)
+  cardHash String? @map("card_hash") @db.Char(64)
+  nameHash String? @unique @map("name_hash") @db.Char(64)
+  addressHash String? @unique @map("address_hash") @db.Char(64)
+  nameEncrypted String? @map("name_encrypted") @db.Text
+  addressId String? @map("address_id") @db.Char(36)
+  jobId String? @unique @map("job_id") @db.Char(36)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  address IdBusinessV2RechargeAddress? @relation(fields: [addressId], references: [id], onDelete: SetNull, map: "recharge_billing_allocation_address_fkey")
+  @@index([addressId])
+  @@map("id_business_v2_recharge_billing_allocations")
 }

@@ -1,5 +1,5 @@
 import { http, request, type ApiRequestOptions } from '@/api/client';
-import type { V2AccountOffer } from '@apple-business/shared';
+import type { V2AccountOffer, V2RechargeAddress } from '@apple-business/shared';
 import { withV2QueryInvalidation } from '@/v2/composables/useV2Query';
 
 export type RechargeOrderChannel = 'bitbrowser' | 'online';
@@ -472,6 +472,7 @@ export const bankRechargeApi = {
   },
   preparePaymentCard(input: {
     plan?: string;
+    billingAllocationId?: string;
     number: string;
     expiry: string;
     name: string;
@@ -481,13 +482,15 @@ export const bankRechargeApi = {
       http.post('/id-business-v2/auto-recharge/names/payment-card', input)
     );
   },
-  matchCardName(number: string) {
+  matchCardName(number: string, allocation?: { allocationKey: string; addressId?: string }) {
     return request<{
       name: string;
+      allocationId?: string;
+      address?: V2RechargeAddress;
       confirmed: boolean;
       cardId: string | null;
       billingAddressId: string | null;
-    }>(http.post('/id-business-v2/auto-recharge/names/match', { number }));
+    }>(http.post('/id-business-v2/auto-recharge/names/match', { number, ...allocation }));
   },
   checkCardAvailability(number: string) {
     return request<{ available: true }>(

@@ -1,4 +1,8 @@
 import {
+  isRechargePlanBillingPublicationOnly,
+  isRechargePlanBillingSourcePaths
+} from './ci-recharge-plan-billing-scope.mjs';
+import {
   isAwsAccountMigrationControlsOnly,
   awsAccountMigrationGuardCommands,
   awsAccountMigrationReadOnlyBase,
@@ -1344,6 +1348,69 @@ if (
 }
 const shared = () => npm('run', 'build', '--workspace', '@apple-business/shared');
 
+if (part === 'guards' && isRechargePlanBillingSourcePaths(changed)) {
+  npm(
+    'exec',
+    '--',
+    'prettier',
+    '--check',
+    ...changed.filter((name) => /\.(mjs|ts|vue|json|md|yml)$/.test(name))
+  );
+  npm('exec', '--', 'eslint', ...changed.filter((name) => /\.(mjs|ts|vue)$/.test(name)));
+  run('node', [
+    '--test',
+    'scripts/ci-recharge-plan-billing-scope.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/ci-aws-account-migration-scope.test.mjs'
+  ]);
+  run('python3', ['-B', 'scripts/production-release/online-recharge-component-diagnostic.test.py']);
+  for (const check of [
+    'check:element-plus',
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation',
+    'check:v2-decimal-standard',
+    'check:v2-timezone-standard',
+    'check:v2-concurrency-standard',
+    'check:v2-prisma-runtime-boundary',
+    'check:cloud-independence'
+  ])
+    npm('run', check);
+  console.log(
+    'Billing source guards PASS; API, Admin and migration remain independent required checks.'
+  );
+  process.exit(0);
+}
+
+if (part === 'guards' && isRechargePlanBillingPublicationOnly(changed)) {
+  run('python3', ['-B', 'scripts/production-release/recharge-plan-billing-release.test.py']);
+  run('python3', ['-B', 'scripts/production-release/online-profile-lock-recovery.test.py']);
+  run('node', [
+    '--test',
+    'scripts/ci-recharge-plan-billing-scope.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ]);
+  npm(
+    'exec',
+    '--',
+    'prettier',
+    '--check',
+    ...changed.filter((name) => /\.(mjs|json|yml)$/.test(name))
+  );
+  npm('exec', '--', 'eslint', ...changed.filter((name) => name.endsWith('.mjs')));
+  console.log(
+    'Billing publication controls PASS; accepted application and database sources unchanged.'
+  );
+  process.exit(0);
+}
+
 // No application, schema or dependency input changed from the accepted main tree.
 if (part === 'guards' && isFeatureRetirementPermissionsRepair(changed)) {
   run('python3', ['-B', 'scripts/production-release/feature-retirement-release.test.py']);
@@ -2161,6 +2228,8 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
   npm('run', 'prisma:mysql:generate');
   npm('run', 'prisma:mysql:validate');
   shared();
+  if (isRechargePlanBillingSourcePaths(changed))
+    npm('run', 'typecheck', '--workspace', '@apple-business/api');
   if (mode === 'mailbox')
     npm(
       'run',
@@ -2180,6 +2249,12 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
       '@apple-business/api',
       '--',
       'src/id-business-v2/auto-recharge',
+      ...(isRechargePlanBillingSourcePaths(changed)
+        ? [
+            'src/id-business-v2/bank-card-pool',
+            'src/id-business-v2/online-recharge/persistence/worker.card-capacity.spec.ts'
+          ]
+        : []),
       ...(changed.some((p) => p.includes('/proxy-pool/')) ? ['src/id-business-v2/proxy-pool'] : []),
       ...(changed.some((p) => p.startsWith('apps/api/src/id-business-v2/online-recharge/'))
         ? ['src/id-business-v2/online-recharge']

@@ -44,6 +44,7 @@ export function validateRechargeBitBrowserStart(value: unknown) {
     'authorizeSinglePayment',
     'cardId',
     'billingName',
+    'billingAllocationId',
     'chatgptAccountId',
     'useSavedCredentials',
     'expectedEmail',
@@ -75,6 +76,11 @@ export function validateRechargeBitBrowserStart(value: unknown) {
       input.billingName.length > 120)
   )
     throw new BadRequestException('银行卡或账单姓名格式无效');
+  if (
+    input.billingAllocationId !== undefined &&
+    (typeof input.billingAllocationId !== 'string' || !uuidPattern.test(input.billingAllocationId))
+  )
+    throw new BadRequestException('账单分配编号无效');
   const windowName = String(input.windowName ?? '').trim();
   if (!windowName || windowName.length > 80 || hasControlCharacter(windowName)) {
     throw new BadRequestException('比特浏览器窗口名称格式无效');
@@ -114,12 +120,18 @@ export function validateRechargeBitBrowserStart(value: unknown) {
   ) {
     throw new BadRequestException('请选择有效的代理国家和代理 IP');
   }
+  if (
+    ['pro-5x', 'pro-500'].includes(String(input.plan)) &&
+    (lockedCurrency !== 'CLP' || input.proxyCountryCode !== 'CL' || !input.proxyId)
+  )
+    throw new BadRequestException('当前套餐必须使用智利代理和智利比索');
   return {
     ...(input.subscriptionCycleProtocol === 1 ? { subscriptionCycleProtocol: 1 as const } : {}),
     ...(input.directMode !== undefined ? { directMode: input.directMode } : {}),
     ...connectionSelection(input),
     cardId: input.cardId as string | undefined,
     billingName: input.billingName as string | undefined,
+    billingAllocationId: input.billingAllocationId as string | undefined,
     id: input.id,
     plan: input.plan,
     addressId: input.addressId,

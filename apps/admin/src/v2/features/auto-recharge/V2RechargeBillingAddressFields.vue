@@ -13,8 +13,8 @@
     <p v-else-if="nameError" class="recharge-error" role="alert">
       {{ nameError }} <AppButton size="small" @click="nameMatch?.retry()">重试</AppButton>
     </p>
-    <p v-else-if="nameConfirmed" class="recharge-note">已回填这张银行卡的绑定账单姓名</p>
-    <p v-else class="recharge-note">新卡自动生成英文账单姓名；再次使用同一张卡时保留原姓名。</p>
+    <p v-else-if="nameConfirmed" class="recharge-note">已回填本次分配的账单姓名</p>
+    <p v-else class="recharge-note">每笔新充值分配未用过的姓名和地址；原任务恢复保留原资料。</p>
   </el-form-item>
   <el-form-item class="recharge-address-select recharge-full-row" label="地址库" required>
     <div class="recharge-billing-address-row">
@@ -50,7 +50,7 @@
     {{ error }} <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
   </p>
   <p v-else-if="source === 'library' && !addresses.length" class="recharge-note" role="status">
-    暂无可用地址，输入银行卡后自动生成，也可点击“一键生成并使用”。
+    选择银行卡后自动分配地址；可用地址耗尽时自动补充100条。
   </p>
   <p v-if="addresses.length" class="recharge-note">
     每笔新充值按添加顺序使用下一条未使用地址，同一卡也会换新地址；原任务恢复保留原地址。

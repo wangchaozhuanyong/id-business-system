@@ -33,13 +33,17 @@ function setup(
 ) {
   const scope = effectScope();
   const context = {
+    plan: ref('plus'),
+    paymentMode: ref(true),
     currency: ref(initial.currency ?? 'PHP'),
     country: ref(initial.country ?? ''),
     proxyId: ref(initial.proxyId ?? ''),
     defaultCountry: ref(initial.defaultCountry ?? 'PH'),
     manualSelection: ref(initial.manual ?? false),
     locked: ref(false),
-    currencies: ref(['PHP', 'USD', 'MYR', 'EUR', 'GBP'].map((value) => ({ value, label: value }))),
+    currencies: ref(
+      ['PHP', 'USD', 'MYR', 'EUR', 'GBP', 'CLP'].map((value) => ({ value, label: value }))
+    ),
     countries: ref(['US', 'PH', 'MY', 'DE', 'FR', 'GB']),
     query: {
       data: ref({
@@ -62,6 +66,47 @@ function setup(
   return { scope, context, region };
 }
 describe('充值币种、国家与代理联动', () => {
+  it.each(['pro-5x', 'pro-500'])(
+    '%s 自动使用智利币种、国家和同国代理，切回 Plus 恢复默认国家',
+    (plan) => {
+      const { scope, context, region } = setup();
+      context.query.data.value.items.push(proxy('cl-mobile', 'CL'));
+      context.plan.value = plan;
+      expect(region.planRegionLocked.value).toBe(true);
+      expect(context.country.value).toBe('CL');
+      expect(context.currency.value).toBe('CLP');
+      expect(context.proxyId.value).toBe('cl-mobile');
+      context.defaultCountry.value = 'MY';
+      expect(context.country.value).toBe('CL');
+      context.plan.value = 'plus';
+      expect(region.planRegionLocked.value).toBe(false);
+      expect(context.country.value).toBe('MY');
+      expect(context.currency.value).toBe('MYR');
+      scope.stop();
+    }
+  );
+  it('智利代理缺失时不退回其他国家，币种未启用时明确阻塞', () => {
+    const { scope, context, region } = setup();
+    context.plan.value = 'pro-500';
+    expect(context.country.value).toBe('CL');
+    expect(context.currency.value).toBe('CLP');
+    expect(context.proxyId.value).toBe('');
+    expect(region.note.value).toContain('暂无启用代理');
+    context.currencies.value = context.currencies.value.filter((item) => item.value !== 'CLP');
+    expect(region.countryCurrencyError.value).toContain('尚未启用');
+    scope.stop();
+  });
+  it('仅登录模式不应用充值套餐地区，执行中不切换代理', () => {
+    const { scope, context, region } = setup();
+    context.locked.value = true;
+    context.plan.value = 'pro-500';
+    expect(context.country.value).toBe('PH');
+    context.paymentMode.value = false;
+    context.locked.value = false;
+    expect(region.planRegionLocked.value).toBe(false);
+    expect(context.country.value).toBe('PH');
+    scope.stop();
+  });
   it('首次默认菲律宾和比索，优先移动代理，默认国家排在首位', () => {
     const { scope, context, region } = setup();
     expect(context.country.value).toBe('PH');

@@ -1,0 +1,38 @@
+{
+  "formatOnly": {
+    "deploy/aws/release-artifact-storage-proof-20261024.json": "7dcb915ee2f4af02edec94d417051e3fa82364badb6a874f37f2a73abb644dc5",
+    "scripts/ci-aws-account-migration-scope.mjs": "f9ede034f5d81b4966450bf6bc7f77e8984a549993c7836bc8d893db04539338",
+    "scripts/ci-aws-account-migration-scope.test.mjs": "b89ca399f056e7aee1cec7afcdb48c38c3b5c34e68f0d116a2ba2df9024ff05c"
+  },
+  "reviewBase": "e317136851edfe3b49c0c44a8deed01b7de62a53",
+  "schemaBeforeSha256": "51a4d25b1302458145f560acc32f25b89a7bd65fea64dc72b254dc56da430100",
+  "sources": {
+    "apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue": "3cdda44241bb8a3592185dccc611baa656d2f2b9a010ff32b6c34c66b4f9f1dc",
+    "apps/admin/src/v2/features/auto-recharge/V2RechargeBillingAddressFields.vue": "fcd619e9c79b57db65a595c7a6825828ddfafc642184fd1f8a62460c9e1c09ee",
+    "apps/admin/src/v2/features/auto-recharge/V2RechargePlanCurrencyFields.vue": "54a3a33eea9a95652d6d07c9778803f80d6650dc246aad75b9b6df0f21933739",
+    "apps/admin/src/v2/features/auto-recharge/V2RechargeProxySelect.vue": "ab91b90c6269b68967b83b5c766d569fbb2bdca367f5b58bf51f688f2fc9d06d",
+    "apps/admin/src/v2/features/auto-recharge/bank-recharge-api.ts": "72c7bcd122e2b4493918ce6f6b353d23012ec348129174285b3e1cc690915252",
+    "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.spec.ts": "a1c131edad6adb7779ee1565928c3c1beb1250a7257d78b1d6b41041cf599813",
+    "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts": "8a8f2f67c28b12014a239f1e892a0375ce1b8ea03dcc72035db5b48f89a471ae",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeNameMatch.ts": "362d5e7df373432f3efe7ae9b4bd2a87eec2946d1228d8a1de9f7df57512935c",
+    "apps/admin/src/v2/features/auto-recharge/useRechargePaymentStart.ts": "db94482621855775b7672f7542003931c57c0c5a7f88d0a577568ff96e61179e",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeProxyRegion.spec.ts": "5702f35701a499e3f929ba67d55782253819aff991d9fb9b5bdc5b3442635639",
+    "apps/admin/src/v2/features/auto-recharge/useRechargeProxyRegion.ts": "069a935f4eab77d3ba1e9cd95c65ea11e2d4fba54d63d2af2d29bce77061a260",
+    "apps/api/prisma-mysql/migrations/20261026010000_recharge_billing_uniqueness/migration.sql": "b270460bba0e5f402e24491163eb193da13c0fdc1376a69e7659c37154e04c32",
+    "apps/api/prisma-mysql/schema.prisma": "2e4c0b496a98c303a7b332b3ee8431defb36b64f4b680758c884e10d5a5852df",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-card.service.ts": "87c29d5e3be12152d1ee393d19632181e7f0cf8ec357db03ab6bebe8cf1246ce",
+    "apps/api/src/id-business-v2/auto-recharge/bank-recharge-plan-catalog.spec.ts": "fcf23580d49cbe6acb971d712d57bca00bac13b91d62a482b6503e7efdf24e6d",
+    "apps/api/src/id-business-v2/auto-recharge/persistence/bank-recharge-card.repository.ts": "0833259d64c589b3879ffcd4f2237e3af7c603f48d29edce97e5845e8b6d198f",
+    "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-address.repository.ts": "d0ba945649ca0697d51bdb0c5f554b2d09d7c2de30f50e880f4f98d9f4c2791d",
+    "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-billing.repository.ts": "f413a9e37ea62fc26f0adf63e1ad3c72946f5132bb3ae9889864092d7a95f22e",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-billing-allocation.mysql.integration.spec.ts": "f943ea732f548a256f94677e03e0aa9d602a664b920784d7bb02076378c5ad66",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-billing.spec.ts": "065d7974ce2e54d268517bfffaf9d723d5258ce3318451c2391ea5b0872bc9d8",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts": "690e45fd1b494730c760bcc8be428b9febe96194a0723947c4d4eb895975fdc0",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-local-validation.ts": "9a0d95d8644babba5de091c70f5f2fddb8f31c4e9abf6056adc90fdedfbd2a75",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts": "b1478b6d3aa14407abda9a4abcce7355a10831128494b72c03e2573e1d112460",
+    "apps/api/src/id-business-v2/auto-recharge/recharge-name.service.ts": "fb3de1e5b0f8a5431a05669db59404ae1af68528999245ce857fe18d060bd824",
+    "apps/api/src/id-business-v2/auto-recharge/recharge.module.ts": "2171744ce6c11d556d2d4756e07485576ddf730018461c9da1d5c40e1616f576",
+    "packages/shared/src/v2/auto-recharge.ts": "3afdff9e32b52fbc98c5fda595083844aaecf2bd269160b27654a7aafd7192d7"
+  },
+  "version": 1
+}
