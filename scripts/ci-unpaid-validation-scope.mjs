@@ -179,7 +179,31 @@ export const unpaidValidationControls = Object.freeze([
     (name) => 'scripts/production-release/online-checkout-resume-' + name
   )
 ]);
+export const profileLockRecoveryPaths = Object.freeze([
+  'scripts/production-release/online-checkout-release.py',
+  'scripts/production-release/online-profile-lock-recovery.py',
+  'scripts/production-release/online-profile-lock-recovery.test.py',
+  'scripts/production-release/online-profile-lock-continuity.test.mjs'
+]);
+export function isProfileLockRecoveryOnly(paths) {
+  return (
+    new Set(paths).size === paths.length &&
+    profileLockRecoveryPaths.every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) =>
+        profileLockRecoveryPaths.includes(p) ||
+        [
+          'scripts/ci-unpaid-validation-scope.mjs',
+          'scripts/ci-unpaid-validation-scope.test.mjs',
+          'scripts/ci-recharge-scope.mjs',
+          'docs/ONLINE_RECHARGE.md',
+          'docs/V2_TASKS.md'
+        ].includes(p)
+    )
+  );
+}
 export function isUnpaidValidationOnly(paths) {
+  if (isProfileLockRecoveryOnly(paths)) return true;
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
@@ -251,6 +275,43 @@ export function unpaidValidationCommands(part, paths) {
     throw new Error('Unsupported unpaid validation scope');
   const npm = (...args) => ['npm', ...args];
   const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+  if (isProfileLockRecoveryOnly(paths)) {
+    if (part === 'guards')
+      return [
+        npm(
+          'exec',
+          '--',
+          'prettier',
+          '--check',
+          ...paths.filter((p) => /\.(?:mjs|cjs|md)$/.test(p))
+        ),
+        npm('exec', '--', 'eslint', ...paths.filter((p) => /\.(?:mjs|cjs)$/.test(p))),
+        ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
+        ['python3', '-B', 'scripts/production-release/online-profile-lock-recovery.test.py'],
+        ['python3', '-B', 'scripts/production-release/online-checkout-release.test.py'],
+        ['python3', '-B', 'scripts/production-release/online-country-evidence-release.test.py'],
+        npm('run', 'check:v2-module-architecture'),
+        npm('run', 'check:v2-isolation')
+      ];
+    if (part === 'online-engine')
+      return [
+        npm('ci', '--prefix', engine + '/upstream', '--ignore-scripts', '--no-audit', '--no-fund'),
+        [
+          'node',
+          engine + '/upstream/node_modules/playwright/cli.js',
+          'install',
+          '--with-deps',
+          'chromium'
+        ],
+        [
+          'node',
+          '--test',
+          'scripts/production-release/online-profile-lock-continuity.test.mjs',
+          engine + '/test/browser-profile.test.cjs'
+        ]
+      ];
+    throw new Error('Profile lock recovery cannot select unrelated application checks');
+  }
   if (part === 'guards') {
     const formatted = paths.filter(
       (p) => /\.(?:mjs|cjs|ts|vue|json|md|yml)$/.test(p) && !p.includes('/engine/upstream/')

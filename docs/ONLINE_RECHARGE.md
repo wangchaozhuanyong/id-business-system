@@ -819,6 +819,22 @@ inert、模态边界、命中位置和唯一候选检查，不修改官网属性
 
 参考：[Playwright 持久化上下文](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context)、[完整 Chromium 与无头 shell](https://playwright.dev/docs/browsers)、[Cloudflare clearance](https://developers.cloudflare.com/cloudflare-challenges/concepts/clearance/)。
 
+### 2026-10-25 发布后失效 profile 锁恢复（本地候选）
+
+不付款任务 `94117418…` 在浏览器启动阶段以 `PROFILE_BUSY` 结束，未登录、未建单、未填卡、未付款。服务器只读取证确认：锁内主机标记与新容器不同，该 PID 在新容器不存在，运行任务为 0。这指向容器重建后的失效锁；新容器内 PID 不存在本身不足以排除另一个容器仍在使用该目录。
+
+修复放在既有发布器的停止／启动衔接处，保持全局 `.deploy.lock`、任务空闲核验和原停机顺序。API 同样挂载代充 runtime 卷，因此先停止执行器、核验空闲、停止 API、完成原空闲核验及释放 SQL 连接，再从服务器宿主机恢复锁，完成后才启动新 API 和执行器。普通任务启动继续使用原生互斥，不在每笔充值里凭 PID 或锁年龄清理目录。
+
+恢复器只接受本机 Unix Docker daemon、当前 Compose 项目的专用 `online_recharge_data` 本地卷；拒绝远程／网络卷、自定义目录、其他项目共享、运行／暂停／重启中的任何挂载者。核对宿主机浏览器进程、原容器状态和两次容器清单；未知主机、自定义远端主机、目录／锁类型异常、进程证据不可读或快照变化均停止发布启动，不推测为失效。已退役默认容器的 12 位 ID 必须不再出现在本机 Docker 清单，或明确属于已停止的本项目执行器。
+
+仅把重新核对的 `SingletonLock`、`SingletonCookie`、`SingletonSocket` 符号链接原子移入 profile 内 0700 的 `.retired-singletons/<随机序号>`，不跟随链接、不操作其目标、不删锁证据、不修改 Cookie 数据库、localStorage、旧分区或绑定记录。这里的 `SingletonCookie` 是浏览器进程单例通信标记，不是登录 Cookie。写入中断时只向仍为空的原位置恢复已移动链接，不覆盖新锁。发布回执保留检查／恢复目录数、归档链接数和登录资料未修改标记，不输出身份、链接目标或原始配置。
+
+新增恢复器必须被下一轮正式发布计划的 `controlSources` 精确 SHA256 纳入；缺失或不匹配时，在执行发布变更前拒绝。已有历史合同和发布事实不回写。本轮没有修改业务执行器、登录策略、代理次数、CVC、支付交互或总超时，没有新增接口、表、迁移、环境变量或依赖。候选及证据归 `.runtime/profile-lock-recovery-20261025/`，尚未提交、发布或再建验证任务。
+
+本地使用模拟 Docker 清单验证宿主机判据，并使用真实 Chromium 验证原生并发排他、恢复前后资料文件字节一致、HttpOnly Cookie 和本地存储恢复。Mac 原生 Chromium 与 Linux 的跨主机锁处理不同，未把 Mac 测试当作生产 Linux 故障复现；CI 的原生测试在 Linux 另行要求恢复前拒绝、恢复后可启动。线上恢复及付款前就绪仍待正式发布后验证。
+
+依据：[Chromium POSIX ProcessSingleton 源码](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/browser/process_singleton_posix.cc)。
+
 ### 2026-10-25 填卡读取阶段诊断
 
 不付款验收的控件读取失败保留为READ_INCOMPLETE，并在原任务结果及下载JSON的formDiagnostics中保留受控inspection与最多32条字段步骤。步骤区分定位、交互前检查、输入、填写后回读，记录非敏感frame序号、候选/可交互数量及匹配布尔值；已有中文结果说明显示实际失败字段和阶段。missing列表仅指未完成字段，不等于每个字段都已尝试或都失败。

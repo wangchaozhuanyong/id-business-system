@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  profileLockRecoveryPaths,
+  isProfileLockRecoveryOnly,
   cardReadDiagnosticsPaths,
   countryEvidencePaths,
   proxyFailureEvidencePaths,
@@ -16,6 +18,42 @@ import {
   unpaidValidationCommands
 } from './ci-unpaid-validation-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
+test('offline profile recovery selects host guards and native browser tests only', () => {
+  const paths = [
+    ...profileLockRecoveryPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs',
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md'
+  ];
+  assert.equal(isProfileLockRecoveryOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = JSON.stringify(
+    selectedParts(paths).flatMap((part) => unpaidValidationCommands(part, paths))
+  );
+  for (const required of [
+    'online-profile-lock-recovery.test.py',
+    'online-profile-lock-continuity.test.mjs',
+    'test/browser-profile.test.cjs',
+    'online-checkout-release.test.py'
+  ])
+    assert.ok(commands.includes(required));
+  assert.doesNotMatch(commands, /migrate|prisma|workspace.*api|financial|ffmpeg/);
+  for (const missing of profileLockRecoveryPaths)
+    assert.equal(isProfileLockRecoveryOnly(paths.filter((p) => p !== missing)), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/auth/session.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+    paths[0]
+  ])
+    assert.equal(isProfileLockRecoveryOnly([...paths, extra]), false);
+  assert.throws(() => unpaidValidationCommands('api', paths));
+  assert.equal(checkMode(paths, 'before', 'after'), 'full');
+});
 test('profile egress publication controls require their contract tests and cannot admit business input', () => {
   const paths = [
     '.github/workflows/online-profile-egress-publication.yml',

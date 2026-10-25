@@ -121,12 +121,31 @@ def smoke(d, target, states, proof, contract, h):
     need(all(states[role]['environmentSha256'] == contract['services'][role]['environmentSha256'] for role in UPDATED), 'ENVIRONMENT_CHANGED')
 
 
+def profile_recovery_source(plan):
+    helper = 'online-profile-lock-recovery.py'
+    need(plan['controlSources'].get(helper) == sha(Path(__file__).with_name(helper).read_bytes()),
+         'PROFILE_RECOVERY_SOURCE_UNMEASURED')
+    return load(helper)
+
+
+def stop_recharge_and_recover(d, previous, before, lock, fence, recovery):
+    d.compose(previous, 'stop', 'online-recharge', timeout=90)
+    fence.check_idle()
+    d.compose(previous, 'stop', 'api', timeout=90)
+    fence.check_idle()
+    fence.close()
+    # API also mounts this volume. Both writers must be stopped before recovery.
+    return recovery.recover(d, before['online-recharge']['containerId'], lock)
+
+
 def release(plan, contract):
     need(plan['mode'] in ('preflight', 'release', 'readback') and re.fullmatch('[a-f0-9]{40}', plan['commit'])
          and re.fullmatch('[a-f0-9]{40}', plan['tree']) and re.fullmatch('[1-9][0-9]*', plan['workflowRunId']), 'IDENTITY_INVALID')
     need(sha(Path(__file__).with_name(CONTRACT_FILE).read_bytes()) == plan['contractSha256'], 'CONTRACT_CHANGED')
     for name, expected in plan['controlSources'].items():
         need(sha(Path(__file__).with_name(name).read_bytes()) == expected, 'CONTROL_SOURCE_CHANGED')
+    # The offline repair is executable deployment control, not an unmeasured hook.
+    recovery = profile_recovery_source(plan) if plan['mode'] == 'release' else None
     h = load('recharge-record-release.py')
     d = h.load_utilities(Path(__file__).with_name('remote-deploy.py'), plan['controlSources']['remote-deploy.py'])
     a = load('recharge-availability-release.py')
@@ -211,11 +230,7 @@ def release(plan, contract):
         journal.write_text(json.dumps({'status': 'SWITCH_STARTED', 'target': str(target), 'previous': str(previous)}) + '\n')
         try:
             fence.acquire()
-            d.compose(previous, 'stop', 'online-recharge', timeout=90)
-            fence.check_idle()
-            d.compose(previous, 'stop', 'api', timeout=90)
-            fence.check_idle()
-            fence.close()
+            profile_recovery = stop_recharge_and_recover(d, previous, before, lock, fence, recovery)
             d.compose(target, 'up', '-d', '--no-deps', 'api', 'admin', timeout=180)
             d.wait_healthy(target, 'api')
             d.wait_healthy(target, 'admin')
@@ -232,6 +247,7 @@ def release(plan, contract):
         p.release_markers(marker)
         h.guards(d, target, after, contract)
         receipt = {'status': 'DEPLOYED', 'commit': plan['commit'], 'before': before, 'after': after, 'images': images,
+                   'profileLockRecovery': profile_recovery,
                    'backup': backup, 'artifactSha256': plan['artifactSha256'], 'buildProofSha256': plan['buildProofSha256'],
                    'preservedServices': list(PRESERVED), 'migrationPerformed': False, 'businessActions': 0}
         (target / 'online-checkout-preservation.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
