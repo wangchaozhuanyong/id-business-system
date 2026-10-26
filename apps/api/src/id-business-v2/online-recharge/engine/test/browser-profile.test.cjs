@@ -28,14 +28,22 @@ async function fixture(
   { exit = '192.0.2.10', sessionStatus = 200, account = 'synthetic-account-profile' } = {}
 ) {
   let officialRequests = 0,
-    manualCalls = 0;
+    manualCalls = 0,
+    launches = 0,
+    probes = 0;
   const native = {
     async launchPersistentContext(directory, config) {
+      launches++;
       const context = await chromium.launchPersistentContext(directory, config);
       // All test network traffic is fulfilled locally; DNS is blocked at launch.
       context.request.get = async (url) => {
         assert.equal(url, 'http://api.ipify.org/?format=text');
-        return { ok: () => true, text: async () => exit, dispose: async () => {} };
+        probes++;
+        return {
+          ok: () => true,
+          text: async () => (typeof exit === 'function' ? exit(probes) : exit),
+          dispose: async () => {}
+        };
       };
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
@@ -50,6 +58,7 @@ async function fixture(
                   body: '<html><body>Just a moment <script src="/cdn-cgi/challenge-platform/test"></script></body></html>'
                 }
               : {
+                  status: sessionStatus,
                   contentType: 'application/json',
                   body: JSON.stringify({
                     accessToken: 'synthetic-bearer-profile-fixture',
@@ -83,7 +92,7 @@ async function fixture(
     setSessionStatus(value) {
       sessionStatus = value;
     },
-    counts: () => ({ officialRequests, manualCalls }),
+    counts: () => ({ officialRequests, manualCalls, launches, probes }),
     manual: async () => {
       manualCalls++;
       return { completed: true };
@@ -636,10 +645,20 @@ test('persistent proxy rechecks a fresh partition and shares five request attemp
     assert.equal(connected, false);
     calls = 0;
     probe = async () => (calls === 1 ? '192.0.2.12' : '192.0.2.13');
-    await assert.rejects(launchProfile(native, { ...options, root }), {
-      code: 'PROFILE_EXIT_CHANGED'
-    });
-    assert.equal(calls, 2, 'a second exit change cannot start a third browser');
+    const beforeLaunches = launches;
+    const rotating = await launchProfile(native, { ...options, root });
+    assert.equal(calls, 2, 'a second exit observation does not need another probe');
+    assert.equal(launches - beforeLaunches, 2, 'only one fresh partition is started');
+    const directory = path.join(root, binding(raw, options.proxyBinding));
+    const selectionFile = path.join(directory, '.active-profile.json');
+    const rotated = JSON.parse(await fs.readFile(selectionFile, 'utf8'));
+    assert.equal(
+      JSON.parse(await fs.readFile(path.join(directory, rotated.profile, '.exit-binding.json')))
+        .exitHash,
+      require('node:crypto').createHash('sha256').update('192.0.2.13').digest('hex'),
+      'the receipt is the fresh partition observation, not proof of authentication'
+    );
+    await rotating.close();
     assert.equal(connected, false);
     calls = 0;
     probe = async () => {
@@ -660,8 +679,6 @@ test('persistent proxy rechecks a fresh partition and shares five request attemp
     });
     assert.equal(calls, 5, 'connection errors still receive all five attempts');
     assert.equal(connected, false);
-    const directory = path.join(root, binding(raw, options.proxyBinding));
-    const selectionFile = path.join(directory, '.active-profile.json');
     const selected = JSON.parse(await fs.readFile(selectionFile, 'utf8'));
     calls = launches = 0;
     onLaunch = async () => {
@@ -709,7 +726,7 @@ test('persistent proxy rechecks a fresh partition and shares five request attemp
       return '192.0.2.17';
     };
     await assert.rejects(launchProfile(native, { ...options, root }), {
-      code: 'PROFILE_EXIT_CHANGED'
+      code: 'PROXY_CONNECTION_FAILED'
     });
     assert.equal(calls, 5);
     assert.equal(launches, 1, 'cannot restart without a remaining confirmation attempt');
@@ -751,7 +768,12 @@ test(
       await page.goto('https://chatgpt.com/');
       await page.evaluate(() => localStorage.setItem('old-partition', 'synthetic-private-state'));
       await current.close();
-      current = await fixture(root, { exit: '192.0.2.11' });
+      current = await fixture(root, {
+        exit: (probe) => (probe === 1 ? '192.0.2.11' : '192.0.2.12')
+      });
+      assert.equal(current.counts().launches, 2);
+      assert.equal(current.counts().probes, 2);
+      assert.equal(current.counts().officialRequests, 0, 'IP probes never imply official login');
       assert.deepEqual(await current.context.cookies('https://chatgpt.com'), []);
       page = await current.context.newPage();
       await page.goto('https://chatgpt.com/');
@@ -783,7 +805,8 @@ test(
         0o600
       );
       await current.close();
-      current = await fixture(root, { exit: '192.0.2.11' });
+      current = await fixture(root, { exit: '192.0.2.12' });
+      assert.equal(current.counts().launches, 1, 'reuse the latest observed partition');
       page = await current.context.newPage();
       await page.goto('https://chatgpt.com/');
       assert.equal(
@@ -818,6 +841,77 @@ test(
     }
   }
 );
+
+for (const mode of [
+  'session_invalid',
+  'account_mismatch',
+  'session_challenge',
+  'subscription_challenge'
+])
+  test(
+    `a rotating fresh partition retains official verification: ${mode}`,
+    { timeout: 30000 },
+    async () => {
+      await fs.mkdir(base, { recursive: true });
+      const root = await fs.mkdtemp(path.join(base, 'fresh-verification-'));
+      const previousRoot = process.env.ONLINE_RECHARGE_PROFILE_ROOT;
+      let current;
+      try {
+        current = await fixture(root);
+        await current.close();
+        current = await fixture(root, {
+          exit: (probe) => (probe === 1 ? '192.0.2.21' : '192.0.2.22'),
+          sessionStatus:
+            mode === 'session_invalid' ? 401 : mode === 'session_challenge' ? 403 : 200,
+          account: mode === 'account_mismatch' ? 'another-account' : 'synthetic-account-profile'
+        });
+        assert.equal(current.counts().launches, 2);
+        assert.equal(current.counts().probes, 2);
+        assert.deepEqual(await current.context.cookies('https://chatgpt.com'), []);
+        const installed = auth.installChatGptSession(current.context, raw, {
+          nativeSession: true,
+          preserveStoredSession: true,
+          onHumanVerification: current.manual
+        });
+        if (mode === 'subscription_challenge') {
+          assert.equal((await installed).cookieVerified, true);
+          process.env.ONLINE_RECHARGE_PROFILE_ROOT = root;
+          const page = await current.context.newPage();
+          await page.goto('https://chatgpt.com/');
+          const result = await require('../upstream/subscription-check').querySubscriptionBySession(
+            'synthetic-bearer-profile-fixture',
+            {
+              page,
+              browserContext: current.context,
+              sessionRaw: raw,
+              onHumanVerification: current.manual
+            }
+          );
+          assert.equal(result.ok, false);
+          assert.equal(result.errorCode, 'CHALLENGE_BLOCKED');
+          assert.equal(result.diagnostics.at(-1).responseFacts.classification, 'CF_CHALLENGE');
+        } else {
+          await assert.rejects(installed, {
+            code: {
+              session_invalid: 'SESSION_INVALID',
+              account_mismatch: 'ACCOUNT_MISMATCH',
+              session_challenge: 'CHALLENGE_BLOCKED'
+            }[mode]
+          });
+        }
+        assert.equal(current.counts().officialRequests, mode === 'subscription_challenge' ? 2 : 1);
+        assert.equal(current.counts().manualCalls, 0);
+        const browser = current.context.browser();
+        await current.close();
+        assert.equal(browser.isConnected(), false);
+      } finally {
+        if (previousRoot === undefined) delete process.env.ONLINE_RECHARGE_PROFILE_ROOT;
+        else process.env.ONLINE_RECHARGE_PROFILE_ROOT = previousRoot;
+        await current?.close();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  );
 
 test('invalid binding metadata fails before browser launch or network and is not overwritten', async () => {
   await fs.mkdir(base, { recursive: true });

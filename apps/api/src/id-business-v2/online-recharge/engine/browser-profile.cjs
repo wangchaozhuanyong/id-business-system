@@ -230,7 +230,7 @@ async function launchProfile(chromium, options) {
     const exitHash = await probeExit(context, options.signal, attempts);
     if (previous && previous.exitHash !== exitHash) {
       if (attempts.used === 5)
-        throw fault('PROFILE_EXIT_CHANGED', '代理出口发生变化，当前检测次数不足以确认新会话');
+        throw fault('PROXY_CONNECTION_FAILED', '代理连通性检测已用尽 5 次，无法核验新会话，已停止');
       const next = `Exit-${crypto.randomBytes(16).toString('hex')}`;
       const fresh = await prepareFreshProfile(directory, next);
       await writeBinding(path.join(fresh, '.exit-binding.json'), { version: 1, exitHash });
@@ -241,8 +241,16 @@ async function launchProfile(chromium, options) {
       console.log('[浏览器会话] 代理出口变化，启用独立资料分区并重新核验登录');
       await closeOwnedBrowser();
       await launch(next);
-      if ((await probeExit(context, options.signal, attempts)) !== exitHash)
-        throw fault('PROFILE_EXIT_CHANGED', '新浏览器启动后代理出口再次变化，已停止；未切换代理');
+      // The fresh partition has no inherited cookies/storage/clearance. A proxy
+      // observation is not an authentication verdict and need not match the
+      // previous browser's exit. Keep only this partition's latest observation;
+      // the caller must still verify the real Session and target account.
+      const observedExit = await probeExit(context, options.signal, attempts);
+      await writeBinding(path.join(fresh, '.exit-binding.json'), {
+        version: 1,
+        exitHash: observedExit
+      });
+      console.log('[浏览器会话] 新分区代理连通性已核验，继续官网真实登录核验');
     } else if (!previous) {
       await writeBinding(receipt, { version: 1, exitHash });
     }
