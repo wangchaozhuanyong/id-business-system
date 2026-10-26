@@ -173,6 +173,10 @@ export const countryEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export const unpaidValidationControls = Object.freeze([
+  '.github/workflows/online-session-diagnostic-publication.yml',
+  ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-session-diagnostic-' + name
+  ),
   '.github/workflows/online-profile-lock-publication.yml',
   ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-profile-lock-' + name
@@ -310,6 +314,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-session-diagnostic-') ||
+        p === '.github/workflows/online-session-diagnostic-publication.yml' ||
         p.startsWith('scripts/production-release/online-profile-lock-') ||
         p === '.github/workflows/online-profile-lock-publication.yml' ||
         p.startsWith('scripts/production-release/online-country-evidence-') ||
@@ -413,6 +419,15 @@ export function unpaidValidationCommands(part, paths) {
               'python3',
               '-B',
               'scripts/production-release/online-card-read-diagnostics-release.test.py'
+            ]
+          ]
+        : []),
+      ...(paths.some((p) => p.includes('online-session-diagnostic-'))
+        ? [
+            [
+              'python3',
+              '-B',
+              'scripts/production-release/online-session-diagnostic-release.test.py'
             ]
           ]
         : []),

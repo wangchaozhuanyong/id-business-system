@@ -79,6 +79,31 @@ test('login diagnostic repair retains API Admin and engine checks without histor
   ])
     assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
 });
+test('session diagnostic publication controls cannot admit unrelated business changes', () => {
+  const paths = [
+    '.github/workflows/online-session-diagnostic-publication.yml',
+    'scripts/production-release/online-session-diagnostic-release.py',
+    'scripts/production-release/online-session-diagnostic-build.py',
+    'scripts/production-release/online-session-diagnostic-publication.py',
+    'scripts/production-release/online-session-diagnostic-release.test.py',
+    'scripts/production-release/online-session-diagnostic-contract.json',
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /online-session-diagnostic-release.test.py/
+  );
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/validation.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    'scripts/production-release/online-session-diagnostic-extra.py'
+  ]) {
+    assert.equal(isUnpaidValidationControlsOnly([...paths, extra]), false);
+  }
+});
 test('offline profile recovery selects host guards and native browser tests only', () => {
   const paths = [
     ...profileLockRecoveryPaths,
