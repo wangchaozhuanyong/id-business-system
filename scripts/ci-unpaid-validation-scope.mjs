@@ -181,6 +181,10 @@ export const countryEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export const unpaidValidationControls = Object.freeze([
+  '.github/workflows/online-fresh-session-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-fresh-session-' + name
+  ),
   '.github/workflows/online-session-diagnostic-publication.yml',
   ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-session-diagnostic-' + name
@@ -331,6 +335,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-fresh-session-') ||
+        p === '.github/workflows/online-fresh-session-publication.yml' ||
         p.startsWith('scripts/production-release/online-session-diagnostic-') ||
         p === '.github/workflows/online-session-diagnostic-publication.yml' ||
         p.startsWith('scripts/production-release/online-profile-lock-') ||
@@ -409,6 +415,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-fresh-session-'))
+        ? [['python3', '-B', 'scripts/production-release/online-fresh-session-release.test.py']]
+        : []),
       ...(paths.some((p) => p.includes('online-profile-lock-'))
         ? [['python3', '-B', 'scripts/production-release/online-profile-lock-release.test.py']]
         : []),
