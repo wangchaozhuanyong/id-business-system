@@ -467,6 +467,27 @@ test('country evidence publication is finite and keeps its contract test', () =>
   assert.equal(isUnpaidValidationControlsOnly([...paths, countryEvidencePaths[0]]), false);
 });
 
+test('fresh session publication runs finite controls without application or database checks', () => {
+  const paths = unpaidValidationControls.filter((p) => p.includes('online-fresh-session-'));
+  assert.equal(paths.length, 5);
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /online-fresh-session-release.test.py/
+  );
+  assert.throws(() => unpaidValidationCommands('api', paths));
+  assert.equal(isUnpaidValidationControlsOnly([...paths, freshSessionPaths[0]]), false);
+  assert.equal(
+    isUnpaidValidationControlsOnly([
+      ...paths,
+      'scripts/production-release/online-fresh-session-extra.py'
+    ]),
+    false
+  );
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+});
+
 test('profile inventory control repair executes its recovery regression suite', () => {
   const paths = [
     'scripts/production-release/online-profile-lock-recovery.py',
