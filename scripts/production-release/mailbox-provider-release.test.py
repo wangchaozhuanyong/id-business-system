@@ -36,6 +36,17 @@ class PublicationTests(unittest.TestCase):
                       'files': self.files, 'baselineApiReproduced': True, 'baselineAdminSourceReproduced': True,
                       'migrationPerformed': False, 'businessActions': 0}
 
+    def test_runtime_helpers_keep_all_seven_current_services(self):
+        helper = m.helpers('recharge-record-release.py')
+        self.assertEqual(set(helper.SERVICES), set(self.c['baseline']['runtime']['services']))
+        self.assertEqual(len(helper.SERVICES), 7)
+
+    def test_admin_reproduction_uses_its_immutable_source_separate_from_current_engine(self):
+        source = (HERE / 'mailbox-provider-build.py').read_text()
+        self.assertIn("'--detach', str(source_root), p.ADMIN_CURRENT", source)
+        self.assertNotEqual(m.ADMIN_CURRENT, m.CURRENT)
+        self.assertEqual(m.SOURCE_BASE, m.ADMIN_CURRENT)
+
     def test_exact_native_proof_is_accepted(self):
         m.verify_proof(self.proof, self.plan, self.c, self.files)
 

@@ -13,12 +13,15 @@ BASE = Path('/opt/id-business-v2')
 SCOPE = 'MAILBOX_PROVIDER_20261026'
 PREFIX = 'mailbox-provider'
 CONTRACT_FILE = PREFIX + '-contract.json'
-CURRENT = '7c5ddc35e15aeecbf54f71acce96498c38b73d45'
+CURRENT = 'ec5af94ceca92ae5e6fe26b81881843f926a42e5'
+ADMIN_CURRENT = '7c5ddc35e15aeecbf54f71acce96498c38b73d45'
+SOURCE_BASE = ADMIN_CURRENT
 SOURCE = '94b08486800227b728dcdee68a161debd179aa43'
 SOURCE_TREE = 'e9afad96f9918a58eddb8b225c0f5c68fd557d52'
 SOURCE_SHA256 = '33fb09b1185cfcad3ba85a33bf96b64670e2487a4c2d6004fd56c636eb8a0aa7'
-BASELINE_SHA256 = '1fcabff63cce8aa2f365728e31fa09a1a222c3cfa21de5faa015150ad6966f55'
+BASELINE_SHA256 = 'c0838623d17e65eb67a90e365e933e4d4a2e55bf70546e9051bea3a541b98851'
 PRESERVED = ('api', 'online-recharge', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
+SERVICES = ('admin', *PRESERVED)
 
 
 def load(name):

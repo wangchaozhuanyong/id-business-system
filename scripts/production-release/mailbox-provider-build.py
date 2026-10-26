@@ -14,7 +14,7 @@ ROOT = HERE.parents[1]
 
 
 def load(name):
-    spec = importlib.util.spec_from_file_location('provider_build_' + name.replace('-', '_'), HERE / name)
+    spec = importlib.util.spec_from_file_location('provider_build_' + Path(name).name.replace('-', '_'), HERE / name)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -25,7 +25,7 @@ def build(c, plan, quality, parent, out):
     p.need(out.is_dir() and not out.is_symlink() and not (out / 'payload').exists(), 'BUILD_OUTPUT_EXISTS')
     binding = c['parentArtifact']
     expected_url = ('https://github.com/wangchaozhuanyong/id-business-system/releases/download/'
-                    'online-session-diagnostic-' + p.CURRENT + '/online-session-diagnostic-artifact.tar.gz')
+                    'online-session-diagnostic-' + p.ADMIN_CURRENT + '/online-session-diagnostic-artifact.tar.gz')
     p.need(binding['url'] == expected_url, 'PARENT_ARTIFACT_LOCATION')
     with urllib.request.urlopen(binding['url'], timeout=60) as response:
         raw = response.read(4 * 1024**2 + 1)
@@ -34,8 +34,11 @@ def build(c, plan, quality, parent, out):
         proof_raw = archive.extractfile('payload/build-proof.json').read()
     p.need(p.sha(proof_raw) == binding['buildProofSha256'] == c['baseline']['parentBuildProofSha256'], 'PARENT_PROOF_CHANGED')
     published = json.loads(proof_raw)
-    p.need(published['commit'] == p.CURRENT and published['workflowRunId'] == binding['workflowRunId'], 'PARENT_IDENTITY')
-    recipe = load('online-session-diagnostic-build.py')
+    p.need(published['commit'] == p.ADMIN_CURRENT and published['workflowRunId'] == binding['workflowRunId'], 'PARENT_IDENTITY')
+    # Reproduce from the immutable Admin source; current main also contains newer engine files.
+    source_root = out / 'published-source'
+    subprocess.run(['git', 'worktree', 'add', '--detach', str(source_root), p.ADMIN_CURRENT], cwd=ROOT, check=True)
+    recipe = load(source_root / 'scripts/production-release/online-session-diagnostic-build.py')
     parent_contract_raw = (HERE / 'online-session-diagnostic-contract.json').read_bytes()
     p.need(p.sha(parent_contract_raw) == c['baseline']['parentContractSha256'], 'PARENT_CONTRACT_CHANGED')
     parent_contract = json.loads(parent_contract_raw)
@@ -45,7 +48,7 @@ def build(c, plan, quality, parent, out):
     def capture(command, *args, **kwargs):
         result = original_run(command, *args, **kwargs)
         if (command == ['npm', 'run', 'build', '--workspace', 'apps/admin']
-                and kwargs.get('env', {}).get('V2_BUILD_ID') == 'v2-' + p.CURRENT):
+                and kwargs.get('env', {}).get('V2_BUILD_ID') == 'v2-' + p.ADMIN_CURRENT):
             contexts['admin'] = kwargs['cwd']
         return result
 
@@ -66,7 +69,7 @@ def build(c, plan, quality, parent, out):
         if '.spec.' in name:
             continue  # Tests are validated by this main/PR quality run, not shipped into an older test toolchain.
         destination = admin / name
-        baseline = subprocess.run(['git', 'show', p.CURRENT + ':' + name], cwd=ROOT, capture_output=True)
+        baseline = subprocess.run(['git', 'show', p.ADMIN_CURRENT + ':' + name], cwd=ROOT, capture_output=True)
         if baseline.returncode == 0:
             p.need(destination.is_file() and destination.read_bytes() == baseline.stdout, 'UNPUBLISHED_SOURCE_DIFFERENCE')
         else:

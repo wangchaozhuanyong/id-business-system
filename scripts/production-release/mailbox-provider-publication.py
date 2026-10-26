@@ -1,4 +1,4 @@
-"""Publish the reviewed unpaid-login Admin/API/engine overlay using native CI and SSM receipts."""
+"""Publish only the reviewed mailbox Admin overlay using native CI and SSM receipts."""
 import argparse
 import base64
 import io
@@ -41,7 +41,7 @@ CONTROLS = frozenset((WORKFLOW, 'scripts/ci-recharge-scope.mjs',
 def reviewed_extensions(c, commit='HEAD'):
     changed = set(git('diff', '--name-only', P.CURRENT, commit).decode().splitlines())
     need(changed <= set(c['sources']) | CONTROLS, 'UNREVIEWED_EXTENSION')
-    source_changed = set(git('diff', '--name-only', P.CURRENT, P.SOURCE).decode().splitlines())
+    source_changed = set(git('diff', '--name-only', P.SOURCE_BASE, P.SOURCE).decode().splitlines())
     need(source_changed == set(c['sources']), 'REVIEW_SOURCE_SCOPE_CHANGED')
 
 
