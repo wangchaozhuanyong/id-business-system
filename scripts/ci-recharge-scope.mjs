@@ -1,3 +1,7 @@
+import {
+  isRechargeAutofillControlsOnly,
+  isRechargeAutofillSourceOnly
+} from './ci-recharge-autofill-scope.mjs';
 import { isMailboxProviderOnly } from './ci-mailbox-provider-scope.mjs';
 import {
   isRechargePlanBillingPublicationOnly,
@@ -1219,6 +1223,8 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isRechargeAutofillSourceOnly(paths)) return false;
+  if (isRechargeAutofillControlsOnly(paths)) return false;
   // This finite release rebuilds only Admin and preserves the deployed engine.
   if (isMailboxProviderOnly(paths)) return false;
   if (isMailQueryPublicationControlsOnly(paths)) return false;
@@ -2388,6 +2394,7 @@ export function isMailQueryPublicationControlsOnly(paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (isRechargeAutofillControlsOnly(paths)) return true;
   if (isMailQueryPublicationControlsOnly(paths)) return true;
   if (isRechargePlanBillingPublicationOnly(paths)) return true;
   if (isAwsAccountMigrationControlsOnly(paths, context)) return true;
@@ -2570,6 +2577,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isRechargeAutofillSourceOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRechargePlanBillingSourcePaths(paths))
     return isRechargePlanBillingSource(paths, oldSchema, newSchema) ? 'recharge' : 'full';
   if (isSettledCheckoutControlsOnly(paths) || isFinancialPublicationControlsOnly(paths))
@@ -3045,6 +3053,7 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isRechargeAutofillSourceOnly(paths)) return oldSchema === newSchema;
   if (isRechargePlanBillingSource(paths, oldSchema, newSchema)) return true;
   if (isProxyResultIdentityOnly(paths)) return oldSchema === newSchema;
   if (isRechargeCheckoutOnly(paths)) return oldSchema === newSchema;
@@ -3162,6 +3171,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isRechargeAutofillSourceOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
+  if (isRechargeAutofillControlsOnly(paths)) return ['guards'];
   if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];
   if (isRechargePlanBillingSourcePaths(paths)) return ['guards', 'admin', 'api', 'migration'];
   if (isRechargePlanBillingPublicationOnly(paths)) return ['guards'];

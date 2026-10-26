@@ -103,9 +103,9 @@
     {
       "path": "credentials.cjs",
       "originalSha256": null,
-      "adaptedSha256": "adcc52680c73b2ed7dfacdaac11e2e2a99612e9df6aa7d6548b523e8b9de6c55",
+      "adaptedSha256": "469e544509c6602cb2f5a27756f8ee76f8011b066a9d7d2fa8976b2d28eb193b",
       "changed": true,
-      "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials. User-requested 24-hour in-memory expiry from last save; preserve task, ownership and exit cleanup."
+      "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials. User-requested 24-hour in-memory expiry from last save; preserve task, ownership and exit cleanup. 2026-10-26 Add an authenticated, audit-gated BitBrowser read of unowned, unexpired CVC; no task lease changes or persistent secret storage."
     },
     {
       "path": "healthcheck.cjs",

@@ -10,8 +10,7 @@ const messages = {
     '网页无法访问比特浏览器。请启动比特浏览器、开启本地接口，并允许当前网站访问本机网络。',
   bitbrowser_direct_token_invalid:
     '比特接口密钥不匹配，请填写当前电脑比特浏览器系统设置中的接口密钥。',
-  bitbrowser_direct_rejected:
-    '比特浏览器拒绝了请求，请检查接口、代理和窗口配置；子账号还需主账号授予 Local API 及对应分组权限。',
+  bitbrowser_direct_rejected: '比特接口未返回成功结果，请核对当前账号登录状态和接口权限后重试。',
   bitbrowser_direct_protocol: '比特接口返回的数据无法确认，请核对接口地址并更新比特浏览器。',
   bitbrowser_direct_debug_unavailable:
     '窗口已打开，但网页无法连接窗口控制接口。请检查网站本机网络权限，并更新比特浏览器后重试。',
@@ -82,6 +81,10 @@ const apiCodeMessages = {
 } as const;
 type DirectBrowserApiCode = keyof typeof apiCodeMessages;
 const apiReasonMessages = {
+  local_api_login_required:
+    '当前比特客户端尚未登录或登录已过期，请先登录该连接对应的比特账号，再刷新分组与标签',
+  local_api_permission_denied:
+    '当前比特账号无权读取所需资料，请由主账号核对 Local API 及对应分组权限',
   callback_credentials_rejected: '本机连接凭据无效',
   job_expired: '执行窗口已结束，请重新核验原订单',
   account_mismatch: '账户标识不一致',
@@ -260,11 +263,25 @@ export function directBrowserApi(url: string, token: string, signal: AbortSignal
         httpStatus: response.status
       });
     }
-    if (!value || !response.ok || value.success !== true)
+    if (!value || !response.ok || value.success !== true) {
+      const hint = [value?.msg, value?.message]
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.slice(0, 300))
+        .join(' ');
+      const apiReason =
+        /未登录|尚未登录|请先登录|登录.{0,8}(?:过期|失效)|not.?logged|login.{0,12}(?:required|expired)|log.?in first/i.test(
+          hint
+        )
+          ? 'local_api_login_required'
+          : /没有权限|无权限|权限不足|permission denied|not permitted|forbidden/i.test(hint)
+            ? 'local_api_permission_denied'
+            : undefined;
       throw new DirectBrowserError('bitbrowser_direct_rejected', {
         operation,
-        httpStatus: response.status
+        httpStatus: response.status,
+        ...(apiReason ? { apiReason } : {})
       });
+    }
     return value;
   }
   return { post };

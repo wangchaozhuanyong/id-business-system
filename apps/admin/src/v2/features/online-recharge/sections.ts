@@ -171,7 +171,7 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
           label: '临时安全码',
           type: 'secret',
           transient: true,
-          help: '仅线上代充执行器内存临时使用，最长24小时；任务结束、失去租约或重启后提前清除。比特浏览器充值仍逐笔输入。'
+          help: '仅在执行器内存临时保留，最长24小时；比特充值选卡后自动填写仍有效且未占用的安全码。任务结束、失去租约或重启后提前清除。'
         },
         allowedPlans
       ]
