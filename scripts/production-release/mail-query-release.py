@@ -1,4 +1,4 @@
-"""Finite mailbox API/Admin publication using the existing lock, backup and SQL fence."""
+"""Finite Admin-only mailbox publication; API and business services remain untouched."""
 import datetime
 import importlib.util
 import json
@@ -13,10 +13,11 @@ BASE = Path('/opt/id-business-v2')
 SCOPE = 'MAIL_QUERY_20261026'
 PREFIX = 'mail-query'
 CONTRACT_FILE = 'mail-query-contract.json'
-CURRENT = '21f63083dd8044726811f6d055b3da675ced31d7'
-SOURCE = 'cdf58bd2867bb0649464e568ebfef9209ab106ff'
-SOURCE_TREE = '814c7fe4b89290ee5a9ebc2d7569199868fbb33b'
-PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge')
+CURRENT = '31f1b57902b3f442b15aa703b0ff1911bbb15c3a'
+BILLING_CURRENT = '21f63083dd8044726811f6d055b3da675ced31d7'
+SOURCE = '937926725c2cf357e8ed3238c3b78a173a8f082b'
+SOURCE_TREE = '7bed2fcb118dcf03eb97331e8732c46f3ef2ec45'
+PRESERVED = ('api', 'online-recharge', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
 
 
 def load(name):
@@ -45,9 +46,9 @@ def verify_proof(proof, plan, c, files):
          and proof['businessActions'] == 0, 'PAYLOAD_CHANGED')
     need(set(proof['apiModules']) == set(proof['baselineApiModules']) == set(c['apiModules'])
          and proof['baselineApiModules'] == plan['nativeParentCapture']['apiModules']
-         and proof['baselineAdminFiles'] == c['adminFiles'], 'BASELINE_NOT_REPRODUCED')
-    expected = {'api/modules/' + n: v for n,v in proof['apiModules'].items()}
-    expected.update({'admin/html/' + n: v for n,v in proof['adminFiles'].items()})
+         and proof['baselineAdminFiles'] == c['adminFiles']
+         and proof['apiModules'] == proof['baselineApiModules'] == c['baselineApiModules'], 'BASELINE_NOT_REPRODUCED')
+    expected = {'admin/html/' + n: v for n,v in proof['adminFiles'].items()}
     expected.update({'source/' + n: v for n,v in c['sources'].items()})
     need(files == expected and sha(canonical(c['sources'])) == c['sourceProjectionSha256'], 'PAYLOAD_SCOPE_CHANGED')
 
@@ -79,9 +80,9 @@ def verify_availability(c, states, original):
 
 def published_billing(directory, c):
     raw = (directory / 'recharge-plan-billing-build-proof.json').read_bytes()
-    need(sha(raw) == c['parentFiles']['recharge-plan-billing-build-proof.json'], 'BILLING_PROOF_CHANGED')
+    need(sha(raw) == c['billingProofSha256'], 'BILLING_PROOF_CHANGED')
     proof = json.loads(raw)
-    need(proof['commit'] == CURRENT and proof['scope'] == 'RECHARGE_PLAN_BILLING_20261026', 'BILLING_IDENTITY_CHANGED')
+    need(proof['commit'] == BILLING_CURRENT and proof['scope'] == 'RECHARGE_PLAN_BILLING_20261026', 'BILLING_IDENTITY_CHANGED')
     controls = directory / 'scripts/production-release'
     for name in ('recharge-plan-billing-release.py', 'recharge-plan-billing-contract.json'):
         need(sha((controls / name).read_bytes()) == proof['controlSources'][name], 'BILLING_CONTROL_CHANGED')
@@ -100,24 +101,22 @@ def snapshot(c):
     h, d, p = profile.helpers(prior)
     previous = (BASE / 'current').resolve(strict=True)
     need(previous.parent == BASE / 'releases' and str(previous) == c['parentRelease'], 'CURRENT_PATH_CHANGED')
-    parent_files = {'release-manifest.json', 'recharge-plan-billing-preservation.json',
-                    'recharge-plan-billing-build-proof.json'}
+    parent_files = {'release-manifest.json', 'mail-query-preservation.json', 'mail-query-build-proof.json'}
     need(set(c['parentFiles']) == parent_files and all(
          sha((previous / name).read_bytes()) == digest for name,digest in c['parentFiles'].items()), 'PARENT_PROOF_CHANGED')
     manifest = json.loads((previous / 'release-manifest.json').read_bytes())
-    receipt = json.loads((previous / 'recharge-plan-billing-preservation.json').read_bytes())
+    receipt = json.loads((previous / 'mail-query-preservation.json').read_bytes())
     need(manifest['commit'] == c['expectedCurrent'] == CURRENT and manifest['status'] == 'DEPLOYED'
-         and manifest['scope'] == 'RECHARGE_PLAN_BILLING_20261026'
+         and manifest['scope'] == SCOPE
          and manifest['actualDeployment'] == receipt and receipt['commit'] == CURRENT
-         and receipt['status'] == 'BILLING_DEPLOYED' and receipt['migrationPerformed'] is True
-         and receipt['businessActions'] == 0, 'PARENT_IDENTITY_CHANGED')
+         and type(receipt['businessActions']) is int and receipt['businessActions'] == 0, 'PARENT_IDENTITY_CHANGED')
     states = h.snapshot(d, previous)
-    recovery_sha=verify_availability(c,states,receipt['after'])
-    billing, billing_contract, billing_proof = published_billing(previous, c)
-    need(c['adminFiles'] == billing_proof['adminFiles'], 'BILLING_ADMIN_CHANGED')
-    billing.smoke(d, h, previous, states, billing_proof, billing_contract)
-    p.read_hashes(d, states['api']['containerId'], '/app/apps/api/dist/', prior['apiFiles'])
-    load('proxy-result-identity-release.py').engine_content(d, states['online-recharge'], prior['engineFiles'])
+    need(states == receipt['after'], 'PARENT_SERVICES_CHANGED')
+    parent_proof=json.loads((previous/'mail-query-build-proof.json').read_bytes())
+    need(parent_proof['commit']==CURRENT and parent_proof['apiModules']==c['baselineApiModules']
+         and parent_proof['adminFiles']==c['adminFiles'], 'PARENT_RUNTIME_CHANGED')
+    smoke(d,previous,states,states,parent_proof,c,prior,h,p,parent_proof['nativeParentCapture'])
+    h.guards(d,previous,states,prior)
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     captured = {'current':str(previous), 'expectedCurrent':CURRENT,
         'manifestSha256':c['parentFiles']['release-manifest.json'], 'parentFiles':c['parentFiles'],
@@ -133,7 +132,6 @@ def snapshot(c):
         need(name.startswith(root) and name.removeprefix(root) in c['apiModules'], 'MODULE_PATH_CHANGED')
         modules[name.removeprefix(root)] = digest
     need(set(modules) == set(c['apiModules']) and modules == c['baselineApiModules'], 'MAILBOX_BASELINE_CHANGED')
-    if recovery_sha:captured['availabilityRecoverySha256']=recovery_sha
     captured['businessActions'] = 0
     captured['apiModules'] = modules
     captured['nginxSha256'] = d.run('docker', 'exec', states['admin']['containerId'], 'sha256sum',
@@ -217,7 +215,7 @@ def release(plan, c):
         verify_proof(proof,plan,c,files)
         before = captured['services'];previous = Path(captured['current'])
         images = {}
-        for role,copy in (('api','COPY modules/ /app/apps/api/dist/'),('admin','COPY html/ /usr/share/nginx/html/')):
+        for role,copy in (('admin','COPY html/ /usr/share/nginx/html/'),):
             context=payload/role
             availability.normalize_image_context(context)
             reference='id-business-v2-mail-query:'+plan['commit']+'-'+plan['workflowRunId']+'-'+role
@@ -228,8 +226,6 @@ def release(plan, c):
             p.verify_image(original,built,plan)
             images[role]={'reference':reference,'imageId':built['Id']}
         need(snapshot(c)[0] == captured, 'PARENT_MOVED')
-        backup=h.fresh_scoped_backup(d,previous,plan,normalizer_path=Path(prior['backupNormalizerPath']))
-        need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')
         stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         target=BASE/'releases'/(stamp+'-'+plan['commit'][:12]+'-mail-query')
         need(not target.exists(), 'TARGET_EXISTS')
@@ -245,31 +241,19 @@ def release(plan, c):
         for role in images:override['services'][role]['image']=images[role]['reference']
         (target/'compose.release.json').write_text(json.dumps(override,sort_keys=True,indent=2)+'\n')
         need(snapshot(c)[0] == captured, 'PARENT_MOVED')
-        finite=load('proxy-result-identity-release.py')
-        retired=load('online-query-network-release.py');retired.SCOPE=SCOPE
-        finite.claim_markers=retired.claim_retired_markers
-        recovery=p.profile_recovery_source(plan)
-        marker=finite.claim_markers(d,before,plan)
-        fence=finite.sql_fence_class(prior)(d,previous)
         journal=stage/'switch-state.json'
         journal.write_text(json.dumps({'status':'SWITCH_STARTED','target':str(target)})+'\n')
         try:
-            fence.acquire();fence.check_idle()
-            recovered=p.stop_recharge_and_recover(d,previous,before,lock,fence,recovery)
-            d.compose(target,'up','-d','--no-deps','--no-build','--pull','never','api','admin',timeout=180)
-            for role in ('api','admin'):d.wait_healthy(target,role)
-            d.compose(target,'up','-d','--no-deps','--no-build','--pull','never','--force-recreate','online-recharge',timeout=180)
-            d.wait_healthy(target,'online-recharge')
+            d.compose(target,'up','-d','--no-deps','--no-build','--pull','never','admin',timeout=180)
+            d.wait_healthy(target,'admin')
             after=h.snapshot(d,target)
-            need(all(after[n]['image']==images[n]['imageId'] for n in images),'IMAGE_CHANGED')
+            need(after['admin']['image']==images['admin']['imageId'],'IMAGE_CHANGED')
             smoke(d,target,before,after,proof,c,prior,h,p,captured)
+            h.guards(d,target,after,prior)
         except BaseException:
             journal.write_text(json.dumps({'status':'NEEDS_FORWARD_DIAGNOSIS','target':str(target),'rollbackPerformed':False})+'\n')
             raise
-        finally:
-            fence.close()
-        finite.release_markers(marker);h.guards(d,target,after,prior)
-        receipt={'commit':plan['commit'],'before':before,'after':after,'images':images,'backup':backup,'profileLockRecovery':recovered,'businessActions':0}
+        receipt={'commit':plan['commit'],'before':before,'after':after,'images':images,'businessActions':0}
         (target/'mail-query-preservation.json').write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
         (target/'mail-query-build-proof.json').write_bytes(raw_proof)
         manifest=json.loads((previous/'release-manifest.json').read_bytes())
@@ -279,11 +263,11 @@ def release(plan, c):
             sourceLayout='PUBLISHED_PREDECESSOR_WITH_REVIEWED_MAIN_MAILBOX_OVERLAY',
             deploymentMethod='NATIVE_MAIN_REBUILD_AND_SSM_FORWARD',validationRun=plan['workflowRunId'],
             previousCommit=CURRENT,previousRelease=str(previous),previousManifestSha256=captured['manifestSha256'],
-            servicesUpdated=['api','admin'],servicesRebound=['online-recharge'],actualDeployment=receipt,
+            servicesUpdated=['admin'],servicesRebound=[],actualDeployment=receipt,
             sourceProjection={'changedSources':c['sources'],'apiModules':proof['apiModules'],
                               'buildProofSha256':plan['buildProofSha256']},
             newMigrations=[],migrationPerformed=False,paymentActions=0,buildProofSha256=plan['buildProofSha256'],
-            compiledArtifact=artifact,apiCompiledArtifact=artifact,adminCompiledArtifact=artifact)
+            compiledArtifact=artifact,adminCompiledArtifact=artifact)
         for name in ('acceptedSwitchCommandId','publicationFinalization','deploymentRun'):
             manifest.pop(name,None)
         for role in images:

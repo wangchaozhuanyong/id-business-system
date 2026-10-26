@@ -1,4 +1,4 @@
-name: Mailbox Query and Link Release
+name: Mailbox Loading Regression Release
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
           fetch-depth: 0
       - name: Verify finite source and publication adapter
         run: |
-          git fetch --no-tags origin refs/pull/721/head
+          git fetch --no-tags origin refs/pull/732/head
           python3 -B scripts/production-release/mail-query-publication.py check
           python3 -B scripts/production-release/mail-query-release.test.py
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -98,7 +98,7 @@ jobs:
           aws-region: ap-northeast-1
       - name: Publish once and independently read back
         run: |
-          git fetch --no-tags origin refs/pull/721/head
+          git fetch --no-tags origin refs/pull/732/head
           python3 -B scripts/production-release/mail-query-publication.py publish
       - name: Preserve original release receipts
         if: always()

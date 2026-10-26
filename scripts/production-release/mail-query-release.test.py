@@ -21,15 +21,15 @@ class ProofTests(unittest.TestCase):
         source = 'apps/api/src/id-business-v2/workspace/vendure-mailbox-list.ts'
         module = 'id-business-v2/workspace/vendure-mailbox-list.js'
         self.c = {'scope':m.SCOPE,'expectedCurrent':m.CURRENT,'migrationPerformed':False,'businessActions':0,
-                  'sources':{source:'a'*64},'apiModules':[module],'adminFiles':{'index.html':'b'*64}}
+                  'sources':{source:'a'*64},'apiModules':[module],'baselineApiModules':{module:'1'*64},'adminFiles':{'index.html':'b'*64}}
         self.c['sourceProjectionSha256'] = m.sha(m.canonical(self.c['sources']))
         self.plan = {'commit':'c'*40,'tree':'d'*40,'workflowRunId':'123','workflowRunAttempt':'1',
                      'contractSha256':'e'*64,'controlSources':{'mail-query-release.py':'f'*64},
                      'nativeParentCapture':{'apiModules':{module:'1'*64}},
-                     'qualitySourceEvidence':{'source':{'pullRequest':721}}}
-        self.files = {'api/modules/'+module:'2'*64,'admin/html/index.html':'3'*64,'source/'+source:'a'*64}
+                     'qualitySourceEvidence':{'source':{'pullRequest':732}}}
+        self.files = {'admin/html/index.html':'3'*64,'source/'+source:'a'*64}
         self.proof = {**copy.deepcopy(self.plan),'scope':m.SCOPE,'sources':self.c['sources'],
-                      'apiModules':{module:'2'*64},'baselineApiModules':{module:'1'*64},
+                      'apiModules':{module:'1'*64},'baselineApiModules':{module:'1'*64},
                       'baselineAdminFiles':self.c['adminFiles'],'adminFiles':{'index.html':'3'*64},
                       'files':self.files,'migrationPerformed':False,'businessActions':0}
 
@@ -83,7 +83,7 @@ class ProofTests(unittest.TestCase):
             path=source/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('synthetic '+name)
         inventory=m.H.file_inventory(source)
         proof=copy.deepcopy(self.proof);proof['files']=inventory
-        proof['apiModules']={n:inventory['api/modules/'+n] for n in proof['apiModules']}
+        proof['apiModules']=dict(proof['baselineApiModules'])
         proof['adminFiles']={n:inventory['admin/html/'+n] for n in proof['adminFiles']}
         c=copy.deepcopy(self.c);c['sources']={n:inventory['source/'+n] for n in c['sources']}
         c['sourceProjectionSha256']=m.sha(m.canonical(c['sources']));proof['sources']=c['sources']
@@ -93,8 +93,7 @@ class ProofTests(unittest.TestCase):
         proof.update({k:v for k,v in plan.items() if k in self.plan})
         raw=json.dumps(proof).encode();(source/'build-proof.json').write_bytes(raw);plan['buildProofSha256']=m.sha(raw)
         after=copy.deepcopy(captured['services'])
-        for role in ('api','admin'):after[role]['image']='new-'+role
-        after['online-recharge']['containerId']='rebound-original-engine'
+        after['admin']['image']='new-admin'
         def run(*args,**kwargs):
             if args[:3]==('docker','image','inspect'):
                 name=args[3];return json.dumps([{'Id':'new-'+name.rsplit('-',1)[-1]}])
@@ -136,7 +135,7 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(result['status'],'MAIL_QUERY_PREFLIGHT_VERIFIED')
         d.compose.assert_not_called();d.point_current.assert_not_called()
 
-    def test_switch_starts_both_web_roles_and_rebinds_original_engine(self):
+    def test_switch_updates_only_admin_and_never_stops_business_services(self):
         plan,c,d,fence,marker,base=self.switch_fixture()
         result=m.release(plan,c)
         self.assertEqual(result['status'],'MAIL_QUERY_DEPLOYED')
@@ -144,14 +143,15 @@ class ProofTests(unittest.TestCase):
         self.assertEqual({manifest[n] for n in ('commit','applicationCommit','controlCommit')},{plan['commit']})
         self.assertEqual(manifest['version'],'v2-'+plan['commit'])
         self.assertEqual(manifest['buildProofSha256'],plan['buildProofSha256'])
-        self.assertEqual(manifest['apiCompiledArtifact'],manifest['adminCompiledArtifact'])
         self.assertNotIn('acceptedSwitchCommandId',manifest)
-        calls=[call.args[1:] for call in d.compose.call_args_list]
-        self.assertEqual(calls[:2],[('stop','online-recharge'),('stop','api')])
-        self.assertEqual(calls[2],('up','-d','--no-deps','--no-build','--pull','never','api','admin'))
-        self.assertEqual(calls[3][-2:],('--force-recreate','online-recharge'))
-        self.assertEqual([x.args[1] for x in d.wait_healthy.call_args_list],['api','admin','online-recharge'])
-        self.assertFalse(marker.exists());d.point_current.assert_called_once()
+        self.assertEqual(manifest['servicesUpdated'],['admin'])
+        self.assertEqual(manifest['servicesRebound'],[])
+        self.assertEqual([call.args[1:] for call in d.compose.call_args_list],
+            [('up','-d','--no-deps','--no-build','--pull','never','admin')])
+        self.assertEqual([x.args[1] for x in d.wait_healthy.call_args_list],['admin'])
+        fence.acquire.assert_not_called();d.point_current.assert_called_once()
+        self.assertEqual(set(manifest['actualDeployment']['images']),{'admin'})
+        self.assertTrue(all(manifest['actualDeployment']['before'][n]==manifest['actualDeployment']['after'][n] for n in m.PRESERVED))
 
     def test_independent_readback_binds_running_state_and_formal_source_tree(self):
         plan,c,d,fence,marker,base=self.switch_fixture()
@@ -164,19 +164,18 @@ class ProofTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'READBACK_CHANGED'):
             m.release({**plan,'mode':'readback'},c)
 
-    def test_failed_switch_keeps_owned_marker_and_never_moves_pointer_or_rolls_back(self):
+    def test_failed_switch_never_moves_pointer_or_rolls_back(self):
         plan,c,d,fence,marker,base=self.switch_fixture(fail=True)
         with self.assertRaisesRegex(RuntimeError,'synthetic startup failed'):m.release(plan,c)
-        self.assertTrue(marker.exists());d.point_current.assert_not_called();fence.close.assert_called()
+        d.point_current.assert_not_called();fence.acquire.assert_not_called()
         journal=list((base/'.staging').rglob('switch-state.json'));self.assertEqual(len(journal),1)
         value=json.loads(journal[0].read_bytes());self.assertEqual(value['status'],'NEEDS_FORWARD_DIAGNOSIS')
         self.assertFalse(value['rollbackPerformed'])
 
-    def test_profile_recovery_failure_cannot_start_new_images_or_move_the_current_pointer(self):
-        plan,c,d,fence,marker,base=self.switch_fixture(fail_recovery=True)
-        with self.assertRaisesRegex(RuntimeError,'synthetic recovery failed'):m.release(plan,c)
-        self.assertTrue(marker.exists());d.point_current.assert_not_called();fence.close.assert_called()
-        self.assertFalse(any(call.args[1]=='up' for call in d.compose.call_args_list))
+    def test_api_payload_change_is_rejected_even_when_hashes_are_self_consistent(self):
+        value=copy.deepcopy(self.proof);value['apiModules']={n:'0'*64 for n in value['apiModules']}
+        with self.assertRaisesRegex(RuntimeError,'BASELINE_NOT_REPRODUCED'):
+            m.verify_proof(value,self.plan,self.c,self.files)
 
     def native_snapshot_fixture(self):
         parent=HERE.parents[1]/'.runtime/mail-query-parent-tests';parent.mkdir(parents=True,exist_ok=True)
@@ -186,10 +185,10 @@ class ProofTests(unittest.TestCase):
         prior=json.loads((HERE/'online-profile-lock-contract.json').read_bytes())
         states={n:{'image':v,'containerId':'synthetic-'+n,'status':'running','health':None if n=='caddy' else 'healthy'}
                 for n,v in prior['expectedImages'].items()}
-        receipt={'commit':m.CURRENT,'status':'BILLING_DEPLOYED','migrationPerformed':True,'after':states,'businessActions':0}
-        files={'release-manifest.json':{'commit':m.CURRENT,'status':'DEPLOYED','scope':'RECHARGE_PLAN_BILLING_20261026','actualDeployment':receipt},
-               'recharge-plan-billing-preservation.json':receipt,
-               'recharge-plan-billing-build-proof.json':{'commit':m.CURRENT,'adminFiles':self.c['adminFiles']}}
+        receipt={'commit':m.CURRENT,'before':states,'after':states,'businessActions':0}
+        files={'release-manifest.json':{'commit':m.CURRENT,'status':'DEPLOYED','scope':m.SCOPE,'actualDeployment':receipt},
+               'mail-query-preservation.json':receipt,
+               'mail-query-build-proof.json':{'commit':m.CURRENT,'adminFiles':self.c['adminFiles'],'apiModules':self.proof['baselineApiModules'],'nativeParentCapture':{}}}
         for name,value in files.items():(previous/name).write_text(json.dumps(value))
         for name in ('.env.aws.production','compose.release.json','docker-compose.aws-mysql.yml'):
             (previous/name).write_text('synthetic configuration only')
@@ -205,7 +204,8 @@ class ProofTests(unittest.TestCase):
         stack=ExitStack();self.addCleanup(stack.close)
         stack.enter_context(patch.object(m,'BASE',base));stack.enter_context(patch.object(m,'load',return_value=profile))
         stack.enter_context(patch.object(m.shutil,'disk_usage',return_value=SimpleNamespace(free=7*1024**3)))
-        stack.enter_context(patch.object(m,'published_billing',return_value=(billing,{},files['recharge-plan-billing-build-proof.json'])))
+        stack.enter_context(patch.object(m,'published_billing',return_value=(billing,{},files['mail-query-build-proof.json'])))
+        stack.enter_context(patch.object(m,'smoke'))
         return c,previous,h,profile
 
     def test_new_official_parent_retains_both_runtime_and_control_publication_proofs(self):
@@ -214,11 +214,11 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(captured['expectedCurrent'],m.CURRENT)
         self.assertEqual(captured['apiModules'],c['baselineApiModules'])
         self.assertEqual(captured['businessActions'],0)
-        profile.billing.smoke.assert_called_once();profile.content.assert_not_called()
+        profile.content.assert_not_called()
 
     def test_parent_receipt_bytes_cannot_change_after_native_binding(self):
         c,previous,h,profile=self.native_snapshot_fixture()
-        path=previous/'recharge-plan-billing-preservation.json';path.write_bytes(path.read_bytes()+b' ')
+        path=previous/'mail-query-preservation.json';path.write_bytes(path.read_bytes()+b' ')
         with self.assertRaisesRegex(RuntimeError,'PARENT_PROOF_CHANGED'):m.snapshot(c)
         h.snapshot.assert_not_called()
 
@@ -239,14 +239,14 @@ class PublishedBillingTests(unittest.TestCase):
         contract={'sources':{'apps/api/reviewed.ts':'a'*64}}
         (self.controls/'recharge-plan-billing-contract.json').write_text(json.dumps(contract))
         (self.controls/'recharge-plan-billing-release.py').write_text("PUBLISHED_IDENTITY = 'synthetic-verified-parent'\n")
-        self.proof={'commit':m.CURRENT,'scope':'RECHARGE_PLAN_BILLING_20261026','sources':contract['sources'],
+        self.proof={'commit':m.BILLING_CURRENT,'scope':'RECHARGE_PLAN_BILLING_20261026','sources':contract['sources'],
                     'contractSha256':m.sha((self.controls/'recharge-plan-billing-contract.json').read_bytes()),
                     'controlSources':{p.name:m.sha(p.read_bytes()) for p in self.controls.iterdir()}}
         self.bind()
 
     def bind(self):
         path=self.root/'recharge-plan-billing-build-proof.json';path.write_text(json.dumps(self.proof))
-        self.c={'parentFiles':{path.name:m.sha(path.read_bytes())}}
+        self.c={'billingProofSha256':m.sha(path.read_bytes())}
 
     def test_only_the_recorded_published_helper_is_loaded(self):
         module,contract,proof=m.published_billing(self.root,self.c)
@@ -322,7 +322,7 @@ class GuardReuseTests(unittest.TestCase):
             if args[0]=='gh' and args[-1].endswith('/logs'):return self.log
             raise AssertionError(args)
         def github(path):
-            if path=='pulls/721':return {'merged_at':'fixture','head':{'sha':m.SOURCE}}
+            if path=='pulls/732':return {'merged_at':'fixture','head':{'sha':m.SOURCE}}
             return {'jobs':[{'id':456,'name':'recharge (guards)','status':'completed','conclusion':'success'}]}
         self.stack=ExitStack();self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.dict(self.pub.os.environ,{'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':self.pub.REPO,'ImageOS':'ubuntu24','ImageVersion':'fixture-image'}))
@@ -336,7 +336,7 @@ class GuardReuseTests(unittest.TestCase):
 
     def test_reuse_requires_complete_native_source_qa_identical_inputs_and_environment(self):
         result=self.pub.guard_reuse({})
-        self.qa.assert_called_once_with(m.SOURCE,'pull_request',m.SOURCE_TREE,721)
+        self.qa.assert_called_once_with(m.SOURCE,'pull_request',m.SOURCE_TREE,732)
         self.assertTrue(result['reused'])
         self.assertEqual(result['environment']['guardLogSha256'],m.sha(self.log))
         self.assertEqual(result['retainedInputsSha256'],m.sha(self.rows.rstrip(b'\n')))
