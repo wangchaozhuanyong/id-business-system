@@ -2818,11 +2818,7 @@ export function adminCheckCommands(mode, paths) {
   const commands = [['run', 'build', '--workspace', '@apple-business/shared']];
   if (isMailboxProviderOnly(paths))
     commands.push(
-      [
-        'exec',
-        '--call',
-        'python3 -B scripts/production-release/mailbox-provider-release.test.py'
-      ],
+      ['exec', '--call', 'python3 -B scripts/production-release/mailbox-provider-release.test.py'],
       ['exec', '--', 'node', '--test', 'scripts/ci-mailbox-provider-scope.test.mjs']
     );
   if (mode === 'mailbox') {
