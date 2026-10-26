@@ -2818,10 +2818,8 @@ export function adminCheckCommands(mode, paths) {
     commands.push(
       [
         'exec',
-        '--',
-        'python3',
-        '-B',
-        'scripts/production-release/mailbox-provider-release.test.py'
+        '--call',
+        'python3 -B scripts/production-release/mailbox-provider-release.test.py'
       ],
       ['exec', '--', 'node', '--test', 'scripts/ci-mailbox-provider-scope.test.mjs']
     );

@@ -12,6 +12,11 @@ test('the complete reviewed UI and publication delta uses Admin checks', () => {
   assert.equal(checkMode(paths), 'admin');
   const commands = adminCheckCommands('admin', paths).map((c) => c.join(' '));
   assert.ok(commands.some((c) => c.includes('mailbox-provider-release.test.py')));
+  assert.ok(
+    commands.includes(
+      'exec --call python3 -B scripts/production-release/mailbox-provider-release.test.py'
+    )
+  );
   assert.ok(commands.some((c) => c.includes('acceptance-v2-workspace-dock.mjs')));
 });
 test('API, authentication, database and unrelated paths cannot enter the finite release', () => {
