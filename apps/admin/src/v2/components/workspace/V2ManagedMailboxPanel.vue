@@ -34,10 +34,10 @@
         class="v2-horizontal-form v2-managed-mailbox-panel__form"
         @submit.prevent="submitMailbox"
       >
-        <el-form-item label="邮箱类型" prop="provider" required>
+        <el-form-item label="收信服务商" prop="provider" required>
           <el-radio-group v-model="form.provider">
             <el-radio-button value="gmail">谷歌邮箱</el-radio-button>
-            <el-radio-button value="icloud">苹果邮箱</el-radio-button>
+            <el-radio-button value="icloud">苹果云邮箱</el-radio-button>
             <el-radio-button value="microsoft">微软邮箱</el-radio-button>
           </el-radio-group>
         </el-form-item>
@@ -133,7 +133,7 @@
           @change="applyFilters"
         >
           <el-option label="谷歌邮箱" value="gmail" />
-          <el-option label="苹果邮箱" value="icloud" />
+          <el-option label="苹果云邮箱" value="icloud" />
           <el-option label="微软邮箱" value="microsoft" />
         </el-select>
         <el-select v-model="filters.status" clearable placeholder="全部状态" @change="applyFilters">
@@ -431,7 +431,7 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from 'vue';
 import type { FormInstance, FormRules, TagProps } from 'element-plus';
 import type {
   CreateV2ManagedMailboxInput,
@@ -475,6 +475,7 @@ import {
   resolveManagedMailboxAppPasswordGuideLinks
 } from './managedMailboxAppPasswordGuide';
 import { resolveV2ManagedMailboxQueryCodeExpiry } from './managedMailboxExpiry';
+import { detectManagedMailboxProvider } from './managedMailboxProvider';
 
 interface ManagedMailboxForm {
   appPassword: string;
@@ -519,7 +520,7 @@ let microsoftAuthorizationPopup: Window | null = null;
 let expiryTickTimer: ReturnType<typeof setInterval> | undefined;
 
 const rules: FormRules<ManagedMailboxForm> = {
-  provider: [{ required: true, message: '请选择邮箱类型', trigger: 'change' }],
+  provider: [{ required: true, message: '请选择收信服务商', trigger: 'change' }],
   email: [
     { required: true, message: '请输入邮箱地址', trigger: 'blur' },
     { type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' }
@@ -541,12 +542,14 @@ const appPasswordPlaceholder = computed(() =>
 const addMailboxHelp = computed(() => {
   if (form.provider === 'microsoft') {
     return [
+      '用于 Apple ID 的 Outlook、Hotmail 等邮箱仍通过微软收信，添加时需完成微软授权。',
       '将打开 Microsoft 登录页授权 IMAP 只读访问，系统不会接收邮箱密码。',
       '验证成功后，授权信息会加密存入服务器，换电脑仍可使用。'
     ];
   }
   const guide = resolveManagedMailboxAppPasswordGuide(form.provider);
   return [
+    '按实际收信服务商选择；Apple ID 登录邮箱不一定是 iCloud 邮箱。',
     guide?.help ?? '',
     form.provider === 'icloud'
       ? '系统会优先使用邮箱名称部分登录 iCloud IMAP。'
@@ -642,7 +645,24 @@ onBeforeUnmount(() => {
   if (expiryTickTimer) clearInterval(expiryTickTimer);
 });
 
+function syncProviderFromEmail() {
+  const detected = detectManagedMailboxProvider(form.email);
+  if (detected) form.provider = detected;
+}
+
+watch(
+  () => form.email,
+  () => {
+    if (!creating.value) syncProviderFromEmail();
+  },
+  { flush: 'sync' }
+);
+
 async function submitMailbox() {
+  if (creating.value) return;
+  form.email = form.email.trim();
+  syncProviderFromEmail();
+  await nextTick();
   try {
     await formRef.value?.validate();
   } catch {
@@ -946,7 +966,7 @@ async function closeQueryCodeSettings() {
 
 function providerLabel(provider: V2MailProvider) {
   if (provider === 'gmail') return '谷歌邮箱';
-  if (provider === 'icloud') return '苹果邮箱';
+  if (provider === 'icloud') return '苹果云邮箱';
   return '微软邮箱';
 }
 
