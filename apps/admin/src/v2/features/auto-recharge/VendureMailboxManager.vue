@@ -32,6 +32,17 @@
     <p v-if="operationMessage" class="vendure-mailbox-message" role="status">
       {{ operationMessage }}
     </p>
+    <p v-if="activeTab === 'mails' && mailSyncing" class="vendure-mailbox-message" role="status">
+      正在同步邮箱，已有收件记录仍可查看。
+    </p>
+    <p
+      v-else-if="activeTab === 'mails' && mailSyncError"
+      class="vendure-mailbox-error"
+      role="alert"
+    >
+      {{ mailSyncError }}
+      <AppButton size="small" variant="ghost" @click="refreshCurrentList">重试同步</AppButton>
+    </p>
     <p v-if="operationError" class="vendure-mailbox-error" role="alert">{{ operationError }}</p>
 
     <V2AsyncRegion
@@ -143,7 +154,12 @@
                 <AppButton variant="soft" @click="openAliasBatch">批量导入</AppButton>
                 <AppButton variant="primary" @click="openAliasCreate">新增虚拟邮箱</AppButton>
               </template>
-              <AppButton variant="soft" @click="refreshCurrentList">刷新列表</AppButton>
+              <AppButton
+                variant="soft"
+                :loading="activeTab === 'mails' && mailSyncing"
+                @click="refreshCurrentList"
+                >刷新列表</AppButton
+              >
             </div>
           </section>
         </div>
@@ -1328,7 +1344,7 @@ import type {
   V2VendureMailboxPublicQueryResult,
   V2VendureMailboxStatus
 } from '@apple-business/shared';
-import { toRef, computed, onBeforeUnmount, ref, watch } from 'vue';
+import { toRef, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Check, CopyDocument, RefreshRight, Search } from '@element-plus/icons-vue';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -1346,6 +1362,7 @@ import { subscribeV2ScopeChanges } from '@/v2/runtime/changeSync';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { vendureMailboxApi } from './vendure-mailbox-api';
+import { createVendureMailboxRefresh } from './vendure-mailbox-refresh';
 import VendureMailboxHealth from './VendureMailboxHealth.vue';
 import '@/v2/styles/records.css';
 import './vendure-mailbox.css';
@@ -1441,7 +1458,8 @@ const aliasQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxAlias>>
       { signal }
     )
 });
-let syncBeforeMailRead = true;
+const mailSyncing = ref(false);
+const mailSyncError = ref('');
 const mailQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxMail>>({
   moduleKey: 'vendure-mailbox',
   scope: 'vendure-mailbox',
@@ -1457,27 +1475,19 @@ const mailQuery = useV2ModuleQuery<V2VendureMailboxPage<V2VendureMailboxMail>>({
     }),
   enabled: () => ready.value && activeTab.value === 'mails',
   trackRouteData: false,
-  query: ({ signal }) => {
-    const refresh = syncBeforeMailRead;
-    syncBeforeMailRead = false;
-    return vendureMailboxApi
-      .mails(
-        {
-          page: page.value,
-          pageSize: pageSize.value,
-          q: keyword.value,
-          primaryAccountId: primaryAccountId.value,
-          virtualEmailId: virtualEmailId.value,
-          unassignedOnly: unassignedOnly.value,
-          refresh
-        },
-        { signal }
-      )
-      .catch((error: unknown) => {
-        if (refresh) syncBeforeMailRead = true;
-        throw error;
-      });
-  }
+  query: ({ signal }) =>
+    vendureMailboxApi.mails(
+      {
+        page: page.value,
+        pageSize: pageSize.value,
+        q: keyword.value,
+        primaryAccountId: primaryAccountId.value,
+        virtualEmailId: virtualEmailId.value,
+        unassignedOnly: unassignedOnly.value,
+        refresh: false
+      },
+      { signal }
+    )
 });
 
 const activeQuery = computed(() =>
@@ -1515,7 +1525,6 @@ const viewKey = computed(
 watch(
   activeTab,
   (tab) => {
-    if (tab === 'mails') syncBeforeMailRead = true;
     page.value = 1;
     keywordInput.value = '';
     keyword.value = '';
@@ -1523,7 +1532,7 @@ watch(
     status.value = '';
     if (tab !== 'mails' || !preserveMailScopeOnNextTabChange) virtualEmailId.value = '';
     preserveMailScopeOnNextTabChange = false;
-    if (tab === 'mails' && ready.value) void mailQuery.refresh();
+    if (tab === 'mails' && ready.value) void refreshCurrentList();
   },
   { flush: 'sync' }
 );
@@ -1546,8 +1555,6 @@ watch(
   { flush: 'post' }
 );
 function applyFilters() {
-  if (activeTab.value === 'mails') syncBeforeMailRead = true;
-
   const changed =
     page.value !== 1 ||
     keyword.value !== keywordInput.value.trim() ||
@@ -1555,14 +1562,66 @@ function applyFilters() {
   page.value = 1;
   keyword.value = keywordInput.value.trim();
   status.value = statusInput.value;
-  if (!changed) void refreshCurrentList();
+  if (!changed || activeTab.value === 'mails') void refreshCurrentList();
   else healthRefreshVersion.value += 1;
 }
-function refreshCurrentList() {
-  if (activeTab.value === 'mails') syncBeforeMailRead = true;
-  healthRefreshVersion.value += 1;
-  return activeQuery.value.refresh();
+function currentMailSyncScope() {
+  const owner =
+    primaryAccountId.value ||
+    aliasQuery.data.value?.items.find((item) => item.id === virtualEmailId.value)?.primaryAccountId;
+  return {
+    key: owner || virtualEmailId.value || '*',
+    query: {
+      page: page.value,
+      pageSize: pageSize.value,
+      q: keyword.value,
+      primaryAccountId: primaryAccountId.value,
+      virtualEmailId: virtualEmailId.value,
+      unassignedOnly: unassignedOnly.value,
+      refresh: true
+    }
+  };
 }
+const mailRefresh = createVendureMailboxRefresh<ReturnType<typeof currentMailSyncScope>>({
+  // This bounded operation deliberately has no list-query AbortSignal: its own
+  // mail events may invalidate reads, but must never restart the synchronization.
+  sync: (scope) => vendureMailboxApi.mails(scope.query),
+  read: async () => {
+    if (activeTab.value === 'mails') await mailQuery.refresh();
+    healthRefreshVersion.value += 1;
+  },
+  pending: (value) => {
+    mailSyncing.value = value;
+  },
+  error: (error, scope) => {
+    if (activeTab.value === 'mails' && currentMailSyncScope().key === scope.key)
+      mailSyncError.value = getApiErrorMessage(error);
+  }
+});
+async function refreshCurrentList() {
+  healthRefreshVersion.value += 1;
+  const query = activeQuery.value;
+  const scope = currentMailSyncScope();
+  // Render the saved records first; a slow or unavailable remote mailbox must
+  // not hold the initial list behind the synchronization request.
+  const result = await query.refresh();
+  if (
+    query === mailQuery &&
+    activeTab.value === 'mails' &&
+    ready.value &&
+    scope.key === currentMailSyncScope().key
+  ) {
+    mailSyncError.value = '';
+    void mailRefresh.refresh(scope);
+  }
+  return result;
+}
+onMounted(() => {
+  if (activeTab.value === 'mails') void refreshCurrentList();
+});
+watch(ready, (value) => {
+  if (value && activeTab.value === 'mails') void refreshCurrentList();
+});
 
 watch(page, (value) => {
   if (value === 1) mailChangesPending.value = false;
@@ -1927,6 +1986,7 @@ const unsubscribeMailChanges = subscribeV2ScopeChanges((scopes) => {
 });
 
 onBeforeUnmount(() => {
+  mailRefresh.dispose();
   unsubscribeMailChanges();
   if (copyTimer) clearTimeout(copyTimer);
 });
