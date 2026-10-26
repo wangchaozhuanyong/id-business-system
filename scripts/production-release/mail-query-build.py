@@ -11,9 +11,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-CURRENT = '31f1b57902b3f442b15aa703b0ff1911bbb15c3a'
-SOURCES = tuple('apps/admin/src/v2/features/auto-recharge/' + n for n in (
-    'VendureMailboxManager.vue', 'vendure-mailbox-refresh.ts'))
+CURRENT = '02963ee681b2c451db8eb903131e38767271c5bf'
+SOURCES = ('apps/admin/src/v2/components/V2AsyncRegion.vue', 'apps/admin/src/v2/features/auto-recharge/VendureMailboxHealth.vue', 'apps/admin/src/v2/features/auto-recharge/VendureMailboxManager.vue')
 
 
 def need(value, code):
@@ -40,28 +39,29 @@ def build(plan, out):
     need(h.digest(proof_raw)==binding['buildProofSha256'],'PUBLISHED_PROOF_CHANGED')
     proof=json.loads(proof_raw)
     need(proof['commit']==CURRENT and proof['workflowRunId']==binding['workflowRunId'],'PUBLISHED_IDENTITY_CHANGED')
-    published=ROOT/'.codex-worktrees/mail-query-parent-source31'
+    published=ROOT/'.codex-worktrees/mail-query-parent-source029'
     need(not published.exists(),'BASE_SOURCE_EXISTS')
     subprocess.run(['git','worktree','add','--detach',str(published),CURRENT],cwd=ROOT,check=True)
     recipe=load(published/'scripts/production-release/mail-query-build.py')
     contexts={}
-    original=recipe.overlay
-    def capture(*args,**kwargs):
-        result=original(*args,**kwargs)
-        contexts.update(kwargs)
+    original_run=recipe.subprocess.run
+    def capture_run(command,*args,**kwargs):
+        result=original_run(command,*args,**kwargs)
+        if command==['npm','run','build','--workspace','apps/admin'] and kwargs.get('env',{}).get('V2_BUILD_ID')=='v2-'+CURRENT:
+            contexts['admin_context']=kwargs['cwd']
         return result
-    recipe.overlay=capture
-    reproduced=recipe.build({'commit':CURRENT},out/'published31')
+    recipe.subprocess.run=capture_run
+    try:
+        reproduced=recipe.build({'commit':CURRENT},out/'published029')
+    finally:
+        recipe.subprocess.run=original_run
     need(reproduced['adminFiles']==proof['adminFiles']==c['adminFiles']
          and reproduced['apiModules']==proof['apiModules']==c['baselineApiModules'],'PUBLISHED_RUNTIME_NOT_REPRODUCED')
     admin=contexts['admin_context']
     for name in SOURCES:
         destination=admin/name
         original_source=subprocess.run(['git','show',CURRENT+':'+name],cwd=ROOT,capture_output=True)
-        if name.endswith('vendure-mailbox-refresh.ts'):
-            need(original_source.returncode!=0 and not destination.exists(),'NEW_HELPER_ALREADY_EXISTS')
-        else:
-            need(original_source.returncode==0 and destination.read_bytes()==original_source.stdout,'UNREVIEWED_BASE_SOURCE')
+        need(original_source.returncode==0 and destination.read_bytes()==original_source.stdout,'UNREVIEWED_BASE_SOURCE')
         raw=(ROOT/name).read_bytes()
         need(h.digest(raw)==c['sources'][name],'REVIEWED_SOURCE_CHANGED')
         destination.write_bytes(raw)

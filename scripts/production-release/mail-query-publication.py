@@ -82,12 +82,12 @@ def reuse_environment(evidence):
 
 def guard_reuse(c):
     need(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('GITHUB_REPOSITORY')==REPO,'NATIVE_GUARD_REQUIRED')
-    git('fetch','--no-tags','origin','refs/pull/732/head')
+    git('fetch','--no-tags','origin','refs/pull/735/head')
     check(c)
-    source=github('pulls/732')
+    source=github('pulls/735')
     need(source.get('merged_at') and source['head']['sha']==P.SOURCE,'SOURCE_MERGE_REQUIRED')
     tree=git('rev-parse',P.SOURCE+'^{tree}').decode().strip()
-    evidence=verified_run(P.SOURCE,'pull_request',tree,732)
+    evidence=verified_run(P.SOURCE,'pull_request',tree,735)
     def retained_inputs(ref):
         rows=git('ls-tree','-r',ref).decode().splitlines()
         return '\n'.join(row for row in rows if row.split('\t',1)[1] not in CONTROLS).encode()
@@ -118,8 +118,8 @@ def verified_run(head, event, tree, pr_number=None):
     need({'quality', 'change-scope'} <= successful and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_PARTS_REQUIRED')
     if event == 'pull_request':
         need(('full-quality' in successful) or ('recharge (guards)' in successful), 'REVIEW_CHECK_REQUIRED')
-        if pr_number == 732:
-            need({'recharge (guards)', 'recharge (api)', 'recharge (admin)'} <= successful, 'SOURCE_MAILBOX_QUALITY_REQUIRED')
+        if pr_number == 735:
+            need({'recharge (guards)', 'recharge (admin)'} <= successful, 'SOURCE_MAILBOX_QUALITY_REQUIRED')
         receipt, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
         need(receipt['repository'] == REPO and receipt['pullRequest'] == pr_number
              and receipt['headSha'] == head and receipt['testedTree'] == tree
@@ -130,12 +130,12 @@ def verified_run(head, event, tree, pr_number=None):
 
 
 def quality(commit, tree):
-    source = github('pulls/732')
+    source = github('pulls/735')
     need(source.get('merged_at') and source['head']['sha'] == P.SOURCE
          and source['base']['ref'] == 'main', 'SOURCE_MERGE_REQUIRED')
     git('merge-base', '--is-ancestor', source['merge_commit_sha'], commit)
     source_tree = git('rev-parse', P.SOURCE + '^{tree}').decode().strip()
-    source_qa = verified_run(P.SOURCE, 'pull_request', source_tree, 732)
+    source_qa = verified_run(P.SOURCE, 'pull_request', source_tree, 735)
     prs = [r for r in github('commits/' + commit + '/pulls') if r.get('merged_at')
            and r['merge_commit_sha'] == commit and r['base']['ref'] == 'main' and r['head']['repo']['full_name'] == REPO]
     need(len(prs) == 1, 'MERGED_CONTROL_REQUIRED')
@@ -202,7 +202,7 @@ def publish(c):
     path = OUT / filename
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('仅发布已审查的收件列表加载修复。只更新管理端，API 和全部业务容器保持原样；无迁移、无业务任务、无付款。\n')
+    notes.write_text('仅发布已审查的邮箱状态区间距与重复健康检查修复。只更新管理端，API 和全部业务容器保持原样；无迁移、无业务任务、无付款。\n')
     tag = PREFIX + '-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
             '--title', '邮箱查询与链接修复 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')

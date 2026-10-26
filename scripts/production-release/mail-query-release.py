@@ -13,10 +13,10 @@ BASE = Path('/opt/id-business-v2')
 SCOPE = 'MAIL_QUERY_20261026'
 PREFIX = 'mail-query'
 CONTRACT_FILE = 'mail-query-contract.json'
-CURRENT = '31f1b57902b3f442b15aa703b0ff1911bbb15c3a'
+CURRENT = '02963ee681b2c451db8eb903131e38767271c5bf'
 BILLING_CURRENT = '21f63083dd8044726811f6d055b3da675ced31d7'
-SOURCE = '937926725c2cf357e8ed3238c3b78a173a8f082b'
-SOURCE_TREE = '7bed2fcb118dcf03eb97331e8732c46f3ef2ec45'
+SOURCE = 'b3d276e1b54a2e97ed8d480dbeda295a562c3d79'
+SOURCE_TREE = '2a0b65676923a2b7b092060b145230ce1ecef111'
 PRESERVED = ('api', 'online-recharge', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
 
 
