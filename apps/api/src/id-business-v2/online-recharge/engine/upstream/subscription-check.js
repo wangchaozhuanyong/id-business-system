@@ -642,6 +642,7 @@ async function closeQueryPage(page) {
 }
 async function completeOriginalChallenge(page, options, budget, diagnostic) {
     const manual = require('../human-verification.cjs');
+    diagnostic.automaticVerification = require('../unpaid-validation.cjs').usesAutomaticVerification(options.onHumanVerification);
     const actionable = await boundedQuery(() => manual.hasActionableHumanVerification(page), budget, 'verification_probe');
     diagnostic.actionableVerification = actionable;
     diagnostic.manualVerification = 'not_started';
@@ -694,7 +695,8 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
         }), budget, 'session_install');
         const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
             sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
-            initialSessionProbe: installed?.initialSessionProbe, nativeSession: Boolean(session.context), onHumanVerification: session.context ? async () => { throw Object.assign(new Error('官网要求进一步验证'), { code: 'CHALLENGE_BLOCKED' }); } : options.onHumanVerification,
+            initialSessionProbe: installed?.initialSessionProbe, nativeSession: Boolean(session.context), onHumanVerification: session.context && !require('../unpaid-validation.cjs').usesAutomaticVerification(options.onHumanVerification)
+                    ? async () => { throw Object.assign(new Error('官网要求进一步验证'), { code: 'CHALLENGE_BLOCKED' }); } : options.onHumanVerification,
             deadlineAt: budget.deadlineAt, signal: budget.signal
         }), budget, 'session_bootstrap');
         return await operation(login.session?.accessToken || accessToken, { ...options, page,
@@ -770,7 +772,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
             accessToken = installed?.sessionData?.accessToken || accessToken;
             const login = await boundedQuery(() => auth.bootstrapChatGptSession(page, options.sessionRaw, {
                 sessionData: installed?.sessionData || installed, cookieVerified: installed?.cookieVerified === true,
-                initialSessionProbe: installed?.initialSessionProbe, nativeSession: Boolean(session.context), onHumanVerification: session.context ? async () => { throw Object.assign(new Error('官网要求进一步验证'), { code: 'CHALLENGE_BLOCKED' }); } : options.onHumanVerification,
+                initialSessionProbe: installed?.initialSessionProbe, nativeSession: Boolean(session.context), onHumanVerification: session.context && !require('../unpaid-validation.cjs').usesAutomaticVerification(options.onHumanVerification)
+                    ? async () => { throw Object.assign(new Error('官网要求进一步验证'), { code: 'CHALLENGE_BLOCKED' }); } : options.onHumanVerification,
                 deadlineAt: budget.deadlineAt, signal: budget.signal
             }), budget, 'session_bootstrap');
             accessToken = login.session?.accessToken || accessToken;
@@ -778,7 +781,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
         if (page) {
             const verification = require('./human-verification');
             if (await boundedQuery(() => verification.isBlockingHumanVerificationVisible(page), budget, 'verification_probe')) {
-                if (process.env.ONLINE_RECHARGE_PROFILE_ROOT && !require('../rpc.cjs').wasSubmitted())
+                if (process.env.ONLINE_RECHARGE_PROFILE_ROOT && !require('../rpc.cjs').wasSubmitted()
+                    && !require('../unpaid-validation.cjs').usesAutomaticVerification(options.onHumanVerification))
                     throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED' });
                 if (typeof options.onHumanVerification === 'function') {
                     const diagnostic = { transport: 'browser-page', phase: 'verification' };
@@ -802,7 +806,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
             try { result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget); }
             catch (error) { await compare(page, error); throw error; }
             if (result.status === 403 && result.responseFacts?.classification === 'CF_CHALLENGE') {
-                if (process.env.ONLINE_RECHARGE_PROFILE_ROOT && !require('../rpc.cjs').wasSubmitted())
+                if (process.env.ONLINE_RECHARGE_PROFILE_ROOT && !require('../rpc.cjs').wasSubmitted()
+                    && !require('../unpaid-validation.cjs').usesAutomaticVerification(options.onHumanVerification))
                     throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED' });
                 const diagnostic = budget.diagnostics.at(-1);
                 if (await completeOriginalChallenge(page, options, budget, diagnostic)) {

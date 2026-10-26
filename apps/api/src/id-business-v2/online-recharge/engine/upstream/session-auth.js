@@ -20,7 +20,8 @@ const BOOTSTRAP_REASONS = new Set([
 const BOOTSTRAP_AWAITS = new Set(['navigation', 'wait', 'challenge', 'login_controls', 'logged_in_ui', 'ui_stability', 'verification', 'session_api']);
 const BOOTSTRAP_FLAGS = [
     'authApiVerified', 'visibleLogin', 'loggedInUi', 'redirectDetected', 'challengeDetected', 'pageClosed',
-    'accountCheckHasAccountFacts', 'accountCheckIdentityMatches'
+    'accountCheckHasAccountFacts', 'accountCheckIdentityMatches',
+    'automaticActionable', 'automaticAttempted', 'automaticCompleted'
 ];
 function safeBootstrapDiagnostics(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -30,6 +31,8 @@ function safeBootstrapDiagnostics(value) {
     for (const key of BOOTSTRAP_FLAGS) {
         if (typeof value[key] === 'boolean') result[key] = value[key];
     }
+    if (['cleared', 'solver_disabled', 'not_actionable', 'failed', 'timeout', 'session_invalid'].includes(value.automaticResult))
+        result.automaticResult = value.automaticResult;
     for (const key of ['initialSessionProbe', 'homepageSessionProbe']) {
         if (!value[key]) continue;
         const probe = require('../subscription-diagnostics.cjs').safeSessionProbe(value[key]);
@@ -444,6 +447,7 @@ async function verifyRealSessionApi(context, options = {}) {
         catch (_) { return document.documentElement?.outerHTML || text; }
     }));
     const diagnostic = require('../subscription-diagnostics.cjs');
+    const automatic = require('../unpaid-validation.cjs').usesAutomaticVerification(options.onHumanVerification);
     const started = performance.now();
     let initial;
     try {
@@ -455,7 +459,8 @@ async function verifyRealSessionApi(context, options = {}) {
         let bodyText = await body();
         let facts = diagnostic.sessionProbeFacts(response?.status() || 0, response?.headers?.() || {}, bodyText, options.expected);
         initial = diagnostic.safeSessionProbe({ ...facts, complete: true, elapsedMs: performance.now() - started });
-        if (facts.state === 'challenge' && options.nativeSession) {
+        console.log('[Session] 首次校验结果', JSON.stringify(initial));
+        if (facts.state === 'challenge' && options.nativeSession && !automatic) {
             throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), {
                 code: 'CHALLENGE_BLOCKED', challengeDetected: true,
                 bootstrapDiagnostics: { initialSessionProbe: initial }
@@ -463,10 +468,20 @@ async function verifyRealSessionApi(context, options = {}) {
         }
         if (facts.state === 'challenge' && typeof options.onHumanVerification === 'function') {
             const human = require('../human-verification.cjs');
-            initial.manualActionable = await budget.run(() => human.hasActionableHumanVerification(probe, { sessionProbe: true }));
-            if (initial.manualActionable && performance.now() < deadlineAt) {
+            const actionable = await budget.run(() => human.hasActionableHumanVerification(probe, { sessionProbe: true }));
+            initial[automatic ? 'automaticActionable' : 'manualActionable'] = actionable;
+            if (automatic && !actionable) throw Object.assign(new Error('原页未确认可操作的自动验证，已停止'), {
+                code: 'CHALLENGE_BLOCKED', challengeDetected: true,
+                automaticAttempted: false, automaticResult: 'not_actionable'
+            });
+            if (actionable && performance.now() < deadlineAt) {
+                if (automatic) initial.automaticAttempted = true;
                 const completed = await budget.run(() => options.onHumanVerification(probe, { signal: budget.signal, deadlineAt, sessionProbe: true }));
-                if (completed?.completed !== true) throw Object.assign(new Error('本人验证尚未完成'), { code: 'HUMAN_VERIFICATION_REQUIRED' });
+                if (automatic) initial.automaticAttempted = completed?.automaticAttempted === true;
+                if (completed?.completed !== true) throw Object.assign(new Error('官网验证尚未完成'), {
+                    code: automatic ? 'CHALLENGE_BLOCKED' : 'HUMAN_VERIFICATION_REQUIRED',
+                    ...(automatic ? { automaticAttempted: true, automaticResult: 'failed' } : {})
+                });
                 options.signal?.throwIfAborted();
                 if (performance.now() >= deadlineAt) throw Object.assign(new Error('登录状态查询超时'), { name: 'TimeoutError' });
                 if (probe.url() !== `${CHATGPT_COOKIE_URL}/api/auth/session`)
@@ -474,11 +489,18 @@ async function verifyRealSessionApi(context, options = {}) {
                 response = await budget.run(() => probe.reload({ waitUntil: 'domcontentloaded', timeout: remaining() }));
                 bodyText = await body();
                 facts = diagnostic.sessionProbeFacts(response?.status() || 0, response?.headers?.() || {}, bodyText, options.expected);
-                initial.manualCompleted = facts.state === 'verified';
+                initial[automatic ? 'automaticCompleted' : 'manualCompleted'] = facts.state === 'verified';
+                if (automatic) {
+                    initial.automaticResult = facts.state === 'verified' ? 'cleared' : facts.state === 'invalid' ? 'session_invalid' : 'failed';
+                    if (facts.state === 'challenge') throw Object.assign(new Error('官网验证后仍未通过会话核验'), {
+                        code: 'CHALLENGE_BLOCKED', challengeDetected: true,
+                        automaticAttempted: true, automaticResult: 'failed'
+                    });
+                }
             }
         }
         const diagnostics = diagnostic.safeSessionProbe(facts);
-        console.log('[Session] 首次校验结果', JSON.stringify(initial));
+        if (automatic && initial.automaticActionable) console.log('[Session] 自动验证后校验结果', JSON.stringify({ ...diagnostics, automaticCompleted: initial.automaticCompleted }));
         if (initial.manualActionable) console.log('[Session] 本人验证后校验结果', JSON.stringify(diagnostics));
         if (facts.state === 'verified') return { ok: true, data: JSON.parse(bodyText), status: facts.httpStatus, diagnostics, initialDiagnostics: initial };
         const code = facts.state === 'mismatch' ? 'ACCOUNT_MISMATCH'
@@ -489,6 +511,16 @@ async function verifyRealSessionApi(context, options = {}) {
             ...(facts.state === 'challenge' ? { challenge: true } : {}),
             error: `登录状态尚未核实（HTTP ${facts.httpStatus}，分类 ${facts.classification}）` };
     } catch (err) {
+        if (automatic && initial?.state === 'challenge' && !options.signal?.aborted
+            && (err.code === 'VERIFICATION_TIMEOUT' || err.name === 'TimeoutError')) {
+            err = Object.assign(new Error('原页自动验证超过本次期限，已停止'), {
+                code: 'CHALLENGE_BLOCKED', challengeDetected: true,
+                automaticAttempted: initial.automaticAttempted === true, automaticResult: 'timeout'
+            });
+        }
+        if (automatic && initial) initial = diagnostic.safeSessionProbe({ ...initial,
+            ...(typeof err.automaticAttempted === 'boolean' ? { automaticAttempted: err.automaticAttempted } : {}),
+            ...(err.automaticResult ? { automaticResult: err.automaticResult } : {}) });
         if (['CHALLENGE_BLOCKED', 'LEASE_LOST', 'HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'ACCOUNT_MISMATCH'].includes(err.code) || options.signal?.aborted) {
             err.bootstrapDiagnostics = { initialSessionProbe: initial };
             throw err;
@@ -908,14 +940,40 @@ async function bootstrapSessionWithinBudget(page, sessionRaw, options = {}) {
             } catch (_) { return false; }
         };
         let manualVerificationUsed = false;
+        let automaticVerificationUsed = false;
+        const automatic = require('../unpaid-validation.cjs').usesAutomaticVerification(options.onHumanVerification);
         const blockingVerificationVisible = async () => {
             const blocked = await isBlockingHumanVerificationVisible(page);
-            if (blocked && options.nativeSession) {
+            if (blocked && options.nativeSession && !automatic) {
                 diagnostics.reason = 'verification_failed';
                 diagnostics.challengeDetected = true;
                 throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED' });
             }
             if (!blocked || typeof options.onHumanVerification !== 'function') return blocked;
+            if (automatic) {
+                diagnostics.automaticActionable = await require('../human-verification.cjs').hasActionableHumanVerification(page);
+                if (!diagnostics.automaticActionable || automaticVerificationUsed || !isOfficialHomepage()) {
+                    diagnostics.challengeDetected = true;
+                    diagnostics.automaticResult = diagnostics.automaticActionable ? 'failed' : 'not_actionable';
+                    throw Object.assign(new Error('原页自动验证不可继续，已停止'), { code: 'CHALLENGE_BLOCKED' });
+                }
+                automaticVerificationUsed = true;
+                try {
+                    const completed = await run('verification', () => options.onHumanVerification(page, { signal, deadlineAt }));
+                    diagnostics.automaticAttempted = completed?.automaticAttempted === true;
+                    assertOfficialHomepage();
+                    diagnostics.automaticCompleted = completed?.completed === true
+                        && !await isBlockingHumanVerificationVisible(page);
+                    diagnostics.automaticResult = diagnostics.automaticCompleted ? 'cleared' : 'failed';
+                    if (!diagnostics.automaticCompleted) throw Object.assign(new Error('官网自动验证尚未完成'), { code: 'CHALLENGE_BLOCKED' });
+                    return false;
+                } catch (error) {
+                    if (typeof error.automaticAttempted === 'boolean') diagnostics.automaticAttempted = error.automaticAttempted;
+                    if (error.automaticResult) diagnostics.automaticResult = error.automaticResult;
+                    diagnostics.challengeDetected = true;
+                    throw error;
+                }
+            }
             if (!await require('../human-verification.cjs').hasActionableHumanVerification(page)) {
                 diagnostics.reason = 'verification_failed';
                 diagnostics.challengeDetected = true;

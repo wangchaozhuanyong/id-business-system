@@ -80,6 +80,9 @@ async function fixture(
   const session = await launchProfile(native, { ...options, root });
   return {
     ...session,
+    setSessionStatus(value) {
+      sessionStatus = value;
+    },
     counts: () => ({ officialRequests, manualCalls }),
     manual: async () => {
       manualCalls++;
@@ -249,6 +252,89 @@ test(
     }
   }
 );
+
+for (const mode of ['cleared', 'disabled', 'no_actionable', 'still_blocked', 'timeout']) {
+  test(
+    `unpaid persistent session attempts original-page automatic handling: ${mode}`,
+    { timeout: 30000 },
+    async () => {
+      await fs.mkdir(base, { recursive: true });
+      const root = await fs.mkdtemp(path.join(base, 'automatic-'));
+      const validation = require('../unpaid-validation.cjs');
+      const human = require('../upstream/human-verification');
+      const manual = require('../human-verification.cjs');
+      const originalClear = human.clearHumanVerification;
+      const originalActionable = manual.hasActionableHumanVerification;
+      const originalEnabled = process.env.HCAPTCHA_SOLVER_ENABLED;
+      let current,
+        solverCalls = 0;
+      try {
+        current = await fixture(root, { sessionStatus: 403 });
+        await current.context.addCookies([
+          {
+            name: '__Secure-next-auth.session-token',
+            value: 'synthetic-cookie',
+            url: 'https://chatgpt.com',
+            httpOnly: true,
+            secure: true
+          }
+        ]);
+        process.env.HCAPTCHA_SOLVER_ENABLED = mode === 'disabled' ? '0' : '1';
+        manual.hasActionableHumanVerification = async () => mode !== 'no_actionable';
+        human.clearHumanVerification = async (page) => {
+          solverCalls++;
+          assert.equal(page.context(), current.context);
+          assert.equal(page.url(), 'https://chatgpt.com/api/auth/session');
+          if (mode === 'timeout') return new Promise(() => {});
+          if (mode === 'cleared') current.setSessionStatus(200);
+          return { cleared: true };
+        };
+        const pending = auth.installChatGptSession(current.context, raw, {
+          nativeSession: true,
+          preserveStoredSession: true,
+          deadlineAt: performance.now() + (mode === 'timeout' ? 2000 : 5000),
+          onHumanVerification: validation.automaticVerification
+        });
+        if (mode === 'cleared') {
+          const result = await pending;
+          assert.equal(result.cookieVerified, true);
+          assert.equal(result.initialSessionProbe.httpStatus, 403);
+          assert.equal(result.initialSessionProbe.automaticCompleted, true);
+          assert.equal(result.initialSessionProbe.automaticResult, 'cleared');
+        } else {
+          await assert.rejects(pending, (error) => {
+            assert.equal(error.code, 'CHALLENGE_BLOCKED');
+            assert.equal(error.bootstrapDiagnostics.initialSessionProbe.httpStatus, 403);
+            assert.equal(
+              error.bootstrapDiagnostics.initialSessionProbe.automaticResult,
+              {
+                disabled: 'solver_disabled',
+                no_actionable: 'not_actionable',
+                still_blocked: 'failed',
+                timeout: 'timeout'
+              }[mode]
+            );
+            return true;
+          });
+        }
+        assert.equal(solverCalls, ['disabled', 'no_actionable'].includes(mode) ? 0 : 1);
+        assert.equal(
+          current.counts().officialRequests,
+          ['cleared', 'still_blocked'].includes(mode) ? 2 : 1
+        );
+        assert.equal(current.counts().manualCalls, 0);
+        assert.equal(current.context.pages().length, 1);
+      } finally {
+        human.clearHumanVerification = originalClear;
+        manual.hasActionableHumanVerification = originalActionable;
+        if (originalEnabled === undefined) delete process.env.HCAPTCHA_SOLVER_ENABLED;
+        else process.env.HCAPTCHA_SOLVER_ENABLED = originalEnabled;
+        await current?.close();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+}
 
 test('stored account mismatch stops without replacing cookies', { timeout: 30000 }, async () => {
   await fs.mkdir(base, { recursive: true });

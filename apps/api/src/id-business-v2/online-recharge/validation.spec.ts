@@ -201,6 +201,66 @@ describe('线上代充安全边界和原版默认行为', () => {
       'fixture@example.invalid 8.8.8.8 Timeout 29983.123456789ms'
     );
   });
+  it('会话探针只保留固定诊断，反复入库和公开投影不丢回执也不放出凭据', () => {
+    const expected = {
+      state: 'challenge',
+      httpStatus: 403,
+      contentType: 'text/html',
+      cfMitigated: 'challenge',
+      cfRayPresent: true,
+      classification: 'CF_CHALLENGE',
+      hasValidUser: false,
+      matchesTargetAccount: false,
+      complete: true,
+      elapsedMs: 1235,
+      automaticActionable: true,
+      automaticAttempted: false,
+      automaticResult: 'solver_disabled',
+      markers: { challengePlatform: true, challengeOptions: false }
+    };
+    const value = {
+      bootstrapDiagnostics: {
+        initialSessionProbe: {
+          ...expected,
+          elapsedMs: 1234.6,
+          session: 'synthetic-private-session',
+          accessToken: 'synthetic-private-token',
+          body: 'synthetic-private-body',
+          authorization: 'synthetic-private-auth',
+          markers: { ...expected.markers, raw: 'synthetic-private-marker' }
+        }
+      }
+    };
+    const stored = sanitize(value);
+    expect(stored).toEqual({ bootstrapDiagnostics: { initialSessionProbe: expected } });
+    expect(sanitize(stored, '', true)).toEqual(stored);
+    expect(JSON.stringify(stored)).not.toContain('synthetic-private');
+    expect(
+      sanitize({
+        homepageSessionProbe: { httpStatus: 200, hasValidUser: true, matchesTargetAccount: true }
+      })
+    ).toEqual({
+      homepageSessionProbe: { httpStatus: 200, hasValidUser: true, matchesTargetAccount: true }
+    });
+  });
+  it('不能借会话探针字段夹带任意字符串、数组、未知枚举或敏感号码', () => {
+    for (const value of [
+      'synthetic-private',
+      ['synthetic-private'],
+      null,
+      {
+        state: 'synthetic-private',
+        errorCode: 'synthetic-private',
+        complete: 'synthetic-private',
+        httpStatus: 4242424242424242,
+        elapsedMs: 4242424242424242,
+        markers: { challengePlatform: 'synthetic-private' }
+      }
+    ])
+      expect(sanitize({ initialSessionProbe: value, sessionToken: 'synthetic-private' })).toEqual(
+        {}
+      );
+  });
   it('银行卡和令牌仍隐藏，业务资料编号可见且不能使凭据字段绕过检查', () => {
     const pan = '4242424242424242';
     const token = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.synthetic';

@@ -4,11 +4,12 @@ import { constants } from 'node:fs';
 import { mkdir, open, realpath, writeFile } from 'node:fs/promises';
 import { resolve, join, sep, dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { Prisma } from '@prisma/client';
 import type { OnlineRechargeWorkerRpc } from '../contracts';
 import { OnlineRechargeWorkerRepository } from './worker.repository';
 import { OnlineRechargeRepository } from './online-recharge.repository';
-import { id, object, text } from '../validation';
+import { id, object, text, safeBootstrapDiagnostics } from '../validation';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 
 // This existing diagnostic upload accepts enums/counts only, never field values or DOM.
@@ -361,6 +362,7 @@ export class OnlineRechargeArtifactsRepository {
         'executorTerminated',
         'sourceManifestSha256',
         'formDiagnostics',
+        'bootstrapDiagnostics',
         'evidenceUploads'
       ];
       const stages = [
@@ -436,6 +438,11 @@ export class OnlineRechargeArtifactsRepository {
       if (
         !report ||
         Object.keys(report).some((key) => !fields.includes(key)) ||
+        (report.bootstrapDiagnostics !== undefined &&
+          !isDeepStrictEqual(
+            safeBootstrapDiagnostics(report.bootstrapDiagnostics),
+            report.bootstrapDiagnostics
+          )) ||
         report.format !== 'unpaid-validation-v1' ||
         !['ready_before_payment', 'failed_with_class', 'challenge_blocked'].includes(
           String(report.outcome)

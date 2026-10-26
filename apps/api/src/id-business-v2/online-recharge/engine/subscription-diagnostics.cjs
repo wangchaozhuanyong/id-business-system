@@ -175,11 +175,25 @@ function safeSessionProbe(value) {
     'matchesTargetAccount',
     'manualActionable',
     'manualCompleted',
+    'automaticActionable',
+    'automaticAttempted',
+    'automaticCompleted',
     'complete'
   ])
     if (typeof value[key] === 'boolean') out[key] = value[key];
-  if (Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0)
+  if (Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0 && value.elapsedMs <= 86400000)
     out.elapsedMs = Math.round(value.elapsedMs);
+  if (
+    [
+      'cleared',
+      'solver_disabled',
+      'not_actionable',
+      'failed',
+      'timeout',
+      'session_invalid'
+    ].includes(value.automaticResult)
+  )
+    out.automaticResult = value.automaticResult;
   if (
     [
       'CF_CHALLENGE',

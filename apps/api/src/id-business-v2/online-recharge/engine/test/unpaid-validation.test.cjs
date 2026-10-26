@@ -288,6 +288,82 @@ test('automatic challenge exit never opens the human RPC queue', async () => {
     rpc.clearTask();
   }
 });
+test('disabled automatic handling exits before invoking a solver and records the exact reason', async () => {
+  const human = require('../upstream/human-verification');
+  const original = human.clearHumanVerification;
+  const enabled = process.env.HCAPTCHA_SOLVER_ENABLED;
+  let called = 0;
+  human.clearHumanVerification = async () => {
+    called++;
+    return { cleared: true };
+  };
+  process.env.HCAPTCHA_SOLVER_ENABLED = '0';
+  try {
+    assert.equal(validation.usesAutomaticVerification(validation.automaticVerification), true);
+    assert.equal(
+      validation.usesAutomaticVerification(async () => ({})),
+      false
+    );
+    await assert.rejects(
+      validation.automaticVerification({}, {}),
+      (error) =>
+        error.code === 'CHALLENGE_BLOCKED' &&
+        error.automaticAttempted === false &&
+        error.automaticResult === 'solver_disabled'
+    );
+    assert.equal(called, 0);
+  } finally {
+    human.clearHumanVerification = original;
+    if (enabled === undefined) delete process.env.HCAPTCHA_SOLVER_ENABLED;
+    else process.env.HCAPTCHA_SOLVER_ENABLED = enabled;
+  }
+});
+test('downloaded unpaid evidence retains safe session facts, not the response payload', () => {
+  const report = validation.finish({
+    code: 'CHALLENGE_BLOCKED',
+    bootstrapDiagnostics: {
+      initialSessionProbe: {
+        state: 'challenge',
+        httpStatus: 403,
+        cfMitigated: 'challenge',
+        complete: true,
+        automaticResult: 'solver_disabled',
+        body: 'synthetic-private-body',
+        sessionToken: 'synthetic-private-cookie'
+      }
+    }
+  });
+  assert.equal(report.outcome, 'challenge_blocked');
+  assert.equal(report.bootstrapDiagnostics.initialSessionProbe.httpStatus, 403);
+  assert.equal(report.bootstrapDiagnostics.initialSessionProbe.automaticResult, 'solver_disabled');
+  assert.ok(!JSON.stringify(report).includes('synthetic-private'));
+});
+test('automatic handler classifies solver exceptions but never masks lease loss', async () => {
+  const human = require('../upstream/human-verification');
+  const original = human.clearHumanVerification;
+  const enabled = process.env.HCAPTCHA_SOLVER_ENABLED;
+  process.env.HCAPTCHA_SOLVER_ENABLED = '1';
+  try {
+    human.clearHumanVerification = async () => {
+      throw new Error('synthetic-private-error');
+    };
+    await assert.rejects(
+      validation.automaticVerification({}, {}),
+      (error) =>
+        error.code === 'CHALLENGE_BLOCKED' &&
+        error.automaticResult === 'failed' &&
+        !error.message.includes('synthetic-private')
+    );
+    human.clearHumanVerification = async () => {
+      throw Object.assign(new Error('lease lost'), { code: 'LEASE_LOST' });
+    };
+    await assert.rejects(validation.automaticVerification({}, {}), { code: 'LEASE_LOST' });
+  } finally {
+    human.clearHumanVerification = original;
+    if (enabled === undefined) delete process.env.HCAPTCHA_SOLVER_ENABLED;
+    else process.env.HCAPTCHA_SOLVER_ENABLED = enabled;
+  }
+});
 
 test('five isolated form fixtures reveal billing after card fill and never submit', async (t) => {
   const browser = await chromium.launch({ headless: true });

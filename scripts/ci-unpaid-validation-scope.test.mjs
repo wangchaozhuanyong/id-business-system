@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  sessionDiagnosticPaths,
   profileLockRecoveryPaths,
   isProfileLockRecoveryOnly,
   cardReadDiagnosticsPaths,
@@ -45,6 +46,38 @@ test('profile lock publication checks only its finite controls and refuses runti
     ]),
     false
   );
+});
+test('login diagnostic repair retains API Admin and engine checks without historical image projection', () => {
+  const paths = [
+    ...sessionDiagnosticPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  const commands = JSON.stringify(
+    selectedParts(paths).flatMap((p) => unpaidValidationCommands(p, paths))
+  );
+  for (const required of [
+    'check:v2-ui-language',
+    'check:v2-loading-standard',
+    'typecheck',
+    '@apple-business/api',
+    '@apple-business/admin',
+    'test:online-recharge:engine'
+  ])
+    assert.ok(commands.includes(required), required);
+  for (const missing of sessionDiagnosticPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== missing)), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/auth/session.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+    paths[0]
+  ])
+    assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
 });
 test('offline profile recovery selects host guards and native browser tests only', () => {
   const paths = [

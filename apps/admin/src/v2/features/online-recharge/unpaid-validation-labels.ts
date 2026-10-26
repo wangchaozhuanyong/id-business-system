@@ -1,4 +1,81 @@
 import { formatV2DateTime } from '@/v2/utils/dateTime';
+export function sessionProbeEntries(value: unknown): { label: string; value: string }[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const diagnostics = value as Record<string, unknown>;
+  const handling: Record<string, string> = {
+    cleared: '自动处理步骤已完成',
+    solver_disabled: '自动验证未启用',
+    not_actionable: '原页未确认可操作验证',
+    failed: '自动验证未完成',
+    timeout: '自动验证期限已到',
+    session_invalid: '官网未接受登录资料'
+  };
+  const rows: { label: string; value: string }[] = [];
+  for (const [key, label] of [
+    ['initialSessionProbe', '首次会话核验'],
+    ['homepageSessionProbe', '首页会话核验']
+  ]) {
+    const value = diagnostics[key];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const probe = value as Record<string, unknown>;
+    const parts: string[] = [];
+    if (
+      typeof probe.httpStatus === 'number' &&
+      Number.isInteger(probe.httpStatus) &&
+      probe.httpStatus >= 100 &&
+      probe.httpStatus <= 599
+    )
+      parts.push(`HTTP ${probe.httpStatus}`);
+    const types: Record<string, string> = {
+      'application/json': '结构化响应',
+      'text/html': 'HTML页面',
+      'text/plain': '纯文本',
+      other: '其他内容类型',
+      unknown: '内容类型未知'
+    };
+    const classes: Record<string, string> = {
+      CF_CHALLENGE: '明确验证挑战',
+      POLICY_OR_REGION_BLOCK: '地区或策略限制',
+      AUTH_SESSION_REJECTED: '登录资料被拒绝',
+      UNKNOWN_403: '拒绝原因未确认',
+      NOT_CLASSIFIED: '未归类'
+    };
+    const states: Record<string, string> = {
+      verified: '会话已核验',
+      invalid: '会话无效',
+      mismatch: '账号不一致',
+      challenge: '需要官网验证',
+      blocked: '会话读取被拒绝',
+      timeout: '会话读取超时',
+      network_error: '网络读取失败',
+      unconfirmed: '会话未确认'
+    };
+    for (const [field, labels] of [
+      ['contentType', types],
+      ['classification', classes],
+      ['state', states],
+      ['automaticResult', handling]
+    ] as const)
+      if (typeof probe[field] === 'string' && labels[probe[field]])
+        parts.push(labels[probe[field]]);
+    if (['challenge', 'absent', 'unknown'].includes(String(probe.cfMitigated)))
+      parts.push(
+        `挑战响应头：${probe.cfMitigated === 'challenge' ? '明确挑战' : probe.cfMitigated === 'absent' ? '未提供' : '未知'}`
+      );
+    for (const [field, label] of [
+      ['hasValidUser', '有效用户'],
+      ['matchesTargetAccount', '目标账号匹配'],
+      ['complete', '读取完整']
+    ])
+      if (typeof probe[field] === 'boolean') parts.push(`${label}：${probe[field] ? '是' : '否'}`);
+    if (typeof probe.automaticAttempted === 'boolean')
+      parts.push(probe.automaticAttempted ? '已调用自动处理器' : '未调用自动处理器');
+    if (parts.length) rows.push({ label, value: parts.join('；') });
+  }
+  if (typeof diagnostics.automaticResult === 'string' && handling[diagnostics.automaticResult])
+    rows.push({ label: '首页自动验证', value: handling[diagnostics.automaticResult] });
+  return rows;
+}
 const stages: Record<string, string> = {
   input: '输入检查',
   proxy: '代理连接',
@@ -244,7 +321,7 @@ export function unpaidValidationEntries(value: unknown) {
   }
   if (Number.isInteger(report.httpStatus))
     rows.push({ label: '官网建单响应', value: `HTTP ${report.httpStatus}` });
-  rows.push(...diagnosticEntries(report));
+  rows.push(...sessionProbeEntries(report.bootstrapDiagnostics), ...diagnosticEntries(report));
   if (Array.isArray(report.timeline))
     report.timeline.slice(0, 32).forEach((item, index) => {
       if (!item || typeof item !== 'object' || !stages[item.stage]) return;

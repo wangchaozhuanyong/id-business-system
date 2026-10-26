@@ -1,5 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { unpaidValidationEntries } from './unpaid-validation-labels';
+import { sessionProbeEntries, unpaidValidationEntries } from './unpaid-validation-labels';
+describe('登录分诊呈现', () => {
+  it('显示首次HTTP与自动处理停点，不回显内部枚举或未知原始内容', () => {
+    const diagnostics = {
+      initialSessionProbe: {
+        httpStatus: 403,
+        contentType: 'text/html',
+        cfMitigated: 'challenge',
+        classification: 'CF_CHALLENGE',
+        state: 'challenge',
+        complete: true,
+        automaticAttempted: false,
+        automaticResult: 'solver_disabled',
+        body: 'synthetic-private-response'
+      }
+    };
+    const rows = sessionProbeEntries(diagnostics);
+    expect(rows[0].value).toContain('HTTP 403');
+    expect(rows[0].value).toContain('自动验证未启用');
+    expect(rows[0].value).toContain('未调用自动处理器');
+    expect(JSON.stringify(rows)).not.toMatch(/synthetic-private|CF_CHALLENGE|solver_disabled/);
+    expect(
+      unpaidValidationEntries({
+        format: 'unpaid-validation-v1',
+        outcome: 'challenge_blocked',
+        lastStage: 'login',
+        failureClass: 'CHALLENGE_BLOCKED',
+        bootstrapDiagnostics: diagnostics
+      })
+    ).toEqual(expect.arrayContaining(rows));
+    expect(
+      sessionProbeEntries({
+        initialSessionProbe: { httpStatus: 4242424242424242, state: 'synthetic-private' }
+      })
+    ).toEqual([]);
+  });
+});
 describe('国家交互与附件上传的具体停点', () => {
   it('区分控件本身和内嵌外框的视口结果，不展示内部字段或原始资料', () => {
     const rows = unpaidValidationEntries({

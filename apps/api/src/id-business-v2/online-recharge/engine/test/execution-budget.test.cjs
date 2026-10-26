@@ -244,6 +244,7 @@ test('a shorter verification timeout keeps its own cause while the login budget 
           }
         };
       if (name === './auth-page-detect') return { hasVisibleLoginChrome: async () => false };
+      if (name === '../unpaid-validation.cjs') return require('../unpaid-validation.cjs');
       if (name === './human-verification')
         return {
           isBlockingHumanVerificationVisible: async () => true,

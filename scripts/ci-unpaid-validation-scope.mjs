@@ -1,6 +1,32 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+export const sessionDiagnosticPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.spec.ts',
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.ts',
+  'apps/api/src/id-business-v2/online-recharge/validation.ts',
+  'apps/api/src/id-business-v2/online-recharge/validation.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.unpaid.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/worker.repository.spec.ts',
+  ...[
+    'SOURCE_MANIFEST.json',
+    'subscription-diagnostics.cjs',
+    'unpaid-validation.cjs',
+    'upstream/index.js',
+    'upstream/session-auth.js',
+    'upstream/subscription-check.js',
+    'test/browser-profile.test.cjs',
+    'test/execution-budget.test.cjs',
+    'test/human-verification.test.cjs',
+    'test/unpaid-validation.test.cjs',
+    'test/upstream-session-transition.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+
 // Exact unpaid validation batch. Adding another business path restores full checks.
 export const unpaidValidationPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
@@ -215,6 +241,7 @@ export function isUnpaidValidationOnly(paths) {
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
     [
+      sessionDiagnosticPaths,
       unpaidValidationPaths,
       checkoutResumePaths,
       persistentProfilePaths,
