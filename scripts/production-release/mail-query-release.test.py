@@ -26,7 +26,7 @@ class ProofTests(unittest.TestCase):
         self.plan = {'commit':'c'*40,'tree':'d'*40,'workflowRunId':'123','workflowRunAttempt':'1',
                      'contractSha256':'e'*64,'controlSources':{'mail-query-release.py':'f'*64},
                      'nativeParentCapture':{'apiModules':{module:'1'*64}},
-                     'qualitySourceEvidence':{'source':{'pullRequest':732}}}
+                     'qualitySourceEvidence':{'source':{'pullRequest':735}}}
         self.files = {'admin/html/index.html':'3'*64,'source/'+source:'a'*64}
         self.proof = {**copy.deepcopy(self.plan),'scope':m.SCOPE,'sources':self.c['sources'],
                       'apiModules':{module:'1'*64},'baselineApiModules':{module:'1'*64},
@@ -322,7 +322,7 @@ class GuardReuseTests(unittest.TestCase):
             if args[0]=='gh' and args[-1].endswith('/logs'):return self.log
             raise AssertionError(args)
         def github(path):
-            if path=='pulls/732':return {'merged_at':'fixture','head':{'sha':m.SOURCE}}
+            if path=='pulls/735':return {'merged_at':'fixture','head':{'sha':m.SOURCE}}
             return {'jobs':[{'id':456,'name':'recharge (guards)','status':'completed','conclusion':'success'}]}
         self.stack=ExitStack();self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.dict(self.pub.os.environ,{'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':self.pub.REPO,'ImageOS':'ubuntu24','ImageVersion':'fixture-image'}))
@@ -336,7 +336,7 @@ class GuardReuseTests(unittest.TestCase):
 
     def test_reuse_requires_complete_native_source_qa_identical_inputs_and_environment(self):
         result=self.pub.guard_reuse({})
-        self.qa.assert_called_once_with(m.SOURCE,'pull_request',m.SOURCE_TREE,732)
+        self.qa.assert_called_once_with(m.SOURCE,'pull_request',m.SOURCE_TREE,735)
         self.assertTrue(result['reused'])
         self.assertEqual(result['environment']['guardLogSha256'],m.sha(self.log))
         self.assertEqual(result['retainedInputsSha256'],m.sha(self.rows.rstrip(b'\n')))
