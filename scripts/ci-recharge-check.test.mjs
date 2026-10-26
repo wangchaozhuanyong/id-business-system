@@ -1405,7 +1405,7 @@ function recordGuardCommands(
     const cacheConfiguration = ${JSON.stringify(cacheConfiguration)};
     const environmentTestSource = ${JSON.stringify(environmentTestSource)};
     const environmentWorkflowSource = ${JSON.stringify(environmentWorkflowSource)};
-    const billingFixtureFiles = ${JSON.stringify(billingFixtureFiles)};
+    const billingFixtureFiles = JSON.parse(fs.readFileSync(0, 'utf8'));
     const originalReadFileSync = fs.readFileSync;
     fs.readFileSync = (path, options) => {
       if (Object.hasOwn(billingFixtureFiles, String(path))) {
@@ -1555,8 +1555,14 @@ function recordGuardCommands(
     }
     process.stdout.write(String.fromCharCode(10) + JSON.stringify(calls));
   `;
+  if (billingSourceFixture)
+    assert.ok(
+      Buffer.byteLength(script) < 120 * 1024,
+      'Fixture bootstrap must fit Linux argv budget'
+    );
   return JSON.parse(
     execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      input: JSON.stringify(billingFixtureFiles),
       cwd: root,
       encoding: 'utf8',
       env: {
