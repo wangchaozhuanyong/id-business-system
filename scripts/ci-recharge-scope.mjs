@@ -1219,6 +1219,8 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  // This finite release rebuilds only Admin and preserves the deployed engine.
+  if (isMailboxProviderOnly(paths)) return false;
   if (isMailQueryPublicationControlsOnly(paths)) return false;
   if (isRechargePlanBillingSourcePaths(paths) || isRechargePlanBillingPublicationOnly(paths))
     return false;

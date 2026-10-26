@@ -5,11 +5,12 @@ import {
   mailboxProviderControls,
   mailboxProviderSources
 } from './ci-mailbox-provider-scope.mjs';
-import { checkMode, adminCheckCommands } from './ci-recharge-scope.mjs';
+import { checkMode, adminCheckCommands, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 const paths = [...mailboxProviderSources, ...mailboxProviderControls];
 test('the complete reviewed UI and publication delta uses Admin checks', () => {
   assert.equal(isMailboxProviderOnly(paths), true);
   assert.equal(checkMode(paths), 'admin');
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
   const commands = adminCheckCommands('admin', paths).map((c) => c.join(' '));
   assert.ok(commands.some((c) => c.includes('mailbox-provider-release.test.py')));
   assert.ok(
@@ -18,6 +19,14 @@ test('the complete reviewed UI and publication delta uses Admin checks', () => {
     )
   );
   assert.ok(commands.some((c) => c.includes('acceptance-v2-workspace-dock.mjs')));
+});
+test('actual engine or image inputs retain the sealed ONLINE checks', () => {
+  for (const name of [
+    'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+    'scripts/production-release/online-recharge-ci-build.py',
+    'package-lock.json'
+  ])
+    assert.equal(needsOnlineRechargeCiBuild([...paths, name]), true, name);
 });
 test('API, authentication, database and unrelated paths cannot enter the finite release', () => {
   for (const name of [
