@@ -127,6 +127,14 @@ export const profileEgressLifecyclePaths = Object.freeze([
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ]);
+export const freshSessionPaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/browser-profile.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
 export const cardReadDiagnosticsPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
   'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
@@ -250,6 +258,7 @@ export function isUnpaidValidationOnly(paths) {
       checkoutResumePaths,
       persistentProfilePaths,
       profileEgressLifecyclePaths,
+      freshSessionPaths,
       cardReadDiagnosticsPaths,
       proxyFailureEvidencePaths,
       countryEvidencePaths
@@ -258,6 +267,14 @@ export function isUnpaidValidationOnly(paths) {
         batch.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
         paths.every((p) => batch.includes(p) || unpaidValidationControls.includes(p))
     )
+  );
+}
+export function isFreshSessionOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    freshSessionPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every((p) => freshSessionPaths.includes(p) || unpaidValidationControls.includes(p))
   );
 }
 export function isPersistentProfileOnly(paths) {

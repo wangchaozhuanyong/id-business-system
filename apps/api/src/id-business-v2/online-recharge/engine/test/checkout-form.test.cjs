@@ -76,6 +76,25 @@ async function pageFor(t, html) {
 const iframe = (html) =>
   `<iframe style="width:900px;height:600px" srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>`;
 
+for (const nested of [false, true])
+  test(`embedded billing outside the main viewport is filled through native scrolling, nested=${nested}`, async (t) => {
+    const content = countryHtml + addressHtml;
+    const page = await pageFor(
+      t,
+      '<div style="height:2000px"></div>' + iframe(nested ? iframe(content) : content)
+    );
+    const frame = page.frames().at(-1);
+    const result = await fillBilling(page, address, 'Synthetic Name', {
+      deadline: Date.now() + 4000
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(await frame.locator('[autocomplete="billing country"]').inputValue(), 'US');
+    assert.equal(
+      await frame.locator('[autocomplete="billing address-line1"]').inputValue(),
+      address.line1
+    );
+  });
+
 test('embedded country reports the outer viewport that blocks it without selecting', async (t) => {
   const page = await pageFor(
     t,
