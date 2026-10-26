@@ -1,3 +1,4 @@
+import { isMailboxProviderOnly } from './ci-mailbox-provider-scope.mjs';
 import {
   isRechargePlanBillingPublicationOnly,
   isRechargePlanBillingSource,
@@ -1218,6 +1219,8 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  // This finite release rebuilds only Admin and preserves the deployed engine.
+  if (isMailboxProviderOnly(paths)) return false;
   if (isMailQueryPublicationControlsOnly(paths)) return false;
   if (isRechargePlanBillingSourcePaths(paths) || isRechargePlanBillingPublicationOnly(paths))
     return false;
@@ -2742,6 +2745,7 @@ export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, cont
       paths.every((path) => path === productionDatabaseAccessHelper || isCiOnly([path]))
       ? 'ci-only'
       : 'full';
+  if (isMailboxProviderOnly(paths)) return 'admin';
   if (isCiOnly(paths, context)) return 'ci-only';
   if (isMailboxOnly(paths)) return 'mailbox';
   if (isTargetedOnly(paths, oldSchema, newSchema)) return 'recharge';
@@ -2812,6 +2816,11 @@ export function rechargeAvailabilityCommonControlTests(paths) {
 
 export function adminCheckCommands(mode, paths) {
   const commands = [['run', 'build', '--workspace', '@apple-business/shared']];
+  if (isMailboxProviderOnly(paths))
+    commands.push(
+      ['exec', '--call', 'python3 -B scripts/production-release/mailbox-provider-release.test.py'],
+      ['exec', '--', 'node', '--test', 'scripts/ci-mailbox-provider-scope.test.mjs']
+    );
   if (mode === 'mailbox') {
     commands.push([
       'run',
