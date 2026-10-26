@@ -66,3 +66,164 @@ describe('Vendure mailbox UI contract', () => {
     expect(view).toContain('验证码未识别');
   });
 });
+
+// Exercise the production query cache while the independent remote sync is slow.
+import { effectScope } from 'vue';
+import { afterEach, vi } from 'vitest';
+import { clearV2QueryCache, invalidateV2Queries, useV2Query } from '@/v2/composables/useV2Query';
+import { createVendureMailboxRefresh } from './vendure-mailbox-refresh';
+
+function deferredSync() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+afterEach(() => clearV2QueryCache());
+
+describe('mailbox list and synchronization event regression', () => {
+  it('renders saved records while repeated real scope invalidations cannot restart remote sync', async () => {
+    const scope = effectScope();
+    let version = 1;
+    const query = scope.run(() =>
+      useV2Query({
+        scope: 'vendure-mailbox',
+        key: 'mail-sync-regression',
+        query: async () => version
+      })
+    )!;
+    const remote = deferredSync();
+    const sync = vi.fn(() => remote.promise);
+    const pending = vi.fn();
+    const refresh = createVendureMailboxRefresh<{ key: string }>({
+      sync,
+      read: () => query.refresh(),
+      pending,
+      error: vi.fn()
+    });
+    try {
+      await query.ensureFresh();
+      const running = refresh.refresh({ key: 'primary-a' });
+      await Promise.resolve();
+      for (let event = 0; event < 5; event++) {
+        invalidateV2Queries('vendure-mailbox');
+        await query.ensureFresh();
+        expect(query.data.value).toBe(1);
+        expect(query.isInitialLoading.value).toBe(false);
+      }
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(pending).toHaveBeenLastCalledWith(true);
+      version = 2;
+      remote.resolve();
+      await running;
+      expect(query.data.value).toBe(2);
+      expect(pending).toHaveBeenLastCalledWith(false);
+    } finally {
+      refresh.dispose();
+      scope.stop();
+    }
+  });
+
+  it('coalesces repeated requests for the same owner during a slow synchronization', async () => {
+    const remote = deferredSync();
+    const sync = vi.fn(() => remote.promise);
+    const read = vi.fn(async () => undefined);
+    const refresh = createVendureMailboxRefresh<{ key: string }>({
+      sync,
+      read,
+      pending: vi.fn(),
+      error: vi.fn()
+    });
+    const running = refresh.refresh({ key: 'a' });
+    for (let click = 0; click < 5; click++) expect(refresh.refresh({ key: 'a' })).toBe(running);
+    await Promise.resolve();
+    expect(sync).toHaveBeenCalledTimes(1);
+    remote.resolve();
+    await running;
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes owner changes and processes only the latest queued selection', async () => {
+    const first = deferredSync();
+    const last = deferredSync();
+    const sync = vi.fn((item: { key: string }) =>
+      item.key === 'a' ? first.promise : last.promise
+    );
+    const pending = vi.fn();
+    const refresh = createVendureMailboxRefresh({
+      sync,
+      read: vi.fn(async () => undefined),
+      pending,
+      error: vi.fn()
+    });
+    const running = refresh.refresh({ key: 'a' });
+    refresh.refresh({ key: 'b' });
+    refresh.refresh({ key: 'c' });
+    await Promise.resolve();
+    expect(sync.mock.calls.map(([item]) => item.key)).toEqual(['a']);
+    first.resolve();
+    await running;
+    await vi.waitFor(() => expect(sync.mock.calls.map(([item]) => item.key)).toEqual(['a', 'c']));
+    last.resolve();
+    await vi.waitFor(() => expect(pending).toHaveBeenLastCalledWith(false));
+  });
+
+  it('reports synchronization failure without hiding saved rows and permits an explicit retry', async () => {
+    const error = new Error('synthetic-sync-failure');
+    const sync = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
+    const report = vi.fn();
+    const read = vi.fn(async () => undefined);
+    const pending = vi.fn();
+    const refresh = createVendureMailboxRefresh<{ key: string }>({
+      sync,
+      read,
+      pending,
+      error: report
+    });
+    await refresh.refresh({ key: 'a' });
+    expect(report).toHaveBeenCalledWith(error, { key: 'a' });
+    expect(read).not.toHaveBeenCalled();
+    expect(pending).toHaveBeenLastCalledWith(false);
+    await refresh.refresh({ key: 'a' });
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refresh a disposed page or start a queued operation after navigation', async () => {
+    const remote = deferredSync();
+    const sync = vi.fn(() => remote.promise);
+    const read = vi.fn(async () => undefined);
+    const refresh = createVendureMailboxRefresh<{ key: string }>({
+      sync,
+      read,
+      pending: vi.fn(),
+      error: vi.fn()
+    });
+    const running = refresh.refresh({ key: 'a' });
+    refresh.refresh({ key: 'b' });
+    await Promise.resolve();
+    refresh.dispose();
+    remote.resolve();
+    await running;
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+    await refresh.refresh({ key: 'c' });
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps event-driven reads passive and renders cached data before independent synchronization', () => {
+    const queryBlock = view.slice(
+      view.indexOf('const mailQuery ='),
+      view.indexOf('const activeQuery =')
+    );
+    expect(queryBlock).toContain('refresh: false');
+    expect(queryBlock).not.toContain('refresh: true');
+    expect(queryBlock).not.toContain('syncBeforeMailRead');
+    expect(view).toContain('sync: (scope) => vendureMailboxApi.mails(scope.query)');
+    expect(view).toContain('const result = await query.refresh();');
+    expect(view).toContain('void mailRefresh.refresh(scope);');
+    expect(view).toContain('正在同步邮箱，已有收件记录仍可查看。');
+    expect(view).toContain('mailRefresh.dispose();');
+  });
+});
