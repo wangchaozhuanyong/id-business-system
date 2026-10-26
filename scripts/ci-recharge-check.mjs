@@ -226,7 +226,8 @@ if (isRechargeAutofillControlsOnly(changed)) {
     throw new Error('Autofill publication requires its exact control selection');
   const formatted = changed.filter((name) => /\.(?:mjs|json|yml|md)$/.test(name));
   npm('exec', '--', 'prettier', '--check', ...formatted);
-  npm('exec', '--', 'eslint', ...formatted.filter((name) => name.endsWith('.mjs')));
+  const scripts = formatted.filter((name) => name.endsWith('.mjs'));
+  if (scripts.length) npm('exec', '--', 'eslint', ...scripts);
   run('node', [
     '--test',
     'scripts/ci-recharge-autofill-scope.test.mjs',
