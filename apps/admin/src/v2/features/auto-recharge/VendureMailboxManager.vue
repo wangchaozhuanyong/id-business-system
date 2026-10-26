@@ -1563,7 +1563,6 @@ function applyFilters() {
   keyword.value = keywordInput.value.trim();
   status.value = statusInput.value;
   if (!changed || activeTab.value === 'mails') void refreshCurrentList();
-  else healthRefreshVersion.value += 1;
 }
 function currentMailSyncScope() {
   const owner =
@@ -1599,7 +1598,6 @@ const mailRefresh = createVendureMailboxRefresh<ReturnType<typeof currentMailSyn
   }
 });
 async function refreshCurrentList() {
-  healthRefreshVersion.value += 1;
   const query = activeQuery.value;
   const scope = currentMailSyncScope();
   // Render the saved records first; a slow or unavailable remote mailbox must
@@ -1613,6 +1611,8 @@ async function refreshCurrentList() {
   ) {
     mailSyncError.value = '';
     void mailRefresh.refresh(scope);
+  } else if (query !== mailQuery) {
+    healthRefreshVersion.value += 1;
   }
   return result;
 }

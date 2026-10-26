@@ -102,7 +102,7 @@ const props = withDefaults(
     empty?: boolean;
     error?: string;
     forbidden?: boolean;
-    variant?: 'page' | 'section' | 'field';
+    variant?: 'page' | 'section' | 'field' | 'content';
     skeleton?: V2SkeletonKind;
     loadingTitle: string;
     refreshingTitle?: string;

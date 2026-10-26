@@ -1,5 +1,6 @@
 <template>
   <V2AsyncRegion
+    variant="content"
     skeleton="settings"
     :phase="healthQuery.phase.value"
     :error="healthQuery.error.value ? getApiErrorMessage(healthQuery.error.value) : ''"
@@ -45,7 +46,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
+import { computed, watch } from 'vue';
 import type { V2VendureMailboxHealth } from '@apple-business/shared';
 import { getApiErrorMessage } from '@/api/client';
 import AppButton from '@/components/ui/AppButton.vue';
@@ -108,7 +109,7 @@ const description = computed(() => {
     ? '上游暂不支持健康检查，邮件列表仍可正常读取。'
     : status === 'unavailable'
       ? '健康状态暂时无法核验，邮件列表仍可读取；可刷新状态重试。'
-      : '健康状态截至本次检查时间；查询和刷新收件记录会先同步邮箱，再读取最新邮件。';
+      : '健康状态截至本次检查时间；收件记录会先显示已有内容，再独立同步新邮件。';
 });
 let refreshing: Promise<unknown> | undefined;
 function refreshHealth() {
@@ -118,9 +119,6 @@ function refreshHealth() {
     refreshing = undefined;
   });
   return refreshing;
-}
-function onForeground() {
-  if (document.visibilityState !== 'hidden') void refreshHealth();
 }
 watch(
   () => props.refreshVersion,
@@ -132,12 +130,4 @@ watch(
     if (previous !== null) void refreshHealth();
   }
 );
-onMounted(() => {
-  window.addEventListener('focus', onForeground);
-  document.addEventListener('visibilitychange', onForeground);
-});
-onBeforeUnmount(() => {
-  window.removeEventListener('focus', onForeground);
-  document.removeEventListener('visibilitychange', onForeground);
-});
 </script>
