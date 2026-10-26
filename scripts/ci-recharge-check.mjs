@@ -1,4 +1,9 @@
 import {
+  isRechargeAutofillControlsOnly,
+  isRechargeAutofillSourceOnly,
+  rechargeAutofillSourceCommands
+} from './ci-recharge-autofill-scope.mjs';
+import {
   isRechargePlanBillingPublicationOnly,
   isRechargePlanBillingSourcePaths
 } from './ci-recharge-plan-billing-scope.mjs';
@@ -216,6 +221,30 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (isRechargeAutofillControlsOnly(changed)) {
+  if (part !== 'guards' || mode !== 'ci-only')
+    throw new Error('Autofill publication requires its exact control selection');
+  const formatted = changed.filter((name) => /\.(?:mjs|json|yml|md)$/.test(name));
+  npm('exec', '--', 'prettier', '--check', ...formatted);
+  npm('exec', '--', 'eslint', ...formatted.filter((name) => name.endsWith('.mjs')));
+  run('node', [
+    '--test',
+    'scripts/ci-recharge-autofill-scope.test.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'scripts/ci-change-scope.test.mjs'
+  ]);
+  run('python3', ['-B', 'scripts/production-release/recharge-autofill-release.test.py']);
+  run('python3', ['-B', 'scripts/production-release/recharge-autofill-publication.py', 'check']);
+  npm('run', 'git:readiness');
+  process.exit(0);
+}
+if (isRechargeAutofillSourceOnly(changed)) {
+  if (mode !== 'recharge')
+    throw new Error('Autofill source requires its reviewed recharge check selection');
+  for (const [file, args] of rechargeAutofillSourceCommands(part)) run(file, args);
+  process.exit(0);
+}
 // These two fixture changes execute their component suites above. They do not
 // alter the frozen ONLINE publisher, its runtime, or its archived application.
 const mailboxFixtureControlPaths = new Set([

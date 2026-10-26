@@ -1,4 +1,9 @@
 import {
+  rechargeAutofillControls,
+  rechargeAutofillSourcePaths,
+  rechargeAutofillSourceCommands
+} from './ci-recharge-autofill-scope.mjs';
+import {
   rechargePlanBillingPublicationControls,
   rechargePlanBillingSourcePaths
 } from './ci-recharge-plan-billing-scope.mjs';
@@ -25,6 +30,46 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { financialPublicationControlPaths } from './ci-financial-publication-scope.mjs';
 import { financialClosurePaths } from './ci-financial-closure-scope.mjs';
+
+test('回填源码真实入口保留四类检查并拒绝错误模式', () => {
+  for (const part of ['guards', 'api', 'admin', 'online-engine'])
+    assert.deepEqual(recordGuardCommands('recharge', [...rechargeAutofillSourcePaths], part), [
+      ...rechargeAutofillSourceCommands(part).map(([file, args]) => [file, ...args]),
+      ['process-exit', 0]
+    ]);
+  assert.throws(
+    () => recordGuardCommands('ci-only', [...rechargeAutofillSourcePaths]),
+    /reviewed recharge check selection/
+  );
+});
+
+test('回填发布的实际入口只运行有限控制检查且拒绝错误模式', () => {
+  const calls = recordGuardCommands('ci-only', [...rechargeAutofillControls]);
+  assert.ok(
+    calls.some((call) =>
+      call.includes('scripts/production-release/recharge-autofill-release.test.py')
+    )
+  );
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.includes('scripts/production-release/recharge-autofill-publication.py') &&
+        call.includes('check')
+    )
+  );
+  assert.equal(
+    calls.some((call) =>
+      call.some((arg) =>
+        /acceptance:v2|prisma:mysql|--workspace|online-recharge-ci-build/.test(arg)
+      )
+    ),
+    false
+  );
+  assert.throws(
+    () => recordGuardCommands('recharge', [...rechargeAutofillControls]),
+    /exact control selection/
+  );
+});
 
 test('账单排重发布控制走真实入口且不重复应用或数据库检查', () => {
   const calls = recordGuardCommands('ci-only', [...rechargePlanBillingPublicationControls]);
