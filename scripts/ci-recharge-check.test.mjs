@@ -45,7 +45,7 @@ test('账单排重发布控制走真实入口且不重复应用或数据库检�
 
 test('账单迁移源码入口保留全部界面规则及共享卡回归', () => {
   const paths = [...rechargePlanBillingSourcePaths];
-  const guards = recordGuardCommands('recharge', paths);
+  const guards = recordGuardCommands('recharge', paths, 'guards', { billingSourceFixture: true });
   for (const name of [
     'check:admin-ui',
     'check:v2-ui-language',
@@ -65,7 +65,7 @@ test('账单迁移源码入口保留全部界面规则及共享卡回归', () =>
     ),
     false
   );
-  const api = recordGuardCommands('recharge', paths, 'api');
+  const api = recordGuardCommands('recharge', paths, 'api', { billingSourceFixture: true });
   assert.ok(api.some((call) => call.includes('src/id-business-v2/bank-card-pool')));
   assert.ok(api.some((call) => call.includes('typecheck')));
 });
@@ -1212,7 +1212,8 @@ function recordGuardCommands(
     protocolRepairFixture = false,
     flowV4Fixture = false,
     terminalStopFixture = false,
-    mailQueryInputsChanged = false
+    mailQueryInputsChanged = false,
+    billingSourceFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -1327,6 +1328,25 @@ function recordGuardCommands(
     adminDelta: [],
     reviewedFileHashes: terminalHashes
   };
+  // Exercise the historical billing dispatcher against its reviewed source,
+  // independently of subsequent application changes in the current checkout.
+  const billingFixtureManifest = billingSourceFixture
+    ? JSON.parse(readFileSync(new URL('./recharge-plan-billing-source.json', import.meta.url)))
+    : null;
+  const billingFixtureFiles = billingFixtureManifest
+    ? Object.fromEntries(
+        Object.keys({
+          ...billingFixtureManifest.sources,
+          ...billingFixtureManifest.formatOnly
+        }).map((name) => [
+          new URL('../' + name, import.meta.url).href,
+          execFileSync('git', [
+            'show',
+            '3ab77ffc39eea97a56cbeffce1d7582a2dc8e5e1:' + name
+          ]).toString('base64')
+        ])
+      )
+    : {};
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
@@ -1340,8 +1360,13 @@ function recordGuardCommands(
     const cacheConfiguration = ${JSON.stringify(cacheConfiguration)};
     const environmentTestSource = ${JSON.stringify(environmentTestSource)};
     const environmentWorkflowSource = ${JSON.stringify(environmentWorkflowSource)};
+    const billingFixtureFiles = ${JSON.stringify(billingFixtureFiles)};
     const originalReadFileSync = fs.readFileSync;
     fs.readFileSync = (path, options) => {
+      if (Object.hasOwn(billingFixtureFiles, String(path))) {
+        const raw = Buffer.from(billingFixtureFiles[String(path)], 'base64');
+        return typeof options === 'string' ? raw.toString(options) : raw;
+      }
       if (String(path) === '.github/workflows/registration-closure-validation.yml' && typeof environmentWorkflowSource === 'string')
         return typeof options === 'string' ? environmentWorkflowSource : Buffer.from(environmentWorkflowSource);
       if (String(path) === 'scripts/production-release/registration-closure-release.test.py' && typeof environmentTestSource === 'string')
@@ -2143,6 +2168,7 @@ test('historical backup recovery runs both dedicated suites only for exact contr
 function recordOnlineEngineCommands(failBrowser = false) {
   const script = `
     import childProcess from 'node:child_process';
+    Object.defineProperty(process, 'platform', { value: 'linux' });
     import { syncBuiltinESMExports } from 'node:module';
     const calls = [];
     childProcess.execFileSync = (file, args) => {
@@ -2172,6 +2198,23 @@ test('online engine installs its own pinned browser before real media tests', ()
   assert.equal(failed, false);
   const install = calls.findIndex((row) => row[0] === 'node');
   const tests = calls.findIndex((row) => row.includes('test:online-recharge:engine'));
+  assert.deepEqual(
+    calls.find((row) => row[0] === 'sudo'),
+    [
+      'sudo',
+      'apt-get',
+      '-o',
+      'Acquire::Retries=3',
+      '-o',
+      'Acquire::http::Timeout=30',
+      '-o',
+      'Acquire::https::Timeout=30',
+      'install',
+      '-y',
+      '--no-install-recommends',
+      'ffmpeg'
+    ]
+  );
   assert.ok(install >= 0 && tests > install);
   assert.deepEqual(calls[install], [
     'node',

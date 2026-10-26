@@ -1443,7 +1443,19 @@ const onlineEngine = () => {
     'chromium'
   ]);
   if (process.platform === 'linux')
-    run('sudo', ['apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg']);
+    run('sudo', [
+      'apt-get',
+      '-o',
+      'Acquire::Retries=3',
+      '-o',
+      'Acquire::http::Timeout=30',
+      '-o',
+      'Acquire::https::Timeout=30',
+      'install',
+      '-y',
+      '--no-install-recommends',
+      'ffmpeg'
+    ]);
   npm('run', 'test:online-recharge:engine');
 };
 const onlineReleaseControlPaths = new Set([
