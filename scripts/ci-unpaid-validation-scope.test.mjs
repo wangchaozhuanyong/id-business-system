@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  freshSessionPaths,
+  isFreshSessionOnly,
   sessionDiagnosticPaths,
   profileLockRecoveryPaths,
   isProfileLockRecoveryOnly,
@@ -20,6 +22,39 @@ import {
   unpaidValidationCommands
 } from './ci-unpaid-validation-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
+test('fresh session repair retains engine regression and rejects other runtime changes', () => {
+  const paths = [
+    ...freshSessionPaths,
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isFreshSessionOnly(paths), true);
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'recharge');
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.ok(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)).includes(
+      'test:online-recharge:engine'
+    )
+  );
+  for (const missing of freshSessionPaths.filter((p) => p.startsWith('apps/'))) {
+    assert.equal(isFreshSessionOnly(paths.filter((p) => p !== missing)), false);
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== missing)), false);
+  }
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
+    'apps/api/src/id-business-v2/online-recharge/validation.ts',
+    'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.ts',
+    'apps/api/prisma-mysql/schema.prisma',
+    paths[0]
+  ]) {
+    assert.equal(isFreshSessionOnly([...paths, extra]), false);
+    assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
+  }
+});
 test('profile lock publication checks only its finite controls and refuses runtime changes', () => {
   const paths = [
     'scripts/production-release/online-unpaid-validation-release.test.py',
@@ -430,6 +465,27 @@ test('country evidence publication is finite and keeps its contract test', () =>
     )
   );
   assert.equal(isUnpaidValidationControlsOnly([...paths, countryEvidencePaths[0]]), false);
+});
+
+test('fresh session publication runs finite controls without application or database checks', () => {
+  const paths = unpaidValidationControls.filter((p) => p.includes('online-fresh-session-'));
+  assert.equal(paths.length, 5);
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /online-fresh-session-release.test.py/
+  );
+  assert.throws(() => unpaidValidationCommands('api', paths));
+  assert.equal(isUnpaidValidationControlsOnly([...paths, freshSessionPaths[0]]), false);
+  assert.equal(
+    isUnpaidValidationControlsOnly([
+      ...paths,
+      'scripts/production-release/online-fresh-session-extra.py'
+    ]),
+    false
+  );
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
 });
 
 test('profile inventory control repair executes its recovery regression suite', () => {

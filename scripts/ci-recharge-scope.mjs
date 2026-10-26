@@ -5,6 +5,7 @@ import {
   isRechargePlanBillingSourcePaths
 } from './ci-recharge-plan-billing-scope.mjs';
 import {
+  isFreshSessionOnly,
   isProfileLockRecoveryOnly,
   isPersistentProfileOnly,
   isProfileEgressLifecycleOnly,
@@ -3168,7 +3169,8 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];
   if (isRechargePlanBillingSourcePaths(paths)) return ['guards', 'admin', 'api', 'migration'];
   if (isRechargePlanBillingPublicationOnly(paths)) return ['guards'];
-  if (isProfileLockRecoveryOnly(paths)) return ['guards', 'online-engine'];
+  if (isProfileLockRecoveryOnly(paths) || isFreshSessionOnly(paths))
+    return ['guards', 'online-engine'];
   if (isProfileEgressLifecycleOnly(paths)) return ['guards', 'admin', 'online-engine'];
   if (isPersistentProfileOnly(paths)) return ['guards', 'online-engine'];
   if (isUnpaidValidationOnly(paths))

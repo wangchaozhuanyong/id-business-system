@@ -127,6 +127,14 @@ export const profileEgressLifecyclePaths = Object.freeze([
   'docs/ONLINE_RECHARGE.md',
   'docs/V2_TASKS.md'
 ]);
+export const freshSessionPaths = Object.freeze([
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/browser-profile.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
 export const cardReadDiagnosticsPaths = Object.freeze([
   'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
   'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
@@ -173,6 +181,10 @@ export const countryEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export const unpaidValidationControls = Object.freeze([
+  '.github/workflows/online-fresh-session-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-fresh-session-' + name
+  ),
   '.github/workflows/online-session-diagnostic-publication.yml',
   ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-session-diagnostic-' + name
@@ -250,6 +262,7 @@ export function isUnpaidValidationOnly(paths) {
       checkoutResumePaths,
       persistentProfilePaths,
       profileEgressLifecyclePaths,
+      freshSessionPaths,
       cardReadDiagnosticsPaths,
       proxyFailureEvidencePaths,
       countryEvidencePaths
@@ -258,6 +271,14 @@ export function isUnpaidValidationOnly(paths) {
         batch.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
         paths.every((p) => batch.includes(p) || unpaidValidationControls.includes(p))
     )
+  );
+}
+export function isFreshSessionOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    freshSessionPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every((p) => freshSessionPaths.includes(p) || unpaidValidationControls.includes(p))
   );
 }
 export function isPersistentProfileOnly(paths) {
@@ -314,6 +335,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-fresh-session-') ||
+        p === '.github/workflows/online-fresh-session-publication.yml' ||
         p.startsWith('scripts/production-release/online-session-diagnostic-') ||
         p === '.github/workflows/online-session-diagnostic-publication.yml' ||
         p.startsWith('scripts/production-release/online-profile-lock-') ||
@@ -392,6 +415,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-fresh-session-'))
+        ? [['python3', '-B', 'scripts/production-release/online-fresh-session-release.test.py']]
+        : []),
       ...(paths.some((p) => p.includes('online-profile-lock-'))
         ? [['python3', '-B', 'scripts/production-release/online-profile-lock-release.test.py']]
         : []),
