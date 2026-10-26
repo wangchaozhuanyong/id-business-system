@@ -65,6 +65,17 @@ test('回填发布的实际入口只运行有限控制检查且拒绝错误模�
     ),
     false
   );
+  const onlyNewControls = rechargeAutofillControls.filter((p) => !p.startsWith('scripts/ci-'));
+  const nativeCalls = recordGuardCommands('ci-only', onlyNewControls);
+  assert.equal(
+    nativeCalls.some((call) => call.includes('eslint')),
+    false
+  );
+  assert.ok(
+    nativeCalls.some((call) =>
+      call.includes('scripts/production-release/recharge-autofill-release.test.py')
+    )
+  );
   assert.throws(
     () => recordGuardCommands('recharge', [...rechargeAutofillControls]),
     /exact control selection/
