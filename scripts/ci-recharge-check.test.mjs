@@ -1387,7 +1387,7 @@ function recordGuardCommands(
           new URL('../' + name, import.meta.url).href,
           execFileSync('git', [
             'show',
-            '3ab77ffc39eea97a56cbeffce1d7582a2dc8e5e1:' + name
+            '21f63083dd8044726811f6d055b3da675ced31d7:' + name
           ]).toString('base64')
         ])
       )

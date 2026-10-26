@@ -122,6 +122,7 @@ const aptTransport = `set -eu
 export function rechargeAutofillSourceCommands(part) {
   if (part === 'online-engine')
     return [
+      npm('ci', '--ignore-scripts', '--no-audit', '--no-fund'),
       ['sudo', ['bash', '-c', aptTransport]],
       npm('ci', '--prefix', engine + '/upstream', '--ignore-scripts', '--no-audit', '--no-fund'),
       [

@@ -97,3 +97,11 @@ test('publication admits its seven new controls after unchanged CI support has m
   assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
   assert.deepEqual(selectedParts(paths), ['guards']);
 });
+
+test('Linux engine installs the frozen root TypeScript dependency before its source consumer tests', () => {
+  const commands = rechargeAutofillSourceCommands('online-engine');
+  assert.deepEqual(commands[0], ['npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund']]);
+  assert.ok(
+    commands.findIndex(([file, args]) => file === 'node' && args.includes('--with-deps')) > 0
+  );
+});
