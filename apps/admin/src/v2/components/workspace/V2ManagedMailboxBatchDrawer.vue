@@ -30,10 +30,10 @@
         class="v2-horizontal-form"
         @submit.prevent="submit"
       >
-        <el-form-item label="邮箱类型" required>
+        <el-form-item label="收信服务商" required>
           <el-radio-group v-model="provider" :disabled="submitting">
             <el-radio-button value="gmail">谷歌邮箱</el-radio-button>
-            <el-radio-button value="icloud">苹果邮箱</el-radio-button>
+            <el-radio-button value="icloud">苹果云邮箱</el-radio-button>
             <el-radio-button value="microsoft">微软邮箱</el-radio-button>
           </el-radio-group>
         </el-form-item>
@@ -84,7 +84,7 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type {
   CreateV2ManagedMailboxBatchResult,
   V2MailProvider,
@@ -103,6 +103,10 @@ import {
   resolveManagedMailboxAppPasswordGuide,
   resolveManagedMailboxAppPasswordGuideLinks
 } from './managedMailboxAppPasswordGuide';
+import {
+  detectManagedMailboxBatchProvider,
+  detectManagedMailboxProvider
+} from './managedMailboxProvider';
 
 defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{
@@ -124,6 +128,15 @@ const parsedRows = computed(() =>
     .map((source, index) => ({ index, source: source.trim() }))
     .filter((row) => row.source)
 );
+watch(
+  () => batchText.value,
+  () => {
+    if (submitting.value) return;
+    const detected = detectManagedMailboxBatchProvider(parsedRows.value.map((row) => row.source));
+    if (detected) provider.value = detected;
+  },
+  { flush: 'sync' }
+);
 const failedItems = computed<V2ManagedMailboxBatchResultItem[]>(
   () => result.value?.items.filter((item) => item.status === 'failed') ?? []
 );
@@ -137,7 +150,11 @@ const batchHelp = computed(() => {
     return [formatHelp.value, '每个邮箱仍需管理员在 Microsoft 登录窗口选择对应账号并确认授权。'];
   }
   const guide = resolveManagedMailboxAppPasswordGuide(provider.value);
-  return [formatHelp.value, guide?.help ?? ''];
+  return [
+    formatHelp.value,
+    '按实际收信服务商分批导入；用于 Apple ID 的 Outlook 邮箱请选择微软邮箱。',
+    guide?.help ?? ''
+  ];
 });
 const appPasswordHelpLinks = computed(() =>
   resolveManagedMailboxAppPasswordGuideLinks(provider.value)
@@ -160,6 +177,17 @@ async function submit() {
   }
   if (parsedRows.value.length > V2_MAIL_VIEWER_LIMITS.batchLines) {
     ElMessage.warning(`每次最多导入 ${V2_MAIL_VIEWER_LIMITS.batchLines} 个邮箱`);
+    return;
+  }
+
+  const mismatched = parsedRows.value.find((row) => {
+    const detected = detectManagedMailboxProvider(row.source.split('----')[0] ?? '');
+    return detected && detected !== provider.value;
+  });
+  if (mismatched) {
+    ElMessage.warning(
+      `第 ${mismatched.index + 1} 行与所选收信服务商不一致，请按服务商分批导入；微软邮箱需选择微软邮箱并完成授权。`
+    );
     return;
   }
 
