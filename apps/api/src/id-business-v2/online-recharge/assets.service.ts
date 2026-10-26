@@ -15,7 +15,9 @@ export class OnlineRechargeAssetsService {
     const input = object(raw);
     if (!['cards', 'proxies', 'addresses', 'cdks'].includes(section))
       throw new BadRequestException('资源类型无效');
-    if (['reveal', 'export'].includes(action)) {
+    if (action === 'bitbrowser-cvc' && !operator.roles.includes('admin'))
+      throw new ForbiddenException('本次安全码读取仅允许管理员执行');
+    if (['reveal', 'export', 'bitbrowser-cvc'].includes(action)) {
       assertOnlineSensitive(operator);
       text(input.reason ?? '资料出库', '查看原因', 500);
     } else if (

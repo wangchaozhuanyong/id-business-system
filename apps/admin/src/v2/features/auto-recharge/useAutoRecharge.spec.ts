@@ -32,6 +32,7 @@ const mock = vi.hoisted(() => ({
   generateAddresses: vi.fn(),
   preparePaymentCard: vi.fn(),
   managedCardDetail: vi.fn(),
+  sharedCardCvc: vi.fn(),
   accountIdentity: vi.fn(),
   loginCredential: vi.fn(),
   accountTotpCode: vi.fn(),
@@ -177,6 +178,7 @@ vi.mock('./bank-recharge-api', () => ({
     listCards: vi.fn(),
     listSharedCards: vi.fn(),
     sharedCardDetail: mock.managedCardDetail,
+    sharedCardCvc: mock.sharedCardCvc,
     listAccounts: vi.fn(),
     listCurrencies: vi.fn(),
     managedCardDetail: mock.managedCardDetail,
@@ -500,6 +502,7 @@ beforeEach(() => {
     connectorToken: launch.connectorToken
   });
   mock.updateBitBrowserSettings.mockResolvedValue(settings);
+  mock.sharedCardCvc.mockResolvedValue({ cvc: null, expiresAt: null, state: 'unavailable' });
   scope = effectScope();
   flow = scope.run(() => useAutoRecharge({ clearPaymentValidation: mock.clearPaymentValidation }))!;
   flow.operationMode.value = 'payment';
@@ -713,6 +716,11 @@ describe('比特浏览器充值入口', () => {
     expect(flow.sessionJson.value).toBe('');
   });
   it('选择未绑定姓名的已保存银行卡后自动从姓名库回填，无需手填或点击执行', async () => {
+    mock.sharedCardCvc.mockResolvedValueOnce({
+      cvc: '987',
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+      state: 'available'
+    });
     mock.managedCardDetail.mockResolvedValueOnce({
       allowedPlans: ['plus'],
       id: 'card-a',
@@ -737,6 +745,7 @@ describe('比特浏览器充值入口', () => {
       expect.objectContaining({ allocationKey: expect.any(String) })
     );
     expect(flow.details.value.name).toBe('Library Person');
+    expect(flow.details.value.cvc).toBe('987');
     expect(flow.selectedPaymentCardId.value).toBe('card-a');
     flow.details.value.number = '4111111111111111';
     expect(flow.selectedPaymentCardId.value).toBe('');

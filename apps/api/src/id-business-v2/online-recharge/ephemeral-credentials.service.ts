@@ -17,6 +17,30 @@ export class OnlineRechargeEphemeralCredentials {
       throw new BadRequestException('安全码批量格式无效');
     await this.request('/credentials', { cards });
   }
+  async forBitBrowser(cardId: string) {
+    const raw = (await this.request('/credentials/bitbrowser', { id: cardId })) as {
+      cvc?: unknown;
+      expiresAt?: unknown;
+      state?: unknown;
+    };
+    if (raw?.state === 'unavailable' || raw?.state === 'busy')
+      return { cvc: null, expiresAt: null, state: raw.state };
+    const expires = typeof raw?.expiresAt === 'string' ? Date.parse(raw.expiresAt) : NaN;
+    if (
+      raw?.state !== 'available' ||
+      typeof raw.cvc !== 'string' ||
+      !/^\d{3,4}$/.test(raw.cvc) ||
+      !Number.isFinite(expires) ||
+      expires <= Date.now() ||
+      expires > Date.now() + 86401000
+    )
+      throw new ServiceUnavailableException('临时安全码不可用，请重新补充或本次手动填写');
+    return {
+      cvc: raw.cvc,
+      expiresAt: new Date(expires).toISOString(),
+      state: 'available' as const
+    };
+  }
   async available(ids: string[]): Promise<string[]> {
     if (!ids.length) return [];
     try {

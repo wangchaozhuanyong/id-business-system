@@ -2,6 +2,7 @@ import { computed, effectScope, nextTick, ref, watch } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
 import { clearV2SessionDrafts } from '@/v2/composables/useV2SessionDraft';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { useRechargeBrowserSettings } from './useRechargeBrowserSettings';
 import type { V2RechargeBitBrowserSettings } from './contracts';
 
@@ -131,15 +132,50 @@ describe('按连接配置隔离设置草稿', () => {
     expect(settings.settingsError.value).toContain('连接密钥');
     stop();
   });
-  it('首次读取显式选择原连接，不跟随另一台电脑保存的服务器默认选择', async () => {
+  it('整页刷新后读取当前系统账号已保存的连接与参数，不强制退回原连接', async () => {
+    mocks.get.mockImplementation(async (_options, id) => fixture(id === undefined ? profileA : id));
     const { settings, stop } = create(true);
     await settle();
-    expect(mocks.get.mock.calls[0]![1]).toBeNull();
+    expect(mocks.get.mock.calls[0]![1]).toBeUndefined();
+    expect(settings.connectionProfileChoice.value).toBe(profileA);
+    expect(settings.settingsForm.value.groupName).toBe('甲分组');
+    stop();
+    clearV2SessionDrafts();
+    const refreshed = create(true);
+    await settle();
+    expect(refreshed.settings.connectionProfileChoice.value).toBe(profileA);
+    expect(refreshed.settings.settingsForm.value.groupName).toBe('甲分组');
+    refreshed.stop();
+  });
+  it('主动切换连接只读取对应配置，明确保存后才改变账号的首选连接', async () => {
+    const { settings, stop } = create(true);
+    await settle();
     settings.connectionProfileChoice.value = profileB;
     await settle();
     expect(mocks.get.mock.calls.at(-1)![1]).toBe(profileB);
+    expect(mocks.save).not.toHaveBeenCalled();
     expect(settings.connectorStatus.value).toBe('unknown');
     stop();
+  });
+  it('切换系统账号后旧保存响应不能改写新账号的连接和草稿', async () => {
+    const first = create();
+    await settle();
+    first.settings.connectionProfileChoice.value = profileA;
+    await settle();
+    let finish!: (value: V2RechargeBitBrowserSettings) => void;
+    mocks.save.mockImplementationOnce(() => new Promise((done) => (finish = done)));
+    const saving = first.settings.saveSettings();
+    sessionCoordinator.clearLocalSession({ reason: 'identity-switched', broadcast: false });
+    mocks.get.mockResolvedValue(fixture(profileB));
+    const second = create();
+    await settle();
+    second.settings.settingsForm.value.groupName = '第二个账号的输入';
+    finish(fixture(profileA));
+    await saving;
+    expect(second.settings.connectionProfileChoice.value).toBe(profileB);
+    expect(second.settings.settingsForm.value.groupName).toBe('第二个账号的输入');
+    first.stop();
+    second.stop();
   });
   it('子账号无分组或标签时仍可先检测并保存连接，但不能通过完整执行检查', async () => {
     const { settings, stop } = create(true);

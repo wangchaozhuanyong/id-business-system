@@ -40,6 +40,7 @@ import { isApiError } from '@/api/apiError';
 import { directOperationDeadline, rechargeExecutionFailure } from './recharge-direct-lifecycle';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { useRechargePaymentStart } from './useRechargePaymentStart';
+import { useRechargeCardCvc } from './useRechargeCardCvc';
 import {
   cancelDirectPayment,
   directPaymentControls,
@@ -396,6 +397,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
         item.active && item.hasNumber && item.allowedPlans.includes(plan.value.replace(/-/g, '_'))
     )
   );
+  const cardCvc = useRechargeCardCvc(details, selectedPaymentCardId, plan);
   const proxySelectionReady = computed(
     () =>
       proxyCountriesQuery.phase.value === 'ready' &&
@@ -423,6 +425,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       return;
     }
     const generation = ++paymentCardGeneration;
+    const cardIdentityEpoch = sessionCoordinator.identityEpoch.value;
     selectedPaymentCardId.value = id;
     paymentCardLoading.value = Boolean(id);
     if (!id) return;
@@ -431,7 +434,12 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     try {
       const selectedPlan = plan.value;
       const card = await bankRechargeApi.sharedCardDetail(id, selectedPlan);
-      if (generation !== paymentCardGeneration || selectedPaymentCardId.value !== id || disposed)
+      if (
+        generation !== paymentCardGeneration ||
+        selectedPaymentCardId.value !== id ||
+        disposed ||
+        cardIdentityEpoch !== sessionCoordinator.identityEpoch.value
+      )
         return;
       if (busy.value || active.value) {
         selectedPaymentCardId.value = '';
@@ -453,6 +461,17 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
       // 卡号监听会清除旧选择；完整资料写入后再登记本次卡号对应的编号。
       selectedPaymentCardId.value = id;
       await nextTick();
+      await cardCvc.load(
+        id,
+        selectedPlan,
+        () =>
+          !disposed &&
+          generation === paymentCardGeneration &&
+          selectedPaymentCardId.value === id &&
+          !busy.value &&
+          !active.value &&
+          cardIdentityEpoch === sessionCoordinator.identityEpoch.value
+      );
       if (!disposed && generation === paymentCardGeneration && selectedPaymentCardId.value === id)
         options.clearPaymentValidation?.();
     } catch (cause) {
@@ -1928,6 +1947,7 @@ export function useAutoRecharge(options: { clearPaymentValidation?: () => void }
     savedPaymentCards,
     paymentCardsQuery,
     paymentCardLoading,
+    paymentCardCvcMessage: cardCvc.message,
     resettingPaymentFields,
     selectSavedCard,
     nameMatch,

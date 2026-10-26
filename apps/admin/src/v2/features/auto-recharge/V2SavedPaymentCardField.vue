@@ -28,6 +28,7 @@
       当前套餐暂无可用银行卡，请先在银行卡共享池配置。
     </p>
     <p v-if="detailLoading" class="recharge-note" role="status">正在读取银行卡资料，请稍候。</p>
+    <p v-else-if="cvcMessage" class="recharge-note" role="status">{{ cvcMessage }}</p>
     <p v-if="error" class="recharge-error" role="alert">
       {{ getApiErrorMessage(error) }}
       <AppButton link variant="primary" @click="$emit('retry')">重试</AppButton>
@@ -45,6 +46,7 @@ defineProps<{
   cards: SharedPaymentCard[];
   loading: boolean;
   detailLoading?: boolean;
+  cvcMessage?: string;
   error: unknown;
 }>();
 defineEmits<{ select: [id: string]; retry: [] }>();

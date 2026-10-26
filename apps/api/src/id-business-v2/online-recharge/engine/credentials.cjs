@@ -56,7 +56,13 @@ async function start(options = {}) {
       return reply(401, { error: '内部凭证无效' });
     const pathname = (req.url || '').split('?')[0];
     if (
-      !['/credentials', '/credentials/status', '/credentials/forget', '/health'].includes(pathname)
+      ![
+        '/credentials',
+        '/credentials/status',
+        '/credentials/forget',
+        '/credentials/bitbrowser',
+        '/health'
+      ].includes(pathname)
     )
       return reply(404, { error: '接口不存在' });
     if (pathname === '/health') {
@@ -75,6 +81,18 @@ async function start(options = {}) {
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       cleanup();
+      if (pathname === '/credentials/bitbrowser') {
+        if (!cardId(body.id) || Object.keys(body).some((key) => key !== 'id'))
+          return reply(400, { error: '资料标识无效' });
+        const value = values.get(body.id);
+        if (!value || owners.has(body.id))
+          return reply(200, { cvc: null, expiresAt: null, state: value ? 'busy' : 'unavailable' });
+        return reply(200, {
+          cvc: value.cvc,
+          expiresAt: new Date(value.expires).toISOString(),
+          state: 'available'
+        });
+      }
       if (pathname === '/credentials') {
         if (
           !Array.isArray(body.cards) ||

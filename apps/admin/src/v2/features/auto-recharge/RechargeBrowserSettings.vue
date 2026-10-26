@@ -101,7 +101,7 @@
             >
           </div>
           <p class="recharge-settings-note">
-            配置仅归本人使用。不同员工可在不同电脑同时执行；同一连接每次执行一笔任务。
+            点击“保存设置”后，当前连接和参数仅为本系统账号保存，刷新后恢复；其他系统账号的设置独立。同一连接每次执行一笔任务。
           </p>
         </fieldset>
         <RechargeProxyOptions

@@ -17,6 +17,7 @@ import { createOnlineRechargeCodes } from '../cdk-generator';
 import { assertV2ExpectedUpdatedAt, normalizeV2ExpectedUpdatedAt } from '../../runtime/public-api';
 import {
   lockSharedBankCards,
+  assertSharedCardPlan,
   sharedCardPlans,
   SHARED_CARD_PLANS
 } from '../../bank-card-pool/public-api';
@@ -161,6 +162,29 @@ export class OnlineRechargeAssetsRepository {
     if (action === 'create') return this.importCards([input], operator);
     if (action === 'import') return this.importCards(input.cards, operator);
     const rowId = id(input.id);
+    if (action === 'bitbrowser-cvc') {
+      assertOnlineSensitive(operator);
+      text(input.reason, '查看原因', 500);
+      return this.repository.transaction(
+        `card:${rowId}`,
+        async (tx) => {
+          await lockSharedBankCards(tx);
+          const card = await tx.onlineRechargeCard.findUnique({ where: { id: rowId } });
+          if (!card) throw new NotFoundException('银行卡不存在');
+          if (card.status !== 'active' || card.leaseOwner)
+            throw new BadRequestException('银行卡已停用或正在使用，不能读取本次安全码');
+          assertSharedCardPlan(card.allowedPlans, input.plan);
+          const credential = await this.memory.forBitBrowser(rowId);
+          await this.repository.log(tx, 'cards.bitbrowser_credentials', operator, rowId, {
+            available: credential.state === 'available',
+            plan: input.plan,
+            reason: '为本次比特充值读取临时凭据'
+          });
+          return credential;
+        },
+        ['audit-logs']
+      );
+    }
     if (action === 'cvc') {
       const row = await this.repository.read((db) =>
         db.onlineRechargeCard.findUnique({ where: { id: rowId } })

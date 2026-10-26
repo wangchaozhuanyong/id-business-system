@@ -203,6 +203,7 @@
                   :cards="savedPaymentCards"
                   :loading="paymentCardsQuery.phase.value === 'initial-loading'"
                   :detail-loading="paymentCardLoading"
+                  :cvc-message="paymentCardCvcMessage"
                   :error="paymentCardsQuery.error.value"
                   @select="selectSavedCard"
                   @retry="paymentCardsQuery.refresh"
@@ -411,6 +412,7 @@ const {
   savedPaymentCards,
   paymentCardsQuery,
   paymentCardLoading,
+  paymentCardCvcMessage,
   resettingPaymentFields,
   selectSavedCard,
   bankCurrenciesQuery,
