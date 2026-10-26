@@ -50,6 +50,47 @@ function input(value: unknown) {
   };
 }
 describe('不付款诊断文件合同', () => {
+  it('首次和首页真实回执通过原附件接口保存，保留自动处理停点', async () => {
+    const root = join(project, '.runtime/session-probe-repair-20261026/artifacts');
+    await mkdir(root, { recursive: true });
+    const directory = await mkdtemp(join(root, 'fixture-'));
+    try {
+      const bootstrapDiagnostics = {
+        initialSessionProbe: {
+          state: 'challenge',
+          httpStatus: 403,
+          cfMitigated: 'challenge',
+          complete: true,
+          automaticResult: 'solver_disabled',
+          automaticAttempted: false
+        },
+        homepageSessionProbe: { httpStatus: 200, hasValidUser: true, matchesTargetAccount: true }
+      };
+      const f = fixture(directory);
+      const uploaded = await f.repository.upload(input({ ...report, bootstrapDiagnostics }));
+      const { readFile } = await import('node:fs/promises');
+      expect(
+        JSON.parse(await readFile(join(directory, uploaded.filename), 'utf8')).bootstrapDiagnostics
+      ).toEqual(bootstrapDiagnostics);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  for (const bootstrapDiagnostics of [
+    { rawBody: 'synthetic-private' },
+    { initialSessionProbe: { httpStatus: 403, body: 'synthetic-private' } },
+    { initialSessionProbe: { state: 'synthetic-private' } },
+    { initialSessionProbe: { elapsedMs: 4242424242424242 } },
+    { initialSessionProbe: ['synthetic-private'] },
+    { automaticResult: 'synthetic-private' }
+  ])
+    it('登录诊断附件拒绝夹带正文、凭据及未知枚举', async () => {
+      const f = fixture(join(project, '.runtime/session-probe-repair-20261026/artifacts'));
+      await expect(f.repository.upload(input({ ...report, bootstrapDiagnostics }))).rejects.toThrow(
+        '诊断文件字段无效'
+      );
+      expect(f.workers.withLease).not.toHaveBeenCalled();
+    });
   it('有效受控报告通过原证据接口保存，不连接数据库', async () => {
     const root = join(project, '.runtime/unpaid-validation-20261024');
     await mkdir(root, { recursive: true });

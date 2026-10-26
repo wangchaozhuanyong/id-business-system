@@ -208,7 +208,7 @@
     {
       "path": "subscription-diagnostics.cjs",
       "originalSha256": null,
-      "adaptedSha256": "f3cff17e105c2c7a1899e850e52a11a886097bcaea0e5665a451001194b7ca21",
+      "adaptedSha256": "ee7eb0c19372dca3b6e26f42f57a290e446c87fd287c4a789e8add8d9b699c50",
       "changed": true,
       "reason": "Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
     },
@@ -369,7 +369,7 @@
     {
       "path": "test/execution-budget.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a7ec8946366a11f39066afa9c1fb9d8a69789146e692775c4c3c1706d2d94358",
+      "adaptedSha256": "3664af049947b8607107d52b40f3053aa3f55d7754da024e9b7c2e8ef659f7be",
       "changed": true,
       "reason": "2026-10-21 Bound in-flight session bootstrap and owned-page cleanup, reuse complete checkout readiness within the original budget, preserve interruption/payment facts and recover completed redacted evidence under the original lease; offline regressions only."
     },
@@ -377,7 +377,7 @@
       "path": "test/human-verification.test.cjs",
       "originalSha256": null,
       "changed": true,
-      "adaptedSha256": "aa625d2f4e9ec90cde7afba88c013db965478c91dc7d1734c187f75bf23dcf9a",
+      "adaptedSha256": "3c476b516b4eba2fdd697bba69436b3f2acc558828deeb445ad16d040171cda5",
       "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
     },
     {
@@ -586,7 +586,7 @@
     {
       "path": "test/upstream-session-transition.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "cb8fe2bbe4bb1a3d4f2e7e962bdcd38cb1870e348b643a7a04f75f52563d39cd",
+      "adaptedSha256": "3825a20635addd284699aee1121a18de3a47f8328356bb05f64e15c8e4139feb",
       "changed": true,
       "reason": "2026-10-19 Real isolated Chromium regressions for the frozen guest-homepage transition, verified-cookie empty-shell rejection, cancellation during pending reload and late completion, exact homepage and visible-challenge boundaries. 2026-10-19 Cover stale guest verdicts, late guest UI at both final reads and navigation during recovery with real isolated Chromium; retain the sixteen-test total and all cancellation, challenge, origin and budget rejection cases.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
     },
@@ -726,7 +726,7 @@
     {
       "path": "upstream/index.js",
       "originalSha256": "1694958e105ebe962494d3c88bbf2f0c6b22e49028e46cfc77801e2c9f814855",
-      "adaptedSha256": "2f8c03eee708628a67fd5f2cd79bb84fde4ccfcd50202d6a51337ca81757fe43",
+      "adaptedSha256": "93ca1d7aad80478b65baf61043d0e3d8125f0c10d70a1a1e8f48e4702bb42ec8",
       "changed": true,
       "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Distinguish incomplete observed candidate counts from absence; report known cancellation rules and possible navigation timing without asserting a root cause. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout. 2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes. Preserve bounded request completion, payment/frame timeline and frozen success/failure diagnostics without changing checkout behavior.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons through unpaid reports; isolated child, artifact and UI regressions; no retry, binding, login or payment behavior changes. 2026-10-25 Preserve the existing proxy failure code while describing the shared probe budget accurately; no checkout or payment change."
     },
@@ -796,7 +796,7 @@
     {
       "path": "upstream/session-auth.js",
       "originalSha256": "0c3aeaba4e60f77746e399c2d5c1037b3632f7430b5559c43f81e2c413c2deca",
-      "adaptedSha256": "99ad2f8fc0dddf39de3932785210f9b09e241686b29119bb85a06010c1fdba9c",
+      "adaptedSha256": "036e7664989db925024e484955c515118547103e5f20d844f4518cefd8807d92",
       "changed": true,
       "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Remove the page fetch override and synthetic CSRF routing; preserve native fetch and server CSRF/Cookie pairing, retain exact GET Session network compatibility and existing login flow. 2026-10-22 Restore native Session and CSRF responses by removing Session fulfill/fallback; preserve complete input metadata, Cookie chunks and bootstrap; observe unchanged login cancellation rules with fixed IDs.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-24 Controlled non-payment validation, classified reads/creation failures and bounded task evidence; preserve payment submission protection."
     },
@@ -810,7 +810,7 @@
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "7e71c82e9e575516163db1adb8d8e6959997cd0a7950f187a3016b6f7a39733e",
+      "adaptedSha256": "f49a4d9bb7718f5e6d9c1c686fadaf41c7179bbb70ee558a2304a58aa1097c73",
       "changed": true,
       "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. Match the pinned upstream 20-second complete-response GET limit within unchanged overall deadlines; exclusive diagnostics use one primary read and reserve one complete comparison without authorizing payments. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
     },
@@ -901,14 +901,14 @@
     {
       "path": "test/unpaid-validation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "5cb1a9455351ea671f80cbeeba4faefff0368896bb7c821a057b506f87db362c",
+      "adaptedSha256": "790aeedb1760768616241cc786acef60b54b5ed27ef5ffe717dad75c17c41b2d",
       "changed": true,
       "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: retain checkout preparation and incomplete-read evidence across credential resume. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons through unpaid reports; isolated child, artifact and UI regressions; no retry, binding, login or payment behavior changes. 2026-10-25 Assert accurate shared probe exhaustion message. 2026-10-25 Isolated country interaction projection and evidence upload classification regressions; no real payment."
     },
     {
       "path": "unpaid-validation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "3221d1f5560cfeb677a1ca66901f715267b1e4bf006a159096811b11e626d250",
+      "adaptedSha256": "6f23d22c51bfd881a715ed18245ae7a922b624525bfef27a73a27ebd0333341f",
       "changed": true,
       "reason": "2026-10-24 Opt-in non-payment validation and isolated regression coverage; no payment submission. 2026-10-25: pre-check CVC, persist and reuse the original checkout after credentials resume, wait for the official preparing screen within existing deadlines. 2026-10-25 Preserve bounded value-free field/read diagnostics through unpaid result and artifact projection; unchanged selectors, read budgets, retries and payment behavior. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons through unpaid reports; isolated child, artifact and UI regressions; no retry, binding, login or payment behavior changes. 2026-10-25 Describe shared five-probe exhaustion without falsely claiming five consecutive network failures."
     },
@@ -936,7 +936,7 @@
     {
       "path": "test/browser-profile.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "fcc6110431d63eacb7fb60735cd1daf3adf1837cbbf8ae4e5defa862b189ca72",
+      "adaptedSha256": "db4956c13799c63ee55dfacc3e9bf2505704ef0b4b5d9994b96612a8811bbd3d",
       "changed": true,
       "reason": "Account-bound native persistent browser state and isolated lifecycle regression verification. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons; test unchanged five-request retries and early exit-binding failure without business requests. 2026-10-25 Native cookie/storage isolation and legacy preservation, fresh Session verification, partition reuse and cross-process lock; shared probe limit, cancellation, stale metadata and invalid binding regressions."
     }

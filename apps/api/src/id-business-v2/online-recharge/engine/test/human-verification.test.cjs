@@ -201,6 +201,7 @@ for (const mode of ['completed', 'no_actionable', 'identity_mismatch', 'cancelle
 
 for (const mode of [
   'completed',
+  'automatic_native',
   'preflight',
   'subscription_identity_mismatch',
   'identity_mismatch',
@@ -222,6 +223,29 @@ for (const mode of [
       noClick: mode === 'deadline'
     };
     const f = await fixture(t, options);
+    if (mode === 'automatic_native') {
+      const human = require('../upstream/human-verification');
+      const originalClear = human.clearHumanVerification;
+      const originalRoot = process.env.ONLINE_RECHARGE_PROFILE_ROOT;
+      const originalEnabled = process.env.HCAPTCHA_SOLVER_ENABLED;
+      process.env.ONLINE_RECHARGE_PROFILE_ROOT = __dirname;
+      process.env.HCAPTCHA_SOLVER_ENABLED = '1';
+      human.clearHumanVerification = async (page) => {
+        assert.equal(page, f.page);
+        await page.evaluate(() => {
+          document.body.innerHTML =
+            '<main><button>New chat</button><textarea id="prompt-textarea"></textarea></main>';
+        });
+        return { cleared: true };
+      };
+      t.after(() => {
+        human.clearHumanVerification = originalClear;
+        if (originalRoot === undefined) delete process.env.ONLINE_RECHARGE_PROFILE_ROOT;
+        else process.env.ONLINE_RECHARGE_PROFILE_ROOT = originalRoot;
+        if (originalEnabled === undefined) delete process.env.HCAPTCHA_SOLVER_ENABLED;
+        else process.env.HCAPTCHA_SOLVER_ENABLED = originalEnabled;
+      });
+    }
     let reads = 0,
       waits = 0;
     const account = {
@@ -278,7 +302,14 @@ for (const mode of [
       sessionRaw: JSON.stringify(session),
       authDiagnostics: observer,
       deadlineAt: performance.now() + (mode === 'deadline' ? 3000 : 10000),
-      ...(mode === 'no_callback' ? {} : { onHumanVerification: callback })
+      ...(mode === 'no_callback'
+        ? {}
+        : {
+            onHumanVerification:
+              mode === 'automatic_native'
+                ? require('../unpaid-validation.cjs').automaticVerification
+                : callback
+          })
     };
     let result;
     if (['preflight', 'subscription_identity_mismatch'].includes(mode)) {
@@ -301,10 +332,16 @@ for (const mode of [
         token,
         queryOptions
       );
-    assert.equal(result.ok, ['completed', 'preflight'].includes(mode));
+    assert.equal(result.ok, ['completed', 'preflight', 'automatic_native'].includes(mode));
     assert.equal(
       reads,
-      ['completed', 'preflight', 'subscription_identity_mismatch', 'still_blocked'].includes(mode)
+      [
+        'completed',
+        'preflight',
+        'automatic_native',
+        'subscription_identity_mismatch',
+        'still_blocked'
+      ].includes(mode)
         ? 2
         : 1
     );
@@ -324,6 +361,7 @@ for (const mode of [
         : 0
     );
     assert.equal(f.page.isClosed(), false, 'Borrowed original page stays owned by the caller');
+    if (mode === 'automatic_native') assert.deepEqual(f.calls, []);
     assert.equal(
       f.requests.some(
         (request) => request.method !== 'GET' || /checkout|payment/.test(request.path)

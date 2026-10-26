@@ -303,6 +303,43 @@ describe('执行器无结果的事务收尾', () => {
       }
     });
   });
+  it('不付款挑战失败入库保留首次HTTP探针且拒绝原始会话与响应体', async () => {
+    const f = fixture({ operation: 'debug', payload: { validationMode: 'ready_before_payment' } });
+    const probe = {
+      httpStatus: 403,
+      state: 'challenge',
+      cfMitigated: 'challenge',
+      classification: 'CF_CHALLENGE',
+      complete: true
+    };
+    const result = {
+      errorCode: 'CHALLENGE_BLOCKED',
+      challengeDetected: true,
+      bootstrapDiagnostics: {
+        initialSessionProbe: {
+          ...probe,
+          body: 'synthetic-private-body',
+          sessionToken: 'synthetic-private-session'
+        }
+      },
+      validationReport: {
+        outcome: 'challenge_blocked',
+        bootstrapDiagnostics: { initialSessionProbe: probe }
+      }
+    };
+    const reply = await f.worker.finish(
+      f.rpc({ status: 'failed', executorTerminated: true, result }),
+      true
+    );
+    expect(reply.status).toBe('failed');
+    expect(f.row.result).toMatchObject({
+      bootstrapDiagnostics: { initialSessionProbe: probe },
+      validationReport: { bootstrapDiagnostics: { initialSessionProbe: probe } }
+    });
+    expect(JSON.stringify(f.row.result)).not.toContain('synthetic-private');
+    expect(f.row.paymentStarted).toBe(false);
+    expect(f.row.confirmedPaid).toBe(false);
+  });
   for (const evidence of [
     { paymentStarted: true },
     { confirmedPaid: true },

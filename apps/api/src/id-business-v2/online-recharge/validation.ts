@@ -150,13 +150,179 @@ export function sessionAccountId(value: string | null): string {
     return '';
   }
 }
+export function safeSessionProbe(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  const enums: Record<string, readonly string[]> = {
+    state: [
+      'verified',
+      'invalid',
+      'mismatch',
+      'challenge',
+      'blocked',
+      'timeout',
+      'network_error',
+      'unconfirmed'
+    ],
+    contentType: ['application/json', 'text/html', 'text/plain', 'other', 'unknown'],
+    cfMitigated: ['challenge', 'absent', 'unknown'],
+    classification: [
+      'CF_CHALLENGE',
+      'POLICY_OR_REGION_BLOCK',
+      'AUTH_SESSION_REJECTED',
+      'UNKNOWN_403',
+      'NOT_CLASSIFIED'
+    ],
+    errorCode: [
+      'unsupported_country',
+      'unsupported_country_region_territory',
+      'region_not_supported',
+      'subscription_sharing',
+      'invalid_token',
+      'token_expired',
+      'invalid_session',
+      'session_expired',
+      'invalid_api_key',
+      'access_denied',
+      'permission_denied',
+      'UNKNOWN'
+    ],
+    errorType: ['invalid_request_error', 'authentication_error', 'permission_error', 'UNKNOWN'],
+    automaticResult: [
+      'cleared',
+      'solver_disabled',
+      'not_actionable',
+      'failed',
+      'timeout',
+      'session_invalid'
+    ]
+  };
+  for (const [key, allowed] of Object.entries(enums))
+    if (typeof input[key] === 'string' && allowed.includes(input[key])) result[key] = input[key];
+  for (const key of [
+    'cfRayPresent',
+    'hasValidUser',
+    'matchesTargetAccount',
+    'manualActionable',
+    'manualCompleted',
+    'automaticActionable',
+    'automaticAttempted',
+    'automaticCompleted',
+    'complete'
+  ])
+    if (typeof input[key] === 'boolean') result[key] = input[key];
+  if (
+    typeof input.httpStatus === 'number' &&
+    Number.isInteger(input.httpStatus) &&
+    input.httpStatus >= 100 &&
+    input.httpStatus <= 599
+  )
+    result.httpStatus = input.httpStatus;
+  if (
+    typeof input.elapsedMs === 'number' &&
+    Number.isFinite(input.elapsedMs) &&
+    input.elapsedMs >= 0 &&
+    input.elapsedMs <= 86400000
+  )
+    result.elapsedMs = Math.round(input.elapsedMs);
+  if (input.markers && typeof input.markers === 'object' && !Array.isArray(input.markers)) {
+    const markers: Record<string, boolean> = {};
+    for (const key of ['challengePlatform', 'challengeOptions', 'justAMoment', 'unusualActivity']) {
+      const item = (input.markers as Record<string, unknown>)[key];
+      if (typeof item === 'boolean') markers[key] = item;
+    }
+    if (Object.keys(markers).length) result.markers = markers;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+export function safeBootstrapDiagnostics(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  const enums: Record<string, readonly string[]> = {
+    reason: [
+      'input_missing',
+      'identity_missing',
+      'login_redirect',
+      'visible_login_content',
+      'visible_login_controls',
+      'login_not_confirmed',
+      'navigation_failed',
+      'verification_failed',
+      'page_closed',
+      'runtime_failed'
+    ],
+    lastAwait: [
+      'navigation',
+      'wait',
+      'challenge',
+      'login_controls',
+      'logged_in_ui',
+      'ui_stability',
+      'verification',
+      'session_api'
+    ],
+    automaticResult: [
+      'cleared',
+      'solver_disabled',
+      'not_actionable',
+      'failed',
+      'timeout',
+      'session_invalid'
+    ]
+  };
+  for (const [key, allowed] of Object.entries(enums))
+    if (typeof input[key] === 'string' && allowed.includes(input[key])) result[key] = input[key];
+  for (const key of [
+    'authApiVerified',
+    'visibleLogin',
+    'loggedInUi',
+    'redirectDetected',
+    'challengeDetected',
+    'pageClosed',
+    'accountCheckHasAccountFacts',
+    'accountCheckIdentityMatches',
+    'automaticActionable',
+    'automaticAttempted',
+    'automaticCompleted'
+  ])
+    if (typeof input[key] === 'boolean') result[key] = input[key];
+  for (const key of ['initialSessionProbe', 'homepageSessionProbe']) {
+    const probe = safeSessionProbe(input[key]);
+    if (probe) result[key] = probe;
+  }
+  if (
+    typeof input.accountCheckHttpStatus === 'number' &&
+    Number.isInteger(input.accountCheckHttpStatus) &&
+    input.accountCheckHttpStatus >= 100 &&
+    input.accountCheckHttpStatus <= 599
+  )
+    result.accountCheckHttpStatus = input.accountCheckHttpStatus;
+  return Object.keys(result).length ? result : undefined;
+}
 export function sanitize(value: unknown, field = '', publicView = false): unknown {
   if (Array.isArray(value)) return value.map((item) => sanitize(item, '', publicView));
   if (value && typeof value === 'object')
     return Object.fromEntries(
       Object.entries(value)
+        .flatMap<[string, unknown]>(([key, item]) => {
+          if (key === 'bootstrapDiagnostics') {
+            const diagnostics = safeBootstrapDiagnostics(item);
+            return diagnostics ? [[key, diagnostics]] : [];
+          }
+          // These names describe a bounded projection, never a Session payload.
+          // Project before the credential-name filter; never exempt their raw contents.
+          if (key === 'initialSessionProbe' || key === 'homepageSessionProbe') {
+            const probe = safeSessionProbe(item);
+            return probe ? [[key, probe]] : [];
+          }
+          return [[key, item]];
+        })
         .filter(
           ([key]) =>
+            key === 'initialSessionProbe' ||
+            key === 'homepageSessionProbe' ||
             !/token|session|cvc|cvv|card[_-]?number|password|secret|api.?key|authorization|cookie|Encrypted|checkoutUrl|paymentUrl|publicToken|^(?:pan|number|cardno|card_no)$/i.test(
               key
             )

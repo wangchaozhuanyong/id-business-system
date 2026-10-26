@@ -162,9 +162,9 @@ async function run(runOptions = {}) {
     const debugOnly = process.env.CHECKOUT_DEBUG_ONLY === '1';
     const validation = runOptions.unpaidValidation === true ? require('../unpaid-validation.cjs') : null;
     const nativeSession = Boolean(process.env.ONLINE_RECHARGE_PROFILE_ROOT);
-    const verificationHandler = nativeSession ? async () => {
+    const verificationHandler = validation ? validation.automaticVerification : nativeSession ? async () => {
         throw Object.assign(new Error('官网要求进一步验证，已停止本次任务'), { code: 'CHALLENGE_BLOCKED', challengeDetected: true });
-    } : validation ? validation.automaticVerification : require('../human-verification.cjs').waitForHumanVerification;
+    } : require('../human-verification.cjs').waitForHumanVerification;
 
     let proxyCleanup = async () => { };
     let browserSession = null;

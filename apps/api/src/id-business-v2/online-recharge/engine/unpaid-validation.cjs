@@ -307,6 +307,13 @@ function finish(result = {}, snapshot = current) {
           .slice(0, 9)
       : [],
     ...(formDiagnostics ? { formDiagnostics } : {}),
+    ...(result.bootstrapDiagnostics
+      ? {
+          bootstrapDiagnostics: require('./upstream/session-auth').safeBootstrapDiagnostics(
+            result.bootstrapDiagnostics
+          )
+        }
+      : {}),
     ...(result.checkoutOpenDiagnostics
       ? {
           checkoutOpenDiagnostics: require('./upstream/chatgpt').safeCheckoutOpenDiagnostics(
@@ -321,19 +328,46 @@ function finish(result = {}, snapshot = current) {
 }
 async function automaticVerification(page, options) {
   if (current) current.pendingChallenge = true;
-  const verification = await require('./upstream/human-verification').clearHumanVerification(page, {
-    ...options,
-    requireCheckoutReady: false,
-    checkCheckoutLoad: false
-  });
+  if (process.env.HCAPTCHA_SOLVER_ENABLED === '0')
+    throw Object.assign(new Error('自动验证未启用，已停止本次不付款验证'), {
+      code: 'CHALLENGE_BLOCKED',
+      challengeDetected: true,
+      automaticAttempted: false,
+      automaticResult: 'solver_disabled'
+    });
+  let verification;
+  try {
+    verification = await require('./upstream/human-verification').clearHumanVerification(page, {
+      ...options,
+      requireCheckoutReady: false,
+      checkCheckoutLoad: false
+    });
+  } catch (error) {
+    if (error?.code === 'LEASE_LOST' || options?.signal?.aborted) throw error;
+    throw Object.assign(new Error('自动验证未完成，已停止本次不付款验证'), {
+      code: 'CHALLENGE_BLOCKED',
+      challengeDetected: true,
+      automaticAttempted: true,
+      automaticResult: error?.code === 'VERIFICATION_TIMEOUT' ? 'timeout' : 'failed'
+    });
+  }
   if (verification.sessionRequired === true && current) current.pendingChallenge = false;
   if (!verification.cleared)
     throw Object.assign(new Error('官网验证未完成，已停止本次不付款验证'), {
       code: verification.sessionRequired ? 'SESSION_INVALID' : 'CHALLENGE_BLOCKED',
-      challengeDetected: verification.sessionRequired !== true
+      challengeDetected: verification.sessionRequired !== true,
+      automaticAttempted: true,
+      automaticResult: verification.sessionRequired
+        ? 'session_invalid'
+        : verification.code === 'VERIFICATION_TIMEOUT'
+          ? 'timeout'
+          : 'failed'
     });
   if (current) current.pendingChallenge = false;
-  return { completed: true };
+  return { completed: true, automaticAttempted: true, automaticResult: 'cleared' };
+}
+function usesAutomaticVerification(callback) {
+  return callback === automaticVerification;
 }
 async function buttonReady(page) {
   const locator = page.getByRole('button', {
@@ -501,6 +535,7 @@ module.exports = {
   classify,
   safeFormDiagnostics,
   automaticVerification,
+  usesAutomaticVerification,
   prepare,
   buttonReady,
   STAGES,

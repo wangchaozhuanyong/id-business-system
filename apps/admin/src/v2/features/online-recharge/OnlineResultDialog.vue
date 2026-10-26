@@ -91,6 +91,7 @@ import OnlineHumanVerification from './OnlineHumanVerification.vue';
 import { canUseOnlineAction } from './permissions';
 import { useOnlineTask } from './useOnlineTask';
 import type { PublicTask } from './contracts';
+import { sessionProbeEntries } from './unpaid-validation-labels';
 const props = defineProps<{ modelValue: boolean; result: unknown }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; copied: [] }>();
 const labels: Record<string, string> = {
@@ -114,6 +115,7 @@ const labels: Record<string, string> = {
   queryError: '订阅查询失败原因',
   queryErrorCode: '订阅查询结果',
   diagnostics: '查询网络诊断',
+  bootstrapDiagnostics: '登录诊断',
   queryDiagnostics: '订阅查询网络诊断',
   compareDiagnostics: '只读对照结果（不替代订阅核验）',
   transport: '读取方式',
@@ -335,6 +337,12 @@ const entries = computed(() => {
     }));
 });
 function displayValue(key: string, value: unknown): string {
+  if (key === 'bootstrapDiagnostics')
+    return (
+      sessionProbeEntries(value)
+        .map((row) => `${row.label}：${row.value}`)
+        .join('\n') || '未记录详细登录回执'
+    );
   if (key === 'networkCode') {
     if (value == null) return '—';
     const meanings: Record<string, string> = {

@@ -200,6 +200,8 @@ async function fixture(t, options = {}) {
       if (name === './verification-runtime') return require('../upstream/verification-runtime');
       if (name === '../subscription-diagnostics.cjs')
         return require('../subscription-diagnostics.cjs');
+      if (name === '../unpaid-validation.cjs') return require('../unpaid-validation.cjs');
+      if (name === '../human-verification.cjs') return require('../human-verification.cjs');
       throw Error('Unexpected synthetic dependency');
     }
   });
@@ -243,6 +245,40 @@ async function within(promise, timeoutMs) {
     clearTimeout(timer);
   }
 }
+
+test('unpaid native homepage uses its original automatic handler then verifies the real session', async (t) => {
+  const f = await fixture(t, { challengeInitially: true });
+  const validation = require('../unpaid-validation.cjs');
+  const owner = require('../human-verification.cjs');
+  const originalActionable = owner.hasActionableHumanVerification;
+  const originalClear = human.clearHumanVerification;
+  const enabled = process.env.HCAPTCHA_SOLVER_ENABLED;
+  let calls = 0;
+  process.env.HCAPTCHA_SOLVER_ENABLED = '1';
+  owner.hasActionableHumanVerification = async () => true;
+  human.clearHumanVerification = async (page) => {
+    calls++;
+    assert.equal(page, f.page);
+    await page.setContent(ready);
+    return { cleared: true };
+  };
+  try {
+    const result = await f.run({
+      nativeSession: true,
+      onHumanVerification: validation.automaticVerification
+    });
+    assert.equal(result.bootstrapDiagnostics.automaticCompleted, true);
+    assert.equal(result.bootstrapDiagnostics.homepageSessionProbe.httpStatus, 200);
+    assert.equal(result.bootstrapDiagnostics.homepageSessionProbe.matchesTargetAccount, true);
+    assert.equal(calls, 1);
+    assert.equal(f.state.writes, 0);
+  } finally {
+    owner.hasActionableHumanVerification = originalActionable;
+    human.clearHumanVerification = originalClear;
+    if (enabled === undefined) delete process.env.HCAPTCHA_SOLVER_ENABLED;
+    else process.env.HCAPTCHA_SOLVER_ENABLED = enabled;
+  }
+});
 
 function noBusinessActions(f) {
   assert.equal(f.state.writes, 0);
