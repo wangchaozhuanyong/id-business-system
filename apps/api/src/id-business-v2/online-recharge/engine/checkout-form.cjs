@@ -1087,17 +1087,37 @@ async function candidateInteraction(item, handle, key, deadline, state, allowScr
     timeout(deadline, state.signal);
     const scrollStarted = Date.now();
     try {
-      await observedRead(
-        () =>
-          handle.scrollIntoViewIfNeeded({
-            timeout: Math.min(500, timeout(deadline, state.signal))
-          }),
-        deadline,
-        state.signal,
-        state,
-        'candidate_scroll',
-        item.frame
-      );
+      const scrollDeadline = Math.min(deadline, scrollStarted + 500);
+      const scroll = (target, frame) =>
+        observedRead(
+          () => target.scrollIntoViewIfNeeded({ timeout: timeout(scrollDeadline, state.signal) }),
+          deadline,
+          state.signal,
+          state,
+          'candidate_scroll',
+          frame
+        );
+      if (point.reason === 'outside_viewport' && pointChecks.at(-1)?.scope === 'frame_owner') {
+        // The control already has a valid point in its own document. Bring its
+        // iframe hosts into view from the outside in, sharing the same 500ms.
+        const owners = [];
+        try {
+          for (let frame = item.frame; frame?.parentFrame(); frame = frame.parentFrame()) {
+            const owner = await observedRead(
+              () => frame.frameElement(),
+              deadline,
+              state.signal,
+              state,
+              'frame_element',
+              frame
+            );
+            owners.push({ owner, frame });
+          }
+          for (const { owner, frame } of owners.reverse()) await scroll(owner, frame);
+        } finally {
+          await Promise.all(owners.map(({ owner }) => owner.dispose().catch(() => {})));
+        }
+      } else await scroll(handle, item.frame);
       trace.scroll = { state: 'completed', durationMs: Date.now() - scrollStarted };
     } catch (error) {
       trace.scroll = {

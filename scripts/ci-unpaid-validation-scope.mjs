@@ -49,6 +49,22 @@ export const subscriptionBodyFallbackPaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 
+export const countryFrameScrollPaths = Object.freeze([
+  ...['SOURCE_MANIFEST.json', 'checkout-form.cjs', 'test/checkout-form.test.cjs'].map(
+    (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
+  ),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export function isCountryFrameScrollOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    countryFrameScrollPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every((p) => countryFrameScrollPaths.includes(p) || unpaidValidationControls.includes(p))
+  );
+}
+
 // Exact unpaid validation batch. Adding another business path restores full checks.
 export const unpaidValidationPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
@@ -285,6 +301,7 @@ export function isUnpaidValidationOnly(paths) {
     [
       sessionDiagnosticPaths,
       subscriptionBodyFallbackPaths,
+      countryFrameScrollPaths,
       unpaidValidationPaths,
       checkoutResumePaths,
       persistentProfilePaths,

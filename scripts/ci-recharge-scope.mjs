@@ -10,6 +10,7 @@ import {
 } from './ci-recharge-plan-billing-scope.mjs';
 import {
   isFreshSessionOnly,
+  isCountryFrameScrollOnly,
   isProfileLockRecoveryOnly,
   isPersistentProfileOnly,
   isProfileEgressLifecycleOnly,
@@ -3176,7 +3177,11 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];
   if (isRechargePlanBillingSourcePaths(paths)) return ['guards', 'admin', 'api', 'migration'];
   if (isRechargePlanBillingPublicationOnly(paths)) return ['guards'];
-  if (isProfileLockRecoveryOnly(paths) || isFreshSessionOnly(paths))
+  if (
+    isProfileLockRecoveryOnly(paths) ||
+    isFreshSessionOnly(paths) ||
+    isCountryFrameScrollOnly(paths)
+  )
     return ['guards', 'online-engine'];
   if (isProfileEgressLifecycleOnly(paths)) return ['guards', 'admin', 'online-engine'];
   if (isPersistentProfileOnly(paths)) return ['guards', 'online-engine'];

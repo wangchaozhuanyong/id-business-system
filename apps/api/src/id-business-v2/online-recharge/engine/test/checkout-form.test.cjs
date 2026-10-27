@@ -53,6 +53,23 @@ function interceptCountryScroll(t, page, scroll) {
   });
   return () => calls;
 }
+function interceptFrameScroll(t, frame, scroll) {
+  const frameElement = frame.frameElement;
+  let calls = 0;
+  frame.frameElement = async function (...args) {
+    const owner = await frameElement.apply(this, args);
+    const nativeScroll = owner.scrollIntoViewIfNeeded.bind(owner);
+    owner.scrollIntoViewIfNeeded = async (options) => {
+      calls++;
+      return scroll(owner, nativeScroll, options);
+    };
+    return owner;
+  };
+  t.after(() => {
+    frame.frameElement = frameElement;
+  });
+  return () => calls;
+}
 let browser;
 test.before(async () => {
   browser = await chromium.launch({
@@ -100,20 +117,8 @@ test('embedded country reports the outer viewport that blocks it without selecti
     t,
     '<div style="height:2000px"></div>' + iframe(countryHtml + addressHtml)
   );
-  const frame = page.frames()[1],
-    locator = frame.locator;
-  frame.locator = function (selector, ...args) {
-    const result = locator.call(this, selector, ...args);
-    if (selector.includes('[autocomplete="billing country"]')) {
-      const handles = result.elementHandles.bind(result);
-      result.elementHandles = async () => {
-        const all = await handles();
-        for (const handle of all) handle.scrollIntoViewIfNeeded = async () => {};
-        return all;
-      };
-    }
-    return result;
-  };
+  const frame = page.frames()[1];
+  const scrolls = interceptFrameScroll(t, frame, async () => {});
   const result = await fillBilling(page, address, 'Synthetic Name', {
     deadline: Date.now() + 4000
   });
@@ -122,11 +127,91 @@ test('embedded country reports the outer viewport that blocks it without selecti
   assert.equal(trace.initialReason, 'outside_viewport');
   assert.equal(trace.scroll.state, 'completed');
   assert.equal(trace.afterScrollReason, 'outside_viewport');
+  assert.equal(scrolls(), 1);
   assert.equal(trace.pointChecks[0].scope, 'control');
   assert.equal(trace.pointChecks[0].reason, 'none');
   assert.equal(trace.pointChecks[1].scope, 'frame_owner');
   assert.equal(trace.pointChecks[1].reason, 'outside_viewport');
   assert.ok(trace.pointChecks[1].geometry.top > trace.pointChecks[1].geometry.viewportHeight);
+  assert.equal(await frame.locator('[autocomplete="billing country"]').inputValue(), 'PH');
+});
+
+test('country visible inside an offscreen iframe scrolls the host without invoking a stuck inner scroll', async (t) => {
+  const page = await pageFor(
+    t,
+    '<div style="height:1210px"></div>' + iframe(countryHtml + addressHtml)
+  );
+  const frame = page.frames()[1];
+  const innerScrolls = interceptCountryScroll(t, { mainFrame: () => frame }, async () => {
+    throw Object.assign(new Error('Synthetic inner scroll timeout'), { name: 'TimeoutError' });
+  });
+  const hostScrolls = interceptFrameScroll(t, frame, (_owner, nativeScroll, options) =>
+    nativeScroll(options)
+  );
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(innerScrolls(), 0);
+  assert.equal(hostScrolls(), 1);
+  assert.equal(await frame.locator('[autocomplete="billing country"]').inputValue(), 'US');
+});
+
+test('nested iframe hosts scroll outside-in and share the existing 500ms scroll budget', async (t) => {
+  const page = await pageFor(
+    t,
+    '<div style="height:1210px"></div>' + iframe(iframe(countryHtml + addressHtml))
+  );
+  const frames = page.frames().slice(1);
+  const order = [],
+    budgets = [];
+  for (const [index, frame] of frames.entries())
+    interceptFrameScroll(t, frame, async (_owner, nativeScroll, options) => {
+      order.push(index);
+      budgets.push(options.timeout);
+      if (index === 0) await new Promise((resolve) => setTimeout(resolve, 30));
+      return nativeScroll(options);
+    });
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(order, [0, 1]);
+  assert.ok(budgets[0] <= 500 && budgets[1] < budgets[0]);
+});
+
+test('a settled host scroll timeout re-locates once and never selects an offscreen country', async (t) => {
+  const page = await pageFor(
+    t,
+    '<div style="height:1210px"></div>' + iframe(countryHtml + addressHtml)
+  );
+  const frame = page.frames()[1];
+  const scrolls = interceptFrameScroll(t, frame, async () => {
+    throw Object.assign(new Error('Synthetic host scroll timeout'), { name: 'TimeoutError' });
+  });
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_BLOCKED');
+  assert.equal(scrolls(), 1);
+  assert.equal(result.inspection.interactionChecks[0].scroll.errorClass, 'scroll_timeout');
+  assert.equal(result.inspection.interactionChecks[0].recovery, 'blocked');
+  assert.equal(await frame.locator('[autocomplete="billing country"]').inputValue(), 'PH');
+});
+
+test('a host scrolled into a persistent main-frame overlay remains blocked without selecting', async (t) => {
+  const page = await pageFor(
+    t,
+    '<div style="height:1210px"></div>' +
+      iframe(countryHtml + addressHtml) +
+      '<div style="position:fixed;inset:0;z-index:999"></div>'
+  );
+  const frame = page.frames()[1];
+  const result = await fillBilling(page, address, 'Synthetic Name', {
+    deadline: Date.now() + 4000
+  });
+  assert.equal(result.errorCode, 'CHECKOUT_CONTROL_BLOCKED');
+  assert.equal(result.inspection.interactionChecks[0].afterScrollReason, 'occluded');
   assert.equal(await frame.locator('[autocomplete="billing country"]').inputValue(), 'PH');
 });
 
