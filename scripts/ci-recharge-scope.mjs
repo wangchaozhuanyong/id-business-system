@@ -6098,10 +6098,14 @@ async function main() {
       const run = gh(`repos/${repo}/actions/runs/${b.runId}`);
       const job = gh(`repos/${repo}/actions/jobs/${b.jobId}`);
       const checkout = gh(`repos/${repo}/git/commits/${b.checkout}`);
-      const log = execFileSync('gh', ['api', `repos/${repo}/actions/jobs/${b.jobId}/logs`], {
-        encoding: 'utf8',
-        maxBuffer: 4 * 1024 * 1024
-      });
+      const log = execFileSync(
+        'gh',
+        ['run', 'view', String(b.runId), '--repo', repo, '--job', String(b.jobId), '--log'],
+        {
+          encoding: 'utf8',
+          maxBuffer: 4 * 1024 * 1024
+        }
+      );
       if (!mailboxValidityApiReceiptMatches({ run, job, checkout, log, unchanged }))
         throw new Error('Mailbox API native receipt changed');
       reused.add('api');
