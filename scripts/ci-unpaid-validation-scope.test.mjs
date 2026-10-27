@@ -634,3 +634,27 @@ test('checkout read evidence requires API Admin and full engine regression witho
   ])
     assert.equal(isUnpaidValidationOnly([...paths, path]), false);
 });
+
+test('checkout read publication checks finite controls and retains the three-service source receipt', () => {
+  const paths = [
+    '.github/workflows/online-checkout-read-publication.yml',
+    ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+      (name) => 'scripts/production-release/online-checkout-read-' + name
+    ),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(commands, /online-checkout-read-release.test.py/);
+  assert.doesNotMatch(commands, /prisma.*migrate|test:online-recharge:engine/);
+  assert.equal(
+    isUnpaidValidationControlsOnly([
+      ...paths,
+      'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+    ]),
+    false
+  );
+});
