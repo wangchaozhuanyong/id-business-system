@@ -302,6 +302,30 @@ describe('填卡读取诊断落盘', () => {
 });
 
 describe('代理与专用浏览器失败分类落盘', () => {
+  for (const failureCode of ['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'])
+    it(`保留订阅读取分类 ${failureCode}`, async () => {
+      const root = join(project, '.runtime/subscription-body-fallback-20261027/api-artifacts');
+      await mkdir(root, { recursive: true });
+      const directory = await mkdtemp(join(root, 'fixture-'));
+      try {
+        const f = fixture(directory);
+        const result = await f.repository.upload(
+          input({
+            ...report,
+            lastStage: 'preflight',
+            failureClass: 'NETWORK_READ_FAILED',
+            failureCode
+          })
+        );
+        const { readFile } = await import('node:fs/promises');
+        const saved = JSON.parse(await readFile(join(directory, result.filename), 'utf8'));
+        expect(saved.failureClass).toBe('NETWORK_READ_FAILED');
+        expect(saved.failureCode).toBe(failureCode);
+        expect(saved.submitted).toBe(false);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
   for (const code of [
     'PROXY_CONNECTION_FAILED',
     'PROFILE_IDENTITY_MISSING',

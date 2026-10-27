@@ -644,6 +644,23 @@ test('unknown profile-like errors remain unknown instead of entering the allowed
   assert.doesNotMatch(JSON.stringify(report), /PRIVATE_ARBITRARY/);
 });
 
+for (const code of ['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'])
+  test(`subscription ${code} remains a network failure before payment`, () => {
+    const report = validation.finish(
+      { confirmation: { queryErrorCode: code } },
+      {
+        format: 'unpaid-validation-v1',
+        startedAt: '2026-10-27T00:00:00.000Z',
+        timeline: [{ stage: 'preflight', startedAt: '2026-10-27T00:00:00.000Z' }]
+      }
+    );
+    assert.equal(report.failureClass, 'NETWORK_READ_FAILED');
+    assert.equal(report.failureCode, code);
+    assert.equal(report.outcome, 'failed_with_class');
+    assert.equal(report.submitted, false);
+    assert.match(validation.message(report), /网络/);
+  });
+
 for (const code of ['PROFILE_EXIT_CHANGED', 'PROFILE_LAUNCH_FAILED', 'PROXY_CONNECTION_FAILED'])
   test(`native task child propagates ${code} without checkout or payment`, async () => {
     const harness = require('./recharge-flow-acceptance.test.cjs');

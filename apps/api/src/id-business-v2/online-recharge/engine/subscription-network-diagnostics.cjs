@@ -40,7 +40,8 @@ function proxyFacts() {
 async function observeSubscriptionNetwork(page, targetUrl, options = {}) {
   const started = performance.now();
   const events = [],
-    requests = new Map();
+    requests = new Map(),
+    transfers = new Map();
   let session,
     active = true,
     available = false,
@@ -60,6 +61,7 @@ async function observeSubscriptionNetwork(page, targetUrl, options = {}) {
     available,
     truncated,
     events: structuredClone(events),
+    transfers: [...transfers.values()].map((row) => ({ ...row })),
     proxy: proxyFacts(),
     ...(cancellationAtMs !== undefined ? { cancellationAtMs } : {}),
     // A browser event is not acknowledgement from the origin server.
@@ -137,6 +139,8 @@ async function observeSubscriptionNetwork(page, targetUrl, options = {}) {
       }
       const ordinal = requests.get(event.requestId) || requests.size + 1;
       requests.set(event.requestId, ordinal);
+      if (!transfers.has(ordinal))
+        transfers.set(ordinal, { request: ordinal, chunks: 0, decodedBytes: 0, encodedBytes: 0 });
       add({ event: 'browser_request', request: ordinal });
     });
     on('Network.responseReceived', (event) => {
@@ -167,8 +171,25 @@ async function observeSubscriptionNetwork(page, targetUrl, options = {}) {
         request,
         ...(Number.isInteger(response.status) ? { httpStatus: response.status } : {}),
         remoteEndpointPresent: Boolean(response.remoteIPAddress),
+        responseMetadata: require('./subscription-diagnostics.cjs').responseReadMetadata(
+          response.headers
+        ),
         timing
       });
+    });
+    on('Network.dataReceived', (event) => {
+      if (!active) return;
+      const row = transfers.get(requests.get(event.requestId));
+      if (!row) return;
+      row.chunks = Math.min(1000000, row.chunks + 1);
+      for (const [target, source] of [
+        ['decodedBytes', 'dataLength'],
+        ['encodedBytes', 'encodedDataLength']
+      ]) {
+        const value = event[source];
+        if (Number.isSafeInteger(value) && value >= 0)
+          row[target] = Math.min(1073741824, row[target] + value);
+      }
     });
     on('Network.loadingFailed', (event) => {
       const request = requests.get(event.requestId);
@@ -188,7 +209,14 @@ async function observeSubscriptionNetwork(page, targetUrl, options = {}) {
     });
     on('Network.loadingFinished', (event) => {
       const request = requests.get(event.requestId);
-      if (request) add({ event: 'loading_finished', request });
+      if (request)
+        add({
+          event: 'loading_finished',
+          request,
+          ...(Number.isSafeInteger(event.encodedDataLength) && event.encodedDataLength >= 0
+            ? { encodedBytes: Math.min(1073741824, event.encodedDataLength) }
+            : {})
+        });
     });
     await setup(session.send('Network.enable'));
     available = active;

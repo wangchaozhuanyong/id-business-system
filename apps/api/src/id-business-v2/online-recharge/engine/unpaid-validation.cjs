@@ -19,6 +19,7 @@ const CLASSES = [
   'PROXY_UNAVAILABLE',
   'BROWSER_PROFILE_UNAVAILABLE',
   'LOGIN_READ_FAILED',
+  'NETWORK_READ_FAILED',
   'LOGIN_UNCONFIRMED',
   'CHECKOUT_REJECTED',
   'CHECKOUT_CREATION_UNKNOWN',
@@ -54,6 +55,7 @@ const CODES = [
   'ACCOUNT_MISMATCH',
   'NETWORK_TIMEOUT',
   'NETWORK_UNAVAILABLE',
+  'UPSTREAM_INVALID_RESPONSE',
   'UPSTREAM_BLOCKED',
   'UPSTREAM_FORBIDDEN',
   'CHECKOUT_CREATION_REJECTED',
@@ -203,6 +205,7 @@ function classify(result = {}, lastStage) {
   )
     return 'PROXY_UNAVAILABLE';
   if (CODES.includes(code) && code.startsWith('PROFILE_')) return 'BROWSER_PROFILE_UNAVAILABLE';
+  if (['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'].includes(code)) return 'NETWORK_READ_FAILED';
   if (code === 'CHECKOUT_CREATION_REJECTED') return 'CHECKOUT_REJECTED';
   if (code === 'CHECKOUT_CREATION_UNKNOWN') return 'CHECKOUT_CREATION_UNKNOWN';
   if (code === 'EXECUTOR_INTERRUPTED') return 'EXECUTOR_INTERRUPTED';
@@ -468,6 +471,7 @@ function message(report) {
     BROWSER_PROFILE_UNAVAILABLE: '专用浏览器不可用',
     LOGIN_READ_FAILED: '登录页面读取失败',
     LOGIN_UNCONFIRMED: '登录状态未确认',
+    NETWORK_READ_FAILED: '官网接口网络读取失败',
     CHECKOUT_REJECTED: '官网拒绝建单',
     CHECKOUT_CREATION_UNKNOWN: '建单响应未确认',
     PAYMENT_COMPONENT_NOT_LOADED: '支付组件未加载',
@@ -480,6 +484,9 @@ function message(report) {
     OTHER: '其他执行异常，详见诊断'
   };
   const codeLabels = {
+    NETWORK_TIMEOUT: '官网接口网络读取超时',
+    NETWORK_UNAVAILABLE: '官网接口网络连接或响应体读取失败',
+    UPSTREAM_INVALID_RESPONSE: '官网订阅响应格式无效',
     PROXY_CONNECTION_FAILED: '代理连通性检测已用尽5次，仍未完成核验，已停止后续操作',
     PROFILE_IDENTITY_MISSING: '缺少账号及用户标识，不能复用浏览器会话',
     PROFILE_PROXY_INVALID: '代理绑定格式无效，未继续执行',

@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { sessionProbeEntries, unpaidValidationEntries } from './unpaid-validation-labels';
+
+it.each(['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'])(
+  '将%s显示为网络读取失败而非未知异常',
+  (failureCode) => {
+    const rows = unpaidValidationEntries({
+      format: 'unpaid-validation-v1',
+      outcome: 'failed_with_class',
+      lastStage: 'preflight',
+      failureClass: 'NETWORK_READ_FAILED',
+      failureCode
+    });
+    expect(rows.find((row) => row.label === '停止分类')?.value).toMatch(/网络/);
+    expect(JSON.stringify(rows)).not.toMatch(/OTHER|NETWORK_|其他执行异常/);
+  }
+);
 describe('登录分诊呈现', () => {
   it('显示首次HTTP与自动处理停点，不回显内部枚举或未知原始内容', () => {
     const diagnostics = {

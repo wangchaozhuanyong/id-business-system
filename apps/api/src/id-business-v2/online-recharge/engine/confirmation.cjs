@@ -108,6 +108,7 @@ async function confirmSubscription(targetPlan, token, injected = {}) {
     ...(injected.signal ? { signal: injected.signal } : {}),
     ...(injected.onHumanVerification ? { onHumanVerification: injected.onHumanVerification } : {}),
     ...(injected.authDiagnostics ? { authDiagnostics: injected.authDiagnostics } : {}),
+    ...(injected.allowBodyReadFallback === true ? { allowBodyReadFallback: true } : {}),
     ...(Number.isFinite(injected.deadlineAt) ? { deadlineAt: injected.deadlineAt } : {}),
     ...(injected.sessionRaw ? { sessionRaw: injected.sessionRaw, allowBrowserFallback: true } : {})
   });
@@ -140,6 +141,9 @@ async function preflightPayment(targetPlan, token, injected = {}) {
       injected.query || require('./upstream/subscription-check').querySubscriptionBySession;
     confirmation = await confirmSubscription(targetPlan, token, {
       ...injected,
+      // Only the pre-payment owner may close this task's context to cancel a
+      // fallback. Post-payment confirmation and borrowed diagnostics stay unchanged.
+      allowBodyReadFallback: require('./rpc.cjs').wasSubmitted() !== true,
       query: async (...args) => {
         const result = await query(...args);
         activeSubscription = result?.data?.hasActiveSubscription;

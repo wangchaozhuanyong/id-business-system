@@ -304,7 +304,8 @@ function transportCode(error) {
 function queryErrorCode(error) {
     if (Object.hasOwn(BOOTSTRAP_FAILURE_MESSAGES, error?.code || '')) return error.code;
     if (['HUMAN_VERIFICATION_REQUIRED', 'HUMAN_VERIFICATION_CANCELLED', 'SESSION_INVALID', 'ACCOUNT_MISMATCH', 'NETWORK_TIMEOUT',
-        'SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED', 'SESSION_VERIFICATION_BLOCKED', 'SESSION_API_UNCONFIRMED'].includes(error?.code)) return error.code;
+        'SESSION_NOT_CONFIRMED', 'SESSION_BOOTSTRAP_FAILED', 'SESSION_VERIFICATION_BLOCKED', 'SESSION_API_UNCONFIRMED',
+        'UPSTREAM_INVALID_RESPONSE'].includes(error?.code)) return error.code;
     if (/^(?:VERIFICATION_(?:TIMEOUT|CANCELLED|PAGE_CLOSED|FRAME_AMBIGUOUS|NOT_READY|NETWORK_UNAVAILABLE|PROVIDER_UNAVAILABLE|PROVIDER_REJECTED|RATE_LIMITED|CHALLENGE_REJECTED|CHALLENGE_UNCHANGED|ROUNDS_EXHAUSTED|SOLVER_DISABLED|SOLVER_FAILED|RUNTIME_FAILED|PAGE_BINDING_REQUIRED|PAGE_BINDING_MISMATCH|UNSUPPORTED)|VLM_(?:AUTH_FAILED|RATE_LIMITED|TIMEOUT|NETWORK_UNAVAILABLE|REQUEST_UNSUPPORTED|INVALID_RESPONSE|INVALID_DECISION|PROVIDER_UNAVAILABLE|IMAGE_UNSUPPORTED|NOT_CONFIGURED|API_REJECTED))$/.test(error?.code)) return error.code;
     const network = transportCode(error);
     if (network === 'ETIMEDOUT') return 'NETWORK_TIMEOUT';
@@ -386,6 +387,8 @@ function mergeReadObservation(target, source) {
         if (Number.isSafeInteger(source[key]) && source[key] >= 0 && source[key] <= 180000) target[key] = source[key];
     if (Number.isSafeInteger(source.httpStatus) && source.httpStatus >= 100 && source.httpStatus <= 599)
         target.httpStatus = source.httpStatus;
+    if (source.responseMetadata)
+        target.responseMetadata = require('../subscription-diagnostics.cjs').responseReadMetadata(source.responseMetadata);
     if (source.resourceTiming && typeof source.resourceTiming.observed === 'boolean') {
         const timing = { observed: source.resourceTiming.observed };
         for (const key of ['startTime', 'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart', 'responseStart', 'responseEnd'])
@@ -405,11 +408,21 @@ async function settledWithin(pending, timeoutMs = 1000) {
             new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
     } finally { clearTimeout(timer); }
 }
-async function queryGet(read, budget, transport) {
+function incompleteJsonBody(observation, code) {
+    return observation.requestIssued === true && observation.httpStatus === 200
+        && observation.responseHeadersReceived === true && observation.responseBodyCompleted === false
+        && observation.responseMetadata?.contentType === 'application/json'
+        && observation.responseMetadata?.cfMitigated === 'absent'
+        && ['ETIMEDOUT', 'ECONNRESET', 'net::ERR_CONNECTION_CLOSED', 'net::ERR_CONNECTION_RESET',
+            'net::ERR_TIMED_OUT', 'net::ERR_INCOMPLETE_CHUNKED_ENCODING', 'net::ERR_CONTENT_LENGTH_MISMATCH'].includes(code);
+}
+async function queryGet(read, budget, transport, fallback) {
     const maximum = budget.maxAttempts === 1 ? 1 : 2;
+    let fallbackUsed = false;
     while (budget.attempts < maximum) {
         const started = performance.now(), attempt = ++budget.attempts;
         const control = { observation: emptyReadObservation(), cancel: undefined };
+        const currentTransport = fallbackUsed ? 'context-request-fallback' : transport;
         let pending;
         try {
             const timeoutMs = Math.min(ACCOUNT_CHECK_ATTEMPT_MS, checkBudget(budget));
@@ -417,7 +430,7 @@ async function queryGet(read, budget, transport) {
                 timeoutSource: budget.deadlineAt <= started + ACCOUNT_CHECK_ATTEMPT_MS ? 'query_deadline' : 'attempt_deadline' };
             control.timeoutSource = attemptBudget.timeoutSource;
             const value = await boundedQuery(() => {
-                pending = Promise.resolve().then(() => read(timeoutMs, control));
+                pending = Promise.resolve().then(() => (fallbackUsed ? fallback.read : read)(timeoutMs, control));
                 return pending;
             }, attemptBudget, 'account_check', async error => {
                 if (typeof control.cancel !== 'function') return await settledWithin(pending);
@@ -425,23 +438,35 @@ async function queryGet(read, budget, transport) {
                 return acknowledged === true && await settledWithin(pending);
             });
             checkBudget(budget);
-            budget.diagnostics.push({ transport, phase: 'account_check', httpStatus: value.status,
+            budget.diagnostics.push({ transport: currentTransport, phase: 'account_check', httpStatus: value.status,
                 ...control.observation, attempt, elapsedMs: Math.round(performance.now() - started),
                 ...(value.responseFacts ? { responseFacts: value.responseFacts } : {}),
                 ...(budget.afterHumanVerification ? { afterHumanVerification: true } : {}) });
             return value;
         } catch (error) {
             const code = transportCode(error);
-            budget.diagnostics.push({ transport, phase: 'account_check', networkCode: code,
-                ...control.observation, failurePhase: readFailurePhase(control.observation),
+            budget.diagnostics.push({ transport: currentTransport, phase: 'account_check', networkCode: code,
+                ...control.observation, failurePhase: fallbackUsed ? 'request_complete' : readFailurePhase(control.observation),
                 ...(['attempt_deadline', 'query_deadline', 'lease_lost', 'browser_abort'].includes(error.timeoutSource)
                     ? { timeoutSource: error.timeoutSource } : {}),
                 ...(typeof error.cancellationConfirmed === 'boolean'
                     ? { cancellationConfirmed: error.cancellationConfirmed } : {}),
                 attempt, elapsedMs: Math.round(performance.now() - started) });
             if (error.code === 'LEASE_LOST' || error.cancelUnconfirmed) throw error;
-            if (attempt >= maximum || !['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN',
-                'net::ERR_CONNECTION_RESET', 'net::ERR_TIMED_OUT', 'net::ERR_NETWORK_CHANGED'].includes(code)) throw error;
+            if (control.observation.responseMetadata?.cfMitigated === 'challenge')
+                throw Object.assign(error, { code: 'CHALLENGE_BLOCKED', challengeDetected: true });
+            if ([401, 403].includes(control.observation.httpStatus)) throw error;
+            if (fallbackUsed || attempt >= maximum) throw error;
+            const incompleteBody = incompleteJsonBody(control.observation, code);
+            if (fallback && incompleteBody && (control.readSettled || error.cancellationConfirmed === true)
+                && await boundedQuery(fallback.eligible, budget, 'verification_probe')) {
+                // Replace the second page attempt; never add a third GET or a new deadline.
+                fallbackUsed = true;
+                continue;
+            }
+            if (!['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN',
+                'net::ERR_CONNECTION_RESET', 'net::ERR_TIMED_OUT', 'net::ERR_NETWORK_CHANGED'].includes(code)
+                && !incompleteBody) throw error;
             await boundedQuery(() => new Promise((resolve) => setTimeout(resolve, Math.min(500, checkBudget(budget)))), budget, 'retry_wait');
         }
     }
@@ -451,7 +476,7 @@ function officialPage(page) {
     try { const url = new URL(page.url()); return url.origin === 'https://chatgpt.com' && !page.isClosed?.(); }
     catch (_) { return false; }
 }
-async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
+async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget, fallback) {
     if (!officialPage(page)) throw Object.assign(new Error('订阅查询页面来源不符'), { code: 'NETWORK_UNAVAILABLE' });
     return queryGet(async (timeoutMs, control) => {
         const readId = randomUUID();
@@ -523,6 +548,10 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
                                 redirect: 'error', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: control.signal });
                             observation.responseHeadersReceived = true;
                             observation.httpStatus = response.status;
+                            observation.responseMetadata = Object.fromEntries(
+                                ['content-type', 'content-length', 'transfer-encoding', 'cf-mitigated', 'server']
+                                    .map(key => [key, response.headers.get(key) || '']));
+                            observation.responseMetadata['cf-ray'] = response.headers.has('cf-ray') ? 'present' : '';
                             observation.headersElapsedMs = Math.round(performance.now() - started);
                             const bodyStarted = performance.now(), text = await response.text();
                             observation.responseBodyCompleted = true;
@@ -557,6 +586,7 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
                 } finally { clearTimeout(timer); reads.delete(readId); }
             }, { url, token: accessToken, timeoutMs, readId, timeoutSource: control.timeoutSource,
                 dispatchDeadline });
+            control.readSettled = true;
             mergeReadObservation(control.observation, result.observation);
             if (result.readError) throw Object.assign(new Error('页面订阅读取未完成'), {
                 networkCode: result.readError === 'ETIMEDOUT'
@@ -574,7 +604,64 @@ async function readCheckInPage(page, accessToken, timezoneOffsetMin, budget) {
             if (network) { control.observation.network = network.snapshot(); network.dispose(); }
             page.off?.('request', issued); page.off?.('requestfailed', failed);
         }
-    }, budget, 'browser-page');
+    }, budget, 'browser-page', fallback);
+}
+function contextBodyFallback(page, context, accessToken, timezoneOffsetMin, budget) {
+    const diagnostic = require('../subscription-diagnostics.cjs');
+    const eligible = async () => {
+        checkBudget(budget);
+        if (!officialPage(page) || page.context?.() !== context || require('../rpc.cjs').wasSubmitted()) return false;
+        if (await require('./human-verification').isBlockingHumanVerificationVisible(page))
+            throw Object.assign(new Error('官网要求进一步验证，本次未继续读取'), { code: 'CHALLENGE_BLOCKED' });
+        return true;
+    };
+    return { eligible, read: async (timeoutMs, control) => {
+        if (!await eligible()) throw Object.assign(new Error('原查询页面已变化'), { code: 'NETWORK_UNAVAILABLE' });
+        let pending, response;
+        const started = performance.now();
+        control.cancel = async () => {
+            // APIRequestContext has no per-request abort. The preflight owner
+            // closes this task's context and waits for the request to settle.
+            const closing = context.close();
+            return await settledWithin(closing) && await settledWithin(pending);
+        };
+        try {
+            checkBudget(budget);
+            control.observation.requestIssued = true;
+            control.observation.responseHeadersObservable = false;
+            pending = context.request.get(buildCheckUrl(timezoneOffsetMin), {
+                timeout: timeoutMs, maxRedirects: 0, maxRetries: 0,
+                headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
+            });
+            response = await pending;
+            checkBudget(budget);
+            control.observation.responseHeadersReceived = true;
+            control.observation.httpStatus = response.status();
+            control.observation.responseElapsedMs = Math.round(performance.now() - started);
+            control.observation.responseMetadata = diagnostic.responseReadMetadata(response.headers());
+            const text = await response.text();
+            control.observation.responseBodyCompleted = true;
+            if (text.length > 512 * 1024) throw Object.assign(new Error('订阅响应超过读取上限'), { code: 'UPSTREAM_INVALID_RESPONSE' });
+            const facts = diagnostic.responseFacts(response.status(), response.headers(), text);
+            control.observation.responseFacts = facts;
+            if (facts.classification === 'CF_CHALLENGE')
+                throw Object.assign(new Error('官网要求进一步验证，本次未继续读取'), { code: 'CHALLENGE_BLOCKED' });
+            let data;
+            try { data = JSON.parse(text); } catch (_) { data = null; }
+            if (response.status() === 200) {
+                const observed = data?.accounts?.default?.account?.account_id;
+                const expected = extractProfileFromToken(accessToken).accountId;
+                if (!data || typeof data !== 'object' || Array.isArray(data)
+                    || typeof observed !== 'string' || !observed
+                    || typeof data.accounts?.default?.entitlement?.has_active_subscription !== 'boolean')
+                    throw Object.assign(new Error('官网订阅响应缺少有效账号或订阅状态'), { code: 'UPSTREAM_INVALID_RESPONSE' });
+                if (!expected || observed !== expected)
+                    throw Object.assign(new Error(ACCOUNT_MISMATCH_MESSAGE), { code: 'ACCOUNT_MISMATCH' });
+            }
+            checkBudget(budget);
+            return { status: response.status(), data, via: 'context-request-fallback', responseFacts: facts };
+        } finally { await response?.dispose().catch(() => {}); }
+    } };
 }
 async function compareContextRead(context, accessToken, timezoneOffsetMin, budget) {
     const started = performance.now(), observation = emptyReadObservation();
@@ -803,7 +890,9 @@ async function fetchAccountCheck(accessToken, options = {}) {
             // exclusive diagnostic context. Normal and borrowed contexts retain a retry.
             if (ownedContext && options.queryTransportMode === 'transport_compare') budget.maxAttempts = 1;
             let result;
-            try { result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget); }
+            const fallback = options.allowBodyReadFallback === true && context && page.context?.() === context
+                ? contextBodyFallback(page, context, accessToken, options.timezoneOffsetMin, budget) : undefined;
+            try { result = await readCheckInPage(page, accessToken, options.timezoneOffsetMin, budget, fallback); }
             catch (error) { await compare(page, error); throw error; }
             if (result.status === 403 && result.responseFacts?.classification === 'CF_CHALLENGE') {
                 if (process.env.ONLINE_RECHARGE_PROFILE_ROOT && !require('../rpc.cjs').wasSubmitted()
@@ -821,8 +910,8 @@ async function fetchAccountCheck(accessToken, options = {}) {
             return { ...result, diagnostics: budget.diagnostics,
                 ...(compareDiagnostics ? { compareDiagnostics } : {}) };
         }
-        // Token-only callers retain the explicit task-proxy transport; browser callers never
-        // silently leave their Chromium network stack or change the resolved proxy.
+        // Token-only callers retain the explicit task-proxy transport. Browser preflight
+        // may use only the opted-in same-context body fallback above.
         const prepared = await boundedQuery(() => preparePlaywrightProxy(String(process.env.PROXY || '').trim()), budget, 'proxy_prepare');
         cleanup = prepared.cleanup;
         requestContext = await boundedQuery(() => playwrightRequest.newContext({ userAgent: USER_AGENT,
@@ -1244,7 +1333,8 @@ async function querySubscriptionBySession(accessToken, options = {}) {
             SESSION_INVALID: '账号尚未登录或 Session 已失效，请更新登录资料',
             ACCOUNT_MISMATCH: ACCOUNT_MISMATCH_MESSAGE,
             ...BOOTSTRAP_FAILURE_MESSAGES,
-            NETWORK_UNAVAILABLE: '订阅查询网络不可用，本次未取得账号订阅结果'
+            NETWORK_UNAVAILABLE: '订阅查询网络不可用，本次未取得账号订阅结果',
+            UPSTREAM_INVALID_RESPONSE: '官网订阅响应格式无效，本次未取得账号订阅结果'
         };
         const statuses = { NETWORK_TIMEOUT: 504, SESSION_INVALID: 401, HUMAN_VERIFICATION_REQUIRED: 403, HUMAN_VERIFICATION_CANCELLED: 403, ACCOUNT_MISMATCH: 409,
             SESSION_NOT_CONFIRMED: 503, SESSION_BOOTSTRAP_FAILED: 502 };

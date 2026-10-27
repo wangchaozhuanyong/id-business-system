@@ -1,7 +1,7 @@
 'use strict';
 
-// Only fixed enums and booleans leave this module. Response bodies, header
-// values, identities and credentials remain transient inputs to the diagnosis.
+// Only fixed enums, booleans and bounded counts leave this module. Raw response
+// bodies, header values, identities and credentials remain transient inputs.
 const ERROR_CODES = new Set([
   'unsupported_country',
   'unsupported_country_region_territory',
@@ -26,6 +26,33 @@ function contentType(value) {
     : type
       ? 'other'
       : 'unknown';
+}
+function responseReadMetadata(headers = {}) {
+  const values = Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value || '')])
+  );
+  const mitigated = values['cf-mitigated']?.trim().toLowerCase();
+  const encoding = values['transfer-encoding']?.trim().toLowerCase();
+  const length = values['content-length'];
+  return {
+    contentType: contentType(values['content-type']),
+    cfMitigated: mitigated === 'challenge' ? 'challenge' : mitigated ? 'unknown' : 'absent',
+    cfRayPresent: Boolean(values['cf-ray']),
+    transferEncoding: ['chunked', 'identity'].includes(encoding)
+      ? encoding
+      : encoding
+        ? 'other'
+        : 'absent',
+    server:
+      values.server?.trim().toLowerCase() === 'cloudflare'
+        ? 'cloudflare'
+        : values.server
+          ? 'other'
+          : 'absent',
+    ...(/^\d{1,10}$/.test(length || '') && Number(length) <= 1073741824
+      ? { contentLength: Number(length) }
+      : {})
+  };
 }
 function responseFacts(status, headers = {}, body) {
   const normalized = Object.fromEntries(
@@ -351,6 +378,7 @@ function observeAuthResponses(page, sessionRaw) {
   };
 }
 module.exports = {
+  responseReadMetadata,
   responseFacts,
   sessionProbeFacts,
   safeSessionProbe,

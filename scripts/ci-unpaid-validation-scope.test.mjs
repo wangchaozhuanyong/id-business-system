@@ -4,6 +4,7 @@ import {
   freshSessionPaths,
   isFreshSessionOnly,
   sessionDiagnosticPaths,
+  subscriptionBodyFallbackPaths,
   profileLockRecoveryPaths,
   isProfileLockRecoveryOnly,
   cardReadDiagnosticsPaths,
@@ -22,6 +23,33 @@ import {
   unpaidValidationCommands
 } from './ci-unpaid-validation-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
+test('subscription body fallback checks API Admin and full executor without accepting other payment changes', () => {
+  const paths = [
+    ...subscriptionBodyFallbackPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const p of subscriptionBodyFallbackPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((row) => row !== p)), false);
+  assert.equal(isUnpaidValidationOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']), false);
+  assert.equal(
+    isUnpaidValidationOnly([
+      ...paths,
+      'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js'
+    ]),
+    false
+  );
+  const guards = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(guards, /check:admin-ui/);
+  assert.match(guards, /check:v2-ui-language/);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
+});
 test('fresh session repair retains engine regression and rejects other runtime changes', () => {
   const paths = [
     ...freshSessionPaths,
