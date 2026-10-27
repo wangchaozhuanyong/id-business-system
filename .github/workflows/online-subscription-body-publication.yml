@@ -1,6 +1,8 @@
 name: Online Subscription Body Publication
 
 on:
+  pull_request:
+    types: [edited]
   workflow_dispatch:
     inputs:
       commit:
@@ -17,10 +19,61 @@ permissions:
   actions: read
 
 concurrency:
-  group: id-business-v2-production-release
+  group: ${{ github.event_name == 'pull_request' && 'id-business-v2-subscription-body-probe' || 'id-business-v2-production-release' }}
   cancel-in-progress: false
 
 jobs:
+  synthetic-auth-probe:
+    if: github.event_name == 'pull_request' && github.event.changes.body && contains(github.event.pull_request.body, '<!-- run-synthetic-auth-probe -->')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Install locked isolated browser fixture dependencies
+        run: |
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine --ignore-scripts --no-audit --no-fund
+          npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
+          node apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Compare the original baseline and reviewed candidate without production access
+        run: |
+          git worktree add --detach .codex-worktrees/subscription-auth-baseline b0b5aa733594682121258553e6a6748db41147a1
+          probe_engine=apps/api/src/id-business-v2/online-recharge/engine
+          ln -s "$GITHUB_WORKSPACE/$probe_engine/node_modules" ".codex-worktrees/subscription-auth-baseline/$probe_engine/node_modules"
+          ln -s "$GITHUB_WORKSPACE/$probe_engine/upstream/node_modules" ".codex-worktrees/subscription-auth-baseline/$probe_engine/upstream/node_modules"
+          node <<'JS'
+          const path = require('node:path'), fs = require('node:fs/promises');
+          (async () => {
+            const root = process.cwd(), rows = [];
+            for (const [name, tree] of [['baseline', '.codex-worktrees/subscription-auth-baseline'], ['candidate', '.']]) {
+              const outputDir = path.join(root, '.runtime/subscription-body-linux-probe', name);
+              const fixture = require(path.join(root, tree, 'apps/api/src/id-business-v2/online-recharge/engine/test/recharge-flow-acceptance.test.cjs'));
+              try {
+                const result = await fixture.runSyntheticRecharge('success', {authUi:'chat-guest-recover', outputDir});
+                rows.push({name, fixtureCompleted:true, status:result.result?.status});
+              } catch (error) {
+                rows.push({name, fixtureCompleted:false, errorClass:error.code || 'FIXTURE_FAILED'});
+              }
+            }
+            await fs.writeFile(path.join(root, '.runtime/subscription-body-linux-probe/summary.json'), JSON.stringify(rows, null, 2));
+            console.log(JSON.stringify(rows));
+          })().catch(() => { process.exitCode = 1; });
+          JS
+      - name: Preserve synthetic-only child diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: subscription-body-linux-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .runtime/subscription-body-linux-probe/
+          include-hidden-files: true
+          if-no-files-found: error
+
   validate:
     if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
     runs-on: ubuntu-latest

@@ -649,5 +649,5 @@
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
   "updatedServices": ["api", "admin", "online-recharge"],
   "version": 1,
-  "workflowSha256": "669596041309ccbfecf90991222ffd2d07bb08df33555103bdd5b6d2c7841598"
+  "workflowSha256": "284792784eb77f55bc621c79ec078772d8fbc738231c8961769dc9b828342413"
 }
