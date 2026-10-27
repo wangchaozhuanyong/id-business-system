@@ -11,8 +11,8 @@ BASE = Path('/opt/id-business-v2')
 PREFIX = 'online-subscription-body'
 SCOPE = 'ONLINE_SUBSCRIPTION_BODY_20261027'
 CURRENT = 'b0b5aa733594682121258553e6a6748db41147a1'
-SOURCE = 'f23c8860c407d4f0263616b5c8614f21ff6e18eb'
-SOURCE_TREE = '6234aea9a290bb7c164acc45e175f03f4ea02b18'
+SOURCE = 'a92f46b64ef481b2f3fe0cfa3316a16aa0a3be4c'
+SOURCE_TREE = 'bcab46d60e460f794c168003ef5a6b328563590a'
 SOURCE_PR = 743
 CONTRACT_FILE = PREFIX + '-contract.json'
 UPDATED = ('api', 'admin', 'online-recharge')
@@ -20,7 +20,7 @@ PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge')
 SERVICES = (*UPDATED, *PRESERVED)
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine/'
 API_MODULES = ['id-business-v2/online-recharge/persistence/artifacts.repository.js']
-SEALED = {'sources': 'f6b08fcf66c0880bc6df27bec4d0d7d9a9c8a93dc729aea2e15904ecd69f52b7', 'beforeEngineFiles': '0e6f0fa4b1e658335f286436aa5c494ae0c9818253e100add3ea817025b481d0', 'afterEngineFiles': '50753aa463a49bb4daaf342a0548348acc46539f9ef52a7cbe558f12db0a8698', 'beforeApiModules': '8edc89f96b7e3bb9e239a2c0db886504eaebc42dedfabc2b1e704b6e7d73139c', 'expectedApiOnlineFiles': '53929e40d2113894e464b00aa92945e9ccfc2b508bc5d0acf1007bf51b7bc8f4', 'baselineAdminFiles': '680ef7ad72c99521d07dd244e17c9b546f9b7b4acdaecbe47192b468cf7d2fe1', 'parentArtifact': 'dc08e7b35842bb425cb7dc7e9d2d53b3fe912f493823aba27f7524a61aafe8bd', 'parentContractSha256': '74e78d1a52b78ab3516b8979537751923b1251481c5380bf2cb1ad36bdea2463', 'backupNormalizerPath': '7d678c7771c072ec77e01a7001abc3434ac14cea56c9f5484a00402e3ca1acf6', 'engineHealth': '0fe609fb203d77fd628e5d16c629b37429b488e69386eecc2402c87bc14b5430'}
+SEALED = {'sources': '1261751a943019360d17e6cdfac21250c87b7030cf7f99e3c587d3b53afda936', 'beforeEngineFiles': '0e6f0fa4b1e658335f286436aa5c494ae0c9818253e100add3ea817025b481d0', 'afterEngineFiles': 'e2935930dd85a57e8cc707761f691591a98b04eb0a1742c2865a1ee662fbe49b', 'beforeApiModules': '8edc89f96b7e3bb9e239a2c0db886504eaebc42dedfabc2b1e704b6e7d73139c', 'expectedApiOnlineFiles': '53929e40d2113894e464b00aa92945e9ccfc2b508bc5d0acf1007bf51b7bc8f4', 'baselineAdminFiles': '680ef7ad72c99521d07dd244e17c9b546f9b7b4acdaecbe47192b468cf7d2fe1', 'parentArtifact': 'dc08e7b35842bb425cb7dc7e9d2d53b3fe912f493823aba27f7524a61aafe8bd', 'parentContractSha256': '74e78d1a52b78ab3516b8979537751923b1251481c5380bf2cb1ad36bdea2463', 'backupNormalizerPath': '7d678c7771c072ec77e01a7001abc3434ac14cea56c9f5484a00402e3ca1acf6', 'engineHealth': '0fe609fb203d77fd628e5d16c629b37429b488e69386eecc2402c87bc14b5430'}
 
 
 def need(value, code):
@@ -52,7 +52,7 @@ def validate_contract(c):
          and c.get('migrationPerformed') is False and type(c.get('businessActions')) is int
          and c['businessActions'] == 0, 'SIDE_EFFECT_SCOPE')
     need(all(sha(canonical(c.get(key))) == digest for key, digest in SEALED.items()), 'FROZEN_INPUT_CHANGED')
-    need(len(c['sources']) == 16 and c['apiModules'] == API_MODULES
+    need(len(c['sources']) == 17 and c['apiModules'] == API_MODULES
          and set(c['beforeApiModules']) == {n.removesuffix('.js') + e for n in API_MODULES for e in ('.js', '.js.map', '.d.ts')}, 'SOURCE_SCOPE')
     before, after = c['beforeEngineFiles'], c['afterEngineFiles']
     need(set(before) <= set(after) and set(after) - set(before) == {'test/subscription-body-fallback.test.cjs'}
