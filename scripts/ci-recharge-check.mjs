@@ -1,4 +1,9 @@
 import {
+  isMailboxValidityOnly,
+  mailboxValidityContext,
+  mailboxValidityCommands
+} from './ci-mailbox-validity-scope.mjs';
+import {
   isRechargeAutofillControlsOnly,
   isRechargeAutofillSourceOnly,
   rechargeAutofillSourceCommands
@@ -221,6 +226,11 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (isMailboxValidityOnly(changed, ...mailboxValidityContext(base))) {
+  if (mode !== 'mailbox') throw new Error('Mailbox validity requires its finite quality selection');
+  for (const [file, args] of mailboxValidityCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 if (isRechargeAutofillControlsOnly(changed)) {
   if (part !== 'guards' || mode !== 'ci-only')
     throw new Error('Autofill publication requires its exact control selection');

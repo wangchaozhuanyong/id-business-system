@@ -299,7 +299,11 @@
     "scripts/production-release/mailbox-validity-contract.json",
     "scripts/production-release/mailbox-validity-publication.py",
     "scripts/production-release/mailbox-validity-release.test.py",
-    "scripts/production-release/mailbox-validity-runtime.py"
+    "scripts/production-release/mailbox-validity-runtime.py",
+    "scripts/ci-mailbox-validity-scope.mjs",
+    "scripts/ci-mailbox-validity-scope.test.mjs",
+    "scripts/ci-recharge-scope.mjs",
+    "scripts/ci-recharge-check.mjs"
   ],
   "engineFiles": {
     ".dockerignore": "6eb0e0e877d4ee3c5c6b697383b0280890214db3d80b07d100f7a612d1e62858",
@@ -554,7 +558,7 @@
   },
   "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
   "reboundServices": ["online-recharge"],
-  "reviewBase": "22b8104469b5dd0fa364c38a05f0985a572528a0",
+  "reviewBase": "46aba11a50f147b28692bcdead474d6a221a081e",
   "scope": "MAILBOX_QUERY_CODE_VALIDITY_20261027",
   "sourceBase": "22b8104469b5dd0fa364c38a05f0985a572528a0",
   "sources": {
@@ -594,7 +598,7 @@
     "apps/api/src/id-business-v2/workspace/managed-mailbox-validity.mysql.integration.spec.ts": "b2007314c884e740d0b9bef6bc58379a57b5728f758839afe80940ed8c7973cc",
     "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.spec.ts": "0d6226ded60264d090e43dcd369ac10d4c66eea52e9a375327ee006ca0026c16",
     "docs/MAILBOX_QUERY_CODE_VALIDITY_20261027.md": "48c8c1f2f4c541c11f54c75accf92c0ddc6bcb369cfc339e171bcb0be3b813ab",
-    "docs/V2_TASKS.md": "338ee72d5fd3e4ef641b79163dfca4d71eba77e6d1f0dba0ba60722d3d977f4a",
+    "docs/V2_TASKS.md": "4fd46e9b2ce1d5b5f4b603edddc38c6f294457ab98b24839e0f5fc0f14cb14ec",
     "scripts/acceptance-v2-mailbox-query-code-validity.mjs": "4a5237e2182e70d741c4f38767bbf8c96e760b9fbc8f9cdef53fc951dd8754fc"
   },
   "version": 1,

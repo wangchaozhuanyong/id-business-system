@@ -1,3 +1,4 @@
+import { isMailboxValidityOnly } from './ci-mailbox-validity-scope.mjs';
 import {
   isRechargeAutofillControlsOnly,
   isRechargeAutofillSourceOnly
@@ -1224,6 +1225,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isMailboxValidityOnly(paths)) return false;
   if (isRechargeAutofillSourceOnly(paths)) return false;
   if (isRechargeAutofillControlsOnly(paths)) return false;
   // This finite release rebuilds only Admin and preserves the deployed engine.
@@ -2578,6 +2580,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isMailboxValidityOnly(paths, oldSchema, newSchema)) return 'mailbox';
   if (isRechargeAutofillSourceOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRechargePlanBillingSourcePaths(paths))
     return isRechargePlanBillingSource(paths, oldSchema, newSchema) ? 'recharge' : 'full';
