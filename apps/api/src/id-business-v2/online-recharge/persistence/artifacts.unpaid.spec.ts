@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { OnlineRechargeArtifactsRepository } from './artifacts.repository';
+import { sanitize } from '../validation';
 const project = resolve(__dirname, '../../../../../..');
+const engineModule = createRequire(resolve(__dirname, 'artifacts.unpaid.spec.ts'));
 const report = {
   format: 'unpaid-validation-v1',
   startedAt: '2026-10-24T01:00:00.000Z',
@@ -372,4 +375,247 @@ describe('代理与专用浏览器失败分类落盘', () => {
     ).rejects.toThrow('诊断文件字段无效');
     expect(f.workers.withLease).not.toHaveBeenCalled();
   });
+});
+
+const diagnostics = engineModule('../engine/unpaid-validation.cjs') as {
+  boundedReport: (report: unknown) => Record<string, unknown>;
+  DIAGNOSTIC_MAX_BYTES: number;
+};
+function syntheticCheckoutReport() {
+  const event = (index: number, kind = 'request_failed', endpoint = 'stripe_script') => ({
+    event: kind,
+    endpoint,
+    frame: 'embedded',
+    elapsedMs: 2000 + index,
+    method: 'GET',
+    frameId: 2,
+    requestId: index + 1,
+    resourceType: 'script',
+    ownerEndpoint: 'stripe_frame',
+    routeTemplate: 'other',
+    startedMs: index,
+    durationMs: 2000,
+    ...(kind === 'request_failed'
+      ? { code: 'TIMEOUT', failureCode: 'ERR_TIMED_OUT', source: 'network_or_proxy' }
+      : {})
+  });
+  const lastReadFailure = {
+    phase: 'load_state',
+    reason: 'timeout',
+    probe: 'load_precheck',
+    readOperation: 'load_error_count',
+    frameKind: 'embedded',
+    frameId: 2,
+    count: 1
+  };
+  return {
+    ...report,
+    lastStage: 'checkout_open',
+    failureClass: 'READ_INCOMPLETE',
+    failureCode: 'CHECKOUT_CONTROL_READ_FAILED',
+    missing: [],
+    timeline: [
+      'input',
+      'proxy',
+      'login',
+      'preflight',
+      'card_readiness',
+      'checkout_create',
+      'checkout_open',
+      'cleanup'
+    ].map((stage) => ({
+      stage,
+      startedAt: '2026-10-24T01:00:00.000Z',
+      endedAt: '2026-10-24T01:00:01.000Z',
+      state: stage === 'checkout_open' ? 'failed' : 'completed'
+    })),
+    bootstrapDiagnostics: {
+      initialSessionProbe: {
+        httpStatus: 200,
+        hasValidUser: true,
+        matchesTargetAccount: true,
+        complete: true
+      },
+      homepageSessionProbe: {
+        httpStatus: 200,
+        hasValidUser: true,
+        matchesTargetAccount: true,
+        complete: true
+      }
+    },
+    checkoutOpenDiagnostics: {
+      stage: 'readiness',
+      reason: 'not_ready',
+      code: 'CHECKOUT_CONTROL_READ_FAILED',
+      missing: [],
+      controls: [],
+      inspection: {
+        complete: false,
+        timedOut: false,
+        framesFailed: 1,
+        readPhase: 'frame_scan',
+        readAttempts: 2,
+        readFailures: [lastReadFailure],
+        lastReadFailure
+      },
+      initialization: {
+        version: 2,
+        elapsedMs: 26711,
+        eventCount: 533,
+        readFailures: 0,
+        truncated: true,
+        events: Array.from({ length: 64 }, (_, i) => event(i)),
+        firstFailure: event(0),
+        criticalEvents: Array.from({ length: 96 }, (_, i) => event(i)),
+        criticalEventCount: 123,
+        criticalTruncated: true,
+        failureClasses: Array.from({ length: 32 }, (_, i) => ({
+          ...event(i),
+          count: 2,
+          lastElapsedMs: i === 0 ? 9999 : 3000 + i
+        })),
+        failureClassesTruncated: false,
+        pendingRequests: Array.from({ length: 48 }, (_, i) =>
+          event(i, 'request', i % 2 ? 'stripe_script' : 'stripe_frame')
+        ),
+        pendingRequestCount: 100,
+        pendingRequestsTruncated: true,
+        requestCounts: ['stripe_script', 'stripe_frame'].map((endpoint) => ({
+          endpoint,
+          started: 100,
+          responses: 80,
+          finished: 40,
+          failed: 2,
+          pending: 58
+        }))
+      },
+      awaits: {
+        version: 1,
+        elapsedMs: 26711,
+        steps: Array.from({ length: 48 }, (_, i) => ({
+          step: 'readiness',
+          state: i === 46 ? 'read_failed' : i === 47 ? 'pending' : 'completed',
+          startedMs: i,
+          remainingMs: 1000,
+          ...(i === 46 ? { errorClass: 'timeout' } : {})
+        }))
+      }
+    }
+  };
+}
+describe('付款页诊断合同与字节裁剪', () => {
+  it('合成大报告经执行器裁剪后由API保存，完整保留业务判断和阶段概要', async () => {
+    const original = syntheticCheckoutReport(),
+      before = JSON.stringify(original);
+    expect(Buffer.byteLength(before)).toBeGreaterThan(42156);
+    const bounded = diagnostics.boundedReport(original);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(
+      diagnostics.DIAGNOSTIC_MAX_BYTES
+    );
+    expect(JSON.stringify(original)).toBe(before);
+    for (const key of [
+      'lastStage',
+      'failureCode',
+      'failureClass',
+      'outcome',
+      'missing',
+      'timeline',
+      'cardVerified',
+      'billingVerified',
+      'buttonReady',
+      'submitted',
+      'executorTerminated',
+      'bootstrapDiagnostics'
+    ] as const)
+      expect(bounded[key]).toEqual(original[key]);
+    const open = bounded.checkoutOpenDiagnostics as typeof original.checkoutOpenDiagnostics;
+    expect(open.inspection.lastReadFailure).toEqual(
+      original.checkoutOpenDiagnostics.inspection.lastReadFailure
+    );
+    expect(open.initialization.firstFailure).toEqual(
+      original.checkoutOpenDiagnostics.initialization.firstFailure
+    );
+    expect(open.initialization.requestCounts).toEqual(
+      original.checkoutOpenDiagnostics.initialization.requestCounts
+    );
+    expect(open.initialization.eventCount).toBe(533);
+    expect(open.initialization.pendingRequestCount).toBe(100);
+    expect(open.initialization.failureClasses.some((row) => row.lastElapsedMs === 9999)).toBe(true);
+    for (const endpoint of ['stripe_script', 'stripe_frame'])
+      expect(open.initialization.pendingRequests.some((row) => row.endpoint === endpoint)).toBe(
+        true
+      );
+    expect(open.awaits.steps.some((row) => row.state === 'read_failed')).toBe(true);
+    expect(open.awaits.steps.some((row) => row.state === 'pending')).toBe(true);
+    expect(bounded.diagnosticsTruncated).toBe(true);
+    const root = join(project, '.runtime/checkout-read-evidence-20261027/artifacts');
+    await mkdir(root, { recursive: true });
+    const directory = await mkdtemp(join(root, 'fixture-'));
+    try {
+      const f = fixture(directory);
+      const result = await f.repository.upload(input(bounded));
+      const { readFile } = await import('node:fs/promises');
+      expect(JSON.parse(await readFile(join(directory, result.filename), 'utf8'))).toEqual(bounded);
+      expect(f.tx.onlineRechargeEvent.create).toHaveBeenCalledOnce();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('未裁剪的超限报告仍被拒绝，不扩展32KB附件上限', async () => {
+    const f = fixture(join(project, '.runtime/checkout-read-evidence-20261027/artifacts'));
+    await expect(f.repository.upload(input(syntheticCheckoutReport()))).rejects.toThrow(
+      /大小限制|过大/
+    );
+    expect(f.workers.withLease).not.toHaveBeenCalled();
+  });
+  for (const location of ['open', 'inspection', 'readFailure', 'event', 'await', 'metadata'])
+    it(`拒绝${location}中的未知字段和原始内容`, async () => {
+      const bounded = diagnostics.boundedReport(syntheticCheckoutReport());
+      const open = bounded.checkoutOpenDiagnostics as Record<string, unknown>;
+      const inspection = open.inspection as Record<string, unknown>;
+      if (location === 'open') open.rawBody = 'SYNTHETIC_PRIVATE';
+      if (location === 'inspection') inspection.rawValue = 'SYNTHETIC_PRIVATE';
+      if (location === 'readFailure')
+        (inspection.lastReadFailure as Record<string, unknown>).message = 'SYNTHETIC_PRIVATE';
+      if (location === 'event')
+        (open.initialization as { firstFailure: Record<string, unknown> }).firstFailure.url =
+          'https://example.invalid/SYNTHETIC_PRIVATE';
+      if (location === 'await')
+        (open.awaits as { steps: Record<string, unknown>[] }).steps.at(-1)!.rawMessage =
+          'SYNTHETIC_PRIVATE';
+      if (location === 'metadata') bounded.diagnosticsOmitted = ['SYNTHETIC_PRIVATE'];
+      const f = fixture(join(project, '.runtime/checkout-read-evidence-20261027/artifacts'));
+      await expect(f.repository.upload(input(bounded))).rejects.toThrow('诊断文件字段无效');
+      expect(f.workers.withLease).not.toHaveBeenCalled();
+    });
+});
+
+it('加载预检异常经执行器投影与API结果投影后保留真实操作，原始内容不回显', () => {
+  const projection = engineModule('../engine/upstream/chatgpt.js') as {
+    safeCheckoutOpenDiagnostics: (input: unknown) => Record<string, unknown>;
+  };
+  const failure = {
+    phase: 'load_state',
+    reason: 'timeout',
+    probe: 'load_precheck',
+    readOperation: 'load_error_visibility',
+    frameKind: 'embedded',
+    frameId: 2,
+    count: 1,
+    rawMessage: 'SYNTHETIC_PRIVATE'
+  };
+  const result = sanitize({
+    checkoutOpenDiagnostics: projection.safeCheckoutOpenDiagnostics({
+      stage: 'readiness',
+      reason: 'not_ready',
+      code: 'CHECKOUT_CONTROL_READ_FAILED',
+      missing: [],
+      inspection: { readPhase: 'frame_scan', readFailures: [failure], lastReadFailure: failure }
+    })
+  }) as { checkoutOpenDiagnostics: { inspection: { lastReadFailure: Record<string, unknown> } } };
+  expect(result.checkoutOpenDiagnostics.inspection.lastReadFailure.readOperation).toBe(
+    'load_error_visibility'
+  );
+  expect(result.checkoutOpenDiagnostics.inspection.lastReadFailure.probe).toBe('load_precheck');
+  expect(JSON.stringify(result)).not.toContain('SYNTHETIC_PRIVATE');
 });

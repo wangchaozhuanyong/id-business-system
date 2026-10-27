@@ -161,6 +161,62 @@ function diagnosticEntries(report: Record<string, unknown>) {
   const rows: { label: string; value: string }[] = [];
   const form = record(report.formDiagnostics),
     inspection = record(form.inspection);
+  const openInspection = record(record(report.checkoutOpenDiagnostics).inspection);
+  const source = openInspection.lastReadFailure ? openInspection : inspection;
+  const readFailure = record(
+    source.lastReadFailure ||
+      (Array.isArray(source.readFailures) ? source.readFailures.at(-1) : undefined)
+  );
+  const readLabels: Record<string, string> = {
+    frame_element: '获取内嵌页面外框',
+    owner_visibility: '读取外框可见性',
+    load_error_count: '查询官网加载错误提示',
+    load_error_visibility: '读取加载错误提示可见性',
+    control_snapshot: '读取控件快照',
+    candidate_handles: '定位候选控件',
+    candidate_eligibility: '核对控件可编辑状态',
+    control_read: '读取控件状态',
+    value: '填写后回读',
+    candidate_scroll: '滚动控件',
+    unknown: '具体操作未取得'
+  };
+  const readReasons: Record<string, string> = {
+    timeout: '读取超时',
+    detached: '节点已脱离',
+    context_destroyed: '页面执行环境已替换',
+    closed: '页面已关闭',
+    aborted: '读取已取消',
+    read_failed: '读取失败'
+  };
+  if (readLabels[String(readFailure.readOperation)] && readReasons[String(readFailure.reason)]) {
+    const probes: Record<string, string> = {
+      load_precheck: '官网加载状态预检',
+      control_scan: '支付控件扫描'
+    };
+    const kinds: Record<string, string> = {
+      main: '主页面',
+      embedded: '内嵌页面',
+      unknown: '页面类别未取得'
+    };
+    rows.push({
+      label: '最后读取失败',
+      value: [
+        probes[String(readFailure.probe)],
+        readLabels[String(readFailure.readOperation)],
+        kinds[String(readFailure.frameKind)],
+        Number.isInteger(readFailure.frameId) &&
+        Number(readFailure.frameId) > 0 &&
+        Number(readFailure.frameId) <= 10000
+          ? `页面序号 ${readFailure.frameId}`
+          : '',
+        readReasons[String(readFailure.reason)]
+      ]
+        .filter(Boolean)
+        .join('／')
+    });
+  }
+  if (report.diagnosticsTruncated === true)
+    rows.push({ label: '诊断详情', value: '已按附件字节上限裁剪，阶段概要及最后失败操作保留' });
   const failed = Array.isArray(form.steps)
     ? form.steps
         .map(record)
@@ -305,9 +361,13 @@ export function unpaidValidationEntries(value: unknown) {
     {
       label: '停止分类',
       value:
-        failureDetails[String(report.failureCode)] ??
-        failures[String(report.failureClass)] ??
-        '分类未确认'
+        report.failureClass === 'READ_INCOMPLETE' &&
+        record(record(record(report.checkoutOpenDiagnostics).inspection).lastReadFailure).probe ===
+          'load_precheck'
+          ? '官网加载状态预检读取未完成'
+          : (failureDetails[String(report.failureCode)] ??
+            failures[String(report.failureClass)] ??
+            '分类未确认')
     },
     { label: '卡片回读', value: report.cardVerified === true ? '通过' : '尚未通过' },
     { label: '账单回读', value: report.billingVerified === true ? '通过' : '尚未通过' },
