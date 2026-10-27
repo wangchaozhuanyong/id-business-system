@@ -6,6 +6,7 @@ import {
   sessionDiagnosticPaths,
   subscriptionBodyFallbackPaths,
   countryFrameScrollPaths,
+  checkoutReadEvidencePaths,
   profileLockRecoveryPaths,
   isProfileLockRecoveryOnly,
   cardReadDiagnosticsPaths,
@@ -614,4 +615,22 @@ test('country frame publication keeps controls only and never selects a business
     isUnpaidValidationControlsOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']),
     false
   );
+});
+
+test('checkout read evidence requires API Admin and full engine regression without accepting payment or migration changes', () => {
+  const paths = [
+    ...checkoutReadEvidencePaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const path of checkoutReadEvidencePaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== path)), false);
+  for (const path of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+  ])
+    assert.equal(isUnpaidValidationOnly([...paths, path]), false);
 });

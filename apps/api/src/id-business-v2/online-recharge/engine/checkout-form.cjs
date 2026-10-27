@@ -119,9 +119,54 @@ async function within(operation, deadline, signal) {
 }
 // Opt-in, value-free tracing for an owned readonly diagnostic page. Ordinary
 // payment callers retain their existing deadlines and pure-read retry policy.
+const READ_OPERATIONS = new Set([
+  'frame_element',
+  'owner_visibility',
+  'load_error_count',
+  'load_error_visibility',
+  'control_snapshot',
+  'candidate_handles',
+  'candidate_eligibility',
+  'control_read',
+  'value',
+  'candidate_scroll',
+  'unknown'
+]);
+const readFailureMetadata = new WeakMap();
+function tagReadFailure(error, operation, frame, state) {
+  if (!error || typeof error !== 'object') return;
+  const details = {
+    readOperation: READ_OPERATIONS.has(operation) ? operation : 'unknown',
+    readFrameKind: 'unknown'
+  };
+  try {
+    const page = frame?.page();
+    if (page) details.readFrameKind = frame === page.mainFrame() ? 'main' : 'embedded';
+    if (frame && state) {
+      state.readFrames ||= new Map();
+      if (!state.readFrames.has(frame) && state.readFrames.size < 10000)
+        state.readFrames.set(frame, state.readFrames.size + 1);
+      if (state.readFrames.has(frame)) details.readFrameId = state.readFrames.get(frame);
+    }
+  } catch {
+    /* A failed identity observation cannot replace the original error. */
+  }
+  readFailureMetadata.set(error, details);
+  try {
+    Object.assign(error, details);
+  } catch {
+    /* Frozen errors retain their identity. */
+  }
+}
 async function observedRead(operation, deadline, signal, state, readOperation, frame) {
-  if (typeof state?.onRead !== 'function' && state?.stopOnReadFailure !== true)
-    return within(operation, deadline, signal);
+  if (typeof state?.onRead !== 'function' && state?.stopOnReadFailure !== true) {
+    try {
+      return await within(operation, deadline, signal);
+    } catch (error) {
+      tagReadFailure(error, readOperation, frame, state);
+      throw error;
+    }
+  }
   const startedAt = Date.now();
   let finish;
   try {
@@ -155,7 +200,7 @@ async function observedRead(operation, deadline, signal, state, readOperation, f
     end({ state: 'completed' });
     return result;
   } catch (error) {
-    error.readOperation = readOperation;
+    tagReadFailure(error, readOperation, frame, state);
     const timedOut = error.code === 'CHECKOUT_FORM_TIMEOUT' || error.name === 'TimeoutError';
     if (state.stopOnReadFailure === true) state.readStopped = true;
     end({
@@ -296,7 +341,7 @@ function inspectionState(page, deadline, signal) {
     aborted: signal?.aborted === true
   };
 }
-function frameReadFailure(inspection, phase, error, page, signal) {
+function frameReadFailure(inspection, phase, error, page, signal, probe = 'control_scan') {
   const reason = signal?.aborted
     ? 'aborted'
     : closed(page)
@@ -308,9 +353,30 @@ function frameReadFailure(inspection, phase, error, page, signal) {
           : /detached/i.test(String(error?.message || ''))
             ? 'detached'
             : 'read_failed';
-  const prior = inspection.readFailures.find((row) => row.phase === phase && row.reason === reason);
+  const metadata = readFailureMetadata.get(error) || error || {};
+  const details = {
+    phase,
+    reason,
+    probe,
+    readOperation: READ_OPERATIONS.has(metadata.readOperation) ? metadata.readOperation : 'unknown',
+    frameKind: ['main', 'embedded'].includes(metadata.readFrameKind)
+      ? metadata.readFrameKind
+      : 'unknown',
+    ...(Number.isInteger(metadata.readFrameId) &&
+    metadata.readFrameId > 0 &&
+    metadata.readFrameId <= 10000
+      ? { frameId: metadata.readFrameId }
+      : {})
+  };
+  const prior = inspection.readFailures.find((row) =>
+    Object.keys(details).every((key) => row[key] === details[key])
+  );
   if (prior) prior.count = Math.min(10000, prior.count + 1);
-  else inspection.readFailures.push({ phase, reason, count: 1 });
+  else {
+    if (inspection.readFailures.length === 32) inspection.readFailures.shift();
+    inspection.readFailures.push({ ...details, count: 1 });
+  }
+  inspection.lastReadFailure = { ...details, count: prior?.count || 1 };
 }
 function inspectionCode(inspection) {
   return inspection.pageClosed
@@ -676,10 +742,10 @@ async function readControlsOnce(page, deadline, state) {
   if (!inspectionCode(inspection)) {
     try {
       frames = page.frames();
-    } catch {
+    } catch (error) {
       inspection.framesFailed++;
       inspection.readPhase = 'frame_scan';
-      inspection.readFailures.push({ phase: 'frame_scan', reason: 'read_failed', count: 1 });
+      frameReadFailure(inspection, 'frame_scan', error, page, state.signal);
     }
   }
   for (const frame of frames) {
@@ -2035,6 +2101,7 @@ async function loadFailed(page, deadline, signal, options = {}) {
     const inspection = inspectionState(page, deadline, signal);
     state.inspection = inspection;
     let readDeadline = deadline;
+    let phase = 'frame_scan';
     try {
       if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
       const frames = page.frames();
@@ -2042,10 +2109,12 @@ async function loadFailed(page, deadline, signal, options = {}) {
         timeout(deadline, signal);
         if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
         readDeadline = Math.min(deadline, Date.now() + state.readBudgetMs);
+        phase = 'frame_owner';
         if (!(await frameVisible(frame, readDeadline, signal, inspection, state))) {
           inspection.framesSkipped++;
           continue;
         }
+        phase = 'load_state';
         const visibleFailure = await frameLoadFailed(frame, readDeadline, signal, state);
         timeout(deadline, signal);
         if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
@@ -2068,7 +2137,7 @@ async function loadFailed(page, deadline, signal, options = {}) {
         (error.code === 'CHECKOUT_FORM_TIMEOUT' && readDeadline === deadline);
       inspection.framesFailed++;
       inspection.readPhase = 'frame_scan';
-      if (state.onRead) frameReadFailure(inspection, 'frame_scan', error, page, signal);
+      frameReadFailure(inspection, phase, error, page, signal, 'load_precheck');
       const code = inspectionCode(inspection);
       throw Object.assign(failure(code, '结账加载状态读取未完成'), {
         readPhase: 'frame_scan',

@@ -880,7 +880,7 @@ async function clearHumanVerification(page, options = {}) {
         code, retryable, rounds, challengeDetected: challengeObserved, diagnostics: { state: lastCode, revision: state.revision, ...solverDiagnostics } });
     const checkoutFailure = (code) => ({ cleared: false, captchaRequired: false,
         checkoutNotReady: true, code, rounds,
-        missing: readiness?.missing || ['number'], controls: readiness?.controls || [],
+        missing: readiness?.missing || [], controls: readiness?.controls || [],
         ...(readiness?.inspection ? { inspection: readiness.inspection } : {}),
         diagnostics: { state: code,
             ...(readiness?.inspection ? { inspection: readiness.inspection } : {}),

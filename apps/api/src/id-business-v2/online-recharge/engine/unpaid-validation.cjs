@@ -329,6 +329,89 @@ function finish(result = {}, snapshot = current) {
       : {})
   };
 }
+// Limit the complete JSON document, not a substring. Business verdicts and all
+// stage summaries are immutable; only explicitly marked diagnostic detail shrinks.
+const DIAGNOSTIC_MAX_BYTES = 24576;
+function boundedReport(value) {
+  const report = JSON.parse(JSON.stringify(value));
+  delete report.diagnosticUploaded;
+  const omitted = new Set(report.diagnosticsOmitted || []);
+  report.diagnosticsTruncated = omitted.size > 0;
+  report.diagnosticsOmitted = [...omitted];
+  const over = () => Buffer.byteLength(JSON.stringify(report), 'utf8') > DIAGNOSTIC_MAX_BYTES;
+  const mark = (group) => {
+    omitted.add(group);
+    report.diagnosticsTruncated = true;
+    report.diagnosticsOmitted = [...omitted];
+  };
+  const trim = (owner, key, group, minimum = 0, preserve = () => false, changed = () => {}) => {
+    if (!Array.isArray(owner?.[key])) return;
+    const rows = owner[key];
+    while (over() && rows.length > minimum) {
+      const index = rows.findIndex((row, index) => !preserve(row, index, rows));
+      if (index < 0) break;
+      rows.splice(index, 1);
+      changed();
+      mark(group);
+    }
+  };
+  const open = report.checkoutOpenDiagnostics,
+    init = open?.initialization;
+  trim(init, 'events', 'events', 0, undefined, () => {
+    init.truncated = true;
+  });
+  trim(open, 'controls', 'control_details');
+  trim(open?.exclusionProbe, 'rows', 'exclusion_rows', 0, undefined, () => {
+    open.exclusionProbe.truncated = true;
+    open.exclusionProbe.complete = false;
+  });
+  trim(init, 'criticalEvents', 'critical_events', 1, undefined, () => {
+    init.criticalTruncated = true;
+  });
+  // Keep the newest pending request of every observed endpoint, including both
+  // Stripe script and iframe categories; original counts remain untouched.
+  trim(
+    init,
+    'pendingRequests',
+    'pending_requests',
+    0,
+    (row, index, rows) => !rows.slice(index + 1).some((next) => next.endpoint === row.endpoint),
+    () => {
+      init.pendingRequestsTruncated = true;
+    }
+  );
+  trim(
+    init,
+    'failureClasses',
+    'failure_classes',
+    1,
+    (row, index, rows) =>
+      index ===
+      rows.reduce(
+        (latest, item, i) => (item.lastElapsedMs >= rows[latest].lastElapsedMs ? i : latest),
+        0
+      ),
+    () => {
+      init.failureClassesTruncated = true;
+    }
+  );
+  const lastStep = (row, index, rows) =>
+    index === rows.length - 1 ||
+    (['failed', 'read_failed'].includes(row.state) &&
+      !rows.slice(index + 1).some((next) => ['failed', 'read_failed'].includes(next.state))) ||
+    (row.state === 'pending' && !rows.slice(index + 1).some((next) => next.state === 'pending'));
+  trim(open?.awaits, 'steps', 'await_steps', 1, lastStep);
+  trim(report.formDiagnostics, 'steps', 'form_steps', 1, lastStep);
+  for (const inspection of [open?.inspection, report.formDiagnostics?.inspection]) {
+    trim(inspection, 'interactionChecks', 'control_details', 1);
+    trim(inspection, 'readFailures', 'control_details', 1);
+  }
+  if (over())
+    throw Object.assign(new Error('诊断必需字段超过附件预算'), {
+      code: 'DIAGNOSTIC_REPORT_TOO_LARGE'
+    });
+  return report;
+}
 async function automaticVerification(page, options) {
   if (current) current.pendingChallenge = true;
   if (process.env.HCAPTCHA_SOLVER_ENABLED === '0')
@@ -529,11 +612,18 @@ function message(report) {
     report.failureClass === 'READ_INCOMPLETE' && fieldLabel && phaseLabel
       ? `（${[fieldLabel, phaseLabel, errorLabel].filter(Boolean).join('／')}）`
       : '';
+  const stopLabel =
+    report.failureClass === 'READ_INCOMPLETE' &&
+    report.checkoutOpenDiagnostics?.inspection?.lastReadFailure?.probe === 'load_precheck'
+      ? '官网加载状态预检读取未完成'
+      : codeLabels[report.failureCode] || labels[report.failureClass] || labels.OTHER;
   return report.failureClass === 'NONE'
     ? labels.NONE
-    : `不付款验证已结束：${codeLabels[report.failureCode] || labels[report.failureClass] || labels.OTHER}${detail}${report.httpStatus ? `（HTTP ${report.httpStatus}）` : ''}`;
+    : `不付款验证已结束：${stopLabel}${detail}${report.httpStatus ? `（HTTP ${report.httpStatus}）` : ''}`;
 }
 module.exports = {
+  boundedReport,
+  DIAGNOSTIC_MAX_BYTES,
   message,
   enabled,
   start,

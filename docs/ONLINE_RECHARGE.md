@@ -902,3 +902,11 @@ CI 按本批四个执行器文件及两份文档精确登记，并允许现有�
 只在初始点位明确归于frame_owner/outside_viewport时，原生滚动外层iframe宿主，再由外向内处理内层宿主，共享既有500ms滚动期限。不重复调用可能卡住的内层控件滚动；之后仍走现有重扫、节点身份和逐层交互核验，遮挡或越界持续存在仍停止。无新的等待期限、可见性豁免、force、DOM滚动脚本、CSP或付款行为修改。
 
 新增本地合成页面回归覆盖内层滚动不可用但宿主可滚动、嵌套宿主顺序和共享期限、宿主滚动无效/超时、滚动后真实遮挡；保留已有单层/嵌套、节点替换和读取异常套件。CI精确登记本批3个执行器文件及文档，保留guards与完整online-engine检查，额外付款源码不被该范围接受。证据归本树`.runtime/country-frame-scroll-20261027/`；本节不表示已发布或官网国家填写已恢复，本轮不再创建第二笔验收任务。
+
+### 2026-10-27：付款页读取入口与诊断附件合同（本地候选）
+
+原不付款任务79adfdfc的frame_scan失败缺少具体操作，且约42KB报告超出附件32KB限制，并包含未登记的checkoutOpenDiagnostics。本批仅修证据传递和合同：普通observedRead异常保留实际操作，loadFailed无观察器也记录失败；readFailures/lastReadFailure使用固定phase、reason、probe（加载预检或控件扫描）、readOperation、frameKind及读取局部frameId。该序号仅用于本次读取，不与网络事件frameId等同。未知类别明确保留unknown，不记录URL、字段值、异常原文或凭据。
+
+未真正取得字段检查结论时，加载预检失败不再默认missing=[number]。附件按确定性优先级裁剪至24KB，API上限维持32KB；阶段timeline与业务结果不裁剪，首次网络异常、最新异常分类、Stripe资源计数、各端点最新待完成请求、最后失败/待完成步骤及lastReadFailure保留。diagnosticsTruncated和固定diagnosticsOmitted明确标记详情裁剪；严格拒绝未知嵌套字段。
+
+本批不修改frame跳过规则、验证处理、CSP、可见性、总期限、读取预算、重试次数或付款行为；仍不保证超时后底层读取已取消。API、执行器与管理端须配套发布。本地合成回归不能证明官网付款前链路恢复，当前没有新的发布或线上任务授权。
