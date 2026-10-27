@@ -34,7 +34,10 @@ async function completed(dir, name, contents = 'synthetic masked image') {
   );
   return file;
 }
-async function worker(root, { duplicateIpc = false, validation = false, upload } = {}) {
+async function worker(
+  root,
+  { duplicateIpc = false, validation = false, upload, validationReport } = {}
+) {
   const effects = [],
     module = { exports: {} };
   const task = {
@@ -63,14 +66,16 @@ async function worker(root, { duplicateIpc = false, validation = false, upload }
           type: 'result',
           status: 'failed',
           result: {
-            validationReport: require('../unpaid-validation.cjs').finish(
-              { code: 'CHECKOUT_CONTROL_BLOCKED' },
-              {
-                format: 'unpaid-validation-v1',
-                startedAt: new Date().toISOString(),
-                timeline: [{ stage: 'billing_fill', startedAt: new Date().toISOString() }]
-              }
-            )
+            validationReport:
+              validationReport ||
+              require('../unpaid-validation.cjs').finish(
+                { code: 'CHECKOUT_CONTROL_BLOCKED' },
+                {
+                  format: 'unpaid-validation-v1',
+                  startedAt: new Date().toISOString(),
+                  timeline: [{ stage: 'billing_fill', startedAt: new Date().toISOString() }]
+                }
+              )
           }
         });
       child.exitCode = 0;
@@ -258,4 +263,81 @@ test('an expired unconfirmed lease cannot recover or upload a completed file', a
     w.effects.some((item) => ['evidenceUpload', 'completeJob', 'failJob'].includes(item.method)),
     false
   );
+});
+
+test('worker bounds the diagnostic document before its single upload and never submits payment', async (t) => {
+  const root = await directory(t),
+    validation = require('../unpaid-validation.cjs');
+  const event = (index) => ({
+    event: 'request_failed',
+    elapsedMs: index + 2000,
+    endpoint: 'stripe_script',
+    frame: 'embedded',
+    method: 'GET',
+    frameId: 2,
+    requestId: index + 1,
+    resourceType: 'script',
+    ownerEndpoint: 'stripe_frame',
+    routeTemplate: 'other',
+    startedMs: index,
+    durationMs: 2000,
+    status: 500,
+    responseMs: index + 1000,
+    navigationRelated: 'possible',
+    code: 'TIMEOUT',
+    failureCode: 'ERR_TIMED_OUT',
+    source: 'network_or_proxy'
+  });
+  const report = validation.finish(
+    {
+      code: 'CHECKOUT_CONTROL_READ_FAILED',
+      checkoutOpenDiagnostics: {
+        stage: 'readiness',
+        reason: 'not_ready',
+        code: 'CHECKOUT_CONTROL_READ_FAILED',
+        missing: [],
+        initialization: {
+          version: 1,
+          elapsedMs: 3000,
+          eventCount: 100,
+          readFailures: 0,
+          truncated: true,
+          events: Array.from({ length: 64 }, (_, i) => event(i)),
+          firstFailure: event(0),
+          failureClasses: Array.from({ length: 32 }, (_, i) => ({
+            ...event(i),
+            count: 2,
+            lastElapsedMs: 3000 + i
+          })),
+          failureClassesTruncated: false
+        }
+      }
+    },
+    {
+      format: 'unpaid-validation-v1',
+      startedAt: new Date().toISOString(),
+      timeline: [{ stage: 'checkout_open', startedAt: new Date().toISOString() }]
+    }
+  );
+  assert.ok(Buffer.byteLength(JSON.stringify(report)) > 32768);
+  const w = await worker(root, { validation: true, validationReport: report });
+  await w.runJob(w.task, { browserPool: { enabled: true, size: 1 } });
+  const uploads = w.effects.filter((row) => row.method === 'evidenceUpload');
+  assert.equal(uploads.length, 1);
+  const bytes = Buffer.from(uploads[0].args.dataBase64, 'base64');
+  assert.ok(bytes.length <= validation.DIAGNOSTIC_MAX_BYTES);
+  const saved = JSON.parse(bytes.toString());
+  assert.equal(saved.diagnosticsTruncated, true);
+  assert.equal(saved.failureCode, report.failureCode);
+  assert.deepEqual(saved.timeline, report.timeline);
+  assert.deepEqual(
+    saved.checkoutOpenDiagnostics.initialization.firstFailure,
+    report.checkoutOpenDiagnostics.initialization.firstFailure
+  );
+  assert.equal(
+    w.effects.some((row) => row.method === 'beforeExternalSubmit'),
+    false
+  );
+  const result = w.effects.find((row) => row.method === 'completeJob').args.result.validationReport;
+  assert.equal(result.diagnosticUploaded, true);
 });

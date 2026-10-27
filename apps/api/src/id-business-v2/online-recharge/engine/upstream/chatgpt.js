@@ -444,13 +444,23 @@ function safeCheckoutFormInspection(value) {
             inspection[key] = value[key];
     if ([1, 2].includes(value.readAttempts)) inspection.readAttempts = value.readAttempts;
     if (CHECKOUT_FORM_READ_PHASES.has(value.readPhase)) inspection.readPhase = value.readPhase;
-    if (Array.isArray(value.readFailures)) {
-        inspection.readFailures = value.readFailures.slice(0, 32).filter(row => row
-            && ['frame_scan', 'frame_owner', 'load_state', 'control_snapshot'].includes(row.phase)
-            && ['timeout', 'detached', 'context_destroyed', 'closed', 'aborted', 'read_failed'].includes(row.reason)
-            && Number.isInteger(row.count) && row.count > 0 && row.count <= 10000)
-            .map(row => ({ phase: row.phase, reason: row.reason, count: row.count }));
-    }
+    const readFailure = row => {
+        if (!row || !['frame_scan', 'frame_owner', 'load_state', 'control_snapshot'].includes(row.phase)
+            || !['timeout', 'detached', 'context_destroyed', 'closed', 'aborted', 'read_failed'].includes(row.reason)
+            || !Number.isInteger(row.count) || row.count < 1 || row.count > 10000) return undefined;
+        const clean = { phase: row.phase, reason: row.reason, count: row.count };
+        if (['load_precheck', 'control_scan'].includes(row.probe)) clean.probe = row.probe;
+        if (['frame_element', 'owner_visibility', 'load_error_count', 'load_error_visibility',
+            'control_snapshot', 'candidate_handles', 'candidate_eligibility', 'control_read',
+            'value', 'candidate_scroll', 'unknown'].includes(row.readOperation)) clean.readOperation = row.readOperation;
+        if (['main', 'embedded', 'unknown'].includes(row.frameKind)) clean.frameKind = row.frameKind;
+        if (Number.isInteger(row.frameId) && row.frameId > 0 && row.frameId <= 10000) clean.frameId = row.frameId;
+        return clean;
+    };
+    if (Array.isArray(value.readFailures))
+        inspection.readFailures = value.readFailures.slice(-32).map(readFailure).filter(Boolean);
+    const lastReadFailure = readFailure(value.lastReadFailure);
+    if (lastReadFailure) inspection.lastReadFailure = lastReadFailure;
     const visibilityReasons = ['zero_geometry', 'hidden', 'inert', 'aria_hidden', 'display_none',
         'visibility_hidden', 'opacity_zero', 'content_visibility_hidden', 'modal_background'];
     const countGroups = {

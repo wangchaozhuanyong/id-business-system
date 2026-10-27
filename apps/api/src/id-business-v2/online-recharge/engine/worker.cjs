@@ -307,7 +307,7 @@ async function runJob(task, config) {
   async function validationEvidence(executorTerminated) {
     if (entry.validation && !entry.lost && !entry.validationRecorded) {
       entry.validationRecorded = true;
-      const report =
+      let report =
         entry.result?.result?.validationReport ||
         unpaid.finish({ code: 'EXECUTOR_INTERRUPTED' }, entry.validation);
       report.executorTerminated = executorTerminated;
@@ -327,6 +327,8 @@ async function runJob(task, config) {
       else entry.result.result.validationReport = report;
       report.evidenceUploads = entry.evidenceUploads.map((row) => ({ ...row }));
       try {
+        report = unpaid.boundedReport(report);
+        entry.result.result.validationReport = report;
         const file = path.join(
           childEnvironment(task).ONLINE_RECHARGE_MEDIA_DIR,
           'unpaid-validation.json'

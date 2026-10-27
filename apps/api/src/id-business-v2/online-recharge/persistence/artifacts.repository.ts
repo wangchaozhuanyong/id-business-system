@@ -11,6 +11,11 @@ import { OnlineRechargeWorkerRepository } from './worker.repository';
 import { OnlineRechargeRepository } from './online-recharge.repository';
 import { id, object, text, safeBootstrapDiagnostics } from '../validation';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
+import {
+  validReadFailure,
+  validCheckoutOpenDiagnostics,
+  validTruncationMetadata
+} from './diagnostic-contract';
 
 // This existing diagnostic upload accepts enums/counts only, never field values or DOM.
 function validFormDiagnostics(value: unknown): boolean {
@@ -205,20 +210,9 @@ function validFormDiagnostics(value: unknown): boolean {
     if (['framesChecked', 'framesSkipped', 'framesFailed'].includes(key)) return count(v);
     if (key === 'readAttempts') return v === 1 || v === 2;
     if (key === 'readPhase') return oneOf(v, readPhases);
+    if (key === 'lastReadFailure') return validReadFailure(v);
     if (key === 'readFailures')
-      return (
-        Array.isArray(v) &&
-        v.length <= 32 &&
-        v.every(
-          (row) =>
-            record(row) &&
-            Object.keys(row).length === 3 &&
-            oneOf(row.phase, ['frame_scan', 'frame_owner', 'load_state', 'control_snapshot']) &&
-            oneOf(row.reason, errors) &&
-            count(row.count) &&
-            Number(row.count) > 0
-        )
-      );
+      return Array.isArray(v) && v.length <= 32 && v.every(validReadFailure);
     return (
       Object.hasOwn(groups, key) &&
       record(v) &&
@@ -363,6 +357,9 @@ export class OnlineRechargeArtifactsRepository {
         'sourceManifestSha256',
         'formDiagnostics',
         'bootstrapDiagnostics',
+        'checkoutOpenDiagnostics',
+        'diagnosticsTruncated',
+        'diagnosticsOmitted',
         'evidenceUploads'
       ];
       const stages = [
@@ -469,6 +466,11 @@ export class OnlineRechargeArtifactsRepository {
                 ].includes(String(key))
             ))) ||
         (report.formDiagnostics !== undefined && !validFormDiagnostics(report.formDiagnostics)) ||
+        (report.checkoutOpenDiagnostics !== undefined &&
+          !validCheckoutOpenDiagnostics(report.checkoutOpenDiagnostics, (inspection) =>
+            validFormDiagnostics({ inspection, steps: [] })
+          )) ||
+        !validTruncationMetadata(report) ||
         (report.evidenceUploads !== undefined && !validEvidenceUploads(report.evidenceUploads)) ||
         !stages.includes(String(report.lastStage)) ||
         !timestamp(report.startedAt) ||

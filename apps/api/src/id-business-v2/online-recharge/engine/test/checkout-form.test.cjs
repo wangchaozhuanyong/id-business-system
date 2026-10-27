@@ -388,7 +388,15 @@ for (const [message, reason] of [
     assert.equal(result.inspection.complete, false);
     assert.equal(result.code, 'CHECKOUT_CONTROL_READ_FAILED');
     assert.deepEqual(result.inspection.readFailures, [
-      { phase: 'control_snapshot', reason, count: 1 }
+      {
+        phase: 'control_snapshot',
+        reason,
+        count: 1,
+        probe: 'control_scan',
+        readOperation: 'control_snapshot',
+        frameKind: 'main',
+        frameId: 1
+      }
     ]);
     assert.doesNotMatch(JSON.stringify(result), /SYNTHETIC_PRIVATE/);
   });
@@ -400,7 +408,15 @@ test('per-frame snapshot timeout is incomplete while the original global budget 
   assert.equal(result.inspection.timedOut, false);
   assert.equal(result.inspection.complete, false);
   assert.deepEqual(result.inspection.readFailures, [
-    { phase: 'control_snapshot', reason: 'timeout', count: 1 }
+    {
+      phase: 'control_snapshot',
+      reason: 'timeout',
+      count: 1,
+      probe: 'control_scan',
+      readOperation: 'control_snapshot',
+      frameKind: 'main',
+      frameId: 1
+    }
   ]);
 });
 function interceptLoadFailureCount(t, frame, read) {
@@ -2390,3 +2406,116 @@ for (const phase of ['locate', 'precheck', 'input', 'readback'])
       );
     }
   });
+
+for (const [message, name, reason] of [
+  ['SYNTHETIC_PRIVATE', 'TimeoutError', 'timeout'],
+  ['Frame was detached SYNTHETIC_PRIVATE', 'Error', 'detached'],
+  ['Execution context was destroyed SYNTHETIC_PRIVATE', 'Error', 'context_destroyed']
+])
+  test(`ordinary load precheck records ${reason} without an observer`, async (t) => {
+    const page = await pageFor(t, '<main>Payment</main>');
+    let reads = 0;
+    interceptLoadFailureCount(t, page.mainFrame(), async () => {
+      reads++;
+      throw Object.assign(new Error(message), { name });
+    });
+    await assert.rejects(checkoutPageLoadFailed(page, { deadline: Date.now() + 4000 }), (error) => {
+      assert.equal(error.code, 'CHECKOUT_CONTROL_READ_FAILED');
+      assert.equal(error.inspection.readPhase, 'frame_scan');
+      assert.equal(error.inspection.readAttempts, 2);
+      assert.equal(error.inspection.timedOut, false);
+      assert.deepEqual(error.inspection.lastReadFailure, {
+        phase: 'load_state',
+        reason,
+        probe: 'load_precheck',
+        readOperation: 'load_error_count',
+        frameKind: 'main',
+        frameId: 1,
+        count: 1
+      });
+      assert.deepEqual(error.inspection.readFailures, [error.inspection.lastReadFailure]);
+      assert.doesNotMatch(JSON.stringify(error.inspection), /SYNTHETIC_PRIVATE/);
+      return true;
+    });
+    assert.equal(reads, 2);
+  });
+test('ordinary load precheck distinguishes error count from error visibility', async (t) => {
+  const page = await pageFor(t, '<p>Content failed to load</p>');
+  const frame = page.mainFrame(),
+    original = frame.getByText;
+  frame.getByText = function (...args) {
+    const locator = original.apply(this, args);
+    locator.nth = () => ({
+      evaluate: async () => {
+        throw new Error('Frame was detached SYNTHETIC_PRIVATE');
+      }
+    });
+    return locator;
+  };
+  t.after(() => {
+    frame.getByText = original;
+  });
+  await assert.rejects(checkoutPageLoadFailed(page, { deadline: Date.now() + 4000 }), (error) => {
+    assert.equal(error.inspection.lastReadFailure.readOperation, 'load_error_visibility');
+    assert.equal(error.inspection.lastReadFailure.reason, 'detached');
+    return true;
+  });
+});
+for (const operation of ['frame_element', 'owner_visibility'])
+  test(`ordinary load precheck records embedded ${operation} without skipping the frame`, async (t) => {
+    const page = await pageFor(t, iframe('<p>Payment frame</p>'));
+    const frame = page.frames()[1],
+      original = frame.frameElement;
+    frame.frameElement = async function (...args) {
+      if (operation === 'frame_element')
+        throw new Error('Execution context was destroyed SYNTHETIC_PRIVATE');
+      const owner = await original.apply(this, args);
+      owner.evaluate = async () => {
+        throw new Error('Execution context was destroyed SYNTHETIC_PRIVATE');
+      };
+      return owner;
+    };
+    t.after(() => {
+      frame.frameElement = original;
+    });
+    await assert.rejects(checkoutPageLoadFailed(page, { deadline: Date.now() + 4000 }), (error) => {
+      const failure = error.inspection.lastReadFailure;
+      assert.equal(failure.readOperation, operation);
+      assert.equal(failure.probe, 'load_precheck');
+      assert.equal(failure.phase, 'frame_owner');
+      assert.equal(failure.frameKind, 'embedded');
+      assert.equal(failure.reason, 'context_destroyed');
+      assert.equal(error.inspection.complete, false);
+      return true;
+    });
+  });
+test('ordinary load precheck preserves frozen original errors and still records their operation', async (t) => {
+  const page = await pageFor(t, '<main>Payment</main>');
+  const original = Object.freeze(
+    Object.assign(new Error('SYNTHETIC_PRIVATE'), { name: 'TimeoutError' })
+  );
+  interceptLoadFailureCount(t, page.mainFrame(), async () => {
+    throw original;
+  });
+  await assert.rejects(checkoutPageLoadFailed(page, { deadline: Date.now() + 4000 }), (error) => {
+    assert.equal(error.inspection.lastReadFailure.readOperation, 'load_error_count');
+    assert.equal(error.inspection.lastReadFailure.reason, 'timeout');
+    return true;
+  });
+});
+test('ordinary load precheck failure does not claim that number scanning found a missing field', async (t) => {
+  const page = await pageFor(t, '<main>Payment</main>');
+  interceptLoadFailureCount(t, page.mainFrame(), async () => {
+    throw Object.assign(new Error('SYNTHETIC_PRIVATE'), { name: 'TimeoutError' });
+  });
+  const result = await require('../upstream/human-verification').clearHumanVerification(page, {
+    phase: 'checkout-open',
+    requireCheckoutReady: true,
+    checkCheckoutLoad: true,
+    maxWaitMs: 4000
+  });
+  assert.equal(result.cleared, false);
+  assert.equal(result.code, 'CHECKOUT_CONTROL_READ_FAILED');
+  assert.deepEqual(result.missing, []);
+  assert.equal(result.inspection.lastReadFailure.probe, 'load_precheck');
+});

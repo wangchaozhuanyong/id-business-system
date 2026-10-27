@@ -679,3 +679,42 @@ for (const code of ['PROFILE_EXIT_CHANGED', 'PROFILE_LAUNCH_FAILED', 'PROXY_CONN
     assert.equal(actual.metrics.actualPaymentClicks, 0);
     assert.equal(actual.metrics.paymentRequests, 0);
   });
+
+test('a load precheck failure message identifies the probe without inventing a missing card field', () => {
+  const report = validation.finish(
+    {
+      code: 'CHECKOUT_CONTROL_READ_FAILED',
+      checkoutOpenDiagnostics: {
+        stage: 'readiness',
+        reason: 'not_ready',
+        code: 'CHECKOUT_CONTROL_READ_FAILED',
+        missing: [],
+        inspection: {
+          complete: false,
+          readPhase: 'frame_scan',
+          lastReadFailure: {
+            phase: 'load_state',
+            reason: 'timeout',
+            probe: 'load_precheck',
+            readOperation: 'load_error_count',
+            frameKind: 'embedded',
+            count: 1,
+            rawMessage: 'SYNTHETIC_PRIVATE'
+          }
+        }
+      }
+    },
+    {
+      format: 'unpaid-validation-v1',
+      startedAt: new Date().toISOString(),
+      timeline: [{ stage: 'checkout_open', startedAt: new Date().toISOString() }]
+    }
+  );
+  assert.deepEqual(report.missing, []);
+  assert.equal(
+    report.checkoutOpenDiagnostics.inspection.lastReadFailure.readOperation,
+    'load_error_count'
+  );
+  assert.match(validation.message(report), /官网加载状态预检读取未完成/);
+  assert.doesNotMatch(validation.message(report), /卡号|SYNTHETIC_PRIVATE/);
+});

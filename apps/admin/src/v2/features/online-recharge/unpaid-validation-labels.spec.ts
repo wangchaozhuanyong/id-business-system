@@ -199,3 +199,50 @@ describe('代理与专用浏览器的具体停止原因', () => {
     expect(JSON.stringify(rows)).not.toContain('PRIVATE_ARBITRARY');
   });
 });
+
+describe('普通读取异常的真实入口', () => {
+  it('展示加载预检、具体操作、页面类别和异常，不默认宣称卡号不存在', () => {
+    const rows = unpaidValidationEntries({
+      format: 'unpaid-validation-v1',
+      lastStage: 'checkout_open',
+      failureClass: 'READ_INCOMPLETE',
+      missing: [],
+      checkoutOpenDiagnostics: {
+        inspection: {
+          lastReadFailure: {
+            phase: 'load_state',
+            probe: 'load_precheck',
+            readOperation: 'load_error_visibility',
+            frameKind: 'embedded',
+            frameId: 2,
+            reason: 'context_destroyed',
+            count: 1,
+            rawMessage: 'SYNTHETIC_PRIVATE'
+          }
+        }
+      },
+      diagnosticsTruncated: true,
+      diagnosticsOmitted: ['events']
+    });
+    expect(rows.find((row) => row.label === '停止分类')?.value).toBe('官网加载状态预检读取未完成');
+    expect(rows.find((row) => row.label === '最后读取失败')?.value).toBe(
+      '官网加载状态预检／读取加载错误提示可见性／内嵌页面／页面序号 2／页面执行环境已替换'
+    );
+    expect(rows.find((row) => row.label === '诊断详情')?.value).toContain(
+      '阶段概要及最后失败操作保留'
+    );
+    expect(rows.some((row) => row.label === '未就绪字段')).toBe(false);
+    expect(JSON.stringify(rows)).not.toMatch(
+      /SYNTHETIC_PRIVATE|load_precheck|context_destroyed|load_error_visibility/
+    );
+  });
+  it('未知读取操作不原样显示', () => {
+    const rows = unpaidValidationEntries({
+      format: 'unpaid-validation-v1',
+      checkoutOpenDiagnostics: {
+        inspection: { lastReadFailure: { readOperation: 'SYNTHETIC_PRIVATE', reason: 'timeout' } }
+      }
+    });
+    expect(JSON.stringify(rows)).not.toContain('SYNTHETIC_PRIVATE');
+  });
+});

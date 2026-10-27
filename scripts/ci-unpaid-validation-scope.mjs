@@ -49,6 +49,25 @@ export const subscriptionBodyFallbackPaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 
+export const checkoutReadEvidencePaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.ts',
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.unpaid.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/diagnostic-contract.ts',
+  'apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json',
+  'apps/api/src/id-business-v2/online-recharge/engine/checkout-form.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/unpaid-validation.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/worker.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/chatgpt.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/upstream/human-verification.js',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/checkout-form.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/evidence-recovery.test.cjs',
+  'apps/api/src/id-business-v2/online-recharge/engine/test/unpaid-validation.test.cjs',
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+
 export const countryFrameScrollPaths = Object.freeze([
   ...['SOURCE_MANIFEST.json', 'checkout-form.cjs', 'test/checkout-form.test.cjs'].map(
     (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
@@ -306,6 +325,7 @@ export function isUnpaidValidationOnly(paths) {
       sessionDiagnosticPaths,
       subscriptionBodyFallbackPaths,
       countryFrameScrollPaths,
+      checkoutReadEvidencePaths,
       unpaidValidationPaths,
       checkoutResumePaths,
       persistentProfilePaths,
