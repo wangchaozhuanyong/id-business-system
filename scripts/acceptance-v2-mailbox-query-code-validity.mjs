@@ -40,6 +40,8 @@ if (!process.argv.includes('--reuse-build'))
 const browser = await chromium.launch({ headless: true });
 const results = [];
 let activePage;
+let activeErrors = [];
+let activeUnexpectedRequests = [];
 try {
   for (const system of ['managed', 'vendure']) {
     const context = await browser.newContext({
@@ -49,6 +51,8 @@ try {
     activePage = page;
     const errors = [];
     const unexpectedRequests = [];
+    activeErrors = errors;
+    activeUnexpectedRequests = unexpectedRequests;
     page.on('pageerror', (error) => errors.push(error.message));
     await page.route('**/*', async (route) => {
       const url = new URL(route.request().url());
@@ -227,6 +231,9 @@ try {
   );
   console.log(JSON.stringify({ passed: true, layoutCases: 24, flowCases: 2, evidence }));
 } catch (error) {
+  console.error(
+    JSON.stringify({ fixtureErrors: activeErrors, unexpectedRequests: activeUnexpectedRequests })
+  );
   await activePage
     ?.screenshot({ path: join(evidence, `browser-failure-${Date.now()}.png`) })
     .catch(() => {});

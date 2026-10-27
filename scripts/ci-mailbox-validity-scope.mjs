@@ -155,3 +155,45 @@ export function mailboxValidityCommands(part, changed) {
     ];
   throw new Error('Unsupported mailbox validity quality part');
 }
+
+// The first PR run completed API checks; only its browser fixture failed.
+export const mailboxValidityApiReceipt = Object.freeze({
+  repository: 'wangchaozhuanyong/id-business-system',
+  pullRequest: 750,
+  runId: 40522000607,
+  jobId: 122251409323,
+  head: '35c4f65bdcec65adf7d0bfb6b3757ed7e7d375d2',
+  base: 'a7f61aeca2b6ead635f3e0d8858f760da96964de',
+  checkout: 'da615a3f81e8e0703e193d26f6ed85adbf5acd61',
+  tree: '06b763bffeedccaf91e494dc374268432f85b98d'
+});
+
+export function mailboxValidityApiReceiptMatches({ run, job, checkout, log, unchanged }) {
+  const b = mailboxValidityApiReceipt;
+  return (
+    unchanged &&
+    run.id === b.runId &&
+    run.run_attempt === 1 &&
+    run.event === 'pull_request' &&
+    run.path === '.github/workflows/quality.yml' &&
+    run.status === 'completed' &&
+    run.conclusion === 'failure' &&
+    run.head_sha === b.head &&
+    run.repository?.full_name === b.repository &&
+    run.pull_requests?.some((p) => p.number === b.pullRequest) &&
+    job.id === b.jobId &&
+    job.run_id === b.runId &&
+    job.name === 'recharge (api)' &&
+    job.status === 'completed' &&
+    job.conclusion === 'success' &&
+    ['Checkout', 'Install package dependencies', 'Check affected recharge part'].every((name) =>
+      job.steps.some((s) => s.name === name && s.conclusion === 'success')
+    ) &&
+    job.steps.every((s) => ['success', 'skipped'].includes(s.conclusion)) &&
+    checkout.sha === b.checkout &&
+    checkout.tree?.sha === b.tree &&
+    JSON.stringify(checkout.parents?.map((p) => p.sha)) === JSON.stringify([b.base, b.head]) &&
+    log.includes('[command]/usr/bin/git log -1 --format=%H') &&
+    new RegExp('git log -1 --format=%H\\r?\\n[^\\n]* ' + b.checkout + '(?:\\r?\\n|$)').test(log)
+  );
+}

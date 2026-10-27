@@ -1,4 +1,8 @@
-import { isMailboxValidityOnly } from './ci-mailbox-validity-scope.mjs';
+import {
+  isMailboxValidityOnly,
+  mailboxValidityApiReceipt,
+  mailboxValidityApiReceiptMatches
+} from './ci-mailbox-validity-scope.mjs';
 import {
   isRechargeAutofillControlsOnly,
   isRechargeAutofillSourceOnly
@@ -3416,7 +3420,7 @@ export function affectsPart(part, paths) {
     /^(?:package(?:-lock)?\.json$|\.github\/workflows\/quality\.yml$|scripts\/ci-recharge-check\.mjs$|scripts\/ci-change-scope|tsconfig|eslint\.config|\.npmrc$)/;
   const inputs = {
     admin:
-      /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-(?:auto-recharge|table-layout)\.mjs$)/,
+      /^(?:apps\/admin\/|packages\/shared\/|scripts\/acceptance-v2-(?:auto-recharge|table-layout|mailbox-query-code-validity)\.mjs$)/,
     api: /^(?:apps\/api\/(?!src\/id-business-v2\/(?:auto-recharge\/worker|workspace\/media-resolver)\/)|packages\/shared\/)/,
     'online-engine': /^apps\/api\/src\/id-business-v2\/online-recharge\/engine\//,
     connector: /^apps\/api\/src\/id-business-v2\/auto-recharge\/worker\//,
@@ -6069,6 +6073,39 @@ async function main() {
         }
       }
       if (reused.size === reuseParts.length) break;
+    }
+  }
+  if (
+    process.env.GITHUB_EVENT_NAME === 'pull_request' &&
+    mode === 'mailbox' &&
+    isMailboxValidityOnly(paths) &&
+    event.pull_request.number === mailboxValidityApiReceipt.pullRequest
+  ) {
+    const b = mailboxValidityApiReceipt;
+    ensureCommit(b.head);
+    const changed = git('diff', '--name-only', b.tree, currentTree).split('\n').filter(Boolean);
+    const same = (name) =>
+      git('show', `${b.tree}:${name}`) === git('show', `${currentTree}:${name}`);
+    const modulePath = 'scripts/ci-mailbox-validity-scope.mjs';
+    const unchanged =
+      !affectsPart('api', changed) &&
+      same('.github/workflows/quality.yml') &&
+      same('scripts/ci-recharge-check.mjs') &&
+      git('show', `${currentTree}:${modulePath}`).startsWith(
+        git('show', `${b.tree}:${modulePath}`)
+      );
+    if (unchanged) {
+      const run = gh(`repos/${repo}/actions/runs/${b.runId}`);
+      const job = gh(`repos/${repo}/actions/jobs/${b.jobId}`);
+      const checkout = gh(`repos/${repo}/git/commits/${b.checkout}`);
+      const log = execFileSync('gh', ['api', `repos/${repo}/actions/jobs/${b.jobId}/logs`], {
+        encoding: 'utf8',
+        maxBuffer: 4 * 1024 * 1024
+      });
+      if (!mailboxValidityApiReceiptMatches({ run, job, checkout, log, unchanged }))
+        throw new Error('Mailbox API native receipt changed');
+      reused.add('api');
+      evidence.push({ part: 'api', run: b.runId, job: b.jobId, tree: b.tree });
     }
   }
   const registrationNativeEvidence = readRegistrationNativeReuse({

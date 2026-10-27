@@ -609,7 +609,7 @@
     "apps/admin/mailbox-query-code-validity-fixture.html": "a54866cf87a950c542a866ac899307f76a3b0da6fdcf6164311800fa256c5d81",
     "apps/admin/src/v2/components/workspace/mailboxQueryCodeValidity.spec.ts": "c3f3edd73e7046cf309c9093e3f33f97b8d768dca73fcc0c194fa98472852d3a",
     "apps/admin/src/v2/testing/V2MailboxQueryCodeValidityFixture.vue": "f4f963e8b7f0d1a7c2bc3b9ad70b0cf164dcde27ff53242182fec1d82e6e1470",
-    "apps/admin/src/v2/testing/mailbox-query-code-validity-fixture.ts": "337bb8bb115dd210fbb6de7acada2be05fdd4dc6c6f6111d196caa62ebc7dbf8",
+    "apps/admin/src/v2/testing/mailbox-query-code-validity-fixture.ts": "ce9c4371075954af7bd026f9933327be23182ab0aab9ae8e64b4cfa5cf1d3540",
     "apps/api/src/id-business-v2/workspace/id-business-v2-managed-mailbox-schema.contract.spec.ts": "f57cf495f0fd146cfd83214318d4615ca7b6c6bcd2ebc805b5fc1a90508fcdac",
     "apps/api/src/id-business-v2/workspace/id-business-v2-managed-mailbox-settings.service.spec.ts": "33e2dae59cb63124153cf06a2daf6d45b255ac73f901a21e6a19cb8f0224a7dc",
     "apps/api/src/id-business-v2/workspace/id-business-v2-managed-mailbox.service.spec.ts": "4a276fd4e3ef36dd3781b86059815e8940df0e44356983b34837a57e9787d092",
@@ -618,7 +618,7 @@
     "apps/api/src/id-business-v2/workspace/providers/id-business-v2-vendure-mailbox.client.spec.ts": "0d6226ded60264d090e43dcd369ac10d4c66eea52e9a375327ee006ca0026c16",
     "docs/MAILBOX_QUERY_CODE_VALIDITY_20261027.md": "48c8c1f2f4c541c11f54c75accf92c0ddc6bcb369cfc339e171bcb0be3b813ab",
     "docs/V2_TASKS.md": "4fd46e9b2ce1d5b5f4b603edddc38c6f294457ab98b24839e0f5fc0f14cb14ec",
-    "scripts/acceptance-v2-mailbox-query-code-validity.mjs": "4a5237e2182e70d741c4f38767bbf8c96e760b9fbc8f9cdef53fc951dd8754fc"
+    "scripts/acceptance-v2-mailbox-query-code-validity.mjs": "46bebf9cc439e61aee1390a2dfaca32e26a48dad5ded29392c78914d3c9d7aa5"
   },
   "version": 1,
   "workflowSha256": "7b763464349f9e5be1a3e28531ae10a57f03673e4571f39505ca2357dbc0c84a"
