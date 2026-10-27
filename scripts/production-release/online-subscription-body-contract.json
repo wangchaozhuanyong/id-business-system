@@ -136,7 +136,9 @@
     "verify-image-runtime.cjs": "fb1bafb7220664c4a220c410580ceeae78bedd4a9986ae2ef01b4bd6a9efcc4a",
     "worker.cjs": "f25eccfd2db7c90c854802aa913dfe2cf6ccd32b3cb1f920b03c9330f3bc7f47"
   },
-  "apiModules": ["id-business-v2/online-recharge/persistence/artifacts.repository.js"],
+  "apiModules": [
+    "id-business-v2/online-recharge/persistence/artifacts.repository.js"
+  ],
   "awsTargetAccount": "098208446664",
   "awsTargetInstance": "i-0838cebf64f0e2a89",
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
@@ -624,7 +626,12 @@
     "workflowRunId": "40367720793"
   },
   "parentContractSha256": "210e3fb54073ef53b5aa726af6a6e88fcc557cfba0c3210cea2b8e79b3d1d550",
-  "preservedServices": ["mysql", "caddy", "media-resolver", "auto-recharge"],
+  "preservedServices": [
+    "mysql",
+    "caddy",
+    "media-resolver",
+    "auto-recharge"
+  ],
   "scope": "ONLINE_SUBSCRIPTION_BODY_20261027",
   "sourcePullRequest": 743,
   "sourceReviewCommit": "25d6e048fa0db0e586cf0123fe5ea8aabed92916",
@@ -647,7 +654,11 @@
     "docs/V2_TASKS.md": "e96cd7bc076f736f55f38a9e36933dfec45303e5b0b3d18f30e9fb9de602747e"
   },
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-  "updatedServices": ["api", "admin", "online-recharge"],
+  "updatedServices": [
+    "api",
+    "admin",
+    "online-recharge"
+  ],
   "version": 1,
-  "workflowSha256": "8234f583bec5448e531977c7e41034fd230fc765428b512fc92cfc7d2a76f01c"
+  "workflowSha256": "a7806e3a6f4cfcf50e225ab1eab9afe0b79bf963ed7de032c976d65d17737ba4"
 }
