@@ -50,6 +50,29 @@ test('subscription body fallback checks API Admin and full executor without acce
     /test:online-recharge:engine/
   );
 });
+test('subscription body publication checks finite controls without rerunning application or database suites', () => {
+  const paths = [
+    '.github/workflows/online-subscription-body-publication.yml',
+    ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+      (name) => 'scripts/production-release/online-subscription-body-' + name
+    ),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(commands, /online-subscription-body-release.test.py/);
+  assert.doesNotMatch(commands, /prisma.*migrate|test:online-recharge:engine/);
+  assert.equal(
+    isUnpaidValidationControlsOnly([
+      ...paths,
+      'apps/api/src/id-business-v2/online-recharge/engine/upstream/payment-retry.js'
+    ]),
+    false
+  );
+});
 test('fresh session repair retains engine regression and rejects other runtime changes', () => {
   const paths = [
     ...freshSessionPaths,

@@ -203,6 +203,10 @@ export const countryEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export const unpaidValidationControls = Object.freeze([
+  '.github/workflows/online-subscription-body-publication.yml',
+  ...['release.py', 'publication.py', 'build.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-subscription-body-' + name
+  ),
   '.github/workflows/online-fresh-session-publication.yml',
   ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
     (name) => 'scripts/production-release/online-fresh-session-' + name
@@ -376,6 +380,8 @@ export function isUnpaidValidationControlsOnly(paths) {
         p === '.github/workflows/online-persistent-profile-publication.yml' ||
         p.startsWith('scripts/production-release/online-checkout-resume-') ||
         p === '.github/workflows/online-checkout-resume-publication.yml' ||
+        p.startsWith('scripts/production-release/online-subscription-body-') ||
+        p === '.github/workflows/online-subscription-body-publication.yml' ||
         p.startsWith('scripts/production-release/online-unpaid-validation-') ||
         p.startsWith('scripts/ci-unpaid-validation-') ||
         p === '.github/workflows/online-unpaid-validation-publication.yml'
@@ -438,6 +444,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-subscription-body-'))
+        ? [['python3', '-B', 'scripts/production-release/online-subscription-body-release.test.py']]
+        : []),
       ...(paths.some((p) => p.includes('online-fresh-session-'))
         ? [['python3', '-B', 'scripts/production-release/online-fresh-session-release.test.py']]
         : []),
