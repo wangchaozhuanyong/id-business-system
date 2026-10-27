@@ -41,7 +41,8 @@ def load(name):
 
 
 def validate_contract(c):
-    need(c['scope'] == SCOPE and c['version'] == 1 and c['expectedCurrent'] == '22b8104469b5dd0fa364c38a05f0985a572528a0', 'IDENTITY_CHANGED')
+    need(c['scope'] == SCOPE and c['version'] == 1 and c['expectedCurrent'] == 'a7f61aeca2b6ead635f3e0d8858f760da96964de'
+         and c['sourceBase'] == c['expectedCurrent'] and set(c['parentUpdatedImages']) == {'api', 'admin', 'online-recharge'}, 'IDENTITY_CHANGED')
     need(c['migration']['name'] == '20261027010000_managed_mailbox_query_code_validity'
          and c['sources'][c['migration']['path']] == c['migration']['sha256']
          and c['migration']['sql'] == '-- Existing codes and their expiration timestamps are preserved.\nALTER TABLE `id_business_v2_managed_mailboxes`\n  ADD COLUMN `query_code_validity_days` INTEGER NOT NULL DEFAULT 30;\n', 'MIGRATION_SCOPE_CHANGED')
@@ -99,8 +100,14 @@ def capture(plan, c, d, h):
     current = (BASE / 'current').resolve()
     manifest = json.loads((current / 'release-manifest.json').read_bytes())
     need(current.parent == BASE / 'releases' and manifest['commit'] == c['expectedCurrent'], 'CURRENT_CHANGED')
+    proof_raw = (current / c['parentBuildProof']['file']).read_bytes()
+    published = json.loads(proof_raw)
+    need(sha(proof_raw) == c['parentBuildProof']['sha256'] and published['commit'] == c['expectedCurrent']
+         and published['workflowRunId'] == c['parentBuildProof']['workflowRunId'], 'PUBLISHED_PROOF_CHANGED')
     states = h.snapshot(d, current)
-    need(all(states[n] == c['parentServices'][n] for n in (*UPDATED, *PRESERVED)), 'PUBLISHED_SERVICES_CHANGED')
+    need(all(states[n] == c['parentServices'][n] for n in PRESERVED)
+         and all(states[n]['image'] == value['imageId'] for n, value in c['parentUpdatedImages'].items())
+         and all(states[n]['environmentSha256'] == c['parentServices'][n]['environmentSha256'] for n in UPDATED), 'PUBLISHED_SERVICES_CHANGED')
     idle(d, current, states, c, h)
     load('proxy-result-identity-release.py').engine_content(d, states['online-recharge'], c['engineFiles'])
     config = json.loads(d.compose(current, 'config', '--format', 'json'))
