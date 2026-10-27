@@ -12,6 +12,30 @@ const operator = {
 };
 
 describe('IdBusinessV2VendureMailboxService', () => {
+  it.each(['primary', 'alias'] as const)(
+    'forwards a selected reset cycle for %s and rejects invalid days before the remote write',
+    async (kind) => {
+      const client = {
+        resetPrimaryCode: vi.fn().mockResolvedValue({ id: 'fixture-id' }),
+        resetAliasCode: vi.fn().mockResolvedValue({ id: 'fixture-id' })
+      };
+      const transaction = { execute: vi.fn(async (work: (tx: object) => unknown) => work({})) };
+      const service = new IdBusinessV2VendureMailboxService(
+        client as never,
+        transaction as never,
+        { append: vi.fn() } as never
+      );
+      const reset = (days: number) =>
+        kind === 'primary'
+          ? service.primaryAction('fixture-id', 'reset-code', operator, 'fixture-request', days)
+          : service.aliasAction('fixture-id', 'reset-code', operator, 'fixture-request', days);
+      await reset(180);
+      const remote = kind === 'primary' ? client.resetPrimaryCode : client.resetAliasCode;
+      expect(remote).toHaveBeenCalledWith('fixture-id', 180);
+      await expect(reset(-1)).rejects.toThrow('查询码有效天数');
+      expect(remote).toHaveBeenCalledOnce();
+    }
+  );
   it('充值验证码从重验授权后的别名编号识别脱敏收件地址', async () => {
     const alias = {
       id: 'alias-1',

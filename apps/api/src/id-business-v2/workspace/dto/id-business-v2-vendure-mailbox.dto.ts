@@ -56,3 +56,7 @@ export interface ReconcileIdBusinessV2VendureMailboxHistoryDto {
 export interface QueryIdBusinessV2VendureMailboxDto {
   queryCode?: unknown;
 }
+
+export interface ResetIdBusinessV2VendureMailboxQueryCodeDto {
+  validityDays?: unknown;
+}

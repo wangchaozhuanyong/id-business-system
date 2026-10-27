@@ -62,9 +62,9 @@ export const vendureMailboxApi = {
   syncPrimary(id: string) {
     return request<V2VendureMailboxSyncResult>(http.post(`${base}/primary-accounts/${id}/sync`));
   },
-  resetPrimaryCode(id: string) {
+  resetPrimaryCode(id: string, validityDays?: number) {
     return request<V2VendureMailboxPrimaryAccount>(
-      http.post(`${base}/primary-accounts/${id}/reset-code`)
+      http.post(`${base}/primary-accounts/${id}/reset-code`, { validityDays })
     );
   },
   reconcile(id: string, dryRun: boolean) {
@@ -84,8 +84,10 @@ export const vendureMailboxApi = {
   deleteAlias(id: string) {
     return request<{ deleted: boolean }>(http.delete(`${base}/aliases/${id}`));
   },
-  resetAliasCode(id: string) {
-    return request<V2VendureMailboxAlias>(http.post(`${base}/aliases/${id}/reset-code`));
+  resetAliasCode(id: string, validityDays?: number) {
+    return request<V2VendureMailboxAlias>(
+      http.post(`${base}/aliases/${id}/reset-code`, { validityDays })
+    );
   },
   reassignMail(id: string, virtualEmailId: string) {
     return request<V2VendureMailboxMail>(

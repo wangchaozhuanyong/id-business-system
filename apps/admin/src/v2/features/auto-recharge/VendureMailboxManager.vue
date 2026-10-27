@@ -262,7 +262,18 @@
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[3]"
                 prop="remainingDays"
-              />
+              >
+                <template #default="{ row }">
+                  <el-tag
+                    :type="queryCodeExpiryMeta(row).state === 'expired' ? 'danger' : 'success'"
+                    effect="plain"
+                    >{{ queryCodeExpiryMeta(row).label }}</el-tag
+                  >
+                  <div v-if="row.codeExpiresAt">
+                    <small>{{ showDate(row.codeExpiresAt) }} 到期</small>
+                  </div>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.primary.columns[4]"
                 prop="virtualEmailCount"
@@ -386,8 +397,13 @@
                       'remainingDays'
                     ]"
                   >
-                    <dt>剩余天数</dt>
-                    <dd>{{ item.remainingDays ?? '—' }}</dd>
+                    <dt>查询码有效期</dt>
+                    <dd>
+                      <span>{{ queryCodeExpiryMeta(item).label }}</span>
+                      <div v-if="item.codeExpiresAt">
+                        <small>{{ showDate(item.codeExpiresAt) }} 到期</small>
+                      </div>
+                    </dd>
                   </div>
                   <div
                     v-v2-column-visibility="[
@@ -534,7 +550,18 @@
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[4]"
                 prop="remainingDays"
-              />
+              >
+                <template #default="{ row }">
+                  <el-tag
+                    :type="queryCodeExpiryMeta(row).state === 'expired' ? 'danger' : 'success'"
+                    effect="plain"
+                    >{{ queryCodeExpiryMeta(row).label }}</el-tag
+                  >
+                  <div v-if="row.codeExpiresAt">
+                    <small>{{ showDate(row.codeExpiresAt) }} 到期</small>
+                  </div>
+                </template>
+              </V2TableColumn>
               <V2TableColumn
                 :definition="v2TableSchemas.vendureMailbox.aliases.columns[5]"
                 prop="mailCount"
@@ -638,8 +665,13 @@
                       'remainingDays'
                     ]"
                   >
-                    <dt>剩余天数</dt>
-                    <dd>{{ item.remainingDays ?? '—' }}</dd>
+                    <dt>查询码有效期</dt>
+                    <dd>
+                      <span>{{ queryCodeExpiryMeta(item).label }}</span>
+                      <div v-if="item.codeExpiresAt">
+                        <small>{{ showDate(item.codeExpiresAt) }} 到期</small>
+                      </div>
+                    </dd>
                   </div>
                   <div
                     v-v2-column-visibility="[v2TableSchemas.vendureMailbox.aliases.id, 'mailCount']"
@@ -1315,6 +1347,15 @@
       </dl>
     </el-drawer>
 
+    <V2MailboxQueryCodeResetDialog
+      v-model="resetCodeOpen"
+      :target="resetCodeTarget"
+      :busy="saving"
+      :error="operationError"
+      :result="resetCodeResult"
+      @submit="submitQueryCodeReset"
+    />
+
     <V2ConfirmDialog
       v-model="confirmOpen"
       :title="confirmTitle"
@@ -1327,6 +1368,14 @@
 </template>
 
 <script setup lang="ts">
+import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
+import { resolveV2ManagedMailboxQueryCodeExpiry } from '../../components/workspace/managedMailboxExpiry';
+import V2MailboxQueryCodeResetDialog from '../../components/workspace/V2MailboxQueryCodeResetDialog.vue';
+import type {
+  MailboxQueryCodeResetTarget,
+  MailboxQueryCodeResetResult
+} from '../../components/workspace/mailboxQueryCodeValidity';
+
 import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2MailBody from '../../components/workspace/V2MailBody.vue';
 
@@ -2176,16 +2225,7 @@ function handlePrimaryCommand(row: V2VendureMailboxPrimaryAccount, command: stri
         await afterWrite(`修复完成，已关联 ${result.updatedCount} 封历史邮件`);
       }
     );
-  if (command === 'reset')
-    return askConfirm(
-      '重置主查询码',
-      `重置“${row.email}”的主查询码后，旧查询码立即失效。`,
-      true,
-      async () => {
-        await vendureMailboxApi.resetPrimaryCode(row.id);
-        await afterWrite('主查询码已重置');
-      }
-    );
+  if (command === 'reset') return openQueryCodeReset(row, 'primary');
   if (command === 'delete')
     askConfirm(
       '删除主邮箱',
@@ -2280,21 +2320,64 @@ function handleAliasCommand(row: V2VendureMailboxAlias, command: string) {
     jumpToRelayQuery(row.aliasEmail);
     return;
   }
-  if (command === 'reset')
-    return askConfirm(
-      '重置买家查询码',
-      `重置“${row.aliasEmail}”的查询码后，旧查询码立即失效。`,
-      true,
-      async () => {
-        await vendureMailboxApi.resetAliasCode(row.id);
-        await afterWrite('买家查询码已重置');
-      }
-    );
+  if (command === 'reset') return openQueryCodeReset(row, 'alias');
   if (command === 'delete')
     askConfirm('删除虚拟邮箱', `确认删除“${row.aliasEmail}”？`, true, async () => {
       await vendureMailboxApi.deleteAlias(row.id);
       await afterWrite('虚拟邮箱已删除');
     });
+}
+
+function queryCodeExpiryMeta(row: { codeExpiresAt: string | null }) {
+  return row.codeExpiresAt
+    ? resolveV2ManagedMailboxQueryCodeExpiry(
+        row.codeExpiresAt,
+        getV2BusinessNowMs() ?? Date.now(),
+        showDate(row.codeExpiresAt)
+      )
+    : { label: '长期有效', state: 'valid' };
+}
+
+const resetCodeOpen = ref(false);
+const resetCodeTarget = ref<
+  (MailboxQueryCodeResetTarget & { id: string; kind: 'primary' | 'alias' }) | null
+>(null);
+const resetCodeResult = ref<MailboxQueryCodeResetResult | null>(null);
+watch(resetCodeOpen, (open) => {
+  if (!open) resetCodeResult.value = null;
+});
+function openQueryCodeReset(
+  row: V2VendureMailboxPrimaryAccount | V2VendureMailboxAlias,
+  kind: 'primary' | 'alias'
+) {
+  if (saving.value) return;
+  clearNotice();
+  resetCodeTarget.value = {
+    id: row.id,
+    kind,
+    key: `vendure:${kind}:${row.id}`,
+    email: 'email' in row ? row.email : row.aliasEmail,
+    expiresAt: row.codeExpiresAt,
+    validityDays: row.codeResetIntervalDays
+  };
+  resetCodeResult.value = null;
+  resetCodeOpen.value = true;
+}
+function submitQueryCodeReset(validityDays: number, completeDraft: () => boolean) {
+  const target = resetCodeTarget.value;
+  if (!target || saving.value || resetCodeResult.value) return;
+  void run(async () => {
+    const row =
+      target.kind === 'primary'
+        ? await vendureMailboxApi.resetPrimaryCode(target.id, validityDays)
+        : await vendureMailboxApi.resetAliasCode(target.id, validityDays);
+    completeDraft();
+    resetCodeResult.value = {
+      queryCode: 'masterQueryCode' in row ? (row.masterQueryCode ?? '') : row.buyerQueryCode,
+      expiresAt: row.codeExpiresAt
+    };
+    await afterWrite('查询码已重置，请将新码重新交付买家');
+  });
 }
 
 const batchDrawerOpen = ref(false);

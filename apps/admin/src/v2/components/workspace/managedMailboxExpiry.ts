@@ -31,5 +31,9 @@ export function resolveV2ManagedMailboxQueryCodeExpiry(
       state: 'warning'
     };
   }
-  return { detail: `${formatted} 到期`, label: '有效', state: 'valid' };
+  return {
+    detail: `${formatted} 到期`,
+    label: `剩余 ${Math.ceil(remainingMs / 86_400_000)} 天`,
+    state: 'valid'
+  };
 }

@@ -59,7 +59,8 @@ describe('IdBusinessV2ManagedMailboxSettingsService', () => {
     expect(repository.updateAllQueryCodeExpirations).toHaveBeenCalledWith(
       tx,
       new Date('2026-10-13T12:00:00.000Z'),
-      admin.id
+      admin.id,
+      45
     );
     expect(result).toMatchObject({ validityDays: 45, updatedExistingCount: 3 });
     expect(audit.append).toHaveBeenCalledWith(

@@ -73,10 +73,11 @@ export class IdBusinessV2ManagedMailboxRepository {
   updateAllQueryCodeExpirations(
     tx: V2CommandTransaction,
     queryCodeExpiresAt: Date,
-    updatedByUserId: string
+    updatedByUserId: string,
+    queryCodeValidityDays: number
   ) {
     return tx.idBusinessV2ManagedMailbox.updateMany({
-      data: { queryCodeExpiresAt, updatedByUserId }
+      data: { queryCodeExpiresAt, queryCodeValidityDays, updatedByUserId }
     });
   }
 
@@ -122,6 +123,7 @@ export class IdBusinessV2ManagedMailboxRepository {
     id: string,
     input: {
       queryCodeExpiresAt: Date;
+      queryCodeValidityDays: number;
       queryCodeEncrypted: string;
       queryCodeHash: string;
       queryCodeHint: string;

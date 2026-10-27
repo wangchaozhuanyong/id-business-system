@@ -129,6 +129,7 @@ export class IdBusinessV2ManagedMailboxService {
           provider: input.provider,
           providerCredentialEncrypted: encrypted,
           queryCodeExpiresAt: this.settings.expiresAt(context.businessTime, validityDays),
+          queryCodeValidityDays: validityDays,
           queryCodeEncrypted,
           queryCodeHash,
           queryCodeHint: queryCode.slice(-4),
@@ -295,7 +296,8 @@ export class IdBusinessV2ManagedMailboxService {
   async rotateQueryCode(
     mailboxIdInput: unknown,
     operator?: AuthenticatedUser,
-    requestId = 'managed-mailbox-query-code-rotate'
+    requestId = 'managed-mailbox-query-code-rotate',
+    validityDaysInput?: unknown
   ): Promise<CreateV2ManagedMailboxResult> {
     const userId = this.requireAdmin(operator);
     const mailboxId = this.normalizeId(mailboxIdInput);
@@ -305,14 +307,19 @@ export class IdBusinessV2ManagedMailboxService {
     if (!queryCodeEncrypted || !queryCodeHash) {
       throw new ServiceUnavailableException('查询码生成失败');
     }
-    const validityDays = await this.settings.getValidityDays();
+    const selectedValidityDays =
+      validityDaysInput === undefined
+        ? undefined
+        : this.settings.normalizeValidityDays(validityDaysInput);
 
     const row = await this.transactionManager.execute(
       async (tx, context) => {
         const before = await this.repository.findById(mailboxId, tx);
         if (!before) throw new NotFoundException('邮箱不存在');
+        const validityDays = selectedValidityDays ?? before.queryCodeValidityDays ?? 30;
         const updated = await this.repository.updateQueryCode(tx, before.id, {
           queryCodeExpiresAt: this.settings.expiresAt(context.businessTime, validityDays),
+          queryCodeValidityDays: validityDays,
           queryCodeEncrypted,
           queryCodeHash,
           queryCodeHint: queryCode.slice(-4),
@@ -325,7 +332,11 @@ export class IdBusinessV2ManagedMailboxService {
           objectType: 'id_business_v2_managed_mailbox',
           objectId: updated.id,
           beforeData: toV2JsonDocument(this.toAuditData(before)),
-          afterData: toV2JsonDocument({ ...this.toAuditData(updated), queryCodeRotated: true }),
+          afterData: toV2JsonDocument({
+            ...this.toAuditData(updated),
+            queryCodeRotated: true,
+            validityDays
+          }),
           remark: `已重置买家查询码：${updated.email}`
         });
         return updated;
@@ -520,12 +531,14 @@ export class IdBusinessV2ManagedMailboxService {
     email: string;
     provider: string;
     queryCodeExpiresAt: Date;
+    queryCodeValidityDays?: number;
     status: string;
   }) {
     return {
       email: row.email,
       provider: row.provider,
       queryCodeExpiresAt: row.queryCodeExpiresAt.toISOString(),
+      queryCodeValidityDays: row.queryCodeValidityDays ?? 30,
       status: row.status
     };
   }
@@ -538,6 +551,7 @@ export class IdBusinessV2ManagedMailboxService {
     status: V2ManagedMailboxStatus;
     queryCodeEncrypted: string | null;
     queryCodeExpiresAt: Date;
+    queryCodeValidityDays?: number;
     queryCodeHint: string;
     lastVerifiedAt: Date | null;
     lastQueriedAt: Date | null;
@@ -554,6 +568,7 @@ export class IdBusinessV2ManagedMailboxService {
       provider: row.provider,
       status: row.status,
       queryCode: this.decryptQueryCode(row.queryCodeEncrypted),
+      queryCodeValidityDays: row.queryCodeValidityDays ?? 30,
       queryCodeExpiresAt: row.queryCodeExpiresAt.toISOString(),
       queryCodeHint: row.queryCodeHint,
       lastVerifiedAt: row.lastVerifiedAt?.toISOString() ?? null,

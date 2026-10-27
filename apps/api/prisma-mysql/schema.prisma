@@ -2364,6 +2364,7 @@ model IdBusinessV2ManagedMailbox {
   queryCodeEncrypted          String?                          @map("query_code_encrypted") @db.Text
   queryCodeHint               String                           @map("query_code_hint") @db.VarChar(4)
   queryCodeExpiresAt          DateTime                         @map("query_code_expires_at") @db.DateTime(6)
+  queryCodeValidityDays       Int                              @default(30) @map("query_code_validity_days")
   status                      IdBusinessV2ManagedMailboxStatus @default(active)
   lastVerifiedAt              DateTime?                        @map("last_verified_at") @db.DateTime(6)
   lastQueriedAt               DateTime?                        @map("last_queried_at") @db.DateTime(6)

@@ -275,6 +275,8 @@ export interface V2ManagedMailbox {
   queryCode: string | null;
   queryCodeHint: string;
   queryCodeExpiresAt: IsoDateTimeString;
+  /** Optional when reading an older API; legacy records use 30 days. */
+  queryCodeValidityDays?: number;
   lastVerifiedAt: IsoDateTimeString | null;
   lastQueriedAt: IsoDateTimeString | null;
   createdAt: IsoDateTimeString;
