@@ -594,3 +594,24 @@ test('profile inventory control repair executes its recovery regression suite', 
     false
   );
 });
+
+test('country frame publication keeps controls only and never selects a business or database suite', () => {
+  const paths = [
+    '.github/workflows/online-country-frame-publication.yml',
+    ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+      (name) => 'scripts/production-release/online-country-frame-' + name
+    ),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  const commands = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(commands, /online-country-frame-release.test.py/);
+  assert.doesNotMatch(commands, /test:online-recharge:engine|migrate:deploy/);
+  assert.equal(
+    isUnpaidValidationControlsOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+});
