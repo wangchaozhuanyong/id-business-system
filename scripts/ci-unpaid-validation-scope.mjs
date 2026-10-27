@@ -40,6 +40,7 @@ export const subscriptionBodyFallbackPaths = Object.freeze([
     'unpaid-validation.cjs',
     'upstream/subscription-check.js',
     'test/dispatch.test.cjs',
+    'test/human-verification.test.cjs',
     'test/subscription-body-fallback.test.cjs',
     'test/subscription-network-diagnostics.test.cjs',
     'test/unpaid-validation.test.cjs'
