@@ -80,6 +80,22 @@ async function fixture(t, options = {}) {
     ]
   });
   const context = await browser.newContext({ ignoreHTTPSErrors: true, serviceWorkers: 'block' });
+  if (options.sessionChallenge) {
+    // These cases exercise identity/cancellation after an actionable challenge.
+    // Let the local iframe finish loading before the production probe observes it;
+    // the separate no_actionable case intentionally serves no iframe.
+    const newPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      const page = await newPage();
+      const goto = page.goto.bind(page);
+      page.goto = (url, navigation) =>
+        goto(url, {
+          ...navigation,
+          ...(url === 'https://chatgpt.com/api/auth/session' ? { waitUntil: 'load' } : {})
+        });
+      return page;
+    };
+  }
   t.after(async () => {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));

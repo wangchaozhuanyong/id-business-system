@@ -377,8 +377,8 @@
       "path": "test/human-verification.test.cjs",
       "originalSha256": null,
       "changed": true,
-      "adaptedSha256": "3c476b516b4eba2fdd697bba69436b3f2acc558828deeb445ad16d040171cda5",
-      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
+      "adaptedSha256": "abfe5f399cf003cd4520fc96d7ee92f084417ef6e040445af26cb98e359a875a",
+      "reason": "Bounded same-task human verification with authenticated cropped-frame input, native browser identity recheck and isolated regression coverage. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. Local actionable Session challenge fixture waits for its iframe load before identity/cancellation assertions; no runtime login change."
     },
     {
       "path": "test/login-evidence-browser.test.cjs",
