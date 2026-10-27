@@ -151,12 +151,12 @@ export class IdBusinessV2VendureMailboxClient {
     );
   }
 
-  resetPrimaryCode(id: string) {
+  resetPrimaryCode(id: string, codeResetIntervalDays?: number) {
     return this.adminMutation<V2VendureMailboxPrimaryAccount>(
-      `mutation IdBusinessResetPrimaryCode($id: ID!) {
-        result: resetIcloudMasterCode(id: $id) { ${PRIMARY_FIELDS} }
+      `mutation IdBusinessResetPrimaryCode($id: ID!, $codeResetIntervalDays: Int) {
+        result: resetIcloudMasterCode(id: $id, codeResetIntervalDays: $codeResetIntervalDays) { ${PRIMARY_FIELDS} }
       }`,
-      { id }
+      { id, ...(codeResetIntervalDays === undefined ? {} : { codeResetIntervalDays }) }
     );
   }
 
@@ -207,12 +207,12 @@ export class IdBusinessV2VendureMailboxClient {
     );
   }
 
-  resetAliasCode(id: string) {
+  resetAliasCode(id: string, codeResetIntervalDays?: number) {
     return this.adminMutation<V2VendureMailboxAlias>(
-      `mutation IdBusinessResetAliasCode($id: ID!) {
-        result: resetIcloudVirtualEmailCode(id: $id) { ${ALIAS_FIELDS} }
+      `mutation IdBusinessResetAliasCode($id: ID!, $codeResetIntervalDays: Int) {
+        result: resetIcloudVirtualEmailCode(id: $id, codeResetIntervalDays: $codeResetIntervalDays) { ${ALIAS_FIELDS} }
       }`,
-      { id }
+      { id, ...(codeResetIntervalDays === undefined ? {} : { codeResetIntervalDays }) }
     );
   }
 

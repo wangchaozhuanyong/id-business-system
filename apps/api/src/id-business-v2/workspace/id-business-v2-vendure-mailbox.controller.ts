@@ -14,6 +14,7 @@ import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type {
   BatchCreateIdBusinessV2VendureMailboxAliasesDto,
+  ResetIdBusinessV2VendureMailboxQueryCodeDto,
   CreateIdBusinessV2VendureMailboxAliasDto,
   CreateIdBusinessV2VendureMailboxPrimaryDto,
   ListIdBusinessV2VendureMailboxDto,
@@ -99,10 +100,17 @@ export class IdBusinessV2VendureMailboxController {
   @Post('primary-accounts/:id/reset-code')
   resetPrimaryCode(
     @Param('id') id: string,
+    @Body() dto: ResetIdBusinessV2VendureMailboxQueryCodeDto,
     @CurrentUser() operator?: AuthenticatedUser,
     @Req() request?: { requestId?: string }
   ) {
-    return this.service.primaryAction(id, 'reset-code', operator, request?.requestId);
+    return this.service.primaryAction(
+      id,
+      'reset-code',
+      operator,
+      request?.requestId,
+      dto?.validityDays
+    );
   }
 
   @Post('primary-accounts/:id/reconcile')
@@ -155,10 +163,17 @@ export class IdBusinessV2VendureMailboxController {
   @Post('aliases/:id/reset-code')
   resetAliasCode(
     @Param('id') id: string,
+    @Body() dto: ResetIdBusinessV2VendureMailboxQueryCodeDto,
     @CurrentUser() operator?: AuthenticatedUser,
     @Req() request?: { requestId?: string }
   ) {
-    return this.service.aliasAction(id, 'reset-code', operator, request?.requestId);
+    return this.service.aliasAction(
+      id,
+      'reset-code',
+      operator,
+      request?.requestId,
+      dto?.validityDays
+    );
   }
 
   @Delete('aliases/:id')

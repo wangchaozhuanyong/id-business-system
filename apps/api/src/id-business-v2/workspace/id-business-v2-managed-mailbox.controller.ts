@@ -2,6 +2,7 @@ import { Body, Controller, Get, Header, Param, Patch, Post, Put, Query, Req } fr
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import type {
+  ResetIdBusinessV2ManagedMailboxQueryCodeDto,
   CreateIdBusinessV2ManagedMailboxDto,
   CreateIdBusinessV2ManagedMailboxBatchDto,
   ListIdBusinessV2ManagedMailboxesDto,
@@ -112,9 +113,10 @@ export class IdBusinessV2ManagedMailboxController {
   @Header('Cache-Control', 'private, no-store')
   rotateQueryCode(
     @Param('mailboxId') mailboxId: string,
+    @Body() dto: ResetIdBusinessV2ManagedMailboxQueryCodeDto,
     @CurrentUser() operator?: AuthenticatedUser,
     @Req() request?: { requestId?: string }
   ) {
-    return this.service.rotateQueryCode(mailboxId, operator, request?.requestId);
+    return this.service.rotateQueryCode(mailboxId, operator, request?.requestId, dto?.validityDays);
   }
 }

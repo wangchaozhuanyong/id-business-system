@@ -73,6 +73,18 @@ const mysqlQueryCodeSettingsMigration = readFileSync(
 );
 
 describe('managed mailbox schema contract', () => {
+  it('adds a saved cycle without changing existing codes or expiry timestamps', () => {
+    const source = readFileSync(
+      resolve(
+        process.cwd(),
+        'prisma-mysql/migrations/20261027010000_managed_mailbox_query_code_validity/migration.sql'
+      ),
+      'utf8'
+    );
+    expect(mysqlSchema).toContain('queryCodeValidityDays');
+    expect(source).toContain('`query_code_validity_days` INTEGER NOT NULL DEFAULT 30');
+    expect(source).not.toMatch(/DROP|DELETE|TRUNCATE|UPDATE|query_code_expires_at/i);
+  });
   it('stores provider authorization and admin-copyable query codes encrypted', () => {
     expect(schema).toContain('model IdBusinessV2ManagedMailbox {');
     expect(schema).toContain('providerCredentialEncrypted String');

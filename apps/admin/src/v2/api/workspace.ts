@@ -250,9 +250,11 @@ export const idBusinessV2WorkspaceApi = {
       )
     );
   },
-  rotateManagedMailboxQueryCode(mailboxId: string) {
+  rotateManagedMailboxQueryCode(mailboxId: string, validityDays?: number) {
     return request<CreateV2ManagedMailboxResult>(
-      http.post(`/id-business-v2/workspace-mailboxes/${encodeURIComponent(mailboxId)}/query-code`)
+      http.post(`/id-business-v2/workspace-mailboxes/${encodeURIComponent(mailboxId)}/query-code`, {
+        validityDays
+      })
     );
   },
   getRelayConnection(options: ApiRequestOptions = {}) {

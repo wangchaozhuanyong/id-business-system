@@ -4,6 +4,29 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IdBusinessV2VendureMailboxClient } from './id-business-v2-vendure-mailbox.client';
 
 describe('IdBusinessV2VendureMailboxClient', () => {
+  it.each(['Primary', 'Alias'] as const)(
+    'sends the selected cycle in the same %s reset operation',
+    async (kind) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ data: { result: { id: 'fixture-id', codeResetIntervalDays: 365 } } })
+        );
+      vi.stubGlobal('fetch', fetchMock);
+      const client = new IdBusinessV2VendureMailboxClient(
+        new ConfigService({
+          VENDURE_MAILBOX_ADMIN_API_URL: 'https://vendure.example/admin-api',
+          VENDURE_MAILBOX_API_KEY: 'synthetic-test-key'
+        })
+      );
+      if (kind === 'Primary') await client.resetPrimaryCode('fixture-id', 365);
+      else await client.resetAliasCode('fixture-id', 365);
+      const request = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(request.variables).toEqual({ id: 'fixture-id', codeResetIntervalDays: 365 });
+      expect(request.query).toContain('codeResetIntervalDays: $codeResetIntervalDays');
+      expect(fetchMock).toHaveBeenCalledOnce();
+    }
+  );
   afterEach(() => vi.unstubAllGlobals());
 
   it.each(['admin', 'shop'])(
