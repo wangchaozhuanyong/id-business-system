@@ -114,6 +114,24 @@ class SubscriptionBodyPublicationTests(unittest.TestCase):
         plan = pub.native_plan(self.c, {})
         self.assertEqual(plan['controlSources'][P.CONTRACT_FILE], P.sha((HERE / P.CONTRACT_FILE).read_bytes()))
 
+    def test_historical_build_observer_preserves_inherited_env_and_exact_context(self):
+        builder = P.load(P.PREFIX + '-build.py')
+        calls, contexts = [], {}
+        result = object()
+        def run(command, *args, **kwargs):
+            calls.append((command, args, kwargs))
+            return result
+        observe = builder.observe_build(run, contexts, 'v2-published')
+        command = ['npm', 'run', 'build', '--workspace', 'apps/admin']
+        for environment in (None, {}, {'V2_BUILD_ID': 'v2-older'}):
+            self.assertIs(observe(command, cwd='/synthetic/older', env=environment), result)
+            self.assertEqual(contexts, {})
+            self.assertIs(calls[-1][2]['env'], environment)
+        observe(command, cwd='/synthetic/published', env={'V2_BUILD_ID': 'v2-published'})
+        self.assertEqual(contexts, {'admin': Path('/synthetic/published')})
+        observe(['git', 'merge-file'], cwd='/synthetic/other', env=None)
+        self.assertEqual(contexts, {'admin': Path('/synthetic/published')})
+
     def test_builder_overlays_only_matching_published_runtime_sources(self):
         builder = P.load(P.PREFIX + '-build.py')
         directory = ROOT / '.runtime/subscription-body-fallback-20261027/control-fixtures'

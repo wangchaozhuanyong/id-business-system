@@ -23,6 +23,18 @@ def load(path):
     return module
 
 
+def observe_build(run, contexts, build_id):
+    def capture(command, *args, **kwargs):
+        result = run(command, *args, **kwargs)
+        # Historical recipes may explicitly inherit the process environment.
+        if (kwargs.get('env') or {}).get('V2_BUILD_ID') == build_id:
+            for role in ('api', 'admin'):
+                if command == ['npm', 'run', 'build', '--workspace', 'apps/' + role]:
+                    contexts[role] = Path(kwargs['cwd'])
+        return result
+    return capture
+
+
 def overlay_sources(c, contexts):
     p = load('online-subscription-body-release.py')
     for name, digest in c['sources'].items():
@@ -61,15 +73,7 @@ def build(c, plan, quality, parent, out):
     contexts = {}
     original_run = subprocess.run
 
-    def capture(command, *args, **kwargs):
-        result = original_run(command, *args, **kwargs)
-        if kwargs.get('env', {}).get('V2_BUILD_ID') == 'v2-' + p.CURRENT:
-            for role in ('api', 'admin'):
-                if command == ['npm', 'run', 'build', '--workspace', 'apps/' + role]:
-                    contexts[role] = Path(kwargs['cwd'])
-        return result
-
-    subprocess.run = capture
+    subprocess.run = observe_build(original_run, contexts, 'v2-' + p.CURRENT)
     try:
         reproduced_out = out / 'published-parent'
         reproduced_out.mkdir()
