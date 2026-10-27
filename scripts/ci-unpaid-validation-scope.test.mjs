@@ -5,6 +5,7 @@ import {
   isFreshSessionOnly,
   sessionDiagnosticPaths,
   subscriptionBodyFallbackPaths,
+  countryFrameScrollPaths,
   profileLockRecoveryPaths,
   isProfileLockRecoveryOnly,
   cardReadDiagnosticsPaths,
@@ -23,6 +24,29 @@ import {
   unpaidValidationCommands
 } from './ci-unpaid-validation-scope.mjs';
 import { checkMode, selectedParts, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
+test('country iframe scroll retains the full executor suite and rejects unrelated payment changes', () => {
+  const paths = [
+    ...countryFrameScrollPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const path of countryFrameScrollPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== path)), false);
+  assert.equal(
+    isUnpaidValidationOnly([
+      ...paths,
+      'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+    ]),
+    false
+  );
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
+});
 test('subscription body fallback checks API Admin and full executor without accepting other payment changes', () => {
   const paths = [
     ...subscriptionBodyFallbackPaths,
