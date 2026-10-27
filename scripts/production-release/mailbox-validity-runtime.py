@@ -41,6 +41,9 @@ def load(name):
 
 
 def validate_contract(c):
+    need(c['sourceReview']['main'] == 'b3dd3bf3e0c59b7905a037e971a71430c6f528ba'
+         and c['sourceReview']['head'] == '359316257fc7082559c26e2e5b0ea0f313544539'
+         and c['sourceReview']['pullRequest'] == 750, 'SOURCE_REVIEW_CHANGED')
     need(c['scope'] == SCOPE and c['version'] == 1 and c['expectedCurrent'] == 'a7f61aeca2b6ead635f3e0d8858f760da96964de'
          and c['sourceBase'] == c['expectedCurrent'] and set(c['parentUpdatedImages']) == {'api', 'admin', 'online-recharge'}, 'IDENTITY_CHANGED')
     need(c['migration']['name'] == '20261027010000_managed_mailbox_query_code_validity'
@@ -150,8 +153,11 @@ def verify_proof(proof, plan, c, files):
     need(all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'workflowRunId', 'workflowRunAttempt', 'contractSha256', 'controlSources', 'nativeParentCapture', 'qualitySourceEvidence')), 'BUILD_PROVENANCE_CHANGED')
     need(proof['scope'] == SCOPE and proof['sources'] == c['sources'] and proof['baselineApiModulesReproduced'] is True and proof['baselineAdminReproduced'] is True and proof['migrationPerformed'] is False and proof['businessActions'] == 0, 'BUILD_PROOF_CHANGED')
     need(proof['retainedSourceBase'] == c['sourceBase'] and proof['reviewBase'] == c['reviewBase'], 'RETAINED_SCOPE_CHANGED')
-    selected = {n.removesuffix('.js') + e for n in c['apiModules'] for e in ('.js', '.js.map', '.d.ts')}
+    selected = {n.removesuffix('.js') + e for n in c['apiModules'] for e in ('.js', '.js.map')}
     need(set(proof['apiModules']) == selected and proof['baselineAdminFiles'] == c['baselineAdminFiles'], 'BUILD_SCOPE_CHANGED')
+    declarations = {n: v for n, v in plan['nativeParentCapture']['baseline']['baselineApiModules'].items() if n.endswith('.d.ts')}
+    need(set(declarations) == {n.removesuffix('.js') + '.d.ts' for n in c['apiModules']}
+         and proof.get('preservedApiDeclarations') == declarations, 'PRESERVED_DECLARATIONS_CHANGED')
     expected = {**{'source/' + n: v for n, v in c['sources'].items()}, **{'api/modules/' + n: v for n, v in proof['apiModules'].items()}, **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()}, **{'api/prisma-client/' + n: v for n, v in proof['prismaClientFiles'].items()}, 'api/schema.prisma': c['sources']['apps/api/prisma-mysql/schema.prisma']}
     need(expected == files == proof['files'] and all('/' not in n and not n.endswith('.node') for n in proof['prismaClientFiles']), 'PAYLOAD_SCOPE_CHANGED')
 
@@ -180,6 +186,7 @@ def apply_migration(d, target, c, parent, stage):
 def smoke(d, target, states, proof, parent, c, h):
     shared = load('shared-bank-card-release.py')
     shared.read_hashes(d, states['api']['containerId'], '/app/apps/api/dist/', proof['apiModules'])
+    shared.read_hashes(d, states['api']['containerId'], '/app/apps/api/dist/', proof['preservedApiDeclarations'])
     shared.read_hashes(d, states['api']['containerId'], '/app/node_modules/.prisma/client/', proof['prismaClientFiles'])
     shared.read_hashes(d, states['admin']['containerId'], '/usr/share/nginx/html/', proof['adminFiles'])
     need(native_client(d, states['api']['containerId']) == parent['nativeClient'], 'NATIVE_ENGINE_CHANGED')
@@ -190,6 +197,15 @@ def smoke(d, target, states, proof, parent, c, h):
     check_database(database(d, target, c), parent['database'], c, True)
     load('proxy-result-identity-release.py').engine_content(d, states['online-recharge'], c['engineFiles'])
     h.engine_idle(d, states['online-recharge'], c, wait_connected=True)
+
+
+def verify_api_image(d, reference, proof):
+    expected = {**{'/app/apps/api/dist/' + n: v for n, v in {**proof['apiModules'], **proof['preservedApiDeclarations']}.items()},
+                **{'/app/node_modules/.prisma/client/' + n: v for n, v in proof['prismaClientFiles'].items()}}
+    code = "const fs=require('fs'),c=require('crypto'),v=JSON.parse(process.argv[1]);console.log(JSON.stringify(Object.fromEntries(Object.keys(v).map(n=>[n,c.createHash('sha256').update(fs.readFileSync(n)).digest('hex')]))))"
+    actual = json.loads(d.run('docker', 'run', '--rm', '--network', 'none', '--read-only', '--entrypoint', 'node', reference,
+                              '-e', code, json.dumps(expected), timeout=60))
+    need(actual == expected, 'IMAGE_CONTENT_CHANGED')
 
 
 def release(plan, c):
@@ -255,6 +271,7 @@ def release(plan, c):
             built = json.loads(d.run('docker', 'image', 'inspect', ref))[0]
             shared.verify_image(json.loads(d.run('docker', 'image', 'inspect', before[role]['image']))[0], built, plan)
             images[role] = {'reference': ref, 'imageId': built['Id']}
+        verify_api_image(d, images['api']['reference'], proof)
         baseline(parent, c, d, h)
         backup = h.fresh_scoped_backup(d, current, plan, normalizer_path=Path(c['backupNormalizerPath']))
         need(backup.get('s3Verified') is True, 'BACKUP_UNVERIFIED')

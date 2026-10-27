@@ -18,6 +18,47 @@ class ValidityControls(unittest.TestCase):
     def setUp(self):
         self.c = json.loads((HERE / r.CONTRACT_FILE).read_bytes())
 
+    def test_executable_payload_excludes_and_preserves_existing_declarations(self):
+        modules = {n.removesuffix('.js') + e: 'a' * 64 for n in self.c['apiModules'] for e in ('.js', '.js.map', '.d.ts')}
+        plan = {'commit': 'b' * 40, 'tree': 'c' * 40, 'workflowRunId': '1', 'workflowRunAttempt': '1',
+                'contractSha256': 'd' * 64, 'controlSources': {}, 'nativeParentCapture': {'baseline': {'baselineApiModules': modules}},
+                'qualitySourceEvidence': {'fixtureOnly': True}}
+        runtime = {n: 'e' * 64 for n in modules if not n.endswith('.d.ts')}
+        declarations = {n: v for n, v in modules.items() if n.endswith('.d.ts')}
+        proof = {**plan, 'scope': r.SCOPE, 'sources': self.c['sources'], 'baselineApiModulesReproduced': True,
+                 'baselineAdminReproduced': True, 'migrationPerformed': False, 'businessActions': 0,
+                 'retainedSourceBase': self.c['sourceBase'], 'reviewBase': self.c['reviewBase'],
+                 'apiModules': runtime, 'preservedApiDeclarations': declarations, 'baselineAdminFiles': self.c['baselineAdminFiles'],
+                 'adminFiles': {'index.html': 'f' * 64}, 'prismaClientFiles': {'schema.prisma': 'f' * 64}}
+        files = {**{'source/' + n: v for n, v in self.c['sources'].items()},
+                 **{'api/modules/' + n: v for n, v in runtime.items()},
+                 'admin/html/index.html': 'f' * 64, 'api/prisma-client/schema.prisma': 'f' * 64,
+                 'api/schema.prisma': self.c['sources']['apps/api/prisma-mysql/schema.prisma']}
+        proof['files'] = files
+        r.verify_proof(proof, plan, self.c, files)
+        bad = copy.deepcopy(proof)
+        bad['apiModules'][next(iter(declarations))] = 'a' * 64
+        with self.assertRaisesRegex(RuntimeError, 'BUILD_SCOPE_CHANGED'):
+            r.verify_proof(bad, plan, self.c, files)
+        bad = copy.deepcopy(proof)
+        bad['preservedApiDeclarations'][next(iter(declarations))] = '0' * 64
+        with self.assertRaisesRegex(RuntimeError, 'PRESERVED_DECLARATIONS_CHANGED'):
+            r.verify_proof(bad, plan, self.c, files)
+
+    def test_image_bytes_are_checked_without_network_or_application_startup(self):
+        proof = {'apiModules': {'module.js': 'a' * 64}, 'preservedApiDeclarations': {'module.d.ts': 'b' * 64},
+                 'prismaClientFiles': {'schema.prisma': 'c' * 64}}
+        expected = {'/app/apps/api/dist/module.js': 'a' * 64, '/app/apps/api/dist/module.d.ts': 'b' * 64,
+                    '/app/node_modules/.prisma/client/schema.prisma': 'c' * 64}
+        d = Mock()
+        d.run.return_value = json.dumps(expected)
+        r.verify_api_image(d, 'fixture-image', proof)
+        self.assertIn('--read-only', d.run.call_args.args)
+        self.assertIn('none', d.run.call_args.args)
+        d.run.return_value = json.dumps({**expected, '/app/apps/api/dist/module.d.ts': '0' * 64})
+        with self.assertRaisesRegex(RuntimeError, 'IMAGE_CONTENT_CHANGED'):
+            r.verify_api_image(d, 'fixture-image', proof)
+
     def test_exact_additive_scope(self):
         r.validate_contract(self.c)
         for change in ['DROP TABLE id_business_v2_managed_mailboxes;', 'DELETE FROM id_business_v2_managed_mailboxes;', self.c['migration']['sql'] + 'SELECT 1;']:
