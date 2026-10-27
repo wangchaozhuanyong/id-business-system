@@ -1,4 +1,4 @@
-"""Publish the reviewed personal settings Admin/API/engine overlay using native CI and SSM receipts."""
+"""Publish the reviewed subscription-read Admin/API/engine overlay using native CI and SSM receipts."""
 import argparse
 import base64
 import io
