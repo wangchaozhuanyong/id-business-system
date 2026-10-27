@@ -100,8 +100,15 @@ export function mailboxValidityCommands(part, changed) {
           '--test',
           'scripts/ci-mailbox-validity-scope.test.mjs',
           'scripts/ci-recharge-scope.test.mjs',
-          'scripts/ci-recharge-check.test.mjs',
           'scripts/ci-change-scope.test.mjs'
+        ]
+      ],
+      [
+        'node',
+        [
+          '--test',
+          '--test-name-pattern=mailbox|mail-query|bank-card',
+          'scripts/ci-recharge-check.test.mjs'
         ]
       ],
       ['python3', ['-B', 'scripts/production-release/mailbox-validity-publication.py', 'check']],
