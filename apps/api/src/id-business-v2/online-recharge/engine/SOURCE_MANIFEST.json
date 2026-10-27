@@ -355,9 +355,9 @@
     {
       "path": "test/dispatch.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "e2ecc55d1a8222f42a772304d438adb912546c33a24a4724ac6048b5c24acde3",
+      "adaptedSha256": "92e918bd71487104e3eedcf7ca5f44c93ba616274f99cad864dafd9a3e26c266",
       "changed": true,
-      "reason": "Synthetic dispatch regression includes the strict proxy detection adapter. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization."
+      "reason": "Synthetic dispatch regression includes the strict proxy detection adapter. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. 2026-10-27 Include the pre-payment RPC state in the existing isolated confirmation fixture; no production safety change."
     },
     {
       "path": "test/evidence-recovery.test.cjs",

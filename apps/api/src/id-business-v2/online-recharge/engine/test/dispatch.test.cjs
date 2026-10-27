@@ -278,6 +278,7 @@ test('successful comparison facts never become subscription confirmation or paym
     require(name) {
       if (name.startsWith('node:')) return require(name);
       if (name === './plans.cjs') return require('../plans.cjs');
+      if (name === './rpc.cjs') return { wasSubmitted: () => false };
       if (name === './upstream/session-auth')
         return { extractProfileFromToken: () => ({ accountId: 'synthetic-account' }) };
       throw new Error(`Unexpected isolated confirmation import: ${name}`);
