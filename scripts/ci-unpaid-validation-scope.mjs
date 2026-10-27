@@ -27,6 +27,26 @@ export const sessionDiagnosticPaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 
+export const subscriptionBodyFallbackPaths = Object.freeze([
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.ts',
+  'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.spec.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.repository.ts',
+  'apps/api/src/id-business-v2/online-recharge/persistence/artifacts.unpaid.spec.ts',
+  ...[
+    'SOURCE_MANIFEST.json',
+    'confirmation.cjs',
+    'subscription-diagnostics.cjs',
+    'subscription-network-diagnostics.cjs',
+    'unpaid-validation.cjs',
+    'upstream/subscription-check.js',
+    'test/subscription-body-fallback.test.cjs',
+    'test/subscription-network-diagnostics.test.cjs',
+    'test/unpaid-validation.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+
 // Exact unpaid validation batch. Adding another business path restores full checks.
 export const unpaidValidationPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
@@ -258,6 +278,7 @@ export function isUnpaidValidationOnly(paths) {
     new Set(paths).size === paths.length &&
     [
       sessionDiagnosticPaths,
+      subscriptionBodyFallbackPaths,
       unpaidValidationPaths,
       checkoutResumePaths,
       persistentProfilePaths,

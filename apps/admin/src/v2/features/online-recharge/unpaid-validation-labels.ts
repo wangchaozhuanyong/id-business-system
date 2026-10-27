@@ -100,6 +100,7 @@ const failures: Record<string, string> = {
   PROXY_UNAVAILABLE: '代理检查未通过',
   BROWSER_PROFILE_UNAVAILABLE: '专用浏览器不可用',
   LOGIN_READ_FAILED: '登录页面读取失败',
+  NETWORK_READ_FAILED: '官网接口网络读取失败',
   LOGIN_UNCONFIRMED: '登录状态未确认',
   CHECKOUT_REJECTED: '官网拒绝建单',
   CHECKOUT_CREATION_UNKNOWN: '建单响应未确认，未重复创建',
@@ -113,6 +114,9 @@ const failures: Record<string, string> = {
   OTHER: '其他执行异常，详见诊断'
 };
 const failureDetails: Record<string, string> = {
+  NETWORK_TIMEOUT: '官网接口网络读取超时',
+  NETWORK_UNAVAILABLE: '官网接口网络连接或响应体读取失败',
+  UPSTREAM_INVALID_RESPONSE: '官网订阅响应格式无效',
   CHECKOUT_CONTROL_BLOCKED: '控件交互前检查未通过',
   PROXY_CONNECTION_FAILED: '代理连通性检测已用尽5次，仍未完成核验，已停止后续操作',
   PROFILE_IDENTITY_MISSING: '缺少账号及用户标识，不能复用浏览器会话',

@@ -3,7 +3,37 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { observeSubscriptionNetwork } = require('../subscription-network-diagnostics.cjs');
-const { sessionProbeFacts, safeSessionProbe } = require('../subscription-diagnostics.cjs');
+const {
+  sessionProbeFacts,
+  safeSessionProbe,
+  responseReadMetadata
+} = require('../subscription-diagnostics.cjs');
+
+test('response metadata projects enums and bounded length without retaining arbitrary headers', () => {
+  const facts = responseReadMetadata({
+    'Content-Type': 'application/json; charset=utf-8',
+    'CF-Mitigated': 'challenge',
+    'CF-Ray': 'SYNTHETIC_PRIVATE',
+    server: 'SYNTHETIC_PRIVATE',
+    'Content-Length': '32',
+    'Transfer-Encoding': 'chunked',
+    Authorization: 'SYNTHETIC_PRIVATE'
+  });
+  assert.deepEqual(facts, {
+    contentType: 'application/json',
+    cfMitigated: 'challenge',
+    cfRayPresent: true,
+    contentLength: 32,
+    transferEncoding: 'chunked',
+    server: 'other'
+  });
+  assert.doesNotMatch(JSON.stringify(facts), /SYNTHETIC_PRIVATE|Authorization/);
+  assert.equal(responseReadMetadata({ 'cf-mitigated': 'guardrails' }).cfMitigated, 'unknown');
+  assert.equal(
+    responseReadMetadata({ 'content-length': '9999999999999999' }).contentLength,
+    undefined
+  );
+});
 
 test('Session states distinguish explicit invalidity, unknown 403, challenge and identity mismatch', () => {
   for (const [status, headers, body, expected] of [
@@ -131,6 +161,32 @@ test('network recorder has a fixed event bound and unavailable evidence never re
   );
   assert.equal(unavailable.snapshot().available, false);
   unavailable.dispose();
+});
+
+test('body bytes are aggregated without filling the bounded event timeline or surviving disposal', async () => {
+  const f = await recorder();
+  f.request();
+  for (let i = 0; i < 100; i++)
+    f.session.emit('Network.dataReceived', {
+      requestId: 'private-request-id',
+      dataLength: 10,
+      encodedDataLength: 4,
+      data: 'SYNTHETIC_PRIVATE'
+    });
+  f.session.emit('Network.loadingFinished', {
+    requestId: 'private-request-id',
+    encodedDataLength: 500
+  });
+  const result = f.observer.snapshot();
+  assert.deepEqual(result.transfers, [
+    { request: 1, chunks: 100, decodedBytes: 1000, encodedBytes: 400 }
+  ]);
+  assert.equal(result.events.length, 2);
+  assert.equal(result.events[1].encodedBytes, 500);
+  assert.doesNotMatch(JSON.stringify(result), /private-|SYNTHETIC_PRIVATE/);
+  f.observer.dispose();
+  f.session.emit('Network.dataReceived', { requestId: 'private-request-id', dataLength: 99 });
+  assert.deepEqual(f.observer.snapshot(), result);
 });
 
 test('cancelling a pending CDP attachment freezes evidence and detaches a late session', async () => {
