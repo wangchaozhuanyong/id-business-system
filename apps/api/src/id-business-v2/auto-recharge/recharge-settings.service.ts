@@ -347,8 +347,14 @@ export class RechargeSettingsService {
             create: input.newConnectionProfile === true,
             expectedUpdatedAt: input.expectedUpdatedAt
           });
-          // A connection belongs to this operator; its selection belongs to the
-          // current browser session. Saving on one computer must not switch another.
+          // Persist only this operator's preferred connection. Keep the original
+          // connection's parameters intact so switching back restores its own values.
+          await this.repository.upsert(tx, operator.id, {
+            browserOptions: toV2JsonDocument({
+              ...object(base?.browserOptions ?? {}),
+              selectedConnectionProfileId: profile.id
+            })
+          });
           updated = {
             ...configuration,
             ownerId: operator.id,
@@ -363,9 +369,9 @@ export class RechargeSettingsService {
             updatedAt: new Date(Math.max(Date.now(), (base?.updatedAt?.getTime() ?? 0) + 1)),
             browserOptions: toV2JsonDocument({
               ...object(configuration.browserOptions ?? {}),
-              ...(object(base?.browserOptions ?? {}).selectedConnectionProfileId
-                ? { selectedConnectionProfileId: null }
-                : {})
+              selectedConnectionProfileId: input.serverMode
+                ? (object(base?.browserOptions ?? {}).selectedConnectionProfileId ?? null)
+                : null
             })
           });
         }

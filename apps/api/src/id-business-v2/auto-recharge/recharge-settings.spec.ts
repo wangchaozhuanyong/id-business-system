@@ -104,7 +104,7 @@ describe('比特浏览器列表只读连接授权', () => {
 });
 
 describe('网页直连设置与运行凭据', () => {
-  it('子账号可先保存无窗口资料的独立连接，不改变用户的共享默认选择，执行仍受完整配置检查', async () => {
+  it('子账号可先保存无窗口资料的独立连接并记为本人首选，执行仍受完整配置检查', async () => {
     const repository = {
       lock: vi.fn(),
       pinLegacyConnections: vi.fn(),
@@ -143,7 +143,9 @@ describe('网页直连设置与运行凭据', () => {
     const saved = await service.update(input, operator);
     expect(saved.localApiTokenConfigured).toBe(true);
     expect(saved.groupName).toBe('');
-    expect(repository.upsert).not.toHaveBeenCalled();
+    expect(repository.upsert).toHaveBeenCalledWith(expect.anything(), operator.id, {
+      browserOptions: { selectedConnectionProfileId: saved.connectionProfileId }
+    });
     expect(repository.saveProfile).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ ownerId: operator.id, create: true })

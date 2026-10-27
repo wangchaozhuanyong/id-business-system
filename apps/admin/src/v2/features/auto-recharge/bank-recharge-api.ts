@@ -398,6 +398,19 @@ export const bankRechargeApi = {
       billingAddressId: string | null;
     }>(http.get(`/id-business-v2/bank-card-pool/${id}/payment-details`, { params: { plan } }));
   },
+  sharedCardCvc(id: string, plan: string) {
+    return request<{
+      cvc: string | null;
+      expiresAt: string | null;
+      state: 'available' | 'busy' | 'unavailable';
+    }>(
+      http.post('/id-business-v2/online-recharge/cards/bitbrowser-cvc', {
+        id,
+        plan,
+        reason: '为本次比特充值自动填写临时安全码'
+      })
+    );
+  },
   createCard(input: { label: string; last4: string; currencyCode: string }) {
     return request<BankRechargeCard>(http.post(`${base}/cards`, input));
   },

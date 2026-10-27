@@ -40,9 +40,9 @@
     {
       "path": "README.md",
       "originalSha256": null,
-      "adaptedSha256": "cd84a0602c8e2c7b4b34dae9db404cf6bb81a2f8cf2921e111b83a87176a2dc5",
+      "adaptedSha256": "8229b6f4af3fe6f262246030a580e000830427615d94ab6b7530f007ee51fc7f",
       "changed": true,
-      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance. Authorized administrator business visibility: preserve operational data and mask credentials only. Document the authorized 24-hour transient CVC expiry and earlier lifecycle cleanup."
+      "reason": "Document targeted ws8.21.0 security exception, separate root/upstream audits and regression evidence, and require a new patched image proof; retain existing runtime guidance. Authorized administrator business visibility: preserve operational data and mask credentials only. Document the authorized 24-hour transient CVC expiry and earlier lifecycle cleanup. 2026-10-27 Align the manifest with the already-reviewed main README after merging the temporary-CVC autofill release; no README or runtime edit."
     },
     {
       "path": "UPSTREAM.json",
@@ -103,9 +103,9 @@
     {
       "path": "credentials.cjs",
       "originalSha256": null,
-      "adaptedSha256": "adcc52680c73b2ed7dfacdaac11e2e2a99612e9df6aa7d6548b523e8b9de6c55",
+      "adaptedSha256": "469e544509c6602cb2f5a27756f8ee76f8011b066a9d7d2fa8976b2d28eb193b",
       "changed": true,
-      "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials. User-requested 24-hour in-memory expiry from last save; preserve task, ownership and exit cleanup."
+      "reason": "Authenticated loopback CVC memory service with secret-free private health and task/TTL/exit cleanup; no API-side cache or persisted credentials. User-requested 24-hour in-memory expiry from last save; preserve task, ownership and exit cleanup. 2026-10-26 Add an authenticated, audit-gated BitBrowser read of unowned, unexpired CVC; no task lease changes or persistent secret storage."
     },
     {
       "path": "healthcheck.cjs",

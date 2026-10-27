@@ -8,6 +8,7 @@ import type {
   V2RechargeBitBrowserSettings
 } from './contracts';
 import { getApiErrorMessage } from '@/api/client';
+import { sessionCoordinator } from '@/auth/sessionCoordinator';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { rechargeApi } from './api';
@@ -51,13 +52,17 @@ export function useRechargeBrowserSettings(
   serverMode: Ref<boolean>,
   directMode: Ref<boolean> = ref(false)
 ) {
+  const identityEpoch = sessionCoordinator.identityEpoch.value;
+  let disposed = false;
+  const currentIdentity = () =>
+    !disposed && identityEpoch === sessionCoordinator.identityEpoch.value;
   const settingsOpen = ref(false);
   const { settingsError, settingsSaving, selectedProfile, editingNewProfile } = useV2SessionDraft(
     'recharge-browser-settings-selection',
     () => ({
       settingsError: ref(''),
       settingsSaving: ref(false),
-      selectedProfile: ref<string | null | undefined>(null),
+      selectedProfile: ref<string | null | undefined>(undefined),
       editingNewProfile: ref(false)
     })
   );
@@ -117,8 +122,13 @@ export function useRechargeBrowserSettings(
         !settingsSaving.value &&
         (!settingsDirty.value ||
           settingsForm.value.connectionProfileId !== (data.connectionProfileId ?? null))
-      )
+      ) {
+        // Resolve the account preference once, then keep this page on that
+        // connection. Later refreshes must not switch a form or an active task.
+        if (selectedProfile.value === undefined)
+          selectedProfile.value = data.connectionProfileId ?? null;
         resetSettings();
+      }
     },
     { immediate: true }
   );
@@ -213,13 +223,14 @@ export function useRechargeBrowserSettings(
   }
 
   async function restoreSavedSettings() {
-    if (settingsSaving.value || editingNewProfile.value) return;
+    if (!currentIdentity() || settingsSaving.value || editingNewProfile.value) return;
     const id = connectionProfileChoice.value;
     const beforeRead = JSON.stringify(settingsForm.value);
     const complete = formDraft.beginSave();
     try {
       await settingsQuery.refresh();
       if (
+        currentIdentity() &&
         id === connectionProfileChoice.value &&
         !settingsQuery.error.value &&
         beforeRead === JSON.stringify(settingsForm.value)
@@ -228,7 +239,7 @@ export function useRechargeBrowserSettings(
         resetSettings();
       }
     } catch (cause) {
-      settingsError.value = getApiErrorMessage(cause);
+      if (currentIdentity()) settingsError.value = getApiErrorMessage(cause);
     }
   }
 
@@ -253,7 +264,7 @@ export function useRechargeBrowserSettings(
   }
 
   async function saveSettings(serverMode = false) {
-    if (settingsSaving.value) return;
+    if (!currentIdentity() || settingsSaving.value) return;
     const connectionDraft =
       directMode.value &&
       !settingsForm.value.groupName.trim() &&
@@ -287,7 +298,8 @@ export function useRechargeBrowserSettings(
     const submitted = JSON.stringify(settingsForm.value);
     const completeSave = formDraft.beginSave();
     try {
-      if (connectionDraft) await checkConnection({ ...settingsForm.value }, () => true, false);
+      if (connectionDraft) await checkConnection({ ...settingsForm.value }, currentIdentity, false);
+      if (!currentIdentity()) return;
       const { staticProxyUsername, staticProxyPassword, ...input } = settingsForm.value;
       const updated = await rechargeApi.updateBitBrowserSettings({
         ...input,
@@ -309,6 +321,7 @@ export function useRechargeBrowserSettings(
             ? { username: staticProxyUsername, password: staticProxyPassword }
             : undefined
       });
+      if (!currentIdentity()) return;
       completeSave();
       if (JSON.stringify(settingsForm.value) === submitted) {
         editingNewProfile.value = false;
@@ -318,13 +331,14 @@ export function useRechargeBrowserSettings(
         settingsOpen.value = false;
       }
     } catch (cause) {
-      settingsError.value = getApiErrorMessage(cause);
+      if (currentIdentity()) settingsError.value = getApiErrorMessage(cause);
     } finally {
       settingsSaving.value = false;
     }
   }
 
   onScopeDispose(() => {
+    disposed = true;
     connectionCheck?.abort();
   });
 
