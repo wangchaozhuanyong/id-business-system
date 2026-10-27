@@ -1,5 +1,6 @@
 import {
   isMailboxValidityOnly,
+  isMailboxValidityControlsOnly,
   mailboxValidityApiReceipt,
   mailboxValidityApiReceiptMatches
 } from './ci-mailbox-validity-scope.mjs';
@@ -1229,6 +1230,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isMailboxValidityControlsOnly(paths)) return false;
   if (isMailboxValidityOnly(paths)) return false;
   if (isRechargeAutofillSourceOnly(paths)) return false;
   if (isRechargeAutofillControlsOnly(paths)) return false;
@@ -2584,6 +2586,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isMailboxValidityControlsOnly(paths)) return 'ci-only';
   if (isMailboxValidityOnly(paths, oldSchema, newSchema)) return 'mailbox';
   if (isRechargeAutofillSourceOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
   if (isRechargePlanBillingSourcePaths(paths))

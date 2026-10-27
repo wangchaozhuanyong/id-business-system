@@ -5,6 +5,7 @@ import {
   isMailboxValidityOnly,
   mailboxValidityCommands
 } from './ci-mailbox-validity-scope.mjs';
+import { isMailboxValidityControlsOnly } from './ci-mailbox-validity-scope.mjs';
 import {
   mailboxValidityApiReceipt as b,
   mailboxValidityApiReceiptMatches
@@ -21,6 +22,27 @@ test('browser-only repair rechecks Admin and guards while retaining API source e
       'apps/api/src/id-business-v2/workspace/id-business-v2-managed-mailbox.service.ts'
     ]),
     true
+  );
+});
+
+test('publication repair selects controls only and rejects application or migration additions', () => {
+  const controls = [
+    'scripts/production-release/mailbox-validity-build.py',
+    'scripts/production-release/mailbox-validity-runtime.py',
+    'scripts/production-release/mailbox-validity-publication.py',
+    'scripts/production-release/mailbox-validity-contract.json',
+    'scripts/production-release/mailbox-validity-release.test.py'
+  ];
+  assert.equal(isMailboxValidityControlsOnly(controls), true);
+  assert.equal(checkMode(controls, '', ''), 'ci-only');
+  assert.equal(needsOnlineRechargeCiBuild(controls), false);
+  assert.equal(
+    isMailboxValidityControlsOnly([...controls, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+  assert.equal(
+    isMailboxValidityControlsOnly([...controls, 'apps/admin/src/v2/features/tableSchemas.ts']),
+    false
   );
 });
 

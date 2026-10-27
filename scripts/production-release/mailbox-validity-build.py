@@ -48,12 +48,22 @@ def build(c, plan, qa, capture, out):
             ['npm', 'run', 'build', '--workspace', '@apple-business/api'],
             ['npm', 'run', 'build', '--workspace', '@apple-business/admin']]:
             subprocess.run(command, cwd=context, env=env, check=True)
+    return assemble(c, plan, qa, capture, out, contexts)
+
+
+def assemble(c, plan, qa, capture, out, contexts):
+    r, h = load('mailbox-validity-runtime.py'), load('recharge-record-release.py')
     before = h.file_inventory(contexts['baseline'] / 'apps/api/dist')
     candidate = contexts['candidate']
     after = h.file_inventory(candidate / 'apps/api/dist')
-    selected = {n.removesuffix('.js') + ext for n in c['apiModules'] for ext in ('.js', '.js.map', '.d.ts')}
-    r.need(all(before[n] == v for n, v in capture['baseline']['baselineApiModules'].items()), 'API_BASELINE_NOT_REPRODUCED')
-    changed = {n for n in before.keys() | after.keys() if before.get(n) != after.get(n)}
+    selected = {n.removesuffix('.js') + ext for n in c['apiModules'] for ext in ('.js', '.js.map')}
+    published = capture['baseline']['baselineApiModules']
+    r.need(all(before[n] == published[n] for n in selected), 'API_BASELINE_NOT_REPRODUCED')
+    # The deployed lineage retains historical declarations. They are not Node
+    # execution inputs: preserve their exact bytes instead of replacing them.
+    declarations = {n: v for n, v in published.items() if n.endswith('.d.ts')}
+    changed = {n for n in before.keys() | after.keys() if before.get(n) != after.get(n)
+               and not n.endswith(('.d.ts', '.d.ts.map'))}
     r.need(changed <= selected | {'tsconfig.build.tsbuildinfo'} and selected <= after.keys(), 'API_COMPILED_SCOPE_CHANGED')
     baseline_admin = h.file_inventory(contexts['baseline'] / 'apps/admin/dist')
     r.need(baseline_admin == c['baselineAdminFiles'], 'ADMIN_BASELINE_NOT_REPRODUCED')
@@ -83,6 +93,7 @@ def build(c, plan, qa, capture, out):
              'baselineApiModulesReproduced': True,
              'baselineAdminReproduced': True, 'baselineAdminFiles': baseline_admin,
              'apiModules': {n: after[n] for n in sorted(selected)},
+             'preservedApiDeclarations': declarations,
              'adminFiles': h.file_inventory(payload / 'admin/html'),
              'prismaClientFiles': h.file_inventory(payload / 'api/prisma-client'),
              'files': h.file_inventory(payload), 'migrationPerformed': False, 'businessActions': 0}

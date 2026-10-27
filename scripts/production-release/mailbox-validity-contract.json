@@ -580,6 +580,14 @@
   "reviewBase": "a7f61aeca2b6ead635f3e0d8858f760da96964de",
   "scope": "MAILBOX_QUERY_CODE_VALIDITY_20261027",
   "sourceBase": "a7f61aeca2b6ead635f3e0d8858f760da96964de",
+  "sourceReview": {
+    "databaseRunId": 40525576247,
+    "head": "359316257fc7082559c26e2e5b0ea0f313544539",
+    "main": "b3dd3bf3e0c59b7905a037e971a71430c6f528ba",
+    "pullRequest": 750,
+    "qualityRunId": 40525576294,
+    "tree": "3a0976db79617b41829a6532c07a99d88683b466"
+  },
   "sources": {
     "apps/admin/src/v2/api/workspace.ts": "71ad68986215dacd6dc857d232d056954705627c5b3a1cb08275c07321027af0",
     "apps/admin/src/v2/components/workspace/V2MailboxQueryCodeResetDialog.vue": "cb64b22bc2e2fd3e28d4f76a7ec40fdeecce2c92773426c8666fd735d2f40979",

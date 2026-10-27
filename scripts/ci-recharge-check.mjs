@@ -1,5 +1,6 @@
 import {
   isMailboxValidityOnly,
+  isMailboxValidityControlsOnly,
   mailboxValidityContext,
   mailboxValidityCommands
 } from './ci-mailbox-validity-scope.mjs';
@@ -226,6 +227,12 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (isMailboxValidityControlsOnly(changed)) {
+  if (part !== 'guards' || mode !== 'ci-only')
+    throw new Error('Mailbox release controls require guards only');
+  for (const [file, args] of mailboxValidityCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 if (
   isMailboxValidityOnly(changed) &&
   isMailboxValidityOnly(changed, ...mailboxValidityContext(base))

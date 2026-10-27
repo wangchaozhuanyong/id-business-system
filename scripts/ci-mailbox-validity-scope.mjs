@@ -70,6 +70,26 @@ export function mailboxValidityContext(base) {
   ];
 }
 
+export function isMailboxValidityControlsOnly(paths) {
+  const controls = mailboxValidityPaths.filter(
+    (n) =>
+      n.startsWith('scripts/production-release/mailbox-validity-') ||
+      [
+        'scripts/ci-mailbox-validity-scope.mjs',
+        'scripts/ci-mailbox-validity-scope.test.mjs',
+        'scripts/ci-recharge-scope.mjs',
+        'scripts/ci-recharge-check.mjs',
+        '.github/workflows/mailbox-validity-publication.yml'
+      ].includes(n)
+  );
+  return (
+    paths.includes('scripts/production-release/mailbox-validity-release.test.py') &&
+    paths.includes('scripts/production-release/mailbox-validity-build.py') &&
+    new Set(paths).size === paths.length &&
+    paths.every((n) => controls.includes(n))
+  );
+}
+
 export function mailboxValidityCommands(part, changed) {
   const npm = (...args) => ['npm', args];
   if (part === 'guards')

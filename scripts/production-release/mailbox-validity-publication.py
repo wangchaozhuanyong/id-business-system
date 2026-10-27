@@ -41,6 +41,10 @@ def check(c):
         need(sha((ROOT / n).read_bytes()) == v, 'SOURCE_CHANGED')
     for n, v in c['helperPins'].items():
         need(sha((HERE / n).read_bytes()) == v, 'INHERITED_CONTROL_CHANGED')
+    source = c['sourceReview']['main']
+    need(set(git('diff', '--name-only', source, 'HEAD').decode().splitlines()) <= set(c['controlFiles']), 'APPLICATION_SOURCE_CHANGED')
+    for name, expected in {**c['sources'], **c['validationSources']}.items():
+        need(sha(git('show', source + ':' + name)) == expected, 'SOURCE_EVIDENCE_CHANGED')
     changed = set(git('diff', '--name-only', c['reviewBase'], 'HEAD').decode().splitlines())
     need(changed <= set(c['sources']) | set(c['validationSources']) | set(c['controlFiles']), 'UNREVIEWED_EXTENSION')
     need(sha((ROOT / 'package-lock.json').read_bytes()) == c['packageLockSha256']
@@ -53,8 +57,32 @@ def identity(c):
     return F.native_identity()
 
 
+def source_quality(c):
+    source = c['sourceReview']
+    pr = github('pulls/' + str(source['pullRequest']))
+    need(pr['merged_at'] and pr['merge_commit_sha'] == source['main'] and pr['head']['sha'] == source['head']
+         and git('rev-parse', source['main'] + '^{tree}').decode().strip() == source['tree'], 'SOURCE_REVIEW_CHANGED')
+    run = github('actions/runs/' + str(source['qualityRunId']))
+    F.require_run(run, source['head'], '.github/workflows/quality.yml', 'pull_request')
+    jobs = github('actions/runs/' + str(run['id']) + '/jobs?per_page=100')['jobs']
+    successful = {j['name'] for j in jobs if j['conclusion'] == 'success'}
+    need({'quality', 'change-scope', 'recharge (guards)', 'recharge (api)', 'recharge (admin)'} <= successful
+         and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'SOURCE_CHECKS_REQUIRED')
+    receipt, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
+    need(receipt['repository'] == REPO and receipt['headSha'] == source['head'] and receipt['testedTree'] == source['tree']
+         and receipt['pullRequest'] == source['pullRequest'], 'SOURCE_RECEIPT_CHANGED')
+    db = github('actions/runs/' + str(source['databaseRunId']))
+    F.require_run(db, source['head'], '.github/workflows/recharge-billing-allocation-validation.yml', 'pull_request')
+    db_jobs = github('actions/runs/' + str(db['id']) + '/jobs?per_page=100')['jobs']
+    need(any(j['conclusion'] == 'success' and any(step['name'] == 'Verify mailbox query-code migration without production data'
+         and step['conclusion'] == 'success' for step in j['steps']) for j in db_jobs), 'MAILBOX_DATABASE_CHECK_REQUIRED')
+    return {**source, 'sourceReceiptSha256': digest}
+
+
 def quality(commit, tree):
-    prs = [p for p in github('commits/' + commit + '/pulls') if p.get('merged_at') and p['merge_commit_sha'] == commit and p['base']['ref'] == 'main' and p['head']['repo']['full_name'] == REPO]
+    source = source_quality(contract())
+    prs = [p for p in github('commits/' + commit + '/pulls') if p.get('merged_at') and p['merge_commit_sha'] == commit
+           and p['base']['ref'] == 'main' and p['head']['repo']['full_name'] == REPO]
     need(len(prs) == 1, 'MERGED_PR_REQUIRED')
     pr = prs[0]
     need(git('rev-parse', pr['head']['sha'] + '^{tree}').decode().strip() == tree, 'REVIEW_TREE_CHANGED')
@@ -69,19 +97,13 @@ def quality(commit, tree):
         successful = {j['name'] for j in jobs if j['conclusion'] == 'success'}
         need({'quality', 'change-scope'} <= successful and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_PARTS_REQUIRED')
         if event == 'pull_request':
-            need('full-quality' in successful or {'recharge (guards)', 'recharge (api)', 'recharge (admin)'} <= successful, 'SOURCE_CHECKS_REQUIRED')
+            need('recharge (guards)' in successful or 'full-quality' in successful, 'CONTROL_CHECKS_REQUIRED')
             receipt, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
-            need(receipt['repository'] == REPO and receipt['headSha'] == head and receipt['testedTree'] == tree and receipt['pullRequest'] == pr['number'], 'QUALITY_RECEIPT_CHANGED')
-            # The existing migration workflow must execute the new finite MySQL cases.
-            db_runs = github('actions/workflows/recharge-billing-allocation-validation.yml/runs?head_sha=' + head)['workflow_runs']
-            db = [r for r in db_runs if r['head_sha'] == head and r['event'] == 'pull_request' and r['conclusion'] == 'success']
-            need(bool(db), 'ISOLATED_DATABASE_CHECK_REQUIRED')
-            db_jobs = github('actions/runs/' + str(db[0]['id']) + '/jobs?per_page=100')['jobs']
-            need(any(j['conclusion'] == 'success' and any(s['name'] == 'Verify mailbox query-code migration without production data' and s['conclusion'] == 'success' for s in j['steps']) for j in db_jobs), 'MAILBOX_DATABASE_CHECK_REQUIRED')
-            receipts['databaseRunId'] = str(db[0]['id'])
-            receipts['sourceReceiptSha256'] = digest
+            need(receipt['repository'] == REPO and receipt['headSha'] == head and receipt['testedTree'] == tree
+                 and receipt['pullRequest'] == pr['number'], 'QUALITY_RECEIPT_CHANGED')
+            receipts['controlReceiptSha256'] = digest
         receipts[event] = {'head': head, 'runId': str(run['id']), 'runAttempt': str(run['run_attempt'])}
-    return {**receipts, 'commit': commit, 'tree': tree, 'pullRequest': pr['number']}
+    return {**receipts, 'source': source, 'commit': commit, 'tree': tree, 'pullRequest': pr['number']}
 
 
 def transport(plan, mode):
