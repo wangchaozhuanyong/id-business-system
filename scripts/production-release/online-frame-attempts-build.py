@@ -1,4 +1,4 @@
-"""Reproduce the two live API modules, then overlay only the reviewed diagnostic files."""
+"""Reproduce live API modules and Admin assets, then apply reviewed diagnostic files."""
 import importlib.util
 import io
 import json
@@ -67,12 +67,45 @@ def build(c, plan, quality, parent, out):
         destination = payload / 'engine' / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / p.ENGINE / name, destination)
+    # Reproduce the exact published Admin source envelope, retaining mailbox fixes.
+    admin_contexts = {}
+    for role in ('baseline', 'candidate'):
+        context = out / ('admin-' + role)
+        context.mkdir()
+        raw = subprocess.check_output(['git', 'archive', c['adminSourceBase']], cwd=ROOT)
+        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+            for member in archive.getmembers():
+                p.need(not member.name.startswith('/') and '..' not in Path(member.name).parts
+                       and not member.issym() and not member.islnk(), 'ADMIN_SOURCE_ARCHIVE_INVALID')
+            archive.extractall(context)
+        for name, expected in c['adminBaselineSources'].items():
+            raw = subprocess.check_output(['git', 'show', c['expectedCurrent'] + ':' + name], cwd=ROOT)
+            p.need(p.sha(raw) == expected, 'ADMIN_BASE_SOURCE_CHANGED')
+            target = context / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+        if role == 'candidate':
+            for name in c['sources']:
+                if name.startswith('apps/admin/'):
+                    shutil.copyfile(ROOT / name, context / name)
+        env = {**os.environ, 'NODE_ENV': 'production',
+               'V2_BUILD_ID': 'v2-' + (c['expectedCurrent'] if role == 'baseline' else plan['commit'])}
+        for command in [['npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
+                        ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
+                        ['npm', 'run', 'build', '--workspace', '@apple-business/admin']]:
+            subprocess.run(command, cwd=context, env=env, check=True)
+        admin_contexts[role] = context
+    admin_before = h.file_inventory(admin_contexts['baseline'] / 'apps/admin/dist')
+    p.need(admin_before == c['baselineAdminFiles'], 'ADMIN_PARENT_NOT_REPRODUCED')
+    shutil.copytree(admin_contexts['candidate'] / 'apps/admin/dist', payload / 'admin/html')
+    admin_after = h.file_inventory(payload / 'admin/html')
+    p.need('v2-' + plan['commit'] in (payload / 'admin/html/index.html').read_text(), 'ADMIN_BUILD_VERSION_CHANGED')
     proof = {**plan, 'version': 1, 'scope': p.SCOPE, 'sources': c['sources'],
              'qualitySourceEvidence': quality, 'nativeParentCapture': parent,
              'baselineApiReproduced': True, 'afterEngineFiles': c['afterEngineFiles'],
              'apiModules': {n: after[n] for n in sorted(selected)},
              'preservedApiDeclarations': {n: v for n, v in c['beforeApiModules'].items() if n.endswith('.d.ts')},
-             'baselineAdminFiles': c['baselineAdminFiles'], 'adminFiles': c['baselineAdminFiles'],
+             'baselineAdminReproduced': True, 'baselineAdminFiles': admin_before, 'adminFiles': admin_after,
              'files': h.file_inventory(payload), 'migrationPerformed': False, 'businessActions': 0}
     p.verify_proof(proof, {**plan, 'qualitySourceEvidence': quality, 'nativeParentCapture': parent}, c, proof['files'])
     (payload / 'build-proof.json').write_text(json.dumps(proof, sort_keys=True, indent=2) + '\n')
