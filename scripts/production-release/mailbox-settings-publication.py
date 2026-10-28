@@ -64,7 +64,6 @@ def admin_evidence_matches(c, run, job, checkout, log, unchanged):
     return (unchanged and run['id'] == b['runId'] and run['run_attempt'] == 1 and run['status'] == 'completed'
         and run['conclusion'] == 'failure' and run['event'] == 'pull_request' and run['path'] == '.github/workflows/quality.yml'
         and run['head_sha'] == b['head'] and run['repository']['full_name'] == REPO
-        and any(p['number'] == 753 for p in run['pull_requests'])
         and job['id'] == b['jobId'] and job['run_id'] == b['runId'] and job['name'] == 'recharge (admin)'
         and job['status'] == 'completed' and job['conclusion'] == 'success'
         and all(s['conclusion'] in ('success', 'skipped') for s in job['steps'])
@@ -76,12 +75,25 @@ def admin_evidence_matches(c, run, job, checkout, log, unchanged):
         and re.search(r'\s' + b['checkout'] + r'$', lines[starts[0] + 1]) is not None)
 
 
+def merged_source_matches(c, pr):
+    source = c['sourceReview']
+    return (source == {'pullRequest': 753, 'main': 'f89e534b22b996e3cdb962e82ea567421228c031',
+                       'head': '9c3007bf5544683514edd4de910dc4f4c9b7a409'}
+            and pr['number'] == source['pullRequest'] and bool(pr['merged_at'])
+            and pr['merge_commit_sha'] == source['main'] and pr['head']['sha'] == source['head']
+            and pr['base']['ref'] == 'main')
+
+
 def verified_admin_evidence(c):
     b = c['adminEvidence']
-    try:
-        git('cat-file', '-e', b['checkout'])
-    except Exception:
-        git('fetch', '--no-tags', 'origin', b['checkout'])
+    pr = github('pulls/' + str(c['sourceReview']['pullRequest']))
+    need(merged_source_matches(c, pr), 'MERGED_SOURCE_REQUIRED')
+    for ref in (b['checkout'], pr['head']['sha']):
+        try:
+            git('cat-file', '-e', ref)
+        except Exception:
+            git('fetch', '--no-tags', 'origin', ref)
+    git('merge-base', '--is-ancestor', b['head'], pr['head']['sha'])
     controls = set(c['candidateFiles']) - set(c['sources']) - set(c['validationSources'])
     def inputs(ref):
         def selected(name):

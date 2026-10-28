@@ -71,7 +71,7 @@ class SettingsControls(unittest.TestCase):
         b = self.c['adminEvidence']
         steps = [{'name': n, 'conclusion': 'success'} for n in ('Checkout', 'Install package dependencies', 'Check affected recharge part')]
         run = dict(id=b['runId'], run_attempt=1, status='completed', conclusion='failure', event='pull_request',
-                   path='.github/workflows/quality.yml', head_sha=b['head'], repository={'full_name': p.REPO}, pull_requests=[{'number': 753}])
+                   path='.github/workflows/quality.yml', head_sha=b['head'], repository={'full_name': p.REPO}, pull_requests=[])
         job = dict(id=b['jobId'], run_id=b['runId'], name='recharge (admin)', status='completed', conclusion='success', steps=steps)
         checkout = {'sha': b['checkout'], 'tree': {'sha': b['tree']}, 'parents': [{'sha': b['base']}, {'sha': b['head']}]}
         log = '[command]/usr/bin/git log -1 --format=%H\ncheckout ' + b['checkout'] + '\n'
@@ -79,6 +79,12 @@ class SettingsControls(unittest.TestCase):
         self.assertFalse(p.admin_evidence_matches(self.c, run, job, checkout, log, False))
         self.assertFalse(p.admin_evidence_matches(self.c, run, {**job, 'conclusion': 'failure'}, checkout, log, True))
         self.assertFalse(p.admin_evidence_matches(self.c, run, job, {**checkout, 'sha': '0' * 40}, log, True))
+        source = self.c['sourceReview']
+        pr = {'number': 753, 'merged_at': '2026-10-28', 'merge_commit_sha': source['main'],
+              'head': {'sha': source['head']}, 'base': {'ref': 'main'}}
+        self.assertTrue(p.merged_source_matches(self.c, pr))
+        self.assertFalse(p.merged_source_matches(self.c, {**pr, 'merged_at': None}))
+        self.assertFalse(p.merged_source_matches(self.c, {**pr, 'merge_commit_sha': '0' * 40}))
 
 
 if __name__ == '__main__':

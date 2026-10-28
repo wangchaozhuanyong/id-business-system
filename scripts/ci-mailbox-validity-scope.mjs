@@ -25,6 +25,18 @@ export function isMailboxSettingsOnly(paths) {
   );
 }
 
+export function isMailboxSettingsControlsOnly(paths) {
+  const controls = mailboxSettingsPaths.filter(
+    (n) => !n.startsWith('apps/') && n !== 'scripts/acceptance-v2-mailbox-query-code-validity.mjs'
+  );
+  return (
+    paths.includes('scripts/production-release/mailbox-settings-publication.py') &&
+    paths.includes('scripts/production-release/mailbox-settings-release.test.py') &&
+    new Set(paths).size === paths.length &&
+    paths.every((n) => controls.includes(n))
+  );
+}
+
 export function mailboxSettingsCommands(part, changed) {
   if (part === 'admin') return mailboxValidityCommands(part, changed);
   if (part !== 'guards') throw new Error('Mailbox settings has no API or database changes');

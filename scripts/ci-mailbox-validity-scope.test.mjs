@@ -8,6 +8,7 @@ import {
 import {
   isMailboxValidityControlsOnly,
   isMailboxSettingsOnly,
+  isMailboxSettingsControlsOnly,
   mailboxSettingsPaths,
   mailboxSettingsCommands
 } from './ci-mailbox-validity-scope.mjs';
@@ -41,6 +42,19 @@ test('settings guard repair retains native Admin evidence and rejects API or sch
       args.includes('scripts/production-release/mailbox-settings-release.test.py')
     )
   );
+});
+
+test('merged settings proof repair selects only controls and rejects application changes', () => {
+  const paths = [
+    'scripts/production-release/mailbox-settings-publication.py',
+    'scripts/production-release/mailbox-settings-release.test.py',
+    'scripts/production-release/mailbox-settings-contract.json'
+  ];
+  assert.equal(isMailboxSettingsControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isMailboxSettingsControlsOnly([...paths, mailboxSettingsPaths[1]]), false);
 });
 
 test('browser-only repair rechecks Admin and guards while retaining API source evidence', () => {
