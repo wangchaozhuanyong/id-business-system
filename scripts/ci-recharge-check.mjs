@@ -1,5 +1,7 @@
 import {
   isMailboxValidityOnly,
+  isMailboxSettingsOnly,
+  mailboxSettingsCommands,
   isMailboxValidityControlsOnly,
   mailboxValidityContext,
   mailboxValidityCommands
@@ -227,6 +229,12 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (isMailboxSettingsOnly(changed)) {
+  if (mode !== 'admin' || !['guards', 'admin'].includes(part))
+    throw new Error('Mailbox settings requires only fresh Admin and guard checks');
+  for (const [file, args] of mailboxSettingsCommands(part, changed)) run(file, args);
+  process.exit(0);
+}
 if (isMailboxValidityControlsOnly(changed)) {
   if (part !== 'guards' || mode !== 'ci-only')
     throw new Error('Mailbox release controls require guards only');
