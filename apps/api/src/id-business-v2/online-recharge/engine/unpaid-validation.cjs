@@ -260,8 +260,13 @@ function finish(result = {}, snapshot = current) {
         lastStage
       );
   const formDiagnostics = safeFormDiagnostics(result.formDiagnostics);
+  const checkoutOpenDiagnostics = result.checkoutOpenDiagnostics
+    ? require('./upstream/chatgpt').safeCheckoutOpenDiagnostics(result.checkoutOpenDiagnostics)
+    : undefined;
   const missing =
-    result.validationMissing || result.missing || result.checkoutOpenDiagnostics?.missing;
+    checkoutOpenDiagnostics?.inspection?.lastReadFailure?.probe === 'load_precheck'
+      ? []
+      : result.validationMissing || result.missing || checkoutOpenDiagnostics?.missing;
   return {
     format: snapshot.format,
     startedAt: snapshot.startedAt,
@@ -317,13 +322,7 @@ function finish(result = {}, snapshot = current) {
           )
         }
       : {}),
-    ...(result.checkoutOpenDiagnostics
-      ? {
-          checkoutOpenDiagnostics: require('./upstream/chatgpt').safeCheckoutOpenDiagnostics(
-            result.checkoutOpenDiagnostics
-          )
-        }
-      : {}),
+    ...(checkoutOpenDiagnostics ? { checkoutOpenDiagnostics } : {}),
     ...(Number.isInteger(result.checkoutCreationDiagnostics?.httpStatus)
       ? { httpStatus: result.checkoutCreationDiagnostics.httpStatus }
       : {})
@@ -404,7 +403,16 @@ function boundedReport(value) {
   trim(report.formDiagnostics, 'steps', 'form_steps', 1, lastStep);
   for (const inspection of [open?.inspection, report.formDiagnostics?.inspection]) {
     trim(inspection, 'interactionChecks', 'control_details', 1);
-    trim(inspection, 'readFailures', 'control_details', 1);
+    // At least the last failure of each existing attempt must survive trimming.
+    trim(
+      inspection,
+      'readFailures',
+      'control_details',
+      1,
+      (row, index, rows) =>
+        [1, 2].includes(row.attempt) &&
+        !rows.slice(index + 1).some((next) => next.attempt === row.attempt)
+    );
   }
   if (over())
     throw Object.assign(new Error('诊断必需字段超过附件预算'), {

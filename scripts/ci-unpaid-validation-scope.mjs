@@ -68,6 +68,16 @@ export const checkoutReadEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 
+// This follow-up changes the API/engine evidence contract, with no Admin edits.
+export const checkoutFrameAttemptsPaths = Object.freeze(
+  checkoutReadEvidencePaths.filter(
+    (p) =>
+      !p.startsWith('apps/admin/') &&
+      !p.endsWith('/worker.cjs') &&
+      !p.endsWith('/test/evidence-recovery.test.cjs')
+  )
+);
+
 export const countryFrameScrollPaths = Object.freeze([
   ...['SOURCE_MANIFEST.json', 'checkout-form.cjs', 'test/checkout-form.test.cjs'].map(
     (name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name
@@ -330,6 +340,7 @@ export function isUnpaidValidationOnly(paths) {
       subscriptionBodyFallbackPaths,
       countryFrameScrollPaths,
       checkoutReadEvidencePaths,
+      checkoutFrameAttemptsPaths,
       unpaidValidationPaths,
       checkoutResumePaths,
       persistentProfilePaths,

@@ -69,9 +69,32 @@ export const validReadFailure: Check = closed(
     probe: oneOf(['load_precheck', 'control_scan']),
     readOperation: oneOf(READ_OPERATIONS),
     frameKind: oneOf(['main', 'embedded', 'unknown']),
-    frameId: integer(10000, 1)
+    frameId: integer(10000, 1),
+    attempt: oneOf([1, 2]),
+    enumerationIndex: integer(10000, 1),
+    frameCount: integer(10000, 1)
   },
   ['phase', 'reason', 'count']
+);
+export const validReadAttemptSummary: Check = closed(
+  {
+    attempt: oneOf([1, 2]),
+    frameCount: count,
+    framesChecked: count,
+    framesSkipped: count,
+    framesFailed: count,
+    complete: bool,
+    durationMs: integer(600000)
+  },
+  [
+    'attempt',
+    'frameCount',
+    'framesChecked',
+    'framesSkipped',
+    'framesFailed',
+    'complete',
+    'durationMs'
+  ]
 );
 const EVENTS = [
   'request',
@@ -550,6 +573,10 @@ export function validCheckoutOpenDiagnostics(value: unknown, validInspection: Ch
         128
       ),
       candidateCounts: list(closed({ field: oneOf(FIELDS), count }, ['field', 'count']), 11),
+      previousCardReadiness: closed(
+        { ready: bool, missing: list(oneOf(FIELDS), 11), complete: bool, scanned: count },
+        ['ready', 'missing']
+      ),
       inspection: validInspection,
       initialization: validInitialization,
       awaits: validAwaits,

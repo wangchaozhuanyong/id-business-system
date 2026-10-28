@@ -406,6 +406,9 @@ function syntheticCheckoutReport() {
     readOperation: 'load_error_count',
     frameKind: 'embedded',
     frameId: 2,
+    attempt: 2,
+    enumerationIndex: 2,
+    frameCount: 6,
     count: 1
   };
   return {
@@ -449,14 +452,24 @@ function syntheticCheckoutReport() {
       code: 'CHECKOUT_CONTROL_READ_FAILED',
       missing: [],
       controls: [],
+      previousCardReadiness: { ready: false, missing: ['number'], complete: true, scanned: 1 },
       inspection: {
         complete: false,
         timedOut: false,
         framesFailed: 1,
         readPhase: 'frame_scan',
         readAttempts: 2,
-        readFailures: [lastReadFailure],
-        lastReadFailure
+        readFailures: [{ ...lastReadFailure, attempt: 1 }, lastReadFailure],
+        lastReadFailure,
+        readAttemptSummaries: [1, 2].map((attempt) => ({
+          attempt,
+          frameCount: 6,
+          framesChecked: 1,
+          framesSkipped: 3,
+          framesFailed: 1,
+          complete: false,
+          durationMs: 10
+        }))
       },
       initialization: {
         version: 2,
@@ -532,6 +545,13 @@ describe('付款页诊断合同与字节裁剪', () => {
     expect(open.inspection.lastReadFailure).toEqual(
       original.checkoutOpenDiagnostics.inspection.lastReadFailure
     );
+    expect(open.inspection.readFailures.map((row) => row.attempt)).toEqual([1, 2]);
+    expect(open.previousCardReadiness).toEqual(
+      original.checkoutOpenDiagnostics.previousCardReadiness
+    );
+    expect(open.inspection.readAttemptSummaries).toEqual(
+      original.checkoutOpenDiagnostics.inspection.readAttemptSummaries
+    );
     expect(open.initialization.firstFailure).toEqual(
       original.checkoutOpenDiagnostics.initialization.firstFailure
     );
@@ -568,15 +588,29 @@ describe('付款页诊断合同与字节裁剪', () => {
     );
     expect(f.workers.withLease).not.toHaveBeenCalled();
   });
-  for (const location of ['open', 'inspection', 'readFailure', 'event', 'await', 'metadata'])
+  for (const location of [
+    'open',
+    'inspection',
+    'readFailure',
+    'attemptSummary',
+    'previousCard',
+    'event',
+    'await',
+    'metadata'
+  ])
     it(`拒绝${location}中的未知字段和原始内容`, async () => {
       const bounded = diagnostics.boundedReport(syntheticCheckoutReport());
       const open = bounded.checkoutOpenDiagnostics as Record<string, unknown>;
       const inspection = open.inspection as Record<string, unknown>;
+      if (location === 'previousCard')
+        (open.previousCardReadiness as Record<string, unknown>).rawValue = 'SYNTHETIC_PRIVATE';
       if (location === 'open') open.rawBody = 'SYNTHETIC_PRIVATE';
       if (location === 'inspection') inspection.rawValue = 'SYNTHETIC_PRIVATE';
       if (location === 'readFailure')
         (inspection.lastReadFailure as Record<string, unknown>).message = 'SYNTHETIC_PRIVATE';
+      if (location === 'attemptSummary')
+        (inspection.readAttemptSummaries as Record<string, unknown>[])[0].rawMessage =
+          'SYNTHETIC_PRIVATE';
       if (location === 'event')
         (open.initialization as { firstFailure: Record<string, unknown> }).firstFailure.url =
           'https://example.invalid/SYNTHETIC_PRIVATE';
@@ -619,3 +653,19 @@ it('加载预检异常经执行器投影与API结果投影后保留真实操作�
   expect(result.checkoutOpenDiagnostics.inspection.lastReadFailure.probe).toBe('load_precheck');
   expect(JSON.stringify(result)).not.toContain('SYNTHETIC_PRIVATE');
 });
+
+for (const [key, invalid] of [
+  ['attempt', 3],
+  ['frameCount', -1],
+  ['enumerationIndex', 10001]
+] as const)
+  it(`rejects invalid attempt metadata ${key} before acquiring a lease`, async () => {
+    const bounded = diagnostics.boundedReport(syntheticCheckoutReport());
+    const open = bounded.checkoutOpenDiagnostics as {
+      inspection: { lastReadFailure: Record<string, unknown> };
+    };
+    open.inspection.lastReadFailure[key] = invalid;
+    const f = fixture(join(project, '.runtime/checkout-frame-attempts-20261027/artifacts'));
+    await expect(f.repository.upload(input(bounded))).rejects.toThrow('诊断文件字段无效');
+    expect(f.workers.withLease).not.toHaveBeenCalled();
+  });
