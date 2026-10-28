@@ -1,4 +1,4 @@
-"""Finite API/sidecar overlay; preserve Admin and all other roles, data and settings."""
+"""Finite API/Admin/sidecar overlay; preserve all other roles, data and settings."""
 import datetime
 import hashlib
 import importlib.util
@@ -238,6 +238,9 @@ def release(plan, contract):
             profile_recovery = stop_recharge_and_recover(d, previous, before, lock, fence, recovery)
             d.compose(target, 'up', '-d', '--no-deps', 'api', timeout=180)
             d.wait_healthy(target, 'api')
+            if 'admin' in UPDATED:
+                d.compose(target, 'up', '-d', '--no-deps', 'admin', timeout=180)
+                d.wait_healthy(target, 'admin')
             d.compose(target, 'up', '-d', '--no-deps', '--force-recreate', 'online-recharge', timeout=180)
             d.wait_healthy(target, 'online-recharge')
             after = h.snapshot(d, target)

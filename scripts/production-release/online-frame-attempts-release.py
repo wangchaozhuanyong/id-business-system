@@ -1,4 +1,4 @@
-"""Finite two-service diagnostic overlay on the published mailbox successor."""
+"""Finite card-input evidence overlay on the published mailbox settings successor."""
 import hashlib
 import importlib.util
 import json
@@ -9,19 +9,19 @@ import urllib.request
 HERE = Path(__file__).resolve().parent
 BASE = Path('/opt/id-business-v2')
 PREFIX = 'online-frame-attempts'
-SCOPE = 'ONLINE_FRAME_ATTEMPTS_20261028'
-CURRENT = 'f9a9a4184ba6689abc778ff68e391b1b2dd75834'
-SOURCE = '8af73b9c59219270064d4197a2b634bac840991a'
-SOURCE_TREE = '73996cad8c29574a36ab21013234515016c57db0'
-SOURCE_PR = 752
+SCOPE = 'ONLINE_CARD_POST_INPUT_READ_20261028'
+CURRENT = '1371f41f486aa9c6e73cdfbc578984ccb640a6c5'
+SOURCE = '8a3635aa2b8f4820f09e2f7ce5b24929ef1c30b3'
+SOURCE_TREE = 'cfa7bf4438fc778459ee7a57cfb576d28a884f75'
+SOURCE_PR = 757
 CONTRACT_FILE = PREFIX + '-contract.json'
-UPDATED = ('api', 'online-recharge')
-PRESERVED = ('admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge')
+UPDATED = ('api', 'admin', 'online-recharge')
+PRESERVED = ('mysql', 'caddy', 'media-resolver', 'auto-recharge')
 SERVICES = ('api', 'admin', 'mysql', 'caddy', 'media-resolver', 'auto-recharge', 'online-recharge')
 ENGINE = 'apps/api/src/id-business-v2/online-recharge/engine/'
 API_MODULES = ['id-business-v2/online-recharge/persistence/artifacts.repository.js',
                'id-business-v2/online-recharge/persistence/diagnostic-contract.js']
-SEALED = {'sources': '3cdf22a8934f66743a55542ab36ffae4ec11d964ee185230fd1bfcf7f16be8af', 'beforeEngineFiles': '8053e1947617f27a8158f5427494b9c36102c464ffd5ca27cd42d747c1f8e47c', 'afterEngineFiles': '6fb97ea6020e0f44227f2dc64b86d8457f1f980b3ba094ab79b8abca3ec1194d', 'beforeApiModules': '65772bc015a9a099070cfe49ba79605c5e66334f08bf417ea31c89b3791da46b', 'expectedApiOnlineFiles': 'e8f8ccb2c101dbe772640c3818d53fed6c9ea37ea62df658ccd47a238e6ff624', 'baselineAdminFiles': '02c5f8f021fa863cecc389912932096d928a3489dfc2c13ca50dcdfec7e701b8', 'parentArtifact': 'fd643aa84c0a17f296b5fb19cf2d4fdd544aed05b6a9963f206cecdab3e4c38d', 'publishedOverlays': 'ff7010c53510841de02cae9346e62ff1244a8d0a9c3110d29681918293fdd9d0', 'backupNormalizerPath': '7d678c7771c072ec77e01a7001abc3434ac14cea56c9f5484a00402e3ca1acf6', 'engineHealth': '0fe609fb203d77fd628e5d16c629b37429b488e69386eecc2402c87bc14b5430', 'configurationFiles': 'b109415552aeb6ba2bd631f62afb4d2635a01b0f9f4e8f6082097ca483231cdc'}
+SEALED = {'sources': '642d801f2fa29740e317d63b033891dee5f436f8b35ce32c0ac945327fa8d22d', 'beforeEngineFiles': '6fb97ea6020e0f44227f2dc64b86d8457f1f980b3ba094ab79b8abca3ec1194d', 'afterEngineFiles': '72039efc514eea24032ebd66b3da62875631c42702fbfce3a4e5c3b6fc43391f', 'beforeApiModules': 'fdf8b1d50fcda2f73cb746882e805a8071211935c71246cb9de4e0d2ca1d9421', 'expectedApiOnlineFiles': 'd5784b5b8779f8c7c88d14b3be6b88cc7e527d7736d7dd3ec756227d95d0447b', 'baselineAdminFiles': '97aab233b6cae8de7de10917e0e0932992b42e4877fbf7dbd012cddbae862c90', 'parentArtifact': 'f64887ba394e6e0c6b17e9438e238b029ca04e516375c1726b73e1ada9f82c48', 'publishedOverlays': '6bad7969f7ff98cd039f84e4f229b908c3abf79160fa7116bf294f2abd661f85', 'backupNormalizerPath': '7d678c7771c072ec77e01a7001abc3434ac14cea56c9f5484a00402e3ca1acf6', 'engineHealth': '0fe609fb203d77fd628e5d16c629b37429b488e69386eecc2402c87bc14b5430', 'configurationFiles': '6d092dba31432f31f24c66e7bf4aa0bea4dec05f09d47459a4a49985c46be3ee', 'parentPreservationFile': '8f52eb1e5b54e8728c319c8cd7e444801b378e601b0902221af9e0b9aafd212d', 'adminSourceBase': 'd33538571a5fc107683402d2a94c76644406260d4762cb50ffa66b9450d020a1', 'adminBaselineSources': '2d41e1150b52f6443404c83494efeeb37a8830a7b8571efae875ee76bd143529'}
 
 
 def need(value, code):
@@ -53,7 +53,7 @@ def validate_contract(c):
          and c.get('migrationPerformed') is False and type(c.get('businessActions')) is int
          and c['businessActions'] == 0, 'SIDE_EFFECT_SCOPE')
     need(bool(SEALED) and all(sha(canonical(c.get(k))) == v for k, v in SEALED.items()), 'FROZEN_INPUT_CHANGED')
-    need(len(c['sources']) == 10 and c['apiModules'] == API_MODULES, 'SOURCE_SCOPE')
+    need(len(c['sources']) == 12 and c['apiModules'] == API_MODULES, 'SOURCE_SCOPE')
     before, after = c['beforeEngineFiles'], c['afterEngineFiles']
     need(set(before) == set(after) and {ENGINE + n: v for n, v in after.items() if before.get(n) != v}
          == {n: v for n, v in c['sources'].items() if n.startswith(ENGINE)}, 'ENGINE_DELTA')
@@ -92,6 +92,7 @@ def verify_proof(proof, plan, c, files):
     declarations = {n: v for n, v in c['beforeApiModules'].items() if n.endswith('.d.ts')}
     expected = {**{'source/' + n: v for n, v in c['sources'].items()},
                 **{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
+                **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()},
                 **{'engine/' + n: v for n, v in c['afterEngineFiles'].items() if c['beforeEngineFiles'].get(n) != v}}
     need(all(proof.get(k) == plan[k] for k in ('commit', 'tree', 'contractSha256', 'workflowRunId', 'workflowRunAttempt'))
          and proof.get('version') == 1 and proof.get('scope') == SCOPE and proof.get('sources') == c['sources']
@@ -99,7 +100,8 @@ def verify_proof(proof, plan, c, files):
          and proof.get('afterEngineFiles') == c['afterEngineFiles']
          and proof.get('baselineApiReproduced') is True and set(proof['apiModules']) == selected
          and proof.get('preservedApiDeclarations') == declarations
-         and proof.get('baselineAdminFiles') == proof.get('adminFiles') == c['baselineAdminFiles']
+         and proof.get('baselineAdminReproduced') is True and proof.get('baselineAdminFiles') == c['baselineAdminFiles']
+         and isinstance(proof.get('adminFiles'), dict) and 'index.html' in proof['adminFiles']
          and proof.get('migrationPerformed') is False and type(proof.get('businessActions')) is int
          and proof['businessActions'] == 0 and files == expected == proof['files'], 'PAYLOAD_SCOPE_CHANGED')
 
@@ -149,8 +151,10 @@ def capture(c):
         for row in c['publishedOverlays']:
             need(sha((current / row['proofFile']).read_bytes()) == row['proofSha256'], 'PARENT_PROOF_CHANGED')
         states = h.snapshot(d, current)
-        receipt = json.loads((current / 'mailbox-validity-preservation.json').read_bytes())
-        need(states == receipt['after'], 'PARENT_SERVICES_CHANGED')
+        receipt = json.loads((current / c['parentPreservationFile']).read_bytes())
+        need(all(states[n] == receipt['after'][n] for n in SERVICES if n != 'admin'), 'PARENT_SERVICES_CHANGED')
+        manifest = json.loads(raw)
+        need(all(states[n]['image'] == manifest['images'][n]['digest'] for n in UPDATED), 'PARENT_IMAGES_CHANGED')
         baseline = {'current': str(current), 'expectedCurrent': CURRENT, 'manifestSha256': sha(raw), 'services': states,
                     'runtimeConfigurationSha256': {n: h.configuration(d, s) for n, s in states.items()},
                     'configurationSha256': {n: sha((current / n).read_bytes()) for n in c['configurationFiles']},

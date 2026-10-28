@@ -39,7 +39,7 @@ CONTROLS = frozenset((WORKFLOW, 'scripts/ci-unpaid-validation-scope.mjs', 'scrip
 def ensure_source_commit():
     args = ['git', 'cat-file', '-e', P.SOURCE + '^{commit}']
     if subprocess.run(args, cwd=ROOT, capture_output=True).returncode:
-        git('fetch', '--no-tags', '--no-write-fetch-head', 'origin', 'refs/pull/752/head')
+        git('fetch', '--no-tags', '--no-write-fetch-head', 'origin', 'refs/pull/757/head')
         need(subprocess.run(args, cwd=ROOT, capture_output=True).returncode == 0, 'SOURCE_COMMIT_MISSING')
 
 
@@ -72,12 +72,12 @@ def verified_run(head, event, tree, pr_number=None):
     need({'quality', 'change-scope'} <= successful and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_PARTS_REQUIRED')
     if event == 'pull_request':
         need(('full-quality' in successful) or ('recharge (guards)' in successful), 'REVIEW_CHECK_REQUIRED')
-        if pr_number == 752:
+        if pr_number == P.SOURCE_PR:
             if 'full-quality' in successful:
                 engine = next(j for j in jobs if j['name'] == 'full-quality')
                 step = 'Verify frozen online recharge engine'
             else:
-                need({'recharge (guards)', 'recharge (api)', 'recharge (online-engine)'}
+                need({'recharge (guards)', 'recharge (admin)', 'recharge (api)', 'recharge (online-engine)'}
                      <= successful, 'SOURCE_API_ENGINE_QUALITY_REQUIRED')
                 engine = next(j for j in jobs if j['name'] == 'recharge (online-engine)')
                 step = 'Check affected recharge part'
@@ -93,12 +93,12 @@ def verified_run(head, event, tree, pr_number=None):
 
 
 def quality(commit, tree):
-    source = github('pulls/752')
+    source = github('pulls/757')
     need(source.get('merged_at') and source['head']['sha'] == P.SOURCE
          and source['base']['ref'] == 'main', 'SOURCE_MERGE_REQUIRED')
     git('merge-base', '--is-ancestor', source['merge_commit_sha'], commit)
     source_tree = git('rev-parse', P.SOURCE + '^{tree}').decode().strip()
-    source_qa = verified_run(P.SOURCE, 'pull_request', source_tree, 752)
+    source_qa = verified_run(P.SOURCE, 'pull_request', source_tree, 757)
     prs = [r for r in github('commits/' + commit + '/pulls') if r.get('merged_at')
            and r['merge_commit_sha'] == commit and r['base']['ref'] == 'main' and r['head']['repo']['full_name'] == REPO]
     need(len(prs) == 1, 'MERGED_CONTROL_REQUIRED')
@@ -157,7 +157,7 @@ def publish(c):
     path = OUT / filename
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('仅发布两次加载预检证据、旧卡号结果隔离及严格诊断附件合同。保留业务阻断、可见性、CSP、期限、重试和付款保护；无迁移、无充值任务或付款。\n')
+    notes.write_text('仅发布填卡后节点读取子操作及原异常证据、严格附件合同和管理端中文映射。保留业务阻断、可见性、CSP、期限、重试和付款保护；无迁移、无充值任务或付款。\n')
     tag = PREFIX + '-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
             '--title', '付款页读取证据修复 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
