@@ -722,5 +722,8 @@ test('post-fill diagnostic batch retains API Admin and complete Linux engine che
     assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
   const engine = JSON.stringify(unpaidValidationCommands('online-engine', paths));
   assert.match(engine, /test:online-recharge:engine/);
-  assert.match(JSON.stringify(unpaidValidationCommands('api', paths)), /src\/id-business-v2\/online-recharge/);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('api', paths)),
+    /src\/id-business-v2\/online-recharge/
+  );
 });
