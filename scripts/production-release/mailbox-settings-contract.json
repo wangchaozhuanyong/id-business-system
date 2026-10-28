@@ -1,4 +1,12 @@
 {
+  "adminEvidence": {
+    "base": "dffe3867b640c6d8861ba32733fc2e6ebd80eb87",
+    "checkout": "3f8c21d43592d1317aa69c2ae9303e894c884e6d",
+    "head": "764cec074ff7785b761fdbbc229279026d43b6e5",
+    "jobId": 122642925074,
+    "runId": 40635962013,
+    "tree": "b451131697e22cf1b3c7246164e2d97d51eff95d"
+  },
   "awsAccount": "098208446664",
   "baselineAdminFiles": {
     "_headers": "d4c6717ea046cf5b22007827eb6e4cebf372f13fd07031594ea11174bb4a4a18",
@@ -315,7 +323,7 @@
     "apps/api/prisma-mysql/schema.prisma",
     ".env.aws.production"
   ],
-  "expectedCurrent": "f9a9a4184ba6689abc778ff68e391b1b2dd75834",
+  "expectedCurrent": "93615a3fe9920c0c7933649c5ceb11e501cac4b0",
   "helperPins": {
     "api-admin-pending-projection.py": "592aebbeb7c8605587924416b0632dc4533eacfb3305793b577db3827bbf8d78",
     "api-admin-pending-receipt-wire.py": "47cba3fad47077f30c83d8cfe5a8907b797eeeb2fedd78e764a47a42a0849c75",
@@ -365,6 +373,7 @@
   "migrationPerformed": false,
   "packageLockSha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
   "parentProofSha256": "9e849986e756e8f8ca4ff03181615359698caf7c445bd9c710db314ad6baaf1d",
+  "reviewBase": "93615a3fe9920c0c7933649c5ceb11e501cac4b0",
   "scope": "MAILBOX_SETTINGS_INITIAL_STATE_20261028",
   "sourceBase": "a7f61aeca2b6ead635f3e0d8858f760da96964de",
   "sources": {

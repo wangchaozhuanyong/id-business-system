@@ -32,7 +32,7 @@ def build(c, plan, qa, capture, out, runtime):
                 raw = (root / name).read_bytes()
                 runtime.need(runtime.sha(raw) == expected, 'SOURCE_CHANGED')
                 (context / name).write_bytes(raw)
-        env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + (c['expectedCurrent'] if role == 'baseline' else plan['commit'])}
+        env = {**os.environ, 'NODE_ENV': 'production', 'V2_BUILD_ID': 'v2-' + (runtime.ADMIN_PARENT if role == 'baseline' else plan['commit'])}
         for command in [['npm', 'ci', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
                         ['npm', 'run', 'build', '--workspace', '@apple-business/shared'],
                         ['npm', 'run', 'build', '--workspace', '@apple-business/admin']]:

@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import zipfile
 
 HERE = Path(__file__).resolve().parent
@@ -40,7 +41,8 @@ def check(c):
     before = b"const queryCodeSettingsSnapshot = ref('');"
     after = b'const queryCodeSettingsSnapshot = ref(JSON.stringify(queryCodeSettingsForm));'
     need(old.count(before) == 1 and (ROOT / R.SOURCE).read_bytes() == old.replace(before, after), 'APPLICATION_DELTA_CHANGED')
-    need(set(git('diff', '--name-only', R.CURRENT, 'HEAD').decode().splitlines()) <= set(c['candidateFiles']), 'UNREVIEWED_EXTENSION')
+    git('merge-base', '--is-ancestor', c['reviewBase'], 'HEAD')
+    need(set(git('diff', '--name-only', c['reviewBase'], 'HEAD').decode().splitlines()) <= set(c['candidateFiles']), 'UNREVIEWED_EXTENSION')
     for name, expected in {**c['sources'], **c['validationSources']}.items():
         need(sha((ROOT / name).read_bytes()) == expected, 'SOURCE_CHANGED')
     need(all(sha(git('show', R.CURRENT + ':' + n)) == v for n, v in c['baselineSources'].items()), 'BASE_SOURCE_CHANGED')
@@ -55,11 +57,48 @@ def identity(c):
     return F.native_identity()
 
 
+def admin_evidence_matches(c, run, job, checkout, log, unchanged):
+    b = c['adminEvidence']
+    lines = log.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.endswith('[command]/usr/bin/git log -1 --format=%H')]
+    return (unchanged and run['id'] == b['runId'] and run['run_attempt'] == 1 and run['status'] == 'completed'
+        and run['conclusion'] == 'failure' and run['event'] == 'pull_request' and run['path'] == '.github/workflows/quality.yml'
+        and run['head_sha'] == b['head'] and run['repository']['full_name'] == REPO
+        and any(p['number'] == 753 for p in run['pull_requests'])
+        and job['id'] == b['jobId'] and job['run_id'] == b['runId'] and job['name'] == 'recharge (admin)'
+        and job['status'] == 'completed' and job['conclusion'] == 'success'
+        and all(s['conclusion'] in ('success', 'skipped') for s in job['steps'])
+        and all(any(s['name'] == name and s['conclusion'] == 'success' for s in job['steps'])
+                for name in ('Checkout', 'Install package dependencies', 'Check affected recharge part'))
+        and checkout['sha'] == b['checkout'] and checkout['tree']['sha'] == b['tree']
+        and [p['sha'] for p in checkout['parents']] == [b['base'], b['head']]
+        and len(starts) == 1 and starts[0] + 1 < len(lines)
+        and re.search(r'\s' + b['checkout'] + r'$', lines[starts[0] + 1]) is not None)
+
+
+def verified_admin_evidence(c):
+    b = c['adminEvidence']
+    try:
+        git('cat-file', '-e', b['checkout'])
+    except Exception:
+        git('fetch', '--no-tags', 'origin', b['checkout'])
+    controls = set(c['candidateFiles']) - set(c['sources']) - set(c['validationSources'])
+    def inputs(ref):
+        def selected(name):
+            return (name.startswith(('apps/admin/', 'packages/shared/')) or '/' not in name
+                    or name in c['validationSources'] or name == '.github/workflows/quality.yml') and name not in controls
+        return '\n'.join(n for n in git('ls-tree', '-r', ref).decode().splitlines() if selected(n.split('\t')[1])).encode()
+    original, current = inputs(b['checkout']), inputs('HEAD')
+    run = github('actions/runs/' + str(b['runId']))
+    job = github('actions/jobs/' + str(b['jobId']))
+    checkout = github('git/commits/' + b['checkout'])
+    raw = execute('gh', 'run', 'view', str(b['runId']), '--job', str(b['jobId']), '--log')
+    need(admin_evidence_matches(c, run, job, checkout, raw.decode(), original == current), 'ORIGINAL_ADMIN_EVIDENCE_REQUIRED')
+    return {**b, 'jobLogSha256': sha(raw), 'retainedInputsSha256': sha(current)}
+
+
 def quality(native):
-    qa = M.quality(native['commit'], native['tree'])
-    jobs = github('actions/runs/' + qa['pull_request']['runId'] + '/jobs?per_page=100')['jobs']
-    need(any(j['name'] in ('recharge (admin)', 'full-quality') and j['conclusion'] == 'success' for j in jobs), 'FRESH_ADMIN_QUALITY_REQUIRED')
-    return qa
+    return {**M.quality(native['commit'], native['tree']), 'admin': verified_admin_evidence(contract())}
 
 
 def plan_for(c, native):
@@ -136,3 +175,5 @@ if __name__ == '__main__':
     parser.add_argument('mode', choices=('check', 'build', 'publish'))
     args = parser.parse_args()
     {'check': check, 'build': build, 'publish': publish}[args.mode](contract())
+    if args.mode == 'check':
+        print(json.dumps({'verifiedAdminEvidence': verified_admin_evidence(contract())}))

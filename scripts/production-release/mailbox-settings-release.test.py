@@ -66,6 +66,20 @@ class SettingsControls(unittest.TestCase):
         self.assertIn('cancel-in-progress: false', workflow)
         self.assertEqual(workflow.count("inputs.commit == github.sha"), 2)
 
+    def test_admin_reuse_requires_original_job_checkout_and_unchanged_inputs(self):
+        p = r.load('mailbox-settings-publication.py')
+        b = self.c['adminEvidence']
+        steps = [{'name': n, 'conclusion': 'success'} for n in ('Checkout', 'Install package dependencies', 'Check affected recharge part')]
+        run = dict(id=b['runId'], run_attempt=1, status='completed', conclusion='failure', event='pull_request',
+                   path='.github/workflows/quality.yml', head_sha=b['head'], repository={'full_name': p.REPO}, pull_requests=[{'number': 753}])
+        job = dict(id=b['jobId'], run_id=b['runId'], name='recharge (admin)', status='completed', conclusion='success', steps=steps)
+        checkout = {'sha': b['checkout'], 'tree': {'sha': b['tree']}, 'parents': [{'sha': b['base']}, {'sha': b['head']}]}
+        log = '[command]/usr/bin/git log -1 --format=%H\ncheckout ' + b['checkout'] + '\n'
+        self.assertTrue(p.admin_evidence_matches(self.c, run, job, checkout, log, True))
+        self.assertFalse(p.admin_evidence_matches(self.c, run, job, checkout, log, False))
+        self.assertFalse(p.admin_evidence_matches(self.c, run, {**job, 'conclusion': 'failure'}, checkout, log, True))
+        self.assertFalse(p.admin_evidence_matches(self.c, run, job, {**checkout, 'sha': '0' * 40}, log, True))
+
 
 if __name__ == '__main__':
     unittest.main()

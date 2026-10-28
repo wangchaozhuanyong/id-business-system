@@ -13,7 +13,8 @@ BASE = Path('/opt/id-business-v2')
 PREFIX = 'mailbox-settings'
 CONTRACT_FILE = PREFIX + '-contract.json'
 SCOPE = 'MAILBOX_SETTINGS_INITIAL_STATE_20261028'
-CURRENT = 'f9a9a4184ba6689abc778ff68e391b1b2dd75834'
+CURRENT = '93615a3fe9920c0c7933649c5ceb11e501cac4b0'
+ADMIN_PARENT = 'f9a9a4184ba6689abc778ff68e391b1b2dd75834'
 SOURCE = 'apps/admin/src/v2/components/workspace/V2ManagedMailboxPanel.vue'
 
 
@@ -62,7 +63,7 @@ def capture(c, d, h):
     manifest = json.loads((current / 'release-manifest.json').read_bytes())
     need(current.parent == BASE / 'releases' and manifest['commit'] == CURRENT and manifest['status'] == 'DEPLOYED', 'CURRENT_CHANGED')
     raw = (current / 'mailbox-validity-build-proof.json').read_bytes()
-    need(sha(raw) == c['parentProofSha256'] and json.loads(raw)['commit'] == CURRENT, 'PARENT_PROOF_CHANGED')
+    need(sha(raw) == c['parentProofSha256'] and json.loads(raw)['commit'] == ADMIN_PARENT, 'PARENT_PROOF_CHANGED')
     prior = json.loads(raw)
     need(prior['adminFiles'] == c['baselineAdminFiles'] and prior['sources'] == c['baselineSources'], 'PARENT_PROJECTION_CHANGED')
     states = h.snapshot(d, current)
@@ -153,6 +154,7 @@ def release(plan, c):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-' + PREFIX)
         need(not target.exists(), 'TARGET_EXISTS')
         shutil.copytree(current, target, symlinks=True)
+        need((target / SOURCE).resolve().is_relative_to(target) and not (target / SOURCE).is_symlink(), 'HOST_SOURCE_PATH_CHANGED')
         (target / SOURCE).write_bytes((payload / 'source' / SOURCE).read_bytes())
         for name in plan['controlSources']:
             (target / 'scripts/production-release' / name).write_bytes((HERE / name).read_bytes())
@@ -163,14 +165,21 @@ def release(plan, c):
         baseline(parent, c, d, h)
         journal = stage / 'switch-state.json'
         journal.write_text(json.dumps({'status': 'STARTED', 'target': str(target)}) + '\n')
-        d.compose(target, 'up', '-d', '--no-deps', 'admin', timeout=180)
-        d.wait_healthy(target, 'admin')
-        verify_deployed(d, target, parent, proof, image['Id'], c, h)
+        try:
+            d.compose(target, 'up', '-d', '--no-deps', 'admin', timeout=180)
+            d.wait_healthy(target, 'admin')
+            verify_deployed(d, target, parent, proof, image['Id'], c, h)
+        except BaseException:
+            journal.write_text(json.dumps({'status': 'FAILED', 'target': str(target), 'businessActions': 0}) + '\n')
+            raise
         manifest = json.loads((current / 'release-manifest.json').read_bytes())
         manifest.update(commit=plan['commit'], applicationCommit=plan['commit'], controlCommit=plan['commit'], version='v2-' + plan['commit'],
             sourceTree=plan['tree'], sourceBranch='main', scope=SCOPE, previousCommit=CURRENT, previousRelease=str(current), status='DEPLOYED',
             servicesUpdated=['admin'], servicesRebound=[], newMigrations=[], migrationPerformed=False, paymentActions=0)
         manifest['images']['admin'] = {'reference': ref, 'digest': image['Id'], 'sourceCommit': plan['commit']}
+        projections = manifest.setdefault('roleSourceProjections', {})
+        projections['admin'] = {'kind': SCOPE, 'commit': plan['commit'], 'parentProjection': projections.get('admin'),
+                                'buildProofSha256': plan['buildProofSha256'], 'sources': c['sources']}
         (target / (PREFIX + '-build-proof.json')).write_bytes(proof_raw)
         (target / 'release-manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         d.point_current(target, stamp + '-' + PREFIX)

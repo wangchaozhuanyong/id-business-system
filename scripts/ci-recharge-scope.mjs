@@ -3186,7 +3186,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
-  if (isMailboxSettingsOnly(paths)) return ['guards', 'admin'];
+  if (isMailboxSettingsOnly(paths)) return ['guards'];
   if (isRechargeAutofillSourceOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
   if (isRechargeAutofillControlsOnly(paths)) return ['guards'];
   if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];

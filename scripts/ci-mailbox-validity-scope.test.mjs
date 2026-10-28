@@ -15,13 +15,19 @@ import {
   mailboxValidityApiReceipt as b,
   mailboxValidityApiReceiptMatches
 } from './ci-mailbox-validity-scope.mjs';
-import { checkMode, needsOnlineRechargeCiBuild, affectsPart } from './ci-recharge-scope.mjs';
+import {
+  checkMode,
+  needsOnlineRechargeCiBuild,
+  affectsPart,
+  selectedParts
+} from './ci-recharge-scope.mjs';
 
-test('initial settings repair reruns Admin and guards and rejects API or schema additions', () => {
+test('settings guard repair retains native Admin evidence and rejects API or schema additions', () => {
   assert.equal(isMailboxSettingsOnly(mailboxSettingsPaths), true);
   assert.equal(checkMode(mailboxSettingsPaths, 'same', 'same'), 'admin');
   assert.equal(checkMode(mailboxSettingsPaths, 'before', 'after'), 'full');
   assert.equal(needsOnlineRechargeCiBuild(mailboxSettingsPaths), false);
+  assert.deepEqual(selectedParts(mailboxSettingsPaths), ['guards']);
   for (const extra of ['apps/api/prisma-mysql/schema.prisma', 'apps/api/src/auth.ts'])
     assert.equal(isMailboxSettingsOnly([...mailboxSettingsPaths, extra]), false);
   assert.throws(() => mailboxSettingsCommands('api', mailboxSettingsPaths));
