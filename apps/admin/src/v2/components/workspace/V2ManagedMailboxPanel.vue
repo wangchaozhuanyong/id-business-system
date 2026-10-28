@@ -558,7 +558,7 @@ const {
 const replacementPassword = toRef(credentialDraft, 'password');
 const clockTick = ref(getV2BusinessNowMs() ?? Date.now());
 const queryCodeSettingsForm = reactive({ applyToExisting: false, validityDays: 30 });
-const queryCodeSettingsSnapshot = ref('');
+const queryCodeSettingsSnapshot = ref(JSON.stringify(queryCodeSettingsForm));
 const queryCodeOverrides = reactive(new Map<string, string>());
 let microsoftAuthorizationGeneration = 0;
 let microsoftAuthorizationPopup: Window | null = null;

@@ -1,6 +1,55 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
+export const mailboxSettingsPaths = [
+  '.github/workflows/mailbox-settings-publication.yml',
+  'apps/admin/src/v2/components/workspace/V2ManagedMailboxPanel.vue',
+  'apps/admin/src/v2/testing/V2MailboxQueryCodeValidityFixture.vue',
+  'scripts/acceptance-v2-mailbox-query-code-validity.mjs',
+  'scripts/ci-mailbox-validity-scope.mjs',
+  'scripts/ci-mailbox-validity-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/production-release/mailbox-settings-build.py',
+  'scripts/production-release/mailbox-settings-contract.json',
+  'scripts/production-release/mailbox-settings-publication.py',
+  'scripts/production-release/mailbox-settings-release.test.py',
+  'scripts/production-release/mailbox-settings-runtime.py'
+];
+
+export function isMailboxSettingsOnly(paths) {
+  return (
+    paths.length === mailboxSettingsPaths.length &&
+    new Set(paths).size === paths.length &&
+    mailboxSettingsPaths.every((n) => paths.includes(n))
+  );
+}
+
+export function isMailboxSettingsControlsOnly(paths) {
+  const controls = mailboxSettingsPaths.filter(
+    (n) => !n.startsWith('apps/') && n !== 'scripts/acceptance-v2-mailbox-query-code-validity.mjs'
+  );
+  return (
+    paths.includes('scripts/production-release/mailbox-settings-publication.py') &&
+    paths.includes('scripts/production-release/mailbox-settings-release.test.py') &&
+    new Set(paths).size === paths.length &&
+    paths.every((n) => controls.includes(n))
+  );
+}
+
+export function mailboxSettingsCommands(part, changed) {
+  if (part === 'admin') return mailboxValidityCommands(part, changed);
+  if (part !== 'guards') throw new Error('Mailbox settings has no API or database changes');
+  return mailboxValidityCommands(part, changed).map(([file, args]) => [
+    file,
+    args.map((arg) =>
+      arg
+        .replace('mailbox-validity-publication.py', 'mailbox-settings-publication.py')
+        .replace('mailbox-validity-release.test.py', 'mailbox-settings-release.test.py')
+    )
+  ]);
+}
+
 export const mailboxValidityPaths = [
   '.github/workflows/mailbox-validity-publication.yml',
   '.github/workflows/recharge-billing-allocation-validation.yml',

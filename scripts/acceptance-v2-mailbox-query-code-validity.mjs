@@ -102,6 +102,20 @@ try {
         values
       );
     const writes = () => page.evaluate(() => globalThis.window.mailboxExpiryFixture.writes);
+    if (system === 'managed') {
+      await page.getByRole('button', { name: '有效期设置', exact: true }).click();
+      const settings = page.getByRole('dialog', { name: '查询码有效期设置', exact: true });
+      await settings
+        .locator('.el-select__selected-item')
+        .filter({ hasText: '3个月（90天）' })
+        .waitFor();
+      assert.equal(await settings.getByRole('checkbox').isChecked(), false);
+      await settings.getByRole('button', { name: '取消', exact: true }).click();
+      await settings.waitFor({ state: 'hidden' });
+      assert.equal(await page.getByText('关闭后会放弃尚未保存的有效期设置。').count(), 0);
+      assert.equal((await writes()).length, 0);
+      results.push({ system, scenario: 'server-default-first-open-clean-cancel', passed: true });
+    }
     await openReset();
     await choose('半年（180天）');
     await dialog().getByRole('button', { name: '取消', exact: true }).click();

@@ -5,12 +5,57 @@ import {
   isMailboxValidityOnly,
   mailboxValidityCommands
 } from './ci-mailbox-validity-scope.mjs';
-import { isMailboxValidityControlsOnly } from './ci-mailbox-validity-scope.mjs';
+import {
+  isMailboxValidityControlsOnly,
+  isMailboxSettingsOnly,
+  isMailboxSettingsControlsOnly,
+  mailboxSettingsPaths,
+  mailboxSettingsCommands
+} from './ci-mailbox-validity-scope.mjs';
 import {
   mailboxValidityApiReceipt as b,
   mailboxValidityApiReceiptMatches
 } from './ci-mailbox-validity-scope.mjs';
-import { checkMode, needsOnlineRechargeCiBuild, affectsPart } from './ci-recharge-scope.mjs';
+import {
+  checkMode,
+  needsOnlineRechargeCiBuild,
+  affectsPart,
+  selectedParts
+} from './ci-recharge-scope.mjs';
+
+test('settings guard repair retains native Admin evidence and rejects API or schema additions', () => {
+  assert.equal(isMailboxSettingsOnly(mailboxSettingsPaths), true);
+  assert.equal(checkMode(mailboxSettingsPaths, 'same', 'same'), 'admin');
+  assert.equal(checkMode(mailboxSettingsPaths, 'before', 'after'), 'full');
+  assert.equal(needsOnlineRechargeCiBuild(mailboxSettingsPaths), false);
+  assert.deepEqual(selectedParts(mailboxSettingsPaths), ['guards']);
+  for (const extra of ['apps/api/prisma-mysql/schema.prisma', 'apps/api/src/auth.ts'])
+    assert.equal(isMailboxSettingsOnly([...mailboxSettingsPaths, extra]), false);
+  assert.throws(() => mailboxSettingsCommands('api', mailboxSettingsPaths));
+  assert.ok(
+    mailboxSettingsCommands('admin', mailboxSettingsPaths).some(([, args]) =>
+      args.includes('scripts/acceptance-v2-mailbox-query-code-validity.mjs')
+    )
+  );
+  assert.ok(
+    mailboxSettingsCommands('guards', mailboxSettingsPaths).some(([, args]) =>
+      args.includes('scripts/production-release/mailbox-settings-release.test.py')
+    )
+  );
+});
+
+test('merged settings proof repair selects only controls and rejects application changes', () => {
+  const paths = [
+    'scripts/production-release/mailbox-settings-publication.py',
+    'scripts/production-release/mailbox-settings-release.test.py',
+    'scripts/production-release/mailbox-settings-contract.json'
+  ];
+  assert.equal(isMailboxSettingsControlsOnly(paths), true);
+  assert.equal(checkMode(paths, 'same', 'same'), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isMailboxSettingsControlsOnly([...paths, mailboxSettingsPaths[1]]), false);
+});
 
 test('browser-only repair rechecks Admin and guards while retaining API source evidence', () => {
   const changed = ['scripts/acceptance-v2-mailbox-query-code-validity.mjs'];

@@ -1,5 +1,7 @@
 import {
   isMailboxValidityOnly,
+  isMailboxSettingsOnly,
+  isMailboxSettingsControlsOnly,
   isMailboxValidityControlsOnly,
   mailboxValidityApiReceipt,
   mailboxValidityApiReceiptMatches
@@ -1230,6 +1232,8 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isMailboxSettingsControlsOnly(paths)) return false;
+  if (isMailboxSettingsOnly(paths)) return false;
   if (isMailboxValidityControlsOnly(paths)) return false;
   if (isMailboxValidityOnly(paths)) return false;
   if (isRechargeAutofillSourceOnly(paths)) return false;
@@ -2586,6 +2590,8 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isMailboxSettingsControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
+  if (isMailboxSettingsOnly(paths)) return oldSchema === newSchema ? 'admin' : 'full';
   if (isMailboxValidityControlsOnly(paths)) return 'ci-only';
   if (isMailboxValidityOnly(paths, oldSchema, newSchema)) return 'mailbox';
   if (isRechargeAutofillSourceOnly(paths)) return oldSchema === newSchema ? 'recharge' : 'full';
@@ -3064,6 +3070,8 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isMailboxSettingsControlsOnly(paths)) return oldSchema === newSchema;
+  if (isMailboxSettingsOnly(paths)) return oldSchema === newSchema;
   if (isRechargeAutofillSourceOnly(paths)) return oldSchema === newSchema;
   if (isRechargePlanBillingSource(paths, oldSchema, newSchema)) return true;
   if (isProxyResultIdentityOnly(paths)) return oldSchema === newSchema;
@@ -3182,6 +3190,8 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isMailboxSettingsControlsOnly(paths)) return ['guards'];
+  if (isMailboxSettingsOnly(paths)) return ['guards'];
   if (isRechargeAutofillSourceOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
   if (isRechargeAutofillControlsOnly(paths)) return ['guards'];
   if (isMailQueryPublicationControlsOnly(paths)) return ['guards'];
