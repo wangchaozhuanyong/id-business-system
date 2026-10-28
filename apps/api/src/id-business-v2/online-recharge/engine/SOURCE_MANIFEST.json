@@ -54,16 +54,16 @@
     {
       "path": "checkout-await-diagnostics.cjs",
       "originalSha256": null,
-      "adaptedSha256": "91ea7ff81d78482b0343d31ad71fcbe37f6ed656a356a95e4bab9e78cac846a3",
+      "adaptedSha256": "3175b80c16c7111e110f41ee10a0660a57d16cdc9502afe3f2e835132eb975c4",
       "changed": true,
-      "reason": "2026-10-22 Authorized checkout-await evidence repair: per-probe timing and controlled read failures, pre-cleanup freeze and Node-only masked-capture phase telemetry; no checkout, payment or network-policy changes."
+      "reason": "Retain exact input sub-operation and completed flags; propagate original bounded post-fill node read class and frame metadata through strict report/API/UI without changing writes, retries, visibility or deadlines."
     },
     {
       "path": "checkout-form.cjs",
       "originalSha256": null,
-      "adaptedSha256": "ac008a17bd1a196e12963535adde431a2e5ce025d7d53e219f5ce285b533ec63",
+      "adaptedSha256": "4ce4859ec40cd83a22bd010c4789c160f4eda065a8bd2874f349848a1f041fb9",
       "changed": true,
-      "reason": "Preserve both existing load-precheck attempts and frame-object identity; isolate precheck failures from stale card candidates; retain strict bounded diagnostics without changing retries or payment behavior."
+      "reason": "Retain exact input sub-operation and completed flags; propagate original bounded post-fill node read class and frame metadata through strict report/API/UI without changing writes, retries, visibility or deadlines."
     },
     {
       "path": "checkout-initialization.cjs",
@@ -257,9 +257,9 @@
     {
       "path": "test/checkout-form.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "a730d75e2670e4c8623290c00780c5c02df849b7afc79c1b029f8d6b15a2f56b",
+      "adaptedSha256": "7179289ebe6ddfc5b2c0b1b9e460f10d154829437d833b43bb3b8360500903f0",
       "changed": true,
-      "reason": "Preserve both existing load-precheck attempts and frame-object identity; isolate precheck failures from stale card candidates; retain strict bounded diagnostics without changing retries or payment behavior."
+      "reason": "Retain exact input sub-operation and completed flags; propagate original bounded post-fill node read class and frame metadata through strict report/API/UI without changing writes, retries, visibility or deadlines."
     },
     {
       "path": "test/checkout-initialization.test.cjs",
@@ -677,9 +677,9 @@
     {
       "path": "upstream/chatgpt.js",
       "originalSha256": "cc94972036ccc614fe02276328b2ac82090a3893219d6d351772f659de88d550",
-      "adaptedSha256": "76666b0bfc8629c9066dc1a64f585afb098a2501f8a4594d7f758e1aaf905463",
+      "adaptedSha256": "5e2edbd32ce1ae4e78647d0142f554e450a84e9b92188a8f3ad1537111ec219d",
       "changed": true,
-      "reason": "Preserve both existing load-precheck attempts and frame-object identity; isolate precheck failures from stale card candidates; retain strict bounded diagnostics without changing retries or payment behavior."
+      "reason": "Retain exact input sub-operation and completed flags; propagate original bounded post-fill node read class and frame metadata through strict report/API/UI without changing writes, retries, visibility or deadlines."
     },
     {
       "path": "upstream/chile-money.js",
@@ -901,16 +901,16 @@
     {
       "path": "test/unpaid-validation.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "7958a10cfc1d92aefe2839ae6357dca31302bb43cca68f5d6776a8124a92e24f",
+      "adaptedSha256": "4667e9a4473249e5bb882698ffb9dd9fdae3bfc59ed94fa262ce2adeb05d8695",
       "changed": true,
-      "reason": "Preserve both existing load-precheck attempts and frame-object identity; isolate precheck failures from stale card candidates; retain strict bounded diagnostics without changing retries or payment behavior."
+      "reason": "Retain exact input sub-operation and completed flags; propagate original bounded post-fill node read class and frame metadata through strict report/API/UI without changing writes, retries, visibility or deadlines."
     },
     {
       "path": "unpaid-validation.cjs",
       "originalSha256": null,
-      "adaptedSha256": "78b38a68ec77f0d207a1c9bd23bfe23a8a184c1830c96322debac6d75dddca23",
+      "adaptedSha256": "1fddf2f283a3fb3670a3b2be39b6440275fa7ab8e89a64ec0f0c4f0f1f5aba83",
       "changed": true,
-      "reason": "Preserve both existing load-precheck attempts and frame-object identity; isolate precheck failures from stale card candidates; retain strict bounded diagnostics without changing retries or payment behavior."
+      "reason": "Retain exact input sub-operation and completed flags; propagate original bounded post-fill node read class and frame metadata through strict report/API/UI without changing writes, retries, visibility or deadlines."
     },
     {
       "path": "checkout-preparation.cjs",

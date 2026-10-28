@@ -1,6 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { sessionProbeEntries, unpaidValidationEntries } from './unpaid-validation-labels';
 
+it('显示卡号填入后的节点读取停点，不把它显示为填入失败', () => {
+  const rows = unpaidValidationEntries({
+    format: 'unpaid-validation-v1',
+    failureClass: 'READ_INCOMPLETE',
+    formDiagnostics: {
+      inspection: {
+        lastReadFailure: {
+          phase: 'control_read',
+          probe: 'field_input',
+          readOperation: 'node_connected',
+          frameKind: 'embedded',
+          frameId: 1,
+          reason: 'timeout',
+          count: 1
+        }
+      },
+      steps: [
+        {
+          field: 'number',
+          phase: 'input',
+          state: 'failed',
+          tag: 'input',
+          frameKind: 'embedded',
+          inputOperation: 'connection_check',
+          fillCompleted: true
+        }
+      ]
+    }
+  });
+  expect(rows.find((row) => row.label === '控件停止位置')?.value).toBe(
+    '卡号／填入后检查节点连接／输入框／内嵌页面'
+  );
+  expect(rows.find((row) => row.label === '最后读取失败')?.value).toBe(
+    '字段输入／填入后读取节点连接状态／内嵌页面／页面序号 1／读取超时'
+  );
+  expect(JSON.stringify(rows)).not.toMatch(/node_connected|connection_check|field_input/);
+});
+
 it.each(['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'])(
   '将%s显示为网络读取失败而非未知异常',
   (failureCode) => {

@@ -52,6 +52,84 @@ function input(value: unknown) {
     }
   };
 }
+describe('卡号输入后读取证据', () => {
+  const lastReadFailure = {
+    phase: 'control_read',
+    reason: 'timeout',
+    count: 1,
+    probe: 'field_input',
+    readOperation: 'node_connected',
+    frameKind: 'embedded',
+    frameId: 1
+  };
+  const value = {
+    ...report,
+    lastStage: 'card_fill',
+    failureClass: 'READ_INCOMPLETE',
+    failureCode: 'CHECKOUT_CONTROL_READ_FAILED',
+    formDiagnostics: {
+      inspection: {
+        complete: false,
+        framesFailed: 1,
+        readFailures: [lastReadFailure],
+        lastReadFailure
+      },
+      steps: [
+        {
+          field: 'number',
+          phase: 'input',
+          state: 'failed',
+          method: 'fill',
+          inputOperation: 'connection_check',
+          fillCompleted: true,
+          nodeConnected: false,
+          tabCompleted: false,
+          readOperation: 'node_connected',
+          readPhase: 'control_read',
+          errorClass: 'timeout'
+        }
+      ]
+    }
+  };
+  it('原附件接口严格保存输入子操作及布尔值', async () => {
+    const root = join(project, '.runtime/checkout-card-post-input-20261028/api-artifacts');
+    await mkdir(root, { recursive: true });
+    const directory = await mkdtemp(join(root, 'fixture-'));
+    try {
+      const f = fixture(directory),
+        uploaded = await f.repository.upload(input(value));
+      const { readFile } = await import('node:fs/promises');
+      expect(
+        JSON.parse(await readFile(join(directory, uploaded.filename), 'utf8')).formDiagnostics
+      ).toEqual(value.formDiagnostics);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  for (const extra of [
+    { inputOperation: 'SYNTHETIC_PRIVATE' },
+    { readOperation: 'SYNTHETIC_PRIVATE' },
+    { fillCompleted: 'true' },
+    { nodeConnected: 1 },
+    { tabCompleted: null },
+    { rawMessage: 'SYNTHETIC_PRIVATE' }
+  ])
+    it('未知操作及非布尔的子操作结果不进入原附件接口', async () => {
+      const f = fixture(join(project, '.runtime/checkout-card-post-input-20261028/api-artifacts'));
+      await expect(
+        f.repository.upload(
+          input({
+            ...value,
+            formDiagnostics: {
+              ...value.formDiagnostics,
+              steps: [{ ...value.formDiagnostics.steps[0], ...extra }]
+            }
+          })
+        )
+      ).rejects.toThrow('诊断文件字段无效');
+      expect(f.workers.withLease).not.toHaveBeenCalled();
+    });
+});
 describe('不付款诊断文件合同', () => {
   it('首次和首页真实回执通过原附件接口保存，保留自动处理停点', async () => {
     const root = join(project, '.runtime/session-probe-repair-20261026/artifacts');

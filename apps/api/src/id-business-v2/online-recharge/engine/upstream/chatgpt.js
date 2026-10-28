@@ -445,14 +445,14 @@ function safeCheckoutFormInspection(value) {
     if ([1, 2].includes(value.readAttempts)) inspection.readAttempts = value.readAttempts;
     if (CHECKOUT_FORM_READ_PHASES.has(value.readPhase)) inspection.readPhase = value.readPhase;
     const readFailure = row => {
-        if (!row || !['frame_scan', 'frame_owner', 'load_state', 'control_snapshot'].includes(row.phase)
+        if (!row || !['frame_scan', 'frame_owner', 'load_state', 'control_snapshot', 'control_read'].includes(row.phase)
             || !['timeout', 'detached', 'context_destroyed', 'closed', 'aborted', 'read_failed'].includes(row.reason)
             || !Number.isInteger(row.count) || row.count < 1 || row.count > 10000) return undefined;
         const clean = { phase: row.phase, reason: row.reason, count: row.count };
-        if (['load_precheck', 'control_scan'].includes(row.probe)) clean.probe = row.probe;
+        if (['load_precheck', 'control_scan', 'field_input'].includes(row.probe)) clean.probe = row.probe;
         if (['frame_element', 'owner_visibility', 'load_error_count', 'load_error_visibility',
             'control_snapshot', 'candidate_handles', 'candidate_eligibility', 'control_read',
-            'value', 'candidate_scroll', 'unknown'].includes(row.readOperation)) clean.readOperation = row.readOperation;
+            'value', 'candidate_scroll', 'node_connected', 'unknown'].includes(row.readOperation)) clean.readOperation = row.readOperation;
         if (['main', 'embedded', 'unknown'].includes(row.frameKind)) clean.frameKind = row.frameKind;
         if (Number.isInteger(row.frameId) && row.frameId > 0 && row.frameId <= 10000) clean.frameId = row.frameId;
         if ([1, 2].includes(row.attempt)) clean.attempt = row.attempt;

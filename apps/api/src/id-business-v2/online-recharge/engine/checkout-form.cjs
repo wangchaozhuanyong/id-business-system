@@ -128,6 +128,7 @@ const READ_OPERATIONS = new Set([
   'candidate_handles',
   'candidate_eligibility',
   'control_read',
+  'node_connected',
   'value',
   'candidate_scroll',
   'unknown'
@@ -137,7 +138,8 @@ function tagReadFailure(error, operation, frame, state) {
   if (!error || typeof error !== 'object') return;
   const details = {
     readOperation: READ_OPERATIONS.has(operation) ? operation : 'unknown',
-    readFrameKind: 'unknown'
+    readFrameKind: 'unknown',
+    readErrorClass: require('./checkout-await-diagnostics.cjs').errorClass(error)
   };
   try {
     const page = frame?.page();
@@ -247,7 +249,11 @@ async function fieldStep(state, field, phase, operation) {
     return result;
   } catch (error) {
     step.state = 'failed';
-    step.errorClass = require('./checkout-await-diagnostics.cjs').errorClass(error);
+    step.errorClass =
+      readFailureMetadata.get(error)?.readErrorClass ||
+      require('./checkout-await-diagnostics.cjs').errorClass(error);
+    const readOperation = readFailureMetadata.get(error)?.readOperation || error.readOperation;
+    if (READ_OPERATIONS.has(readOperation)) step.readOperation = readOperation;
     if (
       [
         'frame_scan',
@@ -356,7 +362,7 @@ function frameReadFailure(inspection, phase, error, page, signal, probe = 'contr
         ? 'timeout'
         : /execution context was destroyed/i.test(String(error?.message || ''))
           ? 'context_destroyed'
-          : /detached/i.test(String(error?.message || ''))
+          : /detached|not attached/i.test(String(error?.message || ''))
             ? 'detached'
             : 'read_failed';
   const metadata = readFailureMetadata.get(error) || error || {};
@@ -917,11 +923,24 @@ async function readWithin(
       frame
     );
   } catch (error) {
-    if (error.code === 'CHECKOUT_FORM_TIMEOUT' && Date.now() < deadline)
-      throw Object.assign(failure('CHECKOUT_CONTROL_READ_FAILED', '结账控件读取未完成'), {
+    if (readOperation === 'node_connected' && state?.inspection && frame)
+      frameReadFailure(
+        state.inspection,
+        'control_read',
+        error,
+        frame.page(),
+        signal,
+        'field_input'
+      );
+    if (error.code === 'CHECKOUT_FORM_TIMEOUT' && Date.now() < deadline) {
+      const wrapped = Object.assign(failure('CHECKOUT_CONTROL_READ_FAILED', '结账控件读取未完成'), {
         readPhase,
         ...(error.readOperation ? { readOperation: error.readOperation } : {})
       });
+      const metadata = readFailureMetadata.get(error);
+      if (metadata) readFailureMetadata.set(wrapped, metadata);
+      throw wrapped;
+    }
     error.readPhase = readPhase;
     throw error;
   }
@@ -1661,11 +1680,30 @@ async function write(page, key, expected, deadline, state = {}) {
               ? '20' + expected
               : String(expected)
           : String(expected);
+      state.formStep.inputOperation = 'fill';
+      state.formStep.fillCompleted = false;
       await item.el.fill(text, { timeout: timeout(deadline, state.signal) });
+      state.formStep.fillCompleted = true;
       // An input handler may replace this exact node. Never fall back to another
       // node for Tab; the next semantic readback will rediscover its replacement.
-      if (await readWithin(() => item.el.evaluate((n) => n.isConnected), deadline, state.signal))
+      state.formStep.inputOperation = 'connection_check';
+      const connected = await readWithin(
+        () => item.el.evaluate((n) => n.isConnected),
+        deadline,
+        state.signal,
+        'control_read',
+        FRAME_READ_MS,
+        state,
+        item.frame,
+        'node_connected'
+      );
+      state.formStep.nodeConnected = connected;
+      if (connected) {
+        state.formStep.inputOperation = 'tab';
+        state.formStep.tabCompleted = false;
         await item.el.press('Tab', { timeout: timeout(deadline, state.signal) });
+        state.formStep.tabCompleted = true;
+      }
     }
     if (key === 'country') state.countryRevision = (state.countryRevision || 0) + 1;
     return true;

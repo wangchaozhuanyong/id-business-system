@@ -9,6 +9,81 @@ const auth = require('../upstream/auth-page-detect');
 const { openApiCheckout } = require('../upstream/chatgpt');
 const { chromium } = require('../upstream/node_modules/playwright');
 
+test('post-input read retains its operation and original timeout through report and IPC', () => {
+  const failure = {
+    phase: 'control_read',
+    reason: 'timeout',
+    probe: 'field_input',
+    readOperation: 'node_connected',
+    frameKind: 'embedded',
+    frameId: 1,
+    count: 1
+  };
+  const result = validation.finish(
+    {
+      errorCode: 'CHECKOUT_CONTROL_READ_FAILED',
+      formDiagnostics: {
+        inspection: {
+          complete: false,
+          framesFailed: 1,
+          readFailures: [failure],
+          lastReadFailure: failure
+        },
+        steps: [
+          {
+            field: 'number',
+            phase: 'input',
+            state: 'failed',
+            method: 'fill',
+            inputOperation: 'connection_check',
+            fillCompleted: true,
+            readOperation: 'node_connected',
+            readPhase: 'control_read',
+            errorClass: 'timeout',
+            inputValue: 'SYNTHETIC_PRIVATE',
+            rawMessage: 'SYNTHETIC_PRIVATE'
+          }
+        ]
+      }
+    },
+    {
+      format: 'unpaid-validation-v1',
+      startedAt: new Date().toISOString(),
+      timeline: [{ stage: 'card_fill', startedAt: new Date().toISOString() }]
+    }
+  );
+  const safe = require('../security.cjs').sanitizeResult({
+    validationReport: result
+  }).validationReport;
+  assert.equal(safe.failureClass, 'READ_INCOMPLETE');
+  assert.deepEqual(safe.formDiagnostics.inspection.lastReadFailure, failure);
+  assert.equal(safe.formDiagnostics.steps[0].fillCompleted, true);
+  assert.equal(safe.formDiagnostics.steps[0].inputOperation, 'connection_check');
+  assert.equal(safe.formDiagnostics.steps[0].errorClass, 'timeout');
+  assert.match(validation.message(safe), /卡号／填入后检查节点连接／读取超时/);
+  assert.doesNotMatch(JSON.stringify(safe), /SYNTHETIC_PRIVATE|inputValue|rawMessage/);
+  assert.equal(safe.submitted, false);
+});
+for (const operation of ['fill', 'tab'])
+  test(`${operation} timeout is described as an operation timeout rather than a read timeout`, () => {
+    const text = validation.message({
+      failureClass: 'READ_INCOMPLETE',
+      formDiagnostics: {
+        steps: [
+          {
+            field: 'number',
+            phase: 'input',
+            state: 'failed',
+            inputOperation: operation,
+            errorClass: 'timeout'
+          }
+        ]
+      }
+    });
+    assert.match(text, /操作超时/);
+    assert.doesNotMatch(text, /读取超时/);
+  });
+
 test('country interaction trace survives report and IPC projection without raw field values', () => {
   const interaction = {
     field: 'country',

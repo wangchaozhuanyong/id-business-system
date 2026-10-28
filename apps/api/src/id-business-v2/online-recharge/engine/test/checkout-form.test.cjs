@@ -1640,6 +1640,94 @@ test('semantic readback rediscovers a number input replaced by its own input han
   assert.equal((await fillCard(page, card, { deadline: Date.now() + 2500 })).ok, true);
   assert.equal(await page.locator('[autocomplete="cc-number"]').inputValue(), card.number);
 });
+for (const [operation, failure, expectedClass] of [
+  ['fill', 'TimeoutError', 'timeout'],
+  ['connection_check', 'pending', 'timeout'],
+  ['connection_check', 'detached SYNTHETIC_PRIVATE', 'detached'],
+  ['connection_check', 'Element is not attached to the DOM SYNTHETIC_PRIVATE', 'detached'],
+  ['connection_check', 'Execution context was destroyed SYNTHETIC_PRIVATE', 'context_destroyed'],
+  ['tab', 'TargetClosedError', 'closed']
+])
+  test(`card input distinguishes ${operation} failure ${expectedClass} without repeating a write`, async (t) => {
+    const page = await pageFor(t, iframe(cardHtml));
+    const frame = page.frames()[1],
+      nativeLocator = frame.locator;
+    const calls = { fill: 0, connection_check: 0, tab: 0 };
+    const reject = () => {
+      if (failure === 'pending') return new Promise(() => {});
+      const error = new Error(failure + ' SYNTHETIC_PRIVATE');
+      if (failure.endsWith('Error')) error.name = failure;
+      throw error;
+    };
+    frame.locator = function (selector, ...args) {
+      const locator = nativeLocator.call(this, selector, ...args);
+      if (!selector.includes('[autocomplete="cc-number"]')) return locator;
+      const handles = locator.elementHandles.bind(locator);
+      locator.elementHandles = async () => {
+        const list = await handles();
+        for (const handle of list) {
+          const fill = handle.fill.bind(handle),
+            evaluate = handle.evaluate.bind(handle),
+            press = handle.press.bind(handle);
+          handle.fill = async (...values) => {
+            calls.fill++;
+            return operation === 'fill' ? reject() : fill(...values);
+          };
+          handle.evaluate = async (code, ...values) => {
+            if (String(code).replace(/\s/g, '') !== '(n)=>n.isConnected')
+              return evaluate(code, ...values);
+            calls.connection_check++;
+            return operation === 'connection_check' ? reject() : evaluate(code, ...values);
+          };
+          handle.press = async (...values) => {
+            calls.tab++;
+            return operation === 'tab' ? reject() : press(...values);
+          };
+        }
+        return list;
+      };
+      return locator;
+    };
+    t.after(() => {
+      frame.locator = nativeLocator;
+    });
+    const result = await fillCard(page, card, { deadline: Date.now() + 6000 });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, 'CHECKOUT_CONTROL_READ_FAILED');
+    const step = result.formDiagnostics.steps.at(-1);
+    assert.equal(step.field, 'number');
+    assert.equal(step.phase, 'input');
+    assert.equal(step.inputOperation, operation);
+    assert.equal(step.errorClass, expectedClass);
+    assert.equal(step.fillCompleted, operation !== 'fill');
+    assert.equal(calls.fill, 1);
+    assert.equal(calls.connection_check, operation === 'fill' ? 0 : 1);
+    assert.equal(calls.tab, operation === 'tab' ? 1 : 0);
+    assert.equal(await frame.locator('[autocomplete="cc-exp"]').inputValue(), '');
+    assert.equal(await frame.locator('[autocomplete="cc-csc"]').inputValue(), '');
+    if (operation === 'connection_check') {
+      assert.equal(step.readOperation, 'node_connected');
+      assert.equal(result.inspection.readFailures.length, 1);
+      assert.deepEqual(result.inspection.lastReadFailure, {
+        phase: 'control_read',
+        reason: expectedClass,
+        probe: 'field_input',
+        readOperation: 'node_connected',
+        frameKind: 'embedded',
+        frameId: 1,
+        count: 1
+      });
+      assert.equal(result.inspection.timedOut, false);
+    }
+    if (operation === 'tab') {
+      assert.equal(step.nodeConnected, true);
+      assert.equal(step.tabCompleted, false);
+    }
+    assert.doesNotMatch(
+      JSON.stringify(result.formDiagnostics),
+      /SYNTHETIC_PRIVATE|4242424242424242/
+    );
+  });
 test('two semantic card numbers with different scores remain ambiguous in readiness and filling', async (t) => {
   const page = await pageFor(t, cardHtml + '<input aria-label="Card number">');
   const ready = await inspectCardReadiness(page);
@@ -1742,6 +1830,7 @@ test('global timeout retains missing fields and explicit inspection instead of a
     vm.runInNewContext(source, {
       module,
       exports: module.exports,
+      require: require('node:module').createRequire(require.resolve('../checkout-form.cjs')),
       Date: { now: () => clock },
       setTimeout: (callback, delay) =>
         setTimeout(() => {

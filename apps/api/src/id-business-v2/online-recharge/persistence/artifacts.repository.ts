@@ -67,6 +67,8 @@ function validFormDiagnostics(value: unknown): boolean {
       'placeholder'
     ],
     method: ['fill', 'select_option', 'combobox'],
+    inputOperation: ['fill', 'connection_check', 'tab'],
+    readOperation: ['node_connected'],
     readPhase: readPhases,
     errorClass: errors
   };
@@ -80,7 +82,15 @@ function validFormDiagnostics(value: unknown): boolean {
             ? !oneOf(v, stepEnums[key])
             : ['durationMs', 'frameId', 'candidateCount', 'eligibleCount'].includes(key)
               ? !count(v, key === 'durationMs' ? 600000 : 10000)
-              : ['inShadowRoot', 'readOnly', 'visible', 'matched'].includes(key)
+              : [
+                    'inShadowRoot',
+                    'readOnly',
+                    'visible',
+                    'matched',
+                    'fillCompleted',
+                    'nodeConnected',
+                    'tabCompleted'
+                  ].includes(key)
                 ? typeof v !== 'boolean'
                 : true
         )
