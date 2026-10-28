@@ -129,6 +129,8 @@ def helpers(name):
             return d
 
         module.load_utilities = utilities
+    elif name == 'proxy-result-identity-release.py':
+        module.claim_markers = retired.claim_retired_markers
     return module
 
 
