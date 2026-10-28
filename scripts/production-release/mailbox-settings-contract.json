@@ -373,9 +373,14 @@
   "migrationPerformed": false,
   "packageLockSha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
   "parentProofSha256": "9e849986e756e8f8ca4ff03181615359698caf7c445bd9c710db314ad6baaf1d",
-  "reviewBase": "a32d1f7bbddeb7a7a9e21590c675720e3b116e8b",
+  "reviewBase": "f89e534b22b996e3cdb962e82ea567421228c031",
   "scope": "MAILBOX_SETTINGS_INITIAL_STATE_20261028",
   "sourceBase": "a7f61aeca2b6ead635f3e0d8858f760da96964de",
+  "sourceReview": {
+    "head": "9c3007bf5544683514edd4de910dc4f4c9b7a409",
+    "main": "f89e534b22b996e3cdb962e82ea567421228c031",
+    "pullRequest": 753
+  },
   "sources": {
     "apps/admin/src/v2/components/workspace/V2ManagedMailboxPanel.vue": "ca1f82a26a9b5472283e344b8f2d4bddb6cfced4b97fb9808a6a8b875d783b01"
   },
