@@ -4,7 +4,9 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('frame_release', HERE / 'online-frame-attempts-release.py')
@@ -117,6 +119,23 @@ class FrameAttemptsPublicationTests(unittest.TestCase):
         self.assertIn('fence.acquire()', rendered)
         self.assertNotIn('migrate', rendered)
         self.assertIn('fresh_scoped_backup', rendered)
+
+    def test_maintenance_marker_uses_retired_registration_runtime(self):
+        helper = P.helpers('proxy-result-identity-release.py')
+        runtime = HERE.parents[1] / '.runtime'
+        runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='frame-marker-test-', dir=runtime) as directory:
+            root = Path(directory)
+            remote = mock.Mock()
+            remote.run.side_effect = AssertionError('retired registration mount must not be inspected')
+            with mock.patch.dict(helper.claim_markers.__globals__, {'BASE': root}):
+                receipt = helper.claim_markers(remote, {}, self.plan)
+                self.assertEqual(receipt['paths'], [str(root / 'maintenance.json')])
+                self.assertTrue(receipt['registrationRetired'])
+                self.assertEqual(json.loads((root / 'maintenance.json').read_bytes())['scope'], P.SCOPE)
+                helper.release_markers(receipt)
+                self.assertFalse((root / 'maintenance.json').exists())
+                remote.run.assert_not_called()
 
     def test_transport_retains_single_send_intent_and_independent_readback(self):
         source = (HERE / 'online-frame-attempts-publication.py').read_text()
