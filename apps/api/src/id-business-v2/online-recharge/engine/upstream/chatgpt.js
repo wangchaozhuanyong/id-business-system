@@ -455,12 +455,22 @@ function safeCheckoutFormInspection(value) {
             'value', 'candidate_scroll', 'unknown'].includes(row.readOperation)) clean.readOperation = row.readOperation;
         if (['main', 'embedded', 'unknown'].includes(row.frameKind)) clean.frameKind = row.frameKind;
         if (Number.isInteger(row.frameId) && row.frameId > 0 && row.frameId <= 10000) clean.frameId = row.frameId;
+        if ([1, 2].includes(row.attempt)) clean.attempt = row.attempt;
+        for (const key of ['enumerationIndex', 'frameCount'])
+            if (Number.isInteger(row[key]) && row[key] > 0 && row[key] <= 10000) clean[key] = row[key];
         return clean;
     };
     if (Array.isArray(value.readFailures))
         inspection.readFailures = value.readFailures.slice(-32).map(readFailure).filter(Boolean);
     const lastReadFailure = readFailure(value.lastReadFailure);
     if (lastReadFailure) inspection.lastReadFailure = lastReadFailure;
+    if (Array.isArray(value.readAttemptSummaries))
+        inspection.readAttemptSummaries = value.readAttemptSummaries.slice(-2).filter(row =>
+            row && [1, 2].includes(row.attempt) && typeof row.complete === 'boolean'
+            && ['frameCount', 'framesChecked', 'framesSkipped', 'framesFailed', 'durationMs'].every(key =>
+                Number.isInteger(row[key]) && row[key] >= 0 && row[key] <= (key === 'durationMs' ? 600000 : 10000)))
+            .map(row => Object.fromEntries(['attempt', 'frameCount', 'framesChecked', 'framesSkipped',
+                'framesFailed', 'complete', 'durationMs'].map(key => [key, row[key]])));
     const visibilityReasons = ['zero_geometry', 'hidden', 'inert', 'aria_hidden', 'display_none',
         'visibility_hidden', 'opacity_zero', 'content_visibility_hidden', 'modal_background'];
     const countGroups = {
@@ -546,9 +556,21 @@ function safeCheckoutOpenDiagnostics(value) {
         const loading = require('../checkout-recovery.cjs').sanitizeOriginalCheckoutReloadDiagnostics(value.loading);
         if (loading) result.loading = loading;
         if (CHECKOUT_FORM_DIAGNOSTIC_CODES.has(value.code)) result.code = value.code;
-        if (Array.isArray(value.missing))
+        const previous = value.previousCardReadiness;
+        if (previous && typeof previous.ready === 'boolean' && Array.isArray(previous.missing)) {
+            result.previousCardReadiness = {
+                ready: previous.ready,
+                missing: [...new Set(previous.missing.slice(0, 64).filter(field => CHECKOUT_FORM_DIAGNOSTIC_FIELDS.has(field)))],
+                ...(typeof previous.complete === 'boolean' ? { complete: previous.complete } : {}),
+                ...(Number.isInteger(previous.scanned) && previous.scanned >= 0 && previous.scanned <= 10000
+                    ? { scanned: previous.scanned } : {})
+            };
+        }
+        const loadPrecheckFailed = value.inspection?.lastReadFailure?.probe === 'load_precheck';
+        if (loadPrecheckFailed) { result.missing = []; result.controls = []; }
+        if (!loadPrecheckFailed && Array.isArray(value.missing))
             result.missing = [...new Set(value.missing.slice(0, 64).filter(field => CHECKOUT_FORM_DIAGNOSTIC_FIELDS.has(field)))];
-        if (Array.isArray(value.controls) && value.controls.length <= 128) {
+        if (!loadPrecheckFailed && Array.isArray(value.controls) && value.controls.length <= 128) {
             result.controls = value.controls
                 .filter(control => control && ['input', 'select', 'textarea', 'other'].includes(control.tag))
                 .map(control => ({
@@ -750,7 +772,7 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
                 checkoutOpenDiagnostics: safeCheckoutOpenDiagnostics({
                     stage, reason: checkoutOpenReason, code: captchaResult.code,
                     missing: captchaResult.missing, controls: captchaResult.controls,
-                    inspection: captchaResult.inspection, exclusionProbe
+                    inspection: captchaResult.inspection, previousCardReadiness: captchaResult.previousCardReadiness, exclusionProbe
                 })
             });
         }

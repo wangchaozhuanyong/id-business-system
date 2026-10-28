@@ -13,6 +13,7 @@ import { id, object, text, safeBootstrapDiagnostics } from '../validation';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
 import {
   validReadFailure,
+  validReadAttemptSummary,
   validCheckoutOpenDiagnostics,
   validTruncationMetadata
 } from './diagnostic-contract';
@@ -211,6 +212,8 @@ function validFormDiagnostics(value: unknown): boolean {
     if (key === 'readAttempts') return v === 1 || v === 2;
     if (key === 'readPhase') return oneOf(v, readPhases);
     if (key === 'lastReadFailure') return validReadFailure(v);
+    if (key === 'readAttemptSummaries')
+      return Array.isArray(v) && v.length <= 2 && v.every(validReadAttemptSummary);
     if (key === 'readFailures')
       return Array.isArray(v) && v.length <= 32 && v.every(validReadFailure);
     return (

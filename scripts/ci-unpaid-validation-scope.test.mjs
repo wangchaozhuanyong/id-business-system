@@ -7,6 +7,7 @@ import {
   subscriptionBodyFallbackPaths,
   countryFrameScrollPaths,
   checkoutReadEvidencePaths,
+  checkoutFrameAttemptsPaths,
   profileLockRecoveryPaths,
   isProfileLockRecoveryOnly,
   cardReadDiagnosticsPaths,
@@ -657,4 +658,21 @@ test('checkout read publication checks finite controls and retains the three-ser
     ]),
     false
   );
+});
+
+test('frame-attempt evidence follow-up selects API and Linux engine checks for its exact reviewed paths', () => {
+  const paths = [
+    ...checkoutFrameAttemptsPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'online-engine']);
+  for (const path of checkoutFrameAttemptsPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== path)), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+  ])
+    assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
 });
