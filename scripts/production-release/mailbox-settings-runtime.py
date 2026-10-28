@@ -13,7 +13,7 @@ BASE = Path('/opt/id-business-v2')
 PREFIX = 'mailbox-settings'
 CONTRACT_FILE = PREFIX + '-contract.json'
 SCOPE = 'MAILBOX_SETTINGS_INITIAL_STATE_20261028'
-CURRENT = '93615a3fe9920c0c7933649c5ceb11e501cac4b0'
+CURRENT = 'a32d1f7bbddeb7a7a9e21590c675720e3b116e8b'
 ADMIN_PARENT = 'f9a9a4184ba6689abc778ff68e391b1b2dd75834'
 SOURCE = 'apps/admin/src/v2/components/workspace/V2ManagedMailboxPanel.vue'
 

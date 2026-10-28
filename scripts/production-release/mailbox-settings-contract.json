@@ -323,7 +323,7 @@
     "apps/api/prisma-mysql/schema.prisma",
     ".env.aws.production"
   ],
-  "expectedCurrent": "93615a3fe9920c0c7933649c5ceb11e501cac4b0",
+  "expectedCurrent": "a32d1f7bbddeb7a7a9e21590c675720e3b116e8b",
   "helperPins": {
     "api-admin-pending-projection.py": "592aebbeb7c8605587924416b0632dc4533eacfb3305793b577db3827bbf8d78",
     "api-admin-pending-receipt-wire.py": "47cba3fad47077f30c83d8cfe5a8907b797eeeb2fedd78e764a47a42a0849c75",
@@ -373,7 +373,7 @@
   "migrationPerformed": false,
   "packageLockSha256": "c40e50937e49ca953b41e3e111cdcb935b3da2031e4470fb4a7f5754d6a1e21f",
   "parentProofSha256": "9e849986e756e8f8ca4ff03181615359698caf7c445bd9c710db314ad6baaf1d",
-  "reviewBase": "93615a3fe9920c0c7933649c5ceb11e501cac4b0",
+  "reviewBase": "a32d1f7bbddeb7a7a9e21590c675720e3b116e8b",
   "scope": "MAILBOX_SETTINGS_INITIAL_STATE_20261028",
   "sourceBase": "a7f61aeca2b6ead635f3e0d8858f760da96964de",
   "sources": {
