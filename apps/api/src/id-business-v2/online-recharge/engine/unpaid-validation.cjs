@@ -136,7 +136,15 @@ function safeFormDiagnostics(value) {
               row[key] <= (key === 'durationMs' ? 600000 : 10000)
             )
               step[key] = row[key];
-          for (const key of ['inShadowRoot', 'readOnly', 'visible', 'matched'])
+          for (const key of [
+            'inShadowRoot',
+            'readOnly',
+            'visible',
+            'matched',
+            'fillCompleted',
+            'nodeConnected',
+            'tabCompleted'
+          ])
             if (typeof row[key] === 'boolean') step[key] = row[key];
           const enums = {
             frameKind: ['main', 'embedded'],
@@ -152,6 +160,8 @@ function safeFormDiagnostics(value) {
               'placeholder'
             ],
             method: ['fill', 'select_option', 'combobox'],
+            inputOperation: ['fill', 'connection_check', 'tab'],
+            readOperation: ['node_connected'],
             readPhase: readPhases,
             errorClass: [
               'timeout',
@@ -608,7 +618,7 @@ function message(report) {
     input: '输入',
     readback: '填写后回读'
   }[failed?.phase];
-  const errorLabel = {
+  let errorLabel = {
     timeout: '读取超时',
     closed: '页面已关闭',
     detached: '控件已脱离',
@@ -616,9 +626,16 @@ function message(report) {
     aborted: '读取已取消',
     read_failed: '读取失败'
   }[failed?.errorClass];
+  if (['fill', 'tab'].includes(failed?.inputOperation))
+    errorLabel = { timeout: '操作超时', read_failed: '操作失败' }[failed.errorClass] || errorLabel;
+  const inputLabel = {
+    fill: '填入',
+    connection_check: '填入后检查节点连接',
+    tab: '填入后切出焦点'
+  }[failed?.inputOperation];
   const detail =
     report.failureClass === 'READ_INCOMPLETE' && fieldLabel && phaseLabel
-      ? `（${[fieldLabel, phaseLabel, errorLabel].filter(Boolean).join('／')}）`
+      ? `（${[fieldLabel, inputLabel || phaseLabel, errorLabel].filter(Boolean).join('／')}）`
       : '';
   const stopLabel =
     report.failureClass === 'READ_INCOMPLETE' &&

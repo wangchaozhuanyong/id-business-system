@@ -176,6 +176,7 @@ function diagnosticEntries(report: Record<string, unknown>) {
     candidate_handles: '定位候选控件',
     candidate_eligibility: '核对控件可编辑状态',
     control_read: '读取控件状态',
+    node_connected: '填入后读取节点连接状态',
     value: '填写后回读',
     candidate_scroll: '滚动控件',
     unknown: '具体操作未取得'
@@ -191,7 +192,8 @@ function diagnosticEntries(report: Record<string, unknown>) {
   if (readLabels[String(readFailure.readOperation)] && readReasons[String(readFailure.reason)]) {
     const probes: Record<string, string> = {
       load_precheck: '官网加载状态预检',
-      control_scan: '支付控件扫描'
+      control_scan: '支付控件扫描',
+      field_input: '字段输入'
     };
     const kinds: Record<string, string> = {
       main: '主页面',
@@ -235,9 +237,14 @@ function diagnosticEntries(report: Record<string, unknown>) {
       select: '原生下拉框',
       textarea: '多行输入框'
     };
+    const inputOperations: Record<string, string> = {
+      fill: '填入',
+      connection_check: '填入后检查节点连接',
+      tab: '填入后切出焦点'
+    };
     const parts = [
       fields[String(failed.field)],
-      phase[String(failed.phase)],
+      inputOperations[String(failed.inputOperation)] || phase[String(failed.phase)],
       tags[String(failed.tag)],
       failed.frameKind === 'embedded' ? '内嵌页面' : failed.frameKind === 'main' ? '主页面' : ''
     ];

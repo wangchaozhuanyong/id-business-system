@@ -34,6 +34,7 @@ const READ_OPERATIONS = [
   'candidate_handles',
   'candidate_eligibility',
   'control_read',
+  'node_connected',
   'value',
   'candidate_scroll',
   'unknown'
@@ -63,10 +64,10 @@ export const DIAGNOSTIC_OMISSIONS = [
 ];
 export const validReadFailure: Check = closed(
   {
-    phase: oneOf(['frame_scan', 'frame_owner', 'load_state', 'control_snapshot']),
+    phase: oneOf(['frame_scan', 'frame_owner', 'load_state', 'control_snapshot', 'control_read']),
     reason: oneOf(ERRORS),
     count: integer(10000, 1),
-    probe: oneOf(['load_precheck', 'control_scan']),
+    probe: oneOf(['load_precheck', 'control_scan', 'field_input']),
     readOperation: oneOf(READ_OPERATIONS),
     frameKind: oneOf(['main', 'embedded', 'unknown']),
     frameId: integer(10000, 1),

@@ -46,7 +46,7 @@ function errorClass(error) {
   if (/timeout|timed.out/i.test(value)) return 'timeout';
   if (/closed|TargetClosed/i.test(value)) return 'closed';
   if (/context.*destroy|execution.*context/i.test(value)) return 'context_destroyed';
-  if (/detach/i.test(value)) return 'detached';
+  if (/detach|not attached/i.test(value)) return 'detached';
   if (/abort|cancel|LEASE_LOST/i.test(value)) return 'aborted';
   return 'read_failed';
 }
