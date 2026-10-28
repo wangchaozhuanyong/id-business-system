@@ -101,7 +101,7 @@ async function recordWrite(kind: string, id: string, days: number) {
 Object.assign(idBusinessV2WorkspaceApi, {
   listManagedMailboxes: async () => page(managed),
   getManagedMailboxQueryCodeSettings: async () => ({
-    validityDays: 30,
+    validityDays: 90,
     defaultValidityDays: 30,
     minValidityDays: 1,
     maxValidityDays: 365,
