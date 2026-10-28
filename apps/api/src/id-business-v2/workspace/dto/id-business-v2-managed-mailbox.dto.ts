@@ -35,3 +35,7 @@ export interface StartIdBusinessV2MicrosoftMailboxAuthorizationDto {
   label?: unknown;
   mailboxId?: unknown;
 }
+
+export interface ResetIdBusinessV2ManagedMailboxQueryCodeDto {
+  validityDays?: unknown;
+}

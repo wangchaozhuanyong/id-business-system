@@ -33,6 +33,7 @@ function mailbox(overrides: Record<string, unknown> = {}) {
     queryCodeEncrypted: 'encrypted-query-code',
     queryCodeHint: 'Ab23',
     queryCodeExpiresAt,
+    queryCodeValidityDays: 30,
     status: 'active' as const,
     lastVerifiedAt: now,
     lastQueriedAt: null,
@@ -71,6 +72,7 @@ describe('IdBusinessV2ManagedMailboxService', () => {
   const provider = { verify: vi.fn() };
   const settings = {
     getValidityDays: vi.fn(async () => 30),
+    normalizeValidityDays: vi.fn((value: unknown) => Number(value)),
     expiresAt: vi.fn(
       (issuedAt: Date, validityDays: number) =>
         new Date(issuedAt.getTime() + validityDays * 24 * 60 * 60 * 1000)
@@ -216,9 +218,9 @@ describe('IdBusinessV2ManagedMailboxService', () => {
     expect(JSON.stringify(audit.append.mock.calls)).not.toContain('newapppassword');
   });
 
-  it('rotates the buyer code with the global expiry and audits no plaintext code', async () => {
+  it('rotates the buyer code with the saved mailbox cycle and audits no plaintext code', async () => {
     const result = await service.rotateQueryCode(mailbox().id, admin);
-    expect(settings.getValidityDays).toHaveBeenCalled();
+    expect(settings.getValidityDays).not.toHaveBeenCalled();
     expect(settings.expiresAt).toHaveBeenCalledWith(now, 30);
     expect(repository.updateQueryCode).toHaveBeenCalledWith(
       tx,
@@ -227,5 +229,28 @@ describe('IdBusinessV2ManagedMailboxService', () => {
     );
     expect(result.mailbox.queryCodeExpiresAt).toBe(queryCodeExpiresAt.toISOString());
     expect(JSON.stringify(audit.append.mock.calls)).not.toMatch(/----[A-Za-z2-9]{20}/);
+  });
+  it.each([30, 90, 180, 365])(
+    'resets to %i days from the transaction time and remembers the cycle',
+    async (days) => {
+      const result = await service.rotateQueryCode(mailbox().id, admin, 'expiry-test', days);
+      const expiresAt = new Date(now.getTime() + days * 86_400_000);
+      expect(settings.normalizeValidityDays).toHaveBeenCalledWith(days);
+      expect(repository.updateQueryCode).toHaveBeenCalledWith(
+        tx,
+        mailbox().id,
+        expect.objectContaining({ queryCodeExpiresAt: expiresAt, queryCodeValidityDays: days })
+      );
+      expect(result.mailbox).toMatchObject({
+        queryCodeExpiresAt: expiresAt.toISOString(),
+        queryCodeValidityDays: days
+      });
+      expect(JSON.stringify(audit.append.mock.calls)).not.toContain(result.buyerCredential);
+    }
+  );
+  it('uses a previously selected cycle when an older client omits days', async () => {
+    repository.findById.mockResolvedValue(mailbox({ queryCodeValidityDays: 180 }));
+    await service.rotateQueryCode(mailbox().id, admin);
+    expect(settings.expiresAt).toHaveBeenCalledWith(now, 180);
   });
 });

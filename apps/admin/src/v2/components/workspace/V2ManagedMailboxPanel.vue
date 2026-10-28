@@ -285,6 +285,15 @@
       </V2AsyncRegion>
     </section>
 
+    <V2MailboxQueryCodeResetDialog
+      v-model="resetCodeOpen"
+      :target="resetCodeTarget"
+      :busy="resetCodeBusy"
+      :error="resetCodeError"
+      :result="resetCodeResult"
+      @submit="submitQueryCodeReset"
+    />
+
     <V2ManagedMailboxBatchDrawer v-model="batchDrawerOpen" @imported="handleBatchImported" />
 
     <el-drawer
@@ -325,15 +334,27 @@
           >
             <el-form-item label="查询码有效天数" required>
               <div class="v2-mailbox-query-code-settings-drawer__field">
-                <el-input-number
+                <el-select
                   v-model="queryCodeSettingsForm.validityDays"
-                  :min="queryCodeSettings.minValidityDays"
-                  :max="queryCodeSettings.maxValidityDays"
-                  :step="1"
-                  step-strictly
-                  controls-position="right"
-                />
-                <small> 新建邮箱和手动生成新码时，统一使用这个有效天数。 </small>
+                  aria-label="默认查询码有效期"
+                >
+                  <el-option
+                    v-for="option in mailboxQueryCodeValidityOptions"
+                    :key="option.days"
+                    :label="option.label"
+                    :value="option.days"
+                  />
+                  <el-option
+                    v-if="
+                      !mailboxQueryCodeValidityOptions.some(
+                        (option) => option.days === queryCodeSettings.validityDays
+                      )
+                    "
+                    :label="`当前设置（${queryCodeSettings.validityDays}天）`"
+                    :value="queryCodeSettings.validityDays"
+                  />
+                </el-select>
+                <small> 新建邮箱使用此默认值；手动重置时可以单独选择有效期。 </small>
               </div>
             </el-form-item>
             <el-form-item label="到期处理方式">
@@ -470,6 +491,12 @@ import { getV2BusinessNowMs } from '@/v2/runtime/businessClock';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { formatV2DateTime } from '@/v2/utils/dateTime';
 import V2ManagedMailboxBatchDrawer from './V2ManagedMailboxBatchDrawer.vue';
+import V2MailboxQueryCodeResetDialog from './V2MailboxQueryCodeResetDialog.vue';
+import {
+  mailboxQueryCodeValidityOptions,
+  type MailboxQueryCodeResetResult
+} from './mailboxQueryCodeValidity';
+
 import {
   resolveManagedMailboxAppPasswordGuide,
   resolveManagedMailboxAppPasswordGuideLinks
@@ -500,6 +527,24 @@ const filters = reactive<{
 }>({ q: '', provider: '', status: '', page: 1, pageSize: 10 });
 const creating = ref(false);
 const updatingId = ref('');
+const resetCodeOpen = ref(false);
+const resetCodeBusy = ref(false);
+const resetCodeError = ref('');
+const resetCodeMailbox = ref<V2ManagedMailbox | null>(null);
+const resetCodeResult = ref<MailboxQueryCodeResetResult | null>(null);
+watch(resetCodeOpen, (open) => {
+  if (!open) resetCodeResult.value = null;
+});
+const resetCodeTarget = computed(() =>
+  resetCodeMailbox.value
+    ? {
+        key: `managed:${resetCodeMailbox.value.id}`,
+        email: resetCodeMailbox.value.email,
+        expiresAt: resetCodeMailbox.value.queryCodeExpiresAt,
+        validityDays: resetCodeMailbox.value.queryCodeValidityDays ?? 30
+      }
+    : null
+);
 const batchDrawerOpen = ref(false);
 const queryCodeSettingsOpen = ref(false);
 const savingQueryCodeSettings = ref(false);
@@ -827,30 +872,43 @@ async function updateCredential() {
   }
 }
 
-async function rotateQueryCode(item: V2ManagedMailbox) {
-  try {
-    await ElMessageBox.confirm(
-      `重置后旧查询码立即失效，新查询码有效期 ${queryCodeSettings.value.validityDays} 天。生成后系统会自动复制，请把新码重新交给买家。`,
-      '重置查询码',
-      {
-        confirmButtonText: '确认重置',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    );
-  } catch {
-    return;
-  }
+function rotateQueryCode(item: V2ManagedMailbox) {
+  if (resetCodeBusy.value) return;
+  resetCodeMailbox.value = item;
+  resetCodeError.value = '';
+  resetCodeResult.value = null;
+  resetCodeOpen.value = true;
+}
+
+async function submitQueryCodeReset(validityDays: number, completeDraft: () => boolean) {
+  const item = resetCodeMailbox.value;
+  if (!item || resetCodeBusy.value || updatingId.value || resetCodeResult.value) return;
+  resetCodeBusy.value = true;
   updatingId.value = item.id;
+  resetCodeError.value = '';
   try {
-    const result = await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(item.id);
+    const result = await idBusinessV2WorkspaceApi.rotateManagedMailboxQueryCode(
+      item.id,
+      validityDays
+    );
+    completeDraft();
+    resetCodeResult.value = {
+      queryCode: result.buyerCredential,
+      expiresAt: result.mailbox.queryCodeExpiresAt
+    };
     queryCodeOverrides.set(item.id, result.buyerCredential);
-    const copied = await writeClipboardText(result.buyerCredential);
     await mailboxesQuery.refresh();
-    ElMessage.success(copied ? '新查询码已生成并复制' : '新查询码已生成，请在当前行复制');
+    if (mailboxesQuery.error.value) {
+      resetCodeError.value = '重置已完成，但列表刷新失败。请刷新列表核对，无需再次重置。';
+    } else {
+      queryCodeOverrides.delete(item.id);
+    }
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error));
+    resetCodeError.value = resetCodeResult.value
+      ? '重置已完成，但列表刷新失败。请刷新列表核对，无需再次重置。'
+      : `${getApiErrorMessage(error)}。若请求中断，请先刷新列表核对后再重试。`;
   } finally {
+    resetCodeBusy.value = false;
     updatingId.value = '';
   }
 }
@@ -868,7 +926,7 @@ async function copyQueryCode(item: V2ManagedMailbox) {
 }
 
 function queryCodeFor(item: V2ManagedMailbox) {
-  return item.queryCode ?? queryCodeOverrides.get(item.id) ?? null;
+  return queryCodeOverrides.get(item.id) ?? item.queryCode ?? null;
 }
 
 function applyFilters() {

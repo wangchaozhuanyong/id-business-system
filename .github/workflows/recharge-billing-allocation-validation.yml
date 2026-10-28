@@ -48,3 +48,8 @@ jobs:
         run: npm run prisma:mysql:migrate:deploy --workspace @apple-business/api
       - name: Verify migration, concurrent uniqueness, audit rollback, deletion and replay
         run: npm run test --workspace @apple-business/api -- src/id-business-v2/auto-recharge/recharge-billing-allocation.mysql.integration.spec.ts
+
+      - name: Verify mailbox query-code migration without production data
+        env:
+          V2_MAILBOX_QUERY_CODE_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: npm run test --workspace @apple-business/api -- src/id-business-v2/workspace/managed-mailbox-validity.mysql.integration.spec.ts

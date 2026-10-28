@@ -266,7 +266,8 @@ export class IdBusinessV2VendureMailboxService {
     idValue: unknown,
     action: 'test' | 'sync' | 'reset-code',
     operator?: AuthenticatedUser,
-    requestId = 'vendure-mailbox-primary-action'
+    requestId = 'vendure-mailbox-primary-action',
+    validityDaysInput?: unknown
   ) {
     const userId = this.requireAdmin(operator);
     const id = this.id(idValue);
@@ -275,7 +276,12 @@ export class IdBusinessV2VendureMailboxService {
         ? await this.client.testConnection(id)
         : action === 'sync'
           ? await this.client.syncPrimary(id)
-          : await this.client.resetPrimaryCode(id);
+          : await this.client.resetPrimaryCode(
+              id,
+              validityDaysInput === undefined
+                ? undefined
+                : this.integer(validityDaysInput, 0, 36500, '查询码有效天数')
+            );
     await this.record(
       userId,
       operator,
@@ -385,14 +391,20 @@ export class IdBusinessV2VendureMailboxService {
     idValue: unknown,
     action: 'reset-code' | 'delete',
     operator?: AuthenticatedUser,
-    requestId = 'vendure-mailbox-alias-action'
+    requestId = 'vendure-mailbox-alias-action',
+    validityDaysInput?: unknown
   ) {
     const userId = this.requireAdmin(operator);
     const id = this.id(idValue);
     const result =
       action === 'delete'
         ? await this.client.deleteAlias(id)
-        : await this.client.resetAliasCode(id);
+        : await this.client.resetAliasCode(
+            id,
+            validityDaysInput === undefined
+              ? undefined
+              : this.integer(validityDaysInput, 0, 36500, '查询码有效天数')
+          );
     await this.record(userId, operator, requestId, `alias.${action}`, 'vendure_icloud_alias', id);
     return action === 'delete' ? { deleted: result } : result;
   }

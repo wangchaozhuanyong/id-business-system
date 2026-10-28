@@ -64,7 +64,8 @@ export class IdBusinessV2ManagedMailboxSettingsService {
               await this.repository.updateAllQueryCodeExpirations(
                 tx,
                 this.expiresAt(context.businessTime, validityDays),
-                userId
+                userId,
+                validityDays
               )
             ).count
           : 0;
@@ -108,7 +109,7 @@ export class IdBusinessV2ManagedMailboxSettingsService {
     };
   }
 
-  private normalizeValidityDays(value: unknown) {
+  normalizeValidityDays(value: unknown) {
     const parsed = Number(value);
     if (
       !Number.isInteger(parsed) ||

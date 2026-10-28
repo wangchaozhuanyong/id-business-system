@@ -243,6 +243,7 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
       provider: 'microsoft',
       providerCredentialEncrypted: credentialEncrypted,
       queryCodeExpiresAt: this.settings.expiresAt(issuedAt, validityDays),
+      queryCodeValidityDays: validityDays,
       queryCodeEncrypted,
       queryCodeHash,
       queryCodeHint: queryCode.slice(-4),
@@ -344,6 +345,7 @@ export class IdBusinessV2MicrosoftMailboxAuthorizationService {
     email: string;
     provider: string;
     queryCodeExpiresAt: Date;
+    queryCodeValidityDays?: number;
     status: string;
   }) {
     return {
