@@ -676,3 +676,28 @@ test('frame-attempt evidence follow-up selects API and Linux engine checks for i
   ])
     assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
 });
+
+test('frame attempts publication checks only exact finite controls and preserves API-engine source review', () => {
+  const paths = [
+    '.github/workflows/online-frame-attempts-publication.yml',
+    ...[
+      'release.py',
+      'publication.py',
+      'build.py',
+      'core.py',
+      'release.test.py',
+      'contract.json'
+    ].map((name) => 'scripts/production-release/online-frame-attempts-' + name),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  const commands = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(commands, /online-frame-attempts-release.test.py/);
+  assert.doesNotMatch(commands, /migrate:deploy|test:online-recharge:engine/);
+  assert.equal(
+    isUnpaidValidationControlsOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+});
