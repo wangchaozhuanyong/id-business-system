@@ -718,3 +718,85 @@ test('a load precheck failure message identifies the probe without inventing a m
   assert.match(validation.message(report), /官网加载状态预检读取未完成/);
   assert.doesNotMatch(validation.message(report), /卡号|SYNTHETIC_PRIVATE/);
 });
+
+test('load precheck projection separates stale candidates and retains bounded attempt evidence', () => {
+  const failure = {
+    phase: 'frame_owner',
+    reason: 'detached',
+    probe: 'load_precheck',
+    readOperation: 'frame_element',
+    frameKind: 'embedded',
+    frameId: 2,
+    count: 1
+  };
+  const safe = require('../upstream/chatgpt').safeCheckoutOpenDiagnostics({
+    stage: 'readiness',
+    reason: 'not_ready',
+    missing: ['number'],
+    controls: [{ tag: 'input', fields: ['expiry'] }],
+    previousCardReadiness: {
+      ready: false,
+      missing: ['number'],
+      complete: true,
+      scanned: 1,
+      rawValue: 'SYNTHETIC_PRIVATE'
+    },
+    inspection: {
+      lastReadFailure: { ...failure, attempt: 2 },
+      readFailures: [1, 2].map((attempt) => ({
+        ...failure,
+        attempt,
+        frameCount: 6,
+        enumerationIndex: 2,
+        rawMessage: 'SYNTHETIC_PRIVATE'
+      })),
+      readAttemptSummaries: [1, 2].map((attempt) => ({
+        attempt,
+        frameCount: 6,
+        framesChecked: 1,
+        framesSkipped: 3,
+        framesFailed: 1,
+        complete: false,
+        durationMs: 10,
+        url: 'SYNTHETIC_PRIVATE'
+      }))
+    }
+  });
+  assert.deepEqual(safe.missing, []);
+  assert.deepEqual(safe.controls, []);
+  assert.equal(safe.candidateCounts, undefined);
+  assert.deepEqual(safe.previousCardReadiness, {
+    ready: false,
+    missing: ['number'],
+    complete: true,
+    scanned: 1
+  });
+  assert.deepEqual(
+    safe.inspection.readFailures.map((row) => row.attempt),
+    [1, 2]
+  );
+  assert.equal(safe.inspection.readAttemptSummaries.length, 2);
+  const finished = validation.finish({ missing: ['number'], checkoutOpenDiagnostics: safe });
+  assert.deepEqual(finished.missing, []);
+  assert.doesNotMatch(JSON.stringify(safe), /SYNTHETIC_PRIVATE/);
+  const report = validation.boundedReport({
+    checkoutOpenDiagnostics: safe,
+    formDiagnostics: {
+      steps: Array.from({ length: 32 }, () => ({
+        field: 'expiry',
+        phase: 'locate',
+        state: 'failed',
+        detail: 'x'.repeat(1500)
+      }))
+    }
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(report)) <= 24576);
+  assert.deepEqual(
+    report.checkoutOpenDiagnostics.inspection.readFailures.map((row) => row.attempt),
+    [1, 2]
+  );
+  assert.deepEqual(
+    report.checkoutOpenDiagnostics.inspection.readAttemptSummaries,
+    safe.inspection.readAttemptSummaries
+  );
+});

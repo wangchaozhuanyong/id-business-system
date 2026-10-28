@@ -881,6 +881,7 @@ async function clearHumanVerification(page, options = {}) {
     const checkoutFailure = (code) => ({ cleared: false, captchaRequired: false,
         checkoutNotReady: true, code, rounds,
         missing: readiness?.missing || [], controls: readiness?.controls || [],
+        ...(readiness?.previousCardReadiness ? { previousCardReadiness: readiness.previousCardReadiness } : {}),
         ...(readiness?.inspection ? { inspection: readiness.inspection } : {}),
         diagnostics: { state: code,
             ...(readiness?.inspection ? { inspection: readiness.inspection } : {}),
@@ -997,8 +998,17 @@ async function clearHumanVerification(page, options = {}) {
         if (error?.code === 'LEASE_LOST') throw error;
         if (/^CHECKOUT_[A-Z0-9_]+$/.test(error?.code || '')) {
             // Preserve failed reads as failed reads; they are not an empty form.
-            readiness = { ...readiness, ...(error.inspection ? { inspection: error.inspection } : {}),
-                ...(error.missing ? { missing: error.missing } : {}), ...(error.controls ? { controls: error.controls } : {}) };
+            const loadPrecheckFailed = error.inspection?.lastReadFailure?.probe === 'load_precheck';
+            const previousCardReadiness = readiness ? {
+                ready: readiness.ready === true, missing: readiness.missing || [],
+                ...(typeof readiness.inspection?.complete === 'boolean' ? { complete: readiness.inspection.complete } : {}),
+                ...(Number.isInteger(readiness.inspection?.controlCounts?.scanned)
+                    ? { scanned: readiness.inspection.controlCounts.scanned } : {})
+            } : undefined;
+            readiness = loadPrecheckFailed
+                ? { inspection: error.inspection, missing: [], controls: [], previousCardReadiness }
+                : { ...readiness, ...(error.inspection ? { inspection: error.inspection } : {}),
+                    ...(error.missing ? { missing: error.missing } : {}), ...(error.controls ? { controls: error.controls } : {}) };
             return checkoutFailure(error.code);
         }
         if (checkoutWaiting && error?.code === 'VERIFICATION_TIMEOUT')

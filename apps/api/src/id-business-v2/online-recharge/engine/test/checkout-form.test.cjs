@@ -2431,9 +2431,19 @@ for (const [message, name, reason] of [
         readOperation: 'load_error_count',
         frameKind: 'main',
         frameId: 1,
+        attempt: 2,
+        enumerationIndex: 1,
+        frameCount: 1,
         count: 1
       });
-      assert.deepEqual(error.inspection.readFailures, [error.inspection.lastReadFailure]);
+      assert.deepEqual(
+        error.inspection.readFailures.map((row) => row.attempt),
+        [1, 2]
+      );
+      assert.deepEqual(
+        error.inspection.readAttemptSummaries.map((row) => row.attempt),
+        [1, 2]
+      );
       assert.doesNotMatch(JSON.stringify(error.inspection), /SYNTHETIC_PRIVATE/);
       return true;
     });
@@ -2519,3 +2529,199 @@ test('ordinary load precheck failure does not claim that number scanning found a
   assert.deepEqual(result.missing, []);
   assert.equal(result.inspection.lastReadFailure.probe, 'load_precheck');
 });
+
+for (const replacement of [false, true])
+  test(`load precheck retains both frame attempts with stable identity, replacement=${replacement}`, async (t) => {
+    const page = await pageFor(t, iframe('<p>Synthetic frame</p>'));
+    const first = page.frames()[1];
+    const frames = page.frames.bind(page);
+    let enumerations = 0;
+    page.frames = () => {
+      enumerations++;
+      return frames();
+    };
+    t.after(() => {
+      page.frames = frames;
+    });
+    let firstReads = 0;
+    first.frameElement = async () => {
+      firstReads++;
+      if (replacement && firstReads === 1) {
+        await page.setContent(iframe('<p>Replacement frame</p>'));
+        frames()[1].frameElement = async () => {
+          throw new Error('Frame was detached');
+        };
+      }
+      throw new Error('Frame was detached');
+    };
+    await assert.rejects(checkoutPageLoadFailed(page, { deadline: Date.now() + 5000 }), (error) => {
+      const inspection = error.inspection;
+      assert.equal(error.code, 'CHECKOUT_CONTROL_READ_FAILED');
+      assert.deepEqual(
+        inspection.readFailures.map((row) => row.attempt),
+        [1, 2]
+      );
+      assert.deepEqual(
+        inspection.readFailures.map((row) => row.frameCount),
+        [2, 2]
+      );
+      assert.deepEqual(
+        inspection.readFailures.map((row) => row.enumerationIndex),
+        [2, 2]
+      );
+      assert.deepEqual(
+        inspection.readFailures.map((row) => row.frameId),
+        replacement ? [2, 3] : [2, 2]
+      );
+      assert.deepEqual(
+        inspection.readAttemptSummaries.map((row) => row.framesFailed),
+        [1, 1]
+      );
+      assert.ok(inspection.readAttemptSummaries.every((row) => Number.isInteger(row.durationMs)));
+      assert.equal(inspection.lastReadFailure.attempt, 2);
+      return true;
+    });
+    assert.equal(enumerations, 2);
+    assert.equal(firstReads, replacement ? 1 : 2);
+  });
+
+test('existing pure-read retry enumerates a replacement frame and succeeds without a third attempt', async (t) => {
+  const page = await pageFor(t, iframe('<p>Old frame</p>'));
+  const oldFrame = page.frames()[1],
+    frames = page.frames.bind(page);
+  let enumerations = 0,
+    oldReads = 0;
+  const traced = [];
+  page.frames = () => {
+    enumerations++;
+    return frames();
+  };
+  t.after(() => {
+    page.frames = frames;
+  });
+  oldFrame.frameElement = async () => {
+    oldReads++;
+    await page.setContent(iframe('<p>Replacement frame</p>'));
+    throw new Error('Frame was detached');
+  };
+  assert.equal(
+    await checkoutPageLoadFailed(page, {
+      deadline: Date.now() + 5000,
+      onRead: (row, frame) => {
+        traced.push({ ...row, frame });
+      }
+    }),
+    false
+  );
+  assert.equal(enumerations, 2);
+  assert.equal(oldReads, 1);
+  assert.ok(traced.some((row) => row.attempt === 1 && row.frame === oldFrame));
+  assert.ok(traced.some((row) => row.attempt === 2 && row.frame === frames()[1]));
+  assert.ok(!traced.some((row) => row.attempt === 2 && row.frame === oldFrame));
+});
+
+test('load precheck failure discards a previous card snapshot instead of mixing probe results', async (t) => {
+  const page = await pageFor(t, '<main>Payment</main>');
+  const form = require('../checkout-form.cjs');
+  const originalLoad = form.checkoutPageLoadFailed,
+    originalReadiness = form.inspectCardReadiness;
+  let loadCalls = 0,
+    scans = 0;
+  form.inspectCardReadiness = async () => {
+    scans++;
+    return {
+      ready: false,
+      missing: ['number'],
+      controls: [{ tag: 'input', fields: ['expiry'] }],
+      inspection: { complete: true, controlCounts: { scanned: 1 } }
+    };
+  };
+  form.checkoutPageLoadFailed = async () => {
+    if (++loadCalls === 1) return false;
+    throw Object.assign(new Error('Synthetic precheck'), {
+      code: 'CHECKOUT_CONTROL_READ_FAILED',
+      inspection: {
+        complete: false,
+        framesFailed: 1,
+        lastReadFailure: {
+          probe: 'load_precheck',
+          phase: 'frame_owner',
+          readOperation: 'frame_element',
+          reason: 'detached',
+          frameKind: 'embedded',
+          count: 1
+        }
+      }
+    });
+  };
+  t.after(() => {
+    form.checkoutPageLoadFailed = originalLoad;
+    form.inspectCardReadiness = originalReadiness;
+  });
+  const result = await require('../upstream/human-verification').clearHumanVerification(page, {
+    phase: 'checkout-open',
+    requireCheckoutReady: true,
+    checkCheckoutLoad: true,
+    maxWaitMs: 5000
+  });
+  assert.equal(scans, 1);
+  assert.equal(result.code, 'CHECKOUT_CONTROL_READ_FAILED');
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.controls, []);
+  assert.deepEqual(result.previousCardReadiness, {
+    ready: false,
+    missing: ['number'],
+    complete: true,
+    scanned: 1
+  });
+  const safe = require('../upstream/chatgpt').safeCheckoutOpenDiagnostics({
+    stage: 'readiness',
+    reason: 'not_ready',
+    ...result
+  });
+  assert.deepEqual(safe.missing, []);
+  assert.equal(safe.candidateCounts, undefined);
+  assert.deepEqual(safe.previousCardReadiness, result.previousCardReadiness);
+});
+
+for (const operation of ['frame_element', 'owner_visibility'])
+  test(`load precheck ${operation} timeout never advances to another frame or adds a third retry`, async (t) => {
+    const page = await pageFor(t, iframe('<p>First</p>') + iframe('<p>Second</p>'));
+    const first = page.frames()[1],
+      second = page.frames()[2];
+    const original = first.frameElement.bind(first),
+      frames = page.frames.bind(page);
+    let enumerations = 0,
+      laterReads = 0;
+    page.frames = () => {
+      enumerations++;
+      return frames();
+    };
+    t.after(() => {
+      page.frames = frames;
+    });
+    first.frameElement = async () => {
+      if (operation === 'frame_element')
+        throw Object.assign(new Error('Synthetic timeout'), { name: 'TimeoutError' });
+      const owner = await original();
+      owner.evaluate = async () => {
+        throw Object.assign(new Error('Synthetic timeout'), { name: 'TimeoutError' });
+      };
+      return owner;
+    };
+    second.frameElement = async () => {
+      laterReads++;
+      throw new Error('must not reach later frame');
+    };
+    await assert.rejects(checkoutPageLoadFailed(page, { deadline: Date.now() + 5000 }), (error) => {
+      assert.equal(error.inspection.lastReadFailure.reason, 'timeout');
+      assert.equal(error.inspection.lastReadFailure.readOperation, operation);
+      assert.deepEqual(
+        error.inspection.readFailures.map((row) => row.attempt),
+        [1, 2]
+      );
+      return true;
+    });
+    assert.equal(enumerations, 2);
+    assert.equal(laterReads, 0);
+  });

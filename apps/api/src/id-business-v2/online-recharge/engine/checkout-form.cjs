@@ -147,6 +147,12 @@ function tagReadFailure(error, operation, frame, state) {
       if (!state.readFrames.has(frame) && state.readFrames.size < 10000)
         state.readFrames.set(frame, state.readFrames.size + 1);
       if (state.readFrames.has(frame)) details.readFrameId = state.readFrames.get(frame);
+      const enumeration = state.readEnumeration;
+      if (enumeration?.has(frame)) {
+        details.attempt = state.readAttempt;
+        details.enumerationIndex = enumeration.get(frame);
+        details.frameCount = enumeration.size;
+      }
     }
   } catch {
     /* A failed identity observation cannot replace the original error. */
@@ -368,6 +374,9 @@ function frameReadFailure(inspection, phase, error, page, signal, probe = 'contr
       ? { frameId: metadata.readFrameId }
       : {})
   };
+  for (const key of ['attempt', 'enumerationIndex', 'frameCount'])
+    if (Number.isInteger(metadata[key]) && metadata[key] > 0 && metadata[key] <= 10000)
+      details[key] = metadata[key];
   const prior = inspection.readFailures.find((row) =>
     Object.keys(details).every((key) => row[key] === details[key])
   );
@@ -2097,7 +2106,11 @@ async function loadFailed(page, deadline, signal, options = {}) {
     onRead: options.onRead,
     stopOnReadFailure: options.stopOnReadFailure === true
   };
+  const failures = [];
+  const attempts = [];
   return freshRead(page, deadline, state, async () => {
+    const startedAt = Date.now();
+    state.readEnumeration = new Map();
     const inspection = inspectionState(page, deadline, signal);
     state.inspection = inspection;
     let readDeadline = deadline;
@@ -2105,6 +2118,11 @@ async function loadFailed(page, deadline, signal, options = {}) {
     try {
       if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
       const frames = page.frames();
+      state.readEnumeration = new Map(frames.map((frame, index) => [frame, index + 1]));
+      state.readFrames ||= new Map();
+      for (const frame of frames)
+        if (!state.readFrames.has(frame) && state.readFrames.size < 10000)
+          state.readFrames.set(frame, state.readFrames.size + 1);
       for (const frame of frames) {
         timeout(deadline, signal);
         if (closed(page)) throw failure('CHECKOUT_PAGE_CLOSED', '结账页面已关闭');
@@ -2144,6 +2162,22 @@ async function loadFailed(page, deadline, signal, options = {}) {
         ...(error.readOperation ? { readOperation: error.readOperation } : {}),
         inspection
       });
+    } finally {
+      // Keep failures from both existing attempts. Identity is stable only within
+      // this load precheck; enumeration positions are not frame identities.
+      failures.push(...inspection.readFailures);
+      attempts.push({
+        attempt: state.readAttempt,
+        frameCount: Math.min(10000, state.readEnumeration?.size || 0),
+        framesChecked: inspection.framesChecked,
+        framesSkipped: inspection.framesSkipped,
+        framesFailed: inspection.framesFailed,
+        complete: inspection.complete,
+        durationMs: Math.min(600000, Math.max(0, Date.now() - startedAt))
+      });
+      inspection.readFailures = failures.slice(-32);
+      if (failures.length) inspection.lastReadFailure = { ...failures.at(-1) };
+      inspection.readAttemptSummaries = attempts.slice(-2);
     }
   });
 }
