@@ -8,6 +8,7 @@ import {
   countryFrameScrollPaths,
   checkoutReadEvidencePaths,
   checkoutFrameAttemptsPaths,
+  cardPostInputReadPaths,
   profileLockRecoveryPaths,
   isProfileLockRecoveryOnly,
   cardReadDiagnosticsPaths,
@@ -700,4 +701,26 @@ test('frame attempts publication checks only exact finite controls and preserves
     isUnpaidValidationControlsOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']),
     false
   );
+});
+
+test('post-fill diagnostic batch retains API Admin and complete Linux engine checks', () => {
+  const paths = [
+    ...cardPostInputReadPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'api', 'admin', 'online-engine']);
+  for (const path of cardPostInputReadPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isUnpaidValidationOnly(paths.filter((p) => p !== path)), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js',
+    'apps/api/src/id-business-v2/auto-recharge/recharge-manual-settlement.ts'
+  ])
+    assert.equal(isUnpaidValidationOnly([...paths, extra]), false);
+  const engine = JSON.stringify(unpaidValidationCommands('online-engine', paths));
+  assert.match(engine, /test:online-recharge:engine/);
+  assert.match(JSON.stringify(unpaidValidationCommands('api', paths)), /src\/id-business-v2\/online-recharge/);
 });
