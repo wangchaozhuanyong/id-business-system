@@ -18,6 +18,7 @@ import {
 } from './ci-recharge-plan-billing-scope.mjs';
 import {
   isFreshSessionOnly,
+  isBrowserRegionOnly,
   isCountryFrameScrollOnly,
   isProfileLockRecoveryOnly,
   isPersistentProfileOnly,
@@ -3199,6 +3200,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (isRechargePlanBillingPublicationOnly(paths)) return ['guards'];
   if (
     isProfileLockRecoveryOnly(paths) ||
+    isBrowserRegionOnly(paths) ||
     isFreshSessionOnly(paths) ||
     isCountryFrameScrollOnly(paths)
   )

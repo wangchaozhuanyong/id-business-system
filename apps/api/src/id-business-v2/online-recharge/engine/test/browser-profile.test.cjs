@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('../upstream/node_modules/playwright');
-const { binding, launchProfile } = require('../browser-profile.cjs');
+const { binding, launchProfile, pruneRetiredProfiles } = require('../browser-profile.cjs');
 const auth = require('../upstream/session-auth');
 const base = path.join(__dirname, '..', 'runtime', 'verification', 'persistent-profile');
 const raw = JSON.stringify({
@@ -446,6 +446,109 @@ test(
   }
 );
 
+for (const [region, locale, timezoneId] of [
+  ['PH', 'en-PH', 'Asia/Manila'],
+  ['CL', 'en-CL', 'America/Santiago']
+])
+  test(
+    `${region}: native query and recharge launches reuse the profile with the same real language and timezone`,
+    { timeout: 30000 },
+    async () => {
+      await fs.mkdir(base, { recursive: true });
+      const root = await fs.mkdtemp(path.join(base, 'region-'));
+      const original = chromium.launchPersistentContext;
+      const runtime = require('../upstream/browser-runtime');
+      let current, key;
+      chromium.launchPersistentContext = async function (directory, config) {
+        const context = await original.call(this, directory, {
+          ...config,
+          args: [
+            ...config.args,
+            '--disable-background-networking',
+            '--host-resolver-rules=MAP * ~NOTFOUND'
+          ]
+        });
+        context.request.get = async () => ({
+          ok: () => true,
+          text: async () => '192.0.2.10',
+          dispose: async () => {}
+        });
+        await context.route('**/*', (route) =>
+          route.fulfill(
+            new URL(route.request().url()).pathname === '/api/auth/session'
+              ? {
+                  contentType: 'application/json',
+                  body: JSON.stringify({ user: { id: 'synthetic-user-profile' } })
+                }
+              : { contentType: 'text/html', body: '<html>synthetic region fixture</html>' }
+          )
+        );
+        return context;
+      };
+      try {
+        const env = {
+          ONLINE_RECHARGE_PROFILE_ROOT: root,
+          CHATGPT_SESSION_JSON: raw,
+          PROXY: options.proxyBinding,
+          PAYMENT_REGION_OVERRIDE: region,
+          CDP_PORT: '0'
+        };
+        for (const contextOptions of [undefined, { locale: 'en-US', timezoneId: 'UTC' }]) {
+          current = await runtime.connectTaskBrowser({ env, contextOptions });
+          if (key) assert.equal(current.profileKey, key);
+          key = current.profileKey;
+          if (contextOptions === undefined)
+            await current.context.addCookies([
+              {
+                name: '__Secure-next-auth.session-token',
+                value: 'synthetic-region-reuse-only',
+                url: 'https://chatgpt.com',
+                secure: true,
+                httpOnly: true,
+                expires: Date.now() / 1000 + 3600
+              }
+            ]);
+          else
+            assert.equal(
+              (await current.context.cookies('https://chatgpt.com')).find(
+                (c) => c.name === '__Secure-next-auth.session-token'
+              )?.value,
+              'synthetic-region-reuse-only'
+            );
+          const events = [];
+          const observer = require('../subscription-diagnostics.cjs').observeSessionRequests(
+            current.context,
+            (event) => events.push(event)
+          );
+          const page = await current.context.newPage();
+          await page.goto('https://chatgpt.com/api/auth/session');
+          await page.goto('https://chatgpt.com/');
+          await page.evaluate(async () => (await fetch('/api/auth/session')).json());
+          assert.deepEqual(
+            await page.evaluate(() => ({
+              language: navigator.language,
+              timezoneId: Intl.DateTimeFormat().resolvedOptions().timeZone
+            })),
+            { language: locale, timezoneId }
+          );
+          const headers = events.filter((e) => e.event === 'request_headers');
+          assert.equal(headers.length, 2);
+          assert.ok(headers.every((e) => e.complete && e.sessionCookieSent));
+          assert.equal(events.find((e) => e.event === 'request').resourceType, 'document');
+          assert.ok(events.some((e) => e.event === 'request' && e.resourceType === 'fetch'));
+          assert.ok(!JSON.stringify(events).includes('synthetic-region-reuse-only'));
+          observer.dispose();
+          await runtime.closeTaskBrowser(current, current.browser);
+          assert.equal(current.browser.isConnected(), false);
+        }
+      } finally {
+        if (current) await current.close();
+        chromium.launchPersistentContext = original;
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+
 test(
   'native browser launcher returns its persistent context even when generic pool mode is configured',
   { timeout: 30000 },
@@ -660,6 +763,11 @@ test('persistent proxy rechecks a fresh partition and shares five request attemp
     );
     await rotating.close();
     assert.equal(connected, false);
+    assert.deepEqual(
+      (await fs.readdir(directory)).filter((name) => /^Exit-[a-f0-9]{32}$/.test(name)),
+      [rotated.profile],
+      'repeated rotations retain only the selected generation after closing'
+    );
     calls = 0;
     probe = async () => {
       if (calls === 1) return '192.0.2.14';
@@ -737,13 +845,13 @@ test('persistent proxy rechecks a fresh partition and shares five request attemp
 });
 
 test(
-  'egress change isolates native cookies/storage, preserves old data, and reuses the new partition',
+  'egress change isolates state, retires old data after closing, and reuses the selected partition',
   { timeout: 60000 },
   async () => {
     await fs.mkdir(base, { recursive: true });
     const root = await fs.mkdtemp(path.join(base, 'egress-partition-'));
     const directory = path.join(root, binding(raw, options.proxyBinding));
-    let current, legacy;
+    let current;
     try {
       current = await fixture(root);
       await current.context.addCookies([
@@ -804,7 +912,13 @@ test(
         (await fs.stat(path.join(directory, '.active-profile.json'))).mode & 0o777,
         0o600
       );
+      assert.ok(
+        (await fs.stat(path.join(directory, 'Default'))).isDirectory(),
+        'do not remove generations while the owned browser is still open'
+      );
       await current.close();
+      await assert.rejects(fs.stat(path.join(directory, 'Default')), { code: 'ENOENT' });
+      assert.ok((await fs.stat(path.join(directory, selected.profile))).isDirectory());
       current = await fixture(root, { exit: '192.0.2.12' });
       assert.equal(current.counts().launches, 1, 'reuse the latest observed partition');
       page = await current.context.newPage();
@@ -819,28 +933,64 @@ test(
       );
       await current.close();
       current = null;
-      // Read the retained old native partition offline; recovery never deletes or
-      // transfers its credential database to the new partition.
-      legacy = await chromium.launchPersistentContext(directory, {
-        ...options.launchOptions,
-        channel: 'chromium',
-        args: [...options.launchOptions.args, '--profile-directory=Default']
-      });
-      assert.equal(
-        (await legacy.cookies()).find((c) => c.name === 'cf_clearance')?.value,
-        'synthetic-old-clearance'
-      );
-      assert.equal(
-        (await legacy.cookies()).find((c) => c.name === '__Secure-next-auth.session-token')?.value,
-        'synthetic-old-session'
-      );
+      await assert.rejects(fs.stat(path.join(directory, 'Default')), { code: 'ENOENT' });
     } finally {
       await current?.close();
-      await legacy?.close();
       await fs.rm(root, { recursive: true, force: true });
     }
   }
 );
+
+test('retirement respects native locks, selected identity, symlinks and unrelated files', async () => {
+  await fs.mkdir(base, { recursive: true });
+  const root = await fs.mkdtemp(path.join(base, 'retirement-'));
+  const selected = `Exit-${'a'.repeat(32)}`;
+  const retired = `Exit-${'b'.repeat(32)}`;
+  const linked = `Exit-${'c'.repeat(32)}`;
+  try {
+    for (const name of [selected, retired, 'Default', 'unrelated'])
+      await fs.mkdir(path.join(root, name));
+    await fs.writeFile(
+      path.join(root, '.active-profile.json'),
+      JSON.stringify({ version: 1, profile: selected })
+    );
+    await fs.writeFile(path.join(root, selected, 'synthetic-state'), 'keep-selected-state');
+    await fs.writeFile(path.join(root, 'unrelated', 'keep'), 'unrelated-data');
+    await fs.symlink(path.join(root, 'unrelated'), path.join(root, linked));
+    await fs.symlink('synthetic-live-owner', path.join(root, 'SingletonLock'));
+    assert.deepEqual(await pruneRetiredProfiles(root), { removed: 0, deferred: true });
+    assert.ok((await fs.stat(path.join(root, retired))).isDirectory());
+    await fs.unlink(path.join(root, 'SingletonLock'));
+    assert.deepEqual(await pruneRetiredProfiles(root), { removed: 2, deferred: false });
+    assert.equal(
+      await fs.readFile(path.join(root, selected, 'synthetic-state'), 'utf8'),
+      'keep-selected-state'
+    );
+    assert.equal(await fs.readFile(path.join(root, 'unrelated', 'keep'), 'utf8'), 'unrelated-data');
+    assert.ok((await fs.lstat(path.join(root, linked))).isSymbolicLink());
+    assert.deepEqual(await pruneRetiredProfiles(root), { removed: 0, deferred: false });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('invalid or missing selected generation refuses retirement without deleting other data', async () => {
+  await fs.mkdir(base, { recursive: true });
+  for (const profile of ['../outside', `Exit-${'f'.repeat(32)}`]) {
+    const root = await fs.mkdtemp(path.join(base, 'retirement-invalid-'));
+    try {
+      await fs.mkdir(path.join(root, 'Default'));
+      await fs.writeFile(
+        path.join(root, '.active-profile.json'),
+        JSON.stringify({ version: 1, profile })
+      );
+      await assert.rejects(pruneRetiredProfiles(root));
+      assert.ok((await fs.stat(path.join(root, 'Default'))).isDirectory());
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+});
 
 for (const mode of [
   'session_invalid',

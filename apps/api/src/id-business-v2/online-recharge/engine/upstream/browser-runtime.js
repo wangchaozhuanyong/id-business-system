@@ -6,6 +6,17 @@
 
 const { connectStandaloneBrowser } = require('./browser-standalone');
 const { connectPoolBrowser } = require('./browser-pool-client');
+const { getRegionBrowserProfile } = require('./region-config');
+
+// The worker already freezes the server-selected task region in this existing
+// variable. Use it for every owned context, including independent queries.
+function getTaskBrowserContextOptions(options = {}, env = process.env) {
+    return {
+        viewport: { width: 1920, height: 1080 },
+        ...options,
+        ...getRegionBrowserProfile(env.PAYMENT_REGION_OVERRIDE)
+    };
+}
 
 function resolveBrowserRuntimeMode(env = process.env) {
     const explicit = String(env.BROWSER_RUNTIME_MODE || '').trim().toLowerCase();
@@ -33,16 +44,25 @@ async function connectTaskBrowser(options = {}) {
         });
     }
 
-    return connectStandaloneBrowser({
+    const contextOptions = getTaskBrowserContextOptions(options.contextOptions, env);
+    if (env.ONLINE_RECHARGE_PROFILE_ROOT) console.log('[Browser] 任务地区设置', JSON.stringify({
+        locale: contextOptions.locale, timezoneId: contextOptions.timezoneId
+    }));
+    const session = await connectStandaloneBrowser({
         proxyConfig: options.proxyConfig,
         profileRoot: env.ONLINE_RECHARGE_PROFILE_ROOT,
         sessionRaw: options.sessionRaw || env.CHATGPT_SESSION_JSON || env.CHATGPT_TOKEN,
         proxyBinding: env.PROXY || '', signal: options.signal,
-        contextOptions: options.contextOptions,
+        contextOptions,
         headful: options.headful,
         chromiumChannel: options.chromiumChannel || env.CHROMIUM_CHANNEL,
         cdpPort: env.CDP_PORT
     });
+    if (session.context) {
+        try { require('../subscription-diagnostics.cjs').observeSessionRequests(session.context); }
+        catch (_) { console.log('[Session] 请求对照监听未就绪，沿用原业务核验'); }
+    }
+    return session;
 }
 
 function applyCdpEnv(session) {
@@ -92,6 +112,7 @@ function buildWorkerRuntimeEnv(baseEnv, slot, mode) {
 }
 
 module.exports = {
+    getTaskBrowserContextOptions,
     resolveBrowserRuntimeMode,
     connectTaskBrowser,
     applyCdpEnv,

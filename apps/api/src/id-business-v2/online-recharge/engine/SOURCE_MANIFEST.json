@@ -208,9 +208,9 @@
     {
       "path": "subscription-diagnostics.cjs",
       "originalSha256": null,
-      "adaptedSha256": "0579c4bf600146800bcb8b775eee42c617f0070a0c024f4030f26027eaaa6197",
+      "adaptedSha256": "8acc7135cd9b2f9b7d951c673130c1a720a5d3d8f43131485f2e965446fbab3d",
       "changed": true,
-      "reason": "Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-27: bounded same-context read-only body fallback for payment preflight, original deadline/two-GET cap, confirmed cancellation and network classification; synthetic regressions only."
+      "reason": "Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-27: bounded same-context read-only body fallback for payment preflight, original deadline/two-GET cap, confirmed cancellation and network classification; synthetic regressions only. 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
     },
     {
       "path": "subscription-network-diagnostics.cjs",
@@ -468,8 +468,8 @@
       "path": "test/query-network-browser.test.cjs",
       "originalSha256": null,
       "changed": true,
-      "reason": "Real Chromium synthetic network-phase, cancellation, late-response and zero-payment regression coverage; localhost-only fixtures. Cover slow streamed complete responses across the former ten-second limit, exclusive comparison scheduling, shared-context retries and shorter caller deadlines with zero payment requests.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts.",
-      "adaptedSha256": "3debfd8a8485a58867574a910bbceaacc7895220bc4af7361f337c5d0209d086"
+      "reason": "Real Chromium synthetic network-phase, cancellation, late-response and zero-payment regression coverage; localhost-only fixtures. Cover slow streamed complete responses across the former ten-second limit, exclusive comparison scheduling, shared-context retries and shorter caller deadlines with zero payment requests.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification.",
+      "adaptedSha256": "8a393ea5dc9f58015d4e6a76ee2d955aca31569a66069679b2d657009366715d"
     },
     {
       "path": "test/recharge-flow-acceptance.test.cjs",
@@ -481,9 +481,9 @@
     {
       "path": "test/regressions.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "3b4e2fcf1ffc56e897e9e37cd6097350fb42fd1f164950ac7744060d36f45ff6",
+      "adaptedSha256": "9bce826625049ee0f6aff928c82dd915b6b840cc621b1a9d9ca44a5c0dea19ab",
       "changed": true,
-      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation. 2026-10-19 Use routed real official-origin pages for existing late-verification browser fixtures; retain guest rejection after the one reload and the seventy-three-test total. 2026-10-22 Assert native fetch identity and unchanged real responses while retaining refreshed Cookie Session, third-party isolation and native authorization behavior. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts."
+      "reason": "Exercise trusted session refresh, strict account and user binding, HTTP/challenge and malformed response classification, route/fetch propagation and refreshed credential redaction. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. Cover real memory-service availability at 30 minutes and the 24-hour boundary, save renewal, ownership and early cleanup using an isolated clock. 2026-10-19 Keep route fixtures faithful to the real Playwright request.method contract and supply native Request in the isolated Session compatibility evaluation. 2026-10-19 Use routed real official-origin pages for existing late-verification browser fixtures; retain guest rejection after the one reload and the seventy-three-test total. 2026-10-22 Assert native fetch identity and unchanged real responses while retaining refreshed Cookie Session, third-party isolation and native authorization behavior. 2026-10-22 Native Session transport, complete input preservation and passive cancellation/incomplete-read regression coverage.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
     },
     {
       "path": "test/renewal-recheck.test.cjs",
@@ -495,9 +495,9 @@
     {
       "path": "test/renewal-state.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "08918b49a86736071368b69dbc456e0036040252fa194e3ad833de5fadb34538",
+      "adaptedSha256": "ee44bc50546d8768570f58ba4b37724e47e5fcb8f3872f8afb81528c383edbc7",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. Keep renewal browser query fixture aligned with the pinned upstream 20-second complete-response limit. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions. Keep renewal browser query fixture aligned with the pinned upstream 20-second complete-response limit. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout. 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
     },
     {
       "path": "test/rpc-response.test.cjs",
@@ -642,9 +642,9 @@
     {
       "path": "upstream/browser-runtime.js",
       "originalSha256": "6a2063b7f6d56fc1e92adc1f7f2acaa046acad2fc706fda21f05c3e1fcc005a7",
-      "adaptedSha256": "3b0d37047503284d13740b826328980127a372de2e86cb8daff40be857cf1c39",
+      "adaptedSha256": "22cd1b0c8dc550f2aefc88315108b9a7b9ace6cc03e98d9053912f277601e378",
       "changed": true,
-      "reason": "冻结原版保持不变。"
+      "reason": "冻结原版保持不变。 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
     },
     {
       "path": "upstream/browser-standalone.js",
@@ -810,9 +810,9 @@
     {
       "path": "upstream/subscription-check.js",
       "originalSha256": "e1f8f285a318389c055c0438f1c143e01023bdc42c619c6ea9eb7abe7238a11e",
-      "adaptedSha256": "27236c70a79580d1d25ca70432bc0ef194fbf4d92a5618e337fbae6963896a3e",
+      "adaptedSha256": "71c4ed67bb141e24c9d43c11e786c21c803b2adb333ef61f27e8264cf83e8947",
       "changed": true,
-      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. Match the pinned upstream 20-second complete-response GET limit within unchanged overall deadlines; exclusive diagnostics use one primary read and reserve one complete comparison without authorizing payments. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-27: bounded same-context read-only body fallback for payment preflight, original deadline/two-GET cap, confirmed cancellation and network classification; synthetic regressions only."
+      "reason": "2026-10-15 Pro档位及升级适配：精确目标、官网报价、单次提交、实际付款方式与原单证据保护；不猜Pro500上游ID。保留既有必要适配。; 2026-10-17 controlled checkout form, subscription context and progress repair.; 2026-10-17 unattended verification and original-checkout reconciliation.; 2026-10-18 restore reachable frozen-upstream billing/Pro/renewal compatibility, preserve authenticated task context and existing payment protections; isolated complete-flow regressions.; 2026-10-18 preserve account-identity rejection across independent subscription and renewal queries after trusted session refresh. 2026-10-18 Distinguish rendered authentication gates from hidden or conversational text; preserve controlled session-bootstrap diagnostics and prepayment stop conditions, with isolated browser and service-chain coverage. 2026-10-18 Bound and cancel actual subscription reads; retain controlled network-phase diagnostics and administrator-only same-context read-only transport comparison without payment authorization. Match the pinned upstream 20-second complete-response GET limit within unchanged overall deadlines; exclusive diagnostics use one primary read and reserve one complete comparison without authorizing payments. Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-27: bounded same-context read-only body fallback for payment preflight, original deadline/two-GET cap, confirmed cancellation and network classification; synthetic regressions only. 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
     },
     {
       "path": "upstream/tax-free-address.js",
@@ -929,16 +929,16 @@
     {
       "path": "browser-profile.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b4a3ecf38fb1b1a247c151ce0ffda2f76699e92ad681f32bbf4d7bca5b91296c",
+      "adaptedSha256": "9609f2df79e31229cb5287043602194424f3443a4c6dfda02e17c14d895c06ec",
       "changed": true,
-      "reason": "Account-bound native persistent browser state and isolated lifecycle regression verification. 2026-10-25 Authorized egress lifecycle repair: one fresh native profile partition on cross-task exit change, retained old state and stable native lock, shared five-probe limit, metadata and cancellation classification. 2026-10-26 Authorized fresh-session verification: one new isolated partition may continue after a changed exit observation; original Session/account/challenge checks, shared five-probe limit and payment protections remain. Native offline regressions cover rotating exits and offscreen billing; production form rules unchanged."
+      "reason": "Account-bound native persistent browser state and isolated lifecycle regression verification. 2026-10-25 Authorized egress lifecycle repair: one fresh native profile partition on cross-task exit change, retained old state and stable native lock, shared five-probe limit, metadata and cancellation classification. 2026-10-26 Authorized fresh-session verification: one new isolated partition may continue after a changed exit observation; original Session/account/challenge checks, shared five-probe limit and payment protections remain. Native offline regressions cover rotating exits and offscreen billing; production form rules unchanged. 2026-10-28 User-authorized retirement of superseded profile generations after confirmed browser close; preserve selected identity and native-lock protection, cover repeated rotation, reuse and safe filesystem boundaries."
     },
     {
       "path": "test/browser-profile.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "389d954a72e92334f0e6dabf52e56184e53ef9344494d3b4f80d1e0f6030e68c",
+      "adaptedSha256": "5c441d35798b566f75738d1529c78a3ea14811987afe660ae0efaebcd1443fbb",
       "changed": true,
-      "reason": "Account-bound native persistent browser state and isolated lifecycle regression verification. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons; test unchanged five-request retries and early exit-binding failure without business requests. 2026-10-25 Native cookie/storage isolation and legacy preservation, fresh Session verification, partition reuse and cross-process lock; shared probe limit, cancellation, stale metadata and invalid binding regressions. 2026-10-26 Authorized fresh-session verification: one new isolated partition may continue after a changed exit observation; original Session/account/challenge checks, shared five-probe limit and payment protections remain. Native offline regressions cover rotating exits and offscreen billing; production form rules unchanged."
+      "reason": "Account-bound native persistent browser state and isolated lifecycle regression verification. 2026-10-25 Preserve controlled proxy/profile failure codes and Chinese reasons; test unchanged five-request retries and early exit-binding failure without business requests. 2026-10-25 Native cookie/storage isolation and legacy preservation, fresh Session verification, partition reuse and cross-process lock; shared probe limit, cancellation, stale metadata and invalid binding regressions. 2026-10-26 Authorized fresh-session verification: one new isolated partition may continue after a changed exit observation; original Session/account/challenge checks, shared five-probe limit and payment protections remain. Native offline regressions cover rotating exits and offscreen billing; production form rules unchanged. 2026-10-28 User-authorized retirement of superseded profile generations after confirmed browser close; preserve selected identity and native-lock protection, cover repeated rotation, reuse and safe filesystem boundaries. 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
     },
     {
       "path": "test/subscription-body-fallback.test.cjs",
@@ -946,6 +946,20 @@
       "changed": true,
       "adaptedSha256": "bbe87e5a1bf678dc77ad951d132ee4993994a369c9d9f8a752d49c5c98f87412",
       "reason": " 2026-10-27: bounded same-context read-only body fallback for payment preflight, original deadline/two-GET cap, confirmed cancellation and network classification; synthetic regressions only."
+    },
+    {
+      "path": "test/browser-region.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "reason": "2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification.",
+      "adaptedSha256": "388fc9b17dc94ddc180f7476e903b928187d79b5b5e16a36131e6819b479fe63"
+    },
+    {
+      "path": "test/session-request-observation.test.cjs",
+      "originalSha256": null,
+      "changed": true,
+      "reason": "2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification.",
+      "adaptedSha256": "7804219e1855a38b95b20a0b3ee850541b305745074bd6b8e2644df40abd39a3"
     }
   ],
   "dependencySecurityPatches": [

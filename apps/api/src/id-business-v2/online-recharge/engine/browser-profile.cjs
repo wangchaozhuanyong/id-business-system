@@ -107,6 +107,46 @@ async function prepareFreshProfile(directory, profile) {
   return target;
 }
 
+// Keep the selected identity for the next task; retired generations have no
+// recovery role. Never follow symlinks or prune while another browser owns it.
+async function pruneRetiredProfiles(directory) {
+  const parent = await fs.lstat(directory);
+  if (!parent.isDirectory() || parent.isSymbolicLink())
+    throw fault('PROFILE_DIRECTORY_INVALID', '浏览器状态目录无效，未清理历史分区');
+  const selected =
+    (await readBinding(path.join(directory, '.active-profile.json'), true))?.profile || 'Default';
+  const current = await fs.lstat(path.join(directory, selected));
+  if (!current.isDirectory() || current.isSymbolicLink())
+    throw fault('PROFILE_BINDING_INVALID', '当前浏览器分区无效，未清理历史分区');
+  let removed = 0;
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (
+      entry.name === selected ||
+      !entry.isDirectory() ||
+      entry.isSymbolicLink() ||
+      !(entry.name === 'Default' || /^Exit-[a-f0-9]{32}$/.test(entry.name))
+    )
+      continue;
+    for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+      try {
+        await fs.lstat(path.join(directory, name));
+        return { removed, deferred: true };
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    const latest =
+      (await readBinding(path.join(directory, '.active-profile.json'), true))?.profile || 'Default';
+    if (latest !== selected) return { removed, deferred: true };
+    const target = path.join(directory, entry.name);
+    const candidate = await fs.lstat(target);
+    if (!candidate.isDirectory() || candidate.isSymbolicLink()) continue;
+    await fs.rm(target, { recursive: true });
+    removed++;
+  }
+  return { removed, deferred: false };
+}
+
 async function probeExit(context, signal, attempts) {
   while (attempts.used < 5) {
     signal?.throwIfAborted();
@@ -141,6 +181,7 @@ async function launchProfile(chromium, options) {
   active.add(directory);
   let context,
     browserPid,
+    profileOpened = false,
     closed = false;
   const closeOwnedBrowser = async () => {
     if (!context) return;
@@ -177,6 +218,17 @@ async function launchProfile(chromium, options) {
   const close = async () => {
     if (closed) return;
     await closeOwnedBrowser();
+    if (profileOpened) {
+      try {
+        const result = await pruneRetiredProfiles(directory);
+        if (result.removed)
+          console.log(`[浏览器会话] 已回收 ${result.removed} 个历史分区，保留当前分区`);
+        if (result.deferred) console.log('[浏览器会话] 分区使用状态已变化，历史分区回收顺延');
+      } catch {
+        // Cleanup never replaces the real login/payment failure classification.
+        console.warn('[浏览器会话] 历史分区回收未完成，下一次安全关闭后重试');
+      }
+    }
     active.delete(directory);
     closed = true;
   };
@@ -195,6 +247,7 @@ async function launchProfile(chromium, options) {
         `--profile-directory=${profile}`
       ]
     });
+    profileOpened = true;
     // Chrome's native profile lock also excludes concurrent worker processes.
     const cdp = await context.browser().newBrowserCDPSession();
     try {
@@ -235,8 +288,8 @@ async function launchProfile(chromium, options) {
       const fresh = await prepareFreshProfile(directory, next);
       await writeBinding(path.join(fresh, '.exit-binding.json'), { version: 1, exitHash });
       options.signal?.throwIfAborted();
-      // Publish while still holding Chromium's native lock. Preserve every old
-      // profile; never copy cookies/storage/clearance into the new partition.
+      // Publish while holding Chromium's native lock. Do not copy old state;
+      // retire superseded generations only after the owned browser closes.
       await writeBinding(selectionFile, { version: 1, profile: next });
       console.log('[浏览器会话] 代理出口变化，启用独立资料分区并重新核验登录');
       await closeOwnedBrowser();
@@ -271,4 +324,4 @@ async function launchProfile(chromium, options) {
   }
 }
 
-module.exports = { binding, launchProfile };
+module.exports = { binding, launchProfile, pruneRetiredProfiles };

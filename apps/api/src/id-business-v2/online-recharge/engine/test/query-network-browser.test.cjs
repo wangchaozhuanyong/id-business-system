@@ -228,6 +228,8 @@ function ownedQuery(f, { onLogin = () => {}, onContext = () => {}, onCleanup = (
       }
     },
     './browser-runtime': {
+      getTaskBrowserContextOptions: require('../upstream/browser-runtime')
+        .getTaskBrowserContextOptions,
       connectTaskBrowser: async () => ({
         browser: {
           newContext: async () => {

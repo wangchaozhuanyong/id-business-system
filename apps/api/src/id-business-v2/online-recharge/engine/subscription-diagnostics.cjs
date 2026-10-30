@@ -275,6 +275,138 @@ function logResponseFacts(status, facts) {
     `[订阅分诊] HTTP状态=${status}；内容类型=${facts.contentType}；挑战响应头=${facts.cfMitigated === 'challenge' ? '明确挑战' : facts.cfMitigated === 'absent' ? '未提供' : '未知'}；Ray存在=${yn(facts.cfRayPresent)}；分类=${categories[facts.classification]}；错误码含义=${codes[facts.errorCode]}；错误类型=${types[facts.errorType]}；挑战脚本=${yn(facts.markers.challengePlatform)}；挑战配置=${yn(facts.markers.challengeOptions)}；等待提示=${yn(facts.markers.justAMoment)}；异常活动提示=${yn(facts.markers.unusualActivity)}`
   );
 }
+// Passive task-owned context events are installed before the caller starts its
+// first Session probe. Request objects distinguish redirect hops without CDP
+// port discovery or requestId reuse. No response body or credential is retained.
+function observeSessionRequests(
+  context,
+  log = (value) => console.log('[Session] 请求对照', JSON.stringify(value))
+) {
+  if (typeof context?.on !== 'function' || typeof context?.off !== 'function')
+    return { dispose() {} };
+  const records = new WeakMap();
+  const started = performance.now();
+  let active = true,
+    count = 0;
+  const isSession = (request) => {
+    try {
+      const url = new URL(request.url());
+      return url.origin === 'https://chatgpt.com' && url.pathname === '/api/auth/session';
+    } catch {
+      return false;
+    }
+  };
+  const emit = (event, row, detail = {}) => {
+    if (!active) return;
+    try {
+      log({ event, ...row, elapsedMs: Math.round(performance.now() - started), ...detail });
+    } catch {
+      /* Diagnostic delivery never changes the real request outcome. */
+    }
+  };
+  const request = (value) => {
+    try {
+      if (!active || count >= 30 || !isSession(value)) return;
+      const type = value.resourceType();
+      const previous = value.redirectedFrom?.();
+      const from = previous && records.get(previous);
+      const row = {
+        sequence: ++count,
+        resourceType: ['document', 'fetch', 'xhr'].includes(type) ? type : 'other',
+        redirected: Boolean(previous),
+        ...(from ? { redirectedFromSequence: from.sequence } : {}),
+        method: value.method() === 'GET' ? 'GET' : 'other'
+      };
+      records.set(value, row);
+      emit('request', row);
+      Promise.resolve()
+        .then(() => (active ? value.allHeaders() : null))
+        .then((raw) => {
+          if (!raw || !active) return;
+          const headers = Object.fromEntries(
+            Object.entries(raw).map(([key, value]) => [key.toLowerCase(), String(value)])
+          );
+          // Keep only Cookie names and fixed header categories; values stay local.
+          const names = String(headers.cookie || '')
+            .split(';')
+            .map((part) => part.trim().split('=', 1)[0]);
+          emit('request_headers', row, {
+            complete: true,
+            sessionCookieSent: names.some((name) =>
+              /^__Secure-next-auth\.session-token(?:\.\d+)?$/.test(name)
+            ),
+            clearanceCookieSent: names.includes('cf_clearance'),
+            fetchMode: ['navigate', 'cors', 'same-origin', 'no-cors'].includes(
+              headers['sec-fetch-mode']
+            )
+              ? headers['sec-fetch-mode']
+              : 'unknown',
+            fetchDestination: ['document', 'empty', 'iframe'].includes(headers['sec-fetch-dest'])
+              ? headers['sec-fetch-dest']
+              : 'unknown'
+          });
+        })
+        .catch(() => emit('request_headers', row, { complete: false, readFailed: true }));
+    } catch {
+      /* Browser teardown may race an observation; never replace its outcome. */
+    }
+  };
+  const response = (value) => {
+    let row;
+    try {
+      row = records.get(value.request());
+      if (!row) return;
+      const status = value.status();
+      const metadata = responseReadMetadata(value.headers());
+      emit('response', row, {
+        complete: true,
+        httpStatus: status >= 100 && status <= 599 ? status : 0,
+        contentType: metadata.contentType,
+        cfMitigated: metadata.cfMitigated,
+        cfRayPresent: metadata.cfRayPresent
+      });
+    } catch {
+      if (row) emit('response', row, { complete: false, readFailed: true });
+    }
+  };
+  const failed = (value) => {
+    const row = records.get(value);
+    if (!row) return;
+    try {
+      const error = String(value.failure()?.errorText || '');
+      emit('request_failed', row, {
+        networkClass: /TIMED_OUT/.test(error)
+          ? 'timeout'
+          : /ABORTED/.test(error)
+            ? 'aborted'
+            : 'network_error'
+      });
+    } catch {
+      emit('request_failed', row, { networkClass: 'unknown' });
+    }
+  };
+  const dispose = () => {
+    active = false;
+    for (const [event, listener] of [
+      ['request', request],
+      ['response', response],
+      ['requestfailed', failed],
+      ['close', dispose]
+    ]) {
+      try {
+        context.off(event, listener);
+      } catch {
+        /* Never block task teardown. */
+      }
+    }
+  };
+  context.on('request', request);
+  context.on('response', response);
+  context.on('requestfailed', failed);
+  context.on('close', dispose);
+  return { dispose };
+}
+
 function observeAuthResponses(page, sessionRaw) {
   const auth = require('./upstream/session-auth');
   const input = auth.resolveSessionInput(sessionRaw);
@@ -378,6 +510,7 @@ function observeAuthResponses(page, sessionRaw) {
   };
 }
 module.exports = {
+  observeSessionRequests,
   responseReadMetadata,
   responseFacts,
   sessionProbeFacts,

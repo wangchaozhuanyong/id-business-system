@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  browserRegionPaths,
+  isBrowserRegionOnly,
   freshSessionPaths,
   isFreshSessionOnly,
   sessionDiagnosticPaths,
@@ -726,4 +728,35 @@ test('post-fill diagnostic batch retains API Admin and complete Linux engine che
     JSON.stringify(unpaidValidationCommands('api', paths)),
     /src\/id-business-v2\/online-recharge/
   );
+});
+
+test('browser region candidate retains full engine checks and rejects unrelated changes', () => {
+  const paths = [
+    ...browserRegionPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(isBrowserRegionOnly(paths), true);
+  assert.equal(isUnpaidValidationOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const required of browserRegionPaths.filter((p) => p.startsWith('apps/'))) {
+    assert.equal(isBrowserRegionOnly(paths.filter((p) => p !== required)), false);
+  }
+  for (const unrelated of [
+    'apps/api/prisma/mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/validation.ts',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+  ]) {
+    assert.equal(isBrowserRegionOnly([...paths, unrelated]), false);
+  }
+  assert.equal(isBrowserRegionOnly([...paths, paths[0]]), false);
+  const engine = JSON.stringify(unpaidValidationCommands('online-engine', paths));
+  assert.match(engine, /test:online-recharge:engine/);
+  const guards = JSON.stringify(unpaidValidationCommands('guards', paths));
+  assert.match(guards, /check:v2-module-architecture/);
+  assert.match(guards, /test:online-recharge:controls/);
+  assert.doesNotMatch(guards, /prisma:mysql|check:admin-ui/);
 });
