@@ -294,6 +294,10 @@ export const countryEvidencePaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export const unpaidValidationControls = Object.freeze([
+  '.github/workflows/online-browser-region-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (name) => 'scripts/production-release/online-browser-region-' + name
+  ),
   '.github/workflows/online-frame-attempts-publication.yml',
   ...[
     'release.py',
@@ -474,6 +478,8 @@ export function isUnpaidValidationControlsOnly(paths) {
     new Set(paths).size === paths.length &&
     paths.some(
       (p) =>
+        p.startsWith('scripts/production-release/online-browser-region-') ||
+        p === '.github/workflows/online-browser-region-publication.yml' ||
         p.startsWith('scripts/production-release/online-frame-attempts-') ||
         p === '.github/workflows/online-frame-attempts-publication.yml' ||
         p.startsWith('scripts/production-release/online-checkout-read-') ||
@@ -562,6 +568,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-browser-region-'))
+        ? [['python3', '-B', 'scripts/production-release/online-browser-region-release.test.py']]
+        : []),
       ...(paths.some((p) => p.includes('online-frame-attempts-'))
         ? [['python3', '-B', 'scripts/production-release/online-frame-attempts-release.test.py']]
         : []),
