@@ -1005,6 +1005,8 @@ async function authenticationQueryFixture(authError, phase = 'session_install') 
         };
       if (name === './browser-runtime')
         return {
+          getTaskBrowserContextOptions: require('../upstream/browser-runtime')
+            .getTaskBrowserContextOptions,
           connectTaskBrowser: async () => ({
             browser: { newContext: async () => context },
             realUserAgent: 'Synthetic'

@@ -772,8 +772,9 @@ async function withRenewalBrowserContext(accessToken, options, operation) {
         session = await acquire(() => runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig,
             headful: process.env.HEADFUL === '1', sessionRaw: options.sessionRaw, signal: budget.signal }), 'browser_connect',
             resource => runtime.closeTaskBrowser(resource, resource.browser));
-        context = await acquire(() => session.context || session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
-            locale: 'en-US' }), 'context_create', resource => resource.close());
+        context = await acquire(() => session.context || session.browser.newContext(
+            runtime.getTaskBrowserContextOptions({ proxy: prepared.proxyConfig || undefined }, process.env)),
+            'context_create', resource => resource.close());
         page = await acquire(() => prepareQueryPage(context, budget), 'page_create', closeQueryPage);
         const auth = require('./session-auth');
         const installed = await boundedQuery(() => auth.installChatGptSession(context, options.sessionRaw, {
@@ -847,8 +848,9 @@ async function fetchAccountCheck(accessToken, options = {}) {
             const runtime = require('./browser-runtime');
             session = await boundedQuery(() => runtime.connectTaskBrowser({ proxyConfig: prepared.proxyConfig,
                 headful: process.env.HEADFUL === '1', sessionRaw: options.sessionRaw, signal: budget.signal }), budget, 'browser_connect');
-            ownedContext = await boundedQuery(() => session.context || session.browser.newContext({ proxy: prepared.proxyConfig || undefined,
-                locale: 'en-US' }), budget, 'context_create');
+            ownedContext = await boundedQuery(() => session.context || session.browser.newContext(
+                runtime.getTaskBrowserContextOptions({ proxy: prepared.proxyConfig || undefined }, process.env)),
+                budget, 'context_create');
             ownedPage = page = await prepareQueryPage(ownedContext, budget);
             const auth = require('./session-auth');
             const installed = await boundedQuery(() => auth.installChatGptSession(ownedContext, options.sessionRaw, {

@@ -1,6 +1,34 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+export const browserRegionPaths = Object.freeze([
+  'AGENTS.md',
+  ...[
+    'SOURCE_MANIFEST.json',
+    'browser-profile.cjs',
+    'subscription-diagnostics.cjs',
+    'test/browser-profile.test.cjs',
+    'test/query-network-browser.test.cjs',
+    'test/regressions.test.cjs',
+    'test/renewal-state.test.cjs',
+    'upstream/browser-runtime.js',
+    'upstream/subscription-check.js',
+    'test/browser-region.test.cjs',
+    'test/session-request-observation.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+
+export function isBrowserRegionOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    browserRegionPaths.filter((p) => p.startsWith('apps/')).every((p) => paths.includes(p)) &&
+    paths.every((p) => browserRegionPaths.includes(p) || unpaidValidationControls.includes(p))
+  );
+}
+
 export const sessionDiagnosticPaths = Object.freeze([
   'apps/admin/src/v2/features/online-recharge/OnlineResultDialog.vue',
   'apps/admin/src/v2/features/online-recharge/unpaid-validation-labels.spec.ts',
@@ -358,7 +386,7 @@ export function isProfileLockRecoveryOnly(paths) {
   );
 }
 export function isUnpaidValidationOnly(paths) {
-  if (isProfileLockRecoveryOnly(paths)) return true;
+  if (isProfileLockRecoveryOnly(paths) || isBrowserRegionOnly(paths)) return true;
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
@@ -602,6 +630,7 @@ export function unpaidValidationCommands(part, paths) {
         : []),
       ...(controlsOnly ||
       isPersistentProfileOnly(paths) ||
+      isBrowserRegionOnly(paths) ||
       (cardReadDiagnosticsPaths
         .filter((p) => p.startsWith('apps/'))
         .every((p) => paths.includes(p)) &&

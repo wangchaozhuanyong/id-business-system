@@ -200,7 +200,8 @@ function queryFixture({
   failedLoginPage,
   onRead,
   onPost,
-  connectBrowser
+  connectBrowser,
+  paymentRegion
 } = {}) {
   const effects = {
     proxies: [],
@@ -328,7 +329,9 @@ function queryFixture({
     URL,
     Date,
     console,
-    process: { env: { PROXY: 'http://task-proxy.invalid:8123' } },
+    process: {
+      env: { PROXY: 'http://task-proxy.invalid:8123', PAYMENT_REGION_OVERRIDE: paymentRegion }
+    },
     require(name) {
       if (name.startsWith('node:')) return require(name);
       if (name === '../rpc.cjs') return rpc;
@@ -378,6 +381,8 @@ function queryFixture({
         };
       if (name === './browser-runtime')
         return {
+          getTaskBrowserContextOptions: require('../upstream/browser-runtime')
+            .getTaskBrowserContextOptions,
           connectTaskBrowser: async (options) => {
             effects.browserConnections.push(options);
             if (connectBrowser) return connectBrowser();
@@ -409,6 +414,43 @@ function queryFixture({
     browserContexts,
     submitted: () => submitted
   };
+}
+
+for (const [paymentRegion, locale, timezoneId] of [
+  ['PH', 'en-PH', 'Asia/Manila'],
+  ['CL', 'en-CL', 'America/Santiago']
+]) {
+  test(`${paymentRegion}: independent subscription query uses task region and releases its owned context without writes`, async () => {
+    const f = queryFixture({ statuses: [200], paymentRegion });
+    const result = await f.api.querySubscriptionBySession(token, {
+      sessionRaw: 'synthetic-session-A',
+      allowBrowserFallback: true
+    });
+    assert.equal(result.ok, true);
+    assert.equal(f.effects.contexts.length, 1);
+    assert.equal(f.effects.contexts[0].locale, locale);
+    assert.equal(f.effects.contexts[0].timezoneId, timezoneId);
+    assert.equal(f.effects.contexts[0].proxy.server, 'http://task-proxy.invalid:8123');
+    assert.equal(f.effects.browserConnections.length, 1);
+    assert.equal(f.effects.closes, 1);
+    assert.equal(f.effects.cleanups, 1);
+    assert.equal(f.effects.posts.length, 0);
+    assert.equal(f.effects.guards.length, 0);
+  });
+  test(`${paymentRegion}: query with an existing checkout context does not recreate or change its environment`, async () => {
+    const f = queryFixture({ statuses: [200], paymentRegion });
+    const context = f.newBrowserContext();
+    const page = await context.newPage();
+    await page.goto('https://chatgpt.com/');
+    const result = await f.api.querySubscriptionBySession(token, { page, browserContext: context });
+    assert.equal(result.ok, true);
+    assert.equal(f.effects.browserConnections.length, 0);
+    assert.equal(f.effects.contexts.length, 0);
+    assert.equal(f.effects.closes + f.effects.disposes + f.effects.cleanups, 0);
+    assert.equal(f.effects.posts.length, 0);
+    assert.equal(f.effects.guards.length, 0);
+    assert.ok(f.effects.requests.every((r) => r.page === page));
+  });
 }
 
 for (const [method, enabled] of [
