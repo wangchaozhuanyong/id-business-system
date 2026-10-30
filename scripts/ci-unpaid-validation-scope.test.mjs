@@ -760,3 +760,30 @@ test('browser region candidate retains full engine checks and rejects unrelated 
   assert.match(guards, /test:online-recharge:controls/);
   assert.doesNotMatch(guards, /prisma:mysql|check:admin-ui/);
 });
+
+test('browser region publication is a finite control-only companion', () => {
+  const paths = [
+    '.github/workflows/online-browser-region-publication.yml',
+    ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+      (n) => 'scripts/production-release/online-browser-region-' + n
+    ),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isUnpaidValidationControlsOnly(paths), true);
+  assert.equal(checkMode(paths), 'ci-only');
+  assert.deepEqual(selectedParts(paths), ['guards']);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /online-browser-region-release.test.py/
+  );
+  assert.equal(isUnpaidValidationControlsOnly([...paths, browserRegionPaths[1]]), false);
+  assert.equal(
+    isUnpaidValidationControlsOnly([
+      ...paths,
+      'scripts/production-release/online-browser-region-extra.py'
+    ]),
+    false
+  );
+});
