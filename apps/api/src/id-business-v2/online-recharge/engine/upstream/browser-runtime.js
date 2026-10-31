@@ -59,7 +59,16 @@ async function connectTaskBrowser(options = {}) {
         cdpPort: env.CDP_PORT
     });
     if (session.context) {
-        try { require('../subscription-diagnostics.cjs').observeSessionRequests(session.context); }
+        try {
+            const diagnostics = require('../subscription-diagnostics.cjs').observeSessionRequests(session.context);
+            const close = session.close;
+            if (close) session.close = async () => {
+                try { return await close(); }
+                finally {
+                    try { diagnostics.dispose(); } catch (_) { /* Observation never owns the task outcome. */ }
+                }
+            };
+        }
         catch (_) { console.log('[Session] 请求对照监听未就绪，沿用原业务核验'); }
     }
     return session;
