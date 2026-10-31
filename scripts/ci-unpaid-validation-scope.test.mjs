@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  proxyClientObservationControlPaths,
+  proxyClientPublicationControlPaths,
+  isProxyClientControlsOnly,
   proxyClientDiagnosticPaths,
   isProxyClientDiagnosticsOnly,
   browserRegionPaths,
@@ -818,4 +821,26 @@ test('proxy client diagnostics scope retains full engine tests and excludes auth
   ])
     assert.equal(isProxyClientDiagnosticsOnly([...paths, extra]), false);
   assert.equal(isProxyClientDiagnosticsOnly([...paths, paths[0]]), false);
+});
+
+test('proxy client controls are finite, preserve contract tests and cannot admit business changes', () => {
+  for (const paths of [proxyClientObservationControlPaths, proxyClientPublicationControlPaths]) {
+    assert.equal(isProxyClientControlsOnly(paths), true);
+    assert.equal(checkMode(paths), 'ci-only');
+    assert.deepEqual(selectedParts(paths), ['guards']);
+    assert.match(
+      JSON.stringify(unpaidValidationCommands('guards', paths)),
+      /online-proxy-client-.*test.py/
+    );
+    assert.equal(
+      isProxyClientControlsOnly([
+        ...paths,
+        'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs'
+      ]),
+      false
+    );
+    assert.equal(isProxyClientControlsOnly([...paths, paths[0]]), false);
+    for (const p of paths)
+      assert.equal(isProxyClientControlsOnly(paths.filter((x) => x !== p)), false);
+  }
 });

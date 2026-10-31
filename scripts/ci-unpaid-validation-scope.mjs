@@ -1,6 +1,35 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+export const proxyClientObservationControlPaths = Object.freeze([
+  '.github/workflows/online-proxy-client-observation.yml',
+  'scripts/production-release/online-proxy-client-observation.py',
+  'scripts/production-release/online-proxy-client-observation.test.py',
+  'scripts/production-release/online-proxy-client-parent-plan.json'
+]);
+export const proxyClientPublicationControlPaths = Object.freeze([
+  '.github/workflows/online-proxy-client-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (n) => 'scripts/production-release/online-proxy-client-' + n
+  )
+]);
+export function isProxyClientControlsOnly(paths) {
+  const controls = [
+    ...proxyClientObservationControlPaths,
+    ...proxyClientPublicationControlPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    (proxyClientObservationControlPaths.every((p) => paths.includes(p)) ||
+      proxyClientPublicationControlPaths.every((p) => paths.includes(p))) &&
+    paths.every((p) => controls.includes(p))
+  );
+}
+
 export const proxyClientDiagnosticPaths = Object.freeze([
   ...[
     'SOURCE_MANIFEST.json',
@@ -510,7 +539,7 @@ export function isProfileInventoryControlRepair(paths, options = {}) {
   return digest === 'bda837bfe6b6b8ca91f356fe780c13d75de15928d017a1fe6780d7b481065b58';
 }
 export function isUnpaidValidationControlsOnly(paths) {
-  if (isProfileInventoryControlRepair(paths)) return true;
+  if (isProfileInventoryControlRepair(paths) || isProxyClientControlsOnly(paths)) return true;
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
@@ -606,6 +635,15 @@ export function unpaidValidationCommands(part, paths) {
       ...(linted.length ? [npm('exec', '--', 'eslint', ...linted)] : []),
       ['node', '--test', 'scripts/ci-unpaid-validation-scope.test.mjs'],
       ['python3', '-B', 'scripts/production-release/online-unpaid-validation-release.test.py'],
+      ...(paths.some((p) => p.includes('online-proxy-client-observation'))
+        ? [['python3', '-B', 'scripts/production-release/online-proxy-client-observation.test.py']]
+        : []),
+      ...(paths.some(
+        (p) =>
+          p.includes('online-proxy-client-publication') || p.includes('online-proxy-client-release')
+      )
+        ? [['python3', '-B', 'scripts/production-release/online-proxy-client-release.test.py']]
+        : []),
       ...(paths.some((p) => p.includes('online-browser-region-'))
         ? [['python3', '-B', 'scripts/production-release/online-browser-region-release.test.py']]
         : []),

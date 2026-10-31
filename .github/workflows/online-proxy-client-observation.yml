@@ -1,0 +1,50 @@
+name: Online Recharge Proxy Client Observation
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Read-only baseline capture or the single authorized blank-context comparison
+        type: choice
+        options: [capture, compare]
+        required: true
+      expected_current:
+        description: Exact expected deployed commit
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Validate finite observation helpers
+        run: python3 -B scripts/production-release/online-proxy-client-observation.test.py
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-proxy-observe-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Execute exactly one bounded observation
+        env:
+          OBSERVE_MODE: ${{ inputs.mode }}
+          EXPECTED_CURRENT: ${{ inputs.expected_current }}
+        run: python3 -B scripts/production-release/online-proxy-client-observation.py "$OBSERVE_MODE" --expected-current "$EXPECTED_CURRENT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: online-proxy-client-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/online-proxy-client-observation/**/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
