@@ -228,7 +228,8 @@ test('stalled diagnostic enable times out independently and does not wait on log
   assert.equal(failure.setupBudgetMs, 1000);
   assert.equal(failure.errorName, 'none');
   assert.equal(failure.errorClass, 'none');
-  assert.ok(failure.setupElapsedMs >= 1000);
+  assert.ok(Number.isSafeInteger(failure.setupElapsedMs));
+  assert.ok(failure.setupElapsedMs >= failure.operationElapsedMs);
   assert.ok(failure.operationElapsedMs >= 0);
   assert.equal(f.detached(), 1);
   finishEnable();
@@ -236,6 +237,51 @@ test('stalled diagnostic enable times out independently and does not wait on log
   request(f);
   response(f);
   assert.equal(f.events.length, 1);
+  assert.equal(f.detached(), 1);
+  observer.dispose();
+});
+
+test('setup schedules exactly 1000ms and preserves measured elapsed time independently of timer precision', async () => {
+  const f = fixture();
+  let finishAttach, timer;
+  let now = 100;
+  f.context.newCDPSession = () =>
+    new Promise((resolve) => {
+      finishAttach = resolve;
+    });
+  const sandbox = {
+    module: { exports: {} },
+    require,
+    performance: { now: () => now },
+    setTimeout(callback, delay) {
+      timer = { callback, delay, unref() {} };
+      return timer;
+    },
+    clearTimeout() {}
+  };
+  runInNewContext(
+    fs.readFileSync(require.resolve('../session-connection-diagnostics.cjs'), 'utf8'),
+    sandbox
+  );
+  const observer = sandbox.module.exports.observeSessionConnections(
+    f.context,
+    (row) => f.events.push(row),
+    responseReadMetadata
+  );
+  await flush();
+  assert.equal(timer.delay, 1000);
+  // Timer delivery and the diagnostic's monotonic elapsed measurement are
+  // separate observations; the measured duration must never be fabricated.
+  now = 1099.2;
+  timer.callback();
+  assert.equal(f.events[0].setupFailure, 'deadline');
+  assert.equal(f.events[0].setupOperation, 'new_cdp_session');
+  assert.equal(f.events[0].setupBudgetMs, 1000);
+  assert.equal(f.events[0].setupElapsedMs, 999);
+  assert.equal(f.events[0].operationElapsedMs, 999);
+  finishAttach(f.cdp);
+  await flush();
+  assert.deepEqual(f.commands, []);
   assert.equal(f.detached(), 1);
   observer.dispose();
 });

@@ -978,9 +978,9 @@
     {
       "path": "test/session-connection-diagnostics.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "db581cc9ca6ae0ae1fcf8742422b08f95715fa447799c7047e60cb9b169fa889",
+      "adaptedSha256": "2b864c16914c6ae03e74538a483c38ab6ff4df93fcf1eff4e4932eb2912ece57",
       "changed": true,
-      "reason": "Synthetic passive CDP correlation, redirects, privacy, setup failure, late attachment and original cleanup outcome regressions. 2026-10-31 Preserve bounded observer setup operation, failure cause, safe error class and elapsed time; retain the 1s asynchronous budget and original request behavior, and cover cancellation, late completion and zero-HTTP Chromium initialization."
+      "reason": "Synthetic passive CDP correlation, redirects, privacy, setup failure, late attachment and original cleanup outcome regressions. 2026-10-31 Preserve bounded observer setup operation, failure cause, safe error class and elapsed time; retain the 1s asynchronous budget and original request behavior, and cover cancellation, late completion and zero-HTTP Chromium initialization. Verify the exact scheduled 1000ms budget separately from observed elapsed-time precision."
     },
     {
       "path": "test/proxy-client-diagnostic.test.cjs",
