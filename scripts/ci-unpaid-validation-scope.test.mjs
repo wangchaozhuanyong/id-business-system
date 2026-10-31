@@ -54,7 +54,10 @@ test('country iframe scroll retains the full executor suite and rejects unrelate
     ]),
     false
   );
-  assert.match(JSON.stringify(unpaidValidationCommands('online-engine', paths)), /test:online-recharge:engine/);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
 });
 test('subscription body fallback checks API Admin and full executor without accepting other payment changes', () => {
   const paths = [
@@ -808,10 +811,7 @@ test('proxy client diagnostics scope retains full engine tests and excludes auth
   ];
   assert.equal(isProxyClientDiagnosticsOnly(withCapture), true);
   assert.deepEqual(selectedParts(withCapture), ['guards', 'online-engine']);
-  assert.match(
-    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
-    /test:upstream/
-  );
+  assert.match(JSON.stringify(unpaidValidationCommands('online-engine', paths)), /test:upstream/);
   assert.match(
     JSON.stringify(unpaidValidationCommands('guards', paths)),
     /check:v2-module-architecture/
