@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   proxyClientObservationControlPaths,
   proxyClientPublicationControlPaths,
@@ -53,10 +54,7 @@ test('country iframe scroll retains the full executor suite and rejects unrelate
     ]),
     false
   );
-  assert.match(
-    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
-    /test:online-recharge:engine/
-  );
+  assert.match(JSON.stringify(unpaidValidationCommands('online-engine', paths)), /test:online-recharge:engine/);
 });
 test('subscription body fallback checks API Admin and full executor without accepting other payment changes', () => {
   const paths = [
@@ -812,7 +810,7 @@ test('proxy client diagnostics scope retains full engine tests and excludes auth
   assert.deepEqual(selectedParts(withCapture), ['guards', 'online-engine']);
   assert.match(
     JSON.stringify(unpaidValidationCommands('online-engine', paths)),
-    /test:online-recharge:engine/
+    /test:upstream/
   );
   assert.match(
     JSON.stringify(unpaidValidationCommands('guards', paths)),
@@ -873,10 +871,20 @@ test('connection setup diagnostic repair retains full engine checks with an exac
   assert.equal(isProxyClientDiagnosticsOnly(paths), true);
   assert.equal(checkMode(paths), 'recharge');
   assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
-  assert.match(
-    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
-    /test:online-recharge:engine/
+  const commands = unpaidValidationCommands('online-engine', paths);
+  const serial = commands.find((command) => command[0] === 'node' && command[1] === '--test');
+  assert.deepEqual(serial.slice(0, 3), ['node', '--test', '--test-concurrency=1']);
+  const engine = 'apps/api/src/id-business-v2/online-recharge/engine';
+  const manifest = JSON.parse(
+    readFileSync(new URL('../' + engine + '/SOURCE_MANIFEST.json', import.meta.url))
   );
+  const expected = manifest.files
+    .filter((row) => /^test\/[^/]+\.test\.cjs$/.test(row.path))
+    .map((row) => engine + '/' + row.path)
+    .sort();
+  assert.ok(expected.length > 50);
+  assert.deepEqual(serial.slice(3), expected);
+  assert.deepEqual(commands.at(-1), ['npm', 'run', 'test:upstream', '--prefix', engine]);
   for (const missing of required)
     assert.equal(isProxyClientDiagnosticsOnly(paths.filter((p) => p !== missing)), false);
   for (const extra of [

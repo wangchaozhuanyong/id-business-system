@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 export const proxyClientObservationControlPaths = Object.freeze([
   '.github/workflows/online-proxy-client-observation.yml',
@@ -808,7 +808,22 @@ export function unpaidValidationCommands(part, paths) {
         'chromium'
       ],
       ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg'],
-      npm('run', 'test:online-recharge:engine')
+      ...(isProxyClientDiagnosticsOnly(paths)
+        ? [
+            [
+              'node',
+              '--test',
+              '--test-concurrency=1',
+              ...readdirSync(new URL('../' + engine + '/test/', import.meta.url), {
+                withFileTypes: true
+              })
+                .filter((file) => file.isFile() && file.name.endsWith('.test.cjs'))
+                .map((file) => engine + '/test/' + file.name)
+                .sort()
+            ],
+            npm('run', 'test:upstream', '--prefix', engine)
+          ]
+        : [npm('run', 'test:online-recharge:engine')])
     ];
   throw new Error('Unsupported unpaid validation part');
 }
