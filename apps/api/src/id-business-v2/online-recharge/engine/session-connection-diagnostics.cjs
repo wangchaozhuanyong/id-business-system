@@ -3,10 +3,41 @@
 const { createHash } = require('node:crypto');
 const { isIP } = require('node:net');
 
+const SETUP_BUDGET_MS = 1000;
+function setupError(error) {
+  try {
+    const name = error?.name;
+    const errorName = ['Error', 'TypeError', 'TimeoutError', 'ProtocolError'].includes(name)
+      ? name
+      : error == null
+        ? 'none'
+        : 'other';
+    const message = typeof error?.message === 'string' ? error.message : '';
+    const errorClass =
+      error == null
+        ? 'none'
+        : errorName === 'TimeoutError' || /timed?\s*out|timeout/i.test(message)
+          ? 'timeout'
+          : /execution context was destroyed/i.test(message)
+            ? 'context_destroyed'
+            : /target.*closed|page.*closed|context.*closed|browser.*closed/i.test(message)
+              ? 'target_closed'
+              : /connection.*closed|disconnected/i.test(message)
+                ? 'connection_closed'
+                : /not supported|unsupported|not implemented/i.test(message)
+                  ? 'unsupported'
+                  : errorName === 'ProtocolError' || /protocol error/i.test(message)
+                    ? 'protocol_error'
+                    : 'other';
+    return { errorName, errorClass };
+  } catch {
+    return { errorName: 'other', errorClass: 'other' };
+  }
+}
+
 // Observe existing page traffic only. CDP IDs are mapped to local ordinals; no
 // URLs, response bodies, header values or raw network addresses leave here.
 function observeSessionConnections(context, log, responseMetadata) {
-  if (typeof context?.newCDPSession !== 'function') return { dispose() {} };
   const pages = new Map();
   const started = performance.now();
   let active = true,
@@ -20,6 +51,27 @@ function observeSessionConnections(context, log, responseMetadata) {
       // Delivery failure cannot affect the request being observed.
     }
   };
+  const incomplete = (
+    setupOperation,
+    setupFailure,
+    error,
+    operationStarted = started,
+    setupStarted = started
+  ) => ({
+    event: 'connection_observer',
+    complete: false,
+    reason: 'setup_incomplete',
+    setupOperation,
+    setupFailure,
+    ...setupError(error),
+    setupBudgetMs: SETUP_BUDGET_MS,
+    setupElapsedMs: Math.max(0, Math.round(performance.now() - setupStarted)),
+    operationElapsedMs: Math.max(0, Math.round(performance.now() - operationStarted))
+  });
+  if (typeof context?.newCDPSession !== 'function') {
+    emit(incomplete('context_support', 'unsupported'));
+    return { dispose() {} };
+  }
   const official = (raw) => {
     try {
       const url = new URL(raw);
@@ -64,30 +116,58 @@ function observeSessionConnections(context, log, responseMetadata) {
       requests: new Map(),
       listeners: [],
       session: null,
-      detaching: false
+      detaching: false,
+      setupComplete: false,
+      setupOperation: 'page_listener',
+      setupStarted: performance.now(),
+      operationStarted: performance.now()
     };
     pages.set(page, state);
     const emitFor = (row) => {
       if (state.active) emit({ pageSequence: state.pageSequence, ...row });
     };
-    state.close = () => release(state);
-    const failedSetup = () => {
-      emitFor({ event: 'connection_observer', complete: false, reason: 'setup_incomplete' });
+    const failedSetup = (setupFailure, error) => {
+      if (!active || !state.active) return;
+      emitFor(
+        incomplete(
+          state.setupOperation,
+          setupFailure,
+          error,
+          state.operationStarted,
+          state.setupStarted
+        )
+      );
       release(state);
+    };
+    const operation = (name) => {
+      state.setupOperation = name;
+      state.operationStarted = performance.now();
+    };
+    state.close = () => {
+      if (!state.setupComplete) failedSetup('page_closed');
+      else release(state);
+    };
+    state.cancelSetup = (reason) => {
+      if (!state.setupComplete) failedSetup(reason);
     };
     try {
       page.on('close', state.close);
       // Never wait for diagnostic setup on the login path. Late/missing setup
       // is explicit evidence loss, not an authentication verdict.
-      state.timer = setTimeout(failedSetup, 1000);
+      state.timer = setTimeout(() => failedSetup('deadline'), SETUP_BUDGET_MS);
       state.timer.unref?.();
       Promise.resolve()
-        .then(() => (active && state.active ? context.newCDPSession(page) : null))
+        .then(() => {
+          if (!active || !state.active) return null;
+          operation('new_cdp_session');
+          return context.newCDPSession(page);
+        })
         .then(async (session) => {
           if (!session) return;
           state.session = session;
           try {
             if (!active || !state.active) return;
+            operation('register_network_listeners');
             const request = (event) => {
               try {
                 if (!active || !state.active) return;
@@ -177,28 +257,34 @@ function observeSessionConnections(context, log, responseMetadata) {
               session.on(name, handler);
               state.listeners.push([name, handler]);
             }
+            operation('network_enable');
             await session.send('Network.enable');
             if (!active || !state.active) return;
             clearTimeout(state.timer);
+            state.setupComplete = true;
             emitFor({ event: 'connection_observer', complete: true });
-          } catch {
-            if (active && state.active) failedSetup();
+          } catch (error) {
+            failedSetup('exception', error);
           } finally {
             if (!active || !state.active) detach(state);
           }
         })
-        .catch(() => {
-          if (active && state.active) failedSetup();
+        .catch((error) => {
+          failedSetup('exception', error);
         });
-    } catch {
-      failedSetup();
+    } catch (error) {
+      failedSetup('exception', error);
     }
   };
-  const dispose = () => {
+  const onContextClose = () => dispose('context_closed');
+  const dispose = (reason = 'observer_disposed') => {
+    if (!active) return;
+    for (const state of pages.values())
+      state.cancelSetup(reason === 'context_closed' ? 'context_closed' : 'observer_disposed');
     active = false;
     for (const [event, handler] of [
       ['page', observe],
-      ['close', dispose]
+      ['close', onContextClose]
     ]) {
       try {
         context.off(event, handler);
@@ -209,12 +295,16 @@ function observeSessionConnections(context, log, responseMetadata) {
     for (const state of pages.values()) release(state);
     pages.clear();
   };
+  let rootOperation = 'context_listeners';
+  let rootOperationStarted = performance.now();
   try {
     context.on('page', observe);
-    context.on('close', dispose);
+    context.on('close', onContextClose);
+    rootOperation = 'enumerate_pages';
+    rootOperationStarted = performance.now();
     for (const page of context.pages()) observe(page);
-  } catch {
-    emit({ event: 'connection_observer', complete: false, reason: 'setup_incomplete' });
+  } catch (error) {
+    emit(incomplete(rootOperation, 'exception', error, rootOperationStarted));
     dispose();
   }
   return { dispose };

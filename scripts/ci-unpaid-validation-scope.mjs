@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 export const proxyClientObservationControlPaths = Object.freeze([
   '.github/workflows/online-proxy-client-observation.yml',
@@ -13,10 +13,17 @@ export const proxyClientPublicationControlPaths = Object.freeze([
     (n) => 'scripts/production-release/online-proxy-client-' + n
   )
 ]);
+export const sessionObserverPublicationControlPaths = Object.freeze([
+  '.github/workflows/online-session-observer-publication.yml',
+  ...['release.py', 'publication.py', 'release.test.py', 'contract.json'].map(
+    (n) => 'scripts/production-release/online-session-observer-' + n
+  )
+]);
 export function isProxyClientControlsOnly(paths) {
   const controls = [
     ...proxyClientObservationControlPaths,
     ...proxyClientPublicationControlPaths,
+    ...sessionObserverPublicationControlPaths,
     'scripts/ci-unpaid-validation-scope.mjs',
     'scripts/ci-unpaid-validation-scope.test.mjs',
     'scripts/ci-recharge-scope.mjs'
@@ -25,7 +32,8 @@ export function isProxyClientControlsOnly(paths) {
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
     (proxyClientObservationControlPaths.every((p) => paths.includes(p)) ||
-      proxyClientPublicationControlPaths.every((p) => paths.includes(p))) &&
+      proxyClientPublicationControlPaths.every((p) => paths.includes(p)) ||
+      sessionObserverPublicationControlPaths.every((p) => paths.includes(p))) &&
     paths.every((p) => controls.includes(p))
   );
 }
@@ -45,20 +53,27 @@ export const proxyClientDiagnosticPaths = Object.freeze([
   'docs/V2_TASKS.md'
 ]);
 export function isProxyClientDiagnosticsOnly(paths) {
+  const runtime = proxyClientDiagnosticPaths.filter((p) => p.startsWith('apps/'));
+  const setup = [
+    'SOURCE_MANIFEST.json',
+    'session-connection-diagnostics.cjs',
+    'test/session-connection-diagnostics.test.cjs',
+    'test/session-request-observation.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
+  const support = [
+    ...proxyClientDiagnosticPaths.filter((p) => !p.startsWith('apps/')),
+    ...proxyClientObservationControlPaths.filter((p) => p.startsWith('scripts/')),
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
-    proxyClientDiagnosticPaths
-      .filter((p) => p.startsWith('apps/'))
-      .every((p) => paths.includes(p)) &&
-    paths.every(
-      (p) =>
-        proxyClientDiagnosticPaths.includes(p) ||
-        [
-          'scripts/ci-unpaid-validation-scope.mjs',
-          'scripts/ci-unpaid-validation-scope.test.mjs',
-          'scripts/ci-recharge-scope.mjs'
-        ].includes(p)
+    [runtime, setup].some(
+      (required) =>
+        required.every((p) => paths.includes(p)) &&
+        paths.every((p) => required.includes(p) || support.includes(p))
     )
   );
 }
@@ -638,6 +653,9 @@ export function unpaidValidationCommands(part, paths) {
       ...(paths.some((p) => p.includes('online-proxy-client-observation'))
         ? [['python3', '-B', 'scripts/production-release/online-proxy-client-observation.test.py']]
         : []),
+      ...(paths.some((p) => p.includes('online-session-observer-'))
+        ? [['python3', '-B', 'scripts/production-release/online-session-observer-release.test.py']]
+        : []),
       ...(paths.some(
         (p) =>
           p.includes('online-proxy-client-publication') || p.includes('online-proxy-client-release')
@@ -790,7 +808,22 @@ export function unpaidValidationCommands(part, paths) {
         'chromium'
       ],
       ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', 'ffmpeg'],
-      npm('run', 'test:online-recharge:engine')
+      ...(isProxyClientDiagnosticsOnly(paths)
+        ? [
+            [
+              'node',
+              '--test',
+              '--test-concurrency=1',
+              ...readdirSync(new URL('../' + engine + '/test/', import.meta.url), {
+                withFileTypes: true
+              })
+                .filter((file) => file.isFile() && file.name.endsWith('.test.cjs'))
+                .map((file) => engine + '/test/' + file.name)
+                .sort()
+            ],
+            npm('run', 'test:upstream', '--prefix', engine)
+          ]
+        : [npm('run', 'test:online-recharge:engine')])
     ];
   throw new Error('Unsupported unpaid validation part');
 }

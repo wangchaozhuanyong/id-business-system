@@ -958,15 +958,15 @@
       "path": "test/session-request-observation.test.cjs",
       "originalSha256": null,
       "changed": true,
-      "reason": "2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification.",
-      "adaptedSha256": "7804219e1855a38b95b20a0b3ee850541b305745074bd6b8e2644df40abd39a3"
+      "reason": "2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification. 2026-10-31 Preserve bounded observer setup operation, failure cause, safe error class and elapsed time; retain the 1s asynchronous budget and original request behavior, and cover cancellation, late completion and zero-HTTP Chromium initialization.",
+      "adaptedSha256": "c68acb1d33e979a8c06acfa0694626a0c530a624da7b8aa84b56f90fab0901c3"
     },
     {
       "path": "session-connection-diagnostics.cjs",
       "originalSha256": null,
-      "adaptedSha256": "19dc45fcd9e63db844644b96c7458c3ba2b08ce64b9661d50e77568e61035b24",
+      "adaptedSha256": "398919d6a4422341a608299f54d88bd00067ef6bcede3b0c3d543154f292c876",
       "changed": true,
-      "reason": "Bounded passive CDP Session connection metadata with local request identities, remote peer hashes, failure isolation and teardown."
+      "reason": "Bounded passive CDP Session connection metadata with local request identities, remote peer hashes, failure isolation and teardown. 2026-10-31 Preserve bounded observer setup operation, failure cause, safe error class and elapsed time; retain the 1s asynchronous budget and original request behavior, and cover cancellation, late completion and zero-HTTP Chromium initialization."
     },
     {
       "path": "proxy-client-diagnostic.cjs",
@@ -978,9 +978,9 @@
     {
       "path": "test/session-connection-diagnostics.test.cjs",
       "originalSha256": null,
-      "adaptedSha256": "f635b74224aeed052106c131c9b0f5ac3fa5acebd7850213b68804d335ece32e",
+      "adaptedSha256": "2b864c16914c6ae03e74538a483c38ab6ff4df93fcf1eff4e4932eb2912ece57",
       "changed": true,
-      "reason": "Synthetic passive CDP correlation, redirects, privacy, setup failure, late attachment and original cleanup outcome regressions."
+      "reason": "Synthetic passive CDP correlation, redirects, privacy, setup failure, late attachment and original cleanup outcome regressions. 2026-10-31 Preserve bounded observer setup operation, failure cause, safe error class and elapsed time; retain the 1s asynchronous budget and original request behavior, and cover cancellation, late completion and zero-HTTP Chromium initialization. Verify the exact scheduled 1000ms budget separately from observed elapsed-time precision."
     },
     {
       "path": "test/proxy-client-diagnostic.test.cjs",

@@ -203,20 +203,247 @@ test('context close before delayed CDP attach suppresses late events and detache
   await flush();
   assert.equal(f.detached(), 1);
   assert.deepEqual(f.commands, []);
-  assert.equal(f.events.length, 0);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].setupFailure, 'context_closed');
+  assert.equal(f.events[0].setupOperation, 'new_cdp_session');
   observer.dispose();
 });
 test('stalled diagnostic enable times out independently and does not wait on login', async () => {
   const f = fixture();
-  f.cdp.send = () => new Promise(() => {});
+  let finishEnable;
+  f.cdp.send = () =>
+    new Promise((resolve) => {
+      finishEnable = resolve;
+    });
   const observer = observeSessionConnections(
     f.context,
     (x) => f.events.push(x),
     responseReadMetadata
   );
   await new Promise((resolve) => setTimeout(resolve, 1050));
-  assert.equal(f.events.at(-1).reason, 'setup_incomplete');
+  const failure = f.events.at(-1);
+  assert.equal(failure.reason, 'setup_incomplete');
+  assert.equal(failure.setupOperation, 'network_enable');
+  assert.equal(failure.setupFailure, 'deadline');
+  assert.equal(failure.setupBudgetMs, 1000);
+  assert.equal(failure.errorName, 'none');
+  assert.equal(failure.errorClass, 'none');
+  assert.ok(Number.isSafeInteger(failure.setupElapsedMs));
+  assert.ok(failure.setupElapsedMs >= failure.operationElapsedMs);
+  assert.ok(failure.operationElapsedMs >= 0);
   assert.equal(f.detached(), 1);
+  finishEnable();
+  await flush();
+  request(f);
+  response(f);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.detached(), 1);
+  observer.dispose();
+});
+
+test('setup schedules exactly 1000ms and preserves measured elapsed time independently of timer precision', async () => {
+  const f = fixture();
+  let finishAttach, timer;
+  let now = 100;
+  f.context.newCDPSession = () =>
+    new Promise((resolve) => {
+      finishAttach = resolve;
+    });
+  const sandbox = {
+    module: { exports: {} },
+    require,
+    performance: { now: () => now },
+    setTimeout(callback, delay) {
+      timer = { callback, delay, unref() {} };
+      return timer;
+    },
+    clearTimeout() {}
+  };
+  runInNewContext(
+    fs.readFileSync(require.resolve('../session-connection-diagnostics.cjs'), 'utf8'),
+    sandbox
+  );
+  const observer = sandbox.module.exports.observeSessionConnections(
+    f.context,
+    (row) => f.events.push(row),
+    responseReadMetadata
+  );
+  await flush();
+  assert.equal(timer.delay, 1000);
+  // Timer delivery and the diagnostic's monotonic elapsed measurement are
+  // separate observations; the measured duration must never be fabricated.
+  now = 1099.2;
+  timer.callback();
+  assert.equal(f.events[0].setupFailure, 'deadline');
+  assert.equal(f.events[0].setupOperation, 'new_cdp_session');
+  assert.equal(f.events[0].setupBudgetMs, 1000);
+  assert.equal(f.events[0].setupElapsedMs, 999);
+  assert.equal(f.events[0].operationElapsedMs, 999);
+  finishAttach(f.cdp);
+  await flush();
+  assert.deepEqual(f.commands, []);
+  assert.equal(f.detached(), 1);
+  observer.dispose();
+});
+
+test('late attach retains the timed-out operation and detaches without starting Network.enable', async () => {
+  const f = fixture();
+  let finishAttach;
+  let attachCalls = 0;
+  f.context.newCDPSession = () => {
+    attachCalls++;
+    return new Promise((resolve) => {
+      finishAttach = resolve;
+    });
+  };
+  const observer = observeSessionConnections(
+    f.context,
+    (x) => f.events.push(x),
+    responseReadMetadata
+  );
+  await new Promise((resolve) => setTimeout(resolve, 1050));
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].setupOperation, 'new_cdp_session');
+  assert.equal(f.events[0].setupFailure, 'deadline');
+  assert.equal(f.events[0].setupBudgetMs, 1000);
+  finishAttach(f.cdp);
+  await flush();
+  assert.equal(attachCalls, 1);
+  assert.deepEqual(f.commands, []);
+  assert.equal(f.detached(), 1);
+  observer.dispose();
+  assert.equal(f.events.length, 1);
+});
+
+test('attach and enable exceptions retain safe operation and error classes without credential text', async () => {
+  for (const [operation, message, name, errorClass] of [
+    [
+      'new_cdp_session',
+      'Target page, context or browser has been closed',
+      'Error',
+      'target_closed'
+    ],
+    ['network_enable', 'Timeout ' + secret, 'TimeoutError', 'timeout'],
+    ['network_enable', 'Protocol error ' + secret, 'Error', 'protocol_error'],
+    ['new_cdp_session', 'Execution context was destroyed ' + secret, 'Error', 'context_destroyed'],
+    ['new_cdp_session', 'Connection closed ' + secret, 'Error', 'connection_closed'],
+    ['new_cdp_session', 'Not supported ' + secret, 'Error', 'unsupported'],
+    ['new_cdp_session', secret, secret, 'other']
+  ]) {
+    const f = fixture();
+    const error = Object.assign(new Error(message), { name });
+    if (operation === 'new_cdp_session')
+      f.context.newCDPSession = async () => {
+        throw error;
+      };
+    else
+      f.cdp.send = async () => {
+        throw error;
+      };
+    const observer = observeSessionConnections(
+      f.context,
+      (x) => f.events.push(x),
+      responseReadMetadata
+    );
+    await flush();
+    const row = f.events.at(-1);
+    assert.equal(row.setupOperation, operation);
+    assert.equal(row.setupFailure, 'exception');
+    assert.equal(row.errorClass, errorClass);
+    assert.equal(row.errorName, name === secret ? 'other' : name);
+    assert.equal(row.setupBudgetMs, 1000);
+    assert.ok(row.operationElapsedMs >= 0);
+    assert.ok(row.setupElapsedMs >= row.operationElapsedMs);
+    assert.equal(f.detached(), operation === 'new_cdp_session' ? 0 : 1);
+    assert.ok(!JSON.stringify(f.events).includes(secret));
+    observer.dispose();
+  }
+});
+
+test('page and observer closure during setup are explicit and never produce a later ready event', async () => {
+  for (const reason of ['page_closed', 'observer_disposed']) {
+    const f = fixture();
+    let finishEnable;
+    f.cdp.send = () =>
+      new Promise((resolve) => {
+        finishEnable = resolve;
+      });
+    const observer = observeSessionConnections(
+      f.context,
+      (x) => f.events.push(x),
+      responseReadMetadata
+    );
+    await flush();
+    if (reason === 'page_closed') f.page.emit('close');
+    else observer.dispose(secret);
+    finishEnable();
+    await flush();
+    assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].setupOperation, 'network_enable');
+    assert.equal(f.events[0].setupFailure, reason);
+    assert.equal(f.detached(), 1);
+    assert.equal(f.cdp.listenerCount('Network.responseReceived'), 0);
+    assert.ok(!JSON.stringify(f.events).includes(secret));
+    observer.dispose();
+  }
+});
+
+test('registration, context enumeration and unsupported contexts identify their exact setup operation', async () => {
+  for (const operation of [
+    'page_listener',
+    'register_network_listeners',
+    'context_listeners',
+    'enumerate_pages',
+    'context_support'
+  ]) {
+    const f = fixture();
+    const fail = () => {
+      throw new TypeError(secret);
+    };
+    if (operation === 'page_listener') f.page.on = fail;
+    if (operation === 'register_network_listeners') f.cdp.on = fail;
+    if (operation === 'context_listeners') f.context.on = fail;
+    if (operation === 'enumerate_pages') f.context.pages = fail;
+    if (operation === 'context_support') f.context.newCDPSession = undefined;
+    const observer = observeSessionConnections(
+      f.context,
+      (x) => f.events.push(x),
+      responseReadMetadata
+    );
+    await flush();
+    assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].setupOperation, operation);
+    assert.equal(
+      f.events[0].setupFailure,
+      operation === 'context_support' ? 'unsupported' : 'exception'
+    );
+    assert.ok(!JSON.stringify(f.events).includes(secret));
+    observer.dispose();
+  }
+});
+
+test('unreadable error properties remain isolated from the original Session request observer', async () => {
+  const f = fixture();
+  f.context.newCDPSession = async () => {
+    throw {
+      get name() {
+        throw Error(secret);
+      }
+    };
+  };
+  const observer = observeSessionRequests(f.context, (x) => f.events.push(x));
+  await flush();
+  assert.equal(f.events[0].errorName, 'other');
+  assert.equal(f.events[0].errorClass, 'other');
+  f.context.emit('request', {
+    url: () => url,
+    resourceType: () => 'fetch',
+    method: () => 'GET',
+    allHeaders: async () => ({})
+  });
+  await flush();
+  assert.equal(f.events.find((x) => x.event === 'request').resourceType, 'fetch');
+  assert.ok(!JSON.stringify(f.events).includes(secret));
   observer.dispose();
 });
 test('observation cap and malformed metadata do not expose unknown values or retain unlimited requests', async () => {
@@ -290,5 +517,48 @@ test('runtime finally disposes diagnostics on successful and failed original bro
     else await result.close();
     assert.equal(closed, 1);
     assert.equal(disposed, 1);
+  }
+});
+
+test('blank Chromium attaches passive diagnostics within the unchanged budget without HTTP traffic', async () => {
+  const { chromium } = require('../upstream/node_modules/playwright');
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--host-resolver-rules=MAP * ~NOTFOUND']
+  });
+  try {
+    const context = await browser.newContext({ serviceWorkers: 'block' });
+    let requests = 0;
+    context.on('request', () => {
+      requests++;
+    });
+    await context.route('**/*', (route) => route.abort());
+    const page = await context.newPage();
+    const rows = [];
+    let observed;
+    const result = new Promise((resolve) => {
+      observed = resolve;
+    });
+    const observer = observeSessionConnections(
+      context,
+      (row) => {
+        rows.push(row);
+        observed(row);
+      },
+      responseReadMetadata
+    );
+    try {
+      assert.equal((await result).complete, true);
+      await page.close();
+      assert.equal(rows.length, 1);
+      assert.equal(context.listenerCount('page'), 1);
+    } finally {
+      observer.dispose();
+      assert.equal(context.listenerCount('page'), 0);
+      await context.close();
+    }
+    assert.equal(requests, 0);
+  } finally {
+    await browser.close();
   }
 });
