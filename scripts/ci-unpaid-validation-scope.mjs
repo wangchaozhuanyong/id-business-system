@@ -1,6 +1,39 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+export const proxyClientDiagnosticPaths = Object.freeze([
+  ...[
+    'SOURCE_MANIFEST.json',
+    'proxy-client-diagnostic.cjs',
+    'session-connection-diagnostics.cjs',
+    'subscription-diagnostics.cjs',
+    'upstream/browser-runtime.js',
+    'test/proxy-client-browser.test.cjs',
+    'test/proxy-client-diagnostic.test.cjs',
+    'test/session-connection-diagnostics.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name),
+  'docs/ONLINE_RECHARGE.md',
+  'docs/V2_TASKS.md'
+]);
+export function isProxyClientDiagnosticsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    proxyClientDiagnosticPaths
+      .filter((p) => p.startsWith('apps/'))
+      .every((p) => paths.includes(p)) &&
+    paths.every(
+      (p) =>
+        proxyClientDiagnosticPaths.includes(p) ||
+        [
+          'scripts/ci-unpaid-validation-scope.mjs',
+          'scripts/ci-unpaid-validation-scope.test.mjs',
+          'scripts/ci-recharge-scope.mjs'
+        ].includes(p)
+    )
+  );
+}
+
 export const browserRegionPaths = Object.freeze([
   'AGENTS.md',
   ...[
@@ -390,7 +423,12 @@ export function isProfileLockRecoveryOnly(paths) {
   );
 }
 export function isUnpaidValidationOnly(paths) {
-  if (isProfileLockRecoveryOnly(paths) || isBrowserRegionOnly(paths)) return true;
+  if (
+    isProfileLockRecoveryOnly(paths) ||
+    isBrowserRegionOnly(paths) ||
+    isProxyClientDiagnosticsOnly(paths)
+  )
+    return true;
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
