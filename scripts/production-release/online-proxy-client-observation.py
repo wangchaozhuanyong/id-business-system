@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 ACCOUNT = '098208446664'
 INSTANCE = 'i-0838cebf64f0e2a89'
-PREDECESSOR = '1467a766701cf78a4da40f6871b7a66a1bf806a8'
+PREDECESSOR = '8ff49238b47a5c227fce70dfbb057ce3ce526ca7'
 PROXY = '0ae77e06-f2e4-4d9c-bee8-c9424c8905fb'
 DIAGNOSTIC_SHA = 'ab84521fa4431f3e6bc8f21b50dad6aa6f78d92f9c5410d3818db3d9273ad5a7'
 
@@ -24,11 +24,11 @@ from pathlib import Path
 base=Path('/opt/id-business-v2');current=(base/'current').resolve(strict=True)
 assert current.parent==base/'releases'
 assert json.loads((current/'release-manifest.json').read_bytes())['commit']==EXPECTED
-helper=current/'scripts/production-release/online-browser-region-release.py'
-assert hashlib.sha256(helper.read_bytes()).hexdigest()==PLAN['controlSources']['online-browser-region-release.py']
+helper=current/'scripts/production-release/online-proxy-client-release.py'
+assert hashlib.sha256(helper.read_bytes()).hexdigest()==PLAN['controlSources']['online-proxy-client-release.py']
 spec=importlib.util.spec_from_file_location('parent',helper);p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 c=json.loads((helper.parent/p.CONTRACT_FILE).read_bytes())
-assert p.release({**PLAN,'mode':'readback'},c)['status']=='ONLINE_BROWSER_REGION_20261030_INDEPENDENT_READBACK_VERIFIED'
+assert p.release({**PLAN,'mode':'readback'},c)['status']=='ONLINE_PROXY_CLIENT_20261031_INDEPENDENT_READBACK_VERIFIED'
 core=p.engine(c,PLAN);h,_old,d,*_=core.LEGACY.helpers()
 raw=(current/'release-manifest.json').read_bytes();states=h.snapshot(d,current)
 history=p.load('bitbrowser-history-release.py');history.MODULES=frozenset()

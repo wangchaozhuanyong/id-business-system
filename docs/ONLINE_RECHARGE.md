@@ -960,3 +960,13 @@ CI 按本批四个执行器文件及两份文档精确登记，并允许现有�
 观察器异步附着，不等待它就能继续原登录。初始化失败/1秒内未就绪记录setup_incomplete，不重试、不触发新请求、不改变原任务结果；尚未附着时发生的流量不可追溯，缺记录不能解读为没有请求。每上下文最多观察30个Session请求、30个页面，页面关闭释放所属CDP；上下文关闭和运行时close的finally均清理监听，迟到事件丢弃。不存在“CDP连接编号相同就证明公网出口相同”的判定。
 
 隔离测试只用合成IP、空白上下文及本机HTTPS/CONNECT夹具，禁止外网解析与生产数据库连接；合成TLS证书的放行仅在测试注入器内，正式实现保留证书校验。不把本地夹具结果写成真实代理对照或官网验收结论。版本和测试回执归`.runtime/proxy-client-diagnostics-20261030/`；本轮未发布，未新增业务任务或付款。
+
+## 2026-10-31 Session连接观察器初始化分类（本地候选）
+
+线上唯一只读查询cea0319a复现首次Session HTTP200、首页Session fetch HTTP403且cf-mitigated=challenge，约34.5秒后以CHALLENGE_BLOCKED结束。本笔连接观察器仅返回setup_incomplete（pageSequence=3、elapsedMs=1212），无法区分初始化期限到达、附着CDP或Network.enable异常，不能据此断言1秒不够、出口漂移或指纹问题。真实回执归`.runtime/proxy-client-diagnostics-20261030/query-20261031-cea0319a/`。
+
+本批保留reason=setup_incomplete兼容既有日志，新增受控setupOperation（context_support/context_listeners/enumerate_pages/page_listener/new_cdp_session/register_network_listeners/network_enable）、setupFailure（unsupported/exception/deadline/page_closed/context_closed/observer_disposed）、errorName/errorClass及setupBudgetMs/setupElapsedMs/operationElapsedMs。异常名称和类别只输出允许枚举，不记录原始message、stack、URL、IP、Cookie或Session。页面关闭、上下文关闭与主动释放在尚未就绪时记录取消位置；就绪后正常关闭不生成初始化失败。
+
+初始化仍为异步且总预算1000ms，不等待观察器就能继续登录、不重试、不追加HTTP或改请求头。迟到CDP连接仅释放自身会话，迟到Network.enable不恢复监听、不补发请求，Promise超时不等于底层操作已取消。原有分区、代理、登录核验、挑战退出、付款和业务期限保持。没有新公开API、数据库表/列、迁移、配置、依赖或环境变量。
+
+回归覆盖附着/启用期限、各初始化操作异常、关闭/取消、迟到完成、日志隔离及空白Chromium零HTTP初始化；CI只新增本批四文件精确范围，保留guards和完整online-engine检查。候选检查归`.runtime/session-observer-setup-20261031/`，本轮不提交、不发布、不重启、不新增线上任务；本地诊断修复不代表403或代充恢复。

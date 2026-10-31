@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   proxyClientObservationControlPaths,
   proxyClientPublicationControlPaths,
+  sessionObserverPublicationControlPaths,
   isProxyClientControlsOnly,
   proxyClientDiagnosticPaths,
   isProxyClientDiagnosticsOnly,
@@ -803,6 +804,12 @@ test('proxy client diagnostics scope retains full engine tests and excludes auth
   assert.equal(isProxyClientDiagnosticsOnly(paths), true);
   assert.equal(checkMode(paths), 'recharge');
   assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  const withCapture = [
+    ...paths,
+    ...proxyClientObservationControlPaths.filter((p) => p.startsWith('scripts/'))
+  ];
+  assert.equal(isProxyClientDiagnosticsOnly(withCapture), true);
+  assert.deepEqual(selectedParts(withCapture), ['guards', 'online-engine']);
   assert.match(
     JSON.stringify(unpaidValidationCommands('online-engine', paths)),
     /test:online-recharge:engine/
@@ -824,13 +831,17 @@ test('proxy client diagnostics scope retains full engine tests and excludes auth
 });
 
 test('proxy client controls are finite, preserve contract tests and cannot admit business changes', () => {
-  for (const paths of [proxyClientObservationControlPaths, proxyClientPublicationControlPaths]) {
+  for (const paths of [
+    proxyClientObservationControlPaths,
+    proxyClientPublicationControlPaths,
+    sessionObserverPublicationControlPaths
+  ]) {
     assert.equal(isProxyClientControlsOnly(paths), true);
     assert.equal(checkMode(paths), 'ci-only');
     assert.deepEqual(selectedParts(paths), ['guards']);
     assert.match(
       JSON.stringify(unpaidValidationCommands('guards', paths)),
-      /online-proxy-client-.*test.py/
+      /online-(?:proxy-client|session-observer)-.*test.py/
     );
     assert.equal(
       isProxyClientControlsOnly([
@@ -843,4 +854,43 @@ test('proxy client controls are finite, preserve contract tests and cannot admit
     for (const p of paths)
       assert.equal(isProxyClientControlsOnly(paths.filter((x) => x !== p)), false);
   }
+});
+
+test('connection setup diagnostic repair retains full engine checks with an exact four-file runtime scope', () => {
+  const required = [
+    'SOURCE_MANIFEST.json',
+    'session-connection-diagnostics.cjs',
+    'test/session-connection-diagnostics.test.cjs',
+    'test/session-request-observation.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
+  const paths = [
+    ...required,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md',
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs'
+  ];
+  assert.equal(isProxyClientDiagnosticsOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
+  for (const missing of required)
+    assert.equal(isProxyClientDiagnosticsOnly(paths.filter((p) => p !== missing)), false);
+  for (const extra of [
+    'browser-profile.cjs',
+    'proxy-client-diagnostic.cjs',
+    'upstream/session-auth.js',
+    'upstream/stripe-payment.js'
+  ])
+    assert.equal(
+      isProxyClientDiagnosticsOnly([
+        ...paths,
+        'apps/api/src/id-business-v2/online-recharge/engine/' + extra
+      ]),
+      false
+    );
+  assert.equal(isProxyClientDiagnosticsOnly([...paths, paths[0]]), false);
 });

@@ -1,9 +1,9 @@
 {
-  "artifactSha256": "9a8f9c46119b3b0f9b5796283c61f10c61bc0383ed23b7b45319a0feb97c0cf4",
-  "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-browser-region-1467a766701cf78a4da40f6871b7a66a1bf806a8/online-browser-region-artifact.tar.gz",
-  "buildProofSha256": "9d3b713e4a1bed9628e3e8e9ce238712d9e66d1567112692ca5632dc6c85211b",
-  "commit": "1467a766701cf78a4da40f6871b7a66a1bf806a8",
-  "contractSha256": "8f698f0f5a10ed11d37d91576272bf19a2ede0146fe0e09d6a5ebe820a1bbce6",
+  "artifactSha256": "26a031ac053670a48ff0cb170b744c343e625d193a0449e4134987c184e4a01c",
+  "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-proxy-client-8ff49238b47a5c227fce70dfbb057ce3ce526ca7/online-proxy-client-artifact.tar.gz",
+  "buildProofSha256": "464c9b2c6e639f6b6d52dda687b7e1a555018ec11d78b51765b8c491fa43c4c7",
+  "commit": "8ff49238b47a5c227fce70dfbb057ce3ce526ca7",
+  "contractSha256": "b8e4dc73a6a038a1768a0b97c421cd3d7b160340598cbc125eb85a60dbdc9176",
   "controlSources": {
     "api-admin-pending-projection.py": "592aebbeb7c8605587924416b0632dc4533eacfb3305793b577db3827bbf8d78",
     "api-admin-pending-receipt-wire.py": "47cba3fad47077f30c83d8cfe5a8907b797eeeb2fedd78e764a47a42a0849c75",
@@ -11,10 +11,6 @@
     "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
     "api-workspace-declaration-artifacts.py": "bff9bdfecb8e53be3b9a04294acaa6f3d6982ef1cf0e6c392808197413de54fe",
     "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
-    "online-browser-region-contract.json": "8f698f0f5a10ed11d37d91576272bf19a2ede0146fe0e09d6a5ebe820a1bbce6",
-    "online-browser-region-publication.py": "201c9779bd6b944402a634b898857a332410da790c86317d320720a081375c30",
-    "online-browser-region-release.py": "a32c60f159265e70f9fd6a3d6173dc71951703cf78019708e624b56a36b3d9eb",
-    "online-browser-region-release.test.py": "aba2cc3c57ee9cf085f583831a32d230cd85bd1d517314412c7e7b4741862923",
     "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
     "online-checkout-initialization-release.py": "3dde1aa3b134f87b31fcbe647e7655f2d62ce87513227c49b43189cebd0689f2",
     "online-checkout-load-release.py": "50f9608895bf0072c38a2549a8db70c941316339c3a4626b179ca8b016078374",
@@ -22,6 +18,10 @@
     "online-native-fetch-release.py": "e861216b6c903763b2373b1091f50dc48a4b3ef9d9156435c9b3238e4cdcb654",
     "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
     "online-profile-lock-recovery.py": "bda837bfe6b6b8ca91f356fe780c13d75de15928d017a1fe6780d7b481065b58",
+    "online-proxy-client-contract.json": "b8e4dc73a6a038a1768a0b97c421cd3d7b160340598cbc125eb85a60dbdc9176",
+    "online-proxy-client-publication.py": "3a82f081cd0af2cb66e5258fbd869e349684ce2ef1ee9f3a2f9c5d07133b388a",
+    "online-proxy-client-release.py": "2c909f1f3aa19da364c59d4adf3ad1031d5c74afdda6ab578ffa4e79c28b60ae",
+    "online-proxy-client-release.test.py": "186af6dc6a64164299503c667896c891c429e4dd55674bc9e61e6a205feff134",
     "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
     "online-recharge-component-consumer.py": "b7979889d857f45d7d7eac87d475e06ab8312669dfb5952120cf7f58b1318ed6",
     "online-recharge-component-readonly.py": "c978531fe72da209e6b3da94b6df41ff4c1d4df7722bcb30f374ed25a74dccfc",
@@ -54,21 +54,21 @@
     "baseline": {
       "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
       "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
-      "commit": "42443056ac7d17b1a8c9146da62a6439755b234a",
+      "commit": "1467a766701cf78a4da40f6871b7a66a1bf806a8",
       "configurationSha256": {
         ".env.aws.production": "7de277c90700f62ac334282c2ff8331d110755d1a41d32422f73c4c172f0f03e",
         "apps/api/prisma-mysql/schema.prisma": "690a8d26006175166578ff07d2a22ac146852df0b3499ec27ac3fd2fa827905c",
-        "compose.release.json": "8027cb0504da9d30663129f2caf39e1199334738ee9965a31835b7a1fc3d00ac",
+        "compose.release.json": "c009fdd60d1c724b3b574317bfe2bfd4dfdf782e355af3a0b529bfca9c6075d3",
         "deploy/caddy/Caddyfile.aws": "e6a6c999301fc988c60358b62b23d7734bd8272937c29707e9faec61596de018",
         "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
       },
-      "current": "/opt/id-business-v2/releases/20261028T094715Z-42443056ac7d-online-checkout",
+      "current": "/opt/id-business-v2/releases/20261030T112301Z-1467a766701c-online-browser-region",
       "database": {
         "columns": "3173a74d4e30d94a635db96d4f8e9ee70b0d7d9177cfaaaa003ed0420d4b2b5e",
         "ledger": "f3b18f8393fcd7c5f589dcf76e4d681d3d076a845c033e263da864e1f36e3d52",
         "pending": 0
       },
-      "manifestSha256": "76064666194e52afd3e12a32a70652648f582c12cf65da57e403e9e959b2117e",
+      "manifestSha256": "182fb17d503405d5983d8a2928bd61eb41009631d8329980ff5ec5243432a567",
       "runtime": {
         "adminInventory": {
           "count": 7779,
@@ -154,12 +154,12 @@
           "status": "running"
         },
         "online-recharge": {
-          "containerId": "4a290ceee8f752faeda648ef6bf303388816d3d8289e374985fbff95c23abd07",
+          "containerId": "6662e5ba97af792ea4f0a3f0ec5c74a375456cebfe522f4de9d5f9fe26bac3bc",
           "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
           "health": "healthy",
-          "image": "sha256:5d3e8f05d8b1a54647e0ac53dbd5ac7282153dba9d989b8dde4bdfc10b13e4d5",
-          "reference": "id-business-v2-online-frame-attempts:42443056ac7d17b1a8c9146da62a6439755b234a-40666279081-online-recharge",
-          "startedAtSha256": "208cc8c465c7839bcf8b1d810b2b2088a0f814202fc28c66328291133bb60353",
+          "image": "sha256:3173b32eda7a093d9ad360186c7821411f53fa10f50c271dcce81f8d97b61faf",
+          "reference": "id-business-v2-online-browser-region:1467a766701cf78a4da40f6871b7a66a1bf806a8-41047465067",
+          "startedAtSha256": "d14e5851ac94698b2a83d11e9882b686c2cba8a43ef4968c0d62e0da836e7f29",
           "status": "running"
         }
       }
@@ -168,31 +168,31 @@
     "status": "ONLINE_NATIVE_FETCH_PARENT_VERIFIED"
   },
   "qualitySourceEvidence": {
-    "commit": "1467a766701cf78a4da40f6871b7a66a1bf806a8",
+    "commit": "8ff49238b47a5c227fce70dfbb057ce3ce526ca7",
     "control": {
-      "head": "881e782ea49b91e9eb35cb3b710c4f39d6828949",
-      "pullRequest": 760,
+      "head": "86b9f7d85206ac5ed6ddbcf7e739aec4aec4710c",
+      "pullRequest": 763,
       "runAttempt": "1",
-      "runId": "41047190470",
-      "sourceReceiptSha256": "29894d25a4124a8e77abb524d503593b3ceac98df998183e478872c9f75c698c",
-      "tree": "5ae26ed0228e4c5bceb2315cf149b35e6b042d3f"
+      "runId": "41157401775",
+      "sourceReceiptSha256": "2a95fd8b332f9e67374cef54cdb4ba67eb43446350f584e033eef70187eb53d8",
+      "tree": "15187eb26d86dbd92b2239e2250d0893c9bb6813"
     },
     "main": {
-      "head": "1467a766701cf78a4da40f6871b7a66a1bf806a8",
+      "head": "8ff49238b47a5c227fce70dfbb057ce3ce526ca7",
       "runAttempt": "1",
-      "runId": "41047373715"
+      "runId": "41157479061"
     },
     "source": {
-      "head": "b879e6a0cc94fd14887c5d78ddd83e345ebff44a",
-      "pullRequest": 759,
+      "head": "af871efc7d2371ea08acd0a55c66f68166fa43f0",
+      "pullRequest": 761,
       "runAttempt": "1",
-      "runId": "41045996452",
-      "sourceReceiptSha256": "d8899a0a788816b06b09bcfe3f02c9d83e3dd48b8973dc59485c4df57cceec99",
-      "tree": "51fd8a2da030466a59feff7a4b1ecda9c5fa2461"
+      "runId": "41156152146",
+      "sourceReceiptSha256": "53b55cbdce1c34a188da97a81711c705e6bf4d1f82f5c5f2d7a6594f01bf4f65",
+      "tree": "f7f2d8c79a6832c8556d0cc13e5cc4acd4d7d902"
     },
-    "tree": "5ae26ed0228e4c5bceb2315cf149b35e6b042d3f"
+    "tree": "15187eb26d86dbd92b2239e2250d0893c9bb6813"
   },
-  "tree": "5ae26ed0228e4c5bceb2315cf149b35e6b042d3f",
+  "tree": "15187eb26d86dbd92b2239e2250d0893c9bb6813",
   "workflowRunAttempt": "1",
-  "workflowRunId": "41047465067"
+  "workflowRunId": "41157522932"
 }

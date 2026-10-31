@@ -103,7 +103,12 @@ test('close detaches the listeners and suppresses late header observations', asy
   release({ Cookie: secret });
   await flush();
   observer.dispose();
-  assert.equal(events.length, 1);
+  assert.deepEqual(
+    events.map((e) => e.event),
+    ['connection_observer', 'request']
+  );
+  assert.equal(events[0].setupOperation, 'context_support');
+  assert.equal(events[0].setupFailure, 'unsupported');
   for (const name of ['request', 'response', 'requestfailed', 'close'])
     assert.equal(context.listenerCount(name), 0);
 });
