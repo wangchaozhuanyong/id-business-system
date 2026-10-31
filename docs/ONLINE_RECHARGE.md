@@ -946,3 +946,17 @@ CI 按本批四个执行器文件及两份文档精确登记，并允许现有�
 原生上下文在首次Session探针前登记被动监听，现有受限日志按请求序号记录document/fetch及重定向来源、Cookie发送布尔值、HTTP状态、内容类别及挑战标记。请求头读取未完成时记录complete=false，不把缺证据当作Cookie未发送；不保存URL、Cookie/Authorization值或响应正文。监听不发请求、不等待求解、不改业务期限；输出失败不改变任务结果，关闭后移除监听。
 
 独立临时采集器另保留动态CDP端口与逐跳ExtraInfo对照；该辅助采集不替代正式业务入口，逐跳事件不完整时明确未确认。候选与合成证据归.runtime/browser-region-consistency-20261030；本批不新增公开API、数据库结构、环境变量或依赖，未提交、推送、发布或新增线上任务。地区一致性修复不能当作403根因已确定，付款前链路仍须另获真实回执。
+
+## 2026-10-30 代理客户端对照与被动连接诊断（本地候选，未发布）
+
+本批只补证据，不改变现有出口变化后新分区、原生互斥、历史分区回收、Session核验、挑战退出、填卡/账单/付款逻辑及任何业务预算。独立工具`engine/proxy-client-diagnostic.cjs`导出`runProxyClientDiagnostic({ proxyConfig })`，必须显式调用并只传入现有正式proxy配置；不从环境或任务读取账号资料，不复用真实profile，不注入Cookie或Session，也不接入任务重试/兜底。
+
+工具冷启独立Chromium空白上下文，唯一回显目标为`https://api.ipify.org/?format=text`。固定次序为导航→APIRequest→回显页面内同源fetch→APIRequest→同源fetch，最多5次检测、含清理总期限90秒。APIRequest关闭重定向跟随和重试；空白诊断上下文仅放行本次唯一GET，额外导航、重定向、favicon等请求拒绝，相关拦截只属于独立诊断，不用于官网任务。导航失败不从about:blank或官网页面执行跨域检测。原始IP只在内存校验后生成摘要，原始异常仅映射为CSP/CORS/超时/取消/网络等受控原因。缺一份有效观察或资源关闭未确认，均为diagnostic_incomplete，不回写代理可用性或修改分区绑定。
+
+本对照固定HTTPS及无头空白浏览器，不能直接推及正式有头任务或既有HTTP出口探测。三种客户端出口摘要相同只记observations_match，范围严格为sampled_echo_service_window_only；不一致只记observations_differ，不能区分客户端路径差异与先后连接间轮换。二者都不能代表ChatGPT实际看到的出口、证明分区切换正确或排除403根因。供应商sticky模式、session TTL、跨目标域名路由仍需其说明或链路日志。
+
+正式任务复用原`observeSessionRequests`入口，额外通过CDP Network.enable被动观察已有Session document/fetch/XHR。日志保留本地页序号、请求序号/重定向跳数、connectionId、connectionReused、受控HTTP/挑战/server类别及remoteAddressHash；后者明确标注remote_peer_not_client_exit，不能当作客户端公网出口。CDP局部requestId映射为本地整数，原URL、Cookie、凭据、响应体及原始远端地址不落日志。日志仍走现有任务事件，不新增结果字段或API/Admin合同。
+
+观察器异步附着，不等待它就能继续原登录。初始化失败/1秒内未就绪记录setup_incomplete，不重试、不触发新请求、不改变原任务结果；尚未附着时发生的流量不可追溯，缺记录不能解读为没有请求。每上下文最多观察30个Session请求、30个页面，页面关闭释放所属CDP；上下文关闭和运行时close的finally均清理监听，迟到事件丢弃。不存在“CDP连接编号相同就证明公网出口相同”的判定。
+
+隔离测试只用合成IP、空白上下文及本机HTTPS/CONNECT夹具，禁止外网解析与生产数据库连接；合成TLS证书的放行仅在测试注入器内，正式实现保留证书校验。不把本地夹具结果写成真实代理对照或官网验收结论。版本和测试回执归`.runtime/proxy-client-diagnostics-20261030/`；本轮未发布，未新增业务任务或付款。

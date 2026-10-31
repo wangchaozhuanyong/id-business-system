@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  proxyClientDiagnosticPaths,
+  isProxyClientDiagnosticsOnly,
   browserRegionPaths,
   isBrowserRegionOnly,
   freshSessionPaths,
@@ -786,4 +788,34 @@ test('browser region publication is a finite control-only companion', () => {
     ]),
     false
   );
+});
+
+test('proxy client diagnostics scope retains full engine tests and excludes authentication/payment/schema changes', () => {
+  const paths = [
+    ...proxyClientDiagnosticPaths,
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    'scripts/ci-recharge-scope.mjs'
+  ];
+  assert.equal(isProxyClientDiagnosticsOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('online-engine', paths)),
+    /test:online-recharge:engine/
+  );
+  assert.match(
+    JSON.stringify(unpaidValidationCommands('guards', paths)),
+    /check:v2-module-architecture/
+  );
+  for (const required of proxyClientDiagnosticPaths.filter((p) => p.startsWith('apps/')))
+    assert.equal(isProxyClientDiagnosticsOnly(paths.filter((p) => p !== required)), false);
+  for (const extra of [
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/engine/browser-profile.cjs',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/session-auth.js',
+    'apps/api/src/id-business-v2/online-recharge/engine/upstream/stripe-payment.js'
+  ])
+    assert.equal(isProxyClientDiagnosticsOnly([...paths, extra]), false);
+  assert.equal(isProxyClientDiagnosticsOnly([...paths, paths[0]]), false);
 });

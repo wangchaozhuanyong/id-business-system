@@ -208,9 +208,9 @@
     {
       "path": "subscription-diagnostics.cjs",
       "originalSha256": null,
-      "adaptedSha256": "8acc7135cd9b2f9b7d951c673130c1a720a5d3d8f43131485f2e965446fbab3d",
+      "adaptedSha256": "b2e14f571aeb0bfc32e5cdafc105e4bea1d24dd51e94098f43ee9313da5800e8",
       "changed": true,
-      "reason": "Authorized subscription-response triage and existing manual verification continuation; passive auth receipts, original identity recheck, no payment or extra checkout.; 2026-10-23 preserve initial Session classifications, independently verify homepage Session, bounded original-page human continuation and passive query network evidence; retain at most five same-proxy connectivity attempts. 2026-10-27: bounded same-context read-only body fallback for payment preflight, original deadline/two-GET cap, confirmed cancellation and network classification; synthetic regressions only. 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
+      "reason": "Keep existing passive Session metadata and attach isolated CDP connection observations without authentication or request changes."
     },
     {
       "path": "subscription-network-diagnostics.cjs",
@@ -642,9 +642,9 @@
     {
       "path": "upstream/browser-runtime.js",
       "originalSha256": "6a2063b7f6d56fc1e92adc1f7f2acaa046acad2fc706fda21f05c3e1fcc005a7",
-      "adaptedSha256": "22cd1b0c8dc550f2aefc88315108b9a7b9ace6cc03e98d9053912f277601e378",
+      "adaptedSha256": "236402e1600e7337c6c0e82079d970d6dad61bb3b6b8a76c29e3361a91b18552",
       "changed": true,
-      "reason": "冻结原版保持不变。 2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification."
+      "reason": "Dispose passive Session diagnostics in the original browser close finally without altering original close errors."
     },
     {
       "path": "upstream/browser-standalone.js",
@@ -960,6 +960,41 @@
       "changed": true,
       "reason": "2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification.",
       "adaptedSha256": "7804219e1855a38b95b20a0b3ee850541b305745074bd6b8e2644df40abd39a3"
+    },
+    {
+      "path": "session-connection-diagnostics.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "19dc45fcd9e63db844644b96c7458c3ba2b08ce64b9661d50e77568e61035b24",
+      "changed": true,
+      "reason": "Bounded passive CDP Session connection metadata with local request identities, remote peer hashes, failure isolation and teardown."
+    },
+    {
+      "path": "proxy-client-diagnostic.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "ab84521fa4431f3e6bc8f21b50dad6aa6f78d92f9c5410d3818db3d9273ad5a7",
+      "changed": true,
+      "reason": "Explicit blank-context three-client HTTPS echo comparison with five requests, 90 second total budget, no credentials or recharge integration."
+    },
+    {
+      "path": "test/session-connection-diagnostics.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "f635b74224aeed052106c131c9b0f5ac3fa5acebd7850213b68804d335ece32e",
+      "changed": true,
+      "reason": "Synthetic passive CDP correlation, redirects, privacy, setup failure, late attachment and original cleanup outcome regressions."
+    },
+    {
+      "path": "test/proxy-client-diagnostic.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "8541cb0725d3a4956107c30e7e5233a03891fa0afa9092f4718aab289ea634d0",
+      "changed": true,
+      "reason": "Synthetic bounded client comparison, safe output, cancellation, deadline and incomplete cleanup regressions."
+    },
+    {
+      "path": "test/proxy-client-browser.test.cjs",
+      "originalSha256": null,
+      "adaptedSha256": "ce0e4b0c8b15a174c58906ff8daef4eacdd1db07fb1bbfd98baf5d11fdc541c8",
+      "changed": true,
+      "reason": "Real Chromium loopback-only HTTPS/CONNECT fixtures for exact five-sample comparison and zero-extra-request Session observation."
     }
   ],
   "dependencySecurityPatches": [

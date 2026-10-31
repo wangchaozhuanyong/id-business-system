@@ -19,6 +19,7 @@ import {
 import {
   isFreshSessionOnly,
   isBrowserRegionOnly,
+  isProxyClientDiagnosticsOnly,
   isCountryFrameScrollOnly,
   isProfileLockRecoveryOnly,
   isPersistentProfileOnly,
@@ -3201,6 +3202,7 @@ export function selectedParts(paths, grantHelperSnapshot, context) {
   if (
     isProfileLockRecoveryOnly(paths) ||
     isBrowserRegionOnly(paths) ||
+    isProxyClientDiagnosticsOnly(paths) ||
     isFreshSessionOnly(paths) ||
     isCountryFrameScrollOnly(paths)
   )

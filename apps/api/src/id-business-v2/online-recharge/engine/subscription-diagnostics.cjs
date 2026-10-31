@@ -1,6 +1,6 @@
 'use strict';
 
-// Only fixed enums, booleans and bounded counts leave this module. Raw response
+// Only controlled metadata leaves this module. Raw response
 // bodies, header values, identities and credentials remain transient inputs.
 const ERROR_CODES = new Set([
   'unsupported_country',
@@ -288,6 +288,7 @@ function observeSessionRequests(
   const started = performance.now();
   let active = true,
     count = 0;
+  let connections;
   const isSession = (request) => {
     try {
       const url = new URL(request.url());
@@ -387,6 +388,11 @@ function observeSessionRequests(
   };
   const dispose = () => {
     active = false;
+    try {
+      connections?.dispose();
+    } catch {
+      /* Diagnostic disposal never blocks business cleanup. */
+    }
     for (const [event, listener] of [
       ['request', request],
       ['response', response],
@@ -404,6 +410,15 @@ function observeSessionRequests(
   context.on('response', response);
   context.on('requestfailed', failed);
   context.on('close', dispose);
+  try {
+    connections = require('./session-connection-diagnostics.cjs').observeSessionConnections(
+      context,
+      log,
+      responseReadMetadata
+    );
+  } catch {
+    emit('connection_observer', {}, { complete: false, reason: 'setup_incomplete' });
+  }
   return { dispose };
 }
 
