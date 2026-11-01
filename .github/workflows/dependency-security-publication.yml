@@ -1,0 +1,59 @@
+name: Dependency Security Publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact reviewed main commit
+        required: true
+        type: string
+      expected_current:
+        description: Exact deployed predecessor
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - name: Verify finite dependency capture
+        run: |
+          python3 -B scripts/production-release/dependency-security-publication.py check
+          python3 -B scripts/production-release/dependency-security-publication.test.py
+      - name: Configure existing production observation role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-dependency-observe-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Capture the exact deployed dependency baseline without writes
+        run: python3 -B scripts/production-release/dependency-security-publication.py capture
+      - name: Preserve credential-free observation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dependency-security-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/dependency-security/*.json
+          include-hidden-files: true
+          if-no-files-found: warn

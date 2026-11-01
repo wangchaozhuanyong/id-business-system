@@ -32,6 +32,30 @@ import test from 'node:test';
 import { financialPublicationControlPaths } from './ci-financial-publication-scope.mjs';
 import { financialClosurePaths } from './ci-financial-closure-scope.mjs';
 
+test('依赖发布控制真实入口保留来源和离线校验并拒绝业务模式', () => {
+  const calls = recordGuardCommands('ci-only', [...dependencySecurityControls]);
+  assert.ok(
+    calls.some((call) =>
+      call.includes('scripts/production-release/dependency-security-publication.test.py')
+    )
+  );
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.includes('scripts/production-release/dependency-security-publication.py') &&
+        call.includes('check')
+    )
+  );
+  assert.equal(
+    calls.some((call) => call.some((arg) => /prisma|acceptance:v2|--workspace/.test(arg))),
+    false
+  );
+  assert.throws(
+    () => recordGuardCommands('recharge', [...dependencySecurityControls]),
+    /control selection/
+  );
+});
+
 test('回填源码真实入口保留四类检查并拒绝错误模式', () => {
   for (const part of ['guards', 'api', 'admin', 'online-engine'])
     assert.deepEqual(
@@ -4312,3 +4336,4 @@ test('finite mailbox publisher checks retain native guards without selecting a d
     false
   );
 });
+import { dependencySecurityControls } from './ci-dependency-security-scope.mjs';
