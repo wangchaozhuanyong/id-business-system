@@ -1210,7 +1210,7 @@ describe('动态代理网络故障有限恢复同一窗口', () => {
       if (path === '/browser/close') throw new DirectBrowserError('bitbrowser_direct_rejected');
       return original(path, body);
     });
-    await expect(run()).rejects.toThrow('拒绝');
+    await expect(run()).rejects.toMatchObject({ reason: 'bitbrowser_direct_rejected' });
     expect(mock.post.mock.calls.filter(([path]) => path === '/browser/open')).toHaveLength(1);
   });
   it('关闭请求与PID确认共用15秒，迟到关闭响应不能再轮询或重开', async () => {

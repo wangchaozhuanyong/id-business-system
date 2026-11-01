@@ -3155,6 +3155,8 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
     ? Object.fromEntries(
         Object.entries({
           '.github/workflows/quality.yml': '745aff41f2b3ffcb13d9271e6d3a91d976b8d8fb',
+          'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.spec.ts':
+            '6e7224877bd2864643633596c66e35187f36d90a',
           'package.json': '47b72e49cc9cad14c5dd9a7aea0083762dd97f70',
           'package-lock.json': 'de254ecc42f160a8dcf730d3f50aecf69faf17f5',
           'apps/api/package.json': '63b3d2a4c3fac6b36171529880160b802a4380fe',

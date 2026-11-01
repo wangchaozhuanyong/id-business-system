@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 // This exact package-only patch keeps full API/Admin/DB/UI checks. The frozen
 // historical ONLINE image producer cannot consume unrelated root manifests.
 export const dependencyPatchSources = Object.freeze({
+  'apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.spec.ts':
+    '439fc2935918bbe3445267b061097dea80d3ac043949b935ee4ff59c06d80ee8',
   '.github/workflows/quality.yml':
     '99bf8c66b750980fc612c798fe7610ac20190b147b5668516a22f2d5f199faeb',
   'package.json': 'f2da8ada6b06e2050a98060375b30ced0bfd95a4aff728e653628afb443d9e69',
