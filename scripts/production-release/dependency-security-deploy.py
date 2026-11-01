@@ -106,6 +106,18 @@ def build(c):
     load('dependency-security-build.py').build(c, plan_for(c, native), qa, OUT, R)
 
 
+def diagnose(c):
+    check(c)
+    native = identity(c)
+    need(json.loads(execute('aws', 'sts', 'get-caller-identity', '--output', 'json'))['Account'] == '098208446664', 'AWS_ACCOUNT_CHANGED')
+    quality(c, native)
+    need(not OUT.exists(), 'OUTPUT_EXISTS')
+    OUT.mkdir(parents=True, mode=0o700)
+    result = transport(plan_for(c, native), 'diagnose')
+    need(result['status'] == 'DEPENDENCY_SECURITY_FAILED_BUILD_DIAGNOSED', 'DIAGNOSIS_FAILED')
+    print(json.dumps(result))
+
+
 def publish(c):
     check(c)
     native = identity(c)
@@ -149,6 +161,6 @@ def publish(c):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('check', 'build', 'publish'))
+    parser.add_argument('mode', choices=('check', 'build', 'publish', 'diagnose'))
     args = parser.parse_args()
-    {'check': check, 'build': build, 'publish': publish}[args.mode](json.loads((HERE / P.CONTRACT_FILE).read_bytes()))
+    {'check': check, 'build': build, 'publish': publish, 'diagnose': diagnose}[args.mode](json.loads((HERE / P.CONTRACT_FILE).read_bytes()))

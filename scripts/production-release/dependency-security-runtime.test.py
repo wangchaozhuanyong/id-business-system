@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+import tempfile
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -125,6 +126,34 @@ class DependencyPublication(unittest.TestCase):
         self.assertFalse({'rollback', 'rollback_release', 'migrate', 'restore_database', 'rmtree'} & set(calls))
         self.assertIn('NEEDS_FORWARD_DIAGNOSIS', source)
         self.assertIn("'--network', 'none', '--read-only'", source)
+
+    def test_failed_build_diagnosis_is_read_only_and_rejects_a_started_switch(self):
+        class Driver:
+            def run(self, *args, **_kwargs):
+                if args[:2] == ('docker', 'exec'):
+                    return json.dumps({'uid': 1000, 'gid': 1000, 'paths': {'/app/node_modules': {'uid': 0, 'gid': 0, 'mode': 493}}})
+                if args[:3] == ('docker', 'image', 'inspect'):
+                    return json.dumps([{'Config': {'User': 'node'}}])
+                raise AssertionError('Unexpected or mutating diagnostic command')
+        directory = HERE.parents[1] / '.runtime'
+        directory.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='dependency-diagnose-', dir=directory) as temp:
+            stage = Path(temp) / '.staging/dependency-security-586ff4f5c571dc784e1533f05e30eb419a0a4eed-41325749240'
+            stage.mkdir(parents=True)
+            (stage / 'api-image-build.json').write_text(json.dumps({'status': 'FAILED', 'role': 'api',
+                'baseImageId': self.c['baseline']['services']['api']['image'], 'failureKind': 'COMMAND_FAILED'}))
+            with patch.object(R, 'BASE', Path(temp)):
+                result = R.diagnose(self.c, Driver())
+                self.assertTrue(result['productionServicesUnchanged'])
+                self.assertFalse(result['switchStarted'])
+                self.assertEqual(result['imageUser'], 'node')
+                (stage / 'switch-state.json').write_text('{}')
+                with self.assertRaisesRegex(RuntimeError, 'FAILED_ATTEMPT_CHANGED'):
+                    R.diagnose(self.c, Driver())
+        tree = ast.parse((HERE / 'dependency-security-runtime.py').read_text())
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'diagnose')
+        calls = {n.func.attr for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        self.assertFalse({'compose', 'write_bytes', 'write_text', 'unlink', 'point_current'} & calls)
 
     def test_main_is_rechecked_after_candidate_build_and_backup_before_switch(self):
         source = (HERE / 'dependency-security-runtime.py').read_text()

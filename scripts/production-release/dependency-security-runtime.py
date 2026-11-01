@@ -156,9 +156,29 @@ def latest_main(commit):
         need(json.load(response)['object']['sha'] == commit, 'MAIN_MOVED')
 
 
+def diagnose(c, d):
+    prior_commit = '586ff4f5c571dc784e1533f05e30eb419a0a4eed'
+    prior_run = '41325749240'
+    stage = BASE / '.staging' / (PREFIX + '-' + prior_commit + '-' + prior_run)
+    receipt = json.loads((stage / 'api-image-build.json').read_bytes())
+    need(receipt['status'] == 'FAILED' and receipt['role'] == 'api'
+         and receipt['baseImageId'] == c['baseline']['services']['api']['image']
+         and receipt['failureKind'] == 'COMMAND_FAILED'
+         and not (stage / 'switch-state.json').exists(), 'FAILED_ATTEMPT_CHANGED')
+    code = "const f=require('fs');console.log(JSON.stringify({uid:process.getuid(),gid:process.getgid(),paths:Object.fromEntries(['/app/node_modules','/app/node_modules/body-parser','/app/node_modules/mailparser'].map(p=>{const s=f.statSync(p);return[p,{uid:s.uid,gid:s.gid,mode:s.mode&511}]}))}));"
+    state = c['baseline']['services']['api']
+    permissions = json.loads(d.run('docker', 'exec', state['containerId'], 'node', '-e', code))
+    image = json.loads(d.run('docker', 'image', 'inspect', state['image']))[0]
+    return {'status': 'DEPENDENCY_SECURITY_FAILED_BUILD_DIAGNOSED', 'commit': c['expectedCurrent'],
+            'failedCommit': prior_commit, 'failedWorkflowRunId': prior_run,
+            'failedPhase': 'CANDIDATE_IMAGE_BUILD', 'productionServicesUnchanged': True,
+            'switchStarted': False, 'imageUser': image['Config']['User'], 'permissions': permissions,
+            'businessActions': 0, 'migrationPerformed': False}
+
+
 def release(plan, c):
     validate_contract(c)
-    need(plan['mode'] in ('preflight', 'release', 'readback')
+    need(plan['mode'] in ('preflight', 'release', 'readback', 'diagnose')
          and all(re.fullmatch('[a-f0-9]{40}', plan[n]) for n in ('commit', 'tree'))
          and all(re.fullmatch('[1-9][0-9]*', plan[n]) for n in ('workflowRunId', 'workflowRunAttempt'))
          and plan['contractSha256'] == sha((HERE / CONTRACT_FILE).read_bytes())
@@ -185,6 +205,8 @@ def release(plan, c):
                     'apiImage': states['api']['image'], 'packageVersions': c['afterVersions'], 'businessActions': 0, 'migrationPerformed': False}
         current, before = baseline(c, history, h, d)
         latest_main(plan['commit'])
+        if plan['mode'] == 'diagnose':
+            return diagnose(c, d)
         if plan['mode'] == 'preflight':
             return {'status': 'DEPENDENCY_SECURITY_PREFLIGHT_VERIFIED', 'businessActions': 0}
         stage = BASE / '.staging' / (PREFIX + '-' + plan['commit'] + '-' + plan['workflowRunId'])
@@ -210,8 +232,10 @@ def release(plan, c):
         a.normalize_image_context(context)
         ref = 'id-business-v2-dependency-security:' + plan['commit'] + '-' + plan['workflowRunId']
         delete = ' '.join('/app/' + n for n in package_roots(c))
+        original = json.loads(d.run('docker', 'image', 'inspect', before['api']['image']))[0]
+        need(original['Config']['User'] == 'node', 'BASE_RUNTIME_USER_CHANGED')
         (context / 'Dockerfile').write_text('FROM ' + h.base_image_reference(d, before['api'])
-            + '\nRUN rm -rf -- ' + delete + '\nCOPY app/ /app/\nLABEL org.opencontainers.image.revision="' + plan['commit']
+            + '\nUSER root\nRUN rm -rf -- ' + delete + '\nCOPY --chown=node:node app/ /app/\nUSER node\nLABEL org.opencontainers.image.revision="' + plan['commit']
             + '" id-business-v2.recharge-record-build-proof-sha256="' + plan['buildProofSha256'] + '"\n')
         h.build_image(d, context, ref, 'api', before['api'], stage)
         image = json.loads(d.run('docker', 'image', 'inspect', ref))[0]
