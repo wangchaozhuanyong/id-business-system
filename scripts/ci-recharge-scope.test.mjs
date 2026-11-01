@@ -3149,6 +3149,23 @@ const bankProof = {
 const bankPolicyPaths = [productionDatabaseAccessHelper, productionDatabaseAccessAcceptance];
 
 function recordScopeClassification(paths, snapshot, eventName = 'pull_request', options = {}) {
+  // These blobs remain reachable from merged main after temporary PR heads are
+  // removed. Transfer the large lockfile fixture via stdin rather than argv.
+  const dependencyPatchFixtureFiles = options.dependencyPatchFixture
+    ? Object.fromEntries(
+        Object.entries({
+          '.github/workflows/quality.yml': '745aff41f2b3ffcb13d9271e6d3a91d976b8d8fb',
+          'package.json': '47b72e49cc9cad14c5dd9a7aea0083762dd97f70',
+          'package-lock.json': 'de254ecc42f160a8dcf730d3f50aecf69faf17f5',
+          'apps/api/package.json': '63b3d2a4c3fac6b36171529880160b802a4380fe',
+          'scripts/dependency-security-regressions.test.mjs':
+            '53a5efbad752009ae8ca5cc0ec28b982cdf2df71'
+        }).map(([name, blob]) => [
+          name,
+          execFileSync('git', ['cat-file', 'blob', blob], { cwd: root, encoding: 'utf8' })
+        ])
+      )
+    : {};
   // Exercise the real CLI with synthetic Git snapshots and successful same-tree PR evidence.
   // No remote API, artifact download, file write or business command is executed.
   const script = `
@@ -3249,7 +3266,13 @@ function recordScopeClassification(paths, snapshot, eventName = 'pull_request', 
   const inputPath = temporary + '/input.json';
   fs.writeFileSync(
     inputPath,
-    JSON.stringify({ paths, snapshot, options, schema, registrationSourceFixtures })
+    JSON.stringify({
+      paths,
+      snapshot,
+      options,
+      schema,
+      registrationSourceFixtures: { ...registrationSourceFixtures, ...dependencyPatchFixtureFiles }
+    })
   );
   try {
     return JSON.parse(
@@ -8538,7 +8561,9 @@ test('多电脑比特连接保留当前构建与 MySQL 验收，不送入历史 
 });
 test('依赖补丁真实 CI 入口保留完整业务门禁且隔离历史 ONLINE 镜像输入', () => {
   for (const eventName of ['pull_request', 'push']) {
-    const { writes } = recordScopeClassification([...dependencyPatchPaths], {}, eventName);
+    const { writes } = recordScopeClassification([...dependencyPatchPaths], {}, eventName, {
+      dependencyPatchFixture: true
+    });
     assert.ok(writes.some(({ contents }) => /(?:^|\n)mode=full\n/.test(contents)));
     assert.ok(writes.some(({ contents }) => /(?:^|\n)online_ci_build=false\n/.test(contents)));
   }

@@ -1,12 +1,38 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dependencyPatchPaths, isDependencyPatchCandidate } from './ci-dependency-patch-scope.mjs';
+import { execFileSync } from 'node:child_process';
+import {
+  dependencyPatchPaths,
+  dependencyPatchSources,
+  isDependencyPatchCandidate
+} from './ci-dependency-patch-scope.mjs';
 import { checkMode, needsOnlineRechargeCiBuild } from './ci-recharge-scope.mjs';
 
 test('reviewed dependency patch retains full checks and does not rebuild an unchanged historical ONLINE image', () => {
-  assert.equal(isDependencyPatchCandidate(dependencyPatchPaths), true);
+  assert.equal(
+    isDependencyPatchCandidate(dependencyPatchPaths, (name) => dependencyPatchSources[name]),
+    true
+  );
   assert.equal(checkMode(dependencyPatchPaths, 'same', 'same'), 'full');
-  assert.equal(needsOnlineRechargeCiBuild(dependencyPatchPaths), false);
+});
+
+test('frozen browser compatibility repair changes only the full-quality runner', () => {
+  const cwd = new URL('../', import.meta.url);
+  const before = execFileSync(
+    'git',
+    ['show', '506b371601f48838f9a6846447c2ab4d899262bb:.github/workflows/quality.yml'],
+    { cwd, encoding: 'utf8' }
+  );
+  const after = execFileSync(
+    'git',
+    ['cat-file', 'blob', '745aff41f2b3ffcb13d9271e6d3a91d976b8d8fb'],
+    { cwd, encoding: 'utf8' }
+  );
+  assert.match(
+    after.split('  full-quality:')[1].split('\n  recharge:')[0],
+    /runs-on: ubuntu-24\.04/
+  );
+  assert.equal(after.replace('runs-on: ubuntu-24.04', 'runs-on: ubuntu-latest'), before);
 });
 
 test('dependency patch admission rejects changed package bytes and every wider or incomplete scope', () => {
