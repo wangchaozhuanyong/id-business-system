@@ -1,0 +1,283 @@
+{
+  "automaticRollback": false,
+  "businessActions": 0,
+  "expectedCurrent": "506b371601f48838f9a6846447c2ab4d899262bb",
+  "helperPins": {
+    "api-admin-pending-projection.py": "592aebbeb7c8605587924416b0632dc4533eacfb3305793b577db3827bbf8d78",
+    "api-admin-pending-receipt-wire.py": "47cba3fad47077f30c83d8cfe5a8907b797eeeb2fedd78e764a47a42a0849c75",
+    "api-admin-readonly.py": "dd43d93b8383867de34b2d0d0aacc282135852e76b4adc8348141e9cfc330949",
+    "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+    "api-workspace-declaration-artifacts.py": "bff9bdfecb8e53be3b9a04294acaa6f3d6982ef1cf0e6c392808197413de54fe",
+    "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
+    "financial-closure-publication.py": "871f30ae20a1daf9c828a3e0de4fcf832c35a0360be7c44bd6f311fcf7753abe",
+    "financial-closure-release.py": "3ae45d6905cc99319cbeb490c32d9d546f27509dac0a80a5ed8a710d8c5f1eef",
+    "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
+    "online-checkout-initialization-release.py": "3dde1aa3b134f87b31fcbe647e7655f2d62ce87513227c49b43189cebd0689f2",
+    "online-checkout-load-release.py": "50f9608895bf0072c38a2549a8db70c941316339c3a4626b179ca8b016078374",
+    "online-checkout-release.py": "387b120904453ba25c47070551389db6a33668ef1f62220ce8d8ebe740bf810d",
+    "online-native-fetch-release.py": "e861216b6c903763b2373b1091f50dc48a4b3ef9d9156435c9b3238e4cdcb654",
+    "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
+    "online-profile-lock-recovery.py": "bda837bfe6b6b8ca91f356fe780c13d75de15928d017a1fe6780d7b481065b58",
+    "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
+    "online-recharge-component-consumer.py": "b7979889d857f45d7d7eac87d475e06ab8312669dfb5952120cf7f58b1318ed6",
+    "online-recharge-component-readonly.py": "c978531fe72da209e6b3da94b6df41ff4c1d4df7722bcb30f374ed25a74dccfc",
+    "online-recharge-component-recovery.py": "4def2e982a58dd15ed89b8230db35b7497c7a8ad0e5aed5172aa65698ca8984a",
+    "online-recharge-component-runtime.py": "c3d76849421b1dbbba143138e316a3ae16a6ec4498eb577a9954f630375feb17",
+    "online-recharge-daemon-identity.py": "2b3698ed515d5428535e16190e7ca32f92e02493d2e498f39c22753921eb1ecb",
+    "online-recharge-daemon-listener.py": "b4ca705bb87dea45b3d0492c33a0e14e2c02f1707e94bc630d16a313db3b3e85",
+    "online-recharge-daemon-socket.py": "cba4b37317e8f48778c0dbc59f2c3131340f7d769b2807d0e03fe7c4d37e511a",
+    "online-recharge-declaration-measurement.py": "6fb65068cfe5daca4a879fe9a02449575f803dadcf7d47aae29ecb1ed958b0aa",
+    "online-recharge-readonly.py": "4316695ff96b898ba92be03da1a0ba230b09f8c2417c820a6ccd0b5504577b2d",
+    "online-recharge-scope.py": "49fd788aac7807365f1078790f5a439fc1c7807150253eb66bd47ef793e81bb9",
+    "online-session-diagnostic-build.py": "86f8583fac560a74befa79d1e3a4af52b2caf80f5c6ad1850d49a943f5ffc71e",
+    "online-session-diagnostic-contract.json": "adfdbba8749635fe33b1891d990eee67ea7101aeb8d6f5bfa3fb0bffe1233e2e",
+    "online-session-diagnostic-publication.py": "813f79a70dd95680c5700a52f16eeee8b5abde938983c89911d59ae944e17693",
+    "online-session-diagnostic-release.py": "0b95db3dd156f90981cda535591bb9f76febc5f7d4bceda1a317bfd069b486e6",
+    "online-session-observer-contract.json": "e681227f99ced4fd15e46afc5254ee2f82e7bc28f47fc54233b3f2821e8c9ffe",
+    "online-session-observer-publication.py": "73987edcd21e8413c57a581cde4dd0ac4bf76968c8c0e0a4b2804f180a805da1",
+    "online-session-observer-release.py": "ecba7af11672e785610cd7c530b87d5a749f9d02a1407569ff0075b1e5c66cc1",
+    "online-session-observer-release.test.py": "39e67274777e7a09030dc673677529e111a2cbd1642a21079c8e1b861401a71d",
+    "online-unpaid-validation-release.py": "869d40d287567eeb901aae413d366444ca077431a433341312fcc90ec8cd4e56",
+    "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
+    "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
+    "recharge-billing-release.py": "eabb3473e5639edaf7073cb71562bfca4d7208bc7856d1262ce904202dedafd7",
+    "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
+    "recharge-record-contract.json": "645884385b0ad22e31496f31e3b3e07adf69e2c3d37bcf93ed886af7fbd2221c",
+    "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+    "recharge-source-recovery-release.py": "e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8",
+    "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
+    "shared-bank-card-contract.json": "22b6133b8b8b704475131604f36c56701377d159c0e5eb80ebce3b4f5bd21c67",
+    "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852",
+    "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771"
+  },
+  "migrationPerformed": false,
+  "packageDirectories": [
+    "node_modules/body-parser",
+    "node_modules/body-parser/node_modules/content-type",
+    "node_modules/follow-redirects",
+    "node_modules/iconv-lite",
+    "node_modules/imapflow/node_modules/iconv-lite",
+    "node_modules/ip-address",
+    "node_modules/libmime/node_modules/iconv-lite",
+    "node_modules/mailparser",
+    "node_modules/mailparser/node_modules/@zone-eu/mailsplit",
+    "node_modules/mailparser/node_modules/iconv-lite",
+    "node_modules/mailparser/node_modules/libbase64",
+    "node_modules/mailparser/node_modules/libmime",
+    "node_modules/mailparser/node_modules/libqp",
+    "node_modules/multer",
+    "node_modules/nodemailer",
+    "node_modules/qs"
+  ],
+  "predecessorPlan": {
+    "artifactSha256": "30cd2ec4545948c0230a0100215ef0d8e16780c8ebf33d7fac62a2b7298486b4",
+    "artifactUrl": "https://github.com/wangchaozhuanyong/id-business-system/releases/download/online-session-observer-506b371601f48838f9a6846447c2ab4d899262bb/online-session-observer-artifact.tar.gz",
+    "buildProofSha256": "20834ae507a3b932f3ef19e087579b27857e55b5564c8fd066c49c38bfe26b25",
+    "commit": "506b371601f48838f9a6846447c2ab4d899262bb",
+    "contractSha256": "e681227f99ced4fd15e46afc5254ee2f82e7bc28f47fc54233b3f2821e8c9ffe",
+    "controlSources": {
+      "api-admin-pending-projection.py": "592aebbeb7c8605587924416b0632dc4533eacfb3305793b577db3827bbf8d78",
+      "api-admin-pending-receipt-wire.py": "47cba3fad47077f30c83d8cfe5a8907b797eeeb2fedd78e764a47a42a0849c75",
+      "api-admin-readonly.py": "dd43d93b8383867de34b2d0d0aacc282135852e76b4adc8348141e9cfc330949",
+      "api-admin-scope.py": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
+      "api-workspace-declaration-artifacts.py": "bff9bdfecb8e53be3b9a04294acaa6f3d6982ef1cf0e6c392808197413de54fe",
+      "bitbrowser-history-release.py": "61df1e9875f3edde18cf6826b06ed6be7dd543ad39dde279828d4f06c1255410",
+      "online-checkout-actionability-release.py": "8c6cb5e392d162cc13565b7bab673e3396641b6ebbbc6c5307c3b667e6d9622c",
+      "online-checkout-initialization-release.py": "3dde1aa3b134f87b31fcbe647e7655f2d62ce87513227c49b43189cebd0689f2",
+      "online-checkout-load-release.py": "50f9608895bf0072c38a2549a8db70c941316339c3a4626b179ca8b016078374",
+      "online-checkout-release.py": "387b120904453ba25c47070551389db6a33668ef1f62220ce8d8ebe740bf810d",
+      "online-native-fetch-release.py": "e861216b6c903763b2373b1091f50dc48a4b3ef9d9156435c9b3238e4cdcb654",
+      "online-pending-features-release.py": "9895b3f00f7e9d1d147c0dc7fa0ad57bec22e27e8bd1183238d86a77e1310993",
+      "online-profile-lock-recovery.py": "bda837bfe6b6b8ca91f356fe780c13d75de15928d017a1fe6780d7b481065b58",
+      "online-query-network-release.py": "102f47d1dfd7eded71375da1d4e78215d48f8e20e9b4c11fabe1803331f98ce0",
+      "online-recharge-component-consumer.py": "b7979889d857f45d7d7eac87d475e06ab8312669dfb5952120cf7f58b1318ed6",
+      "online-recharge-component-readonly.py": "c978531fe72da209e6b3da94b6df41ff4c1d4df7722bcb30f374ed25a74dccfc",
+      "online-recharge-component-recovery.py": "4def2e982a58dd15ed89b8230db35b7497c7a8ad0e5aed5172aa65698ca8984a",
+      "online-recharge-component-runtime.py": "c3d76849421b1dbbba143138e316a3ae16a6ec4498eb577a9954f630375feb17",
+      "online-recharge-daemon-identity.py": "2b3698ed515d5428535e16190e7ca32f92e02493d2e498f39c22753921eb1ecb",
+      "online-recharge-daemon-listener.py": "b4ca705bb87dea45b3d0492c33a0e14e2c02f1707e94bc630d16a313db3b3e85",
+      "online-recharge-daemon-socket.py": "cba4b37317e8f48778c0dbc59f2c3131340f7d769b2807d0e03fe7c4d37e511a",
+      "online-recharge-declaration-measurement.py": "6fb65068cfe5daca4a879fe9a02449575f803dadcf7d47aae29ecb1ed958b0aa",
+      "online-recharge-readonly.py": "4316695ff96b898ba92be03da1a0ba230b09f8c2417c820a6ccd0b5504577b2d",
+      "online-recharge-scope.py": "49fd788aac7807365f1078790f5a439fc1c7807150253eb66bd47ef793e81bb9",
+      "online-session-diagnostic-build.py": "86f8583fac560a74befa79d1e3a4af52b2caf80f5c6ad1850d49a943f5ffc71e",
+      "online-session-diagnostic-contract.json": "adfdbba8749635fe33b1891d990eee67ea7101aeb8d6f5bfa3fb0bffe1233e2e",
+      "online-session-diagnostic-publication.py": "813f79a70dd95680c5700a52f16eeee8b5abde938983c89911d59ae944e17693",
+      "online-session-diagnostic-release.py": "0b95db3dd156f90981cda535591bb9f76febc5f7d4bceda1a317bfd069b486e6",
+      "online-session-observer-contract.json": "e681227f99ced4fd15e46afc5254ee2f82e7bc28f47fc54233b3f2821e8c9ffe",
+      "online-session-observer-publication.py": "73987edcd21e8413c57a581cde4dd0ac4bf76968c8c0e0a4b2804f180a805da1",
+      "online-session-observer-release.py": "ecba7af11672e785610cd7c530b87d5a749f9d02a1407569ff0075b1e5c66cc1",
+      "online-session-observer-release.test.py": "39e67274777e7a09030dc673677529e111a2cbd1642a21079c8e1b861401a71d",
+      "online-unpaid-validation-release.py": "869d40d287567eeb901aae413d366444ca077431a433341312fcc90ec8cd4e56",
+      "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
+      "recharge-availability-release.py": "d98af117f3d80e705dd4f5eb3375a37cf4c0f058b65f4be77550d909ccbbe66c",
+      "recharge-billing-release.py": "eabb3473e5639edaf7073cb71562bfca4d7208bc7856d1262ce904202dedafd7",
+      "recharge-checkout-release.py": "d8f899062b01f80b4ea002c62a7af0042bb19962394d55ea07241783e332624a",
+      "recharge-record-contract.json": "645884385b0ad22e31496f31e3b3e07adf69e2c3d37bcf93ed886af7fbd2221c",
+      "recharge-record-release.py": "4ca6d0053f5dc4368d85722ef0df272ace0947c1c91993a0a3da598507b5163f",
+      "recharge-source-recovery-release.py": "e6f493ab7737bf77d23114a00ff9c970a77d18786726e690b27dbe98c9f099b8",
+      "remote-deploy.py": "889aedb75bbcb53863a55dc2a4c40a84e06dea1d64d493f6a4fca6dc233f855c",
+      "shared-bank-card-contract.json": "22b6133b8b8b704475131604f36c56701377d159c0e5eb80ebce3b4f5bd21c67",
+      "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852",
+      "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771"
+    },
+    "nativeParentCapture": {
+      "baseline": {
+        "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+        "backupNormalizerSha256": "ca9b05f832e9ed73bb36b7e76c083c99a40b13e067850166f8715bae469e5202",
+        "commit": "8ff49238b47a5c227fce70dfbb057ce3ce526ca7",
+        "configurationSha256": {
+          ".env.aws.production": "7de277c90700f62ac334282c2ff8331d110755d1a41d32422f73c4c172f0f03e",
+          "apps/api/prisma-mysql/schema.prisma": "690a8d26006175166578ff07d2a22ac146852df0b3499ec27ac3fd2fa827905c",
+          "compose.release.json": "4ed64b43f07df5921d9a0cf7b800cf746f6771f388b52b5682706a957deac98b",
+          "deploy/caddy/Caddyfile.aws": "e6a6c999301fc988c60358b62b23d7734bd8272937c29707e9faec61596de018",
+          "docker-compose.aws-mysql.yml": "fd227b0fa09345f4cf344e62e2591aeddd1b89e195a19a7d2929d248559f732e"
+        },
+        "current": "/opt/id-business-v2/releases/20261031T015609Z-8ff49238b47a-online-proxy-client",
+        "database": {
+          "columns": "3173a74d4e30d94a635db96d4f8e9ee70b0d7d9177cfaaaa003ed0420d4b2b5e",
+          "ledger": "f3b18f8393fcd7c5f589dcf76e4d681d3d076a845c033e263da864e1f36e3d52",
+          "pending": 0
+        },
+        "manifestSha256": "1144a5c2836030702c3bb0bdb9a9b649283958141c8a4d402af48af68f0ee8a1",
+        "runtime": {
+          "adminInventory": {
+            "count": 7779,
+            "sha256": "0e9abc1e3127d53d7ab70f58834a11698ba4a5e6d5365ee077d83b7b7dbdf864"
+          },
+          "apiModules": {},
+          "apiPreservedInventory": {
+            "count": 1806,
+            "sha256": "0628fc41fbefe6603eb809349cb107308806fab801efac43d8614c6c52c5ce63"
+          },
+          "clientInventory": {
+            "count": 27,
+            "sha256": "b88450d9e695b1dee60cf8974fe87abc8afb75349a6594bf626a3e1ff1276a00"
+          },
+          "nginxSha256": "0b73aedbebdc12065d922b35bbf428e8959fe3a3ea9ef9fa5dc7af2f995baa99",
+          "sharedInventory": {
+            "count": 36,
+            "sha256": "2026bd16905ed256440c736da6b821ed022097178786bf67dba52b8356ca8712"
+          }
+        },
+        "runtimeConfigurationSha256": {
+          "admin": "8e6f51e912ad90182b3ca4d61888042e0c3d818be1e519accec1ac3367efd521",
+          "api": "36250405495459e6fbf8fb67e7b9381ff4d6b02a3a9c6be8cc037ed5c3a3a35b",
+          "auto-recharge": "71e8b8cf9d652276051212ca4add76538d53821d383aa839786d0bfc53ee93b4",
+          "caddy": "37b12e50ce33d08e21ecd1b6107dc6654b900c16b349069a14e64ec9fb00c6ed",
+          "media-resolver": "fe30f727d485d192ec3316fa5d8325451e1a681c9840ac08ff6961592645b71d",
+          "mysql": "3e43803f56bcc5f3f5624ac0f0a433a1c4efffc74634f1dc1b984ac15444980b",
+          "online-recharge": "0db8f5da6e8a49af82fb419ef81b2edc552752edc0c37cfd0383b9e5f963ee20"
+        },
+        "services": {
+          "admin": {
+            "containerId": "b08d0baa0ca5dbbcde4e705b7eff888dcad837ebc07e1f8a88d89277ac53e903",
+            "environmentSha256": "03ddab553858482dcbcc4a93d989902d31b41753eb155fb8162011e218bc0ad4",
+            "health": "healthy",
+            "image": "sha256:297dc59527e3bcaf482c6da0eb8948ff2a01385d8492d6288c00d2ab2a961ef5",
+            "reference": "id-business-v2-online-frame-attempts:42443056ac7d17b1a8c9146da62a6439755b234a-40666279081-admin",
+            "startedAtSha256": "e4d86958e939752aa995f96c0b2c9087fe3c07a9c16aaa0b38896903cc17cc2c",
+            "status": "running"
+          },
+          "api": {
+            "containerId": "e62da0f3975a26dfb3b055841824684f29ff9413013303a02617b1f44c69981c",
+            "environmentSha256": "01b55bee1719a380acaca33e6e97e890f2d074ac706424f20d5762f6114a0c7f",
+            "health": "healthy",
+            "image": "sha256:b62dc33e2a75fb3a0ac2d746ac906b18a99d4db82cedea16ab356b4ed4e0bcda",
+            "reference": "id-business-v2-online-frame-attempts:42443056ac7d17b1a8c9146da62a6439755b234a-40666279081-api",
+            "startedAtSha256": "3e1dc9befb77e253539d1e2fa4f271a4e7c3066564fa1cdbba106328061809d4",
+            "status": "running"
+          },
+          "auto-recharge": {
+            "containerId": "0190045c800bd6cda576b66ccce0986de6792390d01cf19fe19e02cd16316f97",
+            "environmentSha256": "5169582dea47a65076d5f7a3a3defbc824fa4f772b2dc0904eb64659209757ae",
+            "health": "healthy",
+            "image": "sha256:5bd2ab25ebcadcd99f8d339d604e0268cec3fc2cfdac54e2a215f085e3fac00e",
+            "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:04570d75c779fd91a0933ef9416f6d62698b6b91-37694009463-1-auto-recharge",
+            "startedAtSha256": "ce57fbedd4aacfbacce4a7e2234c19872954a1c13647e187fd0bc16be1913c98",
+            "status": "running"
+          },
+          "caddy": {
+            "containerId": "c9a03e8ade2f9fa42fed7881cac7e75d1d0bd01dd9f213123039ce740bb61a3e",
+            "environmentSha256": "33ea62b4e1f4de93e333bdbbea4ec88904661f1cb616907b185fce31b22b7181",
+            "health": null,
+            "image": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+            "reference": "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d",
+            "startedAtSha256": "bab6dc0fcb271e0af4ea79f24bfeb1406617f22f36db7f845984b0c9fcc80476",
+            "status": "running"
+          },
+          "media-resolver": {
+            "containerId": "0c4fd25ba8fbf2fdab7639e680c3a3433d814cdb2d71ebd7ad39531aaa639471",
+            "environmentSha256": "8473962ae5df6f8e5553ab658ccce662a8816f83631b221484daf5fa42e3b163",
+            "health": "healthy",
+            "image": "sha256:34c25f5474f9fdd043cfb39a838762cab9e87f88db9987d9cb9ad6706c331a56",
+            "reference": "079740175286.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:b8d643450ffa9012ccc09ead15e4681e3dee98d0-37302661631-1-media-resolver",
+            "startedAtSha256": "881f72435aeafd10dc248f7627ee1a72fef579e81a5435e86291213ea9886c8c",
+            "status": "running"
+          },
+          "mysql": {
+            "containerId": "7e5a5abe42c5503e6196f736d532793aaec3796b7eb518f02db614d4025d0074",
+            "environmentSha256": "bb8d63d18769016c14d8664a551d2b3da9e251701ed62f87b04cba964fc9e299",
+            "health": "healthy",
+            "image": "sha256:bced325a4ab7aec848f4688371c7433351dcb5dba26fbcc29c67727d898ae5cb",
+            "reference": "mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+            "startedAtSha256": "d3a18b6873a7e69811c62fc3eb0af7086eda8573ee2d8fbba743631cb47910d2",
+            "status": "running"
+          },
+          "online-recharge": {
+            "containerId": "1bbe9a1ec8df854c7ce74186ec0adf57f3d8fbcd9c230e7604a98c94baec380e",
+            "environmentSha256": "60bb48bbd6e03a4ceebe245c8405f248d0c682a27287aabb17c1d3573e50ad37",
+            "health": "healthy",
+            "image": "sha256:e0187348b28955b233bca64505071b2bb1c15462eee67f3ff0a0f257c4c1edb1",
+            "reference": "id-business-v2-online-proxy-client:8ff49238b47a5c227fce70dfbb057ce3ce526ca7-41157522932",
+            "startedAtSha256": "0b9dee3cf7588286ee1b2efbb4b5064a3d8bdcfb1129c6586a8c8e90519b5386",
+            "status": "running"
+          }
+        }
+      },
+      "businessActions": 0,
+      "status": "ONLINE_NATIVE_FETCH_PARENT_VERIFIED"
+    },
+    "qualitySourceEvidence": {
+      "commit": "506b371601f48838f9a6846447c2ab4d899262bb",
+      "control": {
+        "head": "1a2f4480ffd7c4e01335c060cfe1e84251df2b29",
+        "pullRequest": 765,
+        "runAttempt": "1",
+        "runId": "41170890142",
+        "sourceReceiptSha256": "06940c22bc5d5f037625c25fc4c4fdc225545a28bae158c0d20b0e11564cb19e",
+        "tree": "132207589bb390db99322d664a1c0b528f4a74e9"
+      },
+      "main": {
+        "head": "506b371601f48838f9a6846447c2ab4d899262bb",
+        "runAttempt": "1",
+        "runId": "41170962630"
+      },
+      "source": {
+        "head": "0529cfdcbb754ddf3d2af1fbf5549c50974f8208",
+        "pullRequest": 764,
+        "runAttempt": "1",
+        "runId": "41169596623",
+        "sourceReceiptSha256": "864d134e29567f3028b7d06dd4e6a4efbe78c80644e7c5e4d68a25920771ecec",
+        "tree": "7e4f33f4f5d6aa03f88f856cffb6b22f0bfe5c6e"
+      },
+      "tree": "132207589bb390db99322d664a1c0b528f4a74e9"
+    },
+    "tree": "132207589bb390db99322d664a1c0b528f4a74e9",
+    "workflowRunAttempt": "1",
+    "workflowRunId": "41171016727"
+  },
+  "predecessorReadback": {
+    "commandId": "ef1b37fc-73fc-4a52-b452-258dbe9ab130",
+    "workflowRunId": "41171016727"
+  },
+  "scope": "DEPENDENCY_SECURITY_20261101",
+  "sourceCommit": "7d815639c875bc7e4bcb3d7715c74b954b9f8ecb",
+  "sourcePullRequest": 766,
+  "sources": {
+    "apps/api/package.json": "86e1139bad4bf05dda6369f0817d6a66ba4ebdd51298be6c0fb6e1ed198cc786",
+    "package-lock.json": "1e0ec3f854b87981e22ff6f9cfd4e735a3844aaaa3c026264d269069900cacf6",
+    "package.json": "f2da8ada6b06e2050a98060375b30ced0bfd95a4aff728e653628afb443d9e69"
+  },
+  "version": 1
+}
