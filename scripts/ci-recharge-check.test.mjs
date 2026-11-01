@@ -1,5 +1,6 @@
 import {
   rechargeAutofillControls,
+  rechargeAutofillReviewedSources,
   rechargeAutofillSourcePaths,
   rechargeAutofillSourceCommands
 } from './ci-recharge-autofill-scope.mjs';
@@ -33,12 +34,20 @@ import { financialClosurePaths } from './ci-financial-closure-scope.mjs';
 
 test('回填源码真实入口保留四类检查并拒绝错误模式', () => {
   for (const part of ['guards', 'api', 'admin', 'online-engine'])
-    assert.deepEqual(recordGuardCommands('recharge', [...rechargeAutofillSourcePaths], part), [
-      ...rechargeAutofillSourceCommands(part).map(([file, args]) => [file, ...args]),
-      ['process-exit', 0]
-    ]);
+    assert.deepEqual(
+      recordGuardCommands('recharge', [...rechargeAutofillSourcePaths], part, {
+        autofillSourceFixture: true
+      }),
+      [
+        ...rechargeAutofillSourceCommands(part).map(([file, args]) => [file, ...args]),
+        ['process-exit', 0]
+      ]
+    );
   assert.throws(
-    () => recordGuardCommands('ci-only', [...rechargeAutofillSourcePaths]),
+    () =>
+      recordGuardCommands('ci-only', [...rechargeAutofillSourcePaths], 'guards', {
+        autofillSourceFixture: true
+      }),
     /reviewed recharge check selection/
   );
 });
@@ -1269,7 +1278,8 @@ function recordGuardCommands(
     flowV4Fixture = false,
     terminalStopFixture = false,
     mailQueryInputsChanged = false,
-    billingSourceFixture = false
+    billingSourceFixture = false,
+    autofillSourceFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -1403,6 +1413,14 @@ function recordGuardCommands(
         ])
       )
     : {};
+  // Reproduce this historical dispatcher using its approved immutable input.
+  // Current task documentation must not turn the positive fixture into a fallback.
+  if (autofillSourceFixture)
+    for (const name of Object.keys(rechargeAutofillReviewedSources))
+      billingFixtureFiles[new URL('../' + name, import.meta.url).href] = execFileSync('git', [
+        'show',
+        '60a184e5d42074058825e01307ce09e58dc4ae1d:' + name
+      ]).toString('base64');
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
