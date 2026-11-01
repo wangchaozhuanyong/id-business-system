@@ -1,7 +1,15 @@
 const prefix = 'scripts/production-release/dependency-security-';
 export const dependencySecurityControls = Object.freeze([
   '.github/workflows/dependency-security-publication.yml',
-  ...['contract.json', 'publication.py', 'publication.test.py'].map((name) => prefix + name),
+  ...[
+    'contract.json',
+    'publication.py',
+    'publication.test.py',
+    'build.py',
+    'runtime.py',
+    'runtime.test.py',
+    'deploy.py'
+  ].map((name) => prefix + name),
   'scripts/ci-dependency-security-scope.mjs',
   'scripts/ci-dependency-security-scope.test.mjs',
   'scripts/ci-recharge-scope.mjs',
@@ -23,6 +31,8 @@ export function dependencySecurityCommands(part) {
   return [
     ['node', ['--test', 'scripts/ci-dependency-security-scope.test.mjs']],
     ['python3', ['-B', prefix + 'publication.test.py']],
+    ['python3', ['-B', prefix + 'runtime.test.py']],
+    ['python3', ['-B', prefix + 'deploy.py', 'check']],
     ['python3', ['-B', prefix + 'publication.py', 'check']],
     [
       'npm',

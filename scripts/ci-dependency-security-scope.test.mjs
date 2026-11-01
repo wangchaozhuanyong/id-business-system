@@ -42,6 +42,12 @@ test('dependency observation commands retain contract checks and reject non-guar
         args.includes('check')
     )
   );
+  for (const name of ['runtime.test.py', 'deploy.py'])
+    assert.ok(
+      commands.some(([, args]) =>
+        args.includes('scripts/production-release/dependency-security-' + name)
+      )
+    );
   assert.ok(
     commands.every(([, args]) =>
       args.every((arg) => !/prisma|acceptance:v2|migrate|--workspace/.test(arg))
