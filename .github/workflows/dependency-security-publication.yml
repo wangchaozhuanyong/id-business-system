@@ -8,7 +8,7 @@ on:
         required: true
         default: capture
         type: choice
-        options: [capture, publish]
+        options: [capture, publish, diagnose]
       commit:
         description: Exact reviewed main commit
         required: true
@@ -133,5 +133,38 @@ jobs:
         with:
           name: dependency-security-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: .deploy/dependency-security/*.*
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  diagnose:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.mode == 'diagnose'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-business-v2-dependency-diagnose-${{ github.run_id }}
+          aws-region: ap-northeast-1
+      - name: Read the original failed build and prove production was preserved
+        run: python3 -B scripts/production-release/dependency-security-deploy.py diagnose
+      - name: Preserve original diagnostic receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dependency-security-diagnose-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .deploy/dependency-security/*.json
           include-hidden-files: true
           if-no-files-found: warn
