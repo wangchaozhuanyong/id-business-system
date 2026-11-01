@@ -1234,6 +1234,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isDependencyPatchCandidate(paths)) return false;
   if (isMailboxSettingsControlsOnly(paths)) return false;
   if (isMailboxSettingsOnly(paths)) return false;
   if (isMailboxValidityControlsOnly(paths)) return false;
@@ -6232,3 +6233,4 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+import { isDependencyPatchCandidate } from './ci-dependency-patch-scope.mjs';
