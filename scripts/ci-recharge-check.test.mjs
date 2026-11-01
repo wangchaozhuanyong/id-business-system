@@ -1417,10 +1417,11 @@ function recordGuardCommands(
   // Current task documentation must not turn the positive fixture into a fallback.
   if (autofillSourceFixture)
     for (const name of Object.keys(rechargeAutofillReviewedSources))
-      billingFixtureFiles[new URL('../' + name, import.meta.url).href] = execFileSync('git', [
-        'show',
-        '60a184e5d42074058825e01307ce09e58dc4ae1d:' + name
-      ]).toString('base64');
+      billingFixtureFiles[new URL('../' + name, import.meta.url).href] = execFileSync(
+        'git',
+        ['show', 'b3a65fcaab8814531da557d277f6a545641a0fa7:' + name],
+        { cwd: root }
+      ).toString('base64');
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
