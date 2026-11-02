@@ -14,8 +14,8 @@ spec.loader.exec_module(P)
 class SessionObserverPublicationTests(unittest.TestCase):
     def setUp(self):
         self.c = json.loads((HERE / P.CONTRACT_FILE).read_bytes())
-        source = {'head': P.SOURCE, 'tree': P.SOURCE_TREE, 'pullRequest': 764, 'runId': '123', 'sourceReceiptSha256': 'd' * 64}
-        control = {'head': 'c' * 40, 'tree': 'b' * 40, 'pullRequest': 765, 'runId': '124', 'sourceReceiptSha256': 'e' * 64}
+        source = {'head': P.SOURCE, 'tree': P.SOURCE_TREE, 'pullRequest': 770, 'runId': '123', 'sourceReceiptSha256': 'd' * 64}
+        control = {'head': 'c' * 40, 'tree': 'b' * 40, 'pullRequest': 771, 'runId': '124', 'sourceReceiptSha256': 'e' * 64}
         qa = {'source': source, 'control': control, 'main': {'head': 'a' * 40, 'runId': '125'}, 'commit': 'a' * 40, 'tree': 'b' * 40}
         self.plan = {'commit': 'a' * 40, 'tree': 'b' * 40, 'workflowRunId': '126', 'workflowRunAttempt': '1',
             'contractSha256': P.sha((HERE / P.CONTRACT_FILE).read_bytes()),
@@ -28,7 +28,7 @@ class SessionObserverPublicationTests(unittest.TestCase):
 
     def test_finite_overlay_preserves_api_admin_schema_and_payment_modules(self):
         P.validate_contract(self.c)
-        self.assertEqual(len(P.FILES), 4)
+        self.assertEqual(len(P.FILES), 3)
         self.assertEqual(self.c['updatedServices'], ['online-recharge'])
         self.assertEqual(set(self.c['afterEngineFiles']) - set(self.c['beforeEngineFiles']), set())
         for name in self.c['beforeEngineFiles'].keys() - P.FILES:
@@ -131,7 +131,7 @@ class SessionObserverPublicationTests(unittest.TestCase):
         pub = P.load('online-session-observer-publication.py')
         source = (HERE / 'online-session-observer-publication.py').read_text()
         self.assertIn("'recharge (online-engine)'", source)
-        self.assertIn("if pr_number == 764:", source)
+        self.assertIn("if pr_number == 770:", source)
         self.assertNotIn('apps/api/prisma', pub.CONTROLS)
         with patch.object(pub, 'check', side_effect=RuntimeError('SOURCE_CHANGED')):
             with self.assertRaisesRegex(RuntimeError, 'SOURCE_CHANGED'):
