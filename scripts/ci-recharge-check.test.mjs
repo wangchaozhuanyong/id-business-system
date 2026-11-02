@@ -4337,3 +4337,54 @@ test('finite mailbox publisher checks retain native guards without selecting a d
   );
 });
 import { dependencySecurityControls } from './ci-dependency-security-scope.mjs';
+
+import { permissionLoadingRepairPaths } from './ci-recharge-scope.mjs';
+
+test('finite loading repair keeps real source checks and all UI rules without historical publishers', () => {
+  const calls = recordGuardCommands('admin', [...permissionLoadingRepairPaths]);
+  for (const required of [
+    'scripts/ci-permission-loading-scope.test.mjs',
+    'scripts/ci-recharge-release.test.mjs',
+    'scripts/production-release/permission-loading-release.test.py',
+    'scripts/production-release/permission-loading-publication.py',
+    'check:admin-ui',
+    'check:v2-ui-language',
+    'check:v2-color-contrast',
+    'check:v2-table-standard',
+    'check:v2-loading-standard',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(
+      calls.some((row) => row.includes(required)),
+      required
+    );
+  for (const unrelated of [
+    'scripts/production-release/online-recharge-scope.test.py',
+    'scripts/production-release/api-admin-scope.test.py',
+    'scripts/production-release/remote-deploy.test.py'
+  ])
+    assert.equal(
+      calls.some((row) => row.includes(unrelated)),
+      false,
+      unrelated
+    );
+  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+});
+
+test('finite loading repair stops on its source and UI check failures', () => {
+  for (const failCommand of [
+    'python3 -B scripts/production-release/permission-loading-publication.py check',
+    'npm run check:v2-loading-standard'
+  ])
+    assert.throws(
+      () =>
+        recordGuardCommands('admin', [...permissionLoadingRepairPaths], 'guards', { failCommand }),
+      /SYNTHETIC_COMMAND_FAILURE/
+    );
+  const mixed = recordGuardCommands('admin', [
+    ...permissionLoadingRepairPaths,
+    'apps/api/src/id-business-v2/online-recharge/engine/healthcheck.cjs'
+  ]);
+  assert.ok(mixed.some((row) => row.includes('scripts/production-release/remote-deploy.test.py')));
+});

@@ -1235,6 +1235,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isPermissionLoadingRepairOnly(paths)) return false;
   if (isDependencySecurityControlsOnly(paths)) return false;
   if (isDependencyPatchCandidate(paths)) return false;
   if (isMailboxSettingsControlsOnly(paths)) return false;
@@ -2408,6 +2409,47 @@ export function isMailQueryPublicationControlsOnly(paths) {
   return (
     paths.some((path) => mailQueryPublicationControls.includes(path)) &&
     paths.every((path) => mailQueryPublicationSupport.has(path))
+  );
+}
+
+// One reviewed Admin-only batch; adding API, dependencies or another publisher
+// retains the normal gates instead of receiving this finite scope.
+export const permissionLoadingRepairPaths = Object.freeze([
+  'apps/admin/src/v2/components/asyncRegionState.ts',
+  'apps/admin/src/v2/components/V2AsyncRegion.vue',
+  'apps/admin/src/v2/features/proxy-pool/V2ProxyPoolView.vue',
+  'apps/admin/src/v2/components/asyncRegionState.spec.ts',
+  'apps/admin/src/v2/components/V2AsyncRegion.spec.ts',
+  'scripts/acceptance-v2-permission-loading.mjs',
+  'scripts/production-release/permission-loading-runtime.py',
+  'scripts/production-release/permission-loading-build.py',
+  'scripts/production-release/permission-loading-publication.py',
+  'scripts/production-release/permission-loading-release.test.py',
+  'scripts/production-release/permission-loading-contract.json',
+  '.github/workflows/permission-loading-publication.yml',
+  'scripts/ci-recharge-scope.mjs',
+  'docs/V2_TASKS.md',
+  'docs/V2_LOADING_STANDARD.md',
+  'docs/PERMISSION_LOADING_RELEASE_20261102.md',
+  'scripts/ci-permission-loading-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/acceptance-v2-recharge-proxies-ui.mjs',
+  'scripts/ci-recharge-release.test.mjs',
+  'scripts/ci-recharge-check.test.mjs'
+]);
+const permissionLoadingRepairSet = new Set(permissionLoadingRepairPaths);
+export function isPermissionLoadingRepairOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    [
+      '.github/workflows/permission-loading-publication.yml',
+      'scripts/production-release/permission-loading-contract.json',
+      'apps/admin/src/v2/components/asyncRegionState.ts',
+      'apps/admin/src/v2/components/V2AsyncRegion.vue',
+      'apps/admin/src/v2/features/proxy-pool/V2ProxyPoolView.vue'
+    ].every((name) => paths.includes(name)) &&
+    paths.every((name) => permissionLoadingRepairSet.has(name))
   );
 }
 

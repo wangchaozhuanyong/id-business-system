@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isAdminOnly, isCiOnly, needsAdminBrowserAcceptance } from './ci-recharge-scope.mjs';
+import {
+  isAdminOnly,
+  isCiOnly,
+  needsAdminBrowserAcceptance,
+  needsOnlineRechargeCiBuild,
+  isPermissionLoadingRepairOnly,
+  permissionLoadingRepairPaths
+} from './ci-recharge-scope.mjs';
 
 const controls = [
   '.github/workflows/permission-loading-publication.yml',
@@ -51,4 +58,27 @@ test('the complete permission repair uses frontend checks and rejects backend ad
   ];
   assert.equal(isAdminOnly(paths), true);
   assert.equal(isAdminOnly([...paths, 'apps/api/src/auth/auth.service.ts']), false);
+});
+
+test('the finite loading batch excludes unrelated ONLINE images and closes extensions', () => {
+  const paths = permissionLoadingRepairPaths;
+  assert.equal(isPermissionLoadingRepairOnly(paths), true);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  assert.equal(isAdminOnly(paths), true);
+  for (const extra of [
+    'apps/api/src/id-business-v2/online-recharge/engine/healthcheck.cjs',
+    'apps/api/prisma-mysql/schema.prisma',
+    'package-lock.json',
+    'scripts/production-release/remote-deploy.py'
+  ]) {
+    assert.equal(isPermissionLoadingRepairOnly([...paths, extra]), false, extra);
+    assert.equal(needsOnlineRechargeCiBuild([...paths, extra]), true, extra);
+  }
+  assert.equal(isPermissionLoadingRepairOnly([...paths, paths[0]]), false);
+  assert.equal(
+    isPermissionLoadingRepairOnly(
+      paths.filter((p) => !p.endsWith('permission-loading-contract.json'))
+    ),
+    false
+  );
 });
