@@ -45,7 +45,7 @@ def check(c):
          and sha((ROOT / 'package-lock.json').read_bytes()) == c['mainPackageLockSha256'], 'BUILD_INPUT_CHANGED')
     names = R.SOURCES
     originals = {n: git('show', c['reviewBase'] + ':' + n) for n in names}
-    need(all(sha(originals[n]) == c['baselineHostSources'][n] for n in names), 'BASE_SOURCE_CHANGED')
+    need(all(sha(originals[n]) == c['baselineReviewSources'][n] for n in names), 'BASE_SOURCE_CHANGED')
     expected = dict(originals)
     expected[names[0]] = expected[names[0]].replace(b"export type V2AsyncRegionState =\n", b"export type V2AsyncRegionState =\n  | 'inactive'\n").replace(b"  if (forbidden || phase === 'disabled') return 'forbidden';", b"  if (forbidden) return 'forbidden';\n  // A query can wait for a dependency, an active tab or an open drawer without lacking access.\n  if (phase === 'disabled') return 'inactive';")
     expected[names[1]] = expected[names[1]].replace(b'  <section\n', b"  <section\n    v-if=\"regionState !== 'inactive'\"\n", 1)

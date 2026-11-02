@@ -22,7 +22,8 @@ class PermissionLoadingPublicationTests(unittest.TestCase):
     def test_contract_accepts_only_the_admin_loading_repair(self):
         R.validate_contract(self.contract)
         for field, value in [('expectedCurrent', '0' * 40), ('updatedServices', ['api']),
-                             ('migrationPerformed', True), ('businessActions', 1)]:
+                             ('migrationPerformed', True), ('businessActions', 1),
+                             ('baselineHostSourcePresence', dict.fromkeys(R.SOURCES, True))]:
             changed = copy.deepcopy(self.contract)
             changed[field] = value
             with self.subTest(field=field), self.assertRaises(RuntimeError):
@@ -106,6 +107,54 @@ class PermissionLoadingPublicationTests(unittest.TestCase):
             driver, helpers = staged.utilities(self.contract)
             self.assertEqual(set(helpers.SERVICES), set(self.contract['preservedServices']) | {'admin'})
             self.assertTrue(callable(driver.service_state))
+
+    def test_sparse_host_sources_are_snapshotted_without_changing_the_parent(self):
+        output = HERE.parents[1] / '.runtime' / 'permission-loading-20261102'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            root = Path(directory)
+            current, target, payload = root / 'current', root / 'target', root / 'payload'
+            current.mkdir()
+            existing = current / R.SOURCES[1]
+            existing.parent.mkdir(parents=True)
+            existing.write_bytes(b'actual historical host source')
+            before = R.host_source_inventory(current, self.contract)
+            self.assertEqual(before[R.SOURCES[1]], R.sha(existing.read_bytes()))
+            self.assertIsNone(before[R.SOURCES[0]])
+            self.assertIsNone(before[R.SOURCES[2]])
+            existing.write_bytes(b'late change')
+            self.assertNotEqual(R.host_source_inventory(current, self.contract), before)
+            appeared = current / R.SOURCES[0]
+            appeared.write_bytes(b'unexpected')
+            with self.assertRaisesRegex(RuntimeError, 'PARENT_HOST_SOURCE_APPEARED'):
+                R.host_source_inventory(current, self.contract)
+            appeared.unlink()
+            for name in R.SOURCES:
+                path = payload / 'source' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(('reviewed ' + name).encode())
+            shutil.copytree(current, target)
+            R.write_candidate_sources(target, payload)
+            for name in R.SOURCES:
+                self.assertEqual((target / name).read_bytes(), (payload / 'source' / name).read_bytes())
+            self.assertFalse((current / R.SOURCES[0]).exists())
+            self.assertFalse((current / R.SOURCES[2]).exists())
+            self.assertEqual(existing.read_bytes(), b'late change')
+
+    def test_candidate_sources_reject_a_parent_directory_link_outside_the_release(self):
+        output = HERE.parents[1] / '.runtime' / 'permission-loading-20261102'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            root = Path(directory)
+            target, outside = root / 'target', root / 'outside'
+            target.mkdir()
+            outside.mkdir()
+            (target / 'apps').symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, 'HOST_SOURCE_PATH_CHANGED'):
+                R.write_candidate_sources(target, root / 'payload')
+            with self.assertRaisesRegex(RuntimeError, 'PARENT_HOST_SOURCE_LINK'):
+                R.host_source_inventory(target, self.contract)
+            self.assertEqual(list(outside.iterdir()), [])
 
 
 if __name__ == '__main__':

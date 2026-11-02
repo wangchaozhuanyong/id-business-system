@@ -17,6 +17,7 @@ SCOPE = 'PERMISSION_LOADING_ACTIVATION_20261102'
 CURRENT = 'dc957e0553301efe49d76142aeb287b0f1c8333d'
 ADMIN_PARENT = '42443056ac7d17b1a8c9146da62a6439755b234a'
 SOURCES = ('apps/admin/src/v2/components/asyncRegionState.ts', 'apps/admin/src/v2/components/V2AsyncRegion.vue', 'apps/admin/src/v2/features/proxy-pool/V2ProxyPoolView.vue')
+HOST_SOURCE_PRESENCE = {SOURCES[0]: False, SOURCES[1]: True, SOURCES[2]: False}
 
 
 def need(value, code):
@@ -44,6 +45,9 @@ def validate_contract(c):
          and c['updatedServices'] == ['admin'] and c['migrationPerformed'] is False
          and type(c['businessActions']) is int and c['businessActions'] == 0
          and set(c['sources']) == set(SOURCES)
+         and c['baselineHostSourcePresence'] == HOST_SOURCE_PRESENCE
+         and all(type(v) is bool for v in c['baselineHostSourcePresence'].values())
+         and c['hostSourceObservationRunId'] == 41491628317
          and c['baselineAdminCommit'] == ADMIN_PARENT
          and c['awsAccount'] == '098208446664', 'SCOPE_CHANGED')
 
@@ -63,6 +67,28 @@ def utilities(c):
     history.MODULES = frozenset()
     h, d, retired = history.helpers()
     return d, h
+
+
+def host_source_inventory(current, c):
+    result = {}
+    for name in SOURCES:
+        path = current / name
+        need(path.parent.resolve().is_relative_to(current) and not path.is_symlink(), 'PARENT_HOST_SOURCE_LINK')
+        if c['baselineHostSourcePresence'][name]:
+            need(path.is_file(), 'PARENT_HOST_SOURCE_MISSING')
+            result[name] = sha(path.read_bytes())
+        else:
+            need(not path.exists(), 'PARENT_HOST_SOURCE_APPEARED')
+            result[name] = None
+    return result
+
+
+def write_candidate_sources(target, payload):
+    for name in SOURCES:
+        path = target / name
+        need(path.parent.resolve().is_relative_to(target) and not path.is_symlink(), 'HOST_SOURCE_PATH_CHANGED')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((payload / 'source' / name).read_bytes())
 
 
 def capture(c, d, h, diagnostics=None):
@@ -87,13 +113,14 @@ def capture(c, d, h, diagnostics=None):
     shared = load('shared-bank-card-release.py')
     shared.read_hashes(d, states['admin']['containerId'], '/usr/share/nginx/html/', c['baselineAdminFiles'])
     stage('HOST_SOURCES')
-    need(all(sha((current / n).read_bytes()) == c['baselineHostSources'][n] for n in SOURCES), 'PARENT_HOST_SOURCE_CHANGED')
+    host_sources = host_source_inventory(current, c)
     stage('DISK')
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
     stage('CONFIGURATION')
     names = ('.env.aws.production', 'docker-compose.aws-mysql.yml', 'compose.release.json', 'deploy/caddy/Caddyfile.aws', 'apps/api/prisma-mysql/schema.prisma')
     return {'current': str(current), 'manifestSha256': sha((current / 'release-manifest.json').read_bytes()),
-            'services': states, 'runtime': runtime, 'configurationSha256': {n: sha((current / n).read_bytes()) for n in names},
+            'services': states, 'runtime': runtime, 'hostSourceSha256': host_sources,
+            'configurationSha256': {n: sha((current / n).read_bytes()) for n in names},
             'adminConfigurationSha256': h.configuration(d, states['admin'])}
 
 
@@ -128,6 +155,7 @@ def baseline(parent, c, d, h):
     current = (BASE / 'current').resolve()
     need(str(current) == parent['current'] and sha((current / 'release-manifest.json').read_bytes()) == parent['manifestSha256'], 'CURRENT_CHANGED')
     need(h.snapshot(d, current) == parent['services'] and all(sha((current / n).read_bytes()) == v for n, v in parent['configurationSha256'].items()), 'PARENT_CHANGED')
+    need(host_source_inventory(current, c) == parent['hostSourceSha256'], 'PARENT_HOST_SOURCE_CHANGED')
     return current
 
 
@@ -204,10 +232,7 @@ def release(plan, c):
         target = BASE / 'releases' / (stamp + '-' + plan['commit'][:12] + '-' + PREFIX)
         need(not target.exists(), 'TARGET_EXISTS')
         shutil.copytree(current, target, symlinks=True)
-        for name in SOURCES:
-            path = target / name
-            need(path.resolve().is_relative_to(target) and not path.is_symlink(), 'HOST_SOURCE_PATH_CHANGED')
-            path.write_bytes((payload / 'source' / name).read_bytes())
+        write_candidate_sources(target, payload)
         for name in plan['controlSources']:
             (target / 'scripts/production-release' / name).write_bytes((HERE / name).read_bytes())
         override = json.loads((target / 'compose.release.json').read_bytes())

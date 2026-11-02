@@ -271,11 +271,6 @@
     "v2-boot.js": "c2fdaf3938e6ef8b58320965dba5a90edc564760f19d0b8d99248aefef4a2a52"
   },
   "baselineAdminFilesSha256": "cd39e9acbfe584b81239ff415e007ba24b09fb5ab0319e6347c9896fd0cfeb9f",
-  "baselineHostSources": {
-    "apps/admin/src/v2/components/V2AsyncRegion.vue": "df70096a26038c0b475c556c9ef480572f8b7cd1ad2fa5cc57482c0883df3007",
-    "apps/admin/src/v2/components/asyncRegionState.ts": "d43aecb4c917f2e6fb209b1aa7ac8ee7e338500198ed0247da17ee3b341373bf",
-    "apps/admin/src/v2/features/proxy-pool/V2ProxyPoolView.vue": "f69f330751ee3eed75f83d01a0adbd8e4a3ef012ac3c510117ae81167b79171f"
-  },
   "baselineRuntime": {
     "adminInventory": {
       "count": 7779,
@@ -391,9 +386,9 @@
     "online-session-observer-release.test.py": "949e312958da325b54a6b5947652209ddf62a0b383cf7205ad0a218f22762a9c",
     "online-unpaid-validation-release.py": "869d40d287567eeb901aae413d366444ca077431a433341312fcc90ec8cd4e56",
     "permission-loading-build.py": "0eccd4a1e0ea19a7bfc1f5c473c06ffe2765c2b5593e927711cfb709c2c52a34",
-    "permission-loading-publication.py": "387aefb5c8684828d0abed4e99fba7be59e65670def2059efd9c645aa863f0cf",
-    "permission-loading-release.test.py": "f874641747a584c3baa3c7513cadd1931fd5e1eaf115afdeb26d91a87a9b0640",
-    "permission-loading-runtime.py": "8d03c4676712b038f5d906c5e33beaea79a6c240f51c5a716ce11e1d42238641",
+    "permission-loading-publication.py": "605c0f8144072857207677b5aa6c0da858ba39a7ae041d6324f62386646ac7c5",
+    "permission-loading-release.test.py": "c78fcc8bb69d465d03ba9ae96abd7434785d259418cfe3a41eb9557ee2514ed7",
+    "permission-loading-runtime.py": "68e23157ecc7f58d0258757aaa906a283983aacdae7be792b09cbff9519a6887",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",
     "recharge-autofill-build.py": "d0c1f9b43742dd57bfaf39e380159146052b06c9cb9fcfddba492873d4ab7277",
     "recharge-autofill-publication.py": "65475726efdd17113e4b1652c1b2eadf2ab67e1136f3a9aae38c9d4eb0fdb939",
@@ -438,5 +433,16 @@
     "scripts/ci-recharge-check.test.mjs": "93f9ee9bf04848d2db12397f97caf3060039643a969a4587a5fbfa6f61a5851a"
   },
   "version": 1,
-  "workflowSha256": "5932c5dbf82e94dd6ac13f680e87759005ba5eea69ceff26c8dd7fc0bfd7a76a"
+  "workflowSha256": "5932c5dbf82e94dd6ac13f680e87759005ba5eea69ceff26c8dd7fc0bfd7a76a",
+  "baselineReviewSources": {
+    "apps/admin/src/v2/components/V2AsyncRegion.vue": "df70096a26038c0b475c556c9ef480572f8b7cd1ad2fa5cc57482c0883df3007",
+    "apps/admin/src/v2/components/asyncRegionState.ts": "d43aecb4c917f2e6fb209b1aa7ac8ee7e338500198ed0247da17ee3b341373bf",
+    "apps/admin/src/v2/features/proxy-pool/V2ProxyPoolView.vue": "f69f330751ee3eed75f83d01a0adbd8e4a3ef012ac3c510117ae81167b79171f"
+  },
+  "baselineHostSourcePresence": {
+    "apps/admin/src/v2/components/asyncRegionState.ts": false,
+    "apps/admin/src/v2/components/V2AsyncRegion.vue": true,
+    "apps/admin/src/v2/features/proxy-pool/V2ProxyPoolView.vue": false
+  },
+  "hostSourceObservationRunId": 41491628317
 }
