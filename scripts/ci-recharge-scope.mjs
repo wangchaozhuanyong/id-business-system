@@ -1,3 +1,4 @@
+import { isDependencySecurityControlsOnly } from './ci-dependency-security-scope.mjs';
 import {
   isMailboxValidityOnly,
   isMailboxSettingsOnly,
@@ -1234,6 +1235,8 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
+  if (isDependencySecurityControlsOnly(paths)) return false;
+  if (isDependencyPatchCandidate(paths)) return false;
   if (isMailboxSettingsControlsOnly(paths)) return false;
   if (isMailboxSettingsOnly(paths)) return false;
   if (isMailboxValidityControlsOnly(paths)) return false;
@@ -2409,6 +2412,7 @@ export function isMailQueryPublicationControlsOnly(paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (isDependencySecurityControlsOnly(paths)) return true;
   if (isRechargeAutofillControlsOnly(paths)) return true;
   if (isMailQueryPublicationControlsOnly(paths)) return true;
   if (isRechargePlanBillingPublicationOnly(paths)) return true;
@@ -2592,6 +2596,7 @@ export function isMailboxOnly(paths) {
 }
 
 export function checkMode(paths, oldSchema, newSchema, grantHelperSnapshot, context) {
+  if (isDependencySecurityControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isMailboxSettingsControlsOnly(paths)) return oldSchema === newSchema ? 'ci-only' : 'full';
   if (isMailboxSettingsOnly(paths)) return oldSchema === newSchema ? 'admin' : 'full';
   if (isMailboxValidityControlsOnly(paths)) return 'ci-only';
@@ -6232,3 +6237,4 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+import { isDependencyPatchCandidate } from './ci-dependency-patch-scope.mjs';

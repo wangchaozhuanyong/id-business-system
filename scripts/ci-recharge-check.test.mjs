@@ -1,5 +1,6 @@
 import {
   rechargeAutofillControls,
+  rechargeAutofillReviewedSources,
   rechargeAutofillSourcePaths,
   rechargeAutofillSourceCommands
 } from './ci-recharge-autofill-scope.mjs';
@@ -31,14 +32,46 @@ import test from 'node:test';
 import { financialPublicationControlPaths } from './ci-financial-publication-scope.mjs';
 import { financialClosurePaths } from './ci-financial-closure-scope.mjs';
 
+test('依赖发布控制真实入口保留来源和离线校验并拒绝业务模式', () => {
+  const calls = recordGuardCommands('ci-only', [...dependencySecurityControls]);
+  assert.ok(
+    calls.some((call) =>
+      call.includes('scripts/production-release/dependency-security-publication.test.py')
+    )
+  );
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.includes('scripts/production-release/dependency-security-publication.py') &&
+        call.includes('check')
+    )
+  );
+  assert.equal(
+    calls.some((call) => call.some((arg) => /prisma|acceptance:v2|--workspace/.test(arg))),
+    false
+  );
+  assert.throws(
+    () => recordGuardCommands('recharge', [...dependencySecurityControls]),
+    /control selection/
+  );
+});
+
 test('回填源码真实入口保留四类检查并拒绝错误模式', () => {
   for (const part of ['guards', 'api', 'admin', 'online-engine'])
-    assert.deepEqual(recordGuardCommands('recharge', [...rechargeAutofillSourcePaths], part), [
-      ...rechargeAutofillSourceCommands(part).map(([file, args]) => [file, ...args]),
-      ['process-exit', 0]
-    ]);
+    assert.deepEqual(
+      recordGuardCommands('recharge', [...rechargeAutofillSourcePaths], part, {
+        autofillSourceFixture: true
+      }),
+      [
+        ...rechargeAutofillSourceCommands(part).map(([file, args]) => [file, ...args]),
+        ['process-exit', 0]
+      ]
+    );
   assert.throws(
-    () => recordGuardCommands('ci-only', [...rechargeAutofillSourcePaths]),
+    () =>
+      recordGuardCommands('ci-only', [...rechargeAutofillSourcePaths], 'guards', {
+        autofillSourceFixture: true
+      }),
     /reviewed recharge check selection/
   );
 });
@@ -1269,7 +1302,8 @@ function recordGuardCommands(
     flowV4Fixture = false,
     terminalStopFixture = false,
     mailQueryInputsChanged = false,
-    billingSourceFixture = false
+    billingSourceFixture = false,
+    autofillSourceFixture = false
   } = {}
 ) {
   // Run the real dispatcher with process execution replaced before its named import resolves.
@@ -1403,6 +1437,15 @@ function recordGuardCommands(
         ])
       )
     : {};
+  // Reproduce this historical dispatcher using its approved immutable input.
+  // Current task documentation must not turn the positive fixture into a fallback.
+  if (autofillSourceFixture)
+    for (const name of Object.keys(rechargeAutofillReviewedSources))
+      billingFixtureFiles[new URL('../' + name, import.meta.url).href] = execFileSync(
+        'git',
+        ['show', 'b3a65fcaab8814531da557d277f6a545641a0fa7:' + name],
+        { cwd: root }
+      ).toString('base64');
   const script = `
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
@@ -4293,3 +4336,4 @@ test('finite mailbox publisher checks retain native guards without selecting a d
     false
   );
 });
+import { dependencySecurityControls } from './ci-dependency-security-scope.mjs';

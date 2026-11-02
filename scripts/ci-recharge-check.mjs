@@ -230,6 +230,12 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (isDependencySecurityControlsOnly(changed)) {
+  if (mode !== 'ci-only')
+    throw new Error('Dependency security observation requires control selection');
+  for (const [file, args] of dependencySecurityCommands(part)) run(file, args);
+  process.exit(0);
+}
 if (isMailboxSettingsControlsOnly(changed)) {
   if (mode !== 'ci-only' || part !== 'guards')
     throw new Error('Mailbox settings control repair requires guards only');
@@ -2511,3 +2517,7 @@ if (releaseArtifactOnly && ['guards', 'release-controls'].includes(part)) {
     run('sh', ['-n', 'scripts/start-auto-recharge-connector.sh']);
   }
 } else throw new Error('Unknown recharge check part');
+import {
+  isDependencySecurityControlsOnly,
+  dependencySecurityCommands
+} from './ci-dependency-security-scope.mjs';
