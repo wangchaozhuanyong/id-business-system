@@ -12,8 +12,8 @@ class ObservationTests(unittest.TestCase):
   self.assertIn('h.snapshot',code)
   plan=json.loads((HERE/'online-proxy-client-parent-plan.json').read_bytes())
   self.assertEqual(plan['commit'],P.PREDECESSOR)
-  self.assertEqual(plan['controlSources']['online-proxy-client-release.py'],hashlib.sha256((HERE/'online-proxy-client-release.py').read_bytes()).hexdigest())
-  self.assertIn('ONLINE_PROXY_CLIENT_20261031_INDEPENDENT_READBACK_VERIFIED',code)
+  self.assertEqual(plan['controlSources']['dependency-security-runtime.py'],hashlib.sha256((HERE/'dependency-security-runtime.py').read_bytes()).hexdigest())
+  self.assertIn('DEPENDENCY_SECURITY_READBACK_VERIFIED',code)
   self.assertNotIn('docker stop',code)
   with self.assertRaises(AssertionError):P.source('capture','a'*40)
  def test_comparison_is_bounded_and_never_reads_session(self):

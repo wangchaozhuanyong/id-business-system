@@ -60,6 +60,11 @@ export function isProxyClientDiagnosticsOnly(paths) {
     'test/session-connection-diagnostics.test.cjs',
     'test/session-request-observation.test.cjs'
   ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
+  const homepage = [
+    'SOURCE_MANIFEST.json',
+    'subscription-diagnostics.cjs',
+    'test/session-request-observation.test.cjs'
+  ].map((name) => 'apps/api/src/id-business-v2/online-recharge/engine/' + name);
   const support = [
     ...proxyClientDiagnosticPaths.filter((p) => !p.startsWith('apps/')),
     ...proxyClientObservationControlPaths.filter((p) => p.startsWith('scripts/')),
@@ -70,7 +75,7 @@ export function isProxyClientDiagnosticsOnly(paths) {
   return (
     paths.length > 0 &&
     new Set(paths).size === paths.length &&
-    [runtime, setup].some(
+    [runtime, setup, homepage].some(
       (required) =>
         required.every((p) => paths.includes(p)) &&
         paths.every((p) => required.includes(p) || support.includes(p))
