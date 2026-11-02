@@ -460,14 +460,7 @@
   "packageLockSha256": "1e0ec3f854b87981e22ff6f9cfd4e735a3844aaaa3c026264d269069900cacf6",
   "parentPreservationSha256": "bf64d9bf5566fa7e1e926e6f6f9cdae3055c33fef77bb2218ae2c7f3b9ca77e5",
   "parentProofSha256": "9645d50d0b2fbf63a8e9f4913eccd615cfd7adb2281b63dabb9c7f5927fef017",
-  "preservedServices": [
-    "api",
-    "admin",
-    "mysql",
-    "caddy",
-    "media-resolver",
-    "auto-recharge"
-  ],
+  "preservedServices": ["api", "admin", "mysql", "caddy", "media-resolver", "auto-recharge"],
   "runtimeSources": {
     "apps/api/src/id-business-v2/online-recharge/engine/SOURCE_MANIFEST.json": "163c6a47784177557db837ca442c549f98d3694743cc01f708048cdcaee66573",
     "apps/api/src/id-business-v2/online-recharge/engine/subscription-diagnostics.cjs": "4fd59019252c7c49b8e3c10c6daa31a1d2d3effebe1ee91fef9919b3135c9095",
@@ -478,9 +471,7 @@
   "sourceReviewCommit": "bfcba20b9a0fcc262c279885f622bd528e459fc4",
   "sourceReviewTree": "c28eb79da3f0e59c86ca4970e73db20bda5e2fae",
   "sqlFenceHelperSha256": "50446ab528a288ca1c2129c84f1bf4a90f59fa313a92bcff0058a258c8b8e925",
-  "updatedServices": [
-    "online-recharge"
-  ],
+  "updatedServices": ["online-recharge"],
   "validationSources": {
     "AGENTS.md": "fe808c9d0b3e52b94c2b93e9bd99f1790927c0711bf130ef2e828a8ea53abc83",
     "docs/ONLINE_RECHARGE.md": "1f319552ca416f9fa2f16f5171e358f249e959cd85683f6dd954fc1c4b757c98",
