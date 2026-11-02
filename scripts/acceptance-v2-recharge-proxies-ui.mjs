@@ -560,7 +560,6 @@ try {
       await importer.waitFor({ state: 'hidden' });
       await page.getByText('导入验收').first().waitFor({ state: 'visible' });
       await page.getByPlaceholder('代理地址、国家代码或备注').fill('不存在');
-      await page.getByRole('button', { name: '查询', exact: true }).click();
       await page.getByPlaceholder('代理地址、国家代码或备注').press('Enter');
       try {
         await page.getByText('暂无代理', { exact: true }).waitFor({ state: 'visible' });

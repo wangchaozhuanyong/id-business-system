@@ -1,5 +1,6 @@
 <template>
   <section
+    v-if="regionState !== 'inactive'"
     class="v2-async-region"
     :class="[
       `v2-async-region--${variant}`,

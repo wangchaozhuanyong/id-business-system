@@ -8,6 +8,9 @@ import {
 describe('V2 async region state', () => {
   it.each([
     [{ forbidden: true, phase: 'ready', empty: true }, 'forbidden'],
+    [{ forbidden: false, phase: 'disabled', empty: false }, 'inactive'],
+    [{ forbidden: false, phase: 'disabled', empty: true }, 'inactive'],
+    [{ forbidden: true, phase: 'disabled', empty: false }, 'forbidden'],
     [{ forbidden: false, phase: 'initial-loading', empty: false }, 'initial-loading'],
     [{ forbidden: false, phase: 'initial-error', empty: false }, 'initial-error'],
     [{ forbidden: false, phase: 'ready', empty: true }, 'empty'],
@@ -15,6 +18,13 @@ describe('V2 async region state', () => {
     [{ forbidden: false, phase: 'refresh-error', empty: false }, 'content']
   ] as const)('resolves mutually exclusive visual state %#', (input, expected) => {
     expect(resolveV2AsyncRegionState(input)).toBe(expected);
+  });
+
+  it('never treats waiting for query prerequisites as a permission denial', () => {
+    const phases = ['disabled', 'idle', 'initial-loading', 'ready'] as const;
+    expect(
+      phases.map((phase) => resolveV2AsyncRegionState({ forbidden: false, phase, empty: false }))
+    ).toEqual(['inactive', 'initial-loading', 'initial-loading', 'content']);
   });
 
   it('defers refresh feedback only when successful content is already visible', () => {
