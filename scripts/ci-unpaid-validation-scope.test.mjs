@@ -854,6 +854,71 @@ test('proxy client controls are finite, preserve contract tests and cannot admit
   }
 });
 
+test('homepage navigation diagnostics require exact source, manifest and full unfiltered engine checks', () => {
+  const engine = 'apps/api/src/id-business-v2/online-recharge/engine/';
+  const required = [
+    'SOURCE_MANIFEST.json',
+    'subscription-diagnostics.cjs',
+    'test/session-request-observation.test.cjs'
+  ].map((p) => engine + p);
+  const paths = [
+    ...required,
+    'docs/ONLINE_RECHARGE.md',
+    'docs/V2_TASKS.md',
+    'scripts/ci-unpaid-validation-scope.mjs',
+    'scripts/ci-unpaid-validation-scope.test.mjs',
+    ...proxyClientObservationControlPaths.filter((p) => p.startsWith('scripts/'))
+  ];
+  assert.equal(isProxyClientDiagnosticsOnly(paths), true);
+  assert.equal(checkMode(paths), 'recharge');
+  const withRunnerPin = [...paths, '.github/workflows/quality.yml'];
+  assert.equal(isProxyClientDiagnosticsOnly(withRunnerPin), true);
+  assert.deepEqual(selectedParts(withRunnerPin), ['guards', 'online-engine']);
+  const workflow = readFileSync(
+    new URL('../.github/workflows/quality.yml', import.meta.url),
+    'utf8'
+  );
+  assert.match(
+    workflow.split('  recharge:\n')[1].split('\n  quality:')[0],
+    /runs-on: ubuntu-24\.04/
+  );
+  assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
+  const commands = unpaidValidationCommands('online-engine', paths);
+  const serial = commands.find((c) => c[0] === 'node' && c[1] === '--test');
+  const manifest = JSON.parse(
+    readFileSync(new URL('../' + engine + 'SOURCE_MANIFEST.json', import.meta.url))
+  );
+  assert.deepEqual(serial.slice(0, 3), ['node', '--test', '--test-concurrency=1']);
+  assert.deepEqual(
+    serial.slice(3),
+    manifest.files
+      .filter((r) => /^test\/[^/]+\.test\.cjs$/.test(r.path))
+      .map((r) => engine + r.path)
+      .sort()
+  );
+  assert.deepEqual(commands.at(-1), [
+    'npm',
+    'run',
+    'test:upstream',
+    '--prefix',
+    engine.slice(0, -1)
+  ]);
+  for (const p of required)
+    assert.equal(isProxyClientDiagnosticsOnly(paths.filter((n) => n !== p)), false);
+  for (const p of [
+    'upstream/session-auth.js',
+    'upstream/stripe-payment.js',
+    'browser-profile.cjs',
+    'worker.cjs'
+  ])
+    assert.equal(isProxyClientDiagnosticsOnly([...paths, engine + p]), false);
+  assert.equal(
+    isProxyClientDiagnosticsOnly([...paths, 'apps/api/prisma-mysql/schema.prisma']),
+    false
+  );
+  assert.equal(isProxyClientDiagnosticsOnly([...paths, paths[0]]), false);
+});
+
 test('connection setup diagnostic repair retains full engine checks with an exact four-file runtime scope', () => {
   const required = [
     'SOURCE_MANIFEST.json',

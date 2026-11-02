@@ -1,3 +1,10 @@
+## V2-ONLINE-HOMEPAGE-NAVIGATION-EVIDENCE-20261102（本地修复与隔离验证）
+
+- 原任务68279cf3首次Session HTTP200、有效用户及原账号匹配；后续bootstrapDiagnostics为navigation_failed/navigation，failure为session_bootstrap/ETIMEDOUT，订阅请求诊断为空。实际停止在首页导航，管理端504为内部超时投影，不是官网订阅接口504回执。
+- 现有Session请求观察只覆盖/api/auth/session，本批在同一已登记观察器内被动记录首页主frame的GET导航及实际重定向链：请求、响应头允许列表、下载完成、DOMContentLoaded、受控浏览器错误和收尾快照。无需CDP初始化，不新增请求、读取正文或页面执行，不改导航条件、登录判定、代理、分区、CSP、重试或期限。
+- 每任务最多30个导航跳；忽略iframe、普通fetch、伪官网和非关联导航。旧导航不接收新导航的DOMContentLoaded；结束释放页/context监听，迟到事件不回写。快照Observed=false表示未观察到，收尾aborted可能来自关页，均不能直接推断根因；DOMContentLoaded也不等于登录通过。
+- 仅日志增加受控元数据，沿用原IPC和批次日志保存；无新增公开API、数据库表列、迁移、依赖或环境变量。本轮不提交、推送、发布或新增官网任务；诊断补齐不代表登录或付款前链路恢复。检查结果归`.runtime/homepage-navigation-diagnostics-20261102/RESULT.md`。
+
 ## V2-ONLINE-PROXY-CLIENT-DIAGNOSTICS-20261030（代码及本地隔离验证完成，未发布）
 
 - 本批只补检测方式对照与Session被动连接证据，不修改分区切换、登录/Session判定、代理提取、卡片、账单、按钮、CSP或期限。

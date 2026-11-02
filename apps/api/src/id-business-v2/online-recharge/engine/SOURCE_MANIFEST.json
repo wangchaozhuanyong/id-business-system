@@ -208,9 +208,9 @@
     {
       "path": "subscription-diagnostics.cjs",
       "originalSha256": null,
-      "adaptedSha256": "b2e14f571aeb0bfc32e5cdafc105e4bea1d24dd51e94098f43ee9313da5800e8",
+      "adaptedSha256": "4fd59019252c7c49b8e3c10c6daa31a1d2d3effebe1ee91fef9919b3135c9095",
       "changed": true,
-      "reason": "Keep existing passive Session metadata and attach isolated CDP connection observations without authentication or request changes."
+      "reason": "Keep existing passive Session metadata and attach isolated CDP connection observations without authentication or request changes. 2026-11-02 Add bounded passive main-frame homepage navigation and lifecycle evidence independently of CDP; preserve all business requests, navigation waits and login decisions."
     },
     {
       "path": "subscription-network-diagnostics.cjs",
@@ -958,8 +958,8 @@
       "path": "test/session-request-observation.test.cjs",
       "originalSha256": null,
       "changed": true,
-      "reason": "2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification. 2026-10-31 Preserve bounded observer setup operation, failure cause, safe error class and elapsed time; retain the 1s asynchronous budget and original request behavior, and cover cancellation, late completion and zero-HTTP Chromium initialization.",
-      "adaptedSha256": "c68acb1d33e979a8c06acfa0694626a0c530a624da7b8aa84b56f90fab0901c3"
+      "reason": "2026-10-30: unify task-frozen regional browser settings across native account/query contexts; passive Session request metadata starts before login and distinguishes redirect hops without credentials, added requests, auth bypass, payment changes or new deadlines. Isolated region, cookie reuse, read failure and cleanup verification. 2026-10-31 Preserve bounded observer setup operation, failure cause, safe error class and elapsed time; retain the 1s asynchronous budget and original request behavior, and cover cancellation, late completion and zero-HTTP Chromium initialization. 2026-11-02 Cover homepage response/DCL separation, redirects, failure enums, logging, bounded cleanup and an isolated Chromium fixture without external traffic.",
+      "adaptedSha256": "45f7e14277633005e561f6375632c3f71a357df03f1a0fd363b0e71e3a46e183"
     },
     {
       "path": "session-connection-diagnostics.cjs",

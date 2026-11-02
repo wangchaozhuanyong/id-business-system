@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 ACCOUNT = '098208446664'
 INSTANCE = 'i-0838cebf64f0e2a89'
-PREDECESSOR = '8ff49238b47a5c227fce70dfbb057ce3ce526ca7'
+PREDECESSOR = '1fad20094dd3b0d079ddaf0c9ca4bb20f481cef7'
 PROXY = '0ae77e06-f2e4-4d9c-bee8-c9424c8905fb'
 DIAGNOSTIC_SHA = 'ab84521fa4431f3e6bc8f21b50dad6aa6f78d92f9c5410d3818db3d9273ad5a7'
 
@@ -24,17 +24,16 @@ from pathlib import Path
 base=Path('/opt/id-business-v2');current=(base/'current').resolve(strict=True)
 assert current.parent==base/'releases'
 assert json.loads((current/'release-manifest.json').read_bytes())['commit']==EXPECTED
-helper=current/'scripts/production-release/online-proxy-client-release.py'
-assert hashlib.sha256(helper.read_bytes()).hexdigest()==PLAN['controlSources']['online-proxy-client-release.py']
+helper=current/'scripts/production-release/dependency-security-runtime.py'
+assert hashlib.sha256(helper.read_bytes()).hexdigest()==PLAN['controlSources']['dependency-security-runtime.py']
 spec=importlib.util.spec_from_file_location('parent',helper);p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 c=json.loads((helper.parent/p.CONTRACT_FILE).read_bytes())
-assert p.release({**PLAN,'mode':'readback'},c)['status']=='ONLINE_PROXY_CLIENT_20261031_INDEPENDENT_READBACK_VERIFIED'
-core=p.engine(c,PLAN);h,_old,d,*_=core.LEGACY.helpers()
+assert p.release({**PLAN,'mode':'readback'},c)['status']=='DEPENDENCY_SECURITY_READBACK_VERIFIED'
+history,h,d,_retired=p.utilities()
 raw=(current/'release-manifest.json').read_bytes();states=h.snapshot(d,current)
-history=p.load('bitbrowser-history-release.py');history.MODULES=frozenset()
 normalizer=Path(c['baseline']['backupNormalizerPath'])
 b={'commit':EXPECTED,'current':str(current),'manifestSha256':p.sha(raw),'services':states,
-'configurationSha256':{n:p.sha((current/n).read_bytes()) for n in c['baseline']['configurationSha256']},
+'configurationSha256':{n:p.sha((current/n).read_bytes()) for n in ('.env.aws.production','apps/api/prisma-mysql/schema.prisma','compose.release.json','deploy/caddy/Caddyfile.aws','docker-compose.aws-mysql.yml')},
 'runtimeConfigurationSha256':{n:h.configuration(d,s) for n,s in states.items()},
 'runtime':history.runtime(d,states),'database':history.database(d,states['api']),
 'backupNormalizerPath':str(normalizer),'backupNormalizerSha256':p.sha(normalizer.read_bytes())}

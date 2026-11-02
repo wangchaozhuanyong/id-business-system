@@ -1,3 +1,13 @@
+## 2026-11-02 首页导航超时证据（本地候选，尚未发布）
+
+原任务68279cf3-90c9-4e83-8d6d-6bb150432875首次Session返回200、身份匹配，后续首页导航失败，lastAwait=navigation、failure.phase=session_bootstrap、networkCode=ETIMEDOUT。尚未进入首页Session fetch及订阅接口查询；页面“订阅查询超时/504”是内部错误投影，不是上游HTTP504。原回执不能区分document无响应与页面未达到DOMContentLoaded。
+
+本批复用现有Session请求观察入口，增加首页主frame GET导航及其真实重定向链的被动context/page事件。只记录本地导航序号、目标类别、相对耗时、HTTP状态/内容类型/挑战枚举及Ray存在布尔、下载完成、DOMContentLoaded和允许列表网络错误；不记录URL、响应正文、Cookie或其他凭据，不新增官网请求，不依赖CDP Network.enable初始化成功。事件保存在原任务批次日志明细，列表消息可能只显示批次末条，不能把列表行数当成日志事件总数。
+
+每任务至多30个导航跳，真实iframe与普通fetch不纳入首页导航。请求对象关联重定向；无关联的新导航清除旧DOMContentLoaded归属。关闭或dispose拆除全部页/context监听，不接受迟到回执。快照的Observed=false只表示没有观察到，不证明上游没响应；收尾的ERR_ABORTED也可能由清理关页引起。DOMContentLoaded不是登录/会话核验成功，不能用于放宽业务门槛。
+
+导航仍保持原page.goto、domcontentloaded条件和最多90000ms/剩余登录期限，Session/订阅/付款与分区策略均不改。无新增公开API、表列、迁移、配置、依赖或环境变量。本地合成Chromium页面验证“正文完成但defer脚本让DOMContentLoaded等待”的差异，不连接真实官网或生产数据库。此批只补诊断，不能宣称解除线上导航阻断；提交、发布和新任务另按明确授权执行。
+
 ## 2026-10-28 卡号输入后节点读取分类（本地候选，尚未发布）
 
 原任务cb7b8b22在已发布a32d1f7b上通过首次和首页Session200、订阅前检、建单、开页及卡号就绪检查；卡号input阶段525ms后以control_read/READ_INCOMPLETE结束。唯一候选为可见可编辑的embedded input，但原附件没有底层异常和输入子操作，不能认定卡号值被接受或节点已替换，也不能把missing三字段解释为三个控件均不存在。
