@@ -4,7 +4,10 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('permission_loading_runtime', HERE / 'permission-loading-runtime.py')
@@ -64,6 +67,45 @@ class PermissionLoadingPublicationTests(unittest.TestCase):
         root = HERE.parents[1]
         for name, digest in {**self.contract['sources'], **self.contract['validationSources']}.items():
             self.assertEqual(hashlib.sha256((root / name).read_bytes()).hexdigest(), digest, name)
+
+    def test_parent_diagnostics_strip_messages_and_cannot_authorize_release(self):
+        output = HERE.parents[1] / '.runtime' / 'permission-loading-20261102'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            def unavailable(_contract, _driver, _helpers, diagnostics):
+                diagnostics['stage'] = 'HOST_SOURCES'
+                raise FileNotFoundError('private-secret-value-must-not-leave-server')
+            with patch.object(R, 'BASE', Path(directory)), patch.object(R, 'capture', unavailable):
+                result = R.inspect_parent(self.contract, None, None)
+            self.assertEqual(result['stage'], 'HOST_SOURCES')
+            self.assertEqual(result['exceptionType'], 'FileNotFoundError')
+            self.assertFalse(result['baselineCaptured'])
+            self.assertFalse(result['releaseAuthority'])
+            self.assertEqual(result['businessActions'], 0)
+            self.assertNotIn('private-secret-value', json.dumps(result))
+            self.assertEqual(result['hostSourcePresence'], dict.fromkeys(R.SOURCES, False))
+            def available(_contract, _driver, _helpers, diagnostics):
+                diagnostics['stage'] = 'CONFIGURATION'
+                return {'private': 'not part of diagnostic result'}
+            with patch.object(R, 'BASE', Path(directory)), patch.object(R, 'capture', available):
+                success = R.inspect_parent(self.contract, None, None)
+            self.assertTrue(success['baselineCaptured'])
+            self.assertFalse(success['releaseAuthority'])
+            self.assertNotIn('private', success)
+
+    def test_only_shipped_helpers_can_initialize_the_parent_reader(self):
+        output = HERE.parents[1] / '.runtime' / 'permission-loading-20261102'
+        output.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output) as directory:
+            target = Path(directory)
+            for name in {*self.contract['helperPins'], R.CONTRACT_FILE}:
+                shutil.copyfile(HERE / name, target / name)
+            spec = importlib.util.spec_from_file_location('staged_permission_runtime', target / 'permission-loading-runtime.py')
+            staged = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(staged)
+            driver, helpers = staged.utilities(self.contract)
+            self.assertEqual(set(helpers.SERVICES), set(self.contract['preservedServices']) | {'admin'})
+            self.assertTrue(callable(driver.service_state))
 
 
 if __name__ == '__main__':

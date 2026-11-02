@@ -2,6 +2,14 @@ name: Permission Loading Publication
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Publish Admin or inspect the parent without publication
+        required: true
+        default: publish
+        type: choice
+        options:
+          - publish
+          - observe
       commit:
         description: Exact reviewed main commit
         required: true
@@ -47,9 +55,14 @@ jobs:
           role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
           role-session-name: id-business-v2-permission-loading-observe-${{ github.run_id }}
           aws-region: ap-northeast-1
+      - name: Inspect parent without publication
+        if: inputs.operation == 'observe'
+        run: python3 -B scripts/production-release/permission-loading-publication.py observe
       - name: Reproduce current Admin and build the reviewed main revision
+        if: inputs.operation == 'publish'
         run: python3 -B scripts/production-release/permission-loading-publication.py build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.operation == 'publish'
         with:
           name: permission-loading-native-${{ github.sha }}-${{ github.run_attempt }}
           path: |
@@ -67,7 +80,7 @@ jobs:
           if-no-files-found: warn
   publish:
     needs: validate
-    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha && inputs.operation == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

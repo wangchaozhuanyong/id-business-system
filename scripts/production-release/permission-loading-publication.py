@@ -110,6 +110,17 @@ def build(c):
     load(PREFIX + '-build.py').build(c, plan, qa, parent, OUT, R)
 
 
+def observe(c):
+    check(c)
+    native = identity(c)
+    quality(native)
+    need(not OUT.exists(), 'OUTPUT_EXISTS')
+    OUT.mkdir(parents=True, mode=0o700)
+    result = transport(plan_for(c, native), 'inspect-parent')
+    need(result['status'] == 'PERMISSION_LOADING_PARENT_DIAGNOSED' and result['releaseAuthority'] is False, 'DIAGNOSTIC_FAILED')
+    print(json.dumps(result, sort_keys=True))
+
+
 def publish(c):
     check(c)
     native = identity(c)
@@ -153,8 +164,8 @@ def publish(c):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('check', 'build', 'publish'))
+    parser.add_argument('mode', choices=('check', 'build', 'publish', 'observe'))
     args = parser.parse_args()
-    {'check': check, 'build': build, 'publish': publish}[args.mode](contract())
+    {'check': check, 'build': build, 'publish': publish, 'observe': observe}[args.mode](contract())
     if args.mode == 'check':
         print(json.dumps({'status': 'PERMISSION_LOADING_SOURCE_VERIFIED'}))

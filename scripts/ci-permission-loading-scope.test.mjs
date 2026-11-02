@@ -6,6 +6,7 @@ import {
   needsAdminBrowserAcceptance,
   needsOnlineRechargeCiBuild,
   isPermissionLoadingRepairOnly,
+  isPermissionLoadingControlsOnly,
   permissionLoadingRepairPaths
 } from './ci-recharge-scope.mjs';
 
@@ -81,4 +82,23 @@ test('the finite loading batch excludes unrelated ONLINE images and closes exten
     ),
     false
   );
+});
+
+test('publication-only repairs keep controls without frontend or historical engine builds', () => {
+  const paths = [
+    ...controls,
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-permission-loading-scope.test.mjs'
+  ];
+  assert.equal(isPermissionLoadingControlsOnly(paths), true);
+  assert.equal(isCiOnly(paths), true);
+  assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  for (const extra of [
+    'apps/admin/src/v2/components/V2AsyncRegion.vue',
+    'apps/api/src/auth/auth.service.ts',
+    'package-lock.json',
+    'scripts/production-release/remote-deploy.py'
+  ])
+    assert.equal(isPermissionLoadingControlsOnly([...paths, extra]), false, extra);
 });

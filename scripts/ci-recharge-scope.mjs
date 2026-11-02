@@ -1235,7 +1235,7 @@ function isBitbrowserConnectionProfilesOnly(paths) {
   );
 }
 export function needsOnlineRechargeCiBuild(paths, context) {
-  if (isPermissionLoadingRepairOnly(paths)) return false;
+  if (isPermissionLoadingRepairOnly(paths) || isPermissionLoadingControlsOnly(paths)) return false;
   if (isDependencySecurityControlsOnly(paths)) return false;
   if (isDependencyPatchCandidate(paths)) return false;
   if (isMailboxSettingsControlsOnly(paths)) return false;
@@ -2453,7 +2453,27 @@ export function isPermissionLoadingRepairOnly(paths) {
   );
 }
 
+export function isPermissionLoadingControlsOnly(paths) {
+  return (
+    paths.length > 0 &&
+    new Set(paths).size === paths.length &&
+    paths.some(
+      (p) =>
+        p.startsWith('scripts/production-release/permission-loading-') ||
+        p === '.github/workflows/permission-loading-publication.yml'
+    ) &&
+    paths.every(
+      (p) =>
+        permissionLoadingRepairSet.has(p) &&
+        !p.startsWith('apps/') &&
+        !p.startsWith('docs/') &&
+        !p.startsWith('scripts/acceptance-')
+    )
+  );
+}
+
 export function isCiOnly(paths, context) {
+  if (isPermissionLoadingControlsOnly(paths)) return true;
   if (
     paths.length > 0 &&
     paths.every((path) =>

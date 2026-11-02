@@ -4388,3 +4388,33 @@ test('finite loading repair stops on its source and UI check failures', () => {
   ]);
   assert.ok(mixed.some((row) => row.includes('scripts/production-release/remote-deploy.test.py')));
 });
+
+test('permission parent observation control repair retains source verification without application commands', () => {
+  const paths = permissionLoadingRepairPaths.filter(
+    (p) => !p.startsWith('apps/') && !p.startsWith('docs/') && !p.startsWith('scripts/acceptance-')
+  );
+  const calls = recordGuardCommands('ci-only', paths);
+  assert.ok(
+    calls.some(
+      (row) =>
+        row.includes('scripts/production-release/permission-loading-publication.py') &&
+        row.includes('check')
+    )
+  );
+  assert.ok(
+    calls.some((row) =>
+      row.includes('scripts/production-release/permission-loading-release.test.py')
+    )
+  );
+  assert.equal(
+    calls.some((row) => row.includes('scripts/production-release/online-recharge-scope.test.py')),
+    false
+  );
+  assert.equal(
+    calls.some((row) =>
+      row.some((arg) => /prisma:mysql|@apple-business\/admin|@apple-business\/api/.test(arg))
+    ),
+    false
+  );
+  assert.deepEqual(calls.at(-1), ['process-exit', 0]);
+});
