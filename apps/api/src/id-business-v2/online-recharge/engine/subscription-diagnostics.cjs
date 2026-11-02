@@ -275,6 +275,225 @@ function logResponseFacts(status, facts) {
     `[订阅分诊] HTTP状态=${status}；内容类型=${facts.contentType}；挑战响应头=${facts.cfMitigated === 'challenge' ? '明确挑战' : facts.cfMitigated === 'absent' ? '未提供' : '未知'}；Ray存在=${yn(facts.cfRayPresent)}；分类=${categories[facts.classification]}；错误码含义=${codes[facts.errorCode]}；错误类型=${types[facts.errorType]}；挑战脚本=${yn(facts.markers.challengePlatform)}；挑战配置=${yn(facts.markers.challengeOptions)}；等待提示=${yn(facts.markers.justAMoment)}；异常活动提示=${yn(facts.markers.unusualActivity)}`
   );
 }
+// Observe only existing main-frame homepage navigations and their redirect hops.
+// This path deliberately uses context/page events, independently of CDP setup.
+function observeHomepageNavigations(context, log) {
+  const records = new WeakMap(),
+    rows = new Set(),
+    pages = new Map();
+  const current = new WeakMap();
+  const started = performance.now();
+  let active = true,
+    sequence = 0;
+  const emit = (event, row, detail = {}) => {
+    if (!active) return;
+    try {
+      log({
+        event,
+        navigationSequence: row.sequence,
+        destination: row.destination,
+        ...(row.from ? { redirectedFromNavigationSequence: row.from } : {}),
+        elapsedMs: Math.round(performance.now() - started),
+        ...detail
+      });
+    } catch {
+      /* Observation never changes navigation or cleanup. */
+    }
+  };
+  const snapshot = (row, reason) => {
+    if (row.ended) return;
+    row.ended = true;
+    emit('homepage_navigation_snapshot', row, {
+      reason,
+      responseHeadersObserved: row.headers,
+      requestFinishedObserved: row.finished,
+      requestFailedObserved: row.failed,
+      domContentLoadedObserved: row.dom
+    });
+  };
+  const removePage = (page) => {
+    const hooks = pages.get(page);
+    if (!hooks) return;
+    for (const [event, listener] of hooks) {
+      try {
+        page.off(event, listener);
+      } catch {
+        /* Best-effort teardown. */
+      }
+    }
+    pages.delete(page);
+    current.delete(page);
+  };
+  const watchPage = (page) => {
+    if (pages.has(page)) return;
+    const loaded = () => {
+      const row = current.get(page);
+      if (!row || row.ended || row.dom) return;
+      row.dom = true;
+      emit('homepage_domcontentloaded', row);
+    };
+    const closed = () => {
+      for (const row of rows) if (row.page === page) snapshot(row, 'page_closed');
+      removePage(page);
+    };
+    const hooks = [
+      ['domcontentloaded', loaded],
+      ['close', closed]
+    ];
+    pages.set(page, hooks);
+    try {
+      for (const [event, listener] of hooks) page.on(event, listener);
+    } catch {
+      removePage(page);
+      throw new Error('homepage_observation_unavailable');
+    }
+  };
+  const request = (value) => {
+    try {
+      if (
+        !active ||
+        records.has(value) ||
+        value.resourceType() !== 'document' ||
+        !value.isNavigationRequest()
+      )
+        return;
+      const frame = value.frame(),
+        page = frame.page();
+      if (frame !== page.mainFrame() || page.isClosed?.() === true) return;
+      // An unrelated main navigation invalidates DCL attribution to an older request.
+      current.delete(page);
+      const url = new URL(value.url());
+      const from = records.get(value.redirectedFrom?.());
+      const homepage =
+        url.origin === 'https://chatgpt.com' &&
+        url.pathname === '/' &&
+        !url.username &&
+        !url.password;
+      if (
+        (!homepage && (!from || from.page !== page)) ||
+        value.method() !== 'GET' ||
+        sequence >= 30
+      )
+        return;
+      const row = {
+        sequence: ++sequence,
+        page,
+        destination: homepage
+          ? 'homepage'
+          : url.origin === 'https://chatgpt.com'
+            ? 'official_other'
+            : ['https:', 'http:'].includes(url.protocol)
+              ? 'external'
+              : 'other',
+        from: from?.sequence,
+        headers: false,
+        finished: false,
+        failed: false,
+        dom: false
+      };
+      records.set(value, row);
+      rows.add(row);
+      current.set(page, row);
+      emit('homepage_request', row);
+      try {
+        watchPage(page);
+      } catch {
+        emit('homepage_lifecycle_unavailable', row, { reason: 'listener_setup_failed' });
+      }
+    } catch {
+      /* Closing frames and unrelated malformed requests are not business errors. */
+    }
+  };
+  const response = (value) => {
+    let row;
+    try {
+      row = records.get(value.request());
+      if (!row || row.ended) return;
+      // A response event itself establishes headers arrival, even if metadata reading fails.
+      row.headers = true;
+      const status = value.status();
+      const meta = responseReadMetadata(value.headers());
+      emit('homepage_response', row, {
+        complete: true,
+        httpStatus: status >= 100 && status <= 599 ? status : 0,
+        contentType: meta.contentType,
+        cfMitigated: meta.cfMitigated,
+        cfRayPresent: meta.cfRayPresent,
+        server: meta.server
+      });
+    } catch {
+      if (row && !row.ended) emit('homepage_response', row, { complete: false, readFailed: true });
+    }
+  };
+  const finished = (value) => {
+    try {
+      const row = records.get(value);
+      if (!row || row.ended || row.finished) return;
+      row.finished = true;
+      emit('homepage_request_finished', row);
+    } catch {
+      /* Passive observation only. */
+    }
+  };
+  const failed = (value) => {
+    try {
+      const row = records.get(value);
+      if (!row || row.ended || row.failed) return;
+      row.failed = true;
+      const error = String(value.failure()?.errorText || '');
+      const code = error.match(/\bnet::(ERR_[A-Z_]+)\b/)?.[1];
+      const allowed = [
+        'ERR_TIMED_OUT',
+        'ERR_CONNECTION_TIMED_OUT',
+        'ERR_ABORTED',
+        'ERR_PROXY_CONNECTION_FAILED',
+        'ERR_TUNNEL_CONNECTION_FAILED',
+        'ERR_NAME_NOT_RESOLVED',
+        'ERR_CONNECTION_RESET',
+        'ERR_CONNECTION_CLOSED',
+        'ERR_CONNECTION_REFUSED',
+        'ERR_SSL_PROTOCOL_ERROR',
+        'ERR_CERT_AUTHORITY_INVALID',
+        'ERR_CERT_DATE_INVALID',
+        'ERR_HTTP_RESPONSE_CODE_FAILURE'
+      ];
+      emit('homepage_request_failed', row, {
+        networkCode: allowed.includes(code) ? code : 'UNKNOWN'
+      });
+    } catch {
+      /* Never emit a raw browser error. */
+    }
+  };
+  const closed = () => dispose('context_closed');
+  const hooks = [
+    ['request', request],
+    ['response', response],
+    ['requestfinished', finished],
+    ['requestfailed', failed],
+    ['close', closed]
+  ];
+  const dispose = (reason = 'observer_disposed') => {
+    if (!active) return;
+    for (const row of rows) snapshot(row, reason);
+    active = false;
+    for (const [event, listener] of hooks) {
+      try {
+        context.off(event, listener);
+      } catch {
+        /* Best-effort teardown. */
+      }
+    }
+    for (const page of pages.keys()) removePage(page);
+    rows.clear();
+  };
+  try {
+    for (const [event, listener] of hooks) context.on(event, listener);
+  } catch {
+    dispose();
+  }
+  return { dispose };
+}
+
 // Passive task-owned context events are installed before the caller starts its
 // first Session probe. Request objects distinguish redirect hops without CDP
 // port discovery or requestId reuse. No response body or credential is retained.
@@ -289,6 +508,7 @@ function observeSessionRequests(
   let active = true,
     count = 0;
   let connections;
+  const homepage = observeHomepageNavigations(context, log);
   const isSession = (request) => {
     try {
       const url = new URL(request.url());
@@ -388,6 +608,7 @@ function observeSessionRequests(
   };
   const dispose = () => {
     active = false;
+    homepage.dispose();
     try {
       connections?.dispose();
     } catch {

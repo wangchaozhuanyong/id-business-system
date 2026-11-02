@@ -166,3 +166,317 @@ test('only bounded official Session observations are retained; no browser comman
   assert.ok(!JSON.stringify(events).includes(secret));
   context.emit('close');
 });
+
+function homepageFixture() {
+  const context = new EventEmitter(),
+    page = new EventEmitter(),
+    events = [];
+  const frame = { page: () => page };
+  page.mainFrame = () => frame;
+  // A failed CDP setup must not disable context/page navigation evidence.
+  context.newCDPSession = () => {
+    throw new Error(secret);
+  };
+  context.newPage = context.addCookies = () => {
+    throw new Error('UNEXPECTED_MUTATION');
+  };
+  const observer = observeSessionRequests(context, (value) => events.push(value));
+  const req = (options = {}) => ({
+    ...request({
+      url: options.url || 'https://chatgpt.com/?synthetic=' + secret,
+      previous: options.previous
+    }),
+    isNavigationRequest: () => true,
+    frame: () => options.frame || frame,
+    failure: () => ({ errorText: options.error || 'net::ERR_TIMED_OUT ' + secret })
+  });
+  return { context, page, frame, events, observer, req };
+}
+const homepageEvents = (f) => f.events.filter((e) => e.event.startsWith('homepage_'));
+
+test('homepage without response remains an observation gap and survives CDP failure', () => {
+  const f = homepageFixture();
+  const req = f.req();
+  f.context.emit('request', req);
+  f.context.emit('close');
+  const events = homepageEvents(f);
+  assert.equal(events[0].event, 'homepage_request');
+  assert.equal(events[1].event, 'homepage_navigation_snapshot');
+  assert.equal(events[1].reason, 'context_closed');
+  assert.equal(events[1].responseHeadersObserved, false);
+  assert.equal(events[1].domContentLoadedObserved, false);
+  assert.ok(!JSON.stringify(f.events).includes(secret));
+});
+
+test('homepage response and download completion do not imply DOMContentLoaded or login success', () => {
+  const f = homepageFixture(),
+    req = f.req();
+  f.context.emit('request', req);
+  f.context.emit('response', response(req, 403));
+  f.context.emit('requestfinished', req);
+  f.observer.dispose();
+  const events = homepageEvents(f);
+  assert.equal(events.find((e) => e.event === 'homepage_response').httpStatus, 403);
+  assert.equal(events.find((e) => e.event === 'homepage_response').cfMitigated, 'challenge');
+  const snapshot = events.at(-1);
+  assert.equal(snapshot.responseHeadersObserved, true);
+  assert.equal(snapshot.requestFinishedObserved, true);
+  assert.equal(snapshot.domContentLoadedObserved, false);
+  assert.equal(snapshot.requestFailedObserved, false);
+  assert.ok(!JSON.stringify(events).includes(secret));
+});
+
+test('homepage lifecycle correlates redirect hops and ignores later unrelated navigation', () => {
+  const f = homepageFixture(),
+    first = f.req();
+  const redirected = f.req({
+    url: 'https://chatgpt.com/auth/login?secret=' + secret,
+    previous: first
+  });
+  f.context.emit('request', first);
+  f.context.emit('response', response(first, 302));
+  f.context.emit('requestfinished', first);
+  f.context.emit('request', redirected);
+  f.context.emit('response', response(redirected, 200));
+  f.page.emit('domcontentloaded');
+  f.page.emit('domcontentloaded');
+  const unrelated = f.req({ url: 'https://unrelated.invalid/?secret=' + secret });
+  f.context.emit('request', unrelated);
+  f.page.emit('domcontentloaded');
+  f.page.emit('close');
+  const events = homepageEvents(f),
+    loaded = events.filter((e) => e.event === 'homepage_domcontentloaded');
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].navigationSequence, 2);
+  assert.equal(loaded[0].redirectedFromNavigationSequence, 1);
+  assert.equal(loaded[0].destination, 'official_other');
+  assert.equal(events.filter((e) => e.event === 'homepage_request').length, 2);
+  assert.equal(
+    events.find((e) => e.event === 'homepage_navigation_snapshot' && e.navigationSequence === 1)
+      .domContentLoadedObserved,
+    false
+  );
+  assert.ok(!JSON.stringify(events).includes(secret));
+  assert.equal(f.page.listenerCount('domcontentloaded'), 0);
+  f.observer.dispose();
+});
+
+test('iframe, homepage fetch, lookalike origins and unrelated documents cannot become homepage navigation', () => {
+  const f = homepageFixture();
+  const iframe = { page: () => f.page };
+  const candidates = [
+    f.req({ frame: iframe }),
+    f.req({ url: 'https://chatgpt.com.evil.invalid/' }),
+    f.req({ url: 'https://chatgpt.com/settings' }),
+    f.req({ url: 'http://chatgpt.com/' }),
+    f.req({ url: 'https://user:password@chatgpt.com/' })
+  ];
+  const fetch = f.req();
+  fetch.resourceType = () => 'fetch';
+  const nonNavigation = f.req();
+  nonNavigation.isNavigationRequest = () => false;
+  candidates.push(fetch, nonNavigation);
+  for (const req of candidates) f.context.emit('request', req);
+  f.page.emit('domcontentloaded');
+  f.context.emit('close');
+  assert.deepEqual(homepageEvents(f), []);
+});
+
+test('homepage failure keeps only allowlisted browser codes and never infers timeout from arbitrary text', () => {
+  for (const [error, code] of [
+    ['net::ERR_TUNNEL_CONNECTION_FAILED ' + secret, 'ERR_TUNNEL_CONNECTION_FAILED'],
+    ['net::ERR_TIMED_OUT ' + secret, 'ERR_TIMED_OUT'],
+    ['net::ERR_ABORTED ' + secret, 'ERR_ABORTED'],
+    ['net::ERR_UNLISTED ' + secret, 'UNKNOWN'],
+    ['timeout ' + secret, 'UNKNOWN']
+  ]) {
+    const f = homepageFixture(),
+      req = f.req({ error });
+    f.context.emit('request', req);
+    f.context.emit('requestfailed', req);
+    f.context.emit('requestfailed', req);
+    f.observer.dispose();
+    const failed = homepageEvents(f).filter((e) => e.event === 'homepage_request_failed');
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].networkCode, code);
+    assert.equal(homepageEvents(f).at(-1).requestFailedObserved, true);
+    assert.ok(!JSON.stringify(f.events).includes(secret));
+  }
+});
+
+test('homepage metadata read failure retains observed headers without inventing status or challenge absence', () => {
+  const f = homepageFixture(),
+    req = f.req();
+  f.context.emit('request', req);
+  f.context.emit('response', {
+    request: () => req,
+    status: () => 200,
+    headers: () => {
+      throw new Error(secret);
+    }
+  });
+  f.observer.dispose();
+  const failed = homepageEvents(f).find((e) => e.event === 'homepage_response');
+  assert.equal(failed.complete, false);
+  assert.equal(failed.readFailed, true);
+  assert.equal(failed.httpStatus, undefined);
+  assert.equal(failed.cfMitigated, undefined);
+  assert.equal(homepageEvents(f).at(-1).responseHeadersObserved, true);
+});
+
+test('homepage diagnostics survive the existing child and parent log sanitizers', () => {
+  const { sanitize, redactText } = require('../security.cjs');
+  const f = homepageFixture(),
+    req = f.req();
+  f.context.emit('request', req);
+  f.context.emit('response', response(req, 403));
+  f.context.emit('requestfailed', req);
+  f.context.emit('close');
+  const logs = homepageEvents(f).map((event) =>
+    sanitize({
+      level: 'log',
+      text: redactText('[Session] 请求对照 ' + JSON.stringify(event)),
+      timestamp: '2026-11-02T05:13:00.626Z'
+    })
+  );
+  const persisted = sanitize({ logs });
+  assert.deepEqual(
+    persisted.logs.map((log) => JSON.parse(log.text.slice(log.text.indexOf('{')))),
+    homepageEvents(f)
+  );
+  assert.ok(!JSON.stringify(persisted).includes(secret));
+});
+
+test('homepage teardown is bounded, idempotent and suppresses late response and lifecycle events', () => {
+  const f = homepageFixture(),
+    req = f.req();
+  f.context.emit('request', req);
+  f.context.emit('request', req);
+  for (let i = 0; i < 40; i++) f.context.emit('request', f.req());
+  assert.equal(homepageEvents(f).filter((e) => e.event === 'homepage_request').length, 30);
+  f.observer.dispose();
+  f.observer.dispose();
+  const length = f.events.length;
+  f.context.emit('response', response(req));
+  f.context.emit('requestfinished', req);
+  f.page.emit('domcontentloaded');
+  f.page.emit('close');
+  assert.equal(f.events.length, length);
+  for (const name of ['request', 'response', 'requestfailed', 'requestfinished', 'close'])
+    assert.equal(f.context.listenerCount(name), 0);
+  assert.equal(f.page.listenerCount('domcontentloaded'), 0);
+  assert.equal(f.page.listenerCount('close'), 0);
+  assert.equal(
+    homepageEvents(f).filter((e) => e.event === 'homepage_navigation_snapshot').length,
+    30
+  );
+});
+
+test('homepage observation logging and lifecycle setup failures do not escape into navigation', () => {
+  const f = homepageFixture();
+  f.page.on = () => {
+    throw new Error(secret);
+  };
+  const req = f.req();
+  assert.doesNotThrow(() => f.context.emit('request', req));
+  assert.ok(homepageEvents(f).some((e) => e.event === 'homepage_lifecycle_unavailable'));
+  assert.doesNotThrow(() => f.context.emit('response', response(req)));
+  assert.doesNotThrow(() => f.context.emit('close'));
+  const g = homepageFixture();
+  g.observer.dispose();
+  const observer = observeSessionRequests(g.context, () => {
+    throw new Error(secret);
+  });
+  assert.doesNotThrow(() => g.context.emit('request', g.req()));
+  assert.doesNotThrow(() => g.context.emit('close'));
+  observer.dispose();
+});
+
+test(
+  'isolated Chromium distinguishes a downloaded homepage from a deferred DOMContentLoaded',
+  { timeout: 30000 },
+  async () => {
+    const { chromium } = require('../upstream/node_modules/playwright');
+    const browser = await chromium.launch({
+      headless: true,
+      args: ['--host-resolver-rules=MAP * ~NOTFOUND']
+    });
+    let releaseScript;
+    const gate = new Promise((resolve) => {
+      releaseScript = resolve;
+    });
+    try {
+      const context = await browser.newContext({ serviceWorkers: 'block' });
+      const events = [];
+      let sawScript, sawFinished;
+      const scriptRequested = new Promise((resolve) => {
+        sawScript = resolve;
+      });
+      const mainFinished = new Promise((resolve) => {
+        sawFinished = resolve;
+      });
+      // This fixture supplies every response; no login, Session or external network is used.
+      await context.route('**/*', async (route) => {
+        const url = new URL(route.request().url());
+        if (url.origin === 'https://chatgpt.com' && url.pathname === '/')
+          return route.fulfill({
+            contentType: 'text/html',
+            body: '<!doctype html><script defer src="/synthetic-delay.js"></script><p>Synthetic fixture</p>'
+          });
+        if (url.origin === 'https://chatgpt.com' && url.pathname === '/synthetic-delay.js') {
+          sawScript();
+          await gate;
+          return route.fulfill({ contentType: 'application/javascript', body: 'void 0;' });
+        }
+        return route.abort();
+      });
+      context.newCDPSession = async () => {
+        throw new Error(secret);
+      };
+      const observer = observeSessionRequests(context, (row) => {
+        events.push(row);
+        if (row.event === 'homepage_request_finished') sawFinished();
+      });
+      const page = await context.newPage();
+      const navigation = page.goto('https://chatgpt.com/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      });
+      // Install rejection handling immediately so cleanup cannot leave an unhandled navigation.
+      const settledNavigation = navigation.then(
+        () => null,
+        (error) => error
+      );
+      try {
+        await Promise.race([
+          Promise.all([scriptRequested, mainFinished]),
+          settledNavigation.then((error) => {
+            throw error || new Error('Expected navigation events were not observed');
+          })
+        ]);
+        assert.ok(events.some((e) => e.event === 'homepage_response' && e.httpStatus === 200));
+        assert.equal(
+          events.some((e) => e.event === 'homepage_domcontentloaded'),
+          false
+        );
+        releaseScript();
+        assert.equal(await settledNavigation, null);
+        assert.equal(events.filter((e) => e.event === 'homepage_domcontentloaded').length, 1);
+        await page.close();
+        const snapshot = events.find((e) => e.event === 'homepage_navigation_snapshot');
+        assert.equal(snapshot.responseHeadersObserved, true);
+        assert.equal(snapshot.requestFinishedObserved, true);
+        assert.equal(snapshot.domContentLoadedObserved, true);
+        assert.ok(!JSON.stringify(events).includes(secret));
+      } finally {
+        releaseScript();
+        observer.dispose();
+        await context.close();
+        await settledNavigation;
+      }
+    } finally {
+      releaseScript();
+      await browser.close();
+    }
+  }
+);
