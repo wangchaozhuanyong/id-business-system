@@ -93,6 +93,10 @@ def transport(plan, mode):
     source = source.replace("directory/'financial-closure-release.py'", "directory/'permission-loading-runtime.py'")
     source = source.replace('financial-entry-', 'permission-loading-entry-')
     source = source.replace('FINANCIAL_PUBLICATION|BITBROWSER_HISTORY', 'PERMISSION_LOADING|FINANCIAL_PUBLICATION|BITBROWSER_HISTORY')
+    before = "print(json.dumps({'status':'FAILED','code':code,'mode':plan['mode'],'businessActions':0}))"
+    after = "print(json.dumps({'status':'FAILED','code':code,'mode':plan['mode'],'businessActions':0,'exceptionType':type(error).__name__,'httpStatus':error.code if type(getattr(error,'code',None)) is int and 100<=error.code<=599 else None,'controlName':name if 'name' in locals() and re.fullmatch('[a-z][a-z0-9.-]{0,100}',name) else None,'entryLoaded':'module' in locals()}))"
+    need(source.count(before) == 1, 'TRANSPORT_DIAGNOSTIC_RECIPE_CHANGED')
+    source = source.replace(before, after)
     values = dict(F.__dict__)
     exec(compile(source, '<permission-loading-transport>', 'exec'), values)
     return values['transport'](plan, mode, OUT)
@@ -108,6 +112,17 @@ def build(c):
     parent = transport(plan, 'parent')
     need(parent['status'] == 'PERMISSION_LOADING_PARENT_VERIFIED', 'PARENT_CAPTURE_REQUIRED')
     load(PREFIX + '-build.py').build(c, plan, qa, parent, OUT, R)
+
+
+def observe(c):
+    check(c)
+    native = identity(c)
+    quality(native)
+    need(not OUT.exists(), 'OUTPUT_EXISTS')
+    OUT.mkdir(parents=True, mode=0o700)
+    result = transport(plan_for(c, native), 'inspect-parent')
+    need(result['status'] == 'PERMISSION_LOADING_PARENT_DIAGNOSED' and result['releaseAuthority'] is False, 'DIAGNOSTIC_FAILED')
+    print(json.dumps(result, sort_keys=True))
 
 
 def publish(c):
@@ -153,8 +168,8 @@ def publish(c):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('check', 'build', 'publish'))
+    parser.add_argument('mode', choices=('check', 'build', 'publish', 'observe'))
     args = parser.parse_args()
-    {'check': check, 'build': build, 'publish': publish}[args.mode](contract())
+    {'check': check, 'build': build, 'publish': publish, 'observe': observe}[args.mode](contract())
     if args.mode == 'check':
         print(json.dumps({'status': 'PERMISSION_LOADING_SOURCE_VERIFIED'}))

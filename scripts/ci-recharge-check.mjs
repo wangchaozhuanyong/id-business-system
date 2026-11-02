@@ -133,6 +133,7 @@ import {
   adminHtmlCachePaths,
   isAdminHtmlCacheOnly,
   isPermissionLoadingRepairOnly,
+  isPermissionLoadingControlsOnly,
   rechargeRecordControlPaths,
   rechargeAvailabilityControlPaths,
   isRechargeAvailabilityControlsOnly,
@@ -1888,7 +1889,11 @@ if (part === 'guards') {
           ]);
   run('node', ['--test', ...commonControlTests]);
 }
-if (part === 'guards' && mode === 'admin' && isPermissionLoadingRepairOnly(changed)) {
+if (
+  part === 'guards' &&
+  ((mode === 'admin' && isPermissionLoadingRepairOnly(changed)) ||
+    (mode === 'ci-only' && isPermissionLoadingControlsOnly(changed)))
+) {
   run('python3', ['-B', 'scripts/production-release/permission-loading-publication.py', 'check']);
   for (const name of adminUiGuardChecks(mode, changed)) npm('run', name);
   console.log('Finite Admin loading repair source, control tests and all UI rules verified.');

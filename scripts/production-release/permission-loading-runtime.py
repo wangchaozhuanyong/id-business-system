@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import urllib.request
 
@@ -64,26 +65,63 @@ def utilities(c):
     return d, h
 
 
-def capture(c, d, h):
+def capture(c, d, h, diagnostics=None):
+    def stage(name):
+        if diagnostics is not None:
+            diagnostics['stage'] = name
+    stage('MANIFEST')
     current = (BASE / 'current').resolve(strict=True)
     manifest = json.loads((current / 'release-manifest.json').read_bytes())
     need(current.parent == BASE / 'releases' and manifest['commit'] == CURRENT
          and manifest['status'] == 'DEPLOYED', 'CURRENT_CHANGED')
+    stage('SERVICES')
     states = h.snapshot(d, current)
     need(set(states) == set(c['preservedServices']) | {'admin'}
          and all(states[n]['image'] == manifest['images'][n]['digest'] for n in ('api', 'admin')), 'PARENT_IMAGES_CHANGED')
+    stage('RUNTIME')
     history = load('bitbrowser-history-release.py')
     history.MODULES = frozenset()
     runtime = history.runtime(d, states)
     need(runtime == c['baselineRuntime'], 'PARENT_RUNTIME_CHANGED')
+    stage('ADMIN_FILES')
     shared = load('shared-bank-card-release.py')
     shared.read_hashes(d, states['admin']['containerId'], '/usr/share/nginx/html/', c['baselineAdminFiles'])
+    stage('HOST_SOURCES')
     need(all(sha((current / n).read_bytes()) == c['baselineHostSources'][n] for n in SOURCES), 'PARENT_HOST_SOURCE_CHANGED')
+    stage('DISK')
     need(shutil.disk_usage(BASE).free > 6 * 1024**3, 'DISK_LOW')
+    stage('CONFIGURATION')
     names = ('.env.aws.production', 'docker-compose.aws-mysql.yml', 'compose.release.json', 'deploy/caddy/Caddyfile.aws', 'apps/api/prisma-mysql/schema.prisma')
     return {'current': str(current), 'manifestSha256': sha((current / 'release-manifest.json').read_bytes()),
             'services': states, 'runtime': runtime, 'configurationSha256': {n: sha((current / n).read_bytes()) for n in names},
             'adminConfigurationSha256': h.configuration(d, states['admin'])}
+
+
+def inspect_parent(c, d, h):
+    """Read-only bounded diagnostics; never return exception messages or file contents."""
+    result = {'status': 'PERMISSION_LOADING_PARENT_DIAGNOSED', 'businessActions': 0,
+              'releaseAuthority': False, 'stage': 'MANIFEST', 'baselineCaptured': False}
+    try:
+        capture(c, d, h, result)
+        result['baselineCaptured'] = True
+    except Exception as error:
+        result['exceptionType'] = type(error).__name__
+        code = str(error)
+        if re.fullmatch('(?:PERMISSION_LOADING|RECHARGE_RECORD|BITBROWSER_HISTORY|SHARED_BANK_CARD|ONLINE_QUERY_NETWORK)_[A-Z0-9_]+', code):
+            result['controlledCode'] = code
+        frames = []
+        trace = error.__traceback__
+        while trace:
+            frames.append({'file': Path(trace.tb_frame.f_code.co_filename).name,
+                           'function': trace.tb_frame.f_code.co_name, 'line': trace.tb_lineno})
+            trace = trace.tb_next
+        result['frames'] = frames[-3:]
+    current = (BASE / 'current').resolve()
+    result['hostSourcePresence'] = {n: (current / n).is_file() for n in SOURCES}
+    result['configurationPresence'] = {n: (current / n).is_file() for n in (
+        '.env.aws.production', 'docker-compose.aws-mysql.yml', 'compose.release.json',
+        'deploy/caddy/Caddyfile.aws', 'apps/api/prisma-mysql/schema.prisma')}
+    return result
 
 
 def baseline(parent, c, d, h):
@@ -114,6 +152,8 @@ def release(plan, c):
     d, h = utilities(c)
     with (BASE / '.deploy.lock').open('a') as lock:
         load('recharge-availability-release.py').acquire_release_lock(lock)
+        if plan['mode'] == 'inspect-parent':
+            return inspect_parent(c, d, h)
         if plan['mode'] == 'parent':
             return {'status': 'PERMISSION_LOADING_PARENT_VERIFIED', 'baseline': capture(c, d, h), 'businessActions': 0}
         parent = plan['nativeParentCapture']['baseline']
