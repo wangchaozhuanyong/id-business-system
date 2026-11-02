@@ -391,7 +391,7 @@
     "online-session-observer-release.test.py": "949e312958da325b54a6b5947652209ddf62a0b383cf7205ad0a218f22762a9c",
     "online-unpaid-validation-release.py": "869d40d287567eeb901aae413d366444ca077431a433341312fcc90ec8cd4e56",
     "permission-loading-build.py": "0eccd4a1e0ea19a7bfc1f5c473c06ffe2765c2b5593e927711cfb709c2c52a34",
-    "permission-loading-publication.py": "48168e832351d7b9ced87828249e2710ebb42bc310cff5b271615b353e224e6c",
+    "permission-loading-publication.py": "387aefb5c8684828d0abed4e99fba7be59e65670def2059efd9c645aa863f0cf",
     "permission-loading-release.test.py": "f874641747a584c3baa3c7513cadd1931fd5e1eaf115afdeb26d91a87a9b0640",
     "permission-loading-runtime.py": "8d03c4676712b038f5d906c5e33beaea79a6c240f51c5a716ce11e1d42238641",
     "proxy-result-identity-release.py": "97207252c12924dcbbfe3e86ebf397e928cd9545bbf9260337fd94ffd5109d45",

@@ -93,6 +93,10 @@ def transport(plan, mode):
     source = source.replace("directory/'financial-closure-release.py'", "directory/'permission-loading-runtime.py'")
     source = source.replace('financial-entry-', 'permission-loading-entry-')
     source = source.replace('FINANCIAL_PUBLICATION|BITBROWSER_HISTORY', 'PERMISSION_LOADING|FINANCIAL_PUBLICATION|BITBROWSER_HISTORY')
+    before = "print(json.dumps({'status':'FAILED','code':code,'mode':plan['mode'],'businessActions':0}))"
+    after = "print(json.dumps({'status':'FAILED','code':code,'mode':plan['mode'],'businessActions':0,'exceptionType':type(error).__name__,'httpStatus':error.code if type(getattr(error,'code',None)) is int and 100<=error.code<=599 else None,'controlName':name if 'name' in locals() and re.fullmatch('[a-z][a-z0-9.-]{0,100}',name) else None,'entryLoaded':'module' in locals()}))"
+    need(source.count(before) == 1, 'TRANSPORT_DIAGNOSTIC_RECIPE_CHANGED')
+    source = source.replace(before, after)
     values = dict(F.__dict__)
     exec(compile(source, '<permission-loading-transport>', 'exec'), values)
     return values['transport'](plan, mode, OUT)
