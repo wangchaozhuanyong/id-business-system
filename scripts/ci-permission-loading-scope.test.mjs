@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isAdminOnly, isCiOnly } from './ci-recharge-scope.mjs';
+import { isAdminOnly, isCiOnly, needsAdminBrowserAcceptance } from './ci-recharge-scope.mjs';
 
 const controls = [
   '.github/workflows/permission-loading-publication.yml',
@@ -8,6 +8,22 @@ const controls = [
     (suffix) => 'scripts/production-release/permission-loading-' + suffix
   )
 ];
+test('browser acceptance commands install Chromium before the affected frontend checks', () => {
+  assert.equal(
+    needsAdminBrowserAcceptance('admin', [
+      'apps/admin/src/v2/features/proxy-pool/V2ProxyPoolView.vue'
+    ]),
+    true
+  );
+  assert.equal(
+    needsAdminBrowserAcceptance('admin', ['scripts/acceptance-v2-permission-loading.mjs']),
+    true
+  );
+  assert.equal(
+    needsAdminBrowserAcceptance('admin', ['apps/admin/src/v2/components/asyncRegionState.ts']),
+    false
+  );
+});
 test('permission loading release controls do not classify business or schema changes as CI', () => {
   assert.equal(isCiOnly(controls), true);
   for (const path of [
