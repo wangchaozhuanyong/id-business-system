@@ -1,6 +1,7 @@
 import type { V2QueryPhase } from '@/v2/composables/useV2Query';
 
 export type V2AsyncRegionState =
+  | 'inactive'
   | 'forbidden'
   | 'initial-loading'
   | 'initial-error'
@@ -18,7 +19,9 @@ export function resolveV2AsyncRegionState({
   phase,
   empty
 }: ResolveV2AsyncRegionStateInput): V2AsyncRegionState {
-  if (forbidden || phase === 'disabled') return 'forbidden';
+  if (forbidden) return 'forbidden';
+  // A query can wait for a dependency, an active tab or an open drawer without lacking access.
+  if (phase === 'disabled') return 'inactive';
   if (phase === 'initial-error') return 'initial-error';
   if (phase === 'idle' || phase === 'initial-loading') return 'initial-loading';
   if (empty && phase !== 'transitioning') return 'empty';

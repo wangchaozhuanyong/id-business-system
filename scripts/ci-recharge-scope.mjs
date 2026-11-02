@@ -2412,6 +2412,15 @@ export function isMailQueryPublicationControlsOnly(paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (
+    paths.length > 0 &&
+    paths.every((path) =>
+      /^(?:scripts\/production-release\/permission-loading-(?:runtime|build|publication|release\.test)\.py|scripts\/production-release\/permission-loading-contract\.json|scripts\/ci-permission-loading-scope\.test\.mjs|\.github\/workflows\/permission-loading-publication\.yml)$/.test(
+        path
+      )
+    )
+  )
+    return true;
   if (isDependencySecurityControlsOnly(paths)) return true;
   if (isRechargeAutofillControlsOnly(paths)) return true;
   if (isMailQueryPublicationControlsOnly(paths)) return true;
@@ -2527,6 +2536,7 @@ export function hasCombinedComponentScope(paths) {
   );
 }
 const adminInteractionAcceptance = new Set([
+  'scripts/acceptance-v2-permission-loading.mjs',
   'scripts/acceptance-v2-online-recharge-ui.mjs',
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
   'scripts/acceptance-v2-refresh-interaction.mjs',

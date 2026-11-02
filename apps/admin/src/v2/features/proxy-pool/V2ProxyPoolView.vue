@@ -43,6 +43,7 @@
     </V2AsyncRegion>
     <V2AsyncRegion
       :phase="query.phase.value"
+      :forbidden="!canRead"
       :previous-data="query.isParameterTransition.value"
       :error="query.error.value ? getApiErrorMessage(query.error.value) : ''"
       skeleton="table"

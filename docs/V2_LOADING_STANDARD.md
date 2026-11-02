@@ -85,6 +85,8 @@
 - `useV2ModuleQuery` 必须向区域透传受控 `phase`。统一阶段为
   `disabled | idle | initial-loading | ready | refreshing | transitioning | initial-error |
 refresh-error`；业务组件不得重新组合多个布尔值猜测主查询状态。
+- `disabled` 仅表示查询未启用（等待依赖、未选页签或弹层关闭），区域不渲染业务内容、加载反馈或权限提示。
+  真正无权限须显式传入 `forbidden`，或由既有路由／父级权限门禁处理；禁止从查询是否启用推断权限。
 - 查询状态必须同时记录 `requestedKey` 与 `displayedKey`。二者不同时属于参数过渡：旧快照继续展示但
   必须只读，分页器展示旧快照的页码和每页条数；只有新 key 成功后才能一起提交内容、总数和分页状态。
 - 查询 key 必须由已规范化的分页、搜索、筛选和排序参数生成；模块缓存必须包含 `moduleKey`，

@@ -1,3 +1,9 @@
+## V2-PERMISSION-LOADING-20261102（独立正式发布候选）
+
+- 修复查询未启用被误报为权限不足，保留真实拒绝访问；仅更新共享状态、异步区域与代理池反馈三处业务源码。
+- 从最新 main 创建独立分支，保留原混合工作区。发布沿用 OIDC／SSM 与单一发布锁，新增精确前版的 Admin 单服务入口，不执行迁移、付款、外部通知或自动回滚。
+- 检查、范围与正式回执见 `docs/PERMISSION_LOADING_RELEASE_20261102.md`；只有实际发布和独立线上回读成功后才标完成。
+
 ## V2-ONLINE-HOMEPAGE-NAVIGATION-EVIDENCE-20261102（本地修复与隔离验证）
 
 - 原任务68279cf3首次Session HTTP200、有效用户及原账号匹配；后续bootstrapDiagnostics为navigation_failed/navigation，failure为session_bootstrap/ETIMEDOUT，订阅请求诊断为空。实际停止在首页导航，管理端504为内部超时投影，不是官网订阅接口504回执。

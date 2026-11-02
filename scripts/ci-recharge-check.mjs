@@ -1836,6 +1836,10 @@ if (
   run('node', ['--test', 'scripts/v2-table-schema-alias.test.mjs']);
 
 if (part === 'guards') {
+  if (changed.some((path) => path.includes('permission-loading'))) {
+    run('node', ['--test', 'scripts/ci-permission-loading-scope.test.mjs']);
+    run('python3', ['-B', 'scripts/production-release/permission-loading-release.test.py']);
+  }
   if (!/^[a-f0-9]{40}$/.test(base)) throw new Error('Missing diff base');
   if (changed.some((path) => path.startsWith('scripts/ci-feature-retirement-scope')))
     run('node', ['--test', 'scripts/ci-feature-retirement-scope.test.mjs']);
