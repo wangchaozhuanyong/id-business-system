@@ -1,4 +1,4 @@
-name: Online Recharge Session Observer Publication
+name: Online Recharge Homepage Navigation Publication
 
 on:
   workflow_dispatch:

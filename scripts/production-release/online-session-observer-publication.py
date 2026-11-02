@@ -71,7 +71,7 @@ def verified_run(head, event, tree, pr_number=None):
     need({'quality', 'change-scope'} <= successful and all(j['conclusion'] in ('success', 'skipped') for j in jobs), 'QUALITY_PARTS_REQUIRED')
     if event == 'pull_request':
         need(('full-quality' in successful) or ('recharge (guards)' in successful), 'REVIEW_CHECK_REQUIRED')
-        if pr_number == 764:
+        if pr_number == 770:
             need({'recharge (guards)', 'recharge (online-engine)'} <= successful, 'SOURCE_API_ENGINE_QUALITY_REQUIRED')
         receipt, digest = F.artifact_json(run, 'quality-source-evidence-' + str(run['run_attempt']), 'evidence.json')
         need(receipt['repository'] == REPO and receipt['pullRequest'] == pr_number
@@ -83,12 +83,12 @@ def verified_run(head, event, tree, pr_number=None):
 
 
 def quality(commit, tree):
-    source = github('pulls/764')
+    source = github('pulls/770')
     need(source.get('merged_at') and source['head']['sha'] == P.SOURCE
          and source['base']['ref'] == 'main', 'SOURCE_MERGE_REQUIRED')
     git('merge-base', '--is-ancestor', source['merge_commit_sha'], commit)
     source_tree = git('rev-parse', P.SOURCE + '^{tree}').decode().strip()
-    source_qa = verified_run(P.SOURCE, 'pull_request', source_tree, 764)
+    source_qa = verified_run(P.SOURCE, 'pull_request', source_tree, 770)
     prs = [r for r in github('commits/' + commit + '/pulls') if r.get('merged_at')
            and r['merge_commit_sha'] == commit and r['base']['ref'] == 'main' and r['head']['repo']['full_name'] == REPO]
     need(len(prs) == 1, 'MERGED_CONTROL_REQUIRED')
@@ -165,10 +165,10 @@ def publish(c):
     path = OUT / filename
     path.write_bytes(bundle)
     notes = OUT / 'artifact-notes.md'
-    notes.write_text('线上代充：细分连接观察器初始化失败操作与异常。仅更新执行器，无迁移、查询或付款。\n')
+    notes.write_text('线上代充：补齐首页导航超时的被动事件证据。仅更新执行器，无迁移、查询或付款。\n')
     tag = PREFIX + '-' + native['commit']
     execute('gh', 'release', 'create', tag, str(path), '--target', native['commit'],
-            '--title', '线上代充连接观察器初始化诊断 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
+            '--title', '线上代充首页导航诊断 ' + native['commit'][:12], '--notes-file', str(notes), '--prerelease')
     plan['artifactUrl'] = 'https://github.com/' + REPO + '/releases/download/' + tag + '/' + filename
     preflight = transport(plan, 'preflight')
     need(preflight['status'] == P.SCOPE + '_PREFLIGHT_VERIFIED', 'PREFLIGHT_FAILED')
