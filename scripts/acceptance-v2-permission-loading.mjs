@@ -28,6 +28,7 @@ import '@/v2/styles/v2.css';
 import '@/v2/styles/records.css';
 import { createApp, h, reactive } from 'vue';
 import { createPinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import VendureMailboxManager from '@/v2/features/auto-recharge/VendureMailboxManager.vue';
 import V2TopupSupplierPaymentAccountField from '@/v2/features/topup-records/components/V2TopupSupplierPaymentAccountField.vue';
@@ -97,6 +98,12 @@ const app = createApp({
   ])
 });
 app.use(createPinia());
+const router = createRouter({
+  history: createMemoryHistory(),
+  routes: [{ path: '/', component: { render: () => null } }]
+});
+app.use(router);
+await router.isReady();
 app.directive('pagination-label', v2PaginationLabel);
 app.directive('v2-column-visibility', v2TableColumnVisibility);
 app.mount('#app');
