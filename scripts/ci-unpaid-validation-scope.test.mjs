@@ -871,6 +871,17 @@ test('homepage navigation diagnostics require exact source, manifest and full un
   ];
   assert.equal(isProxyClientDiagnosticsOnly(paths), true);
   assert.equal(checkMode(paths), 'recharge');
+  const withRunnerPin = [...paths, '.github/workflows/quality.yml'];
+  assert.equal(isProxyClientDiagnosticsOnly(withRunnerPin), true);
+  assert.deepEqual(selectedParts(withRunnerPin), ['guards', 'online-engine']);
+  const workflow = readFileSync(
+    new URL('../.github/workflows/quality.yml', import.meta.url),
+    'utf8'
+  );
+  assert.match(
+    workflow.split('  recharge:\n')[1].split('\n  quality:')[0],
+    /runs-on: ubuntu-24\.04/
+  );
   assert.deepEqual(selectedParts(paths), ['guards', 'online-engine']);
   const commands = unpaidValidationCommands('online-engine', paths);
   const serial = commands.find((c) => c[0] === 'node' && c[1] === '--test');

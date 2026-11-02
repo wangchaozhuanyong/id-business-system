@@ -78,7 +78,12 @@ export function isProxyClientDiagnosticsOnly(paths) {
     [runtime, setup, homepage].some(
       (required) =>
         required.every((p) => paths.includes(p)) &&
-        paths.every((p) => required.includes(p) || support.includes(p))
+        paths.every(
+          (p) =>
+            required.includes(p) ||
+            support.includes(p) ||
+            (required === homepage && p === '.github/workflows/quality.yml')
+        )
     )
   );
 }

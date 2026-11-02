@@ -299,7 +299,7 @@ jobs:
   recharge:
     if: needs.change-scope.outputs.mode != 'full' && needs.change-scope.outputs.reuse_main != 'true'
     needs: change-scope
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
