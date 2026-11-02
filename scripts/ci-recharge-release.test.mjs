@@ -52,6 +52,7 @@ test('Quality guards and full checks include scoped four-image build-only verifi
 });
 import {
   adminCheckCommands,
+  needsAdminBrowserAcceptance,
   adminUiGuardChecks,
   checkMode,
   isCiOnly,
@@ -3358,6 +3359,7 @@ test('archive UI acceptance runs in full CI and exact frontend scope without API
     'scripts/acceptance-v2-order-archive-ui.mjs'
   ]) {
     assert.equal(checkMode([path], '', ''), 'admin', path);
+    assert.equal(needsAdminBrowserAcceptance('admin', [path]), true, path);
     const commands = adminCheckCommands('admin', [path]);
     assert.equal(
       commands.filter((command) => JSON.stringify(command) === JSON.stringify(archiveCommand))
@@ -3377,10 +3379,9 @@ test('archive UI acceptance runs in full CI and exact frontend scope without API
     ),
     false
   );
-  const selector = readFileSync('scripts/ci-recharge-scope.mjs', 'utf8');
-  assert.match(
-    selector.slice(selector.indexOf('const adminAcceptance =')),
-    /arg === 'scripts\/acceptance-v2-order-archive-ui\.mjs'/
+  assert.equal(
+    needsAdminBrowserAcceptance('admin', ['apps/admin/src/v2/features/customers/CustomerList.vue']),
+    false
   );
 });
 

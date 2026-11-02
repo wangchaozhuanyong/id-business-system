@@ -2537,6 +2537,7 @@ export function hasCombinedComponentScope(paths) {
 }
 const adminInteractionAcceptance = new Set([
   'scripts/acceptance-v2-permission-loading.mjs',
+  'scripts/acceptance-v2-recharge-proxies-ui.mjs',
   'scripts/acceptance-v2-online-recharge-ui.mjs',
   'scripts/acceptance-v2-bitbrowser-direct.mjs',
   'scripts/acceptance-v2-refresh-interaction.mjs',

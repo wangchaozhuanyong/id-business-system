@@ -20,6 +20,10 @@ test('browser acceptance commands install Chromium before the affected frontend 
     true
   );
   assert.equal(
+    needsAdminBrowserAcceptance('admin', ['scripts/acceptance-v2-recharge-proxies-ui.mjs']),
+    true
+  );
+  assert.equal(
     needsAdminBrowserAcceptance('admin', ['apps/admin/src/v2/components/asyncRegionState.ts']),
     false
   );
@@ -40,6 +44,8 @@ test('the complete permission repair uses frontend checks and rejects backend ad
     'scripts/ci-recharge-scope.mjs',
     'scripts/ci-permission-loading-scope.test.mjs',
     'scripts/acceptance-v2-permission-loading.mjs',
+    'scripts/acceptance-v2-recharge-proxies-ui.mjs',
+    'scripts/ci-recharge-release.test.mjs',
     'apps/admin/src/v2/components/asyncRegionState.ts',
     'apps/admin/src/v2/components/V2AsyncRegion.vue'
   ];

@@ -341,7 +341,9 @@
     "docs/V2_LOADING_STANDARD.md",
     "docs/PERMISSION_LOADING_RELEASE_20261102.md",
     "scripts/ci-permission-loading-scope.test.mjs",
-    "scripts/ci-recharge-check.mjs"
+    "scripts/ci-recharge-check.mjs",
+    "scripts/acceptance-v2-recharge-proxies-ui.mjs",
+    "scripts/ci-recharge-release.test.mjs"
   ],
   "expectedCurrent": "dc957e0553301efe49d76142aeb287b0f1c8333d",
   "helperPins": {
@@ -429,7 +431,8 @@
   "validationSources": {
     "apps/admin/src/v2/components/V2AsyncRegion.spec.ts": "64d0c79f6e7868035a6e1ebd9eb8530dd72d3e8556cafbfb65c9e24b469197fc",
     "apps/admin/src/v2/components/asyncRegionState.spec.ts": "9c1323b8298f91033f1c835bf837dc7e7e5d5b20b5c05030e3ead72dc9bdc28c",
-    "scripts/acceptance-v2-permission-loading.mjs": "9da1f29fb03a4d05ab5ea1be6d9b4e230990c16915bffc94acbae2719340bc38"
+    "scripts/acceptance-v2-permission-loading.mjs": "9da1f29fb03a4d05ab5ea1be6d9b4e230990c16915bffc94acbae2719340bc38",
+    "scripts/acceptance-v2-recharge-proxies-ui.mjs": "777ccd21b76f2e9db3db7eab2e89218a31043368b1ad85e564ea262cbcf904d7"
   },
   "version": 1,
   "workflowSha256": "3966b64f3c2d28492d6867ed33944cb0ea77d57803ab92c8fed46da30a94b13c"
