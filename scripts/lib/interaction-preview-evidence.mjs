@@ -20,7 +20,13 @@ const allowed = new Set([
   'apps/admin/src/v2/composables/useV2RoutePresentation.ts',
   'apps/admin/src/v2/composables/useV2RoutePresentation.spec.ts',
   'apps/admin/src/v2/features/accounts/useAccountsPage.ts',
-  'apps/admin/src/v2/features/customers/useCustomersPage.ts'
+  'apps/admin/src/v2/features/customers/useCustomersPage.ts',
+  'apps/admin/src/v2/features/accounts/V2AccountsView.vue',
+  'apps/admin/src/v2/features/accounts/components/V2AccountRowActions.vue',
+  'apps/admin/src/v2/features/orders/components/V2OrderRowActions.vue',
+  'apps/admin/src/v2/features/orders/order-presentation.ts',
+  'apps/admin/src/v2/utils/dateTime.ts',
+  'apps/admin/src/v2/utils/dateTime.spec.ts'
 ]);
 export async function verifyPreviewEvidence(
   env,
@@ -102,12 +108,22 @@ export async function verifyPreviewEvidence(
   const tableSeconds = Math.ceil(
     (Date.parse(tableJobs[0].completed_at) - Date.parse(tableJobs[0].started_at)) / 1000
   );
+  const snapshotRun = await get('', 41609412467);
+  assert.equal(snapshotRun.head_sha, '28a49701fc508da81af239a0b3961f49e385489e');
+  assert.equal(snapshotRun.conclusion, 'failure');
+  const snapshotJobs = (await get('/jobs?filter=latest&per_page=100', 41609412467)).jobs;
+  assert.equal(snapshotJobs.length, 1);
+  const snapshotSeconds = Math.ceil(
+    (Date.parse(snapshotJobs[0].completed_at) - Date.parse(snapshotJobs[0].started_at)) / 1000
+  );
   assert.ok(
-    tableSeconds > 0 &&
+    snapshotSeconds > 0 &&
+      tableSeconds > 0 &&
       profileSeconds > 0 &&
       priorSeconds > 0 &&
       secondSeconds > 0 &&
-      priorSeconds + secondSeconds + profileSeconds + tableSeconds + 25 * 60 <= 45 * 60,
+      priorSeconds + secondSeconds + profileSeconds + tableSeconds + snapshotSeconds + 15 * 60 <=
+        45 * 60,
     'Combined validation exceeds authorized 45-minute budget'
   );
   return {
@@ -134,7 +150,9 @@ export async function verifyPreviewEvidence(
     profileSeconds,
     tableRun: 41607976951,
     tableSeconds,
-    continuationLimitMinutes: 25
+    snapshotRun: 41609412467,
+    snapshotSeconds,
+    continuationLimitMinutes: 15
   };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

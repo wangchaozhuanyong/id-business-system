@@ -1,4 +1,5 @@
 import type { TagProps } from 'element-plus';
+import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import type { V2OptionSelector, V2OrderAccountDisposition, V2OrderStatus } from './contracts';
 
@@ -80,14 +81,5 @@ export function profitClass(value: string | null) {
 }
 
 export function formatDate(value: string | null) {
-  if (!value) return '-';
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(new Date(value));
+  return formatV2DateTime(value);
 }

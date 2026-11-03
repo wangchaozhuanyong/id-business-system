@@ -132,7 +132,7 @@ export function useV2TableContentWidths(
     const startedAt = performance.now();
     containerWidth = root.clientWidth;
     const actionContentKey = fingerprint(
-      [...table.querySelectorAll('.v2-table-actions')].map((node) => node.textContent)
+      [...table.querySelectorAll('.v2-table-actions')].map((node) => node.innerHTML)
     );
     const cached = recallV2TableWidths(data(), cacheKey());
     if (

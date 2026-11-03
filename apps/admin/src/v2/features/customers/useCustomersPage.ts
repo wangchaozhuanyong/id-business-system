@@ -1,3 +1,4 @@
+import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { computed, markRaw, reactive, ref, watch } from 'vue';
@@ -499,15 +500,7 @@ export function useCustomersPage() {
   }
 
   function formatDate(value: string) {
-    return new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(new Date(value));
+    return formatV2DateTime(value);
   }
 
   return {

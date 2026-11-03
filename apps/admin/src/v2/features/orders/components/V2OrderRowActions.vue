@@ -24,17 +24,32 @@
     <el-icon v-if="!mobile"><Edit /></el-icon>
     <template v-else>修改</template>
   </AppButton>
+  <AppButton
+    v-if="showMore && !dropdownReady"
+    size="small"
+    variant="ghost"
+    aria-haspopup="menu"
+    aria-expanded="false"
+    :disabled="page.isParameterTransition || page.archive.saving"
+    :loading="page.lifecycleBusyOrderId === order.id"
+    @click="openMenu"
+    @keydown.down.prevent="openMenu"
+    >更多操作</AppButton
+  >
   <el-dropdown
-    v-if="
-      !order.archivedAt &&
-      (page.hasLifecycleActions(order) || (page.canUpdateOrders && page.archive.canArchive(order)))
-    "
+    v-if="showMore && dropdownReady"
+    ref="dropdownRef"
     trigger="click"
     :persistent="false"
     :disabled="page.isParameterTransition || page.archive.saving"
     @command="page.handleLifecycleCommand($event, order)"
   >
-    <AppButton size="small" variant="ghost" :loading="page.lifecycleBusyOrderId === order.id">
+    <AppButton
+      ref="menuTrigger"
+      size="small"
+      variant="ghost"
+      :loading="page.lifecycleBusyOrderId === order.id"
+    >
       更多操作
     </AppButton>
     <template #dropdown>
@@ -76,11 +91,32 @@
 </template>
 
 <script setup lang="ts">
-import type { UnwrapNestedRefs } from 'vue';
+import { computed, nextTick, ref, type UnwrapNestedRefs } from 'vue';
 import { Edit, View } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { V2Order } from '../contracts';
 import type { useOrdersPage } from '../useOrdersPage';
 type OrdersPage = UnwrapNestedRefs<ReturnType<typeof useOrdersPage>>;
-defineProps<{ order: V2Order; page: OrdersPage; mobile?: boolean }>();
+const props = defineProps<{ order: V2Order; page: OrdersPage; mobile?: boolean }>();
+const dropdownReady = ref(false);
+const dropdownRef = ref<{ handleOpen: () => void }>();
+const menuTrigger = ref<{ $el: HTMLElement }>();
+const showMore = computed(
+  () =>
+    !props.order.archivedAt &&
+    (props.page.hasLifecycleActions(props.order) ||
+      (props.page.canUpdateOrders && props.page.archive.canArchive(props.order)))
+);
+async function openMenu() {
+  const blocked = () =>
+    props.page.isParameterTransition ||
+    props.page.archive.saving ||
+    props.page.lifecycleBusyOrderId === props.order.id;
+  if (blocked()) return;
+  dropdownReady.value = true;
+  await nextTick();
+  if (blocked()) return;
+  menuTrigger.value?.$el.focus();
+  dropdownRef.value?.handleOpen();
+}
 </script>

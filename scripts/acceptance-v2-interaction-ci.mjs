@@ -442,7 +442,10 @@ async function interactionFeedback() {
   await search.press('Enter');
   await page.locator('#v2-main .v2-async-region[data-v2-query-phase="ready"]').first().waitFor();
   const create = page.getByRole('button', { name: '新增客户', exact: true }).first();
+  await arm(create, 'drawer');
   await create.click();
+  await page.waitForFunction(() => window.__previewFeedback !== null);
+  const coldCustomerDrawerMs = await page.evaluate(() => window.__previewFeedback);
   let drawer = page.locator('.el-drawer:visible');
   const nameInput = () =>
     drawer
@@ -473,7 +476,53 @@ async function interactionFeedback() {
       .sort((a, b) => a - b);
     return { kind, samples: values.length, p95: values[Math.ceil(values.length * 0.95) - 1] };
   });
-  save('interaction-feedback.json', { samples, summaries });
+  const coldDrawers = [{ kind: 'customer', feedbackMs: coldCustomerDrawerMs }];
+  const menuChecks = [];
+  for (const target of ['/v2/accounts', '/v2/orders']) {
+    await navigate(page, target);
+    for (const [index, keyboard] of [
+      [0, false],
+      [0, false],
+      [1, true]
+    ]) {
+      const trigger = page.getByRole('button', { name: '更多操作', exact: true }).nth(index);
+      if (keyboard) {
+        await trigger.focus();
+        await trigger.press('ArrowDown');
+      } else await trigger.click();
+      const menu = page.locator('.el-dropdown-menu:visible');
+      await menu.waitFor();
+      await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'hidden' });
+      assert.equal(
+        await trigger.evaluate(
+          (node) => node === document.activeElement || node.contains(document.activeElement)
+        ),
+        true,
+        'Menu must return focus to its trigger'
+      );
+      menuChecks.push({ target, index, keyboard, focusReturned: true });
+    }
+    if (target === '/v2/accounts') {
+      const createAccount = page.getByRole('button', { name: '新增 ID', exact: true }).first();
+      await arm(createAccount, 'drawer');
+      await createAccount.click();
+      await page.waitForFunction(() => window.__previewFeedback !== null);
+      coldDrawers.push({
+        kind: 'account',
+        feedbackMs: await page.evaluate(() => window.__previewFeedback)
+      });
+      const accountDrawer = page.locator('.el-drawer:visible');
+      await accountDrawer.getByRole('button', { name: '关闭', exact: true }).click();
+      await accountDrawer.waitFor({ state: 'hidden' });
+    }
+  }
+  save('menu-first-use.json', menuChecks);
+  save('interaction-feedback.json', { samples, summaries, coldDrawers });
+  assert.ok(
+    coldDrawers.every((value) => value.feedbackMs <= 200),
+    'Cold drawer feedback exceeds 200ms'
+  );
   assert.ok(
     summaries.every((summary) => summary.samples >= 20 && summary.p95 <= 200),
     'Filter/drawer feedback P95 exceeds 200ms'

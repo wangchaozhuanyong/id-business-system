@@ -16,7 +16,7 @@ jobs:
   isolated-acceptance:
     if: github.repository == 'wangchaozhuanyong/id-business-system' && github.ref == 'refs/heads/codex/interaction-preview-20261103'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
