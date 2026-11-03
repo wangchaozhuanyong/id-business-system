@@ -152,7 +152,8 @@ def verify_proof(proof, plan, c, files):
         **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()},
         **{'source/' + n: v for n, v in c['sources'].items()},
         **{'controls/' + n: v for n, v in proof['controlSources'].items()},
-        'online-recharge/engine/credentials.cjs': c['sources']['apps/api/src/id-business-v2/online-recharge/engine/credentials.cjs']}
+        **{'online-recharge/engine/' + n: c['sources']['apps/api/src/id-business-v2/online-recharge/engine/' + n]
+           for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')}}
     need(files == proof['files'] == expected and proof['contractSha256'] == sha((HERE / CONTRACT_FILE).read_bytes()), 'PAYLOAD_SCOPE')
     verify_migration_transport(proof)
     return proof
@@ -190,7 +191,7 @@ def smoke(d, h, target, states, proof, c):
     for role, directory, files in [('api', '/app/apps/api/dist/', proof['apiModules']),
             ('api', '/app/node_modules/.prisma/client/', proof['prismaClientFiles']),
             ('admin', '/usr/share/nginx/html/', proof['adminFiles']),
-            ('online-recharge', '/workspace/engine/', {'credentials.cjs': c['sources']['apps/api/src/id-business-v2/online-recharge/engine/credentials.cjs']})]:
+            ('online-recharge', '/workspace/engine/', {n: c['sources']['apps/api/src/id-business-v2/online-recharge/engine/' + n] for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')})]:
         shared.read_hashes(d, states[role]['containerId'], directory, files)
     verify_db(db_state(d, target), c, True)
     code = """const{Prisma,PrismaClient}=require('@prisma/client');const p=new PrismaClient({log:[]});const b=require('/app/apps/api/dist/id-business-v2/online-recharge/bitbrowser-policy.js');
