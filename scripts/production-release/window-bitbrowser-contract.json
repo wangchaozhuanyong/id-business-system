@@ -234,8 +234,8 @@
     "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852",
     "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771",
     "window-bitbrowser-publication.py": "1377adf257eacd11e78e4d69a7fb938b55159100514d8e28e8b9ff9b30c8a964",
-    "window-bitbrowser-release.py": "f75d75e5e8fe60daf283c97cf002939606dacd6b6c74683831a78e75ce729659",
-    "window-bitbrowser-release.test.py": "0fcff614db396029173c3af2970b78ec7c6c50bed7fd58c73ccaab0a417f5ca5"
+    "window-bitbrowser-release.py": "a9b5abb3504fbf99e730cb7e82ef014b2d02cc148bde593c445e1eae2996dd52",
+    "window-bitbrowser-release.test.py": "6f3d2f070105d4a32304f082be35348a2570a0f8015684020130ddf3b6a1bc5f"
   },
   "migration": {
     "name": "20261102150000_online_recharge_bitbrowser",
@@ -391,8 +391,8 @@
     "scripts/production-release/window-bitbrowser-ci-build.py": "049776fb83601d8aa828d12add29a1442aa35d204199dbdfc9f62a14d432dc3c",
     "scripts/production-release/window-bitbrowser-ci-build.test.py": "450a098b5bc1876b205341ac9698b6fda6ec9af11e076a9fc5f429c39e482410",
     "scripts/production-release/window-bitbrowser-publication.py": "1377adf257eacd11e78e4d69a7fb938b55159100514d8e28e8b9ff9b30c8a964",
-    "scripts/production-release/window-bitbrowser-release.py": "f75d75e5e8fe60daf283c97cf002939606dacd6b6c74683831a78e75ce729659",
-    "scripts/production-release/window-bitbrowser-release.test.py": "0fcff614db396029173c3af2970b78ec7c6c50bed7fd58c73ccaab0a417f5ca5",
+    "scripts/production-release/window-bitbrowser-release.py": "a9b5abb3504fbf99e730cb7e82ef014b2d02cc148bde593c445e1eae2996dd52",
+    "scripts/production-release/window-bitbrowser-release.test.py": "6f3d2f070105d4a32304f082be35348a2570a0f8015684020130ddf3b6a1bc5f",
     "scripts/setup-online-bitbrowser.cmd": "5b56cecc2133a7d8f76d8420a3fc3be253ec9e8eacac6973b0541e81a0880135",
     "scripts/setup-online-bitbrowser.command": "3c913820a35f8c9de0eb445a30024438a6dab98132f12c3ac4073f1fd89da498"
   },
