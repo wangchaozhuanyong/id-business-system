@@ -69,7 +69,18 @@ jobs:
           echo "MIGRATION_ARCHIVE=$GITHUB_WORKSPACE/.runtime/window-bitbrowser-migration/image.tar.gz" >> "$GITHUB_ENV"
           echo "MIGRATION_IMAGE=$registry/id-business-v2-release@$digest" >> "$GITHUB_ENV"
           echo "MIGRATION_LOCAL_REFERENCE=$image" >> "$GITHUB_ENV"
-          echo "MIGRATION_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$image")" >> "$GITHUB_ENV"
+          python3 -B - <<'PYCODE'
+          import importlib.util, os
+          from pathlib import Path
+          source = Path('scripts/production-release/window-bitbrowser-publication.py')
+          spec = importlib.util.spec_from_file_location('migration_identity', source)
+          helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+          reference = '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + os.environ['GITHUB_SHA'] + '-' + os.environ['GITHUB_RUN_ID'] + '-window-bitbrowser-migrate'
+          identity = helper.migration_archive_image_id(Path('.runtime/window-bitbrowser-migration/image.tar.gz'), reference)
+          with Path(os.environ['GITHUB_ENV']).open('a') as output:
+              output.write('MIGRATION_IMAGE_ID=' + identity + '\n')
+          print('Migration archive configuration identity verified: ' + identity)
+          PYCODE
       - name: Reproduce the parent, publish once and independently read back
         run: python3 -B scripts/production-release/window-bitbrowser-publication.py '${{ inputs.operation }}'
       - name: Preserve native receipts and immutable artifact identities

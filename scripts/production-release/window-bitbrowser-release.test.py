@@ -4,6 +4,8 @@ import inspect
 import json
 from pathlib import Path
 import tempfile
+import io
+import tarfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -90,6 +92,26 @@ class Controls(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'PRISMA_IMAGE_CONTENT_CHANGED'):
             R.verify_client_image(d, 'candidate-api', proof)
         self.assertIn('verify_client_image', R.configured_release({}).__code__.co_names)
+
+    def test_migration_archive_identity_uses_verified_configuration_not_a_daemon_identifier(self):
+        publication = R.load('window-bitbrowser-publication.py')
+        runtime = HERE.parents[1] / '.runtime'; runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='window-migration-identity-test-', dir=runtime) as folder:
+            path = Path(folder) / 'image.tar.gz'
+            config = json.dumps({'os': 'linux', 'architecture': 'amd64', 'config': {}}).encode()
+            digest = R.sha(config); name = 'blobs/sha256/' + digest; ref = 'fixture:exact'
+            manifest = json.dumps([{'Config': name, 'RepoTags': [ref], 'Layers': []}]).encode()
+            def write(body):
+                with tarfile.open(path, 'w:gz') as archive:
+                    for filename, data in [('manifest.json', manifest), (name, body)]:
+                        member = tarfile.TarInfo(filename); member.size = len(data); archive.addfile(member, io.BytesIO(data))
+            write(config)
+            self.assertEqual(publication.migration_archive_image_id(path, ref), 'sha256:' + digest)
+            with self.assertRaisesRegex(RuntimeError, 'MIGRATION_ARCHIVE_REFERENCE'):
+                publication.migration_archive_image_id(path, 'fixture:other')
+            write(config + b' ')
+            with self.assertRaisesRegex(RuntimeError, 'MIGRATION_CONFIG_HASH'):
+                publication.migration_archive_image_id(path, ref)
 
     def test_only_the_exact_incremental_migration_state_is_accepted(self):
         c = {'migration': {'sha256': 'a' * 64}}

@@ -68,6 +68,27 @@ def archive_source(ref, folder):
         archive.extractall(folder, filter='data')
 
 
+def migration_archive_image_id(path, reference):
+    need(path.is_file() and not path.is_symlink() and 0 < path.stat().st_size <= 512 * 1024**2, 'MIGRATION_ARCHIVE')
+    import re
+    with tarfile.open(path, 'r:*') as archive:
+        members = {m.name: m for m in archive.getmembers()}
+        manifest = members.get('manifest.json')
+        need(manifest is not None and manifest.isfile() and manifest.size < 2 * 1024**2, 'MIGRATION_ARCHIVE_LAYOUT')
+        rows = [row for row in json.load(archive.extractfile(manifest)) if reference in (row.get('RepoTags') or [])]
+        need(len(rows) == 1, 'MIGRATION_ARCHIVE_REFERENCE')
+        name = rows[0]['Config']
+        match = re.fullmatch(r'(?:blobs/sha256/([a-f0-9]{64})|([a-f0-9]{64})\.json)', name)
+        member = members.get(name)
+        need(match is not None and member is not None and member.isfile() and member.size < 2 * 1024**2, 'MIGRATION_CONFIG_PATH')
+        raw = archive.extractfile(member).read()
+        digest = match.group(1) or match.group(2)
+        need(sha(raw) == digest, 'MIGRATION_CONFIG_HASH')
+        config = json.loads(raw)
+        need(config.get('os') == 'linux' and config.get('architecture') == 'amd64', 'MIGRATION_CONFIG_PLATFORM')
+        return 'sha256:' + digest
+
+
 def reproduce_parent_client(context, baseline, receipt):
     parent_root = baseline['clientGenerationRoot']
     need(isinstance(parent_root, str) and Path(parent_root).is_absolute()
