@@ -345,7 +345,8 @@ watch(
     } else if (!visible) {
       cancelOptionsQuery();
     }
-  }
+  },
+  { immediate: true }
 );
 
 watch(

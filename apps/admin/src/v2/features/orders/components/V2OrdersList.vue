@@ -36,6 +36,7 @@
         </V2SectionHeading>
       </header>
       <V2Table
+        v-if="!isMobile"
         :schema="v2TableSchemas.orders.main"
         :show-column-settings="false"
         :aria-busy="page.loading"
@@ -223,7 +224,11 @@
         </V2TableActionColumn>
       </V2Table>
 
-      <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.orders.main.id">
+      <div
+        v-if="isMobile"
+        class="v2-records-mobile-list"
+        :data-mobile-for="v2TableSchemas.orders.main.id"
+      >
         <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
@@ -416,7 +421,7 @@ const props = defineProps<{
   page: OrdersPage;
 }>();
 
-const { listRef, listFrameStyle } = useV2StableListFrame({
+const { listRef, listFrameStyle, isMobile } = useV2StableListFrame({
   items: () => props.page.items,
   pageSize: () => props.page.displayedPageSize
 });

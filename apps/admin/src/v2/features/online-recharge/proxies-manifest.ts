@@ -1,5 +1,5 @@
 import { defineV2Feature } from '@/v2/features/feature';
-import { sectionTitles, sectionDescriptions } from './sections';
+import { sectionTitles, sectionDescriptions } from './sectionMetadata';
 export const onlineRechargeProxiesFeature = defineV2Feature({
   key: 'online-recharge-proxies',
   title: sectionTitles['proxies'],

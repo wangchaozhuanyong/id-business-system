@@ -32,13 +32,12 @@
       v-if="hasSecondaryActions"
       ref="dropdownRef"
       trigger="click"
+      :persistent="false"
       :disabled="disabled"
       @command="handleCommand"
       @keydown.esc.stop.prevent="closeMenu"
     >
-      <AppButton icon-only size="small" variant="ghost" title="更多 ID 操作">
-        <el-icon><MoreFilled /></el-icon>
-      </AppButton>
+      <AppButton size="small" variant="ghost" title="更多 ID 操作"> 更多操作 </AppButton>
       <template #dropdown>
         <el-dropdown-menu>
           <el-dropdown-item v-if="canChangeRecordStatus" command="toggle-status">
@@ -64,7 +63,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { Edit, MoreFilled } from '@element-plus/icons-vue';
+import { Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RecordStatus } from '../contracts';
 

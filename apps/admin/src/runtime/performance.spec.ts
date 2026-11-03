@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   beginV2RoutePerformance,
+  claimV2RoutePerformance,
+  markV2RoutePaintReady,
+  subscribeV2RoutePresentation,
   markV2RouteCodeReady,
   markV2RouteDataError,
   markV2RouteDataReady
@@ -74,4 +77,36 @@ describe('V2 navigation performance lifecycle', () => {
       outcome: 'ready'
     });
   });
+});
+
+it('allows one primary query and rejects a late response even when returning to the same module', () => {
+  const owner = {},
+    auxiliary = {};
+  const old = beginV2RoutePerformance('/v2/orders');
+  expect(claimV2RoutePerformance('orders', '/v2/orders', owner)).toBe(old);
+  expect(claimV2RoutePerformance('orders', '/v2/orders', auxiliary)).toBeUndefined();
+  beginV2RoutePerformance('/v2/customers');
+  const current = beginV2RoutePerformance('/v2/orders');
+  markV2RouteCodeReady('/v2/orders', 'orders');
+  expect(markV2RouteDataReady('orders', 'network', old)).toBe(false);
+  expect(markV2RouteDataError('orders', old)).toBe(false);
+  expect(markV2RouteDataReady('orders', 'memory-cache', current)).toBe(true);
+  const event = { navigationId: current, moduleKey: 'orders', source: 'memory-cache' as const };
+  expect(markV2RoutePaintReady({ ...event, navigationId: old })).toBe(false);
+  expect(markV2RoutePaintReady(event)).toBe(true);
+  expect(markV2RoutePaintReady(event)).toBe(false);
+  expect(performance.getEntriesByName('v2:route-paint-duration')).toHaveLength(1);
+});
+
+it('notifies presentation once and only after the primary data succeeds', () => {
+  const events: unknown[] = [];
+  const stop = subscribeV2RoutePresentation((event) => {
+    events.push(event);
+  });
+  const id = beginV2RoutePerformance('/v2/orders');
+  markV2RouteCodeReady('/v2/orders', 'orders');
+  markV2RouteDataReady('orders', 'network', id);
+  markV2RouteDataReady('orders', 'network', id);
+  expect(events).toEqual([{ navigationId: id, moduleKey: 'orders', source: 'network' }]);
+  stop();
 });

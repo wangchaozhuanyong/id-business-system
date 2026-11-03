@@ -10,7 +10,7 @@ describe('orders scheme 3 redesign contract', () => {
     expect(view).toContain('<V2OrdersOverview :page="page" />');
     expect(view).toContain('<V2OrdersToolbar :page="page" />');
     expect(view).toContain('<V2OrdersList :page="page" />');
-    expect(view).toContain('<V2OrderDialogs :page="page" />');
+    expect(view).toContain('<V2OrderDialogs v-if="dialogsOpened" :page="page" />');
     expect(view).toContain('const page = reactive(useOrdersPage())');
   });
 

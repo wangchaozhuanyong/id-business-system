@@ -37,6 +37,7 @@ export function useBitOrderPricing(channel: RechargeOrderChannel = 'bitbrowser')
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
     key: settingsKey,
+    trackRouteData: false,
     query: ({ signal }) => bankRechargeApi.orderPricingSettings({ signal }, channel)
   });
   const ratesQuery = useV2ModuleQuery<
@@ -45,6 +46,7 @@ export function useBitOrderPricing(channel: RechargeOrderChannel = 'bitbrowser')
     moduleKey: 'bank-recharge-orders',
     scope: 'exchange-rates',
     key: 'bit-orders-pricing-rates',
+    trackRouteData: false,
     getRevalidateAt: (result) => {
       const expiries = result.items
         .map((rate) => (rate.expiresAt ? Date.parse(rate.expiresAt) : NaN))

@@ -7,6 +7,7 @@ export type AppPerformanceMark =
   | 'v2:route-code-ready'
   | 'v2:route-data-ready'
   | 'v2:route-data-error'
+  | 'v2:route-paint-ready'
   | 'v2:route-prefetch-start'
   | 'v2:route-prefetch-ready'
   | 'v2:route-prefetch-error';
@@ -20,6 +21,8 @@ interface V2NavigationPerformanceState {
   moduleKey: string | null;
   codeReady: boolean;
   dataSettled: boolean;
+  primaryOwner?: object;
+  paintReady?: boolean;
   pendingData?: {
     outcome: 'ready' | 'error';
     source?: V2RouteDataSource;
@@ -37,6 +40,60 @@ interface V2PerformanceDetail {
 
 let navigationSequence = 0;
 let activeNavigation: V2NavigationPerformanceState | null = null;
+export interface V2RoutePresentation {
+  navigationId: number;
+  moduleKey: string;
+  source: V2RouteDataSource;
+}
+const presentationListeners = new Set<(event: V2RoutePresentation) => void | Promise<void>>();
+
+export function subscribeV2RoutePresentation(
+  listener: (event: V2RoutePresentation) => void | Promise<void>
+) {
+  presentationListeners.add(listener);
+  return () => {
+    presentationListeners.delete(listener);
+  };
+}
+
+export function claimV2RoutePerformance(moduleKey: string, path: string, owner: object) {
+  const navigation = activeNavigation;
+  if (!navigation || navigation.path !== normalizeRoutePath(path)) return undefined;
+  if (navigation.primaryOwner && navigation.primaryOwner !== owner) return undefined;
+  navigation.primaryOwner = owner;
+  return navigation.id;
+}
+
+export function isV2RoutePerformanceCurrent(navigationId: number, moduleKey: string) {
+  return activeNavigation?.id === navigationId && activeNavigation.moduleKey === moduleKey;
+}
+
+export function markV2RoutePaintReady(event: V2RoutePresentation) {
+  const navigation = activeNavigation;
+  if (
+    !navigation ||
+    !isV2RoutePerformanceCurrent(event.navigationId, event.moduleKey) ||
+    navigation.paintReady ||
+    !navigation.dataSettled
+  )
+    return false;
+  navigation.paintReady = true;
+  const detail = { ...navigationDetail(navigation), source: event.source };
+  markAppPerformance('v2:route-paint-ready', detail);
+  measureAppPerformance(
+    'v2:route-paint-duration',
+    'v2:route-start',
+    'v2:route-paint-ready',
+    detail
+  );
+  measureAppPerformance(
+    'v2:route-data-to-paint-duration',
+    'v2:route-data-ready',
+    'v2:route-paint-ready',
+    detail
+  );
+  return true;
+}
 
 export function markAppPerformance(name: AppPerformanceMark, detail?: V2PerformanceDetail) {
   if (typeof performance === 'undefined' || typeof performance.mark !== 'function') return;
@@ -109,8 +166,13 @@ export function markV2RouteCodeReady(path: string, moduleKey?: string) {
   return true;
 }
 
-export function markV2RouteDataReady(moduleKey: string, source: V2RouteDataSource) {
+export function markV2RouteDataReady(
+  moduleKey: string,
+  source: V2RouteDataSource,
+  navigationId?: number
+) {
   const navigation = activeNavigation;
+  if (navigationId !== undefined && navigation?.id !== navigationId) return false;
   if (!navigation || navigation.dataSettled) return false;
   if (!navigation.codeReady) return queuePendingRouteData(navigation, moduleKey, 'ready', source);
   if (navigation.moduleKey !== moduleKey) return false;
@@ -118,8 +180,9 @@ export function markV2RouteDataReady(moduleKey: string, source: V2RouteDataSourc
   return completeRouteDataReady(navigation, source);
 }
 
-export function markV2RouteDataError(moduleKey: string) {
+export function markV2RouteDataError(moduleKey: string, navigationId?: number) {
   const navigation = activeNavigation;
+  if (navigationId !== undefined && navigation?.id !== navigationId) return false;
   if (!navigation || navigation.dataSettled) return false;
   if (!navigation.codeReady) return queuePendingRouteData(navigation, moduleKey, 'error');
   if (navigation.moduleKey !== moduleKey) return false;
@@ -168,6 +231,15 @@ function completeRouteDataReady(
     'v2:route-data-ready',
     detail
   );
+  for (const listener of presentationListeners) {
+    try {
+      void Promise.resolve(
+        listener({ navigationId: navigation.id, moduleKey: navigation.moduleKey!, source })
+      ).catch(() => undefined);
+    } catch {
+      /* Diagnostics must not affect navigation. */
+    }
+  }
   return true;
 }
 

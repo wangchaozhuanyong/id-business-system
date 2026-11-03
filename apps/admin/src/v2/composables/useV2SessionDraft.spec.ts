@@ -177,3 +177,60 @@ describe('会话内草稿保留', () => {
     scope.stop();
   });
 });
+
+it('coalesces linked edits into one snapshot and flushes synchronous record switches', async () => {
+  const clone = vi.spyOn(globalThis, 'structuredClone');
+  const scope = effectScope();
+  const draft = scope.run(() => useV2FormDraft('batched', () => ({ a: '', b: '' })))!;
+  draft.open('first');
+  for (let index = 0; index < 100; index++) {
+    draft.form.a = String(index);
+    draft.form.b = String(index);
+  }
+  expect(clone).not.toHaveBeenCalled();
+  await Promise.resolve();
+  expect(clone).toHaveBeenCalledTimes(1);
+  draft.form.a = 'latest';
+  draft.open('second');
+  draft.open('first');
+  expect(draft.form.a).toBe('latest');
+  expect(draft.form.b).toBe('99');
+  scope.stop();
+  clone.mockRestore();
+});
+
+it('does not let an old save discard another consumer edit still queued for copying', () => {
+  const firstScope = effectScope();
+  const first = firstScope.run(() => useV2FormDraft('race', () => ({ text: '' })))!;
+  first.open('same');
+  first.form.text = 'submitted';
+  const complete = first.beginSave();
+  firstScope.stop();
+  const secondScope = effectScope();
+  const second = secondScope.run(() => useV2FormDraft('race', () => ({ text: '' })))!;
+  second.open('same');
+  second.form.text = 'new input';
+  expect(complete()).toBe(false);
+  secondScope.stop();
+  const thirdScope = effectScope();
+  const third = thirdScope.run(() => useV2FormDraft('race', () => ({ text: '' })))!;
+  third.open('same');
+  expect(third.form.text).toBe('new input');
+  thirdScope.stop();
+});
+
+it('discards a queued old-identity snapshot on identity replacement', async () => {
+  const firstScope = effectScope();
+  const first = firstScope.run(() => useV2FormDraft('identity-pending', () => ({ text: '' })))!;
+  first.open('same');
+  first.form.text = 'old input';
+  identity.epoch++;
+  identity.changed();
+  await Promise.resolve();
+  firstScope.stop();
+  const nextScope = effectScope();
+  const next = nextScope.run(() => useV2FormDraft('identity-pending', () => ({ text: '' })))!;
+  next.open('same');
+  expect(next.form.text).toBe('');
+  nextScope.stop();
+});

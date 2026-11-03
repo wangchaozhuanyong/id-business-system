@@ -223,7 +223,8 @@ watch(
     if (!visible) return;
     formDraft.open(props.order?.id ?? 'none', { returnedBalanceAmount: '', reason: '' });
     captureFormSnapshot();
-  }
+  },
+  { immediate: true }
 );
 
 watch(
@@ -267,7 +268,8 @@ watch(
       window.clearTimeout(timer);
       controller.abort();
     });
-  }
+  },
+  { immediate: true }
 );
 
 async function submit() {

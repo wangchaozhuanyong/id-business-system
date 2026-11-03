@@ -359,17 +359,21 @@ import { defineAsyncComponent, ref } from 'vue';
 import type { FormInstance } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
-import RechargePasswordLoginFields from './RechargePasswordLoginFields.vue';
+const RechargePasswordLoginFields = defineAsyncComponent(
+  () => import('./RechargePasswordLoginFields.vue')
+);
 import RechargeSensitiveInput from './RechargeSensitiveInput.vue';
 import RechargeSubmission from './RechargeSubmission.vue';
 import { rechargeRules } from './recharge-form';
 import RechargePageContext from './RechargePageContext.vue';
 import { useAutoRecharge } from './useAutoRecharge';
-import V2SavedPaymentCardField from './V2SavedPaymentCardField.vue';
-import V2RechargePaymentFields from './V2RechargePaymentFields.vue';
+const V2SavedPaymentCardField = defineAsyncComponent(() => import('./V2SavedPaymentCardField.vue'));
+const V2RechargePaymentFields = defineAsyncComponent(() => import('./V2RechargePaymentFields.vue'));
 import V2RechargeProxySelect from './V2RechargeProxySelect.vue';
 import V2RechargePlanCurrencyFields from './V2RechargePlanCurrencyFields.vue';
-import V2RechargeBillingAddressFields from './V2RechargeBillingAddressFields.vue';
+const V2RechargeBillingAddressFields = defineAsyncComponent(
+  () => import('./V2RechargeBillingAddressFields.vue')
+);
 import { proxyCountryLabel } from './recharge-proxy-options';
 const RechargeResult = defineAsyncComponent(() => import('./RechargeResult.vue'));
 const RechargeBrowserSettings = defineAsyncComponent(() => import('./RechargeBrowserSettings.vue'));

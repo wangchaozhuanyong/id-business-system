@@ -1,0 +1,67 @@
+name: Interaction Preview 20261103
+
+on:
+  push:
+    branches: [codex/interaction-preview-20261103]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: interaction-preview-20261103
+  cancel-in-progress: false
+
+jobs:
+  isolated-acceptance:
+    if: github.repository == 'wangchaozhuanyong/id-business-system' && github.ref == 'refs/heads/codex/interaction-preview-20261103'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build shared runtime before dependent tests
+        run: npm run build --workspace @apple-business/shared
+      - name: Generate static Prisma client
+        run: npm run prisma:mysql:generate --workspace @apple-business/api
+      - name: Admin tests and isolated runtime controls
+        run: |
+          set -e
+          npm run test --workspace @apple-business/admin
+          node --test scripts/interaction-preview-runtime.test.mjs scripts/compare-v2-interaction-metrics.test.mjs
+      - name: Build API and production admin
+        run: |
+          set -e
+          npm run build --workspace @apple-business/api
+          npm run build --workspace @apple-business/admin
+      - name: UI and architecture controls
+        run: |
+          set -e
+          npm run lint --workspace @apple-business/admin
+          npm run check:admin-ui
+          npm run check:v2-ui-language
+          npm run check:v2-color-contrast
+          npm run check:v2-table-standard
+          npm run check:v2-loading-standard
+          npm run check:v2-module-architecture
+          npm run check:v2-isolation
+          npm run acceptance:v2-navigation-performance:static
+      - name: Install browser on disposable runner
+        run: npx playwright install --with-deps chromium
+      - name: Real API and owned MySQL browser acceptance
+        run: node scripts/acceptance-v2-interaction-ci.mjs
+      - name: Retain sanitized acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: interaction-preview-${{ github.sha }}
+          path: .runtime/interaction-preview-20261103/remote/
+          retention-days: 7
+          if-no-files-found: ignore

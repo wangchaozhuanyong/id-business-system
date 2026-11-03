@@ -239,7 +239,8 @@ watch(
       customRefundBalanceAmount: ''
     });
     captureFormSnapshot();
-  }
+  },
+  { immediate: true }
 );
 
 async function submit() {

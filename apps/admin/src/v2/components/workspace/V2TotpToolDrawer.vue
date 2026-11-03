@@ -256,7 +256,8 @@ watch(
   (visible) => {
     if (!visible) return;
     void calibrateTime();
-  }
+  },
+  { immediate: true }
 );
 
 watch([secretInput, inputMode], clearResults, { flush: 'sync' });

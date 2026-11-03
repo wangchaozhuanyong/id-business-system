@@ -30,6 +30,7 @@
       (page.hasLifecycleActions(order) || (page.canUpdateOrders && page.archive.canArchive(order)))
     "
     trigger="click"
+    :persistent="false"
     :disabled="page.isParameterTransition || page.archive.saving"
     @command="page.handleLifecycleCommand($event, order)"
   >
