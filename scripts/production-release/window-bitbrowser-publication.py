@@ -68,6 +68,31 @@ def archive_source(ref, folder):
         archive.extractall(folder, filter='data')
 
 
+def reproduce_parent_client(context, baseline, receipt):
+    parent_root = baseline['clientGenerationRoot']
+    need(isinstance(parent_root, str) and Path(parent_root).is_absolute()
+         and '..' not in Path(parent_root).parts and len(parent_root) < 1024, 'CLIENT_GENERATION_PATH')
+    inventory = load('recharge-plan-billing-build.py').inventory
+    directory = context / 'node_modules/.prisma/client'
+    rewritten = []
+    for name in inventory(directory):
+        path = directory / name
+        if path.suffix in ('.js', '.mjs', '.json', '.ts'):
+            raw = path.read_bytes()
+            normalized = raw.replace(str(context.resolve()).encode(), parent_root.encode())
+            if normalized != raw:
+                path.write_bytes(normalized)
+                rewritten.append(name)
+    actual, expected = inventory(directory), baseline['clientFiles']
+    differences = sorted(n for n in actual.keys() | expected.keys() if actual.get(n) != expected.get(n))
+    receipt.write_text(json.dumps({'kind': 'READONLY_PARENT_CLIENT_REPRODUCTION',
+        'actualCount': len(actual), 'expectedCount': len(expected), 'generationPathFiles': sorted(rewritten),
+        'differingFiles': differences, 'expected': expected, 'actual': actual, 'businessActions': 0},
+        sort_keys=True, indent=2) + '\n')
+    need(actual == expected and {'count': len(actual), 'sha256': sha(R.canonical(actual))}
+         == baseline['runtime']['clientInventory'], 'PRISMA_PARENT_NOT_REPRODUCED')
+
+
 def build(c, plan):
     B = load('recharge-plan-billing-build.py')
     B.OUT, B.PREFIX, B.CONTRACT = OUT / 'build', PREFIX, HERE / R.CONTRACT_FILE
@@ -93,9 +118,7 @@ def build(c, plan):
     payload = B.OUT / 'payload'
     proof_file = payload / 'build-proof.json'
     proof = json.loads(proof_file.read_bytes())
-    before_client = B.inventory(B.OUT / 'api-baseline/node_modules/.prisma/client')
-    need({'count': len(before_client), 'sha256': sha(R.canonical(before_client))}
-         == resolved['baseline']['runtime']['clientInventory'], 'PRISMA_PARENT_NOT_REPRODUCED')
+    reproduce_parent_client(B.OUT / 'api-baseline', resolved['baseline'], OUT / 'parent-client-comparison.json')
     for name in ('credentials.cjs', 'SOURCE_MANIFEST.json'):
         engine = payload / 'online-recharge/engine' / name
         engine.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +154,11 @@ def main(operation):
     plan['nativeParentCapture'] = capture
     (OUT / 'parent-capture.json').write_text(json.dumps(capture, sort_keys=True, indent=2)+'\n')
     if operation == 'observe':
-        print(json.dumps({'status': capture['status'], 'commit': native['commit'], 'businessActions': 0}))
+        context = OUT / 'parent-client-source'
+        archive_source(c['reviewBase'], context)
+        load('recharge-plan-billing-build.py').compile(context, 'api', c['expectedCurrent'])
+        reproduce_parent_client(context, capture['baseline'], OUT / 'parent-client-comparison.json')
+        print(json.dumps({'status': capture['status'], 'commit': native['commit'], 'parentClientReproduced': True, 'businessActions': 0}))
         return
     proof = build(c, plan)
     bundle = OUT / (PREFIX + '-artifact.tar.gz')

@@ -3,6 +3,7 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -45,6 +46,30 @@ class Controls(unittest.TestCase):
         source = inspect.getsource(R.capture)
         self.assertIn("'runtime': runtime", source)
         self.assertIn("read_hashes(d, states['admin']['containerId']", source)
+
+    def test_parent_client_normalizes_only_generation_paths_and_rejects_binary_or_file_changes(self):
+        publication = R.load('window-bitbrowser-publication.py')
+        runtime = HERE.parents[1] / '.runtime'
+        runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='window-parent-client-test-', dir=runtime) as folder:
+            context = Path(folder)
+            client = context / 'node_modules/.prisma/client'
+            client.mkdir(parents=True)
+            (client / 'index.js').write_text('root=' + str(context.resolve()))
+            (client / 'engine.node').write_bytes(b'unchanged-engine')
+            parent_root = '/verified-parent-context'
+            files = {'index.js': R.sha(('root=' + parent_root).encode()), 'engine.node': R.sha(b'unchanged-engine')}
+            baseline = {'clientGenerationRoot': parent_root, 'clientFiles': files,
+                'runtime': {'clientInventory': {'count': 2, 'sha256': R.sha(R.canonical(files))}}}
+            output = context / 'comparison.json'
+            publication.reproduce_parent_client(context, baseline, output)
+            self.assertEqual(json.loads(output.read_text())['differingFiles'], [])
+            (client / 'engine.node').write_bytes(b'changed-engine')
+            with self.assertRaisesRegex(RuntimeError, 'PRISMA_PARENT_NOT_REPRODUCED'):
+                publication.reproduce_parent_client(context, baseline, output)
+            self.assertEqual(json.loads(output.read_text())['differingFiles'], ['engine.node'])
+            with self.assertRaisesRegex(RuntimeError, 'CLIENT_GENERATION_PATH'):
+                publication.reproduce_parent_client(context, {**baseline, 'clientGenerationRoot': '../unsafe'}, output)
 
     def test_only_the_exact_incremental_migration_state_is_accepted(self):
         c = {'migration': {'sha256': 'a' * 64}}
