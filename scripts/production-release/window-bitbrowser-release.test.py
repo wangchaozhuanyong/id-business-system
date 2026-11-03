@@ -81,6 +81,21 @@ class Controls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'CLIENT_GENERATION_PATH'):
                 publication.reproduce_parent_client(context, {**baseline, 'clientGenerationRoot': '../unsafe'}, output)
 
+    def test_single_api_layer_copies_only_the_two_reviewed_overlays(self):
+        runtime=HERE.parents[1]/'.runtime';runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='single-api-layer-',dir=runtime) as folder:
+            payload=Path(folder)
+            for name,value in [('modules/feature.js',b'code'),('prisma-client/index.js',b'client')]:
+                path=payload/'api'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(value)
+            R.single_api_layer(payload)
+            files={p.relative_to(payload/'api/rootfs').as_posix():p.read_bytes() for p in (payload/'api/rootfs').rglob('*') if p.is_file()}
+            self.assertEqual(files,{'app/apps/api/dist/feature.js':b'code','app/node_modules/.prisma/client/index.js':b'client'})
+            with self.assertRaisesRegex(RuntimeError,'API_SINGLE_LAYER_EXISTS'):R.single_api_layer(payload)
+        recipe=R.configured_release({})
+        self.assertIn('single_api_layer',recipe.__code__.co_names)
+        self.assertIn('COPY rootfs/',repr(recipe.__code__.co_consts))
+        self.assertNotIn('COPY modules/',repr(recipe.__code__.co_consts))
+
     def test_client_probe_uses_immutable_local_image_and_classifies_without_raw_output(self):
         d=Mock();image='sha256:'+'a'*64;d.run.return_value=json.dumps([{'Id':image}])
         with patch.object(R.subprocess,'run',return_value=Mock(returncode=0,stdout='{}')) as run:
@@ -89,7 +104,7 @@ class Controls(unittest.TestCase):
             self.assertIn(image,args);self.assertNotIn('reviewed-tag',args)
             self.assertIn('--read-only',args);self.assertEqual(args[args.index('--network')+1],'none')
             self.assertNotIn('--pull=never',args)
-        for detail,code in [('unknown flag: private input','FLAG_UNSUPPORTED'),('Permission denied: private input','PERMISSION_DENIED'),('private unrecognized error','EXIT_125')]:
+        for detail,code in [('max depth exceeded','MAX_DEPTH_EXCEEDED'),('unknown flag: private input','FLAG_UNSUPPORTED'),('Permission denied: private input','PERMISSION_DENIED'),('private unrecognized error','EXIT_125')]:
             with patch.object(R.subprocess,'run',return_value=Mock(returncode=125,stderr=detail,stdout='')):
                 with self.assertRaisesRegex(RuntimeError,'^WINDOW_BITBROWSER_CLIENT_PROBE_'+code+'$'):
                     R.client_probe(d,'reviewed-tag','code')
@@ -140,11 +155,12 @@ class Controls(unittest.TestCase):
             stage = base / '.staging' / (R.PREFIX + '-' + commit + '-' + run)
             content = stage / 'content/payload'; content.mkdir(parents=True)
             proof = {'commit': commit, 'workflowRunId': run, 'scope': R.SCOPE, 'sources': {}, 'businessActions': 0,
+                'nativeParentCapture':{'baseline':{'services':{'api':{'image':'parent'}}}},
                 'prismaClientFiles': {}, 'preservedClientFiles': {}, 'migrationTransport': {'file': R.PREFIX+'-migration.tar.gz', 'sha256':'b'*64,'bytes':1,'imageId':'sha256:'+'c'*64,'reference':'098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:'+commit+'-'+run+'-window-bitbrowser-migrate'}}
             raw = json.dumps(proof).encode(); (content / 'build-proof.json').write_bytes(raw)
             current = base / 'releases/parent'; current.mkdir(parents=True); (current/'release-manifest.json').write_text(json.dumps({'commit':'parent'})); (base/'current').symlink_to(current)
             c = {'scope':R.SCOPE,'sources':{},'failedPublicationDiagnostic':{'commit':commit,'workflowRunId':run,'buildProofSha256':R.sha(raw),'acceptedCommandId':'original'}}
-            d = Mock(); d.run.side_effect=lambda *args: json.dumps([{'Id':'sha256:'+'c'*64,'Config':{}}]) if args[1:3]==('image','inspect') else json.dumps({'files':{},'bare':{'ok':False,'code':'MODULE_NOT_FOUND'}})
+            d = Mock(); d.run.side_effect=lambda *args: json.dumps([{'Id':'sha256:'+'c'*64,'Config':{},'RootFS':{'Layers':['a','b']}}]) if args[1:3]==('image','inspect') else json.dumps({'files':{},'bare':{'ok':False,'code':'MODULE_NOT_FOUND'}})
             with patch.object(R,'BASE',base),patch.object(R,'utilities',return_value=(Mock(),d)),patch.object(R,'db_state',return_value={'applied':0}),patch.object(R,'client_probe',return_value={'files':{}}),patch.object(R,'probe_resources',return_value={'freeBytes':123}):
                 result=R.diagnose(c)
                 self.assertEqual(result['migration'],{'applied':0});self.assertFalse(result['maintenancePresent'])

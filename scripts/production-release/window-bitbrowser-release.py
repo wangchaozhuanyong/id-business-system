@@ -202,7 +202,7 @@ def migrate(d, target, c, journal, database):
 
 class ClientProbeFailed(RuntimeError):
     def __init__(self, kind, result):
-        words = frozenset(('docker error response from daemon failed failure cannot can not could unable create start run container process task shim runtime runc exec executable node image network none bridge endpoint port memory allocate available unavailable resource temporarily no space left device file directory system read only invalid argument configuration mount mounts cgroup cgroups pid pids limit exceeded maximum reached disk inode inodes permission denied operation permitted supported unsupported unknown shorthand flag pull healthcheck conflict name already use specified missing found command format formaterror too many open files driver overlay overlay2 initialization init path volume volumes default apparmor profile seccomp security option options namespace namespaces user root node binary loading load library shared libraries interpreter exiting exit status code allocation cap capabilities locked database environment variable entrypoint checkpoint ipv4 ipv6 address pool sandbox connect connection refused timeout timed out oom killed stat mkdir write read sys fs proc dev null insufficient buffer size ulimit threads fork clone thread version api client server requires require newer older minimum maximum windows linux platform architecture amd64 arm64 is are the a an and or to for of on in with by as this that it has have be been was were do does did at detected enabled disabled configure configured unexpected response request requesterror daemonerror message fatal panic warning unsupportedtransport key value malformed valid usage help more information see seealso return returned unsupported never false true busy').split())
+        words = frozenset(('docker error response from daemon max depth failed failure cannot can not could unable create start run container process task shim runtime runc exec executable node image network none bridge endpoint port memory allocate available unavailable resource temporarily no space left device file directory system read only invalid argument configuration mount mounts cgroup cgroups pid pids limit exceeded maximum reached disk inode inodes permission denied operation permitted supported unsupported unknown shorthand flag pull healthcheck conflict name already use specified missing found command format formaterror too many open files driver overlay overlay2 initialization init path volume volumes default apparmor profile seccomp security option options namespace namespaces user root node binary loading load library shared libraries interpreter exiting exit status code allocation cap capabilities locked database environment variable entrypoint checkpoint ipv4 ipv6 address pool sandbox connect connection refused timeout timed out oom killed stat mkdir write read sys fs proc dev null insufficient buffer size ulimit threads fork clone thread version api client server requires require newer older minimum maximum windows linux platform architecture amd64 arm64 is are the a an and or to for of on in with by as this that it has have be been was were do does did at detected enabled disabled configure configured unexpected response request requesterror daemonerror message fatal panic warning unsupportedtransport key value malformed valid usage help more information see seealso return returned unsupported never false true busy').split())
         def safe(text):
             return [word if word in words else '[hidden]' for word in re.findall(r'[a-zA-Z]+', text.lower())[:160]]
         self.diagnostic = {'exitCode': result.returncode, 'stderrWords': safe(result.stderr), 'stdoutWords': safe(result.stdout)}
@@ -218,7 +218,7 @@ def client_probe(d, reference, code, legacy=False):
     result = subprocess.run(args, capture_output=True, text=True, timeout=45)
     if result.returncode:
         text = result.stderr.lower()
-        categories = [('unknown flag', 'FLAG_UNSUPPORTED'), ('flag provided but not defined', 'FLAG_UNSUPPORTED'),
+        categories = [('max depth exceeded', 'MAX_DEPTH_EXCEEDED'), ('unknown flag', 'FLAG_UNSUPPORTED'), ('flag provided but not defined', 'FLAG_UNSUPPORTED'),
             ('permission denied', 'PERMISSION_DENIED'), ('operation not permitted', 'OPERATION_NOT_PERMITTED'),
             ('read-only file system', 'READ_ONLY_FILESYSTEM'), ('cannot find module', 'NODE_MODULE_NOT_FOUND'),
             ('syntaxerror', 'NODE_SYNTAX'), ('exec format error', 'EXEC_FORMAT'),
@@ -258,6 +258,13 @@ def smoke(d, h, target, states, proof, c):
     need(sha(html) == proof['adminFiles']['index.html'] and ('v2-' + proof['commit']).encode() in html, 'PUBLIC_VERSION')
 
 
+def single_api_layer(payload):
+    root = payload / 'api/rootfs'
+    need(not root.exists(), 'API_SINGLE_LAYER_EXISTS')
+    for source, target in [('modules', 'app/apps/api/dist'), ('prisma-client', 'app/node_modules/.prisma/client')]:
+        shutil.copytree(payload / 'api' / source, root / target)
+
+
 def configured_release(c):
     driver = load('recharge-plan-billing-release.py')
     driver.PREFIX, driver.CONTRACT, driver.SCOPE = PREFIX, CONTRACT_FILE, SCOPE
@@ -275,6 +282,8 @@ def configured_release(c):
     # Keep the existing lock, SQL fence, migration journal and no-post-SQL-rollback behavior.
     source = inspect.getsource(driver.release)
     changes = {
+        "        models = {n: h.configuration(d, before[n])": "        single_api_layer(payload)\n        models = {n: h.configuration(d, before[n])",
+        "'COPY modules/ /app/apps/api/dist/\\nCOPY prisma-client/ /app/node_modules/.prisma/client/\\n'": "'COPY rootfs/ /\\n'",
         "c = json.loads((HERE / CONTRACT).read_bytes())": "c = WINDOW_CONTRACT",
         "('admin', 'COPY html/ /usr/share/nginx/html/\\n')": "('admin', 'COPY html/ /usr/share/nginx/html/\\n'), ('online-recharge', 'COPY engine/ /workspace/engine/\\n')",
         "and after['online-recharge']['image'] == before['online-recharge']['image']": "and after['online-recharge']['image'] == images['online-recharge']['imageId']",
@@ -286,7 +295,7 @@ def configured_release(c):
     for before, after in changes.items():
         need(source.count(before) == 1, 'INHERITED_RECIPE_CHANGED')
         source = source.replace(before, after)
-    values = {**driver.__dict__, 'WINDOW_CONTRACT': c, 'verify_client_image': verify_client_image}
+    values = {**driver.__dict__, 'WINDOW_CONTRACT': c, 'verify_client_image': verify_client_image, 'single_api_layer': single_api_layer}
     exec(compile(source, '<window-bitbrowser-runtime>', 'exec'), values)
     return values['release']
 
@@ -348,8 +357,12 @@ def diagnose(c):
         phase = 'candidate-image'
         reference = 'id-business-v2-billing-plan:' + pin['commit'] + '-' + pin['workflowRunId'] + '-api'
         api = image(reference)
-        result['apiImage'] = ({'id': api['Id'], 'user': api['Config'].get('User'), 'workingDir': api['Config'].get('WorkingDir')}
+        result['apiImage'] = ({'id': api['Id'], 'user': api['Config'].get('User'), 'workingDir': api['Config'].get('WorkingDir'), 'layerCount': len(api['RootFS']['Layers'])}
             if 'Id' in api else api)
+        phase = 'parent-image'
+        parent_image = proof['nativeParentCapture']['baseline']['services']['api']['image']
+        parent = image(parent_image)
+        result['apiParentImage'] = {'id': parent['Id'], 'layerCount': len(parent['RootFS']['Layers'])} if 'Id' in parent else parent
         phase = 'migration-image'
         migration = image(transport['reference'])
         result['migrationImage'] = ({'identityMatches': migration['Id'] == transport['imageId']} if 'Id' in migration else migration)
