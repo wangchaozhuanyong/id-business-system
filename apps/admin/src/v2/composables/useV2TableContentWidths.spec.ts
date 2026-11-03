@@ -89,6 +89,9 @@ it('reuses numeric layout only for the same array and layout inputs, with bounde
   rememberV2TableWidths(rows, 'desktop-light-columns-v1', size);
   expect(recallV2TableWidths(rows, 'desktop-light-columns-v1')).toEqual(size);
   expect(recallV2TableWidths([...rows], 'desktop-light-columns-v1')).toBeUndefined();
+  rows[0].id = 'changed';
+  expect(recallV2TableWidths(rows, 'desktop-light-columns-v1')).toBeUndefined();
+  rows[0].id = 'synthetic';
   expect(recallV2TableWidths(rows, 'desktop-dark-columns-v1')).toBeUndefined();
   expect(recallV2TableWidths(rows, 'desktop-light-columns-v2')).toBeUndefined();
   for (let index = 0; index < 5; index++) rememberV2TableWidths(rows, String(index), size);

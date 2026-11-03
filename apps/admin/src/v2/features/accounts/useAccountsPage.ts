@@ -1,6 +1,6 @@
 import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, markRaw, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2AccountsApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
@@ -170,7 +170,7 @@ export function useAccountsPage() {
     accountsQuery.data,
     (snapshot) => {
       if (!snapshot) return;
-      items.value = snapshot.list.items;
+      items.value = markRaw(snapshot.list.items);
       total.value = snapshot.list.total;
       countryOptions.value = snapshot.options.countries;
       statusOptions.value = snapshot.options.statuses;

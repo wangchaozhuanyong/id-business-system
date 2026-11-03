@@ -1,6 +1,6 @@
 import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, markRaw, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { isApiError } from '@/api/apiError';
@@ -201,7 +201,7 @@ export function useCustomersPage() {
     customersQuery.data,
     (snapshot) => {
       if (!snapshot) return;
-      items.value = snapshot.list.items;
+      items.value = markRaw(snapshot.list.items);
       total.value = snapshot.list.total;
       sourceOptions.value = snapshot.options.sources;
       tagOptions.value = snapshot.options.tags;

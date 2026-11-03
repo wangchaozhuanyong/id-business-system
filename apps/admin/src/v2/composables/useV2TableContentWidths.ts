@@ -1,4 +1,4 @@
-import { inject, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue';
+import { inject, onBeforeUnmount, onMounted, provide, ref, toRaw, watch } from 'vue';
 import { recordV2InteractionSample } from '@/v2/runtime/interactionDiagnostics';
 import { V2_ASYNC_REGION_PREVIOUS_DATA } from '@/v2/components/asyncRegionContext';
 import {
@@ -16,19 +16,43 @@ interface RememberedWidths {
   baseWidths: Record<string, number>;
   actionPadding: Record<string, number>;
   actionViewport?: boolean;
+  actionContentKey?: string;
 }
 // Only numeric layout metadata follows the existing query's array identity. No rows are retained.
-const rememberedWidths = new WeakMap<object, Map<string, RememberedWidths>>();
+const rememberedWidths = new WeakMap<
+  object,
+  Map<string, { fingerprint: string; value: RememberedWidths }>
+>();
+function fingerprint(value: unknown) {
+  try {
+    const text = JSON.stringify(value && typeof value === 'object' ? toRaw(value) : value);
+    if (text === undefined) return '';
+    let a = 2166136261,
+      b = 5381;
+    for (let index = 0; index < text.length; index++) {
+      const code = text.charCodeAt(index);
+      a = Math.imul(a ^ code, 16777619);
+      b = Math.imul(b, 33) ^ code;
+    }
+    return `${text.length}:${a >>> 0}:${b >>> 0}`;
+  } catch {
+    return '';
+  }
+}
 let fontRevision = 0;
 export function rememberV2TableWidths(data: unknown, key: string, value: RememberedWidths) {
   if (!data || typeof data !== 'object') return;
-  const entries = rememberedWidths.get(data) ?? new Map<string, RememberedWidths>();
-  entries.set(key, value);
+  const stamp = fingerprint(data);
+  if (!stamp) return;
+  const entries = rememberedWidths.get(data) ?? new Map();
+  entries.set(key, { fingerprint: stamp, value });
   while (entries.size > 4) entries.delete(entries.keys().next().value!);
   rememberedWidths.set(data, entries);
 }
 export function recallV2TableWidths(data: unknown, key: string) {
-  return data && typeof data === 'object' ? rememberedWidths.get(data)?.get(key) : undefined;
+  if (!data || typeof data !== 'object') return undefined;
+  const cached = rememberedWidths.get(data)?.get(key);
+  return cached?.fingerprint === fingerprint(data) ? cached.value : undefined;
 }
 
 export function useV2TableContentWidths(
@@ -105,8 +129,23 @@ export function useV2TableContentWidths(
       }
       actionViewport = mobile;
     }
-    containerWidth = root.clientWidth;
     const startedAt = performance.now();
+    containerWidth = root.clientWidth;
+    const actionContentKey = fingerprint(
+      [...table.querySelectorAll('.v2-table-actions')].map((node) => node.textContent)
+    );
+    const cached = recallV2TableWidths(data(), cacheKey());
+    if (
+      cached?.tableWidth === containerWidth &&
+      tableWidth.value === cached.tableWidth &&
+      Object.keys(widths.value).length === Object.keys(cached.widths).length &&
+      Object.keys(cached.widths).every((key) => widths.value[key] === cached.widths[key]) &&
+      cached.actionViewport === mobile &&
+      cached.actionContentKey === actionContentKey
+    ) {
+      recordV2InteractionSample('table-measure', performance.now() - startedAt);
+      return;
+    }
     const measurements = measureV2TableContent(table, schema(), measurementCache);
     recordV2InteractionSample('table-measure', performance.now() - startedAt);
     const columns = schema().columns.filter(
@@ -129,7 +168,8 @@ export function useV2TableContentWidths(
       ...allocation,
       baseWidths: { ...baseWidths },
       actionPadding: { ...actionPadding },
-      actionViewport
+      actionViewport,
+      actionContentKey
     });
     if (
       tableWidth.value === allocation.tableWidth &&

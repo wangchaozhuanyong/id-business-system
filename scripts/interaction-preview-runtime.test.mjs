@@ -138,11 +138,13 @@ test('prior successful checks are reused only when application inputs are unchan
               ]
             }
           : {
-              head_sha: url.includes('/41606386434')
-                ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
-                : url.includes('/41604661799')
-                  ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
-                  : PRIOR_PREVIEW_COMMIT,
+              head_sha: url.includes('/41607976951')
+                ? '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9'
+                : url.includes('/41606386434')
+                  ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
+                  : url.includes('/41604661799')
+                    ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
+                    : PRIOR_PREVIEW_COMMIT,
               conclusion: url.includes('/41606386434') ? 'success' : 'failure'
             }
       ),

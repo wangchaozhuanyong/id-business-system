@@ -18,7 +18,9 @@ const allowed = new Set([
   'apps/admin/src/v2/composables/useV2TableContentWidths.ts',
   'apps/admin/src/v2/composables/useV2TableContentWidths.spec.ts',
   'apps/admin/src/v2/composables/useV2RoutePresentation.ts',
-  'apps/admin/src/v2/composables/useV2RoutePresentation.spec.ts'
+  'apps/admin/src/v2/composables/useV2RoutePresentation.spec.ts',
+  'apps/admin/src/v2/features/accounts/useAccountsPage.ts',
+  'apps/admin/src/v2/features/customers/useCustomersPage.ts'
 ]);
 export async function verifyPreviewEvidence(
   env,
@@ -92,11 +94,20 @@ export async function verifyPreviewEvidence(
   const profileSeconds = Math.ceil(
     (Date.parse(profileJobs[0].completed_at) - Date.parse(profileJobs[0].started_at)) / 1000
   );
+  const tableRun = await get('', 41607976951);
+  assert.equal(tableRun.head_sha, '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9');
+  assert.equal(tableRun.conclusion, 'failure');
+  const tableJobs = (await get('/jobs?filter=latest&per_page=100', 41607976951)).jobs;
+  assert.equal(tableJobs.length, 1);
+  const tableSeconds = Math.ceil(
+    (Date.parse(tableJobs[0].completed_at) - Date.parse(tableJobs[0].started_at)) / 1000
+  );
   assert.ok(
-    profileSeconds > 0 &&
+    tableSeconds > 0 &&
+      profileSeconds > 0 &&
       priorSeconds > 0 &&
       secondSeconds > 0 &&
-      priorSeconds + secondSeconds + profileSeconds + 30 * 60 <= 45 * 60,
+      priorSeconds + secondSeconds + profileSeconds + tableSeconds + 25 * 60 <= 45 * 60,
     'Combined validation exceeds authorized 45-minute budget'
   );
   return {
@@ -121,7 +132,9 @@ export async function verifyPreviewEvidence(
     secondSeconds,
     profileRun: 41606386434,
     profileSeconds,
-    continuationLimitMinutes: 30
+    tableRun: 41607976951,
+    tableSeconds,
+    continuationLimitMinutes: 25
   };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
