@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Verify unchanged application inputs and reuse successful checks
+      - name: Verify narrow source changes and total CI budget
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/lib/interaction-preview-evidence.mjs
@@ -36,17 +36,33 @@ jobs:
         run: npm run build --workspace @apple-business/shared
       - name: Generate static Prisma client
         run: npm run prisma:mysql:generate --workspace @apple-business/api
-      - name: Verify changed preview controls
-        run: node --test scripts/interaction-preview-runtime.test.mjs
+      - name: Admin tests after shared table changes
+        run: |
+          set -e
+          npm run test --workspace @apple-business/admin
+          node --test scripts/interaction-preview-runtime.test.mjs
+          npx eslint scripts/acceptance-v2-interaction-ci.mjs scripts/lib/interaction-preview-evidence.mjs scripts/lib/interaction-preview-runtime.mjs scripts/interaction-preview-runtime.test.mjs
       - name: Prepare verified API and admin runtime files
         run: |
           set -e
           npm run build --workspace @apple-business/api
           npm run build --workspace @apple-business/admin
+      - name: UI and architecture checks after shared table changes
+        run: |
+          set -e
+          npm run lint --workspace @apple-business/admin
+          npm run check:admin-ui
+          npm run check:v2-ui-language
+          npm run check:v2-color-contrast
+          npm run check:v2-table-standard
+          npm run check:v2-loading-standard
+          npm run check:v2-module-architecture
+          npm run check:v2-isolation
+          npm run acceptance:v2-navigation-performance:static
       - name: Install browser on disposable runner
         run: npx playwright install --with-deps chromium
-      - name: Profile remaining render cost on owned API and MySQL
-        run: node scripts/acceptance-v2-interaction-ci.mjs --profile-only
+      - name: Real API and owned MySQL browser acceptance
+        run: node scripts/acceptance-v2-interaction-ci.mjs
       - name: Retain sanitized acceptance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -37,6 +37,7 @@ let frames: Map<number, FrameRequestCallback>;
 let sequence = 0;
 class Group {
   hidden = false;
+  style = { display: '' };
   children: Group[] = [];
   querySelector: () => HTMLElement | null = () => null;
   cancel = vi.fn();
@@ -66,7 +67,12 @@ beforeEach(() => {
     removeEventListener: vi.fn()
   });
   vi.stubGlobal('window', { matchMedia: () => ({ matches: reduced }) });
-  vi.stubGlobal('getComputedStyle', () => ({ display: 'grid' }));
+  vi.stubGlobal(
+    'getComputedStyle',
+    vi.fn(() => {
+      throw new Error('Presentation must not force a style flush');
+    })
+  );
   vi.stubGlobal('HTMLElement', Group);
   page = new Group();
   page.children = [new Group(), new Group(), new Group(), new Group()];

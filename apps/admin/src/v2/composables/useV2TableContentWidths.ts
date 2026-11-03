@@ -10,20 +10,53 @@ import {
 import { isV2TableDataColumn, type V2TableSchema } from '@/v2/components/tableSystem';
 import { V2_TABLE_CONTENT_WIDTH_CONTEXT } from '@/v2/components/tableVisibility';
 
+interface RememberedWidths {
+  widths: Record<string, number>;
+  tableWidth: number;
+  baseWidths: Record<string, number>;
+  actionPadding: Record<string, number>;
+  actionViewport?: boolean;
+}
+// Only numeric layout metadata follows the existing query's array identity. No rows are retained.
+const rememberedWidths = new WeakMap<object, Map<string, RememberedWidths>>();
+let fontRevision = 0;
+export function rememberV2TableWidths(data: unknown, key: string, value: RememberedWidths) {
+  if (!data || typeof data !== 'object') return;
+  const entries = rememberedWidths.get(data) ?? new Map<string, RememberedWidths>();
+  entries.set(key, value);
+  while (entries.size > 4) entries.delete(entries.keys().next().value!);
+  rememberedWidths.set(data, entries);
+}
+export function recallV2TableWidths(data: unknown, key: string) {
+  return data && typeof data === 'object' ? rememberedWidths.get(data)?.get(key) : undefined;
+}
+
 export function useV2TableContentWidths(
   schema: () => V2TableSchema,
   viewKey: () => string | number | undefined,
   shell: () => HTMLElement | undefined,
-  layout: () => void
+  layout: () => void,
+  data: () => unknown = () => undefined,
+  visibilityKey: () => string = () => ''
 ) {
-  const widths = ref<Record<string, number>>({});
-  const tableWidth = ref(0);
+  const cacheKey = () =>
+    JSON.stringify([
+      schema(),
+      viewKey(),
+      visibilityKey(),
+      window.innerWidth,
+      document.documentElement.getAttribute('data-v2-theme'),
+      fontRevision
+    ]);
+  const restored = recallV2TableWidths(data(), cacheKey());
+  const widths = ref<Record<string, number>>({ ...restored?.widths });
+  const tableWidth = ref(restored?.tableWidth ?? 0);
   const previousData = inject(V2_ASYNC_REGION_PREVIOUS_DATA, undefined);
   const measurementCache = new Map<string, number>();
-  let pendingReset = true;
-  let baseWidths: Record<string, number> = {};
-  let actionViewport: boolean | undefined;
-  let actionPadding: Record<string, number> = {};
+  let pendingReset = !restored;
+  let baseWidths: Record<string, number> = { ...restored?.baseWidths };
+  let actionViewport: boolean | undefined = restored?.actionViewport;
+  let actionPadding: Record<string, number> = { ...restored?.actionPadding };
   let frame = 0;
   let containerWidth = 0;
   let mounted = false;
@@ -46,6 +79,7 @@ export function useV2TableContentWidths(
   }
 
   function invalidateMeasurements() {
+    fontRevision++;
     measurementCache.clear();
     schedule();
   }
@@ -91,6 +125,12 @@ export function useV2TableContentWidths(
       baseWidths[column.key] = getV2TableContentBaseWidth(column, measurement, previous);
     }
     const allocation = allocateV2TableContentWidths(columns, baseWidths, containerWidth);
+    rememberV2TableWidths(data(), cacheKey(), {
+      ...allocation,
+      baseWidths: { ...baseWidths },
+      actionPadding: { ...actionPadding },
+      actionViewport
+    });
     if (
       tableWidth.value === allocation.tableWidth &&
       Object.keys(widths.value).length === columns.length &&
@@ -141,7 +181,8 @@ export function useV2TableContentWidths(
       attributes: true,
       attributeFilter: ['data-v2-theme']
     });
-    void document.fonts?.ready.then(invalidateMeasurements);
+    if (document.fonts?.status === 'loading')
+      void document.fonts.ready.then(invalidateMeasurements);
     document.fonts?.addEventListener('loadingdone', invalidateMeasurements);
     schedule();
   });

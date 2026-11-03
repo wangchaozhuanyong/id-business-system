@@ -175,6 +175,10 @@ async function sample(page, target, table) {
                 .getEntriesByName('v2:route-data-ready')
                 .filter((entry) => entry.startTime >= started && entry.detail?.path === target)
                 .at(-1)?.detail?.source,
+              longTasks: performance
+                .getEntriesByName('v2:long-task')
+                .filter((entry) => entry.startTime >= started)
+                .map((entry) => entry.duration),
               tableMeasurements: performance
                 .getEntriesByName('v2:table-measure')
                 .filter((entry) => entry.startTime >= started)
@@ -330,6 +334,45 @@ async function matrix(routes) {
             path: path.join(output, `${theme}-${width}-${target.split('/').at(-1)}.png`),
             animations: 'disabled'
           });
+        if (target === '/v2/customers') {
+          const firstHeight = await page
+            .locator('.v2-records-list')
+            .evaluate((node) => node.getBoundingClientRect().height);
+          await page.locator('.el-pager .number').last().click();
+          await page.waitForFunction(() =>
+            document.querySelector('#v2-main .v2-records-list')?.textContent?.includes('本页 5 条')
+          );
+          await settled(page);
+          const lastHeight = await page
+            .locator('.v2-records-list')
+            .evaluate((node) => node.getBoundingClientRect().height);
+          assert.ok(
+            lastHeight >= firstHeight - 2,
+            `Customer last page frame shrank at ${theme}/${width}`
+          );
+          const search = page.getByRole('textbox', { name: '搜索客户' });
+          await search.fill('合成无匹配资料');
+          await search.press('Enter');
+          await page.locator('.v2-records-empty:visible').waitFor();
+          await settled(page);
+          const emptyHeight = await page
+            .locator('.v2-records-list')
+            .evaluate((node) => node.getBoundingClientRect().height);
+          assert.ok(
+            emptyHeight >= firstHeight - 2,
+            `Customer empty frame shrank at ${theme}/${width}`
+          );
+          checks.push({
+            path: target,
+            theme,
+            width,
+            lastPageFrameStable: true,
+            emptyFrameStable: true,
+            firstHeight,
+            lastHeight,
+            emptyHeight
+          });
+        }
       }
       assert.deepEqual(requests.unexpectedWrites, []);
       assert.deepEqual(requests.errors, []);

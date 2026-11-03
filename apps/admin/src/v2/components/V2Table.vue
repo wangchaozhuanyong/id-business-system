@@ -17,7 +17,8 @@ import { useAuthStore } from '@/stores/auth';
 import {
   clearV2TablePreferences,
   ensureV2TablePreferences,
-  isV2TableColumnVisible
+  isV2TableColumnVisible,
+  v2TablePreferences
 } from '@/v2/composables/useV2TablePreferences';
 import V2TableColumnSettings from './V2TableColumnSettings.vue';
 import { useV2TableContentWidths } from '@/v2/composables/useV2TableContentWidths';
@@ -70,7 +71,13 @@ export default defineComponent({
       () => shellRef.value,
       () => {
         void nextTick(() => tableRef.value?.doLayout?.());
-      }
+      },
+      () => attrs.data,
+      () =>
+        JSON.stringify([
+          props.applyDefaultColumnVisibility,
+          v2TablePreferences.value[props.schema.id]
+        ])
     );
     const toolbarHeight = ref(0);
     const headerHeight = ref<number>();
@@ -81,20 +88,20 @@ export default defineComponent({
         ':scope > .v2-table-preference-toolbar'
       );
       if (toolbar) {
-        const measure = () => {
-          toolbarHeight.value = Math.ceil(toolbar.getBoundingClientRect().height);
-        };
-        measure();
-        toolbarObserver = new ResizeObserver(measure);
+        toolbarObserver = new ResizeObserver(([entry]) => {
+          toolbarHeight.value = Math.ceil(
+            entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
+          );
+        });
         toolbarObserver.observe(toolbar);
       }
       const header = shellRef.value?.querySelector<HTMLElement>('.el-table__header-wrapper');
       if (header) {
-        const measure = () => {
-          headerHeight.value = Math.ceil(header.getBoundingClientRect().height);
-        };
-        measure();
-        headerObserver = new ResizeObserver(measure);
+        headerObserver = new ResizeObserver(([entry]) => {
+          headerHeight.value = Math.ceil(
+            entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
+          );
+        });
         headerObserver.observe(header);
       }
     });
@@ -189,6 +196,7 @@ export default defineComponent({
               flexible: true,
               tableLayout: 'fixed',
               scrollbarAlwaysOn: true,
+              nativeScrollbar: true,
               showOverflowTooltip: true,
               class: ['v2-unified-table', inheritedClass],
               'data-table-schema': props.schema.id,

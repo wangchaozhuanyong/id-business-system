@@ -42,7 +42,7 @@ export function useV2RoutePresentation(content: Ref<HTMLElement | null>) {
           (element): element is HTMLElement =>
             element instanceof HTMLElement &&
             !element.hidden &&
-            getComputedStyle(element).display !== 'none' &&
+            element.style.display !== 'none' &&
             !element.querySelector?.('.v2-unified-table, .v2-records-mobile-list')
         )
         .slice(0, cached ? 2 : 3);

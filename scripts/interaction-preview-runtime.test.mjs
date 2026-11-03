@@ -138,10 +138,12 @@ test('prior successful checks are reused only when application inputs are unchan
               ]
             }
           : {
-              head_sha: url.includes('/41604661799')
-                ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
-                : PRIOR_PREVIEW_COMMIT,
-              conclusion: 'failure'
+              head_sha: url.includes('/41606386434')
+                ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
+                : url.includes('/41604661799')
+                  ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
+                  : PRIOR_PREVIEW_COMMIT,
+              conclusion: url.includes('/41606386434') ? 'success' : 'failure'
             }
       ),
       { status: 200 }
@@ -151,6 +153,12 @@ test('prior successful checks are reused only when application inputs are unchan
     changedPaths: () => ['scripts/acceptance-v2-interaction-ci.mjs']
   });
   assert.equal(evidence.reusedChecks.length, 3);
+  const changedApplication = await verifyPreviewEvidence(env, project, {
+    request,
+    changedPaths: () => ['apps/admin/src/v2/components/V2Table.vue']
+  });
+  assert.ok(changedApplication.affectedChecksRerun.includes('all admin tests'));
+  assert.deepEqual(changedApplication.reusedChecks, ['Unchanged API source checks only']);
   await assert.rejects(
     verifyPreviewEvidence(env, project, {
       request,

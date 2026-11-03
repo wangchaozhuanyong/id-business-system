@@ -13,7 +13,12 @@ const allowed = new Set([
   'scripts/acceptance-v2-interaction-ci.mjs',
   'scripts/lib/interaction-preview-runtime.mjs',
   'scripts/lib/interaction-preview-evidence.mjs',
-  'scripts/interaction-preview-runtime.test.mjs'
+  'scripts/interaction-preview-runtime.test.mjs',
+  'apps/admin/src/v2/components/V2Table.vue',
+  'apps/admin/src/v2/composables/useV2TableContentWidths.ts',
+  'apps/admin/src/v2/composables/useV2TableContentWidths.spec.ts',
+  'apps/admin/src/v2/composables/useV2RoutePresentation.ts',
+  'apps/admin/src/v2/composables/useV2RoutePresentation.spec.ts'
 ]);
 export async function verifyPreviewEvidence(
   env,
@@ -37,7 +42,7 @@ export async function verifyPreviewEvidence(
   const changes = changedPaths();
   assert.ok(
     changes.length && changes.every((file) => allowed.has(file)),
-    'Application inputs changed; prior checks cannot be reused'
+    'Changes outside the verified shared table and preview controls require separate checks'
   );
   const get = async (suffix, runId = PRIOR_PREVIEW_RUN) => {
     const response = await request(
@@ -79,8 +84,19 @@ export async function verifyPreviewEvidence(
   const secondSeconds = Math.ceil(
     (Date.parse(secondJobs[0].completed_at) - Date.parse(secondJobs[0].started_at)) / 1000
   );
+  const profileRun = await get('', 41606386434);
+  assert.equal(profileRun.head_sha, '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984');
+  assert.equal(profileRun.conclusion, 'success');
+  const profileJobs = (await get('/jobs?filter=latest&per_page=100', 41606386434)).jobs;
+  assert.equal(profileJobs.length, 1);
+  const profileSeconds = Math.ceil(
+    (Date.parse(profileJobs[0].completed_at) - Date.parse(profileJobs[0].started_at)) / 1000
+  );
   assert.ok(
-    priorSeconds > 0 && secondSeconds > 0 && priorSeconds + secondSeconds + 30 * 60 <= 45 * 60,
+    profileSeconds > 0 &&
+      priorSeconds > 0 &&
+      secondSeconds > 0 &&
+      priorSeconds + secondSeconds + profileSeconds + 30 * 60 <= 45 * 60,
     'Combined validation exceeds authorized 45-minute budget'
   );
   return {
@@ -88,10 +104,23 @@ export async function verifyPreviewEvidence(
     priorCommit: PRIOR_PREVIEW_COMMIT,
     sourceCommit: env.GITHUB_SHA,
     changedPaths: changes,
-    reusedChecks: required,
+    reusedChecks: changes.some((file) => file.startsWith('apps/'))
+      ? ['Unchanged API source checks only']
+      : required,
+    affectedChecksRerun: changes.some((file) => file.startsWith('apps/'))
+      ? [
+          'all admin tests',
+          'admin build and typecheck',
+          'admin lint',
+          'seven UI and architecture checks',
+          'bundle budgets'
+        ]
+      : [],
     priorSeconds,
     secondRun: 41604661799,
     secondSeconds,
+    profileRun: 41606386434,
+    profileSeconds,
     continuationLimitMinutes: 30
   };
 }
@@ -102,6 +131,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   mkdirSync(output, { recursive: true });
   writeFileSync(path.join(output, 'reused-checks.json'), JSON.stringify(evidence, null, 2) + '\n');
   console.log(
-    JSON.stringify({ ok: true, reusedRun: evidence.priorRun, applicationInputsUnchanged: true })
+    JSON.stringify({
+      ok: true,
+      reusedRun: evidence.priorRun,
+      applicationInputsUnchanged: evidence.affectedChecksRerun.length === 0
+    })
   );
 }

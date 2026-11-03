@@ -1,5 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { measureV2TableContent } from './useV2TableContentWidths';
+import {
+  measureV2TableContent,
+  rememberV2TableWidths,
+  recallV2TableWidths
+} from './useV2TableContentWidths';
 import type { V2TableSchema } from '@/v2/components/tableSystem';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -72,4 +76,22 @@ it('does not clone columns whose fixed presets ignore content, but keeps visible
   ]).toEqual(['id', 'date', 'details']);
   expect(cloneNode).not.toHaveBeenCalled();
   expect(getStyle).not.toHaveBeenCalled();
+});
+
+it('reuses numeric layout only for the same array and layout inputs, with bounded variants', () => {
+  const rows = [{ id: 'synthetic' }];
+  const size = {
+    widths: { name: 120 },
+    tableWidth: 800,
+    baseWidths: { name: 100 },
+    actionPadding: {}
+  };
+  rememberV2TableWidths(rows, 'desktop-light-columns-v1', size);
+  expect(recallV2TableWidths(rows, 'desktop-light-columns-v1')).toEqual(size);
+  expect(recallV2TableWidths([...rows], 'desktop-light-columns-v1')).toBeUndefined();
+  expect(recallV2TableWidths(rows, 'desktop-dark-columns-v1')).toBeUndefined();
+  expect(recallV2TableWidths(rows, 'desktop-light-columns-v2')).toBeUndefined();
+  for (let index = 0; index < 5; index++) rememberV2TableWidths(rows, String(index), size);
+  expect(recallV2TableWidths(rows, 'desktop-light-columns-v1')).toBeUndefined();
+  expect(recallV2TableWidths(rows, '4')).toEqual(size);
 });
