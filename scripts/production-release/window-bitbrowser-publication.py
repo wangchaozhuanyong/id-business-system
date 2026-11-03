@@ -54,7 +54,7 @@ def transport(plan, mode):
     source = inspect.getsource(F.transport)
     changes = {"directory/'financial-closure-release.py'": "directory/'window-bitbrowser-release.py'",
         'financial-entry-': 'window-bitbrowser-entry-',
-        'FINANCIAL_PUBLICATION|BITBROWSER_HISTORY': 'WINDOW_BITBROWSER|RECHARGE_PLAN_BILLING|FINANCIAL_PUBLICATION|BITBROWSER_HISTORY'}
+        'FINANCIAL_PUBLICATION|BITBROWSER_HISTORY': 'WINDOW_BITBROWSER|RECHARGE_PLAN_BILLING|RECHARGE_RECORD|FINANCIAL_PUBLICATION|BITBROWSER_HISTORY'}
     for before, after in changes.items():
         need(source.count(before) == 1, 'TRANSPORT_RECIPE_CHANGED')
         source = source.replace(before, after)

@@ -265,6 +265,7 @@ def diagnose(c):
          and re.fullmatch('[a-f0-9]{40}', pin['commit']) and re.fullmatch('[1-9][0-9]*', pin['workflowRunId'])
          and re.fullmatch('[a-f0-9]{64}', pin['buildProofSha256']), 'DIAGNOSTIC_BINDING')
     stage = BASE / '.staging' / (PREFIX + '-' + pin['commit'] + '-' + pin['workflowRunId'])
+    need((stage / 'content/payload/build-proof.json').is_file() and not (stage / 'content/payload/build-proof.json').is_symlink(), 'DIAGNOSTIC_PROOF_MISSING')
     raw = (stage / 'content/payload/build-proof.json').read_bytes()
     need(sha(raw) == pin['buildProofSha256'], 'DIAGNOSTIC_PROOF_CHANGED')
     proof = json.loads(raw)
@@ -272,37 +273,62 @@ def diagnose(c):
          and proof['scope'] == c['scope'] and proof['sources'] == c['sources']
          and proof['businessActions'] == 0, 'DIAGNOSTIC_PRODUCER_CHANGED')
     transport = verify_migration_transport(proof)
-    h, d = utilities()
-    current = (BASE / 'current').resolve(strict=True)
-    need(current.parent == BASE / 'releases', 'DIAGNOSTIC_CURRENT_PATH')
-    manifest = json.loads((current / 'release-manifest.json').read_bytes())
-    journals = {}
-    for name in ('switch-state.json', 'migration-operation.json'):
-        path = stage / name
-        value = json.loads(path.read_bytes()) if path.is_file() else {}
-        journals[name] = {k: value[k] for k in ('status', 'phase', 'code', 'sqlStarted', 'automaticRollback') if k in value}
-    builds = {}
-    for role in UPDATED:
-        path = stage / (role + '-image-build.json')
-        value = json.loads(path.read_bytes()) if path.is_file() else {}
-        builds[role] = {k: value[k] for k in ('status', 'failureKind', 'exceptionType', 'reference') if k in value}
-    reference = 'id-business-v2-billing-plan:' + pin['commit'] + '-' + pin['workflowRunId'] + '-api'
-    image = json.loads(d.run('docker', 'image', 'inspect', reference))[0]
-    migration = json.loads(d.run('docker', 'image', 'inspect', transport['reference']))[0]
-    code = r"""const fs=require('fs'),path=require('path'),crypto=require('crypto');const out={files:{}};
-try{function walk(p,n=''){for(const e of fs.readdirSync(p,{withFileTypes:true})){const name=n?n+'/'+e.name:e.name,full=path.join(p,e.name);if(e.isDirectory())walk(full,name);else if(e.isFile())out.files[name]=crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');}}walk('/app/node_modules/.prisma/client');}catch(e){out.filesError={name:e.name,code:e.code};}
-function probe(name){try{const p=require(name);return{ok:true,resolved:require.resolve(name),clientVersion:p.Prisma?.prismaVersion?.client,device:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserDevice')===true,state:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserState')===true};}catch(e){const m=/Cannot find module ['"]([^'"]+)['"]/.exec(e.message||'');return{ok:false,name:e.name,code:e.code,missingModule:m&&/^[@a-zA-Z0-9._/-]+$/.test(m[1])?m[1]:null};}}
-out.bare=probe('@prisma/client');out.absolute=probe('/app/node_modules/@prisma/client');console.log(JSON.stringify(out));"""
-    probe = json.loads(d.run('docker', 'run', '--pull=never', '--rm', '--network', 'none', '--read-only', '--no-healthcheck', '--entrypoint', 'node', reference, '-e', code))
-    expected = {**proof['prismaClientFiles'], **proof['preservedClientFiles']}
-    files = probe.pop('files', {})
-    probe['filesMatch'] = files == expected
-    probe['differingFiles'] = sorted(n for n in files.keys() | expected.keys() if files.get(n) != expected.get(n))
-    return {'status': 'WINDOW_BITBROWSER_FAILED_PUBLICATION_DIAGNOSED', 'originalCommit': pin['commit'],
-        'originalCommandId': pin['acceptedCommandId'], 'currentCommit': manifest['commit'],
-        'maintenancePresent': (BASE / 'maintenance.json').exists(), 'migration': db_state(d, current),
-        'journals': journals, 'imageBuilds': builds, 'apiImage': {'id': image['Id'], 'user': image['Config'].get('User'), 'workingDir': image['Config'].get('WorkingDir')},
-        'migrationImageIdentityMatches': migration['Id'] == transport['imageId'], 'clientProbe': probe, 'businessActions': 0}
+    result = {'status': 'WINDOW_BITBROWSER_FAILED_PUBLICATION_DIAGNOSED', 'originalCommit': pin['commit'],
+        'originalCommandId': pin['acceptedCommandId'], 'businessActions': 0, 'complete': False}
+    phase = 'utilities'
+    def bounded(error):
+        message = str(error)
+        return {'exceptionType': type(error).__name__,
+            'code': message if re.fullmatch('[A-Z_]{1,180}', message) else 'DETAIL_SUPPRESSED'}
+    try:
+        h, d = utilities()
+        phase = 'current-manifest'
+        current = (BASE / 'current').resolve(strict=True)
+        need(current.parent == BASE / 'releases', 'DIAGNOSTIC_CURRENT_PATH')
+        manifest = json.loads((current / 'release-manifest.json').read_bytes())
+        result.update(currentCommit=manifest['commit'], maintenancePresent=(BASE / 'maintenance.json').exists())
+        phase = 'migration-state'
+        result['migration'] = db_state(d, current)
+        phase = 'stage-journals'
+        result['journals'] = {}
+        for name in ('switch-state.json', 'migration-operation.json'):
+            path = stage / name
+            value = json.loads(path.read_bytes()) if path.is_file() else {}
+            result['journals'][name] = {k: value[k] for k in ('status', 'phase', 'code', 'sqlStarted', 'automaticRollback') if k in value}
+        result['imageBuilds'] = {}
+        for role in UPDATED:
+            path = stage / (role + '-image-build.json')
+            value = json.loads(path.read_bytes()) if path.is_file() else {}
+            result['imageBuilds'][role] = {k: value[k] for k in ('status', 'failureKind', 'exceptionType', 'reference') if k in value}
+        def image(reference):
+            try:
+                return json.loads(d.run('docker', 'image', 'inspect', reference))[0]
+            except Exception as error:
+                return {'diagnosticError': bounded(error)}
+        phase = 'candidate-image'
+        reference = 'id-business-v2-billing-plan:' + pin['commit'] + '-' + pin['workflowRunId'] + '-api'
+        api = image(reference)
+        result['apiImage'] = ({'id': api['Id'], 'user': api['Config'].get('User'), 'workingDir': api['Config'].get('WorkingDir')}
+            if 'Id' in api else api)
+        phase = 'migration-image'
+        migration = image(transport['reference'])
+        result['migrationImage'] = ({'identityMatches': migration['Id'] == transport['imageId']} if 'Id' in migration else migration)
+        phase = 'candidate-client'
+        code = r"""const fs=require('fs'),path=require('path'),crypto=require('crypto');const out={files:{}};
+    try{function walk(p,n=''){for(const e of fs.readdirSync(p,{withFileTypes:true})){const name=n?n+'/'+e.name:e.name,full=path.join(p,e.name);if(e.isDirectory())walk(full,name);else if(e.isFile())out.files[name]=crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');}}walk('/app/node_modules/.prisma/client');}catch(e){out.filesError={name:e.name,code:e.code};}
+    function probe(name){try{const p=require(name);return{ok:true,resolved:require.resolve(name),clientVersion:p.Prisma?.prismaVersion?.client,device:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserDevice')===true,state:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserState')===true};}catch(e){const m=/Cannot find module ['"]([^'"]+)['"]/.exec(e.message||'');return{ok:false,name:e.name,code:e.code,missingModule:m&&/^[@a-zA-Z0-9._/-]+$/.test(m[1])?m[1]:null};}}
+    out.bare=probe('@prisma/client');out.absolute=probe('/app/node_modules/@prisma/client');console.log(JSON.stringify(out));"""
+        if 'Id' in api:
+            probe = json.loads(d.run('docker', 'run', '--pull=never', '--rm', '--network', 'none', '--read-only', '--no-healthcheck', '--entrypoint', 'node', reference, '-e', code))
+            expected = {**proof['prismaClientFiles'], **proof['preservedClientFiles']}
+            files = probe.pop('files', {})
+            probe['filesMatch'] = files == expected
+            probe['differingFiles'] = sorted(n for n in files.keys() | expected.keys() if files.get(n) != expected.get(n))
+            result['clientProbe'] = probe
+        result['complete'] = True
+    except Exception as error:
+        result['diagnosticError'] = {'stage': phase, **bounded(error)}
+    return result
 
 
 def release(plan, c):

@@ -233,9 +233,9 @@
     "shared-bank-card-contract.json": "22b6133b8b8b704475131604f36c56701377d159c0e5eb80ebce3b4f5bd21c67",
     "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852",
     "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771",
-    "window-bitbrowser-publication.py": "39e2424b69bfab22fb5356e344fd1c725b7c8193b9f4baa2377d16d995bbe770",
-    "window-bitbrowser-release.py": "6b83b1097b10e77acaec46d5ccb66dcb07be15957493127297210e4990b638ae",
-    "window-bitbrowser-release.test.py": "c9376565ce99c8ea94083603a762fd32e0fa975944a8bdd9c1af51841e421bbe"
+    "window-bitbrowser-publication.py": "1377adf257eacd11e78e4d69a7fb938b55159100514d8e28e8b9ff9b30c8a964",
+    "window-bitbrowser-release.py": "7de6467c3b151a2c572c2dd97674c27b928c60c8881a7da4c1ba540a2208bd2b",
+    "window-bitbrowser-release.test.py": "91e54383032112aa0e4ea16caa4685ba76af512241fad6ec0e466cb2080e0d45"
   },
   "migration": {
     "name": "20261102150000_online_recharge_bitbrowser",
@@ -390,9 +390,9 @@
     "scripts/ci-recharge-release.test.mjs": "e87929df9611c50247f7e4ffc288a66cc34f4abfb502af24ba5c8c3e6c653983",
     "scripts/production-release/window-bitbrowser-ci-build.py": "049776fb83601d8aa828d12add29a1442aa35d204199dbdfc9f62a14d432dc3c",
     "scripts/production-release/window-bitbrowser-ci-build.test.py": "450a098b5bc1876b205341ac9698b6fda6ec9af11e076a9fc5f429c39e482410",
-    "scripts/production-release/window-bitbrowser-publication.py": "39e2424b69bfab22fb5356e344fd1c725b7c8193b9f4baa2377d16d995bbe770",
-    "scripts/production-release/window-bitbrowser-release.py": "6b83b1097b10e77acaec46d5ccb66dcb07be15957493127297210e4990b638ae",
-    "scripts/production-release/window-bitbrowser-release.test.py": "c9376565ce99c8ea94083603a762fd32e0fa975944a8bdd9c1af51841e421bbe",
+    "scripts/production-release/window-bitbrowser-publication.py": "1377adf257eacd11e78e4d69a7fb938b55159100514d8e28e8b9ff9b30c8a964",
+    "scripts/production-release/window-bitbrowser-release.py": "7de6467c3b151a2c572c2dd97674c27b928c60c8881a7da4c1ba540a2208bd2b",
+    "scripts/production-release/window-bitbrowser-release.test.py": "91e54383032112aa0e4ea16caa4685ba76af512241fad6ec0e466cb2080e0d45",
     "scripts/setup-online-bitbrowser.cmd": "5b56cecc2133a7d8f76d8420a3fc3be253ec9e8eacac6973b0541e81a0880135",
     "scripts/setup-online-bitbrowser.command": "3c913820a35f8c9de0eb445a30024438a6dab98132f12c3ac4073f1fd89da498"
   },
