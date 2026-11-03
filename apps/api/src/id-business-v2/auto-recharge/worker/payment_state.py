@@ -1,7 +1,7 @@
 """单笔付款状态：提交前持久化，未知结果只能查原单。"""
 from __future__ import annotations
 
-import fcntl
+import local_state_files as fcntl
 import hashlib
 import json
 import os
@@ -127,7 +127,7 @@ class PaymentLedger:
                 raise Stop("account_operation_lock_invalid")
             self.fd = self.held_lock_fd
         else:
-            self.fd = os.open(self.root / (self.account_key + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            self.fd = fcntl.open_private(self.root / (self.account_key + ".lock"), os.O_CREAT | os.O_RDWR)
             self.owns_lock = True
         try:
             if self.owns_lock:

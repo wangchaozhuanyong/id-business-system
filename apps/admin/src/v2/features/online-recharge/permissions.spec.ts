@@ -40,11 +40,11 @@ describe('线上代充操作权限', () => {
   });
   it('普通员工默认无线上代充操作权限', () =>
     expect(canUseOnlineAction(user, 'cards', 'detail')).toBe(false));
-  it('读取授权不自动取得管理或敏感查看权限', () => {
+  it('读取授权直接查看完整资料，管理动作仍独立校验', () => {
     const reader = { ...user, permissions: ['id_business_v2.online_recharge.read'] };
     expect(canUseOnlineAction(reader, 'jobs', 'detail')).toBe(true);
     expect(canUseOnlineAction(reader, 'jobs', 'artifacts')).toBe(true);
-    expect(canUseOnlineAction(reader, 'cards', 'reveal')).toBe(false);
+    expect(canUseOnlineAction(reader, 'cards', 'reveal')).toBe(true);
     expect(canUseOnlineAction(reader, 'jobs', 'start')).toBe(false);
     expect(canUseOnlineAction(reader, 'jobs', 'recheck')).toBe(false);
   });
@@ -54,9 +54,9 @@ describe('线上代充操作权限', () => {
       permissions: ['id_business_v2.online_recharge.read', 'id_business_v2.online_recharge.manage']
     };
     expect(canUseOnlineAction(manager, 'jobs', 'recheck')).toBe(true);
-    expect(canUseOnlineAction(manager, 'cards', 'reveal')).toBe(false);
+    expect(canUseOnlineAction(manager, 'cards', 'reveal')).toBe(true);
   });
-  it('敏感查看独立授权，复制出库还需要管理授权', () => {
+  it('查看无需额外敏感授权，复制出库仍需管理授权', () => {
     const reader = {
       ...user,
       permissions: [
@@ -83,7 +83,7 @@ describe('线上代充操作权限', () => {
       ],
       sensitiveApprovalPermissionCodes: ['id_business_v2.online_recharge.sensitive']
     };
-    expect(canUseOnlineAction(restricted, 'cards', 'reveal')).toBe(false);
+    expect(canUseOnlineAction(restricted, 'cards', 'reveal')).toBe(true);
     expect(canUseOnlineAction(restricted, 'jobs', 'detail')).toBe(true);
   });
 });

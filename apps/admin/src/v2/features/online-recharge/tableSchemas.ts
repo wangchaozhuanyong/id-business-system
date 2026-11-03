@@ -3,7 +3,7 @@ import type { OnlineSection } from './contracts';
 type Column = [key: string, label: string, kind?: V2TableDataColumnDefinition['kind']];
 const columns: Partial<Record<OnlineSection, Column[]>> = {
   cards: [
-    ['last4', '卡尾号', 'identifier'],
+    ['number', '银行卡号', 'identifier'],
     ['expiryMonth', '有效月', 'numeric'],
     ['expiryYear', '有效年', 'numeric'],
     ['holderName', '持卡人'],

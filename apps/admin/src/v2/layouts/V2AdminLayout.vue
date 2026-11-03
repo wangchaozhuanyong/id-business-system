@@ -220,47 +220,6 @@
                   测试播报
                 </AppButton>
               </section>
-              <section v-if="isAdmin" class="v2-notification__section">
-                <header>
-                  <strong>敏感资料审批</strong>
-                  <small>{{ sensitiveApprovalSummary?.pendingCount ?? 0 }} 条待审核</small>
-                </header>
-                <p v-if="sensitiveApprovalInitialLoading && !sensitiveApprovalSummary">
-                  正在读取审批…
-                </p>
-                <ul v-else-if="sensitiveApprovalSummary?.items.length">
-                  <li v-for="item in sensitiveApprovalSummary.items" :key="item.id">
-                    <div>
-                      <strong>{{ item.requester.displayName }} · {{ item.fieldLabel }}</strong>
-                      <span>{{ item.targetLabel }} · {{ item.reason }}</span>
-                    </div>
-                    <small>申请于 {{ formatNotificationTime(item.createdAt) }}</small>
-                    <div class="v2-notification__approval-actions">
-                      <AppButton
-                        size="small"
-                        variant="ghost"
-                        :disabled="approvalDecisionId === item.id"
-                        @click="rejectSensitiveApproval(item.id)"
-                      >
-                        拒绝
-                      </AppButton>
-                      <AppButton
-                        size="small"
-                        variant="primary"
-                        :loading="approvalDecisionId === item.id"
-                        @click="approveSensitiveApproval(item.id)"
-                      >
-                        批准 15 分钟
-                      </AppButton>
-                    </div>
-                  </li>
-                </ul>
-                <p v-else>当前没有待审核的敏感资料申请。</p>
-                <small v-if="sensitiveApprovalError" class="v2-notification__error">
-                  审批通知刷新失败，已保留上次成功结果。
-                </small>
-              </section>
-
               <section class="v2-notification__section">
                 <header>
                   <strong>续费到期提醒</strong>
@@ -436,7 +395,6 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { V2_DATA_SCOPES } from '@apple-business/shared';
@@ -456,7 +414,6 @@ import {
   Sunny
 } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
-import { getApiErrorMessage } from '@/api/client';
 import type { V2RoutePrefetchIntent } from '@/runtime/performance';
 import { useAuthStore } from '@/stores/auth';
 import { hasUserFeatureAccess, hasUserPermission, hasUserRouteAccess } from '@/utils/permissions';
@@ -464,12 +421,9 @@ import { idBusinessV2RenewalsApi } from '@/v2/api/renewals';
 import { bankRechargeApi } from '@/v2/features/auto-recharge/public-api';
 import { useOnlineRechargeVoice } from '@/v2/features/online-recharge/public-api';
 import type { BankRechargeRenewalWarnings } from '@/v2/features/auto-recharge/public-api';
-import { idBusinessV2SensitiveAccessApi } from '@/v2/api/sensitiveAccess';
 import V2BrandLogo from '@/v2/components/V2BrandLogo.vue';
 import V2WorkspaceDock from '@/v2/components/workspace/V2WorkspaceDock.vue';
 import type { V2RenewalWarningSummary } from '@/v2/types/renewals';
-import type { V2SensitiveAccessApprovalSummary } from '@/v2/types/sensitiveAccess';
-import { ElMessage } from '@/v2/services/elementPlusMessage';
 import { v2ModuleDefinitions, v2NavigationSections } from '@/v2/config/modules';
 import { getPreferredV2Theme, persistV2Theme, type V2Theme } from '@/v2/theme';
 import {
@@ -513,7 +467,6 @@ const currentTheme = ref<V2Theme>(getPreferredV2Theme());
 const globalSearchQuery = ref('');
 const globalSearchOpen = ref(false);
 const notificationOpen = ref(false);
-const approvalDecisionId = ref('');
 const sessionRetrying = ref(false);
 const contentElement = ref<HTMLElement | null>(null);
 const pageTitleElement = ref<HTMLElement | null>(null);
@@ -605,23 +558,8 @@ const bankRenewalQuery = useV2Query<BankRechargeRenewalWarnings>({
 });
 const bankRenewalSummary = computed(() => bankRenewalQuery.data.value);
 const bankRenewalInitialLoading = computed(() => bankRenewalQuery.isInitialLoading.value);
-const sensitiveApprovalQuery = useV2Query<V2SensitiveAccessApprovalSummary>({
-  scope: 'security',
-  key: 'sensitive-approval-summary',
-  enabled: () => isAdmin.value,
-  freshnessPolicy: 'event-driven',
-  query: ({ signal }) => idBusinessV2SensitiveAccessApi.getApprovalSummary({ signal })
-});
-const sensitiveApprovalSummary = computed(() => sensitiveApprovalQuery.data.value);
-const sensitiveApprovalInitialLoading = computed(
-  () => sensitiveApprovalQuery.isInitialLoading.value
-);
-const sensitiveApprovalError = computed(() => sensitiveApprovalQuery.error.value);
 const notificationCount = computed(
-  () =>
-    renewalWarningCount.value +
-    (bankRenewalSummary.value?.totalCount ?? 0) +
-    (sensitiveApprovalSummary.value?.pendingCount ?? 0)
+  () => renewalWarningCount.value + (bankRenewalSummary.value?.totalCount ?? 0)
 );
 
 watch(
@@ -722,15 +660,9 @@ function refreshRenewalWarnings(force = false) {
   }
 }
 
-function refreshSensitiveApprovals(force = false) {
-  if (!isAdmin.value) return;
-  void (force ? sensitiveApprovalQuery.refresh() : sensitiveApprovalQuery.ensureFresh());
-}
-
 function handleWindowFocus() {
   void synchronizeV2BusinessClock().catch(() => undefined);
   refreshRenewalWarnings();
-  refreshSensitiveApprovals();
 }
 
 function handleRenewalWarningRefresh() {
@@ -741,63 +673,6 @@ function toggleNotification() {
   notificationOpen.value = !notificationOpen.value;
   if (notificationOpen.value) {
     refreshRenewalWarnings(true);
-    refreshSensitiveApprovals(true);
-  }
-}
-
-async function approveSensitiveApproval(id: string) {
-  try {
-    await ElMessageBox.confirm('批准后，申请人可在 15 分钟内查看对应字段。', '批准敏感资料申请', {
-      confirmButtonText: '确认批准',
-      cancelButtonText: '取消',
-      type: 'warning'
-    });
-  } catch {
-    return;
-  }
-  approvalDecisionId.value = id;
-  try {
-    await idBusinessV2SensitiveAccessApi.decide(id, 'approved');
-    ElMessage.success('敏感资料申请已批准');
-    await sensitiveApprovalQuery.refresh();
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error));
-  } finally {
-    approvalDecisionId.value = '';
-  }
-}
-
-async function rejectSensitiveApproval(id: string) {
-  let reason: string;
-  try {
-    const result = await ElMessageBox.prompt(
-      '请填写拒绝原因，申请人会看到该说明。',
-      '拒绝敏感资料申请',
-      {
-        confirmButtonText: '确认拒绝',
-        cancelButtonText: '取消',
-        inputPlaceholder: '2 至 200 个字符',
-        inputValidator: (value) => {
-          const normalized = value.trim();
-          return normalized.length >= 2 && normalized.length <= 200
-            ? true
-            : '请输入 2 至 200 个字符的拒绝原因';
-        }
-      }
-    );
-    reason = result.value.trim();
-  } catch {
-    return;
-  }
-  approvalDecisionId.value = id;
-  try {
-    await idBusinessV2SensitiveAccessApi.decide(id, 'rejected', reason);
-    ElMessage.success('敏感资料申请已拒绝');
-    await sensitiveApprovalQuery.refresh();
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error));
-  } finally {
-    approvalDecisionId.value = '';
   }
 }
 
@@ -822,10 +697,6 @@ function formatWarningDueAt(value: string | null) {
     minute: '2-digit',
     hour12: false
   }).format(date);
-}
-
-function formatNotificationTime(value: string) {
-  return formatWarningDueAt(value);
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -930,7 +801,6 @@ onMounted(() => {
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener(RENEWAL_WARNING_REFRESH_EVENT, handleRenewalWarningRefresh);
   refreshRenewalWarnings();
-  refreshSensitiveApprovals();
 });
 onBeforeUnmount(() => {
   stopV2ChangeSync();

@@ -13,7 +13,7 @@
       <header class="v2-account-list-heading">
         <V2SectionHeading
           :title="`${page.lifecycleLabel} 列表`"
-          help="账号默认脱敏展示；固定操作列保留敏感查看、编辑和状态操作入口。"
+          help="账号完整显示；操作列提供资料详情、编辑和状态操作。"
         >
           <template #actions>
             <V2TableColumnSettings inline :schema="v2TableSchemas.accounts.main" />

@@ -206,14 +206,20 @@ describe('线上代充业务资料完整显示', () => {
     expect(f.repository.transaction.mock.calls[0]?.[2]).toEqual(['audit-logs']);
   });
 
-  it('只读角色保持原有取密边界，不解密兑换码', async () => {
+  it('有模块读取权限的角色完整显示兑换码并记录访问审计', async () => {
     const f = visibilityFixture([
       { id: 'code-id', codeEncrypted: 'synthetic-secret-code', codeLast4: 'CODE' }
     ]);
-    const result = await f.admin.list('cdks', {}, { roles: ['reader'], permissions: [] } as never);
-    expect(result.items[0]).toMatchObject({ code: '····CODE' });
-    expect(f.encryption.decrypt).not.toHaveBeenCalled();
-    expect(f.repository.log).not.toHaveBeenCalled();
+    const result = await f.admin.list('cdks', {}, {
+      roles: ['reader'],
+      permissions: ['id_business_v2.online_recharge.read']
+    } as never);
+    expect(result.items[0]).toMatchObject({ code: 'synthetic-secret-code' });
+    expect(f.encryption.decrypt).toHaveBeenCalled();
+    expect(f.repository.log).toHaveBeenCalledWith({}, 'cdks.list', expect.anything(), undefined, {
+      ids: ['code-id'],
+      fields: ['兑换码']
+    });
   });
 
   it('账单账号列从原任务加密资料补齐完整邮箱，金额仍为原Decimal字符串', async () => {

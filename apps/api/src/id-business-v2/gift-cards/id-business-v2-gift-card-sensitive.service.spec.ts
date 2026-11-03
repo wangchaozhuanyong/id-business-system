@@ -10,7 +10,7 @@ const operator = {
   username: 'auditor',
   displayName: '审核员',
   roles: ['auditor'],
-  permissions: ['apple.gift_card.view_full']
+  permissions: ['apple.balance.view']
 };
 
 describe('IdBusinessV2GiftCardSensitiveService', () => {
@@ -72,7 +72,7 @@ describe('IdBusinessV2GiftCardSensitiveService', () => {
       data: expect.objectContaining({
         userId: operator.id,
         objectId: giftCardId,
-        accessReason: '核对供应商原始卡号',
+        accessReason: '查看礼品卡资料',
         approved: true
       })
     });
@@ -81,7 +81,7 @@ describe('IdBusinessV2GiftCardSensitiveService', () => {
         action: 'id_business_v2.gift_card.code.reveal',
         objectId: giftCardId,
         afterData: expect.objectContaining({
-          reason: '核对供应商原始卡号',
+          reason: '查看礼品卡资料',
           approved: true,
           accessMode: 'direct'
         })

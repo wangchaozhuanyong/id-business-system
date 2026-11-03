@@ -1,3 +1,9 @@
+import { OnlineBitbrowserDeviceRepository } from './persistence/bitbrowser-device.repository';
+import {
+  OnlineBitbrowserPaymentRepository,
+  bitbrowserAccountKey
+} from './persistence/bitbrowser-payment.repository';
+import { validateBitbrowserQuote, type BitbrowserPolicy } from './bitbrowser-policy';
 import {
   RechargeProxyService,
   RechargeProxyRepository,
@@ -22,6 +28,7 @@ import type { AuthenticatedUser } from '../../auth/auth.types';
 import type { OnlineRechargePaymentContext, OnlineRechargeWorkerRpc } from './contracts';
 import { OnlineRechargeRepository } from './persistence/online-recharge.repository';
 import { OnlineRechargeWorkerRepository } from './persistence/worker.repository';
+import { OnlineRechargeAdminRepository } from './persistence/admin.repository';
 import { OnlineRechargeSettingsService } from './settings.service';
 import { OnlineRechargeEphemeralCredentials } from './ephemeral-credentials.service';
 import { OnlineRechargeAssetsService } from './assets.service';
@@ -38,7 +45,6 @@ import { OnlineRechargeSecurityNotificationRepository } from './persistence/secu
 import { sessionAccountId } from './validation';
 import { OnlineRechargeOrderSyncService } from './order-sync.service';
 import { OnlineRechargeOrderSyncRepository } from './persistence/order-sync.repository';
-import { OnlineRechargeAdminRepository } from './persistence/admin.repository';
 
 const enabled = process.env.ONLINE_RECHARGE_MYSQL_TEST === '1';
 const suite = enabled ? describe : describe.skip;
@@ -98,6 +104,8 @@ suite('线上代充隔离MySQL事务验收', () => {
     memory,
     orderSync
   );
+  const bitDevices = new OnlineBitbrowserDeviceRepository(repository);
+  const bitPayments = new OnlineBitbrowserPaymentRepository(repository, workers, encryption);
   const webhooks = new OnlineRechargeWebhooksService(
     new OnlineRechargeWebhooksRepository(repository, settings, encryption, assets, memory)
   );
@@ -213,6 +221,8 @@ suite('线上代充隔离MySQL事务验收', () => {
   });
   beforeEach(async () => {
     for (const model of [
+      db.onlineRechargeBitbrowserState,
+      db.onlineRechargeBitbrowserDevice,
       db.onlineRechargeOrderSync,
       db.onlineRechargeBill,
       db.onlineRechargeEvent,
@@ -2439,5 +2449,160 @@ suite('线上代充隔离MySQL事务验收', () => {
     });
     await pool.delete(proxy.id, operator);
     expect((await pool.list({ keyword: 'api.ipdeep.com' })).total).toBe(0);
+  });
+  async function bitFixture() {
+    const pairing = await bitDevices.pairing({ name: '隔离测试电脑' }, operator);
+    const device = await bitDevices.pair({ pairingToken: pairing.pairingToken });
+    await settings.update(
+      {
+        executionChannel: 'bitbrowser',
+        bitBrowserApiKey: 'synthetic-bitbrowser-local-api',
+        proxyCountryCode: 'PH'
+      },
+      operator
+    );
+    const code = `BIT-FIXTURE-${randomUUID()}`;
+    await db.onlineRechargeCode.create({
+      data: {
+        codeEncrypted: encryption.encrypt(code)!,
+        codeHash: encryption.hash(code)!,
+        codeLast4: code.slice(-4),
+        plan: 'plus'
+      }
+    });
+    return { device, code, identity: randomUUID() };
+  }
+  it('比特兑换提交幂等、配置快照冻结，服务器不会领取比特任务', async () => {
+    const f = await bitFixture();
+    const input = { code: f.code, session: fullSession(f.identity) };
+    const [first, second] = await Promise.all([
+      tasks.start(input, undefined, 'recharge', true),
+      tasks.start(input, undefined, 'recharge', true)
+    ]);
+    expect(first.id).toBe(second.id);
+    await settings.update(
+      {
+        acceptingNewTasks: false,
+        bitBrowserPaymentMode: 'automatic',
+        bitBrowserPlusMaxAmount: '100',
+        bitBrowserPro5xMaxAmount: '100000',
+        bitBrowserPro20xMaxAmount: '1000'
+      },
+      operator
+    );
+    const stored = await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: first.id } });
+    expect((stored.payload as { bitBrowserPolicy: { mode: string } }).bitBrowserPolicy.mode).toBe(
+      'manual'
+    );
+    expect(await workers.claim('server-fixture')).toBeNull();
+    const claims = await Promise.all([
+      workers.claim(`bitbrowser:${f.device.deviceId}`, f.device.deviceId),
+      workers.claim(`bitbrowser:${f.device.deviceId}`, f.device.deviceId)
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(
+      (
+        await db.onlineRechargeCode.findUniqueOrThrow({
+          where: { codeHash: encryption.hash(f.code)! }
+        })
+      ).status
+    ).toBe('reserved');
+  });
+  it('比特付款许可和提交标记在真实事务中去重，断线后进入待核对且不释放兑换码', async () => {
+    const f = await bitFixture();
+    const task = await tasks.start(
+      { code: f.code, session: fullSession(f.identity) },
+      undefined,
+      'recharge',
+      true
+    );
+    const claim = (await workers.claim(`bitbrowser:${f.device.deviceId}`, f.device.deviceId))!;
+    await prepareCard(claim);
+    const device = await bitDevices.authorize(f.device.deviceId, f.device.deviceKey);
+    const key = bitbrowserAccountKey(f.identity);
+    await bitPayments.restore(lease(claim, { accountKey: key }), device);
+    const policy = (claim.payload as unknown as { bitBrowserPolicy: BitbrowserPolicy })
+      .bitBrowserPolicy;
+    const quote = {
+      plan: 'plus',
+      today: { amount: '20.00', amount_minor: 2000, currency: 'PHP' },
+      tax: { amount: '0.00', amount_minor: 0, currency: 'PHP' },
+      renewal: { amount: '20.00', amount_minor: 2000, currency: 'PHP' },
+      renewal_interval: 'monthly'
+    };
+    const digest = validateBitbrowserQuote(quote, 'plus', policy).digest;
+    const registered = await bitPayments.quote(
+      lease(claim, { accountKey: key, quote, quoteDigest: digest }),
+      device
+    );
+    await bitPayments.confirm(
+      task.id,
+      { quoteDigest: digest, version: registered.version },
+      operator
+    );
+    const args = {
+      accountKey: key,
+      fileKey: `payments/${key}.json`,
+      revision: 0,
+      document: {
+        account_key: key,
+        target_plan: 'plus',
+        quote,
+        quote_digest: digest,
+        confirmation_requests_sent: 1
+      }
+    };
+    const results = await Promise.all([
+      bitPayments.ledger(lease(claim, args), device),
+      bitPayments.ledger(lease(claim, args), device)
+    ]);
+    expect(results.filter((result) => result.replayed === false)).toHaveLength(1);
+    expect(results.filter((result) => result.replayed === true)).toHaveLength(1);
+    await db.onlineRechargeTask.update({
+      where: { id: task.id },
+      data: { leaseExpiresAt: new Date(0) }
+    });
+    expect(await workers.claim('server-fixture')).toBeNull();
+    expect((await db.onlineRechargeTask.findUniqueOrThrow({ where: { id: task.id } })).status).toBe(
+      'awaiting_review'
+    );
+    expect(
+      (
+        await db.onlineRechargeCode.findUniqueOrThrow({
+          where: { codeHash: encryption.hash(f.code)! }
+        })
+      ).status
+    ).toBe('reserved');
+    expect(await workers.claim(`bitbrowser:${f.device.deviceId}`, f.device.deviceId)).toBeNull();
+    const recheck = (await tasks.action('jobs', 'recheck', { id: task.id }, operator)) as {
+      id: string;
+    };
+    expect(recheck.id).toBe(task.id);
+    expect(await workers.claim('server-fixture')).toBeNull();
+    const checkOnly = (await workers.claim(`bitbrowser:${f.device.deviceId}`, f.device.deviceId))!;
+    expect(checkOnly.id).toBe(task.id);
+    expect((checkOnly.payload as { bitBrowserCheckOnly: boolean }).bitBrowserCheckOnly).toBe(true);
+    expect(
+      (await bitPayments.restore(lease(checkOnly, { accountKey: key }), device)).records
+    ).toHaveLength(1);
+  });
+  it('运行中的比特任务付款前取消后旧租约不能再提交，兑换资格释放', async () => {
+    const f = await bitFixture();
+    const task = await tasks.start(
+      { code: f.code, session: fullSession(f.identity) },
+      undefined,
+      'recharge',
+      true
+    );
+    const claim = (await workers.claim(`bitbrowser:${f.device.deviceId}`, f.device.deviceId))!;
+    await tasks.action('jobs', 'cancel', { id: task.id }, operator);
+    await expect(workers.heartbeat(lease(claim))).rejects.toThrow('租约');
+    expect(
+      (
+        await db.onlineRechargeCode.findUniqueOrThrow({
+          where: { codeHash: encryption.hash(f.code)! }
+        })
+      ).status
+    ).toBe('available');
   });
 });

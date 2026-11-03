@@ -4,16 +4,6 @@
     :title="`查看完整${page.revealFieldLabel}`"
     width="min(440px, 92vw)"
   >
-    <el-alert
-      :type="page.sensitiveAccessRequiresApproval ? 'warning' : 'info'"
-      :title="
-        page.sensitiveAccessRequiresApproval
-          ? '该字段需要管理员批准后才能查看，批准结果会自动同步。'
-          : '当前角色可以直接查看，系统仍会记录本次访问。'
-      "
-      :closable="false"
-      show-icon
-    />
     <el-form
       ref="revealFormRef"
       class="v2-horizontal-form"
@@ -26,47 +16,15 @@
       scroll-to-error
       :scroll-into-view-options="{ behavior: 'smooth', block: 'center' }"
     >
-      <el-form-item
-        v-if="
-          page.sensitiveAccessRequiresApproval &&
-          !page.sensitiveAccessCanReveal &&
-          page.sensitiveAccessRequest?.status !== 'pending'
-        "
-        label="申请原因"
-        prop="reason"
-      >
-        <el-input v-model="page.revealForm.reason" maxlength="200" />
-      </el-form-item>
-      <div class="v2-sensitive-access-status" role="status">
-        <span>{{ page.sensitiveAccessStatusText }}</span>
-        <AppButton
-          v-if="page.sensitiveAccessError"
-          size="small"
-          variant="ghost"
-          @click="page.refreshSensitiveAccess"
-        >
-          重试
-        </AppButton>
-      </div>
       <el-form-item v-if="page.revealForm.value" :label="`完整${page.revealFieldLabel}`">
         <el-input v-model="page.revealForm.value" readonly />
       </el-form-item>
     </el-form>
     <template #footer>
       <AppButton variant="ghost" @click="page.revealDialogVisible = false">关闭</AppButton>
-      <AppButton
-        variant="primary"
-        :loading="page.revealing || page.sensitiveAccessLoading || page.sensitiveAccessRequesting"
-        :disabled="
-          Boolean(page.sensitiveAccessError) ||
-          page.sensitiveAccessPolicy?.mode === 'denied' ||
-          (page.sensitiveAccessRequiresApproval &&
-            page.sensitiveAccessRequest?.status === 'pending')
-        "
-        @click="page.revealContact(revealFormRef)"
+      <AppButton variant="soft" :loading="page.revealing" @click="page.revealContact(revealFormRef)"
+        >读取资料</AppButton
       >
-        {{ page.sensitiveAccessActionText }}
-      </AppButton>
     </template>
   </el-dialog>
 </template>

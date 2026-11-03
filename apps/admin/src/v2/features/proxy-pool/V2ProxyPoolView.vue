@@ -213,14 +213,7 @@ const canManage = computed(() =>
   hasUserPermission(auth.user, 'id_business_v2.online_recharge.manage')
 );
 const canRead = computed(() => hasUserPermission(auth.user, 'id_business_v2.online_recharge.read'));
-const canReveal = computed(
-  () =>
-    hasUserPermission(auth.user, 'id_business_v2.online_recharge.sensitive') &&
-    (auth.user?.roles.includes('admin') ||
-      !(
-        auth.user as { sensitiveApprovalPermissionCodes?: readonly string[] } | null
-      )?.sensitiveApprovalPermissionCodes?.includes('id_business_v2.online_recharge.sensitive'))
-);
+const canReveal = computed(() => canRead.value);
 const filters = useV2SessionDraft('proxy-pool/filters', () =>
   ref({
     page: 1,

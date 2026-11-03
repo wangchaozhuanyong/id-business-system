@@ -52,6 +52,11 @@
         >
         <p v-if="syncMessage" role="status">{{ syncMessage }}</p>
       </section>
+      <OnlineBitbrowserPaymentPanel
+        v-if="liveTask?.provider === 'bitbrowser'"
+        :task="liveTask"
+        @confirmed="tracker.refresh"
+      />
       <template v-for="entry in entries" :key="entry.label"
         ><h3>{{ entry.label }}</h3>
         <p>{{ entry.value }}</p></template
@@ -89,6 +94,7 @@ import { onlineChangeEntries, onlineFailureLabel, onlineLabel } from './labels';
 import OnlineTaskProgress from './OnlineTaskProgress.vue';
 import OnlineHumanVerification from './OnlineHumanVerification.vue';
 import { canUseOnlineAction } from './permissions';
+import OnlineBitbrowserPaymentPanel from './OnlineBitbrowserPaymentPanel.vue';
 import { useOnlineTask } from './useOnlineTask';
 import type { PublicTask } from './contracts';
 import { sessionProbeEntries } from './unpaid-validation-labels';

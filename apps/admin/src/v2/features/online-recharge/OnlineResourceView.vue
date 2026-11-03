@@ -77,9 +77,6 @@
       连续明确拒付次数：仅累计支付方明确拒绝的付款，成功后清零，达到系统配置上限后停用；网络异常和结果待核对不计入。
       账单地址：线上代充复用这张卡绑定的付款地址；未绑定时按支付地区分配。比特浏览器保留原有已核实地址规则。
     </p>
-    <p v-if="requiresOnlineSensitiveApproval(authStore.user)">
-      敏感资料查看需要审批，当前页面暂不提供直接取密。
-    </p>
     <p
       v-if="feedback"
       :role="feedbackError ? 'alert' : 'status'"
@@ -241,7 +238,7 @@ import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import { useV2StableListFrame } from '@/v2/composables/useV2StableListFrame';
 import { createV2QueryKey, useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { useAuthStore } from '@/stores/auth';
-import { canUseOnlineAction, requiresOnlineSensitiveApproval } from './permissions';
+import { canUseOnlineAction } from './permissions';
 import type { V2ModuleKey } from '@/v2/features/feature';
 import OnlineActionDrawer from './OnlineActionDrawer.vue';
 import OnlineResultDialog from './OnlineResultDialog.vue';
@@ -426,11 +423,7 @@ async function copyRowValue(id: string) {
   let copied = false;
   let dispatched = false;
   try {
-    const value = await onlineApi.action(
-      section,
-      'reveal',
-      section === 'cards' ? { id, reason: '复制卡号' } : { id }
-    );
+    const value = await onlineApi.action(section, 'reveal', { id });
     if (!isCurrent()) return;
     const content = section === 'cards' ? value.number : value.code;
     if (typeof content !== 'string' || !content.trim())

@@ -70,7 +70,7 @@
             show-overflow-tooltip
           />
           <V2TableColumn :definition="v2TableSchemas.bankRechargeCards.main.columns[1]">
-            <template #default="{ row }">····{{ row.last4 }}</template>
+            <template #default="{ row }">{{ row.number ?? row.last4 }}</template>
           </V2TableColumn>
           <V2TableColumn :definition="v2TableSchemas.bankRechargeCards.main.columns[2]">
             <template #default="{ row }">{{ row.expiry ?? '未录入' }}</template>

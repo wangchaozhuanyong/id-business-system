@@ -61,6 +61,8 @@ async function start(options = {}) {
         '/credentials/status',
         '/credentials/forget',
         '/credentials/bitbrowser',
+        '/credentials/claim',
+        '/credentials/release',
         '/health'
       ].includes(pathname)
     )
@@ -92,6 +94,17 @@ async function start(options = {}) {
           expiresAt: new Date(value.expires).toISOString(),
           state: 'available'
         });
+      }
+      if (pathname === '/credentials/release') {
+        if (!cardId(body.cardId) || !cardId(body.taskId))
+          return reply(400, { error: '资料标识无效' });
+        if (owners.get(body.cardId) === body.taskId) forget([body.cardId]);
+        return reply(200, { ok: true });
+      }
+      if (pathname === '/credentials/claim') {
+        if (!cardId(body.cardId) || !cardId(body.taskId))
+          return reply(400, { error: '资料标识无效' });
+        return reply(200, { cvc: take(body.cardId, body.taskId) });
       }
       if (pathname === '/credentials') {
         if (

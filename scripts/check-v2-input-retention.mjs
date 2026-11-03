@@ -106,6 +106,24 @@ for (const { file, script } of sources) {
           );
         const onlineConfigSecrets =
           name === 'secrets' && file.endsWith('/online-recharge/V2OnlineConfigView.vue');
+        const onlineDeviceSecret =
+          name === 'apiKey' &&
+          file.endsWith('/online-recharge/OnlineBitbrowserConnectionDrawer.vue');
+        if (onlineDeviceSecret) {
+          if (
+            !/function clearSensitiveInput\(\)\s*\{\s*apiKey\.value = '';/.test(script) ||
+            !script.includes('subscribeIdentityChange(clearSensitiveInput)') ||
+            !/onBeforeUnmount\(\(\) => \{[^}]*clearSensitiveInput\(\);[^}]*stopIdentity\(\);/s.test(
+              script
+            ) ||
+            !/watch\(\(\) => props\.modelValue, clearSensitiveInput\)/.test(script) ||
+            !/watch\(\(\) => props\.device\?\.id, clearSensitiveInput\)/.test(script)
+          )
+            issues.push(`${file}: 设备接口密钥必须在关闭、换电脑、离页和身份变化时清除`);
+          if (/localStorage|sessionStorage|draft\.form\.(?:apiKey|localApiToken)/.test(script))
+            issues.push(`${file}: 设备接口密钥不得进入草稿或浏览器存储`);
+          return;
+        }
         const proxyPoolSecret =
           (name === 'url' && file.endsWith('/proxy-pool/ProxyPoolEditor.vue')) ||
           (name === 'text' && file.endsWith('/proxy-pool/ProxyPoolImport.vue'));

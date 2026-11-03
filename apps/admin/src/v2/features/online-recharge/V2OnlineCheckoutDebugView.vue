@@ -37,16 +37,9 @@
     <AppButton
       v-if="task?.status === 'succeeded' && canSensitive"
       variant="soft"
-      @click="linkOpen = true"
+      @click="readCheckoutLink"
       >查看支付链接</AppButton
     >
-    <OnlineActionDrawer
-      v-model="linkOpen"
-      section="jobs"
-      :action="linkAction"
-      :row="taskRow"
-      @saved="onLink"
-    />
     <OnlineResultDialog v-model="resultOpen" :result="result" />
   </section>
 </template>
@@ -74,7 +67,6 @@ const canRead = computed(() => canUseOnlineAction(authStore.user, 'checkout-debu
 const canManage = computed(() => canUseOnlineAction(authStore.user, 'checkout-debug', 'start'));
 const canSensitive = computed(() => canUseOnlineAction(authStore.user, 'jobs', 'checkout-link'));
 const open = ref(false);
-const linkOpen = ref(false);
 const resultOpen = ref(false);
 const result = ref<Record<string, unknown>>({});
 watch(resultOpen, (value) => {
@@ -84,27 +76,24 @@ watch(
   () => authStore.user?.id,
   () => {
     open.value = false;
-    linkOpen.value = false;
     resultOpen.value = false;
     result.value = {};
     task.value = undefined;
     tracker.stop();
   }
 );
-const linkAction: OnlineAction = {
-  key: 'checkout-link',
-  label: '查看支付链接',
-  fields: [{ key: 'reason', label: '查看原因', required: true }]
-};
-function onLink(value: Record<string, unknown>) {
-  result.value = value;
-  resultOpen.value = true;
+async function readCheckoutLink() {
+  if (!task.value) return;
+  try {
+    result.value = await onlineApi.action('jobs', 'checkout-link', { id: task.value.id });
+    resultOpen.value = true;
+    error.value = '';
+  } catch (cause) {
+    error.value = getApiErrorMessage(cause);
+  }
 }
 const error = ref('');
 const task = useV2SessionDraft('online-recharge/checkout-debug/task', () => ref<PublicTask>());
-const taskRow = computed(() =>
-  task.value ? { id: task.value.id, updatedAt: task.value.updatedAt } : undefined
-);
 const tracker = useOnlineTask(task, ref(''), false);
 const query = useV2ModuleQuery({
   moduleKey: 'online-recharge-checkout-debug',

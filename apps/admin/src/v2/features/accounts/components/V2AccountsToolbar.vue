@@ -8,7 +8,7 @@
       showingLossRecords
         ? '报损记录保留冻结快照、财务冲回和恢复审计。'
         : '先切换生命周期，再使用搜索和筛选缩小 ID 资料范围。',
-      !showingLossRecords ? ' 敏感资料默认脱敏，查看、复制和导出都会写入审计日志。 ' : ''
+      !showingLossRecords ? ' 业务资料完整显示，操作保留审计记录。 ' : ''
     ]"
   >
     <template #navigation

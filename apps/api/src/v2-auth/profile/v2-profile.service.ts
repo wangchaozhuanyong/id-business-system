@@ -1,3 +1,4 @@
+import { FieldEncryptionService } from '../../common/crypto/field-encryption.service';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -12,7 +13,8 @@ import {
 export class V2ProfileService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly securityService: SecurityService
+    private readonly securityService: SecurityService,
+    private readonly encryption: FieldEncryptionService
   ) {}
 
   async bootstrap(
@@ -51,6 +53,7 @@ export class V2ProfileService {
         displayName: true,
         email: true,
         phoneMasked: true,
+        phoneEncrypted: true,
         status: true,
         lastLoginAt: true,
         createdAt: true,
@@ -79,6 +82,8 @@ export class V2ProfileService {
       id: user.id,
       username: user.username,
       displayName: user.displayName,
+      email: user.email,
+      phone: this.encryption.decrypt(user.phoneEncrypted),
       emailMasked: this.maskEmail(user.email),
       phoneMasked: user.phoneMasked,
       status: user.status,

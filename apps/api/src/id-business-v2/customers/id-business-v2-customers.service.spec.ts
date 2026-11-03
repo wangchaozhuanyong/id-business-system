@@ -304,7 +304,7 @@ describe('IdBusinessV2CustomersService', () => {
         data: expect.objectContaining({
           module: 'id_business_v2_customer',
           fieldName: 'phone',
-          accessReason: '处理客户续费'
+          accessReason: '角色权限直接查看'
         })
       })
     );
@@ -336,23 +336,23 @@ describe('IdBusinessV2CustomersService', () => {
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects phone reveal without the sensitive permission', async () => {
+  it('rejects phone reveal without the customer module permission', async () => {
     await expect(
       service.revealPhone(
         'customer-1',
         { reason: '测试' },
-        { ...operator, roles: [], permissions: ['customer.view'] }
+        { ...operator, roles: [], permissions: [] }
       )
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('reuses phone permission and writes no plaintext when revealing WhatsApp', async () => {
+  it('uses customer module permission and writes no plaintext when revealing WhatsApp', async () => {
     prisma.idBusinessV2Customer.findFirst.mockResolvedValue(makeCustomer());
 
     const result = await service.revealWhatsapp(
       'customer-1',
       { reason: '核对 WhatsApp 联系方式' },
-      { ...operator, roles: [], permissions: ['customer.view_phone'] },
+      { ...operator, roles: [], permissions: ['customer.view'] },
       { ip: '127.0.0.1', userAgent: 'vitest' }
     );
 
@@ -361,7 +361,7 @@ describe('IdBusinessV2CustomersService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           fieldName: 'whatsapp',
-          accessReason: '核对 WhatsApp 联系方式'
+          accessReason: '角色权限直接查看'
         })
       })
     );

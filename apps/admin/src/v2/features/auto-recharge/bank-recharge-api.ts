@@ -116,6 +116,7 @@ export interface SharedPaymentCard {
   last4: string;
   active: boolean;
   hasNumber: boolean;
+  number?: string | null;
   allowedPlans: string[];
 }
 
@@ -128,6 +129,7 @@ export interface ManagedBankRechargeCard {
   currencyCode: string;
   status: 'active' | 'disabled';
   hasNumber: boolean;
+  number?: string | null;
   remark1: string | null;
   remark2: string | null;
   accountCount: number;

@@ -555,10 +555,10 @@ def validate_owned_profile(value, job_id):
 
 
 class LocalJob:
-    def __init__(self, payload):
+    def __init__(self, payload, *, callback=None):
         self.payload = validate_payload(payload)
         self.id = self.payload["id"]
-        self.callback = CallbackClient(
+        self.callback = callback if callback is not None else CallbackClient(
             self.payload["callbackUrl"], self.payload["agentToken"], self.id)
         self.resume_event = threading.Event()
         self.code_event = threading.Event()
@@ -1294,7 +1294,7 @@ class Registry:
                     self.jobs[job.id] = completed
                 self._prune()
 
-    def start(self, payload):
+    def start(self, payload, *, job_factory=None):
         if not isinstance(payload, dict) or payload.get('mode') not in {
                 'payment', 'recheck', 'open_browser', 'resolve_unknown_payment'}:
             raise Stop('invalid_connector_payload')
@@ -1307,7 +1307,7 @@ class Registry:
             # retires the full object only after the thread restores all globals.
             if any(isinstance(job, LocalJob) for job in self.jobs.values()) or not self._make_room():
                 raise Stop("another_local_job_is_running")
-            job = LocalJob(payload)
+            job = (job_factory or LocalJob)(payload)
             self.jobs[job.id] = job
             try:
                 threading.Thread(target=lambda: self._run(job), name=f"bitbrowser-{job.id[:8]}", daemon=True).start()
@@ -1478,6 +1478,7 @@ def main(argv=None):
     parser.add_argument("--port", type=int)
     parser.add_argument("--allowed-origin", action="append", required=True)
     parser.add_argument("--token-file")
+    parser.add_argument("--online-config-file", help="项目内线上代充电脑配对文件")
     args = parser.parse_args(argv)
     args.port = args.port or 55322
     args.token_file = args.token_file or ".runtime/bitbrowser-recharge-assistant/connector.token"
@@ -1497,7 +1498,19 @@ def main(argv=None):
     Handler.connector_token = load_connector_token(Path(args.token_file).resolve())
     print("本机连接器已启动：http://127.0.0.1:%d" % args.port, flush=True)
     print("连接密钥已就绪；密钥保存在指定的本机私密文件中，日志不输出密钥。", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    online_agent = None
+    if args.online_config_file:
+        import sys
+        integration = Path(__file__).resolve().parents[2] / "online-recharge" / "connector"
+        sys.path.insert(0, str(integration))
+        from online_bitbrowser_agent import start_online_agent
+        online_agent = start_online_agent(args.online_config_file, REGISTRY, sys.modules[__name__])
+    try:
+        ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    finally:
+        if online_agent:
+            online_agent.stop()
+
 
 
 if __name__ == "__main__":

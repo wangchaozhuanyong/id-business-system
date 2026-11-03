@@ -4,7 +4,7 @@
       class="v2-profile-hero"
       aria-label="当前账户总览"
       :title="page.profile.displayName"
-      help="当前账户状态与安全资料，联系方式默认脱敏。"
+      help="当前账户状态与安全资料，联系方式完整显示。"
       metrics-label="当前账户安全指标"
     >
       <template #identity
@@ -42,7 +42,7 @@
       <section class="v2-profile-panel">
         <V2SectionHeading
           title="个人资料"
-          help="联系方式只显示脱敏值；如需修改，请由管理员在员工账户中处理。"
+          help="显示当前账户联系方式；如需修改，请由管理员在员工账户中处理。"
         />
         <dl class="v2-profile-details">
           <div>
@@ -55,11 +55,11 @@
           </div>
           <div>
             <dt>邮箱</dt>
-            <dd>{{ page.profile.emailMasked || '未设置' }}</dd>
+            <dd>{{ page.profile.email ?? page.profile.emailMasked ?? '未设置' }}</dd>
           </div>
           <div>
             <dt>手机号</dt>
-            <dd>{{ page.profile.phoneMasked || '未设置' }}</dd>
+            <dd>{{ page.profile.phone ?? page.profile.phoneMasked ?? '未设置' }}</dd>
           </div>
           <div>
             <dt>角色</dt>

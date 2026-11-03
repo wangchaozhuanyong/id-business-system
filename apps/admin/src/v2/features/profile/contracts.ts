@@ -7,6 +7,8 @@ export interface V2ProfileRecord {
   id: string;
   username: string;
   displayName: string;
+  email?: string | null;
+  phone?: string | null;
   emailMasked?: string | null;
   phoneMasked?: string | null;
   status: 'active';

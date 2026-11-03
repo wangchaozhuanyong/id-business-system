@@ -523,6 +523,7 @@ describe('不付款模式相邻的提交容量合同', () => {
     f.storage.rows('onlineRechargeTask').push({
       id: randomUUID(),
       operation: 'recharge',
+      provider: 'local',
       status: 'awaiting_credentials',
       sessionIdentityHash: 'other-fixture-account',
       paymentStarted: false,

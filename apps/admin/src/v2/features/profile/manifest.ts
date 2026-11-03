@@ -9,7 +9,7 @@ export const profileFeature = defineV2Feature({
   navigation: false,
   kind: 'list',
   freshnessPolicy: 'event-with-deadline',
-  summary: '查看脱敏个人资料，管理密码、MFA 和当前账号的在线设备。',
+  summary: '查看个人资料，管理密码、MFA 和当前账号的在线设备。',
   filters: [],
   loadTables: () =>
     import('@/v2/features/tableSchemas').then(

@@ -1,0 +1,86 @@
+name: Window BitBrowser Publication
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Observe the parent or publish the reviewed main revision
+        type: choice
+        required: true
+        default: observe
+        options: [observe, publish]
+      commit:
+        description: Exact reviewed main commit
+        type: string
+        required: true
+      expected_current:
+        description: Exact deployed predecessor commit
+        type: string
+        required: true
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+  id-token: write
+concurrency:
+  group: id-business-v2-production-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && inputs.commit == github.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_REGION: ap-northeast-1
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify main, finite publication controls and prior quality evidence
+        run: |
+          bash scripts/production-release/check-source.sh
+          python3 -B scripts/production-release/window-bitbrowser-release.test.py
+      - name: Configure the existing production OIDC role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          role-session-name: id-window-bitbrowser-${{ github.run_id }}
+          aws-region: ap-northeast-1
+          role-duration-seconds: 3600
+      - name: Build the migration tool from this exact main revision
+        if: inputs.operation == 'publish'
+        run: |
+          set -Eeuo pipefail
+          registry=098208446664.dkr.ecr.ap-northeast-1.amazonaws.com
+          image="$registry/id-business-v2-release:$GITHUB_SHA-$GITHUB_RUN_ID-window-bitbrowser-migrate"
+          aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin "$registry"
+          docker build --target migration --file apps/api/Dockerfile.mysql --tag "$image" .
+          docker push "$image"
+          digest="$(aws ecr describe-images --repository-name id-business-v2-release --image-ids imageTag="$GITHUB_SHA-$GITHUB_RUN_ID-window-bitbrowser-migrate" --query 'imageDetails[0].imageDigest' --output text)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          mkdir -p .runtime/window-bitbrowser-migration
+          docker save "$image" | gzip -1 > .runtime/window-bitbrowser-migration/image.tar.gz
+          echo "MIGRATION_ARCHIVE=$GITHUB_WORKSPACE/.runtime/window-bitbrowser-migration/image.tar.gz" >> "$GITHUB_ENV"
+          echo "MIGRATION_IMAGE=$registry/id-business-v2-release@$digest" >> "$GITHUB_ENV"
+          echo "MIGRATION_LOCAL_REFERENCE=$image" >> "$GITHUB_ENV"
+          echo "MIGRATION_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$image")" >> "$GITHUB_ENV"
+      - name: Reproduce the parent, publish once and independently read back
+        run: python3 -B scripts/production-release/window-bitbrowser-publication.py '${{ inputs.operation }}'
+      - name: Preserve native receipts and immutable artifact identities
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: window-bitbrowser-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .deploy/window-bitbrowser/*.json
+            .deploy/window-bitbrowser/*.txt
+            .deploy/window-bitbrowser/*-artifact.tar.gz
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30

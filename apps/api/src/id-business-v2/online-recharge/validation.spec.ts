@@ -320,33 +320,26 @@ describe('线上代充安全边界和原版默认行为', () => {
     expect(secureEqual('short', 'short')).toBe(false);
     expect(secureEqual(undefined, undefined)).toBe(false);
   });
-  it('员工取密权限缺失或被设为须审批时关闭，管理员仍按既有策略允许', () => {
+  it('模块读取权限控制完整资料，旧审批标记不再阻断查看', () => {
     const key = 'id_business_v2.online_recharge.sensitive';
-    const employee = {
+    const reader = {
       id: randomUUID(),
       username: 'fixture',
       displayName: '测试',
       roles: ['employee'],
-      permissions: [] as string[]
+      permissions: ['id_business_v2.online_recharge.read']
     };
-    expect(() => assertOnlineSensitive(employee)).toThrow('权限');
+    expect(() => assertOnlineSensitive({ ...reader, permissions: [] })).toThrow('权限');
+    expect(() => assertOnlineSensitive({ ...reader, permissions: [key] })).toThrow('权限');
+    expect(() => assertOnlineSensitive(reader)).not.toThrow();
     expect(() =>
-      assertOnlineSensitive({
-        ...employee,
-        permissions: [key],
-        sensitiveApprovalPermissionCodes: [key]
-      })
-    ).toThrow('审批');
-    expect(() => assertOnlineSensitive({ ...employee, permissions: [key] })).not.toThrow();
+      assertOnlineSensitive({ ...reader, sensitiveApprovalPermissionCodes: [key] })
+    ).not.toThrow();
     expect(() =>
-      assertOnlineSensitive({
-        ...employee,
-        roles: ['admin'],
-        sensitiveApprovalPermissionCodes: [key]
-      })
+      assertOnlineSensitive({ ...reader, roles: ['admin'], permissions: [] })
     ).not.toThrow();
   });
-  it('运行资料下载遵守敏感权限和审批策略，拒绝时不接触文件仓储', () => {
+  it('运行资料下载遵守模块权限，拒绝时不接触文件仓储', async () => {
     let reads = 0;
     const artifacts = new OnlineRechargeArtifactsService({
       download: () => {
@@ -361,16 +354,14 @@ describe('线上代充安全边界和原版默认行为', () => {
       roles: ['employee'],
       permissions: ['id_business_v2.online_recharge.read']
     };
-    expect(() => artifacts.download(randomUUID(), user)).toThrow('权限');
-    expect(() =>
+    expect(() => artifacts.download(randomUUID(), { ...user, permissions: [] })).toThrow('权限');
+    expect(reads).toBe(0);
+    await expect(
       artifacts.download(randomUUID(), {
         ...user,
-        permissions: ['id_business_v2.online_recharge.sensitive'],
         sensitiveApprovalPermissionCodes: ['id_business_v2.online_recharge.sensitive']
       })
-    ).toThrow('审批');
-    expect(reads).toBe(0);
-    expect(() => artifacts.download(randomUUID(), { ...user, roles: ['admin'] })).not.toThrow();
+    ).resolves.toBe('fixture');
     expect(reads).toBe(1);
   });
   it('保留邮箱与Decimal金额，同时隐藏数字卡号和不透明凭据', () => {

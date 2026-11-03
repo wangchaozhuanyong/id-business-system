@@ -23,6 +23,7 @@ describe('V2ProfileService', () => {
           displayName: user.displayName,
           email: 'operator@example.com',
           phoneMasked: '***6789',
+          phoneEncrypted: 'fixture-phone',
           status: 'active',
           lastLoginAt: now,
           createdAt: now,
@@ -52,14 +53,16 @@ describe('V2ProfileService', () => {
     } as unknown as SecurityService;
 
     return {
-      service: new V2ProfileService(prisma, securityService),
+      service: new V2ProfileService(prisma, securityService, {
+        decrypt: (value: string | null) => value
+      } as never),
       prisma,
       securityService
     };
   }
 
-  it('returns only masked contact data and self-scoped security state', async () => {
-    const { service, securityService } = createService();
+  it('returns full own contact data and self-scoped security state', async () => {
+    const { service, securityService, prisma } = createService();
 
     const result = await service.bootstrap(user, 'current-token', { page: '1', pageSize: '20' });
     const serialized = JSON.stringify(result);
@@ -67,11 +70,15 @@ describe('V2ProfileService', () => {
     expect(result.profile).toMatchObject({
       id: user.id,
       username: 'operator',
+      email: 'operator@example.com',
+      phone: 'fixture-phone',
       emailMasked: 'o***@example.com',
       phoneMasked: '***6789',
       roles: [{ code: 'operator', name: '操作员' }]
     });
-    expect(serialized).not.toContain('operator@example.com');
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: user.id }) })
+    );
     expect(serialized).not.toContain('phoneEncrypted');
     expect(securityService.listUserActiveSessions).toHaveBeenCalledWith(
       user.id,

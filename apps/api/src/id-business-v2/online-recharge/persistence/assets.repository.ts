@@ -51,14 +51,9 @@ const streets = [
 export function assertOnlineSensitive(operator: AuthenticatedUser) {
   if (
     !operator.roles.includes('admin') &&
-    !operator.permissions.includes(ONLINE_RECHARGE_PERMISSION.sensitive)
+    !operator.permissions.includes(ONLINE_RECHARGE_PERMISSION.read)
   )
-    throw new ForbiddenException('没有查看敏感资料的权限');
-  if (
-    !operator.roles.includes('admin') &&
-    operator.sensitiveApprovalPermissionCodes?.includes(ONLINE_RECHARGE_PERMISSION.sensitive)
-  )
-    throw new ForbiddenException('该角色取密必须经过审批，请由管理员处理本次资料查看');
+    throw new ForbiddenException('没有查看线上代充资料的权限');
 }
 
 @Injectable()
@@ -212,9 +207,8 @@ export class OnlineRechargeAssetsRepository {
         );
       if (action === 'reveal') {
         assertOnlineSensitive(operator);
-        text(input.reason, '查看原因', 500);
         await this.repository.log(tx, 'cards.reveal', operator, rowId, {
-          reason: input.reason,
+          reason: '查看银行卡资料',
           fields: ['卡号']
         });
         return {
@@ -405,7 +399,7 @@ export class OnlineRechargeAssetsRepository {
         assertOnlineSensitive(operator);
         await this.repository.log(tx, `cdks.${action}`, operator, undefined, {
           ids: selected,
-          reason: text(input.reason ?? '出库复制', '查看原因', 500)
+          reason: '查看兑换码'
         });
         const codes = rows.map((row) => this.encryption.decrypt(row.codeEncrypted)!);
         return { codes, code: codes[0], content: codes.join('\n'), filename: '线上代充兑换码.txt' };

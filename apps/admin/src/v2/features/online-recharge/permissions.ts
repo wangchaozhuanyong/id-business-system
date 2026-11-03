@@ -3,12 +3,8 @@ import { hasUserPermission } from '@/utils/permissions';
 import type { OnlineSection } from './contracts';
 type OnlineUser = CurrentUser & { sensitiveApprovalPermissionCodes?: readonly string[] };
 export function requiresOnlineSensitiveApproval(user: OnlineUser | null | undefined) {
-  return (
-    !user?.roles.includes('admin') &&
-    Boolean(
-      user?.sensitiveApprovalPermissionCodes?.includes('id_business_v2.online_recharge.sensitive')
-    )
-  );
+  void user;
+  return false;
 }
 export function canUseOnlineAction(
   user: OnlineUser | null | undefined,
@@ -18,9 +14,7 @@ export function canUseOnlineAction(
   if (section === 'login-logs' && !user?.roles.includes('admin')) return false;
   const read = hasUserPermission(user, 'id_business_v2.online_recharge.read');
   const manage = hasUserPermission(user, 'id_business_v2.online_recharge.manage');
-  const sensitive =
-    hasUserPermission(user, 'id_business_v2.online_recharge.sensitive') &&
-    !requiresOnlineSensitiveApproval(user);
+  const sensitive = read;
   if (!read) return false;
   if (
     ['reveal', 'checkout-link'].includes(action) ||

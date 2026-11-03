@@ -552,7 +552,7 @@ describe('IdBusinessV2AccountsService', () => {
         data: expect.objectContaining({
           module: 'id_business_v2_account',
           fieldName: 'password',
-          accessReason: '执行客户续费'
+          accessReason: '角色权限直接查看'
         })
       })
     );
@@ -584,12 +584,12 @@ describe('IdBusinessV2AccountsService', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
-  it('rejects a secret reveal without the field permission', async () => {
+  it('rejects a secret reveal without the module permission', async () => {
     await expect(
       service.revealSecret(
         'account-1',
         { field: 'password', reason: '测试' },
-        { ...operator, roles: [], permissions: ['apple.account.view'] }
+        { ...operator, roles: [], permissions: [] }
       )
     ).rejects.toBeInstanceOf(ForbiddenException);
   });

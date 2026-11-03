@@ -193,7 +193,7 @@ export class OnlineRechargeWorkerRepository {
       )
     );
   }
-  async claim(workerId: string) {
+  async claim(workerId: string, bitbrowserDeviceId?: string) {
     return this.repository.transaction('workers-claim', async (tx) => {
       const config = await tx.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
       const settings = { ...ONLINE_RECHARGE_DEFAULTS, ...(config ? object(config.settings) : {}) };
@@ -297,11 +297,32 @@ export class OnlineRechargeWorkerRepository {
           await this.repository.log(tx, 'human_verification.interrupted', undefined, task.id);
         }
       }
-      const active = await tx.onlineRechargeTask.count({ where: { status: 'running' } });
-      if (active >= Number(settings.maxConcurrent)) return null;
+      const provider = bitbrowserDeviceId
+        ? ('bitbrowser' as const)
+        : { in: ['local', 'third_party'] as ('local' | 'third_party')[] };
+      const active = await tx.onlineRechargeTask.count({ where: { status: 'running', provider } });
+      if (active >= (bitbrowserDeviceId ? 1 : Number(settings.maxConcurrent))) return null;
       // 维护只拒绝新请求；已接受的持久化任务仍要执行完毕，避免兑换码永远停在预约状态。
       const row = await tx.onlineRechargeTask.findFirst({
-        where: { status: 'queued', deletedAt: null, paymentStarted: false },
+        where: {
+          status: 'queued',
+          deletedAt: null,
+          provider,
+          ...(bitbrowserDeviceId
+            ? {
+                OR: [
+                  { paymentStarted: false },
+                  { paymentStarted: true, payload: { path: '$.bitBrowserCheckOnly', equals: true } }
+                ]
+              }
+            : { paymentStarted: false }),
+          ...(bitbrowserDeviceId
+            ? {
+                operation: 'recharge' as const,
+                payload: { path: '$.bitBrowserPolicy.deviceId', equals: bitbrowserDeviceId }
+              }
+            : {})
+        },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
       });
       if (!row) {
@@ -470,6 +491,8 @@ export class OnlineRechargeWorkerRepository {
   }
   async beforeSubmit(rpc: OnlineRechargeWorkerRpc) {
     return this.withLease(rpc, async (tx, row) => {
+      if (row.provider === 'bitbrowser')
+        throw new ConflictException('比特任务必须通过绑定报价的单次付款许可提交');
       if (row.operation === 'debug') throw new ConflictException('调试任务必须在付款前停止');
       const args = rpc.args ?? {};
       if (row.operation === 'renewal' || args.stage === 'renewal_update')
@@ -1001,7 +1024,7 @@ export class OnlineRechargeWorkerRepository {
         }
       }
     }
-    if (paid && original.provider === 'local') {
+    if (paid && ['local', 'bitbrowser'].includes(original.provider)) {
       const existing = await tx.onlineRechargeBill.findFirst({
         where: { taskId: original.id, status: 'success' }
       });
@@ -1362,6 +1385,7 @@ export class OnlineRechargeWorkerRepository {
       )
         throw new ConflictException('实际付款卡或金额未核实，不能生成成功扣款账单');
       const checkoutId = source.checkoutId ?? source.stripe_session_id;
+      const currency = text(source.currency ?? 'USD', '币种', 8);
       const idempotencyKey = `${row.id}:${row.cardId ?? 'none'}:${checkoutId ?? status}`.slice(
         0,
         190
@@ -1376,14 +1400,34 @@ export class OnlineRechargeWorkerRepository {
           plan: row.plan,
           status,
           amount: actual,
-          currency: text(source.currency ?? 'USD', '币种', 8),
+          currency,
           checkoutId: checkoutId ? text(checkoutId, '结账编号', 255) : null,
           errorCode: source.error_code ? text(source.error_code, '错误码', 100) : null,
           message: redact(String(source.message ?? source.error_message ?? '')).slice(0, 12000)
         },
         update: {}
       });
-      await this.repository.log(tx, 'worker.billing.create', undefined, row.id, {
+      let auditAction = 'worker.billing.create';
+      if (
+        row.provider === 'bitbrowser' &&
+        status === 'success' &&
+        bill.status === 'result_unknown'
+      ) {
+        if (
+          !actual ||
+          !checkoutId ||
+          !bill.amount?.equals(actual) ||
+          bill.currency !== currency ||
+          bill.checkoutId !== checkoutId ||
+          bill.taskId !== row.id ||
+          bill.cardId !== row.cardId ||
+          bill.plan !== row.plan
+        )
+          throw new ConflictException('原账单的付款标识、金额或业务归属不一致，请核对原任务');
+        await tx.onlineRechargeBill.update({ where: { id: bill.id }, data: { status: 'success' } });
+        auditAction = 'worker.billing.confirm';
+      }
+      await this.repository.log(tx, auditAction, undefined, row.id, {
         billId: bill.id,
         status,
         amountSource: actual ? 'checkout' : 'unknown'

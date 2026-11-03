@@ -19,9 +19,9 @@ describe('profile scheme 3 redesign contract', () => {
     expect(sessions).toContain(':show-column-settings="false"');
   });
 
-  it('preserves masked identity, password, MFA and session actions', () => {
-    expect(overview).toContain("page.profile.emailMasked || '未设置'");
-    expect(overview).toContain("page.profile.phoneMasked || '未设置'");
+  it('preserves full own contact data, password, MFA and session actions', () => {
+    expect(overview).toContain("page.profile.email ?? page.profile.emailMasked ?? '未设置'");
+    expect(overview).toContain("page.profile.phone ?? page.profile.phoneMasked ?? '未设置'");
     expect(overview).toContain('page.openChangePassword');
     expect(overview).toContain('page.regenerateRecoveryCodes');
     expect(sessions).toContain('page.revokeOtherSessions');
