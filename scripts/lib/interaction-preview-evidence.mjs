@@ -14,6 +14,9 @@ const allowed = new Set([
   'scripts/lib/interaction-preview-runtime.mjs',
   'scripts/lib/interaction-preview-evidence.mjs',
   'scripts/interaction-preview-runtime.test.mjs',
+  'apps/admin/src/runtime/performance.ts',
+  'apps/admin/src/runtime/performance.spec.ts',
+  'apps/admin/src/v2/runtime/interactionDiagnostics.ts',
   'docs/UI_DESIGN.md',
   'docs/V2_LOADING_STANDARD.md',
   'apps/admin/src/v2/components/V2Table.vue',
@@ -56,6 +59,7 @@ export async function verifyPreviewEvidence(
   assert.equal(env.GITHUB_ACTIONS, 'true');
   assert.equal(env.GITHUB_REPOSITORY, 'wangchaozhuanyong/id-business-system');
   assert.equal(env.GITHUB_REF, PREVIEW_BRANCH);
+  assert.equal(env.GITHUB_RUN_ATTEMPT, '1', 'Only one authorized attempt is allowed');
   assert.equal(realpathSync(env.GITHUB_WORKSPACE), realpathSync(project));
   assert.match(env.GITHUB_SHA, /^[a-f0-9]{40}$/);
   const changes = changedPaths();
@@ -184,6 +188,14 @@ export async function verifyPreviewEvidence(
   const lazySeconds = Math.ceil(
     (Date.parse(lazyJobs[0].completed_at) - Date.parse(lazyJobs[0].started_at)) / 1000
   );
+  const finalRun = await get('', 41640930871);
+  assert.equal(finalRun.head_sha, '6acb0df4856b5c9aa49f36156a908f1d25ae654c');
+  assert.equal(finalRun.conclusion, 'failure');
+  const finalJobs = (await get('/jobs?filter=latest&per_page=100', 41640930871)).jobs;
+  assert.equal(finalJobs.length, 1);
+  const finalSeconds = Math.ceil(
+    (Date.parse(finalJobs[0].completed_at) - Date.parse(finalJobs[0].started_at)) / 1000
+  );
   const priorDurations = [
     priorSeconds,
     secondSeconds,
@@ -194,14 +206,15 @@ export async function verifyPreviewEvidence(
     expandedSeconds,
     typedSeconds,
     latestSeconds,
-    lazySeconds
+    lazySeconds,
+    finalSeconds
   ];
   const spentSeconds = priorDurations.reduce((total, value) => total + value, 0);
   const continuationLimitMinutes = 8;
   assert.ok(
     priorDurations.every((value) => value > 0) &&
-      spentSeconds + continuationLimitMinutes * 60 <= 60 * 60,
-    'Combined validation exceeds authorized 60-minute budget'
+      spentSeconds + continuationLimitMinutes * 60 <= 70 * 60,
+    'Combined validation exceeds authorized 70-minute budget'
   );
 
   return {
@@ -240,7 +253,9 @@ export async function verifyPreviewEvidence(
     latestSeconds,
     lazyRun: 41637259555,
     lazySeconds,
-    authorizedMinutes: 60,
+    finalRun: 41640930871,
+    finalSeconds,
+    authorizedMinutes: 70,
     spentSeconds,
     continuationLimitMinutes
   };

@@ -10,7 +10,7 @@ export function recordV2InteractionSample(kind: 'table-measure' | 'long-task', d
   try {
     const end = performance.now();
     const name = `v2:${kind}`;
-    if (performance.getEntriesByName(name).length >= 120) performance.clearMeasures(name);
+    if ((counters.get(kind) ?? 0) % 120 === 0) performance.clearMeasures(name);
     performance.measure(name, { start: Math.max(0, end - duration), end });
   } catch {
     /* Optional diagnostics cannot affect an interaction. */
@@ -21,7 +21,7 @@ export function recordV2QueryActivity(kind: 'request' | 'deduplicated' | 'cache-
   counters.set(kind, (counters.get(kind) ?? 0) + 1);
   try {
     const name = `v2:query-${kind}`;
-    if (performance.getEntriesByName(name).length >= 120) performance.clearMarks(name);
+    if ((counters.get(kind) ?? 0) % 120 === 1) performance.clearMarks(name);
     performance.mark(name);
   } catch {
     /* Optional diagnostics cannot affect a query. */

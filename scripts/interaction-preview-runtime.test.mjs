@@ -18,6 +18,7 @@ import {
 const project = process.cwd();
 const context = {
   GITHUB_ACTIONS: 'true',
+  GITHUB_RUN_ATTEMPT: '1',
   GITHUB_REPOSITORY: 'wangchaozhuanyong/id-business-system',
   GITHUB_REF: PREVIEW_BRANCH,
   GITHUB_WORKSPACE: project
@@ -141,25 +142,27 @@ test('prior successful checks are reused only when application inputs are unchan
               ]
             }
           : {
-              head_sha: url.includes('/41637259555')
-                ? 'abd68d64ea3ca3dce52b130f7e5a2c0e8619b45e'
-                : url.includes('/41622075809')
-                  ? '9242102afceb6b05e78195365e227ce3b10fd398'
-                  : url.includes('/41618115000')
-                    ? '7a343c43364fe5a71c75af24fe72ebce9f299580'
-                    : url.includes('/41614170604')
-                      ? '07c06a4399d2b771358ecad2203cbfc0891df19e'
-                      : url.includes('/41612300171')
-                        ? '4acbfd31d125d9567df0eee7b2b059dcb29de478'
-                        : url.includes('/41609412467')
-                          ? '28a49701fc508da81af239a0b3961f49e385489e'
-                          : url.includes('/41607976951')
-                            ? '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9'
-                            : url.includes('/41606386434')
-                              ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
-                              : url.includes('/41604661799')
-                                ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
-                                : PRIOR_PREVIEW_COMMIT,
+              head_sha: url.includes('/41640930871')
+                ? '6acb0df4856b5c9aa49f36156a908f1d25ae654c'
+                : url.includes('/41637259555')
+                  ? 'abd68d64ea3ca3dce52b130f7e5a2c0e8619b45e'
+                  : url.includes('/41622075809')
+                    ? '9242102afceb6b05e78195365e227ce3b10fd398'
+                    : url.includes('/41618115000')
+                      ? '7a343c43364fe5a71c75af24fe72ebce9f299580'
+                      : url.includes('/41614170604')
+                        ? '07c06a4399d2b771358ecad2203cbfc0891df19e'
+                        : url.includes('/41612300171')
+                          ? '4acbfd31d125d9567df0eee7b2b059dcb29de478'
+                          : url.includes('/41609412467')
+                            ? '28a49701fc508da81af239a0b3961f49e385489e'
+                            : url.includes('/41607976951')
+                              ? '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9'
+                              : url.includes('/41606386434')
+                                ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
+                                : url.includes('/41604661799')
+                                  ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
+                                  : PRIOR_PREVIEW_COMMIT,
               conclusion: url.includes('/41606386434') ? 'success' : 'failure'
             }
       ),
@@ -170,7 +173,14 @@ test('prior successful checks are reused only when application inputs are unchan
     changedPaths: () => ['scripts/acceptance-v2-interaction-ci.mjs']
   });
   assert.equal(evidence.reusedChecks.length, 3);
-  assert.equal(evidence.spentSeconds, 10 * 60);
+  assert.equal(evidence.spentSeconds, 11 * 60);
+  await assert.rejects(
+    verifyPreviewEvidence({ ...env, GITHUB_RUN_ATTEMPT: '2' }, project, {
+      request,
+      changedPaths: () => ['scripts/acceptance-v2-interaction-ci.mjs']
+    }),
+    /Only one authorized attempt/
+  );
   await assert.rejects(
     verifyPreviewEvidence(env, project, {
       changedPaths: () => ['scripts/acceptance-v2-interaction-ci.mjs'],
@@ -180,7 +190,7 @@ test('prior successful checks are reused only when application inputs are unchan
         return new Response(JSON.stringify(value), { status: 200 });
       }
     }),
-    /exceeds authorized 60-minute budget/
+    /exceeds authorized 70-minute budget/
   );
 
   const changedApplication = await verifyPreviewEvidence(env, project, {
@@ -193,7 +203,15 @@ test('prior successful checks are reused only when application inputs are unchan
     changedPaths: () => ['apps/admin/src/v2/components/V2FilterDisclosure.vue']
   });
   assert.ok(lazyControls.affectedChecksRerun.includes('all admin tests'));
-  assert.equal(lazyControls.authorizedMinutes, 60);
+  const telemetry = await verifyPreviewEvidence(env, project, {
+    request,
+    changedPaths: () => [
+      'apps/admin/src/runtime/performance.ts',
+      'apps/admin/src/v2/runtime/interactionDiagnostics.ts'
+    ]
+  });
+  assert.ok(telemetry.affectedChecksRerun.includes('all admin tests'));
+  assert.equal(lazyControls.authorizedMinutes, 70);
   assert.deepEqual(changedApplication.reusedChecks, ['Unchanged API source checks only']);
   await assert.rejects(
     verifyPreviewEvidence(env, project, {

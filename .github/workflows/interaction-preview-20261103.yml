@@ -36,7 +36,7 @@ jobs:
         run: npm run build --workspace @apple-business/shared
       - name: Generate static Prisma client
         run: npm run prisma:mysql:generate --workspace @apple-business/api
-      - name: Admin tests after lazy filter and popover changes
+      - name: Admin tests after bounded navigation telemetry
         run: |
           set -e
           npm run test --workspace @apple-business/admin

@@ -38,6 +38,18 @@ interface V2PerformanceDetail {
   intent?: V2RoutePrefetchIntent;
 }
 
+// Keep navigation telemetry bounded without copying an ever-growing Performance timeline.
+const timelineCounts = new Map<string, number>();
+const recordedMarks = new Set<AppPerformanceMark>();
+function trimPerformanceTimeline(name: string, kind: 'mark' | 'measure') {
+  const count = timelineCounts.get(name) ?? 0;
+  if (count >= 120) {
+    if (kind === 'mark') performance.clearMarks(name);
+    else performance.clearMeasures(name);
+  }
+  timelineCounts.set(name, count >= 120 ? 1 : count + 1);
+}
+
 let navigationSequence = 0;
 let activeNavigation: V2NavigationPerformanceState | null = null;
 export interface V2RoutePresentation {
@@ -98,7 +110,9 @@ export function markV2RoutePaintReady(event: V2RoutePresentation) {
 export function markAppPerformance(name: AppPerformanceMark, detail?: V2PerformanceDetail) {
   if (typeof performance === 'undefined' || typeof performance.mark !== 'function') return;
   try {
+    trimPerformanceTimeline(name, 'mark');
     performance.mark(name, detail ? { detail } : undefined);
+    recordedMarks.add(name);
   } catch {
     // Performance telemetry must never interrupt application startup or navigation.
   }
@@ -111,14 +125,10 @@ export function measureAppPerformance(
   detail?: V2PerformanceDetail
 ) {
   if (typeof performance === 'undefined' || typeof performance.measure !== 'function') return;
-  if (
-    !performance.getEntriesByName(startMark).length ||
-    !performance.getEntriesByName(endMark).length
-  ) {
-    return;
-  }
+  if (!recordedMarks.has(startMark) || !recordedMarks.has(endMark)) return;
 
   try {
+    trimPerformanceTimeline(name, 'measure');
     performance.measure(name, {
       start: startMark,
       end: endMark,

@@ -110,3 +110,31 @@ it('notifies presentation once and only after the primary data succeeds', () => 
   expect(events).toEqual([{ navigationId: id, moduleKey: 'orders', source: 'network' }]);
   stop();
 });
+
+it('bounds long-session navigation telemetry while retaining the current navigation anchors', () => {
+  let latest = 0;
+  for (let index = 0; index < 360; index++) {
+    latest = beginV2RoutePerformance('/v2/orders');
+    markV2RouteCodeReady('/v2/orders', 'orders');
+    expect(markV2RouteDataReady('orders', 'memory-cache', latest)).toBe(true);
+    expect(
+      markV2RoutePaintReady({ navigationId: latest, moduleKey: 'orders', source: 'memory-cache' })
+    ).toBe(true);
+  }
+  for (const name of [
+    'v2:route-start',
+    'v2:route-code-ready',
+    'v2:route-data-ready',
+    'v2:route-paint-ready',
+    'v2:route-code-duration',
+    'v2:route-data-duration',
+    'v2:route-code-to-data-duration',
+    'v2:route-paint-duration',
+    'v2:route-data-to-paint-duration'
+  ]) {
+    const entries = performance.getEntriesByName(name);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeLessThanOrEqual(120);
+    expect((entries.at(-1) as PerformanceMark).detail.navigationId).toBe(latest);
+  }
+});
