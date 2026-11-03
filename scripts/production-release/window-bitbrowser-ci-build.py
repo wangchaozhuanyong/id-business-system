@@ -21,8 +21,9 @@ TEST = SELF.removesuffix('.py') + '.test.py'
 CONTRACT = 'scripts/production-release/window-bitbrowser-contract.json'
 WORKFLOW = '.github/workflows/quality.yml'
 GUARD_TEST = 'scripts/ci-recharge-release.test.mjs'
+CHECK_TEST = 'scripts/ci-recharge-check.test.mjs'
 DOC = 'docs/WINDOW_BITBROWSER_RELEASE_20261103.md'
-ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, DOC}
+ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, DOC}
 CONTROL_RECEIPT = ROOT / '.deploy/window-bitbrowser-ci-controls.json'
 STEP = {'release-controls': 'Verify affected release entry and maintenance controls',
         'guards': 'Verify changed release controls'}
@@ -83,8 +84,9 @@ def reuse_inputs():
     paths = set(git('diff', '--name-only', PRIOR, 'HEAD').decode().splitlines())
     need(paths <= ALLOWED_REPAIR, 'CONTROL_INPUT_CHANGED')
     need((ROOT / WORKFLOW).read_text() == expected_workflow(git('show', PRIOR + ':' + WORKFLOW).decode()), 'WORKFLOW_CHANGED')
-    old = git('show', PRIOR + ':' + GUARD_TEST).decode()
-    need(old.count(OLD_BUILD) == 1 and (ROOT / GUARD_TEST).read_text() == old.replace(OLD_BUILD, NEW_BUILD), 'GUARD_CHANGED')
+    for name, before, after in [(GUARD_TEST, OLD_BUILD, NEW_BUILD), (CHECK_TEST, 'run: ' + OLD_BUILD, 'run: ' + NEW_BUILD)]:
+        old = git('show', PRIOR + ':' + name).decode()
+        need(old.count(before) == 1 and (ROOT / name).read_text() == old.replace(before, after), 'GUARD_CHANGED')
     # Every application, dependency, existing test and release helper byte remains the tested input.
     return sorted(paths)
 
@@ -123,6 +125,7 @@ def controls(part, base):
         need(json.loads(CONTROL_RECEIPT.read_bytes()) == record, 'CONTROL_RECEIPT_CHANGED')
     else:
         run(['node', '--test', '--test-name-pattern=Quality guards and full checks include scoped', GUARD_TEST])
+        run(['node', '--test', '--test-name-pattern=readonly metadata shortcut leaves the separate four-image', CHECK_TEST])
         run(['python3', '-B', TEST])
         run(['python3', '-B', str(HERE / 'window-bitbrowser-release.test.py')])
         CONTROL_RECEIPT.parent.mkdir(parents=True, exist_ok=True)

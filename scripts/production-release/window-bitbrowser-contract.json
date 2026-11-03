@@ -132,6 +132,7 @@
     "docs/WINDOW_BITBROWSER_RELEASE_20261103.md",
     "scripts/check-v2-input-retention.mjs",
     "scripts/check-v2-online-recharge-controls.test.mjs",
+    "scripts/ci-recharge-check.test.mjs",
     "scripts/ci-recharge-release.test.mjs",
     "scripts/production-release/window-bitbrowser-ci-build.py",
     "scripts/production-release/window-bitbrowser-ci-build.test.py",
@@ -352,8 +353,9 @@
     "apps/api/src/v2-auth/v2-identity.service.spec.ts": "5bb1552a2e693d7e44e97fb21b70f52f4b1a5606515bb4dce8c30848a593a6b8",
     "scripts/check-v2-input-retention.mjs": "73bbcb00f3345e166101b4688ca8b4dcee9fc884c59443013fc7ca1eacd66707",
     "scripts/check-v2-online-recharge-controls.test.mjs": "3cd69485bb5e93269adc86bda79167689678c205616a8f43f32026d61719f6a9",
+    "scripts/ci-recharge-check.test.mjs": "6e235b1467bdc8f6c543db7142167acdd9daeb84e70875f5de529535ed28ea6e",
     "scripts/ci-recharge-release.test.mjs": "e87929df9611c50247f7e4ffc288a66cc34f4abfb502af24ba5c8c3e6c653983",
-    "scripts/production-release/window-bitbrowser-ci-build.py": "4b15ba3ffcd82184c5b7e821e0399fd9a3713448442d8725857753f294eb6f28",
+    "scripts/production-release/window-bitbrowser-ci-build.py": "45122c388d05655eb6eb14395f6aa287cec3d4b3acf5e59a1c03011c92461d6a",
     "scripts/production-release/window-bitbrowser-ci-build.test.py": "9ec6895a47fe3a912bba23842648e9e78bbf76825c6871d725b9dbc7102f64c5",
     "scripts/setup-online-bitbrowser.cmd": "5b56cecc2133a7d8f76d8420a3fc3be253ec9e8eacac6973b0541e81a0880135",
     "scripts/setup-online-bitbrowser.command": "3c913820a35f8c9de0eb445a30024438a6dab98132f12c3ac4073f1fd89da498"
