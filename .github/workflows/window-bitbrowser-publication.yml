@@ -7,7 +7,7 @@ on:
         type: choice
         required: true
         default: observe
-        options: [observe, publish]
+        options: [observe, publish, diagnose]
       commit:
         description: Exact reviewed main commit
         type: string
