@@ -140,7 +140,7 @@ export class IdBusinessV2CustomersController {
   @Post(':id/reveal-phone')
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
-  @RequirePermissions('customer.view_phone')
+  @RequirePermissions('customer.view')
   revealPhone(
     @Param('id') id: string,
     @Body() dto: RevealIdBusinessV2CustomerPhoneDto,
@@ -153,7 +153,7 @@ export class IdBusinessV2CustomersController {
   @Post(':id/reveal-whatsapp')
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
-  @RequirePermissions('customer.view_phone')
+  @RequirePermissions('customer.view')
   revealWhatsapp(
     @Param('id') id: string,
     @Body() dto: RevealIdBusinessV2CustomerPhoneDto,
@@ -166,7 +166,7 @@ export class IdBusinessV2CustomersController {
   @Post(':id/reveal-wechat')
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
-  @RequirePermissions('customer.view_phone')
+  @RequirePermissions('customer.view')
   revealWechat(
     @Param('id') id: string,
     @Body() dto: RevealIdBusinessV2CustomerPhoneDto,
@@ -179,7 +179,7 @@ export class IdBusinessV2CustomersController {
   @Post(':id/reveal-qq')
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
-  @RequirePermissions('customer.view_phone')
+  @RequirePermissions('customer.view')
   revealQq(
     @Param('id') id: string,
     @Body() dto: RevealIdBusinessV2CustomerPhoneDto,

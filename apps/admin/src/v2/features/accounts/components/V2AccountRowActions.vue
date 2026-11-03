@@ -7,7 +7,7 @@
       :disabled="disabled"
       @click="emit('view-sensitive')"
     >
-      敏感资料
+      资料详情
     </AppButton>
     <AppButton
       v-if="canReportLoss && lossReported"

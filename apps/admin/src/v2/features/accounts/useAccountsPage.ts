@@ -502,7 +502,7 @@ export function useAccountsPage() {
       value: ''
     });
     revealDialogVisible.value = true;
-    void accountSensitiveAccess.prepareSensitiveAccess(field);
+    accountSensitiveAccess.changeRevealField(field);
   }
 
   function openSensitiveAccess(item: V2Account) {

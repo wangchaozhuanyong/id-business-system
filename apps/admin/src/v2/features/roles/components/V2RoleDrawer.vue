@@ -3,7 +3,7 @@
     v-model="page.drawerVisible"
     :title="page.editingItem ? '角色详情与权限' : '新建角色'"
     eyebrow="访问控制"
-    description="按岗位职责配置角色信息、权限范围和敏感字段访问策略"
+    description="按岗位职责配置角色信息和业务模块权限"
     :confirm-text="page.editingItem ? '保存修改' : '确认创建'"
     :confirm-loading="page.saving"
     :confirm-disabled="page.isSystemRole"
@@ -194,8 +194,6 @@
             </div>
           </div>
         </el-form-item>
-
-        <V2RoleSensitivePolicy :page="page" />
       </section>
     </el-form>
 
@@ -242,7 +240,6 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2FormDrawer from '@/v2/components/V2FormDrawer.vue';
 import type { useRolesPage } from '../useRolesPage';
-import V2RoleSensitivePolicy from './V2RoleSensitivePolicy.vue';
 
 const props = defineProps<{
   page: UnwrapNestedRefs<ReturnType<typeof useRolesPage>>;

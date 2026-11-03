@@ -1168,7 +1168,7 @@ test('readonly metadata shortcut leaves the separate four-image Quality step and
     'run: node scripts/ci-recharge-check.mjs "$CHECK_PART" "$CHECK_BASE"'
   );
   const images = workflow.indexOf(
-    'run: python3 -B scripts/production-release/online-recharge-ci-build.py',
+    'run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py',
     check
   );
   assert.ok(check > 0 && images > check);

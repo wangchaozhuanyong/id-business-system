@@ -159,12 +159,15 @@ jobs:
           PYCODE
 
       - name: Verify affected release entry and maintenance controls
+        id: window_ci_controls
         env:
+          GH_TOKEN: ${{ github.token }}
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: full
-        run: node scripts/ci-recharge-check.mjs release-controls "$CHECK_BASE"
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py --controls release-controls --base "$CHECK_BASE"
 
       - name: Verify changed browser worker
+        if: steps.window_ci_controls.outputs.reuse_worker != 'true'
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: full
@@ -176,6 +179,7 @@ jobs:
           fi
 
       - name: Verify frozen online recharge engine
+        if: steps.window_ci_controls.outputs.reuse_engine != 'true'
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
         run: node scripts/ci-recharge-check.mjs online-engine "$CHECK_BASE"
@@ -191,14 +195,15 @@ jobs:
 
       - name: Verify changed release controls
         env:
+          GH_TOKEN: ${{ github.token }}
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: ci-only
-        run: node scripts/ci-recharge-check.mjs guards "$CHECK_BASE"
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py --controls guards --base "$CHECK_BASE"
 
       - name: Build and verify sealed ONLINE images without production access
         if: needs.change-scope.outputs.online_ci_build == 'true'
         timeout-minutes: 45
-        run: python3 -B scripts/production-release/online-recharge-ci-build.py
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py
 
       - name: Preserve CI-only ONLINE image verification
         if: needs.change-scope.outputs.online_ci_build == 'true'
@@ -223,15 +228,19 @@ jobs:
         run: npm run check:v2-table-standard
 
       - name: Verify V2 table action layouts
+        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'
         run: npm run acceptance:v2-table-layout
 
       - name: Verify V2 button color contrast
+        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'
         run: npm run acceptance:v2-color-contrast
 
       - name: Verify ordinary-order archive and restore layouts
+        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'
         run: node scripts/acceptance-v2-order-archive-ui.mjs .artifacts/order-archive-ui
 
       - name: Verify single-account recharge confirmation flow
+        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'
         run: npm run acceptance:v2-auto-recharge
 
       - name: Check V2 loading standard
@@ -259,14 +268,17 @@ jobs:
         run: npm run check:cloud-independence
 
       - name: Typecheck
+        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'
         run: npm run typecheck
 
       - name: Install frozen ONLINE browser test dependencies
+        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'
         run: |
           npm ci --prefix apps/api/src/id-business-v2/online-recharge/engine/upstream --ignore-scripts --no-audit --no-fund
           node apps/api/src/id-business-v2/online-recharge/engine/upstream/node_modules/playwright/cli.js install --with-deps chromium
 
       - name: Test
+        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'
         run: npm run test
 
       - name: Build
@@ -345,7 +357,7 @@ jobs:
       - name: Build and verify sealed ONLINE images without production access
         if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'guards' && needs.change-scope.outputs.online_ci_build == 'true' }}
         timeout-minutes: 45
-        run: python3 -B scripts/production-release/online-recharge-ci-build.py
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py
 
       # BEGIN GPT native API artifact retention
       - name: Preserve the verified GPT API overlay

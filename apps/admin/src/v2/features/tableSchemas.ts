@@ -1328,8 +1328,7 @@ export const v2TableSchemas = {
           kind: 'identifier',
           widthPreset: 'standard',
           hideable: false
-        },
-        { key: 'actions', label: '操作', kind: 'actions', layout: 'single', pin: 'end' }
+        }
       ] as const
     }),
     websiteAnalytics: table({

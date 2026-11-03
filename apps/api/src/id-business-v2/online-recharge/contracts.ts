@@ -66,6 +66,20 @@ export interface OnlineRechargeWorkerRpc {
 }
 export const ONLINE_RECHARGE_DEFAULTS = {
   maxConcurrent: 1,
+  executionChannel: '',
+  acceptingNewTasks: true,
+  bitBrowserQueueLimit: 100,
+  bitBrowserDeviceId: '',
+  bitBrowserPaymentMode: 'manual',
+  bitBrowserApiUrl: 'http://127.0.0.1:54345',
+  bitBrowserGroupName: '线上代充',
+  bitBrowserTagName: '线上代充',
+  bitBrowserPlusCurrency: 'PHP',
+  bitBrowserPlusMaxAmount: '',
+  bitBrowserPro5xCurrency: 'CLP',
+  bitBrowserPro5xMaxAmount: '',
+  bitBrowserPro20xCurrency: 'PHP',
+  bitBrowserPro20xMaxAmount: '',
   maintenance: false,
   cardMaxSubscriptionCount: SHARED_CARD_DEFAULT_LIMITS.maxSubscriptionCount,
   cardMaxDeclineCount: SHARED_CARD_DEFAULT_LIMITS.maxDeclineCount,
@@ -109,6 +123,7 @@ export const ONLINE_RECHARGE_DEFAULTS = {
 } as const;
 export const ONLINE_RECHARGE_SECRET_KEYS = [
   'gptApiKey',
+  'bitBrowserApiKey',
   'telegramBotToken',
   'telegramAdminChatId',
   'telegramGroupChatId',

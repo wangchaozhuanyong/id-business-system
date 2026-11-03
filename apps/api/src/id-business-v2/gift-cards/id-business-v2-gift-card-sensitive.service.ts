@@ -33,15 +33,11 @@ export class IdBusinessV2GiftCardSensitiveService {
     if (!UUID_PATTERN.test(giftCardId)) throw new BadRequestException('礼品卡格式无效');
     if (
       !operator ||
-      (!operator.roles.includes('admin') &&
-        !operator.permissions.includes('apple.gift_card.view_full'))
+      (!operator.roles.includes('admin') && !operator.permissions.includes('apple.balance.view'))
     ) {
       throw new ForbiddenException('无权查看完整礼品卡号');
     }
-    const reason = typeof dto.reason === 'string' ? dto.reason.trim() : '';
-    if (reason.length > 200) {
-      throw new BadRequestException('查看原因不能超过 200 个字符');
-    }
+    const reason = '查看礼品卡资料';
     return this.transactionManager.execute(
       async (tx, context) => {
         const giftCard = await this.repository.findSensitiveGiftCard(giftCardId, tx);

@@ -238,20 +238,10 @@
 
   <el-dialog
     v-model="page.revealDialogVisible"
-    :title="`查看敏感资料 · ${page.revealTarget?.displayAppleId ?? ''}`"
+    :title="`资料详情 · ${page.revealTarget?.displayAppleId ?? ''}`"
     width="min(480px, 92vw)"
     destroy-on-close
   >
-    <el-alert
-      :type="page.sensitiveAccessRequiresApproval ? 'warning' : 'info'"
-      :title="
-        page.sensitiveAccessRequiresApproval
-          ? '该字段需要管理员批准后才能查看，批准结果会自动同步。'
-          : '当前角色可以直接查看，系统仍会记录查看人和字段。'
-      "
-      :closable="false"
-      show-icon
-    />
     <el-form
       ref="revealFormRef"
       class="v2-account-reveal-form v2-horizontal-form"
@@ -274,54 +264,13 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item
-        v-if="
-          page.sensitiveAccessRequiresApproval &&
-          !page.sensitiveAccessCanReveal &&
-          page.sensitiveAccessRequest?.status !== 'pending'
-        "
-        label="申请原因"
-        prop="reason"
-      >
-        <el-input
-          v-model="page.revealForm.reason"
-          type="textarea"
-          :rows="3"
-          maxlength="200"
-          show-word-limit
-          placeholder="例如：客户续费登录核对"
-        />
-      </el-form-item>
-      <div class="v2-sensitive-access-status" role="status">
-        <span>{{ page.sensitiveAccessStatusText }}</span>
-        <AppButton
-          v-if="page.sensitiveAccessError"
-          size="small"
-          variant="ghost"
-          @click="page.refreshSensitiveAccess"
-        >
-          重试
-        </AppButton>
-      </div>
       <el-form-item v-if="page.revealForm.value" label="完整资料">
         <el-input v-model="page.revealForm.value" type="textarea" :rows="3" readonly />
       </el-form-item>
     </el-form>
     <template #footer>
       <AppButton variant="ghost" @click="page.revealDialogVisible = false">关闭</AppButton>
-      <AppButton
-        variant="danger"
-        :loading="page.revealing || page.sensitiveAccessLoading || page.sensitiveAccessRequesting"
-        :disabled="
-          Boolean(page.sensitiveAccessError) ||
-          page.sensitiveAccessPolicy?.mode === 'denied' ||
-          (page.sensitiveAccessRequiresApproval &&
-            page.sensitiveAccessRequest?.status === 'pending')
-        "
-        @click="revealSecret"
-      >
-        {{ page.sensitiveAccessActionText }}
-      </AppButton>
+      <AppButton variant="soft" :loading="page.revealing" @click="revealSecret">重新读取</AppButton>
     </template>
   </el-dialog>
 
@@ -464,25 +413,9 @@ const formRules = computed<FormRules>(() => ({
       : []
 }));
 const revealRules = computed<FormRules>(() => ({
-  field: [{ required: true, message: '请选择查看字段', trigger: 'change' }],
-  reason:
-    props.page.sensitiveAccessRequiresApproval && !props.page.sensitiveAccessCanReveal
-      ? [
-          {
-            required: true,
-            validator: (_rule, value, callback) => {
-              const normalized = String(value ?? '').trim();
-              callback(
-                normalized.length >= 2 && normalized.length <= 200
-                  ? undefined
-                  : new Error('请输入 2 至 200 个字符的申请原因')
-              );
-            },
-            trigger: 'blur'
-          }
-        ]
-      : []
+  field: [{ required: true, message: '请选择查看字段', trigger: 'change' }]
 }));
+
 const importDisabledReason = computed(() =>
   !props.page.importCompleted && !props.page.importRows.length ? '当前没有可导入的有效记录' : ''
 );

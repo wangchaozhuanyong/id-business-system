@@ -72,6 +72,6 @@ describe('V2 topup supplier fund contracts', () => {
     ).toEqual(['apple.balance.adjust', 'apple.topup_supplier_fund.manage']);
     expect(
       Reflect.getMetadata(PERMISSIONS_KEY, IdBusinessV2GiftCardsController.prototype.revealCode)
-    ).toEqual(['apple.gift_card.view_full']);
+    ).toEqual(['apple.balance.view']);
   });
 });

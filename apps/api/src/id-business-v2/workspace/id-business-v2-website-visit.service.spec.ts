@@ -107,7 +107,7 @@ describe('website visit service', () => {
     ).toMatchObject({
       status: 'ready',
       summary: { pageViews: 2, uniqueIps: 1 },
-      items: [{ ipMasked: '203.0.*.*' }]
+      items: [{ ipMasked: '203.0.113.19' }]
     });
   });
 

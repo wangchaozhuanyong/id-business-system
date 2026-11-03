@@ -5,7 +5,7 @@ import {
   OnlineRechargeAssetsRepository,
   assertOnlineSensitive
 } from './persistence/assets.repository';
-import { object, text } from './validation';
+import { object } from './validation';
 export { assertOnlineSensitive } from './persistence/assets.repository';
 
 @Injectable()
@@ -19,7 +19,6 @@ export class OnlineRechargeAssetsService {
       throw new ForbiddenException('本次安全码读取仅允许管理员执行');
     if (['reveal', 'export', 'bitbrowser-cvc'].includes(action)) {
       assertOnlineSensitive(operator);
-      text(input.reason ?? '资料出库', '查看原因', 500);
     } else if (
       !operator.roles.includes('admin') &&
       !operator.permissions.includes(ONLINE_RECHARGE_PERMISSION.manage)

@@ -3,54 +3,49 @@ import type { PrismaService } from '../common/prisma/prisma.service';
 import { V2IdentityService } from './v2-identity.service';
 
 describe('V2IdentityService', () => {
-  it.each([true, false])(
-    '敏感审批角色合并保留现有直接授权优先规则: %s',
-    async (requiresApproval) => {
-      const permissionCode = 'id_business_v2.online_recharge.sensitive';
-      const prisma = {
-        securitySetting: {
-          findUnique: vi
-            .fn()
-            .mockResolvedValue({ value: { userId: '11111111-1111-4111-8111-111111111111' } })
-        },
-        idBusinessV2ScopeVersion: { findUnique: vi.fn().mockResolvedValue({ version: 1n }) },
-        user: {
-          findFirst: vi.fn().mockResolvedValue({
-            id: '33333333-3333-4333-8333-333333333333',
-            username: 'fixture',
-            displayName: '隔离员工',
-            userRoles: [
-              {
-                role: {
-                  code: 'operation',
-                  rolePermissions: [
-                    { permission: { code: permissionCode }, sensitiveApprovalRequired: true }
-                  ]
-                }
-              },
-              {
-                role: {
-                  code: 'reviewer',
-                  rolePermissions: [
-                    {
-                      permission: { code: permissionCode },
-                      sensitiveApprovalRequired: requiresApproval
-                    }
-                  ]
-                }
+  it.each([true, false])('历史敏感审批标记不再进入当前身份: %s', async (requiresApproval) => {
+    const permissionCode = 'id_business_v2.online_recharge.sensitive';
+    const prisma = {
+      securitySetting: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ value: { userId: '11111111-1111-4111-8111-111111111111' } })
+      },
+      idBusinessV2ScopeVersion: { findUnique: vi.fn().mockResolvedValue({ version: 1n }) },
+      user: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: '33333333-3333-4333-8333-333333333333',
+          username: 'fixture',
+          displayName: '隔离员工',
+          userRoles: [
+            {
+              role: {
+                code: 'operation',
+                rolePermissions: [
+                  { permission: { code: permissionCode }, sensitiveApprovalRequired: true }
+                ]
               }
-            ]
-          })
-        }
-      } as unknown as PrismaService;
-      const result = await new V2IdentityService(prisma).getAuthenticatedUser(
-        '33333333-3333-4333-8333-333333333333'
-      );
-      expect(result.sensitiveApprovalPermissionCodes ?? []).toEqual(
-        requiresApproval ? [permissionCode] : []
-      );
-    }
-  );
+            },
+            {
+              role: {
+                code: 'reviewer',
+                rolePermissions: [
+                  {
+                    permission: { code: permissionCode },
+                    sensitiveApprovalRequired: requiresApproval
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      }
+    } as unknown as PrismaService;
+    const result = await new V2IdentityService(prisma).getAuthenticatedUser(
+      '33333333-3333-4333-8333-333333333333'
+    );
+    expect(result.sensitiveApprovalPermissionCodes ?? []).toEqual([]);
+  });
   it('returns deduplicated roles and permissions for an active V2 operator', async () => {
     const prisma = {
       securitySetting: {

@@ -1,7 +1,7 @@
 """建单前落盘和单次重试资格；只保存脱敏状态，不保存网页会话。"""
 from __future__ import annotations
 
-import fcntl
+import local_state_files as fcntl
 import hashlib
 import json
 import os
@@ -183,11 +183,13 @@ def atomic_json(path: Path, data: dict):
     try:
         write_json(temp, data, exclusive=True)
         os.replace(temp, path)
-        fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        # Windows 不支持以 os.open 打开目录；记录本身已 fsync，付款前仍先取得服务器持久化回执。
+        if os.name != 'nt':
+            fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -215,7 +217,7 @@ class AttemptLedger:
         if self.root.is_symlink():
             raise Stop("unsafe_state_directory")
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.fd = os.open(self.root / (self.key + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        self.fd = fcntl.open_private(self.root / (self.key + ".lock"), os.O_CREAT | os.O_RDWR)
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -285,7 +287,7 @@ class AttemptLedger:
                 if archive.read_bytes() != self.previous_bytes:
                     raise Stop("history_conflict")
             else:
-                fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                fd = fcntl.open_private(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
                 with os.fdopen(fd, "wb") as f:
                     f.write(self.previous_bytes)
                     f.flush()

@@ -196,7 +196,7 @@ export class IdBusinessV2GiftCardsController {
   @Post(':giftCardId/reveal-code')
   @Header('Cache-Control', 'no-store')
   @Header('Pragma', 'no-cache')
-  @RequirePermissions('apple.gift_card.view_full')
+  @RequirePermissions('apple.balance.view')
   revealCode(
     @Param('giftCardId') giftCardId: string,
     @Body() dto: RevealIdBusinessV2GiftCardCodeDto,

@@ -43,6 +43,9 @@ export class OnlineRechargeWorkerRpcRepository {
   }
   async rpc(token: unknown, raw: unknown) {
     this.authorize(token);
+    return this.dispatch(raw);
+  }
+  async dispatch(raw: unknown) {
     const input = object(raw),
       args = input.args ? object(input.args) : {};
     const rpc: OnlineRechargeWorkerRpc = {

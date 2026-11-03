@@ -1,5 +1,8 @@
 import { OnlineRechargeTaskNotAccepted } from '../task-acceptance';
 import { assertSharedCardPlan, lockSharedBankCards } from '../../bank-card-pool/public-api';
+import { bitbrowserPolicy, executionChannel } from '../bitbrowser-policy';
+import { queueBitbrowserRecheck } from './bitbrowser-task-actions';
+import { selectBitbrowserDevice } from './bitbrowser-dispatch';
 import {
   BadRequestException,
   ConflictException,
@@ -103,6 +106,14 @@ export class OnlineRechargeTasksRepository {
     const reconciliation = payload.reconciliation
       ? originalRecheckSchedule(payload.reconciliation, row.updatedAt)
       : null;
+    const publicResult =
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? Object.fromEntries(
+            Object.entries(result).filter(
+              ([key]) => !['bitBrowserQuote', 'bitBrowserUserAction'].includes(key)
+            )
+          )
+        : result;
     const base = {
       id: row.id,
       jobKey: row.id,
@@ -148,7 +159,7 @@ export class OnlineRechargeTasksRepository {
             ...(change.quoteId ? { quoteId: change.quoteId } : {})
           }
         : null,
-      result,
+      result: publicView ? publicResult : result,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt
     };
@@ -198,17 +209,25 @@ export class OnlineRechargeTasksRepository {
   }
   async publicConfig() {
     const { settings } = await this.settings.internal();
+    const channel = executionChannel(settings);
     const [active, queued, awaitingCredentials] = await this.repository.read((db) =>
       Promise.all(
         (['running', 'queued', 'awaiting_credentials'] as const).map((status) =>
-          db.onlineRechargeTask.count({ where: { operation: 'recharge', status } })
+          db.onlineRechargeTask.count({
+            where: {
+              operation: 'recharge',
+              status,
+              provider: channel === 'bitbrowser' ? 'bitbrowser' : { in: ['local', 'third_party'] }
+            }
+          })
         )
       )
     );
     return {
-      maintenance: settings.maintenance,
+      maintenance: settings.maintenance === true || settings.acceptingNewTasks === false,
       maintenanceDrain: settings.maintenance === true && active + queued + awaitingCredentials > 0,
-      maxConcurrent: settings.maxConcurrent,
+      maxConcurrent:
+        channel === 'bitbrowser' ? settings.bitBrowserQueueLimit : settings.maxConcurrent,
       active,
       queued,
       awaitingCredentials,
@@ -275,6 +294,12 @@ export class OnlineRechargeTasksRepository {
       operation,
       integrationSource
     );
+    if (
+      !operator &&
+      operation === 'recharge' &&
+      Object.keys(input).some((key) => !['code', 'session'].includes(key))
+    )
+      throw new BadRequestException('客户充值只接收兑换码和完整会话资料');
     const sessionData = ['recharge', 'debug', 'subscription', 'renewal'].includes(operation)
       ? session(input.session, requireFullSession)
       : null;
@@ -340,7 +365,10 @@ export class OnlineRechargeTasksRepository {
         }
       }
       const config = await tx.onlineRechargeConfig.findUnique({ where: { id: 'global' } });
-      const settings = { ...ONLINE_RECHARGE_DEFAULTS, ...(config ? object(config.settings) : {}) };
+      const settings = {
+        ...ONLINE_RECHARGE_DEFAULTS,
+        ...(config ? object(config.settings) : {})
+      };
       const codeRow = code
         ? await tx.onlineRechargeCode.findUnique({
             where: { codeHash: this.encryption.hash(code)! }
@@ -360,15 +388,25 @@ export class OnlineRechargeTasksRepository {
           taskToken: this.encryption.decrypt(existing.publicTokenEncrypted)!
         };
       }
+      const channel = executionChannel(settings);
+      const selectedPlan = codeRow?.plan ?? plan(input.plan ?? 'plus');
       if (operation === 'recharge') {
+        if (!settings.acceptingNewTasks) throw new ConflictException('当前暂停接收新充值任务');
         if (settings.maintenance) throw new ConflictException('线上代充维护中，请稍后再试');
         const active = await tx.onlineRechargeTask.count({
           where: {
             operation: 'recharge',
-            status: 'running'
+            provider: channel === 'bitbrowser' ? 'bitbrowser' : { in: ['local', 'third_party'] },
+            status:
+              channel === 'bitbrowser'
+                ? { in: ['queued', 'running', 'awaiting_credentials'] }
+                : 'running'
           }
         });
-        if (active >= Number(settings.maxConcurrent))
+        if (
+          active >=
+          Number(channel === 'bitbrowser' ? settings.bitBrowserQueueLimit : settings.maxConcurrent)
+        )
           throw new ConflictException('当前代充名额已满，请稍后再试');
       }
       if (
@@ -383,7 +421,6 @@ export class OnlineRechargeTasksRepository {
         }))
       )
         throw new ConflictException('该账号已有充值或续费执行中或待核对任务，请先核对原任务');
-      const selectedPlan = codeRow?.plan ?? plan(input.plan ?? 'plus');
       if (operation === 'recharge' && settings.gptApiEnabled && selectedPlan === 'pro_500')
         throw new BadRequestException('第三方通道尚未核实支持 Pro 500，请使用本地执行通道');
       const payload: Record<string, unknown> = {};
@@ -400,6 +437,16 @@ export class OnlineRechargeTasksRepository {
         if (!operator || operation !== 'recharge' || settings.gptApiEnabled)
           throw new BadRequestException('付款上限仅支持管理端官网充值任务');
         payload.paymentLimit = paymentLimit(input.paymentLimit);
+      }
+      if (operation === 'recharge' && channel === 'bitbrowser') {
+        const secrets = config?.secretsEncrypted
+          ? object(JSON.parse(this.encryption.decrypt(config.secretsEncrypted)!))
+          : {};
+        const selected = await selectBitbrowserDevice(tx, settings, secrets);
+        payload.bitBrowserPolicy = bitbrowserPolicy(settings, selectedPlan, selected.device.id);
+        payload.bitBrowserConnectionEncrypted = this.encryption.encrypt(
+          JSON.stringify(selected.connection)
+        );
       }
       if (input.cardId) {
         const cardId = id(input.cardId);
@@ -435,7 +482,7 @@ export class OnlineRechargeTasksRepository {
         payload.proxyPoolReference = true;
         payload.proxyConnectionVersion = testedProxy.version;
       }
-      if (operation === 'recharge' || operation === 'debug') {
+      if ((operation === 'recharge' && channel !== 'bitbrowser') || operation === 'debug') {
         const route = resolvePlanRegion(
           settings,
           selectedPlan,
@@ -453,7 +500,9 @@ export class OnlineRechargeTasksRepository {
         !(operation === 'subscription' && payload.recheckTaskId)
       ) {
         const countryCode = onlineProxyCountry(
-          payload.proxyCountryCode ?? settings.proxyCountryCode
+          object(payload.bitBrowserPolicy ?? {}).proxyCountryCode ??
+            payload.proxyCountryCode ??
+            settings.proxyCountryCode
         );
         if (!(await tx.idBusinessV2RechargeProxy.count({ where: { active: true, countryCode } })))
           throw new ConflictException('所选代理国家暂无启用代理，请先在代理 IP 管理中添加或启用');
@@ -511,7 +560,7 @@ export class OnlineRechargeTasksRepository {
           operation,
           message: '',
           plan: selectedPlan,
-          provider: operation === 'recharge' && settings.gptApiEnabled ? 'third_party' : 'local',
+          provider: operation === 'recharge' ? channel : 'local',
           codeId: codeRow?.id,
           operatorId: operator?.id,
           sessionEncrypted: this.encryption.encrypt(sessionData?.source),
@@ -939,6 +988,9 @@ export class OnlineRechargeTasksRepository {
     if (action === 'start')
       return this.start(input, operator, section === 'checkout-debug' ? 'debug' : 'recharge');
     if (action === 'recheck') {
+      const originalId = id(input.id);
+      const bitbrowser = await queueBitbrowserRecheck(this.repository, originalId, operator);
+      if (bitbrowser) return this.map(bitbrowser);
       const row = await this.repository.read((db) =>
         db.onlineRechargeTask.findUnique({ where: { id: id(input.id) } })
       );
@@ -1017,22 +1069,16 @@ export class OnlineRechargeTasksRepository {
           if (!row) throw new NotFoundException('任务不存在');
           if (action === 'checkout-link') {
             assertOnlineSensitive(operator);
-            text(input.reason, '查看原因', 500);
             if (row.operation !== 'debug')
               throw new BadRequestException('仅调试任务允许取出支付链接');
             const encrypted = object(row.payload).debugCheckoutEncrypted;
             if (typeof encrypted !== 'string') throw new NotFoundException('调试链接尚未生成');
-            await this.repository.log(tx, 'debug.checkout_link.reveal', operator, taskId, {
-              reason: input.reason
-            });
+            await this.repository.log(tx, 'debug.checkout_link.reveal', operator, taskId);
             return { checkoutUrl: this.encryption.decrypt(encrypted) };
           }
           if (action === 'reveal' || action === 'export') {
             assertOnlineSensitive(operator);
-            text(input.reason ?? '会话管理导出', '查看原因', 500);
-            await this.repository.log(tx, `sessions.${action}`, operator, taskId, {
-              reason: input.reason
-            });
+            await this.repository.log(tx, `sessions.${action}`, operator, taskId);
             return {
               session: this.encryption.decrypt(row.sessionEncrypted),
               content: this.encryption.decrypt(row.sessionEncrypted),
@@ -1040,17 +1086,34 @@ export class OnlineRechargeTasksRepository {
             };
           }
           if (action === 'cancel') {
-            if (row.status !== 'queued' || row.paymentStarted || row.leaseOwner)
-              throw new ConflictException('仅允许取消尚未开始的任务');
+            const runningBitbrowser = row.provider === 'bitbrowser' && row.status === 'running';
+            if (
+              (!runningBitbrowser && (row.status !== 'queued' || row.leaseOwner)) ||
+              row.paymentStarted
+            )
+              throw new ConflictException('仅允许取消尚未提交付款的比特任务或待执行任务');
             await tx.onlineRechargeTask.update({
               where: { id: taskId },
-              data: { status: 'failed', message: '管理员取消待执行任务' }
+              data: {
+                status: 'failed',
+                message: '管理员取消待执行任务',
+                leaseOwner: null,
+                leaseId: null,
+                leaseExpiresAt: null
+              }
             });
             if (row.codeId)
               await tx.onlineRechargeCode.updateMany({
                 where: { id: row.codeId, taskId },
                 data: { status: 'available', taskId: null }
               });
+            if (runningBitbrowser) {
+              await tx.onlineRechargeCard.updateMany({
+                where: { leaseOwner: row.id },
+                data: { leaseOwner: null, leaseId: null, leaseExpiresAt: null }
+              });
+              if (row.cardId) await this.memory.releaseCvc(row.cardId, row.id);
+            }
           } else if (action === 'delete') {
             if (
               activeTaskStatuses.includes(row.status as (typeof activeTaskStatuses)[number]) ||

@@ -3,7 +3,7 @@
     class="v2-accounts-overview"
     aria-label="ID 资源概览"
     title="ID 资源总览"
-    :help="'当前分类为 ' + page.lifecycleLabel + '，敏感资料默认脱敏并保留访问审计。'"
+    :help="'当前分类为 ' + page.lifecycleLabel + '，业务资料完整显示并保留访问审计。'"
     metrics-label="当前页 ID 指标"
   >
     <template #metrics>

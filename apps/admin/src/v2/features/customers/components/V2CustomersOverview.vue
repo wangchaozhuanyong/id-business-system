@@ -3,7 +3,7 @@
     class="v2-customers-overview"
     aria-label="客户资料概览"
     title="客户资料总览"
-    help="集中维护客户来源、标签和历史业务，敏感联系方式默认脱敏。"
+    help="集中维护客户来源、标签和历史业务，联系方式完整显示。"
     metrics-label="当前页客户指标"
   >
     <template #metrics>

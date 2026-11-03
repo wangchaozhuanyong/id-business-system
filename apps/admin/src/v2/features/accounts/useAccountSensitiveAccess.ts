@@ -30,35 +30,33 @@ export function useAccountSensitiveAccess(options: UseAccountSensitiveAccessOpti
     });
   }
 
+  let generation = 0;
+
   function changeRevealField(field: V2AccountSecretField) {
     options.revealForm.reason = '';
     options.revealForm.value = '';
-    void prepareSensitiveAccess(field);
+    void prepareSensitiveAccess(field).then(revealSecret);
   }
 
   async function revealSecret() {
     if (!options.revealTarget.value || !options.revealForm.field) return;
+    const current = ++generation;
+    const target = options.revealTarget.value;
+    const field = options.revealForm.field;
     options.revealing.value = true;
     try {
-      if (sensitiveAccess.requiresApproval.value && !sensitiveAccess.approvedRequestId.value) {
-        await sensitiveAccess.submitRequest(options.revealForm.reason);
-        ElMessage.success('查看申请已提交，管理员审核后即可查看');
-        return;
+      const result = await idBusinessV2AccountsApi.revealSecret(target.id, field, {});
+      if (
+        current === generation &&
+        options.revealTarget.value?.id === target.id &&
+        options.revealForm.field === field
+      ) {
+        options.revealForm.value = result.value;
       }
-      const result = await idBusinessV2AccountsApi.revealSecret(
-        options.revealTarget.value.id,
-        options.revealForm.field,
-        {
-          reason: options.revealForm.reason.trim(),
-          approvalId: sensitiveAccess.approvedRequestId.value
-        }
-      );
-      options.revealForm.value = result.value;
-      ElMessage.success('完整资料已显示，并已写入敏感访问日志');
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error));
     } finally {
-      options.revealing.value = false;
+      if (current === generation) options.revealing.value = false;
     }
   }
 

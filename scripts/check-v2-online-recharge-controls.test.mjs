@@ -261,6 +261,17 @@ test('合成兑换验收跟随已发布后台路由而不再等待旧匿名页�
   );
 });
 
+test('每台电脑接口密钥必须在身份变化时清除，不能用普通草稿保留', () => {
+  assert.match(
+    checkMutation(
+      'check-v2-input-retention.mjs',
+      'apps/admin/src/v2/features/online-recharge/OnlineBitbrowserConnectionDrawer.vue',
+      'subscribeIdentityChange(clearSensitiveInput)',
+      'subscribeIdentityChange(() => undefined)'
+    ),
+    /设备接口密钥必须/
+  );
+});
 function checkMutation(checker, file, from, to, expectedStatus = 1) {
   const runner = `
     import fs from 'node:fs';

@@ -111,7 +111,7 @@ export function useCustomersPage() {
   const canCreate = computed(() => hasUserPermission(authStore.user, 'customer.create'));
   const canUpdate = computed(() => hasUserPermission(authStore.user, 'customer.update'));
   const canDelete = computed(() => hasUserPermission(authStore.user, 'customer.delete'));
-  const canRevealContact = computed(() => hasUserPermission(authStore.user, 'customer.view_phone'));
+  const canRevealContact = computed(() => hasUserPermission(authStore.user, 'customer.view'));
   const activeFilterCount = computed(
     () =>
       [
@@ -139,25 +139,7 @@ export function useCustomersPage() {
       }
     ]
   };
-  const revealRules = computed<FormRules>(() => ({
-    reason:
-      sensitiveAccess.requiresApproval.value && !sensitiveAccess.canReveal.value
-        ? [
-            {
-              required: true,
-              validator: (_rule, value, callback) => {
-                const normalized = String(value ?? '').trim();
-                callback(
-                  normalized.length >= 2 && normalized.length <= 200
-                    ? undefined
-                    : new Error('请输入 2 至 200 个字符的申请原因')
-                );
-              },
-              trigger: 'blur'
-            }
-          ]
-        : []
-  }));
+  const revealRules = computed<FormRules>(() => ({}));
 
   function getCustomersListQuery(): V2CustomerListQuery {
     return {
@@ -393,15 +375,7 @@ export function useCustomersPage() {
     if (!revealTarget.value || !(await validateV2Form(formInstance))) return;
     revealing.value = true;
     try {
-      if (sensitiveAccess.requiresApproval.value && !sensitiveAccess.approvedRequestId.value) {
-        await sensitiveAccess.submitRequest(revealForm.reason);
-        ElMessage.success('查看申请已提交，管理员审核后即可查看');
-        return;
-      }
-      const payload = {
-        reason: revealForm.reason.trim(),
-        approvalId: sensitiveAccess.approvedRequestId.value
-      };
+      const payload = {};
       if (revealField.value === 'phone') {
         const result = await idBusinessV2CustomersApi.revealPhone(revealTarget.value.id, payload);
         revealForm.value = result.phone;

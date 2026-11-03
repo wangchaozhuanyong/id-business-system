@@ -168,7 +168,7 @@ export function parseSecretField(value: unknown): IdBusinessV2AccountSecretField
 export function assertSecretPermission(config: SecretFieldConfig, operator?: AuthenticatedUser) {
   if (
     operator &&
-    (operator.roles.includes('admin') || operator.permissions.includes(config.permission))
+    (operator.roles.includes('admin') || operator.permissions.includes('apple.account.view'))
   ) {
     return;
   }
@@ -257,11 +257,8 @@ export function normalizeBalanceAdjustmentIdempotencyKey(value: unknown) {
 }
 
 export function normalizeRevealReason(value: unknown, fallback?: string) {
-  const reason = normalizeNullableString(value);
-  if (!reason && fallback) return fallback;
-  if (!reason) throw new BadRequestException('查看原因不能为空');
-  if (reason.length > 200) throw new BadRequestException('查看原因过长');
-  return reason;
+  void value;
+  return fallback || '查看业务资料';
 }
 
 export function maskAppleId(value: string) {

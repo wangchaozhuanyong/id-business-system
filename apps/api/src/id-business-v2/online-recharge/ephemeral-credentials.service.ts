@@ -52,6 +52,19 @@ export class OnlineRechargeEphemeralCredentials {
       return [];
     }
   }
+  async claimCvc(cardId: string, taskId: string): Promise<string> {
+    const value = (await this.request('/credentials/claim', { cardId, taskId })) as {
+      cvc?: unknown;
+    };
+    return typeof value.cvc === 'string' && /^\d{3,4}$/.test(value.cvc) ? value.cvc : '';
+  }
+  async releaseCvc(cardId: string, taskId: string) {
+    try {
+      await this.request('/credentials/release', { cardId, taskId });
+    } catch {
+      /* 临时凭据仍受独立到期时间约束。 */
+    }
+  }
   async forgetCvc(cardId: string) {
     try {
       await this.request('/credentials/forget', { ids: [cardId] });

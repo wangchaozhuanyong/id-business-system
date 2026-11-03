@@ -13,7 +13,7 @@
       <header class="v2-customer-list__header">
         <V2SectionHeading
           title="客户资料列表"
-          help="联系方式默认脱敏；固定操作列保留编辑、状态和软删除入口。"
+          help="联系方式完整显示；操作列提供编辑、状态和软删除入口。"
         >
           <template #actions>
             <V2TableColumnSettings inline :schema="v2TableSchemas.customers.main" />

@@ -20,6 +20,10 @@
       loading-title="正在加载配置"
       @retry="query.refresh"
     >
+      <OnlineBitbrowserDevicePanel
+        @updated="query.refresh"
+        @devices-loaded="bitbrowserDevices = $event"
+      />
       <section v-for="group in visibleGroups" :key="group.key" class="online-panel">
         <V2SectionHeading :title="group.title" :help="group.help" placement="bottom"
           ><template #actions
@@ -39,7 +43,7 @@
           :rules="formRules"
           :disabled="!canManage"
           label-position="left"
-          label-width="160px"
+          label-width="clamp(104px, 28vw, 160px)"
           require-asterisk-position="right"
           scroll-to-error
           @submit.prevent="save"
@@ -54,8 +58,20 @@
               <FeatureHelp :title="field.label" :text="field.explanation" placement="bottom" />
             </template>
             <div class="online-field">
+              <el-radio-group
+                v-if="field.type === 'radio'"
+                v-model="draft.form[field.key]"
+                :aria-label="field.label"
+              >
+                <el-radio
+                  v-for="option in field.options"
+                  :key="option.value"
+                  :value="option.value"
+                  >{{ option.label }}</el-radio
+                >
+              </el-radio-group>
               <el-switch
-                v-if="field.type === 'switch'"
+                v-else-if="field.type === 'switch'"
                 :model-value="Boolean(draft.form[field.key])"
                 @update:model-value="draft.form[field.key] = Boolean($event)"
               /><el-input-number
@@ -74,6 +90,7 @@
                   v-for="option in field.options"
                   :key="option.value"
                   :label="option.label"
+                  :disabled="option.disabled"
                   :value="option.value" /></el-select
               ><el-input
                 v-else-if="field.transient"
@@ -120,6 +137,8 @@ import { paymentCurrencyLabels } from './planRegionFields';
 import { onlineError } from './labels';
 import { initialFields } from './sections';
 import OnlineResultDialog from './OnlineResultDialog.vue';
+import OnlineBitbrowserDevicePanel from './OnlineBitbrowserDevicePanel.vue';
+import type { BitbrowserDevice } from './bitbrowser-api';
 import type { FormValue } from './contracts';
 import './online-recharge.css';
 const authStore = useAuthStore();
@@ -129,6 +148,7 @@ const fields = configGroups.flatMap((group) => group.fields);
 const draft = useV2FormDraft<Record<string, FormValue>>('online-recharge/config', () =>
   initialFields(fields)
 );
+const bitbrowserDevices = ref<BitbrowserDevice[]>([]);
 const query = useV2ModuleQuery({
   moduleKey: 'online-recharge-config',
   scope: 'online-recharge',
@@ -175,6 +195,21 @@ function secretSaved(key: string) {
   const flags = query.data.value?.secretStatus ?? query.data.value?.secretKeysSaved ?? {};
   return Boolean((flags as Record<string, unknown>)[key] ?? query.data.value?.[`${key}Saved`]);
 }
+const deviceOptions = computed(() => {
+  const devices = bitbrowserDevices.value;
+  const options = [
+    { value: '', label: '原执行电脑', disabled: false },
+    ...devices.map((device) => ({
+      value: device.id,
+      label: `${device.name}（${!device.enabled ? (device.pairingExpiresAt ? '待配对' : '已停用') : device.online ? '在线' : '离线'}）`,
+      disabled: !device.enabled || !device.paired
+    }))
+  ];
+  const selected = String(draft.form.bitBrowserDeviceId || '');
+  if (selected && !options.some((item) => item.value === selected))
+    options.push({ value: selected, label: '原指定电脑（不可用）', disabled: true });
+  return options;
+});
 const visibleGroups = computed(() =>
   configGroups.map((group) => ({
     ...group,
@@ -197,9 +232,13 @@ const visibleGroups = computed(() =>
                 ...(query.data.value?.proxyCountries ?? []),
                 ...(draft.form[field.key] ? [String(draft.form[field.key])] : [])
               ])
-            ].map((value) => ({ value, label: proxyCountryLabel(value) }))
+            ].map((value) => ({ value, label: proxyCountryLabel(value), disabled: false }))
           }
-        : {})
+        : field.key === 'bitBrowserDeviceId'
+          ? {
+              options: deviceOptions.value
+            }
+          : {})
     }))
   }))
 );

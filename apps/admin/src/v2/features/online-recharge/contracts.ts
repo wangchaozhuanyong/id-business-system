@@ -67,6 +67,8 @@ export interface OnlineTaskRegion {
 }
 export interface PublicTask {
   planRegion?: OnlineTaskRegion | null;
+  provider?: 'local' | 'third_party' | 'bitbrowser';
+  email?: string | null;
   id: string;
   status: string;
   createdAt?: string;
@@ -102,11 +104,11 @@ export type FormValue = string | number | boolean | string[];
 export interface OnlineField {
   key: string;
   label: string;
-  type?: 'text' | 'textarea' | 'number' | 'select' | 'switch' | 'secret' | 'card-select';
+  type?: 'text' | 'textarea' | 'number' | 'select' | 'switch' | 'secret' | 'card-select' | 'radio';
   multiple?: boolean;
   required?: boolean;
   help?: string;
-  options?: readonly { value: string; label: string }[];
+  options?: readonly { value: string; label: string; disabled?: boolean }[];
   min?: number;
   max?: number;
   initial?: FormValue;

@@ -436,17 +436,14 @@ export class IdBusinessV2CustomersService {
   }
 
   private normalizeRevealReason(value: unknown, fallback?: string) {
-    const reason = this.normalizeNullableString(value);
-    if (!reason && fallback) return fallback;
-    if (!reason) throw new BadRequestException('查看原因不能为空');
-    if (reason.length > 200) throw new BadRequestException('查看原因过长');
-    return reason;
+    void value;
+    return fallback || '查看客户资料';
   }
 
   private assertContactPermission(operator?: AuthenticatedUser) {
     if (
       operator &&
-      (operator.roles.includes('admin') || operator.permissions.includes('customer.view_phone'))
+      (operator.roles.includes('admin') || operator.permissions.includes('customer.view'))
     ) {
       return;
     }

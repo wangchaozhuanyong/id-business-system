@@ -202,8 +202,9 @@ def checkout_result(data: dict) -> tuple[dict, str | None]:
 
 
 def write_json(path: Path, data: dict, *, exclusive=False) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_EXCL if exclusive else os.O_TRUNC)
-    fd = os.open(path, flags, 0o600)
+    from local_state_files import open_private
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    fd = open_private(path, flags)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.flush()

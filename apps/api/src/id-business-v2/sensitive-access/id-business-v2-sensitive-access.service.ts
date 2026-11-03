@@ -22,7 +22,6 @@ import type {
 import {
   ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG,
   getIdBusinessV2SensitiveDescriptorByKey,
-  getIdBusinessV2SensitiveAllowedDisplayModes,
   requireIdBusinessV2SensitiveAccessDescriptor,
   type IdBusinessV2SensitiveAccessDescriptor,
   type IdBusinessV2SensitiveAccessMode,
@@ -32,20 +31,11 @@ import {
 import {
   IdBusinessV2SensitiveAccessRepository,
   type SensitiveApprovalFilter,
-  type SensitiveApprovalRecord,
-  type SensitiveDisplayPolicyRecord,
-  type SensitivePermissionGrant
+  type SensitiveApprovalRecord
 } from './persistence/id-business-v2-sensitive-access.repository';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const APPROVAL_DURATION_MS = 15 * 60 * 1000;
-const DISPLAY_MODE_PRIORITY: Record<IdBusinessV2SensitiveDisplayMode, number> = {
-  hidden: 0,
-  masked: 1,
-  reveal_approval: 2,
-  reveal_direct: 3,
-  full: 4
-};
 interface SensitiveAccessAuditMeta {
   requestId?: string;
   ip?: string;
@@ -62,44 +52,11 @@ export class IdBusinessV2SensitiveAccessService {
 
   async listPolicies(operator?: AuthenticatedUser) {
     const current = this.requireOperator(operator);
-    if (current.roles.includes('admin')) {
-      return {
-        items: ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => ({
-          ...descriptor,
-          mode: 'admin_bypass' as const
-        }))
-      };
-    }
-
-    const contexts = [
-      ...new Set(
-        ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map(
-          (descriptor) => descriptor.contexts[0] as IdBusinessV2SensitiveDisplayContext
-        )
-      )
-    ];
-    const [policies, grants] = await Promise.all([
-      this.repository.listSensitiveDisplayPolicies(
-        current.id,
-        ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => descriptor.key),
-        contexts
-      ),
-      this.listSensitivePermissionGrants(current.id)
-    ]);
     return {
-      items: ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => {
-        const displayMode = this.resolveDisplayModeFromRecords(
-          current,
-          descriptor,
-          descriptor.contexts[0],
-          policies,
-          grants
-        );
-        return {
-          ...descriptor,
-          mode: this.toAccessMode(current, displayMode)
-        };
-      })
+      items: ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((descriptor) => ({
+        ...descriptor,
+        mode: current.roles.includes('admin') ? ('admin_bypass' as const) : ('direct' as const)
+      }))
     };
   }
 
@@ -109,7 +66,7 @@ export class IdBusinessV2SensitiveAccessService {
     context: IdBusinessV2SensitiveDisplayContext,
     tx?: V2CommandTransaction
   ): Promise<IdBusinessV2SensitiveDisplayMode> {
-    const operator = this.requireOperator(operatorInput);
+    this.requireOperator(operatorInput);
     const descriptor = getIdBusinessV2SensitiveDescriptorByKey(fieldKey);
     if (
       !descriptor ||
@@ -117,54 +74,9 @@ export class IdBusinessV2SensitiveAccessService {
     ) {
       throw new BadRequestException('敏感资料字段或使用场景无效');
     }
-    if (operator.roles.includes('admin')) {
-      if (context === 'audit') return 'masked';
-      return descriptor.secret ? 'reveal_direct' : 'full';
-    }
-    const [policies, grants] = await Promise.all([
-      this.repository.listSensitiveDisplayPolicies(operator.id, [descriptor.key], [context], tx),
-      this.listSensitivePermissionGrants(operator.id, descriptor.permissionCode, tx)
-    ]);
-    return this.resolveDisplayModeFromRecords(operator, descriptor, context, policies, grants);
-  }
-
-  private resolveDisplayModeFromRecords(
-    operator: AuthenticatedUser,
-    descriptor: IdBusinessV2SensitiveAccessDescriptor,
-    context: IdBusinessV2SensitiveDisplayContext,
-    policies: SensitiveDisplayPolicyRecord[],
-    grants: SensitivePermissionGrant[]
-  ): IdBusinessV2SensitiveDisplayMode {
-    if (operator.roles.includes('admin')) {
-      if (context === 'audit') return 'masked';
-      return descriptor.secret ? 'reveal_direct' : 'full';
-    }
-    if (!operator.permissions.includes(descriptor.permissionCode)) return 'masked';
-
-    const applicablePolicies = policies.filter(
-      (policy) =>
-        policy.fieldKey === descriptor.key &&
-        policy.context === context &&
-        policy.role.rolePermissions.some(
-          (assignment) => assignment.permission.code === descriptor.permissionCode
-        )
-    );
-    const explicitRoleIds = new Set(applicablePolicies.map((policy) => policy.role.id));
-    const applicableModes: IdBusinessV2SensitiveDisplayMode[] = applicablePolicies
-      .map((policy) => policy.mode)
-      .map((mode) => (descriptor.secret && mode === 'full' ? 'reveal_direct' : mode));
-    for (const grant of grants.filter(
-      (item) => item.permission.code === descriptor.permissionCode
-    )) {
-      if (explicitRoleIds.has(grant.roleId)) continue;
-      applicableModes.push(
-        this.resolveLegacyDisplayMode(descriptor, context, grant.sensitiveApprovalRequired)
-      );
-    }
-    if (!applicableModes.length) return 'masked';
-    return applicableModes.reduce((current, mode) =>
-      DISPLAY_MODE_PRIORITY[mode] > DISPLAY_MODE_PRIORITY[current] ? mode : current
-    );
+    // 业务入口负责模块与资料归属校验；历史字段策略不再增加查看审批。
+    void tx;
+    return context === 'audit' ? 'masked' : 'full';
   }
 
   async resolveDisplayModes(
@@ -198,6 +110,18 @@ export class IdBusinessV2SensitiveAccessService {
   ) {
     const operator = this.requireOperator(input.operator);
     const descriptor = requireIdBusinessV2SensitiveAccessDescriptor(input);
+    const modulePermission: Record<string, string> = {
+      id_business_v2_account: 'apple.account.view',
+      id_business_v2_customer: 'customer.view',
+      id_business_v2_order: 'apple.order.view',
+      id_business_v2_gift_card: 'apple.balance.view'
+    };
+    if (
+      !operator.roles.includes('admin') &&
+      !operator.permissions.includes(modulePermission[descriptor.module])
+    ) {
+      throw new ForbiddenException('没有查看该业务模块资料的权限');
+    }
     const displayMode = await this.resolveDisplayMode(
       operator,
       descriptor.key,
@@ -347,10 +271,9 @@ export class IdBusinessV2SensitiveAccessService {
 
   async listPendingSummary(operator?: AuthenticatedUser) {
     this.requireAdmin(operator);
-    const { items, pendingCount } = await this.repository.listPendingSummary();
     return {
-      pendingCount,
-      items: await this.toResponses(items),
+      pendingCount: 0,
+      items: [],
       generatedAt: new Date().toISOString()
     };
   }
@@ -452,41 +375,6 @@ export class IdBusinessV2SensitiveAccessService {
         retryMode: 'none'
       }
     );
-  }
-
-  private listSensitivePermissionGrants(
-    userId: string,
-    permissionCode?: string,
-    tx?: V2CommandTransaction
-  ) {
-    const permissionCodes = permissionCode
-      ? [permissionCode]
-      : [...new Set(ID_BUSINESS_V2_SENSITIVE_ACCESS_CATALOG.map((item) => item.permissionCode))];
-    return this.repository.listSensitivePermissionGrants(userId, permissionCodes, tx);
-  }
-
-  private toAccessMode(
-    operator: AuthenticatedUser,
-    displayMode: IdBusinessV2SensitiveDisplayMode
-  ): IdBusinessV2SensitiveAccessMode {
-    if (operator.roles.includes('admin')) return 'admin_bypass';
-    if (displayMode === 'reveal_approval') return 'approval_required';
-    if (displayMode === 'reveal_direct' || displayMode === 'full') return 'direct';
-    return 'denied';
-  }
-
-  private resolveLegacyDisplayMode(
-    descriptor: IdBusinessV2SensitiveAccessDescriptor,
-    context: IdBusinessV2SensitiveDisplayContext,
-    approvalRequired: boolean
-  ): IdBusinessV2SensitiveDisplayMode {
-    const allowedModes = getIdBusinessV2SensitiveAllowedDisplayModes(descriptor, context);
-    if (approvalRequired) {
-      return allowedModes.includes('reveal_approval') ? 'reveal_approval' : 'masked';
-    }
-    if (allowedModes.includes('reveal_direct')) return 'reveal_direct';
-    if (allowedModes.includes('full')) return 'full';
-    return 'masked';
   }
 
   private async requireTargetLabel(

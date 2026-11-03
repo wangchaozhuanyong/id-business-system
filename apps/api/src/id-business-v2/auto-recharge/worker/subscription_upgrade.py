@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
-import fcntl
+import local_state_files as fcntl
 import hashlib
 import json
 import os
@@ -169,7 +169,7 @@ class UpgradeLedger:
         if self.root.is_symlink():
             raise Stop('unsafe_state_directory')
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.fd = os.open(self.root / (self.account_key + '.lock'), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        self.fd = fcntl.open_private(self.root / (self.account_key + '.lock'), os.O_CREAT | os.O_RDWR)
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             folder = self.root / 'payments'

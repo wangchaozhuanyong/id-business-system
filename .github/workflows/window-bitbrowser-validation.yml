@@ -1,0 +1,61 @@
+name: Window BitBrowser Database Validation
+on:
+  pull_request:
+    paths:
+      - 'apps/api/src/id-business-v2/online-recharge/**'
+      - 'apps/api/src/id-business-v2/sensitive-access/**'
+      - 'apps/api/prisma-mysql/**'
+      - '.github/workflows/window-bitbrowser-validation.yml'
+      - 'scripts/production-release/window-bitbrowser*'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/src/id-business-v2/online-recharge/**'
+      - 'apps/api/prisma-mysql/**'
+      - '.github/workflows/window-bitbrowser-validation.yml'
+permissions:
+  contents: read
+concurrency:
+  group: window-bitbrowser-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  online-bitbrowser-mysql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: bitbrowser-ci-fixture
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: online_recharge_test_window_${{ github.run_id }}
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pbitbrowser-ci-fixture"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    env:
+      DATABASE_URL: mysql://root:bitbrowser-ci-fixture@127.0.0.1:3306/online_recharge_test_window_${{ github.run_id }}
+      ONLINE_RECHARGE_MYSQL_TEST: '1'
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit
+      - run: npm run build --workspace @apple-business/shared
+      - run: npm run prisma:generate
+      - name: Apply migration only on the isolated CI database
+        run: npm run prisma:mysql:migrate:deploy
+      - name: Verify real MySQL transactions and original-order recovery
+        run: |
+          mkdir -p .runtime/window-bitbrowser-ci
+          npm run test --workspace @apple-business/api -- src/id-business-v2/online-recharge/mysql.integration.spec.ts --reporter=json --outputFile="$GITHUB_WORKSPACE/.runtime/window-bitbrowser-ci/mysql.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: window-bitbrowser-mysql-${{ github.sha }}
+          path: .runtime/window-bitbrowser-ci/*.json
+          include-hidden-files: true
+          if-no-files-found: warn

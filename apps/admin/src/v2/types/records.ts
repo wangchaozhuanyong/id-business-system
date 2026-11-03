@@ -339,6 +339,6 @@ export type UnfreezeV2AccountLossResult = ReportV2AccountLossResult;
 export type V2AccountSecretField = 'appleId' | 'password' | 'phone' | 'securityInfo';
 
 export interface V2RevealInput {
-  reason: string;
+  reason?: string;
   approvalId?: string | null;
 }

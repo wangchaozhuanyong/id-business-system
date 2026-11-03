@@ -17,8 +17,28 @@ export const configGroups: {
     ],
     fields: [
       {
+        key: 'executionChannel',
+        explanation: '选择服务器、第三方或指定电脑的比特浏览器执行新任务。',
+        label: '充值通道',
+        type: 'select',
+        initial: 'local',
+        options: [
+          { value: 'local', label: '服务器浏览器' },
+          { value: 'third_party', label: '第三方代充' },
+          { value: 'bitbrowser', label: '比特浏览器' }
+        ]
+      },
+      {
+        key: 'acceptingNewTasks',
+        explanation: '修改只影响之后受理的任务，已受理订单继续按原设置执行。',
+        label: '接收新任务',
+        type: 'switch',
+        initial: true,
+        help: '关闭后暂停接受新充值，已受理任务按提交时的策略继续处理。'
+      },
+      {
         key: 'maxConcurrent',
-        label: '最大并发激活数',
+        label: '服务器最大并发数',
         explanation:
           '同一时间最多处理几笔充值。例如填 1，就一次处理一笔；调大前需要有足够的银行卡、代理和浏览器资源。',
         type: 'number',
@@ -82,6 +102,74 @@ export const configGroups: {
     fields: planRegionFields
   },
   {
+    key: 'bitbrowser',
+    title: '比特浏览器执行',
+    help: '选择执行电脑与付款模式，电脑离线时保留排队。',
+    fields: [
+      {
+        key: 'bitBrowserDeviceId',
+        explanation: '修改只影响之后受理的任务，已受理订单继续按原设置执行。',
+        label: '指定执行电脑',
+        type: 'select',
+        initial: '',
+        options: [{ value: '', label: '原执行电脑' }],
+        help: '选择 Mac 或 Windows 执行。切换只影响新任务，原任务继续由受理时的电脑完成；同时只执行一笔。'
+      },
+      {
+        key: 'bitBrowserPaymentMode',
+        explanation: '修改只影响之后受理的任务，已受理订单继续按原设置执行。',
+        label: '付款模式',
+        type: 'radio',
+        initial: 'manual',
+        options: [
+          { value: 'manual', label: '核对金额后付款' },
+          { value: 'automatic', label: '全自动付款' }
+        ],
+        help: '每笔任务保存提交时的付款策略，修改设置只影响新任务。'
+      },
+      {
+        key: 'bitBrowserQueueLimit',
+        explanation: '修改只影响之后受理的任务，已受理订单继续按原设置执行。',
+        label: '待处理任务上限',
+        type: 'number',
+        min: 1,
+        max: 100,
+        initial: 100,
+        help: '执行电脑一次处理一笔；电脑离线时任务保留排队。'
+      },
+      ...(['Plus', 'Pro5x', 'Pro20x'] as const).flatMap((key) => [
+        {
+          key: `bitBrowser${key}Currency`,
+          explanation: '只接受此币种的官网报价，不符时停止付款。',
+          label: `${key === 'Plus' ? 'Plus' : key === 'Pro5x' ? 'Pro 5 倍' : 'Pro 20 倍'} 付款币种`,
+          type: 'select' as const,
+          initial: key === 'Pro5x' ? 'CLP' : 'PHP',
+          options: (key === 'Pro5x' ? ['CLP'] : ['USD', 'PHP', 'MYR', 'SGD', 'CLP']).map(
+            (currency) => ({
+              value: currency,
+              label: (
+                {
+                  USD: '美元',
+                  PHP: '菲律宾比索',
+                  MYR: '马来西亚令吉',
+                  SGD: '新加坡元',
+                  CLP: '智利比索'
+                } as Record<string, string>
+              )[currency]
+            })
+          )
+        },
+        {
+          key: `bitBrowser${key}MaxAmount`,
+          explanation: '以所选币种设置单笔付款上限；超限等待人工核对。',
+          label: `${key === 'Plus' ? 'Plus' : key === 'Pro5x' ? 'Pro 5 倍' : 'Pro 20 倍'} 自动付款上限`,
+          initial: '',
+          help: '按该套餐所选币种填写；全自动模式须配置，超出上限转为人工核对。'
+        }
+      ])
+    ]
+  },
+  {
     key: 'provider',
     title: '第三方代充',
     help: [
@@ -93,14 +181,6 @@ export const configGroups: {
       { key: 'gpt_status', label: '查询余额与套餐' }
     ],
     fields: [
-      {
-        key: 'gptApiEnabled',
-        label: '启用第三方代充',
-        explanation:
-          '允许系统使用外部供应商的代充服务。只有已经对接供应商时才打开；不使用第三方代充就保持关闭。',
-        type: 'switch',
-        initial: false
-      },
       {
         key: 'gptApiBaseUrl',
         label: '供应商接口地址',

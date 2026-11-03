@@ -123,7 +123,6 @@ const detailLoading = ref(false);
 const detailError = ref('');
 const hasStoredNumber = ref(false);
 let mounted = true;
-let clearTimer: ReturnType<typeof setTimeout> | undefined;
 async function loadDetail() {
   if (detailLoading.value) return;
   detailLoading.value = true;
@@ -133,10 +132,6 @@ async function loadDetail() {
     if (!mounted) return;
     detail.value = value;
     hasStoredNumber.value = Boolean(value.number);
-    if (clearTimer) clearTimeout(clearTimer);
-    clearTimer = setTimeout(() => {
-      if (detail.value) detail.value = { ...detail.value, number: null };
-    }, 60_000);
   } catch (error) {
     if (mounted) detailError.value = getApiErrorMessage(error);
   } finally {
@@ -148,7 +143,6 @@ onMounted(() => {
 });
 onUnmounted(() => {
   mounted = false;
-  if (clearTimer) clearTimeout(clearTimer);
   detail.value = null;
 });
 function goToOrder(accountId: string, orderNo: string) {

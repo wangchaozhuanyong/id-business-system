@@ -1,3 +1,4 @@
+import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import {
   BadRequestException,
   ConflictException,
@@ -9,7 +10,6 @@ import { freemem, totalmem, cpus, uptime } from 'node:os';
 import { statfs } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { AuthenticatedUser } from '../../../auth/auth.types';
-import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
 import {
   ONLINE_RECHARGE_PERMISSION,
   ONLINE_RECHARGE_PLAN_LABELS,
@@ -171,6 +171,7 @@ export class OnlineRechargeAdminRepository {
             delete item.leaseOwner;
             return {
               ...item,
+              number: this.encryption.decrypt((row as { numberEncrypted: string }).numberEncrypted),
               inUse,
               addressSummary: address
                 ? `${address.country} · ${address.city} · ${address.street}`
@@ -225,7 +226,6 @@ export class OnlineRechargeAdminRepository {
           };
         })
       };
-    const visibleCodes = new Map<string, string>();
     const billingEmails = new Map<string, string>();
     if (section === 'billing' && result.items.length) {
       const taskIds = [...new Set(result.items.map((row) => (row as { taskId: string }).taskId))];
@@ -238,7 +238,7 @@ export class OnlineRechargeAdminRepository {
       for (const task of tasks)
         billingEmails.set(task.id, this.encryption.decrypt(task.emailEncrypted) ?? '');
     }
-    if (section === 'cdks' && operator.roles.includes('admin') && result.items.length) {
+    if (section === 'cdks' && result.items.length) {
       await this.repository.transaction(
         'cdks-list-view',
         (tx) =>
@@ -248,10 +248,6 @@ export class OnlineRechargeAdminRepository {
           }),
         ['audit-logs']
       );
-      for (const raw of result.items) {
-        const row = raw as { id: string; codeEncrypted: string };
-        visibleCodes.set(row.id, this.encryption.decrypt(row.codeEncrypted) ?? '');
-      }
     }
     return {
       ...result,
@@ -259,7 +255,7 @@ export class OnlineRechargeAdminRepository {
         const item = sanitize(JSON.parse(JSON.stringify(row))) as Record<string, unknown>;
         if (section === 'cdks') {
           delete item.codeHash;
-          item.code = visibleCodes.get(String(item.id)) ?? `····${item.codeLast4}`;
+          item.code = this.encryption.decrypt((row as { codeEncrypted: string }).codeEncrypted);
         }
         if (section === 'proxies') delete item.connectionHash;
         if (section === 'billing') item.email = billingEmails.get(String(item.taskId)) ?? '';

@@ -1,15 +1,4 @@
-import {
-  Body,
-  ForbiddenException,
-  Controller,
-  Delete,
-  Get,
-  Header,
-  Param,
-  Patch,
-  Post,
-  Query
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { RechargeProxyService } from './proxy-pool.service';
@@ -43,19 +32,9 @@ export class ProxyPoolController {
   }
 
   @Get(':id')
-  @RequirePermissions(
-    'id_business_v2.online_recharge.read',
-    'id_business_v2.online_recharge.sensitive'
-  )
+  @RequirePermissions('id_business_v2.online_recharge.read')
   @Header('Cache-Control', 'no-store')
   detail(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
-    if (
-      !operator.roles.includes('admin') &&
-      operator.sensitiveApprovalPermissionCodes?.includes(
-        'id_business_v2.online_recharge.sensitive'
-      )
-    )
-      throw new ForbiddenException('该角色查看代理凭据需要审批');
     return this.proxies.detail(id, operator);
   }
 

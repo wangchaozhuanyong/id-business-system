@@ -13,18 +13,10 @@ export function useAccountPermissions(revealTarget: Ref<V2Account | null>) {
   );
   const canViewLosses = computed(() => hasUserPermission(authStore.user, 'apple.balance.view'));
   const canReportLoss = computed(() => canUpdate.value && canAdjustBalance.value);
-  const canRevealAppleId = computed(() =>
-    hasUserPermission(authStore.user, 'apple.account.view_full')
-  );
-  const canRevealPassword = computed(() =>
-    hasUserPermission(authStore.user, 'apple.secret.view_password')
-  );
-  const canRevealPhone = computed(() =>
-    hasUserPermission(authStore.user, 'apple.secret.view_phone')
-  );
-  const canRevealSecurity = computed(() =>
-    hasUserPermission(authStore.user, 'apple.secret.view_security')
-  );
+  const canRevealAppleId = computed(() => hasUserPermission(authStore.user, 'apple.account.view'));
+  const canRevealPassword = computed(() => hasUserPermission(authStore.user, 'apple.account.view'));
+  const canRevealPhone = computed(() => hasUserPermission(authStore.user, 'apple.account.view'));
+  const canRevealSecurity = computed(() => hasUserPermission(authStore.user, 'apple.account.view'));
   const revealFieldOptions = computed<Array<{ value: V2AccountSecretField; label: string }>>(() => {
     const target = revealTarget.value;
     if (!target) return [];

@@ -37,7 +37,7 @@ describe('ID management page UI contract', () => {
     expect(toolbar).toContain('更多筛选');
     expect(toolbar).toContain('page.activeFilterCount');
     expect(toolbar).toContain('page.resetFilters');
-    expect(toolbar).toContain('敏感资料默认脱敏');
+    expect(toolbar).toContain('业务资料完整显示');
     expect(list).toContain('class="v2-account-list-heading"');
     expect(list).toContain('useV2StableListFrame');
     expect(view).not.toContain('v2-records-toolbar--accounts');

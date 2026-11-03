@@ -11,7 +11,6 @@ import { FieldEncryptionService } from '../../common/crypto/field-encryption.ser
 import { V2CommandTransactionManager, V2TransactionalAuditService } from '../runtime/public-api';
 import { IdBusinessV2WebsiteVisitRepository } from './persistence/id-business-v2-website-visit.repository';
 import {
-  maskWebsiteVisitIp,
   normalizeWebsiteVisitIp,
   parseWebsiteVisitSearch,
   WEBSITE_VISIT_DAY_MS,
@@ -110,7 +109,7 @@ export class IdBusinessV2WebsiteVisitService {
           id: row.id,
           path: row.path,
           occurredAt: row.occurredAt.toISOString(),
-          ipMasked: maskWebsiteVisitIp(this.decryptIp(row.ipEncrypted))
+          ipMasked: this.decryptIp(row.ipEncrypted)
         }))
       };
     } catch {

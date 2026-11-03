@@ -80,6 +80,7 @@ export class BankRechargeCardService {
       items: cards.map((card) => ({
         id: card.id,
         label: card.label,
+        number: this.encryption.decrypt(card.numberEncrypted),
         last4: card.last4,
         expiry: card.expiry,
         currencyCode: card.currencyCode,

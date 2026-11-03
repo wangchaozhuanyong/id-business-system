@@ -37,7 +37,6 @@ const session: OnlineField = {
   transient: true,
   help: '填写完整的 Session JSON；只提交给对应任务。'
 };
-const reason: OnlineField = { key: 'reason', label: '查看原因', required: true };
 const status: OnlineField = {
   key: 'status',
   label: '状态',
@@ -140,6 +139,7 @@ const taskTop: OnlineAction[] = [
     ]
   }
 ];
+
 export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>> = {
   cards: [
     {
@@ -323,7 +323,7 @@ export const topActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
 };
 export const rowActions: Partial<Record<OnlineSection, readonly OnlineAction[]>> = {
   cards: [
-    { key: 'reveal', label: '复制卡号' },
+    { key: 'reveal', label: '查看卡号' },
     {
       key: 'cvc',
       label: '补充安全码',
@@ -360,7 +360,7 @@ export const rowActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
   ],
   addresses: [{ key: 'update', label: '编辑地址', fields: addressFields }, remove],
   cdks: [
-    { key: 'reveal', label: '复制兑换码' },
+    { key: 'reveal', label: '查看／复制' },
     { key: 'dispatch', label: '标记出库', confirm: '确认将此兑换码标记为已出库？' },
     detail,
     remove
@@ -382,8 +382,8 @@ export const rowActions: Partial<Record<OnlineSection, readonly OnlineAction[]>>
   ],
   automation: [detail, { key: 'artifacts', label: '截图与录像' }, remove],
   sessions: [
-    { key: 'reveal', label: '查看会话', fields: [reason] },
-    { key: 'export', label: '导出会话', fields: [reason] },
+    { key: 'reveal', label: '查看会话' },
+    { key: 'export', label: '导出会话' },
     { key: 'subscription', label: '查询订阅' }
   ],
   renewal: [
@@ -409,6 +409,11 @@ export function onlineActionAllowedForRow(
   action: OnlineAction,
   row: OnlineRow
 ) {
+  if (section === 'jobs' && action.key === 'cancel')
+    return (
+      row.status === 'queued' ||
+      (row.provider === 'bitbrowser' && row.status === 'running' && row.paymentStarted !== true)
+    );
   if (action.key === 'recheck')
     return section === 'jobs' && row.status === 'awaiting_review' && row.hasSession === true;
   return !(section === 'addresses' && action.key === 'update' && Number(row.successCount) > 0);

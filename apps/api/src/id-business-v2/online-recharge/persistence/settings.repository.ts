@@ -1,3 +1,4 @@
+import { executionChannel, validateBitbrowserSettings } from '../bitbrowser-policy';
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
@@ -26,6 +27,7 @@ export class OnlineRechargeSettingsRepository {
     const secrets: Record<string, string> = row?.secretsEncrypted
       ? JSON.parse(this.encryption.decrypt(row.secretsEncrypted)!)
       : {};
+    settings.executionChannel = executionChannel(settings);
     return { settings, secrets, version: row?.version ?? 0 };
   }
   async get(): Promise<
@@ -90,6 +92,10 @@ export class OnlineRechargeSettingsRepository {
           );
         else settings[key] = text(input[key], '配置内容', 2048, defaultValue !== '');
       }
+      if (input.executionChannel === undefined && input.gptApiEnabled !== undefined)
+        settings.executionChannel = input.gptApiEnabled === true ? 'third_party' : 'local';
+      validateBitbrowserSettings(settings);
+      settings.gptApiEnabled = executionChannel(settings) === 'third_party';
       validatePlanRegions(settings);
       if (settings.proxyCountryCode !== '')
         settings.proxyCountryCode = onlineProxyCountry(settings.proxyCountryCode);

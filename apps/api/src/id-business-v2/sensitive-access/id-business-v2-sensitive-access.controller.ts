@@ -1,18 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Controller, Get, GoneException, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, RequireRoles } from '../../auth/auth.decorators';
 import type { AuthenticatedUser } from '../../auth/auth.types';
-import { resolveTrustedClientIp } from '../../common/http/trusted-client-ip';
-import type {
-  CreateIdBusinessV2SensitiveAccessRequestDto,
-  DecideIdBusinessV2SensitiveAccessRequestDto
-} from './dto/id-business-v2-sensitive-access.dto';
 import { IdBusinessV2SensitiveAccessService } from './id-business-v2-sensitive-access.service';
-
-interface RequestWithAuditMeta {
-  ip?: string;
-  requestId?: string;
-  headers: Record<string, string | string[] | undefined>;
-}
 
 @Controller('id-business-v2/sensitive-access')
 export class IdBusinessV2SensitiveAccessController {
@@ -41,12 +30,8 @@ export class IdBusinessV2SensitiveAccessController {
   }
 
   @Post('requests')
-  createRequest(
-    @Body() dto: CreateIdBusinessV2SensitiveAccessRequestDto,
-    @CurrentUser() operator: AuthenticatedUser | undefined,
-    @Req() request: RequestWithAuditMeta
-  ) {
-    return this.sensitiveAccessService.createRequest(dto, operator, this.requestMeta(request));
+  createRequest() {
+    throw new GoneException('业务资料直接查看，查看申请功能已移除');
   }
 
   @Get('approvals/summary')
@@ -75,21 +60,7 @@ export class IdBusinessV2SensitiveAccessController {
 
   @Patch('approvals/:id')
   @RequireRoles('admin')
-  decide(
-    @Param('id') id: string,
-    @Body() dto: DecideIdBusinessV2SensitiveAccessRequestDto,
-    @CurrentUser() operator: AuthenticatedUser | undefined,
-    @Req() request: RequestWithAuditMeta
-  ) {
-    return this.sensitiveAccessService.decide(id, dto, operator, this.requestMeta(request));
-  }
-
-  private requestMeta(request: RequestWithAuditMeta) {
-    const userAgentValue = request.headers['user-agent'];
-    return {
-      requestId: request.requestId,
-      ip: resolveTrustedClientIp(request),
-      userAgent: Array.isArray(userAgentValue) ? userAgentValue[0] : userAgentValue
-    };
+  decide() {
+    throw new GoneException('业务资料直接查看，查看审批功能已移除');
   }
 }

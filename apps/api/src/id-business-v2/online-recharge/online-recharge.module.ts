@@ -1,5 +1,14 @@
 import { OnlineRechargeVendureController } from './vendure-integration.controller';
 import { OnlineRechargeVendureIntegration } from './vendure-integration.service';
+import {
+  OnlineBitbrowserAdminController,
+  OnlineBitbrowserConnectorController
+} from './bitbrowser.controller';
+import { OnlineBitbrowserConnectorService } from './bitbrowser-connector.service';
+import { OnlineBitbrowserCompletionService } from './bitbrowser-completion.service';
+import { OnlineBitbrowserDeviceRepository } from './persistence/bitbrowser-device.repository';
+import { OnlineBitbrowserPaymentRepository } from './persistence/bitbrowser-payment.repository';
+import { OnlineBitbrowserConnectionsRepository } from './persistence/bitbrowser-connections.repository';
 import { ProxyPoolModule } from '../proxy-pool/public-api';
 import { SharedBankCardPoolModule } from '../bank-card-pool/public-api';
 import { Module } from '@nestjs/common';
@@ -45,6 +54,8 @@ import { OnlineRechargeHumanVerification } from './human-verification.service';
     RechargeModule
   ],
   controllers: [
+    OnlineBitbrowserAdminController,
+    OnlineBitbrowserConnectorController,
     OnlineRechargeVendureController,
     OnlineRechargeAdminController,
     OnlineRechargePublicController,
@@ -53,6 +64,11 @@ import { OnlineRechargeHumanVerification } from './human-verification.service';
   exports: [OnlineRechargeSecurityNotificationService],
   providers: [
     OnlineRechargeHumanVerification,
+    OnlineBitbrowserConnectionsRepository,
+    OnlineBitbrowserConnectorService,
+    OnlineBitbrowserCompletionService,
+    OnlineBitbrowserDeviceRepository,
+    OnlineBitbrowserPaymentRepository,
     OnlineRechargeVendureIntegration,
     FieldEncryptionService,
     OnlineRechargeRepository,

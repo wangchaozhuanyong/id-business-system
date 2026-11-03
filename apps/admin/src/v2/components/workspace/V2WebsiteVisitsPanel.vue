@@ -97,7 +97,6 @@
               />
             </el-select>
           </div>
-          <p v-if="revealError" role="alert" class="v2-visits__notice">{{ revealError }}</p>
           <div class="v2-visits__table-region">
             <V2Table
               v-if="view === 'daily'"
@@ -138,24 +137,9 @@
               />
               <V2TableColumn :definition="v2TableSchemas.workspace.websiteVisits.columns[2]"
                 ><template #default="{ row }"
-                  ><span class="v2-visits__ip">{{
-                    revealed[row.id] || row.ipMasked
-                  }}</span></template
+                  ><span class="v2-visits__ip">{{ row.ipMasked }}</span></template
                 ></V2TableColumn
               >
-              <V2TableActionColumn :definition="v2TableSchemas.workspace.websiteVisits.columns[3]">
-                <template #default="{ row }"
-                  ><AppButton
-                    size="small"
-                    variant="ghost"
-                    :disabled="pendingReveal === row.id"
-                    @click="toggleIp(row.id)"
-                    >{{
-                      pendingReveal === row.id ? '读取中' : revealed[row.id] ? '隐藏 IP' : '查看 IP'
-                    }}</AppButton
-                  ></template
-                >
-              </V2TableActionColumn>
             </V2Table>
           </div>
           <el-pagination
@@ -180,7 +164,7 @@
         </template>
       </V2AsyncRegion>
       <footer>
-        在线记录保留 30 天，IP 默认脱敏，查看完整 IP 会留审计并在 30 秒后隐藏。独立 IP
+        在线记录保留 30 天，IP 直接完整显示。独立 IP
         不等于访客或客户数；脚本屏蔽、网络失败会影响采集，“—”表示暂无记录。
       </footer>
     </template>
@@ -188,7 +172,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { V2WebsiteVisitReport, V2WebsiteVisitSearch } from '@apple-business/shared';
 import { useAuthStore } from '@/stores/auth';
 import { getApiErrorMessage } from '@/api/client';
@@ -196,7 +180,6 @@ import AppButton from '@/components/ui/AppButton.vue';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
 import V2Table from '@/v2/components/V2Table.vue';
 import V2TableColumn from '@/v2/components/V2TableColumn.vue';
-import V2TableActionColumn from '@/v2/components/V2TableActionColumn.vue';
 import { v2TableSchemas } from '@/v2/features/tableSchemas';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
@@ -227,22 +210,7 @@ const visibleDays = computed(() =>
 );
 const count = (value?: number | null) =>
   value == null ? '—' : new Intl.NumberFormat('zh-CN').format(value);
-const revealed = ref<Record<string, string>>({});
-const pendingReveal = ref('');
-const revealError = ref('');
-const timers = new Map<string, ReturnType<typeof setTimeout>>();
-let revealGeneration = 0;
-
-function clearRevealed() {
-  revealGeneration += 1;
-  revealed.value = {};
-  pendingReveal.value = '';
-  revealError.value = '';
-  for (const timer of timers.values()) clearTimeout(timer);
-  timers.clear();
-}
 function applySearch() {
-  clearRevealed();
   input.value = {
     days: days.value,
     page: 1,
@@ -255,52 +223,21 @@ function applySearch() {
   void query.refresh();
 }
 function refresh() {
-  clearRevealed();
   void query.refresh();
 }
 function changePage(page: number) {
-  clearRevealed();
   input.value = { ...input.value, page };
   revision.value += 1;
   void query.refresh();
 }
-async function toggleIp(id: string) {
-  if (revealed.value[id]) {
-    delete revealed.value[id];
-    clearTimeout(timers.get(id));
-    timers.delete(id);
-    return;
-  }
-  const generation = revealGeneration;
-  pendingReveal.value = id;
-  revealError.value = '';
-  try {
-    const result = await idBusinessV2WorkspaceApi.revealWebsiteVisitIp(id);
-    if (generation !== revealGeneration || !props.active || !isAdmin.value) return;
-    revealed.value[id] = result.ip;
-    timers.set(
-      id,
-      setTimeout(() => {
-        delete revealed.value[id];
-        timers.delete(id);
-      }, 30_000)
-    );
-  } catch (error) {
-    if (generation === revealGeneration) revealError.value = getApiErrorMessage(error);
-  } finally {
-    if (pendingReveal.value === id) pendingReveal.value = '';
-  }
-}
+
 watch(
   () => props.active,
   (active) => {
-    clearRevealed();
     if (active && isAdmin.value) void query.refresh();
     if (!active) ipFilter.value = '';
   }
 );
-watch(isAdmin, () => clearRevealed());
-onBeforeUnmount(clearRevealed);
 </script>
 
 <style scoped>
