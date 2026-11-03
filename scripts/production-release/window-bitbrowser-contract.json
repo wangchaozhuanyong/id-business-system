@@ -227,9 +227,9 @@
     "shared-bank-card-contract.json": "22b6133b8b8b704475131604f36c56701377d159c0e5eb80ebce3b4f5bd21c67",
     "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852",
     "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771",
-    "window-bitbrowser-publication.py": "de9788b43f76853862899a935c5e2f8dc41457e1ce65f1594ccd5ceace3fe24f",
+    "window-bitbrowser-publication.py": "5858f99ae13ede0eea85b5e2dce7bc9b3daad2811e9d43d1dc2964f3dd21aa7a",
     "window-bitbrowser-release.py": "9da65211bb81c2df92188eb348d807729510ce2bf2730336f6d5c99bec6a5b9c",
-    "window-bitbrowser-release.test.py": "68e1b9c9c9676ea18bca5bab37635af0024e4c21cad6a8e4c6580eaff0bfad48"
+    "window-bitbrowser-release.test.py": "085cacaaac81f6a1567b2093e0e8c0bb0c06d64f2479d1d1447629543fc393dc"
   },
   "migration": {
     "name": "20261102150000_online_recharge_bitbrowser",
@@ -343,7 +343,7 @@
   "updatedServices": ["api", "admin", "online-recharge"],
   "validationSources": {
     ".github/workflows/quality.yml": "4b6c4ae2de48ccc777badc3d8e7910b676fb2aeaab038810ce80ee8d172413fc",
-    ".github/workflows/window-bitbrowser-publication.yml": "177f7c6586d9916a7d287ced022b23bc98f1a7a447f874128eae7df3f88a6428",
+    ".github/workflows/window-bitbrowser-publication.yml": "3ef92e58ad2f56fa9b23e56add654840c4e02578909ffeb153ba2b5477edfff9",
     ".github/workflows/window-bitbrowser-validation.yml": "7677b3e81d9b6a6dba9936dbcc076724a305270b074e3067eb7a0837a1247229",
     "apps/admin/src/v2/components/workspace/workspace-ui.contract.spec.ts": "4b4f0acdfcd874d65c7a3460a7d4e96af5054bf4ed8932888bfd0704ea87a45c",
     "apps/admin/src/v2/features/accounts/accounts-management-ui.contract.spec.ts": "2686c16e5ec0eee736d46b0ed529013468f1c7b992c79f0675fb630380ebe79e",
@@ -382,14 +382,14 @@
     "scripts/check-v2-online-recharge-controls.test.mjs": "3cd69485bb5e93269adc86bda79167689678c205616a8f43f32026d61719f6a9",
     "scripts/ci-recharge-check.test.mjs": "6e235b1467bdc8f6c543db7142167acdd9daeb84e70875f5de529535ed28ea6e",
     "scripts/ci-recharge-release.test.mjs": "e87929df9611c50247f7e4ffc288a66cc34f4abfb502af24ba5c8c3e6c653983",
-    "scripts/production-release/window-bitbrowser-ci-build.py": "7207918c7b6d38dbf11e891e5c920c6e3954396d966411666fe233be50d018db",
+    "scripts/production-release/window-bitbrowser-ci-build.py": "049776fb83601d8aa828d12add29a1442aa35d204199dbdfc9f62a14d432dc3c",
     "scripts/production-release/window-bitbrowser-ci-build.test.py": "450a098b5bc1876b205341ac9698b6fda6ec9af11e076a9fc5f429c39e482410",
-    "scripts/production-release/window-bitbrowser-publication.py": "de9788b43f76853862899a935c5e2f8dc41457e1ce65f1594ccd5ceace3fe24f",
+    "scripts/production-release/window-bitbrowser-publication.py": "5858f99ae13ede0eea85b5e2dce7bc9b3daad2811e9d43d1dc2964f3dd21aa7a",
     "scripts/production-release/window-bitbrowser-release.py": "9da65211bb81c2df92188eb348d807729510ce2bf2730336f6d5c99bec6a5b9c",
-    "scripts/production-release/window-bitbrowser-release.test.py": "68e1b9c9c9676ea18bca5bab37635af0024e4c21cad6a8e4c6580eaff0bfad48",
+    "scripts/production-release/window-bitbrowser-release.test.py": "085cacaaac81f6a1567b2093e0e8c0bb0c06d64f2479d1d1447629543fc393dc",
     "scripts/setup-online-bitbrowser.cmd": "5b56cecc2133a7d8f76d8420a3fc3be253ec9e8eacac6973b0541e81a0880135",
     "scripts/setup-online-bitbrowser.command": "3c913820a35f8c9de0eb445a30024438a6dab98132f12c3ac4073f1fd89da498"
   },
   "version": 1,
-  "workflowSha256": "177f7c6586d9916a7d287ced022b23bc98f1a7a447f874128eae7df3f88a6428"
+  "workflowSha256": "3ef92e58ad2f56fa9b23e56add654840c4e02578909ffeb153ba2b5477edfff9"
 }
