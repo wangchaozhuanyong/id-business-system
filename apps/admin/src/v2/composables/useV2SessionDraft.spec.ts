@@ -15,6 +15,69 @@ import { clearV2SessionDrafts, useV2FormDraft, useV2SessionDraft } from './useV2
 
 beforeEach(clearV2SessionDrafts);
 
+it('copies nested reactive policies after a collection is rebuilt and protects later edits', async () => {
+  const create = () => ({ policies: [] as { fieldKey: string; mode: string }[] });
+  const scope = effectScope();
+  const draft = scope.run(() => useV2FormDraft('nested-policies', create))!;
+  draft.open('a', { policies: [{ fieldKey: 'account.secret', mode: 'full' }] }, 'version-1');
+  await nextTick();
+  const policy = draft.form.policies[0]!;
+  draft.form.policies = [policy];
+  policy.mode = 'masked';
+  expect(() => draft.flush()).not.toThrow();
+  const complete = draft.beginSave();
+  draft.form.policies = [policy];
+  policy.mode = 'hidden';
+  expect(complete()).toBe(false);
+  scope.stop();
+
+  const nextScope = effectScope();
+  const restored = nextScope.run(() => useV2FormDraft('nested-policies', create))!;
+  restored.open('a', { policies: [] }, 'version-2');
+  expect(restored.form.policies).toEqual([{ fieldKey: 'account.secret', mode: 'hidden' }]);
+  expect(restored.version.value).toBe('version-1');
+  expect(JSON.parse(restored.original.value).policies[0].mode).toBe('full');
+  nextScope.stop();
+});
+
+it('preserves native values and shared references without changing the source collections', () => {
+  type Policy = { mode: string };
+  const create = () => ({
+    first: null as Policy | null,
+    second: null as Policy | null,
+    date: new Date(0),
+    byKey: new Map<string, Policy>(),
+    selected: new Set<Policy>()
+  });
+  const scope = effectScope();
+  const draft = scope.run(() => useV2FormDraft('native-values', create))!;
+  draft.open('a');
+  const policy = reactive({ mode: 'masked' });
+  const byKey = new Map([['secret', policy]]);
+  const selected = new Set([policy]);
+  Object.assign(draft.form, {
+    first: policy,
+    second: policy,
+    date: new Date('2026-11-03T00:00:00Z'),
+    byKey,
+    selected
+  });
+  expect(() => draft.flush()).not.toThrow();
+  draft.open('b');
+  draft.open('a');
+  expect(draft.form.date).toBeInstanceOf(Date);
+  expect(draft.form.date.toISOString()).toBe('2026-11-03T00:00:00.000Z');
+  expect(draft.form.byKey).toBeInstanceOf(Map);
+  expect(draft.form.selected).toBeInstanceOf(Set);
+  expect(draft.form.first).toBe(draft.form.second);
+  expect(draft.form.first).toBe(draft.form.byKey.get('secret'));
+  expect(draft.form.selected.has(draft.form.first!)).toBe(true);
+  expect(byKey.get('secret')).toBe(policy);
+  expect(selected.has(policy)).toBe(true);
+  expect(policy.mode).toBe('masked');
+  scope.stop();
+});
+
 describe('会话内草稿保留', () => {
   it('页面卸载后恢复输入，且不同功能互不覆盖', () => {
     const scope = effectScope();

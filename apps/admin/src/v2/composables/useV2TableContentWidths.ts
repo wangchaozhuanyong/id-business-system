@@ -16,7 +16,7 @@ interface RememberedWidths {
   baseWidths: Record<string, number>;
   actionPadding: Record<string, number>;
   actionViewport?: boolean;
-  actionContentKey?: string;
+  contentKey?: string;
 }
 // Only numeric layout metadata follows the existing query's array identity. No rows are retained.
 const rememberedWidths = new WeakMap<
@@ -49,10 +49,46 @@ export function rememberV2TableWidths(data: unknown, key: string, value: Remembe
   while (entries.size > 4) entries.delete(entries.keys().next().value!);
   rememberedWidths.set(data, entries);
 }
-export function recallV2TableWidths(data: unknown, key: string) {
+export function recallV2TableWidths(data: unknown, key: string, validateData = true) {
   if (!data || typeof data !== 'object') return undefined;
   const cached = rememberedWidths.get(data)?.get(key);
-  return cached?.fingerprint === fingerprint(data) ? cached.value : undefined;
+  if (!cached) return undefined;
+  return !validateData || cached.fingerprint === fingerprint(data) ? cached.value : undefined;
+}
+
+// Read rendered content without serializing hidden fields or copying whole HTML trees.
+// Numeric widths may be restored provisionally; only this DOM key can skip measurement.
+export function getV2TableContentKey(table: HTMLElement) {
+  let a = 2166136261,
+    b = 5381,
+    length = 0;
+  const add = (value: string | null) => {
+    const text = value ?? '';
+    length += text.length;
+    a = Math.imul(a ^ text.length, 16777619);
+    b = Math.imul(b, 33) ^ text.length;
+    for (let index = 0; index < text.length; index++) {
+      const code = text.charCodeAt(index);
+      a = Math.imul(a ^ code, 16777619);
+      b = Math.imul(b, 33) ^ code;
+    }
+  };
+  const element = (node: Element) => {
+    add(node.tagName);
+    add(node.getAttribute('class'));
+    add(node.getAttribute('style'));
+    add(node.getAttribute('width'));
+    add(node.getAttribute('height'));
+  };
+  for (const cell of table.querySelectorAll<HTMLElement>(
+    '.el-table__header-wrapper .cell, .el-table__body-wrapper .cell'
+  )) {
+    if (cell.closest('.v2-unified-table') !== table) continue;
+    add(cell.textContent);
+    element(cell);
+    for (const child of cell.querySelectorAll('*')) element(child);
+  }
+  return `${length}:${a >>> 0}:${b >>> 0}`;
 }
 
 export function useV2TableContentWidths(
@@ -72,7 +108,7 @@ export function useV2TableContentWidths(
       document.documentElement.getAttribute('data-v2-theme'),
       fontRevision
     ]);
-  const restored = recallV2TableWidths(data(), cacheKey());
+  const restored = recallV2TableWidths(data(), cacheKey(), false);
   const widths = ref<Record<string, number>>({ ...restored?.widths });
   const tableWidth = ref(restored?.tableWidth ?? 0);
   const previousData = inject(V2_ASYNC_REGION_PREVIOUS_DATA, undefined);
@@ -131,17 +167,15 @@ export function useV2TableContentWidths(
     }
     const startedAt = performance.now();
     containerWidth = root.clientWidth;
-    const actionContentKey = fingerprint(
-      [...table.querySelectorAll('.v2-table-actions')].map((node) => node.innerHTML)
-    );
-    const cached = recallV2TableWidths(data(), cacheKey());
+    const contentKey = getV2TableContentKey(table);
+    const cached = recallV2TableWidths(data(), cacheKey(), false);
     if (
       cached?.tableWidth === containerWidth &&
       tableWidth.value === cached.tableWidth &&
       Object.keys(widths.value).length === Object.keys(cached.widths).length &&
       Object.keys(cached.widths).every((key) => widths.value[key] === cached.widths[key]) &&
       cached.actionViewport === mobile &&
-      cached.actionContentKey === actionContentKey
+      cached.contentKey === contentKey
     ) {
       recordV2InteractionSample('table-measure', performance.now() - startedAt);
       return;
@@ -169,7 +203,7 @@ export function useV2TableContentWidths(
       baseWidths: { ...baseWidths },
       actionPadding: { ...actionPadding },
       actionViewport,
-      actionContentKey
+      contentKey
     });
     if (
       tableWidth.value === allocation.tableWidth &&

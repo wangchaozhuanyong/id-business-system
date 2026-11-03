@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   measureV2TableContent,
+  getV2TableContentKey,
   rememberV2TableWidths,
   recallV2TableWidths
 } from './useV2TableContentWidths';
@@ -97,4 +98,49 @@ it('reuses numeric layout only for the same array and layout inputs, with bounde
   for (let index = 0; index < 5; index++) rememberV2TableWidths(rows, String(index), size);
   expect(recallV2TableWidths(rows, 'desktop-light-columns-v1')).toBeUndefined();
   expect(recallV2TableWidths(rows, '4')).toEqual(size);
+});
+
+it('restores only numeric layout without walking hidden record data and skips hashing cache misses', () => {
+  const hiddenRead = vi.fn(() => []);
+  const rows = [{ name: '原始名称', hiddenDetails: { toJSON: hiddenRead } }];
+  const size = {
+    widths: { name: 160 },
+    tableWidth: 800,
+    baseWidths: { name: 160 },
+    actionPadding: {}
+  };
+  expect(recallV2TableWidths(rows, 'new-layout')).toBeUndefined();
+  expect(hiddenRead).not.toHaveBeenCalled();
+  rememberV2TableWidths(rows, 'current-layout', size);
+  hiddenRead.mockClear();
+  rows[0].name = '更长的新名称';
+  expect(recallV2TableWidths(rows, 'current-layout', false)).toEqual(size);
+  expect(hiddenRead).not.toHaveBeenCalled();
+  expect(recallV2TableWidths(rows, 'current-layout')).toBeUndefined();
+});
+
+it('invalidates rendered layout for visible text, structure and font styles but ignores volatile ids', () => {
+  const attributes = new Map<string, string>([['class', 'label']]);
+  const child = { tagName: 'STRONG', getAttribute: (name: string) => attributes.get(name) ?? null };
+  const table = { querySelectorAll: () => [cell] };
+  const cell = {
+    tagName: 'DIV',
+    textContent: '原始名称',
+    closest: () => table,
+    querySelectorAll: () => [child],
+    getAttribute: () => 'cell'
+  };
+  const contentKey = () => getV2TableContentKey(table as unknown as HTMLElement);
+  const original = contentKey();
+  attributes.set('id', 'transient-next-trigger');
+  attributes.set('aria-describedby', 'transient-next-tooltip');
+  expect(contentKey()).toBe(original);
+  cell.textContent = '更长的新名称';
+  expect(contentKey()).not.toBe(original);
+  cell.textContent = '原始名称';
+  attributes.set('style', 'font-weight:700');
+  expect(contentKey()).not.toBe(original);
+  attributes.delete('style');
+  child.tagName = 'SPAN';
+  expect(contentKey()).not.toBe(original);
 });

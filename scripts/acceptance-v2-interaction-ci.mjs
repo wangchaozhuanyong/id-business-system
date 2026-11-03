@@ -649,6 +649,26 @@ async function interactionFeedback() {
     lazyChecks.push('help opens and Escape closes');
   }
   save('lazy-controls.json', lazyChecks);
+  await navigate(page, '/v2/system/roles');
+  assert.ok(
+    (await page.locator('[data-table-schema="roles.main"] .el-table__body tbody tr').count()) > 0,
+    'The role drawer regression requires a populated role list'
+  );
+  const roleDrawerChecks = [];
+  for (let index = 0; index < 2; index++) {
+    await page.getByRole('button', { name: '查看', exact: true }).first().click();
+    const roleDrawer = page.locator('.el-drawer:visible');
+    await roleDrawer.locator('.v2-role-permissions').waitFor();
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    );
+    assert.equal(await page.locator('.app-route-error, .v2-route-error').count(), 0);
+    assert.deepEqual(requests.errors, []);
+    await roleDrawer.getByRole('button', { name: '关闭', exact: true }).click();
+    await roleDrawer.waitFor({ state: 'hidden' });
+    roleDrawerChecks.push({ open: index + 1, retainedPermissionControls: true, runtimeErrors: 0 });
+  }
+  save('role-drawer-checks.json', roleDrawerChecks);
   save('interaction-feedback.json', { samples, summaries, coldDrawers });
   assert.ok(
     coldDrawers.every((value) => value.feedbackMs <= 200),

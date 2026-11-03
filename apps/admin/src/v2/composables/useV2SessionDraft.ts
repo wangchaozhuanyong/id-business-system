@@ -19,8 +19,42 @@ export function useV2SessionDraft<T>(key: string, create: () => T): T {
   return drafts.get(key) as T;
 }
 
+function unwrapDraftValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  const raw = toRaw(value);
+  if (seen.has(raw)) return seen.get(raw);
+  if (raw instanceof Map) {
+    const result = new Map<unknown, unknown>();
+    seen.set(raw, result);
+    for (const [key, item] of raw) {
+      result.set(unwrapDraftValue(key, seen), unwrapDraftValue(item, seen));
+    }
+    return result;
+  }
+  if (raw instanceof Set) {
+    const result = new Set<unknown>();
+    seen.set(raw, result);
+    for (const item of raw) result.add(unwrapDraftValue(item, seen));
+    return result;
+  }
+  const prototype = Object.getPrototypeOf(raw);
+  if (!Array.isArray(raw) && prototype !== Object.prototype && prototype !== null) return raw;
+  const result = Array.isArray(raw) ? new Array(raw.length) : Object.create(prototype);
+  seen.set(raw, result);
+  for (const key of Object.keys(raw)) {
+    Object.defineProperty(result, key, {
+      value: unwrapDraftValue(Reflect.get(raw, key), seen),
+      enumerable: true,
+      writable: true,
+      configurable: true
+    });
+  }
+  return result;
+}
+
 function copy<T extends object>(value: T): T {
-  return structuredClone(toRaw(value));
+  // Reassembled collections may contain nested Vue proxies even after toRaw(form).
+  return structuredClone(unwrapDraftValue(value, new WeakMap())) as T;
 }
 
 export function flushV2FormDrafts() {

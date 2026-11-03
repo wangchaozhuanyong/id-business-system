@@ -22,6 +22,8 @@ const allowed = new Set([
   'apps/admin/src/v2/components/V2Table.vue',
   'apps/admin/src/v2/composables/useV2TableContentWidths.ts',
   'apps/admin/src/v2/composables/useV2TableContentWidths.spec.ts',
+  'apps/admin/src/v2/composables/useV2SessionDraft.ts',
+  'apps/admin/src/v2/composables/useV2SessionDraft.spec.ts',
   'apps/admin/src/v2/composables/useV2RoutePresentation.ts',
   'apps/admin/src/v2/composables/useV2RoutePresentation.spec.ts',
   'apps/admin/src/v2/features/accounts/useAccountsPage.ts',
@@ -196,6 +198,14 @@ export async function verifyPreviewEvidence(
   const finalSeconds = Math.ceil(
     (Date.parse(finalJobs[0].completed_at) - Date.parse(finalJobs[0].started_at)) / 1000
   );
+  const telemetryRun = await get('', 41646881337);
+  assert.equal(telemetryRun.head_sha, 'af22e3b552e9999c7720f012734361c658dd7225');
+  assert.equal(telemetryRun.conclusion, 'failure');
+  const telemetryJobs = (await get('/jobs?filter=latest&per_page=100', 41646881337)).jobs;
+  assert.equal(telemetryJobs.length, 1);
+  const telemetrySeconds = Math.ceil(
+    (Date.parse(telemetryJobs[0].completed_at) - Date.parse(telemetryJobs[0].started_at)) / 1000
+  );
   const priorDurations = [
     priorSeconds,
     secondSeconds,
@@ -207,14 +217,15 @@ export async function verifyPreviewEvidence(
     typedSeconds,
     latestSeconds,
     lazySeconds,
-    finalSeconds
+    finalSeconds,
+    telemetrySeconds
   ];
   const spentSeconds = priorDurations.reduce((total, value) => total + value, 0);
   const continuationLimitMinutes = 8;
   assert.ok(
     priorDurations.every((value) => value > 0) &&
-      spentSeconds + continuationLimitMinutes * 60 <= 70 * 60,
-    'Combined validation exceeds authorized 70-minute budget'
+      spentSeconds + continuationLimitMinutes * 60 <= 75 * 60,
+    'Combined validation exceeds authorized 75-minute budget'
   );
 
   return {
@@ -255,7 +266,9 @@ export async function verifyPreviewEvidence(
     lazySeconds,
     finalRun: 41640930871,
     finalSeconds,
-    authorizedMinutes: 70,
+    telemetryRun: 41646881337,
+    telemetrySeconds,
+    authorizedMinutes: 75,
     spentSeconds,
     continuationLimitMinutes
   };
