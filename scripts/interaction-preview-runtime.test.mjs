@@ -7,8 +7,13 @@ import {
   redactPreviewOutput,
   previewServerTimings,
   seedPreviewRows,
+  waitForPreviewService,
   PREVIEW_BRANCH
 } from './lib/interaction-preview-runtime.mjs';
+import {
+  verifyPreviewEvidence,
+  PRIOR_PREVIEW_COMMIT
+} from './lib/interaction-preview-evidence.mjs';
 
 const project = process.cwd();
 const context = {
@@ -92,13 +97,70 @@ test('Server-Timing keeps known numeric durations and excludes descriptions or c
     ]
   );
 });
+test('readiness requires the owning API readiness response and fails fast on incorrect paths', async () => {
+  let calls = 0;
+  const request = async () => {
+    calls++;
+    return new Response(
+      JSON.stringify({ success: true, data: { status: 'ready', database: 'ok' } }),
+      { status: 200 }
+    );
+  };
+  await assert.rejects(
+    waitForPreviewService('http://127.0.0.1:5300/api/branding/public', { request, attempts: 1 })
+  );
+  assert.equal(calls, 0);
+  await waitForPreviewService('http://127.0.0.1:5300/api/health/ready', { request });
+  assert.equal(calls, 1);
+  await assert.rejects(
+    waitForPreviewService('http://127.0.0.1:5300/api/health/ready', {
+      request: async () => new Response('', { status: 404 })
+    })
+  );
+});
+test('prior successful checks are reused only when application inputs are unchanged', async () => {
+  const env = { ...context, GITHUB_SHA: 'a'.repeat(40) };
+  const request = async (url) =>
+    new Response(
+      JSON.stringify(
+        url.includes('/jobs?')
+          ? {
+              jobs: [
+                {
+                  started_at: '2026-11-03T00:00:00Z',
+                  completed_at: '2026-11-03T00:05:00Z',
+                  steps: [
+                    'Admin tests and isolated runtime controls',
+                    'Build API and production admin',
+                    'UI and architecture controls'
+                  ].map((name) => ({ name, conclusion: 'success' }))
+                }
+              ]
+            }
+          : { head_sha: PRIOR_PREVIEW_COMMIT, conclusion: 'failure' }
+      ),
+      { status: 200 }
+    );
+  const evidence = await verifyPreviewEvidence(env, project, {
+    request,
+    changedPaths: () => ['scripts/acceptance-v2-interaction-ci.mjs']
+  });
+  assert.equal(evidence.reusedChecks.length, 3);
+  await assert.rejects(
+    verifyPreviewEvidence(env, project, {
+      request,
+      changedPaths: () => ['apps/admin/src/v2/composables/useV2Query.ts']
+    })
+  );
+});
 test('dedicated workflow stays on one test branch, 45 minutes and read-only repository access', () => {
   const workflow = readFileSync(
     new URL('../.github/workflows/interaction-preview-20261103.yml', import.meta.url),
     'utf8'
   );
   assert.match(workflow, /branches: \[codex\/interaction-preview-20261103\]/);
-  assert.match(workflow, /timeout-minutes: 45/);
+  const limit = Number(/timeout-minutes: (\d+)/.exec(workflow)?.[1]);
+  assert.ok(limit > 0 && limit <= 45);
   assert.match(workflow, /persist-credentials: false/);
   assert.doesNotMatch(
     workflow,

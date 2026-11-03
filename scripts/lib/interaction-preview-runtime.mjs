@@ -4,9 +4,37 @@ import { realpathSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { build } from 'esbuild';
+import { PREVIEW_BRANCH, PREVIEW_BASE } from './interaction-preview-evidence.mjs';
 
-export const PREVIEW_BRANCH = 'refs/heads/codex/interaction-preview-20261103';
-export const PREVIEW_BASE = '1cd5045d811b8ce3d5f87dd9fc1182a0f787d1ea';
+export { PREVIEW_BRANCH, PREVIEW_BASE };
+export const PREVIEW_API_READY_PATH = '/api/health/ready';
+export async function waitForPreviewService(
+  url,
+  {
+    request = fetch,
+    isRunning = () => true,
+    pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    attempts = 120
+  } = {}
+) {
+  const target = new URL(url);
+  assert.equal(target.hostname, '127.0.0.1');
+  assert.ok(target.pathname === PREVIEW_API_READY_PATH || target.pathname === '/login');
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    assert.ok(isRunning(), 'A preview process exited before readiness');
+    const response = await request(url, { signal: AbortSignal.timeout(1000) }).catch(() => null);
+    if (response && [401, 403, 404].includes(response.status))
+      throw new Error(`Preview readiness endpoint returned ${response.status}`);
+    if (response?.ok) {
+      if (target.pathname === '/login') return;
+      const body = await response.json();
+      const status = body.data ?? body;
+      if (status.status === 'ready' && status.database === 'ok') return;
+    }
+    await pause(500);
+  }
+  throw new Error('Preview did not become ready');
+}
 export function assertPreviewExecutionContext(env, project) {
   assert.equal(
     env.GITHUB_ACTIONS,

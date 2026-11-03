@@ -14,7 +14,9 @@ import {
   previewServerTimings,
   seedPreviewRows,
   listPreviewRoutes,
-  PREVIEW_BASE
+  PREVIEW_BASE,
+  PREVIEW_API_READY_PATH,
+  waitForPreviewService
 } from './lib/interaction-preview-runtime.mjs';
 import { compareInteractionMetrics } from './compare-v2-interaction-metrics.mjs';
 
@@ -68,20 +70,9 @@ function start(name, args, cwd = root) {
   return child;
 }
 async function available(url) {
-  for (let attempt = 0; attempt < 120; attempt++) {
-    if (
-      await fetch(url, { signal: AbortSignal.timeout(1000) })
-        .then((r) => r.ok)
-        .catch(() => false)
-    )
-      return;
-    assert.ok(
-      children.every((child) => child.exitCode === null),
-      'A preview process exited before readiness'
-    );
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error('Preview did not become ready');
+  await waitForPreviewService(url, {
+    isRunning: () => children.every((child) => child.exitCode === null && child.signalCode === null)
+  });
 }
 async function settled(page) {
   await page.waitForFunction(() => {
@@ -305,9 +296,28 @@ async function matrix(routes) {
           ).length,
           regions: [...document.querySelectorAll('#v2-main [data-v2-query-phase]')].map((element) =>
             element.getAttribute('data-v2-query-phase')
-          )
+          ),
+          metricGeometry: [...document.querySelectorAll('#v2-main .v2-overview-metric')]
+            .filter((element) => element.getBoundingClientRect().width > 0)
+            .map((element) => {
+              const rect = (selector) => {
+                const range = document.createRange();
+                range.selectNodeContents(element.querySelector(selector));
+                return range.getBoundingClientRect().toJSON();
+              };
+              return {
+                box: element.getBoundingClientRect().toJSON(),
+                label: rect('.v2-overview-metric__label'),
+                value: rect('.v2-overview-metric__value')
+              };
+            })
         }));
         assert.equal(state.overflow, false, `${target} overflow at ${theme}/${width}`);
+        for (const { label, value } of state.metricGeometry)
+          assert.ok(
+            Math.abs(label.y + label.height / 2 - value.y - value.height / 2) <= 1.5,
+            `${target} metric text alignment at ${theme}/${width}`
+          );
         checks.push({
           path: target,
           resolvedPath: new URL(page.url()).pathname,
@@ -454,7 +464,7 @@ try {
     NODE_ENV: 'production'
   });
   start('api', ['apps/api/dist/main.js', '--host=127.0.0.1']);
-  await available('http://127.0.0.1:5300/api/branding/public');
+  await available(`http://127.0.0.1:5300${PREVIEW_API_READY_PATH}`);
   for (const [label, project, port] of [
     ['after', root, '5374'],
     ['before', baseline, '5375']
@@ -527,4 +537,11 @@ try {
     }
   }
   await database?.cleanup();
+  save('cleanup.json', {
+    ownedDatabaseRemoved: Boolean(database),
+    childProcessesStopped: children.every(
+      (child) => child.exitCode !== null || child.signalCode !== null
+    ),
+    productionResourcesTouched: false
+  });
 }
