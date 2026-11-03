@@ -108,6 +108,11 @@ walk('/app/apps/api/dist');const sorted=x=>Object.fromEntries(Object.entries(x).
     groups = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', code))
     schema = d.run('docker', 'exec', states['api']['containerId'], 'sha256sum', '/app/node_modules/.prisma/client/schema.prisma').split()[0]
     engine = d.run('docker', 'exec', states['online-recharge']['containerId'], 'sha256sum', '/workspace/engine/credentials.cjs').split()[0]
+    client_code = r"""const fs=require('fs'),path=require('path'),crypto=require('crypto');const{PrismaClient}=require('@prisma/client');const p=new PrismaClient({log:[]});const g=p._engineConfig.generator,suffix='/apps/api/prisma-mysql/schema.prisma';
+if(!g.sourceFilePath.endsWith(suffix))throw Error('CLIENT_SCHEMA_PATH');const root=g.sourceFilePath.slice(0,-suffix.length);if(![root+'/node_modules/@prisma/client',root+'/node_modules/.prisma/client'].includes(g.output.value))throw Error('CLIENT_OUTPUT_PATH');
+const files={};function walk(dir,n=''){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const name=n?n+'/'+e.name:e.name,full=path.join(dir,e.name);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(full,name);else if(e.isFile())files[name]=crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');else throw Error('KIND');}}walk('/app/node_modules/.prisma/client');console.log(JSON.stringify({root,files}));p.$disconnect();"""
+    client = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', client_code))
+    need({'count': len(client['files']), 'sha256': sha(canonical(client['files']))} == runtime['clientInventory'], 'CLIENT_CAPTURE_CHANGED')
     proof_path = current / c['baselineAdminProof']['file']
     need(not proof_path.is_symlink(), 'ADMIN_PARENT_PROOF_LINK')
     admin_files = parent_admin_files(proof_path.read_bytes(), manifest, c)
@@ -118,7 +123,7 @@ walk('/app/apps/api/dist');const sorted=x=>Object.fromEntries(Object.entries(x).
     verify_db(db_state(d, current), c)
     return {'current': str(current), 'expectedCurrent': manifest['commit'], 'manifestSha256': sha((current / 'release-manifest.json').read_bytes()),
         'services': states, 'configurationSha256': {n: sha((current / n).read_bytes()) for n in names},
-        'runtime': runtime, 'apiGroups': {'schema': schema, 'groups': groups},
+        'runtime': runtime, 'clientFiles': client['files'], 'clientGenerationRoot': client['root'], 'apiGroups': {'schema': schema, 'groups': groups},
         'adminFilesSha256': sha(canonical(admin_files)), 'nginxSha256': runtime['nginxSha256'], 'engineCredentialsSha256': engine}
 
 
