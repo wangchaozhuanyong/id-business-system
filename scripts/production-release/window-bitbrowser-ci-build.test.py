@@ -28,7 +28,8 @@ class CurrentCi(unittest.TestCase):
             '      - name: Verify affected release entry and maintenance controls\n        env:\n',
             '      - name: Verify changed release controls\n        env:\n',
             '      - name: Verify changed browser worker\n',
-            '      - name: Verify frozen online recharge engine\n'])
+            '      - name: Verify frozen online recharge engine\n',
+            *['      - name: ' + name + '\n' for name in W.VERIFIED_STEPS]])
         value = W.expected_workflow(old)
         self.assertEqual(value.count(W.NEW_BUILD), 4)
         self.assertIn('--controls release-controls', value)
@@ -53,6 +54,24 @@ class CurrentCi(unittest.TestCase):
             W.verify_prior(run, {'jobs': [{'name': 'full-quality', 'steps': [{**steps[0], 'conclusion': 'failure'}, steps[1]]}]}, 'guards')
         with self.assertRaises(RuntimeError):
             W.verify_prior(run, {'jobs': [{'name': 'full-quality', 'steps': steps + [{'name': 'other', 'conclusion': 'failure'}]}]}, 'guards')
+
+    def test_completed_steps_require_exact_prior_run_and_unchanged_application_inputs(self):
+        run = {'id': W.VERIFIED_RUN, 'head_sha': W.VERIFIED_HEAD, 'path': '.github/workflows/quality.yml',
+            'event': 'pull_request', 'conclusion': 'failure', 'repository': {'full_name': W.REPO}}
+        steps = [{'name': n, 'conclusion': 'success'} for n in W.VERIFIED_STEPS]
+        steps.append({'name': 'Verify online recharge pages', 'conclusion': 'failure'})
+        jobs = {'jobs': [{'name': 'full-quality', 'steps': steps}]}
+        with patch.object(W, 'git', return_value=(W.ACCEPTANCE + '\n').encode()):
+            self.assertEqual(W.verify_completed_inputs(run, jobs), [W.ACCEPTANCE])
+            with self.assertRaisesRegex(RuntimeError, 'COMPLETED_RUN_IDENTITY'):
+                W.verify_completed_inputs({**run, 'head_sha': 'b' * 40}, jobs)
+            with self.assertRaisesRegex(RuntimeError, 'COMPLETED_STEP_NOT_PASSED'):
+                W.verify_completed_inputs(run, {'jobs': [{'name': 'full-quality', 'steps': steps[1:]}]})
+            with self.assertRaisesRegex(RuntimeError, 'COMPLETED_FAILURE_CHANGED'):
+                W.verify_completed_inputs(run, {'jobs': [{'name': 'full-quality', 'steps': steps + [{'name': 'other', 'conclusion': 'failure'}]}]})
+        with patch.object(W, 'git', return_value=b'apps/api/src/changed.ts\n'):
+            with self.assertRaisesRegex(RuntimeError, 'COMPLETED_INPUT_CHANGED'):
+                W.verify_completed_inputs(run, jobs)
 
     def test_other_changes_keep_the_existing_legacy_checks(self):
         with patch.object(W, 'admitted', return_value=False), patch.object(W, 'run') as child:

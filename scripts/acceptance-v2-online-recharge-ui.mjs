@@ -559,6 +559,8 @@ async function fixture(context, state) {
           uptime: 3600
         }
       });
+    if (section === 'bitbrowser' && action === 'devices' && req.method() === 'GET')
+      return ok({ items: [] });
     if (section === 'config' && req.method() === 'GET') return ok(settings);
     if (section === 'config' && req.method() === 'PATCH') {
       writes.push('config');
@@ -912,7 +914,7 @@ try {
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
   const beforeCopy = network.writes.length;
-  await page.getByRole('button', { name: '复制卡号', exact: true }).first().click();
+  await page.getByRole('button', { name: '查看卡号', exact: true }).first().click();
   await page.getByRole('status').filter({ hasText: '卡号已复制' }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '4111111111111111');
   assert.deepEqual(network.writes.slice(beforeCopy), ['cards/reveal']);
@@ -923,7 +925,7 @@ try {
   });
   await navigate(page, '/v2/online-recharge/cdks');
   const beforeCodeCopy = network.writes.length;
-  await page.getByRole('button', { name: '复制兑换码', exact: true }).first().click();
+  await page.getByRole('button', { name: '查看／复制', exact: true }).first().click();
   await page.getByRole('status').filter({ hasText: '已复制并标记出库' }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'SYNTHETIC-CDK');
   assert.deepEqual(network.writes.slice(beforeCodeCopy), ['cdks/reveal', 'cdks/dispatch']);
@@ -971,7 +973,7 @@ try {
       .filter({ has: page.getByText(label, { exact: true }) })
       .locator('input')
       .first();
-  const concurrency = configInput('最大并发激活数');
+  const concurrency = configInput('服务器最大并发数');
   const providerSecret = configInput('供应商密钥');
   await concurrency.fill('7');
   await providerSecret.fill('synthetic-config-original');
@@ -1174,10 +1176,10 @@ try {
     .getByRole('button', { name: '关闭', exact: true })
     .click();
   await navigate(page, '/v2/account-settings/bank-cards');
-  assert.equal(await page.getByRole('button', { name: '复制卡号', exact: true }).count(), 0);
+  assert.ok(await page.getByRole('button', { name: '查看卡号', exact: true }).count());
   assert.equal(await page.getByRole('button', { name: '导入银行卡', exact: true }).count(), 0);
   report.lifecycle.push({
-    case: 'reader-details-without-manage-or-sensitive-actions',
+    case: 'reader-direct-view-without-management-actions',
     result: 'PASS'
   });
   assert.deepEqual(network.unexpected, []);

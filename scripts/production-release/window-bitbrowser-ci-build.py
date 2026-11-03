@@ -32,11 +32,28 @@ DISPLAY_TESTS = {
         ("expect(websiteVisitsPanel).toContain('<V2TableActionColumn');\n    expect(websiteVisitsPanel).toContain('30 秒后隐藏');",
          "expect(websiteVisitsPanel).not.toContain('<V2TableActionColumn');\n    expect(websiteVisitsPanel).toContain('{{ row.ipMasked }}');\n    expect(websiteVisitsPanel).not.toContain('30 秒后隐藏');")
 }
+ACCEPTANCE = 'scripts/acceptance-v2-online-recharge-ui.mjs'
+ACCEPTANCE_REPAIRS = {
+    "configInput('最大并发激活数')": "configInput('服务器最大并发数')",
+    "if (section === 'config' && req.method() === 'GET') return ok(settings);":
+        "if (section === 'bitbrowser' && action === 'devices' && req.method() === 'GET')\n      return ok({ items: [] });\n    if (section === 'config' && req.method() === 'GET') return ok(settings);",
+    "{ name: '复制卡号', exact: true }": "{ name: '查看卡号', exact: true }",
+    "{ name: '复制兑换码', exact: true }": "{ name: '查看／复制', exact: true }",
+    "assert.equal(await page.getByRole('button', { name: '查看卡号', exact: true }).count(), 0);":
+        "assert.ok(await page.getByRole('button', { name: '查看卡号', exact: true }).count());",
+    "case: 'reader-details-without-manage-or-sensitive-actions'":
+        "case: 'reader-direct-view-without-management-actions'"
+}
 DOC = 'docs/WINDOW_BITBROWSER_RELEASE_20261103.md'
-ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC, *DISPLAY_TESTS}
+ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC, ACCEPTANCE, *DISPLAY_TESTS}
 CONTROL_RECEIPT = ROOT / '.deploy/window-bitbrowser-ci-controls.json'
 STEP = {'release-controls': 'Verify affected release entry and maintenance controls',
         'guards': 'Verify changed release controls'}
+VERIFIED_HEAD = '4e47350ebcd3868a989d9f4e6c3b511f148ade12'
+VERIFIED_RUN = 41655442082
+VERIFIED_STEPS = ('Verify V2 table action layouts', 'Verify V2 button color contrast',
+    'Verify ordinary-order archive and restore layouts', 'Verify single-account recharge confirmation flow',
+    'Typecheck', 'Install frozen ONLINE browser test dependencies', 'Test')
 OLD_BUILD = 'python3 -B scripts/production-release/online-recharge-ci-build.py'
 NEW_BUILD = 'python3 -B ' + SELF
 
@@ -94,6 +111,10 @@ def expected_workflow(old):
         before += '        env:\n'
         need(old.count(before) == 1, 'WORKFLOW_RECIPE_CHANGED')
         old = old.replace(before, before + '          GH_TOKEN: ${{ github.token }}\n')
+    for name in VERIFIED_STEPS:
+        before = '      - name: ' + name + '\n'
+        need(old.count(before) == 1, 'WORKFLOW_RECIPE_CHANGED')
+        old = old.replace(before, before + "        if: steps.window_ci_controls.outputs.reuse_verified_full != 'true'\n")
     return old
 
 
@@ -110,6 +131,11 @@ def reuse_inputs():
     for name, (before, after) in DISPLAY_TESTS.items():
         old = git('show', PRIOR + ':' + name).decode()
         need(old.count(before) == 1 and (ROOT / name).read_text() == old.replace(before, after), 'DISPLAY_ASSERTION_CHANGED')
+    old = git('show', PRIOR + ':' + ACCEPTANCE).decode()
+    for before, after in ACCEPTANCE_REPAIRS.items():
+        need(before in old, 'ACCEPTANCE_RECIPE_CHANGED')
+        old = old.replace(before, after)
+    need((ROOT / ACCEPTANCE).read_text() == old, 'ACCEPTANCE_CHANGED')
     # Application/dependency/helper bytes remain tested; only the declared CI assertions and synthetic ID change.
     return sorted(paths)
 
@@ -132,6 +158,22 @@ def verify_prior(run, jobs, part):
         for name in ('Verify changed browser worker', 'Verify frozen online recharge engine')), 'PRIOR_ENGINE_NOT_PASSED')
 
 
+def verify_completed_inputs(run, jobs):
+    paths = set(git('diff', '--name-only', VERIFIED_HEAD, 'HEAD').decode().splitlines())
+    need(paths <= {SELF, TEST, CONTRACT, WORKFLOW, ACCEPTANCE, DOC}, 'COMPLETED_INPUT_CHANGED')
+    need(run['id'] == VERIFIED_RUN and run['head_sha'] == VERIFIED_HEAD
+         and run['path'] == '.github/workflows/quality.yml' and run['event'] == 'pull_request'
+         and run['conclusion'] == 'failure' and run['repository']['full_name'] == REPO, 'COMPLETED_RUN_IDENTITY')
+    rows = [j for j in jobs['jobs'] if j['name'] == 'full-quality']
+    need(len(rows) == 1, 'COMPLETED_JOB')
+    steps = rows[0]['steps']
+    need([s['name'] for s in steps if s['conclusion'] == 'failure']
+         == ['Verify online recharge pages'], 'COMPLETED_FAILURE_CHANGED')
+    need(all(any(s['name'] == name and s['conclusion'] == 'success' for s in steps)
+         for name in VERIFIED_STEPS), 'COMPLETED_STEP_NOT_PASSED')
+    return sorted(paths)
+
+
 def run(args, **kwargs):
     subprocess.run(args, cwd=ROOT, check=True, **kwargs)
 
@@ -141,21 +183,26 @@ def controls(part, base):
     changed = reuse_inputs()
     prior, jobs = github('actions/runs/' + str(RUN)), github('actions/runs/' + str(RUN) + '/jobs')
     verify_prior(prior, jobs, part)
+    completed, completed_jobs = github('actions/runs/' + str(VERIFIED_RUN)), github('actions/runs/' + str(VERIFIED_RUN) + '/jobs')
+    completed_changes = verify_completed_inputs(completed, completed_jobs)
     tree = git('rev-parse', 'HEAD^{tree}').decode().strip()
     record = {'tree': tree, 'priorRun': RUN, 'priorHead': PRIOR, 'changedControls': changed,
-        'scope': 'CI_ONLY', 'releaseAuthority': False, 'businessActions': 0}
+        'scope': 'CI_ONLY', 'releaseAuthority': False, 'businessActions': 0,
+        'completedRun': VERIFIED_RUN, 'completedHead': VERIFIED_HEAD, 'completedChanges': completed_changes,
+        'reusedSteps': list(VERIFIED_STEPS)}
     if CONTROL_RECEIPT.exists():
         need(json.loads(CONTROL_RECEIPT.read_bytes()) == record, 'CONTROL_RECEIPT_CHANGED')
     else:
         run(['node', '--test', '--test-name-pattern=Quality guards and full checks include scoped', GUARD_TEST])
         run(['node', '--test', '--test-name-pattern=readonly metadata shortcut leaves the separate four-image', CHECK_TEST])
+        run(['node', '--test', 'scripts/check-v2-online-recharge-controls.test.mjs'])
         run(['python3', '-B', TEST])
         run(['python3', '-B', str(HERE / 'window-bitbrowser-release.test.py')])
         CONTROL_RECEIPT.parent.mkdir(parents=True, exist_ok=True)
         CONTROL_RECEIPT.write_text(json.dumps(record, sort_keys=True, indent=2) + '\n')
     if part == 'release-controls' and os.environ.get('GITHUB_OUTPUT'):
         with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
-            output.write('reuse_worker=true\nreuse_engine=true\n')
+            output.write('reuse_worker=true\nreuse_engine=true\nreuse_verified_full=true\n')
     print(json.dumps({**record, 'reusedStep': STEP[part], 'status': 'IDENTICAL_CONTROL_INPUTS_REVERIFIED'}))
 
 
