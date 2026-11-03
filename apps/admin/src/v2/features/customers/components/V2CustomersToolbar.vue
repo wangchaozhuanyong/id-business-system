@@ -18,6 +18,7 @@
     />
     <el-select
       v-model="page.query.sourceOptionId"
+      :persistent="Boolean(page.query.sourceOptionId)"
       clearable
       placeholder="全部来源"
       aria-label="筛选客户来源"
@@ -35,6 +36,7 @@
     >
       <el-select
         v-model="page.query.tagOptionId"
+        :persistent="Boolean(page.query.tagOptionId)"
         clearable
         placeholder="全部标签"
         aria-label="筛选客户标签"
@@ -49,6 +51,7 @@
       </el-select>
       <el-select
         v-model="page.query.serviceOptionId"
+        :persistent="Boolean(page.query.serviceOptionId)"
         clearable
         filterable
         placeholder="全部历史业务"
@@ -64,6 +67,7 @@
       </el-select>
       <el-select
         v-model="page.query.recordStatus"
+        :persistent="Boolean(page.query.recordStatus)"
         clearable
         placeholder="全部状态"
         aria-label="筛选资料状态"

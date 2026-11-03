@@ -28,6 +28,7 @@
       />
       <el-select
         v-model="page.query.countryOptionId"
+        :persistent="Boolean(page.query.countryOptionId)"
         clearable
         placeholder="全部国家"
         aria-label="筛选国家"
@@ -45,6 +46,7 @@
       >
         <el-select
           v-model="page.query.statusOptionId"
+          :persistent="Boolean(page.query.statusOptionId)"
           clearable
           placeholder="全部 ID 状态"
           aria-label="筛选 ID 状态"
@@ -59,6 +61,7 @@
         </el-select>
         <el-select
           v-model="page.query.supplierOptionId"
+          :persistent="Boolean(page.query.supplierOptionId)"
           clearable
           placeholder="全部供应商"
           aria-label="筛选 ID 供应商"

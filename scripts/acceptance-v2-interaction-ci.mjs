@@ -478,6 +478,29 @@ async function interactionFeedback() {
       .filter({ hasText: /^\s*客户名称/ })
       .locator('input')
       .first();
+  for (let index = 0; index < 20; index++) {
+    await nameInput().evaluate((element) => {
+      window.__previewFeedback = null;
+      element.addEventListener(
+        'input',
+        () => {
+          const started = performance.now();
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              window.__previewFeedback = performance.now() - started;
+            })
+          );
+        },
+        { capture: true, once: true }
+      );
+    });
+    await nameInput().fill(`合成输入反馈${index}`);
+    await page.waitForFunction(() => window.__previewFeedback !== null);
+    samples.push({
+      kind: 'typing',
+      feedbackMs: await page.evaluate(() => window.__previewFeedback)
+    });
+  }
   await nameInput().fill('合成未保存草稿');
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await drawer.waitFor({ state: 'hidden' });
@@ -494,7 +517,7 @@ async function interactionFeedback() {
     await drawer.getByRole('button', { name: '关闭', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
   }
-  const summaries = ['filter', 'drawer'].map((kind) => {
+  const summaries = ['filter', 'drawer', 'typing'].map((kind) => {
     const values = samples
       .filter((sample) => sample.kind === kind)
       .map((sample) => sample.feedbackMs)
@@ -576,6 +599,55 @@ async function interactionFeedback() {
   }
   toolFeedback.sort((a, b) => a - b);
   summaries.push({ kind: 'tools-drawer', samples: 20, p95: toolFeedback[18] });
+  const lazyChecks = [];
+  await navigate(page, '/v2/orders');
+  const details = page.locator('.v2-filter-disclosure');
+  assert.equal(await details.locator('.el-select').count(), 0);
+  lazyChecks.push('closed advanced controls are deferred');
+  await details.locator('summary').click();
+  const service = details.locator('.el-select').first();
+  await service.waitFor();
+  await service.evaluate((element) =>
+    element.setAttribute('data-preview-probe', 'retained-control')
+  );
+  await service.click();
+  await page.getByRole('option', { name: '合成service', exact: true }).click();
+  await details.locator('summary').click();
+  await details.locator('summary').click();
+  assert.equal(await service.getAttribute('data-preview-probe'), 'retained-control');
+  assert.ok((await service.textContent()).includes('合成service'));
+  lazyChecks.push('advanced filter first open and reopen retain controls and selection');
+  await navigate(page, '/v2/customers');
+  await navigate(page, '/v2/orders');
+  await page.locator('.v2-filter-disclosure summary').click();
+  assert.ok(
+    (await page.locator('.v2-filter-disclosure .el-select').first().textContent()).includes(
+      '合成service'
+    )
+  );
+  lazyChecks.push('advanced selection restores after navigation');
+  await navigate(page, '/v2/accounts');
+  const country = page.locator('.v2-account-command-panel .el-select').first();
+  await country.click();
+  await page.getByRole('option', { name: '合成country', exact: true }).click();
+  await navigate(page, '/v2/customers');
+  await navigate(page, '/v2/accounts');
+  assert.ok(
+    (await page.locator('.v2-account-command-panel .el-select').first().textContent()).includes(
+      '合成country'
+    )
+  );
+  lazyChecks.push('restored country shows its label without opening');
+  const help = page.locator('.feature-help').first();
+  for (let index = 0; index < 2; index++) {
+    await help.focus();
+    await help.click();
+    await page.locator('.feature-help-popper__content:visible').waitFor();
+    await help.press('Escape');
+    await page.locator('.feature-help-popper__content:visible').waitFor({ state: 'hidden' });
+    lazyChecks.push('help opens and Escape closes');
+  }
+  save('lazy-controls.json', lazyChecks);
   save('interaction-feedback.json', { samples, summaries, coldDrawers });
   assert.ok(
     coldDrawers.every((value) => value.feedbackMs <= 200),
@@ -583,7 +655,7 @@ async function interactionFeedback() {
   );
   assert.ok(
     summaries.every((summary) => summary.samples >= 20 && summary.p95 <= 200),
-    'Filter/drawer feedback P95 exceeds 200ms'
+    'Input/filter/drawer feedback P95 exceeds 200ms'
   );
   assert.deepEqual(requests.unexpectedWrites, []);
   assert.deepEqual(requests.errors, []);

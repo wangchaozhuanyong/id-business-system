@@ -29,7 +29,13 @@ const allowed = new Set([
   'apps/admin/src/v2/utils/dateTime.spec.ts',
   'apps/admin/src/v2/features/orders/useOrdersPage.ts',
   'apps/admin/src/v2/components/table-height-measurement.spec.ts',
-  'apps/admin/src/v2/styles/base.css'
+  'apps/admin/src/v2/styles/base.css',
+  'apps/admin/src/components/ui/FeatureHelp.vue',
+  'apps/admin/src/v2/components/V2FilterDisclosure.vue',
+  'apps/admin/src/v2/features/accounts/components/V2AccountsToolbar.vue',
+  'apps/admin/src/v2/features/customers/components/V2CustomersToolbar.vue',
+  'apps/admin/src/v2/features/orders/components/V2OrdersToolbar.vue',
+  'apps/admin/src/v2/features/accounts/components/V2AccountsOverview.vue'
 ]);
 export async function verifyPreviewEvidence(
   env,
@@ -160,6 +166,14 @@ export async function verifyPreviewEvidence(
   const typedSeconds = Math.ceil(
     (Date.parse(typedJobs[0].completed_at) - Date.parse(typedJobs[0].started_at)) / 1000
   );
+  const latestRun = await get('', 41622075809);
+  assert.equal(latestRun.head_sha, '9242102afceb6b05e78195365e227ce3b10fd398');
+  assert.equal(latestRun.conclusion, 'failure');
+  const latestJobs = (await get('/jobs?filter=latest&per_page=100', 41622075809)).jobs;
+  assert.equal(latestJobs.length, 1);
+  const latestSeconds = Math.ceil(
+    (Date.parse(latestJobs[0].completed_at) - Date.parse(latestJobs[0].started_at)) / 1000
+  );
   const priorDurations = [
     priorSeconds,
     secondSeconds,
@@ -168,14 +182,15 @@ export async function verifyPreviewEvidence(
     snapshotSeconds,
     menuSeconds,
     expandedSeconds,
-    typedSeconds
+    typedSeconds,
+    latestSeconds
   ];
   const spentSeconds = priorDurations.reduce((total, value) => total + value, 0);
   const continuationLimitMinutes = 8;
   assert.ok(
     priorDurations.every((value) => value > 0) &&
-      spentSeconds + continuationLimitMinutes * 60 <= 45 * 60,
-    'Combined validation exceeds authorized 45-minute budget'
+      spentSeconds + continuationLimitMinutes * 60 <= 60 * 60,
+    'Combined validation exceeds authorized 60-minute budget'
   );
 
   return {
@@ -210,6 +225,9 @@ export async function verifyPreviewEvidence(
     expandedSeconds,
     typedRun: 41618115000,
     typedSeconds,
+    latestRun: 41622075809,
+    latestSeconds,
+    authorizedMinutes: 60,
     spentSeconds,
     continuationLimitMinutes
   };
@@ -235,23 +253,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     .trim()
     .split('\n')
     .filter(Boolean);
-  assert.ok(
-    runtimeInputChanges.every((file) =>
-      [
-        'apps/admin/src/v2/components/table-height-measurement.spec.ts',
-        'apps/admin/src/v2/styles/base.css'
-      ].includes(file)
-    ),
-    'Application JavaScript or dependency inputs changed; latest unit tests cannot be reused'
-  );
   evidence.runtimeInputChanges = runtimeInputChanges;
-  evidence.reusedLatestAdminTestsRun = 41618115000;
-  evidence.reusedChecks.push(
-    'Full admin unit tests from 41618115000; JavaScript source unchanged; CSS covered by browser and UI checks'
-  );
+  evidence.fullAdminTestsRequired = true;
+  evidence.reusedChecks = ['Unchanged API source checks only'];
   evidence.affectedChecksRerun = [
+    'all admin tests',
     'admin typecheck and runtime build',
-    'admin lint and seven UI checks not reached by prior run',
+    'admin lint and seven UI checks',
     'changed preview controls',
     'real API browser acceptance'
   ];

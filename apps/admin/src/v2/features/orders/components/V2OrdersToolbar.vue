@@ -15,6 +15,7 @@
     />
     <el-select
       v-model="page.query.archived"
+      :persistent="Boolean(page.query.archived)"
       aria-label="筛选订单归档状态"
       @change="page.handleFilterChange"
     >
@@ -24,6 +25,7 @@
     </el-select>
     <el-select
       v-model="page.query.status"
+      :persistent="Boolean(page.query.status)"
       clearable
       placeholder="全部状态"
       aria-label="筛选订单状态"
@@ -38,6 +40,7 @@
     </el-select>
     <el-select
       v-model="page.query.accountSource"
+      :persistent="Boolean(page.query.accountSource)"
       clearable
       placeholder="全部 ID 来源"
       aria-label="筛选 ID 来源"
@@ -48,6 +51,7 @@
     </el-select>
     <el-select
       v-model="page.query.accountDisposition"
+      :persistent="Boolean(page.query.accountDisposition)"
       class="v2-toolbar-field--wide"
       clearable
       placeholder="全部 ID 处理状态"
@@ -66,6 +70,7 @@
     >
       <el-select
         v-model="page.query.serviceOptionId"
+        :persistent="Boolean(page.query.serviceOptionId)"
         clearable
         filterable
         placeholder="全部业务"
@@ -81,6 +86,7 @@
       </el-select>
       <el-select
         v-model="page.query.settlementPlatformOptionId"
+        :persistent="Boolean(page.query.settlementPlatformOptionId)"
         clearable
         filterable
         placeholder="全部结算平台"
