@@ -15,6 +15,8 @@ CONTRACT_FILE = PREFIX + '-contract.json'
 SCOPE = 'BUSINESS_DISPLAY_BITBROWSER_20261103'
 MIGRATION = '20261102150000_online_recharge_bitbrowser'
 UPDATED = ('api', 'admin', 'online-recharge')
+PRESERVED_CLIENT = ('runtime/edge-esm.js', 'runtime/edge.js', 'runtime/index-browser.d.ts', 'runtime/index-browser.js', 'runtime/library.d.ts', 'runtime/library.js', 'runtime/react-native.js', 'runtime/wasm-compiler-edge.js', 'runtime/wasm-engine-edge.js')
+
 
 
 def load(name):
@@ -46,6 +48,8 @@ def validate(c):
     need(all(re.fullmatch('[a-f0-9]{64}', value) for value in c['sources'].values()), 'SOURCE_DIGEST')
     need(all(name.startswith(('apps/admin/src/v2/', 'apps/admin/src/auth/', 'apps/api/src/id-business-v2/', 'apps/api/src/v2-auth/', 'apps/api/prisma-mysql/')) and '..' not in Path(name).parts for name in c['sources']), 'SOURCE_PATH')
     need(all('/migrations/' not in name or name == c['migration']['path'] for name in c['sources']), 'MIGRATION_SCOPE')
+    need(set(c['preservedPrismaClientFiles']) == set(PRESERVED_CLIENT)
+         and all(re.fullmatch('[a-f0-9]{64}', v) for v in c['preservedPrismaClientFiles'].values()), 'PRESERVED_CLIENT_SCOPE')
     for name, digest in c['helperPins'].items():
         need(re.fullmatch('[a-z][a-z0-9.-]+', name) and sha((HERE / name).read_bytes()) == digest, 'HELPER_CHANGED')
 
@@ -113,6 +117,7 @@ if(!g.sourceFilePath.endsWith(suffix))throw Error('CLIENT_SCHEMA_PATH');const ro
 const files={};function walk(dir,n=''){for(const e of fs.readdirSync(dir,{withFileTypes:true})){const name=n?n+'/'+e.name:e.name,full=path.join(dir,e.name);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(full,name);else if(e.isFile())files[name]=crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');else throw Error('KIND');}}walk('/app/node_modules/.prisma/client');console.log(JSON.stringify({root,files}));p.$disconnect();"""
     client = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', client_code))
     need({'count': len(client['files']), 'sha256': sha(canonical(client['files']))} == runtime['clientInventory'], 'CLIENT_CAPTURE_CHANGED')
+    need(all(client['files'].get(n) == v for n, v in c['preservedPrismaClientFiles'].items()), 'PRESERVED_CLIENT_CHANGED')
     proof_path = current / c['baselineAdminProof']['file']
     need(not proof_path.is_symlink(), 'ADMIN_PARENT_PROOF_LINK')
     admin_files = parent_admin_files(proof_path.read_bytes(), manifest, c)
@@ -123,7 +128,7 @@ const files={};function walk(dir,n=''){for(const e of fs.readdirSync(dir,{withFi
     verify_db(db_state(d, current), c)
     return {'current': str(current), 'expectedCurrent': manifest['commit'], 'manifestSha256': sha((current / 'release-manifest.json').read_bytes()),
         'services': states, 'configurationSha256': {n: sha((current / n).read_bytes()) for n in names},
-        'runtime': runtime, 'clientFiles': client['files'], 'clientGenerationRoot': client['root'], 'apiGroups': {'schema': schema, 'groups': groups},
+        'runtime': runtime, 'clientFiles': client['files'], 'clientGenerationRoot': client['root'], 'preservedClientFiles': c['preservedPrismaClientFiles'], 'apiGroups': {'schema': schema, 'groups': groups},
         'adminFilesSha256': sha(canonical(admin_files)), 'nginxSha256': runtime['nginxSha256'], 'engineCredentialsSha256': engine}
 
 
@@ -152,6 +157,8 @@ def verify_proof(proof, plan, c, files):
     expected_modules = {n.removeprefix('apps/api/src/').removesuffix('.ts') + ext for n in c['sources']
         if n.startswith('apps/api/src/') and n.endswith('.ts') and not n.endswith('.spec.ts') for ext in ('.js', '.js.map', '.d.ts')}
     need(expected_modules <= set(proof['apiModules']) and all(n in expected_modules or n.endswith('.d.ts') for n in proof['apiModules']), 'MODULE_SCOPE')
+    need(proof['preservedClientFiles'] == c['baseline']['preservedClientFiles']
+         and set(proof['prismaClientFiles']) == set(c['baseline']['clientFiles']) - set(proof['preservedClientFiles']), 'CLIENT_FILE_SCOPE')
     expected = {**{'api/modules/' + n: v for n, v in proof['apiModules'].items()},
         **{'api/prisma-client/' + n: v for n, v in proof['prismaClientFiles'].items()},
         **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()},
@@ -191,10 +198,18 @@ def migrate(d, target, c, journal, database):
         'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --batch --skip-column-names -u root "$MYSQL_DATABASE"', input_data=sql)
 
 
+def verify_client_image(d, reference, proof):
+    expected = {**proof['prismaClientFiles'], **proof['preservedClientFiles']}
+    code = r"""const fs=require('fs'),path=require('path'),crypto=require('crypto');const files={};function walk(p,n=''){for(const e of fs.readdirSync(p,{withFileTypes:true})){const name=n?n+'/'+e.name:e.name,full=path.join(p,e.name);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(full,name);else if(e.isFile())files[name]=crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');else throw Error('KIND');}}walk('/app/node_modules/.prisma/client');const{Prisma}=require('/app/node_modules/@prisma/client');if(!['OnlineRechargeBitbrowserDevice','OnlineRechargeBitbrowserState'].every(n=>Prisma.dmmf.datamodel.models.some(m=>m.name===n)))throw Error('CLIENT_MODELS');console.log(JSON.stringify(files));"""
+    actual = json.loads(d.run('docker', 'run', '--pull=never', '--rm', '--network', 'none', '--read-only',
+        '--no-healthcheck', '--entrypoint', 'node', reference, '-e', code))
+    need(actual == expected, 'PRISMA_IMAGE_CONTENT_CHANGED')
+
+
 def smoke(d, h, target, states, proof, c):
     shared = load('shared-bank-card-release.py')
     for role, directory, files in [('api', '/app/apps/api/dist/', proof['apiModules']),
-            ('api', '/app/node_modules/.prisma/client/', proof['prismaClientFiles']),
+            ('api', '/app/node_modules/.prisma/client/', {**proof['prismaClientFiles'], **proof['preservedClientFiles']}),
             ('admin', '/usr/share/nginx/html/', proof['adminFiles']),
             ('online-recharge', '/workspace/engine/', {n: c['sources']['apps/api/src/id-business-v2/online-recharge/engine/' + n] for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')})]:
         shared.read_hashes(d, states[role]['containerId'], directory, files)
@@ -232,13 +247,14 @@ def configured_release(c):
         "('admin', 'COPY html/ /usr/share/nginx/html/\\n')": "('admin', 'COPY html/ /usr/share/nginx/html/\\n'), ('online-recharge', 'COPY engine/ /workspace/engine/\\n')",
         "and after['online-recharge']['image'] == before['online-recharge']['image']": "and after['online-recharge']['image'] == images['online-recharge']['imageId']",
         "servicesUpdated=['api', 'admin']": "servicesUpdated=['api', 'admin', 'online-recharge']",
+        'migration_reference = load_migration_image(d, proof, plan, stage)': "migration_reference = load_migration_image(d, proof, plan, stage)\n        verify_client_image(d, images['api']['reference'], proof)",
         'fence.acquire()': "load('dependency-security-runtime.py').latest_main(plan['commit']); fence.acquire()",
         '            sql_started = True': "            load('dependency-security-runtime.py').latest_main(plan['commit'])\n            sql_started = True"
     }
     for before, after in changes.items():
         need(source.count(before) == 1, 'INHERITED_RECIPE_CHANGED')
         source = source.replace(before, after)
-    values = {**driver.__dict__, 'WINDOW_CONTRACT': c}
+    values = {**driver.__dict__, 'WINDOW_CONTRACT': c, 'verify_client_image': verify_client_image}
     exec(compile(source, '<window-bitbrowser-runtime>', 'exec'), values)
     return values['release']
 
