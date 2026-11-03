@@ -27,7 +27,10 @@ DISPLAY_TESTS = {
     'apps/api/src/id-business-v2/topup-supplier-funds/id-business-v2-topup-supplier-funds.contract.spec.ts':
         ("toEqual(['apple.gift_card.view_full']);", "toEqual(['apple.balance.view']);"),
     'apps/api/src/id-business-v2/workspace/id-business-v2-website-visit.service.spec.ts':
-        ("items: [{ ipMasked: '203.0.*.*' }]", "items: [{ ipMasked: '203.0.113.19' }]")
+        ("items: [{ ipMasked: '203.0.*.*' }]", "items: [{ ipMasked: '203.0.113.19' }]"),
+    'apps/admin/src/v2/components/workspace/workspace-ui.contract.spec.ts':
+        ("expect(websiteVisitsPanel).toContain('<V2TableActionColumn');\n    expect(websiteVisitsPanel).toContain('30 秒后隐藏');",
+         "expect(websiteVisitsPanel).not.toContain('<V2TableActionColumn');\n    expect(websiteVisitsPanel).toContain('{{ row.ipMasked }}');\n    expect(websiteVisitsPanel).not.toContain('30 秒后隐藏');")
 }
 DOC = 'docs/WINDOW_BITBROWSER_RELEASE_20261103.md'
 ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC, *DISPLAY_TESTS}

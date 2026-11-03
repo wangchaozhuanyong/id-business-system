@@ -72,8 +72,9 @@ describe('personal workspace UI contract', () => {
     expect(websiteVisitsPanel).toContain('label-position="left"');
     expect(websiteVisitsPanel).toContain('require-asterisk-position="right"');
     expect(websiteVisitsPanel).toContain('<V2AsyncRegion');
-    expect(websiteVisitsPanel).toContain('<V2TableActionColumn');
-    expect(websiteVisitsPanel).toContain('30 秒后隐藏');
+    expect(websiteVisitsPanel).not.toContain('<V2TableActionColumn');
+    expect(websiteVisitsPanel).toContain('{{ row.ipMasked }}');
+    expect(websiteVisitsPanel).not.toContain('30 秒后隐藏');
     expect(websiteVisitsPanel).not.toMatch(/localStorage|sessionStorage|v-loading|el-skeleton/);
     expect(workspaceApi).toContain(
       "http.post('/id-business-v2/workspace-website-monitor/visits/search'"
