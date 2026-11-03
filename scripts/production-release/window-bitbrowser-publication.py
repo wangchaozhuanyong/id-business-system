@@ -174,6 +174,11 @@ def main(operation):
     controls = {**c['helperPins'], PREFIX + '-release.py': sha((HERE / (PREFIX + '-release.py')).read_bytes()),
         R.CONTRACT_FILE: sha((HERE / R.CONTRACT_FILE).read_bytes())}
     plan = {**native, 'contractSha256': sha((HERE / R.CONTRACT_FILE).read_bytes()), 'controlSources': controls, 'qualitySourceEvidence': qa}
+    if operation == 'diagnose':
+        result = transport(plan, 'diagnose')
+        need(result['status'] == 'WINDOW_BITBROWSER_FAILED_PUBLICATION_DIAGNOSED', 'DIAGNOSTIC')
+        print(json.dumps(result, sort_keys=True))
+        return
     capture = transport(plan, 'capture')
     need(capture['status'] == 'WINDOW_BITBROWSER_PARENT_VERIFIED', 'PARENT_CAPTURE')
     plan['nativeParentCapture'] = capture
@@ -207,5 +212,5 @@ def main(operation):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['observe', 'publish'])
+    parser.add_argument('operation', choices=['observe', 'publish', 'diagnose'])
     main(parser.parse_args().operation)

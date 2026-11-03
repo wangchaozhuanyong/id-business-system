@@ -162,6 +162,12 @@
     "stopping": false
   },
   "expectedCurrent": "1cd5045d811b8ce3d5f87dd9fc1182a0f787d1ea",
+  "failedPublicationDiagnostic": {
+    "acceptedCommandId": "17986ddf-31c9-4e6b-aad3-d2257e076fb5",
+    "buildProofSha256": "a8cc43cb4df2581998f408b48cb998e21cc9995205a70817155f35f7bc60c6d1",
+    "commit": "de0a76816583b4f367253cff276d21393ba58889",
+    "workflowRunId": "41683847168"
+  },
   "helperPins": {
     "api-admin-pending-projection.py": "592aebbeb7c8605587924416b0632dc4533eacfb3305793b577db3827bbf8d78",
     "api-admin-pending-receipt-wire.py": "47cba3fad47077f30c83d8cfe5a8907b797eeeb2fedd78e764a47a42a0849c75",
@@ -227,9 +233,9 @@
     "shared-bank-card-contract.json": "22b6133b8b8b704475131604f36c56701377d159c0e5eb80ebce3b4f5bd21c67",
     "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852",
     "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771",
-    "window-bitbrowser-publication.py": "5858f99ae13ede0eea85b5e2dce7bc9b3daad2811e9d43d1dc2964f3dd21aa7a",
-    "window-bitbrowser-release.py": "9da65211bb81c2df92188eb348d807729510ce2bf2730336f6d5c99bec6a5b9c",
-    "window-bitbrowser-release.test.py": "085cacaaac81f6a1567b2093e0e8c0bb0c06d64f2479d1d1447629543fc393dc"
+    "window-bitbrowser-publication.py": "39e2424b69bfab22fb5356e344fd1c725b7c8193b9f4baa2377d16d995bbe770",
+    "window-bitbrowser-release.py": "6b83b1097b10e77acaec46d5ccb66dcb07be15957493127297210e4990b638ae",
+    "window-bitbrowser-release.test.py": "c9376565ce99c8ea94083603a762fd32e0fa975944a8bdd9c1af51841e421bbe"
   },
   "migration": {
     "name": "20261102150000_online_recharge_bitbrowser",
@@ -343,7 +349,7 @@
   "updatedServices": ["api", "admin", "online-recharge"],
   "validationSources": {
     ".github/workflows/quality.yml": "4b6c4ae2de48ccc777badc3d8e7910b676fb2aeaab038810ce80ee8d172413fc",
-    ".github/workflows/window-bitbrowser-publication.yml": "3ef92e58ad2f56fa9b23e56add654840c4e02578909ffeb153ba2b5477edfff9",
+    ".github/workflows/window-bitbrowser-publication.yml": "c1501e7c0b28b7f26f57c2b66d58f993b9bd391ef5ff0f061461868e8d6e952c",
     ".github/workflows/window-bitbrowser-validation.yml": "7677b3e81d9b6a6dba9936dbcc076724a305270b074e3067eb7a0837a1247229",
     "apps/admin/src/v2/components/workspace/workspace-ui.contract.spec.ts": "4b4f0acdfcd874d65c7a3460a7d4e96af5054bf4ed8932888bfd0704ea87a45c",
     "apps/admin/src/v2/features/accounts/accounts-management-ui.contract.spec.ts": "2686c16e5ec0eee736d46b0ed529013468f1c7b992c79f0675fb630380ebe79e",
@@ -384,12 +390,12 @@
     "scripts/ci-recharge-release.test.mjs": "e87929df9611c50247f7e4ffc288a66cc34f4abfb502af24ba5c8c3e6c653983",
     "scripts/production-release/window-bitbrowser-ci-build.py": "049776fb83601d8aa828d12add29a1442aa35d204199dbdfc9f62a14d432dc3c",
     "scripts/production-release/window-bitbrowser-ci-build.test.py": "450a098b5bc1876b205341ac9698b6fda6ec9af11e076a9fc5f429c39e482410",
-    "scripts/production-release/window-bitbrowser-publication.py": "5858f99ae13ede0eea85b5e2dce7bc9b3daad2811e9d43d1dc2964f3dd21aa7a",
-    "scripts/production-release/window-bitbrowser-release.py": "9da65211bb81c2df92188eb348d807729510ce2bf2730336f6d5c99bec6a5b9c",
-    "scripts/production-release/window-bitbrowser-release.test.py": "085cacaaac81f6a1567b2093e0e8c0bb0c06d64f2479d1d1447629543fc393dc",
+    "scripts/production-release/window-bitbrowser-publication.py": "39e2424b69bfab22fb5356e344fd1c725b7c8193b9f4baa2377d16d995bbe770",
+    "scripts/production-release/window-bitbrowser-release.py": "6b83b1097b10e77acaec46d5ccb66dcb07be15957493127297210e4990b638ae",
+    "scripts/production-release/window-bitbrowser-release.test.py": "c9376565ce99c8ea94083603a762fd32e0fa975944a8bdd9c1af51841e421bbe",
     "scripts/setup-online-bitbrowser.cmd": "5b56cecc2133a7d8f76d8420a3fc3be253ec9e8eacac6973b0541e81a0880135",
     "scripts/setup-online-bitbrowser.command": "3c913820a35f8c9de0eb445a30024438a6dab98132f12c3ac4073f1fd89da498"
   },
   "version": 1,
-  "workflowSha256": "3ef92e58ad2f56fa9b23e56add654840c4e02578909ffeb153ba2b5477edfff9"
+  "workflowSha256": "c1501e7c0b28b7f26f57c2b66d58f993b9bd391ef5ff0f061461868e8d6e952c"
 }

@@ -113,6 +113,26 @@ class Controls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'MIGRATION_CONFIG_HASH'):
                 publication.migration_archive_image_id(path, ref)
 
+    def test_failed_publication_diagnostic_binds_original_proof_and_never_stops_services(self):
+        runtime = HERE.parents[1] / '.runtime'; runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='window-native-diagnostic-test-', dir=runtime) as folder:
+            base = Path(folder); commit = 'a' * 40; run = '123'
+            stage = base / '.staging' / (R.PREFIX + '-' + commit + '-' + run)
+            content = stage / 'content/payload'; content.mkdir(parents=True)
+            proof = {'commit': commit, 'workflowRunId': run, 'scope': R.SCOPE, 'sources': {}, 'businessActions': 0,
+                'prismaClientFiles': {}, 'preservedClientFiles': {}, 'migrationTransport': {'file': R.PREFIX+'-migration.tar.gz', 'sha256':'b'*64,'bytes':1,'imageId':'sha256:'+'c'*64,'reference':'098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:'+commit+'-'+run+'-window-bitbrowser-migrate'}}
+            raw = json.dumps(proof).encode(); (content / 'build-proof.json').write_bytes(raw)
+            current = base / 'releases/parent'; current.mkdir(parents=True); (current/'release-manifest.json').write_text(json.dumps({'commit':'parent'})); (base/'current').symlink_to(current)
+            c = {'scope':R.SCOPE,'sources':{},'failedPublicationDiagnostic':{'commit':commit,'workflowRunId':run,'buildProofSha256':R.sha(raw),'acceptedCommandId':'original'}}
+            d = Mock(); d.run.side_effect=lambda *args: json.dumps([{'Id':'sha256:'+'c'*64,'Config':{}}]) if args[1:3]==('image','inspect') else json.dumps({'files':{},'bare':{'ok':False,'code':'MODULE_NOT_FOUND'}})
+            with patch.object(R,'BASE',base),patch.object(R,'utilities',return_value=(Mock(),d)),patch.object(R,'db_state',return_value={'applied':0}):
+                result=R.diagnose(c)
+                self.assertEqual(result['migration'],{'applied':0});self.assertFalse(result['maintenancePresent'])
+                self.assertTrue(result['clientProbe']['filesMatch']);self.assertTrue(result['migrationImageIdentityMatches'])
+                self.assertTrue(all(call.args[0]=='docker' and call.args[1] in ('image','run') for call in d.run.call_args_list))
+                (content/'build-proof.json').write_bytes(raw+b' ')
+                with self.assertRaisesRegex(RuntimeError,'DIAGNOSTIC_PROOF_CHANGED'):R.diagnose(c)
+
     def test_only_the_exact_incremental_migration_state_is_accepted(self):
         c = {'migration': {'sha256': 'a' * 64}}
         R.verify_db({'pending': 0, 'applied': 0, 'checksum': None, 'tables': 0}, c)
