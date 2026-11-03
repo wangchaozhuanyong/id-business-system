@@ -193,7 +193,7 @@ suite('人工结单真实 MySQL 幂等、记账衔接及事务回滚', () => {
       subscriptionConfirmed: true,
       amount: '982.14',
       currency: 'PHP',
-      evidenceRef: 'BANK-' + id,
+      evidenceRef: 'BANK-' + id.replace(/(.{4})/g, '$1_'),
       openedAt: new Date(Date.now() - 60000).toISOString(),
       dueAt: new Date(Date.now() + 30 * 86400000).toISOString()
     };

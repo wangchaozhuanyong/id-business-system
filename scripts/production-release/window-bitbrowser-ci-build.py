@@ -22,8 +22,9 @@ CONTRACT = 'scripts/production-release/window-bitbrowser-contract.json'
 WORKFLOW = '.github/workflows/quality.yml'
 GUARD_TEST = 'scripts/ci-recharge-release.test.mjs'
 CHECK_TEST = 'scripts/ci-recharge-check.test.mjs'
+FIXTURE = 'apps/api/src/id-business-v2/auto-recharge/recharge-manual-settlement.mysql.integration.spec.ts'
 DOC = 'docs/WINDOW_BITBROWSER_RELEASE_20261103.md'
-ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, DOC}
+ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC}
 CONTROL_RECEIPT = ROOT / '.deploy/window-bitbrowser-ci-controls.json'
 STEP = {'release-controls': 'Verify affected release entry and maintenance controls',
         'guards': 'Verify changed release controls'}
@@ -87,7 +88,10 @@ def reuse_inputs():
     for name, before, after in [(GUARD_TEST, OLD_BUILD, NEW_BUILD), (CHECK_TEST, 'run: ' + OLD_BUILD, 'run: ' + NEW_BUILD)]:
         old = git('show', PRIOR + ':' + name).decode()
         need(old.count(before) == 1 and (ROOT / name).read_text() == old.replace(before, after), 'GUARD_CHANGED')
-    # Every application, dependency, existing test and release helper byte remains the tested input.
+    old = git('show', PRIOR + ':' + FIXTURE).decode()
+    before, after = "evidenceRef: 'BANK-' + id,", "evidenceRef: 'BANK-' + id.replace(/(.{4})/g, '$1_'),"
+    need(old.count(before) == 1 and (ROOT / FIXTURE).read_text() == old.replace(before, after), 'FIXTURE_CHANGED')
+    # Application/dependency/helper bytes remain tested; only the declared CI assertions and synthetic ID change.
     return sorted(paths)
 
 
