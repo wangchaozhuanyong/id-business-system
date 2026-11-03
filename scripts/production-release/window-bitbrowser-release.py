@@ -73,6 +73,22 @@ def utilities():
     return h, d
 
 
+def parent_admin_files(raw, manifest, c):
+    pin = c['baselineAdminProof']
+    need(pin['file'] == 'permission-loading-build-proof.json'
+         and sha(raw) == pin['sha256']
+         and manifest['roleSourceProjections']['admin']['buildProofSha256'] == pin['sha256'], 'ADMIN_PARENT_PROOF_CHANGED')
+    proof = json.loads(raw)
+    files = proof['adminFiles']
+    need(proof['commit'] == c['expectedCurrent'] and proof['businessActions'] == 0
+         and type(files) is dict and 'index.html' in files
+         and len(files) == pin['fileCount']
+         and all(not Path(n).is_absolute() and '..' not in Path(n).parts
+                 and re.fullmatch('[a-f0-9]{64}', value) for n, value in files.items())
+         and sha(canonical(files)) == pin['filesSha256'], 'ADMIN_PARENT_INVENTORY_CHANGED')
+    return files
+
+
 def capture(d, h, c):
     current = (BASE / 'current').resolve(strict=True)
     manifest = json.loads((current / 'release-manifest.json').read_bytes())
@@ -92,12 +108,18 @@ walk('/app/apps/api/dist');const sorted=x=>Object.fromEntries(Object.entries(x).
     groups = json.loads(d.run('docker', 'exec', states['api']['containerId'], 'node', '-e', code))
     schema = d.run('docker', 'exec', states['api']['containerId'], 'sha256sum', '/app/node_modules/.prisma/client/schema.prisma').split()[0]
     engine = d.run('docker', 'exec', states['online-recharge']['containerId'], 'sha256sum', '/workspace/engine/credentials.cjs').split()[0]
+    proof_path = current / c['baselineAdminProof']['file']
+    need(not proof_path.is_symlink(), 'ADMIN_PARENT_PROOF_LINK')
+    admin_files = parent_admin_files(proof_path.read_bytes(), manifest, c)
+    # COPY-based parent images retain old hashed assets. Verify the current entry's
+    # exact published files, while runtime.adminInventory still protects the full image.
+    load('shared-bank-card-release.py').read_hashes(d, states['admin']['containerId'], '/usr/share/nginx/html/', admin_files)
     names = ('.env.aws.production', 'docker-compose.aws-mysql.yml', 'compose.release.json', 'deploy/caddy/Caddyfile.aws', 'apps/api/prisma-mysql/schema.prisma')
     verify_db(db_state(d, current), c)
     return {'current': str(current), 'expectedCurrent': manifest['commit'], 'manifestSha256': sha((current / 'release-manifest.json').read_bytes()),
         'services': states, 'configurationSha256': {n: sha((current / n).read_bytes()) for n in names},
         'runtime': runtime, 'apiGroups': {'schema': schema, 'groups': groups},
-        'adminFilesSha256': runtime['adminInventory']['sha256'], 'nginxSha256': runtime['nginxSha256'], 'engineCredentialsSha256': engine}
+        'adminFilesSha256': sha(canonical(admin_files)), 'nginxSha256': runtime['nginxSha256'], 'engineCredentialsSha256': engine}
 
 
 def baseline(d, h, c):
@@ -130,7 +152,8 @@ def verify_proof(proof, plan, c, files):
         **{'admin/html/' + n: v for n, v in proof['adminFiles'].items()},
         **{'source/' + n: v for n, v in c['sources'].items()},
         **{'controls/' + n: v for n, v in proof['controlSources'].items()},
-        'online-recharge/engine/credentials.cjs': c['sources']['apps/api/src/id-business-v2/online-recharge/engine/credentials.cjs']}
+        **{'online-recharge/engine/' + n: c['sources']['apps/api/src/id-business-v2/online-recharge/engine/' + n]
+           for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')}}
     need(files == proof['files'] == expected and proof['contractSha256'] == sha((HERE / CONTRACT_FILE).read_bytes()), 'PAYLOAD_SCOPE')
     verify_migration_transport(proof)
     return proof
@@ -168,7 +191,7 @@ def smoke(d, h, target, states, proof, c):
     for role, directory, files in [('api', '/app/apps/api/dist/', proof['apiModules']),
             ('api', '/app/node_modules/.prisma/client/', proof['prismaClientFiles']),
             ('admin', '/usr/share/nginx/html/', proof['adminFiles']),
-            ('online-recharge', '/workspace/engine/', {'credentials.cjs': c['sources']['apps/api/src/id-business-v2/online-recharge/engine/credentials.cjs']})]:
+            ('online-recharge', '/workspace/engine/', {n: c['sources']['apps/api/src/id-business-v2/online-recharge/engine/' + n] for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')})]:
         shared.read_hashes(d, states[role]['containerId'], directory, files)
     verify_db(db_state(d, target), c, True)
     code = """const{Prisma,PrismaClient}=require('@prisma/client');const p=new PrismaClient({log:[]});const b=require('/app/apps/api/dist/id-business-v2/online-recharge/bitbrowser-policy.js');

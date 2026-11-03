@@ -96,9 +96,10 @@ def build(c, plan):
     before_client = B.inventory(B.OUT / 'api-baseline/node_modules/.prisma/client')
     need({'count': len(before_client), 'sha256': sha(R.canonical(before_client))}
          == resolved['baseline']['runtime']['clientInventory'], 'PRISMA_PARENT_NOT_REPRODUCED')
-    engine = payload / 'online-recharge/engine/credentials.cjs'
-    engine.parent.mkdir(parents=True)
-    shutil.copyfile(ROOT / 'apps/api/src/id-business-v2/online-recharge/engine/credentials.cjs', engine)
+    for name in ('credentials.cjs', 'SOURCE_MANIFEST.json'):
+        engine = payload / 'online-recharge/engine' / name
+        engine.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / 'apps/api/src/id-business-v2/online-recharge/engine' / name, engine)
     proof.update(nativeParentCapture=plan['nativeParentCapture'], qualitySourceEvidence=plan['qualitySourceEvidence'],
         sourceLayout='PUBLISHED_PREDECESSOR_WITH_REVIEWED_MAIN_WINDOW_OVERLAY')
     proof_file.unlink()

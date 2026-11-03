@@ -27,6 +27,25 @@ class Controls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'INHERITED_RECIPE_CHANGED'):
                 R.configured_release({})
 
+    def test_parent_compilation_uses_verified_current_files_while_old_assets_remain_protected(self):
+        files = {'index.html': 'a' * 64, 'assets/current.js': 'b' * 64}
+        raw = json.dumps({'commit': 'parent', 'businessActions': 0, 'adminFiles': files}).encode()
+        pin = {'file': 'permission-loading-build-proof.json', 'sha256': R.sha(raw),
+            'fileCount': 2, 'filesSha256': R.sha(R.canonical(files))}
+        c = {'expectedCurrent': 'parent', 'baselineAdminProof': pin}
+        manifest = {'roleSourceProjections': {'admin': {'buildProofSha256': R.sha(raw)}}}
+        self.assertEqual(R.parent_admin_files(raw, manifest, c), files)
+        for broken in [raw + b' ', raw.replace(b'current.js', b'old.js')]:
+            with self.assertRaisesRegex(RuntimeError, 'ADMIN_PARENT_PROOF_CHANGED'):
+                R.parent_admin_files(broken, manifest, c)
+        with self.assertRaisesRegex(RuntimeError, 'ADMIN_PARENT_INVENTORY_CHANGED'):
+            R.parent_admin_files(raw, manifest, {**c, 'baselineAdminProof': {**pin, 'fileCount': 3}})
+        with self.assertRaisesRegex(RuntimeError, 'ADMIN_PARENT_PROOF_CHANGED'):
+            R.parent_admin_files(raw, {'roleSourceProjections': {'admin': {'buildProofSha256': 'c' * 64}}}, c)
+        source = inspect.getsource(R.capture)
+        self.assertIn("'runtime': runtime", source)
+        self.assertIn("read_hashes(d, states['admin']['containerId']", source)
+
     def test_only_the_exact_incremental_migration_state_is_accepted(self):
         c = {'migration': {'sha256': 'a' * 64}}
         R.verify_db({'pending': 0, 'applied': 0, 'checksum': None, 'tables': 0}, c)
@@ -46,6 +65,26 @@ class Controls(unittest.TestCase):
         for key, value in [('file', 'recharge-plan-billing-migration.tar.gz'), ('reference', 'unrelated-image'), ('bytes', 0)]:
             with self.assertRaises(RuntimeError):
                 R.verify_migration_transport({**proof, 'migrationTransport': {**proof['migrationTransport'], key: value}})
+
+    def test_missing_engine_source_manifest_is_rejected_before_migration(self):
+        commit = 'a' * 40
+        sources = {'apps/api/src/id-business-v2/online-recharge/engine/' + n: 'b' * 64
+            for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')}
+        plan = {'commit': commit, 'tree': 'c' * 40, 'workflowRunId': '123', 'workflowRunAttempt': '1',
+            'contractSha256': R.sha((HERE / R.CONTRACT_FILE).read_bytes()), 'nativeParentCapture': {}}
+        files = {**{'source/' + n: v for n, v in sources.items()},
+            **{'online-recharge/engine/' + n: 'b' * 64 for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')}}
+        proof = {**plan, 'scope': R.SCOPE, 'sources': sources, 'businessActions': 0,
+            'baselineApiGroups': {}, 'baselineAdminFiles': {}, 'apiModules': {}, 'prismaClientFiles': {},
+            'adminFiles': {}, 'controlSources': {}, 'files': files, 'migrationTransport': {
+                'file': R.PREFIX + '-migration.tar.gz', 'sha256': 'b' * 64, 'bytes': 1,
+                'imageId': 'sha256:' + 'c' * 64,
+                'reference': '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + commit + '-123-window-bitbrowser-migrate'}}
+        c = {'sources': sources, 'baseline': {'apiGroups': {'groups': {}}, 'adminFilesSha256': R.sha(R.canonical({}))}}
+        self.assertEqual(R.verify_proof(proof, plan, c, files), proof)
+        missing = {n: v for n, v in files.items() if n != 'online-recharge/engine/SOURCE_MANIFEST.json'}
+        with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_SCOPE'):
+            R.verify_proof({**proof, 'files': missing}, plan, c, missing)
 
     def test_latest_retired_registration_guard_is_preserved(self):
         fn = R.configured_release({})
