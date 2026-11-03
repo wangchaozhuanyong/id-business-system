@@ -2264,9 +2264,9 @@ suite('线上代充隔离MySQL事务验收', () => {
         });
       }
       expect((await fetch(base + '/admin/login-logs', { headers: as('read') })).status).toBe(403);
-      expect(
-        (await fetch(base + `/admin/artifacts/${randomUUID()}`, { headers: as('read') })).status
-      ).toBe(403);
+      const missingArtifact = base + `/admin/artifacts/${randomUUID()}`;
+      expect((await fetch(missingArtifact, { headers: as('employee') })).status).toBe(403);
+      expect((await fetch(missingArtifact, { headers: as('read') })).status).toBe(404);
       const patch = (role: string) =>
         fetch(base + '/admin/config', {
           method: 'PATCH',
