@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import subprocess
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
@@ -198,11 +199,32 @@ def migrate(d, target, c, journal, database):
         'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --batch --skip-column-names -u root "$MYSQL_DATABASE"', input_data=sql)
 
 
+def client_probe(d, reference, code, legacy=False):
+    image = json.loads(d.run('docker', 'image', 'inspect', reference))[0]['Id']
+    need(re.fullmatch('sha256:[a-f0-9]{64}', image), 'CLIENT_PROBE_IMAGE_ID')
+    args = ['docker', 'run', '--rm', '--network', 'none', '--read-only', '--entrypoint', 'node', image, '-e', code]
+    if legacy:
+        args[2:2] = ['--pull=never', '--no-healthcheck']
+    result = subprocess.run(args, capture_output=True, text=True, timeout=45)
+    if result.returncode:
+        text = result.stderr.lower()
+        categories = [('unknown flag', 'FLAG_UNSUPPORTED'), ('flag provided but not defined', 'FLAG_UNSUPPORTED'),
+            ('permission denied', 'PERMISSION_DENIED'), ('operation not permitted', 'OPERATION_NOT_PERMITTED'),
+            ('read-only file system', 'READ_ONLY_FILESYSTEM'), ('cannot find module', 'NODE_MODULE_NOT_FOUND'),
+            ('syntaxerror', 'NODE_SYNTAX'), ('exec format error', 'EXEC_FORMAT'),
+            ('invalid reference format', 'IMAGE_REFERENCE'), ('no such file or directory', 'FILE_MISSING'),
+            ('oci runtime', 'OCI_START_FAILED'), ('unable to find image', 'IMAGE_MISSING')]
+        kind = next((kind for marker, kind in categories if marker in text), 'EXIT_' + str(abs(result.returncode)))
+        raise RuntimeError('WINDOW_BITBROWSER_CLIENT_PROBE_' + kind)
+    value = json.loads(result.stdout)
+    need(type(value) is dict, 'CLIENT_PROBE_FORMAT')
+    return value
+
+
 def verify_client_image(d, reference, proof):
     expected = {**proof['prismaClientFiles'], **proof['preservedClientFiles']}
     code = r"""const fs=require('fs'),path=require('path'),crypto=require('crypto');const files={};function walk(p,n=''){for(const e of fs.readdirSync(p,{withFileTypes:true})){const name=n?n+'/'+e.name:e.name,full=path.join(p,e.name);if(e.isSymbolicLink())throw Error('LINK');if(e.isDirectory())walk(full,name);else if(e.isFile())files[name]=crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');else throw Error('KIND');}}walk('/app/node_modules/.prisma/client');const{Prisma}=require('/app/node_modules/@prisma/client');if(!['OnlineRechargeBitbrowserDevice','OnlineRechargeBitbrowserState'].every(n=>Prisma.dmmf.datamodel.models.some(m=>m.name===n)))throw Error('CLIENT_MODELS');console.log(JSON.stringify(files));"""
-    actual = json.loads(d.run('docker', 'run', '--pull=never', '--rm', '--network', 'none', '--read-only',
-        '--no-healthcheck', '--entrypoint', 'node', reference, '-e', code))
+    actual = client_probe(d, reference, code)
     need(actual == expected, 'PRISMA_IMAGE_CONTENT_CHANGED')
 
 
@@ -279,7 +301,7 @@ def diagnose(c):
     def bounded(error):
         message = str(error)
         return {'exceptionType': type(error).__name__,
-            'code': message if re.fullmatch('[A-Z_]{1,180}', message) else 'DETAIL_SUPPRESSED'}
+            'code': message if re.fullmatch('[A-Z0-9_]{1,180}', message) else 'DETAIL_SUPPRESSED'}
     try:
         h, d = utilities()
         phase = 'current-manifest'
@@ -319,7 +341,12 @@ def diagnose(c):
     function probe(name){try{const p=require(name);return{ok:true,resolved:require.resolve(name),clientVersion:p.Prisma?.prismaVersion?.client,device:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserDevice')===true,state:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserState')===true};}catch(e){const m=/Cannot find module ['"]([^'"]+)['"]/.exec(e.message||'');return{ok:false,name:e.name,code:e.code,missingModule:m&&/^[@a-zA-Z0-9._/-]+$/.test(m[1])?m[1]:null};}}
     out.bare=probe('@prisma/client');out.absolute=probe('/app/node_modules/@prisma/client');console.log(JSON.stringify(out));"""
         if 'Id' in api:
-            probe = json.loads(d.run('docker', 'run', '--pull=never', '--rm', '--network', 'none', '--read-only', '--no-healthcheck', '--entrypoint', 'node', reference, '-e', code))
+            try:
+                client_probe(d, reference, code, legacy=True)
+                result['legacyClientProbe'] = {'ok': True}
+            except Exception as error:
+                result['legacyClientProbe'] = bounded(error)
+            probe = client_probe(d, reference, code)
             expected = {**proof['prismaClientFiles'], **proof['preservedClientFiles']}
             files = probe.pop('files', {})
             probe['filesMatch'] = files == expected

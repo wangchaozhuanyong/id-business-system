@@ -81,16 +81,28 @@ class Controls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'CLIENT_GENERATION_PATH'):
                 publication.reproduce_parent_client(context, {**baseline, 'clientGenerationRoot': '../unsafe'}, output)
 
+    def test_client_probe_uses_immutable_local_image_and_classifies_without_raw_output(self):
+        d=Mock();image='sha256:'+'a'*64;d.run.return_value=json.dumps([{'Id':image}])
+        with patch.object(R.subprocess,'run',return_value=Mock(returncode=0,stdout='{}')) as run:
+            self.assertEqual(R.client_probe(d,'reviewed-tag','console.log("{}")'),{})
+            args=run.call_args.args[0]
+            self.assertIn(image,args);self.assertNotIn('reviewed-tag',args)
+            self.assertIn('--read-only',args);self.assertEqual(args[args.index('--network')+1],'none')
+            self.assertNotIn('--pull=never',args)
+        for detail,code in [('unknown flag: private input','FLAG_UNSUPPORTED'),('Permission denied: private input','PERMISSION_DENIED'),('private unrecognized error','EXIT_125')]:
+            with patch.object(R.subprocess,'run',return_value=Mock(returncode=125,stderr=detail)):
+                with self.assertRaisesRegex(RuntimeError,'^WINDOW_BITBROWSER_CLIENT_PROBE_'+code+'$'):
+                    R.client_probe(d,'reviewed-tag','code')
+
     def test_candidate_image_requires_all_new_and_preserved_client_hashes_before_migration(self):
         proof = {'prismaClientFiles': {'index.js': 'a' * 64}, 'preservedClientFiles': {'runtime/library.js': 'b' * 64}}
         expected = {**proof['prismaClientFiles'], **proof['preservedClientFiles']}
-        d = Mock(); d.run.return_value = json.dumps(expected)
-        R.verify_client_image(d, 'candidate-api', proof)
-        self.assertIn('--read-only', d.run.call_args.args)
-        self.assertIn('--network', d.run.call_args.args)
-        d.run.return_value = json.dumps({'index.js': 'a' * 64})
-        with self.assertRaisesRegex(RuntimeError, 'PRISMA_IMAGE_CONTENT_CHANGED'):
-            R.verify_client_image(d, 'candidate-api', proof)
+        with patch.object(R,'client_probe',return_value=expected) as probe:
+            R.verify_client_image(Mock(), 'candidate-api', proof)
+            self.assertEqual(probe.call_args.args[1],'candidate-api')
+            probe.return_value={'index.js':'a'*64}
+            with self.assertRaisesRegex(RuntimeError, 'PRISMA_IMAGE_CONTENT_CHANGED'):
+                R.verify_client_image(Mock(), 'candidate-api', proof)
         self.assertIn('verify_client_image', R.configured_release({}).__code__.co_names)
 
     def test_migration_archive_identity_uses_verified_configuration_not_a_daemon_identifier(self):
@@ -125,7 +137,7 @@ class Controls(unittest.TestCase):
             current = base / 'releases/parent'; current.mkdir(parents=True); (current/'release-manifest.json').write_text(json.dumps({'commit':'parent'})); (base/'current').symlink_to(current)
             c = {'scope':R.SCOPE,'sources':{},'failedPublicationDiagnostic':{'commit':commit,'workflowRunId':run,'buildProofSha256':R.sha(raw),'acceptedCommandId':'original'}}
             d = Mock(); d.run.side_effect=lambda *args: json.dumps([{'Id':'sha256:'+'c'*64,'Config':{}}]) if args[1:3]==('image','inspect') else json.dumps({'files':{},'bare':{'ok':False,'code':'MODULE_NOT_FOUND'}})
-            with patch.object(R,'BASE',base),patch.object(R,'utilities',return_value=(Mock(),d)),patch.object(R,'db_state',return_value={'applied':0}):
+            with patch.object(R,'BASE',base),patch.object(R,'utilities',return_value=(Mock(),d)),patch.object(R,'db_state',return_value={'applied':0}),patch.object(R,'client_probe',return_value={'files':{}}):
                 result=R.diagnose(c)
                 self.assertEqual(result['migration'],{'applied':0});self.assertFalse(result['maintenancePresent'])
                 self.assertTrue(result['clientProbe']['filesMatch']);self.assertTrue(result['migrationImage']['identityMatches'])
