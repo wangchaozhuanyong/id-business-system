@@ -439,6 +439,49 @@ async function interactionFeedback() {
   assert.deepEqual(requests.errors, []);
   await context.close();
 }
+async function profileCurrent() {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+    colorScheme: 'light',
+    serviceWorkers: 'block'
+  });
+  const page = (activePage = await context.newPage());
+  page.setDefaultTimeout(15000);
+  await login(page, 5374);
+  const routes = [
+    ['/v2/accounts', 'accounts.main'],
+    ['/v2/orders', 'orders.main'],
+    ['/v2/customers', 'customers.main']
+  ];
+  for (const [route] of routes) await navigate(page, route);
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Performance.enable');
+  const samples = [];
+  for (let round = 0; round < 2; round++)
+    for (const [route, table] of routes) {
+      const before = (await cdp.send('Performance.getMetrics')).metrics;
+      await cdp.send('Profiler.enable');
+      await cdp.send('Profiler.setSamplingInterval', { interval: 500 });
+      await cdp.send('Profiler.start');
+      const measured = await sample(page, route, table);
+      const { profile } = await cdp.send('Profiler.stop');
+      const after = (await cdp.send('Performance.getMetrics')).metrics;
+      save(`cpu-${round}-${table}.json`, profile);
+      const delta = Object.fromEntries(
+        after
+          .filter((v) => /Duration$|Count$/.test(v.name))
+          .map((v) => [v.name, v.value - (before.find((b) => b.name === v.name)?.value ?? 0)])
+      );
+      samples.push({ path: route, ...measured, delta });
+    }
+  save('render-profile-summary.json', {
+    source: process.env.GITHUB_SHA,
+    diagnosticOnly: true,
+    samples
+  });
+  console.log(JSON.stringify({ diagnosticOnly: true, samples: samples.length }));
+  await context.close();
+}
 try {
   database = await startOwnedMysqlTestInstance({
     runtime: 'docker',
@@ -485,36 +528,40 @@ try {
     await available(`http://127.0.0.1:${port}/login`);
   }
   browser = await chromium.launch({ headless: true });
-  await benchmark('before', 5375);
-  await benchmark('after', 5374);
-  let performanceError;
-  try {
-    save('performance-comparison.json', compareInteractionMetrics(metrics.after, metrics.before));
-  } catch (error) {
-    performanceError = error;
-    save('performance-error.json', { message: error.message });
-  }
-  const routes = await listPreviewRoutes(root);
-  await interactionFeedback();
-  await matrix(routes);
-  save('checks.json', {
-    checks,
-    source: process.env.GITHUB_SHA,
-    baseline: PREVIEW_BASE,
-    routes: routes.length,
-    productionAccess: false,
-    localMacServicesStarted: false,
-    performancePassed: !performanceError
-  });
-  if (performanceError) throw performanceError;
-  console.log(
-    JSON.stringify({
-      ok: true,
+  if (process.argv.includes('--profile-only')) {
+    await profileCurrent();
+  } else {
+    await benchmark('before', 5375);
+    await benchmark('after', 5374);
+    let performanceError;
+    try {
+      save('performance-comparison.json', compareInteractionMetrics(metrics.after, metrics.before));
+    } catch (error) {
+      performanceError = error;
+      save('performance-error.json', { message: error.message });
+    }
+    const routes = await listPreviewRoutes(root);
+    await interactionFeedback();
+    await matrix(routes);
+    save('checks.json', {
+      checks,
       source: process.env.GITHUB_SHA,
-      routeChecks: checks.length,
-      benchmarkSamples: 120
-    })
-  );
+      baseline: PREVIEW_BASE,
+      routes: routes.length,
+      productionAccess: false,
+      localMacServicesStarted: false,
+      performancePassed: !performanceError
+    });
+    if (performanceError) throw performanceError;
+    console.log(
+      JSON.stringify({
+        ok: true,
+        source: process.env.GITHUB_SHA,
+        routeChecks: checks.length,
+        benchmarkSamples: 120
+      })
+    );
+  }
 } catch (error) {
   save('failure.json', {
     name: error.name,

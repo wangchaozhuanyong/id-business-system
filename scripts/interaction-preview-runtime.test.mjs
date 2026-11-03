@@ -137,7 +137,12 @@ test('prior successful checks are reused only when application inputs are unchan
                 }
               ]
             }
-          : { head_sha: PRIOR_PREVIEW_COMMIT, conclusion: 'failure' }
+          : {
+              head_sha: url.includes('/41604661799')
+                ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
+                : PRIOR_PREVIEW_COMMIT,
+              conclusion: 'failure'
+            }
       ),
       { status: 200 }
     );

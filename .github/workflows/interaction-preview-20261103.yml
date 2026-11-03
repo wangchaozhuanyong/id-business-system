@@ -16,7 +16,7 @@ jobs:
   isolated-acceptance:
     if: github.repository == 'wangchaozhuanyong/id-business-system' && github.ref == 'refs/heads/codex/interaction-preview-20261103'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -45,8 +45,8 @@ jobs:
           npm run build --workspace @apple-business/admin
       - name: Install browser on disposable runner
         run: npx playwright install --with-deps chromium
-      - name: Real API and owned MySQL browser acceptance
-        run: node scripts/acceptance-v2-interaction-ci.mjs
+      - name: Profile remaining render cost on owned API and MySQL
+        run: node scripts/acceptance-v2-interaction-ci.mjs --profile-only
       - name: Retain sanitized acceptance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

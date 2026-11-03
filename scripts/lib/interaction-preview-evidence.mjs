@@ -39,9 +39,9 @@ export async function verifyPreviewEvidence(
     changes.length && changes.every((file) => allowed.has(file)),
     'Application inputs changed; prior checks cannot be reused'
   );
-  const get = async (suffix) => {
+  const get = async (suffix, runId = PRIOR_PREVIEW_RUN) => {
     const response = await request(
-      `https://api.github.com/repos/wangchaozhuanyong/id-business-system/actions/runs/${PRIOR_PREVIEW_RUN}${suffix}`,
+      `https://api.github.com/repos/wangchaozhuanyong/id-business-system/actions/runs/${runId}${suffix}`,
       {
         headers: {
           Accept: 'application/vnd.github+json',
@@ -71,8 +71,16 @@ export async function verifyPreviewEvidence(
   const priorSeconds = Math.ceil(
     (Date.parse(jobs[0].completed_at) - Date.parse(jobs[0].started_at)) / 1000
   );
+  const secondRun = await get('', 41604661799);
+  assert.equal(secondRun.head_sha, '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e');
+  assert.equal(secondRun.conclusion, 'failure');
+  const secondJobs = (await get('/jobs?filter=latest&per_page=100', 41604661799)).jobs;
+  assert.equal(secondJobs.length, 1);
+  const secondSeconds = Math.ceil(
+    (Date.parse(secondJobs[0].completed_at) - Date.parse(secondJobs[0].started_at)) / 1000
+  );
   assert.ok(
-    priorSeconds > 0 && priorSeconds + 35 * 60 <= 45 * 60,
+    priorSeconds > 0 && secondSeconds > 0 && priorSeconds + secondSeconds + 30 * 60 <= 45 * 60,
     'Combined validation exceeds authorized 45-minute budget'
   );
   return {
@@ -82,7 +90,9 @@ export async function verifyPreviewEvidence(
     changedPaths: changes,
     reusedChecks: required,
     priorSeconds,
-    continuationLimitMinutes: 35
+    secondRun: 41604661799,
+    secondSeconds,
+    continuationLimitMinutes: 30
   };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
