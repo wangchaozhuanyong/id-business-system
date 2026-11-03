@@ -43,6 +43,7 @@
     :persistent="false"
     :disabled="page.isParameterTransition || page.archive.saving"
     @command="page.handleLifecycleCommand($event, order)"
+    @keydown.esc.stop.prevent="closeMenu"
   >
     <AppButton
       ref="menuTrigger"
@@ -53,7 +54,7 @@
       更多操作
     </AppButton>
     <template #dropdown>
-      <el-dropdown-menu>
+      <el-dropdown-menu @keydown.esc.stop.prevent="closeMenu">
         <el-dropdown-item
           v-if="page.canUpdateOrders && page.archive.canArchive(order)"
           command="archive"
@@ -99,7 +100,7 @@ import type { useOrdersPage } from '../useOrdersPage';
 type OrdersPage = UnwrapNestedRefs<ReturnType<typeof useOrdersPage>>;
 const props = defineProps<{ order: V2Order; page: OrdersPage; mobile?: boolean }>();
 const dropdownReady = ref(false);
-const dropdownRef = ref<{ handleOpen: () => void }>();
+const dropdownRef = ref<{ handleOpen: () => void; handleClose: () => void }>();
 const menuTrigger = ref<{ $el: HTMLElement }>();
 const showMore = computed(
   () =>
@@ -118,5 +119,9 @@ async function openMenu() {
   if (blocked()) return;
   menuTrigger.value?.$el.focus();
   dropdownRef.value?.handleOpen();
+}
+function closeMenu() {
+  dropdownRef.value?.handleClose();
+  menuTrigger.value?.$el.focus({ preventScroll: true });
 }
 </script>

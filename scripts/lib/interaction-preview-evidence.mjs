@@ -116,13 +116,38 @@ export async function verifyPreviewEvidence(
   const snapshotSeconds = Math.ceil(
     (Date.parse(snapshotJobs[0].completed_at) - Date.parse(snapshotJobs[0].started_at)) / 1000
   );
+  const menuRun = await get('', 41612300171);
+  assert.equal(menuRun.head_sha, '4acbfd31d125d9567df0eee7b2b059dcb29de478');
+  assert.equal(menuRun.conclusion, 'failure');
+  const menuJobs = (await get('/jobs?filter=latest&per_page=100', 41612300171)).jobs;
+  assert.equal(menuJobs.length, 1);
+  for (const name of [
+    'Admin tests after shared table changes',
+    'Prepare verified API and admin runtime files',
+    'UI and architecture checks after shared table changes'
+  ]) {
+    assert.ok(
+      menuJobs[0].steps.some((step) => step.name === name && step.conclusion === 'success'),
+      `Missing passed check: ${name}`
+    );
+  }
+  const menuSeconds = Math.ceil(
+    (Date.parse(menuJobs[0].completed_at) - Date.parse(menuJobs[0].started_at)) / 1000
+  );
   assert.ok(
-    snapshotSeconds > 0 &&
+    menuSeconds > 0 &&
+      snapshotSeconds > 0 &&
       tableSeconds > 0 &&
       profileSeconds > 0 &&
       priorSeconds > 0 &&
       secondSeconds > 0 &&
-      priorSeconds + secondSeconds + profileSeconds + tableSeconds + snapshotSeconds + 15 * 60 <=
+      priorSeconds +
+        secondSeconds +
+        profileSeconds +
+        tableSeconds +
+        snapshotSeconds +
+        menuSeconds +
+        12 * 60 <=
         45 * 60,
     'Combined validation exceeds authorized 45-minute budget'
   );
@@ -152,7 +177,9 @@ export async function verifyPreviewEvidence(
     tableSeconds,
     snapshotRun: 41609412467,
     snapshotSeconds,
-    continuationLimitMinutes: 15
+    menuRun: 41612300171,
+    menuSeconds,
+    continuationLimitMinutes: 12
   };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

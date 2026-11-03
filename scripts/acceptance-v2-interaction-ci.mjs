@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /* global document, window, MutationObserver, requestAnimationFrame, location */
 import assert from 'node:assert/strict';
+import { cpus, availableParallelism, platform, arch } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, appendFileSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
@@ -231,7 +232,7 @@ async function benchmark(label, port) {
   for (const [target] of routes) await navigate(page, target);
   const initialReads = requests.reads,
     samples = [];
-  for (let round = 0; round < 20; round++)
+  for (let round = 0; round < 60; round++)
     for (const [target, table] of routes) {
       const value = await sample(page, target, table);
       assert.equal(value.dataSource, 'memory-cache');
@@ -244,6 +245,12 @@ async function benchmark(label, port) {
   metrics[label] = {
     conditions: {
       browser: browser.version(),
+      device: {
+        platform: platform(),
+        arch: arch(),
+        cpuModel: cpus()[0]?.model,
+        logicalCpus: availableParallelism()
+      },
       viewport: '1440x1000',
       theme: 'light',
       data: 'owned-mysql-45-rows-v1',
@@ -477,6 +484,7 @@ async function interactionFeedback() {
     return { kind, samples: values.length, p95: values[Math.ceil(values.length * 0.95) - 1] };
   });
   const coldDrawers = [{ kind: 'customer', feedbackMs: coldCustomerDrawerMs }];
+  save('interaction-feedback.json', { samples, summaries, coldDrawers });
   const menuChecks = [];
   for (const target of ['/v2/accounts', '/v2/orders']) {
     await navigate(page, target);
@@ -502,6 +510,7 @@ async function interactionFeedback() {
         'Menu must return focus to its trigger'
       );
       menuChecks.push({ target, index, keyboard, focusReturned: true });
+      save('menu-first-use.json', menuChecks);
     }
     if (target === '/v2/accounts') {
       const createAccount = page.getByRole('button', { name: '新增 ID', exact: true }).first();
@@ -650,7 +659,7 @@ try {
         ok: true,
         source: process.env.GITHUB_SHA,
         routeChecks: checks.length,
-        benchmarkSamples: 120
+        benchmarkSamples: metrics.before.samples.length + metrics.after.samples.length
       })
     );
   }
