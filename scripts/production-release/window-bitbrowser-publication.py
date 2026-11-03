@@ -83,13 +83,16 @@ def reproduce_parent_client(context, baseline, receipt):
             if normalized != raw:
                 path.write_bytes(normalized)
                 rewritten.append(name)
-    actual, expected = inventory(directory), baseline['clientFiles']
+    actual, complete = inventory(directory), baseline['clientFiles']
+    preserved = baseline.get('preservedClientFiles', {})
+    need(all(complete.get(n) == v for n, v in preserved.items()), 'PRESERVED_CLIENT_CHANGED')
+    expected = {n: v for n, v in complete.items() if n not in preserved}
     differences = sorted(n for n in actual.keys() | expected.keys() if actual.get(n) != expected.get(n))
     receipt.write_text(json.dumps({'kind': 'READONLY_PARENT_CLIENT_REPRODUCTION',
-        'actualCount': len(actual), 'expectedCount': len(expected), 'generationPathFiles': sorted(rewritten),
+        'actualCount': len(actual), 'expectedCount': len(expected), 'preservedCount': len(preserved), 'generationPathFiles': sorted(rewritten),
         'differingFiles': differences, 'expected': expected, 'actual': actual, 'businessActions': 0},
         sort_keys=True, indent=2) + '\n')
-    need(actual == expected and {'count': len(actual), 'sha256': sha(R.canonical(actual))}
+    need(actual == expected and {'count': len(complete), 'sha256': sha(R.canonical(complete))}
          == baseline['runtime']['clientInventory'], 'PRISMA_PARENT_NOT_REPRODUCED')
 
 
@@ -124,6 +127,7 @@ def build(c, plan):
         engine.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / 'apps/api/src/id-business-v2/online-recharge/engine' / name, engine)
     proof.update(nativeParentCapture=plan['nativeParentCapture'], qualitySourceEvidence=plan['qualitySourceEvidence'],
+        preservedClientFiles=resolved['baseline']['preservedClientFiles'],
         sourceLayout='PUBLISHED_PREDECESSOR_WITH_REVIEWED_MAIN_WINDOW_OVERLAY')
     proof_file.unlink()
     proof['files'] = B.inventory(payload)

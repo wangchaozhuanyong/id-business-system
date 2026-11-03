@@ -64,12 +64,32 @@ class Controls(unittest.TestCase):
             output = context / 'comparison.json'
             publication.reproduce_parent_client(context, baseline, output)
             self.assertEqual(json.loads(output.read_text())['differingFiles'], [])
+            legacy = {'runtime/library.js': R.sha(b'legacy-runtime')}
+            complete = {**files, **legacy}
+            retained = {**baseline, 'clientFiles': complete, 'preservedClientFiles': legacy,
+                'runtime': {'clientInventory': {'count': 3, 'sha256': R.sha(R.canonical(complete))}}}
+            publication.reproduce_parent_client(context, retained, output)
+            self.assertEqual(json.loads(output.read_text())['preservedCount'], 1)
+            with self.assertRaisesRegex(RuntimeError, 'PRISMA_PARENT_NOT_REPRODUCED'):
+                publication.reproduce_parent_client(context, {**retained, 'preservedClientFiles': {}}, output)
             (client / 'engine.node').write_bytes(b'changed-engine')
             with self.assertRaisesRegex(RuntimeError, 'PRISMA_PARENT_NOT_REPRODUCED'):
                 publication.reproduce_parent_client(context, baseline, output)
             self.assertEqual(json.loads(output.read_text())['differingFiles'], ['engine.node'])
             with self.assertRaisesRegex(RuntimeError, 'CLIENT_GENERATION_PATH'):
                 publication.reproduce_parent_client(context, {**baseline, 'clientGenerationRoot': '../unsafe'}, output)
+
+    def test_candidate_image_requires_all_new_and_preserved_client_hashes_before_migration(self):
+        proof = {'prismaClientFiles': {'index.js': 'a' * 64}, 'preservedClientFiles': {'runtime/library.js': 'b' * 64}}
+        expected = {**proof['prismaClientFiles'], **proof['preservedClientFiles']}
+        d = Mock(); d.run.return_value = json.dumps(expected)
+        R.verify_client_image(d, 'candidate-api', proof)
+        self.assertIn('--read-only', d.run.call_args.args)
+        self.assertIn('--network', d.run.call_args.args)
+        d.run.return_value = json.dumps({'index.js': 'a' * 64})
+        with self.assertRaisesRegex(RuntimeError, 'PRISMA_IMAGE_CONTENT_CHANGED'):
+            R.verify_client_image(d, 'candidate-api', proof)
+        self.assertIn('verify_client_image', R.configured_release({}).__code__.co_names)
 
     def test_only_the_exact_incremental_migration_state_is_accepted(self):
         c = {'migration': {'sha256': 'a' * 64}}
@@ -101,11 +121,11 @@ class Controls(unittest.TestCase):
             **{'online-recharge/engine/' + n: 'b' * 64 for n in ('credentials.cjs', 'SOURCE_MANIFEST.json')}}
         proof = {**plan, 'scope': R.SCOPE, 'sources': sources, 'businessActions': 0,
             'baselineApiGroups': {}, 'baselineAdminFiles': {}, 'apiModules': {}, 'prismaClientFiles': {},
-            'adminFiles': {}, 'controlSources': {}, 'files': files, 'migrationTransport': {
+            'adminFiles': {}, 'controlSources': {}, 'preservedClientFiles': {}, 'files': files, 'migrationTransport': {
                 'file': R.PREFIX + '-migration.tar.gz', 'sha256': 'b' * 64, 'bytes': 1,
                 'imageId': 'sha256:' + 'c' * 64,
                 'reference': '098208446664.dkr.ecr.ap-northeast-1.amazonaws.com/id-business-v2-release:' + commit + '-123-window-bitbrowser-migrate'}}
-        c = {'sources': sources, 'baseline': {'apiGroups': {'groups': {}}, 'adminFilesSha256': R.sha(R.canonical({}))}}
+        c = {'sources': sources, 'baseline': {'apiGroups': {'groups': {}}, 'adminFilesSha256': R.sha(R.canonical({})), 'clientFiles': {}, 'preservedClientFiles': {}}}
         self.assertEqual(R.verify_proof(proof, plan, c, files), proof)
         missing = {n: v for n, v in files.items() if n != 'online-recharge/engine/SOURCE_MANIFEST.json'}
         with self.assertRaisesRegex(RuntimeError, 'PAYLOAD_SCOPE'):
