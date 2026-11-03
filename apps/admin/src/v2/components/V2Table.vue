@@ -79,28 +79,27 @@ export default defineComponent({
           v2TablePreferences.value[props.schema.id]
         ])
     );
-    const toolbarHeight = ref(0);
-    const headerHeight = ref<number>();
     let toolbarObserver: ResizeObserver | undefined;
     let headerObserver: ResizeObserver | undefined;
+    const setMeasuredHeight = (name: string, entry: ResizeObserverEntry) => {
+      const value = `${Math.ceil(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height)}px`;
+      const style = shellRef.value?.style;
+      if (style && style.getPropertyValue(name) !== value) style.setProperty(name, value);
+    };
     onMounted(() => {
       const toolbar = shellRef.value?.querySelector<HTMLElement>(
         ':scope > .v2-table-preference-toolbar'
       );
       if (toolbar) {
         toolbarObserver = new ResizeObserver(([entry]) => {
-          toolbarHeight.value = Math.ceil(
-            entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
-          );
+          setMeasuredHeight('--v2-table-toolbar-height', entry);
         });
         toolbarObserver.observe(toolbar);
       }
       const header = shellRef.value?.querySelector<HTMLElement>('.el-table__header-wrapper');
       if (header) {
         headerObserver = new ResizeObserver(([entry]) => {
-          headerHeight.value = Math.ceil(
-            entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
-          );
+          setMeasuredHeight('--v2-table-header-height', entry);
         });
         headerObserver.observe(header);
       }
@@ -174,12 +173,7 @@ export default defineComponent({
         'div',
         {
           class: 'v2-unified-table-shell',
-          ref: shellRef,
-          style: {
-            '--v2-table-toolbar-height': `${toolbarHeight.value}px`,
-            '--v2-table-header-height':
-              headerHeight.value === undefined ? undefined : `${headerHeight.value}px`
-          }
+          ref: shellRef
         },
         [
           props.showColumnSettings ? h(V2TableColumnSettings, { schema: props.schema }) : null,

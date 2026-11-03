@@ -124,7 +124,9 @@ function watchRequests(page) {
         path: url.pathname.replace(/[\da-f]{8}-(?:[\da-f-]{27,})/gi, ':id')
       });
     if (
-      /\/id-business-v2\/(?:accounts|customers|orders)(?:\/bootstrap)?$/.test(url.pathname) &&
+      /(?:\/id-business-v2\/(?:accounts|customers|orders)|\/v2\/roles)(?:\/bootstrap)?$/.test(
+        url.pathname
+      ) &&
       request.method() === 'GET'
     )
       state.reads++;
@@ -135,7 +137,9 @@ function watchRequests(page) {
       started = starts.get(response.request());
     if (
       started === undefined ||
-      !/\/id-business-v2\/(?:accounts|customers|orders)(?:\/bootstrap)?$/.test(url.pathname)
+      !/(?:\/id-business-v2\/(?:accounts|customers|orders)|\/v2\/roles)(?:\/bootstrap)?$/.test(
+        url.pathname
+      )
     )
       return;
     state.timings.push({
@@ -147,9 +151,9 @@ function watchRequests(page) {
   });
   return state;
 }
-async function sample(page, target, table) {
+async function sample(page, target, table, expectedRows = 20) {
   await page.evaluate(
-    ({ target, table }) => {
+    ({ target, table, expectedRows }) => {
       const started = performance.now();
       let feedback = null,
         completed = false,
@@ -161,7 +165,8 @@ async function sample(page, target, table) {
           completed ||
           location.pathname !== target ||
           element?.closest('.v2-async-region')?.getAttribute('data-v2-query-phase') !== 'ready' ||
-          element.querySelectorAll('.el-table__body tbody tr').length !== 20
+          (expectedRows !== null &&
+            element.querySelectorAll('.el-table__body tbody tr').length !== expectedRows)
         )
           return;
         completed = true;
@@ -209,7 +214,7 @@ async function sample(page, target, table) {
       document.querySelector(`a[href="${target}"]`).click();
       requestAnimationFrame(tick);
     },
-    { target, table }
+    { target, table, expectedRows }
   );
   await page.waitForFunction(() => window.__previewSample !== null);
   return page.evaluate(() => window.__previewSample);
@@ -227,14 +232,15 @@ async function benchmark(label, port) {
   const routes = [
     ['/v2/accounts', 'accounts.main'],
     ['/v2/orders', 'orders.main'],
-    ['/v2/customers', 'customers.main']
+    ['/v2/customers', 'customers.main'],
+    ['/v2/system/roles', 'roles.main', null]
   ];
   for (const [target] of routes) await navigate(page, target);
   const initialReads = requests.reads,
     samples = [];
   for (let round = 0; round < 60; round++)
-    for (const [target, table] of routes) {
-      const value = await sample(page, target, table);
+    for (const [target, table, expectedRows] of routes) {
+      const value = await sample(page, target, table, expectedRows);
       assert.equal(value.dataSource, 'memory-cache');
       assert.equal(value.blankFrames, 0);
       samples.push({ path: target, ...value });
@@ -255,7 +261,8 @@ async function benchmark(label, port) {
       theme: 'light',
       data: 'owned-mysql-45-rows-v1',
       network: 'real HTTP to same owned API/MySQL on one runner',
-      measurement: '20-row DOM commit observer plus two-rAF; warm routes'
+      measurement:
+        'DOM commit observer plus two-rAF; 20 rows in primary lists; owned role rows in control; warm routes'
     },
     samples
   };
@@ -417,11 +424,16 @@ async function interactionFeedback() {
                   node.closest('.el-overlay')?.style.display !== 'none' &&
                   node.querySelector('.el-form-item input')
               );
+              const toolDrawer = document.querySelector(
+                '.v2-workspace-shortcut-drawer .v2-workspace-shortcut-drawer__toolbar'
+              );
               const filterFeedback =
                 ['transitioning', 'refreshing'].includes(
                   region?.getAttribute('data-v2-query-phase')
                 ) || document.querySelector('.el-table__body')?.textContent?.includes(keyword);
-              if (kind === 'drawer' ? drawer : filterFeedback)
+              if (
+                kind === 'tools-drawer' ? toolDrawer : kind === 'drawer' ? drawer : filterFeedback
+              )
                 window.__previewFeedback = performance.now() - started;
               else if (performance.now() - started < 10000) requestAnimationFrame(tick);
             };
@@ -527,6 +539,37 @@ async function interactionFeedback() {
     }
   }
   save('menu-first-use.json', menuChecks);
+  const manageTools = page.getByRole('button', { name: '管理工具', exact: true });
+  await arm(manageTools, 'tools-drawer');
+  await manageTools.click();
+  await page.waitForFunction(() => window.__previewFeedback !== null);
+  coldDrawers.push({
+    kind: 'tools',
+    feedbackMs: await page.evaluate(() => window.__previewFeedback)
+  });
+  let toolDrawer = page.locator('.v2-workspace-shortcut-drawer:visible');
+  await toolDrawer.getByRole('button', { name: '新增网址', exact: true }).click();
+  const toolName = () =>
+    page
+      .locator('.v2-workspace-shortcut-drawer:visible .el-form-item')
+      .filter({ hasText: '网址名称' })
+      .locator('input');
+  await toolName().fill('合成未保存工具草稿');
+  await toolDrawer.locator('.el-drawer__close-btn').click();
+  await toolDrawer.waitFor({ state: 'hidden' });
+  const toolFeedback = [];
+  for (let index = 0; index < 20; index++) {
+    await arm(manageTools, 'tools-drawer');
+    await manageTools.click();
+    await page.waitForFunction(() => window.__previewFeedback !== null);
+    toolFeedback.push(await page.evaluate(() => window.__previewFeedback));
+    assert.equal(await toolName().inputValue(), '合成未保存工具草稿');
+    toolDrawer = page.locator('.v2-workspace-shortcut-drawer:visible');
+    await toolDrawer.locator('.el-drawer__close-btn').click();
+    await toolDrawer.waitFor({ state: 'hidden' });
+  }
+  toolFeedback.sort((a, b) => a - b);
+  summaries.push({ kind: 'tools-drawer', samples: 20, p95: toolFeedback[18] });
   save('interaction-feedback.json', { samples, summaries, coldDrawers });
   assert.ok(
     coldDrawers.every((value) => value.feedbackMs <= 200),

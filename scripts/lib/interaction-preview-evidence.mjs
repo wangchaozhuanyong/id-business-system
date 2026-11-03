@@ -26,7 +26,9 @@ const allowed = new Set([
   'apps/admin/src/v2/features/orders/components/V2OrderRowActions.vue',
   'apps/admin/src/v2/features/orders/order-presentation.ts',
   'apps/admin/src/v2/utils/dateTime.ts',
-  'apps/admin/src/v2/utils/dateTime.spec.ts'
+  'apps/admin/src/v2/utils/dateTime.spec.ts',
+  'apps/admin/src/v2/features/orders/useOrdersPage.ts',
+  'apps/admin/src/v2/components/table-height-measurement.spec.ts'
 ]);
 export async function verifyPreviewEvidence(
   env,
@@ -134,8 +136,17 @@ export async function verifyPreviewEvidence(
   const menuSeconds = Math.ceil(
     (Date.parse(menuJobs[0].completed_at) - Date.parse(menuJobs[0].started_at)) / 1000
   );
+  const expandedRun = await get('', 41614170604);
+  assert.equal(expandedRun.head_sha, '07c06a4399d2b771358ecad2203cbfc0891df19e');
+  assert.equal(expandedRun.conclusion, 'failure');
+  const expandedJobs = (await get('/jobs?filter=latest&per_page=100', 41614170604)).jobs;
+  assert.equal(expandedJobs.length, 1);
+  const expandedSeconds = Math.ceil(
+    (Date.parse(expandedJobs[0].completed_at) - Date.parse(expandedJobs[0].started_at)) / 1000
+  );
   assert.ok(
-    menuSeconds > 0 &&
+    expandedSeconds > 0 &&
+      menuSeconds > 0 &&
       snapshotSeconds > 0 &&
       tableSeconds > 0 &&
       profileSeconds > 0 &&
@@ -179,7 +190,9 @@ export async function verifyPreviewEvidence(
     snapshotSeconds,
     menuRun: 41612300171,
     menuSeconds,
-    continuationLimitMinutes: 12
+    expandedRun: 41614170604,
+    expandedSeconds,
+    continuationLimitMinutes: 10
   };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

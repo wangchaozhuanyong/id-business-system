@@ -141,17 +141,19 @@ test('prior successful checks are reused only when application inputs are unchan
               ]
             }
           : {
-              head_sha: url.includes('/41612300171')
-                ? '4acbfd31d125d9567df0eee7b2b059dcb29de478'
-                : url.includes('/41609412467')
-                  ? '28a49701fc508da81af239a0b3961f49e385489e'
-                  : url.includes('/41607976951')
-                    ? '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9'
-                    : url.includes('/41606386434')
-                      ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
-                      : url.includes('/41604661799')
-                        ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
-                        : PRIOR_PREVIEW_COMMIT,
+              head_sha: url.includes('/41614170604')
+                ? '07c06a4399d2b771358ecad2203cbfc0891df19e'
+                : url.includes('/41612300171')
+                  ? '4acbfd31d125d9567df0eee7b2b059dcb29de478'
+                  : url.includes('/41609412467')
+                    ? '28a49701fc508da81af239a0b3961f49e385489e'
+                    : url.includes('/41607976951')
+                      ? '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9'
+                      : url.includes('/41606386434')
+                        ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
+                        : url.includes('/41604661799')
+                          ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
+                          : PRIOR_PREVIEW_COMMIT,
               conclusion: url.includes('/41606386434') ? 'success' : 'failure'
             }
       ),

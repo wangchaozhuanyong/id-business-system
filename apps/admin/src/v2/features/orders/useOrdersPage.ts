@@ -1,7 +1,7 @@
 import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, markRaw, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { getApiErrorMessage } from '@/api/client';
@@ -191,7 +191,7 @@ export function useOrdersPage() {
     }
   });
 
-  const items = computed(() => ordersQuery.data.value?.list.items ?? []);
+  const items = computed(() => markRaw(ordersQuery.data.value?.list.items ?? []));
   const total = computed(() => ordersQuery.data.value?.list.total ?? 0);
   const displayedPage = computed(() => ordersQuery.data.value?.list.page ?? query.page);
   const displayedPageSize = computed(() => ordersQuery.data.value?.list.pageSize ?? query.pageSize);
