@@ -90,9 +90,17 @@ class Controls(unittest.TestCase):
             self.assertIn('--read-only',args);self.assertEqual(args[args.index('--network')+1],'none')
             self.assertNotIn('--pull=never',args)
         for detail,code in [('unknown flag: private input','FLAG_UNSUPPORTED'),('Permission denied: private input','PERMISSION_DENIED'),('private unrecognized error','EXIT_125')]:
-            with patch.object(R.subprocess,'run',return_value=Mock(returncode=125,stderr=detail)):
+            with patch.object(R.subprocess,'run',return_value=Mock(returncode=125,stderr=detail,stdout='')):
                 with self.assertRaisesRegex(RuntimeError,'^WINDOW_BITBROWSER_CLIENT_PROBE_'+code+'$'):
                     R.client_probe(d,'reviewed-tag','code')
+
+    def test_probe_error_evidence_keeps_only_fixed_words_and_resource_numbers(self):
+        error=R.ClientProbeFailed('EXIT_125',Mock(returncode=125,stderr='Docker: Error response from daemon: secret_ABCDEFG password_xyz example@example.test',stdout=''))
+        text=json.dumps(error.diagnostic)
+        self.assertIn('daemon',text)
+        for private in ['secret','ABCDEFG','password','xyz','example','@']:
+            self.assertNotIn(private,text)
+        self.assertEqual(str(error),'WINDOW_BITBROWSER_CLIENT_PROBE_EXIT_125')
 
     def test_candidate_image_requires_all_new_and_preserved_client_hashes_before_migration(self):
         proof = {'prismaClientFiles': {'index.js': 'a' * 64}, 'preservedClientFiles': {'runtime/library.js': 'b' * 64}}
@@ -137,7 +145,7 @@ class Controls(unittest.TestCase):
             current = base / 'releases/parent'; current.mkdir(parents=True); (current/'release-manifest.json').write_text(json.dumps({'commit':'parent'})); (base/'current').symlink_to(current)
             c = {'scope':R.SCOPE,'sources':{},'failedPublicationDiagnostic':{'commit':commit,'workflowRunId':run,'buildProofSha256':R.sha(raw),'acceptedCommandId':'original'}}
             d = Mock(); d.run.side_effect=lambda *args: json.dumps([{'Id':'sha256:'+'c'*64,'Config':{}}]) if args[1:3]==('image','inspect') else json.dumps({'files':{},'bare':{'ok':False,'code':'MODULE_NOT_FOUND'}})
-            with patch.object(R,'BASE',base),patch.object(R,'utilities',return_value=(Mock(),d)),patch.object(R,'db_state',return_value={'applied':0}),patch.object(R,'client_probe',return_value={'files':{}}):
+            with patch.object(R,'BASE',base),patch.object(R,'utilities',return_value=(Mock(),d)),patch.object(R,'db_state',return_value={'applied':0}),patch.object(R,'client_probe',return_value={'files':{}}),patch.object(R,'probe_resources',return_value={'freeBytes':123}):
                 result=R.diagnose(c)
                 self.assertEqual(result['migration'],{'applied':0});self.assertFalse(result['maintenancePresent'])
                 self.assertTrue(result['clientProbe']['filesMatch']);self.assertTrue(result['migrationImage']['identityMatches'])
