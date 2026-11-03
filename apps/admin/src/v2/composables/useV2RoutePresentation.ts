@@ -45,8 +45,12 @@ export function useV2RoutePresentation(content: Ref<HTMLElement | null>) {
             element.style.display !== 'none' &&
             !element.querySelector?.('.v2-unified-table, .v2-records-mobile-list')
         )
-        .slice(0, cached ? 2 : 3);
-      groups.forEach((element, index) => {
+        .slice(0, cached ? 1 : 3);
+      groups.forEach((group, index) => {
+        // Cache returns animate the small heading, avoiding a new layer for a full panel.
+        const element = cached
+          ? (group.querySelector<HTMLElement>('.v2-section-heading') ?? group)
+          : group;
         if (typeof element.animate !== 'function') return;
         const animation = element.animate(
           cached

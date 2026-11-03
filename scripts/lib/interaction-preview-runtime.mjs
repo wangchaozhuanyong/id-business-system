@@ -152,8 +152,9 @@ export async function seedPreviewRows(project, env, owned) {
     const service = await option('service', 'service', {
       parentId: category.id,
       countryOptionId: country.id,
-      businessAmount: '0'
+      businessAmount: '1'
     });
+    assert.ok(service.businessAmount?.greaterThan(0), 'Synthetic service must be selectable');
     const status = await option('id_status', 'normal', { isSystem: true });
     const platform = await option('settlement_platform', 'platform');
     for (let index = 1; index <= 45; index++) {

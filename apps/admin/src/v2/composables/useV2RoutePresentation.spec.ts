@@ -141,3 +141,15 @@ it('keeps table and mobile-card bodies out of route compositing', async () => {
   expect(page.children[2].animate).not.toHaveBeenCalled();
   expect(page.animate).not.toHaveBeenCalled();
 });
+
+it('limits cache compositing to the first heading instead of its full panel', async () => {
+  const heading = new Group();
+  page.children[0].querySelector = ((selector: string) =>
+    selector === '.v2-section-heading' ? heading : null) as unknown as Group['querySelector'];
+  await mocks.listener!({ ...event, source: 'memory-cache' });
+  expect(heading.animate).toHaveBeenCalledWith(
+    [{ opacity: 0.8 }, { opacity: 1 }],
+    expect.objectContaining({ duration: 120 })
+  );
+  expect(page.children.every((group) => group.animate.mock.calls.length === 0)).toBe(true);
+});

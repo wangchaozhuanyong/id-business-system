@@ -14,6 +14,8 @@ const allowed = new Set([
   'scripts/lib/interaction-preview-runtime.mjs',
   'scripts/lib/interaction-preview-evidence.mjs',
   'scripts/interaction-preview-runtime.test.mjs',
+  'docs/UI_DESIGN.md',
+  'docs/V2_LOADING_STANDARD.md',
   'apps/admin/src/v2/components/V2Table.vue',
   'apps/admin/src/v2/composables/useV2TableContentWidths.ts',
   'apps/admin/src/v2/composables/useV2TableContentWidths.spec.ts',
@@ -174,6 +176,14 @@ export async function verifyPreviewEvidence(
   const latestSeconds = Math.ceil(
     (Date.parse(latestJobs[0].completed_at) - Date.parse(latestJobs[0].started_at)) / 1000
   );
+  const lazyRun = await get('', 41637259555);
+  assert.equal(lazyRun.head_sha, 'abd68d64ea3ca3dce52b130f7e5a2c0e8619b45e');
+  assert.equal(lazyRun.conclusion, 'failure');
+  const lazyJobs = (await get('/jobs?filter=latest&per_page=100', 41637259555)).jobs;
+  assert.equal(lazyJobs.length, 1);
+  const lazySeconds = Math.ceil(
+    (Date.parse(lazyJobs[0].completed_at) - Date.parse(lazyJobs[0].started_at)) / 1000
+  );
   const priorDurations = [
     priorSeconds,
     secondSeconds,
@@ -183,7 +193,8 @@ export async function verifyPreviewEvidence(
     menuSeconds,
     expandedSeconds,
     typedSeconds,
-    latestSeconds
+    latestSeconds,
+    lazySeconds
   ];
   const spentSeconds = priorDurations.reduce((total, value) => total + value, 0);
   const continuationLimitMinutes = 8;
@@ -227,6 +238,8 @@ export async function verifyPreviewEvidence(
     typedSeconds,
     latestRun: 41622075809,
     latestSeconds,
+    lazyRun: 41637259555,
+    lazySeconds,
     authorizedMinutes: 60,
     spentSeconds,
     continuationLimitMinutes

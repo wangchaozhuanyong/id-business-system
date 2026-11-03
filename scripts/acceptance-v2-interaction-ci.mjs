@@ -265,7 +265,7 @@ async function benchmark(label, port) {
       viewport: '1440x1000',
       theme: 'light',
       inputMode: 'scripted sidebar navigation; pointer parked in sidebar',
-      data: 'owned-mysql-45-rows-v1',
+      data: 'owned-mysql-45-rows-v2-positive-service',
       network: 'real HTTP to same owned API/MySQL on one runner',
       measurement:
         'DOM commit observer plus two-rAF; 20 rows in primary lists; owned role rows in control; warm routes'
@@ -599,6 +599,7 @@ async function interactionFeedback() {
   }
   toolFeedback.sort((a, b) => a - b);
   summaries.push({ kind: 'tools-drawer', samples: 20, p95: toolFeedback[18] });
+  save('interaction-feedback.json', { samples, summaries, coldDrawers });
   const lazyChecks = [];
   await navigate(page, '/v2/orders');
   const details = page.locator('.v2-filter-disclosure');
@@ -611,7 +612,7 @@ async function interactionFeedback() {
     element.setAttribute('data-preview-probe', 'retained-control')
   );
   await service.click();
-  await page.getByRole('option', { name: '合成service', exact: true }).click();
+  await page.getByRole('option', { name: /合成service/ }).click();
   await details.locator('summary').click();
   await details.locator('summary').click();
   assert.equal(await service.getAttribute('data-preview-probe'), 'retained-control');
