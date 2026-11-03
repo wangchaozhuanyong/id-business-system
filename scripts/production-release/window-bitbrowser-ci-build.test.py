@@ -25,13 +25,15 @@ class CurrentCi(unittest.TestCase):
     def test_workflow_changes_only_route_two_controls_and_one_build(self):
         old = '\n'.join([W.OLD_BUILD, W.OLD_BUILD, 'node scripts/ci-recharge-check.mjs release-controls "$CHECK_BASE"',
             'node scripts/ci-recharge-check.mjs guards "$CHECK_BASE"',
-            '      - name: Verify affected release entry and maintenance controls\n',
+            '      - name: Verify affected release entry and maintenance controls\n        env:\n',
+            '      - name: Verify changed release controls\n        env:\n',
             '      - name: Verify changed browser worker\n',
             '      - name: Verify frozen online recharge engine\n'])
         value = W.expected_workflow(old)
         self.assertEqual(value.count(W.NEW_BUILD), 4)
         self.assertIn('--controls release-controls', value)
         self.assertIn('--controls guards', value)
+        self.assertEqual(value.count('GH_TOKEN: ${{ github.token }}'), 2)
         with self.assertRaises(RuntimeError):
             W.expected_workflow(old + '\n' + W.OLD_BUILD)
 

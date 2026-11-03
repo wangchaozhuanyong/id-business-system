@@ -78,6 +78,13 @@ def expected_workflow(old):
         before = '      - name: ' + name + '\n'
         need(old.count(before) == 1, 'WORKFLOW_RECIPE_CHANGED')
         old = old.replace(before, before + '        ' + setting + '\n')
+    for name in STEP.values():
+        before = '      - name: ' + name + '\n'
+        if name == STEP['release-controls']:
+            before += '        id: window_ci_controls\n'
+        before += '        env:\n'
+        need(old.count(before) == 1, 'WORKFLOW_RECIPE_CHANGED')
+        old = old.replace(before, before + '          GH_TOKEN: ${{ github.token }}\n')
     return old
 
 
