@@ -73,7 +73,10 @@ it('updates measured shell heights without rendering table cells again', async (
     const resize = (index: number, height: number) =>
       callbacks[index](
         [
-          { borderBoxSize: [{ blockSize: height }], contentRect: { height } } as ResizeObserverEntry
+          {
+            borderBoxSize: [{ blockSize: height }],
+            contentRect: { height }
+          } as unknown as ResizeObserverEntry
         ],
         {} as ResizeObserver
       );

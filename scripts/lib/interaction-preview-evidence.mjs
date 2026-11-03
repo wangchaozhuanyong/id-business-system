@@ -28,7 +28,8 @@ const allowed = new Set([
   'apps/admin/src/v2/utils/dateTime.ts',
   'apps/admin/src/v2/utils/dateTime.spec.ts',
   'apps/admin/src/v2/features/orders/useOrdersPage.ts',
-  'apps/admin/src/v2/components/table-height-measurement.spec.ts'
+  'apps/admin/src/v2/components/table-height-measurement.spec.ts',
+  'apps/admin/src/v2/styles/base.css'
 ]);
 export async function verifyPreviewEvidence(
   env,
@@ -144,24 +145,39 @@ export async function verifyPreviewEvidence(
   const expandedSeconds = Math.ceil(
     (Date.parse(expandedJobs[0].completed_at) - Date.parse(expandedJobs[0].started_at)) / 1000
   );
+  const typedRun = await get('', 41618115000);
+  assert.equal(typedRun.head_sha, '7a343c43364fe5a71c75af24fe72ebce9f299580');
+  assert.equal(typedRun.conclusion, 'failure');
+  const typedJobs = (await get('/jobs?filter=latest&per_page=100', 41618115000)).jobs;
+  assert.equal(typedJobs.length, 1);
   assert.ok(
-    expandedSeconds > 0 &&
-      menuSeconds > 0 &&
-      snapshotSeconds > 0 &&
-      tableSeconds > 0 &&
-      profileSeconds > 0 &&
-      priorSeconds > 0 &&
-      secondSeconds > 0 &&
-      priorSeconds +
-        secondSeconds +
-        profileSeconds +
-        tableSeconds +
-        snapshotSeconds +
-        menuSeconds +
-        12 * 60 <=
-        45 * 60,
+    typedJobs[0].steps.some(
+      (step) =>
+        step.name === 'Admin tests after shared table changes' && step.conclusion === 'success'
+    ),
+    'Latest full admin tests must have passed'
+  );
+  const typedSeconds = Math.ceil(
+    (Date.parse(typedJobs[0].completed_at) - Date.parse(typedJobs[0].started_at)) / 1000
+  );
+  const priorDurations = [
+    priorSeconds,
+    secondSeconds,
+    profileSeconds,
+    tableSeconds,
+    snapshotSeconds,
+    menuSeconds,
+    expandedSeconds,
+    typedSeconds
+  ];
+  const spentSeconds = priorDurations.reduce((total, value) => total + value, 0);
+  const continuationLimitMinutes = 8;
+  assert.ok(
+    priorDurations.every((value) => value > 0) &&
+      spentSeconds + continuationLimitMinutes * 60 <= 45 * 60,
     'Combined validation exceeds authorized 45-minute budget'
   );
+
   return {
     priorRun: PRIOR_PREVIEW_RUN,
     priorCommit: PRIOR_PREVIEW_COMMIT,
@@ -192,12 +208,54 @@ export async function verifyPreviewEvidence(
     menuSeconds,
     expandedRun: 41614170604,
     expandedSeconds,
-    continuationLimitMinutes: 10
+    typedRun: 41618115000,
+    typedSeconds,
+    spentSeconds,
+    continuationLimitMinutes
   };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const evidence = await verifyPreviewEvidence(process.env, root);
+  const runtimeInputChanges = execFileSync(
+    'git',
+    [
+      'diff',
+      '--name-only',
+      '7a343c43364fe5a71c75af24fe72ebce9f299580',
+      process.env.GITHUB_SHA,
+      '--',
+      'apps',
+      'packages',
+      'package.json',
+      'package-lock.json'
+    ],
+    { cwd: root, encoding: 'utf8' }
+  )
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  assert.ok(
+    runtimeInputChanges.every((file) =>
+      [
+        'apps/admin/src/v2/components/table-height-measurement.spec.ts',
+        'apps/admin/src/v2/styles/base.css'
+      ].includes(file)
+    ),
+    'Application JavaScript or dependency inputs changed; latest unit tests cannot be reused'
+  );
+  evidence.runtimeInputChanges = runtimeInputChanges;
+  evidence.reusedLatestAdminTestsRun = 41618115000;
+  evidence.reusedChecks.push(
+    'Full admin unit tests from 41618115000; JavaScript source unchanged; CSS covered by browser and UI checks'
+  );
+  evidence.affectedChecksRerun = [
+    'admin typecheck and runtime build',
+    'admin lint and seven UI checks not reached by prior run',
+    'changed preview controls',
+    'real API browser acceptance'
+  ];
+
   const output = path.join(root, '.runtime/interaction-preview-20261103/remote');
   mkdirSync(output, { recursive: true });
   writeFileSync(path.join(output, 'reused-checks.json'), JSON.stringify(evidence, null, 2) + '\n');

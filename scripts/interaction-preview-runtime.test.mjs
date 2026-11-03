@@ -128,7 +128,7 @@ test('prior successful checks are reused only when application inputs are unchan
               jobs: [
                 {
                   started_at: '2026-11-03T00:00:00Z',
-                  completed_at: '2026-11-03T00:05:00Z',
+                  completed_at: '2026-11-03T00:01:00Z',
                   steps: [
                     'Admin tests and isolated runtime controls',
                     'Build API and production admin',
@@ -141,19 +141,21 @@ test('prior successful checks are reused only when application inputs are unchan
               ]
             }
           : {
-              head_sha: url.includes('/41614170604')
-                ? '07c06a4399d2b771358ecad2203cbfc0891df19e'
-                : url.includes('/41612300171')
-                  ? '4acbfd31d125d9567df0eee7b2b059dcb29de478'
-                  : url.includes('/41609412467')
-                    ? '28a49701fc508da81af239a0b3961f49e385489e'
-                    : url.includes('/41607976951')
-                      ? '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9'
-                      : url.includes('/41606386434')
-                        ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
-                        : url.includes('/41604661799')
-                          ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
-                          : PRIOR_PREVIEW_COMMIT,
+              head_sha: url.includes('/41618115000')
+                ? '7a343c43364fe5a71c75af24fe72ebce9f299580'
+                : url.includes('/41614170604')
+                  ? '07c06a4399d2b771358ecad2203cbfc0891df19e'
+                  : url.includes('/41612300171')
+                    ? '4acbfd31d125d9567df0eee7b2b059dcb29de478'
+                    : url.includes('/41609412467')
+                      ? '28a49701fc508da81af239a0b3961f49e385489e'
+                      : url.includes('/41607976951')
+                        ? '837a1cb7310dcd92b6c4c70d0f746a6864b13fc9'
+                        : url.includes('/41606386434')
+                          ? '3be4ae9416c6f30eb56ce8a6a117f7c0359d0984'
+                          : url.includes('/41604661799')
+                            ? '0cb89de9a6a3bedb3dfbf12655609ec853be7e2e'
+                            : PRIOR_PREVIEW_COMMIT,
               conclusion: url.includes('/41606386434') ? 'success' : 'failure'
             }
       ),
@@ -164,6 +166,19 @@ test('prior successful checks are reused only when application inputs are unchan
     changedPaths: () => ['scripts/acceptance-v2-interaction-ci.mjs']
   });
   assert.equal(evidence.reusedChecks.length, 3);
+  assert.equal(evidence.spentSeconds, 8 * 60);
+  await assert.rejects(
+    verifyPreviewEvidence(env, project, {
+      changedPaths: () => ['scripts/acceptance-v2-interaction-ci.mjs'],
+      request: async (url) => {
+        const value = await (await request(url)).json();
+        if (value.jobs) value.jobs[0].completed_at = '2026-11-03T01:00:00Z';
+        return new Response(JSON.stringify(value), { status: 200 });
+      }
+    }),
+    /exceeds authorized 45-minute budget/
+  );
+
   const changedApplication = await verifyPreviewEvidence(env, project, {
     request,
     changedPaths: () => ['apps/admin/src/v2/components/V2Table.vue']

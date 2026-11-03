@@ -236,6 +236,11 @@ async function benchmark(label, port) {
     ['/v2/system/roles', 'roles.main', null]
   ];
   for (const [target] of routes) await navigate(page, target);
+  // Navigation clicks originate from the sidebar; keep the pointer out of table cells.
+  await page.mouse.move(12, 12);
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  );
   const initialReads = requests.reads,
     samples = [];
   for (let round = 0; round < 60; round++)
@@ -259,6 +264,7 @@ async function benchmark(label, port) {
       },
       viewport: '1440x1000',
       theme: 'light',
+      inputMode: 'scripted sidebar navigation; pointer parked in sidebar',
       data: 'owned-mysql-45-rows-v1',
       network: 'real HTTP to same owned API/MySQL on one runner',
       measurement:
