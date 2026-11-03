@@ -390,7 +390,7 @@
     "scripts/ci-recharge-release.test.mjs": "e87929df9611c50247f7e4ffc288a66cc34f4abfb502af24ba5c8c3e6c653983",
     "scripts/production-release/window-bitbrowser-ci-build.py": "049776fb83601d8aa828d12add29a1442aa35d204199dbdfc9f62a14d432dc3c",
     "scripts/production-release/window-bitbrowser-ci-build.test.py": "450a098b5bc1876b205341ac9698b6fda6ec9af11e076a9fc5f429c39e482410",
-    "scripts/production-release/window-bitbrowser-publication.py": "39e2424b69bfab22fb5356e344fd1c725b7c8193b9f4baa2377d16d995bbe770",
+    "scripts/production-release/window-bitbrowser-publication.py": "1377adf257eacd11e78e4d69a7fb938b55159100514d8e28e8b9ff9b30c8a964",
     "scripts/production-release/window-bitbrowser-release.py": "7de6467c3b151a2c572c2dd97674c27b928c60c8881a7da4c1ba540a2208bd2b",
     "scripts/production-release/window-bitbrowser-release.test.py": "91e54383032112aa0e4ea16caa4685ba76af512241fad6ec0e466cb2080e0d45",
     "scripts/setup-online-bitbrowser.cmd": "5b56cecc2133a7d8f76d8420a3fc3be253ec9e8eacac6973b0541e81a0880135",
