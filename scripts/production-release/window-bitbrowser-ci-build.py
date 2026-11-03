@@ -23,8 +23,14 @@ WORKFLOW = '.github/workflows/quality.yml'
 GUARD_TEST = 'scripts/ci-recharge-release.test.mjs'
 CHECK_TEST = 'scripts/ci-recharge-check.test.mjs'
 FIXTURE = 'apps/api/src/id-business-v2/auto-recharge/recharge-manual-settlement.mysql.integration.spec.ts'
+DISPLAY_TESTS = {
+    'apps/api/src/id-business-v2/topup-supplier-funds/id-business-v2-topup-supplier-funds.contract.spec.ts':
+        ("toEqual(['apple.gift_card.view_full']);", "toEqual(['apple.balance.view']);"),
+    'apps/api/src/id-business-v2/workspace/id-business-v2-website-visit.service.spec.ts':
+        ("items: [{ ipMasked: '203.0.*.*' }]", "items: [{ ipMasked: '203.0.113.19' }]")
+}
 DOC = 'docs/WINDOW_BITBROWSER_RELEASE_20261103.md'
-ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC}
+ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC, *DISPLAY_TESTS}
 CONTROL_RECEIPT = ROOT / '.deploy/window-bitbrowser-ci-controls.json'
 STEP = {'release-controls': 'Verify affected release entry and maintenance controls',
         'guards': 'Verify changed release controls'}
@@ -98,6 +104,9 @@ def reuse_inputs():
     old = git('show', PRIOR + ':' + FIXTURE).decode()
     before, after = "evidenceRef: 'BANK-' + id,", "evidenceRef: 'BANK-' + id.replace(/(.{4})/g, '$1_'),"
     need(old.count(before) == 1 and (ROOT / FIXTURE).read_text() == old.replace(before, after), 'FIXTURE_CHANGED')
+    for name, (before, after) in DISPLAY_TESTS.items():
+        old = git('show', PRIOR + ':' + name).decode()
+        need(old.count(before) == 1 and (ROOT / name).read_text() == old.replace(before, after), 'DISPLAY_ASSERTION_CHANGED')
     # Application/dependency/helper bytes remain tested; only the declared CI assertions and synthetic ID change.
     return sorted(paths)
 
