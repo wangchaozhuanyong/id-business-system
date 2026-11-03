@@ -30,7 +30,7 @@ test('Quality guards and full checks include scoped four-image build-only verifi
     assert.equal(builds.length, 1);
     assert.equal(
       builds[0].run,
-      'python3 -B scripts/production-release/online-recharge-ci-build.py'
+      'python3 -B scripts/production-release/window-bitbrowser-ci-build.py'
     );
     assert.match(builds[0].if, /online_ci_build == 'true'/);
     assert.equal(builds[0].env, undefined);

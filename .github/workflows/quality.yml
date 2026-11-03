@@ -159,12 +159,14 @@ jobs:
           PYCODE
 
       - name: Verify affected release entry and maintenance controls
+        id: window_ci_controls
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: full
-        run: node scripts/ci-recharge-check.mjs release-controls "$CHECK_BASE"
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py --controls release-controls --base "$CHECK_BASE"
 
       - name: Verify changed browser worker
+        if: steps.window_ci_controls.outputs.reuse_worker != 'true'
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: full
@@ -176,6 +178,7 @@ jobs:
           fi
 
       - name: Verify frozen online recharge engine
+        if: steps.window_ci_controls.outputs.reuse_engine != 'true'
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
         run: node scripts/ci-recharge-check.mjs online-engine "$CHECK_BASE"
@@ -193,12 +196,12 @@ jobs:
         env:
           CHECK_BASE: ${{ needs.change-scope.outputs.base }}
           CHECK_MODE: ci-only
-        run: node scripts/ci-recharge-check.mjs guards "$CHECK_BASE"
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py --controls guards --base "$CHECK_BASE"
 
       - name: Build and verify sealed ONLINE images without production access
         if: needs.change-scope.outputs.online_ci_build == 'true'
         timeout-minutes: 45
-        run: python3 -B scripts/production-release/online-recharge-ci-build.py
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py
 
       - name: Preserve CI-only ONLINE image verification
         if: needs.change-scope.outputs.online_ci_build == 'true'
@@ -345,7 +348,7 @@ jobs:
       - name: Build and verify sealed ONLINE images without production access
         if: ${{ !contains(fromJSON(needs.change-scope.outputs.reused_parts), matrix.part) && matrix.part == 'guards' && needs.change-scope.outputs.online_ci_build == 'true' }}
         timeout-minutes: 45
-        run: python3 -B scripts/production-release/online-recharge-ci-build.py
+        run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py
 
       # BEGIN GPT native API artifact retention
       - name: Preserve the verified GPT API overlay
