@@ -27,6 +27,25 @@ class Controls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'INHERITED_RECIPE_CHANGED'):
                 R.configured_release({})
 
+    def test_parent_compilation_uses_verified_current_files_while_old_assets_remain_protected(self):
+        files = {'index.html': 'a' * 64, 'assets/current.js': 'b' * 64}
+        raw = json.dumps({'commit': 'parent', 'businessActions': 0, 'adminFiles': files}).encode()
+        pin = {'file': 'permission-loading-build-proof.json', 'sha256': R.sha(raw),
+            'fileCount': 2, 'filesSha256': R.sha(R.canonical(files))}
+        c = {'expectedCurrent': 'parent', 'baselineAdminProof': pin}
+        manifest = {'roleSourceProjections': {'admin': {'buildProofSha256': R.sha(raw)}}}
+        self.assertEqual(R.parent_admin_files(raw, manifest, c), files)
+        for broken in [raw + b' ', raw.replace(b'current.js', b'old.js')]:
+            with self.assertRaisesRegex(RuntimeError, 'ADMIN_PARENT_PROOF_CHANGED'):
+                R.parent_admin_files(broken, manifest, c)
+        with self.assertRaisesRegex(RuntimeError, 'ADMIN_PARENT_INVENTORY_CHANGED'):
+            R.parent_admin_files(raw, manifest, {**c, 'baselineAdminProof': {**pin, 'fileCount': 3}})
+        with self.assertRaisesRegex(RuntimeError, 'ADMIN_PARENT_PROOF_CHANGED'):
+            R.parent_admin_files(raw, {'roleSourceProjections': {'admin': {'buildProofSha256': 'c' * 64}}}, c)
+        source = inspect.getsource(R.capture)
+        self.assertIn("'runtime': runtime", source)
+        self.assertIn("read_hashes(d, states['admin']['containerId']", source)
+
     def test_only_the_exact_incremental_migration_state_is_accepted(self):
         c = {'migration': {'sha256': 'a' * 64}}
         R.verify_db({'pending': 0, 'applied': 0, 'checksum': None, 'tables': 0}, c)

@@ -1,6 +1,12 @@
 {
   "awsAccount": "098208446664",
   "backupNormalizerPath": "/opt/id-business-v2/releases/20261015T091200Z-e197218c8b38-recharge-record/scripts/mysql-dump-restore-normalizer.sed",
+  "baselineAdminProof": {
+    "file": "permission-loading-build-proof.json",
+    "fileCount": 267,
+    "filesSha256": "6b86408d6cad4fb3d9df410ad00dd8e52c848201e2598161fde8e24be9d25280",
+    "sha256": "625743a50a27bf0d323106fc43e78b33607591ab8f73eec85f730b20384ee203"
+  },
   "businessActions": 0,
   "candidateFiles": [
     ".github/workflows/quality.yml",
@@ -222,8 +228,8 @@
     "shared-bank-card-release.py": "003ddac5dceb7388c79529bced489a008fa4597073df6c6b441629b5dfb46852",
     "unpublished-component-successor.py": "930c552ee5599ea0b7014426749019e257421878c9bf49fbffdf82a07627b771",
     "window-bitbrowser-publication.py": "e083d87ed53b85ee35a32445f8b64b5b45d4adeffd210647e90f3dfa73bd192d",
-    "window-bitbrowser-release.py": "46e2ecfdd28c9c5611f2db70860f80ceb6c63bbf281d8fd94919f854ca0721a4",
-    "window-bitbrowser-release.test.py": "a1060c5ac97f7e52f695c9c0927b0206d7c97af2201bd8681c0a8a78de39b54e"
+    "window-bitbrowser-release.py": "38049f0f68f6c4bd0f6c4c40961a0e1e955a16c38024e6b09556a064394fcc20",
+    "window-bitbrowser-release.test.py": "dc14bc577717015bd0c11a26135894cdc4ca83678d8f5b90ad6d478d23a5d70d"
   },
   "migration": {
     "name": "20261102150000_online_recharge_bitbrowser",
@@ -365,8 +371,11 @@
     "scripts/check-v2-online-recharge-controls.test.mjs": "3cd69485bb5e93269adc86bda79167689678c205616a8f43f32026d61719f6a9",
     "scripts/ci-recharge-check.test.mjs": "6e235b1467bdc8f6c543db7142167acdd9daeb84e70875f5de529535ed28ea6e",
     "scripts/ci-recharge-release.test.mjs": "e87929df9611c50247f7e4ffc288a66cc34f4abfb502af24ba5c8c3e6c653983",
-    "scripts/production-release/window-bitbrowser-ci-build.py": "35871bd5421182e0422b0d5bc9d6fd74f2f1522563147fcd797d4d51f0443aa7",
+    "scripts/production-release/window-bitbrowser-ci-build.py": "e929a8e829a88e3a9d54a3f37b63cea1abe1ce60d1dca9c05d46b721d973bc95",
     "scripts/production-release/window-bitbrowser-ci-build.test.py": "450a098b5bc1876b205341ac9698b6fda6ec9af11e076a9fc5f429c39e482410",
+    "scripts/production-release/window-bitbrowser-publication.py": "e083d87ed53b85ee35a32445f8b64b5b45d4adeffd210647e90f3dfa73bd192d",
+    "scripts/production-release/window-bitbrowser-release.py": "38049f0f68f6c4bd0f6c4c40961a0e1e955a16c38024e6b09556a064394fcc20",
+    "scripts/production-release/window-bitbrowser-release.test.py": "dc14bc577717015bd0c11a26135894cdc4ca83678d8f5b90ad6d478d23a5d70d",
     "scripts/setup-online-bitbrowser.cmd": "5b56cecc2133a7d8f76d8420a3fc3be253ec9e8eacac6973b0541e81a0880135",
     "scripts/setup-online-bitbrowser.command": "3c913820a35f8c9de0eb445a30024438a6dab98132f12c3ac4073f1fd89da498"
   },

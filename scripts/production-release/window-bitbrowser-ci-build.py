@@ -44,8 +44,10 @@ ACCEPTANCE_REPAIRS = {
     "case: 'reader-details-without-manage-or-sensitive-actions'":
         "case: 'reader-direct-view-without-management-actions'"
 }
+RELEASE = 'scripts/production-release/window-bitbrowser-release.py'
+RELEASE_TEST = RELEASE.removesuffix('.py') + '.test.py'
 DOC = 'docs/WINDOW_BITBROWSER_RELEASE_20261103.md'
-ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC, ACCEPTANCE, *DISPLAY_TESTS}
+ALLOWED_REPAIR = {SELF, TEST, CONTRACT, WORKFLOW, GUARD_TEST, CHECK_TEST, FIXTURE, DOC, ACCEPTANCE, RELEASE, RELEASE_TEST, *DISPLAY_TESTS}
 CONTROL_RECEIPT = ROOT / '.deploy/window-bitbrowser-ci-controls.json'
 STEP = {'release-controls': 'Verify affected release entry and maintenance controls',
         'guards': 'Verify changed release controls'}
@@ -160,7 +162,7 @@ def verify_prior(run, jobs, part):
 
 def verify_completed_inputs(run, jobs):
     paths = set(git('diff', '--name-only', VERIFIED_HEAD, 'HEAD').decode().splitlines())
-    need(paths <= {SELF, TEST, CONTRACT, WORKFLOW, ACCEPTANCE, DOC}, 'COMPLETED_INPUT_CHANGED')
+    need(paths <= {SELF, TEST, CONTRACT, WORKFLOW, ACCEPTANCE, DOC, RELEASE, RELEASE_TEST}, 'COMPLETED_INPUT_CHANGED')
     need(run['id'] == VERIFIED_RUN and run['head_sha'] == VERIFIED_HEAD
          and run['path'] == '.github/workflows/quality.yml' and run['event'] == 'pull_request'
          and run['conclusion'] == 'failure' and run['repository']['full_name'] == REPO, 'COMPLETED_RUN_IDENTITY')
