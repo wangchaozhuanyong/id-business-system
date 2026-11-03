@@ -128,8 +128,17 @@ class Controls(unittest.TestCase):
             with patch.object(R,'BASE',base),patch.object(R,'utilities',return_value=(Mock(),d)),patch.object(R,'db_state',return_value={'applied':0}):
                 result=R.diagnose(c)
                 self.assertEqual(result['migration'],{'applied':0});self.assertFalse(result['maintenancePresent'])
-                self.assertTrue(result['clientProbe']['filesMatch']);self.assertTrue(result['migrationImageIdentityMatches'])
+                self.assertTrue(result['clientProbe']['filesMatch']);self.assertTrue(result['migrationImage']['identityMatches'])
                 self.assertTrue(all(call.args[0]=='docker' and call.args[1] in ('image','run') for call in d.run.call_args_list))
+                d.run.side_effect=RuntimeError('image read suppressed')
+                partial=R.diagnose(c)
+                self.assertEqual(partial['migration'],{'applied':0})
+                self.assertEqual(partial['apiImage']['diagnosticError']['exceptionType'],'RuntimeError')
+                self.assertEqual(partial['journals'],{'switch-state.json':{},'migration-operation.json':{}})
+                with patch.object(R,'db_state',side_effect=KeyError('private detail')):
+                    failed=R.diagnose(c)
+                    self.assertEqual(failed['diagnosticError'],{'stage':'migration-state','exceptionType':'KeyError','code':'DETAIL_SUPPRESSED'})
+                    self.assertFalse(failed['complete'])
                 (content/'build-proof.json').write_bytes(raw+b' ')
                 with self.assertRaisesRegex(RuntimeError,'DIAGNOSTIC_PROOF_CHANGED'):R.diagnose(c)
 
