@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -199,6 +200,15 @@ def migrate(d, target, c, journal, database):
         'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql --batch --skip-column-names -u root "$MYSQL_DATABASE"', input_data=sql)
 
 
+class ClientProbeFailed(RuntimeError):
+    def __init__(self, kind, result):
+        words = frozenset(('docker error response from daemon failed failure cannot can not could unable create start run container process task shim runtime runc exec executable node image network none bridge endpoint port memory allocate available unavailable resource temporarily no space left device file directory system read only invalid argument configuration mount mounts cgroup cgroups pid pids limit exceeded maximum reached disk inode inodes permission denied operation permitted supported unsupported unknown shorthand flag pull healthcheck conflict name already use specified missing found command format formaterror too many open files driver overlay overlay2 initialization init path volume volumes default apparmor profile seccomp security option options namespace namespaces user root node binary loading load library shared libraries interpreter exiting exit status code allocation cap capabilities locked database environment variable entrypoint checkpoint ipv4 ipv6 address pool sandbox connect connection refused timeout timed out oom killed stat mkdir write read sys fs proc dev null insufficient buffer size ulimit threads fork clone thread version api client server requires require newer older minimum maximum windows linux platform architecture amd64 arm64 is are the a an and or to for of on in with by as this that it has have be been was were do does did at detected enabled disabled configure configured unexpected response request requesterror daemonerror message fatal panic warning unsupportedtransport key value malformed valid usage help more information see seealso return returned unsupported never false true busy').split())
+        def safe(text):
+            return [word if word in words else '[hidden]' for word in re.findall(r'[a-zA-Z]+', text.lower())[:160]]
+        self.diagnostic = {'exitCode': result.returncode, 'stderrWords': safe(result.stderr), 'stdoutWords': safe(result.stdout)}
+        super().__init__('WINDOW_BITBROWSER_CLIENT_PROBE_' + kind)
+
+
 def client_probe(d, reference, code, legacy=False):
     image = json.loads(d.run('docker', 'image', 'inspect', reference))[0]['Id']
     need(re.fullmatch('sha256:[a-f0-9]{64}', image), 'CLIENT_PROBE_IMAGE_ID')
@@ -215,7 +225,7 @@ def client_probe(d, reference, code, legacy=False):
             ('invalid reference format', 'IMAGE_REFERENCE'), ('no such file or directory', 'FILE_MISSING'),
             ('oci runtime', 'OCI_START_FAILED'), ('unable to find image', 'IMAGE_MISSING')]
         kind = next((kind for marker, kind in categories if marker in text), 'EXIT_' + str(abs(result.returncode)))
-        raise RuntimeError('WINDOW_BITBROWSER_CLIENT_PROBE_' + kind)
+        raise ClientProbeFailed(kind, result)
     value = json.loads(result.stdout)
     need(type(value) is dict, 'CLIENT_PROBE_FORMAT')
     return value
@@ -281,6 +291,13 @@ def configured_release(c):
     return values['release']
 
 
+def probe_resources():
+    disk = os.statvfs(BASE)
+    memory = dict(re.findall(r'^(MemAvailable|MemTotal):\s+(\d+) kB$', Path('/proc/meminfo').read_text(), re.M))
+    return {'freeBytes': disk.f_bavail * disk.f_frsize, 'freeInodes': disk.f_favail,
+        **{k + 'KiB': int(v) for k, v in memory.items()}}
+
+
 def diagnose(c):
     pin = c['failedPublicationDiagnostic']
     need(set(pin) == {'commit', 'workflowRunId', 'buildProofSha256', 'acceptedCommandId'}
@@ -301,7 +318,8 @@ def diagnose(c):
     def bounded(error):
         message = str(error)
         return {'exceptionType': type(error).__name__,
-            'code': message if re.fullmatch('[A-Z0-9_]{1,180}', message) else 'DETAIL_SUPPRESSED'}
+            'code': message if re.fullmatch('[A-Z0-9_]{1,180}', message) else 'DETAIL_SUPPRESSED',
+            **({'probe': error.diagnostic} if isinstance(error, ClientProbeFailed) else {})}
     try:
         h, d = utilities()
         phase = 'current-manifest'
@@ -336,6 +354,7 @@ def diagnose(c):
         migration = image(transport['reference'])
         result['migrationImage'] = ({'identityMatches': migration['Id'] == transport['imageId']} if 'Id' in migration else migration)
         phase = 'candidate-client'
+        result['probeHostResources'] = probe_resources()
         code = r"""const fs=require('fs'),path=require('path'),crypto=require('crypto');const out={files:{}};
     try{function walk(p,n=''){for(const e of fs.readdirSync(p,{withFileTypes:true})){const name=n?n+'/'+e.name:e.name,full=path.join(p,e.name);if(e.isDirectory())walk(full,name);else if(e.isFile())out.files[name]=crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');}}walk('/app/node_modules/.prisma/client');}catch(e){out.filesError={name:e.name,code:e.code};}
     function probe(name){try{const p=require(name);return{ok:true,resolved:require.resolve(name),clientVersion:p.Prisma?.prismaVersion?.client,device:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserDevice')===true,state:p.Prisma?.dmmf?.datamodel?.models?.some(m=>m.name==='OnlineRechargeBitbrowserState')===true};}catch(e){const m=/Cannot find module ['"]([^'"]+)['"]/.exec(e.message||'');return{ok:false,name:e.name,code:e.code,missingModule:m&&/^[@a-zA-Z0-9._/-]+$/.test(m[1])?m[1]:null};}}
