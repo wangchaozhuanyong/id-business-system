@@ -2473,6 +2473,15 @@ export function isPermissionLoadingControlsOnly(paths) {
 }
 
 export function isCiOnly(paths, context) {
+  if (
+    paths.length > 0 &&
+    paths.every((path) =>
+      /^(?:scripts\/production-release\/interaction-flow-(?:(?:runtime(?:\.test)?|build|publication|validation)\.py|contract\.json)|\.github\/workflows\/interaction-flow-(?:publication|validation)\.yml)$/.test(
+        path
+      )
+    )
+  )
+    return true;
   if (isPermissionLoadingControlsOnly(paths)) return true;
   if (
     paths.length > 0 &&
@@ -2598,6 +2607,11 @@ export function hasCombinedComponentScope(paths) {
   );
 }
 const adminInteractionAcceptance = new Set([
+  'scripts/acceptance-v2-interaction-offline.mjs',
+  'scripts/acceptance-v2-navigation-performance.mjs',
+  'scripts/compare-v2-interaction-metrics.mjs',
+  'scripts/compare-v2-interaction-metrics.test.mjs',
+  'scripts/lib/v2-offline-admin.mjs',
   'scripts/acceptance-v2-permission-loading.mjs',
   'scripts/acceptance-v2-recharge-proxies-ui.mjs',
   'scripts/acceptance-v2-online-recharge-ui.mjs',
@@ -2609,6 +2623,9 @@ const adminInteractionAcceptance = new Set([
   'scripts/lib/vite-cli.mjs'
 ]);
 const adminFrontendControlPaths = new Set([
+  'apps/admin/src/components/ui/FeatureHelp.vue',
+  'apps/admin/src/runtime/performance.ts',
+  'apps/admin/src/runtime/performance.spec.ts',
   'apps/admin/src/v2-router.ts',
   'scripts/check-v2-input-retention.mjs',
   'scripts/check-v2-online-recharge-controls.test.mjs'

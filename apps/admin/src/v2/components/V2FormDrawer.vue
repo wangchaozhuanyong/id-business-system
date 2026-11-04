@@ -54,6 +54,7 @@ import 'element-plus/es/components/message-box/style/css.mjs';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import AppButton from '@/components/ui/AppButton.vue';
 import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
+import { flushV2FormDrafts } from '@/v2/composables/useV2SessionDraft';
 
 const props = withDefaults(
   defineProps<{
@@ -91,6 +92,7 @@ useV2DrawerNavigation(() => emit('update:modelValue', false));
 
 async function handleBeforeClose(done: () => void) {
   if (props.confirmLoading) return;
+  flushV2FormDrafts();
   if (props.retainDraft || !props.dirty) return done();
   try {
     await ElMessageBox.confirm('当前表单有尚未保存的内容，确认放弃并关闭吗？', '放弃未保存内容', {

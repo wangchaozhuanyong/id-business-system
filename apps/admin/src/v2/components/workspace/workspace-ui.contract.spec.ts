@@ -54,7 +54,9 @@ describe('personal workspace UI contract', () => {
 
   it('mounts website monitoring with the saved FLASH CAST target in the personal workspace', () => {
     expect(launcher).toContain('<strong>网站监控</strong>');
-    expect(launcher).toContain('<V2WebsiteMonitorDrawer v-model="websiteMonitorOpen" />');
+    expect(launcher).toMatch(
+      /<V2WebsiteMonitorDrawer\s+v-if="websiteMonitorOpen \|\| openedDrawers.websiteMonitorOpen"\s+v-model="websiteMonitorOpen"/
+    );
     expect(websiteMonitorDrawer).toContain('只检测可公开访问的网站');
     expect(websiteMonitorDrawer).toContain('label-position="left"');
     expect(websiteMonitorDrawer).toContain('require-asterisk-position="right"');
@@ -86,7 +88,9 @@ describe('personal workspace UI contract', () => {
 
   it('mounts the authenticated multi-platform resolver as a workspace drawer', () => {
     expect(launcher).toContain('<strong>抖音解析</strong>');
-    expect(launcher).toContain('<V2MediaResolverDrawer v-model="mediaResolverDrawerOpen" />');
+    expect(launcher).toMatch(
+      /<V2MediaResolverDrawer\s+v-if="mediaResolverDrawerOpen \|\| openedDrawers.mediaResolverDrawerOpen"\s+v-model="mediaResolverDrawerOpen"/
+    );
     expect(mediaResolverDrawer).toContain('只解析可公开访问的单个作品');
     expect(mediaResolverDrawer).toContain('不读取浏览器登录信息');
     expect(mediaResolverDrawer).toContain('label-position="left"');

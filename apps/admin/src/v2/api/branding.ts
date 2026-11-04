@@ -1,6 +1,5 @@
 import type { UpdateV2BrandingSettingsInput, V2BrandingSettings } from '@apple-business/shared';
 import { http, request, type ApiRequestOptions } from '@/api/client';
-import { invalidateV2Queries } from '@/v2/composables/useV2Query';
 
 export const idBusinessV2BrandingApi = {
   getPublic(options: ApiRequestOptions = {}) {
@@ -14,6 +13,8 @@ export const idBusinessV2BrandingApi = {
     );
   },
   async update(input: UpdateV2BrandingSettingsInput & { expectedUpdatedAt: string }) {
+    // Resolve write-only code before sending the command: chunk failure must not disguise a committed save.
+    const { invalidateV2Queries } = await import('@/v2/composables/useV2Query');
     const result = await request<V2BrandingSettings>(http.patch('/id-business-v2/branding', input));
     invalidateV2Queries('branding');
     return result;

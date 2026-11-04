@@ -17,7 +17,7 @@
         <el-icon><Refresh /></el-icon>
         刷新
       </AppButton>
-      <el-dropdown trigger="click" @command="page.handleToolbarCommand">
+      <el-dropdown :persistent="false" trigger="click" @command="page.handleToolbarCommand">
         <AppButton variant="ghost" :loading="page.exporting">
           <el-icon><MoreFilled /></el-icon>
           数据工具

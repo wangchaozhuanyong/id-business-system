@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addOneInclusiveMonthToV2DateTimeInput,
   formatV2DateTime,
@@ -32,4 +32,23 @@ describe('北京时间工具', () => {
   ])('按北京时间计算含首日一个月周期：%s', (openedAt, dueAt) => {
     expect(addOneInclusiveMonthToV2DateTimeInput(openedAt)).toBe(dueAt);
   });
+});
+
+it('reuses formatters for equivalent options without mixing time zones or modes', () => {
+  const NativeFormatter = Intl.DateTimeFormat;
+  const create = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (locale, options) {
+    return new NativeFormatter(locale, options);
+  });
+  try {
+    const date = '2026-08-12T01:12:00.000Z';
+    const options = { timeZone: 'UTC', era: 'short', year: '2-digit' } as const;
+    const first = formatV2DateTime(date, options);
+    expect(formatV2DateTime(date, { year: '2-digit', era: 'short', timeZone: 'UTC' })).toBe(first);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(formatV2DateTime(date, { ...options, timeZone: 'Asia/Shanghai' })).not.toBe(first);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(formatV2DateTime('invalid')).toBe('-');
+  } finally {
+    create.mockRestore();
+  }
 });

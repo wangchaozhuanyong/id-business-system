@@ -127,6 +127,25 @@ afterEach(() => {
   clearV2QueryCache();
   clearV2SessionDrafts();
 });
+it.each(['bitbrowser', 'online'] as const)(
+  '%s列表首次加载不请求编辑资源，打开编辑器后才读取',
+  async (channel) => {
+    const flow = mount(channel);
+    await vi.waitFor(() => expect(api.list).toHaveBeenCalledOnce());
+    expect(api.options).not.toHaveBeenCalled();
+    expect(api.accounts).not.toHaveBeenCalled();
+    expect(api.cards).not.toHaveBeenCalled();
+    expect(api.currencies).not.toHaveBeenCalled();
+    flow.drawerOpen.value = true;
+    await vi.waitFor(() => {
+      expect(api.options).toHaveBeenCalledOnce();
+      expect(api.accounts).toHaveBeenCalledOnce();
+      expect(api.currencies).toHaveBeenCalledOnce();
+    });
+    if (channel === 'online') expect(api.cards).not.toHaveBeenCalled();
+    else expect(api.cards).toHaveBeenCalledOnce();
+  }
+);
 describe('充值订单渠道隔离', () => {
   it('筛选、页码、编辑与退款草稿在双渠道切换后分别恢复', async () => {
     let flow = mount('bitbrowser');

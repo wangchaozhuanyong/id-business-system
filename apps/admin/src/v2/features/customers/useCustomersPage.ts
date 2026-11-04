@@ -1,6 +1,7 @@
+import { formatV2DateTime } from '@/v2/utils/dateTime';
 import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, markRaw, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { getApiErrorMessage } from '@/api/client';
 import { isApiError } from '@/api/apiError';
@@ -112,10 +113,11 @@ export function useCustomersPage() {
   const canUpdate = computed(() => hasUserPermission(authStore.user, 'customer.update'));
   const canDelete = computed(() => hasUserPermission(authStore.user, 'customer.delete'));
   const canRevealContact = computed(() => hasUserPermission(authStore.user, 'customer.view'));
+  const submittedKeyword = useV2SessionDraft('customers-submitted-keyword', () => ref(''));
   const activeFilterCount = computed(
     () =>
       [
-        query.keyword.trim(),
+        submittedKeyword.value.trim(),
         query.sourceOptionId,
         query.tagOptionId,
         query.serviceOptionId,
@@ -144,7 +146,7 @@ export function useCustomersPage() {
   function getCustomersListQuery(): V2CustomerListQuery {
     return {
       ...query,
-      keyword: query.keyword.trim() || undefined,
+      keyword: submittedKeyword.value.trim() || undefined,
       sourceOptionId: query.sourceOptionId || undefined,
       tagOptionId: query.tagOptionId || undefined,
       serviceOptionId: query.serviceOptionId || undefined,
@@ -183,7 +185,7 @@ export function useCustomersPage() {
     customersQuery.data,
     (snapshot) => {
       if (!snapshot) return;
-      items.value = snapshot.list.items;
+      items.value = markRaw(snapshot.list.items);
       total.value = snapshot.list.total;
       sourceOptions.value = snapshot.options.sources;
       tagOptions.value = snapshot.options.tags;
@@ -212,17 +214,20 @@ export function useCustomersPage() {
   }
 
   function handleSearch() {
+    submittedKeyword.value = query.keyword;
     query.page = 1;
     loadCurrentCustomers();
   }
 
   function handleFilterChange() {
+    submittedKeyword.value = query.keyword;
     query.page = 1;
     loadCurrentCustomers();
   }
 
   function resetFilters() {
     resetV2SearchInputs('customers:');
+    submittedKeyword.value = '';
     Object.assign(query, {
       page: 1,
       keyword: '',
@@ -473,15 +478,7 @@ export function useCustomersPage() {
   }
 
   function formatDate(value: string) {
-    return new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(new Date(value));
+    return formatV2DateTime(value);
   }
 
   return {

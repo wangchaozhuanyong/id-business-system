@@ -1,3 +1,5 @@
+import { computed, ref } from 'vue';
+import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import {
   createV2QueryKey,
   getV2QueryData,
@@ -110,4 +112,15 @@ export function useAccountsListQuery(getParams: () => V2AccountListQuery) {
       return { list: result.list, options: result.options };
     }
   });
+}
+
+export function useAccountsListSearch(query: AccountsListQueryDraft) {
+  const submittedKeyword = useV2SessionDraft('accounts-submitted-keyword', () => ref(''));
+  const activeFilterCount = computed(() =>
+    countActiveAccountsFilters({ ...query, keyword: submittedKeyword.value })
+  );
+  const accountsQuery = useAccountsListQuery(() =>
+    normalizeAccountsListQuery({ ...query, keyword: submittedKeyword.value })
+  );
+  return { accountsQuery, submittedKeyword, activeFilterCount };
 }

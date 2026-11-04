@@ -105,6 +105,7 @@
       </button>
     </div>
     <V2WorkspaceShortcutDrawer
+      v-if="settingsOpen || openedDrawers.settingsOpen"
       v-model="settingsOpen"
       :items="shortcuts"
       :phase="shortcutsQuery.phase.value"
@@ -112,17 +113,32 @@
       :writes-allowed="authStore.writesAllowed"
       :refresh="shortcutsQuery.refresh"
     />
-    <V2MailViewerDrawer v-model="mailViewerDrawerOpen" />
-    <V2MediaResolverDrawer v-model="mediaResolverDrawerOpen" />
-    <V2GoogleSheetsSyncDrawer v-model="googleSheetsSyncDrawerOpen" />
-    <V2RelayScriptDrawer v-model="relayScriptDrawerOpen" />
-    <V2TotpToolDrawer v-model="totpToolOpen" />
-    <V2WebsiteMonitorDrawer v-model="websiteMonitorOpen" />
+    <V2MailViewerDrawer
+      v-if="mailViewerDrawerOpen || openedDrawers.mailViewerDrawerOpen"
+      v-model="mailViewerDrawerOpen"
+    />
+    <V2MediaResolverDrawer
+      v-if="mediaResolverDrawerOpen || openedDrawers.mediaResolverDrawerOpen"
+      v-model="mediaResolverDrawerOpen"
+    />
+    <V2GoogleSheetsSyncDrawer
+      v-if="googleSheetsSyncDrawerOpen || openedDrawers.googleSheetsSyncDrawerOpen"
+      v-model="googleSheetsSyncDrawerOpen"
+    />
+    <V2RelayScriptDrawer
+      v-if="relayScriptDrawerOpen || openedDrawers.relayScriptDrawerOpen"
+      v-model="relayScriptDrawerOpen"
+    />
+    <V2TotpToolDrawer v-if="totpToolOpen || openedDrawers.totpToolOpen" v-model="totpToolOpen" />
+    <V2WebsiteMonitorDrawer
+      v-if="websiteMonitorOpen || openedDrawers.websiteMonitorOpen"
+      v-model="websiteMonitorOpen"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
 import type { V2WorkspaceShortcut, V2WorkspaceShortcutList } from '@apple-business/shared';
 import {
   ArrowRight,
@@ -141,14 +157,43 @@ import { useAuthStore } from '@/stores/auth';
 import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
 import { idBusinessV2WorkspaceApi } from '@/v2/api/workspace';
 import V2AsyncRegion from '@/v2/components/V2AsyncRegion.vue';
+import V2DeferredDrawerLoading from '@/v2/components/V2DeferredDrawerLoading.vue';
 import { useV2ModuleQuery } from '@/v2/composables/useV2Query';
-import V2MailViewerDrawer from './V2MailViewerDrawer.vue';
-import V2GoogleSheetsSyncDrawer from './V2GoogleSheetsSyncDrawer.vue';
-import V2MediaResolverDrawer from './V2MediaResolverDrawer.vue';
-import V2RelayScriptDrawer from './V2RelayScriptDrawer.vue';
-import V2TotpToolDrawer from './V2TotpToolDrawer.vue';
-import V2WebsiteMonitorDrawer from './V2WebsiteMonitorDrawer.vue';
-import V2WorkspaceShortcutDrawer from './V2WorkspaceShortcutDrawer.vue';
+const V2MailViewerDrawer = defineAsyncComponent({
+  loader: () => import('./V2MailViewerDrawer.vue'),
+  loadingComponent: V2DeferredDrawerLoading,
+  delay: 120
+});
+const V2GoogleSheetsSyncDrawer = defineAsyncComponent({
+  loader: () => import('./V2GoogleSheetsSyncDrawer.vue'),
+  loadingComponent: V2DeferredDrawerLoading,
+  delay: 120
+});
+const V2MediaResolverDrawer = defineAsyncComponent({
+  loader: () => import('./V2MediaResolverDrawer.vue'),
+  loadingComponent: V2DeferredDrawerLoading,
+  delay: 120
+});
+const V2RelayScriptDrawer = defineAsyncComponent({
+  loader: () => import('./V2RelayScriptDrawer.vue'),
+  loadingComponent: V2DeferredDrawerLoading,
+  delay: 120
+});
+const V2TotpToolDrawer = defineAsyncComponent({
+  loader: () => import('./V2TotpToolDrawer.vue'),
+  loadingComponent: V2DeferredDrawerLoading,
+  delay: 120
+});
+const V2WebsiteMonitorDrawer = defineAsyncComponent({
+  loader: () => import('./V2WebsiteMonitorDrawer.vue'),
+  loadingComponent: V2DeferredDrawerLoading,
+  delay: 120
+});
+const V2WorkspaceShortcutDrawer = defineAsyncComponent({
+  loader: () => import('./V2WorkspaceShortcutDrawer.vue'),
+  loadingComponent: V2DeferredDrawerLoading,
+  delay: 120
+});
 
 const props = defineProps<{ active: boolean; view: 'personal' | 'tools' }>();
 
@@ -160,6 +205,32 @@ const mediaResolverDrawerOpen = ref(false);
 const relayScriptDrawerOpen = ref(false);
 const googleSheetsSyncDrawerOpen = ref(false);
 const websiteMonitorOpen = ref(false);
+const openedDrawers = ref<Record<string, boolean>>({});
+watch(
+  [
+    settingsOpen,
+    totpToolOpen,
+    mailViewerDrawerOpen,
+    mediaResolverDrawerOpen,
+    relayScriptDrawerOpen,
+    googleSheetsSyncDrawerOpen,
+    websiteMonitorOpen
+  ],
+  (values) => {
+    [
+      'settingsOpen',
+      'totpToolOpen',
+      'mailViewerDrawerOpen',
+      'mediaResolverDrawerOpen',
+      'relayScriptDrawerOpen',
+      'googleSheetsSyncDrawerOpen',
+      'websiteMonitorOpen'
+    ].forEach((key, index) => {
+      if (values[index]) openedDrawers.value[key] = true;
+    });
+  },
+  { flush: 'sync' }
+);
 useV2DrawerNavigation(() => {
   settingsOpen.value = false;
   totpToolOpen.value = false;

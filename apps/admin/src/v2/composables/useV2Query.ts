@@ -14,7 +14,12 @@ import {
 } from 'vue';
 import { expandV2DataScopes, type V2DataScope } from '@apple-business/shared';
 import { sessionCoordinator } from '@/auth/sessionCoordinator';
-import { markV2RouteDataError, markV2RouteDataReady } from '@/runtime/performance';
+import {
+  claimV2RoutePerformance,
+  markV2RouteDataError,
+  markV2RouteDataReady
+} from '@/runtime/performance';
+import { recordV2QueryActivity } from '@/v2/runtime/interactionDiagnostics';
 import { abortAllV2Requests } from '@/v2/api/requestControl';
 import { getV2ModuleDefinition, type V2ModuleKey } from '@/v2/config/modules';
 import type { V2FreshnessPolicy } from '@/v2/features/feature';
@@ -277,6 +282,7 @@ function startRequest<T>(
   freshnessPolicy: V2FreshnessPolicy,
   getRevalidateAt?: UseV2QueryOptions<T>['getRevalidateAt']
 ) {
+  recordV2QueryActivity('request');
   const controller = new AbortController();
   const requestRevision = entry.revision;
   entry.controller = controller;
@@ -440,7 +446,11 @@ export function useV2Query<T>(options: UseV2QueryOptions<T>): UseV2QueryResult<T
     subscribe(entry, nextKey);
     syncFromEntry(entry, true, nextKey);
 
-    if (!force && isFresh(entry)) return entry.data;
+    if (!force && isFresh(entry)) {
+      recordV2QueryActivity('cache-hit');
+      return entry.data;
+    }
+    if (entry.inFlight && !entry.controller?.signal.aborted) recordV2QueryActivity('deduplicated');
     const request =
       entry.inFlight && !entry.controller?.signal.aborted
         ? entry.inFlight
@@ -604,25 +614,42 @@ export function useV2ModuleQuery<T>(
       : options.trackRouteData !== false
   );
   let mounted = false;
+  let disposed = false;
+  const performanceOwner = {};
+  const moduleRoute = moduleDefinition.route;
+  let navigationId =
+    query.enabled.value && trackRouteData.value
+      ? claimV2RoutePerformance(options.moduleKey, moduleRoute, performanceOwner)
+      : undefined;
+  const reportReady = (source: 'memory-cache' | 'network', id = navigationId) => {
+    if (!disposed && trackRouteData.value && id !== undefined)
+      markV2RouteDataReady(options.moduleKey, source, id);
+  };
 
   watch([trackRouteData, query.hasCurrentData], ([shouldTrack, hasCurrentData]) => {
-    if (shouldTrack && hasCurrentData) markV2RouteDataReady(options.moduleKey, 'network');
+    if (shouldTrack && hasCurrentData) reportReady('network');
   });
 
   async function ensureModuleFresh() {
+    if (disposed) return;
+    navigationId = trackRouteData.value
+      ? claimV2RoutePerformance(options.moduleKey, moduleRoute, performanceOwner)
+      : undefined;
+    const requestNavigationId = navigationId;
     const hadCurrentData = query.hasCurrentData.value;
-    if (trackRouteData.value && hadCurrentData) {
-      markV2RouteDataReady(options.moduleKey, 'memory-cache');
-    }
+    if (hadCurrentData) reportReady('memory-cache', requestNavigationId);
 
     await query.ensureFresh();
-    if (!trackRouteData.value) return;
+    if (disposed || !trackRouteData.value || requestNavigationId === undefined) return;
     if (query.hasCurrentData.value) {
-      markV2RouteDataReady(options.moduleKey, hadCurrentData ? 'memory-cache' : 'network');
+      reportReady(hadCurrentData ? 'memory-cache' : 'network', requestNavigationId);
     } else if (query.error.value) {
-      markV2RouteDataError(options.moduleKey);
+      markV2RouteDataError(options.moduleKey, requestNavigationId);
     }
   }
+  onScopeDispose(() => {
+    disposed = true;
+  });
 
   onMounted(() => {
     mounted = true;

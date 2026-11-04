@@ -656,6 +656,12 @@ html[data-v2-theme] .el-button {
   letter-spacing: 0;
 }
 
+/* Measured on the shell without rerendering the table. */
+.v2-unified-table-shell {
+  --v2-table-header-height: 42px;
+  --v2-table-toolbar-height: 0px;
+}
+
 html[data-v2-theme] .el-table {
   --el-table-border-color: var(--v2-border-soft);
   --el-table-header-bg-color: var(--v2-surface-muted);

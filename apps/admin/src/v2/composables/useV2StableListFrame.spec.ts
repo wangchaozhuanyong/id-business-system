@@ -169,3 +169,43 @@ describe('stable list frame after asynchronous content mounts', () => {
     expect(removeEventListener).toHaveBeenCalledWith('change', onBreakpointChange);
   });
 });
+
+it('initializes the visible variant synchronously and rebinds observers at the breakpoint', async () => {
+  let change!: (event: { matches: boolean }) => void;
+  const observe = vi.fn();
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe = observe;
+      disconnect = vi.fn();
+    }
+  );
+  vi.stubGlobal('window', {
+    matchMedia: () => ({
+      matches: true,
+      addEventListener: (_: string, callback: typeof change) => {
+        change = callback;
+      },
+      removeEventListener: vi.fn()
+    }),
+    getComputedStyle: () => ({ display: 'none' })
+  });
+  const { app, frame } = mountListFrame({ items: () => [], pageSize: () => 20 });
+  expect(frame.isMobile.value).toBe(true);
+  const mobileBody = {};
+  const desktopBody = {};
+  let body = mobileBody;
+  frame.listRef.value = {
+    querySelector: () => null,
+    querySelectorAll: () => [body]
+  } as unknown as HTMLElement;
+  await nextTick();
+  expect(observe).toHaveBeenCalledWith(mobileBody);
+  observe.mockClear();
+  body = desktopBody;
+  change({ matches: false });
+  await nextTick();
+  expect(frame.isMobile.value).toBe(false);
+  expect(observe).toHaveBeenCalledWith(desktopBody);
+  app.unmount();
+});

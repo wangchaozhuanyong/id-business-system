@@ -62,7 +62,7 @@
 
 <script setup lang="ts">
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, ref, toRef } from 'vue';
+import { computed, ref, toRef, watch } from 'vue';
 import { useV2FormDraft } from '@/v2/composables/useV2SessionDraft';
 import { useV2DrawerNavigation } from '@/v2/composables/useV2DrawerNavigation';
 import { Setting } from '@element-plus/icons-vue';
@@ -100,6 +100,13 @@ useV2DrawerNavigation(() => {
 const saving = ref(false);
 const saveError = ref('');
 const userId = computed(() => authStore.user?.id ?? '');
+watch(
+  userId,
+  (id) => {
+    if (id) void ensureV2TablePreferences(id).catch(() => undefined);
+  },
+  { immediate: true }
+);
 const dataColumns = computed(() =>
   props.schema.columns.filter((column) => isV2TableDataColumn(column) && column.hideable !== false)
 );

@@ -10,7 +10,7 @@ describe('orders scheme 3 redesign contract', () => {
     expect(view).toContain('<V2OrdersOverview :page="page" />');
     expect(view).toContain('<V2OrdersToolbar :page="page" />');
     expect(view).toContain('<V2OrdersList :page="page" />');
-    expect(view).toContain('<V2OrderDialogs :page="page" />');
+    expect(view).toContain('<V2OrderDialogs v-if="dialogsOpened" :page="page" />');
     expect(view).toContain('const page = reactive(useOrdersPage())');
   });
 
@@ -25,7 +25,8 @@ describe('orders scheme 3 redesign contract', () => {
     ]) {
       expect(toolbar).toContain(binding);
     }
-    expect(toolbar).toContain('@search="page.handleSearch"');
+    expect(toolbar).toContain('@keyup.enter="page.handleSearch"');
+    expect(toolbar).toContain('@clear="page.handleSearch"');
     expect(toolbar).toContain('@change="page.handleFilterChange"');
     expect(toolbar).toContain('@click="page.loadOrders"');
     expect(toolbar).toContain('@click="page.resetFilters"');
