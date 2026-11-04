@@ -1,4 +1,5 @@
 import json
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -7,6 +8,8 @@ import time
 import sys
 import types
 import unittest
+from contextlib import redirect_stdout
+from urllib.error import HTTPError, URLError
 from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'auto-recharge/worker'))
 import online_bitbrowser_agent as agent
@@ -34,6 +37,77 @@ class AgentTests(unittest.TestCase):
     def setUp(self):
         (agent.PROJECT / '.runtime/online-bitbrowser-20261102').mkdir(parents=True, exist_ok=True)
         BaseJob.signal_confirm.reset_mock()
+
+    def rpc_client(self):
+        client = agent.RpcClient.__new__(agent.RpcClient)
+        client.device_id, client.key = 'fixture-device', 'synthetic-private-key'
+        client.origin = 'https://fixture.example.invalid'
+        return client
+
+    def test_quote_poll_recovers_once_without_changing_task_or_quote(self):
+        client, scope = self.rpc_client(), {'taskId': 'task', 'leaseId': 'lease', 'leaseVersion': 2}
+        args = {'quoteDigest': 'same-digest'}
+        with patch.object(client, '_post', side_effect=[
+                agent.OnlineError('private detail', retryable=True), {'approved': False}]) as post, \
+                patch.object(agent.time, 'sleep') as sleep, redirect_stdout(io.StringIO()):
+            self.assertEqual(client.rpc('quote-status', args, scope), {'approved': False})
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[0], post.call_args_list[1])
+        sleep.assert_called_once_with(.25)
+
+    def test_transient_retry_is_bounded_and_never_replays_claim_or_callback(self):
+        for method, expected in [('quote', 3), ('lease', 3), ('heartbeat', 3),
+                                 ('claim', 1), ('prepare', 1), ('callback', 1), ('release', 1)]:
+            with self.subTest(method=method):
+                client = self.rpc_client()
+                with patch.object(client, '_post', side_effect=agent.OnlineError('private', retryable=True)) as post, \
+                        patch.object(agent.time, 'sleep') as sleep, redirect_stdout(io.StringIO()):
+                    with self.assertRaises(agent.OnlineError):
+                        client.rpc(method)
+                self.assertEqual(post.call_count, expected)
+                self.assertEqual(sleep.call_count, expected - 1)
+
+    def test_lost_lease_after_transient_failure_stops_without_confirmation(self):
+        worker, job = self.make_agent(), self.pending_job()
+        client = self.rpc_client()
+        worker.client = client
+        worker.registered_quote = 'digest'
+        with patch.object(client, '_post', side_effect=[
+                agent.OnlineError('temporary', retryable=True),
+                agent.OnlineError('lease lost', status=409)]) as post, \
+                patch.object(agent.time, 'sleep'), redirect_stdout(io.StringIO()):
+            with self.assertRaises(agent.OnlineError):
+                worker.approve_pending({'taskId': 'task'}, job)
+        self.assertEqual(post.call_count, 2)
+        BaseJob.signal_confirm.assert_not_called()
+
+    def test_http_rejections_are_classified_without_logging_response_or_secrets(self):
+        for status, retryable in [(400, False), (401, False), (403, False), (409, False), (503, True)]:
+            with self.subTest(status=status):
+                client, output = self.rpc_client(), io.StringIO()
+                error = HTTPError('https://fixture.example.invalid/private', status,
+                    'synthetic-secret-message', {}, io.BytesIO(b'synthetic-secret-body'))
+                with patch.object(agent, 'build_opener') as opener, \
+                        patch.object(agent.time, 'sleep'), redirect_stdout(output):
+                    opener.return_value.open.side_effect = error
+                    with self.assertRaises(agent.OnlineError) as caught:
+                        client.rpc('quote-status', {'secret': 'synthetic-secret-argument'})
+                self.assertEqual(caught.exception.retryable, retryable)
+                self.assertEqual(opener.return_value.open.call_count, 3 if retryable else 1)
+                records = [json.loads(line) for line in output.getvalue().splitlines()]
+                self.assertTrue(all(row['httpStatus'] == status for row in records))
+                self.assertNotIn('synthetic-secret', output.getvalue())
+                self.assertNotIn(client.key, output.getvalue())
+
+    def test_tls_validation_failure_is_not_retried(self):
+        client = self.rpc_client()
+        with patch.object(agent, 'build_opener') as opener, \
+                patch.object(agent.time, 'sleep') as sleep, redirect_stdout(io.StringIO()):
+            opener.return_value.open.side_effect = URLError(agent.ssl.SSLCertVerificationError('fixture'))
+            with self.assertRaises(agent.OnlineError):
+                client.rpc('connection')
+        self.assertEqual(opener.return_value.open.call_count, 1)
+        sleep.assert_not_called()
 
     def test_manual_quote_waits_for_server_and_does_not_send_local_nonce(self):
         worker = self.make_agent()
