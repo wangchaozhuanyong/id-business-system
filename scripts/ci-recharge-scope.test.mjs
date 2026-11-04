@@ -8737,3 +8737,40 @@ test('mailbox health help retains the required scoped admin and guard checks', (
   assert.deepEqual(selectedParts(paths), ['guards', 'admin']);
 });
 import { dependencyPatchPaths } from './ci-dependency-patch-scope.mjs';
+
+test('interaction flow publication keeps complete Admin checks and excludes foreign build or API inputs', () => {
+  const controls = [
+    '.github/workflows/interaction-flow-publication.yml',
+    '.github/workflows/interaction-flow-validation.yml',
+    'scripts/production-release/interaction-flow-runtime.py',
+    'scripts/production-release/interaction-flow-runtime.test.py',
+    'scripts/production-release/interaction-flow-build.py',
+    'scripts/production-release/interaction-flow-publication.py',
+    'scripts/production-release/interaction-flow-validation.py',
+    'scripts/production-release/interaction-flow-contract.json'
+  ];
+  assert.equal(isCiOnly(controls), true);
+  const paths = [
+    ...controls,
+    'apps/admin/src/v2/components/V2Table.vue',
+    'apps/admin/src/components/ui/FeatureHelp.vue',
+    'apps/admin/src/runtime/performance.ts',
+    'apps/admin/src/runtime/performance.spec.ts',
+    'scripts/acceptance-v2-interaction-offline.mjs',
+    'scripts/compare-v2-interaction-metrics.mjs',
+    'scripts/compare-v2-interaction-metrics.test.mjs',
+    'scripts/lib/v2-offline-admin.mjs',
+    'scripts/acceptance-v2-navigation-performance.mjs'
+  ];
+  assert.equal(isAdminOnly(paths), true);
+  assert.equal(isCiOnly(paths), false);
+  for (const extra of [
+    'apps/api/src/auth/unknown.ts',
+    'package-lock.json',
+    'deploy/unknown.yml',
+    'scripts/production-release/interaction-flow-unreviewed.py'
+  ]) {
+    assert.equal(isAdminOnly([...paths, extra]), false, extra);
+    assert.equal(isCiOnly([...controls, extra]), false, extra);
+  }
+});

@@ -6,6 +6,21 @@ const DATE_TIME_INPUT_PATTERN =
 
 type DateTimeValue = Date | string | number;
 
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function dateFormatter(locale: string, options: Intl.DateTimeFormatOptions) {
+  const key = JSON.stringify([
+    locale,
+    Object.entries(options).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  ]);
+  let formatter = formatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    formatters.set(key, formatter);
+    if (formatters.size > 24) formatters.delete(formatters.keys().next().value!);
+  }
+  return formatter;
+}
+
 export function formatV2DateTime(
   value: DateTimeValue | null | undefined,
   options: Intl.DateTimeFormatOptions = {},
@@ -13,7 +28,7 @@ export function formatV2DateTime(
 ) {
   const date = toValidDate(value);
   if (!date) return fallback;
-  return new Intl.DateTimeFormat('zh-CN', {
+  return dateFormatter('zh-CN', {
     timeZone: V2_BUSINESS_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
@@ -32,7 +47,7 @@ export function formatV2Time(
 ) {
   const date = toValidDate(value);
   if (!date) return fallback;
-  return new Intl.DateTimeFormat('zh-CN', {
+  return dateFormatter('zh-CN', {
     timeZone: V2_BUSINESS_TIME_ZONE,
     hour: '2-digit',
     minute: '2-digit',
@@ -44,7 +59,7 @@ export function formatV2Time(
 export function toV2DateTimeInput(value: DateTimeValue) {
   const date = toValidDate(value);
   if (!date) return '';
-  const parts = new Intl.DateTimeFormat('en-CA', {
+  const parts = dateFormatter('en-CA', {
     timeZone: V2_BUSINESS_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
@@ -79,7 +94,7 @@ export function v2DateTimeInputToIso(value: unknown) {
 
 export function currentV2BusinessMonth(value: DateTimeValue | null) {
   if (value === null) return '';
-  return new Intl.DateTimeFormat('en-CA', {
+  return dateFormatter('en-CA', {
     timeZone: V2_BUSINESS_TIME_ZONE,
     year: 'numeric',
     month: '2-digit'
@@ -118,7 +133,7 @@ function pad(value: number) {
 export function currentV2BusinessDate(value: DateTimeValue | null | undefined) {
   const date = toValidDate(value);
   if (!date) return '';
-  const parts = new Intl.DateTimeFormat('en-CA', {
+  const parts = dateFormatter('en-CA', {
     timeZone: V2_BUSINESS_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',

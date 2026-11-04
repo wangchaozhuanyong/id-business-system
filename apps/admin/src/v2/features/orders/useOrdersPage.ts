@@ -1,7 +1,8 @@
+import { normalizeOrdersListQuery } from './orders-query';
 import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
 import 'element-plus/es/components/message-box/style/css.mjs';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, markRaw, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs';
 import { getApiErrorMessage } from '@/api/client';
@@ -130,10 +131,11 @@ export function useOrdersPage() {
       sortOrder: 'desc' as 'asc' | 'desc'
     })
   );
+  const submittedKeyword = useV2SessionDraft('orders-submitted-keyword', () => ref(''));
   const activeFilterCount = computed(
     () =>
       [
-        query.keyword.trim(),
+        submittedKeyword.value.trim(),
         query.serviceOptionId,
         query.settlementPlatformOptionId,
         query.status,
@@ -145,19 +147,8 @@ export function useOrdersPage() {
   );
   const hasActiveFilters = computed(() => activeFilterCount.value > 0);
 
-  function getOrdersListQuery(): V2OrderListQuery {
-    return {
-      ...query,
-      keyword: query.keyword.trim() || undefined,
-      serviceOptionId: query.serviceOptionId || undefined,
-      settlementPlatformOptionId: query.settlementPlatformOptionId || undefined,
-      status: query.status || undefined,
-      accountDisposition: query.accountDisposition || undefined,
-      accountSource: query.accountSource || undefined,
-      openedFrom: openedRange.value[0] || undefined,
-      openedTo: openedRange.value[1] || undefined
-    };
-  }
+  const getOrdersListQuery = () =>
+    normalizeOrdersListQuery(query, openedRange.value, submittedKeyword.value);
 
   const ordersQuery = useV2ModuleQuery<OrdersPageSnapshot>({
     moduleKey: 'orders',
@@ -191,7 +182,7 @@ export function useOrdersPage() {
     }
   });
 
-  const items = computed(() => ordersQuery.data.value?.list.items ?? []);
+  const items = computed(() => markRaw(ordersQuery.data.value?.list.items ?? []));
   const total = computed(() => ordersQuery.data.value?.list.total ?? 0);
   const displayedPage = computed(() => ordersQuery.data.value?.list.page ?? query.page);
   const displayedPageSize = computed(() => ordersQuery.data.value?.list.pageSize ?? query.pageSize);
@@ -216,17 +207,20 @@ export function useOrdersPage() {
   }
 
   function handleSearch() {
+    submittedKeyword.value = query.keyword;
     query.page = 1;
     loadCurrentOrders();
   }
 
   function handleFilterChange() {
+    submittedKeyword.value = query.keyword;
     query.page = 1;
     loadCurrentOrders();
   }
 
   function resetFilters() {
     resetV2SearchInputs('orders:');
+    submittedKeyword.value = '';
     query.keyword = '';
     query.serviceOptionId = '';
     query.settlementPlatformOptionId = '';

@@ -29,13 +29,13 @@
     />
 
     <V2AccountsList v-if="!showingLossRecords" :page="page" />
-    <V2AccountDialogs v-if="!showingLossRecords" :page="page" />
+    <V2AccountDialogs v-if="!showingLossRecords && dialogsOpened" :page="page" />
     <V2AccountLossesView v-if="showingLossRecords" />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import V2PageContext from '@/v2/components/V2PageContext.vue';
 import { V2AccountLossesView } from '@/v2/features/account-losses/public-api';
 import V2AccountDialogs from './components/V2AccountDialogs.vue';
@@ -52,6 +52,21 @@ const importFileInput = accountPage.importFileInput;
 const page = reactive(accountPage);
 const activeLifecycle = ref<V2AccountLifecycle>(page.query.lifecycle);
 const showingLossRecords = computed(() => activeLifecycle.value === 'reported');
+const dialogsOpened = ref(false);
+watch(
+  () =>
+    page.drawerVisible ||
+    page.importDialogVisible ||
+    page.revealDialogVisible ||
+    page.lossDialogVisible ||
+    page.unfreezeDialogVisible ||
+    page.recordStatusDialogVisible ||
+    page.saleRecoveryDialogVisible,
+  (visible) => {
+    if (visible) dialogsOpened.value = true;
+  },
+  { immediate: true }
+);
 
 function selectLifecycle(lifecycle: V2AccountLifecycle) {
   if (lifecycle === 'reported') {

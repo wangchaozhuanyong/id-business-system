@@ -7,9 +7,15 @@ interface V2StableListFrameOptions {
 }
 
 export function useV2StableListFrame(options: V2StableListFrameOptions) {
+  const mediaCondition = `(max-width: ${options.mobileBreakpoint ?? 900}px)`;
+  const isMobile = ref(
+    typeof window !== 'undefined' && window.matchMedia(mediaCondition).matches === true
+  );
   const listRef = ref<HTMLElement>();
   const stableListBodyHeight = ref(0);
   const stablePaginationHeight = ref(0);
+  let measuring = false;
+  let disposed = false;
   let mobileMediaQuery: MediaQueryList | undefined;
   let listResizeObserver: ResizeObserver | undefined;
 
@@ -30,19 +36,18 @@ export function useV2StableListFrame(options: V2StableListFrameOptions) {
   }
 
   async function rememberListBodyHeight() {
+    if (measuring || disposed) return;
+    measuring = true;
     await nextTick();
+    measuring = false;
+    if (disposed) return;
     const visibleBody = getVisibleListBody();
     if (!visibleBody) return;
-    stableListBodyHeight.value = Math.max(
-      stableListBodyHeight.value,
-      Math.ceil(visibleBody.getBoundingClientRect().height)
-    );
+    const bodyHeight = Math.ceil(visibleBody.getBoundingClientRect().height);
     const pagination = listRef.value?.querySelector<HTMLElement>('.v2-records-pagination');
-    if (pagination)
-      stablePaginationHeight.value = Math.max(
-        stablePaginationHeight.value,
-        Math.ceil(pagination.getBoundingClientRect().height)
-      );
+    const paginationHeight = pagination ? Math.ceil(pagination.getBoundingClientRect().height) : 0;
+    stableListBodyHeight.value = Math.max(stableListBodyHeight.value, bodyHeight);
+    stablePaginationHeight.value = Math.max(stablePaginationHeight.value, paginationHeight);
   }
 
   function resetStableListBodyHeight() {
@@ -54,23 +59,25 @@ export function useV2StableListFrame(options: V2StableListFrameOptions) {
   watch(options.items, rememberListBodyHeight, { flush: 'post' });
   watch(options.pageSize, resetStableListBodyHeight);
 
-  watch(
-    listRef,
-    (element) => {
-      listResizeObserver?.disconnect();
-      element
-        ?.querySelectorAll<HTMLElement>(
-          '.v2-unified-table-shell, .v2-records-mobile-list, .v2-records-pagination'
-        )
-        .forEach((body) => listResizeObserver?.observe(body));
-      if (element) void rememberListBodyHeight();
-    },
-    { flush: 'post' }
-  );
+  function observeListBodies() {
+    listResizeObserver?.disconnect();
+    listRef.value
+      ?.querySelectorAll<HTMLElement>(
+        '.v2-unified-table-shell, .v2-records-mobile-list, .v2-records-pagination'
+      )
+      .forEach((body) => listResizeObserver?.observe(body));
+    void rememberListBodyHeight();
+  }
+  function handleBreakpointChange(event?: MediaQueryListEvent) {
+    isMobile.value = event?.matches ?? window.matchMedia(mediaCondition).matches === true;
+    resetStableListBodyHeight();
+  }
+  watch(listRef, observeListBodies, { flush: 'post' });
+  watch(isMobile, observeListBodies, { flush: 'post' });
 
   onMounted(() => {
-    mobileMediaQuery = window.matchMedia(`(max-width: ${options.mobileBreakpoint ?? 900}px)`);
-    mobileMediaQuery.addEventListener('change', resetStableListBodyHeight);
+    mobileMediaQuery = window.matchMedia(mediaCondition);
+    mobileMediaQuery.addEventListener('change', handleBreakpointChange);
     listResizeObserver = new ResizeObserver(() => {
       void rememberListBodyHeight();
     });
@@ -83,12 +90,14 @@ export function useV2StableListFrame(options: V2StableListFrameOptions) {
   });
 
   onBeforeUnmount(() => {
-    mobileMediaQuery?.removeEventListener('change', resetStableListBodyHeight);
+    disposed = true;
+    mobileMediaQuery?.removeEventListener('change', handleBreakpointChange);
     listResizeObserver?.disconnect();
   });
 
   return {
     listRef,
-    listFrameStyle
+    listFrameStyle,
+    isMobile
   };
 }

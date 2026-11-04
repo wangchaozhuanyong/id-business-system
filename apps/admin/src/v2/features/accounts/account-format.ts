@@ -1,6 +1,16 @@
 import { formatV2Decimal } from '@/v2/utils/decimal';
 import type { V2AccountLifecycle } from './contracts';
 
+const accountDateFormatter = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false
+});
+
 export function accountLifecycleLabel(lifecycle: V2AccountLifecycle) {
   return {
     available: '可用 ID',
@@ -15,13 +25,5 @@ export function formatAccountDecimal(value: string) {
 }
 
 export function formatAccountDate(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(new Date(value));
+  return accountDateFormatter.format(new Date(value));
 }

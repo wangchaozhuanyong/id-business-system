@@ -1,5 +1,6 @@
 <template>
   <el-popover
+    :persistent="false"
     :visible="visible"
     :placement="placement"
     trigger="manual"

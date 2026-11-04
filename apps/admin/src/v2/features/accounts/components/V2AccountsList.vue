@@ -25,6 +25,7 @@
       </header>
 
       <V2Table
+        v-if="!isMobile"
         :schema="v2TableSchemas.accounts.main"
         :show-column-settings="false"
         :aria-busy="page.loading"
@@ -157,7 +158,11 @@
         </V2TableActionColumn>
       </V2Table>
 
-      <div class="v2-records-mobile-list" :data-mobile-for="v2TableSchemas.accounts.main.id">
+      <div
+        v-if="isMobile"
+        class="v2-records-mobile-list"
+        :data-mobile-for="v2TableSchemas.accounts.main.id"
+      >
         <article v-for="item in page.items" :key="item.id" class="v2-records-mobile-item">
           <header>
             <div>
@@ -318,7 +323,7 @@ const emptyDescription = computed(
       reported: '当前没有已报损的 ID'
     })[props.page.query.lifecycle]
 );
-const { listRef, listFrameStyle } = useV2StableListFrame({
+const { listRef, listFrameStyle, isMobile } = useV2StableListFrame({
   items: () => props.page.items,
   pageSize: () => props.page.displayedPageSize
 });

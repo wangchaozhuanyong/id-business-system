@@ -1,0 +1,32 @@
+name: Interaction Flow Source Validation
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  reproduce-parent:
+    if: github.repository == 'wangchaozhuanyong/id-business-system' && github.head_ref == 'codex/interaction-release-20261104'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+      - name: Reproduce published assets and build the candidate without production access
+        run: |
+          python3 -B scripts/production-release/interaction-flow-runtime.test.py
+          python3 -B scripts/production-release/interaction-flow-validation.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: interaction-flow-source-${{ github.sha }}
+          path: |
+            .runtime/interaction-flow-validation/result.json
+            .runtime/interaction-flow-validation/payload/build-proof.json
+          include-hidden-files: true
+          if-no-files-found: warn

@@ -63,6 +63,16 @@ function checkSourceContracts() {
   const sessionCoordinator = read('apps/admin/src/auth/sessionCoordinator.ts');
   const layout = read('apps/admin/src/v2/layouts/V2AdminLayout.vue');
   const performanceRuntime = read('apps/admin/src/runtime/performance.ts');
+  const presentation = read('apps/admin/src/v2/composables/useV2RoutePresentation.ts');
+  assert.match(performanceRuntime, /v2:route-paint-ready/, '缺少内容首帧近似指标');
+  assert.match(performanceRuntime, /primaryOwner/, '缺少主查询计时归属');
+  assert.match(presentation, /isV2RoutePerformanceCurrent/, '绘制回调缺少导航代次保护');
+  assert.match(presentation, /prefers-reduced-motion/, '切页动效未尊重减少动态效果');
+  assert.doesNotMatch(
+    presentation,
+    /setTimeout|localStorage|sessionStorage/,
+    '内容呈现不得依赖计时等待或持久化'
+  );
   const routes = read('apps/admin/src/v2/router/routes.ts');
   const recovery = read('apps/admin/src/v2/runtime/preloadRecovery.ts');
   const routePrefetch = read('apps/admin/src/v2/runtime/routePrefetch.ts');
@@ -545,8 +555,8 @@ async function checkBrowserRuntime() {
       await page
         .locator('input[placeholder="订单号、客户、平台订单号、ID 账号、网站账号"]')
         .inputValue(),
-      '',
-      '普通列表页仍依赖 KeepAlive 保留临时筛选'
+      '保留条件',
+      '订单列表切页返回没有通过会话草稿保留未提交搜索词'
     );
     assert.equal(
       await page.locator('.v2-page-state--loading').count(),
@@ -1439,7 +1449,11 @@ async function navigateAndMeasure(page, path) {
             (entry.name.includes('/assets/') || entry.name.includes('/api/'))
         )
         .map((entry) => ({
-          name: new URL(entry.name).pathname,
+          name: new URL(entry.name).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ':id'),
+          serverTiming: (entry.serverTiming ?? []).map((timing) => ({
+            name: timing.name,
+            durationMs: timing.duration
+          })),
           startMs: Math.round(entry.startTime - routeStart.startTime),
           durationMs: Math.round(entry.duration),
           endMs: Math.round(entry.responseEnd - routeStart.startTime)
@@ -1450,6 +1464,23 @@ async function navigateAndMeasure(page, path) {
   assert.ok(result.dataReadyMs !== null, `${path} 缺少业务数据就绪指标`);
   assert.ok(result.codeToDataMs !== null, `${path} 缺少代码到数据耗时指标`);
   assert.ok(result.dataReadyMs >= result.codeReadyMs, `${path} 数据就绪时间早于路由代码就绪时间`);
+  if (REPORT_METRICS) {
+    result.presentation = await page.evaluate((targetPath) => {
+      const paint = performance
+        .getEntriesByName('v2:route-paint-duration')
+        .filter((entry) => entry.detail?.path === targetPath)
+        .at(-1);
+      return {
+        paintMs: paint ? Math.round(paint.duration) : null,
+        tableMeasurements: performance
+          .getEntriesByName('v2:table-measure')
+          .map((entry) => Math.round(entry.duration)),
+        longTasks: performance
+          .getEntriesByName('v2:long-task')
+          .map((entry) => Math.round(entry.duration))
+      };
+    }, path);
+  }
   navigationMetrics.push(result);
   if (REPORT_METRICS) console.log(`[V2 navigation metric] ${JSON.stringify(result)}`);
   return result;

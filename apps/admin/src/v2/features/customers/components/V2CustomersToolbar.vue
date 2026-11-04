@@ -8,16 +8,17 @@
       '联系方式完整显示，访问范围由客户模块权限控制。'
     ]"
   >
-    <V2SearchInput
+    <el-input
       v-model="page.query.keyword"
-      draft-key="customers:V2CustomersToolbar:page.query.keyword"
       clearable
       placeholder="客户名称、手机、微信、QQ、WhatsApp"
       aria-label="搜索客户"
-      @search="page.handleSearch"
+      @keyup.enter="page.handleSearch"
+      @clear="page.handleSearch"
     />
     <el-select
       v-model="page.query.sourceOptionId"
+      :persistent="Boolean(page.query.sourceOptionId)"
       clearable
       placeholder="全部来源"
       aria-label="筛选客户来源"
@@ -35,6 +36,7 @@
     >
       <el-select
         v-model="page.query.tagOptionId"
+        :persistent="Boolean(page.query.tagOptionId)"
         clearable
         placeholder="全部标签"
         aria-label="筛选客户标签"
@@ -49,6 +51,7 @@
       </el-select>
       <el-select
         v-model="page.query.serviceOptionId"
+        :persistent="Boolean(page.query.serviceOptionId)"
         clearable
         filterable
         placeholder="全部历史业务"
@@ -64,6 +67,7 @@
       </el-select>
       <el-select
         v-model="page.query.recordStatus"
+        :persistent="Boolean(page.query.recordStatus)"
         clearable
         placeholder="全部状态"
         aria-label="筛选资料状态"
@@ -99,7 +103,6 @@
 </template>
 
 <script setup lang="ts">
-import V2SearchInput from '@/v2/components/V2SearchInput.vue';
 import V2ListToolbar from '@/v2/components/V2ListToolbar.vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Search } from '@element-plus/icons-vue';

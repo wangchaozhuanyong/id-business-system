@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /* global document, window */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -28,7 +27,8 @@ const user = {
 const checks = [],
   errors = [],
   requests = [];
-let browser, server, lastPage;
+let browser, lastPage;
+const distribution = path.join(root, 'apps/admin/dist');
 const idOf = (index) => `22222222-2222-4222-8222-${String(index + 1).padStart(12, '0')}`;
 function order(index) {
   const status = ['completed', 'refunded', 'cancelled', 'failed'][index] || 'pending';
@@ -133,31 +133,7 @@ function customer(index) {
 
 try {
   if (!process.env.V2_ARCHIVE_UI_ADMIN_URL)
-    server = spawn(
-      process.execPath,
-      [
-        path.join(root, 'node_modules/vite/bin/vite.js'),
-        '--host',
-        url.hostname,
-        '--port',
-        url.port,
-        '--strictPort'
-      ],
-      {
-        cwd: path.join(root, 'apps/admin'),
-        env: {
-          ...process.env,
-          VITE_API_BASE_URL: '/api',
-          VITE_V2_REALTIME_CHANGES_ENABLED: 'false'
-        },
-        stdio: 'ignore'
-      }
-    );
-  const deadline = Date.now() + 30_000;
-  while (!(await fetch(new URL('/login', url)).catch(() => null))?.ok) {
-    assert.ok(Date.now() < deadline && server?.exitCode == null, '本地服务器未启动');
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+    assert.ok(existsSync(path.join(distribution, 'index.html')), '请先构建当前管理端再验收');
   browser = await chromium.launch();
   for (const theme of ['light', 'dark'])
     for (const width of [1440, 768, 390]) await verify(theme, width);
@@ -168,6 +144,8 @@ try {
     errors,
     requests,
     businessWrites: 0,
+    webServerStarted: false,
+    productionBuild: !process.env.V2_ARCHIVE_UI_ADMIN_URL,
     data: '仅本地合成夹具；全部 API 响应拦截；禁止外部访问'
   };
   writeFileSync(path.join(output, 'checks.json'), JSON.stringify(result, null, 2));
@@ -200,7 +178,6 @@ try {
   throw error;
 } finally {
   await browser?.close();
-  server?.kill('SIGTERM');
 }
 
 async function verify(theme, width) {
@@ -227,7 +204,29 @@ async function verify(theme, width) {
       requestUrl = new URL(request.url()),
       p = requestUrl.pathname;
     assert.equal(requestUrl.origin, url.origin, '禁止访问外部系统');
-    if (!p.startsWith('/api/')) return route.continue();
+    if (!p.startsWith('/api/')) {
+      if (process.env.V2_ARCHIVE_UI_ADMIN_URL) return route.continue();
+      // 默认验收当前生产构建，资源和 API 全部拦截，无需启动网站或冷编译编辑器。
+      const pathname =
+        p === '/' || p === '/login' || p === '/v2' || p.startsWith('/v2/')
+          ? '/index.html'
+          : decodeURIComponent(p);
+      const file = path.resolve(distribution, `.${pathname}`);
+      assert.ok(file.startsWith(distribution + path.sep), '离线资源不得越界');
+      if (!existsSync(file))
+        return route.fulfill({ status: 404, body: 'Missing archive fixture asset' });
+      const contentType =
+        {
+          '.html': 'text/html',
+          '.js': 'application/javascript',
+          '.css': 'text/css',
+          '.svg': 'image/svg+xml',
+          '.png': 'image/png',
+          '.ico': 'image/x-icon',
+          '.woff2': 'font/woff2'
+        }[path.extname(file)] || 'application/octet-stream';
+      return route.fulfill({ status: 200, contentType, body: readFileSync(file) });
+    }
     const pageNumber = Number(requestUrl.searchParams.get('page') || 1);
     const pageSize = Number(requestUrl.searchParams.get('pageSize') || 20);
     let data = { items: [], total: 0, page: pageNumber, pageSize };

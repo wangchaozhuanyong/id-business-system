@@ -6,7 +6,6 @@ import {
   type V2BrandingSettings
 } from '@apple-business/shared';
 import type { ApiRequestOptions } from '@/api/client';
-import { idBusinessV2BrandingApi } from '@/v2/api/branding';
 
 interface BrandingLoadOptions extends ApiRequestOptions {
   force?: boolean;
@@ -36,8 +35,10 @@ export async function loadV2Branding(options: BrandingLoadOptions = {}) {
   if (!options.force && hasLoaded.value) return brandingState.value;
   if (loadingPromise) return loadingPromise;
 
-  loadingPromise = idBusinessV2BrandingApi
-    .getPublic({ signal: options.signal })
+  loadingPromise = import('@/v2/api/branding')
+    .then(({ idBusinessV2BrandingApi }) =>
+      idBusinessV2BrandingApi.getPublic({ signal: options.signal })
+    )
     .then((settings) => {
       setV2Branding(settings);
       hasLoaded.value = true;

@@ -2438,7 +2438,13 @@ test('full quality runs the missing controls before tests while finite and remot
   assert.equal(selected.length, 1);
   assert.equal(
     selected[0].run,
-    'node scripts/ci-recharge-check.mjs release-controls "$CHECK_BASE"'
+    'python3 -B scripts/production-release/window-bitbrowser-ci-build.py --controls release-controls --base "$CHECK_BASE"'
+  );
+  const adapter = readFileSync('scripts/production-release/window-bitbrowser-ci-build.py', 'utf8');
+  assert.ok(
+    adapter.includes(
+      "elif args.controls:\n        run(['node', 'scripts/ci-recharge-check.mjs', args.controls, args.base])"
+    )
   );
   assert.equal(selected[0].env.CHECK_MODE, 'full');
   assert.equal(selected[0].env.CHECK_BASE, '${{ needs.change-scope.outputs.base }}');
@@ -3216,7 +3222,16 @@ test('full Quality Gate includes the release guards alongside unchanged business
   assert.ok(full.includes('name: Verify changed release controls'));
   assert.ok(full.includes('CHECK_BASE: ${{ needs.change-scope.outputs.base }}'));
   assert.ok(full.includes('CHECK_MODE: ci-only'));
-  assert.ok(full.includes('run: node scripts/ci-recharge-check.mjs guards "$CHECK_BASE"'));
+  assert.ok(
+    full.includes(
+      'run: python3 -B scripts/production-release/window-bitbrowser-ci-build.py --controls guards --base "$CHECK_BASE"'
+    )
+  );
+  assert.ok(
+    readFileSync('scripts/production-release/window-bitbrowser-ci-build.py', 'utf8').includes(
+      "elif args.controls:\n        run(['node', 'scripts/ci-recharge-check.mjs', args.controls, args.base])"
+    )
+  );
   for (const command of [
     'npm run typecheck',
     'npm run test',

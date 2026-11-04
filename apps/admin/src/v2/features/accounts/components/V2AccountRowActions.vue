@@ -28,16 +28,29 @@
       <el-icon><Edit /></el-icon>
       编辑
     </AppButton>
+    <AppButton
+      v-if="hasSecondaryActions && !dropdownReady"
+      size="small"
+      variant="ghost"
+      title="更多 ID 操作"
+      aria-haspopup="menu"
+      aria-expanded="false"
+      :disabled="disabled"
+      @click="openMenu"
+      @keydown.down.prevent="openMenu"
+      >更多操作</AppButton
+    >
     <el-dropdown
-      v-if="hasSecondaryActions"
+      v-if="hasSecondaryActions && dropdownReady"
       ref="dropdownRef"
       trigger="click"
+      :persistent="false"
       :disabled="disabled"
       @command="handleCommand"
       @keydown.esc.stop.prevent="closeMenu"
     >
-      <AppButton icon-only size="small" variant="ghost" title="更多 ID 操作">
-        <el-icon><MoreFilled /></el-icon>
+      <AppButton ref="menuTrigger" size="small" variant="ghost" title="更多 ID 操作">
+        更多操作
       </AppButton>
       <template #dropdown>
         <el-dropdown-menu>
@@ -63,8 +76,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { Edit, MoreFilled } from '@element-plus/icons-vue';
+import { computed, nextTick, ref } from 'vue';
+import { Edit } from '@element-plus/icons-vue';
 import AppButton from '@/components/ui/AppButton.vue';
 import type { V2RecordStatus } from '../contracts';
 
@@ -87,7 +100,17 @@ const emit = defineEmits<{
   'unfreeze-loss': [];
 }>();
 
-const dropdownRef = ref<{ handleClose: () => void } | null>(null);
+const dropdownRef = ref<{ handleClose: () => void; handleOpen: () => void } | null>(null);
+const menuTrigger = ref<{ $el: HTMLElement }>();
+const dropdownReady = ref(false);
+async function openMenu() {
+  if (props.disabled) return;
+  dropdownReady.value = true;
+  await nextTick();
+  if (props.disabled) return;
+  menuTrigger.value?.$el.focus();
+  dropdownRef.value?.handleOpen();
+}
 const hasActions = computed(
   () =>
     props.canViewSensitive ||

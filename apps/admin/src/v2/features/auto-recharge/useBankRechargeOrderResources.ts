@@ -5,29 +5,37 @@ import type { emptyForm } from './bank-recharge-order-form';
 export function useBankRechargeOrderResources(
   channel: RechargeOrderChannel,
   form: ReturnType<typeof emptyForm>,
-  selectedCardId: () => string | null | undefined = () => null
+  selectedCardId: () => string | null | undefined = () => null,
+  editorEnabled: () => boolean = () => true
 ) {
   const optionsQuery = useV2ModuleQuery({
+    trackRouteData: false,
+    enabled: editorEnabled,
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
     key: `recharge-orders:${channel}:options`,
     query: ({ signal }) => bankRechargeApi.orderOptions({ signal }, channel)
   });
   const accountsQuery = useV2ModuleQuery({
+    trackRouteData: false,
+    enabled: editorEnabled,
     moduleKey: 'chatgpt-accounts',
     scope: 'auto-recharge',
     key: 'bank-recharge-account-options',
     query: ({ signal }) => bankRechargeApi.listAccounts({ signal })
   });
   const bitCardsQuery = useV2ModuleQuery({
+    trackRouteData: false,
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
-    enabled: () => channel === 'bitbrowser',
+    enabled: () => channel === 'bitbrowser' && editorEnabled(),
     key: 'bank-recharge-card-options',
     query: ({ signal }) => bankRechargeApi.listCards({ signal })
   });
   const cardsQuery = channel === 'online' ? optionsQuery : bitCardsQuery;
   const currenciesQuery = useV2ModuleQuery({
+    trackRouteData: false,
+    enabled: editorEnabled,
     moduleKey: 'bank-recharge-orders',
     scope: 'auto-recharge',
     key: 'bank-recharge-currency-options',

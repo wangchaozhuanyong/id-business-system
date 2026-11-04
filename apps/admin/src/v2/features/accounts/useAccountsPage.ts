@@ -1,6 +1,6 @@
 import { resetV2SearchInputs } from '@/v2/composables/useV2AutoSearch';
 import { useV2FormDraft, useV2SessionDraft } from '@/v2/composables/useV2SessionDraft';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, markRaw, reactive, ref, watch } from 'vue';
 import { getApiErrorMessage } from '@/api/client';
 import { idBusinessV2AccountsApi } from './api';
 import { ElMessage } from '@/v2/services/elementPlusMessage';
@@ -18,12 +18,7 @@ import {
 } from './account-form';
 import { exportAccountRowsToCsv } from './account-export';
 import { accountLifecycleLabel, formatAccountDate, formatAccountDecimal } from './account-format';
-import {
-  countActiveAccountsFilters,
-  normalizeAccountsListQuery,
-  resetAccountsListFilters,
-  useAccountsListQuery
-} from './accounts-query';
+import { resetAccountsListFilters, useAccountsListSearch } from './accounts-query';
 import {
   downloadAccountImportTemplate,
   prepareAccountImport,
@@ -85,7 +80,6 @@ export function useAccountsPage() {
       sortOrder: 'desc' as 'asc' | 'desc'
     })
   );
-  const activeFilterCount = computed(() => countActiveAccountsFilters(query));
   const lifecycleLabel = computed(() => accountLifecycleLabel(query.lifecycle));
   const editorDraft = useV2FormDraft('accounts-editor', emptyAccountForm);
   const { form } = editorDraft;
@@ -165,12 +159,12 @@ export function useAccountsPage() {
     return '';
   });
 
-  const accountsQuery = useAccountsListQuery(() => normalizeAccountsListQuery(query));
+  const { accountsQuery, submittedKeyword, activeFilterCount } = useAccountsListSearch(query);
   watch(
     accountsQuery.data,
     (snapshot) => {
       if (!snapshot) return;
-      items.value = snapshot.list.items;
+      items.value = markRaw(snapshot.list.items);
       total.value = snapshot.list.total;
       countryOptions.value = snapshot.options.countries;
       statusOptions.value = snapshot.options.statuses;
@@ -199,12 +193,14 @@ export function useAccountsPage() {
   }
 
   function handleSearch() {
+    submittedKeyword.value = query.keyword;
     query.page = 1;
     loadCurrentAccounts();
   }
 
   function resetFilters() {
     resetV2SearchInputs('accounts:');
+    submittedKeyword.value = '';
     resetAccountsListFilters(query);
     loadCurrentAccounts();
   }
@@ -323,7 +319,7 @@ export function useAccountsPage() {
     exporting.value = true;
     try {
       const result = await idBusinessV2AccountsApi.exportRows({
-        keyword: query.keyword.trim() || undefined,
+        keyword: submittedKeyword.value.trim() || undefined,
         countryOptionId: query.countryOptionId || undefined,
         statusOptionId: query.statusOptionId || undefined,
         supplierOptionId: query.supplierOptionId || undefined,

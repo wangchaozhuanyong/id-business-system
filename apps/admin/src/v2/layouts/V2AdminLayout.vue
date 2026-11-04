@@ -443,6 +443,7 @@ import { requiresPasswordResetRedirect } from '@/v2/router/passwordReset';
 import { getFirstAllowedV2Route } from '@/v2/router/permissionRedirect';
 import { createV2RoutePrefetchController } from '@/v2/runtime/routePrefetch';
 import { startV2ChangeSync, stopV2ChangeSync } from '@/v2/runtime/changeSync';
+import { useV2RoutePresentation } from '@/v2/composables/useV2RoutePresentation';
 import { synchronizeV2BusinessClock } from '@/v2/runtime/businessClock';
 import '@/v2/styles/v2.css';
 
@@ -469,6 +470,7 @@ const globalSearchOpen = ref(false);
 const notificationOpen = ref(false);
 const sessionRetrying = ref(false);
 const contentElement = ref<HTMLElement | null>(null);
+useV2RoutePresentation(contentElement);
 const pageTitleElement = ref<HTMLElement | null>(null);
 const liveMessage = ref('');
 const currentPageTitle = computed(() => String(route.meta.title ?? '工作台'));

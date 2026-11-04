@@ -40,7 +40,6 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
     typeof route.query.orderNo === 'string' ? route.query.orderNo : ''
   );
   const financeCurrencies = V2_FINANCE_CURRENCIES;
-  const pricing = useBitOrderPricing(channel);
   const executionSource = useV2SessionDraft(draftKey('bit-orders:execution-source'), () =>
     ref<'' | 'bitbrowser'>(channel === 'online' ? '' : 'bitbrowser')
   );
@@ -81,6 +80,7 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
   const cardOpen = ref(false);
   const currencyOpen = ref(false);
   const refundOpen = ref(false);
+  const pricing = useBitOrderPricing(channel);
   const creating = ref(false);
   const correcting = ref(false);
   const correctionReason = ref('');
@@ -153,7 +153,7 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
     executionSource: channel === 'bitbrowser' ? executionSource.value || undefined : undefined
   });
   const ordersQuery = useV2ModuleQuery<Awaited<ReturnType<typeof bankRechargeApi.listOrders>>>({
-    moduleKey: 'bank-recharge-orders',
+    moduleKey: channel === 'online' ? 'online-recharge-jobs' : 'bank-recharge-orders',
     scope: 'auto-recharge',
     key: () => createV2QueryKey(listQuery()),
     keepPreviousData: true,
@@ -161,12 +161,6 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
       Date.now() + Math.max(1000, Date.parse(result.revalidateAt) - Date.parse(result.evaluatedAt)),
     query: ({ signal }) => bankRechargeApi.listOrders(listQuery(), { signal })
   });
-  watch(
-    [page, pageSize, keyword, status, expiry, accountIdFilter, deletedFilter, executionSource],
-    () => {
-      void ordersQuery.ensureFresh();
-    }
-  );
   watch([accountIdFilter, linkedOrderNo], () => {
     keywordInput.value = linkedOrderNo.value;
     keyword.value = linkedOrderNo.value;
@@ -200,7 +194,12 @@ export function useBankRechargeOrdersPage(channel: RechargeOrderChannel = 'bitbr
     fundingAccounts,
     receivedAccounts,
     feeAccounts
-  } = useBankRechargeOrderResources(channel, form, () => selected.value?.onlineRechargeCardId);
+  } = useBankRechargeOrderResources(
+    channel,
+    form,
+    () => selected.value?.onlineRechargeCardId,
+    () => drawerOpen.value || refundOpen.value || cardOpen.value || currencyOpen.value
+  );
   const newFeeMode = computed(
     () => selected.value?.accountingVersion === 'subscription_cost_v2' || form.confirmFeeConversion
   );

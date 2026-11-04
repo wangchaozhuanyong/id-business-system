@@ -1,7 +1,6 @@
 import { computed, readonly, ref } from 'vue';
 import type { V2TablePreference } from '@apple-business/shared';
 import { isApiError } from '@/api/apiError';
-import { idBusinessV2TablePreferencesApi } from '@/v2/api/tablePreferences';
 import { getV2TableDefaultHiddenColumnKeys } from '@/v2/components/tableSystem';
 
 const SERVER_FAILURE_COOLDOWN_MS = 30_000;
@@ -36,8 +35,12 @@ export async function ensureV2TablePreferences(userId: string) {
   loading.value = true;
   loadError.value = null;
   loadRetryAt = 0;
-  const currentLoadingPromise: Promise<void> = idBusinessV2TablePreferencesApi
-    .list()
+  const currentLoadingPromise: Promise<void> = import('@/v2/api/tablePreferences')
+    .then(({ idBusinessV2TablePreferencesApi }) => {
+      if (revision !== identityRevision || activeUserId.value !== normalizedUserId)
+        throw new DOMException('列偏好读取已取消', 'AbortError');
+      return idBusinessV2TablePreferencesApi.list();
+    })
     .then((result) => {
       if (revision !== identityRevision || activeUserId.value !== normalizedUserId) return;
       preferencesByTable.value = Object.fromEntries(
@@ -74,6 +77,9 @@ export async function saveV2TablePreference(
   if (!normalizedUserId) throw new Error('无法识别当前登录用户');
   await ensureV2TablePreferences(normalizedUserId);
   const revision = identityRevision;
+  const { idBusinessV2TablePreferencesApi } = await import('@/v2/api/tablePreferences');
+  if (revision !== identityRevision || activeUserId.value !== normalizedUserId)
+    throw new DOMException('列偏好保存已取消', 'AbortError');
   const result = await idBusinessV2TablePreferencesApi.update(tableId, {
     hiddenColumnKeys: normalizeKeys(hiddenColumnKeys)
   });
@@ -89,6 +95,9 @@ export async function resetV2TablePreference(userId: string, tableId: string) {
   if (!normalizedUserId) throw new Error('无法识别当前登录用户');
   await ensureV2TablePreferences(normalizedUserId);
   const revision = identityRevision;
+  const { idBusinessV2TablePreferencesApi } = await import('@/v2/api/tablePreferences');
+  if (revision !== identityRevision || activeUserId.value !== normalizedUserId)
+    throw new DOMException('列偏好重置已取消', 'AbortError');
   const result = await idBusinessV2TablePreferencesApi.reset(tableId);
   if (revision === identityRevision && activeUserId.value === normalizedUserId) {
     const next = { ...preferencesByTable.value };
