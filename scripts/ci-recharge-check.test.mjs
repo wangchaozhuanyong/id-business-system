@@ -32,6 +32,40 @@ import test from 'node:test';
 import { financialPublicationControlPaths } from './ci-financial-publication-scope.mjs';
 import { financialClosurePaths } from './ci-financial-closure-scope.mjs';
 
+test('online BitBrowser assistant command entry retains guards and actual connector regressions', () => {
+  const paths = [
+    'apps/api/src/id-business-v2/online-recharge/connector/online_bitbrowser_agent.py',
+    'apps/api/src/id-business-v2/online-recharge/connector/test_online_bitbrowser_agent.py',
+    'scripts/ci-recharge-scope.mjs',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.mjs',
+    'scripts/ci-recharge-check.test.mjs'
+  ];
+  const guards = recordGuardCommands('recharge', paths);
+  for (const expected of [
+    'prettier',
+    'eslint',
+    'scripts/ci-recharge-scope.test.mjs',
+    'scripts/ci-recharge-check.test.mjs',
+    'check:v2-module-architecture',
+    'check:v2-isolation'
+  ])
+    assert.ok(
+      guards.some((call) => call.includes(expected)),
+      expected
+    );
+  assert.equal(
+    guards.some((call) => call.some((arg) => /docker|prisma|production-release/.test(arg))),
+    false
+  );
+  const connector = recordGuardCommands('recharge', paths, 'connector');
+  assert.ok(connector.some((call) => call.includes('test_online_bitbrowser_agent.py')));
+  assert.ok(connector.some((call) => call.includes('test_bitbrowser_connector')));
+  assert.ok(connector.some((call) => call.includes('test_bitbrowser_upgrade')));
+  assert.throws(() => recordGuardCommands('full', paths), /scoped guard\/connector/);
+  assert.throws(() => recordGuardCommands('recharge', paths, 'api'), /scoped guard\/connector/);
+});
+
 test('依赖发布控制真实入口保留来源和离线校验并拒绝业务模式', () => {
   const calls = recordGuardCommands('ci-only', [...dependencySecurityControls]);
   assert.ok(

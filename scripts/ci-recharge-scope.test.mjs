@@ -1732,11 +1732,53 @@ test('Admin successor diagnostics have a finite control scope', () => {
     assert.equal(checkMode([...paths, other], '', ''), 'full');
 });
 import { fileURLToPath } from 'node:url';
+const onlineAssistantSources = [
+  'apps/api/src/id-business-v2/online-recharge/connector/online_bitbrowser_agent.py',
+  'apps/api/src/id-business-v2/online-recharge/connector/test_online_bitbrowser_agent.py'
+];
+const onlineAssistantControls = [
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs'
+];
+test('online BitBrowser assistant selects connector checks and excludes server image projection', () => {
+  for (const paths of [
+    onlineAssistantSources,
+    [...onlineAssistantSources, ...onlineAssistantControls]
+  ]) {
+    assert.equal(isOnlineBitbrowserConnectorOnly(paths), true);
+    assert.equal(checkMode(paths, '', ''), 'recharge');
+    assert.deepEqual(selectedParts(paths), ['guards', 'connector']);
+    assert.equal(needsOnlineRechargeCiBuild(paths), false);
+  }
+  assert.equal(affectsPart('connector', onlineAssistantSources), true);
+  assert.equal(affectsPart('api', onlineAssistantSources), false);
+  assert.equal(isRechargeOnly(onlineAssistantSources, 'before', 'after'), false);
+});
+test('online BitBrowser assistant never admits mixed API UI schema dependencies or unknown helpers', () => {
+  assert.equal(isOnlineBitbrowserConnectorOnly([]), false);
+  assert.equal(isOnlineBitbrowserConnectorOnly(onlineAssistantControls), false);
+  for (const path of [
+    'apps/api/src/id-business-v2/online-recharge/bitbrowser-connector.service.ts',
+    'apps/admin/src/v2/features/online-recharge/OnlineTaskProgress.vue',
+    'apps/api/prisma-mysql/schema.prisma',
+    'apps/api/src/id-business-v2/online-recharge/connector/unknown.py',
+    'package-lock.json',
+    '.github/workflows/quality.yml'
+  ]) {
+    const paths = [...onlineAssistantSources, path];
+    assert.equal(isOnlineBitbrowserConnectorOnly(paths), false, path);
+    assert.equal(checkMode(paths, '', ''), 'full', path);
+    assert.equal(needsOnlineRechargeCiBuild(paths), true, path);
+  }
+});
 import {
   affectsPart,
   releaseArtifactRetentionControls,
   isReleaseArtifactRetentionOnly,
   isRechargeOnly,
+  isOnlineBitbrowserConnectorOnly,
   matchingRun,
   canReuseMain,
   isCiOnly,
