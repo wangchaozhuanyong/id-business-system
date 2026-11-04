@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import ssl
 import stat
 import threading
 import time
@@ -17,7 +18,23 @@ PROJECT = Path(__file__).resolve().parents[6]
 MAX_RESPONSE = 512 * 1024
 
 class OnlineError(Exception):
-    pass
+    def __init__(self, message, *, failure='request_rejected', status=None, retryable=False):
+        super().__init__(message)
+        self.failure, self.status, self.retryable = failure, status, retryable
+
+
+# These calls are read-only or idempotent within the same device/lease/quote.
+# Never replay claims, preparation, callbacks or payment writes here.
+RETRYABLE_METHODS = frozenset({'connection', 'heartbeat', 'lease', 'quote', 'quote-status'})
+TRANSIENT_HTTP = frozenset({408, 429, 500, 502, 503, 504})
+
+
+def report_failure(method, attempt, error):
+    # Do not log exception messages, response bodies, arguments or credentials.
+    print(json.dumps({'event': 'online_recharge_rpc_failed',
+        'method': method if method in RETRYABLE_METHODS else 'other',
+        'attempt': attempt, 'failure': error.failure,
+        'httpStatus': error.status, 'retryable': error.retryable}), flush=True)
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
@@ -62,16 +79,35 @@ class RpcClient:
             with build_opener(NoRedirect, ProxyHandler({})).open(request, timeout=8) as response:
                 raw = response.read(MAX_RESPONSE + 1)
                 if len(raw) > MAX_RESPONSE:
-                    raise OnlineError('派单响应超出限制')
+                    raise OnlineError('派单响应超出限制', failure='response_too_large')
                 result = json.loads(raw)
+                if not isinstance(result, dict):
+                    raise OnlineError('派单响应无效', failure='invalid_response')
                 if result.get('success') is False:
                     raise OnlineError('派单请求未完成')
                 return result.get('data', result)
-        except (HTTPError, URLError, OSError, ValueError) as exc:
-            raise OnlineError('派单连接暂不可用') from None
+        except HTTPError as exc:
+            raise OnlineError('派单请求未完成', failure='http_rejected', status=exc.code,
+                retryable=exc.code in TRANSIENT_HTTP) from None
+        except (URLError, OSError) as exc:
+            reason = getattr(exc, 'reason', exc)
+            raise OnlineError('派单连接暂不可用', failure='network_unavailable',
+                retryable=not isinstance(reason, ssl.SSLError)) from None
+        except ValueError:
+            raise OnlineError('派单响应无效', failure='invalid_response') from None
 
     def rpc(self, method, args=None, scope=None):
-        return self._post('rpc', {'deviceId': self.device_id, 'method': method, 'args': args or {}, **{key: value for key, value in (scope or {}).items() if key in {'taskId', 'leaseId', 'leaseVersion'}}})
+        body = {'deviceId': self.device_id, 'method': method, 'args': args or {}, **{key: value for key, value in (scope or {}).items() if key in {'taskId', 'leaseId', 'leaseVersion'}}}
+        for attempt in range(1, 4):
+            try:
+                return self._post('rpc', body)
+            except OnlineError as exc:
+                report_failure(method, attempt, exc)
+                if method not in RETRYABLE_METHODS or not exc.retryable or attempt == 3:
+                    raise
+                # At most two retry waits (0.75s total); keep the 8s request timeout.
+                # Each retry still performs the server's live lease/auth checks.
+                time.sleep(attempt * .25)
 
 class OnlineCallback:
     def __init__(self, client, scope, core):
@@ -194,6 +230,7 @@ class OnlineAgent:
         if response.get('approved') is True:
             self.core.LocalJob.signal_confirm(job, pending['nonce'], pending['quote_digest'])
         elif response.get('expired'):
+            print(json.dumps({'event': 'online_recharge_quote_expired'}), flush=True)
             self.cancel_local(job)
 
     def claim(self):
@@ -235,7 +272,10 @@ class OnlineAgent:
                     self.approve_pending(*self.current)
                 elif self.ready and not self.registry.busy():
                     self.claim()
-            except Exception:
+            except Exception as exc:
+                if not isinstance(exc, OnlineError):
+                    print(json.dumps({'event': 'online_recharge_dispatch_failed',
+                        'failure': 'unexpected_error', 'errorType': type(exc).__name__}), flush=True)
                 if self.current and not self.current[1].done:
                     self.cancel_local(self.current[1])
                 self.next_heartbeat = time.monotonic() + 10

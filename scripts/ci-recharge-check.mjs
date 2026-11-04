@@ -129,6 +129,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  isOnlineBitbrowserConnectorOnly,
   adminCheckCommands,
   adminHtmlCachePaths,
   isAdminHtmlCacheOnly,
@@ -232,6 +233,36 @@ const changed = execFileSync('git', ['diff', '--name-only', base, 'HEAD'], { enc
   .trim()
   .split('\n')
   .filter(Boolean);
+if (isOnlineBitbrowserConnectorOnly(changed)) {
+  if (mode !== 'recharge' || !['guards', 'connector'].includes(part))
+    throw new Error('Local BitBrowser assistant requires its scoped guard/connector checks');
+  if (part === 'guards') {
+    const controls = changed.filter((path) => path.endsWith('.mjs'));
+    if (controls.length) {
+      npm('exec', '--', 'prettier', '--check', ...controls);
+      npm('exec', '--', 'eslint', ...controls);
+    }
+    run('node', [
+      '--test',
+      'scripts/ci-recharge-scope.test.mjs',
+      'scripts/ci-recharge-check.test.mjs'
+    ]);
+    npm('run', 'check:v2-module-architecture');
+    npm('run', 'check:v2-isolation');
+    process.exit(0);
+  }
+  run('python3', [
+    '-B',
+    '-m',
+    'unittest',
+    'discover',
+    '-s',
+    'apps/api/src/id-business-v2/online-recharge/connector',
+    '-p',
+    'test_online_bitbrowser_agent.py'
+  ]);
+  // Continue into the existing shared BitBrowser worker regressions below.
+}
 if (isDependencySecurityControlsOnly(changed)) {
   if (mode !== 'ci-only')
     throw new Error('Dependency security observation requires control selection');

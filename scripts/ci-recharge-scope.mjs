@@ -1234,7 +1234,30 @@ function isBitbrowserConnectionProfilesOnly(paths) {
     paths.every((path) => bitbrowserConnectionProfilePaths.has(path))
   );
 }
+const onlineBitbrowserConnectorSources = new Set([
+  'apps/api/src/id-business-v2/online-recharge/connector/online_bitbrowser_agent.py',
+  'apps/api/src/id-business-v2/online-recharge/connector/test_online_bitbrowser_agent.py'
+]);
+const onlineBitbrowserConnectorControls = new Set([
+  'scripts/ci-recharge-scope.mjs',
+  'scripts/ci-recharge-scope.test.mjs',
+  'scripts/ci-recharge-check.mjs',
+  'scripts/ci-recharge-check.test.mjs'
+]);
+export function isOnlineBitbrowserConnectorOnly(paths) {
+  return (
+    paths.length > 0 &&
+    paths.some((path) => onlineBitbrowserConnectorSources.has(path)) &&
+    paths.every(
+      (path) =>
+        onlineBitbrowserConnectorSources.has(path) || onlineBitbrowserConnectorControls.has(path)
+    )
+  );
+}
+
 export function needsOnlineRechargeCiBuild(paths, context) {
+  // The outbound local assistant is not an input to the deployed server images.
+  if (isOnlineBitbrowserConnectorOnly(paths)) return false;
   if (isPermissionLoadingRepairOnly(paths) || isPermissionLoadingControlsOnly(paths)) return false;
   if (isDependencySecurityControlsOnly(paths)) return false;
   if (isDependencyPatchCandidate(paths)) return false;
@@ -3185,6 +3208,7 @@ const bitOrdersAcceptancePaths = new Set([
 export const hasAppleMailboxScope = (paths) => paths.some((path) => appleMailboxApiPaths.has(path));
 
 export function isRechargeOnly(paths, oldSchema, newSchema) {
+  if (isOnlineBitbrowserConnectorOnly(paths)) return oldSchema === newSchema;
   if (isMailboxSettingsControlsOnly(paths)) return oldSchema === newSchema;
   if (isMailboxSettingsOnly(paths)) return oldSchema === newSchema;
   if (isRechargeAutofillSourceOnly(paths)) return oldSchema === newSchema;
@@ -3305,6 +3329,7 @@ export function isTargetedOnly(paths, oldSchema, newSchema) {
   );
 }
 export function selectedParts(paths, grantHelperSnapshot, context) {
+  if (isOnlineBitbrowserConnectorOnly(paths)) return ['guards', 'connector'];
   if (isMailboxSettingsControlsOnly(paths)) return ['guards'];
   if (isMailboxSettingsOnly(paths)) return ['guards'];
   if (isRechargeAutofillSourceOnly(paths)) return ['guards', 'api', 'admin', 'online-engine'];
@@ -3558,7 +3583,12 @@ export function affectsPart(part, paths) {
     security: securityPaths
   };
   if (!inputs[part]) throw new Error('Unknown check part');
-  return paths.some((p) => common.test(p) || inputs[part].test(p));
+  return paths.some(
+    (p) =>
+      common.test(p) ||
+      ((part !== 'api' || !onlineBitbrowserConnectorSources.has(p)) && inputs[part].test(p)) ||
+      (part === 'connector' && onlineBitbrowserConnectorSources.has(p))
+  );
 }
 
 // This reviewed dispatcher extension adds release controls and connector cases;
