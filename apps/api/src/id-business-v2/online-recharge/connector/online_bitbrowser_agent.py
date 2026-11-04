@@ -230,6 +230,7 @@ class OnlineAgent:
         if response.get('approved') is True:
             self.core.LocalJob.signal_confirm(job, pending['nonce'], pending['quote_digest'])
         elif response.get('expired'):
+            print(json.dumps({'event': 'online_recharge_quote_expired'}), flush=True)
             self.cancel_local(job)
 
     def claim(self):

@@ -141,9 +141,12 @@ class AgentTests(unittest.TestCase):
         worker.registered_quote = 'digest'
         worker.cancel_local = Mock()
         job = self.pending_job()
-        worker.approve_pending({}, job)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            worker.approve_pending({}, job)
         worker.cancel_local.assert_called_once_with(job)
         BaseJob.signal_confirm.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()), {'event': 'online_recharge_quote_expired'})
 
     def test_static_and_dynamic_proxies_reuse_current_browser_contract(self):
         prepared = {'proxy': {'protocol': 'socks5', 'connectionMode': 'direct', 'proxy_url': 'socks5://fixture:synthetic@proxy.example.invalid:1080'},
