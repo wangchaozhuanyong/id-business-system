@@ -348,6 +348,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.current_pro_card = False
         self.usage_controls = False
         self.usage_english = False
+        self.billing_country_control = False
         self.subscription_plan = None
         self.trace_ips = ['8.8.8.8']
         await self.context.route("**/*", self.server)
@@ -388,6 +389,8 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                                 headers={"Access-Control-Allow-Origin": "https://chatgpt.com"})
         elif path.startswith("/checkout/"):
             title = "Pro 套餐"
+            country = ('<select autocomplete="country"><option value="US">United States</option></select>'
+                       if self.billing_country_control else '')
             radios = "" if self.generic_quote else (
                 '<div role="radiogroup" aria-label="Pro 套餐">'
                 '<button role="radio" aria-label="相比 Plus 多 5 倍使用额度" aria-checked="' + str(self.plan == "pro-5x").lower() + '">5 倍</button>'
@@ -398,7 +401,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                     f'<button role="radio" aria-checked="{str(self.plan == plan).lower()}">MYR 420.00<br>{label}</button>'
                     for plan, label in labels) + '</div>'
             await route.fulfill(content_type="text/html; charset=utf-8", body='''<html><body>
-                <h1>TITLE</h1>RADIOS<p>Total due today</p><p>MYR 420.00</p><p>Tax</p><p>MYR 0.00</p>
+                <h1>TITLE</h1>RADIOSCOUNTRY<p>Total due today</p><p>MYR 420.00</p><p>Tax</p><p>MYR 0.00</p>
                 <p>Renews</p><p>MYR 420.00</p><p>per month</p>
                 <input autocomplete="cc-number"><input autocomplete="cc-exp"><input autocomplete="cc-csc"
                   oninput="fetch('https://api.stripe.com/v1/payment_pages/cs_pro_synthetic/init',{method:'POST',body:'billing=changed'})">
@@ -407,7 +410,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
                 async function pay(){
                     await fetch('https://api.stripe.com/v1/payment_methods',{method:'POST',body:'type=card'});
                     await fetch('https://api.stripe.com/v1/payment_pages/cs_pro_synthetic/confirm',{method:'POST',body:'payment_method=pm_synthetic'});
-                }</script></body></html>'''.replace("TITLE", title).replace("RADIOS", radios))
+                }</script></body></html>'''.replace("TITLE", title).replace("RADIOS", radios).replace("COUNTRY", country))
         elif path == "/":
             headers = json.dumps({"Authorization": "Bearer " + self.target.old_token, "Content-Type": "application/json"})
             html = '''<html><title>ChatGPT</title><body>
@@ -570,6 +573,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
         import attempt_ledger
         import payment_state
         self.plan, self.price_controls, self.usage_controls = 'pro-500', True, True
+        self.billing_country_control = True
         page = await self.context.new_page()
         await page.goto('https://chatgpt.com/')
         profile = page.get_by_test_id('accounts-profile-button')
@@ -619,6 +623,7 @@ class ProBrowserTests(unittest.IsolatedAsyncioTestCase):
             result = await job.execute(browser=browser)
         self.assertEqual(result['status'], 'subscription_activated', result)
         self.assertEqual(result['subscription_status'], 'pro-500')
+        self.assertIn('country', result['billing_fields_filled'])
         self.assertEqual(len(self.creates), 1)
         self.assertEqual(self.payments, 1)  # 仅拦截夹具计数，真实付款为 0。
         self.assertEqual(len(records), 2)
@@ -1329,6 +1334,44 @@ class ProCurrentMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.page.evaluate('window.entryClicks'), 0)
         self.assertEqual(await button.get_attribute('id'), 'final')
         await verify_selected_plan(self.page, 'pro-500')
+        await self.assert_unsubmitted()
+
+
+    async def test_initial_pro_20x_expands_summary_before_checkout_tier_fallback(self):
+        await self.page.evaluate("""() => {
+            choose(100);
+            document.querySelector('#pro-details').hidden=true;
+            const navigation=document.createElement('button');navigation.textContent='查看所有套餐';
+            navigation.onclick=()=>{window.navigationClicks=(window.navigationClicks||0)+1;
+              document.querySelector('#pro-details').hidden=false;navigation.remove();};
+            document.querySelector('section').append(navigation);
+        }""")
+        button, checkout_tier_pending = await select_plan(
+            self.page, 'pro-20x', lambda *_args, **_kwargs: None, allow_checkout_tier=True)
+        self.assertFalse(checkout_tier_pending)
+        self.assertEqual(await self.page.evaluate('window.navigationClicks'), 1)
+        self.assertEqual(await button.get_attribute('id'), 'final')
+        self.assertEqual(await self.page.locator('#tier200').get_attribute('aria-checked'), 'true')
+        self.assertEqual(await self.page.locator('#tier100').get_attribute('aria-checked'), 'false')
+        self.assertEqual(await self.page.locator('#tier500').get_attribute('aria-checked'), 'false')
+        await verify_selected_plan(self.page, 'pro-20x')
+        await self.assert_unsubmitted()
+
+
+    async def test_initial_pro_20x_rejects_duplicate_view_all_before_checkout_tier_fallback(self):
+        await self.page.evaluate("""() => {
+            document.querySelector('#pro-details').hidden=true;
+            window.navigationClicks=0;
+            for(let n=0;n<2;n++){const navigation=document.createElement('button');
+              navigation.textContent='查看所有套餐';
+              navigation.onclick=()=>window.navigationClicks++;
+              document.querySelector('section').append(navigation);}
+        }""")
+        with patch('plan_selection.STEP_SECONDS', .3), self.assertRaises(Stop) as stopped:
+            await select_plan(self.page, 'pro-20x', lambda *_args, **_kwargs: None,
+                              allow_checkout_tier=True)
+        self.assertEqual(stopped.exception.report['reason'], 'official_plan_option_ambiguous')
+        self.assertEqual(await self.page.evaluate('window.navigationClicks'), 0)
         await self.assert_unsubmitted()
 
 

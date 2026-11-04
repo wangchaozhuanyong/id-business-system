@@ -471,7 +471,7 @@ class Selection:
                 await expect(personal).to_have_attribute('aria-selected', 'true', timeout=self.timeout())
         return await plan_scope(self.page)
 
-    async def open_pro_details(self, scope):
+    async def expand_plan_summary(self, scope):
         if (not await pro_cards(scope).count()
                 and not await buttons(scope, PRO).count()
                 and await buttons(scope, ALL_PLANS).count()):
@@ -484,6 +484,10 @@ class Selection:
             # 只等待菜单出现；卡片和它的旧名称入口可同时匹配，实际控件仍逐一严格核验。
             await self.ready(cue.first, 'official_plan_tier_not_found')
             scope = await plan_scope(self.page)
+        return scope
+
+    async def open_pro_details(self, scope):
+        scope = await self.expand_plan_summary(scope)
         if await pro_cards(scope).count():
             # 标题可能先于档位组挂载；在原预算内只等原生详情，不点击 Pro CTA。
             self.step('choose_tier', 'region')
@@ -530,6 +534,8 @@ class Selection:
         scope = await self.open_menu(target_plan)
         pro = selection_spec(target_plan)['price_usd'] is not None
         if pro and self.allow_checkout_tier:
+            # 首页可能只展示 Free/Plus；先展开全部套餐，再判断是否确实需要在结算页选档。
+            scope = await self.expand_plan_summary(scope)
             marked = await marked_pro_cards(scope)
             groups = pro_detail_groups(await pro_card(scope)) if await marked.count() else pro_groups(scope)
             if await groups.count() == 0:
