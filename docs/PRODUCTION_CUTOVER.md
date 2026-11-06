@@ -15,6 +15,8 @@ node server/preview.mjs --data-dir /app/.runtime/production --public-origin http
 
 正式模式启动时需要已初始化账号。业务接口需要会话，登录和写入只接收正式 HTTPS 来源。上线前用真实 HTTPS 域名检查登录、退出、库存保存和刷新，确认网页初始化入口关闭。公开查询、采集及 OAuth 回调由各自的访问规则验证。
 
+从冻结源码和锁定的上游 Git 副本生成代充页面制品。运行 `node modules/recharge/codexdaichong/assets.mjs <制品绝对路径>`，随发布记录制品摘要。正式宿主启用 `--codexdaichong-url` 时，通过 `ID_CODEXDAICHONG_ASSETS_FILE` 指定已校验的页面制品。启动时验证制品的上游版本与页面完整性。
+
 Vendure 的验收分两步。先用隔离宿主验证原路径、字段、重复提交与重启回读，再用独立正式库和专用服务凭据核对商城来源、兑换码归属和历史任务回执。正式库通过只读预检后，仍须确认执行器的启动、重启及资产锁处理方式，再启用新单。执行结果未知时，按原任务核对，禁止自动补建任务。正式域名在商城和实际收件验收通过后切换。
 
 用当前代码准备锁定上游副本并安装依赖后，对已初始化的专用代充库运行 `runtime.mjs preflight-production [副本目录]`，再用 `runtime.mjs start-production [副本目录]` 启动。服务监听回环并持有 MySQL 运行锁。连接失去运行锁时服务停止，重启前重新检查未结任务、未登记任务的已占用兑换码和资产锁。正式运行只挑选空闲资产，遗留占用由操作人员按原任务核对。旧运行副本需要重新准备。

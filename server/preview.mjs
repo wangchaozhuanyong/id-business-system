@@ -17,6 +17,7 @@ import { createMicrosoftMailbox, legacyMicrosoftMailboxCallback, microsoftMailbo
 import { createLegacyToolRoutes, legacyWebsiteVisitIngest } from './tools/legacy-public-routes.mjs';
 import { readToolConfig } from './tools/read-tool-config.mjs';
 import { createLocalCodexdaichongGateway } from '../modules/recharge/codexdaichong/local-gateway.mjs';
+import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
 import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-bridge.mjs';
 import { productionDataPaths } from './production-data.mjs';
 
@@ -78,6 +79,9 @@ export async function startPreview(
     throw new Error('首次设置管理员需要本机数据库和账号文件');
   if (rechargeConfig && (!databasePath || !authPath || codexdaichong))
     throw new Error('本机线上代充需要本机业务模式和统一会话');
+  const rechargeAssets = publicUrl && rechargeConfig
+    ? await loadCodexdaichongAssets({ requireBundle: true })
+    : undefined;
   if (mediaResolverUrl && (!databasePath || !authPath))
     throw new Error('作品解析需要本机业务模式和统一会话');
   const handleMediaResolver = createMediaResolver({
@@ -147,6 +151,7 @@ export async function startPreview(
       gateways.set(
         host,
         createLocalCodexdaichongGateway({
+          assets: rechargeAssets ? () => rechargeAssets : undefined,
           upstreamUrl: rechargeConfig.upstreamUrl,
           publicOrigin: secureOrigin || `http://${host}`,
           secret: rechargeConfig.secret,

@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { CODEXDAICHONG_REVISION } from './prepare.mjs';
 import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
@@ -14,6 +15,11 @@ const media = {
   css: 'text/css; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
   svg: 'image/svg+xml; charset=utf-8'
+};
+const bundledPaths = {
+  '/redeem': 'html', '/workspace': 'html', '/admin': 'html', '/subscription': 'html',
+  '/admin.js': 'js', '/admin.css': 'css', '/style.css': 'css', '/favicon.svg': 'svg',
+  '/lucide.js': 'js', '/shell.js': 'js', '/shell.css': 'css'
 };
 
 async function original(name) {
@@ -610,7 +616,7 @@ function adaptHtml(source, kind) {
   return localUrls(source);
 }
 
-export async function loadCodexdaichongAssets() {
+async function buildCodexdaichongAssets() {
   const [
     redeem,
     admin,
@@ -670,4 +676,43 @@ export async function loadCodexdaichongAssets() {
   ])
     assets.set('/' + name, { body, type: media[kind] });
   return assets;
+}
+
+export async function loadCodexdaichongAssets({ requireBundle = false } = {}) {
+  const path = process.env.ID_CODEXDAICHONG_ASSETS_FILE;
+  if (!path && !requireBundle) return buildCodexdaichongAssets();
+  try {
+    if (!path || !isAbsolute(path)) throw new Error();
+    const file = await stat(path);
+    if (!file.isFile() || file.size > 8 * 1024 * 1024) throw new Error();
+    const { revision, assets } = JSON.parse(await readFile(path, 'utf8'));
+    if (revision !== CODEXDAICHONG_REVISION || Object.keys(assets).length !== Object.keys(bundledPaths).length)
+      throw new Error();
+    const entries = Object.entries(bundledPaths).map(([route, kind]) => {
+      const { body, type, csp } = assets[route];
+      if (typeof body !== 'string' || !body.length || type !== media[kind] ||
+          (kind === 'html' ? typeof csp !== 'string' || !csp.startsWith("default-src 'none'") : csp !== undefined))
+        throw new Error();
+      return [route, { body, type, ...(csp ? { csp } : {}) }];
+    });
+    return new Map(entries);
+  } catch {
+    throw new Error('无法读取当前版本的线上代充页面制品');
+  }
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  try {
+    const output = process.argv[2];
+    if (process.argv.length !== 3 || !isAbsolute(output))
+      throw new Error('请指定代充页面制品的绝对输出路径');
+    const assets = await buildCodexdaichongAssets();
+    const entries = Array.from(assets, ([route, value]) => [route, { ...value, body: value.body.toString() }]);
+    await writeFile(output, JSON.stringify({
+      revision: CODEXDAICHONG_REVISION, assets: Object.fromEntries(entries)
+    }), { flag: 'wx', mode: 0o644 });
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }
