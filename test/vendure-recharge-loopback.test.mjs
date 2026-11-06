@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startPreview } from '../server/preview.mjs';
+import { startVendureTaskService } from '../server/vendure-task-service.mjs';
 import { createVendureCodexdaichongWorker } from '../modules/recharge/vendure/codexdaichong-worker.mjs';
 import {
   createLoopbackVendureRechargeBridge,
@@ -136,6 +137,41 @@ async function fixture(t, { durable = false, throughHost = false } = {}) {
     }
   };
 }
+
+test('standalone task service separates the store and worker listeners and refuses concurrent ownership', async (t) => {
+  const runtime = fileURLToPath(new URL('../.runtime', import.meta.url));
+  await mkdir(runtime, { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(join(runtime, 'vendure-service-test-'));
+  const config = {
+    directory, vendurePort: 0, workerPort: 0,
+    vendureKey: randomBytes(32).toString('hex'), workerSecret: randomBytes(32).toString('hex'),
+    storageKey: randomBytes(32).toString('hex'), codes: [{ code: 'fixture-x', plan: 'plus' }]
+  };
+  let service;
+  t.after(async () => {
+    try {
+      await service?.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  service = await startVendureTaskService(config);
+  const post = (base, path, body, headers) => fetch(base + path, {
+    method: 'POST', body, headers: { 'content-type': 'application/json', ...headers }
+  });
+  const claimPath = rechargeWorkerPrefix + '/claim';
+  const verifyPath = vendureRechargePrefix + '/verify';
+  const vendure = { 'x-vendure-recharge-key': config.vendureKey, 'x-vendure-client-ip': '203.0.113.10' };
+  const worker = signRechargeWorkerRequest(config.workerSecret, claimPath, '{}');
+  assert.equal((await post(service.vendureUrl, claimPath, '{}', worker)).status, 404);
+  assert.equal((await post(service.workerUrl, verifyPath, '{}', vendure)).status, 404);
+  assert.equal((await post(service.workerUrl, claimPath, '{}', worker)).status, 200);
+  assert.equal((await post(service.vendureUrl, verifyPath, '{"code":"fixture-x"}', vendure)).status, 200);
+  await assert.rejects(startVendureTaskService(config), /已被占用/);
+  await service.close();
+  service = await startVendureTaskService(config);
+  assert.equal((await post(service.vendureUrl, verifyPath, '{"code":"fixture-x"}', vendure)).status, 200);
+});
 
 test('worker uses the dedicated upstream code and writes one receipt without resending uncertain activation', async (t) => {
   const bridge = await fixture(t, { durable: true });

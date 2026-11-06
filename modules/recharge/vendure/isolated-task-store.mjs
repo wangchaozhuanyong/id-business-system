@@ -25,7 +25,8 @@ export function openIsolatedRechargeStore({ file, storageKey }) {
     if (error.code !== 'EEXIST') throw error;
   }
   const stat = lstatSync(path);
-  if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error('隔离任务库文件或权限无效');
+  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() ||
+      (stat.mode & 0o077) !== 0) throw new Error('隔离任务库文件或权限无效');
 
   const db = new DatabaseSync(path);
   const key = Buffer.from(storageKey);
