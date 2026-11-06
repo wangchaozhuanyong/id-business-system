@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSyn
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
-import { snapshotAction } from '../modules/finance/accounting.mjs';
+import { currencies, snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
 import {
@@ -33,6 +33,8 @@ import { checkInventoryHistory } from './inventory-history.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
+import { checkAccountLocations } from './inventory-account-location.mjs';
+import { checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices } from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
   RelayClaimError,
@@ -82,7 +84,8 @@ const settingsActions = {
   mailbox_category_save: '保存邮箱分类',
   mailbox_category_reorder: '调整邮箱分类排序',
   fee_rules_save: '保存费用规则',
-  statistics_currency_save: '更改统计币种'
+  statistics_currency_save: '更改统计币种',
+  order_prices_save: '保存订单套餐售价'
 };
 const appleBalanceActions = {
   apple_order_charge: '登记苹果内购扣款或冲正',
@@ -125,6 +128,7 @@ const actionLabels = {
   appleBalance: appleBalanceActions
 };
 const sessionEventLabels = {
+  auth_nickname_set: '设置员工昵称',
   auth_login: '员工登录',
   auth_logout: '退出登录',
   auth_employee_create: '新增员工账号',
@@ -139,6 +143,26 @@ const sessionEventLabels = {
   relay_mail_reassign: '分配苹果邮箱邮件归属',
   relay_history_preview: '预检苹果邮箱历史邮件归属'
 };
+const orderFeatureDomains = new Set(['recharge-codes', 'tenant-cards', 'order-sync']);
+const orderFeatureAuditLabels = {
+  recharge_code_request: '申请充值码',
+  recharge_code_approve: '批准充值码申请',
+  recharge_code_reject: '驳回充值码申请',
+  recharge_code_import_started: '提交充值码批次',
+  recharge_code_issue_pending: '充值码发放待核对',
+  recharge_code_issued: '确认发放充值码'
+};
+const verifiedOrderCards = Symbol('verifiedOrderCards');
+const rechargeEvidenceFields = [
+  'source', 'taskId', 'email', 'product', 'plan', 'businessType', 'payment', 'paymentId',
+  'cardId', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed', 'rechargeCompletedAt',
+  'accountSource', 'accountId'
+];
+const defaultOrderCosts = Object.freeze({
+  currency: 'CNY', version: 1, claudeBankFeeMyr: '100', claudeAccountCostMyr: '50',
+  gmailCostCny: '15', appleCostCny: '25', microsoftCostCny: '5', appleDiscount: '0.8',
+  cardIssueUsd: '0.5', cardPercent: '0.008', cardPerPaymentUsd: '0.3'
+});
 const maximumBodyBytes = 12 * 1024 * 1024;
 const localToolboxActor = { id: 'local-operator', name: '本机操作员' };
 const verifiedRelayClaimIds = Symbol('verifiedRelayClaimIds');
@@ -169,12 +193,14 @@ function attributeCommerce(data, previous, actor) {
     const before = new Map((previous?.[key] || []).map((row) => [row.id, row]));
     for (const row of data[key]) {
       const prior = before.get(row.id);
-      if (!prior && 'createdById' in row) {
+      if (!prior && (key === 'orders' || 'createdById' in row)) {
         row.createdById = actor.id;
         row.createdBy = actor.name;
-      } else if (prior && 'createdById' in prior) {
-        row.createdById = prior.createdById;
-        row.createdBy = prior.createdBy;
+      } else if (prior && (key === 'orders' || 'createdById' in prior)) {
+        for (const field of ['createdById', 'createdBy']) {
+          if (Object.hasOwn(prior, field)) row[field] = prior[field];
+          else delete row[field];
+        }
       }
       if ('updatedById' in row && row.version !== prior?.version) {
         row.updatedById = actor.id;
@@ -193,6 +219,55 @@ class LocalDataError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+const positiveOrderAmount = (amount) => validMoney(amount) && /[1-9]/.test(amount);
+const hasBankPayment = (order) => order?.payment === '银行卡' && (
+  order.paidConfirmed === true || (Array.isArray(order.financialEvidence) &&
+    order.financialEvidence.some((item) => item?.kind === 'payment' && item.payment === '银行卡')) ||
+  (Array.isArray(order.corrections) && order.corrections.some(({ previous }) =>
+    previous?.payment === '银行卡' && previous.paidConfirmed === true)));
+const needsOrderCardCheck = (row, prior) => row.payment === '银行卡' && !hasBankPayment(prior) &&
+  (row.cardId !== prior?.cardId || row.tenantId !== prior?.tenantId || row.product !== prior?.product ||
+    row.payment !== prior?.payment || (row.paidConfirmed && !prior?.paidConfirmed));
+
+function orderCostSnapshot(settings) {
+  const snapshot = { ...defaultOrderCosts };
+  for (const key of Object.keys(snapshot)) {
+    if (!Object.hasOwn(settings || {}, key)) continue;
+    const value = settings[key];
+    const valid = key === 'version' ? Number.isSafeInteger(value) && value > 0 :
+      key === 'currency' ? ['CNY', 'MYR'].includes(value) : validMoney(value);
+    if (!valid) throw new LocalDataError(400, '费用规则格式不正确，请先核对设置');
+    snapshot[key] = value;
+  }
+  return snapshot;
+}
+
+function retainOrderField(row, prior, field) {
+  if (prior && Object.hasOwn(prior, field)) row[field] = prior[field];
+  else delete row[field];
+}
+
+function normalizePaymentEvidence(row, prior, automatic) {
+  if (!row.product) return;
+  const evidence = Array.isArray(row.financialEvidence) ? row.financialEvidence : [];
+  const historical = Array.isArray(prior?.financialEvidence) ? prior.financialEvidence : [];
+  const normalized = historical.filter((item) => item?.kind === 'payment');
+  const previous = prior?.paidConfirmed ? prior : null;
+  for (const payment of automatic ? [] : [previous, row]) {
+    if (!payment?.paidConfirmed || !positiveOrderAmount(payment.paidAmount) ||
+        !currencies.includes(payment.paidCurrency)) continue;
+    const cardId = payment.cardId || '';
+    if (!normalized.some((item) => item.amount === payment.paidAmount && item.currency === payment.paidCurrency &&
+        item.payment === payment.payment && item.cardId === cardId)) {
+      normalized.push({ kind: 'payment', amount: payment.paidAmount, currency: payment.paidCurrency,
+        payment: payment.payment, cardId, at: new Date().toISOString() });
+    }
+  }
+  const receipts = evidence.filter((item) => item?.kind !== 'payment');
+  if (!isDeepStrictEqual(evidence.filter((item) => item?.kind === 'payment'), normalized))
+    row.financialEvidence = [...normalized, ...receipts];
 }
 
 function checkToolbox({ version, data }) {
@@ -379,6 +454,8 @@ function checkWrite(entry) {
   if (domain === 'settings' && 'customerSources' in data && !validCustomerOptions(data.customerSources)) {
     throw new LocalDataError(400, '客户来源设置格式不正确');
   }
+  if (domain === 'settings' && 'orderPrices' in data && !validOrderPrices(data.orderPrices))
+    throw new LocalDataError(400, '套餐售价设置格式不正确');
   return {
     domain,
     version,
@@ -404,16 +481,39 @@ function checkedRelayClaims(priorInventory, write, actor) {
   return pendingRelayClaimIds(priorInventory, write.data, { action: write.action, actor });
 }
 
-async function saveHttpWrites(store, entries, actor, verifyRelayExtraction) {
+async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, readOrderCards) {
   const writes = checkWrites(entries);
+  const commerce = writes.find(({ domain }) => domain === 'commerce');
+  const orderCards = new Map();
+  if (commerce) {
+    const current = store.load('commerce');
+    if (current.version !== commerce.version)
+      throw new LocalDataError(409, '订单已在其他页面更新，请刷新后重试');
+    const previous = new Map((current.data?.orders || []).map((row) => [row.id, row]));
+    const needPool = commerce.data.orders.some((row) => {
+      const prior = previous.get(row.id);
+      return row.product === 'GPT' && typeof row.cardId === 'string' && row.cardId.startsWith('recharge:') &&
+        needsOrderCardCheck(row, prior);
+    });
+    if (needPool) {
+      try {
+        for (const card of await readOrderCards()) orderCards.set(card.id, card);
+      } catch {
+        throw new LocalDataError(503, '暂时无法核对代充卡池，草稿已保留');
+      }
+    }
+  }
+  const options = { actor, [verifiedOrderCards]: orderCards };
   const inventory = writes.find(({ domain }) => domain === 'inventory');
-  if (!inventory) return store.saveBatch(writes, { actor });
+  if (!inventory) return store.saveBatch(writes, options);
   const current = store.load('inventory');
   if (current.version !== inventory.version) {
     throw new LocalDataError(409, '库存资料已在其他页面更新，请刷新后重试');
   }
+  const locationError = checkAccountLocations(current.data, inventory.data);
+  if (locationError) throw new LocalDataError(400, locationError);
   const ids = checkedRelayClaims(current.data, inventory, actor);
-  if (!ids.length) return store.saveBatch(writes, { actor });
+  if (!ids.length) return store.saveBatch(writes, options);
   if (typeof verifyRelayExtraction !== 'function') requireVerifiedRelayClaimIds(ids);
   let verifiedIds;
   try {
@@ -422,7 +522,7 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction) {
     throw new LocalDataError(503, '暂时无法核验苹果隐藏邮箱提取资格，请稍后重试');
   }
   requireVerifiedRelayClaimIds(ids, verifiedIds);
-  return store.saveBatch(writes, { actor, [verifiedRelayClaimIds]: verifiedIds });
+  return store.saveBatch(writes, { ...options, [verifiedRelayClaimIds]: verifiedIds });
 }
 
 export function createLocalBusinessStore(databasePath) {
@@ -888,7 +988,7 @@ export function createLocalBusinessStore(databasePath) {
     },
     saveBatch(entries, {
       actor, verifyAutomaticSnapshot, [verifiedRelayClaimIds]: verifiedIds,
-      [verifiedAppleRelayPrimaries]: primaryTargets
+      [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards
     } = {}) {
       const writes = checkWrites(entries);
       return writeTransaction(() => {
@@ -904,7 +1004,7 @@ export function createLocalBusinessStore(databasePath) {
         const settings = writes.find(({ domain }) => domain === 'settings');
         if (settings) {
           const savedSettings = current('settings');
-          for (const key of ['customerTags', 'customerSources']) {
+          for (const key of ['customerTags', 'customerSources', 'orderPrices']) {
             if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };
             }
@@ -988,6 +1088,96 @@ export function createLocalBusinessStore(databasePath) {
           );
           if (actor) attributeCommerce(commerce, priorCommerce, actor);
           const { action } = writes.find((write) => write.domain === 'commerce');
+          if (cards) {
+            const oldOrders = priorCommerce?.orders || [];
+            const priorById = new Map(oldOrders.map((row) => [row.id, row]));
+            const nextIds = new Set(commerce.orders.map(({ id }) => id));
+            if (oldOrders.some((row) => row.source === '线上代充' && !nextIds.has(row.id)))
+              throw new LocalDataError(409, '请使用既有业务撤单流程处理代充订单');
+            const seen = [...oldOrders];
+            const settledThisWrite = [];
+            const tenantCards = current('tenant-cards')?.items || [];
+            for (const row of commerce.orders) {
+              const prior = priorById.get(row.id);
+              if (prior && isDeepStrictEqual(row, prior)) continue;
+              const automatic = prior?.source === '线上代充';
+              if ((!automatic && row.source === '线上代充') || (row.taskId ?? '') !== (prior?.taskId ?? '') ||
+                  (automatic && rechargeEvidenceFields.some((field) =>
+                    (prior[field] ?? '') !== (row[field] ?? ''))))
+                throw new LocalDataError(409, '线上代充来源只能由服务端登记');
+              if (prior) {
+                for (const field of ['orderNo', 'createdAt', 'costSettings', 'cardUsedAt', 'issueFeeSnapshot'])
+                  retainOrderField(row, prior, field);
+                if (prior.product && row.product !== prior.product)
+                  throw new LocalDataError(409, '原订单产品不可更换');
+              }
+              if (prior && row.costBasis === 'actual' &&
+                  ['costBasis', 'actualCostAmount', 'actualCostCurrency', 'appleRecoverableCostAmount']
+                    .some((field) => (prior[field] ?? '') !== (row[field] ?? ''))) {
+                const correction = row.corrections?.at(-1);
+                if (action !== '更正订单' || typeof correction?.reason !== 'string' ||
+                    !correction.reason.trim() || correction.previous?.version !== prior.version)
+                  throw new LocalDataError(400, '实际总成本需要有依据的订单更正记录');
+              }
+              if (!prior) {
+                if (!row.product || !['银行卡', '苹果内购'].includes(row.payment))
+                  throw new LocalDataError(400, '请填写订单产品和付款方式');
+                const error = checkNewOrder(row);
+                if (error) throw new LocalDataError(400, error);
+                row.orderNo = nextOrderNo(seen);
+                row.costSettings = orderCostSnapshot(current('settings')?.costSettings);
+                delete row.issueFeeSnapshot;
+                delete row.cardUsedAt;
+                seen.push(row);
+                for (const movement of incoming.get('appleBalance')?.movements || [])
+                  if (movement.orderId === row.id) movement.orderNo = row.orderNo;
+              }
+              if (row.product?.startsWith('Claude') && (!prior || row.tenantId !== prior.tenantId)) {
+                const tenant = commerce.tenants.find((item) => item.id === row.tenantId && item.active !== false);
+                if (row.tenantId && !tenant) throw new LocalDataError(409, '请选择可用的认证人');
+                row.verifier = tenant?.name || '';
+                row.verifierPhone = tenant?.phone || '';
+                if (!prior) {
+                  row.owner = '';
+                  row.ownerPhone = '';
+                }
+              }
+              if (row.product && (!prior || ['新增独立订单', '更正订单'].includes(action))) {
+                const error = checkAppleOrder(row, prior, oldOrders, current('appleBalance'), inventory, commerce.orders);
+                if (error) throw new LocalDataError(409, error);
+              }
+              if (!automatic && row.payment === '银行卡' && row.paidConfirmed === true &&
+                  (!prior?.paidConfirmed || row.paidAmount !== prior.paidAmount || row.paidCurrency !== prior.paidCurrency) &&
+                  (!positiveOrderAmount(row.paidAmount) || !currencies.includes(row.paidCurrency)))
+                throw new LocalDataError(400, '请登记实际银行卡代付金额与币种');
+              if (!automatic && hasBankPayment(prior)) {
+                if (row.payment !== prior.payment || row.cardId !== prior.cardId ||
+                    (typeof prior.cardId === 'string' && prior.cardId.startsWith('tenant:') && row.tenantId !== prior.tenantId))
+                  throw new LocalDataError(409, '已确认银行卡付款的原订单不可换卡或付款方式');
+                retainOrderField(row, prior, 'paymentId');
+              } else if (!automatic && needsOrderCardCheck(row, prior)) {
+                if (row.product === 'GPT' && typeof row.cardId === 'string' && row.cardId.startsWith('recharge:')) {
+                  const card = cards.get(row.cardId);
+                  if (!card?.active) throw new LocalDataError(409, '请选择当前可用的代充卡池银行卡');
+                  row.paymentId = card.last4;
+                  const fee = deriveCardIssueFee(row, prior, [...oldOrders, ...settledThisWrite], card);
+                  if (fee) row.issueFeeSnapshot = fee;
+                  else delete row.issueFeeSnapshot;
+                  if (row.paidConfirmed) row.cardUsedAt = new Date().toISOString();
+                } else if (row.product?.startsWith('Claude') && typeof row.cardId === 'string' && row.cardId.startsWith('tenant:')) {
+                  const card = tenantCards.find((item) => item.id === row.cardId && item.tenantId === row.tenantId && item.active);
+                  if (!card) throw new LocalDataError(409, '请选择当前认证人名下的银行卡');
+                  row.paymentId = card.number.slice(-4);
+                } else if (row.cardId || row.paidConfirmed) {
+                  throw new LocalDataError(409, '请选择对应来源的银行卡');
+                } else row.paymentId = '';
+              } else if (!automatic && row.payment === '银行卡') {
+                retainOrderField(row, prior, 'paymentId');
+              }
+              if (action !== snapshotAction) normalizePaymentEvidence(row, prior, automatic);
+              if (row.payment === '银行卡' && row.paidConfirmed) settledThisWrite.push(row);
+            }
+          }
           const error =
             checkBankReturns(priorCommerce, commerce) ||
             checkOrderFinancialHistory(priorCommerce, commerce) ||
@@ -1057,6 +1247,108 @@ export function createLocalBusinessStore(databasePath) {
         return result;
       });
     },
+    featureDocument(domain) {
+      if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
+      return readDocument(domain);
+    },
+    saveFeatureDocument(domain, version, data, { action, actor, targetId } = {}) {
+      if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
+      return writeTransaction(() => {
+        if (readDocument(domain).version !== version) throw new LocalDataError(409, '资料已更新，请刷新后重试');
+        const next = version + 1;
+        put.run(domain, next, encrypt(key, domain, next, JSON.stringify(data)));
+        if (action) log.run(new Date().toISOString(), domain, action,
+          auditSummary(orderFeatureAuditLabels[action] || action, actor, targetId), next);
+        return { version: next, data };
+      });
+    },
+    auditFeature(domain, version, { action, actor, targetId }) {
+      if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
+      log.run(new Date().toISOString(), domain, action, auditSummary(action, actor, targetId), version);
+    },
+    rememberRechargeSessions(jobKeys, scanOffset) {
+      return writeTransaction(() => {
+        const current = readDocument('order-sync');
+        const known = new Set(current.data.rows.map(({ jobKey }) => jobKey));
+        const rows = [...current.data.rows, ...jobKeys.filter((id) => !known.has(id)).map((jobKey) => ({
+          jobKey, needs: ['等待核对成功回执']
+        }))];
+        if (rows.length === current.data.rows.length && scanOffset === current.data.scanOffset) return current.data;
+        const data = { ...current.data, rows, scanOffset };
+        const version = current.version + 1;
+        put.run('order-sync', version, encrypt(key, 'order-sync', version, JSON.stringify(data)));
+        return data;
+      });
+    },
+    applyRechargeOrder({ since, row, order, firstUse }) {
+      return writeTransaction(() => {
+        const status = readDocument('order-sync');
+        const commerce = readDocument('commerce');
+        const data = commerce.data || { customers: [], tenants: [], orders: [], operating: [], rentBatches: [], logs: [] };
+        const previous = status.data?.rows || [];
+        const old = data.orders.find((item) => item.taskId === row.jobKey && item.source === '线上代充');
+        const result = { ...row };
+        let changed;
+        if (old) {
+          result.orderNo = old.orderNo;
+          if (order && order.email.toLowerCase() === old.email.toLowerCase() && order.plan === old.plan) {
+            const next = { ...old };
+            if (!old.paidConfirmed && !old.paidAmount && !old.paidCurrency && order.paidConfirmed) {
+              for (const field of ['paidAmount', 'paidCurrency', 'paidConfirmed']) next[field] = order[field];
+              next.financialEvidence = [...(old.financialEvidence || []), ...order.financialEvidence];
+            }
+            if (!old.start && !old.expiry && order.start) {
+              for (const field of ['start', 'expiry', 'rechargeCompletedAt']) next[field] = order[field];
+            }
+            if (!old.paymentId && order.paymentId) next.paymentId = order.paymentId;
+            if (!old.cardId && order.cardId && next.paymentId === order.paymentId) next.cardId = order.cardId;
+            if (!old.fxSnapshot && order.fxSnapshot && next.start === order.start &&
+                next.paidCurrency === order.paidCurrency && next.saleCurrency === order.saleCurrency)
+              next.fxSnapshot = order.fxSnapshot;
+            const recordedFirst = next.cardId && data.orders.some((item) =>
+              item.id !== next.id && item.cardId === next.cardId && item.issueFeeSnapshot?.applied);
+            if (JSON.stringify(next) !== JSON.stringify(old) ||
+                (next.paidConfirmed && next.issueFeeSnapshot?.pending && (typeof firstUse === 'boolean' || recordedFirst))) {
+              next.version++;
+              data.orders[data.orders.indexOf(old)] = next;
+              changed = next;
+            }
+          } else if (order) result.needs = ['成功回执与已有订单不一致'];
+        } else if (order) {
+          const id = 'commerce-order-' + randomUUID();
+          const orderNo = nextOrderNo(data.orders);
+          const settings = readDocument('settings').data;
+          changed = { ...order, id, orderNo, saleAmount: settings?.orderPrices?.GPT?.[order.plan]?.CNY || '' };
+          data.orders.unshift(changed);
+          result.orderNo = orderNo;
+        }
+        if (changed) {
+          if (changed.cardId && changed.issueFeeSnapshot?.pending) {
+            const earlierFee = data.orders.some((item) => item.id !== changed.id &&
+              item.cardId === changed.cardId && item.issueFeeSnapshot?.applied);
+            if (earlierFee || (typeof firstUse === 'boolean' && changed.paidConfirmed)) {
+              changed.issueFeeSnapshot = {
+                cardId: changed.cardId, applied: !earlierFee && firstUse === true, amountUsd: changed.costSettings.cardIssueUsd,
+                at: new Date().toISOString()
+              };
+            }
+          }
+          const next = commerce.version + 1;
+          put.run('commerce', next, encrypt(key, 'commerce', next, JSON.stringify(data)));
+          const actor = { id: 'order-reconciliation', name: '自动充值' };
+          log.run(new Date().toISOString(), 'commerce', 'recharge_order_import',
+            auditSummary(old ? '补齐代充订单回执' : '同步代充成功订单', actor, changed.id), next);
+        }
+        const currentOrder = changed || old;
+        if (currentOrder?.issueFeeSnapshot && !currentOrder.issueFeeSnapshot.pending)
+          result.needs = result.needs.filter((issue) => issue !== '首次开卡费待核对');
+        const version = status.version + 1;
+        const records = { ...status.data, since: status.data?.since ?? since,
+          rows: [...previous.filter((item) => item.jobKey !== row.jobKey), result] };
+        put.run('order-sync', version, encrypt(key, 'order-sync', version, JSON.stringify(records)));
+        return result;
+      });
+    },
     audit: () => audit.all().map(readAuditRow),
     recordAuthEvent({ action, actor, targetId }) {
       if (sessionEventLabels[action])
@@ -1104,7 +1396,7 @@ export async function handleLocalBusiness(
   route,
   store,
   actor,
-  { verifyRelayExtraction, verifyManagedMailbox, publicOrigin } = {}
+  { verifyRelayExtraction, verifyManagedMailbox, publicOrigin, readOrderCards } = {}
 ) {
   try {
     const domain = route.slice('/api/local/'.length);
@@ -1167,7 +1459,7 @@ export async function handleLocalBusiness(
     }
     const body = await readJson(request);
     if (domain === 'batch') {
-      return json(response, 200, await saveHttpWrites(store, body, actor, verifyRelayExtraction));
+      return json(response, 200, await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards));
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       throw new LocalDataError(400, '保存资料格式不正确');
@@ -1183,7 +1475,7 @@ export async function handleLocalBusiness(
     if (domain === bitBrowserAddressDomain) {
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
-    const [entry, inventory] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction);
+    const [entry, inventory] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards);
     return json(response, 200, {
       version: entry.version, data: entry.data,
       ...(entry.usageReview && { usageReview: entry.usageReview }),

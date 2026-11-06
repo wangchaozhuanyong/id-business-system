@@ -216,7 +216,7 @@ function runtime() {
 }
 
 const gptCsv =
-  '邮箱,密码,邮箱类型,2FA密钥,国家地区,注册时间,登录设备,备注1,备注2\nnew.gpt@example.test,Demo-Only,谷歌邮箱,DEMO-TOTP,美国,2026-10-01T10:30,测试设备,第一条,第二条';
+  '邮箱,密码,邮箱类型,2FA密钥,国家地区,地区,注册时间,登录设备,备注1,备注2\nnew.gpt@example.test,Demo-Only,谷歌邮箱,DEMO-TOTP,美国,纽约,2026-10-01T10:30,测试设备,第一条,第二条';
 
 test('账号提交页面包含三个已启用类型，复用账号库存且不提供邮箱入库', () => {
   const r = runtime();
@@ -247,7 +247,7 @@ for (const type of ['gpt', 'claude', 'apple'])
 test('三类单条表单保留各自字段，苹果资料入口不提供余额录入', () => {
   const r = runtime();
   for (const [type, fields] of [
-    ['gpt', ['inventory-emailType', 'inventory-totp', 'inventory-device', 'inventory-notes2']],
+    ['gpt', ['inventory-emailType', 'inventory-city', 'inventory-totp', 'inventory-device', 'inventory-notes2']],
     ['claude', ['inventory-city', 'inventory-proxy-url', 'inventory-proxy-host']],
     [
       'apple',
@@ -270,6 +270,7 @@ test('单条 GPT 直接进入账号库存，空白注册时间采用录入时间
     'inventory-email': 'single.gpt@example.test',
     'inventory-password': 'Demo-Only',
     'inventory-country-edit': '美国',
+    'inventory-city': '纽约',
     'inventory-registered': ''
   });
   r.inventory.onSubmit(r.form);
@@ -295,6 +296,7 @@ test('完整表头GPT导入保留邮箱类型、2FA、时间、设备和备注�
   assert.equal(row.totp, 'DEMO-TOTP');
   assert.equal(row.emailType, 'google');
   assert.equal(row.device, '测试设备');
+  assert.equal(row.city, '纽约');
   assert.equal(row.notes2, '第二条');
   assert.equal(row.registered, '2026-10-01T10:30');
   assert.equal(row.createdAt, '2026-11-03 10:30');
@@ -354,7 +356,7 @@ test('格式或重复错误阻止整批写入，不只导入其中正确的账�
   const r = runtime();
   r.open('gpt');
   r.preview({
-    'inventory-import-content': '邮箱,密码\nvalid@example.test,Demo\ninvalid,Demo'
+    'inventory-import-content': '邮箱,密码,国家,城市\nvalid@example.test,Demo,美国,纽约\ninvalid,Demo,美国,纽约'
   });
   r.requestImport();
   assert.equal(r.pending, false);
@@ -366,7 +368,7 @@ test('错误CSV修正并减少行数后可生成新预览，不被旧逐行控�
   const r = runtime();
   r.open('gpt');
   r.preview({
-    'inventory-import-content': '邮箱,密码\nvalid@example.test,Demo\ninvalid,Demo'
+    'inventory-import-content': '邮箱,密码,国家,城市\nvalid@example.test,Demo,美国,纽约\ninvalid,Demo,美国,纽约'
   });
   assert.equal(r.pending, false);
   const preview = r.preview({ 'inventory-import-content': gptCsv });
@@ -382,7 +384,7 @@ test('错误CSV修正并减少行数后可生成新预览，不被旧逐行控�
 for (const [name, csv] of [
   ['重复表头', '邮箱,密码,邮箱\nheader@example.test,Demo,other@example.test'],
   ['多余列', '邮箱,密码\nextra@example.test,Demo,不应丢弃'],
-  ['未来注册时间', '邮箱,密码,注册时间\nfuture@example.test,Demo,2099-01-01T10:30']
+  ['未来注册时间', '邮箱,密码,国家,城市,注册时间\nfuture@example.test,Demo,美国,纽约,2099-01-01T10:30']
 ])
   test(`${name}必须在预检时阻止整批写入`, () => {
     const r = runtime();

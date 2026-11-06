@@ -34,9 +34,32 @@
     return result;
   }
 
+  let labels = new Map();
+  let labelsRequest;
+  function refreshOperatorLabels() {
+    if (!authRequired || !actor) return Promise.resolve(false);
+    labelsRequest ??= request('auth/display-names').then(({ items }) => {
+      if (!Array.isArray(items)) return false;
+      const changed = items.some(({ id, name }) => labels.get(id) !== name) || labels.size !== items.length;
+      labels = new Map(items.map(({ id, name }) => [id, name]));
+      return changed;
+    }).catch(() => false).finally(() => { labelsRequest = undefined; });
+    return labelsRequest;
+  }
+
   window.IDLocalData = Object.freeze({
     authRequired,
-    actor: () => actor,
+    actor: () => actor && ({ ...actor, name: labels.get(actor.id) || actor.name }),
+    operatorLabel: (id, fallback) => labels.get(id) || fallback || '',
+    refreshOperatorLabels,
+    orderCards: () => request('order-cards'),
+    tenantCards: (tenantId) => request('tenant-cards?tenantId=' + encodeURIComponent(tenantId)),
+    tenantCardAction: (command) => request('tenant-cards', command, 'POST'),
+    rechargeCodeRequests: () => request('recharge-codes'),
+    rechargeCodes: () => request('recharge-codes?view=codes'),
+    rechargeCodeAction: (command) => request('recharge-codes', command, 'POST'),
+    orderSyncStatus: () => request('order-sync'),
+    orderSync: (command) => request('order-sync', command, 'POST'),
     load: (domain) => request(domain),
     save: (domain, version, data, { action } = {}) => request(domain, { version, data, action }),
     saveBatch: (entries) => request('batch', entries),

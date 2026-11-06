@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
+import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 
 test('dense lists retain pagination and drawer controls within their visible boundaries', { timeout: 120_000 }, async t => {
@@ -12,8 +13,9 @@ test('dense lists retain pagination and drawer controls within their visible bou
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url), 'utf8'));
   const customers = fixture.commerce.data.customers;
   for (let i = customers.length; i < 257; i++) customers.push({ ...customers[0], id: `visual-dense-${i}`, name: `隔离长名单客户 ${i}`, phone: '', wechat: `visual-${i}` });
-  const host = await startCodexdaichongDemoSite(0);
-  t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
+  const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
+  const host = offline ? { url: offlineOrigin + '/' } : await startCodexdaichongDemoSite(0);
+  if (!offline) t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const origin = new URL(host.url).origin;
@@ -24,13 +26,14 @@ test('dense lists retain pagination and drawer controls within their visible bou
   for (const width of [1440, 768, 390, 320]) for (const dark of [false, true]) {
     await t.test(`${width}px ${dark ? 'dark' : 'light'}`, async () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
+      if (offline) await interceptDesign(page.context(), { localFixtures: fixture });
       page.setDefaultTimeout(6000);
       await page.route('**/*', route => {
         const request = route.request();
         const url = new URL(request.url());
         if (url.origin !== origin || !['GET', 'HEAD'].includes(request.method())) return route.abort();
         const data = url.pathname.startsWith('/api/local/') && fixture[url.pathname.slice('/api/local/'.length)];
-        return data ? route.fulfill({ json: data }) : route.continue();
+        return data ? route.fulfill({ json: data }) : (offline ? route.fallback() : route.continue());
       });
       const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const inspect = () => page.locator('#main .pagination').evaluate(n => {

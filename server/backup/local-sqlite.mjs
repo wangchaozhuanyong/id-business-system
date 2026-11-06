@@ -231,6 +231,8 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
       } else if (domain === 'website-visits') {
         const snapshot = store.loadWebsiteVisitBackup();
         result = { version: snapshot.version, data: snapshot };
+      } else if (['recharge-codes', 'tenant-cards', 'order-sync'].includes(domain)) {
+        result = store.featureDocument(domain);
       } else if (domain.startsWith(`${bitBrowserAddressDomain}:`)) {
         result = store.loadBitBrowserAddressBackup(domain);
       } else if (domain.startsWith(`${bitBrowserConnectionDomain}:`)) {

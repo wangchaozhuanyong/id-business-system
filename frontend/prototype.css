@@ -18,6 +18,8 @@
   --blue-soft: #eef4fd;
   --shadow: 0 3px 15px #142b4412;
   --radius: 10px;
+  --panel-padding-inline: 22px;
+  --panel-padding-block: 20px;
   --sidebar-width: 224px;
   --header-height: 64px;
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -410,7 +412,7 @@ h1 {
   align-items: center;
   flex-wrap: wrap;
   gap: 0 16px;
-  padding: 0 22px;
+  padding: 0 var(--panel-padding-inline);
   border-bottom: 1px solid var(--line);
 }
 .content-toolbar > .tabs {
@@ -478,7 +480,7 @@ html[data-theme='dark'] .button.primary {
 }
 .summary-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -486,6 +488,7 @@ html[data-theme='dark'] .button.primary {
   padding: 14px 0;
 }
 .summary-item {
+  min-width: 0;
   padding: 0 24px;
   border-right: 1px solid var(--line);
 }
@@ -502,8 +505,10 @@ html[data-theme='dark'] .button.primary {
 .summary-number {
   margin-top: 6px;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 4px 10px;
+  overflow-wrap: anywhere;
   font-weight: 650;
   font-size: 25px;
   font-variant-numeric: tabular-nums;
@@ -530,7 +535,7 @@ html[data-theme='dark'] .button.primary {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  padding: 20px 22px;
+  padding: var(--panel-padding-block) var(--panel-padding-inline);
   border-bottom: 1px solid var(--line);
 }
 .panel-heading h2,
@@ -546,7 +551,7 @@ html[data-theme='dark'] .button.primary {
 .tabs {
   display: flex;
   align-items: stretch;
-  padding: 0 22px;
+  padding: 0 var(--panel-padding-inline);
   border-bottom: 1px solid var(--line);
   gap: 25px;
   min-height: 53px;
@@ -588,7 +593,7 @@ html[data-theme='dark'] .button.primary {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 18px 22px;
+  padding: 18px var(--panel-padding-inline);
 }
 .toolbar-left,
 .toolbar-right {
@@ -961,7 +966,7 @@ th.table-actions {
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  padding: 16px 22px;
+  padding: 16px var(--panel-padding-inline);
   border-top: 1px solid var(--line);
   color: var(--secondary);
   font-size: 12px;
@@ -1031,8 +1036,21 @@ th.table-actions {
   gap: 22px;
   align-items: start;
 }
+.panel-body,
+.panel-pad,
 .form-panel {
-  padding: 20px 22px;
+  padding: var(--panel-padding-block) var(--panel-padding-inline);
+}
+.commerce-search-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+[data-commerce-pool-usage] {
+  margin: 0;
+}
+[data-commerce-pool-usage]:empty {
+  display: none;
 }
 .form-panel > .tabs {
   padding-inline: 0;
@@ -1162,7 +1180,7 @@ th.table-actions {
   color: var(--muted);
 }
 .side-panel {
-  padding: 20px 22px;
+  padding: var(--panel-padding-block) var(--panel-padding-inline);
   overflow: visible;
 }
 .side-panel h2 {
@@ -1701,8 +1719,92 @@ dialog::backdrop {
   width: min(720px, 100%);
 }
 .drawer[data-layout='online-tool'][data-tool='邮箱查询与邮箱池'] {
-  width: min(1560px, 100%);
+  width: min(740px, calc(100% - 32px));
 }
+.drawer[data-layout='online-tool'][data-tool='邮箱查询与邮箱池'][data-section='ops-mailbox-pool'] {
+  width: min(1120px, calc(100% - 32px));
+}
+.drawer[data-layout='online-tool']:is([data-tool='计算 2FA 验证码'], [data-tool='抖音解析'], [data-tool='邮箱查询与邮箱池']) {
+  inset: 32px 0 auto;
+  margin-inline: auto;
+  height: auto;
+  max-height: calc(100dvh - 64px);
+  max-width: calc(100% - 32px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.drawer[data-layout='online-tool']:is([data-tool='计算 2FA 验证码'], [data-tool='抖音解析'], [data-tool='邮箱查询与邮箱池']) .drawer-body {
+  flex: 0 1 auto;
+  padding: 20px;
+}
+.tool-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.tool-header-row .online-tool-sections.tabs,
+.tool-header-row .tool-query-actions {
+  margin: 0;
+}
+.tool-header-row .tool-query-actions {
+  margin-left: auto;
+}
+.tool-query-options {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 16px;
+}
+.tool-query-options > .form-grid {
+  width: 240px;
+  max-width: 100%;
+}
+.drawer[data-layout='online-tool'] .tool-query-options .form-footer {
+  margin: 0 0 0 auto;
+}
+.online-tool-search {
+  margin: 14px 0;
+}
+.tool-input-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tool-input-row > input {
+  flex: 1 1 240px;
+  width: auto;
+  min-width: 0;
+}
+.tool-field-guide {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.tool-field-guide a {
+  color: var(--primary);
+  text-underline-offset: 3px;
+}
+.tool-field-guide > span {
+  flex-basis: 100%;
+}
+.tool-mail-code {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tool-mail-code output {
+  overflow-wrap: anywhere;
+}
+
 .drawer[data-layout='online-tool'] .drawer-header {
   align-items: center;
   padding-block: 18px;
@@ -1735,7 +1837,7 @@ dialog::backdrop {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 .tool-mode-switch .tab {
   border: 1px solid var(--line);
@@ -1753,6 +1855,10 @@ dialog::backdrop {
   border: 1px dashed var(--line);
   border-radius: var(--radius);
   background: var(--surface-soft);
+}
+
+.drawer[data-layout='online-tool']:is([data-tool='计算 2FA 验证码'], [data-tool='抖音解析'], [data-tool='邮箱查询与邮箱池']) .empty-state {
+  padding: 18px 16px;
 }
 .drawer[data-layout='online-tool'] .empty-state .icon {
   width: 24px;
@@ -1870,6 +1976,14 @@ dialog::backdrop {
   margin: 0;
 }
 @media (max-width: 600px) {
+  .drawer[data-layout='online-tool']:is([data-tool='计算 2FA 验证码'], [data-tool='抖音解析'], [data-tool='邮箱查询与邮箱池']) {
+    inset-block-start: 12px;
+    max-height: calc(100dvh - 24px);
+    max-width: calc(100% - 24px);
+  }
+  .drawer[data-layout='online-tool']:is([data-tool='计算 2FA 验证码'], [data-tool='抖音解析'], [data-tool='邮箱查询与邮箱池']) .drawer-body {
+    padding: 14px;
+  }
   .drawer[data-layout='online-tool'] .drawer-header {
     padding: 12px;
     gap: 10px;
@@ -2157,8 +2271,11 @@ dialog::backdrop {
   justify-content: center;
 }
 @media (max-width: 1150px) {
+  :root {
+    --panel-padding-inline: 20px;
+  }
   main {
-    padding: 20px 22px;
+    padding: var(--panel-padding-block) var(--panel-padding-inline);
   }
   .topbar {
     padding: 0 20px;
@@ -2169,10 +2286,6 @@ dialog::backdrop {
   .two-column {
     grid-template-columns: minmax(0, 1fr);
     gap: 16px;
-  }
-  .form-panel,
-  .side-panel {
-    padding: 22px 20px;
   }
   .field {
     grid-template-columns: 86px minmax(0, 1fr);
@@ -2185,6 +2298,8 @@ dialog::backdrop {
 @media (max-width: 900px) {
   :root {
     --header-height: 62px;
+    --panel-padding-inline: 16px;
+    --panel-padding-block: 18px;
   }
   .topbar-context .breadcrumbs {
     display: none;
@@ -2332,7 +2447,7 @@ dialog::backdrop {
     font-size: 20px;
   }
   .summary-strip {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 0;
     margin-bottom: 19px;
   }
@@ -2352,7 +2467,7 @@ dialog::backdrop {
     grid-template-columns: minmax(0, 1fr);
   }
   .toolbar {
-    padding: 15px;
+    padding: 15px var(--panel-padding-inline);
     align-items: stretch;
   }
   .toolbar-left {
@@ -2373,16 +2488,12 @@ dialog::backdrop {
     justify-content: flex-end;
   }
   .tabs {
-    padding: 0 16px;
+    padding: 0 var(--panel-padding-inline);
     gap: 22px;
   }
   .panel-heading {
-    padding: 18px 16px;
+    padding: var(--panel-padding-block) var(--panel-padding-inline);
     flex-wrap: wrap;
-  }
-  .form-panel,
-  .side-panel {
-    padding: 21px 17px;
   }
   .field {
     grid-template-columns: 78px minmax(0, 1fr);
@@ -2705,11 +2816,9 @@ details.toolbox-phrase-more[open] > summary {
 .section-gap {
   margin-top: 22px;
 }
-.panel-pad {
-  padding: 22px;
-}
 .form-panel,
 .drawer-body,
+.panel-body,
 .panel-pad {
   container-type: inline-size;
 }
@@ -2970,8 +3079,27 @@ details.toolbox-phrase-more[open] > summary {
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
+/* Panels with tabs/tables keep their edges; content sections own the inset. */
 .panel > .form-section {
-  padding: 18px 20px;
+  padding: var(--panel-padding-block) var(--panel-padding-inline);
+}
+:is(.panel-body, .panel-pad, .form-panel, .side-panel) > :is(.toolbar, .panel-heading, .tabs, .content-toolbar, .form-section) {
+  padding-inline: 0;
+}
+.panel-body > .toolbar:first-child {
+  padding-top: 0;
+}
+.panel-body > :last-child {
+  margin-bottom: 0;
+}
+.panel-body > :first-child {
+  margin-top: 0;
+}
+p.panel-body {
+  margin: 0;
+}
+.page-actions-fallback {
+  justify-content: flex-end;
 }
 details:not(.title-help) > summary {
   cursor: pointer;
@@ -3064,4 +3192,10 @@ details:not(.title-help) > summary:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
+}
+
+.mail-plain-body a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }

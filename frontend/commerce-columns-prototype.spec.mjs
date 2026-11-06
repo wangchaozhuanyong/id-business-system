@@ -104,7 +104,6 @@ const orderColumns = [
   'businessType',
   'payment',
   'paymentId',
-  'cardId',
   'paidAmount',
   'saleAmount',
   'profit',
@@ -135,7 +134,6 @@ const claudeColumns = [
   'verifier',
   'verifierPhone',
   'owner',
-  'ownerPhone',
   'tenantId'
 ];
 
@@ -146,7 +144,7 @@ test('GPT 列表完整显示联系、交易、周期和备注字段，并绑定�
   for (const column of table.columns) {
     assert(!claudeColumns.includes(column.id), 'GPT 不应混入 Claude 人员专属列');
     assert(
-      !['emailType', 'accountSource', 'previousOrderId', 'actualOpenedAt'].includes(column.id),
+      !['cardId', 'emailType', 'accountSource', 'previousOrderId', 'actualOpenedAt'].includes(column.id),
       '不能恢复后续明确取消的订单字段'
     );
   }
@@ -168,10 +166,12 @@ test('Claude Pro 与 Max 订单各自补齐人员和租户列，空值明确显�
   ]) {
     const table = context.render(route, `commerce-orders-${product}`);
     requireColumns(table, [...orderColumns, ...claudeColumns]);
+    assert(!table.columns.some((column) => column.id === 'cardId'));
     for (const id of claudeColumns) {
       const column = table.columns.find((entry) => entry.id === id);
-      assert.equal(column.render({}), '未记录');
-      if (id === 'tenantId') assert.equal(column.render({ tenantId: 'tenant-demo-1' }), '陈租户');
+      assert.equal(column.render({}), id === 'owner' ? '历史未记录' : '未记录');
+      if (id === 'owner') assert.equal(column.render({ createdBy: '录入员工', owner: '旧归属' }), '录入员工');
+      else if (id === 'tenantId') assert.equal(column.render({ tenantId: 'tenant-demo-1' }), '陈租户');
       else assert.equal(column.render({ [id]: '已填写资料' }), '已填写资料');
     }
   }
@@ -195,8 +195,7 @@ test('Claude 专属显示认证电话、备注、录入时间；客户租户列�
     'verifierPhone',
     'tenant',
     'owner',
-    'ownerPhone',
-    'createdAt',
+      'createdAt',
     'notes',
     'actions'
   ]);
