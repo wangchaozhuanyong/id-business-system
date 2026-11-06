@@ -25,12 +25,25 @@ const moneyFormat = (units) => {
   const magnitude = units < 0n ? -units : units;
   return `${units < 0n ? '-' : ''}${magnitude / 10000n}.${String(magnitude % 10000n).padStart(4, '0')}`;
 };
+const bankCard = { id: 'recharge:1', last4: '2345', active: true, status: '正常', usageCount: 0 };
 
 function browser(store, appleAsset = null) {
   let confirm;
   const notices = [];
+  const errors = new Map();
   const modules = [];
   const state = { route: 'customers/list', demoOrders: [], drafts: new Map() };
+  const bankOrderEntry = {
+    isConnected: true,
+    elements: {
+      'commerce-payment': { value: '银行卡' },
+      'commerce-product': { value: 'GPT' },
+      'commerce-cardId': { tagName: 'SELECT', value: bankCard.id, closest: () => null },
+      'commerce-paymentId': { value: bankCard.last4 },
+      'commerce-saleAmount': { value: '150' }
+    },
+    querySelector: () => null
+  };
   const api = {
     state,
     modules: {
@@ -48,7 +61,8 @@ function browser(store, appleAsset = null) {
     esc: String,
     addCalendarMonth: () => '2026-12-04T10:30',
     readForm: (form) => form.raw,
-    setError() {},
+    setError: (field, message) => message ? errors.set(field, message) : errors.delete(field),
+    options: (items) => JSON.stringify(items),
     render() {},
     button() {},
     titleInfo() {},
@@ -61,6 +75,7 @@ function browser(store, appleAsset = null) {
     confirmAction: (_title, _description, callback) => (confirm = callback)
   };
   const localData = {
+    orderCards: async () => ({ items: [bankCard] }),
     load: async (domain) => store.load(domain),
     save: async (domain, version, data, { action }) =>
       store.saveBatch([{ domain, version, data: JSON.parse(JSON.stringify(data)), action }])[0],
@@ -75,7 +90,12 @@ function browser(store, appleAsset = null) {
   };
   const context = {
     window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
-    document: { querySelector: () => null, querySelectorAll: () => [], getElementById: () => null },
+    document: {
+      querySelector: (selector) => selector === '#commerce-order-form' && state.route === 'workspace/order/gpt'
+        ? bankOrderEntry : null,
+      querySelectorAll: () => [],
+      getElementById: () => null
+    },
     structuredClone,
     crypto
   };
@@ -91,6 +111,12 @@ function browser(store, appleAsset = null) {
       commerce.afterRender();
       return turn();
     },
+    async openBankOrderEntry() {
+      state.route = 'workspace/order/gpt';
+      commerce.afterRender();
+      await turn();
+      assert(JSON.parse(bankOrderEntry.elements['commerce-cardId'].innerHTML).some(([id]) => id === bankCard.id));
+    },
     submit(id, fields) {
       commerce.onSubmit({
         id,
@@ -105,7 +131,7 @@ function browser(store, appleAsset = null) {
       this.submit('commerce-contact-form', { kind: 'customer', name, phone });
     },
     confirm() {
-      assert.equal(typeof confirm, 'function', '等待有效表单进入确认步骤');
+      assert.equal(typeof confirm, 'function', `等待有效表单进入确认步骤：${[...errors.values()].join('、')}`);
       const callback = confirm;
       confirm = undefined;
       callback();
@@ -120,8 +146,8 @@ const orderFields = (customerId) => ({
   email: 'customer@example.test',
   customerId,
   payment: '银行卡',
-  cardId: 'local-card-a',
-  paymentId: '012345',
+  cardId: bankCard.id,
+  paymentId: bankCard.last4,
   paidAmount: '20',
   paidCurrency: 'USD',
   saleAmount: '150',
@@ -156,7 +182,7 @@ test('客户和银行卡独立订单在本机保存、重开后可读，旧标�
     assert.equal(stale.getCustomers()[0].name, '本地测试客户');
     assert.equal(store.audit().length, 1);
 
-    first.state.route = 'workspace/order';
+    await first.openBankOrderEntry();
     first.submit('commerce-order-form', orderFields(first.getCustomers()[0].id));
     await turn();
     first.confirm();
@@ -169,7 +195,8 @@ test('客户和银行卡独立订单在本机保存、重开后可读，旧标�
     assert.equal(order.claudeRenewalId, '');
     assert.equal(order.rateAt, '汇率来源尚未接入');
     assert.equal(order.createdBy, '本机操作员');
-    assert.equal(order.cardId, 'local-card-a');
+    assert.equal(order.cardId, bankCard.id);
+    assert.equal(order.paymentId, bankCard.last4);
     assert.deepEqual(
       store.audit().map(({ action }) => action),
       ['新增独立订单', '新增资料']
@@ -290,7 +317,7 @@ test('成品订单和库存占用一起提交，库存版本冲突时两边都�
       email: account.email
     };
     store.saveBatch([{ domain: 'inventory', version, data: inventory }]);
-    tab.state.route = 'workspace/order';
+    await tab.openBankOrderEntry();
     tab.submit('commerce-order-form', order);
     await turn();
     tab.confirm();
