@@ -275,8 +275,8 @@
         .sort((a, b) => timestamp(b.receivedAt) - timestamp(a.receivedAt))[0]?.receivedAt || '—'
     );
   }
-  function list(columns, rows, id) {
-    return A.table(columns, A.pageRows(rows), '', id) + A.pagination(rows.length);
+  function list(columns, rows, id, emptyState) {
+    return A.table(columns, A.pageRows(rows), '', id, emptyState) + A.pagination(rows.length);
   }
   function columnButton(id) {
     return A.button('列设置', 'column-settings', '', 'columns', `data-table-id="${id}"`);
@@ -314,8 +314,12 @@
       }
     ];
   }
-  function toolbar(actions, id, filters = '') {
-    return `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input id="relay-search" aria-label="搜索苹果邮箱资料" value="${E(view.q)}" placeholder="搜索邮箱、编号、备注或录入人" /></div>${filters}</div><div class="toolbar-right">${columnButton(id)}${actions}</div></div>`;
+  function toolbar(actions, id, filters = '', statusGroups = '') {
+    const placeholder = statusGroups ? '搜索邮箱、编号或备注' : '搜索邮箱、编号、备注或录入人';
+    const controls = `<div class="toolbar-left"><div class="search-field">${A.icon('search')}<input id="relay-search" aria-label="搜索苹果邮箱资料" value="${E(view.q)}" placeholder="${placeholder}" /></div>${filters}</div><div class="toolbar-right">${columnButton(id)}${actions}</div>`;
+    return statusGroups
+      ? `<div class="toolbar relay-alias-toolbar"><div class="relay-alias-filters">${statusGroups}</div><div class="relay-alias-controls">${controls}</div></div>`
+      : `<div class="toolbar">${controls}</div>`;
   }
   function renderRelayPage() {
     if (A.state.route === 'mailboxes/relay') A.render();
@@ -428,7 +432,8 @@
     );
   }
   function renderAliases() {
-    const matching = aliases().filter(
+    const allAliases = aliases();
+    const matching = allAliases.filter(
       (r) =>
         (!view.parentId || r.parentMailboxId === view.parentId) &&
         `${r.email} ${r.id} ${r.parentMailboxId || ''} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''}`
@@ -459,19 +464,20 @@
       ? A.button('批量导入', 'relay-import', '', 'upload') +
         A.button('登记隐藏邮箱', 'relay-alias-add', 'primary', 'plus')
       : A.button('新增主邮箱', 'relay-parent-add', 'primary', 'plus');
-    const hint = !hasParent
-      ? '先添加 Apple 主邮箱，再登记或批量导入其已开通的隐藏邮箱。'
-      : view.inventory === 'claimed' && !rows.length
-        ? '从工作台的「邮箱提取」领取后，待使用的隐藏邮箱会显示在这里。'
-        : '';
+    const hasDetailFilter = view.q || view.parentId || view.health;
+    const emptyState = !hasParent && !allAliases.length
+      ? { title: '请先添加 Apple 主邮箱', description: '添加后即可登记或批量导入该主邮箱下已开通的隐藏邮箱。' }
+      : view.inventory === 'claimed' && !hasDetailFilter
+        ? { title: '暂无已提取的隐藏邮箱', description: '从工作台的「邮箱提取」领取后，待使用的记录会显示在这里。' }
+        : !allAliases.length && !hasDetailFilter && !view.inventory
+          ? { title: '暂无隐藏邮箱', description: '可在上方登记或批量导入已开通的隐藏邮箱。' }
+          : undefined;
+    const history = view.inventory === 'claimed'
+      ? A.button('查看提取与归还', 'relay-extraction-history', '', 'work')
+      : '';
     return (
-      `<div class="toolbar">${usage}${health}${
-        view.inventory === 'claimed'
-          ? A.button('查看提取与归还', 'relay-extraction-history', '', 'work')
-          : ''
-      }</div>` +
-      toolbar((A.modules.inventory?.usageReviewButton?.() || '') + actions, 'relay-aliases', filters) +
-      (hint ? `<div class="toolbar"><p class="footnote">${E(hint)}</p></div>` : '') +
+      toolbar((A.modules.inventory?.usageReviewButton?.() || '') + history + actions,
+        'relay-aliases', filters, usage + health) +
       list(
         [
           { id: 'aliasId', label: '隐藏邮箱编号' },
@@ -521,7 +527,8 @@
           }
         ],
         rows,
-        'relay-aliases'
+        'relay-aliases',
+        emptyState
       )
     );
   }
@@ -536,7 +543,7 @@
         `data-filter="${key}" data-value="${value}" aria-pressed="${view[key] === value}"`
       );
     });
-    return `<div class="toolbar-left" role="group" aria-label="${label}"><span class="footnote">${label}</span>${buttons.join('')}</div>`;
+    return `<div class="relay-status-group" role="group" aria-label="${label}"><span class="footnote">${label}</span>${buttons.join('')}</div>`;
   }
   function renderMails() {
     if (local && !remote.status?.configured)
@@ -2264,7 +2271,7 @@
         .querySelector(
           `[data-action="relay-inventory-status"][data-filter="${filter}"][data-value="${value}"]`
         )
-        ?.focus();
+        ?.focus({ preventScroll: true });
     } else if (action === 'relay-extraction-history') {
       A.go('workspace/extractions');
     } else if (action === 'relay-parent-add') openParentEditor();

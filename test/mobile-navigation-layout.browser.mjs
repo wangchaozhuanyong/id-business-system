@@ -40,6 +40,8 @@ test('mobile navigation remains reachable without losing the long-page reading p
         await page.locator('#nav-toggle').click();
         assert.equal(await page.evaluate(() => scrollY), before, '打开侧栏不应先滚回顶部');
         await page.locator('#sidebar-shade').click({ position: { x: width - 8, y: 200 } });
+        await settle();
+        assert(await page.locator('#nav-toggle').evaluate((button) => button === document.activeElement));
         assert.equal(await page.evaluate(() => scrollY), before, '取消侧栏不应改变阅读位置');
         await page.locator('#nav-toggle').click();
         await page.locator('#sidebar a[href="#/customers/new"]').click();

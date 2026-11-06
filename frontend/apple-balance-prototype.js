@@ -16,6 +16,7 @@
   let loadState = 'idle';
   let hasLoaded = false;
   let loading;
+  let regionRead;
   let saving = false;
   const $ = (selector, root = document) => root.querySelector(selector);
   const actor = () =>
@@ -70,6 +71,14 @@
     loadState = 'ready';
     hasLoaded = true;
   }
+  function bindBalanceRead() {
+    const region = $('#main [data-apple-balance-region]');
+    if (!region || regionRead?.region === region) return;
+    regionRead?.finish();
+    regionRead = A.beginRegionRead(region, region.querySelector('[data-apple-balance-progress]'), {
+      refreshButton: region.querySelector('[data-action="apple-reload"]')
+    });
+  }
   function refreshLocalBalance() {
     if (!localData) return Promise.resolve(true);
     if (loading) return loading;
@@ -82,11 +91,17 @@
         loadState = 'error';
         return false;
       } finally {
+        regionRead?.finish();
+        regionRead = undefined;
         loading = undefined;
-        if (isBalanceRoute()) A.render();
+        if (isBalanceRoute()) {
+          const feedback = $('#main [data-apple-balance-error]');
+          if (loadState === 'error' && feedback) feedback.hidden = false;
+          else A.render();
+        }
       }
     })();
-    if (hasLoaded && isBalanceRoute()) A.render();
+    if (isBalanceRoute()) bindBalanceRead();
     return loading;
   }
   function ensureReady() {
@@ -818,17 +833,15 @@
       const error = loadState === 'error';
       return (
         A.header('苹果 ID 余额', '苹果 ID 与余额流水由本机业务系统保存。') +
-        `<section class="panel">${A.empty(error ? '苹果 ID 余额读取失败' : '正在读取苹果 ID 余额', error ? '请重新读取余额与流水。' : '')}${error ? `<div class="toolbar">${A.button('重新读取', 'apple-reload')}</div>` : ''}</section>`
+        `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div>${error
+          ? `${A.empty('苹果 ID 余额读取失败', '请重新读取余额与流水。')}<div class="toolbar">${A.button('重新读取', 'apple-reload')}</div>`
+          : '<div class="design-loading-rows" aria-label="余额资料"><div class="design-loading-row"></div><div class="design-loading-row"></div><div class="design-loading-row"></div></div>'}</section>`
       );
     }
     const accounts = list();
     const assets = new Map(A.modules.inventory.getAppleIds().map((asset) => [asset.id, asset]));
     const query = String(S.query || '').toLowerCase();
-    const refreshFeedback = ready()
-      ? ''
-      : loadState === 'error'
-        ? `<div class="inline-notice warning" role="status"><span>余额刷新失败，当前显示上次成功读取的资料。</span>${A.button('重新读取', 'apple-reload', 'compact')}</div>`
-        : '<div class="design-region-progress" role="status">正在刷新余额</div>';
+    const refreshFeedback = `<div class="inline-notice warning" data-apple-balance-error role="status" ${loadState === 'error' ? '' : 'hidden'}>余额刷新失败，当前显示上次成功读取的资料。</div>`;
     const rows = accounts
       .filter((row) => `${row.email} ${row.country}`.toLowerCase().includes(query))
       .map((row) => ({ ...assets.get(row.id), ...row }));
@@ -921,7 +934,7 @@
         ],
         ['有余额', accounts.filter((row) => M.compare(row.balance, '0') > 0).length, '个']
       ]) +
-      `<section class="panel"><div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID 或国家地区" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions></div></div>${A.table(columns, A.pageRows(rows), '', '苹果ID余额')}${A.pagination(rows.length)}</section>`
+      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div><div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID 或国家地区" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows), '', '苹果ID余额')}${A.pagination(rows.length)}</section>`
     );
   }
   function saveDrafts() {
@@ -1212,6 +1225,7 @@
     id: 'apple-balance',
     matches: (route) => ['accounts/apple-balances', 'mailboxes/apple'].includes(route),
     render,
+    afterRender() { if (loading) bindBalanceRead(); },
     onClick,
     onSubmit: submit,
     onInput,

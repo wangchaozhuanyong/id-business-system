@@ -670,9 +670,12 @@ window.addEventListener('message', (event) => {
 });
 
 if (window.parent !== window) {
+  try {
+    document.documentElement.dataset.theme = window.parent.document.documentElement.dataset.theme || 'light';
+  } catch { /* Standalone styling remains the default for an inaccessible parent. */ }
   const reportHeight = () =>
     window.parent.postMessage(
-      { source: 'id-bitbrowser-local', type: 'resize', height: document.body.scrollHeight },
+      { source: 'id-bitbrowser-local', type: 'resize', height: document.body.getBoundingClientRect().height },
       location.origin
     );
   new ResizeObserver(reportHeight).observe(document.body);

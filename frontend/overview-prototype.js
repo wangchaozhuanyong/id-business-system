@@ -16,6 +16,15 @@
     timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
   });
   let refreshing = false;
+  let regionRead;
+  function bindOverviewRead() {
+    const region = A.$('#main .website-overview');
+    if (!region || regionRead?.region === region) return;
+    regionRead?.finish();
+    regionRead = A.beginRegionRead(region, region.querySelector('[data-overview-progress]'), {
+      refreshButton: region.querySelector('[data-action="overview-refresh"]')
+    });
+  }
   function recentDates() {
     const today = Date.parse(dayFormatter.format(new Date()) + 'T00:00:00Z');
     return Array.from({ length: 30 }, (_, index) =>
@@ -24,10 +33,10 @@
   async function refreshOverview() {
     if (!business || refreshing) return;
     refreshing = true;
+    bindOverviewRead();
     const admin = allowed('orders/statistics');
     const { commerce, inventory, appleBalance } = A.modules;
     const dates = recentDates();
-    const rerender = () => { if (A.state.route === 'overview') A.render(); };
     const appleLoad = admin && allowed('accounts/apple-balances')
       ? appleBalance.refreshLocalBalance() : Promise.resolve(false);
     const jobs = [['inventory', async () => await inventory.refreshOverview() && inventory.overviewSummary()]];
@@ -38,31 +47,26 @@
         return ok && commerce.overviewSummary(dates);
       }]
     );
-    const loads = jobs.map(async ([key, load]) => {
-      const section = sections[key];
-      section.phase = 'loading';
+    const loaded = await Promise.all(jobs.map(async ([key, load]) => {
       try {
-        const result = await load();
-        if (result === false || result == null) throw new Error('读取未完成');
-        section.data = result;
-        section.updated = new Date();
-        section.phase = 'ready';
+        const data = await load();
+        if (data === false || data == null) return [key, { phase: 'error' }];
+        return [key, { data, updated: new Date(), phase: 'ready' }];
       } catch {
-        section.phase = 'error';
+        return [key, { phase: 'error' }];
       }
-      rerender();
-    });
-    rerender();
-    await Promise.all(loads);
+    }));
+    for (const [key, result] of loaded) Object.assign(sections[key], result);
+    regionRead?.finish();
+    regionRead = undefined;
     refreshing = false;
-    rerender();
+    if (A.state.route === 'overview') A.render();
   }
   function sectionStatus(section) {
     if (!business) return '设计预览';
     if (section.phase === 'error') return section.updated
       ? `读取失败 · 保留 ${timeFormatter.format(section.updated)} 的数据` : '读取失败 · 可重试';
-    if (section.phase === 'loading' || !section.updated) return section.updated
-      ? `更新中 · 上次 ${timeFormatter.format(section.updated)}` : '正在读取';
+    if (!section.updated) return '等待数据';
     return `更新于 ${timeFormatter.format(section.updated)}`;
   }
   const formatAmount = value => String(value).replace(/(\.\d{2})0+$/, '$1');
@@ -154,8 +158,8 @@
       : '设计预览 · 业务数据未连接';
     const date = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
     return A.header('网站总览', '集中查看经营概况、待办、库存和客户状态。统计统一使用北京时间。读取失败时保留上次数据，未取得数据时显示破折号。') +
-      `<div class="website-overview">
-        <div class="overview-toolbar"><div class="overview-date"><div class="overview-date-heading"><strong>${E(date)}</strong><span>北京时间</span></div><div class="overview-design-label" role="status">${E(overviewStatus)}</div></div><div class="toolbar-right"><div class="overview-range" role="group" aria-label="统计时间范围">${ranges.map(([id, label]) => `<button class="button ${range === id ? 'primary' : ''}" data-action="overview-range" data-range="${id}" aria-pressed="${range === id}">${label}</button>`).join('')}</div>${business ? A.button(refreshing ? '更新中' : '刷新数据', 'overview-refresh', '', '', refreshing ? 'disabled' : '') : ''}${A.button('指标口径', 'overview-methodology', '', 'info')}</div></div>
+      `<div class="website-overview design-async-region"><div data-overview-progress role="status" hidden></div>
+        <div class="overview-toolbar"><div class="overview-date"><div class="overview-date-heading"><strong>${E(date)}</strong><span>北京时间</span></div><div class="overview-design-label" role="status">${E(overviewStatus)}</div></div><div class="toolbar-right"><div class="overview-range" role="group" aria-label="统计时间范围">${ranges.map(([id, label]) => `<button class="button ${range === id ? 'primary' : ''}" data-action="overview-range" data-range="${id}" aria-pressed="${range === id}">${label}</button>`).join('')}</div>${business ? A.button('刷新数据', 'overview-refresh') : ''}${A.button('指标口径', 'overview-methodology', '', 'info')}</div></div>
         ${finance ? `<section class="overview-metrics" aria-label="经营概况">${metrics.filter(item => finance && allowed(item[4])).map(([id, label, unit, note, route, action]) => `<article class="panel overview-metric"><div class="overview-metric-label"><h2>${label}</h2>${A.titleInfo(label, note, `overview-metric-${id}`)}</div><div class="overview-metric-value"><strong class="${id === 'receipts' ? 'overview-original-amount' : ''}">${E(values[id])}</strong><span>${unit}</span></div><div class="overview-metric-footer"><span>${E(footers[id])}</span>${link(action, route)}</div></article>`).join('')}</section>` : ''}
         <nav class="panel overview-shortcuts" aria-label="常用入口"><strong>常用入口</strong><div>${[['提交订单', 'workspace/order', 'plus'], ['客户录入', 'customers/new', 'user'], ['邮箱提取', 'workspace/mail-extract', 'mail'], ['账号提取', 'workspace/account-extract', 'key'], ['比特登录', 'recharge/start', 'work'], ['ChatGPT 代充', 'online-recharge/chatgpt', 'bolt']].filter(item => allowed(item[1])).map(([label, route, icon]) => `<a href="#/${route}">${A.icon(icon)}<span>${label}</span></a>`).join('') || link('GPT 订单', 'orders/gpt')}</div></nav>
         <div class="overview-columns">
@@ -199,6 +203,7 @@
   }
   window.IDDesignModules.push({ id: 'overview', matches: route => route === 'overview', render, onClick,
     afterRender({ routeChanged } = {}) {
+      if (refreshing) bindOverviewRead();
       if (routeChanged) queueMicrotask(() => {
         if (A.state.route === 'overview') void refreshOverview();
       });

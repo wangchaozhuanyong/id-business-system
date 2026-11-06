@@ -111,11 +111,6 @@
   }
 }
 
-.recharge-integration__frame--bit-local {
-  height: auto;
-  min-height: 360px;
-}
-
 .bit-local {
   background: var(--surface);
   padding: clamp(12px, 2vw, 24px);

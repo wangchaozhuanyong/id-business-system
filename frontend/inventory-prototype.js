@@ -3816,7 +3816,7 @@
     usageReviewFor: (id) => usageReview.get(id),
     refreshOverview() {
       initialize();
-      return localData ? readLocalInventory() : Promise.resolve(false);
+      return localData ? readLocalInventory({ keepContent: localInventoryState === 'ready' }) : Promise.resolve(false);
     },
     overviewSummary() {
       if (!localData || localInventoryState !== 'ready') return null;

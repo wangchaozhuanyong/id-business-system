@@ -138,6 +138,23 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     await action('apple-relay', 'relay-mail-reassign', { id: 'qa-mail' });
     assert.equal(await page.locator('#relay-assign-alias').inputValue(), 'qa-relay-b');
     await close();
+    await page.setViewportSize({ width: 1800, height: 900 });
+    await page.getByRole('tab', { name: '隐藏邮箱管理' }).click();
+    const toolbar = page.locator('.relay-alias-toolbar');
+    const table = page.locator('table[data-table="relay-aliases"]');
+    await table.getByText('qa-relay-a@example.test', { exact: true }).waitFor();
+    assert(await toolbar.getByRole('button', { name: '批量导入' }).isVisible());
+    assert(await toolbar.getByRole('button', { name: '登记隐藏邮箱' }).isVisible());
+    assert.equal(await toolbar.getByRole('button', { name: '新增主邮箱' }).count(), 0);
+    const tops = await toolbar.locator('button, input, select').evaluateAll(controls =>
+      controls.map(control => control.getBoundingClientRect().top));
+    assert(Math.max(...tops) - Math.min(...tops) <= 1, '有数据时搜索、状态和操作仍应同排');
+    await toolbar.getByRole('button', { name: '已提取 0', exact: true }).click();
+    await table.getByRole('heading', { name: '暂无已提取的隐藏邮箱' }).waitFor();
+    assert(await toolbar.getByRole('button', { name: '查看提取与归还' }).isVisible());
+    await page.locator('#relay-search').fill('no-match');
+    await table.getByRole('heading', { name: '暂无符合条件的记录' }).waitFor();
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   await t.test('余额草稿保留最初版本，不用后续余额响应替换', async () => {
@@ -175,6 +192,35 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     assert.equal(await page.locator('#apple-pending-amount').inputValue(), '4');
     assert.equal(await page.locator('#apple-pending-reason').inputValue(), '保留回款更正原因');
     await close();
+  });
+
+  await t.test('余额慢刷新和失败保留表格与筛选', async () => {
+    await go('accounts/apple-balances');
+    await page.locator('#apple-list-search').fill('qa-apple');
+    const row = page.locator('tr[data-row-id="qa-apple"]');
+    const originalRow = await row.elementHandle();
+    const before = await row.textContent();
+    const release = Promise.withResolvers();
+    await page.route('**/api/local/appleBalance', async route => {
+      await release.promise;
+      await route.fulfill({ status: 503, json: { error: '隔离余额刷新失败' } });
+    }, { times: 1 });
+    try {
+      await page.locator('[data-action="apple-reload"]').click();
+      const progress = page.locator('[data-apple-balance-progress]');
+      await progress.waitFor();
+      assert.equal(await progress.textContent(), '');
+      assert((await progress.boundingBox()).height <= 3);
+      assert.equal(await row.textContent(), before);
+    } finally { release.resolve(); }
+    await page.getByText('余额刷新失败，当前显示上次成功读取的资料。', { exact: true }).waitFor();
+    assert(await originalRow.evaluate(node => node.isConnected));
+    await originalRow.dispose();
+    assert.equal(await row.textContent(), before);
+    assert.equal(await page.locator('#apple-list-search').inputValue(), 'qa-apple');
+    await page.locator('[data-action="apple-reload"]').click();
+    await page.getByText('余额刷新失败，当前显示上次成功读取的资料。', { exact: true }).waitFor({ state: 'hidden' });
+    assert.equal(await row.textContent(), before);
   });
 
   await t.test('库存保存迟到保留后续输入，并沿用自己的已提交版本继续保存', async () => {

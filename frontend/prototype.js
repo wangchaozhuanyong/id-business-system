@@ -483,6 +483,40 @@ function readDraft(form) {
   }
   return values;
 }
+const activeRegionReads = new WeakMap();
+function beginRegionRead(region, status, { loadingText = '', refreshButton } = {}) {
+  activeRegionReads.get(region)?.finish();
+  const dialog = region.closest('dialog');
+  const current = () => activeRegionReads.get(region) === read && region.isConnected &&
+    (!dialog || dialog.open);
+  const setLoadingText = (text) => {
+    loadingText = text;
+    if (current() && !status.hidden) status.textContent = text;
+  };
+  const finish = () => {
+    clearTimeout(timer);
+    if (activeRegionReads.get(region) !== read) return;
+    activeRegionReads.delete(region);
+    region.setAttribute('aria-busy', 'false');
+    status.textContent = '';
+    status.hidden = true;
+    if (refreshButton) refreshButton.disabled = wasDisabled;
+  };
+  const wasDisabled = refreshButton?.disabled;
+  const read = { region, current, setLoadingText, finish };
+  activeRegionReads.set(region, read);
+  region.setAttribute('aria-busy', 'true');
+  status.hidden = true;
+  status.textContent = '';
+  status.className = 'design-region-progress';
+  if (refreshButton) refreshButton.disabled = true;
+  const timer = setTimeout(() => {
+    if (!current()) return;
+    status.textContent = loadingText;
+    status.hidden = false;
+  }, 120);
+  return read;
+}
 function confirmAction(title, message, callback, label = '确认操作') {
   pendingConfirm = callback;
   $('#confirm-dialog').innerHTML =
@@ -628,17 +662,22 @@ function summary(items) {
 function empty(title, description) {
   return `<div class="empty-state">${icon('database')}<h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p></div>`;
 }
-function table(columns, rows, scope = '', tableId = 'default') {
+function table(columns, rows, scope = '', tableId = 'default', emptyState) {
   columnDefinitions[tableId] = columns;
   tableRecords.set(tableId, rows);
   const hiddenColumns = state.columns.get(tableId) || new Set();
   const visible = columns.filter(
     (column) => fixedTableColumn(column) || !hiddenColumns.has(column.id)
   );
+  const emptyContent = rows.length ? '' : empty(
+    emptyState?.title ?? '暂无符合条件的记录',
+    emptyState?.description ??
+      (window.IDLocalData ? '可调整搜索或筛选条件。' : '调整搜索和筛选条件，或新增一条演示资料。')
+  );
   const check = scope
     ? `<th class="check-cell"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /></th>`
     : '';
-  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? `stable-table page-size-${state.pageSize}` : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${visible.map((column) => `<th class="${column.action ? 'table-actions' : ''}" scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${visible.length + (scope ? 1 : 0)}">${empty('暂无符合条件的记录', window.IDLocalData ? '可调整搜索或筛选条件。' : '调整搜索和筛选条件，或新增一条演示资料。')}</td></tr>`}</tbody></table></div>`;
+  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? `stable-table page-size-${state.pageSize}` : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${visible.map((column) => `<th class="${column.action ? 'table-actions' : ''}" scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
 }
 function fixedTableColumn(column) {
   return column.action || ['email', 'orderNo', 'name'].includes(column.id);
@@ -1140,6 +1179,14 @@ function preserveMainDraft() {
 }
 let pendingPageScroll = null;
 let layoutRenderVersion = 0;
+function restorePageScroll(top) {
+  const maxScroll = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+  window.scrollTo({ top: Math.min(top, maxScroll), behavior: 'instant' });
+  if (top <= maxScroll) pendingPageScroll = null;
+}
+function restorePendingPageScroll() {
+  if (pendingPageScroll?.route === state.route) restorePageScroll(pendingPageScroll.top);
+}
 for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
   window.addEventListener(eventName, () => {
     pendingPageScroll = null;
@@ -1200,9 +1247,7 @@ function render() {
   restoreTabScroll(main, tabScroll);
   requestAnimationFrame(() => {
     if (renderVersion !== layoutRenderVersion) return;
-    const maxScroll = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-    window.scrollTo({ top: Math.min(scrollTarget, maxScroll), behavior: 'instant' });
-    if (scrollTarget <= maxScroll) pendingPageScroll = null;
+    restorePageScroll(scrollTarget);
   });
   $('#nav-toggle').setAttribute(
     'aria-expanded',
@@ -2766,6 +2811,7 @@ $('#sidebar-shade').addEventListener('click', () => {
   document.body.classList.remove('nav-open');
   $('#sidebar-shade').hidden = true;
   $('#nav-toggle').setAttribute('aria-expanded', 'false');
+  $('#nav-toggle').focus({ preventScroll: true });
 });
 if (window.IDLocalData) {
   const profile = $('#profile-button');
@@ -2888,6 +2934,8 @@ function roundedDivision(numerator, denominator) {
   return negative ? -result : result;
 }
 window.IDDesignAPI = {
+  beginRegionRead,
+  restorePendingPageScroll,
   $,
   $$,
   esc: escapeHtml,

@@ -49,9 +49,10 @@ test('网站总览真实汇总、失败恢复、入口、占位、权限和响�
     orders: [order, previous, { ...order, id: 'cancelled', cancelled: true, refunds: [] }]
   };
   let mode = 'success';
+  const releaseRefresh = Promise.withResolvers();
   await page.route('**/api/local/commerce', async route => {
     if (mode === 'delay') {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await releaseRefresh.promise;
       return route.fulfill({ status: 503, json: {} });
     }
     return route.fulfill({ json: { version: 1, data: commerceData } });
@@ -65,7 +66,8 @@ test('网站总览真实汇总、失败恢复、入口、占位、权限和响�
   await page.route('**/api/local/appleBalance', route => route.fulfill({ json: { version: 1, data: {
     refunds: [{ id: 'pending-refund', status: 'pending' }, { id: 'closed-refund', status: 'received' }]
   } } }));
-  const settled = () => page.getByRole('button', { name: '刷新数据', exact: true }).waitFor();
+  const refresh = page.locator('[data-action="overview-refresh"]');
+  const settled = () => page.locator('[data-action="overview-refresh"]:enabled').waitFor();
   const go = async route => {
     await page.evaluate(route => { location.hash = '#/' + route; }, route);
     await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
@@ -86,9 +88,18 @@ test('网站总览真实汇总、失败恢复、入口、占位、权限和响�
   assert.deepEqual(await values(), ['1', '250.00 CNY', '68.24', '1']);
   assert.equal(await page.locator('.overview-chart-data g').count(), 1);
   mode = 'delay';
-  await page.getByRole('button', { name: '刷新数据', exact: true }).click();
-  await page.getByRole('button', { name: '更新中', exact: true }).waitFor();
-  assert.deepEqual(await values(), ['1', '250.00 CNY', '68.24', '1']);
+  const metricsBox = await page.locator('.overview-metrics').boundingBox();
+  try {
+    await refresh.click();
+    const progress = page.locator('[data-overview-progress]');
+    await progress.waitFor();
+    assert.equal(await progress.textContent(), '');
+    assert((await progress.boundingBox()).height <= 3);
+    assert.equal(await refresh.textContent(), '刷新数据');
+    assert(await refresh.isDisabled());
+    assert.deepEqual(await page.locator('.overview-metrics').boundingBox(), metricsBox);
+    assert.deepEqual(await values(), ['1', '250.00 CNY', '68.24', '1']);
+  } finally { releaseRefresh.resolve(); }
   await settled();
   assert.match(await page.locator('.overview-design-label').innerText(), /订单与客户 读取失败 · 保留/);
   mode = 'success';
