@@ -28,6 +28,7 @@ const allowedMethods = new Map([
   ['status', 'GET'],
   ['primary-save', 'POST'],
   ['primary-import', 'POST'],
+  ['alias-register', 'POST'],
   ['test', 'POST'],
   ['sync', 'POST'],
   ['mails', 'POST'],
@@ -1018,6 +1019,13 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
           const result = action === 'primary-save'
             ? await primaryManagement.save(input, actor)
             : await primaryManagement.importExisting(input, actor);
+          return writeJson(response, 200, result);
+        }
+        if (action === 'alias-register') {
+          requireAdministrator(actor, '只有管理员可以登记隐藏邮箱');
+          if (!primaryManagement) throw new RelayError(503, '原收件服务未连接，暂无法登记隐藏邮箱');
+          const input = await readBody(request, 512 * 1024);
+          const result = await primaryManagement.registerAliases(input, actor);
           return writeJson(response, 200, result);
         }
         if (action === 'extraction-eligibility' || action === 'extraction-codes') {

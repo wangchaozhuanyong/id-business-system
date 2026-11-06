@@ -188,6 +188,9 @@ function runtime(store, { relayConfigured = true } = {}) {
         committed = saved.data;
         refreshRows();
       },
+      async refreshLocalInventory() {
+        this.applyCommittedInventory(store.load('inventory'));
+      },
       async saveAppleRelay(mutate, action) {
         const staged = structuredClone(committed);
         mutate(staged.appleRelay);
@@ -240,6 +243,20 @@ function runtime(store, { relayConfigured = true } = {}) {
           configured: relayConfigured,
           parentIds: (store.load('inventory').data?.appleRelay?.parents ?? []).map(({ id }) => id)
         };
+        if (action === 'alias-register') {
+          assert(relayConfigured);
+          await setImmediate();
+          const { parentId, parentVersion, days, batch, rows } = input;
+          const entries = rows.map(({ email, note }) => ({
+            id: 'fixture-alias-' + webcrypto.randomUUID(), expectedVersion: null,
+            remoteAliasId: 'fixture-upstream-' + email, parentMailboxId: parentId, email,
+            notes: note, codeResetIntervalDays: days, queryExpiry: '2099-01-01T00:00:00Z'
+          }));
+          const inventory = store.saveAppleRelayPrimaries(
+            [], { id: 'local-operator', name: '本机操作员' }, entries, { parentId, parentVersion, batch }
+          );
+          return { inventory, registered: entries.length };
+        }
         assert.equal(action, 'primary-save');
         assert.equal(typeof input.appPassword, 'string');
         assert(relayConfigured);
@@ -374,7 +391,7 @@ test('本机主邮箱与批量登记归属于同一库存版本，重开后读�
   );
   assert(
     reopened.assets.every(
-      (row) => !row.queryCode && !reopened.api.modules.appleRelay.isAvailable(row)
+      (row) => row.remoteAliasId && !row.queryCode && !reopened.api.modules.appleRelay.isAvailable(row)
     )
   );
   assert.equal(reopened.api.modules.appleRelay.listImports()[0].success, 2);
@@ -449,7 +466,7 @@ test('旧窗口登记隐藏邮箱遇到库存冲突时保留草稿且不报告�
   assert.equal(store.load('inventory').data.mailboxes.length, 1);
   assert.equal(second.drawer.open, true);
   assert.equal(second.form.raw['relay-email'], 'collision@example.test');
-  assert(!second.notices.some((notice) => notice.includes('已保存到本机')));
+  assert(!second.notices.some((notice) => notice.includes('可在资料中查看查询码')));
   second.submit();
   assert.equal(second.hasConfirm(), false);
   assert.match(second.errors.get('relay-email'), /重复/);

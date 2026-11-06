@@ -125,6 +125,24 @@ export function createVendureMailboxProvider(config, fetchImpl = fetch) {
         'icloudVirtualEmails'
       );
     },
+    createAlias(input) {
+      return request(
+        adminUrl,
+        `mutation IdBusinessCreateAlias($input: CreateIcloudVirtualEmailInput!) {
+          result: createIcloudVirtualEmail(input: $input) { id }
+        }`,
+        { input }, 'result'
+      );
+    },
+    batchCreateAliases(input) {
+      return request(
+        adminUrl,
+        `mutation IdBusinessBatchCreateAliases($input: BatchCreateIcloudVirtualEmailsInput!) {
+          result: batchCreateIcloudVirtualEmails(input: $input) { createdCount skippedCount }
+        }`,
+        { input }, 'result', 60_000
+      );
+    },
     testConnection(id) {
       return request(
         adminUrl,
