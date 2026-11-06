@@ -1,0 +1,85 @@
+#local-auth-gate {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.local-auth-card {
+  width: min(100%, 420px);
+  padding: 32px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.local-auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+}
+.local-auth-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 750;
+}
+.local-auth-card > .title-with-help {
+  margin: 24px 0 16px;
+}
+.local-auth-card h1 {
+  font-size: 25px;
+}
+.local-auth-footnote {
+  color: var(--secondary);
+}
+.local-auth-form {
+  display: grid;
+  grid-template-columns: 5em minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+.local-auth-form label {
+  font-weight: 600;
+  line-height: 36px;
+}
+.local-auth-form input {
+  min-width: 0;
+}
+#local-auth-password-hint {
+  grid-column: 2;
+  margin: -6px 0 0;
+  color: var(--secondary);
+  font-size: 12px;
+}
+.local-auth-form .local-auth-error,
+.local-auth-form button[type='submit'] {
+  grid-column: 1 / -1;
+}
+.local-auth-form button[type='submit'] {
+  margin-top: 12px;
+  justify-content: center;
+}
+.local-auth-footnote {
+  margin: 22px 0 0;
+  font-size: 12px;
+}
+.local-auth-error {
+  padding: 9px 11px;
+  margin: 8px 0 0;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-radius: 6px;
+  line-height: 1.5;
+}
+@media (max-width: 480px) {
+  #local-auth-gate,
+  .local-auth-card {
+    padding: 20px;
+  }
+}

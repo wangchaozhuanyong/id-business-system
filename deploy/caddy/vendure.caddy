@@ -1,0 +1,24 @@
+# Import inside the canonical HTTPS site before its fallback handle.
+# Caddy must receive the direct TCP connection from the Vendure service.
+@idVendure {
+	method POST
+	remote_ip {$ID_VENDURE_SOURCE_IPS}
+	path /api/id-business-v2/online-recharge/integrations/vendure/config /api/id-business-v2/online-recharge/integrations/vendure/verify /api/id-business-v2/online-recharge/integrations/vendure/query /api/id-business-v2/online-recharge/integrations/vendure/submit /api/id-business-v2/online-recharge/integrations/vendure/task
+}
+log_skip @idVendure
+handle @idVendure {
+	header Cache-Control "no-store"
+	reverse_proxy 127.0.0.1:{$ID_VENDURE_LOOPBACK_PORT} {
+		lb_try_duration 0s
+		transport http {
+			dial_timeout 2s
+			response_header_timeout 12s
+		}
+	}
+}
+
+@idVendurePrivate path /api/id-business-v2/online-recharge/integrations/vendure /api/id-business-v2/online-recharge/integrations/vendure/* /integrations/recharge-worker /integrations/recharge-worker/*
+handle @idVendurePrivate {
+	header Cache-Control "no-store"
+	respond 404
+}

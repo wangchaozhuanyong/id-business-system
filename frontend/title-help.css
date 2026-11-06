@@ -1,0 +1,68 @@
+.title-with-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.title-with-help > :is(h1, h2, h3) {
+  margin: 0;
+}
+
+.title-description {
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 0;
+  z-index: 3;
+  width: min(340px, calc(100vw - 48px));
+  padding: 12px 15px;
+  border: 1px solid var(--line, var(--border));
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--secondary, var(--text-secondary));
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.title-description[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+}
+.title-help {
+  flex: none;
+}
+.title-help > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--muted, var(--text-dim));
+  list-style: none;
+  cursor: pointer;
+}
+.title-help > summary::-webkit-details-marker {
+  display: none;
+}
+.title-help > summary:hover,
+.title-help[open] > summary {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.title-help > summary:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+@media (max-width: 900px) {
+  .title-help > summary {
+    width: 44px;
+    height: 44px;
+  }
+}

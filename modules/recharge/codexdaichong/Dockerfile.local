@@ -1,0 +1,12 @@
+FROM node:20-bookworm-slim
+
+# The caller supplies the version pinned by the prepared upstream lockfile.
+ARG PLAYWRIGHT_VERSION
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+
+# Include both Chromium and its headless shell. The standalone debug fallback
+# uses the shell when no Chromium channel is configured.
+RUN test -n "$PLAYWRIGHT_VERSION" \
+    && npm exec --yes --package="playwright@$PLAYWRIGHT_VERSION" -- playwright install --with-deps chromium \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/*
