@@ -27,13 +27,13 @@ function closeServer(server) {
 }
 
 export async function startVendureTaskService({
-  directory, vendurePort, workerPort, storageKey, vendureKey, workerSecret, codes
+  directory, vendurePort, workerPort, storageKey, vendureKey, workerSecret, codes, acceptSubmissions = false
 }) {
   const validPort = (value) => Number.isInteger(value) && value >= 0 && value <= 65535;
   if (!validPort(vendurePort) || !validPort(workerPort) || (vendurePort !== 0 && vendurePort === workerPort) ||
       typeof directory !== 'string' || !isAbsolute(directory) || typeof storageKey !== 'string' ||
       !directory.startsWith(runtimeRoot) || !/^[a-f0-9]{64}$/.test(storageKey) ||
-      !Array.isArray(codes) || !codes.length)
+      !Array.isArray(codes) || !codes.length || typeof acceptSubmissions !== 'boolean')
     throw new Error('商城任务服务需要独立端口、私有目录、存储密钥和兑换码配置');
   const state = await lstat(directory);
   if (!state.isDirectory() || (state.mode & 0o777) !== 0o700 || state.uid !== process.getuid() ||
@@ -78,7 +78,7 @@ export async function startVendureTaskService({
     return listen(server, port);
   }
   try {
-    bridge = createLoopbackVendureRechargeBridge({ codes, vendureKey, workerSecret, store });
+    bridge = createLoopbackVendureRechargeBridge({ codes, vendureKey, workerSecret, store, acceptSubmissions });
     const vendureUrl = await startListener(vendureRechargePrefix, vendurePort);
     const workerUrl = await startListener(rechargeWorkerPrefix, workerPort);
     return { vendureUrl, workerUrl, close };

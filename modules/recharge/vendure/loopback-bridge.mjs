@@ -106,10 +106,12 @@ export function createLoopbackVendureRechargeBridge({
   vendureKey,
   workerSecret,
   store,
+  acceptSubmissions = true,
   now = Date.now
 }) {
   if (!strongSecret(vendureKey) || !strongSecret(workerSecret) || vendureKey === workerSecret)
     throw new TypeError('Vendure 与测试执行器需要独立服务凭据');
+  if (typeof acceptSubmissions !== 'boolean') throw new TypeError('商城代充受理开关无效');
 
   const memoryKey = store ? null : randomBytes(32);
   const fingerprint =
@@ -200,7 +202,7 @@ export function createLoopbackVendureRechargeBridge({
   timer.unref();
 
   function handleVendure(action, body, res, at) {
-    if (action === 'config') return send(res, 200, { maintenance: false });
+    if (action === 'config') return send(res, 200, { maintenance: !acceptSubmissions });
     if (action === 'task') {
       const task = tasks.get(body.id);
       if (!task || !secureEqual(fingerprint('task', task.id), body.taskToken))
@@ -213,6 +215,7 @@ export function createLoopbackVendureRechargeBridge({
     const prior = [...tasks.values()].find((task) => task.codeRef === codeRef);
     if (action === 'submit') {
       if (prior) return send(res, 200, taskView(prior, true));
+      if (!acceptSubmissions) return send(res, 200, { rejected: true });
       if (!record || record.disabled || !acceptedSession(body.session, at))
         return send(res, 200, { rejected: true });
       const task = {
@@ -249,6 +252,7 @@ export function createLoopbackVendureRechargeBridge({
       return send(res, status, payload);
     };
     if (action === 'claim') {
+      if (!acceptSubmissions) return finish(200, { task: null });
       for (const task of tasks.values()) {
         if (task.status !== 'queued') continue;
         const session = sessions.get(task.id);

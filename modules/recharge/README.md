@@ -78,7 +78,7 @@ node server/preview.mjs --local-data --port 4348 --codexdaichong-url "$RECHARGE_
 
 专用执行器的入口为 `node modules/recharge/vendure/codexdaichong-worker.mjs <任务服务回环地址> <独立代充回环地址>`。每次进程只领取一笔。通过私有运行环境提供互不相同的 `ID_VENDURE_WORKER_SECRET` 和 `ID_RECHARGE_BRIDGE_SECRET`。执行前要求上游运行副本声明支持商城套餐锁。新版运行副本在占用自助兑换码的 SQL 中核对套餐，拒绝套餐变化或已有在途任务。商城码与执行码可以不同，映射应一对一。执行码及原始授权只经服务间回环传送。
 
-使用 `node server/vendure-task-service.mjs <私有配置文件绝对路径>` 启动任务服务。配置字段为 `directory`、`vendurePort`、`workerPort`、`storageKey`、`vendureKey`、`workerSecret` 和 `codes`。配置文件由服务账号持有，权限为 `0600` 或 `0400`，任务目录为本项目 `.runtime` 下的 `0700` 子目录。`storageKey` 为独立 32 字节密钥的 64 位十六进制表示。`codes` 每项为 `{ code, plan, executionCode }`，`executionCode` 缺省时使用商城码。商城和执行器分别监听不同的回环端口。正式边缘代理只应接入商城端口，并校验商城来源。目录锁会拦截第二个实例，异常退出须先核对原任务和占用状态，再处理残留锁。
+使用 `node server/vendure-task-service.mjs <私有配置文件绝对路径>` 启动任务服务。配置字段为 `directory`、`vendurePort`、`workerPort`、`storageKey`、`vendureKey`、`workerSecret` 和 `codes`。配置文件由服务账号持有，权限为 `0600` 或 `0400`，任务目录为本项目 `.runtime` 下的 `0700` 子目录。`storageKey` 为独立 32 字节密钥的 64 位十六进制表示。`codes` 每项为 `{ code, plan, executionCode }`，`executionCode` 缺省时使用商城码。商城和执行器分别监听不同的回环端口。任务服务默认暂停接收和领取新单，启用前按[切换文档](../../docs/PRODUCTION_CUTOVER.md)核对正式入口。目录锁会拦截第二个实例，异常退出须先核对原任务和占用状态，再处理残留锁。
 
 商城执行通道当前只接浏览器路径，供应商 API 模式仍待按实际报价与订单契约验收。浏览器路径限制一次执行和一次卡片尝试，状态未知保留原任务及兑换码占用，执行器只重传幂等结果回执。正式启动前须核对实际价格、供应商配置、单实例启动策略及历史任务回读，并完成商城、收件和真实业务验收。
 

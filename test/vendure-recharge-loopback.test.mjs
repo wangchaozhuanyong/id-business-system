@@ -155,22 +155,40 @@ test('standalone task service separates the store and worker listeners and refus
       await rm(directory, { recursive: true, force: true });
     }
   });
-  service = await startVendureTaskService(config);
+  service = await startVendureTaskService({ ...config, acceptSubmissions: true });
   const post = (base, path, body, headers) => fetch(base + path, {
     method: 'POST', body, headers: { 'content-type': 'application/json', ...headers }
   });
   const claimPath = rechargeWorkerPrefix + '/claim';
   const verifyPath = vendureRechargePrefix + '/verify';
+  const queryPath = vendureRechargePrefix + '/query';
+  const submitPath = vendureRechargePrefix + '/submit';
+  const configPath = vendureRechargePrefix + '/config';
   const vendure = { 'x-vendure-recharge-key': config.vendureKey, 'x-vendure-client-ip': '203.0.113.10' };
   const worker = signRechargeWorkerRequest(config.workerSecret, claimPath, '{}');
   assert.equal((await post(service.vendureUrl, claimPath, '{}', worker)).status, 404);
   assert.equal((await post(service.workerUrl, verifyPath, '{}', vendure)).status, 404);
   assert.equal((await post(service.workerUrl, claimPath, '{}', worker)).status, 200);
   assert.equal((await post(service.vendureUrl, verifyPath, '{"code":"fixture-x"}', vendure)).status, 200);
+  const submit = JSON.stringify({ code: 'fixture-x', session: authorization() });
+  const created = await (await post(service.vendureUrl, submitPath, submit, vendure)).json();
+  assert.equal(created.status, 'queued');
   await assert.rejects(startVendureTaskService(config), /已被占用/);
   await service.close();
-  service = await startVendureTaskService(config);
+  service = await startVendureTaskService({
+    ...config, codes: [...config.codes, { code: 'fixture-y', plan: 'pro_5x' }]
+  });
   assert.equal((await post(service.vendureUrl, verifyPath, '{"code":"fixture-x"}', vendure)).status, 200);
+  assert.deepEqual(await (await post(service.vendureUrl, configPath, '{}', vendure)).json(), { maintenance: true });
+  const duplicate = await (await post(service.vendureUrl, submitPath, submit, vendure)).json();
+  assert.equal(duplicate.id, created.id);
+  assert.equal(duplicate.status, 'awaiting_review');
+  const newSubmit = JSON.stringify({ code: 'fixture-y', session: authorization() });
+  assert.deepEqual(await (await post(service.vendureUrl, submitPath, newSubmit, vendure)).json(), { rejected: true });
+  assert.deepEqual(await (await post(service.vendureUrl, queryPath, '{"code":"fixture-y"}', vendure)).json(),
+    { plan: 'pro_5x', status: 'available', task: null });
+  const freshSignature = signRechargeWorkerRequest(config.workerSecret, claimPath, '{}');
+  assert.deepEqual(await (await post(service.workerUrl, claimPath, '{}', freshSignature)).json(), { task: null });
 });
 
 test('worker uses the dedicated upstream code and writes one receipt without resending uncertain activation', async (t) => {
