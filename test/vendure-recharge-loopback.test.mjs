@@ -191,6 +191,76 @@ test('standalone task service separates the store and worker listeners and refus
   assert.deepEqual(await (await post(service.workerUrl, claimPath, '{}', freshSignature)).json(), { task: null });
 });
 
+test('legacy Vendure receipts authenticate old and new task tokens and never reach the worker', async (t) => {
+  const runtime = fileURLToPath(new URL('../.runtime', import.meta.url));
+  await mkdir(runtime, { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(join(runtime, 'vendure-history-test-'));
+  const storageKey = randomBytes(32).toString('hex');
+  const fingerprint = (purpose, value) =>
+    createHmac('sha256', Buffer.from(storageKey, 'hex')).update(purpose).update('\0').update(value).digest('hex');
+  const legacyId = '3a465105-0661-450e-ab2f-8ddfa986a12f';
+  const oldToken = randomBytes(32).toString('base64url');
+  const legacyCode = 'legacy-vendure-example';
+  const releasedId = '137f2108-0a7e-410b-af56-ff7273b68af2';
+  const releasedToken = randomBytes(32).toString('base64url');
+  const updatedAt = Date.now() - 60_000;
+  const config = {
+    directory, vendurePort: 0, workerPort: 0, storageKey, acceptSubmissions: true,
+    vendureKey: randomBytes(32).toString('hex'), workerSecret: randomBytes(32).toString('hex'),
+    codes: [{ code: 'new-fixture', plan: 'plus' }],
+    legacyReceipts: [
+      {
+        id: legacyId, codeRef: fingerprint('code', legacyCode), oldTokenRef: fingerprint('legacy-task', oldToken),
+        plan: 'pro_5x', status: 'succeeded', codeStatus: 'used', updatedAt
+      },
+      {
+        id: releasedId, oldTokenRef: fingerprint('legacy-task', releasedToken),
+        plan: 'plus', status: 'failed', updatedAt
+      }
+    ]
+  };
+  let service;
+  t.after(async () => {
+    try { await service?.close(); }
+    finally { await rm(directory, { recursive: true, force: true }); }
+  });
+  await assert.rejects(startVendureTaskService({ ...config, codes: [{ code: legacyCode, plan: 'plus' }] }), /冲突/);
+  service = await startVendureTaskService(config);
+  const send = (action, body) => fetch(service.vendureUrl + vendureRechargePrefix + '/' + action, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-vendure-recharge-key': config.vendureKey,
+      'x-vendure-client-ip': '203.0.113.20'
+    },
+    body: JSON.stringify(body)
+  });
+  const verify = await (await send('verify', { code: legacyCode })).json();
+  assert.deepEqual(verify, { plan: 'pro_5x', status: 'used' });
+  const query = await (await send('query', { code: legacyCode })).json();
+  const expected = { id: legacyId, plan: 'pro_5x', status: 'succeeded', updatedAt: new Date(updatedAt).toISOString() };
+  assert.deepEqual(query.task, { ...expected, taskToken: fingerprint('task', legacyId) });
+  assert.deepEqual(await (await send('submit', { code: legacyCode, session: authorization() })).json(), query.task);
+  assert.equal((await send('task', { id: legacyId, taskToken: 'wrong' })).status, 404);
+  await service.close();
+  service = await startVendureTaskService(config);
+  for (const taskToken of [oldToken, query.task.taskToken])
+    assert.deepEqual(await (await send('task', { id: legacyId, taskToken })).json(), expected);
+  assert.deepEqual(await (await send('task', { id: releasedId, taskToken: releasedToken })).json(),
+    { ...expected, id: releasedId, plan: 'plus', status: 'failed' });
+  assert.deepEqual(await (await send('query', { code: 'new-fixture' })).json(),
+    { plan: 'plus', status: 'available', task: null });
+  const path = rechargeWorkerPrefix + '/claim';
+  const claim = await fetch(service.workerUrl + path, {
+    method: 'POST', body: '{}',
+    headers: { 'content-type': 'application/json', ...signRechargeWorkerRequest(config.workerSecret, path, '{}') }
+  });
+  assert.deepEqual(await claim.json(), { task: null });
+  const stored = await readFile(join(directory, isolatedRechargeFilename));
+  assert.equal(stored.includes(Buffer.from(oldToken)), false);
+  assert.equal(stored.includes(Buffer.from(legacyCode)), false);
+});
+
 test('worker uses the dedicated upstream code and writes one receipt without resending uncertain activation', async (t) => {
   const bridge = await fixture(t, { durable: true });
   const upstreamSecret = randomBytes(32).toString('hex');

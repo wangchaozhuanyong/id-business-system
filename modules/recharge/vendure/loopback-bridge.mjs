@@ -16,6 +16,9 @@ const workerOutcomes = new Map([
   ['confirmed_failure', 'failed'],
   ['unknown', 'awaiting_review']
 ]);
+const legacyTaskStates = new Set(['succeeded', 'failed', 'awaiting_review']);
+const legacyCodeStates = new Set(['used', 'reserved']);
+const hexFingerprint = /^[a-f0-9]{64}$/;
 const signatureWindowMs = 30_000;
 const queuedLifetimeMs = 10 * 60_000;
 const leaseLifetimeMs = 5 * 60_000;
@@ -100,6 +103,28 @@ function codeKey(value) {
   return typeof value === 'string' && value.trim().length <= 190 ? value.trim() : '';
 }
 
+function indexLegacyReceipts(receipts, tasks, registry) {
+  if (!Array.isArray(receipts)) throw new TypeError('商城历史回执配置无效');
+  const byId = new Map();
+  const byCode = new Map();
+  const activeCodes = new Set([...tasks.values()].map((task) => task.codeRef));
+  for (const { id, codeRef, oldTokenRef, plan, status, codeStatus, updatedAt } of receipts) {
+    const hasCode = codeRef !== undefined || codeStatus !== undefined;
+    if (typeof id !== 'string' || !/^[a-z0-9-]{1,36}$/i.test(id) ||
+        typeof oldTokenRef !== 'string' || !hexFingerprint.test(oldTokenRef) ||
+        !plans.has(plan) || !legacyTaskStates.has(status) ||
+        !Number.isSafeInteger(updatedAt) || updatedAt <= 0 || updatedAt > 8_640_000_000_000_000 ||
+        byId.has(id) || tasks.has(id) ||
+        (hasCode && (typeof codeRef !== 'string' || !hexFingerprint.test(codeRef) ||
+          !legacyCodeStates.has(codeStatus) || byCode.has(codeRef) || activeCodes.has(codeRef) || registry.has(codeRef))))
+      throw new TypeError('商城历史回执格式无效或与现有任务冲突');
+    const receipt = { id, codeRef, oldTokenRef, plan, status, codeStatus, updatedAt };
+    byId.set(id, receipt);
+    if (hasCode) byCode.set(codeRef, receipt);
+  }
+  return { byId, byCode };
+}
+
 /** Isolated bridge with optional project-local storage. It never starts an executor. */
 export function createLoopbackVendureRechargeBridge({
   codes,
@@ -107,11 +132,13 @@ export function createLoopbackVendureRechargeBridge({
   workerSecret,
   store,
   acceptSubmissions = true,
+  legacyReceipts = [],
   now = Date.now
 }) {
   if (!strongSecret(vendureKey) || !strongSecret(workerSecret) || vendureKey === workerSecret)
     throw new TypeError('Vendure 与测试执行器需要独立服务凭据');
   if (typeof acceptSubmissions !== 'boolean') throw new TypeError('商城代充受理开关无效');
+  if (!store && legacyReceipts?.length) throw new TypeError('商城历史回执需要正式任务存储密钥');
 
   const memoryKey = store ? null : randomBytes(32);
   const fingerprint =
@@ -134,6 +161,7 @@ export function createLoopbackVendureRechargeBridge({
   let revision = loaded?.revision;
   let tasks = new Map((loaded?.state.tasks ?? []).map((task) => [task.id, task]));
   let nonces = new Map(loaded?.state.nonces ?? []);
+  const legacy = indexLegacyReceipts(legacyReceipts, tasks, registry);
   // The authorization never enters the durable snapshot, even during a failed commit.
   const sessions = new Map();
   let closed = false;
@@ -204,15 +232,18 @@ export function createLoopbackVendureRechargeBridge({
   function handleVendure(action, body, res, at) {
     if (action === 'config') return send(res, 200, { maintenance: !acceptSubmissions });
     if (action === 'task') {
-      const task = tasks.get(body.id);
-      if (!task || !secureEqual(fingerprint('task', task.id), body.taskToken))
+      const task = tasks.get(body.id) ?? legacy.byId.get(body.id);
+      const supplied = body.taskToken;
+      const oldTokenMatches = task?.oldTokenRef && typeof supplied === 'string' && supplied.length <= 100 &&
+        secureEqual(task.oldTokenRef, fingerprint('legacy-task', supplied.trim()));
+      if (!task || (!oldTokenMatches && !secureEqual(fingerprint('task', task.id), supplied)))
         return send(res, 404, { error: '任务不可用' });
       return send(res, 200, taskView(task));
     }
 
     const codeRef = fingerprint('code', codeKey(body.code));
     const record = registry.get(codeRef);
-    const prior = [...tasks.values()].find((task) => task.codeRef === codeRef);
+    const prior = legacy.byCode.get(codeRef) ?? [...tasks.values()].find((task) => task.codeRef === codeRef);
     if (action === 'submit') {
       if (prior) return send(res, 200, taskView(prior, true));
       if (!acceptSubmissions) return send(res, 200, { rejected: true });
@@ -232,13 +263,13 @@ export function createLoopbackVendureRechargeBridge({
     }
 
     if (!record && !prior) return send(res, 400, { error: '兑换码不可用' });
-    const status = prior
+    const status = prior?.codeStatus ?? (prior
       ? prior.status === 'succeeded'
         ? 'used'
         : 'reserved'
       : record.disabled
         ? 'disabled'
-        : 'available';
+        : 'available');
     const result = { plan: prior?.plan ?? record.plan, status };
     if (action === 'query') result.task = prior ? taskView(prior, true) : null;
     return send(res, 200, result);
@@ -384,6 +415,8 @@ export function createLoopbackVendureRechargeBridge({
       registry.clear();
       nonces.clear();
       sessions.clear();
+      legacy.byId.clear();
+      legacy.byCode.clear();
       memoryKey?.fill(0);
     }
   };

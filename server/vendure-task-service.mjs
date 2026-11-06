@@ -27,7 +27,8 @@ function closeServer(server) {
 }
 
 export async function startVendureTaskService({
-  directory, vendurePort, workerPort, storageKey, vendureKey, workerSecret, codes, acceptSubmissions = false
+  directory, vendurePort, workerPort, storageKey, vendureKey, workerSecret, codes,
+  acceptSubmissions = false, legacyReceipts
 }) {
   const validPort = (value) => Number.isInteger(value) && value >= 0 && value <= 65535;
   if (!validPort(vendurePort) || !validPort(workerPort) || (vendurePort !== 0 && vendurePort === workerPort) ||
@@ -78,7 +79,9 @@ export async function startVendureTaskService({
     return listen(server, port);
   }
   try {
-    bridge = createLoopbackVendureRechargeBridge({ codes, vendureKey, workerSecret, store, acceptSubmissions });
+    bridge = createLoopbackVendureRechargeBridge({
+      codes, vendureKey, workerSecret, store, acceptSubmissions, legacyReceipts
+    });
     const vendureUrl = await startListener(vendureRechargePrefix, vendurePort);
     const workerUrl = await startListener(rechargeWorkerPrefix, workerPort);
     return { vendureUrl, workerUrl, close };
