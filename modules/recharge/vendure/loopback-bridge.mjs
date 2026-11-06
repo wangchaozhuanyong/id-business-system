@@ -117,11 +117,15 @@ export function createLoopbackVendureRechargeBridge({
     ((purpose, value) =>
       createHmac('sha256', memoryKey).update(purpose).update('\0').update(value).digest('hex'));
   const registry = new Map();
-  for (const { code, plan, disabled = false } of codes) {
+  const assignedCodes = new Set();
+  for (const { code, plan, disabled = false, executionCode = code } of codes) {
     const key = codeKey(code);
+    const upstreamCode = codeKey(executionCode);
     const ref = fingerprint('code', key);
-    if (!key || !plans.has(plan) || registry.has(ref)) throw new TypeError('测试兑换码配置无效');
-    registry.set(ref, { plan, disabled });
+    if (!key || !upstreamCode || !plans.has(plan) || registry.has(ref) || assignedCodes.has(upstreamCode))
+      throw new TypeError('兑换码配置无效或重复分配代充码');
+    registry.set(ref, { plan, disabled, upstreamCode });
+    assignedCodes.add(upstreamCode);
   }
 
   const loaded = store?.load();
@@ -248,7 +252,8 @@ export function createLoopbackVendureRechargeBridge({
       for (const task of tasks.values()) {
         if (task.status !== 'queued') continue;
         const session = sessions.get(task.id);
-        if (!acceptedSession(session, at)) {
+        const record = registry.get(task.codeRef);
+        if (!record || record.disabled || record.plan !== task.plan || !acceptedSession(session, at)) {
           sessions.delete(task.id);
           nextTasks.set(task.id, transition(task, 'awaiting_review', at));
           continue;
@@ -264,7 +269,7 @@ export function createLoopbackVendureRechargeBridge({
         commit(nextTasks, nextNonces);
         sessions.delete(task.id);
         return send(res, 200, {
-          task: { ...taskView(leased), leaseToken, leaseUntil, session }
+          task: { ...taskView(leased), leaseToken, leaseUntil, session, executionCode: record.upstreamCode }
         });
       }
       return finish(200, { task: null });
@@ -279,16 +284,19 @@ export function createLoopbackVendureRechargeBridge({
       return finish(404, { error: '执行租约不可用' });
     const status = workerOutcomes.get(body.outcome);
     const evidenceId = body.evidenceId;
+    const upstreamJobId = body.upstreamJobId;
     const confirmed = status === 'succeeded' || status === 'failed';
     if (
       !status ||
+      (upstreamJobId !== undefined && (typeof upstreamJobId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(upstreamJobId))) ||
       (confirmed
         ? typeof evidenceId !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(evidenceId)
         : evidenceId !== undefined)
     )
       return finish(400, { error: '结果格式无效' });
     const evidenceRef = confirmed ? fingerprint('evidence', evidenceId) : null;
-    if (task.result?.status === status && task.result.evidenceRef === evidenceRef)
+    if (task.result?.status === status && task.result.evidenceRef === evidenceRef &&
+        task.result.upstreamJobId === upstreamJobId)
       return finish(200, taskView(task));
     if (
       task.status !== 'running' ||
@@ -297,7 +305,8 @@ export function createLoopbackVendureRechargeBridge({
       return finish(409, { error: '已有结果、租约失效或凭证重复，需核对原任务' });
     const completed = {
       ...transition(task, status, at),
-      result: { status, evidenceRef, receiptRef: nonceRef, receivedAt: at }
+      result: { status, evidenceRef, receiptRef: nonceRef, receivedAt: at,
+        ...(upstreamJobId === undefined ? {} : { upstreamJobId }) }
     };
     nextTasks.set(task.id, completed);
     return finish(200, taskView(completed));

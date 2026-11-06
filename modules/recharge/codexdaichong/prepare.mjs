@@ -88,7 +88,85 @@ export function adaptCodexdaichongServer(source) {
     "const integratedBridge = require('./upstream-bridge.cjs');",
     "const integratedBridge = require('./upstream-bridge.cjs');\nintegratedBridge.requireDedicatedRuntime();"
   );
-  return adaptLocalCheckoutDebugServer(result);
+  return adaptVendureActivation(adaptLocalCheckoutDebugServer(result));
+}
+
+function adaptVendureActivation(source) {
+  source = replaceSource(source, "app.get('/api/public/runtime', async (req, res) => {",
+    `app.get('/api/public/runtime', async (req, res) => {
+    if (req.idRechargeActor?.id === 'vendure-recharge-executor') res.set('X-ID-Vendure-Plan-Lock', '1');`);
+  const start = source.indexOf('async function handleActivationRequest(req, res) {');
+  const end = source.indexOf("app.post('/api/run-process',", start);
+  if (start < 0 || end < 0) throw new Error('上游开通入口版本不符');
+  let handler = source.slice(start, end);
+  handler = replaceSource(handler, "    const cdk = String(req.body?.cdk || '').trim();",
+    `    const cdk = String(req.body?.cdk || '').trim();
+    const vendure = req.idRechargeActor?.id === 'vendure-recharge-executor';
+    const expectedPlan = vendure ? req.body?.expectedPlan : undefined;
+    if (vendure && !['plus', 'pro_5x', 'pro_20x'].includes(expectedPlan)) {
+        return res.status(400).json({ success: false, message: '商城套餐无效' });
+    }`);
+  handler = replaceSource(handler, '        if (runningTask) {', `        if (runningTask) {
+            if (vendure) return res.status(409).json({ success: false, message: '需核对已存在的开通任务' });`);
+  handler = replaceSource(handler, "        const rawPlanType = String(cdkDetails.plan_type || 'plus').trim();",
+    `        const rawPlanType = String(cdkDetails.plan_type || 'plus').trim();
+        if (vendure && cdkDetails.plan_type !== expectedPlan) {
+            return res.status(409).json({ success: false, message: '兑换码套餐已经变化' });
+        }`);
+  handler = replaceSource(handler, 'await store.markCdkUsed(cdk)', 'await store.markCdkUsed(cdk, expectedPlan)');
+  handler = replaceSource(handler, '        if (!useGptApi) {', `        if (vendure && useGptApi) {
+            return res.status(503).json({ success: false, message: '商城供应商通道尚未验收' });
+        }
+        if (!useGptApi) {`);
+  handler = replaceSource(handler, 'sessionPayload: storedSession,', 'sessionPayload: vendure ? null : storedSession,');
+  handler = replaceSource(handler, 'tokenPreview: extractSessionPreview(storedSession),',
+    "tokenPreview: vendure ? '' : extractSessionPreview(storedSession),");
+  handler = replaceSource(handler, "fireTelegramNotification('card_pool_empty', {",
+    "if (!vendure) fireTelegramNotification('card_pool_empty', {");
+  handler = replaceSource(handler, 'cdkDetails, clientIp });', 'cdkDetails, clientIp, vendure });');
+  handler = replaceSource(handler, 'try { await store.markCdkUnused(cdk); } catch (_) { }',
+    'if (!vendure) { try { await store.markCdkUnused(cdk); } catch (_) { } }');
+  const activationSource = source.slice(0, start) + handler + source.slice(end);
+  const workerStart = activationSource.indexOf('function spawnActivationWorker(');
+  const workerEnd = activationSource.indexOf('async function handleActivationRequest(', workerStart);
+  if (workerStart < 0 || workerEnd < 0) throw new Error('上游执行入口版本不符');
+  let worker = activationSource.slice(workerStart, workerEnd);
+  worker = replaceSource(worker, 'cdkDetails, clientIp })', 'cdkDetails, clientIp, vendure = false })');
+  worker = replaceSource(worker, 'let shouldRollbackCdk = true;', 'let shouldRollbackCdk = !vendure;');
+  worker = replaceSource(worker, '        try {\n            for (let attempt = 1; attempt <= MAX_PROCESS_ATTEMPTS; attempt += 1) {',
+    `        const maxAttempts = vendure ? 1 : MAX_PROCESS_ATTEMPTS;
+        try {
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {`);
+  worker = replaceSource(worker, 'attempt >= MAX_PROCESS_ATTEMPTS', 'attempt >= maxAttempts');
+  worker = replaceSource(worker, '${attempt}/${MAX_PROCESS_ATTEMPTS}', '${attempt}/${maxAttempts}');
+  worker = replaceSource(worker, '                    JOB_KEY: task.jobKey,',
+    "                    JOB_KEY: task.jobKey,\n                    ID_VENDURE_SINGLE_ATTEMPT: vendure ? '1' : '',");
+  worker = replaceSource(worker, "if (finalStatus !== 'success') {\n                await store.markCdkUnused(cdk);",
+    "if (!vendure && finalStatus !== 'success') {\n                await store.markCdkUnused(cdk);");
+  worker = worker.replaceAll('notifyTaskOutcome({', 'if (!vendure) notifyTaskOutcome({');
+  return activationSource.slice(0, workerStart) + worker + activationSource.slice(workerEnd);
+}
+
+function adaptVendureCdkLock(source) {
+  const start = source.indexOf('async function markCdkUsed(cdk) {');
+  const end = source.indexOf('async function markCdkUnused(cdk) {', start);
+  if (start < 0 || end < 0) throw new Error('上游兑换码锁版本不符');
+  let lock = source.slice(start, end);
+  lock = replaceSource(lock, 'markCdkUsed(cdk)', 'markCdkUsed(cdk, expectedPlan)');
+  lock = replaceSource(lock, 'AND used_at IS NULL`,\n        [String(cdk)]',
+    'AND used_at IS NULL\n           AND (? IS NULL OR (CAST(plan_type AS BINARY) = CAST(? AS BINARY) AND type = \'自助\'))`,\n        [String(cdk), expectedPlan ?? null, expectedPlan ?? null]');
+  return source.slice(0, start) + lock + source.slice(end);
+}
+
+function adaptVendureCardAttempts(source) {
+  source = replaceSource(source, '    const screenshots = [];', `    const maxCardAttempts =
+        process.env.ID_VENDURE_SINGLE_ATTEMPT === '1' ? 1 : MAX_CARD_ATTEMPTS;
+    const screenshots = [];`);
+  source = replaceSource(source, '${MAX_CARD_ATTEMPTS} 张卡', '${maxCardAttempts} 张卡');
+  source = replaceSource(source, '${cardAttempt}/${MAX_CARD_ATTEMPTS}', '${cardAttempt}/${maxCardAttempts}');
+  source = replaceSource(source, 'cardAttempt < MAX_CARD_ATTEMPTS', 'cardAttempt < maxCardAttempts');
+  source = replaceSource(source, 'cardAttempt <= MAX_CARD_ATTEMPTS', 'cardAttempt <= maxCardAttempts');
+  return source;
 }
 
 export function adaptLocalCheckoutDebugServer(source) {
@@ -176,9 +254,15 @@ export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'cod
   await writeFile(serverPath, adaptCodexdaichongServer(await readFile(serverPath, 'utf8')));
   const workerPath = resolve(destination, 'index.js');
   await writeFile(workerPath, adaptLocalCheckoutDebugWorker(await readFile(workerPath, 'utf8')));
+  const storePath = resolve(destination, 'mysql-store.js');
+  await writeFile(storePath, adaptVendureCdkLock(await readFile(storePath, 'utf8')));
+  const paymentPath = resolve(destination, 'payment-retry.js');
+  await writeFile(paymentPath, adaptVendureCardAttempts(await readFile(paymentPath, 'utf8')));
   await exec(process.execPath, ['--check', bridgePath]);
   await exec(process.execPath, ['--check', serverPath]);
   await exec(process.execPath, ['--check', workerPath]);
+  await exec(process.execPath, ['--check', storePath]);
+  await exec(process.execPath, ['--check', paymentPath]);
   await writeFile(
     resolve(destination, '.id-business-integrated-runtime'),
     CODEXDAICHONG_REVISION + '\n',

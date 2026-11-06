@@ -76,4 +76,8 @@ node server/preview.mjs --local-data --port 4348 --codexdaichong-url "$RECHARGE_
 
 `node modules/recharge/codexdaichong/runtime.mjs preflight-production [副本目录]` 可对已初始化的独立正式库执行只读核对。沿用上述运行参数，库名为 `id_redesign_codexdaichong_prod`，专用账号为 `id_redesign_recharge`。预检确认实际连接身份，发现未结任务、待人工核对记录或资产锁时拒绝放行。此命令不初始化 MySQL 或启动执行器。
 
+专用执行器的入口为 `node modules/recharge/vendure/codexdaichong-worker.mjs <任务服务回环地址> <独立代充回环地址>`。每次进程只领取一笔。通过私有运行环境提供互不相同的 `ID_VENDURE_WORKER_SECRET` 和 `ID_RECHARGE_BRIDGE_SECRET`。执行前要求上游运行副本声明支持商城套餐锁。新版运行副本在占用自助兑换码的 SQL 中核对套餐，拒绝套餐变化或已有在途任务。商城码与执行码可以不同，映射应一对一。执行码及原始授权只经服务间回环传送。
+
+商城执行通道当前只接浏览器路径，供应商 API 模式仍待按实际报价与订单契约验收。浏览器路径限制一次执行和一次卡片尝试，状态未知保留原任务及兑换码占用，执行器只重传幂等结果回执。正式启动前须核对实际价格、供应商配置、单实例启动策略及历史任务回读，并完成商城、收件和真实业务验收。
+
 真实专用库、员工权限策略的生产验收、外部服务、设备和实际付款仍需独立验证。比特浏览器继续只接原授权 JSON 登录流程。

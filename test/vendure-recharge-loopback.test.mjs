@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startPreview } from '../server/preview.mjs';
+import { createVendureCodexdaichongWorker } from '../modules/recharge/vendure/codexdaichong-worker.mjs';
 import {
   createLoopbackVendureRechargeBridge,
   rechargeWorkerPrefix,
@@ -58,7 +59,8 @@ async function fixture(t, { durable = false, throughHost = false } = {}) {
       store: injectedStore,
       codes: [
         { code: 'fixture-a', plan: 'plus' },
-        { code: 'fixture-b', plan: 'pro_5x' },
+        { code: 'fixture-b', plan: 'pro_5x', executionCode: 'fixture-upstream-b' },
+        { code: 'fixture-c', plan: 'pro_20x' },
         { code: 'fixture-disabled', plan: 'pro_20x', disabled: true }
       ],
       now: () => at
@@ -116,6 +118,7 @@ async function fixture(t, { durable = false, throughHost = false } = {}) {
   return {
     vendure,
     origin: () => origin,
+    workerSecret,
     signed,
     worker: (action, body) => signed(action, body)(),
     restart: async () => {
@@ -133,6 +136,68 @@ async function fixture(t, { durable = false, throughHost = false } = {}) {
     }
   };
 }
+
+test('worker uses the dedicated upstream code and writes one receipt without resending uncertain activation', async (t) => {
+  const bridge = await fixture(t, { durable: true });
+  const upstreamSecret = randomBytes(32).toString('hex');
+  let hasPlanLock = false;
+  let verifiedPlan = 'pro_5x';
+  let ambiguous = false;
+  const starts = [];
+  const server = createServer(async (req, res) => {
+    const [payload, signature] = req.headers['x-id-recharge-assertion'].split('.');
+    assert.equal(createHmac('sha256', upstreamSecret).update(payload).digest('base64url'), signature);
+    const claim = JSON.parse(Buffer.from(payload, 'base64url'));
+    assert.equal(claim.actor.id, 'vendure-recharge-executor');
+    assert.equal(claim.path, req.url);
+    assert.equal(claim.method, req.method);
+    const reply = (value) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value));
+    if (req.url === '/api/public/runtime') {
+      if (hasPlanLock) res.setHeader('X-ID-Vendure-Plan-Lock', '1');
+      return reply({ success: true });
+    }
+    if (req.url === '/api/task-status/synthetic-job') return reply({
+      success: true, data: { jobKey: 'synthetic-job', status: 'success', isTerminal: true, cdkCode: 'fixture-upstream-b' }
+    });
+    const raw = [];
+    for await (const chunk of req) raw.push(chunk);
+    const input = JSON.parse(Buffer.concat(raw));
+    if (req.url === '/api/verify-cdk')
+      return reply({ success: true, data: { type: '自助', plan_type: verifiedPlan } });
+    assert.equal(req.url, '/api/run-process');
+    starts.push({ code: input.cdk, plan: input.expectedPlan, sessionMatched: input.session === authorization() });
+    if (ambiguous) return res.destroy();
+    return reply({ success: true, jobKey: 'synthetic-job' });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const run = () => createVendureCodexdaichongWorker({
+    bridgeUrl: bridge.origin(), upstreamUrl: 'http://127.0.0.1:' + server.address().port,
+    workerSecret: bridge.workerSecret, upstreamSecret
+  })();
+  const first = (await bridge.vendure('submit', { code: 'fixture-b', session: authorization() })).body;
+  await assert.rejects(run(), /缺少商城套餐锁/);
+  assert.equal((await bridge.vendure('task', taskIdentity(first))).body.status, 'queued');
+  hasPlanLock = true;
+  assert.deepEqual(await run(), { status: 'succeeded' });
+  assert.deepEqual(starts, [{ code: 'fixture-upstream-b', plan: 'pro_5x', sessionMatched: true }]);
+  assert.equal((await bridge.vendure('task', taskIdentity(first))).body.upstreamJobId, undefined);
+  assert.equal((await bridge.readFile()).includes(Buffer.from('fixture-upstream-b')), false);
+  assert.equal(bridge.inspect().state.tasks[0].result.upstreamJobId, 'synthetic-job');
+
+  await bridge.vendure('submit', { code: 'fixture-c', session: authorization() });
+  assert.deepEqual(await run(), { status: 'failed' });
+  assert.equal(starts.length, 1);
+
+  const second = (await bridge.vendure('submit', { code: 'fixture-a', session: authorization() })).body;
+  verifiedPlan = 'plus';
+  ambiguous = true;
+  assert.deepEqual(await run(), { status: 'awaiting_review' });
+  assert.equal((await bridge.vendure('submit', { code: 'fixture-a', session: authorization() })).body.id, second.id);
+  assert.deepEqual(await run(), { status: 'idle' });
+  assert.equal(starts.length, 2);
+});
 
 test('isolated site routes Vendure requests and keeps executor routes off the site listener', async (t) => {
   await assert.rejects(startPreview(0, {
