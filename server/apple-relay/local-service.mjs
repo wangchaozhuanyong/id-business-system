@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createRelayCodeReset } from './code-reset.mjs';
 import { createRelayMailReassignment } from './mail-reassignment.mjs';
+import { createAppleRelayPrimaryManagement } from './primary-management.mjs';
 import { RelayError, createVendureMailboxProvider } from './vendure-provider.mjs';
 
 const prefix = '/api/local/apple-relay/';
@@ -25,6 +26,8 @@ const publicQueryActor = { id: 'public-mailbox-query', name: '公开查询' };
 const invalidPublicCode = '查询码无效或已过期';
 const allowedMethods = new Map([
   ['status', 'GET'],
+  ['primary-save', 'POST'],
+  ['primary-import', 'POST'],
   ['test', 'POST'],
   ['sync', 'POST'],
   ['mails', 'POST'],
@@ -146,11 +149,11 @@ function snapshot(inventory) {
   };
 }
 
-function matchPrimaries(local, remoteRows, bindings) {
-  const remote = new Map(remoteRows.map((row) => [String(row.id), row]));
+function matchPrimaries(local, remoteRows, remoteIdFor) {
+  const remote = uniqueRemoteRows(remoteRows);
   const matched = new Map();
-  for (const [id, remoteId] of bindings) {
-    const row = local.parents.get(id);
+  for (const [id, row] of local.parents) {
+    const remoteId = remoteIdFor(row);
     const entry = remote.get(remoteId);
     if (
       activeParent(row) &&
@@ -164,11 +167,11 @@ function matchPrimaries(local, remoteRows, bindings) {
   return matched;
 }
 
-function matchAliases(local, remoteRows, bindings, primaryRows) {
-  const remote = new Map(remoteRows.map((row) => [String(row.id), row]));
+function matchAliases(local, remoteRows, remoteAliasIdFor, primaryRows) {
+  const remote = uniqueRemoteRows(remoteRows);
   const matched = new Map();
-  for (const [id, remoteId] of bindings) {
-    const row = local.aliases.get(id);
+  for (const [id, row] of local.aliases) {
+    const remoteId = remoteAliasIdFor(row);
     const owner = primaryRows.get(row?.parentMailboxId);
     const entry = remote.get(remoteId);
     if (
@@ -302,10 +305,14 @@ async function readBody(request, maximumBytes = 4096) {
   return body;
 }
 
-export function createAppleRelayService({ config, readInventory, fetchImpl, recordAction, publicOrigin }) {
+export function createAppleRelayService({ config, readInventory, savePrimaries, fetchImpl, recordAction, publicOrigin }) {
   const provider = config ? createVendureMailboxProvider(config, fetchImpl) : null;
   const primaryBindings = loadBindings(config?.primaryBindings);
   const aliasBindings = loadBindings(config?.aliasBindings);
+  const importAliasIds = config?.importAliasIds ?? [];
+  if (!Array.isArray(importAliasIds) || importAliasIds.length > 2 ||
+      !importAliasIds.every(boundedId) || new Set(importAliasIds).size !== importAliasIds.length)
+    throw new RelayError(503, '指定隐藏邮箱导入编号无效');
   const syncing = new Map();
   const historyPreviews = new Set();
   const publicAttempts = [];
@@ -315,18 +322,26 @@ export function createAppleRelayService({ config, readInventory, fetchImpl, reco
     return snapshot(await readInventory());
   }
 
+  const remoteIdFor = (row) => primaryBindings.get(row.id) ||
+    (boundedId(row.remotePrimaryId) ? row.remotePrimaryId : undefined);
+  const remoteAliasIdFor = (row) => aliasBindings.get(row.id) ||
+    (boundedId(row.remoteAliasId) ? row.remoteAliasId : undefined);
+  const primaryManagement = provider && savePrimaries && createAppleRelayPrimaryManagement({
+    provider, current, remoteIdFor, remoteAliasIdFor, importAliasIds, savePrimaries
+  });
+
   async function matched(includeAliases) {
     const [local, primaries, aliases] = await Promise.all([
       current(),
       provider.primaryAccounts().then(checkedRows),
       includeAliases ? provider.virtualEmails().then(checkedRows) : []
     ]);
-    const matchedParents = matchPrimaries(local, primaries, primaryBindings);
+    const matchedParents = matchPrimaries(local, primaries, remoteIdFor);
     return {
       primaries,
       aliases,
       matchedParents,
-      matchedAliases: matchAliases(local, aliases, aliasBindings, matchedParents)
+      matchedAliases: matchAliases(local, aliases, remoteAliasIdFor, matchedParents)
     };
   }
 
@@ -379,7 +394,7 @@ export function createAppleRelayService({ config, readInventory, fetchImpl, reco
     const parent = local.parents.get(alias.parentMailboxId);
     if (!activeParent(parent) || parent.status !== 'ACTIVE')
       return { reason: '主邮箱未启用或待核对' };
-    const remoteParentId = primaryBindings.get(parent.id);
+    const remoteParentId = remoteIdFor(parent);
     const remoteParent = remoteParents.get(remoteParentId);
     const parentEmail = normalizeEmail(parent.email);
     if (
@@ -391,7 +406,7 @@ export function createAppleRelayService({ config, readInventory, fetchImpl, reco
     }
     if (remoteParent.status !== 'ACTIVE') return { reason: 'Vendure 主邮箱暂不可用' };
 
-    const remoteAlias = remoteAliases.get(aliasBindings.get(alias.id));
+    const remoteAlias = remoteAliases.get(remoteAliasIdFor(alias));
     const aliasEmail = normalizeEmail(alias.email);
     if (
       !remoteAlias ||
@@ -553,7 +568,7 @@ export function createAppleRelayService({ config, readInventory, fetchImpl, reco
         localNow.status !== 'ACTIVE' ||
         localNow.email !== email ||
         localNow.version !== version ||
-        primaryBindings.get(parentId) !== parent.remoteId
+        remoteIdFor(localNow) !== parent.remoteId
       ) {
         throw new RelayError(409, '主邮箱资料已变化，请刷新后重试');
       }
@@ -979,22 +994,31 @@ export function createAppleRelayService({ config, readInventory, fetchImpl, reco
         }
         if (action === 'status') {
           const local = await current();
-          const parentIds = [...primaryBindings.keys()].filter((id) =>
-            activeParent(local.parents.get(id))
-          );
+          const parentIds = [...local.parents.values()]
+            .filter((row) => activeParent(row) && remoteIdFor(row))
+            .map(({ id }) => id);
           return writeJson(response, 200, {
             configured: Boolean(provider),
             codeQueryConfigured: Boolean(provider?.supportsCodeQuery),
+            ...(importAliasIds.length && { aliasImportCount: importAliasIds.length }),
             parentIds,
-            aliasIds: [...aliasBindings.keys()].filter(
-              (id) =>
-                activeAlias(local.aliases.get(id)) &&
-                parentIds.includes(local.aliases.get(id).parentMailboxId)
-            )
+            aliasIds: [...local.aliases.values()]
+              .filter((row) => activeAlias(row) && remoteAliasIdFor(row) &&
+                parentIds.includes(row.parentMailboxId))
+              .map(({ id }) => id)
           });
         }
         if (action === 'history-preview') {
           requireAdministrator(actor, '当前账号无权检查历史邮件');
+        }
+        if (action === 'primary-save' || action === 'primary-import') {
+          requireAdministrator(actor, '只有管理员可以管理主邮箱授权');
+          if (!primaryManagement) throw new RelayError(503, '原收件服务未连接，暂无法保存或导入主邮箱');
+          const input = await readBody(request);
+          const result = action === 'primary-save'
+            ? await primaryManagement.save(input, actor)
+            : await primaryManagement.importExisting(input, actor);
+          return writeJson(response, 200, result);
         }
         if (action === 'extraction-eligibility' || action === 'extraction-codes') {
           const copy = action === 'extraction-codes';

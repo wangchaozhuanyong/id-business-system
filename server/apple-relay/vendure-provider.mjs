@@ -44,6 +44,7 @@ export function createVendureMailboxProvider(config, fetchImpl = fetch) {
   const adminUrl = loopbackUrl(config.adminUrl);
   const shopUrl = config.shopUrl ? loopbackUrl(config.shopUrl) : null;
   const apiKey = config.apiKey?.trim();
+  const primarySettings = 'id email status note createdAt codeResetIntervalDays codeExpiresAt lastSyncedAt';
   if (!apiKey || apiKey.length > 512 || /[\r\n]/.test(apiKey)) {
     throw new RelayError(503, '请配置本机 Vendure 邮箱专用 API Key');
   }
@@ -93,15 +94,33 @@ export function createVendureMailboxProvider(config, fetchImpl = fetch) {
     primaryAccounts() {
       return request(
         adminUrl,
-        'query IdBusinessPrimaryAccounts { icloudPrimaryAccounts { id email status masterQueryCode codeExpiresAt } }',
+        `query IdBusinessPrimaryAccounts { icloudPrimaryAccounts { ${primarySettings} masterQueryCode } }`,
         {},
         'icloudPrimaryAccounts'
+      );
+    },
+    createPrimary(input) {
+      return request(
+        adminUrl,
+        `mutation IdBusinessCreatePrimary($input: CreateIcloudPrimaryAccountInput!) {
+          result: createIcloudPrimaryAccount(input: $input) { ${primarySettings} }
+        }`,
+        { input }, 'result'
+      );
+    },
+    updatePrimary(id, input) {
+      return request(
+        adminUrl,
+        `mutation IdBusinessUpdatePrimary($input: UpdateIcloudPrimaryAccountInput!) {
+          result: updateIcloudPrimaryAccount(input: $input) { ${primarySettings} }
+        }`,
+        { input: { id, ...input } }, 'result'
       );
     },
     virtualEmails() {
       return request(
         adminUrl,
-        'query IdBusinessVirtualEmails { icloudVirtualEmails { id primaryAccountId aliasEmail status buyerQueryCode codeExpiresAt } }',
+        'query IdBusinessVirtualEmails { icloudVirtualEmails { id primaryAccountId aliasEmail status buyerQueryCode codeExpiresAt codeResetIntervalDays note createdAt } }',
         {},
         'icloudVirtualEmails'
       );

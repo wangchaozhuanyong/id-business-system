@@ -21,6 +21,8 @@ const authorizationResult = get('bit-authorization-result');
 const windowName = get('bit-window-name');
 const urlInput = get('bit-local-url');
 const tokenInput = get('bit-local-token');
+const proxyUserInput = get('bit-proxy-user');
+const proxyPasswordInput = get('bit-proxy-password');
 const groupSelect = get('bit-local-group');
 const tagSelect = get('bit-local-tag');
 const catalogResult = get('bit-catalog-result');
@@ -70,6 +72,7 @@ let profileData;
 let profileBusy = false;
 let profileConflict = false;
 let selectedProfileId = '';
+let loadedProxyEndpoint = '';
 let groupPreference = defaultConnection.groupName;
 let tagPreference = defaultConnection.tagName;
 
@@ -293,9 +296,31 @@ catalogButton.addEventListener('click', async () => {
 function clearConnectionSecrets() {
   tokenInput.value = '';
   get('bit-proxy-url').value = '';
-  get('bit-proxy-user').value = '';
-  get('bit-proxy-password').value = '';
+  clearProxyCredentials();
 }
+
+function clearProxyCredentials() {
+  proxyUserInput.value = '';
+  proxyPasswordInput.value = '';
+  loadedProxyEndpoint = '';
+}
+
+function proxyEndpoint({ proxyMode, proxyType, staticHost, staticPort }) {
+  return proxyMode === 'static' ? JSON.stringify([proxyType, staticHost, staticPort]) : '';
+}
+
+function formProxyEndpoint() {
+  return proxyEndpoint({
+    proxyMode: proxyMode.value,
+    proxyType: profileControls.proxyType.value,
+    staticHost: profileControls.staticHost.value.trim(),
+    staticPort: profileControls.staticPort.valueAsNumber
+  });
+}
+
+loginForm.addEventListener('input', () => {
+  if (loadedProxyEndpoint && formProxyEndpoint() !== loadedProxyEndpoint) clearProxyCredentials();
+});
 
 function selectConnection(profile = defaultConnection) {
   selectedProfileId = profile.id || '';
@@ -331,10 +356,10 @@ function lastConnection() {
 async function restoreConnection(profile) {
   selectConnection(profile);
   rememberConnection();
-  if (!profile?.hasInterfaceToken) return;
+  if (!profile?.hasInterfaceToken && !profile?.hasStaticProxyCredentials) return;
   profileBusy = true;
   updateStartButton();
-  profileResult.textContent = '正在载入已保存的接口密钥…';
+  profileResult.textContent = '正在载入已保存的连接凭据…';
   try {
     const response = await fetch('/api/local/bitbrowser-connections', {
       method: 'POST',
@@ -343,19 +368,26 @@ async function restoreConnection(profile) {
       body: JSON.stringify({ id: profile.id, version: profileData.version })
     });
     const result = await response.json();
-    if (!response.ok || typeof result.interfaceToken !== 'string') {
+    if (!response.ok) {
       if (response.status === 409) {
         profileConflict = true;
         reloadProfileButton.hidden = false;
       }
       throw new Error();
     }
-    if (urlInput.value === profile.url && !tokenInput.value) {
+    if (urlInput.value === profile.url && !tokenInput.value && typeof result.interfaceToken === 'string') {
       tokenInput.value = result.interfaceToken;
-      profileResult.textContent = '已载入保存的接口密钥。';
     }
+    const endpoint = proxyEndpoint(profile);
+    if (result.staticProxyCredentials && endpoint && formProxyEndpoint() === endpoint &&
+        !proxyUserInput.value && !proxyPasswordInput.value) {
+      proxyUserInput.value = result.staticProxyCredentials.username;
+      proxyPasswordInput.value = result.staticProxyCredentials.password;
+      loadedProxyEndpoint = endpoint;
+    }
+    profileResult.textContent = '已载入保存的连接凭据。';
   } catch {
-    profileResult.textContent = '无法载入接口密钥，请重新读取配置或手动填写。';
+    profileResult.textContent = '无法载入连接凭据，请重新读取配置或手动填写。';
   } finally {
     profileBusy = false;
     updateStartButton();
@@ -434,6 +466,16 @@ async function saveProfile() {
     return;
   }
   const fixedProxy = proxyMode.value === 'static';
+  const username = proxyUserInput.value;
+  const password = proxyPasswordInput.value;
+  if (fixedProxy && Boolean(username) !== Boolean(password)) {
+    profileResult.textContent = '请同时填写固定代理账号和密码。';
+    (username ? proxyPasswordInput : proxyUserInput).focus();
+    return;
+  }
+  const staticProxyCredentials = fixedProxy && username && password
+    ? { username, password }
+    : loadedProxyEndpoint ? null : undefined;
   const submittedPrefix = draftPrefix();
   const submittedDraft = readConnectionDrafts();
   const draftVersion = submittedDraft[submittedPrefix + 'version'];
@@ -461,7 +503,8 @@ async function saveProfile() {
     const interfaceToken = profileData.canSaveToken ? tokenInput.value.trim() : '';
     profileData = await profileRequest({
       version: /^\d+$/.test(draftVersion || '') ? Number(draftVersion) : profileData.version, profile,
-      ...(interfaceToken && { interfaceToken })
+      ...(interfaceToken && { interfaceToken }),
+      ...(profileData.canSaveToken && staticProxyCredentials !== undefined && { staticProxyCredentials })
     });
     const latestDraft = readConnectionDrafts();
     const nextPrefix = `profile/${profileData.savedId}/`;
@@ -479,6 +522,9 @@ async function saveProfile() {
       latestDraft[nextPrefix + 'version'] = String(profileData.version);
     draftBridge?.write('bit-local', latestDraft);
     selectedProfileId = profileData.savedId;
+    if (staticProxyCredentials && formProxyEndpoint() === proxyEndpoint(profile))
+      loadedProxyEndpoint = proxyEndpoint(profile);
+    else if (staticProxyCredentials === null) loadedProxyEndpoint = '';
     updateProfileOptions();
     rememberConnection();
     profileResult.textContent = '连接配置已保存。';
@@ -569,8 +615,8 @@ loginForm.addEventListener('submit', async (event) => {
       dynamicProxyUrl: fixedProxy ? '' : get('bit-proxy-url').value.trim(),
       staticProxyCredentials: fixedProxy
         ? {
-            username: get('bit-proxy-user').value,
-            password: get('bit-proxy-password').value
+            username: proxyUserInput.value,
+            password: proxyPasswordInput.value
           }
         : undefined,
       signal: check.signal,

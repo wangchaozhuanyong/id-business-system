@@ -46,7 +46,9 @@ function label(value, field, required = false) {
 export function validateBitBrowserConnectionWrite(body) {
   if (
     !object(body) ||
-    Object.keys(body).length !== 2 + Number(Object.hasOwn(body, 'interfaceToken')) ||
+    Object.keys(body).some(
+      (key) => !['version', 'profile', 'interfaceToken', 'staticProxyCredentials'].includes(key)
+    ) ||
     !Object.hasOwn(body, 'version') ||
     !integer(body.version, 0, Number.MAX_SAFE_INTEGER - 1) ||
     !Object.hasOwn(body, 'profile') ||
@@ -109,9 +111,25 @@ export function validateBitBrowserConnectionWrite(body) {
   if (!integer(sessionWaitMinutes, 1, 10)) invalid('会话等待须在 1 至 10 分钟之间');
   if (!integer(sessionRetryLimit, 0, 9)) invalid('会话重试须在 0 至 9 次之间');
 
+  const staticProxyCredentials = body.staticProxyCredentials;
+  if (Object.hasOwn(body, 'staticProxyCredentials') && staticProxyCredentials !== null) {
+    if (
+      proxyMode !== 'static' ||
+      !object(staticProxyCredentials) ||
+      Object.keys(staticProxyCredentials).length !== 2 ||
+      !['username', 'password'].every((key) => {
+        const value = staticProxyCredentials[key];
+        return Object.hasOwn(staticProxyCredentials, key) && typeof value === 'string' &&
+          value.length > 0 && value.length <= 256 && !/[\x00-\x1f\x7f-\x9f]/.test(value);
+      })
+    )
+      invalid('固定代理账号和密码须一起填写，各不超过 256 字且不能包含控制字符');
+  }
+
   return {
     version,
     interfaceToken: interfaceToken?.trim(),
+    staticProxyCredentials,
     profile: {
       ...(editing ? { id: profile.id } : {}),
       name,
@@ -131,24 +149,33 @@ export function validateBitBrowserConnectionWrite(body) {
 }
 
 export function summarizeBitBrowserConnections(profiles) {
-  return profiles.map(({ interfaceToken, ...profile }) => ({
+  return profiles.map(({ interfaceToken, sealedStaticProxyCredentials, ...profile }) => ({
     ...profile,
-    ...(interfaceToken && { hasInterfaceToken: true })
+    ...(interfaceToken && { hasInterfaceToken: true }),
+    ...(sealedStaticProxyCredentials && { hasStaticProxyCredentials: true })
   }));
 }
 
-export function readBitBrowserConnectionToken(current, body) {
+export function readBitBrowserConnectionSecrets(current, body, unsealProxyCredentials) {
   if (!object(body) || Object.keys(body).length !== 2 || typeof body.id !== 'string' ||
       !uuid.test(body.id) || !integer(body.version, 0, Number.MAX_SAFE_INTEGER))
     invalid('连接配置编号或版本无效');
   if (current.version !== body.version)
     throw new BitBrowserConnectionError(409, '连接配置已更新，请重新读取后选择');
   const profile = current.data?.find(({ id }) => id === body.id);
-  if (!profile?.interfaceToken) throw new BitBrowserConnectionError(404, '此连接尚未保存接口密钥');
-  return { interfaceToken: profile.interfaceToken };
+  if (!profile?.interfaceToken && !profile?.sealedStaticProxyCredentials)
+    throw new BitBrowserConnectionError(404, '此连接尚未保存凭据');
+  return {
+    ...(profile.interfaceToken && { interfaceToken: profile.interfaceToken }),
+    ...(profile.sealedStaticProxyCredentials && {
+      staticProxyCredentials: unsealProxyCredentials(profile.id, profile.sealedStaticProxyCredentials)
+    })
+  };
 }
 
-export function writeBitBrowserConnection(current, { version, profile, interfaceToken }) {
+export function writeBitBrowserConnection(
+  current, { version, profile, interfaceToken, staticProxyCredentials }, sealProxyCredentials
+) {
   if (current.version !== version)
     throw new BitBrowserConnectionError(409, '连接配置已在其他页面更新，请刷新后重试');
   const profiles = current.data ?? [];
@@ -157,7 +184,19 @@ export function writeBitBrowserConnection(current, { version, profile, interface
   const savedId = profile.id ?? randomUUID();
   const previous = profiles[index];
   const token = interfaceToken ?? (previous?.url === profile.url ? previous.interfaceToken : undefined);
-  const saved = { ...profile, id: savedId, ...(token && { interfaceToken: token }) };
+  const sameProxy = profile.proxyMode === 'static' && previous?.proxyMode === 'static' &&
+    previous.proxyType === profile.proxyType && previous.staticHost === profile.staticHost &&
+    previous.staticPort === profile.staticPort;
+  let sealedStaticProxyCredentials;
+  if (staticProxyCredentials) {
+    sealedStaticProxyCredentials = sealProxyCredentials(savedId, staticProxyCredentials);
+  } else if (staticProxyCredentials === undefined && sameProxy) {
+    sealedStaticProxyCredentials = previous.sealedStaticProxyCredentials;
+  }
+  const saved = {
+    ...profile, id: savedId, ...(token && { interfaceToken: token }),
+    ...(sealedStaticProxyCredentials && { sealedStaticProxyCredentials })
+  };
   const updated = index === -1 ? [...profiles, saved] : profiles.with(index, saved);
   return { version: current.version + 1, profiles: updated, savedId };
 }

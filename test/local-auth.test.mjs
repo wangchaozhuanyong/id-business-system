@@ -150,9 +150,11 @@ test('production requires initialized staff and authenticates only the canonical
   assert.equal(logout.status, 200);
   assert.match(logout.headers.get('set-cookie'), /Max-Age=0; Secure$/);
   assert.equal((await request('/api/local/inventory', { session })).status, 401);
+  const newSession = cookie(await login(publicOrigin));
   await stop();
   ({ server, url } = await startPreview(0, options));
-  const newSession = cookie(await login(publicOrigin));
+  assert.equal((await request('/api/local/inventory', { session })).status, 401);
+  assert.equal((await request('/api/local/inventory', { session: newSession })).status, 200);
   const persisted = await request('/api/local/toolbox', { session: newSession });
   assert.equal(persisted.status, 200);
   assert.equal((await persisted.json()).version, 1);

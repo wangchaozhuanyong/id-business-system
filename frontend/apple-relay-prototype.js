@@ -345,7 +345,8 @@
       ? bound(id)
       : remote.status?.configured && remote.status.aliasIds?.includes(id);
   function localConnection(id) {
-    return remote.parents.get(id)?.message || (bound(id) ? '已绑定，等待测试' : '未绑定收件服务');
+    return remote.parents.get(id)?.message || parent(id)?.connection ||
+      (bound(id) ? '已绑定，等待测试' : '未绑定收件服务');
   }
   function renderParents() {
     const rows = parents.filter(
@@ -356,7 +357,16 @@
           .includes(view.q.toLowerCase())
     );
     return (
-      toolbar(A.button('新增主邮箱', 'relay-parent-add', 'primary', 'plus'), 'relay-parents') +
+      toolbar(
+        (local && remote.status?.configured
+          ? A.button('导入已有主邮箱', 'relay-primary-import', '', '', remote.importing ? 'disabled' : '')
+          : '') + A.button('新增主邮箱', 'relay-parent-add', 'primary', 'plus'),
+        'relay-parents'
+      ) +
+      (local && !remote.statusLoading && (!remote.status?.configured || remote.statusError)
+        ? `<p class="inline-notice warning" role="status">${E(remote.statusError ||
+          '原收件服务未连接，连接后可导入已有主邮箱及授权。')}</p>`
+        : '') +
       list(
         [
           { id: 'id', label: '主邮箱编号', class: 'mono' },
@@ -368,7 +378,7 @@
             render: (r) =>
               E(
                 local
-                  ? bound(r.id)
+                  ? r.remotePrimaryId || bound(r.id)
                     ? '由收件服务管理'
                     : '未配置'
                   : r.hasCredential
@@ -393,7 +403,7 @@
             id: 'lastSyncedAt',
             label: '最近同步时间',
             render: (r) =>
-              E(local ? remote.parents.get(r.id)?.syncedAt || '—' : r.lastSyncedAt || '—')
+              E((local && remote.parents.get(r.id)?.syncedAt) || r.lastSyncedAt || '—')
           },
           {
             id: 'lastSyncError',
@@ -731,7 +741,9 @@
     A.openDrawer(
       title,
       local
-        ? '登记资料保存在本机。收件连接待接入。'
+        ? kind === 'parent'
+          ? '使用 Apple 应用专用密码授权收信，保存后可在更多操作中测试连接。'
+          : '隐藏邮箱资料关联到指定主邮箱。'
         : '离线交互原型；不连接 Apple、IMAP 或 Vendure，不保存专用密码原文。',
       html,
       footer ||
@@ -763,20 +775,19 @@
       'parent',
       id,
       id ? '编辑 Apple 主邮箱' : '新增 Apple 主邮箱',
-      field('Apple 主邮箱', 'email', input('email', v('email'), 'autocomplete="off"'), true) +
-        (local
-          ? ''
-          : field(
-              id ? '更新专用密码' : '应用专用密码',
-              'appPassword',
-              input(
-                'appPassword',
-                '',
-                `type="password" data-no-draft autocomplete="new-password" placeholder="${id ? '留空表示不修改' : '原型只填写虚构示例'}"`
-              ),
-              !id,
-              '用于 iCloud 收信，不是 Apple ID 登录密码；本原型关闭后清除。'
-            )) +
+      field('Apple 主邮箱', 'email', input('email', local && row ? row.email : v('email'),
+        local && row ? 'autocomplete="off" readonly' : 'autocomplete="off"'), true) +
+        field(
+          id ? '更新专用密码' : '应用专用密码',
+          'appPassword',
+          input(
+            'appPassword', '',
+            `type="password" data-no-draft autocomplete="new-password" maxlength="256" placeholder="${id ? '留空表示不修改' : local ? '输入 Apple 应用专用密码' : '原型只填写虚构示例'}"`
+          ),
+          !id,
+          local ? '开启 Apple 账户双重认证后，可在 Apple 账户的登录与安全设置中生成应用专用密码。'
+            : '用于 iCloud 收信，不是 Apple ID 登录密码；本原型关闭后清除。'
+        ) +
         field(
           '有效天数',
           'days',
@@ -788,6 +799,10 @@
           : '') +
         field('备注', 'note', input('note', v('note'), 'maxlength="500"'))
     );
+    const password = document.getElementById('relay-appPassword');
+    document.querySelector('#drawer')?.addEventListener?.('close', () => {
+      if (password) password.value = '';
+    }, { once: true });
   }
   function openAliasEditor(id = '', parentId = '') {
     initialize();
@@ -1023,27 +1038,22 @@
     return true;
   }
   function saveParent(form) {
+    if (form.dataset.saving) return;
     const check = checked(form, 'parent');
     if (!check) return;
     const { raw, ctx } = check,
       row = parent(ctx.id),
-      credential = Boolean(val(raw, 'appPassword'));
+      appPassword = val(raw, 'appPassword'),
+      credential = Boolean(appPassword);
     delete raw['relay-appPassword'];
     const password = document.getElementById('relay-appPassword');
-    if (password) password.value = '';
+    if (!local && password) password.value = '';
     if (!validEmail(val(raw, 'email'))) return fail('email', '请填写有效 Apple 主邮箱');
-    if (!local && !row && !credential)
-      return fail('appPassword', '新增主邮箱需要应用专用密码，原型仅填写虚构值');
+    if (!row && !credential)
+      return fail('appPassword', local ? '请填写 Apple 应用专用密码' : '新增主邮箱需要应用专用密码，原型仅填写虚构值');
     if (!validDays(raw)) return fail('days', '有效天数应为 1 至 3650 的整数');
     if (row && !statuses.some(([id]) => id === val(raw, 'status')))
       return fail('status', '请选择有效状态');
-    if (
-      local &&
-      row &&
-      row.email !== val(raw, 'email') &&
-      aliases().some((a) => a.parentMailboxId === row.id)
-    )
-      return fail('email', '主邮箱已有隐藏邮箱，请保留当前地址以维持原有归属');
     if (
       parents.some(
         (p) =>
@@ -1053,11 +1063,43 @@
       return fail('email', '主邮箱已存在');
     const fp = fingerprint(raw),
       who = actor();
+    if (local) {
+      return A.confirmAction(
+        row ? '确认更新主邮箱' : '确认添加主邮箱',
+        '保存至原收件服务。保存后可测试 iCloud 收信连接。',
+        async () => {
+          if (!stillCurrent(form, ctx, fp, who) || val(A.readForm(form), 'appPassword') !== appPassword) return;
+          form.dataset.saving = 'true';
+          const submit = document.querySelector('button[form="relay-parent-form"]');
+          if (submit) submit.disabled = true;
+          try {
+            const result = await window.IDLocalData.relay('primary-save', {
+              ...(row && { id: row.id, version: ctx.version, status: val(raw, 'status') }),
+              email: val(raw, 'email'), note: val(raw, 'note'), days: Number(val(raw, 'days')),
+              ...(appPassword && { appPassword })
+            });
+            A.modules.inventory.applyCommittedInventory(result.inventory);
+            initialize();
+            if (context === ctx && document.getElementById(form.id) === form &&
+                fingerprint(A.readForm(form)) === fp && val(A.readForm(form), 'appPassword') === appPassword) {
+              if (password) password.value = '';
+              finish(ctx);
+            }
+            void readConnection();
+            A.notify('主邮箱已保存，可在更多操作中测试连接');
+          } catch (error) {
+            A.notify(error.message || '保存主邮箱失败，请核对后重试');
+          } finally {
+            delete form.dataset.saving;
+            if (submit) submit.disabled = false;
+          }
+        },
+        '确认保存'
+      );
+    }
     A.confirmAction(
       '确认登记主邮箱',
-      local
-        ? '保存主邮箱资料，供后续登记所属隐藏邮箱。'
-        : '专用密码原文不会保存在离线原型中；正式版本按原服务加密接入。',
+      '专用密码原文不会保存在离线原型中；正式版本按原服务加密接入。',
       () => {
         if (!stillCurrent(form, ctx, fp, who)) return;
         if (
@@ -1085,26 +1127,55 @@
               createdById: who.id,
               createdBy: who.name,
               queryCode: code('MAIN'),
-              queryExpiry: local ? '' : expiry(val(raw, 'days'))
+              queryExpiry: expiry(val(raw, 'days'))
             };
             Object.assign(saved, {
               email: val(raw, 'email'),
               note: val(raw, 'note'),
               days: Number(val(raw, 'days')),
               status: current ? val(raw, 'status') : 'ACTIVE',
-              hasCredential: !local && (credential || saved.hasCredential || false)
+              hasCredential: credential || saved.hasCredential || false
             });
-            if (credential && !local) {
+            if (credential) {
               saved.connection = '凭据待测试（演示）';
               saved.lastSyncError = '';
             }
             if (!current) parents.unshift(saved);
             audit(current ? '修改主邮箱' : '登记主邮箱', saved);
           },
-          local ? '主邮箱资料已保存到本机' : '主邮箱演示资料已保存，未连接 Apple'
+          '主邮箱演示资料已保存，未连接 Apple'
         );
       },
       '确认保存'
+    );
+  }
+  function importExistingPrimaries() {
+    if (!remote.status?.configured || remote.importing) return;
+    A.confirmAction(
+      '导入已有主邮箱',
+      remote.status.aliasImportCount
+        ? `沿用原主邮箱授权，并导入指定的 ${remote.status.aliasImportCount} 条隐藏邮箱。`
+        : '沿用原收件服务中的主邮箱编号和授权，已绑定的记录会保留。',
+      async () => {
+        if (remote.importing) return;
+        remote.importing = true;
+        renderRelayPage();
+        try {
+          const result = await window.IDLocalData.relay('primary-import', {});
+          if (result.inventory) A.modules.inventory.applyCommittedInventory(result.inventory);
+          initialize();
+          void readConnection();
+          A.notify(result.imported || result.importedAliases
+            ? `已导入 ${result.imported} 个主邮箱、${result.importedAliases || 0} 条隐藏邮箱`
+            : '没有待导入的邮箱');
+        } catch (error) {
+          A.notify(error.message || '导入主邮箱失败，请核对收件服务后重试');
+        } finally {
+          remote.importing = false;
+          renderRelayPage();
+        }
+      },
+      '确认导入'
     );
   }
   function makeAlias(email, parentId, days, note, importId = '') {
@@ -2136,6 +2207,8 @@
       A.render();
     } else if (action === 'relay-service-retry') {
       void readConnection();
+    } else if (local && action === 'relay-primary-import') {
+      importExistingPrimaries();
     } else if (local && action === 'relay-live-code-read') {
       void readCurrentCode(kind, id, node);
     } else if (local && action === 'relay-live-code-reset') {

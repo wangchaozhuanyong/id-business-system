@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { promisify } from 'node:util';
+import { openLocalSessionStore } from './local-auth-sessions.mjs';
 
 export const localAdminEmail = 'ppfzj1314@gmail.com';
 const localCookieName = 'id_local_session';
@@ -301,7 +302,7 @@ export function createLocalAdminSetup(accountPath, { onCreated } = {}) {
 export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUrl } = {}) {
   if (!readAccounts(accountPath)) return null;
   const cookieName = publicUrl ? '__Host-id_session' : localCookieName;
-  const sessions = new Map();
+  const sessions = publicUrl ? openLocalSessionStore(accountPath + '.sessions') : new Map();
   const attempts = [];
   let verifying = 0;
 
@@ -381,10 +382,14 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     }
     const previousToken = requestToken(request, cookieName);
     if (previousToken) sessions.delete(previousToken);
-    for (const [token, session] of sessions) {
-      if (session.expiresAt <= at) sessions.delete(token);
+    if (publicUrl) {
+      sessions.prune(at);
+    } else {
+      for (const [token, session] of sessions) {
+        if (session.expiresAt <= at) sessions.delete(token);
+      }
+      if (sessions.size >= 1024) sessions.delete(sessions.keys().next().value);
     }
-    if (sessions.size >= 1024) sessions.delete(sessions.keys().next().value);
     const token = randomBytes(32).toString('hex');
     sessions.set(createHash('sha256').update(token).digest('hex'), {
       employeeId: employee.id,
