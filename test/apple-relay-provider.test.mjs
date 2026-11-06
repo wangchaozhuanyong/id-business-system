@@ -119,6 +119,73 @@ test('imports old primary authorizations, then creates and edits through the exi
   assert.equal(state.upstream.calls.filter(({ query }) => query.includes('createIcloudPrimaryAccount')).length, 2);
 });
 
+test('registers only submitted Apple aliases, reconciles an interrupted batch and never stores upstream codes', async (t) => {
+  const state = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  state.inventory = {
+    ...Object.fromEntries(['mailboxes', 'accounts', 'batches', 'returnRecords', 'importRecords',
+      'registrationRecords', 'tableSettings', 'undo'].map((key) => [key, []])),
+    appleRelay: { parents: state.inventory.appleRelay.parents, imports: [], events: [] }
+  };
+  store.saveBatch([{ domain: 'inventory', version: 0, data: state.inventory }]);
+  state.savePrimaries = (rows, actor, aliases, registration) => {
+    const saved = store.saveAppleRelayPrimaries(rows, { ...actor, name: '登记测试员' }, aliases, registration);
+    state.inventory = saved.data;
+    return saved;
+  };
+  const request = await listen(t, state);
+  const fields = { parentId: 'one', parentVersion: 1, days: 31, batch: false };
+  const rows = [{ email: 'new-alias@example.test', note: '登记测试' }];
+  assert.equal((await request('alias-register', { ...fields, rows }, undefined, 'employee', 'employee')).status, 403);
+  assert.equal((await request('alias-register', { ...fields, parentVersion: 2, rows })).status, 409);
+  assert.equal((await request('alias-register', {
+    ...fields, rows: [{ email: 'other@example.test', note: '' }]
+  })).status, 409);
+  assert.equal(state.upstream.calls.some(({ query }) => query.includes('mutation')), false);
+
+  const registered = await request('alias-register', { ...fields, rows });
+  assert.equal(registered.status, 200);
+  const [saved] = registered.body.inventory.data.mailboxes;
+  assert.equal(saved.email, rows[0].email);
+  assert.equal(saved.createdBy, '登记测试员');
+  assert.equal(saved.inventoryHistory[0].action, '登记隐藏邮箱');
+  assert((await request('status')).body.aliasIds.includes(saved.id));
+  const eligibility = await request('extraction-eligibility', { aliasIds: [saved.id] });
+  assert.equal(eligibility.status, 200);
+  assert.deepEqual(eligibility.body, { items: [{ id: saved.id, eligible: true, reason: null }] });
+  assert(!JSON.stringify(registered.body).includes('BUY-REGISTERED'));
+  assert(!JSON.stringify(store.audit()).includes('BUY-REGISTERED'));
+  assert(store.audit().some((row) => row.targetId === saved.id && row.action === 'inventory_relay_alias_save'));
+  assert.equal((await request('alias-register', { ...fields, rows })).status, 409);
+  assert.equal(state.upstream.calls.filter(({ query }) => query.includes('createIcloudVirtualEmail')).length, 1);
+
+  const batch = { ...fields, batch: true, rows: [
+    { email: 'unbound@example.test', note: '已登记到同一主邮箱' },
+    { email: 'batch-first@example.test', note: '备注,可包含逗号' },
+    { email: 'batch-last@example.test', note: '' }
+  ] };
+  state.upstream.interruptAliasBatch = true;
+  const interrupted = await request('alias-register', batch);
+  assert.equal(interrupted.status, 502);
+  assert.match(interrupted.body.message, /第 3 条/);
+  assert.equal(state.inventory.mailboxes.length, 1);
+  assert.deepEqual(state.inventory.appleRelay.imports, []);
+  const recovered = await request('alias-register', batch);
+  assert.equal(recovered.status, 200);
+  assert.equal(recovered.body.registered, 3);
+  assert.equal(state.inventory.mailboxes.length, 4);
+  const [entry] = state.inventory.appleRelay.imports;
+  assert.equal(entry.total, 3);
+  assert.equal(entry.actorId, 'relay-tester');
+  assert.equal(entry.results[1].note, batch.rows[1].note);
+  const mutations = state.upstream.calls.filter(({ query }) => query.includes('batchCreateIcloudVirtualEmails'));
+  assert.deepEqual(mutations.map(({ variables }) => variables.input.rawInput), [
+    'batch-first@example.test,备注,可包含逗号\nbatch-last@example.test', 'batch-last@example.test'
+  ]);
+  assert.equal(state.upstream.aliases.filter(({ aliasEmail }) => aliasEmail === 'batch-first@example.test').length, 1);
+});
+
 function fakeVendure() {
   const primaries = [
     primary('vp-one', 'one@example.test', 'MSTR-ONE'),
@@ -152,6 +219,31 @@ function fakeVendure() {
     }
     if (query.includes('icloudVirtualEmails')) {
       return Response.json({ data: { icloudVirtualEmails: aliases } });
+    }
+    const register = ({ primaryAccountId, aliasEmail, note, codeResetIntervalDays }) => {
+      const row = {
+        ...alias(`va-registered-${aliases.length}`, primaryAccountId, aliasEmail, `BUY-REGISTERED-${aliases.length}`),
+        note, codeResetIntervalDays
+      };
+      aliases.push(row);
+      return row;
+    };
+    if (query.includes('createIcloudVirtualEmail')) {
+      const { id } = register(variables.input);
+      return Response.json({ data: { result: { id } } });
+    }
+    if (query.includes('batchCreateIcloudVirtualEmails')) {
+      const lines = variables.input.rawInput.split('\n');
+      const accepted = state.interruptAliasBatch ? lines.slice(0, 1) : lines;
+      for (const line of accepted) {
+        const [aliasEmail, ...note] = line.split(',');
+        register({ ...variables.input, aliasEmail, note: note.join(',') });
+      }
+      if (state.interruptAliasBatch) {
+        state.interruptAliasBatch = false;
+        return Response.json({ errors: [{ message: 'fixture response interrupted' }] });
+      }
+      return Response.json({ data: { result: { createdCount: accepted.length, skippedCount: 0 } } });
     }
     if (query.includes('createIcloudPrimaryAccount')) {
       const { email, note, codeResetIntervalDays, appPassword } = variables.input;

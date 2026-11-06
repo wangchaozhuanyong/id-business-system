@@ -877,7 +877,7 @@
           'note',
           input('note', d['relay-note'] ?? row?.notes ?? '', 'maxlength="500"')
         ) +
-        `<div class="commerce-span-all footnote">${local ? '查询码将在查询服务接通后签发。' : '隐藏邮箱无需独立密码、2FA 或电话；查询码和到期时间由系统生成。'}</div>`
+        `<div class="commerce-span-all footnote">${local ? '收件服务登记后可查看查询码。已签发的查询码可从资料操作中重置。' : '隐藏邮箱无需独立密码、2FA 或电话；查询码和到期时间由系统生成。'}</div>`
     );
     ctx.parentId = row?.parentMailboxId || '';
     if (id) {
@@ -1217,7 +1217,42 @@
     audit('登记隐藏邮箱', row, parentId);
     return row;
   }
+  function usesRelayRegistration() {
+    return local && (remote.status?.configured || window.IDLocalData.authRequired);
+  }
+  async function registerAliases(form, ctx, fp, payload) {
+    if (form.dataset.saving) return;
+    form.dataset.saving = 'true';
+    const submit = document.querySelector(`button[form="${form.id}"][type="submit"]`);
+    if (submit) submit.disabled = true;
+    try {
+      const result = await window.IDLocalData.relay('alias-register', payload);
+      A.modules.inventory.applyCommittedInventory(result.inventory);
+      initialize();
+      if (context === ctx && document.getElementById(form.id) === form &&
+          document.querySelector('#drawer')?.open && fingerprint(A.readForm(form)) === fp) {
+        finish(ctx);
+      } else {
+        const savedDraft = A.state.drafts.get(ctx.key);
+        if (savedDraft && fingerprint(savedDraft) === fp) A.state.drafts.delete(ctx.key);
+        renderRelayPage();
+      }
+      void readConnection();
+      A.notify(`已登记 ${result.registered} 条隐藏邮箱，可在资料中查看查询码`);
+    } catch (error) {
+      if (error.status === 409) {
+        await A.modules.inventory.refreshLocalInventory({ keepContent: true });
+        initialize();
+        renderRelayPage();
+      }
+      A.notify(error.message || '登记隐藏邮箱失败，保留当前资料供核对重试');
+    } finally {
+      delete form.dataset.saving;
+      if (submit) submit.disabled = false;
+    }
+  }
   function saveAlias(form) {
+    if (form.dataset.saving) return;
     const check = checked(form, 'alias');
     if (!check) return;
     const { raw, ctx } = check,
@@ -1242,7 +1277,7 @@
       return fail('email', '隐藏邮箱已登记，不能重复绑定其他主邮箱');
     const fp = fingerprint(raw),
       who = actor(),
-      parentVersion = p.version;
+      parentVersion = p.version || 1;
     A.confirmAction(
       '确认登记隐藏邮箱',
       '只登记已存在的 Apple 隐藏地址，不会在 Apple 创建邮箱。所属主邮箱需与实际转发设置一致。',
@@ -1250,12 +1285,16 @@
         if (!stillCurrent(form, ctx, fp, who)) return;
         if (
           parent(pid)?.status !== 'ACTIVE' ||
-          parent(pid)?.version !== parentVersion ||
+          (parent(pid)?.version || 1) !== parentVersion ||
           duplicateAlias(val(raw, 'email'), ctx.id)
         ) {
           A.notify('主邮箱或隐藏邮箱库存已变化，本次未保存');
           return;
         }
+        if (!row && usesRelayRegistration()) return registerAliases(form, ctx, fp, {
+          parentId: pid, parentVersion, days: Number(val(raw, 'days')), batch: false,
+          rows: [{ email: val(raw, 'email'), note: val(raw, 'note') }]
+        });
         return saveChange(
           form,
           ctx,
@@ -1274,7 +1313,7 @@
             } else makeAlias(val(raw, 'email'), pid, val(raw, 'days'), val(raw, 'note'));
           },
           local
-            ? '隐藏邮箱及所属主邮箱关系已保存到本机'
+            ? '隐藏邮箱资料已保存'
             : '隐藏邮箱已登记到原主邮箱，查询码由系统生成'
         );
       },
@@ -1329,7 +1368,7 @@
       ctx,
       fingerprint: fingerprint(raw),
       parentId: p.id,
-      parentVersion: p.version,
+      parentVersion: p.version || 1,
       rows
     };
     const target = document.getElementById('relay-import-preview');
@@ -1352,6 +1391,7 @@
     );
   }
   function saveImport(form) {
+    if (form.dataset.saving) return;
     const check = checked(form, 'import');
     if (!check) return;
     const { raw, ctx } = check,
@@ -1369,12 +1409,16 @@
         if (!stillCurrent(form, ctx, fp, who)) return;
         if (
           parent(prior.parentId)?.status !== 'ACTIVE' ||
-          parent(prior.parentId)?.version !== prior.parentVersion ||
+          (parent(prior.parentId)?.version || 1) !== prior.parentVersion ||
           parseBatch(raw).some((r) => r.error)
         ) {
           A.notify('主邮箱或库存已变化，请重新预检；本次未导入');
           return;
         }
+        if (usesRelayRegistration()) return registerAliases(form, ctx, fp, {
+          parentId: prior.parentId, parentVersion: prior.parentVersion, days: Number(val(raw, 'days')),
+          batch: true, rows: prior.rows.map(({ email, note }) => ({ email, note }))
+        });
         return saveChange(
           form,
           ctx,

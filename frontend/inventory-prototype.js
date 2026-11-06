@@ -3930,8 +3930,8 @@
       }
     },
     applyCommittedInventory,
-    refreshLocalInventory() {
-      return localData ? readLocalInventory() : undefined;
+    refreshLocalInventory(options) {
+      return localData ? readLocalInventory(options) : undefined;
     },
     commitAccountSale(accountId, { orderId, expectedVersion } = {}) {
       if (localData) return { ok: false, message: '本机订单与库存必须一起保存' };

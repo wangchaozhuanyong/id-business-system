@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -524,11 +524,19 @@ export function createLocalBusinessStore(databasePath) {
       const review = usageReviewRows(inspectInventoryUsage(snapshot.data, readDocument('commerce').data));
       return review.length ? { ...snapshot, usageReview: review } : snapshot;
     },
-    saveAppleRelayPrimaries(rows, actor, aliases = []) {
+    saveAppleRelayPrimaries(rows, actor, aliases = [], registration) {
       const { version, data } = readDocument('inventory');
       const inventory = data ?? Object.fromEntries(inventoryLists.map((key) => [key, []]));
-      const { parents } = inventory.appleRelay ??= { parents: [], imports: [], events: [] };
+      const relay = inventory.appleRelay ??= { parents: [], imports: [], events: [] };
+      const { parents } = relay;
       const time = new Date().toISOString();
+      const batchId = registration?.batch ? `relay-import-${randomUUID()}` : '';
+      const aliasAction = registration && !registration.batch
+        ? 'inventory_relay_alias_save' : 'inventory_relay_alias_import';
+      if (registration && !parents.some((row) => row.id === registration.parentId &&
+          (row.version || 1) === registration.parentVersion && row.status === 'ACTIVE' && !row.deleted)) {
+        throw new LocalDataError(409, '主邮箱已更新，本系统尚未入库。刷新后可按相同内容重试');
+      }
       for (const { expectedVersion, imported, sourceCreatedAt, ...row } of rows) {
         const index = parents.findIndex(({ id }) => id === row.id);
         const before = parents[index];
@@ -563,6 +571,14 @@ export function createLocalBusinessStore(databasePath) {
               inventoryState: 'available', used: false, inventoryHistory: [], usageLinks: [],
               createdAt: typeof sourceCreatedAt === 'string' ? sourceCreatedAt : '', importedAt: time
             };
+        if (registration) Object.assign(saved, {
+          source: 'Apple 主邮箱登记', importId: batchId,
+          createdAt: time, createdById: actor.id, createdBy: actor.name,
+          inventoryHistory: [{
+            id: `relay-asset-event-${randomUUID()}`, action: '登记隐藏邮箱', detail: row.parentMailboxId,
+            actorId: actor.id, actor: actor.name, time
+          }]
+        });
         Object.assign(saved, {
           version: (expectedVersion ?? 0) + 1, lastOperatedAt: time,
           lastOperatedById: actor.id, lastOperatedBy: actor.name
@@ -570,11 +586,22 @@ export function createLocalBusinessStore(databasePath) {
         if (index === -1) inventory.mailboxes.unshift(saved);
         else inventory.mailboxes[index] = saved;
       }
+      if (batchId) {
+        const imports = relay.imports ??= [];
+        imports.unshift({
+          id: batchId, type: 'relay', types: ['relay'], parentId: registration.parentId, time,
+          actor: actor.name, actorId: actor.id, total: aliases.length, success: aliases.length,
+          failed: 0, status: '已登记',
+          results: aliases.map(({ id, email, notes }, index) => ({
+            id: `row-${index + 1}`, line: index + 1, email, note: notes, error: '', assetId: id
+          }))
+        });
+      }
       return this.saveBatch(
-        [{ domain: 'inventory', version, data: inventory, action: 'inventory_relay_parent_save' }],
+        [{ domain: 'inventory', version, data: inventory, action: registration ? aliasAction : 'inventory_relay_parent_save' }],
         { actor, [verifiedAppleRelayPrimaries]: [
           ...rows.map(({ id }) => ({ id, action: 'inventory_relay_parent_save' })),
-          ...aliases.map(({ id }) => ({ id, action: 'inventory_relay_alias_import' }))
+          ...aliases.map(({ id }) => ({ id, action: aliasAction }))
         ] }
       )[0];
     },

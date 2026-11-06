@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { registerAppleRelayAliases } from './alias-registration.mjs';
 import { RelayError } from './vendure-provider.mjs';
 
 const fields = ['id', 'version', 'email', 'appPassword', 'note', 'days', 'status'];
@@ -79,6 +80,12 @@ export function createAppleRelayPrimaryManagement({
   }
 
   return {
+    registerAliases(input, actor) {
+      return registerAppleRelayAliases(input, actor, {
+        perform, provider, remoteIdFor, remoteAliasIdFor, savePrimaries
+      });
+    },
+
     save(input, actor) {
       const { id, version, email, appPassword, note, days, status } = readInput(input);
       return perform(async (local, upstream) => {

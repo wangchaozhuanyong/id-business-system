@@ -195,7 +195,8 @@ export async function startPreview(
         config: relayConfig,
         publicOrigin: secureOrigin,
         readInventory: () => store.load('inventory').data,
-        savePrimaries: (rows, actor, aliases) => store.saveAppleRelayPrimaries(rows, actor, aliases),
+        savePrimaries: (rows, actor, aliases, registration) =>
+          store.saveAppleRelayPrimaries(rows, actor, aliases, registration),
         fetchImpl: relayFetch,
         recordAction: ({ action, actor, parentId, aliasId }) =>
           store.recordAuthEvent({ action: 'relay_' + action, actor, targetId: aliasId || parentId })
