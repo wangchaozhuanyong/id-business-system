@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="design-preview-revision" content="20261105-bit-login" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>ID 业务管理 · 新版交互设计</title>
+    <link rel="stylesheet" href="./prototype.css?v=20261105-recharge-1" />
+    <link rel="stylesheet" href="./recharge-integration.css?v=20261105-bit-login" />
+    <link rel="stylesheet" href="./bitbrowser-addresses.css?v=20261105-addresses" />
+    <link rel="stylesheet" href="./title-help.css" />
+    <link rel="stylesheet" href="./overview-prototype.css" />
+    <script src="/title-help.js" defer></script>
+    <script src="./prototype.js?v=20261105-bit-login" defer></script>
+    <script src="./inventory-prototype.js?v=20261105-bit-login" defer></script>
+    <script src="./apple-relay-prototype.js?v=20261105-bit-login" defer></script>
+    <script src="./apple-balance-prototype.js?v=20261105-bit-login" defer></script>
+    <script src="./commerce-prototype.js?v=20261105-bit-login" defer></script>
+    <script src="./operations-prototype.js?v=20261105-bit-login" defer></script>
+    <script src="./bitbrowser-addresses.js?v=20261105-addresses" defer></script>
+    <script src="./overview-prototype.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="主导航"></aside>
+      <div class="sidebar-shade" id="sidebar-shade" hidden></div>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button
+              class="icon-button"
+              id="nav-toggle"
+              aria-label="展开或收起导航"
+              aria-expanded="true"
+            ></button>
+            <div class="topbar-context">
+              <nav class="breadcrumbs" id="breadcrumbs" aria-label="所属栏目"></nav>
+              <div class="topbar-page-title" id="page-title"></div>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <button
+              class="prototype-label"
+              type="button"
+              data-action="preview-states"
+              title="查看加载、失败、空数据等设计状态"
+            >
+              <i></i>交互原型 · 状态预览
+            </button>
+            <button class="button quiet" id="tools-button"></button>
+            <button class="icon-button" id="theme-toggle" aria-label="切换为深色主题"></button>
+            <span class="topbar-divider"></span>
+            <button class="profile-button" id="profile-button" aria-label="查看演示账户">
+              <span class="avatar">林</span><span class="profile-name">林管理员</span>
+            </button>
+          </div>
+        </header>
+        <main id="main" tabindex="-1" aria-labelledby="page-title-heading"></main>
+        <footer class="workspace-footer">
+          <span>ID 业务管理系统</span
+          ><span>北京时间（UTC+8） · 页面设计预览 · 所有资料均为虚构示例</span>
+        </footer>
+      </div>
+    </div>
+    <dialog id="drawer" class="drawer" aria-labelledby="drawer-title"></dialog>
+    <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title"></dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

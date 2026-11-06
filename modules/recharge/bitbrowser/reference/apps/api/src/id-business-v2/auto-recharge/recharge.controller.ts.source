@@ -1,0 +1,218 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query
+} from '@nestjs/common';
+import { CurrentUser, Public, RequireRoles } from '../../auth/auth.decorators';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import { RechargeLoginCodeService } from './recharge-login-code.service';
+import { RechargeManualSettlementService } from './recharge-manual-settlement.service';
+import { RechargeService } from './recharge.service';
+import { RechargeLocalService } from './recharge-local.service';
+import { RechargeSettingsService } from './recharge-settings.service';
+
+@Controller('id-business-v2/auto-recharge')
+@RequireRoles('admin')
+export class RechargeController {
+  constructor(
+    private readonly service: RechargeService,
+    private readonly local: RechargeLocalService,
+    private readonly settings: RechargeSettingsService,
+    private readonly loginCodes: RechargeLoginCodeService,
+    private readonly manualSettlement: RechargeManualSettlementService
+  ) {}
+  @Get('bitbrowser-settings')
+  @Header('Cache-Control', 'no-store')
+  getBitBrowserSettings(
+    @CurrentUser() operator: AuthenticatedUser,
+    @Query('connectionProfileId') profileId?: string
+  ) {
+    return this.settings.get(operator, profileId === 'default' ? null : profileId);
+  }
+  @Get('server-proxy-settings')
+  @Header('Cache-Control', 'no-store')
+  getServerProxySettings(@CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.getServerProxySettings(operator);
+  }
+  @Put('server-proxy-settings')
+  updateServerProxySettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.updateServerProxySettings(input, operator);
+  }
+  @Put('bitbrowser-settings')
+  updateBitBrowserSettings(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.settings.update(input, operator);
+  }
+  @Post('bitbrowser-catalog-access')
+  @Header('Cache-Control', 'no-store')
+  bitBrowserCatalogAccess(@CurrentUser() operator: AuthenticatedUser, @Body() input: unknown = {}) {
+    return this.settings.catalogAccess(operator, input);
+  }
+  @Get('jobs')
+  @Header('Cache-Control', 'no-store')
+  list(@CurrentUser() operator: AuthenticatedUser) {
+    return this.service.list(operator);
+  }
+  @Get('jobs/review')
+  @Header('Cache-Control', 'no-store')
+  review(@Query() query: Record<string, unknown>, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.review(query, operator);
+  }
+  @Get('addresses')
+  @Header('Cache-Control', 'no-store')
+  listAddresses(@Query() query: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.listAddresses(query, operator);
+  }
+  @Post('addresses/import')
+  importAddresses(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.importAddresses(input, operator);
+  }
+  @Post('addresses/generate')
+  @Header('Cache-Control', 'no-store')
+  generateAddresses(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.generateAddresses(input, operator);
+  }
+  @Patch('addresses/:id/status')
+  updateAddressStatus(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.updateAddressStatus(id, input, operator);
+  }
+  @Post('jobs')
+  start(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.start(input, operator);
+  }
+  @Post('jobs/server-recheck')
+  recheckServer(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.recheckServer(input, operator);
+  }
+  @Post('jobs/bitbrowser')
+  @Header('Cache-Control', 'no-store')
+  startBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.start(input, operator);
+  }
+  @Post('jobs/bitbrowser-open')
+  @Header('Cache-Control', 'no-store')
+  startBitBrowserOpen(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.startOpen(input, operator);
+  }
+  @Post('jobs/bitbrowser-recheck')
+  recheckBitBrowser(@Body() input: unknown, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.recheck(input, operator);
+  }
+  @Post('jobs/:id/login-code')
+  @Header('Cache-Control', 'no-store')
+  loginCode(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.loginCodes.request(id, input, operator);
+  }
+  @Post('jobs/:id/manual-settlement')
+  settleManually(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.manualSettlement.settle(id, input, operator);
+  }
+  @Post('jobs/:id/resolve-declined')
+  resolveDeclined(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.resolveDeclined(id, input, operator);
+  }
+  @Post('jobs/:id/resolve-no-bank-request')
+  resolveNoBankRequest(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.local.resolveNoBankRequest(id, input, operator);
+  }
+  @Post('jobs/:id/next-cycle-confirm')
+  @Header('Cache-Control', 'no-store')
+  confirmNextCycle(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.local.confirmNextCycle(id, input, operator);
+  }
+  @Post('jobs/:id/bitbrowser-cancel')
+  cancelBitBrowser(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.cancel(id, operator);
+  }
+  @Post('jobs/:id/bitbrowser-unreceived')
+  abandonUnreceivedBitBrowser(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.abandonUnreceived(id, operator);
+  }
+  @Post('jobs/:id/bitbrowser-access')
+  bitBrowserAccess(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.local.access(id, operator);
+  }
+  @Get('jobs/:id/handoff')
+  @Header('Cache-Control', 'no-store')
+  handoffFrame(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.handoffFrame(id, operator);
+  }
+  @Post('jobs/:id/handoff')
+  @Header('Cache-Control', 'no-store')
+  handoffCommand(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.handoffCommand(id, input, operator);
+  }
+  @Post('jobs/:id/confirm')
+  confirm(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.confirm(id, input, operator);
+  }
+  @Post('jobs/:id/details')
+  submitDetails(
+    @Param('id') id: string,
+    @Body() input: unknown,
+    @CurrentUser() operator: AuthenticatedUser
+  ) {
+    return this.service.submitDetails(id, input, operator);
+  }
+  @Post('jobs/:id/cancel')
+  cancel(@Param('id') id: string, @CurrentUser() operator: AuthenticatedUser) {
+    return this.service.cancel(id, operator);
+  }
+  @Public()
+  @Post('local/:id')
+  localCallback(
+    @Param('id') id: string,
+    @Headers('x-recharge-local') token: unknown,
+    @Body() input: unknown
+  ) {
+    return this.local.callback(id, token, input);
+  }
+  @Public()
+  @Post('internal/:id')
+  callback(
+    @Param('id') id: string,
+    @Headers('x-recharge-worker') token: unknown,
+    @Body() input: unknown
+  ) {
+    this.service.authorizeWorker(token);
+    return this.service.callback(id, input);
+  }
+}

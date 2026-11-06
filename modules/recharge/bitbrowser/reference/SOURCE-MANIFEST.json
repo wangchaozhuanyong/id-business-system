@@ -1,0 +1,463 @@
+{
+  "sourceRepository": "wangchaozhuanyong/id-business-system",
+  "commit": "e51dd9c9974c6292dbbc6572a5d844a672f0d0f1",
+  "publicationRun": 41779119131,
+  "selection": "BitBrowser web-direct execution and payment integrity; reference only",
+  "files": [
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue",
+      "sha256": "0011b117164bfbbc2761cc00cb13a0e0a6bebf920c9769663c1219848331c20d",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/RechargeBrowserSettings.vue.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/RechargeHistoryDrawer.vue",
+      "sha256": "9f0198945273bce98529e0d4f1130f15a70a886d95b57692140c0dd182778374",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/RechargeHistoryDrawer.vue.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/RechargeLocalPaymentControl.vue",
+      "sha256": "e02761cab33cc98d2c922813728c1752f6e77fe732333a32fab7979f8aacab56",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/RechargeLocalPaymentControl.vue.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/RechargeNextCycleControl.vue",
+      "sha256": "dc2a0c16d81d8d04317c68acc0b9fb7009bc1a50d6f6928fdbde14f7b57ed3d6",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/RechargeNextCycleControl.vue.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue",
+      "sha256": "a70b92dfda352481f317c40be8bfaf889d122a9de8f5ae594e7d3c96dab247e0",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/RechargePaymentReview.vue.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/RechargeSensitiveInput.vue",
+      "sha256": "75ec188c3728b77d26b636962c3e9886388fd950d27b58db8b0ba1a15b6392a6",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/RechargeSensitiveInput.vue.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue",
+      "sha256": "fc0afea1ec4aa60baf48ddfd29f6f860b6448a1c41943f6db12f42e48caab9b5",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/V2AutoRechargeView.vue.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/api.ts",
+      "sha256": "82e28ee6600f595576e360e9749d205187d7445de0d27b36e70b1446c0b1833c",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/api.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-catalog-rejection.spec.ts",
+      "sha256": "1ba05e9e5ee1553df5e5fe27aa74c323c619f3ffa4a8fcd3d0c40737c7f817f2",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-catalog-rejection.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-cdp.ts",
+      "sha256": "7f356d58fc4f9f2db1281051c0fda0dcd3999bb2466c75aefc66879749369e9a",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-cdp.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-checkout-diagnostic.spec.ts",
+      "sha256": "ae4294d327a3c2b300a7b19dd120822a5076484b5e8cb2062fced0c5858c3319",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-checkout-diagnostic.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-checkout-diagnostic.ts",
+      "sha256": "9773d4c9b837b4adb236d161e735b8f3bd56dc183fc671ec432734cb22017281",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-checkout-diagnostic.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts",
+      "sha256": "be81d4cff308ec9489904de84bb77742e823856d29d39d827c921f26c4b16369",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-api.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-credential.ts",
+      "sha256": "9e8e149da6d061818a96828174c54a01aa28539d94a4bee64f642fae6c32971b",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-credential.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-cycle.spec.ts",
+      "sha256": "f84a3259cf113c7ffb15db0adb5dc3b07b155ac59fe183175e32413929310e77",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-cycle.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-cycle.ts",
+      "sha256": "85c9349a415166f0cf68cb919c5d5947570b9ad34f85de8d577ad3af012ac92f",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-cycle.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.spec.ts",
+      "sha256": "439fc2935918bbe3445267b061097dea80d3ac043949b935ee4ff59c06d80ee8",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts",
+      "sha256": "80a0f4b4f7b9dba6efe141b50ed977a281d4a5a51200c84978d4320b4db9c463",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-login.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.spec.ts",
+      "sha256": "9b4a39bcf67462b686ef64747e61aa36f5194e3f35633715aff868d65c7f002e",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts",
+      "sha256": "69184c8fc7c6ed99706dfe3411f108be391e8ed2a4f3f352f62e623499f0ef11",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-payment.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-recheck.spec.ts",
+      "sha256": "9ccbe361eeee7577631b5a6440340f0c3f892fac999028b7b7f2a2bee59ce76f",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-recheck.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-recheck.ts",
+      "sha256": "60a9591dc1f303e77fc1e94be109f4dc6646c291cf0f27664b24b52d1ba5c6a1",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-recheck.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-security.spec.ts",
+      "sha256": "261799b82de956806dabe1a46951e06fe492478ef89c8987326cb7e1a1700f87",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-security.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-upgrade.spec.ts",
+      "sha256": "99cf733afa24764bb65c657451d45a298eb980e4e1358618065f66edeee972f9",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-upgrade.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-upgrade.ts",
+      "sha256": "695bf785f905f157f27c1d9e8ee5e4185f243a1763439abbe52d8e0c7fd06d98",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct-upgrade.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts",
+      "sha256": "e18c7fe564a52093622f1d15decfb50e19f138ba7d67060b66f20405dec81a15",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-direct.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-login-page.ts",
+      "sha256": "8ed5cc5d7ff6f21d6b25260ebc5d418d6843584b00a95aa69ec03588a7296f68",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-login-page.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-manual-settlement.spec.ts",
+      "sha256": "e2808ad4e0236a20b87b731162a6142b2d2a3620b60084428277420cc91bf490",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-manual-settlement.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-manual-settlement.ts",
+      "sha256": "10f8f03e89cd5e5fda2887fdd36f4fecc6365f102c2f4c204d3ba4d1657b054f",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-manual-settlement.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts",
+      "sha256": "416c85e0fc5982a85fad87e3cd1c372db3e2e56fbe30eef321eb1ac48331186e",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-observer.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.spec.ts",
+      "sha256": "232593043655657dfdb5e5e3f65efe751b9386f6bac0a99c277df228d7622fdb",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.ts",
+      "sha256": "9b2119905e37b4b4fe1f176729f75cd5ee8fbda20aad529b444aebbaaa495325",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-native-quote.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-diagnostics.spec.ts",
+      "sha256": "dee99a8e3dfc7d5a27a53df1b98c3ced2115cac0198d8689ecafda9d535a3ec3",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-diagnostics.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-diagnostics.ts",
+      "sha256": "20bdc8d58cb500f4f43a9439f8e3ee741b2232399223c833da5acc270f549bbe",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-diagnostics.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.spec.ts",
+      "sha256": "808a6ec3ac237be37b84b95cf4f0289d043b6b0e14ad49531a4492bd48c22b76",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts",
+      "sha256": "1a03b141786bb674748c4ae84a6401a234014cf6f743496603ccf9ff907aef3a",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-evidence.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-form.spec.ts",
+      "sha256": "0b670c4a270d04103092cc9807512d8f071af19c2d68d733c6b62cf6be8c97af",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-form.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-form.ts",
+      "sha256": "4ea5748fb8624608c8611507769705058547d34c0e9900bdca4ec051096b9247",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-form.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts",
+      "sha256": "371198bedfb41fbc19964aa35c618a5dcaf91210d2022d22ec6827a3601dd459",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-observer.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-page.spec.ts",
+      "sha256": "88a7bd8b44aab377c3e56b9b82a8e09a94d17ff0417536dd092295584c371c2f",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-page.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-page.ts",
+      "sha256": "5e7c50d16146187b2d1c4a5d217974309566a993332e20408cd3c64e0a6a6bdb",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-page.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-session.ts",
+      "sha256": "9eb9959b47be7acedd18de9d699508b5cbbe7b680970c136c8f983d896e9deba",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-payment-session.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-pro-tier.spec.ts",
+      "sha256": "1fcc62a696138a7fd287f41cdc5acc13513d3343a555293246dec6fd0a8c77b3",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-pro-tier.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-pro-tier.ts",
+      "sha256": "3f8f6cd4a5a11ecb7da7949d31c7f57b7dca45af0c19ac41b6e86ae53bf1eca8",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-pro-tier.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-stripe-quote.spec.ts",
+      "sha256": "6010fe72aea40e90855aac107b757b073591c6448bf52744abdbd0cbfe9a0321",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-stripe-quote.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/bitbrowser-stripe-quote.ts",
+      "sha256": "f48ea8a0e4b074f1d97e7566064d970d01ad0c42a40cbdfc506a9cf0007914a3",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/bitbrowser-stripe-quote.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/contracts.ts",
+      "sha256": "801729df20227178eebccb657caa0c14c1f223c2075db6550f8b46cc16eb0f4a",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/contracts.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/direct-payment-task.spec.ts",
+      "sha256": "17c41aa08543c82300f519253fdfa275c425bf1c39f54495eebcf8b896855bf1",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/direct-payment-task.spec.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/direct-payment-task.ts",
+      "sha256": "9fba271b30ad5dc64a3a5d1d79938f6863aa59b0f0780e4f4f6d5d79d8990792",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/direct-payment-task.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/recharge-availability.ts",
+      "sha256": "12a82c0acc4265ca0c8b9ce3fd823aec0014abbffb04103987ec2f721a027642",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/recharge-availability.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/recharge-direct-lifecycle.ts",
+      "sha256": "1dbff4ed6588cd6d5dc948506655a3d5e24f261689757bb483ebfd70a130705e",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/recharge-direct-lifecycle.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/recharge-plan-options.ts",
+      "sha256": "d2cac61e2cf0cabefb6566e5d5849d300a6d227c5abd138d432583ada21358a7",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/recharge-plan-options.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/recharge-proxy-options.ts",
+      "sha256": "69074d4fdd81fae2d256b7a08bf8e3fce22afa2e543272cbfa66e531afd39a78",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/recharge-proxy-options.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts",
+      "sha256": "6130cfa3661cac9463677e315008af143126d9ea43d25ce5c1f2dd67b8507e26",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/useAutoRecharge.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts",
+      "sha256": "35f0d606edb05468052f315e30950b731332080f4ed6526289b8db699f90105f",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/useBitBrowserDirectOpen.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts",
+      "sha256": "3e0407f3547aef3db49c1752bd3602c79f30bd57b4da8db76b7154d780224fae",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/useRechargeBrowserSettings.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts",
+      "sha256": "ea6bc153477ff2c00fc9c2ee5f38670b5c48ce9840c70eb6749e7b2ad6f599d0",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/useRechargeLocalConfirmation.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/useRechargeNextCycle.ts",
+      "sha256": "e8769efa4e6ddd4d5a35fb11e4d47e319317f3b95605f7a0e1b7df71494a7c58",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/useRechargeNextCycle.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/useRechargePaymentStart.ts",
+      "sha256": "db94482621855775b7672f7542003931c57c0c5a7f88d0a577568ff96e61179e",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/useRechargePaymentStart.ts.source"
+    },
+    {
+      "path": "apps/admin/src/v2/features/auto-recharge/useRechargeProxyRegion.ts",
+      "sha256": "069a935f4eab77d3ba1e9cd95c65ea11e2d4fba54d63d2af2d29bce77061a260",
+      "snapshot": "apps/admin/src/v2/features/auto-recharge/useRechargeProxyRegion.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts",
+      "sha256": "fea563eb0cb58c30eb6cd8e2b7accd1a57c8d452e6412d2663fc1cde48a24479",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-payment-hold.repository.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-settings.repository.ts",
+      "sha256": "0ee15681c821888f91a5628d54f26f5081cca7ce11d2f24001666beec812f287",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/persistence/recharge-settings.repository.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts",
+      "sha256": "2d0eeb15c7b918af0611600a5e29a80bbe00db3c96837d3678eae9367c5ac7a5",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/persistence/recharge.repository.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-bank-callback.ts",
+      "sha256": "12b2c08e3ae1b1a7af48af327a7b4eeab521d061c28ccb9b3f8bbe1471cffac3",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-bank-callback.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-browser-options.ts",
+      "sha256": "511898d7a34adcda590cdab5c7538ac4028610beb8ff1197600f48cb20851f0f",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-browser-options.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts",
+      "sha256": "0ad220ffc5e199752800902f5749a2b915cab368160cc530839e8ad7fbb51643",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-callback-lease.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts",
+      "sha256": "fb8ddc51ebe99355cfb498b5f06023b83943f020200d4ba5b94a296884bdf6b9",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-callback-receipts.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts",
+      "sha256": "690e45fd1b494730c760bcc8be428b9febe96194a0723947c4d4eb895975fdc0",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-card-billing.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-checkout-recovery.ts",
+      "sha256": "fa87f5d3a43536875f3658ba14ae678f9b125cfae5679b0e5e7f62fadfcd1c63",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-checkout-recovery.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-ledger.ts",
+      "sha256": "646f3c41830f20ed418b58054ae7e1f83326c2201ba580a92a27459bd7ea1cea",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-ledger.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts",
+      "sha256": "368955fc871a750f9e86d7936ffbf07542e0e4d450f5d00d549ca2097c122e69",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-cycle-state.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts",
+      "sha256": "452b6aca42e00ea7ee7c0d97a3038c35e831a92c48d3cf1e9fd830ae5c05e95c",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-declined-resolution.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts",
+      "sha256": "5a184ee2384c932654263ec9037cde7ce7e2ecedbcd771843363ed6b1cef85f6",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-direct-payment.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-expired-checkout.ts",
+      "sha256": "b7d950781cbd625e8c789b8b9cc9cf823bc6f1d4bd26621a4cf76fb84c2e68e5",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-expired-checkout.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-ledger-callback.ts",
+      "sha256": "a8e1782a618b28c3d05eca2b23cc4c96b8bce0d5beb8a9795bd9035d0e38498c",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-ledger-callback.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-local-payment-recovery.ts",
+      "sha256": "60ad6948a4fa6390e56809a96698a82fa48c607cae6647b3261303edabbbd77f",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-local-payment-recovery.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-local-validation.ts",
+      "sha256": "9a0d95d8644babba5de091c70f5f2fddb8f31c4e9abf6056adc90fdedfbd2a75",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-local-validation.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts",
+      "sha256": "b1478b6d3aa14407abda9a4abcce7355a10831128494b72c03e2573e1d112460",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-local.service.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts",
+      "sha256": "68682b2fa565786f680a15bfcc81cf5c5f459df0b7f6a4ca5697264d0b4f3935",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-noncharge-proof.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-payment-facts.ts",
+      "sha256": "c63934bf864804aaaa402de78052c4a2be29e2b6fd73f40d0fb16e78591dc77d",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-payment-facts.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-profile-recovery.ts",
+      "sha256": "e17cd9aced558fd34fcfece63da91f74b34f0aa16bbd0a84f7d446aa2eeb02ae",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-profile-recovery.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts",
+      "sha256": "20a8d4f88167c59196309ddb7ea5255b0e120d6092a0975a7a2b02ab84d4e131",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-resolution.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts",
+      "sha256": "121940b8fb3d9e6d0e8892e31a4254c8973c5094b09cea769f8c89f91a2a9f6a",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-settings-validation.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts",
+      "sha256": "3952a84de4a73499e676d8c064a79a4455e24e8ab79dea55e9884707fb070431",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-settings.service.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-subscription-cycle.ts",
+      "sha256": "a2ee8e1788bfe932ae6d962efc20933362e5f129ccb48b6058141cdd4aa08bd8",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-subscription-cycle.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-upgrade-protocol.ts",
+      "sha256": "3264d409d33695fece6aecb542e9ac28899c382f5b34d07f6abecde2b97e65b0",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-upgrade-protocol.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge-validation.ts",
+      "sha256": "f354c27da8f3f8ed31c9b4b0c5a76c9505c6c74ecda494b3ad9362df2e1e826f",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge-validation.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge.controller.ts",
+      "sha256": "0342504e93c5f55664a7806f71dbffff4f9c95565c53b57e3c00e4fb9b09b011",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge.controller.ts.source"
+    },
+    {
+      "path": "apps/api/src/id-business-v2/auto-recharge/recharge.service.ts",
+      "sha256": "ff88690e552ad7cfd1ec9fc22d28b3097f147672cb007c04ca68f604a966a611",
+      "snapshot": "apps/api/src/id-business-v2/auto-recharge/recharge.service.ts.source"
+    },
+    {
+      "path": "packages/shared/src/v2/auto-recharge.ts",
+      "sha256": "3afdff9e32b52fbc98c5fda595083844aaecf2bd269160b27654a7aafd7192d7",
+      "snapshot": "packages/shared/src/v2/auto-recharge.ts.source"
+    },
+    {
+      "path": "scripts/acceptance-v2-bitbrowser-direct.mjs",
+      "sha256": "a2e26fed7767ce6f117d0cece21e34ddbc1a03014bb0dca5ba5977b3b26a6c5c",
+      "snapshot": "scripts/acceptance-v2-bitbrowser-direct.mjs.source"
+    }
+  ]
+}

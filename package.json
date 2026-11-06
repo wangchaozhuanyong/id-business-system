@@ -1,0 +1,16 @@
+{
+  "name": "id-business-independent-redesign",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node server/preview.mjs",
+    "dev:local": "node server/preview.mjs --local-data --port 4348",
+    "setup:admin": "node server/setup-local-admin.mjs",
+    "test": "node --test frontend/*.spec.mjs test/*.test.mjs modules/recharge/codexdaichong/*.test.mjs",
+    "prepare:codexdaichong": "node modules/recharge/codexdaichong/prepare.mjs"
+  }
+}

@@ -1,0 +1,507 @@
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+import { installFinanceAssets } from './finance/preview-assets.mjs';
+import { createFinanceQuoteService } from './finance/quote-service.mjs';
+import { automaticSnapshotRoute, createAutomaticSnapshotHandler } from './finance/quote-route.mjs';
+import { handleWebsiteMonitor } from './tools/website-monitor.mjs';
+import { createWebsiteAnalytics } from './tools/website-analytics.mjs';
+import { createWebsiteVisits } from './tools/website-visits.mjs';
+import { createMediaResolver } from './tools/media-resolver.mjs';
+import {
+  createManagedMailboxQuery, managedMailboxQueryRoute, storefrontMailboxQueryRoute, verifyMailboxImap
+} from './tools/mailbox-pool.mjs';
+import { parseToolPublicOrigin } from './tools/request-origin.mjs';
+import { createMicrosoftMailbox, microsoftMailboxPrefix } from './tools/mailbox-microsoft.mjs';
+import { readToolConfig } from './tools/read-tool-config.mjs';
+import { createLocalCodexdaichongGateway } from '../modules/recharge/codexdaichong/local-gateway.mjs';
+
+const files = new Map([
+  ['index.html', 'text/html; charset=utf-8'],
+  ['prototype.css', 'text/css; charset=utf-8'],
+  ['title-help.css', 'text/css; charset=utf-8'],
+  ['overview-prototype.css', 'text/css; charset=utf-8'],
+  ['recharge-integration.css', 'text/css; charset=utf-8'],
+  ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
+  ...[
+    'prototype',
+    'overview-prototype',
+    'title-help',
+    'inventory-prototype',
+    'apple-relay-prototype',
+    'apple-balance-prototype',
+    'commerce-prototype',
+    'operations-prototype',
+    'bitbrowser-addresses'
+  ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
+]);
+
+export async function startPreview(
+  port = 4347,
+  {
+    codexdaichong,
+    rechargeConfig,
+    databasePath,
+    authPath,
+    bootstrapLocalAdmin = false,
+    relayConfig,
+    relayFetch,
+    financeProvider,
+    financeFetch,
+    mediaResolverUrl,
+    mediaFetch,
+    websiteAnalyticsConfig,
+    websiteAnalyticsFetch,
+    websiteVisitsSecret,
+    readManagedMailbox,
+    mailboxPublicOrigin,
+    microsoftMailboxConfig,
+    microsoftMailboxFetch
+  } = {}
+) {
+  const mailboxPublicUrl = parseToolPublicOrigin(mailboxPublicOrigin);
+  if (mailboxPublicUrl && (!databasePath || !authPath))
+    throw new Error('商城邮箱查询需要独立业务库和账号配置');
+  if (bootstrapLocalAdmin && (!databasePath || !authPath))
+    throw new Error('首次设置管理员需要本机数据库和账号文件');
+  if (rechargeConfig && (!databasePath || !authPath || codexdaichong))
+    throw new Error('本机线上代充需要本机业务模式和统一会话');
+  if (mediaResolverUrl && (!databasePath || !authPath))
+    throw new Error('作品解析需要本机业务模式和统一会话');
+  const handleMediaResolver = createMediaResolver({
+    url: mediaResolverUrl,
+    fetchWorker: mediaFetch
+  });
+  const handleWebsiteAnalytics = createWebsiteAnalytics({
+    config: websiteAnalyticsConfig,
+    fetchImpl: websiteAnalyticsFetch
+  });
+  const assets = new Map(
+    await Promise.all(
+      [...files].map(async ([file, type]) => [
+        '/' + file,
+        { type, body: await readFile(new URL('../frontend/' + file, import.meta.url)) }
+      ])
+    )
+  );
+  const localBitAssets = [
+    ['/assets/bitbrowser/authorization.mjs', '../modules/recharge/bitbrowser/authorization.mjs'],
+    ['/assets/bitbrowser/catalog.mjs', '../modules/recharge/bitbrowser/catalog.mjs'],
+    ['/assets/bitbrowser/local.mjs', '../frontend/bitbrowser-local.mjs'],
+    ...['index', 'direct-login', 'direct-api', 'browser-options', 'cdp', 'login-page'].map(
+      (name) => [
+        `/assets/bitbrowser/login/${name}.mjs`,
+        `../modules/recharge/bitbrowser/login/${name}.mjs`
+      ]
+    )
+  ];
+  for (const [route, file] of localBitAssets) {
+    assets.set(route, {
+      type: 'text/javascript; charset=utf-8',
+      body: await readFile(new URL(file, import.meta.url))
+    });
+  }
+  const bitLoginHtml = await readFile(
+    new URL('../frontend/bitbrowser-local.html', import.meta.url),
+    'utf8'
+  );
+  const localBitCheck = Buffer.from(
+    databasePath
+      ? bitLoginHtml.replace(
+          '<body class="bit-local">',
+          '<body class="bit-local" data-connection-profiles>'
+        )
+      : bitLoginHtml
+  );
+  const localBusiness = databasePath ? await import('./local-business.mjs') : null;
+  let store = null;
+  let handleManagedMailboxQuery;
+  let microsoftMailbox;
+  let handleWebsiteVisits;
+  let auth = null;
+  let loadAuth = null;
+  let setupAdmin = null;
+  let relay = null;
+  let signedOutIndex = null;
+  let setupIndex = null;
+  let handleAutomaticSnapshot = null;
+  const gateways = new Map();
+  function gatewayFor(host) {
+    if (!rechargeConfig) return codexdaichong;
+    if (!gateways.has(host)) {
+      gateways.set(
+        host,
+        createLocalCodexdaichongGateway({
+          upstreamUrl: rechargeConfig.upstreamUrl,
+          publicOrigin: `http://${host}`,
+          secret: rechargeConfig.secret,
+          getActor: (request) => auth?.getActor(request)
+        })
+      );
+    }
+    return gateways.get(host);
+  }
+  if (rechargeConfig) gatewayFor(`127.0.0.1:${port}`);
+  if (localBusiness) {
+    store = localBusiness.createLocalBusinessStore(databasePath);
+    try {
+      handleWebsiteVisits = createWebsiteVisits({ store, secret: websiteVisitsSecret });
+      microsoftMailbox = createMicrosoftMailbox({
+        store, config: microsoftMailboxConfig, fetchImpl: microsoftMailboxFetch, readImap: readManagedMailbox
+      });
+      handleManagedMailboxQuery = createManagedMailboxQuery({
+        store, storefrontOrigin: mailboxPublicUrl?.origin, readMailbox: microsoftMailbox.readMailbox
+      });
+      if (authPath) {
+        const { createLocalAuth, createLocalAdminSetup, localAdminEmail } = await import('./local-auth.mjs');
+        loadAuth = () =>
+          createLocalAuth(authPath, { onEvent: (event) => store.recordAuthEvent(event) });
+        auth = loadAuth();
+        if (bootstrapLocalAdmin && !auth) setupAdmin = {
+          handle: createLocalAdminSetup(authPath, {
+            onCreated: (actor) => store.recordAuthEvent({ action: 'auth_employee_create', actor, targetId: actor.id })
+          }),
+          email: localAdminEmail
+        };
+      }
+      const { createAppleRelayService } = await import('./apple-relay/local-service.mjs');
+      relay = createAppleRelayService({
+        config: relayConfig,
+        readInventory: () => store.load('inventory').data,
+        fetchImpl: relayFetch,
+        recordAction: ({ action, actor, parentId, aliasId }) =>
+          store.recordAuthEvent({ action: 'relay_' + action, actor, targetId: aliasId || parentId })
+      });
+      for (const [name, type] of [
+        ['local-data.js', 'text/javascript; charset=utf-8'],
+        ['toolbox-local.js', 'text/javascript; charset=utf-8'],
+        ['local-auth.js', 'text/javascript; charset=utf-8'],
+        ['local-auth.css', 'text/css; charset=utf-8'],
+        ['apple-relay-public.js', 'text/javascript; charset=utf-8'],
+        ['apple-relay-public.css', 'text/css; charset=utf-8']
+      ]) {
+        const body = await readFile(new URL('../frontend/' + name, import.meta.url));
+        assets.set('/' + name, { type, body });
+      }
+      assets.set('/mailbox-query', {
+        type: 'text/html; charset=utf-8',
+        body: await readFile(new URL('../frontend/apple-relay-public.html', import.meta.url))
+      });
+      assets.set('/assets/tools/totp.mjs', {
+        type: 'text/javascript; charset=utf-8',
+        body: await readFile(new URL('../modules/tools/totp.mjs', import.meta.url))
+      });
+    } catch (error) {
+      store.close();
+      throw error;
+    }
+    const index = assets.get('/index.html');
+    const localIndex = index.body
+      .toString('utf8')
+      .replace(
+        '    <script src="./prototype.js',
+        '    <link rel="stylesheet" href="/local-auth.css" />\n' +
+          '    <script src="/local-data.js" defer></script>\n' +
+          '    <script src="/toolbox-local.js" defer></script>\n' +
+          '    <script src="/local-auth.js" defer></script>\n    <script src="./prototype.js'
+      )
+      .replace('20261105-bit-login" />', '20261106-local-inventory-settings" />')
+      .replace(
+        '<title>ID 业务管理 · 新版交互设计</title>',
+        '<title>ID 业务管理 · 独立本机测试</title>'
+      )
+      .replace('页面设计预览 · 所有资料均为虚构示例', '本机业务模式 · 未接入的模块仍为演示');
+    index.body = Buffer.from(localIndex);
+    try {
+      const quoteService = createFinanceQuoteService({
+        provider: financeProvider,
+        fetchQuote: financeFetch
+      });
+      handleAutomaticSnapshot = createAutomaticSnapshotHandler({ store, quoteService });
+      await installFinanceAssets(assets, { automaticQuotes: quoteService.enabled });
+    } catch (error) {
+      store.close();
+      throw error;
+    }
+    if (loadAuth) {
+      signedOutIndex = Buffer.from(
+        localIndex
+          .replace('<head>', '<head>\n    <meta name="id-local-auth" content="required" />')
+          .replace(/^ *<script src="\.\/[^"\n]+" defer><\/script>\n/gm, '')
+          .replace('<div class="app-shell">', '<div class="app-shell" hidden>')
+          .replace('<a class="skip-link"', '<a hidden class="skip-link"')
+      );
+      if (setupAdmin) {
+        setupIndex = Buffer.from(signedOutIndex.toString('utf8').replace(
+          '<head>',
+          `<head>\n    <meta name="id-local-admin-setup" content="${setupAdmin.email}" />`
+        ));
+      }
+    }
+  }
+  const server = createServer((request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Referrer-Policy', 'no-referrer');
+    response.setHeader('X-ID-Workspace', 'independent-redesign-20261105');
+    const address = server.address();
+    const route = (request.url || '/').split('?', 1)[0];
+    const storefrontMailbox = route === storefrontMailboxQueryRoute &&
+      mailboxPublicUrl && request.headers.host === mailboxPublicUrl.host;
+    if (
+      !storefrontMailbox &&
+      !['127.0.0.1:' + address.port, 'localhost:' + address.port].includes(request.headers.host)
+    ) {
+      response.writeHead(403).end();
+      return;
+    }
+    if (loadAuth && !auth) {
+      try {
+        auth = loadAuth();
+      } catch {
+        response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return response.end('本机账号配置读取失败，请检查运行目录。');
+      }
+    }
+    const actor = auth?.getActor(request);
+    if (route === storefrontMailboxQueryRoute) {
+      if (!storefrontMailbox || !auth || request.url !== storefrontMailboxQueryRoute) {
+        response.writeHead(storefrontMailbox ? 400 : 404, { 'Cache-Control': 'private, no-store' }).end();
+        return;
+      }
+      return void handleManagedMailboxQuery(request, response);
+    }
+    const loginRequired = Boolean(auth || setupAdmin);
+    const canManage = !loginRequired || ['admin', 'super'].includes(actor?.role);
+    const forbidden = () => {
+      const code = actor ? 403 : 401;
+      response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+      return response.end(JSON.stringify({ error: actor ? '当前账号无权执行此操作' : '请先登录' }));
+    };
+    if (store && route.startsWith('/api/local/auth/')) {
+      if (route === '/api/local/auth/setup' && setupAdmin) {
+        if (!auth) return void setupAdmin.handle(request, response);
+        response.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+        return response.end(JSON.stringify({ error: '本机管理员已设置，请直接登录' }));
+      }
+      if (auth) return void auth.handle(request, response);
+      if (route === '/api/local/auth/session' && request.method === 'GET') {
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return response.end(JSON.stringify({ configured: false, actor: null }));
+      }
+      return response.writeHead(503).end();
+    }
+    if (store && route.startsWith(microsoftMailboxPrefix)) {
+      const operation = route.slice(microsoftMailboxPrefix.length);
+      if (operation !== 'callback' && (!actor || !canManage)) return forbidden();
+      return void microsoftMailbox.handle(request, response, operation, actor);
+    }
+    if (store && route === managedMailboxQueryRoute) {
+      if (!auth) return forbidden();
+      return void handleManagedMailboxQuery(request, response);
+    }
+    if (store && route === '/api/local/apple-relay/public-query') {
+      if (!auth) {
+        response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+        return response.end(JSON.stringify({ success: false, error: '邮箱查询服务尚未启用' }));
+      }
+      return void relay.handlePublicQuery(request, response);
+    }
+    if (store && route.startsWith('/api/local/apple-relay/')) {
+      if (!canManage || (!auth && relayConfig)) return forbidden();
+      return void relay.handle(request, response, route, actor);
+    }
+    if (store && route === automaticSnapshotRoute) {
+      if (!canManage) return forbidden();
+      return void handleAutomaticSnapshot(request, response, actor);
+    }
+    if (store && route.startsWith('/api/local/tools/media/')) {
+      if (!actor) return forbidden();
+      return void handleMediaResolver(request, response, actor);
+    }
+    if (store && route.startsWith('/api/local/tools/website-visits/')) {
+      const operation = route.slice('/api/local/tools/website-visits/'.length);
+      if (operation !== 'ingest' && (!actor || !canManage)) return forbidden();
+      return void handleWebsiteVisits(request, response, operation, actor);
+    }
+    if (store && route === '/api/local/tools/website-analytics') {
+      if (!actor || !canManage) return forbidden();
+      return void handleWebsiteAnalytics(request, response);
+    }
+    if (store && route === '/api/local/tools/website-monitor') {
+      if (!actor) return forbidden();
+      return void handleWebsiteMonitor(request, response, actor);
+    }
+    if (store && route.startsWith('/api/local/')) {
+      if (loginRequired && !actor) return forbidden();
+      if (
+        !canManage &&
+        route !== '/api/local/toolbox' &&
+        !['/api/local/saved-totp', '/api/local/saved-totp/code'].includes(route) &&
+        (request.method !== 'GET' || !['inventory', 'commerce'].includes(route.split('/').at(-1)))
+      )
+        return forbidden();
+      return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
+        verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,
+        async verifyRelayExtraction(aliasIds, operator) {
+          const { items } = await relay.checkExtractionEligibility(aliasIds, operator);
+          return items.filter((item) => item.eligible).map((item) => item.id);
+        }
+      });
+    }
+
+    if (route === '/integrations/bitbrowser/local-login') {
+      if (!canManage) return forbidden();
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return response.writeHead(405, { Allow: 'GET, HEAD' }).end();
+      }
+      response.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': localBitCheck.length,
+        'Content-Security-Policy':
+          "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+      });
+      return response.end(request.method === 'HEAD' ? undefined : localBitCheck);
+    }
+    if (route.startsWith('/integrations/codexdaichong/')) {
+      if (!canManage || (rechargeConfig && !actor)) return forbidden();
+      const gateway = gatewayFor(request.headers.host);
+      if (gateway) return gateway.handle(request, response);
+      if (route === '/integrations/codexdaichong/status' && request.method === 'GET') {
+        response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+        return response.end(JSON.stringify({ ready: false, message: '充值服务未接入' }));
+      }
+      return response.writeHead(404).end();
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.writeHead(405, { Allow: 'GET, HEAD' }).end();
+      return;
+    }
+    const path = route;
+    if (path === '/favicon.ico') {
+      response.writeHead(204).end();
+      return;
+    }
+    const asset = assets.get(
+      path === '/' || path === '/design-preview.html' ? '/index.html' : path
+    );
+    if (!asset) {
+      response.writeHead(404).end();
+      return;
+    }
+    if (path === '/mailbox-query') {
+      response.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+      );
+    }
+    let body = asset.body;
+    if (loginRequired && signedOutIndex && asset === assets.get('/index.html')) {
+      if (!actor) response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+      body = actor
+        ? Buffer.from(
+            body
+              .toString('utf8')
+              .replace(
+                '<head>',
+                `<head>\n    <meta name="id-local-auth" content="required" />\n    <meta name="id-local-actor" content="${encodeURIComponent(JSON.stringify(actor))}" />`
+              )
+          )
+        : setupIndex && !auth ? setupIndex : signedOutIndex;
+    }
+    response.writeHead(200, { 'Content-Type': asset.type, 'Content-Length': body.length });
+    response.end(request.method === 'HEAD' ? undefined : body);
+  });
+  if (store) server.once('close', () => store.close());
+  if (codexdaichong || rechargeConfig) {
+    server.on('upgrade', (request, socket, head) => {
+      const address = server.address();
+      const allowedHosts = ['127.0.0.1:' + address.port, 'localhost:' + address.port];
+      if (
+        !allowedHosts.includes(request.headers.host) ||
+        request.url !== '/integrations/codexdaichong/socket' ||
+        ((auth || rechargeConfig) && !['admin', 'super'].includes(auth?.getActor(request)?.role))
+      ) {
+        socket.destroy();
+        return;
+      }
+      gatewayFor(request.headers.host).upgrade(request, socket, head);
+    });
+  }
+  await new Promise((resolve, reject) => {
+    const startFailed = (error) => {
+      store?.close();
+      reject(error);
+    };
+    server.once('error', startFailed);
+    server.listen(port, '127.0.0.1', () => {
+      server.removeListener('error', startFailed);
+      resolve();
+    });
+  });
+  return { server, url: 'http://127.0.0.1:' + server.address().port + '/' };
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  try {
+    const { values } = parseArgs({
+      options: {
+        'local-data': { type: 'boolean' },
+        port: { type: 'string' },
+        'finance-provider': { type: 'string' },
+        'media-resolver-url': { type: 'string' },
+        'website-analytics-config': { type: 'string' },
+        'website-visits-secret-file': { type: 'string' },
+        'microsoft-mailbox-config': { type: 'string' },
+        'mailbox-public-origin': { type: 'string' },
+        'codexdaichong-url': { type: 'string' }
+      }
+    });
+    const port = values.port === undefined ? 4347 : Number(values.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口无效');
+    const databasePath = values['local-data']
+      ? fileURLToPath(new URL('../.runtime/local-business.sqlite', import.meta.url))
+      : undefined;
+    const authPath = databasePath
+      ? fileURLToPath(new URL('../.runtime/local-auth.json', import.meta.url))
+      : undefined;
+    const relayConfig = databasePath
+      ? await (
+          await import('./apple-relay/local-service.mjs')
+        ).loadAppleRelayConfig(
+          fileURLToPath(new URL('../.runtime/local-apple-relay.json', import.meta.url))
+        )
+      : undefined;
+    const rechargeConfig = values['codexdaichong-url']
+      ? { upstreamUrl: values['codexdaichong-url'], secret: process.env.ID_RECHARGE_BRIDGE_SECRET }
+      : undefined;
+    const [websiteAnalyticsConfig, websiteVisitsSecret, microsoftMailboxConfig] = await Promise.all(
+      [
+        readToolConfig(values['website-analytics-config'], 'website-analytics'),
+        readToolConfig(values['website-visits-secret-file'], 'website-visits'),
+        readToolConfig(values['microsoft-mailbox-config'], 'microsoft-mailbox')
+      ]
+    );
+    const { url } = await startPreview(port, {
+      databasePath,
+      authPath,
+      relayConfig,
+      rechargeConfig,
+      financeProvider: values['finance-provider'],
+      mediaResolverUrl: values['media-resolver-url'],
+      websiteAnalyticsConfig,
+      websiteVisitsSecret,
+      mailboxPublicOrigin: values['mailbox-public-origin'],
+      microsoftMailboxConfig
+    });
+    console.log(
+      (databasePath ? 'ID 业务管理系统 · 本机业务模式：' : 'ID 业务管理系统 · 独立新版设计预览：') +
+        url
+    );
+    console.log(databasePath ? '本机数据存储已启用。' : '此入口使用虚构演示资料。');
+  } catch (error) {
+    console.error('独立预览启动失败：' + error.message);
+    process.exitCode = 1;
+  }
+}

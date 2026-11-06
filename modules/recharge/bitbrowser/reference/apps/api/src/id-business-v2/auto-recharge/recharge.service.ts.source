@@ -1,0 +1,594 @@
+import { authorizeExpiredCheckoutReplacement } from './recharge-expired-checkout';
+import {
+  assertDirectRechargeReport,
+  confirmDirectRechargeRequest,
+  completeDirectRechargeControl,
+  persistDirectRechargeObservation
+} from './recharge-direct-payment';
+import { resolveDeclinedRecharge } from './recharge-declined-resolution';
+import { manualRechargeSettlement } from './recharge-manual-settlement-proof';
+import { reviewRechargeJobs } from './recharge-review';
+import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import type { AuthenticatedUser } from '../../auth/auth.types';
+import {
+  V2CommandTransactionManager,
+  V2TransactionalAuditService,
+  toV2JsonDocument
+} from '../runtime/public-api';
+import { RechargeRepository } from './persistence/recharge.repository';
+import { retainOrReplaceRechargeBrowserProfile } from './recharge-profile-recovery';
+import { completeCancellation } from './recharge-cancellation';
+import { RechargeAddressRepository } from './persistence/recharge-address.repository';
+import { consumeRechargeAddress } from './recharge-address-consumption';
+import {
+  RECHARGE_ADDRESS_LOCATION,
+  validateRechargeAddressGeneration,
+  validateRechargeAddressImport,
+  validateRechargeAddressListQuery,
+  validateRechargeAddressStatus
+} from './recharge-address-validation';
+import {
+  object,
+  safeDocument,
+  uuidPattern,
+  validateWorkerConfirmation,
+  assertFinalQuote
+} from './recharge-validation';
+import { completeUnknownPaymentResolution } from './recharge-resolution';
+import { isBrowserProfileId, staleProfile } from './recharge-job-helpers';
+import { sendRechargeWorkerRequest } from './recharge-worker-client';
+import { BankRechargeAccountService } from './bank-recharge-account.service';
+import { BankRechargeCardService } from './bank-recharge-card.service';
+import { BankRechargeOrderService } from './bank-recharge-order.service';
+import {
+  bindSavedChatgptAccount,
+  recordServerLoginNetwork,
+  recordVerifiedBankRecharge
+} from './recharge-bank-callback';
+import { mergeRechargeCallbackResult } from './recharge-bank-callback';
+import { hasOfficialRechargeQuote } from './recharge-upgrade-protocol';
+import { RechargeSettingsService } from './recharge-settings.service';
+import { RechargeProxyService } from './recharge-proxy.service';
+import { RechargeNameService } from './recharge-name.service';
+import { finalizeRechargeCard } from './recharge-card-billing';
+import { startRechargeJob } from './recharge-start';
+import { startServerRecheck } from './recharge-server-recheck';
+import { listRechargeJobs } from './recharge-job-list';
+import { completeRechargeLedgerCallback } from './recharge-ledger-callback';
+import {
+  assertNoPrivateRechargeCallback,
+  authorizeRechargeWorkerCallback,
+  authorizeLocalRechargeCallback,
+  isRetiredRechargeCallback,
+  replayRechargeReceipt,
+  withRechargeReceipt
+} from './recharge-callback-receipts';
+import { completeRetiredRechargeCallback } from './recharge-retired-callback';
+import { restoreRechargeAccount } from './recharge-account-restore';
+import { prepareNextSubscriptionCycle } from './recharge-subscription-cycle';
+import { assertNoClientCycleFields } from './recharge-cycle-state';
+import { isNextCycleCheckoutMarker } from './recharge-cycle-ledger';
+import { rechargeCallbackLease } from './recharge-callback-lease';
+import { IdBusinessV2TotpAccountService } from '../workspace/public-api';
+import {
+  readRechargeHandoff,
+  serverHandoffProgressState,
+  serverQuoteConfirmationState
+} from './recharge-handoff';
+@Injectable()
+export class RechargeService {
+  constructor(
+    private readonly repository: RechargeRepository,
+    private readonly addressRepository: RechargeAddressRepository,
+    private readonly transactions: V2CommandTransactionManager,
+    private readonly audit: V2TransactionalAuditService,
+    @Optional() private readonly bankAccounts?: BankRechargeAccountService,
+    @Optional() private readonly bankOrders?: BankRechargeOrderService,
+    @Optional() private readonly settings?: RechargeSettingsService,
+    @Optional() private readonly bankCards?: BankRechargeCardService,
+    @Optional() private readonly proxies?: RechargeProxyService,
+    @Optional() private readonly totpAccounts?: IdBusinessV2TotpAccountService,
+    @Optional() private readonly names?: RechargeNameService
+  ) {}
+
+  async listAddresses(value: unknown, operator: AuthenticatedUser) {
+    const query = validateRechargeAddressListQuery(value);
+    const result = await this.addressRepository.list(operator.id, query);
+    return { ...result, page: query.page, pageSize: query.pageSize };
+  }
+
+  async generateAddresses(value: unknown, operator: AuthenticatedUser) {
+    const { count } = validateRechargeAddressGeneration(value);
+    return this.transactions.execute(
+      async (tx) => {
+        const items = await this.addressRepository.generate(tx, operator.id, count);
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.addresses.generate',
+          objectType: 'recharge_address_batch',
+          objectId: randomUUID(),
+          afterData: { count: items.length, ids: items.map((item) => item.id) },
+          remark: '生成比特充值账单地址'
+        });
+        return { count: items.length, items };
+      },
+      { changedScopes: ['auto-recharge'], requestId: randomUUID(), operator, retryMode: 'none' }
+    );
+  }
+
+  async importAddresses(value: unknown, operator: AuthenticatedUser) {
+    const input = validateRechargeAddressImport(value);
+    return this.transactions.execute(
+      async (tx) => {
+        const created = await this.addressRepository.createMany(tx, operator.id, input.streets);
+        const result = {
+          imported: created.count,
+          duplicated: input.duplicatedInFile + input.streets.length - created.count,
+          rejected: input.rejected
+        };
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.addresses.import',
+          objectType: 'recharge_address_batch',
+          objectId: randomUUID(),
+          afterData: { ...result, location: RECHARGE_ADDRESS_LOCATION },
+          remark: '批量导入自动充值地址'
+        });
+        return result;
+      },
+      {
+        changedScopes: ['auto-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
+  }
+
+  async updateAddressStatus(id: string, value: unknown, operator: AuthenticatedUser) {
+    if (!uuidPattern.test(id)) throw new BadRequestException('地址编号无效');
+    const status = validateRechargeAddressStatus(value);
+    return this.transactions.execute(
+      async (tx) => {
+        const result = await this.addressRepository.updateStatus(tx, operator.id, id, status);
+        await this.audit.append(tx, {
+          userId: operator.id,
+          module: 'id_business_v2',
+          action: 'id_business_v2.auto_recharge.addresses.status',
+          objectType: 'recharge_address',
+          objectId: id,
+          beforeData: { status: result.before.status },
+          afterData: { status: result.after.status },
+          remark: status === 'used' ? '标记地址已使用' : '更新地址可用状态'
+        });
+        return result.after;
+      },
+      {
+        changedScopes: ['auto-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
+  }
+
+  async resolveDeclined(id: string, value: unknown, operator: AuthenticatedUser) {
+    return this.transactions.execute(
+      (tx) =>
+        resolveDeclinedRecharge(
+          tx,
+          this.repository,
+          this.audit,
+          id,
+          value,
+          operator,
+          this.bankCards
+        ),
+      {
+        changedScopes: ['auto-recharge', 'online-recharge'],
+        requestId: randomUUID(),
+        operator,
+        retryMode: 'none'
+      }
+    );
+  }
+
+  async review(query: Record<string, unknown>, operator: AuthenticatedUser) {
+    await this.bankCards?.reconcilePaymentHolds(this.repository, operator);
+    return reviewRechargeJobs(
+      this.repository,
+      operator.id,
+      query,
+      process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
+    );
+  }
+
+  async list(operator: AuthenticatedUser) {
+    await this.bankCards?.reconcilePaymentHolds(this.repository, operator);
+    return listRechargeJobs(
+      this.repository,
+      operator.id,
+      process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
+    );
+  }
+
+  async start(value: unknown, operator: AuthenticatedUser) {
+    return startRechargeJob(value, operator, {});
+  }
+
+  async recheckServer(value: unknown, operator: AuthenticatedUser) {
+    return startServerRecheck(value, operator, {});
+  }
+
+  async submitDetails(
+    id: string,
+    value: unknown,
+    operator: AuthenticatedUser
+  ): Promise<{ id: string }> {
+    void id;
+    void value;
+    void operator;
+    throw new ConflictException('服务器付款资料提交已停用，请在比特浏览器充值页面操作');
+  }
+
+  async confirm(id: string, value: unknown, operator: AuthenticatedUser) {
+    return confirmDirectRechargeRequest({
+      id,
+      value,
+      operator,
+      repository: this.repository,
+      transactions: this.transactions,
+      audit: this.audit,
+      cards: this.bankCards
+    });
+  }
+  handoffFrame(id: string, operator: AuthenticatedUser) {
+    return readRechargeHandoff(id, operator, { repository: this.repository });
+  }
+  async handoffCommand(id: string, input: unknown, operator: AuthenticatedUser): Promise<never> {
+    void id;
+    void input;
+    void operator;
+    throw new ConflictException('服务器远程操作已停用，请在所属比特浏览器窗口处理验证');
+  }
+  async cancel(id: string, operator: AuthenticatedUser) {
+    const job = await this.repository.owned(id, operator.id);
+    if (job.state === 'confirming') throw new ConflictException('付款已确认，只能等待或复查原订单');
+    await sendRechargeWorkerRequest('/jobs/' + id + '/cancel', {}, id, 'cancelled');
+    return { id };
+  }
+  authorizeWorker(token: unknown) {
+    return authorizeRechargeWorkerCallback(token);
+  }
+  async callback(id: string, value: unknown, context?: { localToken: unknown }) {
+    if (!uuidPattern.test(id)) throw new BadRequestException('任务编号无效');
+    const input = object(value);
+    assertNoPrivateRechargeCallback(input);
+    assertNoClientCycleFields(input);
+    return this.transactions.execute(
+      async (tx) => {
+        await this.repository.lock(tx);
+        const job = context
+          ? authorizeLocalRechargeCallback(
+              await this.repository.findJob(tx, id),
+              context.localToken
+            )
+          : await this.repository.active(tx, id);
+        if (manualRechargeSettlement(job.result))
+          throw new ConflictException(
+            '该原单已由人工结单，迟到回执不能覆盖人工结果；请从订单更正入口处理'
+          );
+        if (context) {
+          const replay = replayRechargeReceipt(job, input);
+          if (replay !== undefined) return replay;
+          if (isRetiredRechargeCallback(job))
+            return completeRetiredRechargeCallback({
+              tx,
+              job,
+              callback: input,
+              repository: this.repository,
+              addressRepository: this.addressRepository,
+              audit: this.audit,
+              orders: this.bankOrders,
+              cards: this.bankCards,
+              names: this.names
+            });
+        }
+        const accountKey = input.accountKey;
+        if (input.type === 'prepare_next_subscription_cycle') {
+          return prepareNextSubscriptionCycle({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit
+          });
+        }
+        if (input.type === 'resolve_unknown_payment') {
+          return completeUnknownPaymentResolution({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit,
+            cards: this.bankCards
+          });
+        }
+        if (['direct_quote', 'direct_unexpected_payment'].includes(String(input.type))) {
+          return completeDirectRechargeControl({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit
+          });
+        }
+        if (input.type === 'replace_expired_checkout') {
+          return authorizeExpiredCheckoutReplacement({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            audit: this.audit
+          });
+        }
+        if (input.type === 'restore') {
+          return restoreRechargeAccount({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            accounts: this.bankAccounts
+          });
+        }
+        if (input.type === 'stale_profile_cleanup') {
+          if (
+            typeof accountKey !== 'string' ||
+            !/^[a-f0-9]{64}$/.test(accountKey) ||
+            job.accountKey !== accountKey ||
+            !Array.isArray(input.profiles) ||
+            input.profiles.length < 1 ||
+            input.profiles.length > 30
+          )
+            throw new BadRequestException('历史窗口清理回执无效');
+          const requested = input.profiles.map((value) => {
+            const item = object(value);
+            if (
+              typeof item.sourceJobId !== 'string' ||
+              !uuidPattern.test(item.sourceJobId) ||
+              !isBrowserProfileId(item.profileId)
+            )
+              throw new BadRequestException('历史窗口清理回执无效');
+            return { sourceJobId: item.sourceJobId, profileId: item.profileId };
+          });
+          if (new Set(requested.map((item) => item.sourceJobId)).size !== requested.length)
+            throw new BadRequestException('历史窗口清理回执重复');
+          const finished = await this.repository.finishedJobsForAccount(
+            tx,
+            job.ownerId,
+            accountKey,
+            job.id
+          );
+          const byId = new Map(finished.map((item) => [item.id, item]));
+          const retained =
+            job.action === 'bitbrowser'
+              ? await this.repository.retainedProfileForAccount(tx, job.ownerId, accountKey, job.id)
+              : undefined;
+          let updated = 0;
+          for (const item of requested) {
+            if (
+              item.profileId === object(job.result).browser_profile_id ||
+              item.profileId === retained?.profileId
+            )
+              throw new ConflictException('原比特窗口必须保留，不能作为历史失败窗口清理');
+            const source = byId.get(item.sourceJobId);
+            const eligible = source ? staleProfile(source, true) : null;
+            if (!source || !eligible || eligible.profileId !== item.profileId)
+              throw new ConflictException('历史失败窗口归属无法核验');
+            const before = object(source.result);
+            if (before.browser_cleanup_status === 'completed') continue;
+            await this.repository.updateJob(tx, source.id, {
+              result: toV2JsonDocument({
+                ...before,
+                browser_cleanup_status: 'completed',
+                stale_cleanup_job_id: job.id
+              })
+            });
+            updated += 1;
+          }
+          await this.audit.append(tx, {
+            userId: job.ownerId,
+            module: 'id_business_v2',
+            action: 'id_business_v2.auto_recharge.stale_browser_cleanup',
+            objectType: 'recharge_job',
+            objectId: id,
+            afterData: { requested: requested.length, updated },
+            remark: '已核验并清理同账号历史付款前失败窗口'
+          });
+          return { ok: true, updated };
+        }
+        if (input.type === 'ledger') {
+          const response = await completeRechargeLedgerCallback({
+            tx,
+            job,
+            callback: input,
+            repository: this.repository,
+            addressRepository: this.addressRepository,
+            audit: this.audit
+          });
+          return {
+            revision: response.revision,
+            ...(response.replayed && isNextCycleCheckoutMarker(job, input)
+              ? { replayed: true }
+              : {})
+          };
+        }
+        if (
+          !['progress', 'details_required', 'confirmation', 'finished'].includes(String(input.type))
+        )
+          throw new BadRequestException('执行事件无效');
+        if (job.state === 'finished') {
+          if (input.type === 'finished') return { ok: true };
+          throw new ConflictException('已结束任务不能再写入执行事件');
+        }
+        const report = safeDocument(input.result);
+        assertDirectRechargeReport(job, report);
+        await persistDirectRechargeObservation({ tx, job, report, repository: this.repository });
+        for (const key of Object.keys(report))
+          if (key.startsWith('connection_')) delete report[key];
+        await retainOrReplaceRechargeBrowserProfile({
+          tx,
+          job,
+          eventType: input.type,
+          report,
+          repository: this.repository,
+          audit: this.audit
+        });
+        await bindSavedChatgptAccount(tx, job, report, this.bankAccounts);
+        const verifiedAt =
+          input.type === 'progress'
+            ? await recordServerLoginNetwork(tx, job, report, this.bankAccounts)
+            : undefined;
+        if (job.action === 'server') delete report.network;
+        let state = job.state;
+        let nonceHash = job.nonceHash;
+        if (input.type === 'progress' && job.action === 'bitbrowser') {
+          if (report.status === 'awaiting_confirmation') {
+            const quote = object(report.quote);
+            const today = object(quote.today);
+            const authorization = object(job.result);
+            assertFinalQuote(quote as never, job.plan, report.quote_authority, report);
+            if (
+              !job.accountKey ||
+              report.account_matched !== true ||
+              !/^[a-f0-9]{64}$/.test(String(report.quote_digest)) ||
+              typeof report.confirmation_expires_at !== 'string' ||
+              !Number.isFinite(Date.parse(report.confirmation_expires_at)) ||
+              Date.parse(report.confirmation_expires_at) <= Date.now() ||
+              Date.parse(report.confirmation_expires_at) > Date.now() + 10 * 60000 ||
+              today.currency !== authorization.locked_currency ||
+              typeof today.amount_minor !== 'number' ||
+              today.amount_minor <= 0
+            )
+              throw new ConflictException('本机官网报价未完整核实');
+            state = 'awaiting_confirmation';
+            await this.audit.append(tx, {
+              userId: job.ownerId,
+              module: 'id_business_v2',
+              action: 'id_business_v2.auto_recharge.bitbrowser.quote_verified',
+              objectType: 'recharge_job',
+              objectId: id,
+              afterData: {
+                plan: job.plan,
+                currency: String(today.currency),
+                amountMinor: today.amount_minor
+              },
+              remark: '本机官网报价已核实，等待本人在所属充值助手确认；尚未付款'
+            });
+          } else {
+            state = [
+              'verification_required',
+              'bank_verification_required',
+              'login_code_required',
+              'login_email_code_required'
+            ].includes(String(report.stage))
+              ? 'awaiting_human_verification'
+              : 'running';
+          }
+        }
+        if (input.type === 'progress' && job.action === 'server') {
+          state = serverHandoffProgressState(job, report);
+        }
+        if (input.type === 'details_required') {
+          if (job.action !== 'flow' || job.state !== 'running') {
+            throw new ConflictException('当前任务不能等待付款资料');
+          }
+          state = 'awaiting_details';
+        }
+        if (input.type === 'confirmation') {
+          nonceHash = validateWorkerConfirmation(
+            id,
+            job,
+            report,
+            input.result,
+            process.env.AUTO_RECHARGE_WORKER_TOKEN ?? ''
+          );
+          state =
+            job.action === 'server'
+              ? serverQuoteConfirmationState(job.result, report)
+              : 'awaiting_confirmation';
+          if (job.action === 'server') {
+            const authorization = object(job.result);
+            const quote = object(report.quote);
+            const today = object(quote.today);
+            if (
+              !hasOfficialRechargeQuote(report) ||
+              quote.renewal_interval !== 'monthly' ||
+              today.currency !== authorization.locked_currency ||
+              typeof today.amount_minor !== 'number' ||
+              today.amount_minor <= 0
+            )
+              throw new ConflictException('官网身份或报价未完整核实');
+            await this.audit.append(tx, {
+              userId: job.ownerId,
+              module: 'id_business_v2',
+              action: 'id_business_v2.auto_recharge.server.quote_verified',
+              objectType: 'recharge_job',
+              objectId: id,
+              afterData: {
+                plan: job.plan,
+                currency: String(today.currency),
+                amountMinor: today.amount_minor
+              },
+              remark: '官网报价已核实，等待本人确认；尚未付款'
+            });
+          }
+        }
+        if (input.type === 'finished') {
+          await consumeRechargeAddress({
+            tx,
+            rechargeJobId: id,
+            job,
+            report,
+            addressRepository: this.addressRepository,
+            audit: this.audit
+          });
+          await completeCancellation(tx, job, report, this.repository, this.audit);
+          const verifiedOrder = await recordVerifiedBankRecharge(tx, job, report, this.bankOrders);
+          await finalizeRechargeCard({
+            tx,
+            job,
+            report: object(mergeRechargeCallbackResult(job, report, verifiedAt)),
+            order: verifiedOrder,
+            repository: this.repository,
+            cards: this.bankCards,
+            names: this.names,
+            terminalReport: report
+          });
+          state = 'finished';
+          nonceHash = null;
+        }
+        await this.repository.updateJob(tx, id, {
+          state,
+          nonceHash,
+          ...rechargeCallbackLease(job, input.type, report),
+          result: toV2JsonDocument(
+            input.type === 'finished'
+              ? withRechargeReceipt(
+                  job,
+                  object(mergeRechargeCallbackResult(job, report, verifiedAt)),
+                  input,
+                  { ok: true }
+                )
+              : mergeRechargeCallbackResult(job, report, verifiedAt)
+          )
+        });
+        return { ok: true };
+      },
+      { changedScopes: ['auto-recharge', 'online-recharge'], requestId: id, retryMode: 'none' }
+    );
+  }
+}

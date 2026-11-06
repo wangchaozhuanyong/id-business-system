@@ -1,0 +1,916 @@
+import { V2_RECHARGE_BROWSER_DEFAULTS } from '@apple-business/shared';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '@/api/apiError';
+import {
+  DirectBrowserError,
+  directBrowserApi,
+  directBrowserCatalog,
+  directBrowserFailure,
+  directBrowserProfileExists,
+  directProfileOptions,
+  localBrowserUrl
+} from './bitbrowser-direct-api';
+import { isLoginPaymentWrite, parseDirectCredential } from './bitbrowser-direct-login';
+import {
+  inspectLoginPage,
+  inspectLoggedInPage,
+  inspectOfficialProxy
+} from './bitbrowser-login-page';
+
+const signal = () => new AbortController().signal;
+afterEach(() => vi.unstubAllGlobals());
+describe('直连验证码只用于明确的身份验证器挑战', () => {
+  function challenge(path: string, text: string) {
+    const click = vi.fn();
+    const form = {
+      innerText: text,
+      checkValidity: () => true,
+      querySelectorAll: (selector: string) =>
+        selector.includes('button')
+          ? [{ form, click, getClientRects: () => [{}], getAttribute: () => null }]
+          : []
+    };
+    class Input {
+      private text = '';
+      form = form;
+      get value() {
+        return this.text;
+      }
+      set value(value: string) {
+        this.text = value;
+      }
+      getClientRects = () => [{}];
+      dispatchEvent = vi.fn();
+      focus = vi.fn();
+    }
+    const input = new Input();
+    vi.stubGlobal('HTMLInputElement', Input);
+    vi.stubGlobal('location', {
+      protocol: 'https:',
+      hostname: 'auth.openai.com',
+      pathname: path
+    });
+    vi.stubGlobal('document', {
+      readyState: 'complete',
+      title: 'Log in',
+      querySelectorAll: (selector: string) => (selector.includes('one-time-code') ? [input] : [])
+    });
+    vi.stubGlobal('getComputedStyle', () => ({ visibility: 'visible' }));
+    return { input, form, click };
+  }
+  it.each([
+    ['/u/mfa-otp-challenge', 'Enter a code'],
+    ['/u/challenge', 'Use your authenticator app'],
+    ['/u/challenge', '请输入身份验证应用的验证码']
+  ])('明确 TOTP 挑战可以获取、填入并提交当前验证码：%s', async (path, text) => {
+    const { input, click } = challenge(path, text);
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'code', codeType: 'totp' });
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
+      kind: 'filled'
+    });
+    expect(input.value).toBe('123456');
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code', codeType: 'totp' })).toEqual(
+      {
+        kind: 'submitted'
+      }
+    );
+    expect(click).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ['/u/email-verification', 'Check your inbox', 'email'],
+    ['/u/challenge', 'Enter the code sent to your email', 'email'],
+    ['/u/challenge', '验证码发送到邮箱', 'email'],
+    ['/u/mfa-otp-challenge', 'SMS sent to your phone number', 'sms'],
+    ['/u/mfa-otp-challenge', 'Check your email for a code', 'email'],
+    ['/u/challenge', 'Enter verification code', 'unknown']
+  ])('邮箱、短信及不明确挑战保留原窗口人工处理：%s %s', async (path, text, codeType) => {
+    const { input, click } = challenge(path, text);
+    expect(await inspectLoginPage('inspect')).toEqual({
+      kind: codeType === 'email' ? 'code' : 'manual',
+      codeType
+    });
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
+      kind: 'manual',
+      codeType
+    });
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code', codeType: 'totp' })).toEqual(
+      {
+        kind: 'manual',
+        codeType
+      }
+    );
+    expect(input.value).toBe('');
+    expect(input.dispatchEvent).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+  });
+  it('明确邮箱挑战只接受邮箱类型的验证码，不能填入TOTP', async () => {
+    const { input, click } = challenge('/u/email-verification', 'Check your inbox');
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
+      kind: 'manual',
+      codeType: 'email'
+    });
+    expect(await inspectLoginPage('code', '654321', { codeType: 'email' })).toEqual({
+      kind: 'filled'
+    });
+    expect(
+      await inspectLoginPage('submit', '654321', { stage: 'code', codeType: 'email' })
+    ).toEqual({ kind: 'submitted' });
+    expect(input.value).toBe('654321');
+    expect(click).toHaveBeenCalledOnce();
+  });
+  it('已填入后页面改为邮箱挑战时不点击提交', async () => {
+    const { form, click } = challenge('/u/mfa-otp-challenge', 'Use your authenticator app');
+    expect(await inspectLoginPage('code', '123456', { codeType: 'totp' })).toEqual({
+      kind: 'filled'
+    });
+    form.innerText = 'Enter the code sent to your email';
+    expect(await inspectLoginPage('submit', '123456', { stage: 'code', codeType: 'totp' })).toEqual(
+      {
+        kind: 'manual',
+        codeType: 'email'
+      }
+    );
+    expect(click).not.toHaveBeenCalled();
+  });
+});
+describe('原窗口不存在的完整列表证明', () => {
+  const profileId = 'a'.repeat(32);
+  const remaining = () => 10_000;
+  it('读取完整分页，目标在下一页时不误判已删除', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          list: Array.from({ length: 100 }, (_, i) => ({ id: i.toString(16).padStart(32, '0') }))
+        }
+      })
+      .mockResolvedValueOnce({ data: { list: [{ id: profileId }] } });
+    expect(await directBrowserProfileExists({ post }, profileId, remaining)).toBe(true);
+    expect(post).toHaveBeenLastCalledWith('/browser/list', { page: 1, pageSize: 100 }, 10_000);
+  });
+  it('只有完整列表不含原ID才允许重建', async () => {
+    const post = vi.fn().mockResolvedValue({ data: { list: [] } });
+    expect(await directBrowserProfileExists({ post }, profileId, remaining)).toBe(false);
+  });
+  it.each([{}, { data: null }, { data: { list: [{ id: 'invalid' }] } }])(
+    '不明确列表不当作删除证明 %j',
+    async (response) => {
+      const post = vi.fn().mockResolvedValue(response);
+      await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow();
+    }
+  );
+  it('分页忽略页号重复返回时停止，不能误判不存在', async () => {
+    const post = vi.fn().mockResolvedValue({
+      data: {
+        list: Array.from({ length: 100 }, (_, i) => ({ id: i.toString(16).padStart(32, '0') }))
+      }
+    });
+    await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+  it.each([1, '0', null, 2001])('窗口总数与清单不一致时不能认定不存在：%s', async (total) => {
+    const post = vi.fn().mockResolvedValue({ data: { list: [], total } });
+    await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow();
+  });
+  it('网络失败保留错误，不能当作窗口不存在', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('synthetic-offline'));
+    await expect(directBrowserProfileExists({ post }, profileId, remaining)).rejects.toThrow(
+      'synthetic-offline'
+    );
+  });
+});
+describe('官网已登录页面与真实代理的独立证据', () => {
+  function official(
+    controls: object[] = [],
+    title = 'ChatGPT',
+    composers: object[] = [composer()]
+  ) {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    vi.stubGlobal('document', {
+      readyState: 'loading',
+      title,
+      querySelectorAll: (selector: string) =>
+        selector.includes('accounts-profile-button') ? controls : composers
+    });
+    vi.stubGlobal('getComputedStyle', () => ({
+      visibility: 'visible',
+      display: 'block',
+      pointerEvents: 'auto'
+    }));
+  }
+  function control(visible = true, disabled = false) {
+    return {
+      getClientRects: () => (visible ? [{}] : []),
+      closest: () => null,
+      matches: (selector: string) => (selector.includes(':disabled') ? disabled : true)
+    };
+  }
+  function composer(editable = true, busy = false, hidden = false) {
+    const region = { querySelectorAll: () => (busy ? [control()] : []) };
+    return {
+      getClientRects: () => [{}],
+      isContentEditable: editable,
+      closest: (selector: string) => (selector === 'form' ? region : hidden ? {} : null),
+      matches: () => false,
+      parentElement: region
+    };
+  }
+  function currentOfficialPage(
+    options: {
+      profileLabel?: string;
+      composerLabel?: string;
+      editable?: boolean;
+      menu?: boolean;
+      profileVisible?: boolean;
+      profileDisabled?: boolean;
+      composerVisible?: boolean;
+      composerDisabled?: boolean;
+      busy?: boolean;
+      hidden?: boolean;
+      pointerEvents?: string;
+    } = {}
+  ) {
+    // Attribute snapshot of the current official DOM: neither element has a test id or id.
+    const snapshotNode = (tag: string, attributes: Record<string, string>, visible = true) => ({
+      ...control(visible),
+      matches: (selector: string): boolean =>
+        selector.split(',').some((entry) => {
+          const part = entry.trim();
+          if (part === ':disabled') return attributes.disabled !== undefined;
+          if (part.startsWith('#')) return attributes.id === part.slice(1);
+          const selectedTag = /^[a-z]+/i.exec(part)?.[0];
+          if (selectedTag && selectedTag.toLowerCase() !== tag) return false;
+          const selectedAttributes = [...part.matchAll(/\[([^=\]]+)(?:="([^"]*)")?\]/g)];
+          if (!selectedTag && selectedAttributes.length === 0) return false;
+          return selectedAttributes.every(
+            ([, name, value]) =>
+              attributes[name!] !== undefined &&
+              (value === undefined || attributes[name!] === value)
+          );
+        })
+    });
+    const profile = snapshotNode(
+      'button',
+      {
+        'aria-label': options.profileLabel ?? '打开个人资料菜单',
+        'aria-haspopup': options.menu === false ? 'dialog' : 'menu',
+        ...(options.profileDisabled ? { 'aria-disabled': 'true' } : {})
+      },
+      options.profileVisible !== false
+    );
+    const region = { querySelectorAll: () => (options.busy ? [control()] : []) };
+    const input = {
+      ...snapshotNode(
+        'div',
+        {
+          role: 'textbox',
+          contenteditable: options.editable === false ? 'false' : 'true',
+          'aria-label': options.composerLabel ?? '询问 ChatGPT',
+          ...(options.composerDisabled ? { 'aria-disabled': 'true' } : {})
+        },
+        options.composerVisible !== false
+      ),
+      isContentEditable: options.editable !== false,
+      closest: () => (options.hidden ? {} : null),
+      parentElement: region
+    };
+    const nodes = [profile, input];
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    vi.stubGlobal('document', {
+      title: 'ChatGPT',
+      querySelectorAll: (selector: string) => nodes.filter((node) => node.matches(selector))
+    });
+    vi.stubGlobal('getComputedStyle', () => ({
+      visibility: 'visible',
+      display: 'block',
+      pointerEvents: options.pointerEvents ?? 'auto'
+    }));
+  }
+  it.each([
+    ['打开个人资料菜单', '询问 ChatGPT'],
+    ['Open profile menu', 'Ask ChatGPT']
+  ])(
+    '当前官网没有旧测试属性时，明确的账号菜单和聊天输入仍可就绪：%s',
+    (profileLabel, composerLabel) => {
+      currentOfficialPage({ profileLabel, composerLabel });
+      expect(inspectLoggedInPage()).toEqual({ kind: 'page_ready' });
+    }
+  );
+  it.each([
+    { profileLabel: '升级套餐' },
+    { profileLabel: '打开菜单' },
+    { composerLabel: '搜索' },
+    { composerLabel: '留言' },
+    { editable: false },
+    { menu: false },
+    { profileVisible: false },
+    { profileDisabled: true },
+    { composerVisible: false },
+    { composerDisabled: true },
+    { busy: true },
+    { hidden: true },
+    { pointerEvents: 'none' }
+  ])('当前DOM的无关、不可用或被遮挡控件不能冒充可用聊天页：%j', (options) => {
+    currentOfficialPage(options);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'page_loading' });
+  });
+  it('账号和输入框均可用才交付，无关资源未完成不阻塞', () => {
+    official([control(), control()]);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'page_ready' });
+  });
+  it.each([
+    { composers: [] },
+    { composers: [composer(false)] },
+    { composers: [composer(true, true)] },
+    { composers: [composer(true, false, true)] }
+  ])('账号菜单出现但输入框缺失、不可编辑、转圈或被弹窗遮挡时继续等待', ({ composers }) => {
+    official([control()], 'ChatGPT', composers);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'page_loading' });
+  });
+  it('输入框可编辑时，空输入的禁用发送按钮不阻止就绪', () => {
+    official([control()], 'ChatGPT', [composer()]);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'page_ready' });
+  });
+  it.each([{ controls: [] }, { controls: [control(false)] }, { controls: [control(true, true)] }])(
+    '没有可用账号控件不能交付窗口',
+    ({ controls }) => {
+      official(controls);
+      expect(inspectLoggedInPage()).toEqual({ kind: 'page_loading' });
+    }
+  );
+  it('真人验证优先于旧账号控件，且不读取代理', async () => {
+    official([control()], 'Just a moment');
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    expect(inspectLoggedInPage()).toEqual({ kind: 'manual' });
+    expect(await inspectOfficialProxy(20_000)).toEqual({ kind: 'manual' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('在原页面通过代理读取官网trace，只返回分类并核对地区', async () => {
+    official();
+    const fetch = vi.fn().mockImplementation(async () => new Response('ip=8.8.8.8\nloc=PH\n'));
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectOfficialProxy(20_000, 'PH')).toEqual({ kind: 'proxy_ready' });
+    expect(await inspectOfficialProxy(20_000, 'US')).toEqual({ kind: 'proxy_unverified' });
+    expect(fetch.mock.calls[0]).toEqual([
+      '/cdn-cgi/trace',
+      expect.objectContaining({ credentials: 'omit', cache: 'no-store' })
+    ]);
+  });
+  it.each(['ip=127.0.0.1\nloc=PH\n', 'ip=999.1.1.1\nloc=PH\n', 'ip=8.8.8.8\n', 'ip=::1\nloc=PH\n'])(
+    '缺少有效公网出口证据不判为可用',
+    async (trace) => {
+      official();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(trace)));
+      expect(await inspectOfficialProxy(20_000)).toEqual({ kind: 'proxy_unverified' });
+    }
+  );
+  it('官网拒绝与网络失败分别归类，授权或验证错误不冒充坏IP', async () => {
+    official();
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('', { status: 403 }))
+      .mockRejectedValueOnce(new TypeError('fixture-network'));
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectOfficialProxy(20_000)).toEqual({ kind: 'manual' });
+    expect(await inspectOfficialProxy(20_000)).toEqual({ kind: 'proxy_network_failed' });
+  });
+});
+describe('网页直连比特浏览器的输入和读取边界', () => {
+  it('页面加载中不提前核验空会话，真正的人工验证页继续等待', async () => {
+    vi.stubGlobal('location', {
+      protocol: 'https:',
+      hostname: 'chatgpt.com',
+      href: 'https://chatgpt.com/'
+    });
+    const document = { readyState: 'loading', title: 'Just a moment' };
+    vi.stubGlobal('document', document);
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'loading' });
+    document.readyState = 'complete';
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'manual' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([200, 401])('已加载的官网明确没有登录会话时返回失效状态：%s', async (status) => {
+    vi.stubGlobal('location', {
+      protocol: 'https:',
+      hostname: 'chatgpt.com',
+      href: 'https://chatgpt.com/'
+    });
+    vi.stubGlobal('document', {
+      readyState: 'complete',
+      title: 'ChatGPT',
+      querySelectorAll: () => []
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status })));
+    expect(await inspectLoginPage('inspect')).toEqual({ kind: 'unauthenticated' });
+  });
+  it('已接受会话但返回过期令牌时不继续请求套餐，也不回显令牌', async () => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    vi.stubGlobal('document', {
+      readyState: 'complete',
+      title: 'ChatGPT',
+      querySelectorAll: () => []
+    });
+    const claims = btoa(
+      JSON.stringify({
+        exp: Math.floor(Date.now() / 1000) - 60,
+        'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' }
+      })
+    );
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          user: { id: 'fixture-user', email: 'user@example.com' },
+          accessToken: `fixture.${claims}.signature`
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectLoginPage('inspect')).toMatchObject({ kind: 'expired' });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it('JSON只读核验在资源仍加载时读取有效会话和官方套餐，不依赖表单DOM', async () => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    const query = vi.fn(() => {
+      throw new Error('JSON verification must not inspect forms');
+    });
+    vi.stubGlobal('document', { readyState: 'loading', title: 'ChatGPT', querySelectorAll: query });
+    const claims = btoa(
+      JSON.stringify({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' }
+      })
+    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            user: { id: 'fixture-user', email: 'user@example.com' },
+            accessToken: `fixture.${claims}.signature`
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            accounts: {
+              'fixture-account': { account: { account_id: 'fixture-account', plan_type: 'free' } }
+            }
+          })
+        )
+      );
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectLoginPage('inspect', '', { sessionOnly: true })).toEqual({
+      kind: 'identity',
+      email: 'user@example.com',
+      userId: 'fixture-user',
+      accountId: 'fixture-account',
+      plan: 'free'
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(query).not.toHaveBeenCalled();
+    expect(await inspectLoginPage('password', 'fixture', { sessionOnly: true })).toEqual({
+      kind: 'loading'
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it('慢会话读取可使用剩余的十秒总预算，不在五秒处反复取消', async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    try {
+      vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+      vi.stubGlobal('document', { readyState: 'loading', title: 'ChatGPT' });
+      const claims = btoa(
+        JSON.stringify({
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' }
+        })
+      );
+      let reads = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_path, options) =>
+            new Promise((resolve, reject) => {
+              const session = reads++ === 0;
+              const timer = setTimeout(
+                () =>
+                  resolve(
+                    new Response(
+                      JSON.stringify(
+                        session
+                          ? {
+                              user: { id: 'fixture-user', email: 'user@example.com' },
+                              accessToken: `fixture.${claims}.signature`
+                            }
+                          : {
+                              accounts: {
+                                'fixture-account': {
+                                  account: { account_id: 'fixture-account', plan_type: 'free' }
+                                }
+                              }
+                            }
+                      )
+                    )
+                  ),
+                session ? 6000 : 2000
+              );
+              options.signal.addEventListener(
+                'abort',
+                () => {
+                  clearTimeout(timer);
+                  reject(new Error('timeout'));
+                },
+                { once: true }
+              );
+            })
+        )
+      );
+      const result = inspectLoginPage('inspect', '', { sessionOnly: true });
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(await result).toMatchObject({ kind: 'identity', accountId: 'fixture-account' });
+      expect(timeout.mock.calls.map(([ms]) => ms)).toEqual([10000, 4000]);
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+  it('JSON核验仍停在官网真人验证页，不提前请求会话', async () => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    vi.stubGlobal('document', { readyState: 'loading', title: 'Just a moment' });
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectLoginPage('inspect', '', { sessionOnly: true })).toEqual({
+      kind: 'manual'
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('显式刷新只走官网GET，刷新错误不算已登录也不继续请求套餐', async () => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    vi.stubGlobal('document', { readyState: 'loading', title: 'ChatGPT' });
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ error: 'RefreshAccessTokenError' })));
+    vi.stubGlobal('fetch', fetch);
+    expect(
+      await inspectLoginPage('inspect', '', { sessionOnly: true, refreshSession: true })
+    ).toEqual({ kind: 'expired', refreshFailed: true });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]![0]).toBe(
+      '/api/auth/session?refresh=true&reason=token_expired&method=GET&path=%2Fapi%2Fauth%2Fsession'
+    );
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ credentials: 'include', cache: 'no-store' });
+    expect(fetch.mock.calls[0]![1].method).toBeUndefined();
+    expect(fetch.mock.calls[0]![1].body).toBeUndefined();
+  });
+  it('官网返回其他会话错误也不能凭用户字段核验成功', async () => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+    vi.stubGlobal('document', { readyState: 'loading', title: 'ChatGPT' });
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: 'fixture_error',
+          user: { id: 'fixture-user' },
+          accessToken: 'fixture'
+        })
+      )
+    );
+    vi.stubGlobal('fetch', fetch);
+    expect(await inspectLoginPage('inspect', '', { sessionOnly: true })).toEqual({
+      kind: 'session_error'
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it('只允许当前电脑的接口和窗口控制地址，不接受外部地址或凭据 URL', () => {
+    expect(localBrowserUrl('http://127.0.0.1:54345')).toBe('http://127.0.0.1:54345');
+    expect(localBrowserUrl('ws://localhost:9222/devtools/browser/abc-123', true)).toContain(
+      'localhost'
+    );
+    for (const url of [
+      'https://example.com',
+      'http://192.168.1.1:54345',
+      'http://key@localhost:54345',
+      'http://localhost:54345/other'
+    ])
+      expect(() => localBrowserUrl(url)).toThrow();
+    for (const url of [
+      'ws://example.com:9222/devtools/browser/123',
+      'ws://localhost:9222/path',
+      'ws://localhost:9222/devtools/browser/abc?token=x'
+    ])
+      expect(() => localBrowserUrl(url, true)).toThrow();
+  });
+  it('直接读取接口、分组和标签，分页读取且不调用本机连接器', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: url.endsWith('/group/list')
+              ? { list: [{ id: 'group-id-1', groupName: '分组' }] }
+              : url.endsWith('/browserTag/list')
+                ? [{ id: 'a'.repeat(32), tagName: '标签' }]
+                : {}
+          }),
+          { status: 200 }
+        );
+      })
+    );
+    expect(
+      await directBrowserCatalog('http://127.0.0.1:54345', 'fixture-only-api-key', signal())
+    ).toEqual({
+      groups: [{ id: 'group-id-1', name: '分组' }],
+      tags: [{ id: 'a'.repeat(32), name: '标签' }]
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls.every((url) => url.startsWith('http://127.0.0.1:54345/'))).toBe(true);
+  });
+  it('重复编号、接口拒绝和网络不可达使用受控错误，不回显任意接口消息', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ success: false, msg: 'fixture-sensitive-response' }), {
+          status: 403
+        })
+      )
+    );
+    await expect(
+      directBrowserApi('http://localhost:54345', 'fixture-only-api-key', signal()).post('/health')
+    ).rejects.toThrow('密钥不匹配');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fixture-sensitive-response')));
+    await expect(
+      directBrowserApi('http://localhost:54345', 'fixture-only-api-key', signal()).post('/health')
+    ).rejects.toThrow('无法访问比特浏览器');
+  });
+  it.each([
+    ['/browser/update', 'browser_update', '创建或更新窗口资料', 500],
+    ['/browser/update', 'browser_update', '创建或更新窗口资料', 200],
+    ['/browser/open', 'browser_open', '打开比特窗口', 503],
+    ['/browser/open', 'browser_open', '打开比特窗口', 200]
+  ] as const)(
+    '窗口接口拒绝保留受控步骤与HTTP状态：%s %s %s %i',
+    async (path, operation, label, status) => {
+      const fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            success: false,
+            msg: 'fixture-private-response',
+            code: 'fixture-private-code',
+            data: { id: 'fixture-private-profile' }
+          }),
+          { status }
+        )
+      );
+      vi.stubGlobal('fetch', fetch);
+      const error = await directBrowserApi(
+        'http://localhost:54345',
+        'fixture-private-key',
+        signal()
+      )
+        .post(path, { name: 'fixture-private-window', id: 'fixture-private-profile' })
+        .catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(DirectBrowserError);
+      expect(error).toMatchObject({
+        reason: 'bitbrowser_direct_rejected',
+        metadata: { operation, httpStatus: status }
+      });
+      expect((error as Error).message).toContain(label);
+      expect((error as Error).message).toContain(`HTTP ${status}`);
+      expect((error as Error).message).not.toMatch(/fixture-private|localhost|\/browser/);
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  );
+  it('成功窗口接口原样返回，保留原请求体、鉴权和请求数量', async () => {
+    const value = { success: true, data: { id: 'a'.repeat(32) } };
+    const body = { name: '合成窗口', groupId: 'fixture-group' };
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(value), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    expect(
+      await directBrowserApi('http://localhost:54345', 'fixture-only-key', signal()).post(
+        '/browser/update',
+        body
+      )
+    ).toEqual(value);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:54345/browser/update',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'omit',
+        redirect: 'error',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': 'fixture-only-key' },
+        body: JSON.stringify(body)
+      })
+    );
+  });
+  it('记录失败只显示标准错误码、HTTP与UUID，不复制消息、cause或未知字段', () => {
+    const requestId = '11111111-1111-4111-8111-111111111111';
+    const error = directBrowserFailure(
+      new ApiError('fixture-private-message', {
+        kind: 'conflict',
+        code: 'CONFLICT',
+        status: 409,
+        requestId,
+        retryable: false,
+        cause: {
+          url: 'https://example.invalid/?fixture-private-key',
+          body: 'fixture-private-json',
+          profileId: 'fixture-private-profile'
+        }
+      }),
+      'record_finished'
+    );
+    expect(error.metadata).toEqual({
+      operation: 'record_finished',
+      httpStatus: 409,
+      apiCode: 'CONFLICT',
+      requestId
+    });
+    expect(error.message).toContain('保存执行结果失败');
+    expect(error.message).toContain('执行记录冲突');
+    expect(error.message).not.toContain('CONFLICT');
+    expect(error.message).toContain('HTTP 409');
+    expect(error.message).toContain(requestId);
+    expect(error.message).not.toMatch(/fixture-private|https:|profileId|body|cause/);
+    const invalid = directBrowserFailure(
+      new ApiError('fixture-private-message', {
+        kind: 'server',
+        code: 'fixture-private-code',
+        status: 600,
+        requestId: 'https://example.invalid/?fixture-private',
+        retryable: false
+      }),
+      'record_restore'
+    );
+    expect(invalid.metadata).toEqual({ operation: 'record_restore' });
+    expect(invalid.message).toBe('读取账户执行记录失败');
+  });
+  it('未知步骤、超长或带换行的请求号和非白名单原因均不进入诊断', () => {
+    const unsafe = new DirectBrowserError('bitbrowser_direct_command_failed', {
+      operation: '__proto__' as never,
+      httpStatus: Number.NaN,
+      apiCode: 'constructor',
+      apiReason: 'fixture-private-reason',
+      requestId: '11111111-1111-4111-8111-111111111111\n'
+    });
+    expect(unsafe.metadata).toEqual({});
+    expect(Object.isFrozen(unsafe.metadata)).toBe(true);
+    expect(unsafe.message).not.toMatch(/fixture-private|请求编号|__proto__|NaN/);
+    const valid = directBrowserFailure(
+      new ApiError('原单付款状态未安全核实，不能更换比特窗口', {
+        code: 'CONFLICT',
+        kind: 'conflict',
+        status: 409,
+        requestId: 'a'.repeat(4096),
+        retryable: false
+      }),
+      'record_profile_check'
+    );
+    expect(valid.metadata.apiReason).toBe('original_payment_profile_unverified');
+    expect(valid.metadata.requestId).toBeUndefined();
+    expect(valid.message).toContain('原单付款状态未安全核实，不能更换比特窗口');
+    const wrongStatus = directBrowserFailure(
+      new ApiError('原单付款状态未安全核实，不能更换比特窗口', {
+        code: 'CONFLICT',
+        kind: 'conflict',
+        status: 400,
+        retryable: false
+      })
+    );
+    expect(wrongStatus.metadata.apiReason).toBeUndefined();
+    expect(wrongStatus.message).not.toContain('原单付款状态');
+  });
+  it('创建窗口始终关闭登录态同步，保留已有代理和指纹设置', () => {
+    const result = directProfileOptions({
+      localApiUrl: 'http://localhost:54345',
+      localApiToken: 'fixture',
+      groupName: '组',
+      tagName: '标签',
+      proxyType: 'http',
+      dynamicProxyUrl: 'https://example.invalid/proxy'
+    });
+    expect(result).toMatchObject({
+      syncCookies: false,
+      syncLocalStorage: false,
+      syncTabs: false,
+      syncIndexedDb: false,
+      syncAuthorization: false,
+      proxyMethod: 3
+    });
+  });
+  it('自定义窗口指纹时区按所选地区计算偏移，不使用业务显示时区', () => {
+    const result = directProfileOptions({
+      localApiUrl: 'http://localhost:54345',
+      localApiToken: 'fixture',
+      groupName: '组',
+      tagName: '标签',
+      proxyType: 'http',
+      dynamicProxyUrl: '',
+      browserOptions: {
+        ...V2_RECHARGE_BROWSER_DEFAULTS,
+        timezoneFromIp: false,
+        timezone: 'Asia/Tokyo'
+      }
+    });
+    expect(result.browserFingerPrint).toMatchObject({
+      timeZone: 'Asia/Tokyo',
+      timeZoneOffset: 32400
+    });
+  });
+  it('授权 JSON 必须绑定目标用户与账号，冲突或缺失会话资料时拒绝', () => {
+    const data = {
+      user: { email: 'user@example.com', id: 'user-1' },
+      account: { id: 'account-1' },
+      sessionToken: 'fixture-session'
+    };
+    expect(parseDirectCredential({ sessionJson: JSON.stringify(data) })).toMatchObject({
+      userId: 'user-1',
+      accountId: 'account-1'
+    });
+    for (const value of [
+      { user: { email: 'user@example.com' } },
+      { ...data, session_token: 'other-session' },
+      { ...data, sessionToken: 'cookie; attr' }
+    ])
+      expect(() => parseDirectCredential({ sessionJson: JSON.stringify(value) })).toThrow(
+        '授权 JSON'
+      );
+  });
+  it('仅登录窗口不阻止官网、付款组件和登录请求', () => {
+    expect(isLoginPaymentWrite('POST', 'https://chatgpt.com/backend-api/payments/checkout')).toBe(
+      false
+    );
+    expect(isLoginPaymentWrite('POST', 'https://api.stripe.com/v1/payment_intents')).toBe(false);
+    expect(isLoginPaymentWrite('GET', 'https://chatgpt.com/api/auth/session')).toBe(false);
+    expect(isLoginPaymentWrite('POST', 'https://auth.openai.com/login')).toBe(false);
+  });
+});
+
+describe('owned checkout readiness', () => {
+  it.each([
+    ['/checkout/openai_llc/oaics_synthetic', true, 'page_ready'],
+    ['/checkout/openai_llc/oaics_synthetic', false, 'page_loading'],
+    ['/#pricing', true, 'page_loading'],
+    ['/checkout/openai_llc/not_a_checkout', true, 'page_loading']
+  ])('permits only the explicitly restored checkout: %s %s', (pathname, allowed, kind) => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com', pathname });
+    vi.stubGlobal('document', {
+      title: 'ChatGPT',
+      body: { innerText: '配置你的套餐' },
+      querySelectorAll: () => []
+    });
+    expect(inspectLoggedInPage(allowed as boolean)).toEqual({ kind });
+  });
+});
+
+describe('official account check rejects a still-unexpired token', () => {
+  it.each([false, true])(
+    '401 requests at most the explicit refresh, refreshed=%s',
+    async (refreshed) => {
+      vi.stubGlobal('location', { protocol: 'https:', hostname: 'chatgpt.com' });
+      vi.stubGlobal('document', { readyState: 'loading', title: 'ChatGPT' });
+      const claims = btoa(
+        JSON.stringify({
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' }
+        })
+      );
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              user: { id: 'fixture-user', email: 'user@example.com' },
+              accessToken: `fixture.${claims}.signature`
+            })
+          )
+        )
+        .mockResolvedValueOnce(new Response('{}', { status: 401 }));
+      vi.stubGlobal('fetch', fetch);
+      expect(
+        await inspectLoginPage('inspect', '', { sessionOnly: true, refreshSession: refreshed })
+      ).toEqual({
+        kind: 'expired',
+        tokenRejected: true,
+        refreshFailed: refreshed,
+        email: 'user@example.com',
+        userId: 'fixture-user',
+        accountId: 'fixture-account'
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch.mock.calls.every(([, options]) => !options.body && !options.method)).toBe(true);
+    }
+  );
+});

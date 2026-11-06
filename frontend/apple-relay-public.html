@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'"
+    />
+    <title>苹果隐藏邮箱查询</title>
+    <link rel="stylesheet" href="/prototype.css" />
+    <link rel="stylesheet" href="/apple-relay-public.css" />
+    <link rel="stylesheet" href="/title-help.css" />
+    <script src="/title-help.js" defer></script>
+    <script src="/apple-relay-public.js" defer></script>
+  </head>
+  <body class="public-mailbox">
+    <header class="public-mailbox-header">
+      <div class="public-mailbox-brand">
+        <span aria-hidden="true">ID</span>
+        <strong>业务管理系统</strong>
+      </div>
+    </header>
+    <main class="public-mailbox-main">
+      <section class="public-mailbox-panel" aria-labelledby="mailbox-title">
+        <h1 id="mailbox-title">苹果隐藏邮箱查询</h1>
+        <p class="public-mailbox-intro">使用主邮箱查询码或买家查询码查看对应邮件。</p>
+        <form id="mailbox-query-form" autocomplete="off" novalidate>
+          <div class="field public-mailbox-field">
+            <label for="mailbox-query-code"
+              >查询码<span class="required" aria-hidden="true">*</span></label
+            >
+            <div class="field-control public-mailbox-controls">
+              <input
+                id="mailbox-query-code"
+                type="password"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                maxlength="100"
+                placeholder="输入查询码"
+                aria-describedby="mailbox-query-hint"
+                required
+              />
+              <button id="mailbox-query-submit" type="submit" class="button primary" disabled>
+                查询邮件
+              </button>
+            </div>
+            <p id="mailbox-query-hint" class="field-help">查询结果仅显示查询码授权范围内的邮件。</p>
+          </div>
+        </form>
+        <p
+          id="mailbox-query-status"
+          class="public-mailbox-status"
+          role="status"
+          aria-atomic="true"
+        ></p>
+        <noscript
+          ><p class="public-mailbox-status" data-state="error">
+            请在浏览器中启用 JavaScript 后查询。
+          </p></noscript
+        >
+      </section>
+      <section
+        id="mailbox-query-results"
+        class="public-mailbox-panel"
+        aria-labelledby="mailbox-results-title"
+        hidden
+      >
+        <h2 id="mailbox-results-title">收件记录</h2>
+        <dl id="mailbox-result-summary" class="public-mailbox-summary"></dl>
+        <p id="mailbox-result-note" class="public-mailbox-note" hidden></p>
+        <ul id="mailbox-result-messages" class="public-mailbox-messages" aria-label="邮件列表"></ul>
+        <p id="mailbox-copy-status" class="public-mailbox-copy-status" role="status"></p>
+      </section>
+      <footer class="public-mailbox-footer">收件时间使用北京时间（UTC+8）</footer>
+    </main>
+  </body>
+</html>
