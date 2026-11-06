@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createLocalBusinessStore } from '../server/local-business.mjs';
 import {
   createAppleRelayService,
   loadAppleRelayConfig
@@ -46,6 +47,78 @@ const mail = (id, primaryAccountId, virtualEmailId, extra = {}) => ({
   ...extra
 });
 
+test('imports old primary authorizations, then creates and edits through the existing Vendure operations', async (t) => {
+  const state = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  state.config.primaryBindings = {};
+  state.config.importAliasIds = ['va-first', 'va-other'];
+  state.inventory = {
+    ...Object.fromEntries(['mailboxes', 'accounts', 'batches', 'returnRecords', 'importRecords',
+      'registrationRecords', 'tableSettings', 'undo'].map((key) => [key, []])),
+    appleRelay: { parents: [{ id: 'prior-local', email: 'one@example.test', version: 1 }], imports: [], events: [] }
+  };
+  store.saveBatch([{ domain: 'inventory', version: 0, data: state.inventory }]);
+  let localConflict = false;
+  state.savePrimaries = (rows, actor, aliases) => {
+    if (localConflict) throw Object.assign(new Error('fixture conflict'), { status: 409 });
+    const saved = store.saveAppleRelayPrimaries(rows, { ...actor, name: '授权测试员' }, aliases);
+    state.inventory = saved.data;
+    return saved;
+  };
+  const request = await listen(t, state);
+  assert.equal((await request('primary-import', {}, undefined, 'employee', 'employee')).status, 403);
+  assert.equal((await request('primary-import', {}, 'https://untrusted.example.test')).status, 403);
+  const imported = await request('primary-import', {});
+  assert.equal(imported.status, 200);
+  assert.equal(imported.body.imported, 2);
+  assert.equal(imported.body.importedAliases, 2);
+  assert.deepEqual(
+    imported.body.inventory.data.mailboxes.map(({ remoteAliasId }) => remoteAliasId).sort(),
+    ['va-first', 'va-other']
+  );
+  assert.equal((await request('status')).body.aliasIds.length, 2);
+  assert(!JSON.stringify(imported.body).includes('BUY-FIRST'));
+  const prior = imported.body.inventory.data.appleRelay.parents.find(({ id }) => id === 'prior-local');
+  assert.equal(prior.remotePrimaryId, 'vp-one');
+  assert.equal(prior.version, 2);
+  assert.equal(prior.queryExpiry, future);
+  assert(!JSON.stringify(imported.body).includes('MSTR-ONE'));
+  assert.deepEqual((await request('primary-import', {})).body, { imported: 0, importedAliases: 0 });
+  assert.equal(state.upstream.calls.some(({ query }) => query.includes('mutation')), false);
+  assert.equal((await request('test', { parentId: prior.id })).body.success, true);
+
+  const fields = { email: 'new@example.test', note: '新增测试', days: 31 };
+  assert.equal((await request('primary-save', fields)).status, 400);
+  const created = await request('primary-save', { ...fields, appPassword: 'fixture-apple-app-password' });
+  assert.equal(created.status, 200);
+  assert(!JSON.stringify(created.body).includes('fixture-apple-app-password'));
+  assert(!JSON.stringify(store.audit()).includes('fixture-apple-app-password'));
+  assert(store.audit().some((row) => row.targetId === created.body.parentId));
+  assert.equal((await request('primary-save', { ...fields, appPassword: 'fixture-apple-app-password' })).status, 409);
+  assert.equal(state.upstream.calls.filter(({ query }) => query.includes('createIcloudPrimaryAccount')).length, 1);
+
+  const update = { ...fields, id: created.body.parentId, version: 1, note: '只修改备注', status: 'ACTIVE' };
+  assert.equal((await request('primary-save', update)).status, 200);
+  assert.equal((await request('primary-save', update)).status, 409);
+  assert.equal(state.upstream.calls.filter(({ query }) => query.includes('updateIcloudPrimaryAccount')).length, 1);
+  assert((await request('status')).body.parentIds.includes(created.body.parentId));
+
+  const stale = store.load('inventory');
+  stale.data.appleRelay.parents[0].remotePrimaryId = 'forged-provider-id';
+  assert.throws(() => store.saveBatch([{ domain: 'inventory', ...stale }]), { status: 409 });
+
+  localConflict = true;
+  const retry = { ...fields, email: 'retry@example.test', appPassword: 'fixture-apple-app-password' };
+  const uncertain = await request('primary-save', retry);
+  assert.equal(uncertain.status, 409);
+  assert.match(uncertain.body.message, /导入已有主邮箱/);
+  localConflict = false;
+  assert.equal((await request('primary-save', retry)).status, 409);
+  assert.equal((await request('primary-import', {})).body.imported, 1);
+  assert.equal(state.upstream.calls.filter(({ query }) => query.includes('createIcloudPrimaryAccount')).length, 2);
+});
+
 function fakeVendure() {
   const primaries = [
     primary('vp-one', 'one@example.test', 'MSTR-ONE'),
@@ -79,6 +152,21 @@ function fakeVendure() {
     }
     if (query.includes('icloudVirtualEmails')) {
       return Response.json({ data: { icloudVirtualEmails: aliases } });
+    }
+    if (query.includes('createIcloudPrimaryAccount')) {
+      const { email, note, codeResetIntervalDays, appPassword } = variables.input;
+      assert.equal(appPassword, 'fixture-apple-app-password');
+      const row = { ...primary(`vp-created-${primaries.length}`, email, 'MSTR-NEW'), note, codeResetIntervalDays };
+      primaries.push(row);
+      return Response.json({ data: { result: row } });
+    }
+    if (query.includes('updateIcloudPrimaryAccount')) {
+      const { id, note, status, codeResetIntervalDays } = variables.input;
+      const row = primaries.find((entry) => entry.id === id);
+      assert(row);
+      assert.equal(Object.hasOwn(variables.input, 'appPassword'), false);
+      Object.assign(row, { note, ...(status && { status }), codeResetIntervalDays });
+      return Response.json({ data: { result: row } });
     }
     if (query.includes('testIcloudConnection')) {
       return Response.json({ data: { result: { success: true, message: 'upstream secret' } } });
@@ -177,6 +265,7 @@ async function listen(t, state) {
   const service = createAppleRelayService({
     config: state.config,
     readInventory: () => state.inventory,
+    savePrimaries: state.savePrimaries,
     fetchImpl: state.upstream?.fetch,
     recordAction: (entry) => {
       state.events.push(entry);

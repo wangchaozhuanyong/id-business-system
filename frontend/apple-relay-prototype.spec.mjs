@@ -40,7 +40,7 @@ function defaults(html) {
 }
 // Exercise real public handlers against fictional main mailboxes and aliases.
 // The DOM shim models form snapshots, disabled selects, confirmation and drafts.
-function runtime(store) {
+function runtime(store, { relayConfigured = true } = {}) {
   let form = null,
     callback = null,
     sequence = 0,
@@ -183,6 +183,11 @@ function runtime(store) {
     api.modules.inventory = {
       getAppleRelayState: () => structuredClone(committed.appleRelay),
       getLocalInventoryState: () => 'ready',
+      applyCommittedInventory(saved) {
+        version = saved.version;
+        committed = saved.data;
+        refreshRows();
+      },
       async saveAppleRelay(mutate, action) {
         const staged = structuredClone(committed);
         mutate(staged.appleRelay);
@@ -229,7 +234,24 @@ function runtime(store) {
   };
   const modules = [];
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: store },
+    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: store && {
+      async relay(action, input) {
+        if (action === 'status') return {
+          configured: relayConfigured,
+          parentIds: (store.load('inventory').data?.appleRelay?.parents ?? []).map(({ id }) => id)
+        };
+        assert.equal(action, 'primary-save');
+        assert.equal(typeof input.appPassword, 'string');
+        assert(relayConfigured);
+        await setImmediate();
+        const row = {
+          id: 'fixture-' + webcrypto.randomUUID(), expectedVersion: null, remotePrimaryId: 'fixture-upstream',
+          email: input.email, days: input.days, note: input.note, status: 'ACTIVE'
+        };
+        const inventory = store.saveAppleRelayPrimaries([row], { id: 'local-operator', name: '本机操作员' });
+        return { inventory, parentId: row.id };
+      }
+    } },
     document,
     crypto: webcrypto,
     Date,
@@ -338,14 +360,14 @@ test('本机主邮箱与批量登记归属于同一库存版本，重开后读�
   assert.equal(browser.parents().length, 0);
   await pendingParent;
   const parent = browser.parents()[0];
-  assert.equal(parent.hasCredential, false);
-  assert.equal(parent.queryCode, '');
+  assert.equal(parent.remotePrimaryId, 'fixture-upstream');
+  assert.equal(parent.queryCode, undefined);
   assert.equal(JSON.stringify(store.load('inventory')).includes('not-a-real-secret'), false);
 
   browser.preview('hidden1@example.test,备注\nhidden2@example.test', parent.id);
   browser.submit();
   await browser.confirm();
-  const reopened = runtime(store);
+  const reopened = runtime(store, { relayConfigured: false });
   assert.deepEqual(
     reopened.assets.map((row) => row.parentMailboxId),
     [parent.id, parent.id]

@@ -124,17 +124,26 @@ test('connection profiles stay encrypted and are readable after backup and recov
   const recovered = join(directory, 'recovered');
   const store = createLocalBusinessStore(source);
   const interfaceToken = 'fixture-local-interface-token';
+  const staticProxyCredentials = { username: 'fixture-proxy-user', password: 'fixture-proxy-password' };
+  const staticProfile = { proxyMode: 'static', staticHost: 'proxy.example.test', staticPort: 8082 };
+  const secrets = { interfaceToken, staticProxyCredentials };
   let saved;
   try {
-    saved = store.saveBitBrowserConnection({ ...command(0), interfaceToken }, alice);
+    assert.throws(() => store.saveBitBrowserConnection({ ...command(0), ...secrets }, alice), { status: 400 });
+    saved = store.saveBitBrowserConnection({ ...command(0, staticProfile), ...secrets }, alice);
     assert.equal(saved.profiles[0].hasInterfaceToken, true);
-    assert.equal(JSON.stringify(saved).includes(interfaceToken), false);
-    assert.equal(JSON.stringify(store.audit()).includes(interfaceToken), false);
+    assert.equal(saved.profiles[0].hasStaticProxyCredentials, true);
+    for (const value of [interfaceToken, ...Object.values(staticProxyCredentials)]) {
+      assert.equal(JSON.stringify(saved).includes(value), false);
+      assert.equal(JSON.stringify(store.audit()).includes(value), false);
+    }
   } finally {
     store.close();
   }
   assert.equal((await readFile(source)).includes(Buffer.from(profile.name)), false);
-  assert.equal((await readFile(source)).includes(Buffer.from(interfaceToken)), false);
+  const sourceBytes = await readFile(source);
+  for (const value of [interfaceToken, ...Object.values(staticProxyCredentials)])
+    assert.equal(sourceBytes.includes(Buffer.from(value)), false);
   await createSnapshot({ source, output: snapshot });
   await restoreSnapshot({ input: snapshot, key: source + '.key', output: recovered });
   const restored = createLocalBusinessStore(join(recovered, 'local-business.sqlite'));
@@ -145,14 +154,17 @@ test('connection profiles stay encrypted and are readable after backup and recov
     });
     assert.deepEqual(restored.loadBitBrowserConnections(bob), empty);
     const selection = { id: saved.savedId, version: 1 };
-    assert.deepEqual(restored.useBitBrowserConnectionToken(selection, alice), { interfaceToken });
-    assert.throws(() => restored.useBitBrowserConnectionToken({ ...selection, version: 0 }, bob), { status: 404 });
-    const retained = restored.saveBitBrowserConnection(command(1, { id: saved.savedId }), alice);
+    assert.deepEqual(restored.useBitBrowserConnectionSecrets(selection, alice), secrets);
+    assert.throws(() => restored.useBitBrowserConnectionSecrets({ ...selection, version: 0 }, bob), { status: 404 });
+    const retained = restored.saveBitBrowserConnection(command(1, { ...staticProfile, id: saved.savedId }), alice);
     assert.equal(retained.profiles[0].hasInterfaceToken, true);
+    assert.equal(retained.profiles[0].hasStaticProxyCredentials, true);
     const changed = restored.saveBitBrowserConnection(command(2, {
-      id: saved.savedId, url: 'http://127.0.0.1:54346'
+      ...staticProfile, id: saved.savedId, url: 'http://127.0.0.1:54346', staticPort: 8083
     }), alice);
     assert.equal(changed.profiles[0].hasInterfaceToken, undefined);
+    assert.equal(changed.profiles[0].hasStaticProxyCredentials, undefined);
+    assert.throws(() => restored.useBitBrowserConnectionSecrets(selection, alice), { status: 409 });
   } finally {
     restored.close();
   }
@@ -210,7 +222,16 @@ test('uses the preview server existing administrator gate and same-origin write 
   );
   const firstToken = 'fixture-interface-token-one';
   const secondToken = 'fixture-interface-token-two';
-  const first = await request(path, { method: 'PUT', body: { ...command(0), interfaceToken: firstToken }, cookie });
+  const staticProxyCredentials = { username: 'fixture-proxy-user', password: 'fixture-proxy-password' };
+  const first = await request(path, {
+    method: 'PUT',
+    body: {
+      ...command(0, { proxyMode: 'static', staticHost: 'proxy.example.test' }),
+      interfaceToken: firstToken,
+      staticProxyCredentials
+    },
+    cookie
+  });
   assert.equal(first.status, 200);
   assert.equal(first.headers.get('X-ID-BitBrowser-Token-Storage'), 'enabled');
   const { savedId } = await first.json();
@@ -220,7 +241,8 @@ test('uses the preview server existing administrator gate and same-origin write 
   assert.equal(second.status, 200);
   const secondId = (await second.json()).savedId;
   const summary = await (await request(path, { cookie })).text();
-  assert.ok(!summary.includes(firstToken) && !summary.includes(secondToken));
+  for (const value of [firstToken, secondToken, ...Object.values(staticProxyCredentials)])
+    assert.equal(summary.includes(value), false);
   const use = (id, requestCookie, requestOrigin) => request(path, {
     method: 'POST', body: { id, version: 2 }, cookie: requestCookie, requestOrigin
   });
@@ -228,7 +250,7 @@ test('uses the preview server existing administrator gate and same-origin write 
   assert.equal((await use(savedId, cookie, 'https://other.example.test')).status, 403);
   const firstUse = await use(savedId, cookie);
   assert.equal(firstUse.headers.get('cache-control'), 'private, no-store');
-  assert.deepEqual(await firstUse.json(), { interfaceToken: firstToken });
+  assert.deepEqual(await firstUse.json(), { interfaceToken: firstToken, staticProxyCredentials });
   assert.deepEqual(await (await use(secondId, cookie)).json(), { interfaceToken: secondToken });
   const added = await request('api/local/auth/employees', {
     method: 'POST',

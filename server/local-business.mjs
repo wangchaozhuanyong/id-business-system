@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { isDeepStrictEqual } from 'node:util';
 import { snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
@@ -23,7 +24,7 @@ import {
 import {
   BitBrowserConnectionError,
   bitBrowserConnectionDomain,
-  readBitBrowserConnectionToken,
+  readBitBrowserConnectionSecrets,
   summarizeBitBrowserConnections,
   validateBitBrowserConnectionWrite,
   writeBitBrowserConnection
@@ -52,6 +53,11 @@ const domainLabels = {
   appleBalance: '苹果 ID 余额'
 };
 const allowedDomains = new Set(Object.keys(domainLabels));
+const verifiedAppleRelayPrimaries = Symbol('verifiedAppleRelayPrimaries');
+const inventoryLists = [
+  'mailboxes', 'accounts', 'batches', 'returnRecords', 'importRecords',
+  'registrationRecords', 'tableSettings', 'undo'
+];
 const inventoryActions = {
   inventory_edit: '修改库存资料',
   inventory_create: '新增库存资料',
@@ -344,16 +350,7 @@ function checkWrite(entry) {
   }
   // The local preview has no separate sign-in, so accept only the application's document shape.
   const arrayKeys = {
-    inventory: [
-      'mailboxes',
-      'accounts',
-      'batches',
-      'returnRecords',
-      'importRecords',
-      'registrationRecords',
-      'tableSettings',
-      'undo'
-    ],
+    inventory: inventoryLists,
     commerce: ['customers', 'tenants', 'orders', 'operating', 'rentBatches', 'logs'],
     settings: ['mailboxTypes'],
     appleBalance: ['wallets', 'allocations', 'movements', 'refunds']
@@ -526,6 +523,60 @@ export function createLocalBusinessStore(databasePath) {
       const snapshot = readDocument('inventory');
       const review = usageReviewRows(inspectInventoryUsage(snapshot.data, readDocument('commerce').data));
       return review.length ? { ...snapshot, usageReview: review } : snapshot;
+    },
+    saveAppleRelayPrimaries(rows, actor, aliases = []) {
+      const { version, data } = readDocument('inventory');
+      const inventory = data ?? Object.fromEntries(inventoryLists.map((key) => [key, []]));
+      const { parents } = inventory.appleRelay ??= { parents: [], imports: [], events: [] };
+      const time = new Date().toISOString();
+      for (const { expectedVersion, imported, sourceCreatedAt, ...row } of rows) {
+        const index = parents.findIndex(({ id }) => id === row.id);
+        const before = parents[index];
+        if (
+          (before ? (before.version || 1) : null) !== expectedVersion ||
+          parents.some((other) => other.id !== row.id &&
+            (String(other.email || '').trim().toLowerCase() === row.email || other.remotePrimaryId === row.remotePrimaryId))
+        ) throw new LocalDataError(409, '主邮箱登记资料已变化');
+        const saved = {
+          ...before, ...row,
+          version: (expectedVersion ?? 0) + 1,
+          ...(before ? {} : imported
+            ? { createdAt: typeof sourceCreatedAt === 'string' ? sourceCreatedAt : '' }
+            : { createdAt: time, createdById: actor.id, createdBy: actor.name }),
+          updatedAt: time, lastOperatedAt: time, lastOperatedById: actor.id, lastOperatedBy: actor.name
+        };
+        if (index === -1) parents.unshift(saved);
+        else parents[index] = saved;
+      }
+      for (const { expectedVersion, sourceCreatedAt, ...row } of aliases) {
+        const index = inventory.mailboxes.findIndex(({ id }) => id === row.id);
+        const before = inventory.mailboxes[index];
+        if ((before ? (before.version || 1) : null) !== expectedVersion ||
+            inventory.mailboxes.some((other) => other.id !== row.id && other.type === 'relay' &&
+              (String(other.email || '').trim().toLowerCase() === row.email || other.remoteAliasId === row.remoteAliasId)))
+          throw new LocalDataError(409, '隐藏邮箱登记资料已变化');
+        const saved = before
+          ? { ...before, remoteAliasId: row.remoteAliasId }
+          : {
+              ...row, aliasId: row.id, type: 'relay', source: '原收件服务',
+              relayStatus: 'ACTIVE', health: 'normal', status: '正常',
+              inventoryState: 'available', used: false, inventoryHistory: [], usageLinks: [],
+              createdAt: typeof sourceCreatedAt === 'string' ? sourceCreatedAt : '', importedAt: time
+            };
+        Object.assign(saved, {
+          version: (expectedVersion ?? 0) + 1, lastOperatedAt: time,
+          lastOperatedById: actor.id, lastOperatedBy: actor.name
+        });
+        if (index === -1) inventory.mailboxes.unshift(saved);
+        else inventory.mailboxes[index] = saved;
+      }
+      return this.saveBatch(
+        [{ domain: 'inventory', version, data: inventory, action: 'inventory_relay_parent_save' }],
+        { actor, [verifiedAppleRelayPrimaries]: [
+          ...rows.map(({ id }) => ({ id, action: 'inventory_relay_parent_save' })),
+          ...aliases.map(({ id }) => ({ id, action: 'inventory_relay_alias_import' }))
+        ] }
+      )[0];
     },
     saveInventoryUsageCorrection(body, actor) {
       if (actor && !['admin', 'super'].includes(actor.role))
@@ -722,15 +773,20 @@ export function createLocalBusinessStore(databasePath) {
       const { version, data } = readDocument(`${bitBrowserConnectionDomain}:${actor.id}`);
       return { version, profiles: summarizeBitBrowserConnections(data ?? []) };
     },
-    useBitBrowserConnectionToken(body, actor) {
-      const current = readDocument(`${bitBrowserConnectionDomain}:${actor.id}`);
-      return readBitBrowserConnectionToken(current, body);
+    useBitBrowserConnectionSecrets(body, actor) {
+      const domain = `${bitBrowserConnectionDomain}:${actor.id}`;
+      return readBitBrowserConnectionSecrets(readDocument(domain), body, (id, sealed) =>
+        decrypt(key, `${domain}:static-proxy:${id}`, 1, Buffer.from(sealed, 'base64url'))
+      );
     },
     saveBitBrowserConnection(body, actor = localToolboxActor) {
       const command = validateBitBrowserConnectionWrite(body);
       const domain = `${bitBrowserConnectionDomain}:${actor.id}`;
       return writeTransaction(() => {
-        const result = writeBitBrowserConnection(readDocument(domain), command);
+        // Older versions expose extra profile fields in summaries, so proxy secrets must remain sealed there.
+        const result = writeBitBrowserConnection(readDocument(domain), command, (id, credentials) =>
+          encrypt(key, `${domain}:static-proxy:${id}`, 1, JSON.stringify(credentials)).toString('base64url')
+        );
         const { version, profiles, savedId } = result;
         put.run(domain, version, encrypt(key, domain, version, JSON.stringify(profiles)));
         log.run(
@@ -803,7 +859,10 @@ export function createLocalBusinessStore(databasePath) {
         return result;
       });
     },
-    saveBatch(entries, { actor, verifyAutomaticSnapshot, [verifiedRelayClaimIds]: verifiedIds } = {}) {
+    saveBatch(entries, {
+      actor, verifyAutomaticSnapshot, [verifiedRelayClaimIds]: verifiedIds,
+      [verifiedAppleRelayPrimaries]: primaryTargets
+    } = {}) {
       const writes = checkWrites(entries);
       return writeTransaction(() => {
         for (const { domain, version } of writes) {
@@ -842,6 +901,18 @@ export function createLocalBusinessStore(databasePath) {
           }
           const ids = checkedRelayClaims(priorInventory, write, actor);
           requireVerifiedRelayClaimIds(ids, verifiedIds);
+          const relayParents = inventory.appleRelay?.parents ?? [];
+          const existingParents = priorInventory?.appleRelay?.parents ?? [];
+          const links = (rows) => new Map(rows.filter((row) => row.remotePrimaryId)
+            .map(({ id, remotePrimaryId, email }) => [id, { remotePrimaryId, email }]));
+          const aliasLinks = (rows) => new Map(rows.filter((row) => row.remoteAliasId)
+            .map(({ id, remoteAliasId, email, parentMailboxId, type }) =>
+              [id, { remoteAliasId, email, parentMailboxId, type }]));
+          if (relayParents.some((row) => Object.hasOwn(row, 'appPassword')) ||
+              (!primaryTargets && (!isDeepStrictEqual(links(relayParents), links(existingParents)) ||
+                !isDeepStrictEqual(aliasLinks(inventory.mailboxes), aliasLinks(priorInventory?.mailboxes ?? []))))) {
+            throw new LocalDataError(409, '请通过主邮箱授权入口修改收件连接');
+          }
           const attributionError = attributeInventory(priorInventory, inventory, actor, write.action);
           if (attributionError) throw new LocalDataError(409, attributionError);
           defaultInventoryRegistrationTimes(priorInventory, inventory);
@@ -947,7 +1018,10 @@ export function createLocalBusinessStore(databasePath) {
             actionLabels[domain]?.[action] ||
             (action === 'local_save' ? `保存${domainLabels[domain]}资料` : action);
           put.run(domain, next, encrypt(key, domain, next, JSON.stringify(data)));
-          log.run(now, domain, action, auditSummary(label, actor), next);
+          if (domain === 'inventory' && primaryTargets) {
+            for (const target of primaryTargets)
+              log.run(now, domain, target.action, auditSummary(inventoryActions[target.action], actor, target.id), next);
+          } else log.run(now, domain, action, auditSummary(label, actor), next);
           const review = domain === 'inventory'
             ? usageReviewRows(inspectInventoryUsage(inventory, commerce, Date.parse(now)))
             : [];
@@ -1045,7 +1119,7 @@ export async function handleLocalBusiness(
       if (!actor?.id) throw new LocalDataError(401, '请先登录');
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从本机页面使用');
       response.setHeader('Cache-Control', 'private, no-store');
-      return json(response, 200, store.useBitBrowserConnectionToken(await readJson(request), actor));
+      return json(response, 200, store.useBitBrowserConnectionSecrets(await readJson(request), actor));
     }
     if (request.method === 'GET') {
       if (domain === 'toolbox') return json(response, 200, store.loadToolbox(actor));
@@ -1074,8 +1148,8 @@ export async function handleLocalBusiness(
     if (domain === 'inventory/usage-correction') return json(response, 200, store.saveInventoryUsageCorrection(body, actor));
     if (domain === 'toolbox') return json(response, 200, store.saveToolbox(body, actor));
     if (domain === bitBrowserConnectionDomain) {
-      if (Object.hasOwn(body, 'interfaceToken') && !actor?.id)
-        throw new LocalDataError(401, '请先登录再保存接口密钥');
+      if ((Object.hasOwn(body, 'interfaceToken') || Object.hasOwn(body, 'staticProxyCredentials')) && !actor?.id)
+        throw new LocalDataError(401, '请先登录再保存连接凭据');
       if (actor?.id) response.setHeader('X-ID-BitBrowser-Token-Storage', 'enabled');
       return json(response, 200, store.saveBitBrowserConnection(body, actor));
     }

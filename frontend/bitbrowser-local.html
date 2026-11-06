@@ -199,11 +199,12 @@
                   ><input id="bit-proxy-port" type="number" min="1" max="65535" value="8080" />
                 </div>
                 <div class="field" data-bit-proxy="static" hidden>
-                  <label for="bit-proxy-user">代理用户名</label><input id="bit-proxy-user" />
+                  <label for="bit-proxy-user">代理用户名</label
+                  ><input id="bit-proxy-user" type="password" autocomplete="off" maxlength="256" />
                 </div>
                 <div class="field" data-bit-proxy="static" hidden>
                   <label for="bit-proxy-password">代理密码</label
-                  ><input id="bit-proxy-password" type="password" />
+                  ><input id="bit-proxy-password" type="password" autocomplete="off" maxlength="256" />
                 </div>
               </div>
             </details>
