@@ -17,6 +17,7 @@ import { createMicrosoftMailbox, legacyMicrosoftMailboxCallback, microsoftMailbo
 import { createLegacyToolRoutes, legacyWebsiteVisitIngest } from './tools/legacy-public-routes.mjs';
 import { readToolConfig } from './tools/read-tool-config.mjs';
 import { createLocalCodexdaichongGateway } from '../modules/recharge/codexdaichong/local-gateway.mjs';
+import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-bridge.mjs';
 import { productionDataPaths } from './production-data.mjs';
 
 const files = new Map([
@@ -44,6 +45,7 @@ export async function startPreview(
   {
     codexdaichong,
     rechargeConfig,
+    vendureRehearsal,
     databasePath,
     authPath,
     publicOrigin,
@@ -67,6 +69,8 @@ export async function startPreview(
   const secureOrigin = publicUrl?.origin;
   if (publicUrl && (!databasePath || !authPath || bootstrapLocalAdmin || codexdaichong))
     throw new Error('正式站必须使用独立业务库、预先初始化的员工账号和统一登录');
+  if (vendureRehearsal && (publicUrl || typeof vendureRehearsal.handle !== 'function'))
+    throw new Error('Vendure 演练适配器仅可挂载到独立回环站');
   const mailboxPublicUrl = parseToolPublicOrigin(mailboxPublicOrigin);
   if (mailboxPublicUrl && (!databasePath || !authPath))
     throw new Error('商城邮箱查询需要独立业务库和账号配置');
@@ -273,6 +277,8 @@ export async function startPreview(
       response.writeHead(403).end();
       return;
     }
+    if (vendureRehearsal && route.startsWith(vendureRechargePrefix + '/'))
+      return void vendureRehearsal.handle(request, response);
     if (handleLegacyToolRoute && [legacyMicrosoftMailboxCallback, legacyWebsiteVisitIngest].includes(route)) {
       return void handleLegacyToolRoute(request, response).catch(() => {
         if (!response.headersSent) response.writeHead(502);

@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { startPreview } from '../server/preview.mjs';
 import {
   createLoopbackVendureRechargeBridge,
   rechargeWorkerPrefix,
@@ -24,8 +25,9 @@ const authorization = (extra = {}) =>
     accessToken: 'synthetic-access-token-for-test',
     ...extra
   });
+const taskIdentity = ({ id, taskToken }) => ({ id, taskToken });
 
-async function fixture(t, { durable = false } = {}) {
+async function fixture(t, { durable = false, throughHost = false } = {}) {
   const vendureKey = randomBytes(32).toString('hex');
   const workerSecret = randomBytes(32).toString('hex');
   let at = Date.now();
@@ -61,10 +63,16 @@ async function fixture(t, { durable = false } = {}) {
       ],
       now: () => at
     });
-    server = createServer(bridge.handle);
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    origin = 'http://127.0.0.1:' + server.address().port;
+    if (throughHost) {
+      const preview = await startPreview(0, { vendureRehearsal: bridge });
+      server = preview.server;
+      origin = new URL(preview.url).origin;
+    } else {
+      server = createServer(bridge.handle);
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      origin = 'http://127.0.0.1:' + server.address().port;
+    }
   }
   async function stop() {
     if (!server) return;
@@ -95,6 +103,7 @@ async function fixture(t, { durable = false } = {}) {
   const vendure = (action, body = {}, headers = {}) =>
     post(vendureRechargePrefix + '/' + action, JSON.stringify(body), {
       'x-vendure-recharge-key': vendureKey,
+      'x-vendure-client-ip': '203.0.113.10',
       ...headers
     });
   function signed(action, body = {}) {
@@ -106,6 +115,7 @@ async function fixture(t, { durable = false } = {}) {
   }
   return {
     vendure,
+    origin: () => origin,
     signed,
     worker: (action, body) => signed(action, body)(),
     restart: async () => {
@@ -124,6 +134,33 @@ async function fixture(t, { durable = false } = {}) {
   };
 }
 
+test('isolated site routes Vendure requests and keeps executor routes off the site listener', async (t) => {
+  await assert.rejects(startPreview(0, {
+    databasePath: ':memory:', authPath: 'unused', publicOrigin: 'https://id.example.test',
+    vendureRehearsal: { handle() {} }
+  }), /仅可挂载到独立回环站/);
+  const { vendure, origin, restart } = await fixture(t, { durable: true, throughHost: true });
+  const code = 'fixture-b';
+  const session = authorization();
+  assert.equal((await vendure('config', {}, { 'x-vendure-recharge-key': 'invalid' })).status, 401);
+  assert.equal((await vendure('config', {}, { 'x-vendure-client-ip': 'invalid' })).status, 400);
+  assert.equal((await vendure('verify', { code }, { Origin: origin() })).status, 403);
+  assert.equal((await vendure('verify', { code })).body.plan, 'pro_5x');
+  const [first, retry] = await Promise.all([
+    vendure('submit', { code, session }), vendure('submit', { code, session })
+  ]);
+  assert.deepEqual(first, retry);
+  assert.equal(first.body.status, 'queued');
+  const taskRequest = taskIdentity(first.body);
+  assert.equal((await vendure('task', taskRequest)).body.status, 'queued');
+  const worker = await fetch(origin() + rechargeWorkerPrefix + '/claim', { method: 'POST' });
+  assert.equal(worker.status, 405);
+  await restart();
+  assert.equal((await vendure('query', { code })).body.task.id, first.body.id);
+  assert.equal((await vendure('task', taskRequest)).body.status, 'awaiting_review');
+  assert.equal((await vendure('submit', { code, session })).body.id, first.body.id);
+});
+
 test('Vendure verify, submit, query and task preserve one receipt across concurrent delivery and a lost result reply', async (t) => {
   const { vendure, worker } = await fixture(t);
   const code = 'fixture-a';
@@ -131,8 +168,7 @@ test('Vendure verify, submit, query and task preserve one receipt across concurr
   assert.deepEqual(await vendure('config'), { status: 200, body: { maintenance: false } });
   assert.deepEqual((await vendure('verify', { code })).body, {
     plan: 'plus',
-    status: 'available',
-    task: null
+    status: 'available'
   });
   assert.deepEqual((await vendure('submit', { code, session: '{}' })).body, { rejected: true });
   assert.deepEqual(
@@ -149,9 +185,10 @@ test('Vendure verify, submit, query and task preserve one receipt across concurr
     rejected: true
   });
   assert.deepEqual((await worker('claim')).body, { task: null });
+  assert.equal((await vendure('submit', { code, session, plan: 'pro_20x' })).status, 400);
 
   const [first, duplicate] = await Promise.all([
-    vendure('submit', { code, session, plan: 'pro_20x' }),
+    vendure('submit', { code, session }),
     vendure('submit', {
       code,
       session: authorization({
@@ -188,7 +225,7 @@ test('Vendure verify, submit, query and task preserve one receipt across concurr
   assert.equal(claimed.status, 'running');
   assert.match(claimed.session, /@example\.test/);
   assert.equal(claimed.taskToken, undefined);
-  assert.equal((await vendure('task', accepted)).body.status, 'running');
+  assert.equal((await vendure('task', taskIdentity(accepted))).body.status, 'running');
 
   const result = {
     id: claimed.id,
@@ -203,7 +240,7 @@ test('Vendure verify, submit, query and task preserve one receipt across concurr
   assert.equal(recorded.body.status, 'succeeded');
   assert.deepEqual(recorded, await worker('result', result));
   assert.equal((await worker('result', { ...result, outcome: 'confirmed_failure' })).status, 409);
-  assert.deepEqual((await vendure('task', accepted)).body, recorded.body);
+  assert.deepEqual((await vendure('task', taskIdentity(accepted))).body, recorded.body);
   assert(Date.parse(recorded.body.updatedAt) > Date.parse(claimed.updatedAt));
   assert.equal((await vendure('query', { code })).body.status, 'used');
   const second = (await vendure('submit', { code: 'fixture-b', session })).body;
@@ -241,7 +278,7 @@ test('worker signatures bind the path and exact request body and reject replay a
 
   const signedResult = { id: leased.id, leaseToken: leased.leaseToken, outcome: 'unknown' };
   assert.equal((await worker('result', signedResult)).body.status, 'awaiting_review');
-  assert.equal((await vendure('query', submit)).body.status, 'reserved');
+  assert.equal((await vendure('query', { code: submit.code })).body.status, 'reserved');
   assert.deepEqual((await worker('claim')).body, { task: null });
 });
 
@@ -251,7 +288,7 @@ test('lease expiry never reissues an attempt and expired queued credentials are 
   const leased = (await worker('claim')).body.task;
   advance(301_000);
   assert.deepEqual((await worker('claim')).body, { task: null });
-  assert.equal((await vendure('task', first)).body.status, 'awaiting_review');
+  assert.equal((await vendure('task', taskIdentity(first))).body.status, 'awaiting_review');
   assert.equal(
     (
       await worker('result', {
@@ -266,7 +303,7 @@ test('lease expiry never reissues an attempt and expired queued credentials are 
   const second = (await vendure('submit', { code: 'fixture-b', session: authorization() })).body;
   advance(601_000);
   assert.deepEqual((await worker('claim')).body, { task: null });
-  assert.equal((await vendure('task', second)).body.status, 'awaiting_review');
+  assert.equal((await vendure('task', taskIdentity(second))).body.status, 'awaiting_review');
   assert.equal(
     (await vendure('submit', { code: 'fixture-b', session: authorization() })).body.id,
     second.id
@@ -304,7 +341,7 @@ test('durable receipts, reservations and replay protection survive reopening wit
 
   await f.restart();
   assert.equal((await originalClaim()).status, 409);
-  assert.deepEqual(await f.vendure('task', first), recorded);
+  assert.deepEqual(await f.vendure('task', taskIdentity(first)), recorded);
   const duplicate = await f.vendure('submit', { code: 'fixture-a', session });
   assert.equal(duplicate.body.id, first.id);
   assert.equal(duplicate.body.taskToken, first.taskToken);
@@ -323,7 +360,7 @@ test('reopening puts running and unclaimed tasks into review without restoring s
   await f.restart();
 
   for (const original of [first, second]) {
-    const current = await f.vendure('task', original);
+    const current = await f.vendure('task', taskIdentity(original));
     assert.equal(current.body.status, 'awaiting_review');
     assert(Date.parse(current.body.updatedAt) > Date.parse(original.updatedAt));
   }
@@ -357,7 +394,7 @@ test('failed commits never acknowledge submission, credential delivery or succes
   const noLease = await f.worker('claim');
   assert.equal(noLease.status, 503);
   assert.equal(noLease.body.task, undefined);
-  assert.equal((await f.vendure('task', accepted)).body.status, 'queued');
+  assert.equal((await f.vendure('task', taskIdentity(accepted))).body.status, 'queued');
   const leased = (await f.worker('claim')).body.task;
   assert.equal(leased.session, session);
   const result = {
@@ -368,15 +405,15 @@ test('failed commits never acknowledge submission, credential delivery or succes
   };
   f.fault('before');
   assert.equal((await f.worker('result', result)).status, 503);
-  assert.equal((await f.vendure('task', accepted)).body.status, 'running');
+  assert.equal((await f.vendure('task', taskIdentity(accepted))).body.status, 'running');
   assert.equal(f.inspect().state.tasks[0].status, 'running');
 
   f.fault('after');
   assert.equal((await f.worker('result', result)).status, 503);
   assert.equal(f.inspect().state.tasks[0].status, 'succeeded');
-  assert.equal((await f.vendure('task', accepted)).status, 503);
+  assert.equal((await f.vendure('task', taskIdentity(accepted))).status, 503);
   await f.restart();
-  const current = await f.vendure('task', accepted);
+  const current = await f.vendure('task', taskIdentity(accepted));
   assert.equal(current.body.status, 'succeeded');
   assert.deepEqual(await f.worker('result', result), current);
   assert.deepEqual((await f.worker('claim')).body, { task: null });

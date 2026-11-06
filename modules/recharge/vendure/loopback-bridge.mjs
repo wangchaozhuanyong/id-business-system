@@ -1,8 +1,16 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 
 export const vendureRechargePrefix = '/api/id-business-v2/online-recharge/integrations/vendure';
 export const rechargeWorkerPrefix = '/integrations/recharge-worker';
 const plans = new Set(['plus', 'pro_5x', 'pro_20x']);
+const vendureFields = new Map([
+  ['config', []],
+  ['verify', ['code']],
+  ['query', ['code']],
+  ['submit', ['code', 'session']],
+  ['task', ['id', 'taskToken']]
+]);
 const workerOutcomes = new Map([
   ['confirmed_success', 'succeeded'],
   ['confirmed_failure', 'failed'],
@@ -224,11 +232,9 @@ export function createLoopbackVendureRechargeBridge({
       : record.disabled
         ? 'disabled'
         : 'available';
-    return send(res, 200, {
-      plan: prior?.plan ?? record.plan,
-      status,
-      task: action === 'query' && prior ? taskView(prior, true) : null
-    });
+    const result = { plan: prior?.plan ?? record.plan, status };
+    if (action === 'query') result.task = prior ? taskView(prior, true) : null;
+    return send(res, 200, result);
   }
 
   function handleWorker(action, body, res, at, nonceRef, nonceUntil) {
@@ -310,6 +316,8 @@ export function createLoopbackVendureRechargeBridge({
       return send(res, 403, { error: '只接受本机服务请求' });
     if (vendure && !secureEqual(vendureKey, headers['x-vendure-recharge-key']))
       return send(res, 401, { error: '服务凭据无效' });
+    if (vendure && !isIP(headers['x-vendure-client-ip'] ?? ''))
+      return send(res, 400, { error: '来源资料无效' });
     if (!/^application\/json(?:\s*;|$)/i.test(headers['content-type'] || ''))
       return send(res, 415, { error: '需要 JSON 请求' });
     const raw = await readBody(req, vendure ? 1_600_000 : 4096);
@@ -341,6 +349,8 @@ export function createLoopbackVendureRechargeBridge({
     } catch {
       return send(res, 400, { error: 'JSON 格式无效' });
     }
+    if (vendure && Object.keys(body).some((field) => !vendureFields.get(vendure[1]).includes(field)))
+      return send(res, 400, { error: '不支持的请求字段' });
     expire(at);
     if (worker && nonces.has(nonceRef)) return send(res, 409, { error: '执行请求已接收' });
     return vendure

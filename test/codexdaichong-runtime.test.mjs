@@ -3,7 +3,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { isolatedCodexdaichongEnv } from '../modules/recharge/codexdaichong/runtime.mjs';
+import { checkProductionDatabase, isolatedCodexdaichongEnv } from '../modules/recharge/codexdaichong/runtime.mjs';
 import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/runtime-health.mjs';
 
 test('isolated startup rejects implicit, remote and shared databases and only forwards allowed settings', () => {
@@ -31,6 +31,33 @@ test('isolated startup rejects implicit, remote and shared databases and only fo
     isolatedCodexdaichongEnv({ ...env, NODE_OPTIONS: '--inspect', OTHER: 'fixture' }),
     env
   );
+});
+
+test('production preflight checks the actual dedicated database and rejects active tasks or asset locks', async () => {
+  const env = {
+    PORT: '43101', DB_HOST: '127.0.0.1', DB_PORT: '43102',
+    DB_NAME: 'id_redesign_codexdaichong_prod', DB_USER: 'id_redesign_recharge',
+    DB_PASSWORD: randomBytes(18).toString('hex'), ID_RECHARGE_BRIDGE_SECRET: randomBytes(32).toString('hex')
+  };
+  const result = { databaseName: env.DB_NAME, account: env.DB_USER + '@localhost', pending: 0, assetsLocked: 0 };
+  const check = (row, database = env) => checkProductionDatabase(database, async ({ host, database: name }) => {
+    assert.equal(host, '127.0.0.1');
+    assert.equal(name, env.DB_NAME);
+    let reads = 0;
+    return {
+      async query({ sql }) {
+        if (reads++ === 0) assert.equal(sql, 'START TRANSACTION READ ONLY');
+        else assert.match(sql.trim(), /^SELECT DATABASE\(\)/);
+        return [[row]];
+      },
+      async end() { assert.equal(reads, 2); }
+    };
+  });
+  await check(result);
+  await assert.rejects(check(result, { ...env, DB_NAME: 'id_redesign_codexdaichong_test' }), /专用回环/);
+  await assert.rejects(check({ ...result, account: 'root@localhost' }), /实际身份/);
+  await assert.rejects(check({ ...result, pending: 1 }), /未确认/);
+  await assert.rejects(check({ ...result, assetsLocked: 1 }), /资产锁/);
 });
 
 test('signed health distinguishes real readiness from an arbitrary 200 and does not expose upstream errors', async (t) => {

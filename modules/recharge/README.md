@@ -62,7 +62,7 @@ node server/preview.mjs --local-data --port 4348 --codexdaichong-url "$RECHARGE_
 
 ### Vendure 与本机执行边界
 
-固定 codexdaichong 继续使用原有 HTTP、WebSocket 和供应商状态轮询。新建的 `vendure/loopback-bridge.mjs` 是独立的回环联调适配器，未挂载到公共宿主或代充网关。它保留 Vendure 已有的五个 POST 动作 `config`、`verify`、`submit`、`query`、`task`，沿用 `/api/id-business-v2/online-recharge/integrations/vendure/` 前缀及原任务回执格式。任务套餐来自兑换码配置。
+固定 codexdaichong 继续使用原有 HTTP、WebSocket 和供应商状态轮询。`vendure/loopback-bridge.mjs` 可由隔离宿主通过 `startPreview(0, { vendureRehearsal })` 挂载。它使用 Vendure 的五个 POST 动作 `config`、`verify`、`submit`、`query`、`task`，沿用 `/api/id-business-v2/online-recharge/integrations/vendure/` 前缀和任务回执字段。请求校验专用密钥、客户 IP 格式和动作字段，任务套餐来自兑换码配置。正式 HTTPS 宿主拒绝挂载演练适配器，执行器领取和回执接口使用单独监听入口。
 
 替身执行器使用另一组服务密钥签名 `POST /integrations/recharge-worker/claim` 和 `POST /integrations/recharge-worker/result`。签名覆盖方法、路径、请求体摘要、时间戳和一次性编号。领取返回短期租约与此次授权资料，查单和结果回执不返回授权资料。已领取任务租约超时或执行结果未知时，原任务保留为 `awaiting_review`，同一兑换码不会自动创建第二次执行。已记录的相同结果可安全重传，冲突结果或重复凭证须核对。测试使用随机回环端口、合成数据和本项目的独立临时存储。
 
@@ -73,5 +73,7 @@ node server/preview.mjs --local-data --port 4348 --codexdaichong-url "$RECHARGE_
 - 提交未落盘时返回暂不可用，读取仍显示上次已确认状态。存储层报错但文件版本已经前进时，实例停止继续应答任务请求，重开后根据文件恢复真实结果。已确认的重复结果可使用新签名安全重传。
 
 正式接入仍需确定生产任务库、备份和审计策略，接入已核验的执行器与来源限制，并完成实际断电恢复和切换验收。现有 Vendure 历史任务继续由原服务查询。
+
+`node modules/recharge/codexdaichong/runtime.mjs preflight-production [副本目录]` 可对已初始化的独立正式库执行只读核对。沿用上述运行参数，库名为 `id_redesign_codexdaichong_prod`，专用账号为 `id_redesign_recharge`。预检确认实际连接身份，发现未结任务、待人工核对记录或资产锁时拒绝放行。此命令不初始化 MySQL 或启动执行器。
 
 真实专用库、员工权限策略的生产验收、外部服务、设备和实际付款仍需独立验证。比特浏览器继续只接原授权 JSON 登录流程。
