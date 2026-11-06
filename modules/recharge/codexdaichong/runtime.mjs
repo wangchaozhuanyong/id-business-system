@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { readFile, realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { CODEXDAICHONG_REVISION } from './prepare.mjs';
+import { CODEXDAICHONG_REVISION, PRODUCTION_GUARD_REVISION } from './prepare.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 
 const runtimeRoot = fileURLToPath(new URL('../../../.runtime/', import.meta.url));
@@ -20,6 +20,7 @@ const required = [
 const portValid = (value) => /^\d{1,5}$/.test(value ?? '') && +value > 0 && +value <= 65535;
 const productionDatabase = 'id_redesign_codexdaichong_prod';
 const productionAccount = 'id_redesign_recharge';
+const productionLock = 'id_redesign_codexdaichong_prod.runtime';
 
 export function isolatedCodexdaichongEnv(env = process.env) {
   const checked = checkedRuntimeEnv(env);
@@ -48,22 +49,31 @@ function checkedRuntimeEnv(env) {
   );
 }
 
-export async function checkProductionDatabase(env, createConnection) {
+function productionRuntimeEnv(env) {
   const checked = checkedRuntimeEnv(env);
   if (checked.DB_HOST !== '127.0.0.1' || checked.DB_NAME !== productionDatabase ||
       checked.DB_USER !== productionAccount || Buffer.byteLength(checked.ID_RECHARGE_BRIDGE_SECRET) < 32)
     throw new Error('正式预检只接受独立新版专用回环 MySQL、专用账号和桥接密钥');
-  let db, state;
+  return checked;
+}
+
+function connectProduction(checked, createConnection) {
+  return createConnection({
+    host: checked.DB_HOST, port: Number(checked.DB_PORT), database: checked.DB_NAME,
+    user: checked.DB_USER, password: checked.DB_PASSWORD, connectTimeout: 3000
+  });
+}
+
+async function readProductionState(db) {
+  let state;
   try {
-    db = await createConnection({
-      host: checked.DB_HOST, port: Number(checked.DB_PORT), database: checked.DB_NAME,
-      user: checked.DB_USER, password: checked.DB_PASSWORD, connectTimeout: 3000
-    });
     await db.query({ sql: 'START TRANSACTION READ ONLY', timeout: 3000 });
     const [[row]] = await db.query({ sql: `
       SELECT DATABASE() AS databaseName, CURRENT_USER() AS account,
         (EXISTS(SELECT 1 FROM task_logs WHERE status NOT IN ('success', 'failed', 'card_invalid')) OR
-          EXISTS(SELECT 1 FROM activation_manual_holds WHERE resolved_at IS NULL)) AS pending,
+          EXISTS(SELECT 1 FROM activation_manual_holds WHERE resolved_at IS NULL) OR
+          EXISTS(SELECT 1 FROM cdk_codes AS code WHERE code.used_at IS NOT NULL AND code.type = '自助'
+            AND NOT EXISTS (SELECT 1 FROM task_logs AS task WHERE task.cdk_code = code.cdk_code))) AS pending,
         (EXISTS(SELECT 1 FROM phone_assets WHERE in_use = 1) OR
           EXISTS(SELECT 1 FROM card_assets WHERE in_use = 1) OR
           EXISTS(SELECT 1 FROM pool_emails WHERE registered = 0 AND in_use = 1) OR
@@ -72,20 +82,71 @@ export async function checkProductionDatabase(env, createConnection) {
     state = row;
   } catch {
     throw new Error('正式代充只读预检失败，请核对专用库结构和账号权限');
-  } finally {
-    if (db) {
-      try {
-        await db.end();
-      } catch {
-        throw new Error('正式代充只读预检无法确认连接已关闭');
-      }
-    }
   }
   if (state?.databaseName !== productionDatabase || typeof state.account !== 'string' ||
       state.account.split('@')[0] !== productionAccount)
     throw new Error('正式代充数据库实际身份不符合配置');
   if (state.pending !== 0 || state.assetsLocked !== 0)
     throw new Error('存在未确认的代充任务或资产锁，须先核对原任务');
+}
+
+export async function checkProductionDatabase(env, createConnection) {
+  const checked = productionRuntimeEnv(env);
+  let db;
+  try {
+    db = await connectProduction(checked, createConnection);
+  } catch {
+    throw new Error('正式代充只读预检无法连接专用库');
+  }
+  try {
+    await readProductionState(db);
+  } finally {
+    try {
+      await db.end();
+    } catch {
+      db.destroy();
+      throw new Error('正式代充只读预检无法确认连接已关闭');
+    }
+  }
+}
+
+async function holdProductionRuntime(directory) {
+  const checked = productionRuntimeEnv(process.env);
+  const marker = await readFile(join(directory, '.id-business-production-guard'), 'utf8').catch(() => '');
+  if (marker.trim() !== PRODUCTION_GUARD_REVISION)
+    throw new Error('正式启动需要按当前版本重新准备运行副本');
+  const requireFromCopy = createRequire(join(directory, 'package.json'));
+  const db = await connectProduction(checked, requireFromCopy('mysql2/promise').createConnection);
+  try {
+    const [[{ acquired }]] = await db.execute({ sql: 'SELECT GET_LOCK(?, 0) AS acquired', timeout: 3000 }, [productionLock]);
+    if (acquired !== 1) throw new Error('独立正式代充库已有运行实例');
+    await readProductionState(db);
+    await db.query({ sql: 'ROLLBACK', timeout: 3000 });
+  } catch (error) {
+    db.destroy();
+    throw error;
+  }
+  globalThis[Symbol.for('id-business.recharge.production-lock')] = true;
+  const stopOnLostLock = () => {
+    console.error('正式代充失去运行锁，停止服务并保留任务待核对。');
+    process.exit(1);
+  };
+  db.on('error', stopOnLostLock);
+  const verifyOwnership = async () => {
+    try {
+      const [[{ owned }]] = await db.execute({
+        sql: 'SELECT IS_USED_LOCK(?) = CONNECTION_ID() AS owned', timeout: 3000
+      }, [productionLock]);
+      if (owned === 1) {
+        setTimeout(verifyOwnership, 5000).unref();
+        return;
+      }
+    } catch {
+      // Losing the dedicated connection also loses the advisory lock.
+    }
+    stopOnLostLock();
+  };
+  setTimeout(verifyOwnership, 5000).unref();
 }
 
 export async function checkCodexdaichongRuntime(directory = join(runtimeRoot, 'codexdaichong')) {
@@ -120,6 +181,16 @@ export async function checkCodexdaichongRuntime(directory = join(runtimeRoot, 'c
   return location;
 }
 
+if (process.env.ID_RECHARGE_RUNTIME_MODE === 'production' && basename(process.argv[1] || '') === 'server.js') {
+  try {
+    await holdProductionRuntime(dirname(process.argv[1]));
+  } catch (error) {
+    const message = error.code ? '正式代充无法取得独立数据库运行锁。' : error.message;
+    console.error(message);
+    process.exit(1);
+  }
+}
+
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const [action, target] = process.argv.slice(2);
   try {
@@ -135,13 +206,16 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       const requireFromCopy = createRequire(join(directory, 'package.json'));
       await checkProductionDatabase(process.env, requireFromCopy('mysql2/promise').createConnection);
       console.log('正式专用库只读预检通过。执行器未启动。');
-    } else if (action === 'preflight' || action === 'start') {
-      const env = isolatedCodexdaichongEnv();
+    } else if (action === 'preflight' || action === 'start' || action === 'start-production') {
+      const production = action === 'start-production';
+      const env = production ? productionRuntimeEnv(process.env) : isolatedCodexdaichongEnv();
       const directory = await checkCodexdaichongRuntime(target);
       if (action === 'preflight')
         console.log('通过：锁定运行副本、依赖和隔离环境参数。MySQL 连通性待启动验证。');
       else {
-        const child = spawn(process.execPath, [join(directory, 'server.js')], {
+        if (production) env.ID_RECHARGE_RUNTIME_MODE = 'production';
+        const preload = production ? ['--import', import.meta.url] : [];
+        const child = spawn(process.execPath, [...preload, join(directory, 'server.js')], {
           cwd: directory,
           env,
           stdio: 'inherit'
@@ -160,7 +234,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       }
     } else {
       throw new Error(
-        '用法：runtime.mjs preflight [副本目录] | preflight-production [副本目录] | start [副本目录] | health <回环地址>'
+        '用法：runtime.mjs preflight | preflight-production | start | start-production [副本目录]，或 health <回环地址>'
       );
     }
   } catch (error) {

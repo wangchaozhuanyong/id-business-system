@@ -74,9 +74,9 @@ node server/preview.mjs --local-data --port 4348 --codexdaichong-url "$RECHARGE_
 
 正式接入仍需确定生产任务库、备份和审计策略，接入已核验的执行器与来源限制，并完成实际断电恢复和切换验收。现有 Vendure 历史任务继续由原服务查询。
 
-`node modules/recharge/codexdaichong/runtime.mjs preflight-production [副本目录]` 可对已初始化的独立正式库执行只读核对。沿用上述运行参数，库名为 `id_redesign_codexdaichong_prod`，专用账号为 `id_redesign_recharge`。预检确认实际连接身份，发现未结任务、待人工核对记录或资产锁时拒绝放行。此命令不初始化 MySQL 或启动执行器。
+`node modules/recharge/codexdaichong/runtime.mjs preflight-production [副本目录]` 对已初始化的独立正式库执行只读核对。沿用上述运行参数，库名为 `id_redesign_codexdaichong_prod`，专用账号为 `id_redesign_recharge`。预检发现未结任务、待人工核对记录、已占用却无任务的自助兑换码或资产锁时退出。通过后用 `start-production [副本目录]` 启动。该入口在实际服务进程内取得 MySQL 单实例锁，重新核对任务与占用，失去锁即停止。正式运行保留遗留占用，待操作人员按原任务核对。测试库继续使用 `start`。
 
-专用执行器的入口为 `node modules/recharge/vendure/codexdaichong-worker.mjs <任务服务回环地址> <独立代充回环地址>`。每次进程只领取一笔。通过私有运行环境提供互不相同的 `ID_VENDURE_WORKER_SECRET` 和 `ID_RECHARGE_BRIDGE_SECRET`。执行前要求上游运行副本声明支持商城套餐锁。新版运行副本在占用自助兑换码的 SQL 中核对套餐，拒绝套餐变化或已有在途任务。商城码与执行码可以不同，映射应一对一。执行码及原始授权只经服务间回环传送。
+专用执行器的入口为 `node modules/recharge/vendure/codexdaichong-worker.mjs <任务服务回环地址> <独立代充回环地址>`。默认只尝试领取一笔，正式服务追加 `--watch` 逐笔处理。收到停止信号后不再领取，当前任务在租约内完成并尝试回执。通过私有运行环境提供互不相同的 `ID_VENDURE_WORKER_SECRET` 和 `ID_RECHARGE_BRIDGE_SECRET`。执行前要求上游运行副本声明支持商城套餐锁。新版运行副本在占用自助兑换码的 SQL 中核对套餐，拒绝套餐变化或已有在途任务。商城码与执行码可以不同，映射应一对一。执行码及原始授权只经服务间回环传送。
 
 使用 `node server/vendure-task-service.mjs <私有配置文件绝对路径>` 启动任务服务。配置字段为 `directory`、`vendurePort`、`workerPort`、`storageKey`、`vendureKey`、`workerSecret` 和 `codes`。配置文件由服务账号持有，权限为 `0600` 或 `0400`，任务目录为本项目 `.runtime` 下的 `0700` 子目录。`storageKey` 为独立 32 字节密钥的 64 位十六进制表示。`codes` 每项为 `{ code, plan, executionCode }`，`executionCode` 缺省时使用商城码。商城和执行器分别监听不同的回环端口。任务服务默认暂停接收和领取新单，启用前按[切换文档](../../docs/PRODUCTION_CUTOVER.md)核对正式入口。目录锁会拦截第二个实例，异常退出须先核对原任务和占用状态，再处理残留锁。
 

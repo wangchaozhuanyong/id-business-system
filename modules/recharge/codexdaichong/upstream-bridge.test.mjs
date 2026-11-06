@@ -10,16 +10,29 @@ const source = await readFile(new URL('./upstream-bridge.cjs', import.meta.url),
 const customer = { id: 'u1', email: 'u1@example.test', admin: false, sensitive: false };
 const admin = { ...customer, admin: true };
 
-function loadBridge(value = secret) {
+function loadBridge(value = secret, env = {}, ownsProductionLock = false) {
   const module = { exports: {} };
   runInNewContext(source, {
     require: createRequire(import.meta.url),
-    process: { env: { ID_RECHARGE_BRIDGE_SECRET: value } },
+    process: { env: { ID_RECHARGE_BRIDGE_SECRET: value, ...env } },
+    [Symbol.for('id-business.recharge.production-lock')]: ownsProductionLock,
     module,
     Buffer
   });
   return module.exports;
 }
+
+test('a direct start cannot open the dedicated production database without a held run lock', () => {
+  const env = {
+    PORT: '43101', DB_HOST: '127.0.0.1', DB_PORT: '3306', DB_USER: 'id_redesign_recharge',
+    DB_PASSWORD: randomBytes(32).toString('hex'), DB_NAME: 'id_redesign_codexdaichong_prod'
+  };
+  const production = { ...env, ID_RECHARGE_RUNTIME_MODE: 'production' };
+  assert.throws(() => loadBridge(secret, env).requireDedicatedRuntime(), /运行锁/);
+  assert.throws(() => loadBridge(secret, production).requireDedicatedRuntime(), /运行锁/);
+  loadBridge(secret, production, true).requireDedicatedRuntime();
+  loadBridge(secret, { ...env, DB_NAME: 'id_redesign_codexdaichong_test' }).requireDedicatedRuntime();
+});
 
 function signedRequest(method, path, actor, overrides = {}) {
   const claims = { method, path, exp: Date.now() + 10_000, actor, ...overrides };

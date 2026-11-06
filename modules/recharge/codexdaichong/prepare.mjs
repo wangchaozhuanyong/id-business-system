@@ -11,6 +11,7 @@ const sourceRoot = resolve(projectRoot, '.upstream/codexdaichong');
 const runtimeRoot = resolve(projectRoot, '.runtime');
 
 export const CODEXDAICHONG_REVISION = 'f4d7761e0036892e6dd68ec64c5447b513ca37da';
+export const PRODUCTION_GUARD_REVISION = '1';
 
 function replaceSource(source, oldText, newText) {
   const offset = source.indexOf(oldText);
@@ -88,6 +89,16 @@ export function adaptCodexdaichongServer(source) {
     "const integratedBridge = require('./upstream-bridge.cjs');",
     "const integratedBridge = require('./upstream-bridge.cjs');\nintegratedBridge.requireDedicatedRuntime();"
   );
+  result = replaceSource(
+    result,
+    '    // 启动时把所有遗留的 in_use 锁清空',
+    "    if (process.env.ID_RECHARGE_RUNTIME_MODE !== 'production') {\n    // 启动时把所有遗留的 in_use 锁清空"
+  );
+  result = replaceSource(
+    result,
+    "    const server = app.listen(PORT, '127.0.0.1', () => {",
+    "    }\n\n    const server = app.listen(PORT, '127.0.0.1', () => {"
+  );
   return adaptVendureActivation(adaptLocalCheckoutDebugServer(result));
 }
 
@@ -114,6 +125,12 @@ function adaptVendureActivation(source) {
             return res.status(409).json({ success: false, message: '兑换码套餐已经变化' });
         }`);
   handler = replaceSource(handler, 'await store.markCdkUsed(cdk)', 'await store.markCdkUsed(cdk, expectedPlan)');
+  handler = replaceSource(handler,
+    '    console.log(`[Activation] 收到开通请求 path=${req.path} cdk=${cdk}',
+    '    console.log(`[Activation] 收到开通请求 path=${req.path} cdk=${vendure ? "[商城]" : cdk}');
+  handler = replaceSource(handler,
+    'logTask(task.jobKey, `任务已创建，CDK=${cdk}',
+    'logTask(task.jobKey, `任务已创建，CDK=${vendure ? "[商城]" : cdk}');
   handler = replaceSource(handler, '        if (!useGptApi) {', `        if (vendure && useGptApi) {
             return res.status(503).json({ success: false, message: '商城供应商通道尚未验收' });
         }
@@ -156,6 +173,25 @@ function adaptVendureCdkLock(source) {
   lock = replaceSource(lock, 'AND used_at IS NULL`,\n        [String(cdk)]',
     'AND used_at IS NULL\n           AND (? IS NULL OR (CAST(plan_type AS BINARY) = CAST(? AS BINARY) AND type = \'自助\'))`,\n        [String(cdk), expectedPlan ?? null, expectedPlan ?? null]');
   return source.slice(0, start) + lock + source.slice(end);
+}
+
+function protectProductionAssetReservations(source) {
+  const condition = 'AND (in_use = 0 OR locked_at IS NULL OR locked_at < ?)';
+  const reserveOnlyFree = 'AND (in_use = 0 OR (? AND (locked_at IS NULL OR locked_at < ?)))';
+  const staleArgs = '[staleThreshold]';
+  const reserveArgs = "[process.env.ID_RECHARGE_RUNTIME_MODE !== 'production', staleThreshold]";
+  for (const [name, next] of [
+    ['reserveAssetRow', 'reserveRuntimeAssets'],
+    ['reservePoolEmail', 'releasePoolEmailReservation']
+  ]) {
+    const start = source.indexOf('async function ' + name + '(');
+    const end = source.indexOf('async function ' + next + '(', start);
+    if (start < 0 || end < 0) throw new Error('上游资产占用版本不符');
+    const section = replaceSource(replaceSource(source.slice(start, end), condition, reserveOnlyFree),
+      staleArgs, reserveArgs);
+    source = source.slice(0, start) + section + source.slice(end);
+  }
+  return source;
 }
 
 function adaptVendureCardAttempts(source) {
@@ -255,7 +291,7 @@ export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'cod
   const workerPath = resolve(destination, 'index.js');
   await writeFile(workerPath, adaptLocalCheckoutDebugWorker(await readFile(workerPath, 'utf8')));
   const storePath = resolve(destination, 'mysql-store.js');
-  await writeFile(storePath, adaptVendureCdkLock(await readFile(storePath, 'utf8')));
+  await writeFile(storePath, protectProductionAssetReservations(adaptVendureCdkLock(await readFile(storePath, 'utf8'))));
   const paymentPath = resolve(destination, 'payment-retry.js');
   await writeFile(paymentPath, adaptVendureCardAttempts(await readFile(paymentPath, 'utf8')));
   await exec(process.execPath, ['--check', bridgePath]);
@@ -268,6 +304,7 @@ export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'cod
     CODEXDAICHONG_REVISION + '\n',
     { flag: 'wx' }
   );
+  await writeFile(resolve(destination, '.id-business-production-guard'), PRODUCTION_GUARD_REVISION + '\n', { flag: 'wx' });
   return destination;
 }
 

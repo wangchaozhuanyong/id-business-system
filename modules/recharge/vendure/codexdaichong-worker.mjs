@@ -122,12 +122,38 @@ export function createVendureCodexdaichongWorker({
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   try {
-    const [bridgeUrl, upstreamUrl] = process.argv.slice(2);
+    const [bridgeUrl, upstreamUrl, mode, extra] = process.argv.slice(2);
+    if (extra !== undefined || (mode !== undefined && mode !== '--watch'))
+      throw new Error('商城执行器启动参数无效');
     const runOnce = createVendureCodexdaichongWorker({
       bridgeUrl, upstreamUrl, workerSecret: process.env.ID_VENDURE_WORKER_SECRET,
       upstreamSecret: process.env.ID_RECHARGE_BRIDGE_SECRET
     });
-    console.log(JSON.stringify(await runOnce()));
+    if (mode !== '--watch') console.log(JSON.stringify(await runOnce()));
+    else {
+      const shutdown = new AbortController();
+      const stop = () => shutdown.abort();
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      try {
+        while (!shutdown.signal.aborted) {
+          let delay = 2000;
+          try {
+            const result = await runOnce();
+            if (result.status !== 'idle') console.log(JSON.stringify(result));
+          } catch {
+            delay = 5000;
+            console.error('商城代充执行未确认，请查询原任务及独立服务健康状态。');
+          }
+          await sleep(delay, undefined, { signal: shutdown.signal }).catch((error) => {
+            if (error.name !== 'AbortError') throw error;
+          });
+        }
+      } finally {
+        process.off('SIGINT', stop);
+        process.off('SIGTERM', stop);
+      }
+    }
   } catch {
     console.error('商城代充执行未确认，请查询原任务及独立服务健康状态。');
     process.exitCode = 1;

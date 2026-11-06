@@ -125,6 +125,11 @@ function requireDedicatedRuntime() {
   ) {
     throw new Error('线上代充需要明确配置独立新版专用数据库及运行端口');
   }
+  if ((env.DB_NAME === 'id_redesign_codexdaichong_prod' || env.ID_RECHARGE_RUNTIME_MODE === 'production') &&
+      (env.DB_NAME !== 'id_redesign_codexdaichong_prod' || env.ID_RECHARGE_RUNTIME_MODE !== 'production' ||
+       globalThis[Symbol.for('id-business.recharge.production-lock')] !== true)) {
+    throw new Error('正式代充需要由持有独立数据库运行锁的启动入口运行');
+  }
 }
 
 module.exports = {
