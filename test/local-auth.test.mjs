@@ -123,6 +123,10 @@ test('production requires initialized staff and authenticates only the canonical
   assert.equal((await request('/api/local/inventory')).status, 401);
   assert.equal((await request('/api/local/auth/setup', { method: 'POST', origin: publicOrigin })).status, 404);
   assert.equal((await request('/design-preview.html')).status, 404);
+  const legacyLogin = await request('/login?redirect=https://untrusted.example.test');
+  assert.equal(legacyLogin.status, 302);
+  assert.equal(legacyLogin.headers.get('location'), '/');
+  assert.equal(legacyLogin.headers.get('cache-control'), 'no-store');
   assert.doesNotMatch(await (await request('/')).text(), /name="id-local-admin-setup"/);
   const authenticated = await login(publicOrigin);
   assert.equal(authenticated.status, 200);

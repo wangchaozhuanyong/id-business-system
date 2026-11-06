@@ -415,6 +415,10 @@ export async function startPreview(
       return;
     }
     const path = route;
+    if (publicUrl && path === '/login') {
+      response.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' }).end();
+      return;
+    }
     if (path === '/favicon.ico') {
       response.writeHead(204).end();
       return;
