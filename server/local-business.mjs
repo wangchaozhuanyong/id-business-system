@@ -1003,11 +1003,11 @@ export async function handleLocalBusiness(
   route,
   store,
   actor,
-  { verifyRelayExtraction, verifyManagedMailbox } = {}
+  { verifyRelayExtraction, verifyManagedMailbox, publicOrigin } = {}
 ) {
   try {
     const domain = route.slice('/api/local/'.length);
-    const origin = `http://${request.headers.host}`;
+    const origin = publicOrigin || `http://${request.headers.host}`;
     if (
       (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin') ||
       (request.headers.origin && request.headers.origin !== origin)

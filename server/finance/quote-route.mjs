@@ -37,11 +37,11 @@ async function readOrderIdentity(request) {
 
 // Mount after preview's loopback, login and administrator checks. The only trusted
 // automatic-snapshot verifier is injected on this server-side transaction.
-export function createAutomaticSnapshotHandler({ store, quoteService, clock = Date.now }) {
+export function createAutomaticSnapshotHandler({ store, quoteService, clock = Date.now, publicOrigin }) {
   return async (request, response, actor) => {
     if (request.method !== 'POST')
       return reply(response, 405, { error: '自动汇率只接受订单冻结请求' });
-    if (request.headers.origin !== `http://${request.headers.host}` ||
+    if (request.headers.origin !== (publicOrigin || `http://${request.headers.host}`) ||
         (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin'))
       return reply(response, 403, { error: '仅允许从本机页面冻结汇率' });
     if (!quoteService.enabled)

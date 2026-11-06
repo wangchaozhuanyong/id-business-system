@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { chmod, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { createServer, request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { createLocalAuth, initializeLocalAdmin, localAdminEmail } from '../server/local-auth.mjs';
 import { startPreview } from '../server/preview.mjs';
+import { productionDataPaths } from '../server/production-data.mjs';
 
 const supervisor = {
   email: 'supervisor@example.test',
@@ -70,6 +71,87 @@ test('first administrator provisioning is exclusive and stores only a salted has
   await assert.rejects(initializeLocalAdmin(accountPath, ordinaryAdmin), { status: 409 });
   await chmod(accountPath, 0o644);
   assert.throws(() => createLocalAuth(accountPath), /权限/);
+});
+
+test('production requires initialized staff and authenticates only the canonical HTTPS origin', async (t) => {
+  const directory = await realpath(dirname(await useAccounts(t)));
+  const { authPath, databasePath } = await productionDataPaths(directory);
+  const publicOrigin = 'https://id.example.test';
+  const options = { databasePath, authPath, publicOrigin };
+  await assert.rejects(startPreview(0, options), /管理员尚未初始化/);
+  await assert.rejects(startPreview(0, { ...options, bootstrapLocalAdmin: true }), /预先初始化/);
+  await initializeLocalAdmin(authPath, supervisor);
+  let { server, url } = await startPreview(0, options);
+  const stop = () => new Promise((resolve, reject) =>
+    server.close((error) => error ? reject(error) : resolve()));
+  t.after(() => server.listening ? stop() : undefined);
+  const host = new URL(publicOrigin).host;
+  function request(path, { method = 'GET', origin, body, session, requestHost = host } = {}) {
+    return new Promise((resolve, reject) => {
+      const outgoing = httpRequest(new URL(path, url), {
+        method,
+        headers: {
+          Host: requestHost,
+          'X-Forwarded-Host': host,
+          'X-Forwarded-Proto': 'https',
+          ...(origin ? { Origin: origin } : {}),
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(session ? { Cookie: session } : {})
+        }
+      }, async (incoming) => {
+        try {
+          const chunks = [];
+          for await (const chunk of incoming) chunks.push(chunk);
+          const headers = new Headers();
+          for (const [name, value] of Object.entries(incoming.headers))
+            headers.set(name, Array.isArray(value) ? value[0] : value);
+          resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode, headers }));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      outgoing.on('error', reject);
+      outgoing.end(body ? JSON.stringify(body) : undefined);
+    });
+  }
+  const login = (origin, requestHost) => request('/api/local/auth/login', {
+    method: 'POST', body: supervisor, origin, requestHost
+  });
+  assert.equal((await login(publicOrigin, 'untrusted.example.test')).status, 403);
+  assert.equal((await login('http://' + host)).status, 403);
+  assert.equal((await login('https://untrusted.example.test')).status, 403);
+  assert.equal((await request('/api/local/inventory')).status, 401);
+  assert.equal((await request('/api/local/auth/setup', { method: 'POST', origin: publicOrigin })).status, 404);
+  assert.equal((await request('/design-preview.html')).status, 404);
+  assert.doesNotMatch(await (await request('/')).text(), /name="id-local-admin-setup"/);
+  const authenticated = await login(publicOrigin);
+  assert.equal(authenticated.status, 200);
+  const session = cookie(authenticated);
+  assert.match(authenticated.headers.get('set-cookie'), /^__Host-id_session=.*; Path=\/; HttpOnly; SameSite=Strict;.*; Secure$/);
+  assert.equal((await request('/api/local/inventory', { session })).status, 200);
+  assert.equal((await request('/api/local/inventory', {
+    session, method: 'PUT', origin: 'http://' + host, body: {}
+  })).status, 403);
+  assert.equal((await request('/api/local/inventory', {
+    session, method: 'PUT', origin: publicOrigin, body: {}
+  })).status, 400);
+  assert.equal((await request('/api/id-business-v2/workspace-website-monitor/visits/ingest')).status, 405);
+  const saved = await request('/api/local/toolbox', {
+    session, method: 'PUT', origin: publicOrigin,
+    body: { version: 0, data: { shortcuts: [], phrases: [] } }
+  });
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json()).version, 1);
+  const logout = await request('/api/local/auth/logout', { session, method: 'POST', origin: publicOrigin });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get('set-cookie'), /Max-Age=0; Secure$/);
+  assert.equal((await request('/api/local/inventory', { session })).status, 401);
+  await stop();
+  ({ server, url } = await startPreview(0, options));
+  const newSession = cookie(await login(publicOrigin));
+  const persisted = await request('/api/local/toolbox', { session: newSession });
+  assert.equal(persisted.status, 200);
+  assert.equal((await persisted.json()).version, 1);
 });
 
 test('opt-in browser setup creates the fixed local admin once and protects the business API', async (t) => {

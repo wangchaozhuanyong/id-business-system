@@ -1,15 +1,22 @@
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import { createLocalAuth, initializeLocalAdmin, localAdminEmail } from './local-auth.mjs';
+import { productionDataPaths } from './production-data.mjs';
 
-const accountPath = fileURLToPath(new URL('../.runtime/local-auth.json', import.meta.url));
 const { stdin, stderr } = process;
 
 async function setup() {
   if (!stdin.isTTY || !stderr.isTTY) {
     throw new Error('请在本机终端运行此命令，并在隐藏输入提示中设置密码。');
   }
+  const { values } = parseArgs({ options: { 'data-dir': { type: 'string' }, email: { type: 'string' } } });
+  const production = values['data-dir'] !== undefined;
+  if (production !== Boolean(values.email)) throw new Error('正式初始化必须同时指定数据目录和管理员邮箱。');
+  const accountPath = production ? (await productionDataPaths(values['data-dir'])).authPath
+    : fileURLToPath(new URL('../.runtime/local-auth.json', import.meta.url));
+  const email = values.email || localAdminEmail;
   if (createLocalAuth(accountPath)) {
     throw new Error('本机超级管理员已经初始化。');
   }
@@ -33,15 +40,15 @@ async function setup() {
   }
 
   try {
-    stderr.write(`本机超级管理员邮箱 ${localAdminEmail}\n`);
+    stderr.write(`超级管理员邮箱 ${email}\n`);
     const password = await ask('输入新密码（至少 12 个字符，输入内容隐藏） ');
     if ((await ask('再次输入新密码 ')) !== password) throw new Error('两次密码不一致。');
     await initializeLocalAdmin(accountPath, {
-      email: localAdminEmail,
-      name: '本机超级管理员',
+      email,
+      name: production ? '超级管理员' : '本机超级管理员',
       password
     });
-    stderr.write('本机超级管理员已初始化。刷新本机业务页面后即可登录。\n');
+    stderr.write('超级管理员已初始化。启动网站后即可登录。\n');
   } finally {
     terminal.close();
   }

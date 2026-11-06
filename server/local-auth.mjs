@@ -16,7 +16,7 @@ import { dirname } from 'node:path';
 import { promisify } from 'node:util';
 
 export const localAdminEmail = 'ppfzj1314@gmail.com';
-const cookieName = 'id_local_session';
+const localCookieName = 'id_local_session';
 const sessionLifetime = 8 * 60 * 60 * 1000;
 const loginWindow = 60_000;
 const accountAttempts = 8;
@@ -196,7 +196,7 @@ export async function initializeLocalAdmin(accountPath, { email, name, password 
   return publicEmployee(employee);
 }
 
-function requestToken(request) {
+function requestToken(request, cookieName) {
   const cookies = String(request.headers.cookie || '').split(';');
   const matches = cookies
     .map((cookie) => cookie.trim())
@@ -206,24 +206,24 @@ function requestToken(request) {
   return tokenPattern.test(token) ? createHash('sha256').update(token).digest('hex') : null;
 }
 
-function setCookie(response, token, lifetime) {
+function setCookie(response, token, lifetime, cookieName, secure) {
   response.setHeader(
     'Set-Cookie',
-    `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(lifetime / 1000)}`
+    `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(lifetime / 1000)}${secure ? '; Secure' : ''}`
   );
 }
 
-function checkOrigin(request) {
+function checkOrigin(request, publicUrl) {
   const host = request.headers.host || '';
-  const expectedOrigin = 'http://' + host;
+  const expectedOrigin = publicUrl?.origin || 'http://' + host;
   const fetchSite = request.headers['sec-fetch-site'];
   if (
-    !/^(?:127\.0\.0\.1|localhost):[0-9]{1,5}$/.test(host) ||
+    (publicUrl ? host !== publicUrl.host : !/^(?:127\.0\.0\.1|localhost):[0-9]{1,5}$/.test(host)) ||
     (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') ||
     (request.headers.origin && request.headers.origin !== expectedOrigin) ||
     (request.method !== 'GET' && request.headers.origin !== expectedOrigin)
   ) {
-    throw new AuthError(403, '仅可通过本机业务页面访问员工账户');
+    throw new AuthError(403, '仅可通过本系统业务页面访问员工账户');
   }
 }
 
@@ -298,14 +298,15 @@ export function createLocalAdminSetup(accountPath, { onCreated } = {}) {
   };
 }
 
-export function createLocalAuth(accountPath, { onEvent, now = Date.now } = {}) {
+export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUrl } = {}) {
   if (!readAccounts(accountPath)) return null;
+  const cookieName = publicUrl ? '__Host-id_session' : localCookieName;
   const sessions = new Map();
   const attempts = [];
   let verifying = 0;
 
   function actorRecord(request, accounts) {
-    const token = requestToken(request);
+    const token = requestToken(request, cookieName);
     const session = sessions.get(token);
     if (!session) return null;
     const current = accounts === undefined ? readAccounts(accountPath) : accounts;
@@ -378,7 +379,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now } = {}) {
     if (!matches || !employee?.active || employee.sessionVersion !== previous.sessionVersion) {
       throw new AuthError(401, '邮箱或密码不正确');
     }
-    const previousToken = requestToken(request);
+    const previousToken = requestToken(request, cookieName);
     if (previousToken) sessions.delete(previousToken);
     for (const [token, session] of sessions) {
       if (session.expiresAt <= at) sessions.delete(token);
@@ -390,7 +391,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now } = {}) {
       version: employee.sessionVersion,
       expiresAt: now() + sessionLifetime
     });
-    setCookie(response, token, sessionLifetime);
+    setCookie(response, token, sessionLifetime, cookieName, Boolean(publicUrl));
     report('auth_login', employee);
     sendJson(response, 200, { actor: publicEmployee(employee) });
   }
@@ -490,7 +491,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now } = {}) {
 
   async function handle(request, response) {
     try {
-      checkOrigin(request);
+      checkOrigin(request, publicUrl);
       const route = (request.url || '').split('?', 1)[0];
       const method = request.method;
       if (route === '/api/local/auth/session' && method === 'GET') {
@@ -500,8 +501,8 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now } = {}) {
         return await login(request, response);
       if (route === '/api/local/auth/logout' && method === 'POST') {
         const employee = actorRecord(request);
-        sessions.delete(requestToken(request));
-        setCookie(response, '', 0);
+        sessions.delete(requestToken(request, cookieName));
+        setCookie(response, '', 0, cookieName, Boolean(publicUrl));
         if (employee) report('auth_logout', employee);
         return sendJson(response, 200, { actor: null });
       }

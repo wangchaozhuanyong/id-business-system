@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import { installFinanceAssets } from './finance/preview-assets.mjs';
 import { createFinanceQuoteService } from './finance/quote-service.mjs';
 import { automaticSnapshotRoute, createAutomaticSnapshotHandler } from './finance/quote-route.mjs';
-import { handleWebsiteMonitor } from './tools/website-monitor.mjs';
+import { createWebsiteMonitor, handleWebsiteMonitor } from './tools/website-monitor.mjs';
 import { createWebsiteAnalytics } from './tools/website-analytics.mjs';
 import { createWebsiteVisits } from './tools/website-visits.mjs';
 import { createMediaResolver } from './tools/media-resolver.mjs';
@@ -13,9 +13,11 @@ import {
   createManagedMailboxQuery, managedMailboxQueryRoute, storefrontMailboxQueryRoute, verifyMailboxImap
 } from './tools/mailbox-pool.mjs';
 import { parseToolPublicOrigin } from './tools/request-origin.mjs';
-import { createMicrosoftMailbox, microsoftMailboxPrefix } from './tools/mailbox-microsoft.mjs';
+import { createMicrosoftMailbox, legacyMicrosoftMailboxCallback, microsoftMailboxPrefix } from './tools/mailbox-microsoft.mjs';
+import { createLegacyToolRoutes, legacyWebsiteVisitIngest } from './tools/legacy-public-routes.mjs';
 import { readToolConfig } from './tools/read-tool-config.mjs';
 import { createLocalCodexdaichongGateway } from '../modules/recharge/codexdaichong/local-gateway.mjs';
+import { productionDataPaths } from './production-data.mjs';
 
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
@@ -44,6 +46,7 @@ export async function startPreview(
     rechargeConfig,
     databasePath,
     authPath,
+    publicOrigin,
     bootstrapLocalAdmin = false,
     relayConfig,
     relayFetch,
@@ -60,6 +63,10 @@ export async function startPreview(
     microsoftMailboxFetch
   } = {}
 ) {
+  const publicUrl = parseToolPublicOrigin(publicOrigin);
+  const secureOrigin = publicUrl?.origin;
+  if (publicUrl && (!databasePath || !authPath || bootstrapLocalAdmin || codexdaichong))
+    throw new Error('正式站必须使用独立业务库、预先初始化的员工账号和统一登录');
   const mailboxPublicUrl = parseToolPublicOrigin(mailboxPublicOrigin);
   if (mailboxPublicUrl && (!databasePath || !authPath))
     throw new Error('商城邮箱查询需要独立业务库和账号配置');
@@ -71,12 +78,14 @@ export async function startPreview(
     throw new Error('作品解析需要本机业务模式和统一会话');
   const handleMediaResolver = createMediaResolver({
     url: mediaResolverUrl,
+    publicOrigin: secureOrigin,
     fetchWorker: mediaFetch
   });
   const handleWebsiteAnalytics = createWebsiteAnalytics({
     config: websiteAnalyticsConfig,
     fetchImpl: websiteAnalyticsFetch
   });
+  const monitorWebsite = publicUrl ? createWebsiteMonitor({ publicOrigin: secureOrigin }) : handleWebsiteMonitor;
   const assets = new Map(
     await Promise.all(
       [...files].map(async ([file, type]) => [
@@ -119,6 +128,7 @@ export async function startPreview(
   let handleManagedMailboxQuery;
   let microsoftMailbox;
   let handleWebsiteVisits;
+  let handleLegacyToolRoute;
   let auth = null;
   let loadAuth = null;
   let setupAdmin = null;
@@ -134,7 +144,7 @@ export async function startPreview(
         host,
         createLocalCodexdaichongGateway({
           upstreamUrl: rechargeConfig.upstreamUrl,
-          publicOrigin: `http://${host}`,
+          publicOrigin: secureOrigin || `http://${host}`,
           secret: rechargeConfig.secret,
           getActor: (request) => auth?.getActor(request)
         })
@@ -142,22 +152,16 @@ export async function startPreview(
     }
     return gateways.get(host);
   }
-  if (rechargeConfig) gatewayFor(`127.0.0.1:${port}`);
+  if (rechargeConfig) gatewayFor(publicUrl?.host || `127.0.0.1:${port}`);
   if (localBusiness) {
-    store = localBusiness.createLocalBusinessStore(databasePath);
     try {
-      handleWebsiteVisits = createWebsiteVisits({ store, secret: websiteVisitsSecret });
-      microsoftMailbox = createMicrosoftMailbox({
-        store, config: microsoftMailboxConfig, fetchImpl: microsoftMailboxFetch, readImap: readManagedMailbox
-      });
-      handleManagedMailboxQuery = createManagedMailboxQuery({
-        store, storefrontOrigin: mailboxPublicUrl?.origin, readMailbox: microsoftMailbox.readMailbox
-      });
       if (authPath) {
         const { createLocalAuth, createLocalAdminSetup, localAdminEmail } = await import('./local-auth.mjs');
-        loadAuth = () =>
-          createLocalAuth(authPath, { onEvent: (event) => store.recordAuthEvent(event) });
+        loadAuth = () => createLocalAuth(authPath, {
+          onEvent: (event) => store.recordAuthEvent(event), publicUrl
+        });
         auth = loadAuth();
+        if (publicUrl && !auth) throw new Error('正式站管理员尚未初始化');
         if (bootstrapLocalAdmin && !auth) setupAdmin = {
           handle: createLocalAdminSetup(authPath, {
             onCreated: (actor) => store.recordAuthEvent({ action: 'auth_employee_create', actor, targetId: actor.id })
@@ -165,9 +169,22 @@ export async function startPreview(
           email: localAdminEmail
         };
       }
+      store = localBusiness.createLocalBusinessStore(databasePath);
+      handleWebsiteVisits = createWebsiteVisits({ store, secret: websiteVisitsSecret, publicOrigin: secureOrigin });
+      microsoftMailbox = createMicrosoftMailbox({
+        store, config: microsoftMailboxConfig, publicOrigin: secureOrigin,
+        fetchImpl: microsoftMailboxFetch, readImap: readManagedMailbox
+      });
+      handleManagedMailboxQuery = createManagedMailboxQuery({
+        store, publicOrigin: secureOrigin, storefrontOrigin: mailboxPublicUrl?.origin, readMailbox: microsoftMailbox.readMailbox
+      });
+      if (publicUrl) handleLegacyToolRoute = createLegacyToolRoutes({
+        publicOrigin: secureOrigin, microsoftMailbox, handleWebsiteVisits
+      });
       const { createAppleRelayService } = await import('./apple-relay/local-service.mjs');
       relay = createAppleRelayService({
         config: relayConfig,
+        publicOrigin: secureOrigin,
         readInventory: () => store.load('inventory').data,
         fetchImpl: relayFetch,
         recordAction: ({ action, actor, parentId, aliasId }) =>
@@ -193,7 +210,7 @@ export async function startPreview(
         body: await readFile(new URL('../modules/tools/totp.mjs', import.meta.url))
       });
     } catch (error) {
-      store.close();
+      store?.close();
       throw error;
     }
     const index = assets.get('/index.html');
@@ -209,16 +226,16 @@ export async function startPreview(
       .replace('20261105-bit-login" />', '20261106-local-inventory-settings" />')
       .replace(
         '<title>ID 业务管理 · 新版交互设计</title>',
-        '<title>ID 业务管理 · 独立本机测试</title>'
+        publicUrl ? '<title>ID 业务管理系统</title>' : '<title>ID 业务管理 · 独立本机测试</title>'
       )
-      .replace('页面设计预览 · 所有资料均为虚构示例', '本机业务模式 · 未接入的模块仍为演示');
+      .replace('页面设计预览 · 所有资料均为虚构示例', publicUrl ? '业务管理系统' : '本机业务模式 · 未接入的模块仍为演示');
     index.body = Buffer.from(localIndex);
     try {
       const quoteService = createFinanceQuoteService({
         provider: financeProvider,
         fetchQuote: financeFetch
       });
-      handleAutomaticSnapshot = createAutomaticSnapshotHandler({ store, quoteService });
+      handleAutomaticSnapshot = createAutomaticSnapshotHandler({ store, quoteService, publicOrigin: secureOrigin });
       await installFinanceAssets(assets, { automaticQuotes: quoteService.enabled });
     } catch (error) {
       store.close();
@@ -240,6 +257,9 @@ export async function startPreview(
       }
     }
   }
+  function allowsHost(host, port) {
+    return publicUrl ? host === publicUrl.host : ['127.0.0.1:' + port, 'localhost:' + port].includes(host);
+  }
   const server = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -249,12 +269,15 @@ export async function startPreview(
     const route = (request.url || '/').split('?', 1)[0];
     const storefrontMailbox = route === storefrontMailboxQueryRoute &&
       mailboxPublicUrl && request.headers.host === mailboxPublicUrl.host;
-    if (
-      !storefrontMailbox &&
-      !['127.0.0.1:' + address.port, 'localhost:' + address.port].includes(request.headers.host)
-    ) {
+    if (!storefrontMailbox && !allowsHost(request.headers.host, address.port)) {
       response.writeHead(403).end();
       return;
+    }
+    if (handleLegacyToolRoute && [legacyMicrosoftMailboxCallback, legacyWebsiteVisitIngest].includes(route)) {
+      return void handleLegacyToolRoute(request, response).catch(() => {
+        if (!response.headersSent) response.writeHead(502);
+        response.end();
+      });
     }
     if (loadAuth && !auth) {
       try {
@@ -272,7 +295,7 @@ export async function startPreview(
       }
       return void handleManagedMailboxQuery(request, response);
     }
-    const loginRequired = Boolean(auth || setupAdmin);
+    const loginRequired = Boolean(publicUrl || auth || setupAdmin);
     const canManage = !loginRequired || ['admin', 'super'].includes(actor?.role);
     const forbidden = () => {
       const code = actor ? 403 : 401;
@@ -280,6 +303,7 @@ export async function startPreview(
       return response.end(JSON.stringify({ error: actor ? '当前账号无权执行此操作' : '请先登录' }));
     };
     if (store && route.startsWith('/api/local/auth/')) {
+      if (publicUrl && route === '/api/local/auth/setup') return response.writeHead(404).end();
       if (route === '/api/local/auth/setup' && setupAdmin) {
         if (!auth) return void setupAdmin.handle(request, response);
         response.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -331,7 +355,7 @@ export async function startPreview(
     }
     if (store && route === '/api/local/tools/website-monitor') {
       if (!actor) return forbidden();
-      return void handleWebsiteMonitor(request, response, actor);
+      return void monitorWebsite(request, response, actor);
     }
     if (store && route.startsWith('/api/local/')) {
       if (loginRequired && !actor) return forbidden();
@@ -343,6 +367,7 @@ export async function startPreview(
       )
         return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
+        publicOrigin: secureOrigin,
         verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,
         async verifyRelayExtraction(aliasIds, operator) {
           const { items } = await relay.checkExtractionEligibility(aliasIds, operator);
@@ -383,6 +408,7 @@ export async function startPreview(
       response.writeHead(204).end();
       return;
     }
+    if (publicUrl && path === '/design-preview.html') return response.writeHead(404).end();
     const asset = assets.get(
       path === '/' || path === '/design-preview.html' ? '/index.html' : path
     );
@@ -417,9 +443,8 @@ export async function startPreview(
   if (codexdaichong || rechargeConfig) {
     server.on('upgrade', (request, socket, head) => {
       const address = server.address();
-      const allowedHosts = ['127.0.0.1:' + address.port, 'localhost:' + address.port];
       if (
-        !allowedHosts.includes(request.headers.host) ||
+        !allowsHost(request.headers.host, address.port) ||
         request.url !== '/integrations/codexdaichong/socket' ||
         ((auth || rechargeConfig) && !['admin', 'super'].includes(auth?.getActor(request)?.role))
       ) {
@@ -448,6 +473,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const { values } = parseArgs({
       options: {
         'local-data': { type: 'boolean' },
+        'public-origin': { type: 'string' },
+        'data-dir': { type: 'string' },
         port: { type: 'string' },
         'finance-provider': { type: 'string' },
         'media-resolver-url': { type: 'string' },
@@ -460,18 +487,21 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     });
     const port = values.port === undefined ? 4347 : Number(values.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口无效');
-    const databasePath = values['local-data']
-      ? fileURLToPath(new URL('../.runtime/local-business.sqlite', import.meta.url))
-      : undefined;
-    const authPath = databasePath
-      ? fileURLToPath(new URL('../.runtime/local-auth.json', import.meta.url))
-      : undefined;
+    const publicOrigin = values['public-origin'];
+    if (Boolean(publicOrigin) !== Boolean(values['data-dir']) || (publicOrigin && values['local-data']))
+      throw new Error('正式站需要同时指定 HTTPS 地址和正式数据目录。');
+    if (publicOrigin) process.umask(0o077);
+    const { databasePath, authPath, relayPath } = publicOrigin
+      ? await productionDataPaths(values['data-dir'])
+      : values['local-data'] ? {
+          databasePath: fileURLToPath(new URL('../.runtime/local-business.sqlite', import.meta.url)),
+          authPath: fileURLToPath(new URL('../.runtime/local-auth.json', import.meta.url)),
+          relayPath: fileURLToPath(new URL('../.runtime/local-apple-relay.json', import.meta.url))
+        } : {};
     const relayConfig = databasePath
       ? await (
           await import('./apple-relay/local-service.mjs')
-        ).loadAppleRelayConfig(
-          fileURLToPath(new URL('../.runtime/local-apple-relay.json', import.meta.url))
-        )
+        ).loadAppleRelayConfig(relayPath)
       : undefined;
     const rechargeConfig = values['codexdaichong-url']
       ? { upstreamUrl: values['codexdaichong-url'], secret: process.env.ID_RECHARGE_BRIDGE_SECRET }
@@ -486,6 +516,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const { url } = await startPreview(port, {
       databasePath,
       authPath,
+      publicOrigin,
       relayConfig,
       rechargeConfig,
       financeProvider: values['finance-provider'],
@@ -496,7 +527,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       microsoftMailboxConfig
     });
     console.log(
-      (databasePath ? 'ID 业务管理系统 · 本机业务模式：' : 'ID 业务管理系统 · 独立新版设计预览：') +
+      (publicOrigin ? 'ID 业务管理系统 · 正式站内网监听：' :
+        databasePath ? 'ID 业务管理系统 · 本机业务模式：' : 'ID 业务管理系统 · 独立新版设计预览：') +
         url
     );
     console.log(databasePath ? '本机数据存储已启用。' : '此入口使用虚构演示资料。');

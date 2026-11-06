@@ -302,7 +302,7 @@ async function readBody(request, maximumBytes = 4096) {
   return body;
 }
 
-export function createAppleRelayService({ config, readInventory, fetchImpl, recordAction }) {
+export function createAppleRelayService({ config, readInventory, fetchImpl, recordAction, publicOrigin }) {
   const provider = config ? createVendureMailboxProvider(config, fetchImpl) : null;
   const primaryBindings = loadBindings(config?.primaryBindings);
   const aliasBindings = loadBindings(config?.aliasBindings);
@@ -935,7 +935,7 @@ export function createAppleRelayService({ config, readInventory, fetchImpl, reco
           throw new RelayError(405, '邮箱查询需要 POST 请求');
         }
         if (
-          request.headers.origin !== `http://${request.headers.host}` ||
+          request.headers.origin !== (publicOrigin || `http://${request.headers.host}`) ||
           (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin')
         ) {
           throw new RelayError(403, '仅支持本机同源请求');
@@ -968,7 +968,7 @@ export function createAppleRelayService({ config, readInventory, fetchImpl, reco
           response.setHeader('Allow', allowedMethods.get(action));
           throw new RelayError(405, '邮箱服务不支持此请求方式');
         }
-        const origin = `http://${request.headers.host}`;
+        const origin = publicOrigin || `http://${request.headers.host}`;
         if (
           (request.headers.origin && request.headers.origin !== origin) ||
           (request.headers['sec-fetch-site'] &&
