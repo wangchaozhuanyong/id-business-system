@@ -34,8 +34,10 @@ export async function startVendureTaskService({
   if (!validPort(vendurePort) || !validPort(workerPort) || (vendurePort !== 0 && vendurePort === workerPort) ||
       typeof directory !== 'string' || !isAbsolute(directory) || typeof storageKey !== 'string' ||
       !directory.startsWith(runtimeRoot) || !/^[a-f0-9]{64}$/.test(storageKey) ||
-      !Array.isArray(codes) || !codes.length || typeof acceptSubmissions !== 'boolean')
+      !Array.isArray(codes) || typeof acceptSubmissions !== 'boolean')
     throw new Error('商城任务服务需要独立端口、私有目录、存储密钥和兑换码配置');
+  if (acceptSubmissions && codes.length === 0)
+    throw new Error('开始受理商城充值前必须配置新版兑换码');
   const state = await lstat(directory);
   if (!state.isDirectory() || (state.mode & 0o777) !== 0o700 || state.uid !== process.getuid() ||
       await realpath(directory) !== directory)
