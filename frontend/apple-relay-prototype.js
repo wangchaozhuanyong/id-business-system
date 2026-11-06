@@ -340,7 +340,7 @@
   function connectionNotice(title, text) {
     return (
       A.empty(remote.statusError ? '读取收件服务状态失败' : title, remote.statusError || text) +
-      (remote.statusError ? A.button('重新读取', 'relay-service-retry', '', 'refresh') : '')
+      (remote.statusError ? `<div class="toolbar">${A.button('重新读取', 'relay-service-retry', '', 'refresh')}</div>` : '')
     );
   }
   const bound = (id) => remote.status?.configured && remote.status.parentIds?.includes(id);
@@ -624,7 +624,7 @@
         connectionNotice('查询服务待接入', '绑定收件服务后可按邮箱或已签发的查询码查询。')
       );
     const result = view.result;
-    return `${publicEntry}<form id="relay-query-form" novalidate>${field('查询内容', 'query', input('query', view.query, 'autocomplete="off" placeholder="隐藏邮箱、买家查询码或主查询码"'), true)}<div class="form-footer"><span class="footnote">${local ? '查询时同步对应主邮箱。' : '查询时先同步所属主邮箱；仅使用虚构演示资料。'}</span><button type="submit" class="button primary" ${local && remote.querying ? 'disabled' : ''}>${local && remote.querying ? '正在查询…' : '同步并查询'}</button></div></form><div id="relay-query-output">${
+    return `<div class="panel-body">${publicEntry}<form id="relay-query-form" novalidate>${field('查询内容', 'query', input('query', view.query, 'autocomplete="off" placeholder="隐藏邮箱、买家查询码或主查询码"'), true)}<div class="form-footer"><span class="footnote">${local ? '查询时同步对应主邮箱。' : '查询时先同步所属主邮箱；仅使用虚构演示资料。'}</span><button type="submit" class="button primary" ${local && remote.querying ? 'disabled' : ''}>${local && remote.querying ? '正在查询…' : '同步并查询'}</button></div></form><div id="relay-query-output">${
       result
         ? `<div class="inline-notice ${result.ok ? '' : 'warning'}" role="status">${E(result.message)}${!result.ok && result.rows ? '（显示上次成功结果）' : ''}</div>${
             result.rows
@@ -648,7 +648,7 @@
               : ''
           }`
         : ''
-    }</div>`;
+    }</div></div>`;
   }
   function renderImports() {
     const hasParent = parents.some((p) => !p.deleted && p.status === 'ACTIVE');
@@ -691,7 +691,7 @@
       const body =
         loadState === 'error'
           ? A.empty('读取邮箱资料失败', '请重试读取本机数据。') +
-            A.button('重试', 'relay-retry', '', 'refresh')
+            `<div class="toolbar">${A.button('重试', 'relay-retry', '', 'refresh')}</div>`
           : '<div class="inline-notice" role="status">正在读取本机邮箱资料…</div>';
       return header + `<section class="panel">${body}</section>`;
     }

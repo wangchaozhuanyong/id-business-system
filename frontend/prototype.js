@@ -94,7 +94,8 @@ const navigation = [
     '快速操作',
     'work',
     [
-      ['提交订单', 'workspace/order'],
+      ['GPT 提交订单', 'workspace/order/gpt'],
+      ['Claude 提交订单', 'workspace/order/claude'],
       ['续费管理', 'workspace/renewals'],
       ['客户流失', 'workspace/customer-loss'],
       ['客户录入', 'customers/new'],
@@ -103,6 +104,8 @@ const navigation = [
       ['邮箱提取', 'workspace/mail-extract'],
       ['账号提取', 'workspace/account-extract'],
       ['提取与归还', 'workspace/extractions'],
+      ['充值码提取', 'workspace/recharge-codes'],
+      ['我的充值码', 'workspace/my-recharge-codes'],
       ['比特登录', 'recharge/start'],
       ['兑换开通', 'workspace/recharge']
     ]
@@ -141,6 +144,7 @@ const navigation = [
     [
       ['数据统计', 'orders/statistics'],
       ['GPT 订单', 'orders/gpt'],
+      ['代充订单同步', 'orders/recharge-sync'],
       ['Claude Pro 订单', 'orders/pro'],
       ['Claude Max 订单', 'orders/max'],
       ['Claude 专属', 'orders/exclusive'],
@@ -532,6 +536,8 @@ function openDrawer(title, description, body, footer = '', context = '', layout 
   }
   state.drawerContext = context;
   drawer.dataset.layout = layout.kind || '';
+  drawer.dataset.tool = layout.tool || '';
+  drawer.dataset.section = layout.section || '';
   const heading = layout.tabs
     ? `<h2 class="toolbox-accessible-title" id="drawer-title">${escapeHtml(title)}</h2>${layout.tabs}`
     : `<div class="drawer-title-row"><h2 id="drawer-title">${escapeHtml(title)}</h2>${titleInfo(title, description, 'drawer-description')}</div>`;
@@ -635,14 +641,17 @@ function mountPageContext() {
   title.append($('.page-heading', source));
   const actions = $('.page-header-actions', source);
   if (actions.innerHTML.trim()) {
-    let target = $('#main [data-page-actions]');
+    let target = $('#main [data-page-actions]') ||
+      $('#main .panel > .toolbar > .toolbar-right') ||
+      $('#main .panel > .tabs') ||
+      $('#main .form-panel .form-footer');
     actions.className = 'toolbar-right page-actions';
     if (!target) {
       target = document.createElement('div');
-      target.className = 'form-footer page-actions-fallback';
+      target.className = 'toolbar page-actions-fallback';
       ($('#main .panel') || $('#main')).append(target);
     }
-    if (target.dataset.pageActions === 'tabs') {
+    if (target.dataset.pageActions === 'tabs' || target.matches('.tabs')) {
       const row = document.createElement('div');
       row.className = 'content-toolbar';
       target.before(row);
@@ -704,11 +713,12 @@ function pageRows(rows) {
   return rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
 }
 function matchesNav(route, base) {
+  if (route === 'workspace/order' && base === 'workspace/order/gpt') return true;
   return route === base || route.startsWith(base + '/');
 }
 function permittedRoute(route) {
   if (!window.IDLocalData?.authRequired || state.actor?.role !== 'employee') return true;
-  return /^(overview$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
+  return /^(overview$|workspace\/(recharge-codes|my-recharge-codes)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
     route
   );
 }
@@ -1026,7 +1036,7 @@ function renderClaude() {
       'Claude 专属',
       '从开通、续费到付租，集中处理每个账号的订阅周期。',
       button('列设置', 'column-settings', '', 'columns', 'data-table-id="Claude专属"') +
-        button('录入 Claude 订单', 'goto', 'primary', 'plus', 'data-route="workspace/order"'),
+        button('录入 Claude 订单', 'goto', 'primary', 'plus', 'data-route="workspace/order/claude"'),
       '订阅运营'
     ) +
     summary([
@@ -1099,7 +1109,7 @@ function renderOrders() {
     header(
       `${product} 订单`,
       '充值任务成功后进入待补全列表，补充客户与实际收款资料。',
-      button('提交订单', 'goto', 'primary', 'plus', 'data-route="workspace/order"')
+      button('提交订单', 'goto', 'primary', 'plus', `data-route="workspace/order/${product === 'GPT' ? 'gpt' : 'claude'}"`)
     ) +
     `<section class="panel"><div class="tabs"><button class="tab active">全部订单 <span class="tab-count">${rows.length}</span></button></div>${
       rows.length
@@ -2502,7 +2512,7 @@ document.addEventListener('click', async (event) => {
       plan: order.plan,
       sourceOrderId: order.id
     });
-    location.hash = '/workspace/order';
+    location.hash = '/workspace/order/gpt';
     return;
   }
   if (action === 'personal-tool-manage') {

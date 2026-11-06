@@ -3,14 +3,16 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 
 test('mobile navigation remains reachable without losing the long-page reading position', { timeout: 45_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const module = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const { chromium } = module.default || module;
-  const host = await startCodexdaichongDemoSite(0);
-  t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
+  const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
+  const host = offline ? { url: offlineOrigin + '/' } : await startCodexdaichongDemoSite(0);
+  if (!offline) t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const origin = new URL(host.url).origin;
@@ -20,12 +22,13 @@ test('mobile navigation remains reachable without losing the long-page reading p
   for (const width of [900, 768, 390, 320]) for (const dark of [false, true]) {
     await t.test(`${width}px ${dark ? 'dark' : 'light'}`, async () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
+      if (offline) await interceptDesign(page.context(), { localFixtures: {} });
       page.setDefaultTimeout(5000);
       await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
-        ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
+        ['GET', 'HEAD'].includes(route.request().method()) ? (offline ? route.fallback() : route.continue()) : route.abort());
       const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       try {
-        await page.goto(origin + '/#/workspace/order');
+        await page.goto(origin + '/#/workspace/order/gpt');
         await page.locator('#commerce-payment').waitFor();
         if (dark) await page.locator('#theme-toggle').click();
         // The first route restores its scroll position on the next animation frame.
@@ -48,10 +51,11 @@ test('mobile navigation remains reachable without losing the long-page reading p
         await page.locator('#commerce-contact-name').waitFor();
         await settle();
         await page.locator('#nav-toggle').click();
-        await page.locator('#sidebar a[href="#/workspace/order"]').click();
+        await page.locator('#sidebar a[href="#/workspace/order/gpt"]').click();
         await page.locator('#commerce-payment').waitFor();
         await settle();
         await page.waitForFunction(() => document.querySelector('#sidebar').getBoundingClientRect().right <= 1);
+        await page.waitForFunction((position) => scrollY === position, before);
         assert.equal(await page.evaluate(() => scrollY), before, '手机侧栏切页返回未恢复阅读位置');
         assert.equal(await page.locator('#nav-toggle').getAttribute('aria-expanded'), 'false');
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

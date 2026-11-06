@@ -79,8 +79,8 @@ async function matchesCredential(password, { salt, hash }) {
   return timingSafeEqual(candidate, Buffer.from(hash, 'hex'));
 }
 
-function publicEmployee({ id, email, name, role, active, version, createdAt, updatedAt }) {
-  return { id, email, name, role, active, version, createdAt, updatedAt };
+function publicEmployee({ id, email, name, nicknameSet, role, active, version, createdAt, updatedAt }) {
+  return { id, email, name, nicknameSet: nicknameSet === true, role, active, version, createdAt, updatedAt };
 }
 
 function readAccounts(accountPath) {
@@ -124,6 +124,7 @@ function readAccounts(accountPath) {
         validatedEmail(employee.email) !== employee.email ||
         emails.has(employee.email) ||
         validatedName(employee.name) !== employee.name ||
+        (employee.nicknameSet !== undefined && typeof employee.nicknameSet !== 'boolean') ||
         typeof employee.active !== 'boolean' ||
         !Number.isSafeInteger(employee.version) ||
         employee.version < 1 ||
@@ -332,9 +333,14 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     }
   }
 
-  function requireSuper(request, accounts) {
+  function requireActor(request, accounts) {
     const employee = actorRecord(request, accounts);
     if (!employee) throw new AuthError(401, '请先登录本机业务系统');
+    return employee;
+  }
+
+  function requireSuper(request, accounts) {
+    const employee = requireActor(request, accounts);
     if (employee.role !== 'super') throw new AuthError(403, '仅超级管理员可管理员工账户');
     return employee;
   }
@@ -401,7 +407,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     sendJson(response, 200, { actor: publicEmployee(employee) });
   }
 
-  function mutate(request, change) {
+  function mutate(request, change, authorize = requireSuper) {
     const lockPath = accountPath + '.lock';
     let lock;
     try {
@@ -412,10 +418,10 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     }
     try {
       const accounts = readAccounts(accountPath);
-      const supervisor = requireSuper(request, accounts);
-      const employee = change(accounts.employees, supervisor);
+      const operator = authorize(request, accounts);
+      const employee = change(accounts.employees, operator);
       writeAccounts(accountPath, accounts);
-      return { employee, supervisor };
+      return { employee, operator };
     } finally {
       closeSync(lock);
       unlinkSync(lockPath);
@@ -432,7 +438,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       throw new AuthError(400, '员工状态格式不正确');
     }
     const credential = await createCredential(body.password);
-    const { employee, supervisor } = mutate(request, (employees) => {
+    const { employee, operator } = mutate(request, (employees) => {
       if (employees.some((row) => row.email === email)) throw new AuthError(409, '员工邮箱已存在');
       const at = new Date(now()).toISOString();
       const row = {
@@ -450,7 +456,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       employees.push(row);
       return row;
     });
-    report('auth_employee_create', supervisor, employee.id);
+    report('auth_employee_create', operator, employee.id);
     sendJson(response, 201, { employee: publicEmployee(employee) });
   }
 
@@ -466,10 +472,11 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     if (body.active !== undefined && typeof body.active !== 'boolean') {
       throw new AuthError(400, '员工状态格式不正确');
     }
-    const name = body.name === undefined ? undefined : validatedName(body.name);
+    const nameValue = body.nickname === undefined ? body.name : body.nickname;
+    const name = nameValue === undefined ? undefined : validatedName(nameValue);
     const credential =
       body.password === undefined ? undefined : await createCredential(body.password);
-    const { employee, supervisor } = mutate(request, (employees, actor) => {
+    const { employee, operator } = mutate(request, (employees, actor) => {
       const row = employees.find((entry) => entry.id === employeeId);
       if (!row) throw new AuthError(404, '员工账号不存在');
       if (row.version !== body.version) throw new AuthError(409, '员工资料已更新，请刷新后再保存');
@@ -482,6 +489,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
         throw new AuthError(403, '超级管理员角色与启用状态受保护');
       }
       if (role !== row.role || active !== row.active || credential) row.sessionVersion++;
+      if (body.nickname !== undefined || (name !== undefined && name !== row.name)) row.nicknameSet = true;
       row.name = name ?? row.name;
       row.role = role;
       row.active = active;
@@ -490,8 +498,26 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       row.updatedAt = new Date(now()).toISOString();
       return row;
     });
-    report('auth_employee_update', supervisor, employee.id);
+    report('auth_employee_update', operator, employee.id);
     sendJson(response, 200, { employee: publicEmployee(employee) });
+  }
+
+  async function setOwnNickname(request, response) {
+    requireActor(request);
+    const body = await parseJson(request);
+    if (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'nickname'))
+      throw new AuthError(400, '仅可设置自己的昵称');
+    const nickname = validatedName(body.nickname);
+    const { employee } = mutate(request, (_employees, actor) => {
+      if (actor.nicknameSet === true) throw new AuthError(409, '昵称已设置，请联系管理员修改');
+      actor.name = nickname;
+      actor.nicknameSet = true;
+      actor.version++;
+      actor.updatedAt = new Date(now()).toISOString();
+      return actor;
+    }, requireActor);
+    report('auth_nickname_set', employee);
+    sendJson(response, 200, { actor: publicEmployee(employee) });
   }
 
   async function handle(request, response) {
@@ -511,6 +537,13 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
         if (employee) report('auth_logout', employee);
         return sendJson(response, 200, { actor: null });
       }
+      if (route === '/api/local/auth/display-names' && method === 'GET') {
+        const accounts = readAccounts(accountPath);
+        requireActor(request, accounts);
+        return sendJson(response, 200, { items: accounts.employees.map(({ id, name }) => ({ id, name })) });
+      }
+      if (route === '/api/local/auth/nickname' && method === 'POST')
+        return await setOwnNickname(request, response);
       if (route === '/api/local/auth/employees') {
         if (method === 'GET') {
           const accounts = readAccounts(accountPath);

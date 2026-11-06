@@ -20,6 +20,10 @@ import { createLocalCodexdaichongGateway } from '../modules/recharge/codexdaicho
 import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
 import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-bridge.mjs';
 import { productionDataPaths } from './production-data.mjs';
+import { createOrderRechargeClient, readPoolCards } from './order-recharge-client.mjs';
+import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
+import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
+import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
@@ -36,6 +40,7 @@ const files = new Map([
     'apple-relay-prototype',
     'apple-balance-prototype',
     'commerce-prototype',
+    'order-operations',
     'operations-prototype',
     'bitbrowser-addresses'
   ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
@@ -63,7 +68,8 @@ export async function startPreview(
     readManagedMailbox,
     mailboxPublicOrigin,
     microsoftMailboxConfig,
-    microsoftMailboxFetch
+    microsoftMailboxFetch,
+    rechargeOrderSync = false
   } = {}
 ) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
@@ -144,6 +150,8 @@ export async function startPreview(
   let signedOutIndex = null;
   let setupIndex = null;
   let handleAutomaticSnapshot = null;
+  let handleOrderAuxiliary, handleRechargeCodes, orderSync;
+  const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
   function gatewayFor(host) {
     if (!rechargeConfig) return codexdaichong;
@@ -179,6 +187,15 @@ export async function startPreview(
         };
       }
       store = localBusiness.createLocalBusinessStore(databasePath);
+      handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
+      handleRechargeCodes = createRechargeCodeHandler({
+        store: {
+          load: () => store.featureDocument('recharge-codes'),
+          save: (version, data, audit) => store.saveFeatureDocument('recharge-codes', version, data, audit)
+        },
+        transport: orderRechargeClient,
+        publicOrigin: secureOrigin
+      });
       handleWebsiteVisits = createWebsiteVisits({ store, secret: websiteVisitsSecret, publicOrigin: secureOrigin });
       microsoftMailbox = createMicrosoftMailbox({
         store, config: microsoftMailboxConfig, publicOrigin: secureOrigin,
@@ -247,6 +264,7 @@ export async function startPreview(
         fetchQuote: financeFetch
       });
       handleAutomaticSnapshot = createAutomaticSnapshotHandler({ store, quoteService, publicOrigin: secureOrigin });
+      orderSync = createRechargeOrderSync({ store, client: orderRechargeClient, quoteService, publicOrigin: secureOrigin });
       await installFinanceAssets(assets, { automaticQuotes: quoteService.enabled });
     } catch (error) {
       store.close();
@@ -353,6 +371,18 @@ export async function startPreview(
       if (!canManage) return forbidden();
       return void handleAutomaticSnapshot(request, response, actor);
     }
+    if (store && route === rechargeCodesRoute) {
+      if (!actor) return forbidden();
+      return void handleRechargeCodes(request, response, actor);
+    }
+    if (store && route === orderSyncRoute) {
+      if (!actor || !canManage) return forbidden();
+      return void orderSync.handle(request, response, actor);
+    }
+    if (store && orderAuxiliaryRoutes.has(route)) {
+      if (!actor || !canManage) return forbidden();
+      return void handleOrderAuxiliary(request, response, route, actor);
+    }
     if (store && route.startsWith('/api/local/tools/media/')) {
       if (!actor) return forbidden();
       return void handleMediaResolver(request, response, actor);
@@ -381,6 +411,7 @@ export async function startPreview(
         return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
+        readOrderCards: () => readPoolCards(orderRechargeClient),
         verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,
         async verifyRelayExtraction(aliasIds, operator) {
           const { items } = await relay.checkExtractionEligibility(aliasIds, operator);
@@ -457,6 +488,11 @@ export async function startPreview(
     response.end(request.method === 'HEAD' ? undefined : body);
   });
   if (store) server.once('close', () => store.close());
+  if (rechargeOrderSync && orderSync && rechargeConfig) {
+    const timer = setInterval(() => void orderSync.run({ apply: true }).catch(() => {}), 60_000);
+    timer.unref();
+    server.once('close', () => clearInterval(timer));
+  }
   if (codexdaichong || rechargeConfig) {
     server.on('upgrade', (request, socket, head) => {
       const address = server.address();
@@ -499,7 +535,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
         'website-visits-secret-file': { type: 'string' },
         'microsoft-mailbox-config': { type: 'string' },
         'mailbox-public-origin': { type: 'string' },
-        'codexdaichong-url': { type: 'string' }
+        'codexdaichong-url': { type: 'string' },
+        'recharge-order-sync': { type: 'boolean' }
       }
     });
     const port = values.port === undefined ? 4347 : Number(values.port);
@@ -536,6 +573,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       publicOrigin,
       relayConfig,
       rechargeConfig,
+      rechargeOrderSync: values['recharge-order-sync'],
       financeProvider: values['finance-provider'],
       mediaResolverUrl: values['media-resolver-url'],
       websiteAnalyticsConfig,

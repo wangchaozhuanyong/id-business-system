@@ -173,6 +173,7 @@ export function calculateOrder(order, { appleLedger, currency = 'CNY', clock = D
         item('KYC 认证成本', unsigned(rules.claudeAccountCostMyr), 'MYR');
       } else if (!apple) {
         if (!order.issueFeeSnapshot) throw new Error('订单缺少开卡费快照');
+        if (order.issueFeeSnapshot.pending) throw new Error('首次开卡费待核对');
         if (order.issueFeeSnapshot.applied)
           item('本卡首次开卡费', unsigned(order.issueFeeSnapshot.amountUsd), 'USD');
         const feePercent = unsigned(rules.cardPercent);

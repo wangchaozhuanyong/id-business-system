@@ -66,11 +66,24 @@
     if (
       result.configured !== required ||
       result.actor?.id !== state.actor?.id ||
-      result.actor?.role !== state.actor?.role ||
-      result.actor?.name !== state.actor?.name
+      result.actor?.role !== state.actor?.role
     )
       reload();
+    else if (result.actor && (result.actor.name !== actor.name || result.actor.nicknameSet !== actor.nicknameSet))
+      acceptActorLabel(result.actor);
     return state;
+  }
+
+  function acceptActorLabel(next) {
+    actor = next;
+    const api = window.IDDesignAPI;
+    if (api) api.state.actor = next;
+    const profile = $('#profile-button');
+    if (profile) {
+      $('.avatar', profile).textContent = Array.from(next.name)[0] || '本';
+      $('.profile-name', profile).textContent = next.name;
+    }
+    void window.IDLocalData?.refreshOperatorLabels();
   }
 
   async function logout() {
@@ -155,12 +168,31 @@
   function openProfile() {
     const api = window.IDDesignAPI;
     if (!actor || !api) return;
+    const nickname = actor.nicknameSet ? '' : `<form id="local-auth-nickname" class="form-section">${api.field('设置昵称', 'self-nickname', api.input('self-nickname', '', 'required maxlength="80" autocomplete="off"'), true, '首次保存后由管理员修改。')}<div class="form-footer"><button type="submit" class="button primary">保存昵称</button></div></form>`;
     api.openDrawer(
       '当前登录账户',
       '',
-      `<div class="property-list"><div class="property-row"><span>昵称</span><strong>${api.esc(actor.name)}</strong></div><div class="property-row"><span>登录邮箱</span><strong>${api.esc(actor.email)}</strong></div><div class="property-row"><span>角色</span><strong>${roles[actor.role]}</strong></div></div>`,
+      `<div class="property-list"><div class="property-row"><span>昵称</span><strong>${api.esc(actor.name)}</strong></div><div class="property-row"><span>登录邮箱</span><strong>${api.esc(actor.email)}</strong></div><div class="property-row"><span>角色</span><strong>${roles[actor.role]}</strong></div></div>${nickname}`,
       `${api.button('关闭', 'drawer-close')}<button type="button" id="local-auth-sign-out" class="button danger">退出登录</button>`
     );
+    $('#local-auth-nickname')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const form = event.currentTarget;
+      const submit = $('button[type=submit]', form);
+      if (submit.disabled) return;
+      submit.disabled = true;
+      try {
+        const result = await request('nickname', 'POST', { nickname: form.elements['self-nickname'].value.trim() });
+        acceptActorLabel(result.actor);
+        if (form.isConnected) openProfile();
+        api.notify('昵称已保存');
+      } catch (error) {
+        api.notify(error.message || '昵称未保存，请重试');
+      } finally {
+        submit.disabled = false;
+      }
+    });
     const button = $('#local-auth-sign-out');
     button.addEventListener('click', async () => {
       if (button.disabled) return;

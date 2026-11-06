@@ -221,6 +221,7 @@ function addGpt(r, email = 'provenance@example.test') {
     'inventory-email': email,
     'inventory-password': 'Demo-Only',
     'inventory-country-edit': '美国',
+    'inventory-city': '纽约',
     'inventory-createdBy': '伪造人',
     'inventory-createdById': 'forged-id',
     'inventory-lastOperatedBy': '伪造最近操作人'
@@ -278,7 +279,7 @@ test('账号状态操作单独留痕，不覆盖录入人且最近操作含状�
 test('批量导入同时记录每条资产来源和批次操作人，不从CSV读取人员', () => {
   const r = runtime();
   r.open('gpt');
-  r.preview({ 'inventory-import-content': '邮箱,密码\nimport.actor@example.test,Demo' });
+  r.preview({ 'inventory-import-content': '邮箱,密码,国家,城市\nimport.actor@example.test,Demo,美国,纽约' });
   r.requestImport();
   r.confirm();
   const row = r.accounts.find((entry) => entry.email === 'import.actor@example.test');

@@ -31,6 +31,7 @@
   const usageReview = new Map();
   let accountAssetContext = null;
   let accountImportContext = null;
+  let locationSettingsReturn = null;
   let importFileReadVersion = 0;
   const accountSubmissionTypes = [
     ['gpt', 'GPT 账号'],
@@ -46,7 +47,7 @@
     { id: 'microsoft', label: '微软邮箱', enabled: false }
   ];
   const tableSettings = new Map();
-  const defaultClaudeCities = new Map([
+  const defaultAccountCities = new Map([
     ['马来西亚', ['吉隆坡', '槟城', '新山']],
     ['美国', ['纽约', '洛杉矶', '芝加哥']],
     ['日本', ['东京', '大阪']],
@@ -473,6 +474,9 @@
       (asset.type !== 'claude' || (age(asset) ?? -1) >= settingsFor(asset.type).hours) &&
       !returnBlock(asset, claim.batch, claim.item) && !claim.item.orderId;
   }
+  function usesAccountLocation(type) {
+    return type === 'gpt' || type === 'claude';
+  }
   function settingsFor(type) {
     if (!tableSettings.has(type))
       tableSettings.set(type, {
@@ -716,13 +720,14 @@
       '#main form[data-inventory-draft], #drawer[open] form[data-inventory-draft]'
     )) {
       let values = api.readDraft(form);
-      if (form.id === 'inventory-settings-form' && values['inventory-settings-type'] === 'claude') {
+      const type = values['inventory-settings-type'];
+      if (form.id === 'inventory-settings-form' && usesAccountLocation(type)) {
         const group = form.querySelector?.('#inventory-settings-city-groups');
         if (group) {
-          const countries = settingsCountries(values, settingsFor('claude'));
+          const countries = settingsCountries(values, settingsFor(type));
           const countryList = JSON.stringify(countries);
           if (group.dataset.countries !== countryList) {
-            group.innerHTML = claudeCityEditors(countries, values);
+            group.innerHTML = accountCityEditors(type, countries, values);
             group.dataset.countries = countryList;
             values = api.readDraft(form);
           }
@@ -812,7 +817,8 @@
               { id: 'appPassword', label: '应用专用密码', class: 'mono wide-cell', long: true }
             ]
           : []),
-        { id: 'country', label: type === 'claude' ? '注册国家' : '国家地区' },
+        { id: 'country', label: usesAccountLocation(type) ? '注册国家' : '国家地区' },
+        ...(usesAccountLocation(type) ? [{ id: 'city', label: type === 'claude' ? '注册城市' : '注册地区／城市' }] : []),
         {
           id: 'status',
           label: '账号状态',
@@ -837,7 +843,6 @@
         },
         ...(type === 'claude'
           ? [
-              { id: 'city', label: '注册城市' },
               { id: 'proxyUrl', label: '注册 IP 链接', class: 'mono wide-cell', long: true },
               {
                 id: 'proxyProtocol',
@@ -1346,7 +1351,7 @@
       else api.notify('隐藏邮箱管理尚未就绪，请刷新页面后重试');
       return;
     }
-    const account = ['gpt', 'claude'].includes(type);
+    const account = usesAccountLocation(type);
     const fundingApple = type === 'apple' && (fundingAppleRoute() || accountEntry);
     const key = accountEntry ? accountAssetKey(type) : `inventory-edit:${id || `new:${type}`}`;
     accountAssetContext = accountEntry ? { key, type } : null;
@@ -1418,23 +1423,26 @@
         'inventory-phone',
         `${input('inventory-phone', val('phone'))}<label class="checkbox-label"><input type="checkbox" id="inventory-no-phone" name="inventory-no-phone" ${(api.state.drafts.has(key) ? Boolean(d['inventory-no-phone']) : original && !original.phone) ? 'checked' : ''} />确认未绑定电话</label>`
       );
-    fields += field(
-      '国家地区',
+    const countrySelect = select(
       'inventory-country-edit',
-      select(
-        'inventory-country-edit',
-        choicesWithCurrent([['', '请选择国家'], ...config.countries], country),
-        country
-      ),
-      ['apple', 'claude'].includes(type)
+      choicesWithCurrent([['', '请选择国家'], ...config.countries], country),
+      country
     );
-    if (type === 'claude')
+    fields += field(
+      account ? '注册国家' : '国家地区',
+      'inventory-country-edit',
+      account
+        ? `<div class="field-row">${countrySelect}${locationSettingsButton(type, 'asset', id)}</div>`
+        : countrySelect,
+      account || type === 'apple'
+    );
+    if (account)
       fields += field(
-        '注册城市',
+        type === 'claude' ? '注册城市' : '注册地区／城市',
         'inventory-city',
-        select('inventory-city', claudeCityChoices(country, original, val('city')), val('city')),
+        select('inventory-city', accountCityChoices(type, country, original, val('city')), val('city')),
         true,
-        '请先选国家。城市选项可在 Claude 账号的本表设置维护。'
+        '请先选国家。地区／城市可在本账号的国家地区设置中维护。'
       );
     fields +=
       field(
@@ -1575,15 +1583,19 @@
       key
     );
   }
-  function cityOptions(country) {
-    const configured = settingsFor('claude').cities;
+  function locationSettingsButton(type, from = '', id = '') {
+    return button('国家地区设置', 'inventory-location-settings', '', 'settings',
+      `data-type="${esc(type)}" data-from="${esc(from)}" data-id="${esc(id)}"`);
+  }
+  function cityOptions(type, country) {
+    const configured = settingsFor(type).cities;
     const values = Array.isArray(configured)
       ? configured.find((entry) => Array.isArray(entry) && entry[0] === country)?.[1]
       : undefined;
-    return Array.isArray(values) ? values : defaultClaudeCities.get(country) || [];
+    return Array.isArray(values) ? values : defaultAccountCities.get(country) || [];
   }
-  function claudeCityChoices(country, original, current = '') {
-    const values = settingsFor('claude').countries.includes(country) ? cityOptions(country) : [];
+  function accountCityChoices(type, country, original, current = '') {
+    const values = settingsFor(type).countries.includes(country) ? cityOptions(type, country) : [];
     const choices = [
       [
         '',
@@ -1601,29 +1613,29 @@
     }
     return withPrevious;
   }
-  function claudeLocationError(country, city, original) {
-    if (original?.country === country && original?.city === city) return '';
-    if (!settingsFor('claude').countries.includes(country)) {
-      return '注册国家未在 Claude 本表设置启用';
-    }
-    return cityOptions(country).includes(city) ? '' : '注册城市不在所选国家的本表设置中';
+  function accountLocationError(type, country, city, original) {
+    if (original && (original.country || '') === country && (original.city || '') === city) return '';
+    if (!country) return '缺少注册国家';
+    if (!settingsFor(type).countries.includes(country)) return '注册国家未在本账号的国家地区设置启用';
+    if (!city) return '缺少地区／城市';
+    return cityOptions(type, country).includes(city) ? '' : '地区／城市不在所选国家的设置中';
   }
   function settingsCountries(values, config) {
     const raw = values['inventory-settings-countries'];
     return [...new Set(raw === undefined ? config.countries : api.readOptionList(raw))];
   }
-  function claudeCityEditorId(country) {
+  function accountCityEditorId(country) {
     const token = Array.from(country, (char) => char.codePointAt(0).toString(16)).join('-');
     return `inventory-settings-city-${token}`;
   }
-  function claudeCityEditors(countries, draft) {
+  function accountCityEditors(type, countries, draft) {
     return countries
       .map((country) =>
         api.optionListEditor({
-          id: claudeCityEditorId(country),
-          label: `${country} · 注册城市`,
-          itemLabel: '城市名称',
-          values: cityOptions(country),
+          id: accountCityEditorId(country),
+          label: `${country} · ${type === 'claude' ? '注册城市' : '地区／城市'}`,
+          itemLabel: '地区／城市名称',
+          values: cityOptions(type, country),
           minItems: 0,
           draft
         })
@@ -1727,7 +1739,8 @@
       ['密码', asset.password || '未填写'],
       ['资料类型', typeLabel(asset.type)],
       ...(isAccount(asset) ? [['邮箱类型', accountEmailType(asset)]] : []),
-      ['国家地区', asset.country || '未填写'],
+      [isAccount(asset) ? '注册国家' : '国家地区', asset.country || '未填写'],
+      ...(isAccount(asset) ? [[asset.type === 'claude' ? '注册城市' : '注册地区／城市', asset.city || '未填写']] : []),
       ['来源渠道', asset.source || '未填写'],
       ['账号状态', { normal: asset.status, dead: '死号', unlocking: '解封中' }[asset.health]],
       [
@@ -1777,7 +1790,6 @@
       );
     if (asset.type === 'claude')
       rows.push(
-        ['注册城市', asset.city || '未填写'],
         ['养号时长', ageLabel(asset)],
         ['KYC 状态', accountKyc(asset)],
         ['注册 IP 链接', asset.proxyUrl || '未填写'],
@@ -1829,7 +1841,7 @@
       `<section class="panel form-panel"><div class="submission-grid">${choices
         .map(
           ([type, label]) =>
-            `<div class="guide-item"><h3>${esc(label)}</h3><div class="toolbar">${button(type === 'relay' ? '登记隐藏邮箱' : '单条录入', 'inventory-add-type', 'primary', 'plus', `data-type="${type}"`)}${button('批量导入', 'inventory-import', '', 'upload', `data-type="${type}"`)}</div>${accountEntry ? textAction('查看账号管理', 'inventory-go', `data-route="accounts/${type === 'apple' ? 'apple-balances' : type}"`) : type === 'relay' ? textAction('主邮箱管理', 'inventory-go', 'data-route="mailboxes/relay"') : ''}</div>`
+            `<div class="guide-item"><h3>${esc(label)}</h3><div class="toolbar">${button(type === 'relay' ? '登记隐藏邮箱' : '单条录入', 'inventory-add-type', 'primary', 'plus', `data-type="${type}"`)}${button('批量导入', 'inventory-import', '', 'upload', `data-type="${type}"`)}${accountEntry && usesAccountLocation(type) ? locationSettingsButton(type) : ''}</div>${accountEntry ? textAction('查看账号管理', 'inventory-go', `data-route="accounts/${type === 'apple' ? 'apple-balances' : type}"`) : type === 'relay' ? textAction('主邮箱管理', 'inventory-go', 'data-route="mailboxes/relay"') : ''}</div>`
         )
         .join(
           ''
@@ -1917,7 +1929,7 @@
     ['emailType', '邮箱类型', ['emailType'], ['gpt', 'claude']],
     ['phone', '绑定电话', ['电话', '手机号', 'phone'], ['apple']],
     ['country', '国家地区', ['国家', '注册国家', 'country']],
-    ['city', '注册城市', ['城市', 'city'], ['claude']],
+    ['city', '注册城市', ['城市', '地区', '地区／城市', '地区/城市', '注册地区', '注册地区／城市', 'city', 'region'], ['gpt', 'claude']],
     ['status', '账号状态', ['状态', 'status']],
     ['source', '来源渠道', ['来源', 'source']],
     ['registered', '注册时间', ['registered', 'registeredAt']],
@@ -1951,17 +1963,16 @@
     );
   }
   function accountCsvTemplate(type) {
-    const country =
-      type === 'claude'
-        ? settingsFor('claude').countries.find((value) => cityOptions(value).length) || ''
-        : '美国';
+    const country = usesAccountLocation(type)
+      ? settingsFor(type).countries.find((value) => cityOptions(type, value).length) || ''
+      : settingsFor(type).countries[0] || '';
     const values = {
       email: `submit.${type}@example.test`,
       password: 'Demo-Account-Only!',
       emailType: '谷歌邮箱',
       phone: '演示电话',
       country,
-      city: type === 'claude' ? cityOptions(country)[0] || '' : '',
+      city: usesAccountLocation(type) ? cityOptions(type, country)[0] || '' : '',
       status: '正常',
       source: '自己注册',
       registered: '2026-10-29T09:20',
@@ -2043,7 +2054,7 @@
         'inventory-import-content',
         area('inventory-import-content', d['inventory-import-content'] || '', example, 7),
         true,
-        '支持带表头 CSV 和旧版七列。注册时间可留空，按录入时间保存。余额、使用状态、KYC 和养号结果不接受导入。'
+        `${usesAccountLocation(type) ? '国家和地区／城市必填，使用本账号设置中的选项。' : ''}支持带表头 CSV 和旧版七列。注册时间可留空，按录入时间保存。余额、使用状态、KYC 和养号结果不接受导入。`
       ) +
       (type === 'apple'
         ? wide(
@@ -2055,7 +2066,7 @@
     showDrawer(
       `批量导入${typeLabel(type)}`,
       '每批只提交一种账号资料，逐行检查后整批确认；不注册账号，不改变任何余额或业务使用状态。',
-      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${fields}</div><div class="toolbar">${localData ? '' : button('填入示例 CSV', 'inventory-import-example', '', 'copy')}</div></form><div id="inventory-import-results"></div>`,
+      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${fields}</div><div class="toolbar">${usesAccountLocation(type) ? locationSettingsButton(type, 'import') : ''}${localData ? '' : button('填入示例 CSV', 'inventory-import-example', '', 'copy')}</div></form><div id="inventory-import-results"></div>`,
       button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-import-form" type="submit">检查并预览</button>',
       key
@@ -2169,11 +2180,9 @@
       if (!error && context.type === 'apple' && !values.password) error = '缺少密码';
       if (!error && context.type === 'apple' && !values.phone && !d['inventory-import-no-phone'])
         error = '需确认未绑定电话';
-      if (!error && ['apple', 'claude'].includes(context.type) && !values.country)
-        error = '缺少国家';
-      if (!error && context.type === 'claude' && !values.city) error = '缺少城市';
-      if (!error && context.type === 'claude')
-        error = claudeLocationError(values.country, values.city);
+      if (!error && context.type === 'apple' && !values.country) error = '缺少国家';
+      if (!error && usesAccountLocation(context.type))
+        error = accountLocationError(context.type, values.country, values.city);
       if (!error && values.registered && !validRegisteredDate(values.registered))
         error = '注册时间无效或晚于当前时间，请按北京时间填写';
       if (!error && values.birthday && !validCalendarDate(values.birthday))
@@ -2353,8 +2362,7 @@
     let first = '';
     const required = ['inventory-email'];
     if (['google', 'apple'].includes(type)) required.push('inventory-password');
-    if (['apple', 'claude'].includes(type)) required.push('inventory-country-edit');
-    if (type === 'claude') required.push('inventory-city');
+    if (type === 'apple') required.push('inventory-country-edit');
     for (const name of required) {
       const error = !String(data[name] || '').trim() ? '请填写此项资料' : '';
       api.setError(name, error);
@@ -2427,15 +2435,16 @@
       api.notify('资料类型和邮箱标识创建后不可修改');
       return;
     }
-    if (type === 'claude') {
-      const country = data['inventory-country-edit'];
-      const issue = claudeLocationError(country, data['inventory-city'], original);
+    if (usesAccountLocation(type)) {
+      const country = data['inventory-country-edit'] || '';
+      const issue = accountLocationError(type, country, data['inventory-city'] || '', original);
+      const locationField = settingsFor(type).countries.includes(country)
+        ? 'inventory-city'
+        : 'inventory-country-edit';
+      api.setError('inventory-country-edit', locationField === 'inventory-country-edit' ? issue : '');
+      api.setError('inventory-city', locationField === 'inventory-city' ? issue : '');
       if (issue) {
-        const field = settingsFor('claude').countries.includes(country)
-          ? 'inventory-city'
-          : 'inventory-country-edit';
-        api.setError(field, issue);
-        document.getElementById(field)?.focus();
+        document.getElementById(locationField)?.focus();
         return;
       }
     }
@@ -2970,9 +2979,9 @@
             !d['inventory-import-no-phone']
           )
             error = '需确认未绑定电话';
-          if (!error && ['apple', 'claude'].includes(finalType) && !country) error = '缺少国家';
-          if (!error && finalType === 'claude' && !city) error = '缺少城市';
-          if (!error && finalType === 'claude') error = claudeLocationError(country, city);
+          if (!error && finalType === 'apple' && !country) error = '缺少国家';
+          if (!error && usesAccountLocation(finalType))
+            error = accountLocationError(finalType, country, city);
           if (!error && registered && !validRegisteredDate(registered))
             error = '注册时间无效或晚于当前时间';
           seen.add(key);
@@ -3064,7 +3073,7 @@
                         : row.fields?.[key] || '—'
                     )
                 }))
-            : []),
+            : account ? [{ id: 'country', label: '注册国家' }, { id: 'city', label: '地区／城市' }] : []),
           {
             id: 'registered',
             label: '注册时间',
@@ -3395,20 +3404,28 @@
               : empty('历史导入摘要', `${record.success} 条成功。演示历史不伪造逐行原始文件。`)),
           button('关闭', 'inventory-close')
         );
-    } else if (action === 'inventory-settings') {
-      const type = fundingAppleRoute() ? 'apple' : api.state.route.split('/')[1],
-        config = settingsFor(type),
-        key = `inventory-settings:${type}`,
+    } else if (action === 'inventory-settings' || action === 'inventory-location-settings') {
+      const locationOnly = action === 'inventory-location-settings';
+      const type = locationOnly ? node.dataset.type
+        : fundingAppleRoute() ? 'apple' : api.state.route.split('/')[1];
+      if (locationOnly && !usesAccountLocation(type)) return true;
+      const from = node.dataset.from;
+      if (locationOnly && (from === 'asset' || from === 'import')) {
+        saveDrafts();
+        locationSettingsReturn = { route: api.state.route, type, from, id: id || '' };
+      }
+      const config = settingsFor(type),
+        key = `inventory-${locationOnly ? 'location-' : ''}settings:${type}`,
         saved = api.state.drafts.get(key) || {};
       let cities = '';
-      if (type === 'claude') {
+      if (usesAccountLocation(type)) {
         const countries = settingsCountries(saved, config);
-        cities = `<div id="inventory-settings-city-groups" class="option-settings-groups" data-countries="${esc(JSON.stringify(countries))}">${claudeCityEditors(countries, saved)}</div>`;
+        cities = `<div id="inventory-settings-city-groups" class="option-settings-groups" data-countries="${esc(JSON.stringify(countries))}">${accountCityEditors(type, countries, saved)}</div>`;
       }
       showDrawer(
-        '本表设置',
-        '国家、城市、来源和养号阈值只作用于此资料表，邮箱分类由系统统一维护。',
-        `<form id="inventory-settings-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-settings-type" value="${type}" /><div class="option-settings-groups">${api.optionListEditor({ id: 'inventory-settings-countries', label: '国家地区', itemLabel: '国家名称', values: config.countries, minItems: 1, draft: saved })}${api.optionListEditor({ id: 'inventory-settings-sources', label: '来源渠道', itemLabel: '来源名称', values: config.sources, minItems: 1, draft: saved })}${type === 'claude' ? field('养号阈值', 'inventory-settings-hours', input('inventory-settings-hours', saved['inventory-settings-hours'] ?? config.hours, 'type="number" min="1" max="8760"'), false, '请输入 1–8760 小时。') : ''}${cities}</div></form>`,
+        locationOnly ? `${typeLabel(type)}国家地区设置` : '本表设置',
+        '这些选项只作用于本资料表。',
+        `<form id="inventory-settings-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-settings-type" value="${type}" /><div class="option-settings-groups">${api.optionListEditor({ id: 'inventory-settings-countries', label: '国家地区', itemLabel: '国家名称', values: config.countries, minItems: 1, draft: saved })}${locationOnly ? '<input type="hidden" name="inventory-location-only" value="1" />' : api.optionListEditor({ id: 'inventory-settings-sources', label: '来源渠道', itemLabel: '来源名称', values: config.sources, minItems: 1, draft: saved })}${!locationOnly && type === 'claude' ? field('养号阈值', 'inventory-settings-hours', input('inventory-settings-hours', saved['inventory-settings-hours'] ?? config.hours, 'type="number" min="1" max="8760"'), false, '请输入 1–8760 小时。') : ''}${cities}</div></form>`,
         button('取消', 'inventory-close') +
           '<button class="button primary" form="inventory-settings-form" type="submit">确认设置</button>',
         key
@@ -3522,18 +3539,25 @@
     } else if (form.id === 'inventory-settings-form') {
       const data = api.readForm(form),
         type = data['inventory-settings-type'];
+      const locationOnly = data['inventory-location-only'] === '1';
+      const expectedKey = `inventory-${locationOnly ? 'location-' : ''}settings:${type}`;
+      if (form.dataset.inventoryDraft !== expectedKey || (locationOnly && !usesAccountLocation(type))) {
+        api.notify('设置入口或资料类型已变化，请从对应资料表重新打开');
+        return true;
+      }
       if (api.optionListPending(form)) {
         api.notify('请先添加或保存正在输入的项目，也可以取消该项编辑后再确认设置');
         return true;
       }
+      const current = settingsFor(type);
       let countries, sources, cities;
       try {
-        countries = settingsCountries(data, settingsFor(type));
-        sources = [...new Set(api.readOptionList(data['inventory-settings-sources']))];
-        if (type === 'claude') {
+        countries = settingsCountries(data, current);
+        sources = locationOnly ? current.sources : [...new Set(api.readOptionList(data['inventory-settings-sources']))];
+        if (usesAccountLocation(type)) {
           cities = countries.map((country) => {
-            const raw = data[claudeCityEditorId(country)];
-            const values = raw === undefined ? cityOptions(country) : api.readOptionList(raw);
+            const raw = data[accountCityEditorId(country)];
+            const values = raw === undefined ? cityOptions(type, country) : api.readOptionList(raw);
             return [country, [...new Set(values)]];
           });
         }
@@ -3541,7 +3565,9 @@
         api.notify('配置项目格式不正确，请重新核对列表');
         return true;
       }
-      const hours = type === 'claude' ? Number(data['inventory-settings-hours']) : 72;
+      const hours = type === 'claude' && !locationOnly
+        ? Number(data['inventory-settings-hours'])
+        : current.hours ?? 72;
       if (
         !countries.length ||
         !sources.length ||
@@ -3731,8 +3757,11 @@
       const city = document.getElementById('inventory-city');
       if (city) {
         const form = node.form || document.getElementById('inventory-asset-form');
-        const id = form && api.readForm(form)['inventory-asset-id'];
-        city.innerHTML = options(claudeCityChoices(node.value, id ? assetById(id) : null), '');
+        const values = form && api.readForm(form);
+        const id = values?.['inventory-asset-id'];
+        const type = values?.['inventory-asset-type'];
+        if (usesAccountLocation(type))
+          city.innerHTML = options(accountCityChoices(type, node.value, id ? assetById(id) : null), '');
         api.setError('inventory-city', '');
       }
     } else if (node.id === 'inventory-proxy-protocol') {
@@ -4032,6 +4061,16 @@
     }
   };
   if (localData) initialize();
+  const drawer = document.querySelector('#drawer');
+  drawer?.addEventListener?.('close', () => {
+    if (drawer.open || !locationSettingsReturn) return;
+    const back = locationSettingsReturn;
+    locationSettingsReturn = null;
+    if (back.route !== api.state.route) return;
+    if (back.from === 'asset') assetEditor(back.id, back.type);
+    else importEditor(back.type);
+  });
+
   window.IDDesignModules.push({
     id: 'inventory',
     matches(route) {
