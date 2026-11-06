@@ -1,0 +1,245 @@
+.recharge-integration {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.recharge-integration__toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.recharge-integration__nav,
+.recharge-integration__labels {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 8px;
+}
+
+[data-recharge-module='online'] .recharge-integration__toolbar {
+  align-items: center;
+  justify-content: flex-start;
+  padding: 12px 16px;
+}
+
+.recharge-integration__nav {
+  flex: 1 1 0;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  padding-block: 2px;
+}
+
+.recharge-integration__nav .button,
+[data-recharge-module='online'] .recharge-integration__toolbar > .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.recharge-integration__nav .button:focus-visible {
+  outline-width: 2px;
+  outline-offset: -4px;
+}
+
+.recharge-integration__nav .button.primary:focus-visible {
+  outline-color: var(--surface);
+}
+
+.recharge-integration__labels {
+  align-self: center;
+}
+
+.recharge-integration__view {
+  position: relative;
+  min-height: 290px;
+}
+
+.recharge-integration__view > .design-region-progress {
+  position: absolute;
+  inset: 0 0 auto;
+  margin: 0;
+  border-radius: 0;
+}
+
+.recharge-integration__frame {
+  display: block;
+  width: 100%;
+  height: max(520px, calc(100dvh - 220px));
+  border: 0;
+  background: var(--surface);
+}
+
+.drawer-body:has(> .recharge-task-log-frame) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.recharge-task-log-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--surface);
+}
+
+.recharge-integration__frame[hidden] {
+  /* Keep the incoming document measurable without adding it to page flow. */
+  display: block !important;
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  [data-recharge-module='online'] .recharge-integration__toolbar {
+    gap: 8px;
+    padding: 12px;
+  }
+
+  [data-recharge-module='online'] .recharge-integration__toolbar .button {
+    min-height: 44px;
+    padding-inline: 8px;
+  }
+}
+
+.recharge-integration__frame--bit-local {
+  height: auto;
+  min-height: 360px;
+}
+
+.bit-local {
+  background: var(--surface);
+  padding: clamp(12px, 2vw, 24px);
+}
+
+#bit-login-form {
+  display: grid;
+  gap: 20px;
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
+#bit-login-fields {
+  display: grid;
+  gap: 16px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.bit-local__section {
+  container-type: inline-size;
+}
+
+.bit-local__section + .bit-local__section {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.bit-local .section-heading h2 {
+  margin: 0;
+}
+
+.bit-local__connection {
+  display: grid;
+  gap: 12px;
+}
+
+.bit-local__connection-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bit-local__connection-toolbar > .bit-local__status {
+  flex: 1 1 14rem;
+}
+
+.bit-local__connection-help:not([hidden]) {
+  display: block;
+  margin: 0;
+}
+
+.bit-local__connection-help h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.bit-local__connection-help ol {
+  padding-inline-start: 1.4em;
+}
+
+.bit-local__connection-help p:last-child {
+  margin-bottom: 0;
+}
+
+.bit-local__actions,
+.bit-local__execution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.bit-local__execution {
+  justify-content: space-between;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.bit-local__execution > div {
+  min-width: 0;
+}
+
+.bit-local__execution h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.bit-local__status {
+  min-width: 0;
+  margin: 0;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
+
+.bit-local input[type='file'] {
+  align-content: center;
+  padding-block: 0;
+}
+
+.bit-local input[type='file']::file-selector-button {
+  margin-inline-end: 8px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.bit-local #bit-authorization-result {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.bit-local #bit-authorization-result:empty {
+  margin-top: 0;
+}

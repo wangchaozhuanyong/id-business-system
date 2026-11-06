@@ -1,0 +1,409 @@
+// Ported from the pinned BitBrowser implementation e51dd9c9. See README.md.
+import { normalizeV2RechargeBrowserOptions } from './browser-options.mjs';
+const messages = {
+  bitbrowser_secure_context_required:
+    '请通过 HTTPS 安全地址打开管理网站，再连接比特浏览器；当前 HTTP 公网地址无法执行网页直连。',
+  bitbrowser_direct_unreachable:
+    '网页无法访问比特浏览器。请启动比特浏览器、开启本地接口，并允许当前网站访问本机网络。',
+  bitbrowser_direct_token_invalid:
+    '比特接口密钥不匹配，请填写当前电脑比特浏览器系统设置中的接口密钥。',
+  bitbrowser_direct_rejected: '比特接口未返回成功结果，请核对当前账号登录状态和接口权限后重试。',
+  bitbrowser_direct_protocol: '比特接口返回的数据无法确认，请核对接口地址并更新比特浏览器。',
+  bitbrowser_direct_debug_unavailable:
+    '窗口已打开，但网页无法连接窗口控制接口。请检查网站本机网络权限，并更新比特浏览器后重试。',
+  bitbrowser_existing_window_control_unavailable:
+    '原窗口已在运行，但网页未能建立窗口控制连接。请关闭这个原窗口，再从本页重新打开；原窗口资料和执行记录已保留。',
+  bitbrowser_direct_command_failed: '窗口控制失败，请检查原窗口；本次不会自动重建或重复登录。',
+  bitbrowser_direct_cancelled: '本次网页直连操作已停止，已打开的窗口保留供手动检查。',
+  bitbrowser_profile_sync_unverified: '无法确认窗口已关闭登录资料同步，本次已停止登录。',
+  bitbrowser_profile_configuration_mismatch:
+    '比特窗口的内核、系统或尺寸与所选配置不一致，本次已停止登录。请检查客户端可用内核和窗口设置。',
+  bitbrowser_profile_configuration_unverified:
+    '无法确认比特窗口实际使用的内核版本，本次已停止登录。请更新客户端后重试。',
+  official_login_email_mismatch: '官网已登录账号与本次选择不一致，本次已停止。',
+  official_login_not_verified: '未能确认官网账号登录成功，请检查原窗口后重试。',
+  official_login_token_rejected:
+    '官网拒绝了当前访问凭据，单次会话刷新后仍未通过，请更新授权 JSON。',
+  access_token_expired: '官网接受了会话，但返回的访问令牌已过期，请更新有效授权后重试。',
+  official_login_network_failed: '代理或网络连接失败，自动恢复已停止，请检查原窗口后重试。',
+  official_login_page_not_ready: '官网会话已登录，但页面登录状态尚未就绪，请检查原窗口。',
+  bitbrowser_recovery_timeout: '加载恢复已达到时间上限，请检查原窗口后重试。',
+  bitbrowser_owned_profile_missing:
+    '无法确认原比特窗口已删除，本次未重建，请检查比特浏览器连接和窗口资料。',
+  bitbrowser_owned_profile_unverified: '无法确认原比特窗口属于本次账号，本次已停止。',
+  proxy_probe_unverified: '无法确认代理可正常访问官网，本次已停止，请检查原窗口。',
+  bitbrowser_profile_close_unverified: '无法确认失败窗口已关闭，本次已停止，未重新打开窗口。',
+  invalid_session_json: '授权 JSON 缺少有效的会话、用户或账号资料，请重新授权。'
+};
+const operationMessages = {
+  browser_health: '检测比特接口',
+  browser_groups: '读取比特分组',
+  browser_tags: '读取比特标签',
+  browser_list: '核验原窗口资料',
+  browser_update: '创建或更新窗口资料',
+  browser_tag_relation: '关联窗口标签',
+  browser_detail: '读取窗口资料',
+  browser_open: '打开比特窗口',
+  browser_close: '关闭比特窗口',
+  browser_processes: '核验窗口关闭状态',
+  browser_control: '连接窗口控制通道'
+};
+const apiReasonMessages = {
+  local_api_login_required:
+    '当前比特客户端尚未登录或登录已过期，请先登录该连接对应的比特账号，再刷新分组与标签',
+  local_api_permission_denied:
+    '当前比特账号无权读取所需资料，请由主账号核对 Local API 及对应分组权限'
+};
+function safeFailureMetadata(value) {
+  return {
+    ...(typeof value.operation === 'string' && Object.hasOwn(operationMessages, value.operation)
+      ? { operation: value.operation }
+      : {}),
+    ...(typeof value.httpStatus === 'number' &&
+    Number.isInteger(value.httpStatus) &&
+    value.httpStatus >= 100 &&
+    value.httpStatus <= 599
+      ? { httpStatus: value.httpStatus }
+      : {}),
+    ...(typeof value.apiReason === 'string' && Object.hasOwn(apiReasonMessages, value.apiReason)
+      ? { apiReason: value.apiReason }
+      : {})
+  };
+}
+class DirectBrowserError extends Error {
+  constructor(reason, metadata = {}) {
+    const safe = safeFailureMetadata(metadata);
+    const operation = safe.operation ? operationMessages[safe.operation] : undefined;
+    const description = operation ? `${operation}失败：${messages[reason]}` : messages[reason];
+    const details = [
+      ...(safe.httpStatus ? [`HTTP ${safe.httpStatus}`] : []),
+      ...(safe.apiReason ? [apiReasonMessages[safe.apiReason]] : [])
+    ];
+    super(details.length ? `${description}（${details.join('；')}）。` : description);
+    this.reason = reason;
+    this.metadata = Object.freeze(safe);
+  }
+  reason;
+  metadata;
+}
+function directBrowserFailure(error, operation) {
+  if (error instanceof DirectBrowserError) {
+    return new DirectBrowserError(
+      Object.hasOwn(messages, error.reason) ? error.reason : 'bitbrowser_direct_command_failed',
+      { ...error.metadata, ...(operation ? { operation } : {}) }
+    );
+  }
+  return new DirectBrowserError('bitbrowser_direct_command_failed', { operation });
+}
+const requestOperations = {
+  '/health': 'browser_health',
+  '/group/list': 'browser_groups',
+  '/browserTag/list': 'browser_tags',
+  '/browser/list': 'browser_list',
+  '/browser/update': 'browser_update',
+  '/browserTag/updateRelation': 'browser_tag_relation',
+  '/browser/detail': 'browser_detail',
+  '/browser/open': 'browser_open',
+  '/browser/close': 'browser_close',
+  '/browser/pids/alive': 'browser_processes'
+};
+function localBrowserUrl(value, websocket = false) {
+  if (
+    typeof value !== 'string' ||
+    !(websocket
+      ? /^ws:\/\/(?:127\.0\.0\.1|localhost):\d{1,5}\/devtools\/browser\/[A-Za-z0-9-]+$/.test(value)
+      : /^http:\/\/(?:127\.0\.0\.1|localhost):\d{1,5}\/?$/.test(value))
+  )
+    throw new DirectBrowserError('bitbrowser_direct_protocol');
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new DirectBrowserError('bitbrowser_direct_protocol');
+  }
+  if (
+    !['127.0.0.1', 'localhost'].includes(url.hostname) ||
+    !url.port ||
+    Number(url.port) < 1 ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.protocol !== (websocket ? 'ws:' : 'http:') ||
+    (websocket ? !/^\/devtools\/browser\/[A-Za-z0-9-]+$/.test(url.pathname) : url.pathname !== '/')
+  ) {
+    throw new DirectBrowserError('bitbrowser_direct_protocol');
+  }
+  return websocket ? url.href : url.origin;
+}
+function directBrowserApi(url, token, signal) {
+  if (globalThis.isSecureContext === false)
+    throw new DirectBrowserError('bitbrowser_secure_context_required');
+  const origin = localBrowserUrl(url);
+  async function post(path, body = {}, timeoutMs = 30_000) {
+    if (!Object.hasOwn(requestOperations, path))
+      throw new DirectBrowserError('bitbrowser_direct_protocol');
+    const operation = requestOperations[path];
+    if (!token || /[\r\n]/.test(token))
+      throw new DirectBrowserError('bitbrowser_direct_token_invalid', { operation });
+    let response;
+    try {
+      response = await fetch(origin + path, {
+        method: 'POST',
+        mode: 'cors',
+        credentials: 'omit',
+        cache: 'no-store',
+        redirect: 'error',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': token },
+        body: JSON.stringify(body),
+        signal: AbortSignal.any([
+          signal,
+          AbortSignal.timeout(Math.max(1, Math.min(30_000, timeoutMs)))
+        ])
+      });
+    } catch {
+      throw new DirectBrowserError(
+        signal.aborted ? 'bitbrowser_direct_cancelled' : 'bitbrowser_direct_unreachable',
+        { operation }
+      );
+    }
+    if ([401, 403].includes(response.status))
+      throw new DirectBrowserError('bitbrowser_direct_token_invalid', {
+        operation,
+        httpStatus: response.status
+      });
+    let value;
+    try {
+      value = await response.json();
+    } catch {
+      throw new DirectBrowserError('bitbrowser_direct_protocol', {
+        operation,
+        httpStatus: response.status
+      });
+    }
+    if (!value || !response.ok || value.success !== true) {
+      const hint = [value?.msg, value?.message]
+        .filter((item) => typeof item === 'string')
+        .map((item) => item.slice(0, 300))
+        .join(' ');
+      const apiReason =
+        /未登录|尚未登录|请先登录|登录.{0,8}(?:过期|失效)|not.?logged|login.{0,12}(?:required|expired)|log.?in first/i.test(
+          hint
+        )
+          ? 'local_api_login_required'
+          : /没有权限|无权限|权限不足|permission denied|not permitted|forbidden/i.test(hint)
+            ? 'local_api_permission_denied'
+            : undefined;
+      throw new DirectBrowserError('bitbrowser_direct_rejected', {
+        operation,
+        httpStatus: response.status,
+        ...(apiReason ? { apiReason } : {})
+      });
+    }
+    return value;
+  }
+  return { post };
+}
+function catalogRows(value) {
+  for (let depth = 0; depth < 4; depth++) {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== 'object') break;
+    const document = value;
+    value = document.list ?? document.data;
+  }
+  throw new DirectBrowserError('bitbrowser_direct_protocol');
+}
+async function directBrowserProfileExists(api, profileId, remaining) {
+  const seen = new Set();
+  let expectedTotal;
+  for (let page = 0; page <= 20; page++) {
+    const response = await api.post('/browser/list', { page, pageSize: 100 }, remaining());
+    let metadata = response;
+    for (let depth = 0; depth < 4 && metadata && typeof metadata === 'object'; depth++) {
+      const document = metadata;
+      if (document.total !== undefined) {
+        const total = document.total;
+        if (
+          typeof total !== 'number' ||
+          !Number.isSafeInteger(total) ||
+          total < 0 ||
+          total > 2e3 ||
+          (expectedTotal !== undefined && total !== expectedTotal)
+        )
+          throw new DirectBrowserError('bitbrowser_direct_protocol');
+        expectedTotal = total;
+      }
+      metadata = document.data;
+    }
+    const rows = catalogRows(response);
+    if (rows.length > 100) throw new DirectBrowserError('bitbrowser_direct_protocol');
+    for (const row of rows) {
+      if (
+        !row ||
+        typeof row.id !== 'string' ||
+        !/^[a-fA-F0-9]{32}$/.test(row.id) ||
+        seen.has(row.id)
+      )
+        throw new DirectBrowserError('bitbrowser_direct_protocol');
+      seen.add(row.id);
+      if (row.id === profileId) return true;
+    }
+    if (seen.size > 2e3) throw new DirectBrowserError('bitbrowser_direct_protocol');
+    if (rows.length < 100) {
+      if (expectedTotal !== undefined && seen.size !== expectedTotal)
+        throw new DirectBrowserError('bitbrowser_direct_protocol');
+      return false;
+    }
+  }
+  throw new DirectBrowserError('bitbrowser_direct_protocol');
+}
+function choices(rows, key) {
+  if (rows.length > 2e3) throw new DirectBrowserError('bitbrowser_direct_protocol');
+  const ids = new Set();
+  return rows.map((row) => {
+    if (
+      !row ||
+      typeof row.id !== 'string' ||
+      !/^[A-Za-z0-9_-]{8,100}$/.test(row.id) ||
+      ids.has(row.id) ||
+      typeof row[key] !== 'string' ||
+      !row[key].trim() ||
+      row[key].length > 80
+    )
+      throw new DirectBrowserError('bitbrowser_direct_protocol');
+    ids.add(row.id);
+    return { id: row.id, name: row[key] };
+  });
+}
+async function directBrowserCatalog(url, token, signal) {
+  const api = directBrowserApi(url, token, signal);
+  await api.post('/health');
+  const groups = [];
+  for (let page = 0; ; page++) {
+    const rows = catalogRows(await api.post('/group/list', { page, pageSize: 100, all: true }));
+    groups.push(...rows);
+    if (groups.length > 2e3 || page > 20)
+      throw new DirectBrowserError('bitbrowser_direct_protocol');
+    if (rows.length < 100) break;
+  }
+  return {
+    groups: choices(groups, 'groupName'),
+    tags: choices(catalogRows(await api.post('/browserTag/list')), 'tagName')
+  };
+}
+function directProfileOptions(settings) {
+  const o = normalizeV2RechargeBrowserOptions(settings.browserOptions);
+  const fingerprint = {
+    coreProduct: 'chrome',
+    coreVersion: o.coreVersion,
+    ostype: 'PC',
+    os: o.os,
+    osVersion: o.osVersion,
+    version: o.coreVersion,
+    userAgent: '',
+    openWidth: o.openWidth,
+    openHeight: o.openHeight,
+    isIpCreateTimeZone: o.timezoneFromIp,
+    isIpCreatePosition: o.positionFromIp,
+    isIpCreateLanguage: o.languageFromIp,
+    languages: o.language,
+    isIpCreateDisplayLanguage: o.displayLanguageFromIp,
+    displayLanguages: o.displayLanguage
+  };
+  if (!o.timezoneFromIp) {
+    const V2_BROWSER_FINGERPRINT_TIME_ZONE = o.timezone;
+    const offset =
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: V2_BROWSER_FINGERPRINT_TIME_ZONE,
+        timeZoneName: 'longOffset'
+      })
+        .formatToParts(new Date())
+        .find((part) => part.type === 'timeZoneName')?.value ?? 'GMT';
+    const parts = /^GMT([+-])(\d{2}):(\d{2})$/.exec(offset);
+    fingerprint.timeZone = o.timezone;
+    fingerprint.timeZoneOffset = parts
+      ? (parts[1] === '-' ? -1 : 1) * (Number(parts[2]) * 3600 + Number(parts[3]) * 60)
+      : 0;
+  }
+  if (!o.positionFromIp)
+    Object.assign(fingerprint, {
+      position: '1',
+      lat: String(o.latitude),
+      lng: String(o.longitude),
+      precisionData: String(o.accuracy)
+    });
+  return {
+    proxyMethod: o.proxyMode === 'dynamic' ? 3 : 2,
+    proxyType: settings.proxyType,
+    ipCheckService: o.ipCheckService,
+    syncTabs: false,
+    syncCookies: false,
+    syncLocalStorage: false,
+    syncIndexedDb: false,
+    syncAuthorization: false,
+    browserFingerPrint: fingerprint,
+    ...(o.proxyMode === 'dynamic'
+      ? {
+          dynamicIpUrl: settings.dynamicProxyUrl,
+          dynamicIpChannel: o.dynamicProvider,
+          isDynamicIpChangeIp: o.refreshIp
+        }
+      : {
+          host: o.staticHost,
+          port: o.staticPort,
+          proxyUserName: settings.staticProxyCredentials?.username ?? '',
+          proxyPassword: settings.staticProxyCredentials?.password ?? ''
+        })
+  };
+}
+function verifyDirectProfileConfiguration(detail, settings, opened) {
+  const expected = directProfileOptions(settings).browserFingerPrint;
+  const fingerprint = detail.browserFingerPrint;
+  if (fingerprint != null && (typeof fingerprint !== 'object' || Array.isArray(fingerprint))) {
+    throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+  }
+  const observed = fingerprint ?? {};
+  for (const key of [
+    'coreProduct',
+    'coreVersion',
+    'os',
+    'osVersion',
+    'version',
+    'openWidth',
+    'openHeight'
+  ]) {
+    const value = observed[key];
+    if (expected[key] === '' || value == null || value === '') continue;
+    const matches =
+      key === 'coreVersion' || key === 'version'
+        ? /^\d+(?:\.\d+)*$/.test(String(value)) && String(value).split('.')[0] === expected[key]
+        : String(value) === String(expected[key]);
+    if (!matches) {
+      throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+    }
+  }
+  const userAgent = typeof observed.userAgent === 'string' ? observed.userAgent : '';
+  const major = /(?:Chrome|Chromium)\/(\d+)/.exec(userAgent);
+  if (major && major[1] !== expected.coreVersion) {
+    throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+  }
+  const actualCore = opened?.coreVersion;
+  if (
+    actualCore != null &&
+    actualCore !== '' &&
+    (!/^\d+(?:\.\d+)*$/.test(String(actualCore)) ||
+      String(actualCore).split('.')[0] !== expected.coreVersion)
+  ) {
+    throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+  }
+}
+export {
+  DirectBrowserError,
+  directBrowserApi,
+  directBrowserCatalog,
+  directBrowserFailure,
+  directBrowserProfileExists,
+  directProfileOptions,
+  localBrowserUrl,
+  verifyDirectProfileConfiguration
+};

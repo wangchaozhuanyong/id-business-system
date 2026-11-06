@@ -1,157 +1,39 @@
-# ID 业务管理系统
+# ID 业务管理系统 · 独立新版
 
-本仓库只包含当前 ID 业务管理系统。管理端、API、构建命令和部署入口均已统一为单一运行链路。
+从本目录开发。这里拥有独立的 Git 根目录、npm 清单、前端资产、启动入口和业务规则；没有关联旧仓库的 Git 历史或远端，也没有旧后台入口、旧版 API 或数据库连接。
 
-## 当前功能
+在本目录打开终端，使用 Node.js 24 或更新版本：
 
-- 续费操作
-- 订单录入
-- 加卡
-- ID 管理
-- 订单管理
-- 客户记录
-- 加卡记录与余额流水
-- 开通记录
-- 汇率记录、Binance / OKX 公开报价采集，以及 ExchangeRate-API 多币种人民币收购价自动计算、异常审核与报价文本复制
-- 业务选项设置
-- 操作审计、敏感访问查询与导出留痕
-- 员工账号、角色权限与操作审计
-- 登录风险、在线会话强制下线、MFA 管理与 IP 白名单防锁死门禁
-- 我的账户：脱敏个人资料、修改密码、MFA 和在线设备自助管理
-- 经营仪表盘：权限感知的今日业务、风险待办、ID 库存成本和团队动态
-- 业务监控：按源业务状态识别订单、余额、续费、汇率和财务基线异常
-- 系统监控：API、数据库、版本补偿、汇率任务和认证状态只读探针
-
-当前没有外部消息推送、兑换码商城、平台 OAuth、旧版通知中心或 Apple 官网自动操作。
-
-## 技术栈
-
-- 管理端：Vue 3、Vite、TypeScript、Element Plus、Pinia
-- API：NestJS、TypeScript、Prisma
-- 数据库：MySQL 8.4
-- 包管理：npm workspaces
-- 部署：AWS EC2、Docker Compose、Caddy、S3 备份
-
-## 目录
-
-- `apps/admin`：唯一管理端
-- `apps/api`：唯一 API
-- `apps/api/src/id-business-v2`：业务领域模块
-- `packages/shared`：前后端共享类型
-- `docs/V2_PRODUCT_SCOPE.md`：产品边界
-- `docs/V2_ARCHITECTURE.md`：模块边界
-- `docs/UI_DESIGN.md`：界面强制规则
-- `docs/V2_LOADING_STANDARD.md`：加载与路由规则
-- `docs/V2_TASKS.md`：当前任务清单
-
-当前运行时 Prisma 以 `apps/api/prisma-mysql/schema.prisma` 和其 migration 为唯一权威，
-不包含其他系统的历史表、枚举或任务。`apps/api/prisma` 仅保留 PostgreSQL 历史迁移源和兼容验收文件，
-不参与当前 API 或管理端运行。
-
-## 日常使用
-
-直接访问 [线上 ID 系统](https://54-249-61-238.sslip.io)。网页、API 和业务数据库运行在服务器，
-这台 Mac 不需要打开 Docker Desktop，也不需要运行本地网站或数据库。
-普通代码修复在本机完成不连接数据库的检查，再按明确授权的正式流程发布到服务器；
-需要数据库的验证使用已授权的远端 CI 隔离检查，不在生产库测试。
-比特浏览器充值功能另需本机充值助手，该助手不依赖 Docker Desktop。
-
-## 本地开发（仅在用户明确要求时）
-
-以下步骤是可选的隔离开发方案，不是日常使用或普通修复的前置条件。
-未经单独要求，不启动本机网站或数据库，不执行以下迁移和初始化。
-
-本机默认直接运行 Node、MySQL 和 Python，不要求 Docker Desktop。先启动本项目独立的
-MySQL 8.4 实例，在 `.env` 中配置本机数据库地址，再按下述入口运行。已有数据库和其他项目
-的数据目录不能共用；不要把生产数据库地址用于本机开发。
-
-```bash
-nvm use
-npm ci
-npm run setup:env
-npm run doctor -- --mysql-client=/已安装MySQL目录/bin/mysql --mysql-server=/已安装MySQL目录/bin/mysqld
-npm run prisma:mysql:generate
-npm run prisma:mysql:migrate:deploy
-npm run prisma:seed
-npm run dev:api
-npm run dev:admin
+```sh
+npm run dev:local
+npm test
 ```
 
-以上迁移和初始化仅用于已确认的独立开发库。`doctor` 默认只检查原生程序和配置，
-不会启动 MySQL、连接数据库或执行迁移；程序存在不代表数据库已就绪。
-MySQL 已在 PATH 时可省略两个路径参数。已有依赖按锁文件复用，不必每次安装；
-普通脚本测试可执行 `npm run test:native-runtime`。
+[本机业务版](http://127.0.0.1:4348/)初次使用时库存、客户和订单为空。保存的数据和操作记录写入 `.runtime/local-business.sqlite`。数据内容加密保存，数据库与同目录的 `.key` 文件需成对保留。保存时检查版本，两页并发修改同一模块时，较晚提交的页面会提示重新核对。
 
-五类数据库检查都提供显式原生入口，追加已安装 MySQL 的 `--mysql-bin=/绝对目录`：
+苹果 ID 余额可登记充值和更正。苹果内购订单与已确认的余额扣款一起保存。客户实际退款与 Apple 待回款分别登记，确认到账后才增加原付款 ID 余额。银行卡实际回款也与客户退款分开记录，按原代付币种登记。
 
-- `npm run acceptance:v2-data-governance:native`
-- `npm run acceptance:v2-financial-integrity:native`
-- `npm run acceptance:v2-rollback-integrity:native`
-- `npm run check:recharge-migration:native`
-- `npm run check:audit-retention:native`
+苹果隐藏邮箱支持登记主邮箱、单条登记子地址及 CSV 批量导入。已接入独立 Vendure 的连接测试、同步、收件读取、后台查询和查询码重置契约。[公开查询页](http://127.0.0.1:4348/mailbox-query)按主码或子码显示授权范围内的脱敏结果。查询与重置已使用模拟 Vendure 验证。
 
-这些检查仅创建自己的测试库；前三类会生成客户端与构建产物，须在隔离工作区执行。
-它们已在本机真实 MySQL 验证；正式 Linux CI 尚未切换，生产运行方式也未改变。
-`npm run native:backup -- check --bin-dir=/绝对目录` 默认仅预检，不连接数据库。
-七服务配置、备份恢复、财务制品封存和线上切换边界见 [脱离 Docker 说明](docs/DOCKER_INDEPENDENCE.md)。
+启用统一员工登录及独立 Vendure 后，管理员可从「工作台 → 邮箱提取」选择苹果隐藏邮箱。提交前和保存时分别核对可用库存、主子邮箱绑定及买家查询码。提取批次支持复制当前待使用条目的地址和查询码、逐条归还及登记实际使用。查询码按需读取，未写入本机库存、批次或审计。真实 Vendure 及实际邮箱仍需联调。
 
-- 管理端：http://localhost:5374
-- API：http://localhost:3000/api
-- 健康检查：http://localhost:3000/api/health/ready
+启用时需要在 `.runtime/local-apple-relay.json` 提供独立回环环境的 `adminUrl`、`apiKey` 和本机编号到 Vendure 编号的 `primaryBindings`、`aliasBindings`。按查询码查找还需要该环境的 `shopUrl`。配置文件须为当前用户的私有文件，权限 `0600`，并在启用员工登录后重启本机服务读取。应用专用密码在 Vendure 测试环境配置，系统登记页不接收密码。管理员可确认同一主邮箱最近 200 封收件记录中的单封归属，也可通过「检查历史邮件」读取该主邮箱的整组匹配统计。批量修改仍需可核对的逐封目标和版本契约，真实邮箱仍待联调。
 
-### 本机比特充值助手
+本机业务版只监听回环地址。首次使用登录功能时，在此目录的终端运行 `npm run setup:admin`，为 `ppfzj1314@gmail.com` 设置密码，然后刷新页面。初始化前业务使用「本机操作员」身份，启用后记录实际登录账号。超级管理员可以新增、停用员工及调整角色，普通管理员管理业务，普通员工只读库存和订单。
 
-网页只创建任务并保存权限、资料与结果；登录、套餐读取、核价与付款在当前电脑的比特浏览器执行。
-登录方式为授权 JSON 或选取 ChatGPT 账号库中的账号密码，不再提供重复的第三种登录入口。
-每次开通或升级独立创建任务，官网报价明确后等待本次人工确认。真实账号和付款验收继续暂停。
+独立本机测试站 4371 的启动器显式启用网页首次设置。首次打开即可为固定管理员邮箱设置密码，提交后用同一套本机会话登录。设置前业务接口要求登录，账号建好后首次设置入口关闭。该入口仅用于回环测试站，普通启动命令保持原有初始化方式。
 
-使用已安装的 Python 3.11+ 和比特浏览器，先开启比特本地 API，然后在本项目内启动：
+订单详情的「成本与汇率」可以登记手工汇率快照。统计按各单快照分别换算并扣除客户退款、计入实际回款。外部自动汇率及充值服务单独接入。通过 `npm run dev` 可在 [设计预览](http://127.0.0.1:4347/) 查看虚构示例。
 
-```bash
-npm run auto-recharge:connector -- --allowed-origin=https://你的管理端域名
-```
+工具箱支持按账号保存个人网址和话术。在线工具保留 2FA、网站监控、抖音解析和邮箱查询与邮箱池。Google 表格同步按新版数据范围保留占位。各工具启用条件和隔离验收见 [在线工具说明](server/tools/ONLINE_TOOLS.md)。
 
-新充值助手版本为 4，默认监听本机 `127.0.0.1:55322`，依赖和运行目录为项目内
-`.runtime/bitbrowser-recharge-assistant/`；依赖版本不变时直接复用。
-启动脚本只安装锁定的四个比特依赖，不安装 Camoufox、不下载浏览器、不启动 Docker。
-旧的 `55321` 助手不能承担新版充值任务，网页会提示升级；已运行的旧窗口不会被静默接管。
-账号密码、银行卡安全码和一次性付款授权不要发到聊天或写到日志。
+本机启动默认关闭自动报价和代充上游。测试环境确认后可用 `npm run dev:local -- --finance-provider exchange-rate-api-open` 启用对应报价源，或传入 `--codexdaichong-url` 指定独立回环上游，代充桥接密钥由现有环境变量 `ID_RECHARGE_BRIDGE_SECRET` 注入。代充由新版员工会话验证，需先完成管理员初始化。正式供应商、独立代充服务和设备尚待实际联调。
 
-2026-10-17 用户取消自动注册。原自研及开源注册的页面、API、专用执行器与安装启动入口均移除；
-已有账号、注册来源历史、迁移、审计与历史加密存储保留，不再被新运行时加载。
-ChatGPT 账号台账、邮箱验证码查询、代理及充值功能继续使用。
-移除范围和验证状态见 [自动注册退役说明](docs/AUTO_REGISTRATION_RETIREMENT_20261017.md)。
+| 目录        | 内容                                                                    |
+| ----------- | ----------------------------------------------------------------------- |
+| `frontend/` | 新版导航、交互设计和充值工作区                                          |
+| `server/`   | 本机业务 API、数据库和设计预览服务                                      |
+| `modules/`  | 可独立执行的库存导入预检、提取选项、Claude 养号、订单展示和北京时间规则 |
+| `docs/`     | 新版设计与业务约定                                                      |
 
-历史服务器执行器原生工具仅保留兼容与诊断能力，新充值请求不能走服务器付款流程。
-完整比特方案与本地合成验收见 `docs/BITBROWSER_RECHARGE_REBUILD_RESULT_20261009.md`，
-统一上线与清理范围见 `docs/UNIFIED_RELEASE_20261009.md`。
-
-Docker 开发方式仍可显式选择：`npm run doctor:docker`。已有 Docker 数据不会自动删除。
-线上替换、数据库保护和回滚安排见 [Docker 脱离方案](docs/DOCKER_INDEPENDENCE.md)；
-线上尚未改为原生运行，不应直接卸载生产 Docker。
-
-## 常用检查
-
-```bash
-npm run check:v2-isolation
-npm run check:v2-loading-standard
-npm run check:v2-table-standard
-npm run check:v2-module-architecture
-npm run check:v2-prisma-runtime-boundary
-npm run check:v2-color-contrast
-npm run acceptance:v2-color-contrast
-npm run acceptance:v2-table-layout
-npm run acceptance:v2-session-reliability
-npm run acceptance:v2-navigation-performance
-npm run acceptance:v2-decimal-adapters
-npm run typecheck
-npm run test
-npm run build
-npm run prisma:validate
-```
-
-全量检查：
-
-```bash
-npm run check
-```
+充值区当前接入范围、固定版本和运行要求见 [充值接入说明](modules/recharge/README.md)。

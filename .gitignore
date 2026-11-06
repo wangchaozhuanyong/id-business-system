@@ -1,49 +1,7 @@
-# Dependencies
-node_modules
-
-# Python worker dependencies and bytecode
-.venv/
-__pycache__/
-*.py[cod]
-apps/api/src/id-business-v2/auto-recharge/worker/.browsers/
-
-# Build output
-dist/
-coverage/
-
-# Local env files
-.env
-.env.local
-.env.*.local
-.env.production
-
-# Local deployment secrets and machine-specific credentials
-.deploy/
-.secrets/
-*.pem
-*.key
-*.p12
-
-# Logs
-*.log
-npm-debug.log*
-
-# OS / editor
-.DS_Store
-.idea/
-.vscode/
-
-# Runtime data
-uploads/
-tmp/
+node_modules/
 .runtime/
-backups/
-exports/
-
-# Generated visual QA evidence
-.audit/
-.codex-audit/
-artifacts/design-qa/
-qa-artifacts/
-design-qa.md
-apps/api/src/id-business-v2/online-recharge/engine/runtime/
+.env
+.env.*
+!.env.example
+.DS_Store
+.upstream/
