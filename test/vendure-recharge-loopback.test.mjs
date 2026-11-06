@@ -155,7 +155,6 @@ test('standalone task service separates the store and worker listeners and refus
       await rm(directory, { recursive: true, force: true });
     }
   });
-  service = await startVendureTaskService({ ...config, acceptSubmissions: true });
   const post = (base, path, body, headers) => fetch(base + path, {
     method: 'POST', body, headers: { 'content-type': 'application/json', ...headers }
   });
@@ -165,6 +164,13 @@ test('standalone task service separates the store and worker listeners and refus
   const submitPath = vendureRechargePrefix + '/submit';
   const configPath = vendureRechargePrefix + '/config';
   const vendure = { 'x-vendure-recharge-key': config.vendureKey, 'x-vendure-client-ip': '203.0.113.10' };
+  await assert.rejects(startVendureTaskService({ ...config, codes: [], acceptSubmissions: true }), /必须配置新版兑换码/);
+  service = await startVendureTaskService({ ...config, codes: [] });
+  assert.deepEqual(await (await post(service.vendureUrl, configPath, '{}', vendure)).json(), { maintenance: true });
+  const unavailable = JSON.stringify({ code: 'fresh-code', session: authorization() });
+  assert.deepEqual(await (await post(service.vendureUrl, submitPath, unavailable, vendure)).json(), { rejected: true });
+  await service.close();
+  service = await startVendureTaskService({ ...config, acceptSubmissions: true });
   const worker = signRechargeWorkerRequest(config.workerSecret, claimPath, '{}');
   assert.equal((await post(service.vendureUrl, claimPath, '{}', worker)).status, 404);
   assert.equal((await post(service.workerUrl, verifyPath, '{}', vendure)).status, 404);
