@@ -137,6 +137,52 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     assert(form.width > main.width - 70, '空侧栏仍挤压费用表单');
   });
 
+  await t.test('relay filters and actions share one toolbar and empty guidance stays inside the table', async () => {
+    await page.setViewportSize({ width: 1591, height: 900 });
+    await go('mailboxes/relay');
+    await page.getByRole('tab', { name: '隐藏邮箱管理' }).click();
+    const toolbar = page.locator('.relay-alias-toolbar');
+    const table = page.locator('table[data-table="relay-aliases"]');
+    await table.getByRole('heading', { name: '请先添加 Apple 主邮箱' }).waitFor();
+    assert.equal(await toolbar.evaluate(node => node.parentElement.querySelectorAll(':scope > .toolbar').length), 1);
+    assert.equal(await table.getByText('可调整搜索或筛选条件。', { exact: true }).count(), 0);
+    for (const width of [1591, 1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const dark of [false, true]) {
+        await theme(dark);
+        const controls = await toolbar.evaluate(node => {
+          const middle = element => element.top + element.height / 2;
+          return [...node.querySelectorAll('button, input, select, .relay-status-group > span')].map(control => {
+            const range = document.createRange();
+            range.selectNodeContents(control);
+            const bounds = control.getBoundingClientRect();
+            return {
+              y: middle(control.matches('span') ? range.getBoundingClientRect() : bounds),
+              left: bounds.left, right: bounds.right, height: bounds.height,
+              label: control.matches('span')
+            };
+          });
+        });
+        if (width === 1591)
+          assert(Math.max(...controls.map(c => c.y)) - Math.min(...controls.map(c => c.y)) <= 1, '宽屏按钮和状态文字未同排对齐');
+        if (width === 1440) {
+          const search = await box('#relay-search');
+          const action = await box('[data-action="relay-parent-add"]');
+          aligned(search, action, '空间不足时搜索和操作应整组换行');
+        }
+        assert(controls.every(c => c.left >= 0 && c.right <= width), '工具栏控件越过视口');
+        if (width <= 390)
+          assert(controls.filter(c => !c.label).every(c => c.height >= 44), '手机控件触控高度不足');
+        const guidance = await table.locator('.empty-state p').boundingBox();
+        const viewport = await box('.table-viewport');
+        assert(guidance.x >= viewport.x && guidance.x + guidance.width <= viewport.x + viewport.width,
+          '空状态操作说明不应被表格横向裁切');
+        await noOverflow();
+      }
+    }
+    await theme(false);
+  });
+
   await t.test('recharge navigation stays on one row and frames never show an intermediate default height', async () => {
     await go('online-recharge/chatgpt');
     await frame().locator('#querySection').waitFor();

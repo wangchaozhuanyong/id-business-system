@@ -175,29 +175,50 @@
     });
   }
 
-  const staff = { rows: [], status: 'idle', error: '', saving: false, tab: 'accounts' };
+  const staff = { rows: [], status: 'idle', error: '', saving: false, loading: false, tab: 'accounts' };
+  let employeeRead;
   const employeeDraftKey = (id) => `local-staff:${id || 'new'}`;
 
+  function bindEmployeeRead(api) {
+    const region = $('#main [data-employee-region]');
+    if (!region || employeeRead?.region === region) return;
+    employeeRead?.finish();
+    employeeRead = api.beginRegionRead(region, region.querySelector('[data-employee-progress]'), {
+      refreshButton: $('[data-action="ops-local-staff-reload"]', region)
+    });
+  }
   async function loadEmployees(api, force = false) {
-    if (
-      actor?.role !== 'super' ||
-      staff.status === 'loading' ||
-      (!force && staff.status !== 'idle')
-    )
+    if (actor?.role !== 'super') return;
+    if (staff.loading) {
+      bindEmployeeRead(api);
       return;
-    staff.status = 'loading';
-    staff.error = '';
-    if (force && api.state.route === 'settings/accounts') api.render();
+    }
+    if (!force && staff.status !== 'idle') return;
+    staff.loading = true;
+    bindEmployeeRead(api);
     try {
       const { employees } = await request('employees');
       if (!Array.isArray(employees)) throw new Error('未收到员工账户资料。');
       staff.rows = employees;
       staff.status = 'ready';
+      staff.error = '';
     } catch (error) {
-      staff.status = 'error';
+      if (staff.status !== 'ready') staff.status = 'error';
       staff.error = error.message || '无法载入员工账户。';
+    } finally {
+      employeeRead?.finish();
+      employeeRead = undefined;
+      staff.loading = false;
+      if (!reloading && api.state.route === 'settings/accounts') {
+        if (staff.status === 'ready' && staff.error) {
+          const notice = $('#main [data-employee-error]');
+          if (notice) {
+            notice.textContent = staff.error + ' 已保留上次员工列表。';
+            notice.hidden = false;
+          }
+        } else api.render();
+      }
     }
-    if (!reloading && api.state.route === 'settings/accounts') api.render();
   }
 
   function renderEmployees(api) {
@@ -224,15 +245,16 @@
         title +
         `<section class="panel">${empty('无权管理员工', '此功能仅向超级管理员开放。')}</section>`
       );
-    if (staff.status === 'idle' || staff.status === 'loading')
+    const region = '<section class="panel design-async-region" data-employee-region><div data-employee-progress role="status" hidden></div>';
+    if (staff.status === 'idle')
       return (
         title +
-        `<section class="panel" aria-busy="true">${empty('正在载入员工账户', '请稍候。')}</section>`
+        `${region}<div class="design-loading-rows" aria-label="员工账户"><div class="design-loading-row"></div><div class="design-loading-row"></div><div class="design-loading-row"></div></div></section>`
       );
     if (staff.status === 'error')
       return (
         title +
-        `<section class="panel">${empty('员工账户载入失败', staff.error)}${button('重试', 'ops-local-staff-reload')}</section>`
+        `${region}${empty('员工账户载入失败', staff.error)}${button('重试', 'ops-local-staff-reload')}</section>`
       );
 
     const tabs = `<div class="tabs" role="tablist" aria-label="员工与权限">${[
@@ -247,7 +269,7 @@
     if (staff.tab === 'roles')
       return (
         title +
-        `<section class="panel">${tabs}${table(
+        `${region}${tabs}${table(
           [
             { id: 'name', label: '角色' },
             { id: 'access', label: '本机权限' }
@@ -298,7 +320,7 @@
       : empty('未找到员工', '可调整关键词或新增员工。');
     return (
       title +
-      `<section class="panel">${tabs}<div class="toolbar"><div class="toolbar-left"><div class="search-field">${api.icon('search')}<input id="ops-list-search" type="search" aria-label="搜索员工" value="${esc(view.query || '')}" placeholder="搜索姓名或邮箱" /></div></div><div class="toolbar-right">${button('新增员工', 'ops-local-staff-add', 'primary', 'plus')}</div></div>${list}</section>`
+      `${region}${tabs}<div class="toolbar"><div class="toolbar-left"><div class="search-field">${api.icon('search')}<input id="ops-list-search" type="search" aria-label="搜索员工" value="${esc(view.query || '')}" placeholder="搜索姓名或邮箱" /></div></div><div class="toolbar-right">${button('刷新', 'ops-local-staff-reload')}${button('新增员工', 'ops-local-staff-add', 'primary', 'plus')}</div></div><div class="inline-notice warning" data-employee-error role="status" ${staff.error ? '' : 'hidden'}>${staff.error ? `${esc(staff.error)} 已保留上次员工列表。` : ''}</div>${list}</section>`
     );
   }
 
@@ -393,7 +415,7 @@
   }
 
   async function persistEmployee(api, payload, original, form) {
-    if (staff.saving) return;
+    if (staff.saving || staff.loading) return;
     const context = employeeDraftKey(original?.id);
     const submittedDraft = form ? JSON.stringify(api.readDraft(form)) : null;
     staff.saving = true;
@@ -431,7 +453,7 @@
   }
 
   function submitEmployee(api, form) {
-    if (actor?.role !== 'super' || staff.saving) return;
+    if (actor?.role !== 'super' || staff.saving || staff.loading) return;
     const details = readEmployeeDetails(form);
     const original = staff.rows.find(({ id }) => id === details.id);
     if (details.id && !original) return;
@@ -463,8 +485,6 @@
     if (actor?.role !== 'super' || staff.saving) return;
     if (action === 'ops-local-staff-tab' && (id === 'accounts' || id === 'roles')) {
       staff.tab = id;
-      api.state.page = 1;
-      api.state.query = '';
       api.render();
     } else if (action === 'ops-local-staff-add') editEmployee(api);
     else if (action === 'ops-local-staff-edit') editEmployee(api, id);

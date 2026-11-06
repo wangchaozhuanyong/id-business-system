@@ -242,7 +242,7 @@
       .finally(() => {
         commerceLoad = undefined;
         updateRenewalReminder();
-        if (matches(S.route)) A.render();
+        if (matches(S.route) && (!hadData || !$('#main form[data-commerce-draft]'))) A.render();
       });
     return commerceLoad;
   }

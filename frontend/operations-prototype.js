@@ -254,14 +254,15 @@
     if (!localData) return Promise.resolve(true);
     if (settingsLoading) return settingsLoading;
     if (!retry && settingsState !== 'idle') return Promise.resolve(settingsState === 'ready');
-    settingsState = 'loading';
+    const hadSettings = settingsState === 'ready';
+    if (!hadSettings) settingsState = 'loading';
     settingsLoading = (async () => {
       try {
         applySettings(await localData.load('settings'));
         settingsState = 'ready';
         return true;
       } catch {
-        settingsState = 'error';
+        if (!hadSettings) settingsState = 'error';
         return false;
       } finally {
         settingsLoading = undefined;
@@ -288,7 +289,7 @@
       notify('本机设置正在保存');
       return false;
     }
-    if (settingsState !== 'ready' || expectedVersion !== settingsVersion) {
+    if (settingsLoading || settingsState !== 'ready' || expectedVersion !== settingsVersion) {
       notify('配置已变化，请重新打开并核对后再保存');
       return false;
     }
@@ -464,6 +465,8 @@
   let loginLogTab = 'system';
   const workspaceRechargeRoute = 'workspace/recharge';
   const workspaceRechargeView = ['redeem', '兑换开通', 'workspace'];
+  const bitLoginRoute = 'recharge/start';
+  const bitLoginView = ['bit-login', '比特登录', '/integrations/bitbrowser/local-login'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const onlineRechargeMount = '/integrations/codexdaichong/';
   let activeOnlineView = 'query';
@@ -522,16 +525,13 @@
         '比特登录',
         '使用授权 JSON 登录账号，登录后保留比特浏览器窗口。'
       ) +
-      `<section class="panel recharge-integration" data-recharge-module="bit">
-        <iframe class="recharge-integration__frame recharge-integration__frame--bit-local"
-          title="比特登录" src="/integrations/bitbrowser/local-login" referrerpolicy="no-referrer"></iframe>
-      </section>`
+      renderRechargeRegion('bit')
     );
   }
   function renderRechargeRegion(module, toolbar = '') {
     return `<section class="panel recharge-integration" data-recharge-module="${module}">
         ${toolbar}
-        <div class="recharge-integration__view" aria-busy="true">
+        <div class="recharge-integration__view design-async-region" aria-busy="true">
           <div class="recharge-integration__content"></div>
           <div class="design-region-progress" role="status" hidden></div>
         </div>
@@ -551,7 +551,7 @@
     currentIntegrationRequest.delete(view);
     if (request) {
       request.controller.abort();
-      clearTimeout(request.progressTimer);
+      request.read?.finish();
       clearTimeout(request.frameTimer);
       request.frame?.remove();
     }
@@ -560,6 +560,8 @@
   }
   function showUnavailableIntegration(view, status, keepContent = false) {
     finishIntegrationLoad(view);
+    const bit = view.closest('[data-recharge-module]')?.dataset.rechargeModule === 'bit';
+    if (!bit && status !== 403) onlineAdmin = undefined;
     const auth = window.IDLocalAuth;
     const needsSetup = status === 401 && auth?.getState().status === 'unconfigured';
     const title =
@@ -567,7 +569,7 @@
         ? (needsSetup ? '请先设置本机管理员密码' : '需要系统登录')
         : status === 403
           ? '当前账号没有充值权限'
-          : 'ChatGPT 充值服务未就绪';
+          : bit ? '比特登录页面未能加载' : 'ChatGPT 充值服务未就绪';
     if (keepContent && status !== 401 && status !== 403) {
       const progress = view.querySelector('.design-region-progress');
       progress.textContent = `${title}，已保留当前内容。`;
@@ -579,11 +581,11 @@
         ? '在 Mac「终端」的设置窗口为本机管理员设置密码，完成后回到此页继续登录。'
         : status === 401 || status === 403
           ? '请使用有充值权限的本机系统账号。'
-          : '本机尚未连接独立充值服务。完成统一账号与服务配置后，可在这里使用。';
+          : bit ? '请重新加载页面。' : '本机尚未连接独立充值服务。完成统一账号与服务配置后，可在这里使用。';
     const action = status === 401 && auth
       ? button(needsSetup ? '我已设置密码，去登录' : '去登录', 'ops-integrated-login', 'primary')
-      : [workspaceRechargeRoute, loginLogsRoute].includes(state.route) && status !== 401 && status !== 403
-        ? button('重新检查服务', 'ops-integrated-refresh')
+      : [workspaceRechargeRoute, loginLogsRoute, bitLoginRoute].includes(state.route) && status !== 401 && status !== 403
+        ? button(bit ? '重新加载' : '重新检查服务', 'ops-integrated-refresh')
         : '';
     updateRechargeDescription('');
     view.dataset.unavailable = String(status);
@@ -606,6 +608,24 @@
     note.dataset.baseDescription ??= note.textContent;
     note.textContent = [note.dataset.baseDescription, description].filter(Boolean).join(' ');
   }
+  function revealRechargeFrame(view, frame, request, height, description) {
+    frame.dataset.bridgeReady = 'true';
+    const root = frame.contentDocument?.documentElement;
+    if (root) {
+      const themeKey = frame.dataset.viewGroup === 'bit' ? 'theme' : 'idTheme';
+      root.dataset[themeKey] = integrationTheme();
+    }
+    resizeRechargeFrame(frame, height);
+    request.frame = null;
+    finishIntegrationLoad(view);
+    delete view.dataset.unavailable;
+    // Moving an attached iframe would reload it. Remove its old siblings in place.
+    for (const sibling of [...frame.parentElement.children])
+      if (sibling !== frame) sibling.remove();
+    frame.hidden = false;
+    api.restorePendingPageScroll();
+    updateRechargeDescription(description);
+  }
   function handleIntegrationMessage(event) {
     if (event.origin !== window.location.origin) return;
     const message = event.data;
@@ -618,26 +638,29 @@
       (candidate) => candidate.contentWindow === event.source
     );
     if (!frame) return;
+    const view = frame.closest('.recharge-integration__view');
+    if (!view) return;
+    const request = currentIntegrationRequest.get(view);
     if (
       frame.classList.contains('recharge-integration__frame--bit-local') &&
       event.data?.source === 'id-bitbrowser-local' &&
       event.data.type === 'resize' &&
-      Number.isFinite(event.data.height)
+      Number.isFinite(event.data.height) && event.data.height > 0
     ) {
-      frame.style.height = `${Math.min(1600, Math.max(360, Math.ceil(event.data.height)))}px`;
-      sendIntegrationTheme(frame);
+      let height = event.data.height;
       const addresses = frame.contentDocument?.getElementById('bit-open-addresses');
       if (addresses && addresses.hidden && localData && isAdmin() && api.modules.bitbrowserAddresses) {
         addresses.addEventListener('click', () => {
           if (isAdmin()) api.modules.bitbrowserAddresses.open();
         });
         addresses.hidden = false;
+        height = frame.contentDocument.body.getBoundingClientRect().height;
       }
+      if (request?.frame === frame) revealRechargeFrame(view, frame, request, height);
+      else if (!frame.hidden) resizeRechargeFrame(frame, height);
       return;
     }
     if (event.data?.source !== 'id-codexdaichong') return;
-    const view = frame.closest('.recharge-integration__view');
-    if (!view) return;
     if (message.type === 'open-task-log') {
       if (state.route !== onlineRechargeRoute || activeOnlineView !== 'logs' ||
           frame.hidden || frame.dataset.viewGroup !== 'admin' ||
@@ -653,21 +676,9 @@
       }, { once: true });
       return;
     }
-    const request = currentIntegrationRequest.get(view);
     if (event.data.type === 'ready' && request?.frame === frame) {
       if (preserveLockedRecharge(view)) return;
-      frame.dataset.bridgeReady = 'true';
-      const root = frame.contentDocument?.documentElement;
-      if (root) root.dataset.idTheme = integrationTheme();
-      resizeRechargeFrame(frame, event.data.height);
-      request.frame = null;
-      finishIntegrationLoad(view);
-      delete view.dataset.unavailable;
-      // Moving an attached iframe would reload it. Remove its old siblings in place.
-      for (const sibling of [...frame.parentElement.children])
-        if (sibling !== frame) sibling.remove();
-      frame.hidden = false;
-      updateRechargeDescription(event.data.description);
+      revealRechargeFrame(view, frame, request, event.data.height, event.data.description);
     } else if (event.data.type === 'view-context' && !frame.hidden) {
       updateRechargeDescription(event.data.description);
     } else if (event.data.type === 'navigation-lock' && event.data.locked && request) {
@@ -687,7 +698,9 @@
   }
   function resizeRechargeFrame(frame, height) {
     if (!Number.isFinite(height) || height <= 0) return;
-    const nextHeight = `${Math.max(290, Math.ceil(height))}px`;
+    const nextHeight = frame.dataset.viewGroup === 'bit'
+      ? `${Math.min(1600, Math.max(360, Math.ceil(height)))}px`
+      : `${Math.max(290, Math.ceil(height))}px`;
     if (frame.style.height !== nextHeight) frame.style.height = nextHeight;
     positionRechargeOverlays();
   }
@@ -703,16 +716,29 @@
     root.style.setProperty('--embed-visible-top', `${top}px`);
     root.style.setProperty('--embed-visible-height', `${height}px`);
   }
+  async function checkRechargeAccess(signal) {
+    try {
+      const response = await window.fetch(onlineRechargeMount + 'status', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: AbortSignal.any([signal, AbortSignal.timeout(8000)])
+      });
+      return { status: response.status, access: response.ok ? await response.json() : null };
+    } catch {
+      return { status: 503, access: null };
+    }
+  }
   async function loadIntegratedRecharge({ refresh = false } = {}) {
+    const bit = state.route === bitLoginRoute;
     const workspace = state.route === workspaceRechargeRoute;
     const loginLogs = state.route === loginLogsRoute;
-    const module = workspace ? 'workspace' : loginLogs ? 'login-logs' : 'online';
+    const module = bit ? 'bit' : workspace ? 'workspace' : loginLogs ? 'login-logs' : 'online';
     const panel = $(`[data-recharge-module="${module}"]`);
     const view = panel?.querySelector('.recharge-integration__view');
     if (!view) return;
-    const selected = workspace ? workspaceRechargeView :
+    const selected = bit ? bitLoginView : workspace ? workspaceRechargeView :
       loginLogs ? rechargeLoginLogsView : onlineRechargeViews.find(([id]) => id === activeOnlineView);
-    const group = workspace ? 'workspace' : selected[2] ? 'public' : 'admin';
+    const group = bit ? 'bit' : workspace ? 'workspace' : selected[2] ? 'public' : 'admin';
     const existingFrame = view.querySelector('iframe:not([hidden])');
 
     if (!refresh) {
@@ -739,38 +765,24 @@
     currentIntegrationRequest.set(view, request);
     const active = () => panel.isConnected && currentIntegrationRequest.get(view) === request;
     const progress = view.querySelector('.design-region-progress');
-    view.setAttribute('aria-busy', 'true');
-    request.progressTimer = setTimeout(() => {
-      if (!active()) return;
-      progress.textContent = existingFrame?.isConnected
-        ? refresh
-          ? '正在刷新，保留当前内容'
-          : '正在切换，保留当前内容'
-        : '正在检查充值服务';
-      progress.hidden = false;
-    }, 120);
+    const needsAccessCheck = !bit && (refresh || onlineAdmin === undefined);
+    request.read = api.beginRegionRead(view, progress, {
+      loadingText: needsAccessCheck && !refresh && !existingFrame ? '正在检查充值服务' : '',
+      refreshButton: panel.querySelector('.recharge-integration__toolbar > [data-action="ops-integrated-refresh"]')
+    });
 
-    let status = 503;
-    let access;
-    try {
-      const response = await window.fetch(onlineRechargeMount + 'status', {
-        credentials: 'same-origin',
-        cache: 'no-store',
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)])
-      });
-      status = response.status;
-      if (response.ok) access = await response.json();
-    } catch {
-      status = 503;
-    }
-    if (!active()) return;
-    if (preserveLockedRecharge(view)) return;
-    if (access?.ready !== true) {
-      showUnavailableIntegration(view, status, Boolean(existingFrame));
-      return;
+    if (needsAccessCheck) {
+      const { status, access } = await checkRechargeAccess(controller.signal);
+      if (!active() || preserveLockedRecharge(view)) return;
+      if (access?.ready !== true) {
+        onlineAdmin = undefined;
+        showUnavailableIntegration(view, status, Boolean(existingFrame));
+        return;
+      }
+      onlineAdmin = access.admin === true;
+      request.read.setLoadingText('');
     }
     delete view.dataset.unavailable;
-    onlineAdmin = access.admin === true;
     if (!onlineAdmin && existingFrame?.dataset.viewGroup === 'admin') existingFrame.remove();
     panel.querySelectorAll('.recharge-integration__nav [data-view]').forEach((control) => {
       const publicPath = onlineRechargeViews.find(([id]) => id === control.dataset.view)?.[2];
@@ -785,12 +797,27 @@
     const frame = document.createElement('iframe');
     request.frame = frame;
     frame.className = 'recharge-integration__frame';
+    if (bit) frame.classList.add('recharge-integration__frame--bit-local');
     frame.title = selected[1];
     frame.dataset.viewGroup = group;
     frame.dataset.view = selected[0];
     frame.referrerPolicy = 'no-referrer';
     frame.hidden = true;
-    frame.src = onlineRechargeMount + (selected[2] || 'admin?view=' + selected[0]);
+    frame.src = bit ? selected[2] : onlineRechargeMount + (selected[2] || 'admin?view=' + selected[0]);
+    // The gateway still authorizes every frame request and returns JSON if access changed.
+    frame.addEventListener('load', async () => {
+      if (!active() || frame.contentDocument?.contentType !== 'application/json') return;
+      if (bit) {
+        showUnavailableIntegration(view, 503);
+        return;
+      }
+      onlineAdmin = undefined;
+      const { status, access } = await checkRechargeAccess(controller.signal);
+      if (!active() || preserveLockedRecharge(view)) return;
+      const denied = status === 401 || status === 403 ||
+        (access?.ready === true && access.admin !== true && !selected[2]);
+      showUnavailableIntegration(view, denied ? (status === 401 ? 401 : 403) : 503, existingFrame?.isConnected);
+    });
     request.frameTimer = setTimeout(() => {
       if (active()) showUnavailableIntegration(view, 503, existingFrame?.isConnected);
     }, 15000);
@@ -1220,7 +1247,7 @@
         tag(`配置版本 ${config.version}`, 'blue') +
           (localData ? button('重新读取', 'ops-settings-reload') : '')
       ) +
-      `<div class="${hasRates ? 'two-column' : 'cost-layout'}"><section class="panel form-panel"><form id="ops-cost-form" novalidate><input type="hidden" name="ops-cost-version" value="${esc(draft['ops-cost-version'] ?? config.version)}" />${grid(fields)}${hasRates ? '' : `<div class="commerce-cost-strip section-gap"><span class="section-title-row"><strong>汇率状态</strong>${titleInfo('汇率状态', '订单核算使用各自登记的汇率快照，费用规则变化不会回写历史订单。', 'cost-rates-description')}</span><span>暂无汇率报价</span></div>`}<div class="form-footer" data-page-actions="before-submit"><span class="footnote">保存后只影响新订单，历史金额不自动重算。</span><button class="button primary" type="submit">核对费用规则</button></div></form></section>${hasRates ? `<section class="panel side-panel"><div class="section-title-row"><h2>演示汇率</h2>${titleInfo('演示汇率', '全部为固定示例汇率，不是当前市场报价。正式接入复用已有供应商、有效期和快照，不把配置变化回写历史订单。', 'cost-rates-description')}</div><dl class="definition-list">${Object.entries(
+      `<div class="${hasRates ? 'two-column' : 'cost-layout'}"><section class="panel form-panel design-async-region" aria-busy="false"><div data-cost-read-status role="status" hidden></div><form id="ops-cost-form" novalidate><input type="hidden" name="ops-cost-version" value="${esc(draft['ops-cost-version'] ?? config.version)}" />${grid(fields)}${hasRates ? '' : `<div class="commerce-cost-strip section-gap"><span class="section-title-row"><strong>汇率状态</strong>${titleInfo('汇率状态', '订单核算使用各自登记的汇率快照，费用规则变化不会回写历史订单。', 'cost-rates-description')}</span><span>暂无汇率报价</span></div>`}<div class="form-footer" data-page-actions="before-submit"><span class="footnote">保存后只影响新订单，历史金额不自动重算。</span><button class="button primary" type="submit">核对费用规则</button></div></form></section>${hasRates ? `<section class="panel side-panel"><div class="section-title-row"><h2>演示汇率</h2>${titleInfo('演示汇率', '全部为固定示例汇率，不是当前市场报价。正式接入复用已有供应商、有效期和快照，不把配置变化回写历史订单。', 'cost-rates-description')}</div><dl class="definition-list">${Object.entries(
         rates
       )
         .map(([code, value]) => `<dt>${esc(code)} / CNY</dt><dd>${esc(value)}</dd>`)
@@ -1633,6 +1660,8 @@
     const panel = drawer.querySelector(`[data-tool-panel][id="${id}"]`);
     if (!panel) return;
     preserveDraft();
+    const mailForm = drawer.querySelector('#ops-managed-mail-query');
+    if (mailForm && id !== 'ops-mailbox-query-panel') finishManagedMailRead(mailForm);
     for (const item of drawer.querySelectorAll('[data-tool-panel]')) item.hidden = item !== panel;
     for (const tab of drawer.querySelectorAll('[data-action="ops-tool-section"]')) {
       const active = tab.dataset.panel === id;
@@ -2073,6 +2102,13 @@
       if (submit) submit.disabled = false;
     }
   }
+  const managedMailReads = new WeakMap();
+  function finishManagedMailRead(form, read = managedMailReads.get(form)) {
+    if (!read || managedMailReads.get(form) !== read) return;
+    managedMailReads.delete(form);
+    read.finish();
+    form.querySelector('[type="submit"]').disabled = false;
+  }
   function openMailboxTools() {
     const manage = isAdmin() && localData.authRequired;
     openToolDrawer(
@@ -2088,10 +2124,10 @@
       </div><div class="toolbar" data-mail-refresh hidden>
         <label><input type="checkbox" data-mail-auto-refresh> 每 30 秒自动刷新</label>
         ${button('立即刷新', 'ops-mail-refresh')}
-      </div><div id="ops-managed-query-progress" role="status"></div><div id="ops-managed-query-results"></div></form></section>${manage ? `<section class="form-section" id="ops-mailbox-pool" hidden><div class="guide-item"><div class="panel-heading"><h3>添加邮箱</h3>${button('登记邮箱', 'ops-mailbox-pool-add', 'primary')}</div><div data-mailbox-pool-editor></div><div data-mailbox-pool-issued role="status"></div></div><div class="form-section"><div class="panel-heading"><h3>邮箱池</h3><div class="toolbar">${button('查询码设置', 'ops-mailbox-pool-settings')}${button('批量导入', 'ops-mailbox-pool-batch')}${button('刷新', 'ops-mailbox-pool-reload')}</div></div><p data-mailbox-pool-status role="status" hidden></p><form class="online-tool-mail-filters" id="ops-mailbox-pool-search-form" onsubmit="return false"><input type="search" id="ops-mailbox-pool-search" name="ops-mailbox-pool-search" aria-label="搜索邮箱池" placeholder="搜索邮箱或备注">
+      </div><div class="design-async-region"><div id="ops-managed-query-progress" role="status" hidden></div><div id="ops-managed-query-results"></div></div></form></section>${manage ? `<section class="form-section" id="ops-mailbox-pool" hidden><div class="guide-item"><div class="panel-heading"><h3>添加邮箱</h3>${button('登记邮箱', 'ops-mailbox-pool-add', 'primary')}</div><div data-mailbox-pool-editor></div><div data-mailbox-pool-issued role="status"></div></div><div class="form-section"><div class="panel-heading"><h3>邮箱池</h3><div class="toolbar">${button('查询码设置', 'ops-mailbox-pool-settings')}${button('批量导入', 'ops-mailbox-pool-batch')}${button('刷新', 'ops-mailbox-pool-reload')}</div></div><form class="online-tool-mail-filters" id="ops-mailbox-pool-search-form" onsubmit="return false"><input type="search" id="ops-mailbox-pool-search" name="ops-mailbox-pool-search" aria-label="搜索邮箱池" placeholder="搜索邮箱或备注">
         ${select('ops-mailbox-filter-provider', [['', '全部类型'], ['google', '谷歌邮箱'], ['apple', '苹果云邮箱'], ['microsoft', '微软邮箱']]).replace('<select ', '<select aria-label="邮箱类型" ')}
         ${select('ops-mailbox-filter-status', [['', '全部状态'], ['active', '可查询'], ['disabled', '已停用'], ['auth_failed', '授权失效'], ['expired', '查询码已过期']]).replace('<select ', '<select aria-label="邮箱状态" ')}
-        </form><div data-mailbox-pool-list></div></div><div class="toolbar">${button('查看谷歌邮箱库存', 'ops-go', '', 'mail', 'data-route="mailboxes/google"')}${button('提取邮箱', 'ops-go', '', 'database', 'data-route="workspace/mail-extract"')}${button('后台查询隐藏邮箱', 'ops-relay-query', '', 'search')}</div></section>` : ''}`,
+        </form><div class="design-async-region"><div data-mailbox-pool-status role="status" hidden></div><div data-mailbox-pool-list></div></div></div><div class="toolbar">${button('查看谷歌邮箱库存', 'ops-go', '', 'mail', 'data-route="mailboxes/google"')}${button('提取邮箱', 'ops-go', '', 'database', 'data-route="workspace/mail-extract"')}${button('后台查询隐藏邮箱', 'ops-relay-query', '', 'search')}</div></section>` : ''}`,
       '',
       [['ops-mailbox-query-panel', '邮件查询'], ...(manage ? [['ops-mailbox-pool', '邮箱池管理']] : [])],
       '<div class="tool-query-actions"><span>买家查询页</span><a class="button" href="/mailbox-query" target="_blank" rel="noopener noreferrer">打开查询页</a></div>'
@@ -2119,15 +2155,19 @@
     }, 30_000);
     form.addEventListener('input', (event) => {
       if (!['ops-managed-query-code', 'ops-managed-query-limit'].includes(event.target.id)) return;
+      finishManagedMailRead(form);
       refresh.hidden = true;
       autoRefresh.checked = false;
-      form.querySelector('#ops-managed-query-progress').textContent = '';
+      const status = form.querySelector('#ops-managed-query-progress');
+      status.textContent = '';
+      status.hidden = true;
       form.querySelector('#ops-managed-query-results').replaceChildren();
     });
     const clear = () => {
       if (drawer.open && form.isConnected) return;
       drawer.removeEventListener('close', clear);
       window.clearInterval(timer);
+      finishManagedMailRead(form);
       form.querySelector('#ops-managed-query-code').value = '';
       form.querySelector('#ops-managed-query-results').replaceChildren();
       pool?.querySelector('[data-mailbox-pool-issued]')?.replaceChildren();
@@ -2141,6 +2181,7 @@
     const result = form.querySelector('#ops-managed-query-results');
     const progress = form.querySelector('#ops-managed-query-progress');
     const submit = form.querySelector('[type="submit"]');
+    const refresh = form.querySelector('[data-mail-refresh]');
     const code = field.value.trim();
     if (submit.disabled || !code) return;
     const limitField = form.querySelector('#ops-managed-query-limit');
@@ -2151,23 +2192,29 @@
       return;
     }
     setError(limitField.id, '');
-    progress.textContent = result.childElementCount ? '正在刷新邮件…' : '正在查询邮件…';
+    const read = api.beginRegionRead(result.parentElement, progress, {
+      loadingText: result.childElementCount ? '' : '正在查询邮件…',
+      refreshButton: refresh.querySelector('[data-action="ops-mail-refresh"]')
+    });
+    managedMailReads.set(form, read);
     submit.disabled = true;
     try {
       const response = await localData.queryManagedMailbox(code, limit);
-      if (!form.isConnected || !$('#drawer').open || field.value.trim() !== code || Number(limitField.value) !== limit) return;
+      if (!read.current()) return;
       result.innerHTML = response.items?.length ? `<div class="guide-list">${response.items.slice(0, limit).map((row) =>
         `<section class="guide-item"><h4>${esc(row.subject || '无主题')}</h4><p>${esc(row.receivedAt || '')}</p>${row.extractedCode ? `<strong>验证码 ${esc(row.extractedCode)}</strong>` : ''}${row.body ? `<details><summary>查看邮件正文</summary><pre class="mail-plain-body">${esc(row.body)}</pre></details>` : ''}</section>`
       ).join('')}</div>` : empty('暂无邮件', '请稍后重新查询。');
-      progress.textContent = '';
-      form.querySelector('[data-mail-refresh]').hidden = false;
+      refresh.hidden = false;
     } catch (error) {
-      if (result.isConnected && field.value.trim() === code) {
-        progress.textContent = error.message;
+      if (read.current()) {
+        finishManagedMailRead(form, read);
+        progress.className = 'inline-notice warning';
+        progress.textContent = error.message || '邮件读取失败，请重试。';
+        progress.hidden = false;
         form.querySelector('[data-mail-auto-refresh]').checked = false;
       }
     } finally {
-      submit.disabled = false;
+      finishManagedMailRead(form, read);
     }
   }
   const mailboxPoolSnapshots = new WeakMap();
@@ -2181,7 +2228,7 @@
     return Number.isFinite(Date.parse(value)) ? mailboxDate.format(new Date(value)) : '—';
   }
   function paintManagedPool(panel, snapshot, requestedPage = getDraft('mailbox-pool-page').page || 1) {
-    if (!panel.isConnected) return;
+    if (!panel.isConnected || snapshot.version < Number(panel.dataset.version)) return;
     mailboxPoolSnapshots.set(panel, snapshot);
     panel.dataset.version = String(snapshot.version);
     panel.dataset.defaultValidDays = String(snapshot.defaultValidDays);
@@ -2229,11 +2276,14 @@
   async function loadManagedPool(panel) {
     if (!panel) return;
     const status = panel.querySelector('[data-mailbox-pool-status]');
-    status.hidden = false;
-    status.textContent = mailboxPoolSnapshots.has(panel) ? '正在刷新邮箱池…' : '正在读取邮箱池…';
+    const read = api.beginRegionRead(status.parentElement, status, {
+      loadingText: mailboxPoolSnapshots.has(panel) ? '' : '正在读取邮箱池…',
+      refreshButton: panel.querySelector('[data-action="ops-mailbox-pool-reload"]')
+    });
     try {
-      paintManagedPool(panel, await localData.managedMailboxPool());
-      status.hidden = true;
+      const snapshot = await localData.managedMailboxPool();
+      if (!read.current()) return;
+      paintManagedPool(panel, snapshot);
       if (panel.isConnected && !panel.querySelector('#ops-managed-pool-form')) {
         const view = getDraft('mailbox-tools-view');
         if (['create', 'credential', 'rotate'].includes(view.editor))
@@ -2242,10 +2292,15 @@
           editMailboxBatchOrSettings(panel, view.editor);
       }
     } catch (error) {
-      if (panel.isConnected) {
+      if (read.current()) {
+        read.finish();
+        status.hidden = false;
+        status.className = 'inline-notice warning';
         status.textContent = error.message;
         status.insertAdjacentHTML('beforeend', button('重试', 'ops-mailbox-pool-reload'));
       }
+    } finally {
+      read.finish();
     }
   }
   function editManagedPool(panel, action, id = '') {
@@ -2505,30 +2560,25 @@
     );
     bindToolDraft($('#ops-online-tool-form'), `online-tool:${name}`);
   }
-  const websiteRequests = new WeakMap();
   const websiteVisitQueries = new WeakMap();
   async function refreshWebsiteReport(result, status, label, load, renderReport) {
-    const request = Symbol();
-    websiteRequests.set(result, request);
-    const isCurrent = () =>
-      websiteRequests.get(result) === request && Boolean(result.closest('dialog[open]'));
     const hasResult = result.hasChildNodes();
-    status.className = 'design-region-progress';
-    status.textContent = `正在读取${label}…${hasResult ? '已保留上次结果。' : ''}`;
-    status.hidden = false;
-    result.setAttribute('aria-busy', 'true');
+    const read = api.beginRegionRead(result.parentElement, status, {
+      loadingText: hasResult ? '' : `正在读取${label}…`,
+      refreshButton: result.closest('.form-section').querySelector('[data-async-refresh]')
+    });
     try {
       const report = await load();
-      if (!isCurrent()) return;
+      if (!read.current()) return;
       result.innerHTML = renderReport(report);
-      status.hidden = true;
-      status.textContent = '';
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!read.current()) return;
+      read.finish();
       status.className = 'inline-notice warning';
       status.textContent = `读取${label}失败。${hasResult ? '已保留上次结果。' : ''}${error?.message || '请稍后重试。'}`;
+      status.hidden = false;
     } finally {
-      if (isCurrent()) result.setAttribute('aria-busy', 'false');
+      read.finish();
     }
   }
   function websiteVisitsPanel() {
@@ -2576,7 +2626,7 @@
           false,
           '可选，按完整 IP 精确查找。'
         )
-    )}<div class="form-footer">${button('刷新记录', 'ops-website-visit-page', '', 'return', 'data-page="1"')}<button type="submit" class="button primary">查询明细</button></div></form><div data-visits-status role="status" hidden></div><div data-visits-result aria-busy="false"></div></section>`;
+    )}<div class="form-footer">${button('刷新记录', 'ops-website-visit-page', '', 'return', 'data-page="1" data-async-refresh')}<button type="submit" class="button primary">查询明细</button></div></form><div class="design-async-region" aria-busy="false"><div data-visits-status role="status" hidden></div><div data-visits-result></div></div></section>`;
   }
   async function showWebsiteVisits(form, page) {
     if (!form) return;
@@ -2665,7 +2715,7 @@
     node.disabled = false;
   }
   function websiteAnalyticsPanel() {
-    return `<section class="form-section" id="ops-website-analytics"><div class="panel-heading"><h3>装修网站访问统计</h3><a class="button" href="https://analytics.google.com/analytics/web/#/a396903314p540413787/reports" target="_blank" rel="noopener noreferrer">查看完整报表</a></div><div class="tool-period" role="group" aria-label="统计时间范围">${button('最近 7 天', 'ops-website-analytics', '', '', 'data-days="7" aria-pressed="false"')}${button('最近 30 天', 'ops-website-analytics', '', '', 'data-days="30" aria-pressed="false"')}${button('刷新统计', 'ops-website-analytics', '', 'return')}</div><div data-website-analytics-status role="status" hidden></div><div data-website-analytics-result aria-busy="false"></div></section>`;
+    return `<section class="form-section" id="ops-website-analytics"><div class="panel-heading"><h3>装修网站访问统计</h3><a class="button" href="https://analytics.google.com/analytics/web/#/a396903314p540413787/reports" target="_blank" rel="noopener noreferrer">查看完整报表</a></div><div class="tool-period" role="group" aria-label="统计时间范围">${button('最近 7 天', 'ops-website-analytics', '', '', 'data-days="7" aria-pressed="false"')}${button('最近 30 天', 'ops-website-analytics', '', '', 'data-days="30" aria-pressed="false"')}${button('刷新统计', 'ops-website-analytics', '', 'return', 'data-async-refresh')}</div><div class="design-async-region" aria-busy="false"><div data-website-analytics-status role="status" hidden></div><div data-website-analytics-result></div></div></section>`;
   }
   async function showWebsiteAnalytics(days) {
     const panel = $('#ops-website-analytics');
@@ -2884,7 +2934,7 @@
   }
   function renderPage() {
     const route = state.route;
-    if (route === 'recharge/start') return renderBitBrowserLogin();
+    if (route === bitLoginRoute) return renderBitBrowserLogin();
     if (route === workspaceRechargeRoute) return renderIntegratedRecharge(true);
     if (route === onlineRechargeRoute) return renderIntegratedRecharge();
     if (route === 'settings/accounts') return renderStaff();
@@ -3089,7 +3139,7 @@
     } else if (action === 'ops-integrated-login') {
       window.location.reload();
     } else if (action === 'ops-integrated-refresh') {
-      if ([onlineRechargeRoute, workspaceRechargeRoute, loginLogsRoute].includes(state.route)) {
+      if ([onlineRechargeRoute, workspaceRechargeRoute, loginLogsRoute, bitLoginRoute].includes(state.route)) {
         if (blockRechargeNavigation()) return true;
         void loadIntegratedRecharge({ refresh: true });
       }
@@ -3170,14 +3220,28 @@
         });
       });
     } else if (action === 'ops-settings-reload') {
+      const form = $('#main #ops-cost-form');
+      const values = form && readDraft(form);
+      const config = values && api.modules.commerce?.getCostSettings?.();
+      const hasEdits = config && Object.entries(values).some(([name, value]) =>
+        value !== String(config[name.slice('ops-cost-'.length)]));
+      const snapshot = JSON.stringify(values);
       const reload = () => {
-        const key = state.route === 'settings/costs' ? 'costs' : '';
+        const region = form?.parentElement;
+        const read = region && api.beginRegionRead(region, region.querySelector('[data-cost-read-status]'), {
+          refreshButton: node
+        });
         void loadSettings(true).then((loaded) => {
-          if (loaded && key) state.drafts.delete(draftKey(key));
-          refreshSettingsPage();
+          read?.finish();
+          const activeForm = $('#main #ops-cost-form');
+          if (activeForm) preserveDraft();
+          if (!loaded) notify('读取失败，已保留当前设置草稿');
+          if (loaded && form && activeForm === form && JSON.stringify(readDraft(form)) === snapshot)
+            state.drafts.delete(draftKey('costs'));
+          if (loaded || !form) refreshSettingsPage();
         });
       };
-      if (state.route === 'settings/costs' && state.drafts.has(draftKey('costs'))) {
+      if (hasEdits) {
         confirmAction('确认重新读取费用规则', '成功读取后清除当前未提交的费用草稿。', reload);
       } else reload();
     } else if (action === 'ops-audit-refresh') {
@@ -3467,7 +3531,7 @@
     id: 'operations',
     matches: (route) =>
       [
-        'recharge/start',
+        bitLoginRoute,
         workspaceRechargeRoute,
         onlineRechargeRoute,
         'settings/accounts',

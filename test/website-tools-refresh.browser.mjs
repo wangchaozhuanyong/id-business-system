@@ -145,6 +145,11 @@ test(
     const analyticsStatus = drawer.locator('[data-website-analytics-status]');
     const visits = drawer.locator('[data-visits-result]');
     const visitsStatus = drawer.locator('[data-visits-status]');
+    const showPendingLine = async (status) => {
+      await status.waitFor();
+      assert.equal(await status.textContent(), '');
+      assert((await status.boundingBox()).height <= 3);
+    };
     const showMetric = async (value) => {
       await analytics.getByText(String(value), { exact: true }).waitFor();
     };
@@ -167,12 +172,16 @@ test(
 
     const firstAnalytics = await openMonitor();
     await tools.reply(await tools.next(visitsPath), { items: [], page: 1, pageSize: 20, total: 0 });
+    await analyticsStatus.waitFor();
     assert.match(await analyticsStatus.textContent(), loading);
     await tools.reply(firstAnalytics, analyticsResult(111));
     await showMetric(111);
 
+    const beforeRefresh = await analytics.boundingBox();
     const slowerAnalytics = await requestAnalytics();
-    assert.match(await analyticsStatus.textContent(), loading);
+    await showPendingLine(analyticsStatus);
+    assert.deepEqual(await analytics.boundingBox(), beforeRefresh);
+    assert(await drawer.getByRole('button', { name: '刷新统计' }).isDisabled());
     await showMetric(111);
     const newerAnalytics = await requestAnalytics();
     await tools.reply(newerAnalytics, analyticsResult(333));
@@ -190,7 +199,7 @@ test(
     await setVisitFilters(page, firstVisitFilters);
     const firstVisit = await requestVisits();
     assert.deepEqual(firstVisit.request().postDataJSON(), firstVisitFilters);
-    assert.match(await visitsStatus.textContent(), loading);
+    await showPendingLine(visitsStatus);
     await tools.reply(firstVisit, visitResult('/first-page'));
     await showVisit('/first-page');
 
@@ -199,7 +208,7 @@ test(
     await nextPage.click();
     const failingPage = await tools.next(visitsPath);
     assert.deepEqual(failingPage.request().postDataJSON(), { ...firstVisitFilters, page: 2 });
-    assert.match(await visitsStatus.textContent(), loading);
+    await showPendingLine(visitsStatus);
     await showVisit('/first-page');
     await tools.reply(failingPage, { error: '访问记录暂时失败' }, 503);
     assert.match(await visitsStatus.textContent(), /访问记录暂时失败/);

@@ -23,7 +23,6 @@
   });
   let pendingFile = null;
   let current = null;
-  let latestRequest = 0;
   let readingFile = false;
   let saving = false;
 
@@ -116,7 +115,10 @@
             .join('')}
         </fieldset>
         <div id="bit-address-feedback" aria-live="polite" hidden></div>
-        <section id="bit-address-list" aria-label="地址清单"></section>
+        <div class="design-async-region">
+          <div data-bit-address-read-status role="status" hidden></div>
+          <section id="bit-address-list" aria-label="地址清单"></section>
+        </div>
       </div>`,
       button('关闭', 'drawer-close')
     );
@@ -183,13 +185,14 @@
   async function refresh(completedMessage = '') {
     const panel = opened();
     if (!panel) return;
-    const request = ++latestRequest;
-    const list = $('#bit-address-list');
-    list.setAttribute('aria-busy', 'true');
-    feedback(current ? '正在更新地址…' : '正在加载地址…', 'loading');
+    const status = panel.querySelector('[data-bit-address-read-status]');
+    const read = A.beginRegionRead(status.parentElement, status, {
+      loadingText: current ? '' : '正在加载地址…',
+      refreshButton: panel.querySelector('[data-action="bit-address-refresh"]')
+    });
     try {
       const result = await localData.load(`${endpoint}?${new URLSearchParams(filters)}`);
-      if (request !== latestRequest || opened() !== panel) return;
+      if (!read.current()) return;
       const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize));
       if (result.page > lastPage) {
         filters.page = lastPage;
@@ -200,13 +203,13 @@
       renderList();
       feedback(completedMessage);
     } catch (error) {
-      if (request === latestRequest && opened() === panel)
+      if (read.current())
         feedback(
           `${completedMessage ? completedMessage + ' ' : ''}${error.message}。请点击刷新重试。`,
           'warning'
         );
     } finally {
-      if (request === latestRequest) list.setAttribute('aria-busy', 'false');
+      read.finish();
     }
   }
 

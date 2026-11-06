@@ -93,6 +93,33 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   assert.equal(await page.locator('#ops-type-label').inputValue(), '', '新增不串用编辑分类草稿');
   await close();
 
+  await navigate('settings/costs');
+  const fee = page.locator('#ops-cost-form input[inputmode="decimal"]').first();
+  const originalForm = await page.locator('#ops-cost-form').elementHandle();
+  await fee.fill('123');
+  await page.locator('[data-action="ops-settings-reload"]').click();
+  await page.getByRole('heading', { name: '确认重新读取费用规则' }).waitFor();
+  const readStarted = Promise.withResolvers();
+  const releaseRead = Promise.withResolvers();
+  await page.route('**/api/local/settings', async (route) => {
+    readStarted.resolve();
+    await releaseRead.promise;
+    await route.continue();
+  }, { times: 1 });
+  try {
+    await page.locator('[data-action="confirm-accept"]').click();
+    await readStarted.promise;
+    const progress = page.locator('[data-cost-read-status]:not([hidden])');
+    await progress.waitFor();
+    assert.equal(await progress.textContent(), '');
+    await fee.fill('124');
+  } finally {
+    releaseRead.resolve();
+  }
+  await page.waitForFunction((form) => !form.isConnected, originalForm);
+  await originalForm.dispose();
+  assert.equal(await fee.inputValue(), '124', '重新读取完成不能清除请求期间的新输入');
+
   await openTool('抖音解析');
   await page.locator('#ops-media-text').fill('https://www.douyin.com/video/123456789');
   await close();
@@ -112,6 +139,52 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   await close();
 
   await openTool('邮箱查询与邮箱池');
+  await drawer.getByRole('tab', { name: '邮件查询', exact: true }).click();
+  const mailResults = drawer.locator('#ops-managed-query-results');
+  const mailProgress = drawer.locator('#ops-managed-query-progress');
+  const queryMail = drawer.getByRole('button', { name: '查询邮件', exact: true });
+  const refreshMail = drawer.getByRole('button', { name: '立即刷新', exact: true });
+  let subject = '隔离测试邮件';
+  await page.route('**/api/local/tools/mailbox-query', route =>
+    route.fulfill({ json: { items: [{ subject }] } }));
+  await drawer.locator('#ops-managed-query-code').fill('MBX-FIXTURE-ONLY');
+  await queryMail.click();
+  await mailResults.getByText(subject, { exact: true }).waitFor();
+  const failMailRead = Promise.withResolvers();
+  await page.route('**/api/local/tools/mailbox-query', async route => {
+    await failMailRead.promise;
+    await route.fulfill({ status: 503, json: { error: '隔离取信失败' } });
+  }, { times: 1 });
+  try {
+    await refreshMail.click();
+    await mailProgress.waitFor();
+    assert.equal(await mailProgress.textContent(), '');
+    assert((await mailProgress.boundingBox()).height <= 3);
+    assert(await refreshMail.isDisabled());
+    assert(await mailResults.getByText(subject, { exact: true }).isVisible());
+  } finally { failMailRead.resolve(); }
+  await mailProgress.getByText('隔离取信失败', { exact: true }).waitFor();
+  assert(await mailResults.getByText(subject, { exact: true }).isVisible());
+  const releaseOldMail = Promise.withResolvers();
+  const oldMailResponse = page.waitForResponse(response =>
+    response.url().endsWith('/tools/mailbox-query') && response.request().postDataJSON().limit === 5);
+  await page.route('**/api/local/tools/mailbox-query', async route => {
+    await releaseOldMail.promise;
+    await route.fulfill({ json: { items: [{ subject: '迟到的旧邮件' }] } });
+  }, { times: 1 });
+  try {
+    await refreshMail.click();
+    await mailProgress.waitFor();
+    await drawer.locator('#ops-managed-query-limit').fill('2');
+    subject = '按新条件查询的邮件';
+    await queryMail.click();
+    await mailResults.getByText(subject, { exact: true }).waitFor();
+  } finally { releaseOldMail.resolve(); }
+  await (await oldMailResponse).finished();
+  await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await drawer.getByRole('tab', { name: '邮件查询', exact: true }).click();
+  await mailResults.getByText(subject, { exact: true }).waitFor();
+  assert.equal(await mailResults.getByText('迟到的旧邮件', { exact: true }).count(), 0);
   await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
   await page.locator('#ops-mailbox-pool[data-version]').waitFor();
   await page.locator('#ops-mailbox-pool-search').fill('草稿搜索');
@@ -185,6 +258,32 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   const { employee } = await (await employeeCreated).json();
   await drawer.waitFor({ state: 'hidden' });
   const employeeEdit = () => page.locator(`[data-action="ops-local-staff-edit"][data-id="${employee.id}"]`).click();
+  const employeeRow = page.locator(`tr[data-row-id="${employee.id}"]`);
+  await employeeRow.waitFor();
+  await page.locator('#ops-list-search').fill(employee.name);
+  const releaseEmployeeRead = Promise.withResolvers();
+  await page.route('**/api/local/auth/employees', async route => {
+    await releaseEmployeeRead.promise;
+    await route.fulfill({ status: 503, json: { error: '隔离员工刷新失败' } });
+  }, { times: 1 });
+  try {
+    await page.locator('[data-action="ops-local-staff-reload"]').click();
+    const progress = page.locator('[data-employee-progress]');
+    await progress.waitFor();
+    assert.equal(await progress.textContent(), '');
+    assert((await progress.boundingBox()).height <= 3);
+    assert(await employeeRow.isVisible());
+    await page.getByRole('tab', { name: '角色权限' }).click();
+    await page.getByRole('tab', { name: '员工账户' }).click();
+    assert(await employeeRow.isVisible());
+  } finally { releaseEmployeeRead.resolve(); }
+  await page.getByText(/隔离员工刷新失败/).waitFor();
+  assert(await employeeRow.isVisible());
+  assert.equal(await page.locator('#ops-list-search').inputValue(), employee.name);
+  await page.locator('[data-action="ops-local-staff-reload"]').click();
+  await page.getByText(/隔离员工刷新失败/).waitFor({ state: 'hidden' });
+  assert(await employeeRow.isVisible());
+  await page.locator('#ops-list-search').fill('');
   await employeeEdit();
   await page.locator('#local-staff-name').fill('员工提交快照');
   let delayedEmployeeResponse;
