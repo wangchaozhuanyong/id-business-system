@@ -11,7 +11,32 @@ const sourceRoot = resolve(projectRoot, '.upstream/codexdaichong');
 const runtimeRoot = resolve(projectRoot, '.runtime');
 
 export const CODEXDAICHONG_REVISION = 'f4d7761e0036892e6dd68ec64c5447b513ca37da';
-export const PRODUCTION_GUARD_REVISION = '2';
+export const PRODUCTION_GUARD_REVISION = '3';
+const routingDirectory = new URL('./routing/', import.meta.url);
+const routingFiles = ['pricing-checkout.js', 'region-config.js', 'server.js'];
+
+async function approvedRouting() {
+  const manifest = JSON.parse(await readFile(new URL('manifest.json', routingDirectory), 'utf8'));
+  const patch = await readFile(new URL('upstream-routing.patch', routingDirectory));
+  const names = [...patch.toString().matchAll(/^diff --git a\/(\S+) b\/\1$/gm)].map(match => match[1]).sort();
+  if (manifest.revision !== CODEXDAICHONG_REVISION ||
+      JSON.stringify(Object.keys(manifest.files).sort()) !== JSON.stringify(routingFiles) ||
+      JSON.stringify(names) !== JSON.stringify(routingFiles) ||
+      createHash('sha256').update(patch).digest('hex') !== manifest.patchSha256)
+    throw new Error('套餐选路补丁与审查清单不符');
+  return manifest;
+}
+
+/** Apply only the explicitly authorized startup routing and Egypt region metadata. */
+export async function applyApprovedRechargeRouting(directory) {
+  await approvedRouting();
+  const args = ['--git-dir=' + resolve(sourceRoot, '.git'), '--work-tree=' + await realpath(directory),
+    'apply'];
+  const patch = fileURLToPath(new URL('upstream-routing.patch', routingDirectory));
+  // git apply is constrained by the checked manifest and never touches the upstream index.
+  await exec('git', [...args, '--check', patch], { cwd: directory });
+  await exec('git', [...args, patch], { cwd: directory });
+}
 
 function isDescendant(base, target) {
   const path = relative(base, target);
@@ -34,14 +59,18 @@ async function extractPinnedSource(directory) {
 /** Check every tracked upstream file, including the scheduler, store and dependency lock. */
 export async function verifyCodexdaichongSource(directory) {
   const destination = await realpath(directory);
+  const routing = await approvedRouting();
   const { stdout } = await exec('git', ['-C', sourceRoot, 'ls-tree', '-rz', CODEXDAICHONG_REVISION], {
     maxBuffer: 8 * 1024 * 1024
   });
   let files = 0;
   for (const entry of stdout.split('\0').filter(Boolean)) {
     const separator = entry.indexOf('\t');
-    const [mode, type, expected] = entry.slice(0, separator).split(' ');
+    const [mode, type, original] = entry.slice(0, separator).split(' ');
     const name = entry.slice(separator + 1);
+    const approved = routing.files[name];
+    if (approved && approved.original !== original) throw new Error('选路补丁基准不符：' + name);
+    const expected = approved?.approved || original;
     if (type !== 'blob' || !['100644', '100755', '120000'].includes(mode))
       throw new Error('锁定仓库包含不支持的文件类型');
     const path = resolve(destination, name);
@@ -59,7 +88,8 @@ export async function verifyCodexdaichongSource(directory) {
     files++;
   }
   if (!files) throw new Error('锁定充值仓库没有可核验的源码');
-  return { revision: CODEXDAICHONG_REVISION, files };
+  return { revision: CODEXDAICHONG_REVISION, files, originalFiles: files - routingFiles.length,
+    routingFiles: [...routingFiles], routingPatchSha256: routing.patchSha256 };
 }
 
 export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'codexdaichong')) {
@@ -89,7 +119,7 @@ export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'cod
   }
   await mkdir(destination, { mode: 0o700 });
   await extractPinnedSource(destination);
-
+  await applyApprovedRechargeRouting(destination);
   await verifyCodexdaichongSource(destination);
   await writeFile(
     resolve(destination, '.id-business-integrated-runtime'),

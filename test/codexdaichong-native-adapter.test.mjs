@@ -57,6 +57,10 @@ test('the outer adapter uses native authentication without exposing its token or
   assert.equal((await request('/api/admin/cards', admin)).status, 403);
   assert.equal((await request('/API/ADMIN/CARDS/', admin)).status, 403);
   assert.equal((await request('/api/admin/sessions', admin)).status, 403);
+  assert.equal((await request('/api/admin/recharge-routing', customer)).status, 403);
+  assert.equal((await fetch(host.url + '/api/admin/recharge-routing', { method: 'PUT', headers: {
+    'x-id-recharge-assertion': signRechargeAssertion(secret, 'PUT', '/api/admin/recharge-routing', admin)
+  } })).status, 403);
   assert.equal((await request('/api/admin/login', superUser, {})).status, 404);
   assert.equal((await request('/api/admin/cards?token=forged', superUser)).status, 404);
   assert.equal((await request('/api/admin/cards%2Fother', superUser)).status, 404);

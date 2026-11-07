@@ -64,6 +64,8 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
       return reply(res, 404, '接口不存在');
     if ((admin || external) && !actor.admin) return reply(res, 403, '没有充值管理权限');
     if (sensitivePaths.test(path) && !actor.sensitive) return reply(res, 403, '没有敏感资料权限');
+    if (path === '/api/admin/recharge-routing' && req.method === 'PUT' && !actor.sensitive)
+      return reply(res, 403, '没有套餐地区配置权限');
     if (path === '/api/admin/session') {
       if (!['GET', 'HEAD'].includes(req.method)) return reply(res, 405, '不支持此操作');
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
