@@ -428,7 +428,8 @@
     S.drawerContext = '';
   }
   function field(label, id, control, required = false, help = '', span = '', hidden = false) {
-    const html = A.field(label, `commerce-${id}`, control, required, help);
+    const html = A.field(label, `commerce-${id}`, control, required, help)
+      .replace(`for="commerce-${id}"`, `for="commerce-${id}${control.includes('class="button commerce-picker-trigger"') ? '-picker' : ''}"`);
     const attributes = `data-commerce-field="${id}"${hidden ? ' hidden' : ''}`;
     return span
       ? `<div class="${span}" ${attributes}>${html}</div>`
@@ -441,14 +442,62 @@
     return A.select(`commerce-${id}`, choices, selected);
   }
   function searchableSelect(id, label, choices, selected = '', actions = '') {
-    return `<div class="commerce-search-picker"><input type="search" class="input" data-commerce-picker="${id}" aria-label="搜索${label}" placeholder="搜索${label}" autocomplete="off" /><div class="field-row">${select(id, choices, selected)}${actions}</div></div>`;
+    const value = choices.find(([value]) => String(value) === String(selected))?.[1] || choices[0]?.[1] || '请选择';
+    const prefix = `commerce-${id}`;
+    return `<div class="commerce-search-picker field-row">
+      <button type="button" id="${prefix}-picker" class="button commerce-picker-trigger"
+        role="combobox" aria-label="${E(label)}" aria-expanded="false" aria-haspopup="listbox"
+        aria-controls="${prefix}-options" aria-describedby="${prefix}-error"
+        popovertarget="${prefix}-popover" title="${E(value)}">
+        <span class="commerce-picker-label">${E(value)}</span>${A.icon('down')}
+      </button>
+      ${select(id, choices, selected).replace('<select ', '<select hidden aria-hidden="true" tabindex="-1" ')}${actions}
+      <div class="commerce-picker-popover" id="${prefix}-popover" popover="auto">
+        <input type="search" data-commerce-picker="${id}" aria-label="搜索${E(label)}"
+          placeholder="搜索${E(label)}" aria-controls="${prefix}-options" autocomplete="off" />
+        <div id="${prefix}-options" class="commerce-picker-options" role="listbox" aria-label="${E(label)}"></div>
+        <p class="commerce-picker-empty" role="status" hidden>没有匹配的${E(label)}</p>
+      </div>
+    </div>`;
   }
   function filterPicker(search) {
-    const select = search.parentElement.querySelector('select');
+    const picker = search.closest('.commerce-search-picker');
+    const select = picker?.querySelector('select');
     if (!select) return;
-    const query = search.value.trim().toLowerCase();
-    for (const option of select.options)
-      option.hidden = Boolean(option.value && !option.selected && !option.text.toLowerCase().includes(query));
+    const trigger = picker.querySelector('.commerce-picker-trigger');
+    const label = select.selectedOptions[0]?.text || select.options[0]?.text || '请选择';
+    trigger.querySelector('.commerce-picker-label').textContent = label;
+    trigger.title = label;
+    trigger.disabled = select.disabled;
+    const popup = picker.querySelector('.commerce-picker-popover');
+    if (!popup.matches(':popover-open')) return;
+    const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const options = [...select.options].filter(option => !option.disabled &&
+      (option.value ? terms.every(term => option.text.toLowerCase().includes(term)) : terms.length === 0));
+    picker.querySelector('.commerce-picker-options').innerHTML = options.map(option =>
+      `<button type="button" class="commerce-picker-option" role="option" aria-selected="${option.selected}" tabindex="-1" data-action="commerce-picker-select" data-value="${E(option.value)}">${E(option.text)}</button>`).join('');
+    picker.querySelector('.commerce-picker-empty').hidden = options.some(option => option.value);
+  }
+  function positionPicker(popup) {
+    const trigger = popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger');
+    const anchor = trigger.getBoundingClientRect();
+    if (anchor.bottom < 0 || anchor.top > innerHeight) {
+      popup.hidePopover();
+      return;
+    }
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft || 0;
+    const top = viewport?.offsetTop || 0;
+    const width = viewport?.width || innerWidth;
+    const height = viewport?.height || innerHeight;
+    const below = top + height - anchor.bottom - 8;
+    const above = anchor.top - top - 8;
+    const openBelow = below >= Math.min(280, above);
+    popup.style.width = `${Math.min(Math.max(anchor.width, 240), width - 16)}px`;
+    popup.style.maxHeight = `${Math.max(80, Math.min(320, height - 16, openBelow ? below : above))}px`;
+    const bounds = popup.getBoundingClientRect();
+    popup.style.left = `${Math.max(left + 8, Math.min(anchor.left, left + width - bounds.width - 8))}px`;
+    popup.style.top = `${Math.max(top + 8, Math.min(openBelow ? anchor.bottom + 4 : anchor.top - bounds.height - 4, top + height - bounds.height - 8))}px`;
   }
   function section(number, title, body, description = '', hidden = false, idPrefix = 'commerce-section', actions = '') {
     return `<section class="form-section" data-commerce-section="${number}"${hidden ? ' hidden' : ''}><div class="section-heading${actions ? ' section-heading--actions' : ''}"><span class="section-number">${number}</span><div class="section-title-row"><h2>${E(title)}</h2>${A.titleInfo(title, description, `${idPrefix}-${number}`)}</div>${actions ? `<div class="page-actions">${actions}</div>` : ''}</div><div class="commerce-field-grid">${body}</div></section>`;
@@ -4512,6 +4561,17 @@
   }
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
+    if (action === 'commerce-picker-select') {
+      const picker = node.closest('.commerce-search-picker');
+      const select = picker.querySelector('select');
+      if (select.disabled || ![...select.options].some(option => option.value === node.dataset.value && !option.disabled)) return true;
+      select.value = node.dataset.value;
+      filterPicker(picker.querySelector('[data-commerce-picker]'));
+      picker.querySelector('.commerce-picker-popover').hidePopover();
+      picker.querySelector('.commerce-picker-trigger').focus({ preventScroll: true });
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
     if (!canManageOrders() && /^commerce-(?:new-product-order|order-(?:edit|refund|more|pending|auto-fx|fx)|tenant-card)/.test(action)) return true;
     if (action === 'commerce-order-card-retry') {
       const form = node.closest('#commerce-order-form');
@@ -4995,6 +5055,7 @@
         : A.addCalendarMonth(start);
   }
   function onChange(node) {
+    if (node.dataset?.commercePicker) return true;
     if (node.id === 'commerce-renewal-product') {
       S.status = node.value;
       S.page = 1;
@@ -5105,6 +5166,7 @@
       }
       if (node.id === 'commerce-start') updateOrderPeriod(form);
       updateOrderVisibility(form);
+      for (const search of form.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
       const preview = form.querySelector('#commerce-cost-preview');
       if (preview) {
         if (['commerce-email', 'commerce-paidAmount', 'commerce-appleMatchMin', 'commerce-appleMatchMax'].includes(node.id))
@@ -5322,6 +5384,56 @@
         A.render();
     }, 60_000);
   }, { once: true });
+  document.addEventListener?.('toggle', (event) => {
+    const popup = event.target;
+    if (!popup.matches?.('.commerce-picker-popover')) return;
+    const picker = popup.closest('.commerce-search-picker');
+    const open = event.newState === 'open';
+    picker.querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    const search = picker.querySelector('[data-commerce-picker]');
+    filterPicker(search);
+    positionPicker(popup);
+    search.focus({ preventScroll: true });
+  }, true);
+  document.addEventListener?.('keydown', (event) => {
+    const popup = event.target.closest('.commerce-picker-popover');
+    if (!popup || event.isComposing) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      popup.hidePopover();
+      popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger').focus({ preventScroll: true });
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter'].includes(event.key)) return;
+    const search = popup.querySelector('[data-commerce-picker]');
+    if (event.target === search && !['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
+    if (event.key === 'Enter' && event.target !== search) return;
+    event.preventDefault();
+    const options = [...popup.querySelectorAll('[role="option"]')];
+    if (event.key === 'Enter') {
+      const option = event.target === search ? options.find(option => option.dataset.value) : event.target;
+      option?.click();
+      return;
+    }
+    const index = options.indexOf(event.target);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 :
+      event.key === 'ArrowDown' ? Math.min(index + 1, options.length - 1) :
+        index < 0 ? options.length - 1 : Math.max(0, index - 1);
+    options[next]?.focus({ preventScroll: true });
+    options[next]?.scrollIntoView({ block: 'nearest' });
+  });
+  document.addEventListener?.('focusin', (event) => {
+    for (const popup of document.querySelectorAll('.commerce-picker-popover:popover-open'))
+      if (!popup.closest('.commerce-search-picker').contains(event.target)) popup.hidePopover();
+  });
+  const positionOpenPickers = () => {
+    for (const popup of document.querySelectorAll('.commerce-picker-popover:popover-open')) positionPicker(popup);
+  };
+  window.addEventListener?.('resize', positionOpenPickers);
+  window.addEventListener?.('scroll', positionOpenPickers, { capture: true, passive: true });
+  window.visualViewport?.addEventListener('resize', positionOpenPickers);
+  window.visualViewport?.addEventListener('scroll', positionOpenPickers, { passive: true });
   const drawer = $('#drawer');
   drawer?.addEventListener('close', () => {
     if (drawer.open) return;
@@ -5353,6 +5465,7 @@
     preserveDraft: saveDrafts,
     refreshCustomerTagOptions,
     afterRender() {
+      for (const search of document.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
       loadLocalCommerce();
       updateRenewalReminder();
       if (!localData || localPhase !== 'ready') return;
