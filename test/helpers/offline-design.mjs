@@ -5,7 +5,7 @@ import { loadCodexdaichongAssets } from '../../modules/recharge/codexdaichong/as
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
-export async function interceptDesign(context, { beforeDirectory, localFixtures } = {}) {
+export async function interceptDesign(context, { beforeDirectory, localFixtures, actor } = {}) {
   const unavailable = [],
     external = [];
   rechargeAssets ??= await loadCodexdaichongAssets();
@@ -98,6 +98,9 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures 
       if (url.pathname === '/' && localFixtures)
         body = body
           .toString()
+          .replace('<head>', actor
+            ? `<head><meta name="id-local-auth" content="required"><meta name="id-local-actor" content="${encodeURIComponent(JSON.stringify(actor))}">`
+            : '<head>')
           .replace(
             '    <script src="./prototype.js',
             '    <script src="/local-data.js" defer></script><script src="/toolbox-local.js" defer></script>\n    <script src="./prototype.js'

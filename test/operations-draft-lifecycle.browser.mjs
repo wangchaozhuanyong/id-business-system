@@ -72,8 +72,7 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
     await page.waitForFunction((next) => window.IDDesignAPI.state.route === next, route);
   };
   const openTool = async (name) => {
-    await page.getByRole('button', { name: '工具箱', exact: true }).click();
-    await drawer.getByRole('tab', { name: '在线工具', exact: true }).click();
+    await page.getByRole('button', { name: '在线工具', exact: true }).click();
     await drawer.getByRole('button', { name, exact: true }).click();
   };
   const editCategory = () => page.locator('[data-action="ops-mail-type-edit"][data-id="google"]').click();
@@ -128,7 +127,9 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   assert.equal(await page.locator('#ops-media-text').inputValue(), 'https://www.douyin.com/video/123456789');
   await close();
   await openTool('网站监控');
+  await drawer.getByRole('tab', { name: '网站检测', exact: true }).click();
   await page.locator('#ops-monitor-url').fill('https://example.test/status');
+  await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
   await page.locator('#ops-visits-days').selectOption('30');
   await page.locator('#ops-visits-sort').selectOption('oldest');
   await close();
