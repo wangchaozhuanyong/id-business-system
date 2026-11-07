@@ -6,7 +6,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked }) {
   let data, saving = false, reading = false, generation = 0, alive = true;
   const pending = new Set();
   const setMessage = text => { message.textContent = text; };
-  const ready = () => Boolean(!reading && data?.items.some(item => item.id === select.value));
+  const ready = () => Boolean(!reading && !saving && !editor.open && data?.items?.some(item => item.id === select.value));
   function capture() {
     const values = drafts?.read('bit-local') || {};
     values['bit-execution-proxy'] = select.value;
@@ -27,6 +27,11 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked }) {
         ...(body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'IP 操作失败，请重试');
+      if (method !== 'POST' && (!Number.isSafeInteger(result.version) || !Array.isArray(result.items) ||
+        !result.items.every(item => typeof item.id === 'string' && typeof item.name === 'string' &&
+          /^[A-Z]{2}$/.test(item.countryCode) && Object.hasOwn(kinds, item.kind)) ||
+        (method === 'PUT' && !result.items.some(item => item.id === result.savedId))))
+        throw new Error('IP 列表返回不完整，请刷新重试；输入已保留。');
       return result;
     } finally { pending.delete(controller); }
   }
@@ -48,9 +53,10 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked }) {
     if (locked() || saving) return;
     const draft = drafts?.read('bit-local') || {};
     for (const field of ['name', 'country', 'kind', 'mode', 'protocol']) if (Object.hasOwn(draft, 'ip-draft/' + field)) get('bit-ip-' + field).value = draft['ip-draft/' + field];
-    saveMessage.textContent = ''; editor.showModal(); get('bit-ip-name').focus();
+    saveMessage.textContent = ''; editor.showModal(); onChange(); get('bit-ip-name').focus();
   });
   editor.addEventListener('input', capture);
+  editor.addEventListener('close', onChange);
   function close() { if (!saving) { capture(); get('bit-ip-link').value = ''; editor.close(); } }
   get('bit-ip-close').addEventListener('click', close);
   editor.addEventListener('cancel', event => { event.preventDefault(); close(); });
@@ -76,7 +82,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked }) {
       }
       setMessage('IP 已保存并选中。');
     } catch (error) { if (alive) saveMessage.textContent = error.message; }
-    finally { body.link = ''; saving = false; get('bit-ip-save').disabled = false; get('bit-ip-close').disabled = false; }
+    finally { body.link = ''; saving = false; get('bit-ip-save').disabled = false; get('bit-ip-close').disabled = false; onChange(); }
   });
   window.addEventListener('pagehide', () => { alive = false; for (const controller of pending) controller.abort(); get('bit-ip-link').value = ''; });
   window.addEventListener('message', event => {
