@@ -34,24 +34,35 @@ export async function testBitBrowserProxy({ link, protocol = 'auto', mode = 'aut
     }
   }
   const candidates = parsed.automaticProtocol ? ['socks5', 'http'] : [parsed.protocol];
-  const api = directBrowserApi(url, token, signal), started = Date.now();
+  const started = Date.now();
+  async function nativeCheck(body) {
+    const timeout = AbortSignal.timeout(30_000);
+    const api = directBrowserApi(url, token, AbortSignal.any([signal, timeout]));
+    try { return await api.post('/checkagent', body); }
+    catch (error) {
+      if (timeout.aborted && !signal.aborted)
+        throw Object.assign(new Error('比特代理检测等待超时（30 秒），未完成检测；请检查该线路或稍后重试。'), { reason: 'bitbrowser_proxy_probe_timeout' });
+      throw error;
+    }
+  }
   for (const type of candidates) {
     signal.throwIfAborted();
     try {
       const body = { host: parsed.host.replace(/^\[|\]$/g, ''), port: String(parsed.port), proxyType: type, proxyUserName: parsed.username, proxyPassword: parsed.password, checkExists: 0 };
       let response;
-      try { response = await api.post('/checkagent', body, 12000); }
+      try { response = await nativeCheck(body); }
       catch (error) {
         // Only this read-only native check may retry a dropped connection once.
         if (signal.aborted || error.reason !== 'bitbrowser_direct_unreachable') throw error;
-        response = await api.post('/checkagent', body, 12000);
+        response = await nativeCheck(body);
       }
       const result = readProbeResult(response);
       const normalized = new URL(parsed.link.replace(/^[a-z][a-z0-9+.-]*:/i, type + ':'));
       return { ...result, protocol: type, mode: source.mode, link: source.mode === 'dynamic' ? source.link : normalized.href, latencyMs: Math.max(1, Date.now() - started) };
     } catch (error) {
       if (signal.aborted) throw new Error('代理检测已取消。');
-      if (['bitbrowser_direct_token_invalid', 'bitbrowser_direct_unreachable', 'bitbrowser_secure_context_required'].includes(error.reason)) throw error;
+      if (['bitbrowser_direct_token_invalid', 'bitbrowser_secure_context_required'].includes(error.reason)) throw error;
+      if (type === candidates.at(-1) && ['bitbrowser_direct_unreachable', 'bitbrowser_proxy_probe_timeout', 'bitbrowser_direct_protocol'].includes(error.reason)) throw error;
       if (type === candidates.at(-1)) throw Object.assign(new Error('代理检测未通过，请核对代理账号、密码、套餐余额或稍后重试。'), { reason: 'proxy_unavailable' });
     }
   }

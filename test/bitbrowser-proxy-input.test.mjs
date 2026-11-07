@@ -76,3 +76,19 @@ test('the country label is metadata and never becomes a native execution restric
   assert.equal(settings.expectedCountryCode, ''); assert.equal(settings.proxyType, 'socks5');
   assert.equal(settings.dynamicProxyUrl, 'https://extract.example.test/api?key=synthetic');
 });
+
+test('native timeout is incomplete and auto detection can continue with the next protocol', async t => {
+  const timers = [], calls = [];
+  t.mock.method(AbortSignal, 'timeout', ms => { assert.equal(ms, 30000); const c = new AbortController(); timers.push(c); return c.signal; });
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    calls.push(JSON.parse(options.body).proxyType);
+    if (calls.length === 1) { timers[0].abort(); throw new DOMException('synthetic timeout', 'AbortError'); }
+    return Response.json({ success: true, data: { success: true, data: { ip: '8.8.8.8', countryCode: 'PH' } } });
+  });
+  const input = { link: 'user:synthetic-pass@proxy.test:1080', url: 'http://127.0.0.1:54345', token: 'synthetic-key' };
+  assert.equal((await testBitBrowserProxy(input)).protocol, 'http'); assert.deepEqual(calls, ['socks5', 'http']);
+  timers.length = 0; calls.length = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls.push('request'); timers[0].abort(); throw new DOMException('synthetic timeout', 'AbortError'); });
+  await assert.rejects(() => testBitBrowserProxy({ ...input, link: 'socks5://user:synthetic-pass@proxy.test:1080' }), e => e.reason === 'bitbrowser_proxy_probe_timeout' && /30 秒/.test(e.message));
+  assert.equal(calls.length, 1, '超时不能被误当成连接中断重复检测');
+});
