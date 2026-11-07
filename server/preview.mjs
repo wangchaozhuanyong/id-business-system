@@ -8,6 +8,7 @@ import { createFinanceCollection } from './finance/collection-service.mjs';
 import { financeCollectionRoute, createFinanceCollectionHandler } from './finance/collection-route.mjs';
 import { automaticSnapshotRoute, createAutomaticSnapshotHandler } from './finance/quote-route.mjs';
 import { createWebsiteMonitor, handleWebsiteMonitor } from './tools/website-monitor.mjs';
+import { createBitBrowserProxyExtraction } from './bitbrowser-proxy-extraction.mjs';
 import { createWebsiteAnalytics } from './tools/website-analytics.mjs';
 import { createWebsiteVisits } from './tools/website-visits.mjs';
 import { createMediaResolver } from './tools/media-resolver.mjs';
@@ -105,6 +106,7 @@ export async function startPreview(
     config: websiteAnalyticsConfig,
     fetchImpl: websiteAnalyticsFetch
   });
+  const extractBitProxy = createBitBrowserProxyExtraction({ publicOrigin: secureOrigin });
   const monitorWebsite = publicUrl ? createWebsiteMonitor({ publicOrigin: secureOrigin }) : handleWebsiteMonitor;
   const assets = new Map(
     await Promise.all(
@@ -117,7 +119,7 @@ export async function startPreview(
   const localBitAssets = [
     ['/assets/bitbrowser/authorization.mjs', '../modules/recharge/bitbrowser/authorization.mjs'],
     ['/assets/bitbrowser/catalog.mjs', '../modules/recharge/bitbrowser/catalog.mjs'],
-    ...['countries', 'proxy-input', 'proxy-test'].map(name => [`/assets/bitbrowser/${name}.mjs`, `../modules/recharge/bitbrowser/${name}.mjs`]),
+    ...['countries', 'proxy-input', 'proxy-test', 'proxy-extraction'].map(name => [`/assets/bitbrowser/${name}.mjs`, `../modules/recharge/bitbrowser/${name}.mjs`]),
     ['/assets/bitbrowser/local.mjs', '../frontend/bitbrowser-local.mjs'],
     ['/assets/bitbrowser/proxies.mjs', '../frontend/bitbrowser-proxies.mjs'],
     ...['index', 'direct-login', 'direct-api', 'browser-options', 'cdp', 'login-page'].map(
@@ -433,6 +435,10 @@ export async function startPreview(
     if (store && route === '/api/local/tools/website-monitor') {
       if (!actor) return forbidden();
       return void monitorWebsite(request, response, actor);
+    }
+    if (store && route === '/api/local/bitbrowser-proxies/extract') {
+      if (!actor || !canManage) return forbidden();
+      return void extractBitProxy(request, response, actor);
     }
     if (store && route.startsWith('/api/local/')) {
       if (loginRequired && !actor) return forbidden();

@@ -75,7 +75,8 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-add-proxy').click();
     assert.equal(await page.locator('#bit-ip-country').isVisible(), false);
     assert.equal(await page.locator('#bit-ip-mode').isVisible(), false);
-    assert.equal(await page.locator('#bit-ip-protocol').isVisible(), false);
+    assert.equal(await page.locator('#bit-ip-protocol').isVisible(), true);
+    assert.equal(await page.locator('#bit-ip-link').getAttribute('type'), 'text');
     await page.locator('#bit-ip-name').fill('新电脑住宅 IP');
     await page.locator('#bit-ip-link').fill('synthetic-user:synthetic-pass@192.0.2.8:8080');
     await page.locator('#bit-ip-test').click();
@@ -105,7 +106,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-ip-rows').getByRole('button', { name: '测试', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#bit-library-result').textContent.includes('8.8.8.8'));
     await page.locator('#bit-ip-rows').getByRole('button', { name: '编辑', exact: true }).click();
-    assert.equal(await page.locator('#bit-ip-link').inputValue(), '');
+    await page.waitForFunction(() => document.querySelector('#bit-ip-link').value === 'socks5://synthetic-user:synthetic-pass@192.0.2.8:8080');
     assert.equal(await page.locator('#bit-ip-country').inputValue(), '菲律宾');
     await page.locator('#bit-ip-name').fill('新电脑住宅 IP 已修改');
     await page.screenshot({ path: fileURLToPath(new URL(`drawer-${theme}-${width}.png`, output)), fullPage: true });

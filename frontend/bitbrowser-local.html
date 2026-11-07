@@ -185,7 +185,7 @@
     <header class="panel-heading"><div class="title-with-help"><h2>已保存的 IP</h2><details class="title-help"><summary aria-label="查看 IP 资料库说明">ⓘ</summary><div class="title-description" role="note">IP 资料保存到当前账号的服务端资料库。列表展示地址摘要，完整代理链接加密保存。点击“使用”返回登录页并选中该 IP。</div></details></div><div class="bit-local__actions"><button class="button" id="bit-refresh-proxies" type="button">刷新列表</button><button class="button primary" id="bit-library-add" type="button">新增 IP</button></div></header>
     <div class="toolbar bit-local__filters"><input id="bit-ip-search" type="search" aria-label="搜索 IP" placeholder="搜索名称、国家或代理地址" /><select id="bit-ip-filter" aria-label="筛选 IP 类型"><option value="">全部 IP 类型</option><option value="mobile">移动 IP</option><option value="dynamic_residential">动态住宅</option><option value="static_residential">静态住宅</option></select><select id="bit-ip-sort" aria-label="IP 排序"><option value="recent">最近添加优先</option><option value="name">按名称排序</option><option value="country">按国家排序</option></select></div>
     <p id="bit-library-result" class="bit-local__library-status" role="status"></p>
-    <div class="table-viewport bit-local__ip-table" tabindex="0" aria-label="IP 资料表，可横向滚动"><table><thead><tr><th>名称／备注</th><th>国家</th><th>IP 类型</th><th>检测状态</th><th>代理地址</th><th>操作</th></tr></thead><tbody id="bit-ip-rows"></tbody></table><div id="bit-ip-empty" class="empty-state" hidden></div></div>
+    <div class="table-viewport bit-local__ip-table" tabindex="0" aria-label="IP 资料表，可横向滚动"><table><thead><tr><th>名称／备注</th><th>国家</th><th>IP 类型</th><th>检测状态</th><th>代理地址／协议</th><th>操作</th></tr></thead><tbody id="bit-ip-rows"></tbody></table><div id="bit-ip-empty" class="empty-state" hidden></div></div>
     <footer class="bit-local__pagination"><span id="bit-ip-page-info"></span><div class="bit-local__actions"><button class="button" id="bit-ip-prev" type="button">上一页</button><button class="button" id="bit-ip-next" type="button">下一页</button></div></footer>
   </section>
   <dialog id="bit-proxy-editor" class="bit-local__proxy-editor" aria-labelledby="bit-proxy-editor-title">
@@ -193,12 +193,12 @@
     <div class="bit-local__drawer-body">
       <div class="field"><label for="bit-ip-name">备注名称<span class="required">*</span></label><input id="bit-ip-name" autocomplete="off" maxlength="80" placeholder="例如：菲律宾住宅代理" /></div>
       <div class="field"><label for="bit-ip-kind">IP 类型</label><select id="bit-ip-kind"><option value="dynamic_residential">动态住宅</option><option value="static_residential">静态住宅</option><option value="mobile">移动 IP</option></select></div>
-      <div class="field"><label for="bit-ip-link">代理链接<span id="bit-ip-link-required" class="required">*</span></label><input id="bit-ip-link" type="password" autocomplete="new-password" placeholder="直接粘贴购买平台生成的代理信息" /></div>
-      <p class="field-help">支持账号:密码@主机:端口、主机:端口:账号:密码和完整代理链接。执行时自动填入比特窗口。</p>
+      <div class="field"><label for="bit-ip-protocol">代理协议</label><select id="bit-ip-protocol"><option value="auto">自动识别</option><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></div>
+      <div class="field"><label for="bit-ip-link">代理链接<span id="bit-ip-link-required" class="required">*</span></label><input id="bit-ip-link" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="直接粘贴购买平台生成的代理信息" /></div>
+      <p class="field-help">支持账号:密码@主机:端口、主机:端口:账号:密码和完整代理链接。也支持 HTTP／HTTPS API 提取链接。执行时自动填入比特窗口。</p>
       <p id="bit-ip-probe-result" class="field-help" role="status">尚未测试代理。</p>
       <details id="bit-ip-advanced"><summary>高级设置（通常无需填写）</summary>
-        <div class="field"><label for="bit-ip-protocol">代理协议</label><select id="bit-ip-protocol"><option value="auto">自动识别</option><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></div>
-        <div class="field"><label for="bit-ip-mode">连接方式</label><select id="bit-ip-mode"><option value="auto">自动识别</option><option value="static">代理地址</option><option value="dynamic">HTTPS 提取链接</option></select></div>
+        <div class="field"><label for="bit-ip-mode">连接方式</label><select id="bit-ip-mode"><option value="auto">自动识别</option><option value="static">代理地址</option><option value="dynamic">API 提取链接</option></select></div>
         <div class="field"><label for="bit-ip-country">国家标记</label><input id="bit-ip-country" maxlength="80" list="bit-ip-countries" autocomplete="off" placeholder="测试时自动识别，也可填写中文国家名" /></div><datalist id="bit-ip-countries"></datalist>
       </details>
       <p id="bit-ip-edit-note" class="field-help"></p><p id="bit-ip-save-result" role="status"></p><button class="button" id="bit-ip-rebase" type="button" hidden>核对最新资料</button>
