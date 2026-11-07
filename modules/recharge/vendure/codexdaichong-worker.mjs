@@ -8,7 +8,18 @@ const actor = Object.freeze({
   id: 'vendure-recharge-executor', email: 'vendure-worker@localhost', admin: false, sensitive: false
 });
 const jobIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
-const plans = new Set(['plus', 'pro_5x', 'pro_20x']);
+// Public task messages from the pinned engine are often just “正在开通中”.
+// Do not infer card entry or payment success from percentages or raw diagnostics.
+export function originalRechargeStage(message) {
+  const value = typeof message === 'string' ? message.trim() : '';
+  const stages = new Map([
+    ['正在填写支付资料', 'payment_details'], ['正在填写银行卡信息', 'payment_details'],
+    ['正在填写账单资料', 'payment_details'], ['正在付款', 'paying'],
+    ['正在执行付款', 'paying'], ['付款成功', 'paid'], ['支付成功', 'paid'],
+    ['正在确认订阅', 'subscription_check'], ['正在核对订阅状态', 'subscription_check']
+  ]);
+  return stages.get(value.replace(/[。.!！…]+$/, '')) ?? 'processing';
+}
 
 async function requestJson(url, options, timeout) {
   const response = await fetch(url, {
@@ -62,21 +73,35 @@ export function createVendureCodexdaichongWorker({
   async function execute(task) {
     const canContinue = () => Number.isSafeInteger(task.leaseUntil) && Date.now() + timeoutMs * 2 < task.leaseUntil;
     const unknown = { outcome: 'unknown' };
-    if (!canContinue() || !plans.has(task.plan) || typeof task.executionCode !== 'string' ||
+    if (!canContinue() || typeof task.executionCode !== 'string' ||
         !task.executionCode || typeof task.session !== 'string') return unknown;
     let jobKey;
     try {
-      const { data: verified } = await upstreamRequest('/api/verify-cdk', { cdk: task.executionCode });
-      if (verified?.success !== true || verified.data?.status === 'processing' || !verified.data) return unknown;
-      if (verified.data.type !== '自助' || verified.data.plan_type !== task.plan)
-        return { outcome: 'confirmed_failure', evidenceId: 'plan-check:' + task.id };
-      if (!canContinue()) return unknown;
       const { data: accepted } = await upstreamRequest('/api/run-process', {
-        cdk: task.executionCode, session: task.session, expectedPlan: task.plan
+        cdk: task.executionCode, session: task.session
       });
       if (accepted?.success !== true || typeof accepted.jobKey !== 'string' || !jobIdPattern.test(accepted.jobKey))
         return unknown;
       jobKey = accepted.jobKey;
+      let lastStage;
+      let heartbeatAt = 0;
+      const collectProgress = async (stage) => {
+        if (lastStage === stage && Date.now() < heartbeatAt) return;
+        try {
+          const progress = await workerRequest('progress', {
+            id: task.id, leaseToken: task.leaseToken, upstreamJobId: jobKey, stage
+          });
+          if (progress.response.ok && progress.data?.id === task.id &&
+              Number.isSafeInteger(progress.data.leaseUntil)) {
+            task.leaseUntil = progress.data.leaseUntil;
+            lastStage = stage;
+            heartbeatAt = Date.now() + 60_000;
+          }
+        } catch {
+          // Collection never cancels or repeats the original activation.
+        }
+      };
+      await collectProgress('started');
       while (canContinue()) {
         const { data: receipt } = await upstreamRequest('/api/task-status/' + jobKey);
         const status = receipt?.data;
@@ -84,7 +109,10 @@ export function createVendureCodexdaichongWorker({
           break;
         if (status.status === 'success' && status.isTerminal === true)
           return { outcome: 'confirmed_success', evidenceId: 'codexdaichong:' + jobKey, upstreamJobId: jobKey };
+        if (status.status === 'failed' && status.isTerminal === true)
+          return { outcome: 'confirmed_failure', evidenceId: 'codexdaichong:' + jobKey, upstreamJobId: jobKey };
         if (status.status !== 'running' || status.isTerminal !== false) break;
+        await collectProgress(originalRechargeStage(status.message));
         await sleep(pollIntervalMs);
       }
     } catch {
@@ -95,8 +123,8 @@ export function createVendureCodexdaichongWorker({
 
   return async function runOnce() {
     const health = await upstreamRequest('/api/public/runtime');
-    if (health.data?.success !== true || health.response.headers.get('x-id-vendure-plan-lock') !== '1')
-      throw new Error('代充上游未就绪或缺少商城套餐锁');
+    if (!health.response.ok || health.data?.success !== true)
+      throw new Error('代充上游未就绪');
     const claim = await workerRequest('claim', {});
     if (!claim.response.ok || !claim.data || !Object.hasOwn(claim.data, 'task'))
       throw new Error('无法核对任务领取结果');
