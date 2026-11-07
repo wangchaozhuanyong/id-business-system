@@ -1,6 +1,6 @@
 import { parseBitBrowserAuthorization } from '../authorization.mjs';
 import { normalizeV2RechargeBrowserOptions } from './browser-options.mjs';
-import { DirectBrowserError, localBrowserUrl } from './direct-api.mjs';
+import { DirectBrowserError, localBrowserUrl, directProfileOptions } from './direct-api.mjs';
 import { runDirectJsonSession } from './direct-login.mjs';
 
 export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs';
@@ -44,7 +44,9 @@ export async function runBitBrowserJsonLogin({
   dynamicProxyUrl = '',
   staticProxyCredentials,
   expectedCountryCode = '',
-  useSelectedProxy = false
+  useSelectedProxy = false,
+  persistWindow = false,
+  connectionId = ''
 } = {}) {
   if (globalThis.isSecureContext === false) {
     throw new DirectBrowserError('bitbrowser_secure_context_required');
@@ -82,37 +84,77 @@ export async function runBitBrowserJsonLogin({
   }
   const profileName = requiredName(windowName, '窗口名称', 100);
   const accountKey = await digest(accountId);
-  const key = `${localApiUrl}#${await digest(token)}#${accountKey}`;
-  const { localApiToken, ...profileSettings } = settings;
-  const proxyConfiguration = await digest(JSON.stringify(profileSettings));
-  const networkKeys = new Set(['proxyMode', 'staticHost', 'staticPort', 'dynamicProvider', 'refreshIp']);
-  const profileConfiguration = (useSelectedProxy || expectedCountryCode) ? await digest(JSON.stringify({ localApiUrl,
-    groupName, tagName, browserOptions: Object.fromEntries(Object.entries(settings.browserOptions).filter(([key]) => !networkKeys.has(key))) })) : proxyConfiguration;
+  const connectionKey = await digest(JSON.stringify([localApiUrl, await digest(token), connectionId]));
+  const key = `${connectionKey}#${accountKey}`;
+  const networkOptions = Object.fromEntries(Object.entries(directProfileOptions(settings)).filter(
+    ([name]) => !['browserFingerPrint', 'syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'].includes(name)));
+  const proxyConfiguration = await digest(JSON.stringify(networkOptions));
   if (signal.aborted) throw new DirectBrowserError('bitbrowser_direct_cancelled');
   if (activeLogins.has(key)) throw new Error('该账号已有登录任务正在进行。');
-  const saved = ownedProfiles.get(key);
-  if (saved && saved.profileConfiguration !== profileConfiguration) {
-    throw new Error('该账号已关联本次会话的比特窗口，请用原窗口配置重试。');
-  }
-
-  settings.updateOwnedProxy = Boolean((useSelectedProxy || expectedCountryCode) && saved && saved.proxyConfiguration !== proxyConfiguration);
   activeLogins.add(key);
+  let saved;
+  const recordRequest = async (method, body) => {
+    let response, data;
+    try {
+      response = await fetch('/api/local/bitbrowser-login-windows', {
+        method, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+      });
+      data = await response.json();
+    } catch {
+      throw new DirectBrowserError(signal.aborted ? 'bitbrowser_direct_cancelled' : 'bitbrowser_window_record_unavailable');
+    }
+    if (!response.ok) {
+      if (response.status === 409) ownedProfiles.delete(key);
+      throw new DirectBrowserError(response.status === 409
+        ? 'bitbrowser_window_record_conflict' : 'bitbrowser_window_record_unavailable');
+    }
+    const record = data?.record;
+    if (record === null && method === 'POST') return undefined;
+    if (!record || record.connectionKey !== connectionKey || record.accountKey !== accountKey ||
+        !/^[a-f0-9]{32}$/.test(record.profileId ?? '') ||
+        !/^[a-f0-9]{64}$/.test(record.proxyConfiguration ?? '') ||
+        !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(record.sourceJobId ?? '') ||
+        !Number.isSafeInteger(record.version) || record.version < 1)
+      throw new DirectBrowserError('bitbrowser_window_record_unavailable');
+    return { version: record.version, proxyConfiguration: record.proxyConfiguration,
+      profile: { accountKey, profileId: record.profileId, sourceJobId: record.sourceJobId } };
+  };
+  const remember = async (profileId, extra = {}) => {
+    if (persistWindow) {
+      const body = { connectionKey, accountKey, version: saved?.version ?? 0, profileId, proxyConfiguration,
+        ...(extra.browser_profile_missing_confirmed === true && {
+          replacedProfileId: extra.replaced_browser_profile_id, missingConfirmed: true
+        }) };
+      ownedProfiles.set(key, { ...saved, pendingWrite: body });
+      saved = await recordRequest('PUT', body);
+    } else saved = { proxyConfiguration, profile: { accountKey, profileId, sourceJobId: saved?.profile?.sourceJobId ?? crypto.randomUUID() } };
+    ownedProfiles.set(key, saved);
+  };
   try {
+    const previous = ownedProfiles.get(key);
+    saved = persistWindow ? await recordRequest('POST', { connectionKey, accountKey }) : previous;
+    if (persistWindow && previous?.pendingWrite) {
+      const body = previous.pendingWrite;
+      if (saved?.version === body.version + 1 && saved.profile.profileId === body.profileId && saved.proxyConfiguration === body.proxyConfiguration) {
+        ownedProfiles.set(key, saved);
+      } else {
+        saved = await recordRequest('PUT', body);
+        ownedProfiles.set(key, saved);
+      }
+    }
+    settings.updateOwnedProxy = Boolean((useSelectedProxy || expectedCountryCode) && saved && saved.proxyConfiguration !== proxyConfiguration);
     const result = await runDirectJsonSession(settings, expected, profileName, signal, {
       accountKey,
-      restore: async () => ({ ownedProfile: ownedProfiles.get(key)?.profile }),
+      restore: async () => ({ ownedProfile: saved?.profile }),
       progress: async (stage, extra) => {
         const profileId = extra?.browser_profile_id;
-        if (stage === 'bitbrowser_profile_created' && /^[a-f0-9]{32}$/.test(profileId ?? '')) {
-          ownedProfiles.set(key, {
-            profileConfiguration, proxyConfiguration,
-            profile: { accountKey, profileId, sourceJobId: crypto.randomUUID() }
-          });
-        }
+        if (['bitbrowser_profile_created', 'bitbrowser_proxy_updated'].includes(stage) && /^[a-f0-9]{32}$/.test(profileId ?? ''))
+          await remember(profileId, extra);
         onProgress?.(stage);
       }
     });
-    if (ownedProfiles.has(key)) ownedProfiles.get(key).proxyConfiguration = proxyConfiguration;
     return {
       email,
       profileId: result.browser_profile_id,

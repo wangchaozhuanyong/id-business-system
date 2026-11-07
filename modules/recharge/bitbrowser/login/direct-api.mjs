@@ -1,6 +1,8 @@
 // Ported from the pinned BitBrowser implementation e51dd9c9. See README.md.
 import { normalizeV2RechargeBrowserOptions } from './browser-options.mjs';
 const messages = {
+  bitbrowser_window_record_unavailable: '无法读取或保存原窗口关联，已停止本次操作。请检查网站连接后直接重试。',
+  bitbrowser_window_record_conflict: '原窗口关联已在其他页面更新，本次已停止。请再次登录以读取最新原窗口。',
   bitbrowser_secure_context_required:
     '请通过 HTTPS 安全地址打开管理网站，再连接比特浏览器；当前 HTTP 公网地址无法执行网页直连。',
   bitbrowser_direct_unreachable:

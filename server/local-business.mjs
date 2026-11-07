@@ -30,6 +30,7 @@ import {
   validateBitBrowserConnectionWrite,
   writeBitBrowserConnection
 } from './bitbrowser-connections.mjs';
+import { bitBrowserWindowDomain, BitBrowserWindowError, readWindowRecord, writeWindowRecord } from './bitbrowser-login-windows.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkInventoryHistory } from './inventory-history.mjs';
 import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
@@ -1001,6 +1002,21 @@ export function createLocalBusinessStore(databasePath) {
         return { version, profiles: summarizeBitBrowserConnections(profiles), savedId };
       });
     },
+    loadBitBrowserWindow(body, actor) {
+      return { record: readWindowRecord(readDocument(`${bitBrowserWindowDomain}:${actor.id}`).data, body) };
+    },
+    saveBitBrowserWindow(body, actor) {
+      const domain = `${bitBrowserWindowDomain}:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        const { record, rows } = writeWindowRecord(current.data, body);
+        const version = current.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(rows)));
+        log.run(new Date().toISOString(), bitBrowserWindowDomain, 'bitbrowser_window_save',
+          auditSummary('保存比特原窗口关联', actor, record.sourceJobId), version);
+        return { record };
+      });
+    },
     loadBitBrowserProxies(actor) {
       const { version, data } = readDocument(`${bitBrowserProxyDomain}:${actor.id}`);
       return { version, items: summarizeBitBrowserProxies(data ?? []) };
@@ -1565,6 +1581,14 @@ export async function handleLocalBusiness(
       }
       throw new LocalDataError(405, '本机接口不支持此操作');
     }
+    if (domain === bitBrowserWindowDomain) {
+      if (!actor?.id) throw new LocalDataError(401, '请先登录');
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      if (request.method === 'POST') return json(response, 200, store.loadBitBrowserWindow(await readJson(request), actor));
+      if (request.method === 'PUT') return json(response, 200, store.saveBitBrowserWindow(await readJson(request), actor));
+      throw new LocalDataError(405, '原窗口接口不支持该操作');
+    }
     if (domain === bitBrowserProxyDomain) {
       if (!actor?.id) throw new LocalDataError(401, '请先登录');
       response.setHeader('Cache-Control', 'private, no-store');
@@ -1631,6 +1655,7 @@ export async function handleLocalBusiness(
       error instanceof RelayClaimError ||
       error instanceof BitBrowserAddressError ||
       error instanceof BitBrowserConnectionError ||
+      error instanceof BitBrowserWindowError ||
       error instanceof SavedTotpError ||
       error instanceof MailboxPoolError
     )

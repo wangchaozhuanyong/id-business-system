@@ -277,6 +277,43 @@ test('uses the preview server existing administrator gate and same-origin write 
   assert.equal(ipUse.headers.get('cache-control'), 'private, no-store');
   assert.equal((await ipUse.json()).countryCode, 'MY');
 
+  const windowPath = 'api/local/bitbrowser-login-windows';
+  const lookup = { connectionKey: 'a'.repeat(64), accountKey: 'b'.repeat(64) };
+  const windowCommand = { ...lookup, version: 0, profileId: 'c'.repeat(32), proxyConfiguration: 'd'.repeat(64) };
+  assert.equal((await request(windowPath, { method: 'POST', body: lookup })).status, 401);
+  assert.equal((await request(windowPath, { method: 'POST', body: lookup, cookie: employeeCookie })).status, 403);
+  assert.equal((await request(windowPath, { method: 'PUT', body: windowCommand, cookie, requestOrigin: 'https://other.example.test' })).status, 403);
+  const savedWindow = await request(windowPath, { method: 'PUT', body: windowCommand, cookie });
+  assert.equal(savedWindow.status, 200);
+  assert.equal(savedWindow.headers.get('cache-control'), 'private, no-store');
+  const originalWindow = await savedWindow.json();
+  assert.equal(originalWindow.record.profileId, windowCommand.profileId);
+  assert.deepEqual(await (await request(windowPath, { method: 'POST', body: lookup, cookie })).json(), originalWindow);
+  assert.equal((await request(windowPath, { method: 'PUT', body: windowCommand, cookie })).status, 409);
+  assert.equal((await request(windowPath, { method: 'PUT', body: { ...windowCommand, version: 1, sessionJson: '{}' }, cookie })).status, 400);
+
+});
+
+test('window links survive store reopening, remain encrypted and belong to one operator', async t => {
+  const directory = await privateDirectory(t);
+  const file = join(directory, 'windows.sqlite');
+  const lookup = { connectionKey: 'a'.repeat(64), accountKey: 'b'.repeat(64) };
+  const body = { ...lookup, version: 0, profileId: 'c'.repeat(32), proxyConfiguration: 'd'.repeat(64) };
+  let store = createLocalBusinessStore(file);
+  let saved;
+  try {
+    saved = store.saveBitBrowserWindow(body, alice);
+    assert.deepEqual(store.loadBitBrowserWindow(lookup, bob), { record: null });
+    assert.throws(() => store.saveBitBrowserWindow({ ...body, version: 1 }, bob), { status: 409 });
+    assert.throws(() => store.load('bitbrowser-login-windows:' + alice.id), { status: 404 });
+    const audit = JSON.stringify(store.audit());
+    for (const value of [lookup.accountKey, lookup.connectionKey, body.profileId, body.proxyConfiguration]) assert(!audit.includes(value));
+  } finally { store.close(); }
+  const bytes = await readFile(file);
+  for (const value of [lookup.accountKey, lookup.connectionKey, body.profileId, body.proxyConfiguration]) assert(!bytes.includes(Buffer.from(value)));
+  store = createLocalBusinessStore(file);
+  try { assert.deepEqual(store.loadBitBrowserWindow(lookup, alice), saved); }
+  finally { store.close(); }
 });
 
 test('account label is optional for old clients, independent of computer remarks and preserved on older writes', () => {

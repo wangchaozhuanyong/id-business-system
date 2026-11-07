@@ -116,6 +116,37 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     assert(actionGeometry.every(Boolean), `${width} operation clipped`);
     await page.locator('#bit-tab-login').click();
     assert.match(await page.locator('#bit-execution-proxy option:checked').innerText(), /菲律宾.*动态住宅/);
+    await page.evaluate(() => window.postMessage({ source: 'id-recharge-shell', type: 'visibility', visible: false }, location.origin));
+    await page.waitForFunction(() => document.querySelector('#bit-local-token').value === '' && document.querySelector('#bit-local-group').disabled);
+    await page.evaluate(() => window.postMessage({ source: 'id-recharge-shell', type: 'visibility', visible: true }, location.origin));
+    await page.getByText('已连接本机比特浏览器，窗口分组和标签已核对。', { exact: true }).waitFor();
+    assert.equal(await page.locator('#bit-connection-profile').inputValue(), profile.id);
+    assert.equal(await page.locator('#bit-execution-proxy').inputValue(), items[0].id);
+    if (width === 1440 && theme === 'light') {
+      await page.evaluate(() => {
+        const original = window.fetch;
+        let delayed = false;
+        window.fetch = async (url, options) => {
+          const response = await original(url, options);
+          if (url === '/api/local/bitbrowser-connections' && options?.method === 'POST' && !delayed) {
+            delayed = true;
+            return { ok: response.ok, status: response.status, json: () => new Promise(resolve => {
+              window.finishLateConnection = () => { window.fetch = original; resolve({ interfaceToken: 'stale-interface-key' }); };
+            }) };
+          }
+          return response;
+        };
+      });
+      await page.locator('#bit-connection-profile').selectOption(profile.id);
+      await page.waitForFunction(() => typeof window.finishLateConnection === 'function');
+      await page.evaluate(() => window.postMessage({ source: 'id-recharge-shell', type: 'visibility', visible: false }, location.origin));
+      await page.waitForFunction(() => document.querySelector('#bit-local-token').value === '');
+      await page.evaluate(() => window.finishLateConnection());
+      assert.equal(await page.locator('#bit-local-token').inputValue(), '');
+      await page.evaluate(() => window.postMessage({ source: 'id-recharge-shell', type: 'visibility', visible: true }, location.origin));
+      await page.getByText('已连接本机比特浏览器，窗口分组和标签已核对。', { exact: true }).waitFor();
+      assert.equal(await page.locator('#bit-local-token').inputValue(), 'synthetic-interface-key');
+    }
     const authorization = JSON.stringify({ sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: 'fixture@example.test' }, account: { id: 'account-fixture' } });
     await page.locator('#bit-authorization-json').fill(authorization);
     assert.equal(await page.locator('#bit-start-login').isEnabled(), true);

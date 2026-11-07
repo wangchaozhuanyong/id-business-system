@@ -223,6 +223,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
       detail = (await api.post('/browser/detail', { id: profileId }, remaining())).data;
       if (!detail || detail.id !== profileId || Object.entries(proxyOptions).some(([key, value]) => String(detail[key] ?? '') !== String(value)))
         throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+      await hooks.progress('bitbrowser_proxy_updated', { browser_profile_id: profileId });
     }
     let originallyRunning = false;
     if (ownedProfile) {

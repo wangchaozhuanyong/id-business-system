@@ -4,14 +4,16 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
+import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 // All requests stay inside the disposable demo host; no business writes or external calls.
 test('recharge transitions keep content and geometry through delayed, superseded and failed loads', { timeout: 90_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const module = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const { chromium } = module.default || module;
-  const host = await startCodexdaichongDemoSite(0);
-  t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
+  const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
+  const host = offline ? { url: offlineOrigin + '/' } : await startCodexdaichongDemoSite(0);
+  if (!offline) t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const origin = new URL(host.url).origin;
@@ -20,6 +22,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
   const results = [];
 
   for (const width of [1440, 390]) for (const dark of [false, true]) {
+    if (process.env.ID_LAYOUT_QA_CASE && process.env.ID_LAYOUT_QA_CASE !== `${width}-${dark ? 'dark' : 'light'}`) continue;
     await t.test(`${width}px ${dark ? 'dark' : 'light'}`, async () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       const errors = [];
@@ -30,7 +33,11 @@ test('recharge transitions keep content and geometry through delayed, superseded
         if (new URL(request.url()).pathname === statusPath) statusChecks++;
       });
       page.setDefaultTimeout(8000);
-      await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
+      // The offline host has no auth service; retain the 401 entry action without a local server.
+      if (offline) await page.addInitScript(() => { window.IDLocalAuth = { getState: () => ({ status: 'signed-in' }), lock() {} }; });
+      const fixtureActor = { id: '11111111-1111-4111-8111-111111111111', name: '离线验收管理员', role: 'super' };
+      const offlineFixture = offline ? await interceptDesign(page.context(), { actor: fixtureActor, localFixtures: { 'auth/session': { configured: true, actor: fixtureActor }, 'bitbrowser-addresses': { items: [], total: 0, totals: { unused: 0, used: 0, disabled: 0 }, page: 1, pageSize: 20 } } }) : null;
+      if (!offline) await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
         ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
       const frameSelector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
       const frame = () => page.frameLocator(frameSelector);
@@ -78,7 +85,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await page.route('**/integrations/codexdaichong/admin?view=dashboard', async route => {
           started.resolve();
           await release.promise;
-          await route.continue().catch(() => {});
+          await (offline ? offlineFixture.handle(route) : route.continue()).catch(() => {});
         }, { times: 1 });
         await startProbe();
         try {
@@ -155,7 +162,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await page.route('**/integrations/bitbrowser/local-login', async route => {
           bitStarted.resolve();
           await bitRelease.promise;
-          await route.continue().catch(() => {});
+          await (offline ? offlineFixture.handle(route) : route.continue()).catch(() => {});
         }, { times: 1 });
         await startProbe();
         try {
@@ -214,6 +221,13 @@ test('recharge transitions keep content and geometry through delayed, superseded
         assert.deepEqual(errors, []);
         if (output) await page.screenshot({ path: join(output, `transition-${width}-${dark ? 'dark' : 'light'}.png`) });
         results.push({ width, theme: dark ? 'dark' : 'light', delayed, rapid, bitFirst, bitReturned, retainedOnFailure: true });
+      } catch (error) {
+        if (output) {
+          if (offlineFixture) await writeFile(join(output, `failure-${width}-${dark ? 'dark' : 'light'}-requests.json`), JSON.stringify({unavailable:offlineFixture.unavailable,external:offlineFixture.external}));
+          await page.screenshot({ path: join(output, `failure-${width}-${dark ? 'dark' : 'light'}.png`), fullPage: true }).catch(() => {});
+          await writeFile(join(output, `failure-${width}-${dark ? 'dark' : 'light'}.html`), await page.content()).catch(() => {});
+        }
+        throw error;
       } finally { await page.close(); }
     });
   }

@@ -9,7 +9,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
   const unavailable = [],
     external = [];
   rechargeAssets ??= await loadCodexdaichongAssets();
-  await context.route('**/*', async (route) => {
+  const handle = async (route) => {
     const url = new URL(route.request().url());
     if (url.origin !== origin) {
       external.push(url.origin);
@@ -77,6 +77,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
         root,
         suffix === 'local.mjs'
           ? 'frontend/bitbrowser-local.mjs'
+          : suffix === 'proxies.mjs' ? 'frontend/bitbrowser-proxies.mjs'
           : 'modules/recharge/bitbrowser/' + suffix
       );
     }
@@ -125,9 +126,10 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       unavailable.push(url.pathname);
       return route.fulfill({ status: 404, body: 'Offline fixture unavailable' });
     }
-  });
+  };
+  await context.route('**/*', handle);
   if (context.routeWebSocket) await context.routeWebSocket('**/*', (socket) => socket.close());
-  return { unavailable, external };
+  return { unavailable, external, handle };
 }
 export async function settle(page) {
   await page.evaluate(
