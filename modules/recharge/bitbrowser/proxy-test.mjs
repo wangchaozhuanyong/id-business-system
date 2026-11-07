@@ -26,11 +26,11 @@ export async function testBitBrowserProxy({ link, protocol = 'auto', mode = 'aut
         signal: AbortSignal.any([signal, AbortSignal.timeout(15000)])
       });
       const result = await response.json();
-      if (!response.ok) throw Object.assign(new Error(result.reason === 'extraction' ? result.error : '提取检测未完成，请确认系统会话后重试。'), { reason: 'extraction' });
+      if (!response.ok) throw Object.assign(new Error(result.reason === 'extraction' ? result.error : '提取检测未完成，请确认系统会话后重试。'), { reason: 'extraction', status: response.status });
       parsed = parseBitBrowserProxyInput(result.link, { protocol: 'auto', mode: 'static' });
       parsed.automaticProtocol = result.automaticProtocol === true;
     } catch (error) {
-      throw Object.assign(new Error(signal.aborted ? '代理检测已取消。' : error.reason === 'extraction' ? error.message : '提取检测请求未完成，请稍后重试；这不代表代理不可用。'), { reason: 'extraction' });
+      throw Object.assign(new Error(signal.aborted ? '代理检测已取消。' : error.reason === 'extraction' ? error.message : '提取检测请求未完成，请稍后重试；这不代表代理不可用。'), { reason: 'extraction', ...(error.status && { status: error.status }) });
     }
   }
   const candidates = parsed.automaticProtocol ? ['socks5', 'http'] : [parsed.protocol];
