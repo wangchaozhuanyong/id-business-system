@@ -211,6 +211,7 @@
       filters.page = result.page;
       renderList();
       feedback(completedMessage);
+      return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (read.current())
@@ -218,6 +219,7 @@
           `${completedMessage ? completedMessage + ' ' : ''}${error.message}。请点击刷新重试。`,
           'warning'
         );
+      return false;
     } finally {
       read.finish();
     }
@@ -292,7 +294,8 @@
       if (scopes.includes(endpoint) && opened() && !saving) return refresh();
     },
     onClick(action, node) {
-      if (action === 'bit-address-refresh') void refresh();
+      if (action === 'bit-address-refresh') void A.withActionFeedback(node, () => refresh(),
+        { pending: '正在刷新地址…', success: '地址列表已刷新', failure: '地址读取失败，请重试' });
       else if (action === 'bit-address-columns') {
         const choices = $('#bit-address-columns');
         choices.hidden = !choices.hidden;

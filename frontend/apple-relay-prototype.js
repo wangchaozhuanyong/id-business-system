@@ -392,8 +392,10 @@
     remote.statusError = '';
     try {
       remote.status = await window.IDLocalData.relay('status');
+      return true;
     } catch (error) {
       remote.statusError = error.message || '无法读取收件服务状态';
+      return false;
     } finally {
       remote.statusLoading = false;
       renderRelayPage();
@@ -2011,11 +2013,13 @@
         mails.splice(0, mails.length, ...result.items);
         if (result.truncated)
           remote.mailError = '仅显示最近一批邮件，可按主邮箱或隐藏邮箱缩小范围。';
+        return true;
       }
     } catch (error) {
       if (request === remote.mailRequest)
         remote.mailError =
           (error.message || '读取邮件失败') + (mails.length ? '。当前显示上次成功结果。' : '');
+      return request === remote.mailRequest ? false : undefined;
     } finally {
       if (request === remote.mailRequest) {
         remote.mailLoading = false;
@@ -2025,8 +2029,7 @@
   }
   function refreshMails(refresh = true) {
     if (local) {
-      void readRemoteMails(refresh);
-      return;
+      return readRemoteMails(refresh);
     }
     const ids = view.parentId
       ? [view.parentId]
@@ -2417,10 +2420,12 @@
     const id = node.dataset.id,
       kind = node.dataset.kind;
     if (action === 'relay-retry') {
-      void A.modules.inventory.refreshLocalInventory();
+      void A.withActionFeedback(node, () => A.modules.inventory.refreshLocalInventory(),
+        { pending: '正在读取隐藏邮箱资料…', success: '隐藏邮箱资料已重新读取', failure: '隐藏邮箱资料读取失败，请重试' });
       A.render();
     } else if (action === 'relay-service-retry') {
-      void readConnection();
+      void A.withActionFeedback(node, () => readConnection(),
+        { pending: '正在读取收件服务状态…', success: '收件服务状态已重新读取', failure: '收件服务状态读取失败，请重试' });
     } else if (local && action === 'relay-primary-import') {
       importExistingPrimaries();
     } else if (action === 'relay-buyer-code-copy') {
@@ -2437,8 +2442,8 @@
       if (code && !navigator.clipboard) A.notify('请选中查询码手动复制');
       if (code && navigator.clipboard)
         void navigator.clipboard.writeText(code).then(
-          () => A.notify('查询码已复制'),
-          () => A.notify('请选中查询码手动复制')
+          () => A.notify('查询码已复制', { kind: 'success' }),
+          () => A.notify('复制失败，请选中查询码手动复制', { kind: 'error' })
         );
     } else if (local && (action === 'relay-parent-test' || action === 'relay-parent-sync')) {
       void runParentOperation(action === 'relay-parent-test' ? 'test' : 'sync', id);
@@ -2499,7 +2504,8 @@
     else if (action === 'relay-alias-more') more('alias', id, node);
     else if (action === 'relay-alias-bind') bindExistingAlias(id, node);
     else if (action === 'relay-mails') openMails(id);
-    else if (action === 'relay-mail-refresh') refreshMails();
+    else if (action === 'relay-mail-refresh') void A.withActionFeedback(node, () => refreshMails(),
+      { pending: '正在读取收件记录…', success: '收件记录已刷新', failure: '收件记录读取失败，请重试' });
     else if (action === 'relay-mail-detail') mailDetail(id);
     else if (action === 'relay-mail-reassign') reassign(id);
     else if (action === 'relay-import-detail') openImportDetail(id);

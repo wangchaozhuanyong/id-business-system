@@ -50,7 +50,7 @@
     refreshing = true;
     bindOverviewRead();
     try {
-      await business.queries.read('overview', key, async () => {
+      const result = await business.queries.read('overview', key, async () => {
         const previous = business.queries.peek('overview', key)?.data || {};
         const { commerce, inventory, appleBalance } = A.modules;
         const dates = recentDates();
@@ -73,8 +73,10 @@
           }
         })));
       }, { refresh, isFresh: (data) => Object.values(data).every((section) => section.phase === 'ready') });
+      return Object.values(result).every(section => section.phase === 'ready');
     } catch (error) {
       if (error?.name !== 'AbortError') A.notify?.('总览暂时无法更新，已保留上次成功内容。');
+      return error?.name === 'AbortError' ? undefined : false;
     } finally {
       regionRead?.finish();
       regionRead = undefined;
@@ -198,7 +200,8 @@
   }
   function onClick(action, node) {
     if (action === 'overview-refresh') {
-      void refreshOverview({ refresh: true });
+      void A.withActionFeedback(node, () => refreshOverview({ refresh: true }),
+        { pending: '正在刷新总览…', success: '总览数据已刷新', failure: '部分数据未能更新，请查看对应区域，已保留上次成功内容' });
       return true;
     }
     if (action === 'overview-range') {

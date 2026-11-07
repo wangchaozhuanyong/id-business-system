@@ -35,6 +35,12 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
         'admin/ip-bans': { bans: [], activeCount: 0 },
         'admin/checkout/plans': { plans: {} },
         'admin/region': { region: 'PH', label: '离线合成地区', currency: 'PHP' },
+        'admin/recharge-routing': {
+          version: 1,
+          regions: { PH: { label: '菲律宾', currency: 'PHP' }, EG: { label: '埃及', currency: 'EGP' } },
+          plans: { plus: 'PH', pro100: 'EG', pro200: 'PH', pro500: 'EG' },
+          checks: [], audit: [], auditCount: 0
+        },
         'admin/gpt-api': { config: {} },
         'admin/gpt-api/status': {},
         'public/runtime': { runtime: { active_foreground_jobs: 0, max_foreground_jobs: 1 } },

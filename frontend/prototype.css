@@ -1692,21 +1692,49 @@ dialog::backdrop {
   flex-wrap: wrap;
 }
 .toast {
+  --notice-color: var(--blue);
   position: fixed;
-  top: 80px;
-  left: 50%;
+  inset: max(16px, env(safe-area-inset-top)) auto auto 50%;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  min-height: 44px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
   transform: translateX(-50%);
-  padding: 12px 20px;
+  padding: 8px 10px 8px 14px;
   border-radius: 8px;
   background: var(--surface);
-  border: 1px solid var(--primary);
-  color: var(--primary);
+  border: 1px solid var(--notice-color);
+  color: var(--text);
   box-shadow: var(--shadow);
   z-index: 30;
   max-width: calc(100vw - 30px);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.7;
 }
+.toast[data-kind='success'] { --notice-color: var(--primary); }
+.toast[data-kind='error'] { --notice-color: var(--danger); }
+.toast[data-kind='warning'] { --notice-color: var(--warning); }
+.toast > .icon { color: var(--notice-color); }
+.toast [data-feedback-message] { min-width: 0; overflow-wrap: anywhere; }
+.toast-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--secondary);
+}
+.toast-dismiss:hover { background: var(--surface-soft); color: var(--text); }
+@media (max-width: 900px) { .toast-dismiss { width: 44px; height: 44px; } }
 .tool-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

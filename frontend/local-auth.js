@@ -236,9 +236,11 @@
       staff.rows = employees;
       staff.status = 'ready';
       staff.error = '';
+      return true;
     } catch (error) {
       if (staff.status !== 'ready') staff.status = 'error';
       staff.error = error.message || '无法载入员工账户。';
+      return false;
     } finally {
       employeeRead?.finish();
       employeeRead = undefined;
@@ -522,7 +524,9 @@
       api.render();
     } else if (action === 'ops-local-staff-add') editEmployee(api);
     else if (action === 'ops-local-staff-edit') editEmployee(api, id);
-    else if (action === 'ops-local-staff-reload') void loadEmployees(api, true);
+    else if (action === 'ops-local-staff-reload') void api.withActionFeedback(null,
+      () => loadEmployees(api, true),
+      { pending: '正在刷新员工列表…', success: '员工列表已刷新', failure: '员工列表读取失败，请重试' });
     else if (action === 'ops-local-staff-toggle') {
       const original = staff.rows.find((row) => row.id === id);
       if (!original || original.role === 'super') return;

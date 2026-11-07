@@ -263,7 +263,7 @@
   }
   function persistCommerce(action, mutate, completed, dependencies = [], afterCommit) {
     if (!localData) {
-      if (mutate() !== false) completed();
+      if (mutate() !== false) A.completeAction ? A.completeAction(completed) : completed();
       return;
     }
     if (localPhase !== 'ready' || saving) {
@@ -309,6 +309,7 @@
     } else {
       commit = localData.save('commerce', localVersion, next, { action, summary: action });
     }
+    const feedback = A.beginActionFeedback?.(null, '正在保存记录…');
     void commit
       .then(
         (result) => {
@@ -317,7 +318,8 @@
           afterCommit?.();
           const unchanged = !submittedForm || (submittedForm.isConnected &&
             JSON.stringify(readCommerceDraft(submittedForm)) === submittedDraft);
-          if (S.route === route && S.drawerContext === drawerContext && unchanged) completed();
+          if (S.route === route && S.drawerContext === drawerContext && unchanged)
+            A.completeAction ? A.completeAction(completed, '记录已保存') : completed();
           else {
             saveDrafts();
             const activeForms = [...document.querySelectorAll(
@@ -361,6 +363,7 @@
         }
       )
       .finally(() => {
+        feedback?.finish();
         saving = false;
       });
   }
@@ -636,11 +639,13 @@
         if (search) filterPicker(search);
         if (product === 'GPT') refreshPoolUsage(form);
         A.setError('commerce-cardId', '');
+        return true;
       }
     } catch (error) {
       if (cardLoads.get(form) !== request) return;
       cardLoads.delete(form);
       if (form.isConnected) A.setError('commerce-cardId', error.message || '未能读取银行卡，请重试');
+      return false;
     }
   }
   function cardIssueRecorded(cardId, excludeId = '') {
@@ -1348,10 +1353,12 @@
       if (!valid) select.selectedOptions[0].disabled = true;
       filterPicker(select.closest('.commerce-search-picker').querySelector('[data-commerce-picker]'));
       A.setError('commerce-ownerId', valid ? '' : '所选归属人已停用或不存在，请重新选择');
+      return true;
     } catch (error) {
       if (form.isConnected && orderOwnerLoads.get(form) === request) {
         orderOwnerLoads.delete(form);
         A.setError('commerce-ownerId', '人员读取失败，请点击右侧刷新重试；仍可归属当前账号。');
+        return false;
       }
     } finally {
       if (orderOwnerLoads.get(form) === request || !orderOwnerLoads.has(form)) trigger.removeAttribute('aria-busy');
@@ -1981,7 +1988,7 @@
     const id = form.elements['commerce-cardId'].value;
     if (!tenantId || !id) {
       A.setError('commerce-cardId', '请先选择租户银行卡');
-      return;
+      return false;
     }
     try {
       const response = await localData.tenantCardAction({ action, tenantId, id });
@@ -1994,8 +2001,10 @@
         row.hidden = false;
       }
       A.setError('commerce-cardId', '');
+      return true;
     } catch (error) {
       if (form.isConnected) A.setError('commerce-cardId', error.message || '无法读取银行卡，请重试');
+      return false;
     }
   }
   async function openTenantCards(tenantId) {
@@ -4660,7 +4669,9 @@
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
     if (action === 'commerce-order-owner-refresh') {
-      if (canManageOrders()) void loadOrderOwners(node.closest('#commerce-order-form'), true);
+      if (canManageOrders()) void A.withActionFeedback(node,
+        () => loadOrderOwners(node.closest('#commerce-order-form'), true),
+        { pending: '正在刷新归属人…', success: '归属人列表已刷新', failure: '人员读取失败，请重试' });
       return true;
     }
     if (action === 'commerce-picker-select') {
@@ -4679,7 +4690,8 @@
     if (!canManageOrders() && /^commerce-(?:new-product-order|order-(?:edit|refund|more|pending|auto-fx|fx)|tenant-card)/.test(action)) return true;
     if (action === 'commerce-order-card-retry') {
       const form = node.closest('#commerce-order-form');
-      if (form) void loadOrderCards(form, true);
+      if (form) void A.withActionFeedback(node, () => loadOrderCards(form, true),
+        { pending: '正在刷新银行卡…', success: '银行卡列表已刷新', failure: '银行卡读取失败，请重试' });
       return true;
     }
     if (action === 'commerce-tenant-cards') {
@@ -4688,7 +4700,11 @@
     }
     if (action === 'commerce-tenant-card-reveal' || action === 'commerce-tenant-card-copy') {
       const form = node.closest('#commerce-order-form');
-      if (form) void useTenantCard(form, action.endsWith('copy') ? 'copy' : 'reveal');
+      if (form) {
+        if (action.endsWith('copy')) void useTenantCard(form, 'copy');
+        else void A.withActionFeedback(node, () => useTenantCard(form, 'reveal'),
+          { pending: '正在读取银行卡…', success: '完整银行卡号已显示', failure: '银行卡未读取，请检查所选资料' });
+      }
       return true;
     }
     if (action === 'commerce-tenant-card-deactivate') {
@@ -4719,7 +4735,8 @@
       return true;
     }
     if (action === 'commerce-local-retry') {
-      loadLocalCommerce(true);
+      void A.withActionFeedback(node, () => loadLocalCommerce(true),
+        { pending: '正在读取业务资料…', success: '业务资料已重新读取', failure: '业务资料读取失败，请重试' });
       A.render();
       return true;
     }

@@ -179,6 +179,7 @@
     }
 
     inventorySavePending = true;
+    const feedback = api.beginActionFeedback?.(null, '正在保存资料…');
     try {
       saved = await localData.save('inventory', localInventoryVersion, after, { action });
       applyCommittedInventory(saved);
@@ -201,6 +202,7 @@
       }
       return;
     } finally {
+      feedback?.finish();
       inventorySavePending = false;
     }
 
@@ -213,7 +215,7 @@
         api.state.drafts.delete(draftKey);
         draftForm.removeAttribute('data-inventory-draft');
       }
-      finish();
+      api.completeAction ? api.completeAction(finish, '资料变更已保存') : finish();
     } else {
       saveDrafts();
       if (draftKey && JSON.stringify(api.state.drafts.get(draftKey)) === submittedDraft)
@@ -3317,7 +3319,8 @@
     if (!action.startsWith('inventory-')) return false;
     if (action === 'inventory-reload') {
       if (localData && localInventoryState === 'error') {
-        void readLocalInventory();
+        void api.withActionFeedback(node, () => readLocalInventory(),
+          { pending: '正在读取库存…', success: '库存资料已重新读取', failure: '库存读取失败，请重试' });
         api.render();
       }
       return true;
