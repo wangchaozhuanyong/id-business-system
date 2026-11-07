@@ -148,7 +148,7 @@ const sessionEventLabels = {
   relay_mail_reassign: '分配苹果邮箱邮件归属',
   relay_history_preview: '预检苹果邮箱历史邮件归属'
 };
-const orderFeatureDomains = new Set(['recharge-codes', 'tenant-cards', 'order-sync']);
+const orderFeatureDomains = new Set(['recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates']);
 const orderFeatureAuditLabels = {
   recharge_code_request: '申请充值码',
   recharge_code_approve: '批准充值码申请',
@@ -1379,10 +1379,12 @@ export function createLocalBusinessStore(databasePath) {
       if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
       return readDocument(domain);
     },
-    saveFeatureDocument(domain, version, data, { action, actor, targetId } = {}) {
+    saveFeatureDocument(domain, version, data, { action, actor, targetId, commerceVersion } = {}) {
       if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
       return writeTransaction(() => {
         if (readDocument(domain).version !== version) throw new LocalDataError(409, '资料已更新，请刷新后重试');
+        if (domain === 'finance-rates' && commerceVersion !== undefined && readDocument('commerce').version !== commerceVersion)
+          throw new LocalDataError(409, '订单报价引用已更新，请重新预览清理范围');
         const next = version + 1;
         put.run(domain, next, encrypt(key, domain, next, JSON.stringify(data)));
         if (action) log.run(new Date().toISOString(), domain, action,
@@ -1488,7 +1490,7 @@ export function createLocalBusinessStore(databasePath) {
       for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
-        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync']) versions[scope] = version(scope);
+        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates']) versions[scope] = version(scope);
         versions['tools/mailbox-pool'] = version(managedMailboxDomain);
         versions['tools/website-visits'] = version(websiteVisitsDomain);
         versions['apple-relay'] = String(relayRevision.get().version);

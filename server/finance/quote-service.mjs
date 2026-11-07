@@ -19,9 +19,11 @@ function toCny(raw) {
   return `${inverted / scale}.${String(inverted % scale).padStart(8, '0')}`;
 }
 
-async function readQuote(response, clock) {
+export async function readFinanceQuote(response, clock, codes = currencies, partial = false) {
   // Preserve the provider's original JSON digits for exact reciprocal rounding.
-  const data = JSON.parse(await response.text(), (_key, value, context) =>
+  const text = await response.text();
+  if (text.length > 1_000_000) throw new Error('供应商响应过长');
+  const data = JSON.parse(text, (_key, value, context) =>
     typeof value === 'number' ? context.source : value
   );
   if (data?.result !== 'success' || data.base_code !== 'CNY' ||
@@ -37,22 +39,42 @@ async function readQuote(response, clock) {
   if (!(at <= fetchedAt && fetchedAt < expiresAt)) throw new Error('供应商报价尚未生效或已过期');
   if (!/^1(?:\.0+)?$/.test(data.rates.CNY))
     throw new Error('供应商报价基准无效');
-  const rates = Object.fromEntries(currencies.map((code) => [
-    code, code === 'CNY' ? '1' : toCny(data.rates[code])
-  ]));
+  const rates = { CNY: '1' }, errors = {};
+  for (const code of codes.filter(code => code !== 'CNY')) {
+    try { rates[code] = toCny(data.rates[code]); }
+    catch (error) { if (!partial) throw error; errors[code] = '报价缺失或格式无效'; }
+  }
   return {
     provider: automaticProvider.id, source: automaticProvider.source, rates,
     at: new Date(at).toISOString(),
     expiresAt: new Date(expiresAt).toISOString(),
-    fetchedAt: new Date(fetchedAt).toISOString()
+    fetchedAt: new Date(fetchedAt).toISOString(), ...(partial && { errors })
   };
 }
 
+export async function fetchFinanceQuote({ fetchQuote = globalThis.fetch, clock = Date.now,
+  codes = currencies, partial = false, signal } = {}) {
+  const response = await fetchQuote(endpoint, {
+    redirect: 'error', headers: { Accept: 'application/json' },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000)
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw Object.assign(new Error(response.status === 429 ? '来源请求受限，等待冷却后重试' : '汇率来源暂时不可用'), { status: response.status });
+  }
+  return readFinanceQuote(response, clock, codes, partial);
+}
+
 export function createFinanceQuoteService({
-  provider = 'disabled', fetchQuote = globalThis.fetch, clock = Date.now
+  provider = 'disabled', fetchQuote = globalThis.fetch, clock = Date.now, collection
 } = {}) {
   if (provider !== 'disabled' && provider !== automaticProvider.id)
     throw new Error('未识别的自动汇率来源');
+  if (collection) return {
+    get enabled() { return collection.sourceEnabled; },
+    snapshotFor: collection.snapshotFor,
+    verifySnapshot: collection.verifySnapshot
+  };
   const enabled = provider !== 'disabled';
   let cached;
   let inFlight;
@@ -69,16 +91,10 @@ export function createFinanceQuoteService({
   async function refresh() {
     let backoff = 60_000;
     try {
-      const response = await fetchQuote(endpoint, {
-        redirect: 'error',
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(4000)
-      });
-      if (response.status === 429) backoff = 20 * 60_000;
-      if (!response.ok) throw new Error('供应商请求失败');
-      cached = await readQuote(response, clock);
+      cached = await fetchFinanceQuote({ fetchQuote, clock });
       return cached;
-    } catch {
+    } catch (error) {
+      if (error.status === 429) backoff = 20 * 60_000;
       cached = undefined;
       failure = new Error('暂时没有完整且有效的自动报价');
       retryAt = clock() + backoff;

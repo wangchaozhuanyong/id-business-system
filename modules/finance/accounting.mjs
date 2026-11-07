@@ -84,9 +84,10 @@ function normalizeAutomaticSnapshot(input, orderAt, clock) {
   const fetchedAt = instant(input.fetchedAt);
   if (!(fetchedAt >= instant(checked.at) && fetchedAt < instant(checked.expiresAt) && fetchedAt <= clock))
     throw new Error('自动报价采集时间无效');
-  if (currencies.some((code) => !Object.hasOwn(checked.rates, code)))
-    throw new Error('自动报价币种不完整');
-  return { kind: 'automatic', provider: input.provider, fetchedAt: new Date(fetchedAt).toISOString(), ...checked };
+  if (input.quoteId !== undefined && !/^fxq-[a-f0-9]{64}$/.test(input.quoteId))
+    throw new Error('自动报价凭据编号无效');
+  return { kind: 'automatic', provider: input.provider, fetchedAt: new Date(fetchedAt).toISOString(),
+    ...(input.quoteId && { quoteId: input.quoteId }), ...checked };
 }
 
 function readSnapshot(order, clock) {
@@ -229,8 +230,10 @@ export function createOrderSnapshot(input, order, clock = Date.now()) {
   return snapshot;
 }
 
-export function createAutomaticOrderSnapshot(quote, order, clock = Date.now()) {
+export function createAutomaticOrderSnapshot(quote, order, clock = Date.now(), { historical = false } = {}) {
   checkFeeSnapshot(order);
-  if (!(clock < instant(quote.expiresAt))) throw new Error('当前自动报价已过期');
+  if (!(clock < instant(quote.expiresAt)) && !(historical && quote.quoteId)) throw new Error('当前自动报价已过期');
+  const missing = requiredQuoteCurrencies(order).filter(code => !quote.rates || !Object.hasOwn(quote.rates, code));
+  if (missing.length) throw new Error(`自动报价缺少 ${missing.join('、')} 汇率`);
   return normalizeAutomaticSnapshot(quote, order.start, clock);
 }
