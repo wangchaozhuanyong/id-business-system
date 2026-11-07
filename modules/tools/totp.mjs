@@ -6,8 +6,6 @@ function decodeSecret(secret) {
   if (!/^[A-Z2-7]+={0,6}$/.test(input) || input.length > 1024)
     throw new Error('请输入有效的 Base32 密钥');
   const encoded = input.replace(/=+$/, '');
-  if (encoded.length < 16 || new Set(encoded).size < 6)
-    throw new Error('请使用验证器提供的 Base32 密钥（至少 16 位）');
   const padding = input.length - encoded.length;
   const validTail = [0, 2, 4, 5, 7].includes(encoded.length % 8);
   if (!validTail || (padding && input.length % 8 !== 0)) throw new Error('Base32 密钥长度不正确');

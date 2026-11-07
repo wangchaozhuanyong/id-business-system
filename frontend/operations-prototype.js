@@ -1765,7 +1765,7 @@
     }
     list.innerHTML = `<div class="guide-list">${items.slice((page - 1) * savedTotpPageSize, page * savedTotpPageSize).map((row) => {
       const attrs = `data-id="${esc(row.id)}" data-name="${esc(row.name)}"`;
-      return `<article class="totp-code-card"><header class="totp-code-card__heading"><h4>${esc(row.name)}</h4>${row.issuer ? `<p>${esc(row.issuer)}</p>` : ''}</header><div class="totp-code-card__value" data-saved-totp-code data-id="${esc(row.id)}">正在获取验证码…</div><footer class="totp-code-card__actions">${button('编辑', 'ops-saved-totp-edit', '', '', attrs)}${button('删除', 'ops-saved-totp-delete', '', '', attrs)}</footer></article>`;
+      return `<article class="totp-code-card totp-code-card--saved"><header class="totp-code-card__heading"><div class="totp-code-card__identity"><h4 title="${esc(row.name)}">${esc(row.name)}</h4>${row.issuer ? `<p title="${esc(row.issuer)}">${esc(row.issuer)}</p>` : ''}</div><div class="totp-code-card__actions">${button('编辑', 'ops-saved-totp-edit', '', '', attrs)}${button('删除', 'ops-saved-totp-delete', '', '', attrs)}</div></header><div class="totp-code-card__value" data-saved-totp-code data-id="${esc(row.id)}">正在获取验证码…</div></article>`;
     }).join('')}</div>${pages > 1 ? `<div class="toolbar"><span>共 ${items.length} 条 · 第 ${page} / ${pages} 页</span>${button('上一页', 'ops-saved-totp-page', '', '', `data-page="${page - 1}" ${page === 1 ? 'disabled' : ''}`)}${button('下一页', 'ops-saved-totp-page', '', '', `data-page="${page + 1}" ${page === pages ? 'disabled' : ''}`)}</div>` : ''}`;
     refreshVisibleSavedTotp(panel);
   }
@@ -1859,7 +1859,7 @@
         return;
       }
       output.dataset.expiry = String(expiry);
-      output.innerHTML = `<div class="totp-code-card__reading"><strong class="ops-code" aria-label="当前验证码">${esc(code)}</strong><span class="totp-countdown">剩余 <span data-totp-countdown>${remaining}</span> 秒</span></div>${button('复制验证码', 'ops-totp-copy', 'primary', 'copy', `data-code="${esc(code)}" data-expires-at="${expiry}"`)}`;
+      output.innerHTML = `<div class="totp-code-card__reading"><strong class="ops-code" aria-label="当前验证码">${esc(code)}</strong><span class="totp-countdown"><span class="totp-countdown__label">剩余</span><span data-totp-countdown>${remaining}</span>秒</span></div>${button('复制', 'ops-totp-copy', 'primary', 'copy', `aria-label="复制验证码" data-code="${esc(code)}" data-expires-at="${expiry}"`)}`;
       paintTotpCountdown(output.querySelector('[data-totp-countdown]'), remaining);
     } catch (error) {
       if (!output.closest('dialog[open]')) return;
@@ -1880,9 +1880,9 @@
         </div>${grid(
         wide(
           field(
-            '2FA 密钥',
+            '密钥',
             'ops-totp-secret',
-            `<div class="totp-input-actions"><input id="ops-totp-secret" name="ops-totp-secret" type="password" maxlength="20000" placeholder="粘贴 Base32 密钥或 otpauth 链接" autocomplete="off" spellcheck="false" data-no-draft><div class="totp-input-controls"><span data-totp-lines hidden>0 / 50 行</span>${button('显示密钥', 'ops-totp-visibility', '', '', 'aria-pressed="false"')}${button('一键粘贴', 'ops-tool-paste', '', 'copy', 'data-field="ops-totp-secret"')}</div></div>`,
+            `<div class="totp-input-actions"><input id="ops-totp-secret" name="ops-totp-secret" type="password" maxlength="20000" placeholder="粘贴 Base32 密钥或 otpauth 链接" autocomplete="off" spellcheck="false" data-no-draft><div class="totp-input-controls"><span data-totp-lines hidden>0 / 50 行</span>${button('显示密钥', 'ops-totp-visibility', '', '', 'aria-pressed="false"')}${button('一键粘贴', 'ops-tool-paste', '', 'copy', 'data-field="ops-totp-secret"')}${button('重试', 'ops-totp-retry', '', 'refresh', 'hidden')}</div></div>`,
             true,
             '<span data-totp-input-help>粘贴后自动生成。密钥仅在本机计算。</span>'
           )
@@ -1901,6 +1901,7 @@
       form.querySelector('[data-totp-lines]').textContent =
         `${event.target.value.split(/\r?\n/).filter((line) => line.trim()).length} / 50 行`;
       setError('ops-totp-secret', '');
+      form.querySelector('[data-action="ops-totp-retry"]').hidden = true;
     });
     form.addEventListener('keydown', (event) => {
       if (event.target.id === 'ops-totp-secret' && form.dataset.mode === 'single' && event.key === 'Enter') {
@@ -1983,7 +1984,23 @@
     }
     form.querySelector('#ops-totp-result').replaceChildren();
     setError(control.id, '');
+    form.querySelector('[data-action="ops-totp-retry"]').hidden = true;
     control.focus();
+  }
+  let totpCalculatorModule, totpCalculatorAttempt = 0;
+  function loadTotpCalculator() {
+    if (!totpCalculatorModule) {
+      // A failed dynamic import stays cached for its URL in this document.
+      // Each explicit retry gets a fresh URL; successful loads remain shared.
+      const attempt = ++totpCalculatorAttempt;
+      totpCalculatorModule = import(`/assets/tools/totp.mjs?v=20261108&attempt=${attempt}`).catch(() => {
+        totpCalculatorModule = undefined;
+        const error = new Error('验证码组件暂时加载失败，输入已保留，请点击重试。');
+        error.code = 'TOTP_MODULE_UNAVAILABLE';
+        throw error;
+      });
+    }
+    return totpCalculatorModule;
   }
   async function runTotp(form) {
     const control = form.querySelector('#ops-totp-secret');
@@ -1991,7 +2008,7 @@
     const output = form.querySelector('#ops-totp-result');
     if (submit.disabled) return;
     let source = control.value;
-    control.value = '';
+    form.querySelector('[data-action="ops-totp-retry"]').hidden = true;
     output.replaceChildren();
     setError('ops-totp-secret', '');
     if (!source.trim()) {
@@ -2001,10 +2018,11 @@
     submit.disabled = true;
     control.disabled = true;
     try {
-      const { prepareTotpBatch } = await import('/assets/tools/totp.mjs');
+      const { prepareTotpBatch } = await loadTotpCalculator();
       const { accounts, errors } = await prepareTotpBatch(source);
       source = '';
       if (!toolActive(form)) return;
+      if (accounts.length) control.value = '';
       output.innerHTML = `<div class="guide-list">${accounts
         .map(
           ({ label }) =>
@@ -2046,7 +2064,10 @@
       };
       void tick();
     } catch (error) {
-      if (form.isConnected) setError('ops-totp-secret', error.message || '无法计算验证码');
+      if (toolActive(form)) {
+        setError('ops-totp-secret', error.message || '无法计算验证码');
+        form.querySelector('[data-action="ops-totp-retry"]').hidden = error.code !== 'TOTP_MODULE_UNAVAILABLE';
+      }
     } finally {
       source = '';
       submit.disabled = false;
@@ -3398,6 +3419,10 @@
     }
     if (action === 'ops-totp-mode') {
       selectTotpMode(node.closest('form'), node.dataset.mode);
+      return true;
+    }
+    if (action === 'ops-totp-retry') {
+      node.closest('form').requestSubmit();
       return true;
     }
     if (action === 'ops-totp-visibility') {

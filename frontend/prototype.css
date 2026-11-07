@@ -1996,7 +1996,12 @@ dialog::backdrop {
   gap: 12px;
   margin-bottom: 8px;
 }
-.totp-input-actions,
+.totp-input-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
 .totp-input-controls {
   display: flex;
   align-items: center;
@@ -2004,8 +2009,7 @@ dialog::backdrop {
   flex-wrap: wrap;
 }
 .totp-input-actions > input {
-  flex: 1 1 220px;
-  width: auto;
+  width: 100%;
   min-width: 0;
 }
 .totp-input-controls {
@@ -2017,7 +2021,18 @@ dialog::backdrop {
 }
 #ops-totp-form[data-mode='batch'] .totp-input-controls {
   order: -1;
-  width: 100%;
+  grid-column: 1 / -1;
+}
+#ops-totp-form[data-mode='batch'] .totp-input-actions > textarea {
+  grid-column: 1 / -1;
+}
+@media (max-width: 520px) {
+  .totp-input-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .totp-input-controls > .button {
+    flex: 1 1 auto;
+  }
 }
 [data-totp-lines] {
   margin-right: auto;
@@ -3498,6 +3513,52 @@ details.toolbox-phrase-more[open] > summary {
   border-top: 1px solid var(--line);
   padding-top: 12px;
 }
+.totp-code-card--saved {
+  gap: 8px;
+  padding: 12px;
+}
+.totp-code-card--saved .totp-code-card__heading,
+.totp-code-card__identity,
+.totp-code-card--saved .totp-code-card__reading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.totp-code-card__identity {
+  flex: 1;
+  min-width: 0;
+}
+.totp-code-card__identity :is(h4, p) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.totp-code-card__identity h4 {
+  flex: 1;
+}
+.totp-code-card__identity p {
+  max-width: 42%;
+}
+.totp-code-card--saved .totp-code-card__actions {
+  flex: none;
+  flex-wrap: nowrap;
+  border: 0;
+  padding: 0;
+}
+.totp-code-card--saved .totp-code-card__value {
+  min-height: 36px;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.totp-code-card--saved .totp-code-card__value > .button {
+  flex: none;
+}
+.totp-code-card--saved .ops-code {
+  font-size: 28px;
+  letter-spacing: 0.04em;
+  line-height: 36px;
+  font-variant-numeric: tabular-nums;
+}
 @media (max-width: 520px) {
   .totp-code-card {
     padding: 16px;
@@ -3507,6 +3568,15 @@ details.toolbox-phrase-more[open] > summary {
   }
   .totp-code-card__value > .button {
     flex: 1 1 120px;
+  }
+  .totp-code-card--saved {
+    padding: 12px;
+  }
+  .totp-code-card--saved .ops-code {
+    font-size: 24px;
+  }
+  .totp-code-card--saved .totp-countdown__label {
+    display: none;
   }
 }
 /* Panels with tabs/tables keep their edges; content sections own the inset. */
