@@ -92,3 +92,9 @@ test('native timeout is incomplete and auto detection can continue with the next
   await assert.rejects(() => testBitBrowserProxy({ ...input, link: 'socks5://user:synthetic-pass@proxy.test:1080' }), e => e.reason === 'bitbrowser_proxy_probe_timeout' && /30 秒/.test(e.message));
   assert.equal(calls.length, 1, '超时不能被误当成连接中断重复检测');
 });
+
+test('extraction rate-limit metadata remains available to the bulk controller', async () => {
+  await assert.rejects(() => testBitBrowserProxy({ link: 'https://extract.example.test/api?key=synthetic',
+    fetchExtraction: async () => Response.json({ error: '代理提取检测过于频繁，请稍后重试。', reason: 'extraction' }, { status: 429 })
+  }), error => error.reason === 'extraction' && error.status === 429 && !error.message.includes('synthetic'));
+});
