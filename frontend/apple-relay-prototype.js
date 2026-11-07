@@ -1574,6 +1574,11 @@
           ? A.button('查看查询码', 'relay-live-code-read', '', 'key', attr) +
             A.button('重置查询码', 'relay-live-code-reset', '', 'refresh', attr)
           : '') +
+        (kind === 'alias' && row.relayStatus === 'ACTIVE' && !row.remoteAliasId &&
+          !codeTargetBound(kind, id) && bound(row.parentMailboxId)
+          ? A.button('接入收件服务', 'relay-alias-bind', '', 'mail',
+              `${attr} ${remote.pending.has('bind:' + id) ? 'disabled' : ''}`)
+          : '') +
         (kind === 'parent' && bound(id)
           ? A.button(
               '测试连接',
@@ -1629,6 +1634,58 @@
         : '操作前核对对象和状态；查询码重置会使旧码失效。禁用不抹去库存或邮件历史。',
       `<div class="property-list">${prop('邮箱', row.email)}${prop('编号', row.id)}${prop(kind === 'alias' ? '邮箱状态' : '账号状态', status(row))}${kind === 'alias' ? prop('账号状态', healthLabel(row)) : ''}</div><div class="drawer-action-bar">${actions}${healthActions}</div>`,
       A.button('关闭', 'drawer-close')
+    );
+  }
+  function bindExistingAlias(id, button) {
+    initialize();
+    const row = alias(id);
+    const owner = row && parent(row.parentMailboxId);
+    if (!row || !owner || !bound(owner.id) || codeTargetBound('alias', id)) return;
+    const version = row.version || 1;
+    const parentVersion = owner.version || 1;
+    const operatorId = actor().id;
+    const drawerContent = document.querySelector('#drawer')?.firstElementChild;
+    const pendingKey = 'bind:' + id;
+    A.confirmAction(
+      '确认接入收件服务',
+      `将 ${row.email} 接入所属主邮箱 ${owner.email} 的收件服务。已有的同主邮箱地址会复用，保留本条库存及领用历史。`,
+      async () => {
+        if (remote.pending.has(pendingKey)) return;
+        const current = alias(id);
+        if (!current || (current.version || 1) !== version ||
+            (parent(owner.id)?.version || 1) !== parentVersion || actor().id !== operatorId) {
+          A.notify('邮箱资料或当前账号已变化，请重新打开后核对');
+          return;
+        }
+        remote.pending.add(pendingKey);
+        button.disabled = true;
+        try {
+          const result = await window.IDLocalData.relay('alias-register', {
+            existingId: id, existingVersion: version, parentId: owner.id, parentVersion,
+            days: Number(row.codeResetIntervalDays || 30), batch: false,
+            rows: [{ email: row.email, note: row.notes || '' }]
+          });
+          if (actor().id !== operatorId) return;
+          A.modules.inventory.applyCommittedInventory(result.inventory);
+          initialize();
+          await readConnection();
+          if (document.querySelector('#drawer')?.open &&
+              document.querySelector('#drawer').firstElementChild === drawerContent) more('alias', id);
+          A.notify('原隐藏邮箱已接入收件服务，可查看查询码和收件记录');
+        } catch (error) {
+          if (actor().id !== operatorId) return;
+          if (error.status === 409) {
+            await A.modules.inventory.refreshLocalInventory({ keepContent: true });
+            initialize();
+            renderRelayPage();
+          }
+          A.notify(error.message || '接入失败，请核对后重试');
+        } finally {
+          remote.pending.delete(pendingKey);
+          button.disabled = false;
+        }
+      },
+      '确认接入'
     );
   }
   async function previewRemoteHistory(id) {
@@ -2329,6 +2386,7 @@
     else if (action === 'relay-alias-detail') openAliasDetail(id);
     else if (action === 'relay-parent-more') more('parent', id);
     else if (action === 'relay-alias-more') more('alias', id);
+    else if (action === 'relay-alias-bind') bindExistingAlias(id, node);
     else if (action === 'relay-mails') openMails(id);
     else if (action === 'relay-mail-refresh') refreshMails();
     else if (action === 'relay-mail-detail') mailDetail(id);

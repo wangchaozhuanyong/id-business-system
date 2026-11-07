@@ -186,6 +186,58 @@ test('registers only submitted Apple aliases, reconciles an interrupted batch an
   assert.equal(state.upstream.aliases.filter(({ aliasEmail }) => aliasEmail === 'batch-first@example.test').length, 1);
 });
 
+test('binds a previously recorded alias without replacing its identity, usage, provenance or history', async (t) => {
+  const state = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const original = {
+    id: 'previous-local', aliasId: 'previous-local', type: 'relay',
+    email: 'unbound@example.test', parentMailboxId: 'one', relayStatus: 'ACTIVE',
+    notes: '原录入备注', codeResetIntervalDays: 30, version: 4,
+    inventoryState: 'available', used: false, usageLinks: [],
+    source: 'Apple 主邮箱登记', importId: 'previous-import',
+    createdAt: '2026-11-01T01:02:00Z', importedAt: '2026-11-02T01:02:00Z',
+    createdById: 'original-operator', createdBy: '原录入人',
+    inventoryHistory: [{ id: 'original-event', action: '登记隐藏邮箱', time: '2026-11-03 10:00', actor: '原录入人' }]
+  };
+  state.inventory = {
+    ...Object.fromEntries(['mailboxes', 'accounts', 'batches', 'returnRecords', 'importRecords',
+      'registrationRecords', 'tableSettings', 'undo'].map((key) => [key, []])),
+    mailboxes: [original],
+    appleRelay: { parents: state.inventory.appleRelay.parents, imports: [], events: [] }
+  };
+  store.saveBatch([{ domain: 'inventory', version: 0, data: state.inventory }]);
+  state.savePrimaries = (rows, actor, aliases, registration) => {
+    const result = store.saveAppleRelayPrimaries(rows, { ...actor, name: '补接测试员' }, aliases, registration);
+    state.inventory = result.data;
+    return result;
+  };
+  const request = await listen(t, state);
+  const input = {
+    existingId: original.id, existingVersion: 4, parentId: 'one', parentVersion: 1,
+    days: 30, batch: false, rows: [{ email: original.email, note: original.notes }]
+  };
+  assert.equal((await request('alias-register', { ...input, existingVersion: 3 })).status, 409);
+  assert.equal((await request('alias-register', { ...input, parentId: 'two' })).status, 409);
+  assert.equal((await request('alias-register', { ...input, batch: true })).status, 400);
+  const result = await request('alias-register', input);
+  assert.equal(result.status, 200);
+  const [saved] = result.body.inventory.data.mailboxes;
+  for (const field of ['id', 'aliasId', 'email', 'parentMailboxId', 'notes', 'inventoryState', 'used',
+    'usageLinks', 'source', 'importId', 'createdAt', 'importedAt', 'createdById', 'createdBy'])
+    assert.deepEqual(saved[field], original[field], field);
+  assert.equal(saved.remoteAliasId, 'va-unbound');
+  assert.equal(saved.version, 5);
+  assert.equal(saved.lastOperatedBy, '补接测试员');
+  assert.deepEqual(saved.inventoryHistory.slice(0, -1), original.inventoryHistory);
+  assert.equal(saved.inventoryHistory.at(-1).action, '接入收件服务');
+  assert.equal(state.upstream.calls.some(({ query }) => query.includes('mutation')), false);
+  assert(!JSON.stringify(result.body).includes('BUY-UNBOUND'));
+  assert((await request('status')).body.aliasIds.includes(saved.id));
+  assert.equal((await request('alias-register', input)).status, 409);
+  assert.equal(store.load('inventory').data.mailboxes.length, 1);
+});
+
 function fakeVendure() {
   const primaries = [
     primary('vp-one', 'one@example.test', 'MSTR-ONE'),

@@ -24,7 +24,7 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
   const inventory = {
     mailboxes: [asset('qa-google', 'google'), asset('qa-claimed', 'google', {
       inventoryState: 'claimed', used: true, claimId: 'qa-claim', claimBatchId: 'qa-batch'
-    }), asset('qa-apple', 'apple'), ...['a', 'b'].map(suffix => asset(`qa-relay-${suffix}`, 'relay', {
+    }), asset('qa-apple', 'apple'), ...['a', 'b', 'c'].map(suffix => asset(`qa-relay-${suffix}`, 'relay', {
       parentMailboxId: 'qa-parent', relayStatus: 'ACTIVE', aliasId: `qa-relay-${suffix}`
     }))],
     accounts: [],
@@ -48,6 +48,10 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     ? route.continue() : route.abort());
   await page.route('**/api/local/apple-relay/*', route => {
     const operation = new URL(route.request().url()).pathname.split('/').at(-1);
+    if (operation === 'alias-register') return route.fulfill({
+      status: 503, contentType: 'application/json',
+      body: JSON.stringify({ message: '隔离测试：收件服务暂时不可用' })
+    });
     const result = operation === 'status'
       ? { configured: true, parentIds: ['qa-parent'], aliasIds: ['qa-relay-a', 'qa-relay-b'], codeQueryConfigured: true }
       : operation === 'mails'
@@ -154,6 +158,33 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     assert(await toolbar.getByRole('button', { name: '查看提取与归还' }).isVisible());
     await page.locator('#relay-search').fill('no-match');
     await table.getByRole('heading', { name: '暂无符合条件的记录' }).waitFor();
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await t.test('隐藏邮箱补接入口在宽窄屏可操作，服务失败后保留原记录并可重试', async () => {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ['light', 'dark']) {
+        if (await page.evaluate(() => document.documentElement.dataset.theme || 'light') !== theme)
+          await page.locator('#theme-toggle').click();
+        await action('apple-relay', 'relay-alias-more', { id: 'qa-relay-c' });
+        const binding = page.locator('#drawer [data-action="relay-alias-bind"]');
+        await binding.waitFor();
+        const box = await binding.boundingBox();
+        const drawerBox = await page.locator('#drawer').boundingBox();
+        assert(box.x >= drawerBox.x && box.x + box.width <= drawerBox.x + drawerBox.width);
+        await binding.click();
+        await page.locator('#confirm-dialog').getByRole('button', { name: '确认接入', exact: true }).click();
+        await page.getByText('隔离测试：收件服务暂时不可用', { exact: true }).waitFor();
+        await page.waitForFunction(() => !document.querySelector('#drawer [data-action="relay-alias-bind"]').disabled);
+        assert(await binding.isEnabled());
+        assert(await page.locator('#drawer').isVisible());
+        const prior = await page.evaluate(() => window.IDDesignAPI.collections.mailboxes.find(row => row.id === 'qa-relay-c'));
+        assert.equal(prior.remoteAliasId, undefined);
+        assert.equal(prior.email, 'qa-relay-c@example.test');
+        await close();
+      }
+    }
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 

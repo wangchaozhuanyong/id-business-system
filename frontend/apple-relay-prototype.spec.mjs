@@ -241,14 +241,15 @@ function runtime(store, { relayConfigured = true } = {}) {
       async relay(action, input) {
         if (action === 'status') return {
           configured: relayConfigured,
-          parentIds: (store.load('inventory').data?.appleRelay?.parents ?? []).map(({ id }) => id)
+          parentIds: (store.load('inventory').data?.appleRelay?.parents ?? []).map(({ id }) => id),
+          aliasIds: (store.load('inventory').data?.mailboxes ?? []).filter((row) => row.remoteAliasId).map(({ id }) => id)
         };
         if (action === 'alias-register') {
           assert(relayConfigured);
           await setImmediate();
-          const { parentId, parentVersion, days, batch, rows } = input;
+          const { parentId, parentVersion, days, batch, rows, existingId, existingVersion } = input;
           const entries = rows.map(({ email, note }) => ({
-            id: 'fixture-alias-' + webcrypto.randomUUID(), expectedVersion: null,
+            id: existingId || 'fixture-alias-' + webcrypto.randomUUID(), expectedVersion: existingVersion ?? null,
             remoteAliasId: 'fixture-upstream-' + email, parentMailboxId: parentId, email,
             notes: note, codeResetIntervalDays: days, queryExpiry: '2099-01-01T00:00:00Z'
           }));
@@ -470,6 +471,35 @@ test('旧窗口登记隐藏邮箱遇到库存冲突时保留草稿且不报告�
   second.submit();
   assert.equal(second.hasConfirm(), false);
   assert.match(second.errors.get('relay-email'), /重复/);
+});
+
+test('既有未接入的隐藏邮箱可从原记录补接收件服务并保留库存历史', async (t) => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const first = runtime(store);
+  first.newParent();
+  await first.confirm();
+  const parentId = first.parents()[0].id;
+  const prior = runtime(store, { relayConfigured: false });
+  prior.newAlias({ email: 'previous@example.test', note: '原备注' }, parentId);
+  await prior.confirm();
+  const original = structuredClone(store.load('inventory').data.mailboxes[0]);
+  const browser = runtime(store);
+  await setImmediate();
+  browser.click('relay-alias-more', { id: original.id });
+  assert.match(browser.opened.body, /接入收件服务/);
+  browser.click('relay-alias-bind', { id: original.id });
+  await browser.confirm();
+  const { mailboxes } = store.load('inventory').data;
+  assert.equal(mailboxes.length, 1);
+  assert.equal(mailboxes[0].id, original.id);
+  assert.equal(mailboxes[0].notes, original.notes);
+  assert.equal(mailboxes[0].createdAt, original.createdAt);
+  assert.equal(mailboxes[0].remoteAliasId, 'fixture-upstream-previous@example.test');
+  assert.deepEqual(mailboxes[0].inventoryHistory.slice(0, -1), original.inventoryHistory);
+  browser.click('relay-alias-more', { id: original.id });
+  assert.doesNotMatch(browser.opened.body, /接入收件服务/);
+  assert.match(browser.opened.body, /查看查询码/);
 });
 
 test('新增 Apple 主邮箱需要有效地址、应用专用密码与有效天数', () => {
