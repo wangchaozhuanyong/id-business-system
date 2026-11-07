@@ -352,7 +352,8 @@
     appleBalance: '苹果 ID 余额',
     'recharge-codes': '充值码审核',
     'tenant-cards': '租户银行卡',
-    'order-sync': '代充订单同步'
+    'order-sync': '代充订单同步',
+    'finance-rates': '汇率采集'
   };
   const auditActionLabels = {
     customer_tags_save: '保存客户标签设置',

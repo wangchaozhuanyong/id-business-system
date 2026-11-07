@@ -4,6 +4,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { installFinanceAssets } from './finance/preview-assets.mjs';
 import { createFinanceQuoteService } from './finance/quote-service.mjs';
+import { createFinanceCollection } from './finance/collection-service.mjs';
+import { financeCollectionRoute, createFinanceCollectionHandler } from './finance/collection-route.mjs';
 import { automaticSnapshotRoute, createAutomaticSnapshotHandler } from './finance/quote-route.mjs';
 import { createWebsiteMonitor, handleWebsiteMonitor } from './tools/website-monitor.mjs';
 import { createWebsiteAnalytics } from './tools/website-analytics.mjs';
@@ -31,11 +33,13 @@ const files = new Map([
   ['prototype.css', 'text/css; charset=utf-8'],
   ['title-help.css', 'text/css; charset=utf-8'],
   ['overview-prototype.css', 'text/css; charset=utf-8'],
+  ['finance-collection.css', 'text/css; charset=utf-8'],
   ['recharge-integration.css', 'text/css; charset=utf-8'],
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
   ...[
     'prototype',
     'overview-prototype',
+    'finance-collection',
     'title-help',
     'inventory-prototype',
     'apple-relay-prototype',
@@ -154,6 +158,7 @@ export async function startPreview(
   let signedOutIndex = null;
   let setupIndex = null;
   let handleAutomaticSnapshot = null;
+  let financeCollection = null, handleFinanceCollection = null;
   let handleOrderAuxiliary, handleRechargeCodes, orderSync;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
@@ -263,14 +268,17 @@ export async function startPreview(
       .replace('页面设计预览 · 所有资料均为虚构示例', publicUrl ? '业务管理系统' : '本机业务模式 · 未接入的模块仍为演示');
     index.body = Buffer.from(localIndex);
     try {
+      financeCollection = createFinanceCollection({ store, provider: financeProvider, fetchQuote: financeFetch });
+      handleFinanceCollection = createFinanceCollectionHandler({ collection: financeCollection, publicOrigin: secureOrigin });
       const quoteService = createFinanceQuoteService({
         provider: financeProvider,
-        fetchQuote: financeFetch
+        fetchQuote: financeFetch, collection: financeCollection
       });
       handleAutomaticSnapshot = createAutomaticSnapshotHandler({ store, quoteService, publicOrigin: secureOrigin });
       orderSync = createRechargeOrderSync({ store, client: orderRechargeClient, quoteService, publicOrigin: secureOrigin });
-      await installFinanceAssets(assets, { automaticQuotes: quoteService.enabled });
+      await installFinanceAssets(assets, { automaticQuotes: true });
     } catch (error) {
+      financeCollection?.close();
       store.close();
       throw error;
     }
@@ -388,6 +396,10 @@ export async function startPreview(
     if (store && route.startsWith('/api/local/apple-relay/')) {
       if (!canManage || (!auth && relayConfig)) return forbidden();
       return void relay.handle(request, response, route, actor);
+    }
+    if (store && route === financeCollectionRoute) {
+      if (!canManage || (loginRequired && !actor)) return forbidden();
+      return void handleFinanceCollection(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
     if (store && route === automaticSnapshotRoute) {
       if (!canManage) return forbidden();
@@ -512,6 +524,7 @@ export async function startPreview(
     response.writeHead(200, { 'Content-Type': asset.type, 'Content-Length': body.length });
     response.end(request.method === 'HEAD' ? undefined : body);
   });
+  if (financeCollection) server.once('close', () => financeCollection.close());
   if (store) server.once('close', () => store.close());
   if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
@@ -535,6 +548,7 @@ export async function startPreview(
   }
   await new Promise((resolve, reject) => {
     const startFailed = (error) => {
+      financeCollection?.close();
       store?.close();
       reject(error);
     };
@@ -544,6 +558,7 @@ export async function startPreview(
       resolve();
     });
   });
+  financeCollection?.start();
   return { server, url: 'http://127.0.0.1:' + server.address().port + '/' };
 }
 

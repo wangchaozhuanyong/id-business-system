@@ -1085,7 +1085,8 @@ th.table-actions {
   flex: none;
   width: auto;
 }
-.commerce-picker-popover {
+.commerce-picker-popover,
+.fx-currency-popover {
   position: fixed;
   inset: auto;
   margin: 0;
@@ -1097,7 +1098,8 @@ th.table-actions {
   box-shadow: var(--shadow);
   overflow: hidden;
 }
-.commerce-picker-popover:popover-open {
+.commerce-picker-popover:popover-open,
+.fx-currency-popover:popover-open {
   display: flex;
   flex-direction: column;
   gap: 6px;

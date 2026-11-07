@@ -14,7 +14,7 @@
   let pendingWrites = 0;
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
-    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit']);
+    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates']);
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
@@ -166,7 +166,7 @@
       error.status = response.status;
       throw error;
     }
-    observeResult(resource, result);
+    observeResult(resource.startsWith('finance/collection') ? 'finance-rates' : resource, result);
     return result;
   }
 
@@ -218,6 +218,10 @@
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
     load: (domain) => request(domain),
+    financeCollection: (params) => request('finance/collection?' + new URLSearchParams(params)),
+    financeCollectionAction: (command) => command.action === 'cleanup-preview'
+      ? request('finance/collection', command, 'POST')
+      : write(['finance-rates'], () => request('finance/collection', command, 'POST')),
     changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
     save: (domain, version, data, { action } = {}) => write([domain], () => request(domain, { version, data, action })),
     saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
