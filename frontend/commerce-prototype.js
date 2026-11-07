@@ -429,7 +429,7 @@
   }
   function field(label, id, control, required = false, help = '', span = '', hidden = false) {
     const html = A.field(label, `commerce-${id}`, control, required, help)
-      .replace(`for="commerce-${id}"`, `for="commerce-${id}${control.includes('class="button commerce-picker-trigger"') ? '-picker' : ''}"`);
+      .replace(`for="commerce-${id}"`, `for="commerce-${id}${control.includes(`id="commerce-${id}-picker"`) ? '-picker' : ''}"`);
     const attributes = `data-commerce-field="${id}"${hidden ? ' hidden' : ''}`;
     return span
       ? `<div class="${span}" ${attributes}>${html}</div>`
@@ -441,17 +441,19 @@
   function select(id, choices, selected = '') {
     return A.select(`commerce-${id}`, choices, selected);
   }
-  function searchableSelect(id, label, choices, selected = '', actions = '') {
+  function searchableSelect(id, label, choices, selected = '', actions = '', editable = '') {
     const value = choices.find(([value]) => String(value) === String(selected))?.[1] || choices[0]?.[1] || '请选择';
     const prefix = `commerce-${id}`;
-    return `<div class="commerce-search-picker field-row">
+    const control = select(id, choices, selected).replace('<select ', '<select hidden aria-hidden="true" tabindex="-1" ');
+    return `<div class="commerce-search-picker field-row${editable ? ' commerce-email-history' : ''}">
+      ${editable}
       <button type="button" id="${prefix}-picker" class="button commerce-picker-trigger"
         role="combobox" aria-label="${E(label)}" aria-expanded="false" aria-haspopup="listbox"
-        aria-controls="${prefix}-options" aria-describedby="${prefix}-error"
+        aria-controls="${prefix}-options" aria-describedby="${editable ? 'commerce-email' : prefix}-error"
         popovertarget="${prefix}-popover" title="${E(value)}">
-        <span class="commerce-picker-label">${E(value)}</span>${A.icon('down')}
+        <span class="commerce-picker-label">${editable ? '历史邮箱' : E(value)}</span>${A.icon('down')}
       </button>
-      ${select(id, choices, selected).replace('<select ', '<select hidden aria-hidden="true" tabindex="-1" ')}${actions}
+      ${editable ? control.replace(` name="${prefix}"`, '') : control}${actions}
       <div class="commerce-picker-popover" id="${prefix}-popover" popover="auto">
         <input type="search" data-commerce-picker="${id}" aria-label="搜索${E(label)}"
           placeholder="搜索${E(label)}" aria-controls="${prefix}-options" autocomplete="off" />
@@ -466,8 +468,10 @@
     if (!select) return;
     const trigger = picker.querySelector('.commerce-picker-trigger');
     const label = select.selectedOptions[0]?.text || select.options[0]?.text || '请选择';
-    trigger.querySelector('.commerce-picker-label').textContent = label;
-    trigger.title = label;
+    if (!picker.classList.contains('commerce-email-history')) {
+      trigger.querySelector('.commerce-picker-label').textContent = label;
+      trigger.title = label;
+    } else trigger.title = select.disabled ? '该客户暂无可选历史邮箱' : '选择历史邮箱，或直接在输入框填写新邮箱';
     trigger.disabled = select.disabled;
     const popup = picker.querySelector('.commerce-picker-popover');
     if (!popup.matches(':popover-open')) return;
@@ -1713,6 +1717,22 @@
       version: 1
     };
   }
+  function customerEmailChoices(customerId, product) {
+    if (!customerId) return [['', '直接填写新邮箱']];
+    const family = subscriptionFamily({ product });
+    const usedAt = row => parseDate(row.start) || parseDate(row.createdAt) || 0;
+    const history = orders.filter(row => row.customerId === customerId && !row.cancelled &&
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(row.email || '').trim()))
+      .sort((a, b) => Number(subscriptionFamily(b) === family) - Number(subscriptionFamily(a) === family) || usedAt(b) - usedAt(a));
+    const unique = new Map();
+    for (const row of history) {
+      const email = row.email.trim();
+      const key = email.toLowerCase();
+      if (!unique.has(key)) unique.set(key, [email,
+        [email, row.product, (dateInput(row.start) || dateInput(row.createdAt)).slice(0, 10)].filter(Boolean).join(' · ')]);
+    }
+    return [['', '直接填写新邮箱'], ...unique.values()];
+  }
   function orderIdentityFields(v, contact, existing, products) {
     const auto = automaticOrder(existing);
     const product = v('product'),
@@ -1741,17 +1761,17 @@
       field(
         '邮箱账号',
         'email',
-        input(
+        searchableSelect('emailHistory', '客户历史邮箱', customerEmailChoices(customerId, product), v('email'), '', input(
           'email',
           v('email'),
-          `${stock && !existing ? 'list="commerce-stock-options"' : ''} placeholder="${stock ? '搜索并选择本产品的可用账号' : '直接填写客户自有邮箱，无需系统历史'}" aria-required="${stock || product !== 'GPT'}" autocomplete="off" ${existing?.accountId || auto ? 'readonly' : ''}`
-        ) + `<datalist id="commerce-stock-options">${stockOptions(product)}</datalist>`,
+          `${stock && !existing ? 'list="commerce-stock-options"' : ''} placeholder="${stock ? '搜索并选择本产品的可用账号' : '选择客户匹配历史邮箱，也可直接填写新邮箱'}" aria-required="${stock || product !== 'GPT'}" autocomplete="off" ${existing?.accountId || auto ? 'readonly' : ''}`
+        ) + `<datalist id="commerce-stock-options">${stockOptions(product)}</datalist>`),
         true,
         stock
           ? existing
             ? '已保存的交付快照保留，不再次占用库存。'
             : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
-          : '',
+          : auto ? '' : '优先匹配本产品最近使用的邮箱，也可直接填写新邮箱。',
         ''
       ).replace('<span class="required">*', `<span class="required"${!stock && product === 'GPT' ? ' hidden' : ''}>*`) +
       `<details class="commerce-span-all"><summary>联系方式（自动回填，可展开修改）</summary><div class="commerce-field-grid">${field('客户微信', 'wechat', input('wechat', contact('wechat')))}${field('客户电话', 'customerPhone', input('customerPhone', contact('customerPhone')))}${field('QQ', 'qq', input('qq', contact('qq')))}${field('WhatsApp', 'whatsapp', input('whatsapp', contact('whatsapp')))}${field('Telegram', 'telegram', input('telegram', contact('telegram')))}</div></details>`
@@ -2196,6 +2216,7 @@
       key
     );
     const form = $('#commerce-order-form', $('#drawer') || document);
+    if (form) updateCustomerEmailHistory(form);
     if (form && v('payment') === '苹果内购') loadAppleOptions(form);
     if (form && v('payment') === '银行卡') void loadOrderCards(form);
     if (form) void loadPrices(form);
@@ -4566,10 +4587,12 @@
       const select = picker.querySelector('select');
       if (select.disabled || ![...select.options].some(option => option.value === node.dataset.value && !option.disabled)) return true;
       select.value = node.dataset.value;
+      const email = picker.classList.contains('commerce-email-history') ? picker.querySelector('#commerce-email') : null;
+      if (email) email.value = select.value;
       filterPicker(picker.querySelector('[data-commerce-picker]'));
       picker.querySelector('.commerce-picker-popover').hidePopover();
-      picker.querySelector('.commerce-picker-trigger').focus({ preventScroll: true });
-      select.dispatchEvent(new Event('change', { bubbles: true }));
+      (email || picker.querySelector('.commerce-picker-trigger')).focus({ preventScroll: true });
+      (email || select).dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
     if (!canManageOrders() && /^commerce-(?:new-product-order|order-(?:edit|refund|more|pending|auto-fx|fx)|tenant-card)/.test(action)) return true;
@@ -4983,6 +5006,33 @@
     microsoft: 'microsoftCostCny', '微软邮箱': 'microsoftCostCny'
   };
   const stockForms = new WeakSet();
+  function updateCustomerEmailHistory(form, match = false) {
+    const email = form.querySelector('#commerce-email');
+    const select = form.querySelector('#commerce-emailHistory');
+    if (!email || !select) return;
+    const picker = select.closest('.commerce-search-picker');
+    const trigger = picker.querySelector('.commerce-picker-trigger');
+    const stock = form.elements['commerce-businessType'].value === '成品交付';
+    const choices = customerEmailChoices(form.elements['commerce-customerId'].value, form.elements['commerce-product'].value);
+    const current = email.value.trim().toLowerCase();
+    const wasHistory = [...select.options].some(option => option.value && option.value.toLowerCase() === current);
+    if (match && !form.elements['commerce-id'].value && !stock && !email.readOnly && (!current || wasHistory))
+      email.value = choices[1]?.[0] || '';
+    const selected = choices.find(([value]) => value.toLowerCase() === email.value.trim().toLowerCase())?.[0] || '';
+    select.innerHTML = A.options(choices, selected);
+    select.disabled = stock || email.readOnly || choices.length === 1;
+    trigger.hidden = stock || email.readOnly;
+    const help = form.querySelector('[data-commerce-field="email"] .field-help');
+    if (help) {
+      help.textContent = stock
+        ? form.elements['commerce-id'].value ? '已保存的交付快照保留，不再次占用库存。' : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
+        : '优先匹配本产品最近使用的邮箱，也可直接填写新邮箱。';
+      help.hidden = email.readOnly && !stock;
+    }
+    if (select.disabled && picker.querySelector('.commerce-picker-popover').matches(':popover-open'))
+      picker.querySelector('.commerce-picker-popover').hidePopover();
+    filterPicker(picker.querySelector('[data-commerce-picker]'));
+  }
   function updateStockSearch(form, filter = true) {
     const email = form.querySelector('#commerce-email'),
       target = form.querySelector('#commerce-stock-options');
@@ -5019,9 +5069,10 @@
       }
     } else {
       email.removeAttribute('list');
-      email.placeholder = '直接填写客户自有邮箱，无需系统历史';
+      email.placeholder = '选择客户匹配历史邮箱，也可直接填写新邮箱';
       if (!existing?.accountId) form.elements['commerce-accountId'].value = '';
     }
+    updateCustomerEmailHistory(form);
   }
   function updateOrderVisibility(form) {
     const order = orderFromForm(form),
@@ -5116,7 +5167,9 @@
         const customer = customers.find((row) => row.id === node.value);
         for (const [orderField, customerField] of orderContactFields)
           form.querySelector(`#commerce-${orderField}`).value = customer?.[customerField] || '';
+        updateCustomerEmailHistory(form, true);
       }
+      if (node.id === 'commerce-businessType') updateCustomerEmailHistory(form, true);
       if (node.id === 'commerce-payment') {
         const paid = form.querySelector('#commerce-paidCurrency'),
           amount = form.querySelector('#commerce-paidAmount');
@@ -5392,6 +5445,7 @@
     picker.querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', String(open));
     if (!open) return;
     const search = picker.querySelector('[data-commerce-picker]');
+    if (picker.classList.contains('commerce-email-history')) search.value = '';
     filterPicker(search);
     positionPicker(popup);
     search.focus({ preventScroll: true });
@@ -5465,6 +5519,7 @@
     preserveDraft: saveDrafts,
     refreshCustomerTagOptions,
     afterRender() {
+      for (const form of document.querySelectorAll('#commerce-order-form')) updateCustomerEmailHistory(form);
       for (const search of document.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
       loadLocalCommerce();
       updateRenewalReminder();
