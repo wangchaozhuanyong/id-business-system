@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 import { CODEXDAICHONG_PREFIX } from '../modules/recharge/codexdaichong/gateway.mjs';
 
-const frameSelector = '.recharge-integration__content iframe:not([hidden])';
+const frameSelector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
 const workspace = '#/workspace/recharge';
 const mailboxes = '#/mailboxes/google';
 const online = '#/online-recharge/chatgpt';
@@ -61,7 +61,7 @@ test(
     });
     page.on('pageerror', (error) => pageErrors.push(error.message));
     const frame = page.frameLocator(frameSelector);
-    const region = page.locator('.recharge-integration__view');
+    const region = page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view');
     const lock = (locked) =>
       frame
         .locator('html[data-recharge-navigation-locked="' + locked + '"]')
@@ -160,7 +160,7 @@ test(
       await started.promise;
       assert.equal(await region.getAttribute('aria-busy'), 'true');
       await setLock(true);
-      await page.locator('.recharge-integration__view[aria-busy="false"]').waitFor();
+      await page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view[aria-busy="false"]').waitFor();
       assert.equal(await onlineFrame.same(), true);
     } finally {
       resume.resolve();
@@ -170,7 +170,7 @@ test(
     const refreshed = page.waitForResponse(statusUrl);
     await refresh.click();
     assert.equal((await refreshed).status(), 200);
-    await page.locator('.recharge-integration__view[aria-busy="false"]').waitFor();
+    await page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view[aria-busy="false"]').waitFor();
     assert.equal(await onlineFrame.same(), false);
     await onlineFrame.dispose();
     await dashboard.click();

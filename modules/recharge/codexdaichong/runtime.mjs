@@ -17,6 +17,16 @@ const required = [
   'DB_PASSWORD',
   'ID_RECHARGE_BRIDGE_SECRET'
 ];
+// Keep the pinned engine's startup options. Job credentials, plan/region
+// overrides and worker-mode flags must still be assigned by its own scheduler.
+const upstreamRuntimeSettings = [
+  'BROWSER_POOL', 'BROWSER_POOL_SIZE', 'BROWSER_POOL_MAX_SIZE',
+  'BROWSER_POOL_BASE_PORT', 'BROWSER_POOL_ACQUIRE_TIMEOUT_MS',
+  'HEADFUL', 'CHROMIUM_CHANNEL', 'PLAYWRIGHT_BROWSERS_PATH', 'PROXY',
+  'MAX_CONCURRENT_ACTIVATIONS', 'PROCESS_IDLE_TIMEOUT_MS',
+  'PAYMENT_MAX_CARD_ATTEMPTS', 'GPT_API_MAX_POLLS', 'GPT_API_POLL_INTERVAL_MS',
+  'CHECKOUT_UI_MODE', 'CHECKOUT_READY_WAIT_MS', 'RECORD_VIDEO', 'JSON_BODY_LIMIT'
+];
 const portValid = (value) => /^\d{1,5}$/.test(value ?? '') && +value > 0 && +value <= 65535;
 const productionDatabase = 'id_redesign_codexdaichong_prod';
 const productionAccount = 'id_redesign_recharge';
@@ -34,6 +44,8 @@ export function isolatedCodexdaichongEnv(env = process.env) {
     Buffer.byteLength(env.ID_RECHARGE_BRIDGE_SECRET) < 32
   )
     throw new Error('隔离启动需要专用非 root 数据库账号及至少 32 字节的桥接密钥');
+  if (env.ID_RECHARGE_CHECKOUT_DEBUG_PROXY !== undefined)
+    checked.ID_RECHARGE_CHECKOUT_DEBUG_PROXY = env.ID_RECHARGE_CHECKOUT_DEBUG_PROXY;
   return checked;
 }
 
@@ -43,13 +55,14 @@ function checkedRuntimeEnv(env) {
   if (!portValid(env.PORT) || !portValid(env.DB_PORT) || +env.PORT === +env.DB_PORT)
     throw new Error('服务和 MySQL 必须使用不同的有效端口');
   return Object.fromEntries(
-    [...required, 'PATH', 'LANG', 'TZ']
+    [...required, ...upstreamRuntimeSettings,
+      'PATH', 'HOME', 'LANG', 'TZ', 'TMPDIR', 'DISPLAY', 'XDG_CACHE_HOME']
       .filter((name) => env[name] !== undefined)
       .map((name) => [name, env[name]])
   );
 }
 
-function productionRuntimeEnv(env) {
+export function productionRuntimeEnv(env) {
   const checked = checkedRuntimeEnv(env);
   if (checked.DB_HOST !== '127.0.0.1' || checked.DB_NAME !== productionDatabase ||
       checked.DB_USER !== productionAccount || Buffer.byteLength(checked.ID_RECHARGE_BRIDGE_SECRET) < 32)

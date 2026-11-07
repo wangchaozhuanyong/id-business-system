@@ -6,7 +6,7 @@
   const draftKey = 'overview:filters';
   const ranges = [['today', '今日'], ['week', '近 7 天'], ['month', '近 30 天']];
   const business = window.IDLocalData;
-  const sections = {
+  const sectionLabels = {
     commerce: { label: '订单与客户' },
     inventory: { label: '库存' },
     apple: { label: '苹果待回款' }
@@ -30,37 +30,57 @@
     return Array.from({ length: 30 }, (_, index) =>
       new Date(today - (29 - index) * 86_400_000).toISOString().slice(0, 10));
   }
-  async function refreshOverview() {
+  function overviewKey() {
+    return {
+      date: dayFormatter.format(new Date()),
+      finance: allowed('orders/statistics'),
+      apple: allowed('accounts/apple-balances')
+    };
+  }
+  function overviewSections() {
+    const snapshot = business?.queries.peek('overview', overviewKey())?.data;
+    return Object.fromEntries(Object.entries(sectionLabels).map(([key, label]) =>
+      [key, { ...label, ...snapshot?.[key] }]));
+  }
+  async function refreshOverview({ refresh = false } = {}) {
     if (!business || refreshing) return;
+    const key = overviewKey();
+    const cached = business.queries.peek('overview', key);
+    if (!refresh && cached?.data && !cached.stale && !cached.pending) return;
     refreshing = true;
     bindOverviewRead();
-    const admin = allowed('orders/statistics');
-    const { commerce, inventory, appleBalance } = A.modules;
-    const dates = recentDates();
-    const appleLoad = admin && allowed('accounts/apple-balances')
-      ? appleBalance.refreshLocalBalance() : Promise.resolve(false);
-    const jobs = [['inventory', async () => await inventory.refreshOverview() && inventory.overviewSummary()]];
-    if (admin) jobs.push(
-      ['apple', async () => await appleLoad && appleBalance.listRefunds().filter(row => row.status === 'pending').length],
-      ['commerce', async () => {
-        const [ok] = await Promise.all([commerce.refreshOverview(), appleLoad]);
-        return ok && commerce.overviewSummary(dates);
-      }]
-    );
-    const loaded = await Promise.all(jobs.map(async ([key, load]) => {
-      try {
-        const data = await load();
-        if (data === false || data == null) return [key, { phase: 'error' }];
-        return [key, { data, updated: new Date(), phase: 'ready' }];
-      } catch {
-        return [key, { phase: 'error' }];
-      }
-    }));
-    for (const [key, result] of loaded) Object.assign(sections[key], result);
-    regionRead?.finish();
-    regionRead = undefined;
-    refreshing = false;
-    if (A.state.route === 'overview') A.render();
+    try {
+      await business.queries.read('overview', key, async () => {
+        const previous = business.queries.peek('overview', key)?.data || {};
+        const { commerce, inventory, appleBalance } = A.modules;
+        const dates = recentDates();
+        const appleLoad = key.finance && key.apple
+          ? appleBalance.refreshLocalBalance() : Promise.resolve(false);
+        const jobs = [['inventory', async () => await inventory.refreshOverview() && inventory.overviewSummary()]];
+        if (key.finance && key.apple)
+          jobs.push(['apple', async () => await appleLoad && appleBalance.listRefunds().filter(row => row.status === 'pending').length]);
+        if (key.finance) jobs.push(['commerce', async () => {
+            const [ok] = await Promise.all([commerce.refreshOverview(), appleLoad]);
+            return ok && commerce.overviewSummary(dates);
+          }]);
+        return Object.fromEntries(await Promise.all(jobs.map(async ([section, load]) => {
+          try {
+            const data = await load();
+            if (data === false || data == null) return [section, { ...previous[section], phase: 'error' }];
+            return [section, { data, updated: new Date(), phase: 'ready' }];
+          } catch {
+            return [section, { ...previous[section], phase: 'error' }];
+          }
+        })));
+      }, { refresh, isFresh: (data) => Object.values(data).every((section) => section.phase === 'ready') });
+    } catch (error) {
+      if (error?.name !== 'AbortError') A.notify?.('总览暂时无法更新，已保留上次成功内容。');
+    } finally {
+      regionRead?.finish();
+      regionRead = undefined;
+      refreshing = false;
+      if (A.state.route === 'overview') A.render();
+    }
   }
   function sectionStatus(section) {
     if (!business) return '设计预览';
@@ -80,6 +100,7 @@
       .map(([currency, value]) => `${formatAmount(value)} ${currency}`);
   }
   function renderTrend(days) {
+    const sections = overviewSections();
     if (!days?.length) return `<div class="overview-chart-empty"><div><strong>${E(allowed('orders/statistics') ? sectionStatus(sections.commerce) : '当前权限仅提供订单明细')}</strong></div></div>`;
     const max = Math.max(...days.map(day => day.orders + day.cancelled));
     if (!max) return '<div class="overview-chart-empty"><div><strong>该时间范围没有订单记录</strong></div></div>';
@@ -129,6 +150,7 @@
     return `<div class="overview-heading"><div class="section-title-row"><h2 id="overview-${id}">${E(title)}</h2>${A.titleInfo(title, note, `overview-${id}-note`)}</div>${action}</div>`;
   }
   function render() {
+    const sections = overviewSections();
     const range = A.state.drafts.get(draftKey)?.range || 'week';
     const rangeLabel = ranges.find(([id]) => id === range)?.[1] || '近 7 天';
     const finance = allowed('orders/statistics');
@@ -153,7 +175,8 @@
     };
     const taskCounts = [commerce?.renewals, commerce?.incomplete, inventory?.pending, finance ? sections.apple.data : undefined];
     const overviewStatus = business
-      ? Object.entries(sections).filter(([key]) => key === 'inventory' || finance)
+      ? Object.entries(sections).filter(([key]) => key === 'inventory' ||
+          (finance && (key !== 'apple' || allowed('accounts/apple-balances'))))
         .map(([, section]) => `${section.label} ${sectionStatus(section)}`).join(' ｜ ')
       : '设计预览 · 业务数据未连接';
     const date = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
@@ -175,7 +198,7 @@
   }
   function onClick(action, node) {
     if (action === 'overview-refresh') {
-      void refreshOverview();
+      void refreshOverview({ refresh: true });
       return true;
     }
     if (action === 'overview-range') {

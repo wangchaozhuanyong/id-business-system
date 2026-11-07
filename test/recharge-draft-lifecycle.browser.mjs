@@ -20,13 +20,13 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
     ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
   await page.route('**/integrations/codexdaichong/demo-only.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
-  const selector = '.recharge-integration__content iframe:not([hidden])';
+  const selector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
   const frame = () => page.frameLocator(selector);
   const navigate = async hash => { await page.evaluate(hash => { location.hash = '#/' + hash; }, hash); };
   const config = async () => {
     await page.locator('[data-action="ops-integrated-view"][data-view="config"]').click();
     await frame().locator('#config.active').waitFor();
-    await page.locator('.recharge-integration__view[aria-busy="false"]').waitFor();
+    await page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view[aria-busy="false"]').waitFor();
   };
   await page.goto(origin + '/#/online-recharge/chatgpt');
   await frame().locator('#queryInput').waitFor();
@@ -35,12 +35,15 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await frame().locator('#gpt_api_base_url').fill('https://draft.example.test/api');
   await frame().locator('#gpt_api_key').fill('fixture-not-a-real-key');
   await page.locator('[data-action="ops-integrated-view"][data-view="dashboard"]').click();
-  const refreshed = page.waitForResponse(response => response.url().endsWith('/api/admin/data'));
   await config();
+  await assertEventually(() => frame().locator('#max_concurrent_activations').inputValue(), '7');
+  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/admin'));
+  await page.locator('[data-action="ops-integrated-refresh"]').click();
   await refreshed;
+  await frame().locator('#config.active').waitFor();
   await assertEventually(() => frame().locator('#max_concurrent_activations').inputValue(), '7');
   await navigate('customers/list');
-  await page.locator('[data-recharge-module]').waitFor({ state: 'detached' });
+  await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('online-recharge/chatgpt');
   await frame().locator('#config.active').waitFor();
   await assertEventually(() => frame().locator('#gpt_api_base_url').inputValue(), 'https://draft.example.test/api');
@@ -100,7 +103,7 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await frame().locator('#checkout_plan_name').fill('custom-plan-draft');
   await frame().locator('#checkout_region_selector').selectOption('MY');
   await navigate('customers/list');
-  await page.locator('[data-recharge-module]').waitFor({ state: 'detached' });
+  await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('online-recharge/chatgpt');
   await frame().locator('#checkout_debug.active').waitFor();
   await assertEventually(() => frame().locator('#checkout_plan_name').inputValue(), 'custom-plan-draft');
@@ -115,7 +118,7 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await bit().locator('#bit-connection-name').fill('Draft connection');
   await bit().locator('#bit-local-token').fill('fixture-local-secret');
   await navigate('customers/list');
-  await page.locator('[data-recharge-module]').waitFor({ state: 'detached' });
+  await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('recharge/start');
   await assertEventually(() => bit().locator('#bit-window-name').inputValue(), 'Draft browser window');
   assert.equal(await bit().locator('#bit-connection-name').inputValue(), 'Draft connection');

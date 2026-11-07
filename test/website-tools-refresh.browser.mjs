@@ -127,6 +127,12 @@ test(
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     const tools = interceptedTools(page, origin);
+    const readCounts = { analytics: 0, visits: 0 };
+    page.on('request', (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path === analyticsPath) readCounts.analytics++;
+      if (path === visitsPath) readCounts.visits++;
+    });
     await tools.install();
 
     await page.goto(origin + '/#/workspace/mail-submit');
@@ -144,12 +150,12 @@ test(
       await drawer.getByRole('heading', { name, exact: true }).waitFor();
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     }
-    async function openMonitor() {
+    async function openMonitor(expectRead = true) {
       if (!await drawer.isVisible()) {
         await page.getByRole('button', { name: '在线工具', exact: true }).click();
       }
       await drawer.getByRole('button', { name: '网站监控', exact: true }).click();
-      return tools.next(analyticsPath);
+      if (expectRead) return tools.next(analyticsPath);
     }
     const analytics = drawer.locator('[data-website-analytics-result]');
     const analyticsStatus = drawer.locator('[data-website-analytics-status]');
@@ -168,12 +174,14 @@ test(
       await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
       await visits.getByText(path, { exact: true }).waitFor();
     };
-    async function requestAnalytics() {
+    let analyticsDays = 7;
+    async function requestAnalytics(days) {
+      if (days) analyticsDays = days;
       await drawer.getByRole('tab', { name: '访问统计', exact: true }).click();
-      await drawer.getByRole('button', { name: '最近 7 天', exact: true }).click();
+      await drawer.getByRole('button', { name: days ? `最近 ${days} 天` : '刷新统计', exact: true }).click();
       const request = await tools.next(analyticsPath);
       assert.equal(request.request().method(), 'GET');
-      assert.equal(new URL(request.request().url()).searchParams.get('days'), '7');
+      assert.equal(new URL(request.request().url()).searchParams.get('days'), String(analyticsDays));
       return request;
     }
     async function requestVisits() {
@@ -191,24 +199,41 @@ test(
     await tools.reply(firstAnalytics, analyticsResult(111));
     await showMetric(111);
 
+    const initialCounts = { ...readCounts };
+    await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+    await drawer.locator('.online-tool-list').waitFor();
+    await openMonitor(false);
+    await showMetric(111);
+    assert.deepEqual(readCounts, initialCounts, '重开工具应同步复用有效统计和明细，不重新请求');
+
     const beforeRefresh = await analytics.boundingBox();
     const slowerAnalytics = await requestAnalytics();
     await showPendingLine(analyticsStatus);
     assert.deepEqual(await analytics.boundingBox(), beforeRefresh);
     assert(await drawer.getByRole('button', { name: '刷新统计' }).isDisabled());
     await showMetric(111);
-    const newerAnalytics = await requestAnalytics();
+    const newerAnalytics = await requestAnalytics(30);
     await tools.reply(newerAnalytics, analyticsResult(333));
     await showMetric(333);
     await tools.reply(slowerAnalytics, analyticsResult(222));
     await showMetric(333);
     assert.equal(await analytics.getByText('222', { exact: true }).count(), 0);
 
+    const pendingThirtyDays = await requestAnalytics();
+    const beforeCachedSwitch = { ...readCounts };
+    await drawer.getByRole('button', { name: '最近 7 天', exact: true }).click();
+    await showMetric(222);
+    assert.deepEqual(readCounts, beforeCachedSwitch, '切回已有时间范围不重复请求');
+    await tools.reply(pendingThirtyDays, analyticsResult(666));
+    await showMetric(222);
+    await drawer.getByRole('button', { name: '最近 30 天', exact: true }).click();
+    await showMetric(666);
+
     const failingAnalytics = await requestAnalytics();
-    await showMetric(333);
+    await showMetric(666);
     await tools.reply(failingAnalytics, { error: '统计服务暂时失败' }, 503);
     assert.match(await analyticsStatus.textContent(), /统计服务暂时失败/);
-    await showMetric(333);
+    await showMetric(666);
 
     await setVisitFilters(page, firstVisitFilters);
     const firstVisit = await requestVisits();
