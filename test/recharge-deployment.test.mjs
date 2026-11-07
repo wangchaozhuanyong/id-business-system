@@ -89,3 +89,30 @@ assert not probe('HTTP/2 503 \\r\\nRetry-After: 60\\r\\n\\r\\n'+body,False)
 print('passed')`;
   assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
 });
+
+
+test('native startup preserves an existing engine and fails closed when Docker is unavailable', () => {
+  const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
+  const code = `import runpy,sys,subprocess,tempfile,json
+from pathlib import Path
+from unittest.mock import patch
+m=runpy.run_path(${JSON.stringify(launcher)})
+Path(${JSON.stringify(runtime)}).mkdir(exist_ok=True)
+with tempfile.TemporaryDirectory(dir=${JSON.stringify(runtime)}) as directory:
+ root=Path(directory);(root/'formal').mkdir();m['main'].__globals__['ROOT']=root
+ for unavailable in [False,True]:
+  def output(args,**kwargs):
+   assert args[:3]==['docker','ps','-a']
+   if unavailable:raise subprocess.CalledProcessError(1,args)
+   # Docker ps exposes ID; inspect exposes Id. Model the CLI contract.
+   fields={'{{.ID}}':'existing-native-engine'}
+   if args[-1] not in fields:raise subprocess.CalledProcessError(1,args)
+   return fields[args[-1]]
+  with patch.object(sys,'argv',['launcher','native','a'*40]),patch.object(subprocess,'check_output',side_effect=output),patch.object(subprocess,'Popen') as launch:
+   try:m['main']();raise AssertionError('startup unexpectedly continued')
+   except subprocess.CalledProcessError:assert unavailable
+   except ValueError as error:assert not unavailable and 'already exists' in str(error)
+   launch.assert_not_called()
+print('passed')`;
+  assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
+});
