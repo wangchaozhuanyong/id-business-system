@@ -1,9 +1,9 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { isIP } from 'node:net';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { CODEXDAICHONG_REVISION, PRODUCTION_GUARD_REVISION, verifyCodexdaichongSource } from './prepare.mjs';
+import { CODEXDAICHONG_REVISION, verifyCodexdaichongSource } from './prepare.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 import { createNativeAdminTokenIssuer, startNativeRechargeAdapter } from './native-adapter.mjs';
 import { verifyNativeNetworkIsolation } from './native-network.mjs';
@@ -32,7 +32,6 @@ const upstreamRuntimeSettings = [
 const portValid = (value) => /^\d{1,5}$/.test(value ?? '') && +value > 0 && +value <= 65535;
 const productionDatabase = 'id_redesign_codexdaichong_prod';
 const productionAccount = 'id_redesign_recharge';
-const productionLock = 'id_redesign_codexdaichong_prod.runtime';
 
 export function isolatedCodexdaichongEnv(env = process.env) {
   const checked = checkedRuntimeEnv(env);
@@ -143,46 +142,6 @@ export async function checkNativeProductionDatabase(env, createConnection) {
   return checkDedicatedProductionDatabase(nativeProductionRuntimeEnv(env), createConnection);
 }
 
-async function holdProductionRuntime(directory) {
-  const checked = nativeProductionRuntimeEnv(process.env);
-  await verifyCodexdaichongSource(directory);
-  const marker = await readFile(join(directory, '.id-business-production-guard'), 'utf8').catch(() => '');
-  if (marker.trim() !== PRODUCTION_GUARD_REVISION)
-    throw new Error('正式启动需要按当前版本重新准备运行副本');
-  const requireFromCopy = createRequire(join(directory, 'package.json'));
-  const db = await connectProduction(checked, requireFromCopy('mysql2/promise').createConnection);
-  try {
-    const [[{ acquired }]] = await db.execute({ sql: 'SELECT GET_LOCK(?, 0) AS acquired', timeout: 3000 }, [productionLock]);
-    if (acquired !== 1) throw new Error('独立正式代充库已有运行实例');
-    await readProductionState(db);
-    await db.query({ sql: 'ROLLBACK', timeout: 3000 });
-  } catch (error) {
-    db.destroy();
-    throw error;
-  }
-  globalThis[Symbol.for('id-business.recharge.production-lock')] = true;
-  const stopOnLostLock = () => {
-    console.error('正式代充失去运行锁，停止服务并保留任务待核对。');
-    process.exit(1);
-  };
-  db.on('error', stopOnLostLock);
-  const verifyOwnership = async () => {
-    try {
-      const [[{ owned }]] = await db.execute({
-        sql: 'SELECT IS_USED_LOCK(?) = CONNECTION_ID() AS owned', timeout: 3000
-      }, [productionLock]);
-      if (owned === 1) {
-        setTimeout(verifyOwnership, 5000).unref();
-        return;
-      }
-    } catch {
-      // Losing the dedicated connection also loses the advisory lock.
-    }
-    stopOnLostLock();
-  };
-  setTimeout(verifyOwnership, 5000).unref();
-}
-
 export async function checkCodexdaichongRuntime(directory = join(runtimeRoot, 'codexdaichong')) {
   const projectRuntime = await realpath(runtimeRoot);
   const location = await realpath(directory);
@@ -214,24 +173,15 @@ export async function checkCodexdaichongRuntime(directory = join(runtimeRoot, 'c
   return location;
 }
 
-if (process.env.ID_RECHARGE_RUNTIME_MODE === 'production' && basename(process.argv[1] || '') === 'server.js') {
-  try {
-    await holdProductionRuntime(dirname(process.argv[1]));
-    // Configure the original supported signer before server.js imports admin-auth.
-    // Never write a secret into the immutable source, a file or a deployment receipt.
-    const nativeSecret = resolveNativeAdminTokenSecret(process.env);
-    if (!process.env.ADMIN_TOKEN_SECRET?.trim()) process.env.ADMIN_TOKEN_SECRET = nativeSecret;
-  } catch (error) {
-    const message = error.code ? '正式代充无法取得独立数据库运行锁。' : error.message;
-    console.error(message);
-    process.exit(1);
-  }
-}
-
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const [action, target] = process.argv.slice(2);
   try {
-    if (action === 'health') {
+    if (action === 'preflight-native-production') {
+      const directory = await checkCodexdaichongRuntime(target);
+      const requireFromCopy = createRequire(join(directory, 'package.json'));
+      await checkNativeProductionDatabase(process.env, requireFromCopy('mysql2/promise').createConnection);
+      console.log('原版启动前只读预检通过。');
+    } else if (action === 'health') {
       const result = await probeCodexdaichongRuntime({
         upstreamUrl: target,
         secret: process.env.ID_RECHARGE_BRIDGE_SECRET

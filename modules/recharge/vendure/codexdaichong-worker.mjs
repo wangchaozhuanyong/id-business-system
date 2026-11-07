@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { signRechargeAssertion } from '../assertion.mjs';
 import { validateRuntimeOrigin } from '../codexdaichong/runtime-health.mjs';
@@ -50,12 +51,13 @@ export function createVendureCodexdaichongWorker({
   if (![timeoutMs, pollIntervalMs].every((value) => Number.isInteger(value) && value > 0 && value <= 10_000))
     throw new TypeError('请求和轮询时长无效');
 
-  const upstreamRequest = (path, body) => {
+  const upstreamRequest = (path, body, clientIp) => {
     const method = body === undefined ? 'GET' : 'POST';
     return requestJson(upstream + path, {
       method,
       headers: {
-        'x-id-recharge-assertion': signRechargeAssertion(upstreamSecret, method, path, actor),
+        'x-id-recharge-assertion': signRechargeAssertion(upstreamSecret, method, path,
+          isIP(clientIp ?? '') ? { ...actor, clientIp } : actor),
         ...(body === undefined ? {} : { 'content-type': 'application/json' })
       },
       body: body === undefined ? undefined : JSON.stringify(body)
@@ -79,7 +81,7 @@ export function createVendureCodexdaichongWorker({
     try {
       const { data: accepted } = await upstreamRequest('/api/run-process', {
         cdk: task.executionCode, session: task.session
-      });
+      }, task.clientIp);
       if (accepted?.success !== true || typeof accepted.jobKey !== 'string' || !jobIdPattern.test(accepted.jobKey))
         return unknown;
       jobKey = accepted.jobKey;
@@ -103,12 +105,15 @@ export function createVendureCodexdaichongWorker({
       };
       await collectProgress('started');
       while (canContinue()) {
-        const { data: receipt } = await upstreamRequest('/api/task-status/' + jobKey);
+        const { data: receipt } = await upstreamRequest('/api/task-status/' + jobKey, undefined, task.clientIp);
         const status = receipt?.data;
         if (receipt?.success !== true || status?.jobKey !== jobKey || status.cdkCode !== task.executionCode)
           break;
         if (status.status === 'success' && status.isTerminal === true)
           return { outcome: 'confirmed_success', evidenceId: 'codexdaichong:' + jobKey, upstreamJobId: jobKey };
+        if (status.status === 'failed' && status.isTerminal === true &&
+            /转人工|人工确认|人工核|待核实|结果.*(?:未知|不明)|processing.*timeout/i.test(String(status.message ?? '')))
+          return { outcome: 'unknown', upstreamJobId: jobKey };
         if (status.status === 'failed' && status.isTerminal === true)
           return { outcome: 'confirmed_failure', evidenceId: 'codexdaichong:' + jobKey, upstreamJobId: jobKey };
         if (status.status !== 'running' || status.isTerminal !== false) break;

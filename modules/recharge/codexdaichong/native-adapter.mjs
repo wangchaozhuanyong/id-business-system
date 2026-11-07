@@ -71,6 +71,7 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
         token: null, expiresAt: null, issuedAt: null, permissions: ['admin'], email: actor.email }));
     }
     const headers = pick(req.headers, requestHeaders);
+    if (actor.clientIp) headers['x-real-ip'] = actor.clientIp;
     if (admin) headers.authorization = 'Bearer ' + await getNativeAdminToken(actor);
     if (external && req.headers['x-api-key']) headers['x-api-key'] = req.headers['x-api-key'];
     const upstream = httpRequest({ hostname: native.hostname, port: native.port, method: req.method,
