@@ -337,3 +337,15 @@ for (const [field, replacement] of [
     );
   });
 }
+
+test('selected proxies can change on the retained window before country detection', async () => {
+  await withLoginFixture(identity, async ({ requests, login }) => {
+    await login(undefined, { useSelectedProxy: true, dynamicProxyUrl: 'https://first.example.test/get' });
+    const before = requests.length;
+    const result = await login(undefined, { useSelectedProxy: true, dynamicProxyUrl: 'https://second.example.test/get' });
+    assert.equal(result.profileId, profileId);
+    const changed = requests.slice(before).find(row => row.path === '/browser/update');
+    assert.equal(changed.body.id, profileId); assert.equal(changed.body.dynamicIpUrl, 'https://second.example.test/get');
+    assert.equal(Object.hasOwn(changed.body, 'browserFingerPrint'), false);
+  });
+});
