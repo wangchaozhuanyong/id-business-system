@@ -40,3 +40,9 @@ test('deployment launches the pristine entrypoint and keeps role shutdown separa
   assert.match(source, /Object.assign\(env, options\)/);
   assert.doesNotMatch(source, /writeFile|replaceSource|ID_VENDURE_SINGLE_ATTEMPT|expectedPlan/);
 });
+
+test('the ingress gate changes only new recharge mutations and removes only its own marker', () => {
+  const gate = fileURLToPath(new URL('../deploy/recharge-core/release-gate.py', import.meta.url));
+  const code = `import runpy,json\nm=runpy.run_path(${JSON.stringify(gate)})\ns='original-global-options\\n54-249-61-238.sslip.io {\\n    reverse_proxy 127.0.0.1:44572\\n}\\n'\ng=m['gated_text'](s,'a'*40,True)\nassert m['gated_text'](g,'a'*40,False)==s\nassert 'method POST PUT PATCH DELETE' in g\nassert 'path /integrations/codexdaichong/api/*' in g\nassert 'reverse_proxy 127.0.0.1:44572' in g\ntry: m['gated_text'](g,'b'*40,False); raise AssertionError('wrong marker accepted')\nexcept ValueError: pass\nprint('passed')`;
+  assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
+});
