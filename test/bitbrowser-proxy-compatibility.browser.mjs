@@ -71,6 +71,14 @@ test('successive proxy additions, extraction statuses and late edit reads stay i
   assert.equal(await page.locator('#bit-ip-link').getAttribute('type'), 'text');
   assert(!JSON.stringify(await page.evaluate(() => window.testDraft())).includes('synthetic'));
   await page.locator('#bit-ip-close').click();
+  nativeFailure = false;
+  await page.locator('#bit-library-add').click();
+  await page.locator('#bit-ip-name').fill('第四个未注明协议的 API');
+  await page.locator('#bit-ip-link').fill('https://extract.example.test/api?key=synthetic');
+  await page.locator('#bit-ip-save').click();
+  await page.locator('#bit-proxy-editor').waitFor({ state: 'hidden' });
+  assert.equal(items.length, 4);
+  assert.equal(items.find(item => item.name.startsWith('第四个')).protocol, 'socks5', '未注明协议的 API 保存检测确认的协议，不能默认为 HTTP');
   let release, started; const waiting = new Promise(r => started = r), promise = new Promise(r => release = r);
   delayedRead = { promise, started };
   await row.getByRole('button', { name: '编辑', exact: true }).click(); await waiting;

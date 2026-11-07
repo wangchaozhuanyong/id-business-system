@@ -55,3 +55,18 @@ test('extraction failure remains incomplete and never reaches the native probe',
     fetchExtraction: async () => Response.json({ error: '提取服务限制访问来源或白名单，未完成检测。', reason: 'extraction' }, { status: 422 })
   }), error => error.reason === 'extraction' && /白名单/.test(error.message) && !error.message.includes('synthetic'));
 });
+
+test('a dropped native check retries once, without retrying account operations or hiding repeated failures', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (++calls === 1) throw new TypeError('synthetic dropped connection');
+    return Response.json({ success: true, data: { success: true, data: { ip: '8.8.8.8', countryCode: 'PH' } } });
+  });
+  const input = { link: 'socks5://user:synthetic-pass@proxy.test:1080', url: 'http://127.0.0.1:54345', token: 'synthetic-key' };
+  assert.equal((await testBitBrowserProxy(input)).protocol, 'socks5'); assert.equal(calls, 2);
+  calls = 0; t.mock.method(globalThis, 'fetch', async () => { calls++; throw new TypeError('synthetic dropped connection'); });
+  await assert.rejects(() => testBitBrowserProxy(input), e => e.reason === 'bitbrowser_direct_unreachable'); assert.equal(calls, 2);
+  calls = 0; const controller = new AbortController();
+  t.mock.method(globalThis, 'fetch', async () => { calls++; controller.abort(); throw new TypeError('synthetic dropped connection'); });
+  await assert.rejects(() => testBitBrowserProxy({ ...input, signal: controller.signal }), /已取消/); assert.equal(calls, 1);
+});

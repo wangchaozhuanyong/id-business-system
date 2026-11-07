@@ -226,7 +226,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     try {
       if (rawLink) {
         parsed = parseBitBrowserProxyInput(rawLink, { mode: get('bit-ip-mode').value, protocol: get('bit-ip-protocol').value });
-        if (parsed.automaticProtocol && parsed.mode === 'static') {
+        if (parsed.automaticProtocol) {
           const result = editorProbe || await probeEditor();
           parsed = parseBitBrowserProxyInput(result.link, { mode: result.mode, protocol: result.protocol });
         } else if (editorProbe) parsed.protocol = editorProbe.protocol;
