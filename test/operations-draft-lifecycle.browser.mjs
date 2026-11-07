@@ -205,13 +205,13 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   assert.equal(await page.locator('#ops-managed-email').inputValue(), 'draft@example.test');
   failPoolSave = true;
   await page.locator('#ops-managed-app-password').fill('fixture-only');
-  await page.locator('#ops-managed-pool-form').getByRole('button', { name: '保存', exact: true }).click();
+  await page.locator('#ops-managed-pool-form').locator('button[type="submit"]').click();
   await page.getByText('隔离测试保存失败', { exact: true }).waitFor();
   assert.equal(await page.locator('#ops-managed-email').inputValue(), 'draft@example.test');
   delayPoolSave = true;
   const received = new Promise((resolve) => { acknowledged = resolve; });
   await page.locator('#ops-managed-app-password').fill('fixture-only');
-  await page.locator('#ops-managed-pool-form').getByRole('button', { name: '保存', exact: true }).click();
+  await page.locator('#ops-managed-pool-form').locator('button[type="submit"]').click();
   await received;
   await page.locator('#ops-managed-email').fill('later@example.test');
   await close();
@@ -222,7 +222,7 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   assert.equal(await page.locator('#ops-managed-email').inputValue(), 'later@example.test', '晚到响应不得清除之后填写的邮箱');
   assert.equal(submitted.email, 'draft@example.test');
   await page.locator('#ops-managed-app-password').fill('fixture-only');
-  await page.locator('#ops-managed-pool-form').getByRole('button', { name: '保存', exact: true }).click();
+  await page.locator('#ops-managed-pool-form').locator('button[type="submit"]').click();
   await page.locator('#ops-managed-pool-form').waitFor({ state: 'detached' });
   await drawer.getByRole('button', { name: '登记邮箱', exact: true }).click();
   assert.equal(await page.locator('#ops-managed-email').inputValue(), '', '成功只清除对应提交草稿');

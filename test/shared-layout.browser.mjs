@@ -42,7 +42,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   const box = selector => page.locator(selector).boundingBox();
   const aligned = (a, b, message) => assert(Math.abs(a.y - b.y) <= 1, message);
   const noOverflow = async () => assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), page.url());
-  const frame = () => page.frameLocator('.recharge-integration__content iframe:not([hidden])');
+  const frame = () => page.frameLocator('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
   await page.goto(origin + '/#/workspace/order/gpt');
 
   await t.test('GPT and Claude order columns align and narrow labels remain usable', async () => {
@@ -199,9 +199,9 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     await frame().locator('#querySection').waitFor();
     for (const width of [1440, 1024, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
-      const toolbar = await box('.recharge-integration__toolbar');
+      const toolbar = await box('#main > [data-page-region]:not([hidden]) .recharge-integration__toolbar');
       assert(toolbar.height < 90, '充值导航不应占多行');
-      const button = await box('.recharge-integration__toolbar > button');
+      const button = await box('#main > [data-page-region]:not([hidden]) .recharge-integration__toolbar > button');
       assert(button.x + button.width <= width, '刷新不可被挤出视口');
     }
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -225,7 +225,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     const oldFrame = await page.locator('iframe:not([hidden])').evaluateHandle(n => n);
     await page.route('**/integrations/codexdaichong/status', route => route.fulfill({ status: 503, body: '{}' }), { times: 1 });
     await page.locator('[data-action="ops-integrated-refresh"]').click();
-    await page.locator('.recharge-integration__view[aria-busy="false"]').waitFor();
+    await page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view[aria-busy="false"]').waitFor();
     assert(await page.locator('iframe:not([hidden])').evaluate((n, old) => n === old, oldFrame), '刷新失败应保留原内容');
     await oldFrame.dispose();
   });

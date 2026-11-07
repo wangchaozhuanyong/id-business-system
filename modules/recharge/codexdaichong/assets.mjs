@@ -104,7 +104,8 @@ function adaptAdminScript(source) {
                 await loadGptApiConfig();
                 if (adminDataRefreshTimer) clearInterval(adminDataRefreshTimer);
                 adminDataRefreshTimer = setInterval(() => {
-                    if (!adminDataRefreshPaused) loadData(false).catch(() => { });
+                    if (!document.hidden && window.idRechargeVisible !== false && !adminDataRefreshPaused)
+                        loadData(false).catch(() => { });
                 }, 3000);
                 updateAdminDataRefreshButton();
                 lucide.createIcons();
@@ -124,6 +125,11 @@ function adaptAdminScript(source) {
       '                if (!window.idRechargeOpenTaskLog(jobKey)) openTaskLogModal(jobKey);'
   );
   source = replaceOne(source, '                loadAdminSecurityStatus().catch(() => { });', '');
+  for (const call of ['fetchRuntimeLogsIncremental();', 'fetchCheckoutDebugLogsIncremental();', 'pollCheckoutDebugStatus(false);'])
+    source = replaceOne(source, '                ' + call,
+      '                if (!document.hidden && window.idRechargeVisible !== false) ' + call);
+  source = replaceOne(source, 'uptimeTickTimer = setInterval(renderUptimeTick, 1000);',
+    'uptimeTickTimer = setInterval(() => { if (!document.hidden && window.idRechargeVisible !== false) renderUptimeTick(); }, 1000);');
   // The host must keep the last working iframe when its replacement cannot load.
   source = replaceOne(
     source,
@@ -195,6 +201,18 @@ function adaptRedeemHtml(source) {
   ];
   for (const [anchor, replacement] of replacements)
     source = replaceOne(source, anchor, replacement);
+  source = replaceOne(source, "        let verifiedCdk = '';", `        let verifiedCdk = '';
+        window.idRechargeClearTransient = () => {
+            if (activationLocked) return;
+            verifiedCdk = '';
+            cdkInput.value = '';
+            cdkInput.readOnly = false;
+            tokenInput.value = '';
+            startBtn.disabled = true;
+            redeemBtn.hidden = false;
+            backToStep1.hidden = true;
+            tokenInput.dispatchEvent(new Event('input', { bubbles: true }));
+        };`);
   return source;
 }
 

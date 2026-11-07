@@ -475,17 +475,23 @@
   let activeOnlineView = 'query';
   let onlineAdmin;
   const currentIntegrationRequest = new WeakMap();
+  const integrationRoot = () => api.activePageRegion?.() || document;
+  function setFrameVisible(frame, visible) {
+    frame.contentWindow?.postMessage(
+      { source: 'id-recharge-shell', type: 'visibility', visible }, window.location.origin
+    );
+  }
   function lockedRechargeFrame(root = document) {
     const frame = root.querySelector(
-      'iframe[data-view-group="workspace"]:not([hidden]), iframe[data-view-group="public"]:not([hidden])'
+      'iframe[data-view-group="workspace"]:not([hidden]), iframe[data-view-group="public"]:not([hidden]), iframe[data-view-group="bit"]:not([hidden])'
     );
     return frame?.contentDocument?.documentElement?.dataset.rechargeNavigationLocked === 'true'
       ? frame
       : null;
   }
   function blockRechargeNavigation({ quiet = false } = {}) {
-    if (![workspaceRechargeRoute, onlineRechargeRoute].includes(state.route)) return false;
-    if (!lockedRechargeFrame()) return false;
+    if (![workspaceRechargeRoute, onlineRechargeRoute, bitLoginRoute].includes(state.route)) return false;
+    if (!lockedRechargeFrame(integrationRoot())) return false;
     if (!quiet) notify('充值任务正在执行，请等待任务处理完成后再切换或刷新。');
     return true;
   }
@@ -622,10 +628,18 @@
     request.frame = null;
     finishIntegrationLoad(view);
     delete view.dataset.unavailable;
-    // Moving an attached iframe would reload it. Remove its old siblings in place.
-    for (const sibling of [...frame.parentElement.children])
-      if (sibling !== frame) sibling.remove();
+    // Keep one connected document per group. Replacing a group is reserved for
+    // an explicit refresh; normal tab navigation only changes visibility.
+    for (const sibling of [...frame.parentElement.children]) {
+      if (sibling === frame) continue;
+      if (sibling.matches('iframe') && sibling.dataset.viewGroup !== frame.dataset.viewGroup) {
+        setFrameVisible(sibling, false);
+        sibling.hidden = true;
+      } else sibling.remove();
+    }
+    frame.dataset.description = description || '';
     frame.hidden = false;
+    setFrameVisible(frame, true);
     api.restorePendingPageScroll();
     updateRechargeDescription(description);
   }
@@ -683,12 +697,17 @@
       if (preserveLockedRecharge(view)) return;
       revealRechargeFrame(view, frame, request, event.data.height, event.data.description);
     } else if (event.data.type === 'view-context' && !frame.hidden) {
+      frame.dataset.description = event.data.description || '';
       updateRechargeDescription(event.data.description);
     } else if (event.data.type === 'navigation-lock' && event.data.locked && request) {
       preserveLockedRecharge(view);
     } else if (event.data.type === 'resize' && !frame.hidden) {
       resizeRechargeFrame(frame, event.data.height);
     } else if (event.data.type === 'session-expired' || event.data.type === 'unavailable') {
+      if (event.data.type === 'session-expired') {
+        localData?.queries?.clear();
+        window.IDLocalAuth?.lock?.();
+      }
       if (request?.frame !== frame && state.route === onlineRechargeRoute &&
           frame.dataset.view !== activeOnlineView) return;
       const keepContent = frame.hidden && Boolean(view.querySelector('iframe:not([hidden])'));
@@ -705,10 +724,11 @@
       ? `${Math.min(1600, Math.max(360, Math.ceil(height)))}px`
       : `${Math.max(290, Math.ceil(height))}px`;
     if (frame.style.height !== nextHeight) frame.style.height = nextHeight;
+    frame.dataset.measuredHeight = String(height);
     positionRechargeOverlays();
   }
   function positionRechargeOverlays() {
-    const frame = $('[data-recharge-module] iframe[data-view-group="admin"]:not([hidden])');
+    const frame = $('[data-recharge-module] iframe[data-view-group="admin"]:not([hidden])', integrationRoot());
     if (!frame || frame.dataset.viewGroup !== 'admin') return;
     const root = frame.contentDocument?.documentElement;
     if (!root) return;
@@ -736,35 +756,48 @@
     const workspace = state.route === workspaceRechargeRoute;
     const loginLogs = state.route === loginLogsRoute;
     const module = bit ? 'bit' : workspace ? 'workspace' : loginLogs ? 'login-logs' : 'online';
-    const panel = $(`[data-recharge-module="${module}"]`);
+    const panel = $(`[data-recharge-module="${module}"]`, integrationRoot());
     const view = panel?.querySelector('.recharge-integration__view');
     if (!view) return;
     const selected = bit ? bitLoginView : workspace ? workspaceRechargeView :
       loginLogs ? rechargeLoginLogsView : onlineRechargeViews.find(([id]) => id === activeOnlineView);
     const group = bit ? 'bit' : workspace ? 'workspace' : selected[2] ? 'public' : 'admin';
     const existingFrame = view.querySelector('iframe:not([hidden])');
+    const key = `${module}:${group}:${selected[0]}`;
+    const pending = currentIntegrationRequest.get(view);
+    if (!refresh && pending?.key === key && !pending.controller.signal.aborted) return;
 
     if (!refresh) {
       if (view.dataset.unavailable) return;
+      const cachedFrame = view.querySelector(`iframe[data-view-group="${group}"][data-bridge-ready="true"]`);
       if (
-        existingFrame?.dataset.bridgeReady === 'true' &&
-        existingFrame.dataset.viewGroup === group &&
-        (group === 'public' || onlineAdmin === true)
+        cachedFrame &&
+        (group === 'bit' || group === 'public' || group === 'workspace' || onlineAdmin === true)
       ) {
         finishIntegrationLoad(view);
-        existingFrame.title = selected[1];
-        existingFrame.dataset.view = selected[0];
-        existingFrame.contentWindow?.postMessage(
-          { source: 'id-recharge-shell', type: 'select-view', view: selected[0] },
-          window.location.origin
-        );
+        for (const frame of view.querySelectorAll('iframe')) {
+          if (frame !== cachedFrame && !frame.hidden) setFrameVisible(frame, false);
+          frame.hidden = frame !== cachedFrame;
+        }
+        cachedFrame.title = selected[1];
+        if (cachedFrame.dataset.view !== selected[0]) {
+          cachedFrame.dataset.view = selected[0];
+          cachedFrame.contentWindow?.postMessage(
+            { source: 'id-recharge-shell', type: 'select-view', view: selected[0] }, window.location.origin
+          );
+        }
+        sendIntegrationTheme(cachedFrame);
+        setFrameVisible(cachedFrame, true);
+        resizeRechargeFrame(cachedFrame, Number(cachedFrame.dataset.measuredHeight));
+        updateRechargeDescription(cachedFrame.dataset.description || '');
+        api.restorePendingPageScroll();
         return;
       }
     }
 
     finishIntegrationLoad(view);
     const controller = new AbortController();
-    const request = { controller };
+    const request = { controller, key };
     currentIntegrationRequest.set(view, request);
     const active = () => panel.isConnected && currentIntegrationRequest.get(view) === request;
     const progress = view.querySelector('.design-region-progress');
@@ -830,9 +863,17 @@
   window.addEventListener?.('scroll', positionRechargeOverlays, { capture: true, passive: true });
   window.addEventListener?.('resize', positionRechargeOverlays);
   $('#theme-toggle')?.addEventListener('click', () => {
-    const frame = $('[data-recharge-module] iframe:not([hidden])');
-    if (frame) sendIntegrationTheme(frame);
+    for (const frame of document.querySelectorAll('[data-recharge-module] iframe')) sendIntegrationTheme(frame);
   });
+  function deactivateIntegration(region) {
+    for (const view of region.querySelectorAll('.recharge-integration__view')) {
+      finishIntegrationLoad(view);
+      for (const frame of view.querySelectorAll('iframe')) {
+        setFrameVisible(frame, false);
+        frame.hidden = true;
+      }
+    }
+  }
   function renderStaff() {
     if (localData && window.IDLocalAuth) return window.IDLocalAuth.renderEmployees(api);
     if (localData)
@@ -1719,18 +1760,27 @@
     }).join('')}</div>${pages > 1 ? `<div class="toolbar"><span>共 ${items.length} 条 · 第 ${page} / ${pages} 页</span>${button('上一页', 'ops-saved-totp-page', '', '', `data-page="${page - 1}" ${page === 1 ? 'disabled' : ''}`)}${button('下一页', 'ops-saved-totp-page', '', '', `data-page="${page + 1}" ${page === pages ? 'disabled' : ''}`)}</div>` : ''}`;
     refreshVisibleSavedTotp(panel);
   }
-  async function loadSavedTotp(panel) {
+  async function loadSavedTotp(panel, { refresh = false } = {}) {
     if (!panel) return;
     const list = panel.querySelector('[data-saved-totp-list]');
-    list.textContent = '正在读取账号…';
+    const entry = localData.queries?.peek('saved-totp', 'metadata');
+    const cached = entry?.data === undefined ? undefined : entry;
+    if (cached) paintSavedTotp(panel, cached.data);
+    else list.textContent = '正在读取账号…';
     try {
-      paintSavedTotp(panel, await localData.savedTotp());
+      const snapshot = localData.queries
+        ? await localData.queries.read('saved-totp', 'metadata', () => localData.savedTotp(), { refresh })
+        : await localData.savedTotp();
+      if (!panel.closest('dialog[open]')) return;
+      paintSavedTotp(panel, snapshot);
       const view = getDraft('saved-totp-view');
       if (panel.isConnected && view.editor && !panel.querySelector('#ops-saved-totp-form'))
         editSavedTotp(panel, { dataset: { id: view.id || '', name: view.name || '' } });
     } catch (error) {
+      if (error.name === 'AbortError') return;
       if (panel.isConnected) {
-        list.textContent = error.message;
+        if (!cached || error.status === 401 || error.status === 403) list.textContent = error.message;
+        else notify(error.message + '，已保留账号列表。');
         list.insertAdjacentHTML('beforeend', button('重试', 'ops-saved-totp-reload'));
       }
     }
@@ -1764,7 +1814,7 @@
       notify('已保存 2FA 账号变更');
     } catch (error) {
       if (panel.isConnected) notify(error.message);
-      if (error.status === 409) await loadSavedTotp(panel);
+      if (error.status === 409) await loadSavedTotp(panel, { refresh: true });
     }
   }
   function paintTotpCountdown(node, remaining) {
@@ -2309,7 +2359,7 @@
       if (read.current() && field.value.trim() === code && Number(limitField.value) === limit) {
         finishManagedMailRead(form, read);
         progress.className = 'inline-notice warning';
-        progress.textContent = error.message || '邮件读取失败，请重试。';
+        progress.innerHTML = `<span>${esc(error.message || '邮件读取失败，请重试。')}</span>`;
         progress.insertAdjacentHTML('beforeend', button('重试', 'ops-mail-retry'));
         progress.hidden = false;
         form.querySelector('[data-mail-auto-refresh]').checked = false;
@@ -2397,15 +2447,21 @@
       node.disabled = false;
     }
   }
-  async function loadManagedPool(panel) {
+  async function loadManagedPool(panel, { refresh = false } = {}) {
     if (!panel) return;
+    const scope = 'tools/mailbox-pool';
+    const entry = localData.queries?.peek(scope, 'list');
+    const cached = entry?.data === undefined ? undefined : entry;
+    if (cached) paintManagedPool(panel, cached.data);
     const status = panel.querySelector('[data-mailbox-pool-status]');
     const read = api.beginRegionRead(status.parentElement, status, {
       loadingText: mailboxPoolSnapshots.has(panel) ? '' : '正在读取邮箱池…',
       refreshButton: panel.querySelector('[data-action="ops-mailbox-pool-reload"]')
     });
     try {
-      const snapshot = await localData.managedMailboxPool();
+      const snapshot = localData.queries
+        ? await localData.queries.read(scope, 'list', () => localData.managedMailboxPool(), { refresh })
+        : await localData.managedMailboxPool();
       if (!read.current()) return;
       paintManagedPool(panel, snapshot);
       if (panel.isConnected && !panel.querySelector('#ops-managed-pool-form')) {
@@ -2416,7 +2472,13 @@
           editMailboxBatchOrSettings(panel, view.editor);
       }
     } catch (error) {
+      if (error.name === 'AbortError') return;
       if (read.current()) {
+        if (error.status === 401 || error.status === 403) {
+          panel.querySelector('[data-mailbox-pool-list]').replaceChildren();
+          panel.querySelector('[data-mailbox-pool-editor]').replaceChildren();
+          mailboxPoolSnapshots.delete(panel);
+        }
         read.finish();
         status.hidden = false;
         status.className = 'inline-notice warning';
@@ -2521,7 +2583,7 @@
         ? '邮箱池资料已保存' : `已同步 ${snapshot.updatedExistingCount} 个查询码的到期时间`);
     } catch (error) {
       if (panel.isConnected) notify(error.message);
-      if (error.status === 409) await loadManagedPool(panel);
+      if (error.status === 409) await loadManagedPool(panel, { refresh: true });
     }
   }
   async function authorizeMicrosoftBatch(panel, items, submission) {
@@ -2604,7 +2666,7 @@
       }
     } catch (error) {
       if (panel.isConnected) notify(error.message);
-      if (error.status === 409) void loadManagedPool(panel);
+      if (error.status === 409) void loadManagedPool(panel, { refresh: true });
     } finally {
       node.disabled = false;
     }
@@ -2715,23 +2777,46 @@
     bindToolDraft($('#ops-online-tool-form'), `online-tool:${name}`);
   }
   const websiteVisitQueries = new WeakMap();
-  async function refreshWebsiteReport(result, status, label, load, renderReport) {
+  async function refreshWebsiteReport(result, status, label, load, renderReport, { scope, key, refresh = false } = {}) {
+    const entry = scope && localData.queries?.peek(scope, key);
+    const cached = entry?.data === undefined ? undefined : entry;
+    if (cached) result.innerHTML = renderReport(cached.data);
+    if (cached && !cached.stale && !refresh) {
+      api.finishRegionRead(result.parentElement);
+      return;
+    }
     const hasResult = result.hasChildNodes();
     const read = api.beginRegionRead(result.parentElement, status, {
       loadingText: hasResult ? '' : `正在读取${label}…`,
       refreshButton: result.closest('.form-section').querySelector('[data-async-refresh]')
     });
+    const dialog = result.closest('dialog');
+    const cancelClosedRead = () => {
+      if (scope && localData.queries?.peek(scope, key)?.pending) localData.queries.invalidate(scope);
+      read.finish();
+    };
+    const closedDialog = () => { if (!dialog.open) cancelClosedRead(); };
+    dialog?.addEventListener('id-view-deactivate', cancelClosedRead, { once: true });
+    dialog?.addEventListener('close', closedDialog, { once: true });
     try {
-      const report = await load();
+      const report = scope && localData.queries
+        ? await localData.queries.read(scope, key, load, { refresh }) : await load();
       if (!read.current()) return;
       result.innerHTML = renderReport(report);
     } catch (error) {
+      if (error.name === 'AbortError') return;
       if (!read.current()) return;
+      if (error.status === 401 || error.status === 403) {
+        result.replaceChildren();
+        if (scope) localData.queries?.invalidate(scope);
+      }
       read.finish();
       status.className = 'inline-notice warning';
       status.textContent = `读取${label}失败。${hasResult ? '已保留上次结果。' : ''}${error?.message || '请稍后重试。'}`;
       status.hidden = false;
     } finally {
+      dialog?.removeEventListener('id-view-deactivate', cancelClosedRead);
+      dialog?.removeEventListener('close', closedDialog);
       read.finish();
     }
   }
@@ -2782,7 +2867,7 @@
         )
     )}<div class="form-footer">${button('刷新记录', 'ops-website-visit-page', '', 'return', 'data-page="1" data-async-refresh')}<button type="submit" class="button primary">查询明细</button></div></form><div class="design-async-region" aria-busy="false"><div data-visits-status role="status" hidden></div><div data-visits-result></div></div></section>`;
   }
-  async function showWebsiteVisits(form, page) {
+  async function showWebsiteVisits(form, page, { refresh = false } = {}) {
     if (!form) return;
     const panel = form.closest('#ops-website-visits');
     if (!panel) return;
@@ -2838,7 +2923,8 @@
           : empty('没有匹配的访问记录', `${filters}。可调整时间范围或 IP 后重新查询。`);
         websiteVisitQueries.set(output, query);
         return metrics + daily + `<div data-visit-view="records" ${daily && view === 'daily' ? 'hidden' : ''}>${content}</div>`;
-      }
+      },
+      { scope: 'tools/website-visits', key: query, refresh }
     );
   }
   async function showWebsiteVisitIp(node) {
@@ -2871,7 +2957,7 @@
   function websiteAnalyticsPanel() {
     return `<section class="form-section" id="ops-website-analytics"><div class="panel-heading"><h3>装修网站访问统计</h3><a class="button" href="https://analytics.google.com/analytics/web/#/a396903314p540413787/reports" target="_blank" rel="noopener noreferrer">查看完整报表</a></div><div class="tool-period" role="group" aria-label="统计时间范围">${button('最近 7 天', 'ops-website-analytics', '', '', 'data-days="7" aria-pressed="false"')}${button('最近 30 天', 'ops-website-analytics', '', '', 'data-days="30" aria-pressed="false"')}${button('刷新统计', 'ops-website-analytics', '', 'return', 'data-async-refresh')}</div><div class="design-async-region" aria-busy="false"><div data-website-analytics-status role="status" hidden></div><div data-website-analytics-result></div></div></section>`;
   }
-  async function showWebsiteAnalytics(days) {
+  async function showWebsiteAnalytics(days, { refresh = false } = {}) {
     const panel = $('#ops-website-analytics');
     if (!panel) return;
     state.drafts.set(draftKey('website-analytics'), { days });
@@ -2904,7 +2990,8 @@
                 .join('')}</tr>`
           )
           .join('')}</tbody></table></div>`;
-      }
+      },
+      { scope: 'tools/website-analytics', key: days, refresh }
     );
   }
   function openWebsiteMonitor() {
@@ -3120,7 +3207,7 @@
       return true;
     }
     if (action === 'ops-website-visit-page') {
-      void showWebsiteVisits($('#ops-website-visits-form'), Number(node.dataset.page));
+      void showWebsiteVisits($('#ops-website-visits-form'), Number(node.dataset.page), { refresh: node.hasAttribute('data-async-refresh') });
       return true;
     }
     if (action === 'ops-website-visit-view') {
@@ -3148,7 +3235,7 @@
       return true;
     }
     if (action === 'ops-website-analytics') {
-      void showWebsiteAnalytics(Number(node.dataset.days) || getDraft('website-analytics').days || 7);
+      void showWebsiteAnalytics(Number(node.dataset.days) || getDraft('website-analytics').days || 7, { refresh: node.hasAttribute('data-async-refresh') });
       return true;
     }
     if (['ops-mail-copy-code', 'ops-mail-copy-body', 'ops-mail-retry'].includes(action)) {
@@ -3189,7 +3276,7 @@
         }
       }
       if (action === 'ops-mailbox-pool-copy') void copyText(node.dataset.code, '查询码已复制');
-      if (action === 'ops-mailbox-pool-reload') void loadManagedPool(panel);
+      if (action === 'ops-mailbox-pool-reload') void loadManagedPool(panel, { refresh: true });
       if (action === 'ops-mailbox-pool-status') {
         const active = node.dataset.active !== 'true';
         const version = Number(panel.dataset.version);
@@ -3208,7 +3295,7 @@
         panel.querySelector('[data-saved-totp-editor]').replaceChildren();
         state.drafts.delete(draftKey('saved-totp-view'));
       }
-      if (action === 'ops-saved-totp-reload') void loadSavedTotp(panel);
+      if (action === 'ops-saved-totp-reload') void loadSavedTotp(panel, { refresh: true });
       if (action === 'ops-saved-totp-use') void showSavedTotpCode(node.closest('[data-saved-totp-code]'));
       if (action === 'ops-saved-totp-page') {
         const snapshot = savedTotpSnapshots.get(panel);
@@ -3532,7 +3619,7 @@
     else if (form.id === 'ops-phrase-form') savePhrase(form);
     else if (form.id === 'ops-totp-form') void runTotp(form);
     else if (form.id === 'ops-website-monitor-form') void checkWebsite(form);
-    else if (form.id === 'ops-website-visits-form') void showWebsiteVisits(form);
+    else if (form.id === 'ops-website-visits-form') void showWebsiteVisits(form, undefined, { refresh: true });
     else if (form.id === 'ops-managed-mail-query') void queryManagedMail(form);
     else if (form.id === 'ops-mailbox-pool-page-form') {
       if (!form.reportValidity()) return true;
@@ -3708,6 +3795,12 @@
   };
   window.IDDesignModules.push({
     id: 'operations',
+    retainPage: (route) => [bitLoginRoute, workspaceRechargeRoute, onlineRechargeRoute].includes(route),
+    deactivate: deactivateIntegration,
+    clearPageState() {
+      deactivateIntegration(document.getElementById('main'));
+      onlineAdmin = undefined;
+    },
     matches: (route) =>
       [
         bitLoginRoute,

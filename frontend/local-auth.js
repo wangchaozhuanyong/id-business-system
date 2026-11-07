@@ -24,6 +24,8 @@
   const $ = (selector, root = document) => root.querySelector(selector);
 
   function concealBusiness() {
+    window.IDDesignAPI?.clearPageRegions?.();
+    window.IDLocalData?.queries?.clear();
     const shell = $('.app-shell');
     if (shell) shell.hidden = true;
     const skipLink = $('.skip-link');

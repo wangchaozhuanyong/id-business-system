@@ -488,8 +488,11 @@ function readDraft(form) {
   return values;
 }
 const activeRegionReads = new WeakMap();
-function beginRegionRead(region, status, { loadingText = '', refreshButton } = {}) {
+function finishRegionRead(region) {
   activeRegionReads.get(region)?.finish();
+}
+function beginRegionRead(region, status, { loadingText = '', refreshButton } = {}) {
+  finishRegionRead(region);
   const dialog = region.closest('dialog');
   const current = () => activeRegionReads.get(region) === read && region.isConnected &&
     (!dialog || dialog.open);
@@ -532,6 +535,7 @@ function openDrawer(title, description, body, footer = '', context = '', layout 
   const tabScroll = captureTabScroll(drawer);
   if (drawer.open) {
     preserveDrawerDraft();
+    drawer.dispatchEvent(new Event('id-view-deactivate'));
     drawer.close();
   }
   state.drawerContext = context;
@@ -599,6 +603,7 @@ function closeDrawer() {
   const toolEntry = $('#drawer').dataset.layout === 'workspace-tools'
     ? $$('.topbar-tools button').find((button) => button.dataset.tab === state.toolsTab) : null;
   preserveDrawerDraft();
+  $('#drawer').dispatchEvent(new Event('id-view-deactivate'));
   $('#drawer').close();
   state.drawerContext = '';
   toolEntry?.focus({ preventScroll: true });
@@ -636,23 +641,23 @@ function titleInfo(title, description, id) {
 function header(title, description, actions = '', label = '') {
   return `<div class="page-header"><div class="page-heading"><h1 id="page-title-heading">${escapeHtml(title)}</h1>${titleInfo(title, [description, label].filter(Boolean).join(' · '), 'page-description')}</div><div class="page-header-actions">${actions}</div></div>`;
 }
-function mountPageContext() {
-  const source = $('#main .page-header');
+function mountPageContext(region = $('#main')) {
+  const source = $('.page-header', region);
   const title = $('#page-title');
   title.replaceChildren();
   if (!source) return;
   title.append($('.page-heading', source));
   const actions = $('.page-header-actions', source);
   if (actions.innerHTML.trim()) {
-    let target = $('#main [data-page-actions]') ||
-      $('#main .panel > .toolbar > .toolbar-right') ||
-      $('#main .panel > .tabs') ||
-      $('#main .form-panel .form-footer');
+    let target = $('[data-page-actions]', region) ||
+      $('.panel > .toolbar > .toolbar-right', region) ||
+      $('.panel > .tabs', region) ||
+      $('.form-panel .form-footer', region);
     actions.className = 'toolbar-right page-actions';
     if (!target) {
       target = document.createElement('div');
       target.className = 'toolbar page-actions-fallback';
-      ($('#main .panel') || $('#main')).append(target);
+      ($('.panel', region) || region).append(target);
     }
     if (target.dataset.pageActions === 'tabs' || target.matches('.tabs')) {
       const row = document.createElement('div');
@@ -1192,14 +1197,33 @@ function preserveMainDraft() {
 }
 let pendingPageScroll = null;
 let layoutRenderVersion = 0;
+const retainedPageRegions = new Map();
+let mountedPage;
+function activePageRegion() {
+  return $('#main > [data-page-region]:not([hidden])') || $('#main');
+}
+function clearPageRegions() {
+  mountedPage?.module?.deactivate?.(mountedPage.region);
+  for (const module of window.IDDesignModules) module.clearPageState?.();
+  mountedPage?.region.remove();
+  for (const region of retainedPageRegions.values()) region.remove();
+  retainedPageRegions.clear();
+  mountedPage = undefined;
+  delete $('#main').dataset.layoutRoute;
+  window.IDLocalData?.queries?.clear();
+}
 function restorePageScroll(top) {
   const maxScroll = Math.max(0, document.documentElement.scrollHeight - innerHeight);
   window.scrollTo({ top: Math.min(top, maxScroll), behavior: 'instant' });
-  if (top <= maxScroll) pendingPageScroll = null;
 }
 function restorePendingPageScroll() {
   if (pendingPageScroll?.route === state.route) restorePageScroll(pendingPageScroll.top);
 }
+// A sidebar closing, a late font or a data region can change the available
+// height after the first paint. Keep the navigation target until user input;
+// a resize may complete a previously clamped restoration without taking over
+// subsequent manual scrolling.
+new ResizeObserver(restorePendingPageScroll).observe($('#main'));
 for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
   window.addEventListener(eventName, () => {
     pendingPageScroll = null;
@@ -1209,7 +1233,7 @@ function render() {
   const renderVersion = ++layoutRenderVersion;
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
-  const tabScroll = sameRoute ? captureTabScroll(main) : new Map();
+  const tabScroll = sameRoute ? captureTabScroll(activePageRegion()) : new Map();
   if (!sameRoute)
     pendingPageScroll = { route: state.route, top: state.viewDrafts.get(state.route)?.scrollY || 0 };
   const scrollTarget = pendingPageScroll?.route === state.route
@@ -1241,9 +1265,35 @@ function render() {
       ) +
       `<section class="panel form-panel"><div class="submission-grid"><div class="guide-item"><div class="section-title-row"><h3>单条录入</h3>${titleInfo('单条录入', '填写邮箱及必要资料，支持无绑定电话的明确确认。', 'mail-single-description')}</div><div class="toolbar">${button('录入邮箱', 'mail-add', 'primary', 'plus')}</div></div><div class="guide-item"><div class="section-title-row"><h3>批量导入</h3>${titleInfo('批量导入', '粘贴文本或选择 CSV，检查格式、重复邮箱和错误行。', 'mail-batch-description')}</div><div class="toolbar">${button('批量导入', 'mail-import', '', 'upload')}</div></div></div></section>`;
   else content = renderPlaceholder();
-  $('#main').innerHTML = content;
+  // Ordinary pages restore data/drafts. Only explicitly registered embedded
+  // runtimes keep a connected region: detaching an iframe reloads its document.
+  const retain = allowed && extension?.retainPage?.(state.route) === true;
+  let region = retain && retainedPageRegions.get(state.route);
+  if (mountedPage && mountedPage.region !== region) {
+    mountedPage.module?.deactivate?.(mountedPage.region);
+    if (mountedPage.retained) {
+      mountedPage.region.hidden = true;
+      mountedPage.region.inert = true;
+    } else mountedPage.region.remove();
+  }
+  if (!region) {
+    region = document.createElement('div');
+    region.dataset.pageRegion = state.route;
+    region.className = 'design-page-region design-async-region';
+    region.innerHTML = content;
+    main.append(region);
+    if (retain) retainedPageRegions.set(state.route, region);
+  } else {
+    const template = document.createElement('template');
+    template.innerHTML = content;
+    const heading = template.content.querySelector('.page-header');
+    if (heading) region.prepend(heading);
+  }
+  region.hidden = false;
+  region.inert = false;
+  mountedPage = { region, module: extension, retained: retain };
   main.dataset.layoutRoute = state.route;
-  mountPageContext();
+  mountPageContext(region);
   renderSidebar();
   stabilizeDesignTables();
   if (state.route === 'workspace/order') {
@@ -1257,7 +1307,7 @@ function render() {
   if (['normal', 'refresh', 'refresh-error'].includes(state.previewMode))
     extension?.afterRender?.({ routeChanged: !sameRoute });
   applyDesignPreviewState();
-  restoreTabScroll(main, tabScroll);
+  restoreTabScroll(region, tabScroll);
   requestAnimationFrame(() => {
     if (renderVersion !== layoutRenderVersion) return;
     restorePageScroll(scrollTarget);
@@ -2870,17 +2920,13 @@ function showDesignPreviewStates() {
   );
 }
 function applyDesignPreviewState() {
-  const main = $('#main');
-  const region = document.createElement('div');
-  region.className = 'design-async-region';
-  [...main.children]
-    .filter((element) => !element.classList.contains('page-header'))
-    .forEach((element) => region.append(element));
-  main.append(region);
+  const region = activePageRegion();
+  region.querySelector(':scope > [data-preview-feedback]')?.remove();
   const mode = state.previewMode;
   if (mode === 'normal') return;
   if (mode === 'refresh' || mode === 'refresh-error') {
     const feedback = document.createElement('div');
+    feedback.dataset.previewFeedback = '';
     feedback.className = mode === 'refresh' ? 'design-region-progress' : 'inline-notice warning';
     feedback.setAttribute('role', 'status');
     feedback.innerHTML =
@@ -2930,6 +2976,9 @@ function roundedDivision(numerator, denominator) {
 }
 window.IDDesignAPI = {
   beginRegionRead,
+  finishRegionRead,
+  activePageRegion,
+  clearPageRegions,
   restorePendingPageScroll,
   $,
   $$,
