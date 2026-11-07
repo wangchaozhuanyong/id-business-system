@@ -287,16 +287,7 @@ function adaptWorkspaceRecharge(source) {
     '<header class="site-hero">',
     '<div id="redeemSection">',
     `
-    <div class="workspace-recharge-standalone-title"><h1>ChatGPT 兑换开通</h1><p>验码后自动匹配套餐，请核对账号再提交。</p></div>
-    <div class="workspace-recharge-intro">
-      <ul aria-label="兑换开通特点">
-        <li>${workspaceIcon('shield-check')}资料核对</li>
-        <li>${workspaceIcon('zap')}自动处理</li>
-        <li>${workspaceIcon('search')}进度可查</li>
-        <li>${workspaceIcon('info')}套餐锁定</li>
-      </ul>
-      <a class="btn-secondary" href="/subscription" target="_blank" rel="noopener">${workspaceIcon('receipt')}发票助手</a>
-    </div>
+    <div class="workspace-recharge-standalone-title"><h1>ChatGPT 兑换开通</h1><p>资料核对、自动处理、进度可查、套餐锁定。验码后自动匹配套餐，请核对账号再提交。</p></div>
     <main class="recharge-card">
       <header class="workspace-recharge-heading">
         <nav class="tab-nav" aria-label="兑换开通功能">
@@ -304,7 +295,10 @@ function adaptWorkspaceRecharge(source) {
           <button type="button" class="tab-btn" data-tab="query" aria-pressed="false" aria-controls="querySection">兑换码查询</button>
           <button type="button" class="tab-btn" data-tab="guide" aria-pressed="false" aria-controls="workspaceGuide">使用说明</button>
         </nav>
-        <span id="flowStatusBadge" class="flow-badge pending">待开始</span>
+        <div class="workspace-recharge-heading-actions">
+          <span id="flowStatusBadge" class="flow-badge pending">待开始</span>
+          <a class="btn-secondary" href="/subscription" target="_blank" rel="noopener">${workspaceIcon('receipt')}发票助手</a>
+        </div>
       </header>
       <div id="workspaceOperation">
         <div id="flowStepper" hidden></div>
@@ -331,21 +325,22 @@ function adaptWorkspaceRecharge(source) {
     </section>
     <fieldset id="step2" class="workspace-recharge-step" disabled>
       <legend class="workspace-recharge-legend">填写账号并提交</legend>
-      <h2><span>02</span> 填写账号并提交</h2>
+      <h2 id="workspace-account-title"><span>02</span> 填写账号并提交</h2>
+      <p class="field-hint">账号资料仅用于本次充值，请勿转发。<a class="workspace-guide-link" href="#workspaceGuide" data-workspace-tab="guide">如何获取账号资料？</a></p>
       <div class="workspace-recharge-field workspace-recharge-field--account">
         <label for="tokenInput">账号资料（JSON）</label>
         <div class="workspace-recharge-account">
           <textarea id="tokenInput" placeholder="请粘贴完整账号资料" rows="4" autocomplete="off" spellcheck="false" aria-describedby="workspaceAccountHint"></textarea>
-          <a class="workspace-guide-link" href="#workspaceGuide" data-workspace-tab="guide">如何获取账号资料？</a>
           <p id="workspaceAccountHint" class="field-hint" aria-live="polite"></p>
         </div>
       </div>
-      <dl class="workspace-recharge-summary">
-        <dt>目标账号</dt><dd id="workspaceAccount">填写后显示</dd>
-        <dt>充值套餐</dt><dd id="workspacePlan">验码后确认</dd>
-      </dl>
-      <button type="button" id="startBtn" class="btn-primary" disabled><span class="btn-text">充值提交</span><span class="loader"></span></button>
-      <p class="field-hint">账号资料仅用于本次充值，请勿转发。</p>
+      <div class="workspace-recharge-footer">
+        <dl class="workspace-recharge-summary">
+          <div><dt>目标账号</dt><dd id="workspaceAccount">填写后显示</dd></div>
+          <div><dt>充值套餐</dt><dd id="workspacePlan">验码后确认</dd></div>
+        </dl>
+        <button type="button" id="startBtn" class="btn-primary" disabled><span class="btn-text">充值提交</span><span class="loader"></span></button>
+      </div>
     </fieldset>
   </div>
   `
