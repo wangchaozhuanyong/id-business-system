@@ -8,7 +8,7 @@ import { initializeLocalAdmin } from '../server/local-auth.mjs';
 import { startPreview } from '../server/preview.mjs';
 import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
-test('五项在线工具恢复老版入口、页面顺序、操作及草稿', { timeout: 90_000 }, async (t) => {
+test('在线工具启动列表及原有工具操作、布局和草稿兼容', { timeout: 90_000 }, async (t) => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
   await mkdir(runtime, { recursive: true });
@@ -103,7 +103,7 @@ test('五项在线工具恢复老版入口、页面顺序、操作及草稿', { 
   await page.getByRole('button', { name: '在线工具', exact: true }).click();
 
   const tiles = drawer.locator('.online-tool-open');
-  assert.equal(await tiles.count(), 5);
+  assert.equal(await tiles.count(), 2);
   const positions = await tiles.evaluateAll((nodes) => nodes.map((node) => {
     const rect = node.getBoundingClientRect();
     return { left: rect.left, top: rect.top };
@@ -111,7 +111,8 @@ test('五项在线工具恢复老版入口、页面顺序、操作及草稿', { 
   assert(positions.every((rect, i) => rect.left === positions[0].left && (!i || rect.top > positions[i - 1].top)));
   const openTool = async (name) => {
     if (await drawer.getAttribute('data-layout') === 'online-tool') await close.click();
-    await drawer.locator('[data-action="tool-open"]').filter({ hasText: name }).click();
+    // Exercise the retained tool action; the plugin page entry has its own browser suite.
+    await page.evaluate(name => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name } }), name);
   };
 
   await openTool('网站监控');
@@ -202,7 +203,7 @@ test('五项在线工具恢复老版入口、页面顺序、操作及草稿', { 
   await page.keyboard.press('Escape');
   assert.equal(await drawer.locator('.title-help[open]').count(), 0);
   await close.click();
-  assert.equal(await tiles.count(), 5);
+  assert.equal(await tiles.count(), 2);
   assert.equal(await drawer.getAttribute('data-layout'), 'workspace-tools');
   const nav = page.getByRole('navigation', { name: '常用工具' });
   assert.deepEqual(await nav.getByRole('button').allTextContents(), ['个人工具', '在线工具', '话术文案']);

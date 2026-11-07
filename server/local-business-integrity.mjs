@@ -6,6 +6,7 @@ import {
 } from '../modules/inventory/inventory-claude-aging.ts';
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { claimAllowsDelivery, pendingInventoryClaim } from './inventory-usage.mjs';
+import { releasedAccountOrders } from './account-lifecycle.mjs';
 
 function units(value) {
   if (typeof value !== 'string' || !/^-?\d{1,16}(?:\.\d{1,4})?$/.test(value)) return null;
@@ -226,7 +227,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
     ) {
       return '原成品交付订单及其库存账号必须保留';
     }
-    if (order.accountId) usedAccounts.add(order.accountId);
+    if (order.accountId && !releasedAccountOrders(priorAccounts.get(order.accountId) || {}).has(order.id)) usedAccounts.add(order.accountId);
   }
 
   const newSales = new Map();
@@ -275,7 +276,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
         (priorState !== 'available' && !validClaimDelivery) ||
         (prior.health || 'normal') !== 'normal' ||
         (prior.status || '正常') !== '正常' ||
-        previousLinks.length ||
+        (previousLinks.length && prior.accountLifecycle?.disposition !== 'recovered') ||
         links.length !== 1 ||
         account.inventoryState !== 'used' ||
         prior.type !== type ||

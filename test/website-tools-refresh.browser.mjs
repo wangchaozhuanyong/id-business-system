@@ -154,7 +154,7 @@ test(
       if (!await drawer.isVisible()) {
         await page.getByRole('button', { name: '在线工具', exact: true }).click();
       }
-      await drawer.getByRole('button', { name: '网站监控', exact: true }).click();
+      await page.evaluate(() => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name: '网站监控' } }));
       if (expectRead) return tools.next(analyticsPath);
     }
     const analytics = drawer.locator('[data-website-analytics-result]');

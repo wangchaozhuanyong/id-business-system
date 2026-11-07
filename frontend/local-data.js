@@ -88,7 +88,7 @@
 
   async function write(scopes, operation) {
     const result = await operation();
-    queries.invalidate([...scopes, 'overview', 'audit']);
+    queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool'] : []), 'overview', 'audit']);
     return result;
   }
 
@@ -153,6 +153,7 @@
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
     load: (domain) => request(domain),
+    changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
     save: (domain, version, data, { action } = {}) => write([domain], () => request(domain, { version, data, action })),
     saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
     audit: () => request('audit'),

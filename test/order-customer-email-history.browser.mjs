@@ -31,6 +31,9 @@ test('订单优先匹配客户历史邮箱，支持切换、手填和草稿，�
     order('stock', 'alpha', 'delivered@example.test', 'GPT', '2026-06-01T12:00', { businessType: '成品交付', accountId: 'delivered-id' })
   ];
   await interceptDesign(context, { localFixtures: fixture });
+  await context.route('**/api/local/order-cards', route => route.fulfill({ json: {
+    items: [{ id: 'synthetic-card', last4: '7141', usageCount: 3, status: '正常', active: true }]
+  } }));
   const writes = [];
   await context.route('**/api/local/commerce', route => {
     if (route.request().method() === 'GET') return route.fallback();
@@ -56,11 +59,20 @@ test('订单优先匹配客户历史邮箱，支持切换、手填和草稿，�
   }
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.locator('#commerce-customerId option[value="alpha"]').waitFor({ state: 'attached' });
+  await page.locator('#commerce-cardId-picker').click();
+  await page.locator('#commerce-cardId-options [data-value="synthetic-card"]').click();
+  assert.match(await page.locator('#commerce-cardId-picker').innerText(), /已用 3 次/);
+  assert.equal(await page.locator('[data-commerce-pool-usage]').isVisible(), false, '次数只在银行卡选项显示，不再重复一行');
+  assert.equal(await email.inputValue(), '', '未选择客户时不匹配任何产品的历史邮箱');
   await customer('alpha');
-  assert.equal(await email.inputValue(), 'recent@example.test', '优先本产品最近使用邮箱');
+  assert.equal(await email.inputValue(), 'claude@example.test', '优先该客户最近使用邮箱，即使最近订单属于其他产品');
+  assert.match(await page.locator('[data-commerce-field="email"] .field-help').innerText(), /所选客户最近使用/);
   await openHistory();
   await popup.getByRole('option').first().waitFor();
   assert.equal(await popup.getByRole('option').count(), 5, '去重并排除其他客户、撤单、无关联及无效邮箱');
+  assert.deepEqual(await popup.getByRole('option').evaluateAll(nodes => nodes.map(node => node.dataset.value)),
+    ['', 'claude@example.test', 'recent@example.test', 'older@example.test', 'delivered@example.test'],
+    '历史列表按该客户使用时间倒序，不按产品分组优先');
   await search.fill('OLDER');
   await popup.locator('[data-value="older@example.test"]').click();
   assert.equal(await email.inputValue(), 'older@example.test');
@@ -80,21 +92,22 @@ test('订单优先匹配客户历史邮箱，支持切换、手填和草稿，�
   assert.equal(await email.inputValue(), '');
   assert(await email.evaluate(node => node === document.activeElement));
   await customer('alpha');
-  assert.equal(await email.inputValue(), 'recent@example.test');
+  assert.equal(await email.inputValue(), 'claude@example.test');
   await page.locator('#commerce-businessType').selectOption('成品交付');
   assert.equal(await email.inputValue(), '');
-  assert.equal(await trigger.isVisible(), false);
-  assert.equal(await email.getAttribute('list'), 'commerce-stock-options');
+  assert.equal(await trigger.isVisible(), true);
+  assert.equal(await email.isVisible(), false);
+  assert.equal(await email.getAttribute('list'), null);
   assert.match(await page.locator('[data-commerce-field="email"] .field-help').innerText(), /可用|未使用/);
   await page.locator('#commerce-businessType').selectOption('续费');
-  assert.equal(await email.inputValue(), 'recent@example.test');
+  assert.equal(await email.inputValue(), 'claude@example.test');
   await email.fill('draft-new@example.test');
   const submitted = await page.locator('#commerce-order-form').evaluate(form => Object.fromEntries(new FormData(form)));
   assert.equal(submitted['commerce-email'], 'draft-new@example.test');
   assert.equal(Object.hasOwn(submitted, 'commerce-emailHistory'), false, '历史选择器不新增业务字段');
   await page.goto(origin + '/#/workspace/order/claude');
   await customer('alpha');
-  assert.equal(await email.inputValue(), 'claude@example.test', 'Claude 产品系列优先');
+  assert.equal(await email.inputValue(), 'claude@example.test', '切换产品仍使用该客户最近邮箱');
   await page.goto(origin + '/#/workspace/order/gpt');
   assert.equal(await email.inputValue(), 'draft-new@example.test', '返回保留手填草稿');
 

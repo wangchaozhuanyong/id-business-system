@@ -9,6 +9,7 @@ import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisi
 import {
   applyMailboxPoolWrite, findMailboxQuery, mailboxPoolItems, mailboxPoolMetadata, managedMailboxDomain, MailboxPoolError, prepareVerifiedMailboxWrite
 } from './tools/mailbox-pool.mjs';
+import { withClaudeMailboxCandidates } from './tools/claude-mailbox-candidates.mjs';
 import {
   applyTotpWrite, generateSavedCode, savedTotpDomain, savedTotpMetadata, SavedTotpError, validateTotpWrite
 } from './tools/saved-totp.mjs';
@@ -31,6 +32,7 @@ import {
 } from './bitbrowser-connections.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkInventoryHistory } from './inventory-history.mjs';
+import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
 import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
@@ -594,9 +596,9 @@ export function createLocalBusinessStore(databasePath) {
     const metadata = mailboxPoolMetadata(snapshot);
     const activity = new Map(mailboxActivity.all(managedMailboxDomain).map((row) => [row.id, row.at]));
     const previous = new Map(mailboxPoolItems(snapshot).map((row) => [row.id, row.lastQueriedAt]));
-    return { ...metadata, items: metadata.items.map((row) => ({
+    return withClaudeMailboxCandidates({ ...metadata, items: metadata.items.map((row) => ({
       ...row, lastQueriedAt: activity.get(row.id) || previous.get(row.id) || null
-    })) };
+    })) }, readDocument('inventory').data);
   }
 
   function commitMailboxWrite(current, body, plan, actor) {
@@ -627,8 +629,30 @@ export function createLocalBusinessStore(databasePath) {
     },
     inventorySnapshot() {
       const snapshot = readDocument('inventory');
-      const review = usageReviewRows(inspectInventoryUsage(snapshot.data, readDocument('commerce').data));
-      return review.length ? { ...snapshot, usageReview: review } : snapshot;
+      const commerce = readDocument('commerce');
+      const review = usageReviewRows(inspectInventoryUsage(snapshot.data, commerce.data));
+      return { ...snapshot, ...(review.length && { usageReview: review }), commerceVersion: commerce.version,
+        accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data) };
+    },
+    saveAccountLifecycle(body, actor) {
+      return writeTransaction(() => {
+        const inventory = readDocument('inventory');
+        const commerce = readDocument('commerce');
+        const command = body?.data;
+        const existing = inventory.data?.accounts?.find(account => account.id === command?.assetId)
+          ?.accountLifecycleEvents?.some(event => event.id === command?.commandId);
+        if (!existing && (inventory.version !== body?.version || commerce.version !== body?.commerceVersion))
+          throw new LocalDataError(409, '库存或客户订单已变化，请重新打开核对');
+        const now = new Date();
+        const result = changeAccountLifecycle(inventory.data, commerce.data, command, actor, now);
+        if (result.changed) {
+          const version = inventory.version + 1;
+          put.run('inventory', version, encrypt(key, 'inventory', version, JSON.stringify(inventory.data)));
+          log.run(now.toISOString(), 'inventory', 'inventory_account_lifecycle',
+            auditSummary(command.action === 'release' ? '恢复账号可用库存' : '账号停止复用', actor, command.assetId), version);
+        }
+        return this.inventorySnapshot();
+      });
     },
     saveAppleRelayPrimaries(rows, actor, aliases = [], registration) {
       const { version, data } = readDocument('inventory');
@@ -741,7 +765,8 @@ export function createLocalBusinessStore(databasePath) {
         log.run(now.toISOString(), 'inventory', 'inventory_usage_correction',
           auditSummary('更正库存使用关联', operator, assetId), version);
         const usageReview = usageReviewRows(inspectInventoryUsage(snapshot.data, commerce, now.getTime()));
-        return { version, data: snapshot.data, usageReview };
+        return { version, data: snapshot.data, usageReview,
+          commerceVersion: readDocument('commerce').version, accountSummaries: accountLifecycleSummaries(snapshot.data, commerce) };
       });
     },
     appendWebsiteVisit(event, time) {
@@ -1150,6 +1175,8 @@ export function createLocalBusinessStore(databasePath) {
             attributeCommerce(commerce, priorCommerce, actor, owners);
           }
           const { action } = writes.find((write) => write.domain === 'commerce');
+          const renewalError = checkInventoryRenewals(priorCommerce, commerce, inventory);
+          if (renewalError) throw new LocalDataError(409, renewalError);
           if (cards) {
             const oldOrders = priorCommerce?.orders || [];
             const priorById = new Map(oldOrders.map((row) => [row.id, row]));
@@ -1279,8 +1306,10 @@ export function createLocalBusinessStore(databasePath) {
                 prior.evidence.registrationId === match.evidence.registrationId) matches.delete(id);
             }
           }
-          if (applyInventoryUsage(matches, actor, new Date(now))) {
-            const error = checkInventoryHistory(priorInventory, next);
+          const usageChanged = applyInventoryUsage(matches, actor, new Date(now));
+          const lifecycleChanged = incoming.has('commerce') && applyAccountOrderLifecycle(priorCommerce, commerce, next, actor, new Date(now));
+          if (usageChanged || lifecycleChanged) {
+            const error = checkInventoryHistory(priorInventory, next, { trustedAccountLifecycle: true });
             if (error) throw new LocalDataError(409, error);
             if (!inventoryWrite) writes.push({
               domain: 'inventory', version: readDocument('inventory').version,
@@ -1303,7 +1332,9 @@ export function createLocalBusinessStore(databasePath) {
           const review = domain === 'inventory'
             ? usageReviewRows(inspectInventoryUsage(inventory, commerce, Date.parse(now)))
             : [];
-          result.push({ domain, version: next, data, ...(review.length && { usageReview: review }) });
+          result.push({ domain, version: next, data, ...(review.length && { usageReview: review }),
+            ...(domain === 'inventory' && { accountSummaries: accountLifecycleSummaries(data, commerce),
+              commerceVersion: writes.find(write => write.domain === 'commerce')?.version + 1 || readDocument('commerce').version }) });
         }
         return result;
       });
@@ -1535,6 +1566,7 @@ export async function handleLocalBusiness(
       throw new LocalDataError(400, '保存资料格式不正确');
     }
     if (domain === 'inventory/usage-correction') return json(response, 200, store.saveInventoryUsageCorrection(body, actor));
+    if (domain === 'inventory/account-lifecycle') return json(response, 200, store.saveAccountLifecycle(body, actor));
     if (domain === 'toolbox') return json(response, 200, store.saveToolbox(body, actor));
     if (domain === bitBrowserConnectionDomain) {
       if ((Object.hasOwn(body, 'interfaceToken') || Object.hasOwn(body, 'staticProxyCredentials')) && !actor?.id)
@@ -1548,6 +1580,7 @@ export async function handleLocalBusiness(
     const [entry, inventory] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
     return json(response, 200, {
       version: entry.version, data: entry.data,
+      ...(entry.accountSummaries && { accountSummaries: entry.accountSummaries, commerceVersion: entry.commerceVersion }),
       ...(entry.usageReview && { usageReview: entry.usageReview }),
       ...(inventory?.domain === 'inventory' && { inventory })
     });
@@ -1555,6 +1588,7 @@ export async function handleLocalBusiness(
     if (response.destroyed) return;
     if (
       error instanceof LocalDataError ||
+      error instanceof AccountLifecycleError ||
       error instanceof RelayClaimError ||
       error instanceof BitBrowserAddressError ||
       error instanceof BitBrowserConnectionError ||

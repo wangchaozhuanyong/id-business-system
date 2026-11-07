@@ -145,7 +145,8 @@ try {
       const drawer = page.locator('#drawer');
 
       for (const name of ['计算 2FA 验证码', '抖音解析', '邮箱查询与邮箱池']) {
-        await drawer.locator('[data-action="tool-open"]').filter({ hasText: name }).click();
+        // Exercise the retained tool action; the plugin page entry has its own browser suite.
+    await page.evaluate(name => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name } }), name);
         if (name === '计算 2FA 验证码')
           await drawer.getByText('暂无已保存账号', { exact: true }).waitFor();
         const label = name === '计算 2FA 验证码' ? 'totp' : name === '抖音解析' ? 'media' : 'mail';

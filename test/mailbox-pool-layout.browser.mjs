@@ -34,9 +34,8 @@ try {
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(origin + '/#/overview');
     if (theme === 'dark') await page.locator('#theme-toggle').click();
-    const drawer = page.locator('#drawer');
-    await page.getByRole('navigation', { name: '常用工具' }).getByRole('button', { name: '在线工具', exact: true }).click();
-    await drawer.locator('[data-action="tool-open"]').filter({ hasText: '邮箱查询与邮箱池' }).click();
+    const drawer = page.locator('#plugin-tool-host');
+    await page.goto(origin + '/#/plugins/mailboxes');
     await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
     const pool = drawer.locator('#ops-mailbox-pool'), list = pool.locator('.online-tool-mail-list');
     const waitCodes = () => page.waitForFunction(() => {
@@ -57,7 +56,7 @@ try {
       });
       assert(!geometry.overflow && !geometry.clipped, `${width}/${theme}/${label} overflow`);
       assert(geometry.rows.every((r, i, all) => !i || (Math.abs(r.x - all[0].x) < 1 && r.y >= all[i-1].bottom - 1)), '每个账号必须独占一行');
-      assert(geometry.rows.every(r => r.height <= (width <= 900 ? 61 : 54)), `所有记录最多两行，不被长内容撑高 ${width}/${theme}/${label}`);
+      assert(geometry.rows.every(r => r.height <= (width <= 900 ? 61 : 54)), `所有记录单行显示，不被长内容撑高 ${width}/${theme}/${label}`);
       results.push({ width, theme, label, geometry, codeReads: codeReads.length });
       if ([1440,390].includes(width)) await page.screenshot({ path: path.join(output, `${label}-${width}-${theme}.png`) });
     };
@@ -90,7 +89,7 @@ try {
     assert.equal(await actions.count(), 0);
     await pool.locator('.mailbox-account__more').first().click();
     await actions.waitFor();
-    await drawer.locator('.drawer-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
     await pool.locator('.mailbox-account__more').first().click();
     await pool.getByRole('button', { name: '更新授权', exact: true }).first().click();
@@ -123,8 +122,8 @@ try {
     assert(await actions.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), '末行操作浮层不能越出屏幕');
     await pool.locator('.mailbox-account__more').last().press('Escape');
     assert.equal(await actions.count(), 0);
-    await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
-    await drawer.locator('[data-action="tool-open"]').filter({ hasText: '邮箱查询与邮箱池' }).click();
+    await page.goto(origin + '/#/plugins/websites');
+    await page.goto(origin + '/#/plugins/mailboxes');
     await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click(); await waitCodes();
     assert.equal(await pool.getByLabel('邮箱池每页条数', { exact: true }).inputValue(), '100');
     assert.equal(await pool.getByLabel('邮箱池页码', { exact: true }).inputValue(), '21');

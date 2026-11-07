@@ -73,7 +73,7 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   };
   const openTool = async (name) => {
     await page.getByRole('button', { name: '在线工具', exact: true }).click();
-    await drawer.getByRole('button', { name, exact: true }).click();
+    await page.evaluate(name => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name } }), name);
   };
   const editCategory = () => page.locator('[data-action="ops-mail-type-edit"][data-id="google"]').click();
   await editCategory();

@@ -85,10 +85,11 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   await page.goto(host.url + '#/workspace/order');
   await page.locator('#commerce-product').selectOption('GPT');
   await page.locator('#commerce-businessType').selectOption({ label: '成品交付' });
-  await page.locator('#commerce-email').fill('claimed-account');
-  await page.locator('#commerce-stock-options option').filter({ hasText: '已提取' }).waitFor({ state: 'attached' });
-  assert.equal(await page.locator('#commerce-stock-options option').first().getAttribute('value'), stock.email);
-  await page.locator('#commerce-email').fill(stock.email);
+  await page.locator('#commerce-emailHistory-picker').click();
+  await page.getByRole('searchbox', { name: '搜索可用账号' }).fill('claimed-account');
+  const stockOption = page.locator('#commerce-emailHistory-options [role="option"]').filter({ hasText: '已提取' });
+  assert.equal(await stockOption.getAttribute('data-value'), stock.email);
+  await stockOption.click();
   await page.locator('#commerce-customerId-picker').click();
   await page.locator('#commerce-customerId-options [data-value="customer-1"]').click();
   await page.locator('#commerce-payment').selectOption({ label: '银行卡' });

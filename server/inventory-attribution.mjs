@@ -22,7 +22,9 @@ const lifecycleFields = [
   'claimedAt',
   'actualUsedAt',
   'extractionNotes',
-  'usageLinks'
+  'usageLinks',
+  'accountLifecycle',
+  'accountLifecycleEvents'
 ];
 const list = (value) => (Array.isArray(value) ? value : []);
 const stableId = (row) => typeof row?.id === 'string' && row.id.length > 0;

@@ -596,14 +596,16 @@
     const card = cards().find((row) => row.id === id);
     if (!card || !localData) return '';
     return [
-      Number.isInteger(card.usageCount) ? `合计使用 ${card.usageCount} 次` : '使用次数待核对',
       card.lastUsedAt ? `最近使用 ${dateInput(card.lastUsedAt).replace('T', ' ')}` : '',
       Array.isArray(card.sources) && card.sources.length ? `来源 ${card.sources.join('、')}` : ''
     ].filter(Boolean).join(' · ');
   }
   function refreshPoolUsage(form) {
     const row = form.querySelector('[data-commerce-pool-usage]');
-    if (row) row.textContent = poolUsage(form.elements['commerce-cardId']?.value);
+    if (row) {
+      row.textContent = poolUsage(form.elements['commerce-cardId']?.value);
+      row.hidden = !row.textContent;
+    }
   }
   function cardChoices(product, tenantId, selected, savedTail = '') {
     const gpt = product === 'GPT';
@@ -810,12 +812,9 @@
       ? `${wallet.email} · 余额 ${display(wallet.balance)} ${currencyLabel(wallet.currency)}`
       : '请选择苹果 ID';
   }
-  function stockOptions(product, query = '') {
-    return availableStock(product)
-      .filter((row) => !query || row.email.toLowerCase().includes(query.toLowerCase()))
-      .slice(0, 30)
-      .map((row) => `<option value="${E(row.email)}"></option>`)
-      .join('');
+  function stockChoices(product) {
+    return [['', '选择本产品的可用账号'], ...availableStock(product).map(row =>
+      [row.email, `${row.email} · ${row.inventoryState === 'claimed' ? '本人已提取' : '库存可用'}`])];
   }
   function refundable(order) {
     return M.subtract(
@@ -965,7 +964,7 @@
         row.product?.startsWith('Claude') &&
         !row.cancelled &&
         row.customerId &&
-        !row.subscriptionEnded
+        !row.subscriptionEnded && !endedInventoryOrder(row)
     )) {
       const prior = current.get(order.email.toLowerCase());
       if (
@@ -1062,7 +1061,7 @@
         history.push(row);
         histories.set(row.identity, history);
       }
-      if (row.order.cancelled || row.order.subscriptionEnded) continue;
+      if (row.order.cancelled || row.order.subscriptionEnded || endedInventoryOrder(row.order)) continue;
       const prior = latest.get(row.subscription);
       if (!prior || row.expiry > prior.expiry || (row.expiry === prior.expiry && row.start > prior.start))
         latest.set(row.subscription, row);
@@ -1083,7 +1082,7 @@
     const byId = new Map(rows.map((row) => [row.order.id, row]));
     const reminders = [];
     for (const row of rows) {
-      if (row.order.cancelled || row.order.subscriptionEnded || row.start > evaluatedAt) continue;
+      if (row.order.cancelled || row.order.subscriptionEnded || endedInventoryOrder(row.order) || row.start > evaluatedAt) continue;
       const isSuccessor = (candidate) => candidate && candidate !== row && !candidate.order.cancelled &&
         !candidate.order.subscriptionEnded && candidate.expiry > row.expiry && candidate.start >= row.start;
       const automatic = latest.get(row.subscription);
@@ -1771,19 +1770,30 @@
       version: 1
     };
   }
+  function inventoryRenewalIssue(email, customerId, product) {
+    const summary = A.modules.inventory?.accountSummaryForEmail?.(email, product);
+    if (!summary?.systemOwned) return '';
+    if (summary.disposition === 'retired') return '账号已停止复用，不能直接续费';
+    if (['recovered', 'new'].includes(summary.disposition)) return '账号已回收或尚未分配，请通过成品交付重新分配后再续费';
+    if (summary.currentCustomers.length !== 1 || !summary.customerId) return '账号当前客户归属待核对';
+    return summary.customerId !== customerId ? '账号当前由其他客户使用，请选择正确账号' : '';
+  }
+  function endedInventoryOrder(order) {
+    const summary = A.modules.inventory?.accountSummaryForEmail?.(order.email, order.product);
+    return summary?.orders?.some(row => row.id === order.id && row.released) || false;
+  }
   function customerEmailChoices(customerId, product) {
     if (!customerId) return [['', '直接填写新邮箱']];
-    const family = subscriptionFamily({ product });
     const usedAt = row => parseDate(row.start) || parseDate(row.createdAt) || 0;
     const history = orders.filter(row => row.customerId === customerId && !row.cancelled &&
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(row.email || '').trim()))
-      .sort((a, b) => Number(subscriptionFamily(b) === family) - Number(subscriptionFamily(a) === family) || usedAt(b) - usedAt(a));
+      .sort((a, b) => usedAt(b) - usedAt(a));
     const unique = new Map();
     for (const row of history) {
       const email = row.email.trim();
       const key = email.toLowerCase();
       if (!unique.has(key)) unique.set(key, [email,
-        [email, row.product, (dateInput(row.start) || dateInput(row.createdAt)).slice(0, 10)].filter(Boolean).join(' · ')]);
+        [email, row.product, (dateInput(row.start) || dateInput(row.createdAt)).slice(0, 10), inventoryRenewalIssue(email, customerId, product || row.product)].filter(Boolean).join(' · ')]);
     }
     return [['', '直接填写新邮箱'], ...unique.values()];
   }
@@ -1818,14 +1828,14 @@
         searchableSelect('emailHistory', '客户历史邮箱', customerEmailChoices(customerId, product), v('email'), '', input(
           'email',
           v('email'),
-          `${stock && !existing ? 'list="commerce-stock-options"' : ''} placeholder="${stock ? '搜索并选择本产品的可用账号' : '选择客户匹配历史邮箱，也可直接填写新邮箱'}" aria-required="${stock || product !== 'GPT'}" autocomplete="off" ${existing?.accountId || auto ? 'readonly' : ''}`
-        ) + `<datalist id="commerce-stock-options">${stockOptions(product)}</datalist>`),
+          `placeholder="${stock ? '搜索并选择本产品的可用账号' : '选择客户匹配历史邮箱，也可直接填写新邮箱'}" aria-required="${stock || product !== 'GPT'}" autocomplete="off" ${existing?.accountId || auto ? 'readonly' : ''}`
+        )),
         true,
         stock
           ? existing
             ? '已保存的交付快照保留，不再次占用库存。'
             : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
-          : auto ? '' : '优先匹配本产品最近使用的邮箱，也可直接填写新邮箱。',
+          : auto ? '' : '优先匹配所选客户最近使用的邮箱，也可直接填写新邮箱。',
         ''
       ).replace('<span class="required">*', `<span class="required"${!stock && product === 'GPT' ? ' hidden' : ''}>*`) +
       orderOwnerField(v, existing) +
@@ -1954,7 +1964,8 @@
       ? A.button('刷新', 'commerce-order-card-retry', 'compact', '', 'aria-label="刷新银行卡"')
       : A.button('读取', 'commerce-tenant-card-reveal', 'compact', '', 'aria-label="读取完整卡号"');
     const full = !gpt && localData ? `<div class="field-row" data-commerce-card-revealed hidden><input type="text" readonly autocomplete="off" aria-label="完整银行卡号" data-commerce-card-number /><div>${A.button('复制', 'commerce-tenant-card-copy', '', '', 'aria-label="复制完整卡号"')}</div></div>` : '';
-    const usage = gpt && localData ? `<p class="footnote" data-commerce-pool-usage>${E(poolUsage(v('cardId')))}</p>` : '';
+    const metadata = poolUsage(v('cardId'));
+    const usage = gpt && localData ? `<p class="footnote" data-commerce-pool-usage${metadata ? '' : ' hidden'}>${E(metadata)}</p>` : '';
     return field('银行卡', 'cardId', searchableSelect('cardId', '银行卡', choices, v('cardId'), actions) + full + usage,
       true, !gpt ? '选择租户后可搜索该租户的银行卡。' : '', '', hidden);
   }
@@ -2309,7 +2320,13 @@
     ])
       order[key] = raw[`commerce-${key}`] === 'on';
     order.accountSource = order.businessType === '成品交付' ? '库存' : '客户自有';
-    if (order.businessType !== '成品交付') order.accountId = '';
+    if (order.businessType !== '成品交付') {
+      const existingAccount = orders.find(row => row.id === order.id);
+      const summary = A.modules.inventory?.accountSummaryForEmail?.(order.email, order.product);
+      order.accountId = existingAccount?.accountId || (summary?.systemOwned &&
+        !inventoryRenewalIssue(order.email, order.customerId, order.product) ? summary.assetId : '');
+      if (order.accountId) order.accountSource = '库存';
+    }
     order.emailCostAmount ||= '0';
     order.emailCostCurrency ||= 'CNY';
     if (localData && (order.costBasis !== 'actual' || order.payment !== '苹果内购'))
@@ -3484,6 +3501,10 @@
         }
       }
     }
+    if (!existing && order.businessType === '续费') {
+      const issue = inventoryRenewalIssue(order.email, order.customerId, order.product);
+      if (issue) error('email', issue);
+    }
     if (isExternal(order.source) && order.businessType === '成品交付')
       error('businessType', '外部充值只处理客户自有账号');
     if (existing) {
@@ -4657,11 +4678,11 @@
       const select = picker.querySelector('select');
       if (select.disabled || ![...select.options].some(option => option.value === node.dataset.value && !option.disabled)) return true;
       select.value = node.dataset.value;
-      const email = picker.classList.contains('commerce-email-history') ? picker.querySelector('#commerce-email') : null;
+      const email = picker.querySelector('#commerce-email');
       if (email) email.value = select.value;
       filterPicker(picker.querySelector('[data-commerce-picker]'));
       picker.querySelector('.commerce-picker-popover').hidePopover();
-      (email || picker.querySelector('.commerce-picker-trigger')).focus({ preventScroll: true });
+      (email && !email.hidden ? email : picker.querySelector('.commerce-picker-trigger')).focus({ preventScroll: true });
       (email || select).dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
@@ -5083,30 +5104,41 @@
     const picker = select.closest('.commerce-search-picker');
     const trigger = picker.querySelector('.commerce-picker-trigger');
     const stock = form.elements['commerce-businessType'].value === '成品交付';
-    const choices = customerEmailChoices(form.elements['commerce-customerId'].value, form.elements['commerce-product'].value);
+    const choices = stock ? stockChoices(form.elements['commerce-product'].value)
+      : customerEmailChoices(form.elements['commerce-customerId'].value, form.elements['commerce-product'].value);
     const current = email.value.trim().toLowerCase();
     const wasHistory = [...select.options].some(option => option.value && option.value.toLowerCase() === current);
     if (match && !form.elements['commerce-id'].value && !stock && !email.readOnly && (!current || wasHistory))
-      email.value = choices[1]?.[0] || '';
+      email.value = choices.slice(1).find(([value]) => !inventoryRenewalIssue(value, form.elements['commerce-customerId'].value, form.elements['commerce-product'].value))?.[0] || '';
     const selected = choices.find(([value]) => value.toLowerCase() === email.value.trim().toLowerCase())?.[0] || '';
     select.innerHTML = A.options(choices, selected);
-    select.disabled = stock || email.readOnly || choices.length === 1;
-    trigger.hidden = stock || email.readOnly;
+    select.disabled = email.readOnly || (!stock && choices.length === 1);
+    trigger.hidden = email.readOnly;
+    email.hidden = stock && !email.readOnly;
+    picker.classList.toggle('commerce-email-history', !stock);
+    const search = picker.querySelector('[data-commerce-picker]');
+    const label = stock ? '可用账号' : '客户历史邮箱';
+    trigger.setAttribute('aria-label', label);
+    search.setAttribute('aria-label', `搜索${label}`);
+    search.placeholder = `搜索${label}`;
+    picker.querySelector('[role="listbox"]').setAttribute('aria-label', label);
+    picker.querySelector('.commerce-picker-empty').textContent = `没有匹配的${label}`;
+    if (!stock) trigger.querySelector('.commerce-picker-label').textContent = '历史邮箱';
+    form.querySelector('[data-commerce-field="email"] label')?.setAttribute('for', stock && !email.readOnly ? trigger.id : email.id);
     const help = form.querySelector('[data-commerce-field="email"] .field-help');
     if (help) {
       help.textContent = stock
-        ? form.elements['commerce-id'].value ? '已保存的交付快照保留，不再次占用库存。' : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
-        : '优先匹配本产品最近使用的邮箱，也可直接填写新邮箱。';
+        ? form.elements['commerce-id'].value ? '已保存的交付快照保留，不再次占用库存。' : '按邮箱搜索可用库存账号，保存成功后标记为已使用。'
+        : '优先匹配所选客户最近使用的邮箱，也可直接填写新邮箱。';
       help.hidden = email.readOnly && !stock;
     }
     if (select.disabled && picker.querySelector('.commerce-picker-popover').matches(':popover-open'))
       picker.querySelector('.commerce-picker-popover').hidePopover();
-    filterPicker(picker.querySelector('[data-commerce-picker]'));
+    filterPicker(search);
   }
-  function updateStockSearch(form, filter = true) {
-    const email = form.querySelector('#commerce-email'),
-      target = form.querySelector('#commerce-stock-options');
-    if (!email || !target) return;
+  function updateStockSearch(form) {
+    const email = form.querySelector('#commerce-email');
+    if (!email) return;
     const stock = form.elements['commerce-businessType'].value === '成品交付';
     const required = stock || form.elements['commerce-product'].value !== 'GPT';
     email.setAttribute('aria-required', String(required));
@@ -5121,12 +5153,7 @@
           else if (form.isConnected) updateStockSearch(form);
         });
       }
-      email.setAttribute('list', 'commerce-stock-options');
       email.placeholder = '搜索并选择本产品的可用账号';
-      target.innerHTML = stockOptions(
-        form.elements['commerce-product'].value,
-        filter ? email.value : ''
-      );
       const selected = availableStock(form.elements['commerce-product'].value).find(
         (row) => row.email.toLowerCase() === email.value.trim().toLowerCase()
       );
@@ -5162,7 +5189,7 @@
     refreshAppleOptions(form);
     const personnel = form.querySelector('[data-commerce-section="03"]');
     if (personnel) personnel.hidden = order.product === 'GPT';
-    updateStockSearch(form, false);
+    updateStockSearch(form);
   }
   function updateOrderPeriod(form) {
     const start = form.querySelector('#commerce-start').value;
@@ -5454,6 +5481,7 @@
       lost: [...histories.keys()].filter(id => !active.has(id) && !ambiguous.has(id)).length
     };
   }
+  let requestedAccountLifecycle = false;
   A.modules.commerce = {
     refreshCustomerTagOptions,
     refreshOverview: () => loadLocalCommerce(true, true),
@@ -5516,7 +5544,7 @@
     picker.querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', String(open));
     if (!open) return;
     const search = picker.querySelector('[data-commerce-picker]');
-    if (picker.classList.contains('commerce-email-history')) search.value = '';
+    if (picker.querySelector('#commerce-email')) search.value = '';
     filterPicker(search);
     positionPicker(popup);
     search.focus({ preventScroll: true });
@@ -5593,6 +5621,16 @@
       for (const form of document.querySelectorAll('#commerce-order-form')) updateCustomerEmailHistory(form);
       for (const search of document.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
       loadLocalCommerce();
+      if (localData && !requestedAccountLifecycle && !A.modules.inventory?.accountLifecycleReady?.()) {
+        requestedAccountLifecycle = true;
+        const route = S.route;
+        void A.modules.inventory?.refreshLocalInventory?.({ keepContent: true }).then(ready => {
+          if (!ready || route !== S.route) return;
+          const form = $('#commerce-order-form');
+          if (form) updateCustomerEmailHistory(form);
+          else A.render();
+        });
+      }
       updateRenewalReminder();
       if (!localData || localPhase !== 'ready') return;
       if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) {

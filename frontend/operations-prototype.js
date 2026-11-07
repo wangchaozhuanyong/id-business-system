@@ -34,6 +34,16 @@
   } = api;
   const $ = (selector) => document.querySelector(selector);
   const localData = window.IDLocalData;
+  const pluginPages = {
+    'plugins/mailboxes': { label: '邮箱查询与邮箱池', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
+    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '查看访问统计、访问记录与网站检测结果。' },
+    'plugins/sheets': { label: '谷歌表格同步', tool: 'Google 表格同步', description: '管理业务报表同步；当前同步功能尚待接入。' }
+  };
+  let pluginCleanup;
+  function toolActive(node) {
+    return Boolean(node?.isConnected && (node.closest('dialog[open]') ||
+      node.closest('[data-plugin-tool]')?.dataset.route === state.route));
+  }
   const now = () => api.nowText();
   const uid = (prefix) => api.newId(prefix);
   const draftKey = (key) => `operations:${key}`;
@@ -1637,7 +1647,7 @@
       notify(error.message);
       return;
     }
-    if (!form.isConnected || !$('#drawer').open) return;
+    if (!toolActive(form)) return;
     const values = readForm(form);
     const row = phraseRows().find(
       (item) => item.id === (values['ops-phrase-id'] || values['ops-phrase-new-id'])
@@ -1678,10 +1688,12 @@
     const selected = getDraft(`tool-section:${name}`).panel;
     const section = sections.some(([id]) => id === selected) ? selected : sections[0]?.[0] || '';
     const toolbar = tabs || lead ? `<div class="tool-header-row">${tabs}${lead}</div>` : '';
-    openDrawer(titles[name] || name, description, toolbar + body, '', context, { kind: 'online-tool', tool: name, section });
-    const drawer = $('#drawer');
+    const page = pluginPages[state.route]?.tool === name ? $('#plugin-tool-host') : null;
+    if (page) page.innerHTML = toolbar + `<div class="drawer-body plugin-tool-body">${body}</div>`;
+    else openDrawer(titles[name] || name, description, toolbar + body, '', context, { kind: 'online-tool', tool: name, section });
+    const drawer = page || $('#drawer');
     drawer.dataset.tool = name;
-    if (sections.length) {
+    if (sections.length && !page) {
       const navigation = drawer.querySelector('.tool-header-row');
       drawer.querySelector('.drawer-header').after(navigation);
     }
@@ -1708,9 +1720,9 @@
     }
   }
   function selectToolSection(id) {
-    const drawer = $('#drawer');
-    const panel = drawer.querySelector(`[data-tool-panel][id="${id}"]`);
+    const panel = document.getElementById(id);
     if (!panel) return;
+    const drawer = panel.closest('[data-plugin-tool], dialog');
     drawer.dataset.section = id;
     preserveDraft();
     const mailForm = drawer.querySelector('#ops-managed-mail-query');
@@ -1772,7 +1784,7 @@
       const snapshot = localData.queries
         ? await localData.queries.read('saved-totp', 'metadata', () => localData.savedTotp(), { refresh })
         : await localData.savedTotp();
-      if (!panel.closest('dialog[open]')) return;
+      if (!panel.closest('dialog[open], [data-plugin-tool]')) return;
       paintSavedTotp(panel, snapshot);
       const view = getDraft('saved-totp-view');
       if (panel.isConnected && view.editor && !panel.querySelector('#ops-saved-totp-form'))
@@ -1823,7 +1835,7 @@
     node.closest('.totp-countdown')?.classList.toggle('is-expiring', remaining <= 5);
   }
   function refreshVisibleSavedTotp(panel) {
-    if (!panel?.isConnected || panel.hidden || document.hidden || !panel.closest('dialog[open]')) return;
+    if (!panel?.isConnected || panel.hidden || document.hidden || !panel.closest('dialog[open], [data-plugin-tool]')) return;
     const now = Date.now();
     for (const output of panel.querySelectorAll('[data-saved-totp-code]')) {
       const expiry = Number(output.dataset.expiry || 0);
@@ -1996,7 +2008,7 @@
       const { prepareTotpBatch } = await import('/assets/tools/totp.mjs');
       const { accounts, errors } = await prepareTotpBatch(source);
       source = '';
-      if (!form.isConnected || !$('#drawer').open) return;
+      if (!toolActive(form)) return;
       output.innerHTML = `<div class="guide-list">${accounts
         .map(
           ({ label }) =>
@@ -2189,14 +2201,14 @@
         ${button('立即刷新', 'ops-mail-refresh')}
       </div><div class="design-async-region"><div id="ops-managed-query-progress" role="status" hidden></div><div id="ops-managed-query-results"></div></div></form></section>${manage ? `<section class="form-section" id="ops-mailbox-pool" hidden><div class="form-section"><div class="panel-heading"><div class="section-title-row"><h3>邮箱池</h3>${titleInfo('邮箱池', '按实际收信服务商登记邮箱。谷歌与苹果使用应用专用密码，Microsoft 使用只读 OAuth 授权，不填写普通登录密码。验证通过后加密保存。邮件正文不持久化；查询码到期后需手动重置并重新交付。停用后买家无法查询，授权失效应先更新授权。', 'mailbox-pool-help')}</div><div class="mailbox-pool-actions">${button('登记邮箱', 'ops-mailbox-pool-add', 'primary', 'plus')}${button('批量导入', 'ops-mailbox-pool-batch')}${button('查询码设置', 'ops-mailbox-pool-settings')}${button('刷新', 'ops-mailbox-pool-reload', '', 'return')}</div></div><div data-mailbox-pool-editor></div><div data-mailbox-pool-issued role="status"></div><form class="online-tool-mail-filters" id="ops-mailbox-pool-search-form" onsubmit="return false"><input type="search" id="ops-mailbox-pool-search" name="ops-mailbox-pool-search" aria-label="搜索邮箱池" placeholder="搜索邮箱或备注">
         ${select('ops-mailbox-filter-provider', [['', '全部类型'], ['google', '谷歌邮箱'], ['apple', '苹果云邮箱'], ['microsoft', '微软邮箱']]).replace('<select ', '<select aria-label="邮箱类型" ')}
-        ${select('ops-mailbox-filter-status', [['', '全部状态'], ['active', '可查询'], ['disabled', '已停用'], ['auth_failed', '授权失效'], ['expired', '查询码已过期']]).replace('<select ', '<select aria-label="邮箱状态" ')}
+        ${select('ops-mailbox-filter-status', [['', '全部状态'], ['pending', '待授权'], ['active', '可查询'], ['disabled', '已停用'], ['auth_failed', '授权失效'], ['expired', '查询码已过期']]).replace('<select ', '<select aria-label="邮箱状态" ')}
         </form><div class="design-async-region"><div data-mailbox-pool-status role="status" hidden></div><div data-mailbox-pool-list></div></div></div><div class="toolbar">${button('查看谷歌邮箱库存', 'ops-go', '', 'mail', 'data-route="mailboxes/google"')}${button('提取邮箱', 'ops-go', '', 'database', 'data-route="workspace/mail-extract"')}${button('后台查询隐藏邮箱', 'ops-relay-query', '', 'search')}</div></section>` : ''}`,
       '',
       [['ops-mailbox-query-panel', '邮件查询'], ...(manage ? [['ops-mailbox-pool', '邮箱池管理']] : [])],
       '<div class="tool-query-actions"><a class="button" href="/mailbox-query" target="_blank" rel="noopener noreferrer">打开买家查询页</a></div>'
     );
-    const drawer = $('#drawer');
     const form = $('#ops-managed-mail-query');
+    const drawer = form.closest('[data-plugin-tool], dialog');
     const pool = $('#ops-mailbox-pool');
     pool?.querySelector('#mailbox-pool-help').insertAdjacentHTML('beforeend',
       `<div class="mailbox-setup-guides">${['google', 'apple', 'microsoft'].map(provider =>
@@ -2219,7 +2231,7 @@
     const positionMailboxActions = menu => {
       const anchor = menu.previousElementSibling.getBoundingClientRect();
       const body = drawer.querySelector('.drawer-body').getBoundingClientRect();
-      if (anchor.bottom <= body.top || anchor.top >= body.bottom || anchor.right <= body.left || anchor.left >= body.right) {
+      if (anchor.bottom <= Math.max(0, body.top) || anchor.top >= Math.min(innerHeight, body.bottom) || anchor.right <= body.left || anchor.left >= body.right) {
         menu.hidePopover();
         return;
       }
@@ -2235,12 +2247,13 @@
     const drawerBody = drawer.querySelector('.drawer-body');
     drawerBody.addEventListener('scroll', repositionMailboxActions, true);
     window.addEventListener('resize', repositionMailboxActions);
+    window.addEventListener('scroll', repositionMailboxActions, true);
     bindToolDraft(form, 'mailbox-query');
 
     const refresh = form.querySelector('[data-mail-refresh]');
     const autoRefresh = form.querySelector('[data-mail-auto-refresh]');
     const timer = window.setInterval(() => {
-      if (!form.isConnected || !drawer.open) {
+      if (!toolActive(form)) {
         window.clearInterval(timer);
         return;
       }
@@ -2258,12 +2271,13 @@
       mailQuerySnapshots.delete(form);
       form.querySelector('#ops-managed-query-results').replaceChildren();
     });
-    const clear = () => {
-      if (drawer.open && form.isConnected) return;
+    const clear = (force = false) => {
+      if (force !== true && toolActive(form)) return;
       drawer.removeEventListener('close', clear);
       dismissMailboxActions();
       drawerBody.removeEventListener('scroll', repositionMailboxActions, true);
       window.removeEventListener('resize', repositionMailboxActions);
+      window.removeEventListener('scroll', repositionMailboxActions, true);
       window.clearInterval(timer);
       finishManagedMailRead(form);
       form.querySelector('#ops-managed-query-code').value = '';
@@ -2274,6 +2288,7 @@
       if (secret) secret.value = '';
     };
     drawer.addEventListener('close', clear);
+    if (drawer.matches('[data-plugin-tool]')) pluginCleanup = () => clear(true);
   }
   const mailQuerySnapshots = new WeakMap();
   function mailBodyParts(body) {
@@ -2370,8 +2385,8 @@
     }
   }
   const mailboxPoolSnapshots = new WeakMap();
-  const mailboxProviders = { google: '谷歌邮箱', apple: '苹果云邮箱', microsoft: '微软邮箱' };
-  const mailboxStatuses = { active: '可查询', disabled: '已停用', auth_failed: '授权失效', expired: '查询码已过期' };
+  const mailboxProviders = { google: '谷歌邮箱', apple: '苹果云邮箱', microsoft: '微软邮箱', relay: '苹果隐藏邮箱' };
+  const mailboxStatuses = { pending: '待授权', active: '可查询', disabled: '已停用', auth_failed: '授权失效', expired: '查询码已过期' };
   const mailboxDate = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short', hourCycle: 'h23'
   });
@@ -2386,7 +2401,7 @@
     const search = panel.querySelector('#ops-mailbox-pool-search').value.trim().toLowerCase();
     const provider = panel.querySelector('#ops-mailbox-filter-provider').value;
     const status = panel.querySelector('#ops-mailbox-filter-status').value;
-    const statusFor = (row) => row.authFailed ? 'auth_failed' : !row.active ? 'disabled'
+    const statusFor = (row) => row.authorizationPending ? 'pending' : row.authFailed ? 'auth_failed' : !row.active ? 'disabled'
       : Date.parse(row.expiresAt) <= Date.now() ? 'expired' : 'active';
     const items = snapshot.items.filter((row) =>
       (!provider || row.provider === provider) && (!status || statusFor(row) === status) &&
@@ -2402,11 +2417,13 @@
         : empty('邮箱池暂无记录', '添加并验证邮箱后会显示在这里。');
       return;
     }
-    list.innerHTML = `<div class="pagination mailbox-pool-pagination"><span role="status">共 ${items.length} 条 · 第 ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, items.length)} 条</span><div class="mailbox-page-controls">${select('ops-mailbox-page-size', [[20, '20 条 / 页'], [50, '50 条 / 页'], [100, '100 条 / 页']], pageSize).replace('<select ', '<select aria-label="邮箱池每页条数" ')}${button('上一页', 'ops-mailbox-pool-page', '', '', `data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}`)}<span>第 ${page} / ${pages} 页</span>${button('下一页', 'ops-mailbox-pool-page', '', '', `data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}`)}</div><form id="ops-mailbox-pool-page-form" class="mailbox-page-jump"><label for="ops-mailbox-page-number">跳至</label><input id="ops-mailbox-page-number" name="ops-mailbox-page-number" aria-label="邮箱池页码" type="number" min="1" max="${pages}" step="1" value="${page}" required><span>页</span><button class="button" type="submit">跳转</button></form></div><p class="mailbox-table-hint">左右滑动可查看完整列表与操作</p><div class="table-viewport online-tool-mail-list" tabindex="0" role="region" aria-label="邮箱池列表，可横向滚动"><table class="mailbox-pool-table"><colgroup><col class="mailbox-column-identity"><col class="mailbox-column-code"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-date"><col class="mailbox-column-actions"></colgroup><thead><tr><th scope="col">邮箱与备注</th><th scope="col">买家查询码</th><th scope="col">状态</th><th scope="col">到期时间</th><th scope="col">最近查询</th><th scope="col">操作</th></tr></thead><tbody>${items.slice((page - 1) * pageSize, page * pageSize).map((row, index) => {
+    list.innerHTML = `<div class="pagination mailbox-pool-pagination"><span role="status">共 ${items.length} 条 · 第 ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, items.length)} 条</span><div class="mailbox-page-controls">${select('ops-mailbox-page-size', [[20, '20 条 / 页'], [50, '50 条 / 页'], [100, '100 条 / 页']], pageSize).replace('<select ', '<select aria-label="邮箱池每页条数" ')}${button('上一页', 'ops-mailbox-pool-page', '', '', `data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}`)}<span>第 ${page} / ${pages} 页</span>${button('下一页', 'ops-mailbox-pool-page', '', '', `data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}`)}</div><form id="ops-mailbox-pool-page-form" class="mailbox-page-jump"><label for="ops-mailbox-page-number">跳至</label><input id="ops-mailbox-page-number" name="ops-mailbox-page-number" aria-label="邮箱池页码" type="number" min="1" max="${pages}" step="1" value="${page}" required><span>页</span><button class="button" type="submit">跳转</button></form></div><p class="mailbox-table-hint">左右滑动可查看完整列表与操作</p><div class="table-viewport online-tool-mail-list" tabindex="0" role="region" aria-label="邮箱池列表，可横向滚动"><table class="mailbox-pool-table"><colgroup><col class="mailbox-column-identity"><col class="mailbox-column-meta"><col class="mailbox-column-meta"><col class="mailbox-column-source"><col class="mailbox-column-code"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-date"><col class="mailbox-column-actions"></colgroup><thead><tr><th scope="col">邮箱账号</th><th scope="col">类型</th><th scope="col">备注</th><th scope="col">来源</th><th scope="col">买家查询码</th><th scope="col">状态</th><th scope="col">到期时间</th><th scope="col">最近查询</th><th scope="col">操作</th></tr></thead><tbody>${items.slice((page - 1) * pageSize, page * pageSize).map((row, index) => {
       const attrs = `data-id="${esc(row.id)}" data-active="${row.active}" data-provider="${esc(row.provider)}" data-email="${esc(row.email)}"`;
       const status = statusFor(row);
       const menuId = `mailbox-account-actions-${index}`;
-      return `<tr class="mailbox-account"><td><div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong><div class="mailbox-account__meta"><span>${esc(mailboxProviders[row.provider] || '其他邮箱')}</span><span title="${esc(row.label || '未填写备注')}">${esc(row.label || '未填写备注')}</span></div></div></td><td><div class="mailbox-account__code"><output data-mailbox-code="${esc(row.id)}">正在读取…</output>${button('复制', 'ops-mailbox-pool-copy-existing', '', '', attrs)}</div></td><td>${tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning')}</td><td class="mailbox-account__date">${formatMailboxDate(row.expiresAt)}</td><td class="mailbox-account__date">${formatMailboxDate(row.lastQueriedAt)}</td><td><button type="button" class="button mailbox-account__more" popovertarget="${menuId}" aria-label="更多操作：${esc(row.email)}">更多操作</button><div class="mailbox-account__actions" id="${menuId}" popover="auto" role="group" aria-label="邮箱操作">${button(row.active ? '停用' : '启用', 'ops-mailbox-pool-status', '', '', attrs + (row.authFailed ? ' disabled' : ''))}${button(row.provider === 'microsoft' ? '重新授权' : '更新授权', 'ops-mailbox-pool-credential', '', '', attrs)}${button('重置查询码', 'ops-mailbox-pool-rotate', '', '', attrs)}</div></td></tr>`;
+      const authorize = button('去授权', 'ops-mailbox-pool-authorize', '', '', attrs);
+      const actions = row.authorizationPending ? authorize : `${button('查询', 'ops-mailbox-pool-query', '', '', attrs)}${authorize}<button type="button" class="button mailbox-account__more" popovertarget="${menuId}" aria-label="更多操作：${esc(row.email)}">更多操作</button><div class="mailbox-account__actions" id="${menuId}" popover="auto" role="group" aria-label="邮箱操作">${button(row.active ? '停用' : '启用', 'ops-mailbox-pool-status', '', '', attrs + (row.authFailed ? ' disabled' : ''))}${button(row.provider === 'microsoft' ? '重新授权' : '更新授权', 'ops-mailbox-pool-credential', '', '', attrs)}${button('重置查询码', 'ops-mailbox-pool-rotate', '', '', attrs)}</div>`;
+      return `<tr class="mailbox-account"><td><div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong></div></td><td class="mailbox-account__text" title="${esc(mailboxProviders[row.provider] || '待选择')}">${esc(mailboxProviders[row.provider] || '待选择')}</td><td class="mailbox-account__text" title="${esc(row.label || '未填写备注')}">${esc(row.label || '—')}</td><td>${row.source === 'claude' ? 'Claude 账号' : '手工登记'}</td><td><div class="mailbox-account__code">${row.authorizationPending ? '<span>授权后生成</span>' : `<output data-mailbox-code="${esc(row.id)}">正在读取…</output>${button('复制', 'ops-mailbox-pool-copy-existing', '', '', attrs)}`}</div></td><td>${tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning')}</td><td class="mailbox-account__date">${formatMailboxDate(row.expiresAt)}</td><td class="mailbox-account__date">${formatMailboxDate(row.lastQueriedAt)}</td><td><div class="mailbox-row-actions">${actions}</div></td></tr>`;
     }).join('')}</tbody></table></div>`;
     void loadVisibleMailboxCodes(panel);
   }
@@ -2414,7 +2431,7 @@
     for (const output of panel.querySelectorAll('[data-mailbox-code]')) {
       try {
         const { code } = await localData.managedMailboxCode(output.dataset.mailboxCode);
-        if (!output.isConnected || !panel.closest('dialog[open]')) return;
+        if (!output.isConnected || !panel.closest('dialog[open], [data-plugin-tool]')) return;
         output.textContent = code;
         output.title = code;
       } catch {
@@ -2429,7 +2446,7 @@
     node.disabled = true;
     try {
       const { code } = await localData.managedMailboxCode(node.dataset.id);
-      if (!panel.closest('dialog[open]') || !node.isConnected) return;
+      if (!panel.closest('dialog[open], [data-plugin-tool]') || !node.isConnected) return;
       const output = node.closest('.mailbox-account')?.querySelector('[data-mailbox-code]');
       if (output) {
         output.textContent = code;
@@ -2443,7 +2460,7 @@
           `<div class="inline-notice">请手动复制查询码 <strong>${esc(code)}</strong></div>`;
       }
     } catch (error) {
-      if (panel.closest('dialog[open]')) notify(error.message);
+      if (panel.closest('dialog[open], [data-plugin-tool]')) notify(error.message);
     } finally {
       node.disabled = false;
     }
@@ -2504,9 +2521,9 @@
     panel.querySelector('[data-mailbox-pool-issued]').replaceChildren();
     const row = mailboxPoolSnapshots.get(panel)?.items.find((item) => item.id === id);
     const newFields = action === 'create' ? wide(field('收信服务商', 'ops-managed-provider',
-      select('ops-managed-provider', [['google', '谷歌邮箱'], ['apple', '苹果云邮箱'], ['microsoft', '微软邮箱']], 'google'), true,
+      select('ops-managed-provider', [['', '选择实际收信服务商'], ['google', '谷歌邮箱'], ['apple', '苹果云邮箱'], ['microsoft', '微软邮箱']], row ? row.provider : 'google'), true,
       '按实际收信服务商选择，Apple ID 登录邮箱不一定是 iCloud 邮箱。')) +
-      field('邮箱地址', 'ops-managed-email', input('ops-managed-email', '', 'type="email" maxlength="254" placeholder="例如 name@gmail.com"'), true) +
+      field('邮箱地址', 'ops-managed-email', input('ops-managed-email', row?.email || '', `${row ? 'readonly ' : ''}type="email" maxlength="254" placeholder="例如 name@gmail.com"`), true) +
       field('备注', 'ops-managed-label', input('ops-managed-label', '', 'maxlength="60" placeholder="例如：客户 A"')) : '';
     const password = action !== 'rotate' ? wide(field('应用专用密码', 'ops-managed-app-password',
       '<input type="password" id="ops-managed-app-password" name="ops-managed-app-password" autocomplete="new-password" maxlength="256" data-no-draft>', true,
@@ -2517,6 +2534,7 @@
     const label = action === 'rotate' ? '重置并生成新码' : action === 'credential' ? '验证并更新' : '验证并添加';
     panel.querySelector('[data-mailbox-pool-editor]').innerHTML = `<form id="ops-managed-pool-form" novalidate><input type="hidden" name="ops-managed-action" value="${action}"><input type="hidden" name="ops-managed-id" value="${esc(id)}"><input type="hidden" name="ops-managed-version" value="${esc(panel.dataset.version)}">${row ? `<p>当前邮箱：<strong>${esc(row.email)}</strong></p>` : ''}${action === 'rotate' ? '<div class="inline-notice warning">生成新码后旧查询码立即失效，请将新码重新交付买家。</div>' : ''}${grid(newFields + password + days)}<div class="form-footer">${button('取消', 'ops-mailbox-pool-cancel')}<button type="submit" class="button primary">${label}</button></div></form>`;
     bindToolDraft(panel.querySelector('#ops-managed-pool-form'), `mailbox-pool:${action}:${id || 'new'}`);
+    if (row && action === 'create') panel.querySelector('#ops-managed-email').value = row.email;
     const provider = panel.querySelector('#ops-managed-provider');
     provider?.addEventListener('change', () => {
       const credential = panel.querySelector('#ops-managed-app-password');
@@ -2592,7 +2610,7 @@
     if (!popup) return notify('请允许弹出授权窗口后重试');
     popup.opener = null;
     const status = panel.querySelector('[data-mailbox-pool-issued]');
-    const active = () => Boolean(panel.closest('dialog[open]'));
+    const active = () => toolActive(panel);
     let snapshot = mailboxPoolSnapshots.get(panel);
     const batch = [];
     try {
@@ -2791,7 +2809,7 @@
       loadingText: hasResult ? '' : `正在读取${label}…`,
       refreshButton: result.closest('.form-section').querySelector('[data-async-refresh]')
     });
-    const dialog = result.closest('dialog');
+    const dialog = result.closest('dialog, [data-plugin-tool]');
     const cancelClosedRead = () => {
       if (scope && localData.queries?.peek(scope, key)?.pending) localData.queries.invalidate(scope);
       read.finish();
@@ -2934,7 +2952,7 @@
     node.disabled = true;
     try {
       const { ip } = await localData.websiteVisitIp(node.dataset.id);
-      const drawer = value.closest('dialog[open]');
+      const drawer = value.closest('dialog[open], [data-plugin-tool]');
       if (!drawer) {
         node.disabled = false;
         return;
@@ -2944,11 +2962,13 @@
       const mask = () => {
         window.clearTimeout(timer);
         drawer.removeEventListener('close', mask);
+        drawer.removeEventListener('id-view-deactivate', mask);
         value.textContent = masked;
         node.disabled = false;
       };
       const timer = window.setTimeout(mask, 30_000);
       drawer.addEventListener('close', mask, { once: true });
+      drawer.addEventListener('id-view-deactivate', mask, { once: true });
       return;
     } catch (error) {
       if (value.isConnected) notify(error.message);
@@ -3056,7 +3076,7 @@
     progress.textContent = '正在检测网站…';
     try {
       const report = await localData.websiteMonitor(url);
-      if (!form.isConnected || !$('#drawer').open) return;
+      if (!toolActive(form)) return;
       const statuses = {
         reachable: '网站可访问',
         http_error: '网站返回访问错误',
@@ -3110,7 +3130,7 @@
         .join('')}</div>`;
       progress.textContent = '';
     } catch (error) {
-      if (form.isConnected && $('#drawer').open) {
+      if (toolActive(form)) {
         progress.textContent =
           error.message + (result.childElementCount ? '，显示上次检测结果。' : '');
       }
@@ -3163,7 +3183,7 @@
   }
 
   function preserveDraft() {
-    for (const form of document.querySelectorAll('#drawer form[data-ops-draft]'))
+    for (const form of document.querySelectorAll('#drawer form[data-ops-draft], [data-plugin-tool] form[data-ops-draft]'))
       state.drafts.set(form.dataset.opsDraft, readDraft(form));
     const form = $('#main form');
     if (!form) return;
@@ -3182,6 +3202,8 @@
   }
   function renderPage() {
     const route = state.route;
+    if (pluginPages[route]) return header(pluginPages[route].label, pluginPages[route].description) +
+      `<section id="plugin-tool-host" class="panel form-panel plugin-tool-page" data-plugin-tool data-route="${route}"></section>`;
     if (route === bitLoginRoute) return renderBitBrowserLogin();
     if (route === workspaceRechargeRoute) return renderIntegratedRecharge(true);
     if (route === onlineRechargeRoute) return renderIntegratedRecharge();
@@ -3254,6 +3276,34 @@
       if (action === 'ops-mailbox-pool-add') editManagedPool(panel, 'create');
       if (action === 'ops-mailbox-pool-batch') editMailboxBatchOrSettings(panel, 'batch');
       if (action === 'ops-mailbox-pool-settings') editMailboxBatchOrSettings(panel, 'settings');
+      if (action === 'ops-mailbox-pool-authorize') {
+        const row = mailboxPoolSnapshots.get(panel)?.items.find(item => item.id === id);
+        if (!row) return true;
+        if (row.provider === 'relay') {
+          notify('隐藏邮箱通过所属主邮箱收信，请在隐藏邮箱管理中连接并授权主邮箱。');
+          api.go('mailboxes/relay');
+        } else if (row.provider === 'microsoft' && !row.authorizationPending) {
+          void startMicrosoftMailbox(panel, { id, email: row.email, version: Number(panel.dataset.version) });
+        } else {
+          editManagedPool(panel, row.authorizationPending ? 'create' : 'credential', id);
+        }
+      }
+      if (action === 'ops-mailbox-pool-query') {
+        void (async () => {
+          try {
+            node.disabled = true;
+            const { code } = await localData.managedMailboxCode(id);
+            if (!toolActive(panel)) return;
+            selectToolSection('ops-mailbox-query-panel');
+            const form = $('#ops-managed-mail-query');
+            const input = form.querySelector('#ops-managed-query-code');
+            input.value = code;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await queryManagedMail(form);
+          } catch (error) { if (node.isConnected) notify(error.message || '查询失败，请重试'); }
+          finally { node.disabled = false; }
+        })();
+      }
       if (action === 'ops-mailbox-pool-credential') {
         if (node.dataset.provider === 'microsoft')
           void startMicrosoftMailbox(panel, { id, email: node.dataset.email, version: Number(panel.dataset.version) });
@@ -3797,7 +3847,15 @@
   window.IDDesignModules.push({
     id: 'operations',
     retainPage: (route) => [bitLoginRoute, workspaceRechargeRoute, onlineRechargeRoute].includes(route),
-    deactivate: deactivateIntegration,
+    deactivate(region) {
+      const host = region?.querySelector('[data-plugin-tool]');
+      if (host) {
+        host.dispatchEvent(new Event('id-view-deactivate'));
+        pluginCleanup?.();
+        pluginCleanup = undefined;
+      }
+      deactivateIntegration(region);
+    },
     clearPageState() {
       deactivateIntegration(document.getElementById('main'));
       onlineAdmin = undefined;
@@ -3812,8 +3870,9 @@
         'settings/costs',
         loginLogsRoute,
         'settings/audit'
-      ].includes(route),
+      ].includes(route) || Object.hasOwn(pluginPages, route),
     afterRender() {
+      if (pluginPages[state.route]) { openOnlineTool(pluginPages[state.route].tool); return; }
       if (state.route === 'settings/audit' && (localData || isAdmin())) void loadAudit();
       else if (state.route === loginLogsRoute && loginLogTab === 'system') {
         if (localData?.authRequired && isAdmin()) void loadAudit();
