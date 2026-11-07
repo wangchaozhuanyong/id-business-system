@@ -367,6 +367,10 @@
           document.querySelector('#workspace-code-title'),
           document.querySelector('#workspace-code-title + p')
         );
+        window.IDTitleHelp.attach(
+          document.querySelector('#workspace-account-title'),
+          document.querySelector('#workspace-account-title + p')
+        );
         setupWorkspaceGuide();
       } else if (!standalone && tab === 'query') {
         document.body.dataset.rechargeQuery = '';
