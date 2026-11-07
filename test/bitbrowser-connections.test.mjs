@@ -261,4 +261,20 @@ test('uses the preview server existing administrator gate and same-origin write 
   const employeeCookie = await login(employee);
   assert.equal((await request(path, { cookie: employeeCookie })).status, 403);
   assert.equal((await use(savedId, employeeCookie)).status, 403);
+  const ipPath = 'api/local/bitbrowser-proxies';
+  const ip = { version: 0, name: '合成移动 IP', countryCode: 'MY', kind: 'mobile', mode: 'static', protocol: 'http', link: 'http://test:synthetic-proxy-secret@192.0.2.5:8080' };
+  assert.equal((await request(ipPath)).status, 401);
+  assert.equal((await request(ipPath, { cookie: employeeCookie })).status, 403);
+  assert.equal((await request(ipPath, { method: 'PUT', body: ip, cookie, requestOrigin: 'https://other.example.test' })).status, 403);
+  const createdIp = await request(ipPath, { method: 'PUT', body: ip, cookie });
+  assert.equal(createdIp.status, 200);
+  const savedIp = await createdIp.json();
+  assert(!JSON.stringify(savedIp).includes('synthetic-proxy-secret'));
+  const selectedIp = { id: savedIp.savedId, version: savedIp.version };
+  assert.equal((await request(ipPath, { method: 'POST', body: selectedIp, cookie: employeeCookie })).status, 403);
+  assert.equal((await request(ipPath, { method: 'POST', body: selectedIp, cookie, requestOrigin: 'https://other.example.test' })).status, 403);
+  const ipUse = await request(ipPath, { method: 'POST', body: selectedIp, cookie });
+  assert.equal(ipUse.headers.get('cache-control'), 'private, no-store');
+  assert.equal((await ipUse.json()).countryCode, 'MY');
+
 });

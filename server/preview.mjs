@@ -112,6 +112,7 @@ export async function startPreview(
     ['/assets/bitbrowser/authorization.mjs', '../modules/recharge/bitbrowser/authorization.mjs'],
     ['/assets/bitbrowser/catalog.mjs', '../modules/recharge/bitbrowser/catalog.mjs'],
     ['/assets/bitbrowser/local.mjs', '../frontend/bitbrowser-local.mjs'],
+    ['/assets/bitbrowser/proxies.mjs', '../frontend/bitbrowser-proxies.mjs'],
     ...['index', 'direct-login', 'direct-api', 'browser-options', 'cdp', 'login-page'].map(
       (name) => [
         `/assets/bitbrowser/login/${name}.mjs`,

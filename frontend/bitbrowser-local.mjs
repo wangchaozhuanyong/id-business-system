@@ -1,3 +1,4 @@
+import { initializeExecutionProxies } from '/assets/bitbrowser/proxies.mjs';
 import {
   BIT_BROWSER_AUTHORIZATION_MAX_BYTES,
   parseBitBrowserAuthorization
@@ -80,6 +81,7 @@ let loadedProxyEndpoint = '';
 let groupPreference = defaultConnection.groupName;
 let tagPreference = defaultConnection.tagName;
 
+let executionProxies;
 let draftBridge;
 try {
   if (window.parent !== window && window.parent.location.origin === location.origin)
@@ -116,6 +118,7 @@ loginForm.addEventListener('change', captureConnectionDraft);
 
 function updateStartButton() {
   startButton.disabled =
+    !executionProxies?.ready() ||
     !credential ||
     !windowName.value.trim() ||
     !groupSelect.value ||
@@ -136,6 +139,16 @@ function updateStartButton() {
   get('bit-toggle-connection').disabled = Boolean(activeLogin);
   get('bit-toggle-connection-help').disabled = Boolean(activeLogin);
 }
+
+executionProxies = initializeExecutionProxies({ get, drafts: draftBridge, onChange: updateStartButton, locked: () => Boolean(activeLogin) });
+void executionProxies.refresh();
+get('bit-token-eye').addEventListener('click', () => {
+  const visible = tokenInput.type === 'password';
+  tokenInput.type = visible ? 'text' : 'password';
+  get('bit-token-eye').setAttribute('aria-pressed', String(visible));
+  get('bit-token-eye').setAttribute('aria-label', visible ? '隐藏本机接口密钥' : '查看本机接口密钥');
+  get('bit-token-eye').title = visible ? '隐藏本机接口密钥' : '查看本机接口密钥';
+});
 
 function loadAuthorization(value) {
   credential = '';
@@ -299,6 +312,9 @@ catalogButton.addEventListener('click', async () => {
 
 function clearConnectionSecrets() {
   tokenInput.value = '';
+  tokenInput.type = 'password';
+  get('bit-token-eye').setAttribute('aria-pressed', 'false');
+  get('bit-token-eye').setAttribute('aria-label', '查看本机接口密钥');
   get('bit-proxy-url').value = '';
   clearProxyCredentials();
 }
@@ -380,6 +396,7 @@ async function restoreConnection(profile) {
       throw new Error();
     }
     if (urlInput.value === profile.url && !tokenInput.value && typeof result.interfaceToken === 'string') {
+      tokenInput.type = 'password';
       tokenInput.value = result.interfaceToken;
     }
     const endpoint = proxyEndpoint(profile);
@@ -591,13 +608,14 @@ loginForm.addEventListener('submit', async (event) => {
   const check = new AbortController();
   activeLogin = check;
   setLoginLock(true);
-  const fixedProxy = proxyMode.value === 'static';
   const sessionJson = credential;
   loadAuthorization('');
   loginFields.disabled = true;
   cancelButton.hidden = false;
   loginResult.textContent = '正在启动登录…';
+  let executionProxy;
   try {
+    executionProxy = await executionProxies.settings(check.signal);
     const { email } = await runBitBrowserJsonLogin({
       url: urlInput.value,
       token: tokenInput.value,
@@ -609,21 +627,12 @@ loginForm.addEventListener('submit', async (event) => {
         coreVersion: get('bit-core').value,
         sessionWaitMinutes: profileControls.sessionWaitMinutes.valueAsNumber,
         sessionRetryLimit: profileControls.sessionRetryLimit.valueAsNumber,
-        proxyMode: proxyMode.value,
-        ...(fixedProxy && {
-          staticHost: get('bit-proxy-host').value.trim(),
-          staticPort: Number(get('bit-proxy-port').value)
-        })
+        ...executionProxy.browserOptions
       },
-      proxyType: get('bit-proxy-type').value,
-      expectedCountryCode: get('bit-proxy-country').value.toUpperCase(),
-      dynamicProxyUrl: fixedProxy ? '' : get('bit-proxy-url').value.trim(),
-      staticProxyCredentials: fixedProxy
-        ? {
-            username: proxyUserInput.value,
-            password: proxyPasswordInput.value
-          }
-        : undefined,
+      proxyType: executionProxy.proxyType,
+      expectedCountryCode: executionProxy.expectedCountryCode,
+      dynamicProxyUrl: executionProxy.dynamicProxyUrl,
+      staticProxyCredentials: executionProxy.staticProxyCredentials,
       signal: check.signal,
       onProgress(stage) {
         if (!check.signal.aborted && Object.hasOwn(stageLabels, stage)) {
@@ -639,6 +648,7 @@ loginForm.addEventListener('submit', async (event) => {
         ? error.message
         : '登录未完成。请检查本机连接和窗口配置，重新导入授权后再试。';
   } finally {
+    if (executionProxy) { executionProxy.dynamicProxyUrl = ''; if (executionProxy.staticProxyCredentials) { executionProxy.staticProxyCredentials.username = ''; executionProxy.staticProxyCredentials.password = ''; } }
     activeLogin = undefined;
     setLoginLock(false);
     loginFields.disabled = false;
