@@ -599,6 +599,37 @@ test('隐藏邮箱只登记在明确正常主邮箱下，未知旧父级不猜�
   assert.equal(r.assets.length, 3);
 });
 
+test('所属主邮箱在同一控件搜索并选择，输入不匹配时清除旧关联且保留草稿', () => {
+  const r = runtime();
+  r.click('relay-alias-add', { parentId: 'parent-demo-1' });
+  assert(!r.opened.body.includes('relay-parent-search'));
+  assert(!r.opened.body.includes('<select id="relay-parentId"'));
+  assert.match(r.opened.body, /list="relay-parent-options"/);
+  // Use the real input node shim so normalization and draft snapshots share its value.
+  const node = {
+    id: 'relay-parent-choice',
+    get value() { return r.form.raw[this.id] || ''; },
+    set value(value) { r.form.raw[this.id] = value; }
+  };
+  node.value = 'M000002';
+  r.module.onInput(node);
+  assert.equal(r.form.raw['relay-parentId'], 'parent-demo-2');
+  r.module.onChange(node);
+  assert.equal(node.value, 'main.b@example.test · m000002');
+  node.value = 'not-a-main-mailbox';
+  r.module.onInput(node);
+  assert.equal(r.form.raw['relay-parentId'], '');
+  r.submit();
+  assert.match(r.errors.get('relay-parent-choice'), /请选择存在且正常/);
+  r.drawer.close();
+  r.click('relay-alias-add', { parentId: 'parent-demo-1' });
+  assert.equal(r.form.raw['relay-parent-choice'], 'not-a-main-mailbox');
+  assert.equal(r.form.raw['relay-parentId'], '', '重开后不能用默认主邮箱覆盖未完成的搜索');
+  node.value = 'main.b@example.test';
+  r.module.onChange(node);
+  assert.equal(r.form.raw['relay-parentId'], 'parent-demo-2');
+});
+
 test('登记隐藏地址无需独立密码，查询码与人员不能由表单注入', () => {
   const r = runtime();
   r.newAlias({
@@ -633,7 +664,7 @@ test('编辑保留稳定主邮箱关联，已提取或使用的地址不可替�
   r.api.modules.appleRelay.openAliasEditor('mail-27');
   r.set({ parentId: 'parent-demo-2' });
   // Browser-disabled selector is immutable; injected submitted parent must still be rejected.
-  r.controls.get('relay-parentId').disabled = false;
+  r.controls.set('relay-parentId', { disabled: false });
   r.submit();
   assert.equal(r.hasConfirm(), false);
   assert.match(r.notices.at(-1), /不能更换/);

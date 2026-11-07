@@ -128,11 +128,16 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     assert.equal(await page.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]').getAttribute('data-row-id'), 'qa-relay-b');
     await page.locator('#relay-search').fill('');
     await page.evaluate(() => window.IDDesignAPI.modules.appleRelay.openAliasImport());
-    await page.locator('#relay-parent-search').fill('qa-parent');
+    assert.equal(await page.locator('#relay-parent-search').count(), 0);
+    assert.equal(await page.locator('select#relay-parentId').count(), 0);
+    await page.locator('#relay-parent-choice').fill('m000001');
+    await page.locator('#relay-parent-choice').press('Tab');
+    assert.equal(await page.locator('#relay-parentId').inputValue(), 'qa-parent');
     await page.locator('#relay-content').fill('draft@privaterelay.appleid.com');
     await close();
     await page.evaluate(() => window.IDDesignAPI.modules.appleRelay.openAliasImport());
-    assert.equal(await page.locator('#relay-parent-search').inputValue(), 'qa-parent');
+    assert.equal(await page.locator('#relay-parent-choice').inputValue(), 'qa-parent@example.test · m000001');
+    assert.equal(await page.locator('#relay-parentId').inputValue(), 'qa-parent');
     assert.equal(await page.locator('#relay-content').inputValue(), 'draft@privaterelay.appleid.com');
     await close();
     await action('apple-relay', 'relay-live-code-reset', { kind: 'parent', id: 'qa-parent' });
@@ -166,6 +171,42 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     await page.locator('#relay-search').fill('no-match');
     await table.getByRole('heading', { name: '暂无符合条件的记录' }).waitFor();
     await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await t.test('主邮箱搜索与选择合一，宽窄屏校验、草稿和编辑锁定正确', async () => {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ['light', 'dark']) {
+        if (await page.evaluate(() => document.documentElement.dataset.theme || 'light') !== theme)
+          await page.locator('#theme-toggle').click();
+        await action('apple-relay', 'relay-alias-add');
+        const picker = page.locator('#relay-parent-choice');
+        assert.equal(await page.locator('#relay-parent-search').count(), 0);
+        await picker.fill('m000001');
+        await picker.press('Tab');
+        assert.equal(await page.locator('#relay-parentId').inputValue(), 'qa-parent');
+        await picker.fill('unfinished-parent');
+        assert.equal(await page.locator('#relay-parentId').inputValue(), '');
+        await page.getByRole('button', { name: '核对并保存', exact: true }).click();
+        assert.equal(await picker.getAttribute('aria-invalid'), 'true');
+        assert.match(await page.locator('#relay-parent-choice-error').textContent(), /请选择存在且正常/);
+        const box = await picker.boundingBox(), drawerBox = await page.locator('#drawer').boundingBox();
+        assert(box.x >= drawerBox.x && box.x + box.width <= drawerBox.x + drawerBox.width);
+        await close();
+        await action('apple-relay', 'relay-alias-add');
+        assert.equal(await picker.inputValue(), 'unfinished-parent');
+        assert.equal(await page.locator('#relay-parentId').inputValue(), '');
+        await close();
+        await action('apple-relay', 'relay-alias-edit', { id: 'qa-relay-a' });
+        assert(await picker.evaluate(input => input.readOnly));
+        assert(await page.locator('#relay-parentId').isDisabled());
+        assert.equal(await picker.inputValue(), 'qa-parent@example.test · m000001');
+        await close();
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    if (await page.evaluate(() => document.documentElement.dataset.theme || 'light') !== 'light')
+      await page.locator('#theme-toggle').click();
   });
 
   await t.test('隐藏邮箱补接入口在宽窄屏可操作，服务失败后保留原记录并可重试', async () => {

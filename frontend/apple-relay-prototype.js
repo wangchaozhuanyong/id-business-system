@@ -326,6 +326,40 @@
         .map((p) => [p.id, `${p.email} · ${displayId('parent', p)}${p.status === 'DISABLED' ? '（已禁用）' : ''}`])
     ];
   }
+  function matchedParentChoice(text, current = '') {
+    const query = String(text || '').trim().toLowerCase();
+    return parentChoices(current).find(([id, label]) => id && (
+      label.toLowerCase() === query || parent(id)?.email?.toLowerCase() === query ||
+      (/^m\d{6,}$/.test(query) && displayId('parent', id).toLowerCase() === query)
+    ));
+  }
+  function parentPicker(selected = '', text, locked = false) {
+    const choices = parentChoices(selected).filter(([id]) => id);
+    const value = text ?? choices.find(([id]) => id === selected)?.[1] ?? '';
+    const id = locked ? selected : matchedParentChoice(value, selected)?.[0] || '';
+    return field(
+      '所属主邮箱', 'parent-choice',
+      input('parent-choice', value,
+        `autocomplete="off" spellcheck="false" placeholder="输入主邮箱或编号搜索并选择" ${locked ? 'readonly' : 'list="relay-parent-options"'}`) +
+        `<input type="hidden" id="relay-parentId" name="relay-parentId" value="${E(id)}"${locked ? ' disabled' : ''} />` +
+        (locked ? '' : `<datalist id="relay-parent-options">${choices.map(([, label]) => `<option value="${E(label)}"></option>`).join('')}</datalist>`),
+      true, locked ? '已绑定的主邮箱不可更换。' : '搜索并选择实际开通该隐藏地址的 Apple 主邮箱。'
+    );
+  }
+  function updateParentChoice(node, normalize = false) {
+    const control = document.getElementById('relay-parentId');
+    if (!control || control.disabled) return;
+    const choice = matchedParentChoice(node.value, control.value);
+    control.value = choice?.[0] || '';
+    if (normalize && choice) node.value = choice[1];
+    A.setError('relay-parent-choice', '');
+    if (context?.kind === 'import') {
+      preview = null;
+      const output = document.getElementById('relay-import-preview');
+      if (output) output.innerHTML = '';
+    }
+    preserveDraft();
+  }
   function traceColumns() {
     return [
       { id: 'createdBy', label: '录入人', render: (r) => E(unknown(r.createdBy)) },
@@ -853,20 +887,7 @@
       'alias',
       id,
       id ? '编辑隐藏邮箱' : '登记 Apple 隐藏邮箱',
-      (id
-        ? ''
-        : field(
-            '搜索主邮箱',
-            'parent-search',
-            input('parent-search', d['relay-parent-search'] || '', 'placeholder="邮箱或编号"')
-          )) +
-        field(
-          '所属主邮箱',
-          'parentId',
-          select('parentId', parentChoices(pid), pid),
-          true,
-          '选择实际开通该隐藏地址的 Apple 主邮箱；编辑时不可更换。'
-        ) +
+      parentPicker(pid, id ? undefined : d['relay-parent-choice'], Boolean(id)) +
         field(
           '隐藏邮箱地址',
           'email',
@@ -908,12 +929,6 @@
         `<div class="commerce-span-all footnote">${local ? '收件服务登记后可查看查询码。已签发的查询码可从资料操作中重置。' : '隐藏邮箱无需独立密码、2FA 或电话；查询码和到期时间由系统生成。'}</div>`
     );
     ctx.parentId = row?.parentMailboxId || '';
-    if (id) {
-      const control = document.getElementById('relay-parentId');
-      if (control) control.disabled = true;
-    }
-    const search = document.getElementById('relay-parent-search');
-    if (search?.value) onInput(search);
   }
   function openAliasImport(parentId = '') {
     initialize();
@@ -923,17 +938,7 @@
       'import',
       '',
       '批量登记隐藏邮箱',
-      field('搜索主邮箱', 'parent-search', input('parent-search', d['relay-parent-search'] || '', 'placeholder="邮箱或编号"')) +
-        field(
-          '所属主邮箱',
-          'parentId',
-          select(
-            'parentId',
-            parentChoices(d['relay-parentId'] || parentId || view.parentId),
-            d['relay-parentId'] || parentId || view.parentId
-          ),
-          true
-        ) +
+      parentPicker(d['relay-parentId'] || parentId || view.parentId, d['relay-parent-choice']) +
         field(
           '有效天数',
           'days',
@@ -950,8 +955,6 @@
         A.button('预检资料', 'relay-import-preview') +
         '<button type="submit" form="relay-import-form" class="button primary">确认导入</button>'
     );
-    const search = document.getElementById('relay-parent-search');
-    if (search?.value) onInput(search);
   }
   function finish(ctx) {
     A.state.drafts.delete(ctx.key);
@@ -1041,7 +1044,7 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
   function fail(name, message) {
-    A.setError(`relay-${name}`, message);
+    A.setError(`relay-${name === 'parentId' ? 'parent-choice' : name}`, message);
     A.notify(message);
     return false;
   }
@@ -2558,6 +2561,8 @@
     if (!node.id.startsWith('relay-')) return false;
     if (node.id === 'relay-file') {
       void readImportFile(node);
+    } else if (node.id === 'relay-parent-choice') {
+      updateParentChoice(node, true);
     } else if (node.id === 'relay-filter-parent') {
       view.parentId = node.value;
       view.aliasId = '';
@@ -2579,19 +2584,8 @@
   }
   function onInput(node) {
     if (!node.id.startsWith('relay-')) return false;
-    if (node.id === 'relay-parent-search') {
-      const control = document.getElementById('relay-parentId');
-      if (control) {
-        const selected = control.value,
-          query = node.value.trim().toLowerCase();
-        control.innerHTML = A.options(
-          parentChoices(selected).filter(
-            ([id, label]) => !id || id === selected || label.toLowerCase().includes(query)
-          ),
-          selected
-        );
-      }
-      preserveDraft();
+    if (node.id === 'relay-parent-choice') {
+      updateParentChoice(node);
     } else if (node.id === 'relay-search') {
       const cursor = node.selectionStart;
       view.q = node.value;
