@@ -284,7 +284,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   assert.equal((await api(host, 'verify-cdk', { cdk: 'unknown' })).status, 400);
   await frame.locator('#redeemBtn').click();
   const authorization = frame.locator('#tokenInput');
-  await frame.locator('#workspaceConfirm:enabled').waitFor();
+  await frame.locator('#startBtn:enabled').waitFor();
   assert.equal(await authorization.getAttribute('readonly'), '');
   await frame.locator('#workspacePlan').getByText('演示 Plus', { exact: true }).waitFor();
   await frame
@@ -294,14 +294,13 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await guideTab.click();
   await guide.getByRole('button', { name: '开始充值' }).click();
   await frame.locator('#workspacePlan').getByText('演示 Plus', { exact: true }).waitFor();
-  assert.equal(await frame.locator('#workspaceConfirm').isEnabled(), true);
-  assert.equal(await frame.locator('#startBtn').isEnabled(), false);
+  assert.equal(await frame.locator('#workspaceConfirm').count(), 0);
+  assert.equal(await frame.locator('#startBtn').isEnabled(), true);
   const session = await authorization.inputValue();
   const payload = { cdk, session };
   const submission = page.waitForResponse((response) =>
     response.url().endsWith('/api/run-process')
   );
-  await frame.locator('#workspaceConfirm').check();
   await frame.locator('#startBtn').click();
   const { jobKey } = await (await submission).json();
   assert.ok(jobKey);
@@ -489,14 +488,13 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await page.goto(restarted.url + '#/workspace/recharge');
   await fill();
   await frame.locator('#redeemBtn').click();
-  await frame.locator('#workspaceConfirm:enabled').waitFor();
+  await frame.locator('#startBtn:enabled').waitFor();
   const freshSession = await frame.locator('#tokenInput').inputValue();
   let uncertainRequests = 0;
   await page.route('**/api/run-process', (route) => {
     uncertainRequests += 1;
     return route.fulfill({ status: 503, json: { success: false } });
   });
-  await frame.locator('#workspaceConfirm').check();
   await frame.locator('#startBtn').click();
   await frame.getByText('提交结果暂时无法确认，请用原兑换码查询。', { exact: true }).waitFor();
   assert.equal(await frame.locator('#startBtn').isEnabled(), false);
@@ -508,7 +506,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await fill();
   await frame.locator('#redeemBtn').click();
   await frame.locator('#workspacePlan').getByText('演示 Plus', { exact: true }).waitFor();
-  assert.equal(await frame.locator('#workspaceConfirm').isEnabled(), false);
+  assert.equal(await frame.locator('#startBtn').isEnabled(), false);
   assert.equal(uncertainRequests, 1);
   const fresh = await data(restarted, 'run-process', { cdk, session: freshSession });
   assert.ok(fresh.jobKey);

@@ -209,8 +209,8 @@ test(
     assert.equal(await frame.locator('img[src="x"]').count(), 0);
     await frame.locator('#cdkInput').fill('missing-plan');
     await frame.locator('#redeemBtn').click();
-    await frame.getByText('暂时无法确认这张兑换码的套餐，请重新验码。', { exact: true }).waitFor();
-    assert.equal(await frame.locator('#startBtn').isEnabled(), false);
+    await frame.locator('#workspacePlan').getByText('套餐待确认', { exact: true }).waitFor();
+    await frame.locator('#backToStep1').click();
     await frame.locator('#cdkInput').fill(cdk);
     await frame.locator('#redeemBtn').click();
     await frame.locator('#tokenInput').fill('invalid');
@@ -220,10 +220,9 @@ test(
       .waitFor();
     assert.equal(await frame.locator('#startBtn').isEnabled(), false);
     await frame.locator('#tokenInput').fill(session());
-    await frame.locator('#workspaceConfirm').check();
+    assert.equal(await frame.locator('#workspaceConfirm').count(), 0);
     await frame.locator('#tokenInput').fill(session() + ' ');
-    assert.equal(await frame.locator('#startBtn').isEnabled(), false);
-    await frame.locator('#workspaceConfirm').check();
+    assert.equal(await frame.locator('#startBtn').isEnabled(), true);
     assert.equal(upstream.submitted(), 0);
     await frame.locator('#startBtn').click();
     await frame.getByText('模拟任务待人工核对', { exact: true }).first().waitFor();
