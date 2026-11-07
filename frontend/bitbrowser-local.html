@@ -189,12 +189,14 @@
     <header class="bit-local__drawer-header"><h2 id="bit-proxy-editor-title">新增执行 IP</h2><button class="button" id="bit-ip-dismiss" type="button" aria-label="关闭 IP 编辑">关闭</button></header>
     <div class="bit-local__drawer-body">
             <div class="field"><label for="bit-ip-name">名称／备注<span class="required">*</span></label><input id="bit-ip-name" maxlength="80" /></div>
-            <div class="field"><label for="bit-ip-country">国家标记<span class="required">*</span></label><input id="bit-ip-country" maxlength="2" placeholder="PH 菲律宾、US 美国、MY 马来西亚" /></div>
+            <div class="field"><label for="bit-ip-country">国家标记<span class="required">*</span></label><input id="bit-ip-country" maxlength="80" list="bit-ip-countries" autocomplete="off" placeholder="输入中文国家名，如菲律宾、美国" aria-describedby="bit-ip-country-help" /></div>
+            <datalist id="bit-ip-countries"></datalist>
             <div class="field"><label for="bit-ip-kind">IP 类型</label><select id="bit-ip-kind"><option value="mobile">移动 IP</option><option value="dynamic_residential">动态住宅</option><option value="static_residential">静态住宅</option></select></div>
             <div class="field"><label for="bit-ip-mode">连接方式</label><select id="bit-ip-mode"><option value="static">固定代理地址</option><option value="dynamic">HTTPS 动态提取链接</option></select></div>
             <div class="field"><label for="bit-ip-protocol">代理协议</label><select id="bit-ip-protocol"><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></div>
             <div class="field"><label for="bit-ip-link">代理链接<span id="bit-ip-link-required" class="required">*</span></label><input id="bit-ip-link" type="password" autocomplete="off" placeholder="http://账号:密码@主机:端口，或 HTTPS 提取链接" /></div>
 
+      <p id="bit-ip-country-help" class="field-help">支持输入中文国家名，也可输入 PH、US 等国家代码。</p>
       <p id="bit-ip-edit-note" class="field-help"></p><p id="bit-ip-save-result" role="status"></p><button class="button" id="bit-ip-rebase" type="button" hidden>核对最新资料</button>
     </div>
     <footer class="bit-local__drawer-footer"><button class="button" id="bit-ip-close" type="button">取消</button><button class="button primary" id="bit-ip-save" type="button">保存并使用</button></footer>

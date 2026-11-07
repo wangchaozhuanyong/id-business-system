@@ -63,8 +63,12 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#bit-connection-help').isVisible(), false);
     await page.locator('#bit-add-proxy').click();
-    await page.locator('#bit-ip-name').fill('新电脑移动 IP'); await page.locator('#bit-ip-country').fill('MY');
+    await page.locator('#bit-ip-name').fill('新电脑移动 IP'); await page.locator('#bit-ip-country').fill('马来西亚');
     await page.locator('#bit-ip-link').fill('http://synthetic-user:synthetic-pass@192.0.2.8:8080');
+    await page.locator('#bit-ip-country').fill('不存在的国家'); await page.locator('#bit-ip-save').click();
+    await page.getByText('请填写有效的中文国家名，或从国家建议中选择，例如菲律宾。', { exact: true }).waitFor();
+    assert.equal(attempts, 0);
+    await page.locator('#bit-ip-country').fill('马来西亚');
     await page.locator('#bit-ip-save').click(); await page.getByText('合成保存失败，请重试', { exact: true }).waitFor();
     assert.equal(await page.locator('#bit-ip-link').inputValue(), 'http://synthetic-user:synthetic-pass@192.0.2.8:8080');
     const alignment = await page.locator('#bit-proxy-editor .field').evaluateAll(fields => fields.map(field => {
@@ -85,7 +89,11 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-ip-search').fill('新电脑');
     await page.locator('#bit-ip-rows').getByRole('button', { name: '编辑', exact: true }).click();
     assert.equal(await page.locator('#bit-ip-link').inputValue(), '');
+    assert.equal(await page.locator('#bit-ip-country').inputValue(), '马来西亚');
     await page.locator('#bit-ip-name').fill('新电脑移动 IP 已修改');
+    await page.locator('#bit-ip-country').fill('my');
+    await page.locator('#bit-ip-country').blur();
+    assert.equal(await page.locator('#bit-ip-country').inputValue(), '马来西亚');
     await page.screenshot({ path: fileURLToPath(new URL(`drawer-${theme}-${width}.png`, output)), fullPage: true });
     await page.locator('#bit-ip-save').click(); await page.locator('#bit-proxy-editor').waitFor({ state: 'hidden' });
     await page.locator('#bit-tab-library').click(); await page.locator('#bit-ip-search').fill('');

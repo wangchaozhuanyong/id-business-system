@@ -1,11 +1,16 @@
+import { bitBrowserCountryOptions, resolveBitBrowserCountry, bitBrowserCountryName as countryName } from '/assets/bitbrowser/countries.mjs';
 const kinds = { mobile: '移动 IP', dynamic_residential: '动态住宅', static_residential: '静态住宅' };
-const countries = new Intl.DisplayNames(['zh-Hans'], { type: 'region' });
-const countryName = code => countries.of(code) || code;
 const fields = ['name', 'country', 'kind', 'mode', 'protocol'];
 export function initializeExecutionProxies({ get, drafts, onChange, locked, onUse }) {
   const select = get('bit-execution-proxy'), editor = get('bit-proxy-editor');
   const message = get('bit-proxy-result'), saveMessage = get('bit-ip-save-result');
   const search = get('bit-ip-search'), filter = get('bit-ip-filter'), sort = get('bit-ip-sort');
+  const countryInput = get('bit-ip-country');
+  get('bit-ip-countries').replaceChildren(...bitBrowserCountryOptions.map(({ code, name }) => new Option(code, name)));
+  countryInput.addEventListener('change', () => {
+    const code = resolveBitBrowserCountry(countryInput.value);
+    if (code) countryInput.value = countryName(code);
+  });
   let data, saving = false, reading = false, generation = 0, alive = true, editingId = '', editVersion = 0, page = 1, opener;
   const pending = new Set();
   const readDraft = () => drafts?.read('bit-local') || {};
@@ -102,7 +107,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     if (locked() || saving) return;
     editingId = item?.id || ''; editVersion = data?.version ?? 0; opener = document.activeElement;
     const draft = readDraft(), prefix = draftKey();
-    const defaults = { name: item?.name || '', country: item?.countryCode || '', kind: item?.kind || 'mobile', mode: item?.mode || 'static', protocol: item?.protocol || 'http' };
+    const defaults = { name: item?.name || '', country: item ? countryName(item.countryCode) : '', kind: item?.kind || 'mobile', mode: item?.mode || 'static', protocol: item?.protocol || 'http' };
     for (const field of fields) get('bit-ip-' + field).value = draft[prefix + field] ?? defaults[field];
     if (Number.isSafeInteger(draft[prefix + 'version'])) editVersion = draft[prefix + 'version'];
     get('bit-proxy-editor-title').textContent = item ? '编辑执行 IP' : '新增执行 IP';
@@ -134,10 +139,13 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   get('bit-ip-save').addEventListener('click', async () => {
     if (saving || locked()) return;
     if (!data) { saveMessage.textContent = '请先关闭并刷新 IP 列表，输入已保留。'; return; }
-    const body = { ...(editingId && { id: editingId }), version: editVersion, name: get('bit-ip-name').value, countryCode: get('bit-ip-country').value.trim().toUpperCase(),
+    const body = { ...(editingId && { id: editingId }), version: editVersion, name: get('bit-ip-name').value, countryCode: resolveBitBrowserCountry(countryInput.value),
       kind: get('bit-ip-kind').value, mode: get('bit-ip-mode').value, protocol: get('bit-ip-protocol').value, link: get('bit-ip-link').value.trim() };
-    if (!body.name.trim() || !/^[A-Z]{2}$/.test(body.countryCode) || (!editingId && !body.link)) {
-      saveMessage.textContent = '请填写名称、两位国家代码和代理链接。'; return;
+    if (!body.countryCode) {
+      saveMessage.textContent = '请填写有效的中文国家名，或从国家建议中选择，例如菲律宾。'; countryInput.focus(); return;
+    }
+    if (!body.name.trim() || (!editingId && !body.link)) {
+      saveMessage.textContent = '请填写 IP 名称和代理链接。'; return;
     }
     const prefix = draftKey(); capture(); const snapshot = readDraft();
     saving = true; reading = false; generation++; onChange();
