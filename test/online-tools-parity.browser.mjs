@@ -196,9 +196,15 @@ try {
           await drawer.getByRole('button', { name: '登记邮箱', exact: true }).click();
           await page.locator('#ops-managed-email').fill('draft@example.test');
           {
-            await drawer.getByRole('link', { name: '前往 Google 生成', exact: true }).waitFor();
+            // Field instructions now use the shared, body-level help popover.
+            const credentialHelp = drawer.locator('summary[aria-label="查看应用专用密码说明"]');
+            await credentialHelp.click();
+            await page.getByRole('link', { name: '前往 Google 生成', exact: true }).waitFor();
+            await credentialHelp.press('Escape');
             await page.locator('#ops-managed-provider').selectOption('apple');
-            await drawer.getByRole('link', { name: '登录 Apple 账户生成', exact: true }).waitFor();
+            await credentialHelp.click();
+            await page.getByRole('link', { name: '登录 Apple 账户生成', exact: true }).waitFor();
+            await credentialHelp.press('Escape');
             await page.locator('#ops-managed-provider').selectOption('microsoft');
             assert(!(await page.locator('#ops-managed-app-password').isVisible()));
             await drawer

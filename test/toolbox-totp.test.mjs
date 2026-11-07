@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHmac } from 'node:crypto';
 import { calculateTotp, prepareTotpBatch } from '../modules/tools/totp.mjs';
 
 // RFC 6238 Appendix B uses this public test key for SHA-1.
@@ -22,6 +23,18 @@ test('TOTP rejects malformed input without copying it into errors', async () => 
   await assert.rejects(calculateTotp(uri(key, '&period=0')), /时间周期/);
   await assert.rejects(calculateTotp(uri(key, '&algorithm=MD5')), /算法/);
   await assert.rejects(calculateTotp(uri().replace('/totp/', '/hotp/')), /基于时间/);
+});
+
+test('valid Base32 keys are accepted without arbitrary length or distinct-character requirements', async () => {
+  const reference = bytes => {
+    const counter = Buffer.alloc(8); counter.writeBigUInt64BE(1n);
+    const hash = createHmac('sha1', bytes).update(counter).digest();
+    return String((hash.readUInt32BE(hash.at(-1) & 15) & 0x7fffffff) % 1_000_000).padStart(6, '0');
+  };
+  assert.equal((await calculateTotp('MY======', 59_000)).code, reference(Buffer.from('f')));
+  assert.equal((await calculateTotp('AAAAAAAAAAAAAAAA', 59_000)).code, reference(Buffer.alloc(10)));
+  await assert.rejects(calculateTotp('AB'), /编码不完整/);
+  await assert.rejects(calculateTotp('MY='), /长度不正确/);
 });
 
 test('batch preparation keeps legacy account fields separate and reports only invalid rows', async () => {
