@@ -1002,6 +1002,12 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
             configured: Boolean(provider),
             codeQueryConfigured: Boolean(provider?.supportsCodeQuery),
             ...(importAliasIds.length && { aliasImportCount: importAliasIds.length }),
+            ...(provider && { numbers: {
+              parent: Object.fromEntries([...local.parents.values()].filter(remoteIdFor)
+                .map((row) => [row.id, remoteIdFor(row)])),
+              alias: Object.fromEntries([...local.aliases.values()].filter(remoteAliasIdFor)
+                .map((row) => [row.id, remoteAliasIdFor(row)]))
+            } }),
             parentIds,
             aliasIds: [...local.aliases.values()]
               .filter((row) => activeAlias(row) && remoteAliasIdFor(row) &&

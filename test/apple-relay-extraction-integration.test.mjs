@@ -235,6 +235,8 @@ test('startPreview wires bound relay qualification, stock extraction, code copy 
   assert.deepEqual(status.body, {
     configured: true,
     codeQueryConfigured: true,
+    numbers: { parent: { [parentId]: 'vendure-parent' },
+      alias: Object.fromEntries(aliasIds.map((id) => [id, `vendure-${id}`])) },
     parentIds: [parentId],
     aliasIds
   });

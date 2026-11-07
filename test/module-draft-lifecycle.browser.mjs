@@ -53,7 +53,8 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
       body: JSON.stringify({ message: '隔离测试：收件服务暂时不可用' })
     });
     const result = operation === 'status'
-      ? { configured: true, parentIds: ['qa-parent'], aliasIds: ['qa-relay-a', 'qa-relay-b'], codeQueryConfigured: true }
+      ? { configured: true, parentIds: ['qa-parent'], aliasIds: ['qa-relay-a', 'qa-relay-b'], codeQueryConfigured: true,
+          numbers: { parent: { 'qa-parent': '1' }, alias: { 'qa-relay-a': '5', 'qa-relay-b': '6' } } }
       : operation === 'mails'
         ? { items: [{ id: 'qa-mail', parentId: 'qa-parent', aliasId: 'qa-relay-a', subject: '隔离测试邮件', version: 1 }] }
         : null;
@@ -120,6 +121,12 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     const connected = page.waitForResponse(response => response.url().endsWith('/apple-relay/status'));
     await go('mailboxes/relay');
     await connected;
+    await page.locator('tr[data-row-id="qa-relay-a"] td[data-column="aliasId"]').filter({ hasText: 'y000005' }).waitFor();
+    assert.equal(await page.locator('tr[data-row-id="qa-relay-a"] td[data-column="parentMailboxId"]').textContent(), 'm000001');
+    await page.locator('#relay-search').fill('y000006');
+    assert.equal(await page.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]').count(), 1);
+    assert.equal(await page.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]').getAttribute('data-row-id'), 'qa-relay-b');
+    await page.locator('#relay-search').fill('');
     await page.evaluate(() => window.IDDesignAPI.modules.appleRelay.openAliasImport());
     await page.locator('#relay-parent-search').fill('qa-parent');
     await page.locator('#relay-content').fill('draft@privaterelay.appleid.com');

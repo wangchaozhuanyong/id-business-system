@@ -368,6 +368,28 @@ function runtime(store, { relayConfigured = true } = {}) {
   return output;
 }
 
+test('邮箱短编号稳定对应原记录，列表、搜索和详情统一且不改变关联', () => {
+  const r = runtime();
+  const first = r.assets[0], second = r.assets[1];
+  first.remoteAliasId = '000005';
+  second.remoteAliasId = '1000001';
+  r.parent(first.parentMailboxId).remotePrimaryId = '3';
+  const before = { id: first.id, parentId: first.parentMailboxId, aliasId: first.aliasId };
+  const columns = r.table('relay-aliases').columns;
+  const cell = (id, row) => columns.find((column) => column.id === id).render(row);
+  assert.equal(cell('aliasId', first), 'y000005');
+  assert.equal(cell('aliasId', second), 'y1000001', '超过六位保留全值，不能截断产生重复编号');
+  assert.equal(cell('parentMailboxId', first), 'm000003');
+  r.assets.reverse();
+  r.module.onInput({ id: 'relay-search', value: 'Y000005' });
+  assert.deepEqual(r.table('relay-aliases').rows.map((row) => row.id), [first.id]);
+  r.click('relay-alias-detail', { id: first.id });
+  assert.match(r.opened.body, /y000005/);
+  assert.match(r.opened.body, /m000003/);
+  assert.deepEqual({ id: first.id, parentId: first.parentMailboxId, aliasId: first.aliasId }, before);
+  assert.equal(r.api.modules.appleRelay.displayId('alias', r.assets.find((row) => row.id === 'legacy-no-parent')), '待接入');
+});
+
 test('本机主邮箱与批量登记归属于同一库存版本，重开后读取且无模拟凭据', async (t) => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
