@@ -2009,12 +2009,13 @@
     if (submit.disabled) return;
     let source = control.value;
     form.querySelector('[data-action="ops-totp-retry"]').hidden = true;
-    output.replaceChildren();
     setError('ops-totp-secret', '');
     if (!source.trim()) {
+      if (output.querySelector('[data-totp-account]')) return;
       setError('ops-totp-secret', '请输入验证器密钥');
       return;
     }
+    output.replaceChildren();
     submit.disabled = true;
     control.disabled = true;
     try {

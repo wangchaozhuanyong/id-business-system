@@ -52,6 +52,8 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
     await drawer.locator('#ops-totp-secret').press('Enter');
     await drawer.locator('#ops-totp-result .ops-code').filter({ hasText: /^\d{6}$/ }).waitFor();
     assert.equal(attempts.length, 2, 'Successful module loads stay shared');
+    await drawer.locator('#ops-totp-secret').press('Enter');
+    assert.equal(await drawer.locator('#ops-totp-result .ops-code').filter({ hasText: /^\d{6}$/ }).count(), 1, 'Enter after successful paste must retain the current result');
     await saved.locator('[data-action="ops-totp-copy"]').first().click();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '12345678');
     await settle(page);
