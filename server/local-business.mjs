@@ -29,6 +29,7 @@ import {
   validateBitBrowserConnectionWrite,
   writeBitBrowserConnection
 } from './bitbrowser-connections.mjs';
+import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkInventoryHistory } from './inventory-history.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
 import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
@@ -955,6 +956,32 @@ export function createLocalBusinessStore(databasePath) {
         return { version, profiles: summarizeBitBrowserConnections(profiles), savedId };
       });
     },
+    loadBitBrowserProxies(actor) {
+      const { version, data } = readDocument(`${bitBrowserProxyDomain}:${actor.id}`);
+      return { version, items: summarizeBitBrowserProxies(data ?? []) };
+    },
+    useBitBrowserProxy(body, actor) {
+      return writeTransaction(() => {
+        const proxy = readBitBrowserProxy(readDocument(`${bitBrowserProxyDomain}:${actor.id}`), body);
+        log.run(new Date().toISOString(), bitBrowserProxyDomain, 'bitbrowser_proxy_access',
+          auditSummary('取用比特执行 IP', actor, proxy.id), body.version);
+        return proxy;
+      });
+    },
+    saveBitBrowserProxy(body, actor) {
+      const { version, proxy } = validateBitBrowserProxyWrite(body);
+      const domain = `${bitBrowserProxyDomain}:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        if (version !== current.version) throw new BitBrowserConnectionError(409, 'IP 列表已更新，请刷新后重试，输入已保留');
+        if ((current.data?.length ?? 0) >= 500) throw new BitBrowserConnectionError(400, '个人 IP 列表最多保存 500 条');
+        const items = [...(current.data ?? []), proxy];
+        put.run(domain, version + 1, encrypt(key, domain, version + 1, JSON.stringify(items)));
+        log.run(new Date().toISOString(), bitBrowserProxyDomain, 'bitbrowser_proxy_create',
+          auditSummary('保存比特执行 IP', actor, proxy.id), version + 1);
+        return { version: version + 1, items: summarizeBitBrowserProxies(items), savedId: proxy.id };
+      });
+    },
     listBitBrowserAddresses(search, actor = localToolboxActor) {
       const { data } = readDocument(`${bitBrowserAddressDomain}:${actor.id}`);
       return listBitBrowserAddresses(data ?? [], search);
@@ -1466,6 +1493,15 @@ export async function handleLocalBusiness(
         return json(response, 200, await store.useSavedTotp(body?.id, actor));
       }
       throw new LocalDataError(405, '本机接口不支持此操作');
+    }
+    if (domain === bitBrowserProxyDomain) {
+      if (!actor?.id) throw new LocalDataError(401, '请先登录');
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (request.method === 'GET') return json(response, 200, store.loadBitBrowserProxies(actor));
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      if (request.method === 'PUT') return json(response, 200, store.saveBitBrowserProxy(await readJson(request), actor));
+      if (request.method === 'POST') return json(response, 200, store.useBitBrowserProxy(await readJson(request), actor));
+      throw new LocalDataError(405, '此 IP 接口不支持该操作');
     }
     if (domain === bitBrowserConnectionDomain && request.method === 'POST') {
       if (!actor?.id) throw new LocalDataError(401, '请先登录');

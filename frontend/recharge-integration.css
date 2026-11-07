@@ -238,3 +238,11 @@
 .bit-local #bit-authorization-result:empty {
   margin-top: 0;
 }
+
+.bit-local__secret-control { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bit-local__secret-control input { flex: 1; min-width: 0; }
+.bit-local__secret-control button { flex: 0 0 auto; }
+.bit-local__proxy-editor { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(560px, 100%); max-width: 100%; height: 100dvh; max-height: 100dvh; box-sizing: border-box; overflow-y: auto; padding: 20px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.bit-local__proxy-editor[open] { display: grid; align-content: start; gap: 14px; }
+.bit-local__proxy-editor .field { grid-template-columns: minmax(86px, 110px) minmax(0, 1fr); }
+.bit-local__proxy-editor::backdrop { background: rgb(0 0 0 / 25%); }

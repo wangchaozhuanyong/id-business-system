@@ -184,6 +184,19 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
       throw new DirectBrowserError('bitbrowser_profile_sync_unverified');
     }
     verifyDirectProfileConfiguration(detail, settings);
+    if (ownedProfile && settings.updateOwnedProxy) {
+      await api.post('/browser/close', { id: profileId }, remaining());
+      const alive = (await api.post('/browser/pids/alive', { ids: [profileId] }, remaining())).data;
+      if (!alive || typeof alive !== 'object' || Array.isArray(alive) ||
+        Object.keys(alive).some(id => id !== profileId) || ![undefined, null, 0].includes(alive[profileId]))
+        throw new DirectBrowserError('bitbrowser_profile_close_unverified');
+      const proxyOptions = Object.fromEntries(Object.entries(directProfileOptions(settings)).filter(
+        ([key]) => !['browserFingerPrint', 'syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'].includes(key)));
+      await api.post('/browser/update', { id: profileId, ...proxyOptions }, remaining());
+      detail = (await api.post('/browser/detail', { id: profileId }, remaining())).data;
+      if (!detail || detail.id !== profileId || Object.entries(proxyOptions).some(([key, value]) => String(detail[key] ?? '') !== String(value)))
+        throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
+    }
     let originallyRunning = false;
     if (ownedProfile) {
       const alive = (await api.post('/browser/pids/alive', { ids: [profileId] }, remaining())).data;

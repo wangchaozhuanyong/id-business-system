@@ -71,6 +71,11 @@ async function withLoginFixture(observedIdentity, useFixture) {
           data = [{ id: 'fixture-tag', tagName }];
           break;
         case '/browser/update':
+          if (body.id) {
+            assert.equal(body.id, profileId);
+            for (const key of ['cookie', 'password', 'browserFingerPrint']) assert(!Object.hasOwn(body, key));
+            profile = { ...profile, ...body }; data = { id: profileId }; break;
+          }
           assert.equal(body.groupId, 'fixture-group');
           assert.equal(body.name, windowName);
           assert.equal(body.url, 'https://chatgpt.com/');
@@ -100,6 +105,8 @@ async function withLoginFixture(observedIdentity, useFixture) {
           assert.deepEqual(body, { id: profileId });
           data = profile;
           break;
+        case '/browser/close':
+          assert.equal(body.id, profileId); officialTabOpen = false; break;
         case '/browser/pids/alive':
           assert.deepEqual(body, { ids: [profileId] });
           data = { [profileId]: officialTabOpen ? 1234 : 0 };
@@ -235,7 +242,7 @@ async function withLoginFixture(observedIdentity, useFixture) {
       requests,
       commands,
       socketClosed: () => socketClosed,
-      login: (onProgress = () => {}) =>
+      login: (onProgress = () => {}, options = {}) =>
         runBitBrowserJsonLogin({
           url: 'http://127.0.0.1:' + server.address().port,
           token: localApiKey,
@@ -244,7 +251,7 @@ async function withLoginFixture(observedIdentity, useFixture) {
           windowName,
           sessionJson: localAuthorization(),
           signal: AbortSignal.timeout(5_000),
-          onProgress
+          onProgress, ...options
         })
     });
     assert.deepEqual(errors, []);
@@ -291,6 +298,19 @@ test('reuses the verified window for the same account and leaves the live sessio
     assert.equal(secondCommands.includes('Network.setCookies'), false);
     assert.equal(secondCommands.includes('Page.navigate'), false);
     assert.ok(secondCommands.includes('Runtime.evaluate'));
+  });
+});
+
+test('an explicit new IP updates only the retained window network after confirmed close', async () => {
+  await withLoginFixture(identity, async ({ requests, login }) => {
+    await login(undefined, { expectedCountryCode: 'US', dynamicProxyUrl: 'https://first.example.test/get' });
+    const before = requests.length;
+    const result = await login(undefined, { expectedCountryCode: 'MY', dynamicProxyUrl: 'https://second.example.test/get' });
+    assert.equal(result.profileId, profileId);
+    const paths = requests.slice(before).map(({ path }) => path);
+    assert(paths.indexOf('/browser/close') < paths.indexOf('/browser/update'));
+    assert(paths.indexOf('/browser/update') < paths.indexOf('/browser/open'));
+    assert.equal(requests.slice(before).find(({ path }) => path === '/browser/update').body.dynamicIpUrl, 'https://second.example.test/get');
   });
 });
 

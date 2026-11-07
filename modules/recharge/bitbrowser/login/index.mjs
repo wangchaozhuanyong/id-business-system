@@ -81,9 +81,12 @@ export async function runBitBrowserJsonLogin({
   }
   const profileName = requiredName(windowName, '窗口名称', 100);
   const accountKey = await digest(accountId);
-  const key = `${localApiUrl}#${accountKey}`;
+  const key = `${localApiUrl}#${await digest(token)}#${accountKey}`;
   const { localApiToken, ...profileSettings } = settings;
-  const profileConfiguration = await digest(JSON.stringify(profileSettings));
+  const proxyConfiguration = await digest(JSON.stringify(profileSettings));
+  const networkKeys = new Set(['proxyMode', 'staticHost', 'staticPort', 'dynamicProvider', 'refreshIp']);
+  const profileConfiguration = expectedCountryCode ? await digest(JSON.stringify({ localApiUrl,
+    groupName, tagName, browserOptions: Object.fromEntries(Object.entries(settings.browserOptions).filter(([key]) => !networkKeys.has(key))) })) : proxyConfiguration;
   if (signal.aborted) throw new DirectBrowserError('bitbrowser_direct_cancelled');
   if (activeLogins.has(key)) throw new Error('该账号已有登录任务正在进行。');
   const saved = ownedProfiles.get(key);
@@ -91,6 +94,7 @@ export async function runBitBrowserJsonLogin({
     throw new Error('该账号已关联本次会话的比特窗口，请用原窗口配置重试。');
   }
 
+  settings.updateOwnedProxy = Boolean(expectedCountryCode && saved && saved.proxyConfiguration !== proxyConfiguration);
   activeLogins.add(key);
   try {
     const result = await runDirectJsonSession(settings, expected, profileName, signal, {
@@ -100,13 +104,14 @@ export async function runBitBrowserJsonLogin({
         const profileId = extra?.browser_profile_id;
         if (stage === 'bitbrowser_profile_created' && /^[a-f0-9]{32}$/.test(profileId ?? '')) {
           ownedProfiles.set(key, {
-            profileConfiguration,
+            profileConfiguration, proxyConfiguration,
             profile: { accountKey, profileId, sourceJobId: crypto.randomUUID() }
           });
         }
         onProgress?.(stage);
       }
     });
+    if (ownedProfiles.has(key)) ownedProfiles.get(key).proxyConfiguration = proxyConfiguration;
     return {
       email,
       profileId: result.browser_profile_id,
