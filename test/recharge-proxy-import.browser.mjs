@@ -1,0 +1,67 @@
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import test from 'node:test';
+import { chromium } from 'playwright';
+import { interceptDesign, origin, root } from './helpers/offline-design.mjs';
+
+test('代理池粘贴和批量格式转换、错误阻止、失败重试及慢响应输入保护', { timeout: 60_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const output = root + '/.runtime/proxy-import-format-20261107';
+  await mkdir(output, { recursive: true });
+  for (const width of [1440, 390]) for (const theme of ['light', 'dark']) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const { external } = await interceptDesign(context);
+    let fail = true, release, pending;
+    const writes = [];
+    await context.route(origin + '/integrations/codexdaichong/api/admin/proxies', async route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { success: true, proxies: [] } });
+      writes.push(route.request().postDataJSON());
+      if (pending) await pending;
+      if (fail) return route.fulfill({ status: 503, json: { success: false, message: '合成失败' } });
+      return route.fulfill({ json: { success: true, added: writes.at(-1).proxies.length, message: '已保存代理' } });
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(origin + '/integrations/codexdaichong/admin?view=proxies');
+    const input = page.locator('#proxy_add_input');
+    await input.waitFor();
+    await page.evaluate(theme => { document.documentElement.dataset.idTheme = theme; }, theme);
+    const raw = 'Socks5://gate.example.test:8082:example-res-country-ph-session-12345678:synthetic-pass';
+    const canonical = 'socks5://example-res-country-ph-session-12345678:synthetic-pass@gate.example.test:8082';
+    await input.fill(raw + '\n' + canonical);
+    await input.dispatchEvent('paste');
+    await page.waitForFunction(value => document.querySelector('#proxy_add_input')?.value === value, canonical);
+    assert.match(await page.locator('#proxy_add_hint').innerText(), /已识别 1 条.*去重 1 条/);
+    const save = page.getByRole('button', { name: '保存到代理池', exact: true });
+    await save.click();
+    await page.locator('#proxy_add_hint').filter({ hasText: '输入已保留' }).waitFor();
+    assert.equal(await input.inputValue(), canonical);
+    assert.deepEqual(writes[0], { proxies: [canonical] });
+    fail = false;
+    await save.click();
+    await page.waitForFunction(() => document.querySelector('#proxy_add_input')?.value === '');
+    assert.equal(writes.length, 2);
+    const invalid = raw + '\nhttps://api.example.test/extract?id=synthetic';
+    await input.fill(invalid);
+    await save.click();
+    assert.match(await page.locator('#proxy_add_hint').innerText(), /第 2 行.*整批未保存/);
+    assert.equal(writes.length, 2);
+    assert.equal(await input.inputValue(), invalid);
+    await input.fill(raw);
+    pending = new Promise(resolve => { release = resolve; });
+    await save.click();
+    await page.waitForFunction(() => document.querySelector('#proxy_add_input')?.dataset.saving === 'true');
+    await input.fill('gate.example.test:1080:next-user:next-synthetic-pass');
+    release();
+    await page.waitForFunction(() => !document.querySelector('#proxy_add_input')?.dataset.saving);
+    assert.equal(await input.inputValue(), 'gate.example.test:1080:next-user:next-synthetic-pass');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: `${output}/proxy-import-${width}-${theme}.png` });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(external, []);
+    await context.close();
+  }
+});
