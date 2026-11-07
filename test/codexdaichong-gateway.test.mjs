@@ -10,6 +10,48 @@ const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
 const admin = { ...member, id: 'u-2', admin: true, sensitive: true };
 
+test('proxy import normalizes a complete batch before forwarding and rejects invalid or unauthorized writes', async t => {
+  const received = [];
+  const secret = randomBytes(48).toString('base64url');
+  const engine = await listen(t, async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+    assert.equal(Number(req.headers['content-length']), body.length);
+    received.push(JSON.parse(body));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ success: true, added: 1 }));
+  });
+  const origin = 'http://proxy-import.test';
+  const gateway = createCodexdaichongGateway({ upstreamUrl: engine, publicOrigin: origin, secret,
+    getUnifiedPrincipal: req => req.headers['x-test-role'] === 'admin' ? admin
+      : req.headers['x-test-role'] === 'employee' ? member : null });
+  const host = await listen(t, (req, res) => { void gateway.handle(req, res); });
+  const url = host + prefix + '/api/admin/proxies';
+  const raw = 'Socks5://gate.example.test:8082:example-session-{session}:p@ss:word';
+  const canonical = 'socks5://example-session-{session}:p%40ss%3Aword@gate.example.test:8082';
+  const send = (body, role = 'admin', from = origin, type = 'application/json') => fetch(url, {
+    method: 'POST', headers: { Origin: from, 'content-type': type, 'x-test-role': role },
+    body: typeof body === 'string' ? body : JSON.stringify(body)
+  });
+  assert.equal((await send({ proxies: [raw, canonical] })).status, 200);
+  assert.deepEqual(received, [{ proxies: [canonical] }]);
+  assert.equal((await send({ proxy_url: raw })).status, 200, '保留原单条别名兼容');
+  const before = received.length;
+  const rejected = await send({ proxies: [raw, 'https://api.example.test/extract?id=synthetic'] });
+  assert.equal(rejected.status, 400);
+  const message = (await rejected.json()).message;
+  assert.match(message, /第 2 行.*整批未保存/);
+  assert(!message.includes('p@ss') && !message.includes('synthetic'));
+  assert.equal((await send({ proxies: [raw] }, 'employee')).status, 403);
+  assert.equal((await send({ proxies: [raw] }, 'guest')).status, 401);
+  assert.equal((await send({ proxies: [raw] }, 'admin', 'http://other.test')).status, 403);
+  assert.equal((await send('{invalid')).status, 400);
+  assert.equal((await send({ proxies: [raw] }, 'admin', origin, 'text/plain')).status, 415);
+  assert.equal((await send(JSON.stringify({ proxies: ['x'.repeat(512 * 1024)] }))).status, 413);
+  assert.equal(received.length, before, '失败批次没有向执行器发送任何条目');
+});
+
 async function listen(t, handler) {
   const server = createServer(handler);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
