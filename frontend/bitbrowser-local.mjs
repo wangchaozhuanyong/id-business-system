@@ -193,6 +193,24 @@ function loadAuthorization(value) {
   updateStartButton();
 }
 
+get('bit-clear-authorization').addEventListener('click', () => {
+  if (activeLogin) return;
+  authorizationCheckId++;
+  jsonInput.value = '';
+  fileInput.value = '';
+  loadAuthorization('');
+  if (lastAutomaticName && windowName.value === lastAutomaticName) {
+    windowName.value = '';
+    const values = readConnectionDrafts();
+    values['bit-window-name'] = '';
+    draftBridge?.write('bit-local', values);
+  }
+  lastAutomaticName = '';
+  loginResult.textContent = '等待登录';
+  updateStartButton();
+  jsonInput.focus();
+});
+
 jsonInput.addEventListener('input', () => {
   authorizationCheckId++;
   loadAuthorization(jsonInput.value);
