@@ -1097,7 +1097,8 @@
     else if (action === 'apple-import') A.modules.inventory.importAppleIds();
     else if (action === 'apple-ledger') openLedger(id);
     else if (action === 'apple-adjust') adjustmentEditor(id);
-    else if (action === 'apple-reload') void refreshLocalBalance();
+    else if (action === 'apple-reload') void A.withActionFeedback(node, () => refreshLocalBalance(),
+      { pending: '正在读取余额与流水…', success: '余额与流水已刷新', failure: '余额读取失败，已保留当前资料' });
     else if (action === 'apple-pending-edit') pendingRefundEditor(id, true);
     else if (action === 'apple-pending-receive') pendingRefundEditor(id, false);
     else if (action === 'apple-refund-history') openRefundHistory(id);

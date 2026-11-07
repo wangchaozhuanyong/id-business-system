@@ -34,8 +34,10 @@
     views.set(route, current);
     try {
       current.data = await read(route);
+      return true;
     } catch (error) {
       current.error = error.message || '读取失败，请重试';
+      return false;
     } finally {
       current.loaded = true;
       current.loading = false;
@@ -142,6 +144,7 @@
   async function perform(route, operation) {
     if (saving) return;
     saving = true;
+    const feedback = A.beginActionFeedback?.(null, '正在处理，请稍候…');
     const view = views.get(route);
     const controls = [...document.querySelectorAll('#main button, #drawer button[type=submit]')];
     const enabled = controls.filter((node) => !node.disabled);
@@ -151,6 +154,7 @@
     } catch (error) {
       A.notify(error.message || '操作未完成，请重试');
     } finally {
+      feedback?.finish();
       saving = false;
       enabled.forEach((node) => { node.disabled = false; });
       if (routeNow() === route) A.render();
@@ -171,7 +175,8 @@
     const route = routeNow();
     if (action === 'order-ops-refresh') {
       preserveDraft();
-      await load(route, true);
+      await A.withActionFeedback(node, () => load(route, true),
+        { pending: '正在刷新记录…', success: '记录已刷新', failure: '记录读取失败，请重试' });
     } else if (action === 'order-code-tab') {
       codeTab = node.dataset.id;
       A.state.page = 1;
@@ -210,6 +215,7 @@
       await perform(syncRoute, async (view) => {
         view.preview = await D.orderSync({ mode: 'preview', jobKeys: [jobKey] });
         A.state.page = 1;
+        A.notify(view.preview.rows?.length ? '指定任务已核对，结果已列出' : '核对完成，暂无可同步记录', { kind: 'success' });
       });
       return true;
     }

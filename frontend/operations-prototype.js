@@ -390,8 +390,10 @@
         });
         persistedAudit.splice(0, persistedAudit.length, ...records);
         auditState = 'ready';
+        return true;
       } catch {
         auditState = 'error';
+        return false;
       } finally {
         auditLoading = undefined;
         if (state.route === 'settings/audit' ||
@@ -1785,6 +1787,7 @@
       const view = getDraft('saved-totp-view');
       if (panel.isConnected && view.editor && !panel.querySelector('#ops-saved-totp-form'))
         editSavedTotp(panel, { dataset: { id: view.id || '', name: view.name || '' } });
+      return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (panel.isConnected) {
@@ -1792,6 +1795,7 @@
         else notify(error.message + '，已保留账号列表。');
         list.insertAdjacentHTML('beforeend', button('重试', 'ops-saved-totp-reload'));
       }
+      return false;
     }
   }
   function editSavedTotp(panel, node) {
@@ -2507,6 +2511,7 @@
         else if (['batch', 'settings'].includes(view.editor))
           editMailboxBatchOrSettings(panel, view.editor);
       }
+      return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (read.current()) {
@@ -2521,6 +2526,7 @@
         status.textContent = error.message;
         status.insertAdjacentHTML('beforeend', button('重试', 'ops-mailbox-pool-reload'));
       }
+      return false;
     } finally {
       read.finish();
     }
@@ -3345,7 +3351,9 @@
         }
       }
       if (action === 'ops-mailbox-pool-copy') void copyText(node.dataset.code, '查询码已复制');
-      if (action === 'ops-mailbox-pool-reload') void loadManagedPool(panel, { refresh: true });
+      if (action === 'ops-mailbox-pool-reload') void api.withActionFeedback(node,
+        () => loadManagedPool(panel, { refresh: true }),
+        { pending: '正在刷新邮箱池…', success: '邮箱池已刷新', failure: '邮箱池读取失败，已保留当前资料' });
       if (action === 'ops-mailbox-pool-status') {
         const active = node.dataset.active !== 'true';
         const version = Number(panel.dataset.version);
@@ -3364,7 +3372,9 @@
         panel.querySelector('[data-saved-totp-editor]').replaceChildren();
         state.drafts.delete(draftKey('saved-totp-view'));
       }
-      if (action === 'ops-saved-totp-reload') void loadSavedTotp(panel, { refresh: true });
+      if (action === 'ops-saved-totp-reload') void api.withActionFeedback(node,
+        () => loadSavedTotp(panel, { refresh: true }),
+        { pending: '正在刷新账号列表…', success: '账号列表已刷新', failure: '账号读取失败，请重试' });
       if (action === 'ops-saved-totp-use') void showSavedTotpCode(node.closest('[data-saved-totp-code]'));
       if (action === 'ops-saved-totp-page') {
         const snapshot = savedTotpSnapshots.get(panel);
@@ -3450,8 +3460,8 @@
       else if (!navigator.clipboard) notify('请选中验证码手动复制');
       else
         navigator.clipboard.writeText(node.dataset.code).then(
-          () => notify('验证码已复制'),
-          () => notify('请选中验证码手动复制')
+          () => notify('验证码已复制', { kind: 'success' }),
+          () => notify('复制失败，请选中验证码手动复制', { kind: 'error' })
         );
       return true;
     }
@@ -3552,6 +3562,7 @@
           state.drafts.delete(draftKey(config.key));
           openCustomerOptionSettings(config.kind);
           refreshSettingsPage();
+          notify('客户选项已重新读取', { kind: 'success' });
         });
       });
     } else if (action === 'ops-settings-reload') {
@@ -3566,7 +3577,8 @@
         const read = region && api.beginRegionRead(region, region.querySelector('[data-cost-read-status]'), {
           refreshButton: node
         });
-        void loadSettings(true).then((loaded) => {
+        void api.withActionFeedback(node, () => loadSettings(true),
+          { pending: '正在读取费用规则…', success: '费用规则已重新读取' }).then((loaded) => {
           read?.finish();
           const activeForm = $('#main #ops-cost-form');
           if (activeForm) preserveDraft();
@@ -3580,7 +3592,8 @@
         confirmAction('确认重新读取费用规则', '成功读取后清除当前未提交的费用草稿。', reload);
       } else reload();
     } else if (action === 'ops-audit-refresh') {
-      void loadAudit(true);
+      void api.withActionFeedback(node, () => loadAudit(true),
+        { pending: '正在刷新操作记录…', success: '操作记录已刷新', failure: '操作记录读取失败，请重试' });
       render();
     } else if (action === 'ops-mail-type-add') editMailboxType();
     else if (action === 'ops-mail-type-edit') editMailboxType(id);
@@ -3596,6 +3609,7 @@
           state.drafts.delete(key);
           editMailboxType(id);
           refreshSettingsPage();
+          notify('邮箱分类已重新读取', { kind: 'success' });
         });
       });
     }
@@ -3641,7 +3655,8 @@
       );
     } else if (action === 'ops-phrases') showPhrases();
     else if (action === 'ops-phrases-retry' && toolbox) {
-      void toolbox.load({ refresh: true }).catch(() => {});
+      void api.withActionFeedback(node, async () => { await toolbox.load({ refresh: true }); return true; },
+        { pending: '正在读取话术…', success: '话术已重新读取', failure: '话术读取失败，请重试' });
       showPhrases();
     } else if (action === 'ops-phrase-review') void reviewPhrase($('#ops-phrase-form'));
     else if (action === 'ops-phrase-add') editPhrase();

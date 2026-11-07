@@ -194,6 +194,8 @@
     if (saving) return;
     const epoch = lifetime;
     saving = true;
+    const feedback = A.beginActionFeedback?.(null,
+      command.action === 'collect' ? '正在采集汇率…' : '正在保存采集设置…');
     for (const button of document.querySelectorAll('#main button[data-action="fx-collect"], #fx-settings-form [type="submit"]')) button.disabled = true;
     try {
       const result = await D.financeCollectionAction(command);
@@ -206,6 +208,7 @@
       if (target) { target.textContent = failure.message; target.hidden = false; }
       else { error = failure.message; A.render(); }
     } finally {
+      feedback?.finish();
       if (epoch === lifetime) {
         saving = false;
         for (const button of document.querySelectorAll('#fx-settings-form [type="submit"]')) button.disabled = false;
@@ -243,7 +246,11 @@
       Object.assign(view(), { query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1 });
       A.state.page = 1; error = ''; lastKey = ''; A.render();
     }
-    else if (action === 'fx-refresh') { preserveDraft(); await load(true); }
+    else if (action === 'fx-refresh') {
+      preserveDraft();
+      await A.withActionFeedback(node, () => load(true),
+        { pending: '正在刷新汇率资料…', success: '汇率资料已刷新', failure: '汇率读取失败，已保留当前内容' });
+    }
     else if (action === 'fx-rebase') {
       const form = $('#fx-settings-form'), epoch = lifetime;
       try {

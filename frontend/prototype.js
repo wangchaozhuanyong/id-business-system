@@ -384,16 +384,102 @@ localToolbox?.setDefaultShortcuts(personalTools);
 const columnDefinitions = {};
 const tableRecords = new Map();
 let pendingConfirm = null;
-let toastTimer;
-
-function notify(message) {
-  const toast = $('#toast');
-  toast.textContent = message;
-  toast.hidden = false;
+const actionToast = $('#toast');
+let toastTimer, toastRevision = 0, toastExpiresAt = 0, toastRemaining = 0;
+function dismissFeedback() {
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toast.hidden = true;
-  }, 3800);
+  if (actionToast.matches(':popover-open')) actionToast.hidePopover();
+  actionToast.hidden = true;
+}
+function positionFeedback() {
+  if (actionToast.hidden) return;
+  // A body-level notice is both covered and inert while a modal dialog is open.
+  // Keep the live region inside the active modal, and paint it in the top layer.
+  const host = $$('dialog[open]').at(-1) || document.body;
+  if (actionToast.parentElement !== host) host.append(actionToast);
+  if (actionToast.showPopover && !actionToast.matches(':popover-open')) {
+    try { actionToast.showPopover(); } catch { /* A notice must not fail a completed operation. */ }
+  }
+}
+function resumeFeedbackTimer() {
+  clearTimeout(toastTimer);
+  if (actionToast.hidden || !toastRemaining) return;
+  toastExpiresAt = Date.now() + toastRemaining;
+  toastTimer = setTimeout(dismissFeedback, toastRemaining);
+}
+function notify(message, { kind = 'info', duration } = {}) {
+  const text = String(message ?? '').trim();
+  if (!text) return toastRevision;
+  toastRevision++;
+  kind = ['success', 'error', 'warning', 'info', 'loading'].includes(kind) ? kind : 'info';
+  clearTimeout(toastTimer);
+  if (actionToast.matches(':popover-open')) actionToast.hidePopover();
+  actionToast.dataset.kind = kind;
+  actionToast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  actionToast.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  actionToast.innerHTML = icon(kind === 'success' ? 'check' : kind === 'loading' ? 'clock' : 'info') +
+    `<span data-feedback-message>${escapeHtml(text)}</span><button type="button" class="toast-dismiss" aria-label="关闭提示">${icon('close')}</button>`;
+  actionToast.querySelector('button').addEventListener('click', dismissFeedback);
+  actionToast.hidden = false;
+  positionFeedback();
+  toastRemaining = duration ?? (kind === 'loading' ? 0 : kind === 'error' || kind === 'warning' ? 8000 : 3800);
+  resumeFeedbackTimer();
+  return toastRevision;
+}
+actionToast.addEventListener('pointerenter', () => {
+  clearTimeout(toastTimer);
+  if (toastRemaining) toastRemaining = Math.max(1, toastExpiresAt - Date.now());
+});
+actionToast.addEventListener('pointerleave', resumeFeedbackTimer);
+actionToast.addEventListener('focusin', () => clearTimeout(toastTimer));
+actionToast.addEventListener('focusout', resumeFeedbackTimer);
+for (const dialog of $$('dialog')) {
+  new MutationObserver(positionFeedback).observe(dialog, { childList: true, attributes: true, attributeFilter: ['open'] });
+}
+const pendingActionFeedback = new WeakMap();
+function beginActionFeedback(node, pending = '正在处理…') {
+  const route = state.route, actorId = state.actor.id, context = state.drawerContext;
+  const before = toastRevision;
+  const current = () => state.route === route && state.actor.id === actorId && state.drawerContext === context;
+  const disabled = node?.disabled, busy = node?.getAttribute('aria-busy');
+  if (node) { node.disabled = true; node.setAttribute('aria-busy', 'true'); }
+  let notice;
+  const quiet = () => toastRevision === before || toastRevision === notice;
+  const timer = setTimeout(() => { if (current() && quiet()) notice = notify(pending, { kind: 'loading' }); }, 350);
+  const finish = () => {
+    clearTimeout(timer);
+    if (notice !== undefined && notice === toastRevision) dismissFeedback();
+    if (node) {
+      node.disabled = disabled;
+      if (busy === null) node.removeAttribute('aria-busy'); else node.setAttribute('aria-busy', busy);
+    }
+  };
+  return { current, quiet, finish };
+}
+async function withActionFeedback(node, operation, { pending, success, failure } = {}) {
+  if (node && pendingActionFeedback.has(node)) return pendingActionFeedback.get(node);
+  const feedback = beginActionFeedback(node, pending);
+  const task = Promise.resolve().then(operation).then(result => {
+    if (feedback.current() && feedback.quiet() && result !== undefined) {
+      if (result === false && failure) notify(failure, { kind: 'error' });
+      else if (result !== false && success) notify(success, { kind: 'success' });
+    }
+    return result;
+  }, error => {
+    if (!failure) throw error;
+    if (feedback.current() && feedback.quiet() && error?.name !== 'AbortError') notify(error?.message || failure, { kind: 'error' });
+    return false;
+  }).finally(() => {
+    feedback.finish();
+    if (node) pendingActionFeedback.delete(node);
+  });
+  if (node) pendingActionFeedback.set(node, task);
+  return task;
+}
+function completeAction(callback, message = '操作已保存') {
+  const before = toastRevision;
+  callback();
+  if (before === toastRevision) notify(message, { kind: 'success' });
 }
 function getSelection(scope) {
   if (!state.selections.has(scope)) state.selections.set(scope, new Set());
@@ -698,20 +784,25 @@ function dismissDrawer() {
   else if ($('#drawer').dataset.layout === 'toolbox-phrase-detail') showTools('话术文案');
   else closeDrawer();
 }
-async function copyText(value, success = '演示内容已复制') {
+async function copyText(value, success = '内容已复制') {
+  const text = String(value ?? '');
+  if (!text) { notify('暂无可复制内容', { kind: 'warning' }); return false; }
   try {
-    await navigator.clipboard.writeText(value);
-    notify(success);
+    await withActionFeedback(null, () => navigator.clipboard.writeText(text), { pending: '正在复制…' });
+    notify(success, { kind: 'success' });
+    return true;
   } catch {
     openDrawer(
       '复制内容',
       '当前浏览器无法直接写入剪贴板，可选中下方内容复制。',
-      `<textarea class="copy-block" aria-label="待复制内容" readonly>${escapeHtml(value)}</textarea>`,
+      `<textarea class="copy-block" aria-label="待复制内容" readonly>${escapeHtml(text)}</textarea>`,
       button('关闭', 'drawer-close')
     );
     const area = $('textarea', $('#drawer'));
     area.focus();
     area.select();
+    notify('复制失败，请选中下方内容手动复制', { kind: 'error' });
+    return false;
   }
 }
 function titleInfo(title, description, id, trustedHtml = false) {
@@ -2639,8 +2730,8 @@ document.addEventListener('click', async (event) => {
   }
   if (action === 'personal-tool-retry') {
     const panel = $('#personal-tool-load');
-    void localToolbox
-      .load({ refresh: true })
+    void withActionFeedback(node, async () => { await localToolbox.load({ refresh: true }); return true; },
+        { pending: '正在读取个人工具…', success: '个人工具已重新读取', failure: '个人工具读取失败，请重试' })
       .finally(() => {
         if (panel?.isConnected && $('#drawer').open) showTools('个人工具');
       })
@@ -3073,6 +3164,9 @@ window.IDDesignAPI = {
   collections: { mailboxes, accounts, subscriptions },
   getSelection,
   notify,
+  beginActionFeedback,
+  withActionFeedback,
+  completeAction,
   setError,
   readForm,
   optionListEditor,
