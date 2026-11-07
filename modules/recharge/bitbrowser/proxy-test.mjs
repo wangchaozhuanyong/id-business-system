@@ -38,7 +38,14 @@ export async function testBitBrowserProxy({ link, protocol = 'auto', mode = 'aut
   for (const type of candidates) {
     signal.throwIfAborted();
     try {
-      const response = await api.post('/checkagent', { host: parsed.host.replace(/^\[|\]$/g, ''), port: String(parsed.port), proxyType: type, proxyUserName: parsed.username, proxyPassword: parsed.password, checkExists: 0 }, 12000);
+      const body = { host: parsed.host.replace(/^\[|\]$/g, ''), port: String(parsed.port), proxyType: type, proxyUserName: parsed.username, proxyPassword: parsed.password, checkExists: 0 };
+      let response;
+      try { response = await api.post('/checkagent', body, 12000); }
+      catch (error) {
+        // Only this read-only native check may retry a dropped connection once.
+        if (signal.aborted || error.reason !== 'bitbrowser_direct_unreachable') throw error;
+        response = await api.post('/checkagent', body, 12000);
+      }
       const result = readProbeResult(response);
       const normalized = new URL(parsed.link.replace(/^[a-z][a-z0-9+.-]*:/i, type + ':'));
       return { ...result, protocol: type, mode: source.mode, link: source.mode === 'dynamic' ? source.link : normalized.href, latencyMs: Math.max(1, Date.now() - started) };
