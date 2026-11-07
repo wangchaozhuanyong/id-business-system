@@ -64,7 +64,7 @@ export function validateBitBrowserConnectionWrite(body) {
     invalid('本机接口密钥格式无效');
   const editing = Object.hasOwn(profile, 'id');
   if (
-    Object.keys(profile).length !== profileKeys.length + Number(editing) ||
+    Object.keys(profile).length !== profileKeys.length + Number(editing) + Number(Object.hasOwn(profile, 'accountName')) ||
     !profileKeys.every((key) => Object.hasOwn(profile, key))
   )
     invalid('连接配置只接受列出的非敏感字段');
@@ -133,6 +133,7 @@ export function validateBitBrowserConnectionWrite(body) {
     profile: {
       ...(editing ? { id: profile.id } : {}),
       name,
+      ...(Object.hasOwn(profile, 'accountName') && { accountName: label(profile.accountName, '比特账号名称') }),
       url,
       groupName,
       tagName,
@@ -194,7 +195,7 @@ export function writeBitBrowserConnection(
     sealedStaticProxyCredentials = previous.sealedStaticProxyCredentials;
   }
   const saved = {
-    ...profile, id: savedId, ...(token && { interfaceToken: token }),
+    ...profile, ...(profile.accountName === undefined && previous?.accountName && { accountName: previous.accountName }), id: savedId, ...(token && { interfaceToken: token }),
     ...(sealedStaticProxyCredentials && { sealedStaticProxyCredentials })
   };
   const updated = index === -1 ? [...profiles, saved] : profiles.with(index, saved);

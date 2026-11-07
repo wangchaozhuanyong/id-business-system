@@ -278,3 +278,15 @@ test('uses the preview server existing administrator gate and same-origin write 
   assert.equal((await ipUse.json()).countryCode, 'MY');
 
 });
+
+test('account label is optional for old clients, independent of computer remarks and preserved on older writes', () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const first = store.saveBitBrowserConnection(command(0, { accountName: 'fixture-bit-account' }), alice);
+    assert.equal(first.profiles[0].accountName, 'fixture-bit-account');
+    const second = store.saveBitBrowserConnection(command(1, { id: first.savedId, name: '新电脑备注' }), alice);
+    assert.equal(second.profiles[0].accountName, 'fixture-bit-account');
+    assert.equal(second.profiles[0].name, '新电脑备注');
+    assert.throws(() => store.saveBitBrowserConnection(command(2, { id: first.savedId, accountName: 123 }), alice), { status: 400 });
+  } finally { store.close(); }
+});

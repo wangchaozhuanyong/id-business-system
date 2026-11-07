@@ -969,15 +969,16 @@ export function createLocalBusinessStore(databasePath) {
       });
     },
     saveBitBrowserProxy(body, actor) {
-      const { version, proxy } = validateBitBrowserProxyWrite(body);
       const domain = `${bitBrowserProxyDomain}:${actor.id}`;
       return writeTransaction(() => {
         const current = readDocument(domain);
-        if (version !== current.version) throw new BitBrowserConnectionError(409, 'IP 列表已更新，请刷新后重试，输入已保留');
-        if ((current.data?.length ?? 0) >= 500) throw new BitBrowserConnectionError(400, '个人 IP 列表最多保存 500 条');
-        const items = [...(current.data ?? []), proxy];
+        const previous = current.data?.find(item => item.id === body?.id);
+        const { version, proxy } = validateBitBrowserProxyWrite(body, previous);
+        if (version !== current.version) throw new BitBrowserConnectionError(409, 'IP 列表已更新，请核对最新资料，输入已保留');
+        if (!previous && (current.data?.length ?? 0) >= 500) throw new BitBrowserConnectionError(400, '个人 IP 列表最多保存 500 条');
+        const items = previous ? current.data.map(item => item.id === proxy.id ? proxy : item) : [...(current.data ?? []), proxy];
         put.run(domain, version + 1, encrypt(key, domain, version + 1, JSON.stringify(items)));
-        log.run(new Date().toISOString(), bitBrowserProxyDomain, 'bitbrowser_proxy_create',
+        log.run(new Date().toISOString(), bitBrowserProxyDomain, previous ? 'bitbrowser_proxy_update' : 'bitbrowser_proxy_create',
           auditSummary('保存比特执行 IP', actor, proxy.id), version + 1);
         return { version: version + 1, items: summarizeBitBrowserProxies(items), savedId: proxy.id };
       });
