@@ -5,6 +5,9 @@ const kinds = { mobile: '移动 IP', dynamic_residential: '动态住宅', static
 const fields = ['name', 'country', 'kind', 'mode', 'protocol'];
 export function initializeExecutionProxies({ get, drafts, onChange, locked, onUse, connection }) {
   const select = get('bit-execution-proxy'), editor = get('bit-proxy-editor');
+  const sourceGet = get, editorHome = editor.parentNode;
+  // Keep the original controls and listeners when the same-origin host owns the modal.
+  get = id => editor.querySelector(`#${id}`) || sourceGet(id);
   const message = get('bit-proxy-result'), saveMessage = get('bit-ip-save-result');
   const search = get('bit-ip-search'), filter = get('bit-ip-filter'), sort = get('bit-ip-sort');
   const countryInput = get('bit-ip-country');
@@ -94,19 +97,19 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   for (const control of [search, filter, sort]) control.addEventListener(control === search ? 'input' : 'change', () => { page = 1; renderList(); capture(); });
   for (const [id, delta] of [['bit-ip-prev', -1], ['bit-ip-next', 1]]) get(id).addEventListener('click', () => { page += delta; renderList(); capture(); });
   get('bit-refresh-proxies').addEventListener('click', refresh);
-  function fitEditorToHost() {
+  function mountEditor() {
     try {
-      if (window.parent === window || !window.frameElement) return;
-      const frame = window.frameElement.getBoundingClientRect();
-      const headerBottom = Math.max(0, window.parent.document.querySelector('.topbar')?.getBoundingClientRect().bottom || 0);
-      const visibleTop = Math.max(frame.top, headerBottom);
-      editor.style.top = `${Math.max(0, visibleTop - frame.top)}px`;
-      editor.style.height = `${Math.max(160, Math.min(frame.bottom, window.parent.innerHeight) - visibleTop)}px`;
-      editor.style.bottom = 'auto';
-    } catch { /* Standalone or cross-origin embedding keeps the CSS viewport layout. */ }
+      if (window.parent !== window &&
+          window.frameElement?.matches('.recharge-integration__frame--bit-local'))
+        window.parent.document.body.append(editor);
+    } catch { /* Standalone or cross-origin embedding retains its own modal. */ }
   }
-  window.addEventListener('resize', () => { if (editor.open) fitEditorToHost(); });
-  try { window.parent.addEventListener('scroll', () => { if (editor.open) fitEditorToHost(); }, { passive: true }); } catch { /* Same-origin host only. */ }
+  function restoreEditor() {
+    if (editor.parentNode === editorHome) return;
+    if (editorHome.isConnected) editorHome.append(editor);
+    else editor.remove();
+  }
+  function finishEditor() { editor.close(); restoreEditor(); }
   function openEditor(item) {
     if (locked() || saving || probing) return;
     editingId = item?.id || ''; editVersion = data?.version ?? 0; opener = document.activeElement;
@@ -120,15 +123,17 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     get('bit-ip-link').value = ''; get('bit-ip-link').placeholder = item ? '留空保留已保存的链接；输入新链接可替换' : '直接粘贴购买平台生成的代理信息';
     get('bit-ip-link-required').hidden = Boolean(item);
     get('bit-ip-edit-note').textContent = item ? `已保存地址：${item.endpoint}。修改仅影响后续使用；进行中的任务不受影响。` : '保存后会自动选中这个 IP，可在 IP 资料库再次查看和编辑。';
-    saveMessage.textContent = ''; get('bit-ip-rebase').hidden = true; fitEditorToHost(); editor.showModal(); onChange(); get('bit-ip-name').focus();
+    saveMessage.textContent = ''; get('bit-ip-rebase').hidden = true;
+    mountEditor(); editor.showModal(); editor.querySelector('.bit-local__drawer-body').scrollTop = 0;
+    onChange(); get('bit-ip-name').focus({ preventScroll: true });
   }
   for (const id of ['bit-add-proxy', 'bit-library-add']) get(id).addEventListener('click', () => openEditor());
   editor.addEventListener('input', event => {
     capture();
     if (['bit-ip-link', 'bit-ip-protocol', 'bit-ip-mode'].includes(event.target.id)) { editorProbe = undefined; get('bit-ip-probe-result').textContent = '代理资料已修改，请重新测试。'; }
   }); editor.addEventListener('change', capture);
-  editor.addEventListener('close', () => { editorProbe = undefined; onChange(); if (opener?.isConnected) opener.focus(); });
-  function close() { if (!saving && !probing) { capture(); get('bit-ip-link').value = ''; editor.close(); } }
+  editor.addEventListener('close', () => { restoreEditor(); editorProbe = undefined; onChange(); if (opener?.isConnected) opener.focus({ preventScroll: true }); });
+  function close() { if (!saving && !probing) { capture(); get('bit-ip-link').value = ''; finishEditor(); } }
   for (const id of ['bit-ip-close', 'bit-ip-dismiss']) get(id).addEventListener('click', close);
   editor.addEventListener('cancel', event => { event.preventDefault(); close(); });
   get('bit-ip-rebase').addEventListener('click', async () => {
@@ -217,7 +222,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       const latest = readDraft();
       for (const key of Object.keys(snapshot)) if (key.startsWith(prefix) && latest[key] === snapshot[key]) delete latest[key];
       latest['bit-execution-proxy'] = result.savedId; drafts?.write('bit-local', latest);
-      get('bit-ip-link').value = ''; editor.close(); setMessage('IP 已保存并选中。'); onUse?.();
+      get('bit-ip-link').value = ''; finishEditor(); setMessage('IP 已保存并选中。'); onUse?.();
     } catch (error) { if (alive) { saveMessage.textContent = error.message; get('bit-ip-rebase').hidden = error.status !== 409; } }
     finally {
       body.link = ''; saving = false;
@@ -225,11 +230,11 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       get('bit-refresh-proxies').disabled = false; renderList(); onChange();
     }
   });
-  window.addEventListener('pagehide', () => { alive = false; probeController?.abort(); for (const controller of pending) controller.abort(); get('bit-ip-link').value = ''; });
+  window.addEventListener('pagehide', () => { alive = false; probeController?.abort(); for (const controller of pending) controller.abort(); get('bit-ip-link').value = ''; if (editor.open) finishEditor(); restoreEditor(); });
   window.addEventListener('message', event => {
-    if (event.origin === location.origin && event.source === window.parent && event.data?.source === 'id-recharge-shell' && event.data.type === 'visibility' && !event.data.visible) { probeController?.abort(); editorProbe = undefined; get('bit-ip-link').value = ''; if (!saving && editor.open) editor.close(); }
+    if (event.origin === location.origin && event.source === window.parent && event.data?.source === 'id-recharge-shell' && event.data.type === 'visibility' && !event.data.visible) { probeController?.abort(); editorProbe = undefined; get('bit-ip-link').value = ''; if (!saving && editor.open) finishEditor(); }
   });
-  return { ready, refresh, async settings(signal) {
+  return { ready, refresh, editing: () => editor.open, async settings(signal) {
     if (!ready()) throw new Error('请先选择有效的执行 IP');
     const id = select.value, version = data.version;
     const proxy = await request('POST', { id, version }, signal);
