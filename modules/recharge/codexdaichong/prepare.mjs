@@ -1,9 +1,8 @@
-import { execFile, spawn } from 'node:child_process';
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { pipeline } from 'node:stream/promises';
 
 const exec = promisify(execFile);
 const projectRoot = fileURLToPath(new URL('../../../', import.meta.url));
@@ -228,30 +227,17 @@ function isDescendant(base, target) {
   return path !== '' && path !== '..' && !path.startsWith('../') && !isAbsolute(path);
 }
 
-function waitForExit(child, message) {
-  return new Promise((done, reject) => {
-    child.once('error', reject);
-    child.once('close', (code) => {
-      if (code === 0) done();
-      else reject(new Error(message));
-    });
-  });
-}
-
 async function extractPinnedSource(directory) {
-  const archive = spawn(
-    'git',
-    ['-C', sourceRoot, 'archive', '--format=tar', CODEXDAICHONG_REVISION],
-    { stdio: ['ignore', 'pipe', 'inherit'] }
-  );
-  const extract = spawn('tar', ['-xf', '-', '-C', directory], {
-    stdio: ['pipe', 'ignore', 'inherit']
-  });
-  await Promise.all([
-    waitForExit(archive, '无法读取锁定的上游源码'),
-    waitForExit(extract, '无法解包上游源码'),
-    pipeline(archive.stdout, extract.stdin)
-  ]);
+  // tar may exit after its end marker before git's trailing padding drains into
+  // stdin. A completed archive file makes extraction independent of pipe timing.
+  const temporary = await mkdtemp(resolve(runtimeRoot, 'pinned-source-'));
+  const archive = resolve(temporary, 'source.tar');
+  try {
+    await exec('git', ['-C', sourceRoot, 'archive', '--format=tar', '--output', archive, CODEXDAICHONG_REVISION]);
+    await exec('tar', ['-xf', archive, '-C', directory]);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 }
 
 export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'codexdaichong')) {
