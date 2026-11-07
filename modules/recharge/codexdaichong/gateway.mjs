@@ -4,6 +4,7 @@ import { Transform } from 'node:stream';
 import { signRechargeAssertion } from '../assertion.mjs';
 import { loadCodexdaichongAssets } from './assets.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
+import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 
 export const CODEXDAICHONG_PREFIX = '/integrations/codexdaichong';
 const allowedMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -195,6 +196,31 @@ export function createCodexdaichongGateway({
       return;
     }
     const extraHeaders = external ? filterHeaders(req.headers, ['x-api-key']) : {};
+    let proxyImportBody;
+    if (req.method === 'POST' && path.pathname === '/api/admin/proxies') {
+      if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || ''))
+        return respond(res, 415, '请使用 JSON 提交代理资料');
+      const chunks = [];
+      let length = 0;
+      try {
+        for await (const chunk of req) {
+          length += chunk.length;
+          if (length <= 512 * 1024) chunks.push(chunk);
+        }
+        if (length > 512 * 1024) return respond(res, 413, '单次代理资料过大，请分批导入');
+        let data;
+        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { return respond(res, 400, '代理资料格式不正确'); }
+        if (!data || typeof data !== 'object' || Array.isArray(data))
+          return respond(res, 400, '代理资料格式不正确');
+        let batch;
+        try { batch = normalizeRechargeProxyInput(data.proxies ?? data.proxy_url ?? data.proxy ?? ''); }
+        catch (error) { return respond(res, 400, error.message); }
+        proxyImportBody = Buffer.from(JSON.stringify({ proxies: batch.proxies }));
+        extraHeaders['content-type'] = 'application/json';
+        extraHeaders['content-length'] = String(proxyImportBody.length);
+      } catch { return respond(res, 400, '代理资料读取失败，请重试'); }
+    }
     const upstreamRequest = httpRequest(
       target(req, req.method, path.raw, actor, extraHeaders),
       (reply) => {
@@ -237,7 +263,8 @@ export function createCodexdaichongGateway({
     res.once('close', () => {
       if (!res.writableFinished) upstreamRequest.destroy();
     });
-    req.pipe(upstreamRequest);
+    if (proxyImportBody) upstreamRequest.end(proxyImportBody);
+    else req.pipe(upstreamRequest);
   }
 
   async function upgrade(req, socket, head) {
