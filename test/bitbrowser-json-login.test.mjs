@@ -432,6 +432,11 @@ async function withWindowRecords(use) {
     if (controls.failRead && options.method === 'POST') return Response.json({}, { status: 503 });
     if (options.method === 'POST') return Response.json({ record: readWindowRecord(rows, body) });
     if (controls.failWrite) return Response.json({}, { status: 503 });
+    if (controls.conflictWrite) {
+      controls.conflictWrite = false;
+      rows = writeWindowRecord(rows, body).rows;
+      return Response.json({}, { status: 409 });
+    }
     const result = writeWindowRecord(rows, body);
     rows = result.rows;
     writes.push(body);
@@ -496,5 +501,14 @@ test('changing waiting options preserves the original window and changing IP sav
     const updated = requests.length;
     await login(undefined, { persistWindow: true, useSelectedProxy: true, dynamicProxyUrl: 'https://two.example.test/get', runner: await freshRunner() });
     assert.equal(requests.slice(updated).some(row => ['/browser/update', '/browser/close'].includes(row.path)), false);
+  });
+});
+
+test('a record conflict clears the stale pending write so a direct retry reads the current association', async () => {
+  await withWindowRecords(async ({ login, requests, controls }) => {
+    controls.conflictWrite = true;
+    await assert.rejects(login(undefined, { persistWindow: true }), error => error.reason === 'bitbrowser_window_record_conflict');
+    assert.equal((await login(undefined, { persistWindow: true })).profileId, profileId);
+    assert.equal(requests.filter(row => row.path === '/browser/update').length, 1);
   });
 });

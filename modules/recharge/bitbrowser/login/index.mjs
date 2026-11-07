@@ -105,8 +105,11 @@ export async function runBitBrowserJsonLogin({
     } catch {
       throw new DirectBrowserError(signal.aborted ? 'bitbrowser_direct_cancelled' : 'bitbrowser_window_record_unavailable');
     }
-    if (!response.ok) throw new DirectBrowserError(response.status === 409
-      ? 'bitbrowser_window_record_conflict' : 'bitbrowser_window_record_unavailable');
+    if (!response.ok) {
+      if (response.status === 409) ownedProfiles.delete(key);
+      throw new DirectBrowserError(response.status === 409
+        ? 'bitbrowser_window_record_conflict' : 'bitbrowser_window_record_unavailable');
+    }
     const record = data?.record;
     if (record === null && method === 'POST') return undefined;
     if (!record || record.connectionKey !== connectionKey || record.accountKey !== accountKey ||
