@@ -244,7 +244,7 @@ test('legacy Vendure receipts authenticate old and new task tokens and never rea
   const verify = await (await send('verify', { code: legacyCode })).json();
   assert.deepEqual(verify, { plan: 'pro_5x', status: 'used' });
   const query = await (await send('query', { code: legacyCode })).json();
-  const expected = { id: legacyId, plan: 'pro_5x', status: 'succeeded', updatedAt: new Date(updatedAt).toISOString() };
+  const expected = { id: legacyId, plan: 'pro_5x', status: 'succeeded', stage: 'succeeded', message: '开通成功', updatedAt: new Date(updatedAt).toISOString() };
   assert.deepEqual(query.task, { ...expected, taskToken: fingerprint('task', legacyId) });
   assert.deepEqual(await (await send('submit', { code: legacyCode, session: authorization() })).json(), query.task);
   assert.equal((await send('task', { id: legacyId, taskToken: 'wrong' })).status, 404);
@@ -253,7 +253,7 @@ test('legacy Vendure receipts authenticate old and new task tokens and never rea
   for (const taskToken of [oldToken, query.task.taskToken])
     assert.deepEqual(await (await send('task', { id: legacyId, taskToken })).json(), expected);
   assert.deepEqual(await (await send('task', { id: releasedId, taskToken: releasedToken })).json(),
-    { ...expected, id: releasedId, plan: 'plus', status: 'failed' });
+    { ...expected, id: releasedId, plan: 'plus', status: 'failed', stage: 'failed', message: '执行失败，请联系客服处理。' });
   assert.deepEqual(await (await send('query', { code: 'new-fixture' })).json(),
     { plan: 'plus', status: 'available', task: null });
   const path = rechargeWorkerPrefix + '/claim';
@@ -267,11 +267,10 @@ test('legacy Vendure receipts authenticate old and new task tokens and never rea
   assert.equal(stored.includes(Buffer.from(legacyCode)), false);
 });
 
-test('worker uses the dedicated upstream code and writes one receipt without resending uncertain activation', async (t) => {
-  const bridge = await fixture(t, { durable: true });
+test('worker follows the original task without a patched plan lock or extra activation fields', async (t) => {
+  const bridge = await fixture(t);
   const upstreamSecret = randomBytes(32).toString('hex');
-  let hasPlanLock = false;
-  let verifiedPlan = 'pro_5x';
+  let outcome = 'success';
   let ambiguous = false;
   const starts = [];
   const server = createServer(async (req, res) => {
@@ -282,22 +281,18 @@ test('worker uses the dedicated upstream code and writes one receipt without res
     assert.equal(claim.path, req.url);
     assert.equal(claim.method, req.method);
     const reply = (value) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value));
-    if (req.url === '/api/public/runtime') {
-      if (hasPlanLock) res.setHeader('X-ID-Vendure-Plan-Lock', '1');
-      return reply({ success: true });
-    }
-    if (req.url === '/api/task-status/synthetic-job') return reply({
-      success: true, data: { jobKey: 'synthetic-job', status: 'success', isTerminal: true, cdkCode: 'fixture-upstream-b' }
+    if (req.url === '/api/public/runtime') return reply({ success: true });
+    if (req.url === '/api/task-status/synthetic-job-' + starts.length) return reply({
+      success: true, data: { jobKey: 'synthetic-job-' + starts.length, status: outcome, isTerminal: true, cdkCode: starts.at(-1).cdk }
     });
+    assert.equal(req.url, '/api/run-process');
     const raw = [];
     for await (const chunk of req) raw.push(chunk);
     const input = JSON.parse(Buffer.concat(raw));
-    if (req.url === '/api/verify-cdk')
-      return reply({ success: true, data: { type: '自助', plan_type: verifiedPlan } });
-    assert.equal(req.url, '/api/run-process');
-    starts.push({ code: input.cdk, plan: input.expectedPlan, sessionMatched: input.session === authorization() });
+    assert.deepEqual(Object.keys(input).sort(), ['cdk', 'session']);
+    starts.push(input);
     if (ambiguous) return res.destroy();
-    return reply({ success: true, jobKey: 'synthetic-job' });
+    return reply({ success: true, jobKey: 'synthetic-job-' + starts.length });
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -307,26 +302,21 @@ test('worker uses the dedicated upstream code and writes one receipt without res
     workerSecret: bridge.workerSecret, upstreamSecret
   })();
   const first = (await bridge.vendure('submit', { code: 'fixture-b', session: authorization() })).body;
-  await assert.rejects(run(), /缺少商城套餐锁/);
-  assert.equal((await bridge.vendure('task', taskIdentity(first))).body.status, 'queued');
-  hasPlanLock = true;
   assert.deepEqual(await run(), { status: 'succeeded' });
-  assert.deepEqual(starts, [{ code: 'fixture-upstream-b', plan: 'pro_5x', sessionMatched: true }]);
+  assert.deepEqual(starts, [{ cdk: 'fixture-upstream-b', session: authorization() }]);
   assert.equal((await bridge.vendure('task', taskIdentity(first))).body.upstreamJobId, undefined);
-  assert.equal((await bridge.readFile()).includes(Buffer.from('fixture-upstream-b')), false);
-  assert.equal(bridge.inspect().state.tasks[0].result.upstreamJobId, 'synthetic-job');
 
   await bridge.vendure('submit', { code: 'fixture-c', session: authorization() });
+  outcome = 'failed';
   assert.deepEqual(await run(), { status: 'failed' });
-  assert.equal(starts.length, 1);
+  assert.equal(starts.length, 2);
 
   const second = (await bridge.vendure('submit', { code: 'fixture-a', session: authorization() })).body;
-  verifiedPlan = 'plus';
   ambiguous = true;
   assert.deepEqual(await run(), { status: 'awaiting_review' });
   assert.equal((await bridge.vendure('submit', { code: 'fixture-a', session: authorization() })).body.id, second.id);
   assert.deepEqual(await run(), { status: 'idle' });
-  assert.equal(starts.length, 2);
+  assert.equal(starts.length, 3);
 });
 
 test('isolated site routes Vendure requests and keeps executor routes off the site listener', async (t) => {
@@ -401,7 +391,9 @@ test('Vendure verify, submit, query and task preserve one receipt across concurr
   assert.equal(accepted.status, 'queued');
   assert.deepEqual(Object.keys(accepted).sort(), [
     'id',
+    'message',
     'plan',
+    'stage',
     'status',
     'taskToken',
     'updatedAt'

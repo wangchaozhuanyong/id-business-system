@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { runInNewContext } from 'node:vm';
-import { CODEXDAICHONG_REVISION, prepareCodexdaichong } from '../modules/recharge/codexdaichong/prepare.mjs';
+import { CODEXDAICHONG_REVISION, prepareCodexdaichong, verifyCodexdaichongSource } from '../modules/recharge/codexdaichong/prepare.mjs';
 
 const exec = promisify(execFile);
 const upstream = fileURLToPath(new URL('../.upstream/codexdaichong/', import.meta.url));
@@ -30,16 +30,19 @@ after(async () => {
   if (fixture) await rm(fixture, { recursive: true, force: true });
 });
 
-test('prepared checkout, session, browser and plan implementations are identical to the pinned repository', async () => {
-  for (const file of [
-    'chatgpt.js', 'pricing-checkout.js', 'checkout-api-session.js', 'checkout-api-diagnostic.js',
-    'session-auth.js', 'auth-page-detect.js', 'browser-runtime.js', 'browser-pool.js',
-    'browser-pool-client.js', 'browser-standalone.js', 'playwright-proxy.js',
-    'region-config.js', 'plan-registry.js', 'stripe-payment.js', 'subscription-check.js',
-    'package.json', 'package-lock.json'
-  ]) {
-    assert.equal(await readFile(join(prepared, file), 'utf8'), await original(file), file);
-  }
+test('every tracked upstream file including entrypoint, scheduler, store and retries is pristine', async () => {
+  const result = await verifyCodexdaichongSource(prepared);
+  assert.equal(result.revision, CODEXDAICHONG_REVISION);
+  assert.ok(result.files > 100);
+});
+
+test('a tampered core file is rejected even when the revision marker is unchanged', async () => {
+  const path = join(prepared, 'index.js');
+  const baseline = await readFile(path);
+  try {
+    await writeFile(path, Buffer.concat([baseline, Buffer.from('\n// injected patch\n')]));
+    await assert.rejects(verifyCodexdaichongSource(prepared), /原版充值文件被改写：index.js/);
+  } finally { await writeFile(path, baseline); }
 });
 
 function section(source, from, to) {
@@ -148,13 +151,13 @@ async function declinedCardAttempts(source, vendure) {
   return calls;
 }
 
-test('ordinary card rotation matches upstream while the Vendure single-attempt restriction stays scoped', async () => {
+test('all callers retain native card rotation, including an obsolete Vendure flag', async () => {
   const baseline = await declinedCardAttempts(await original('payment-retry.js'), false);
   const integratedSource = await readFile(join(prepared, 'payment-retry.js'), 'utf8');
   const ordinary = await declinedCardAttempts(integratedSource, false);
   assert.deepEqual(ordinary, baseline);
   assert.equal(ordinary.filter((call) => call === 'attempt').length, 4);
   const vendure = await declinedCardAttempts(integratedSource, true);
-  assert.equal(vendure.filter((call) => call === 'attempt').length, 1);
-  assert.deepEqual(vendure, ['reserve', 'attempt', 'record', 'exhaust']);
+  assert.deepEqual(vendure, baseline);
+  assert.equal(vendure.filter((call) => call === 'attempt').length, 4);
 });

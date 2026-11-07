@@ -1,3 +1,5 @@
+> 当前充值核心以 [2026-11-07 恢复方案](../../docs/CORE_RECHARGE_RESTORE_20261107.md) 为准：所有原版追踪文件保持一致，身份、商城及采集在独立外围接入。下文早期运行方式与本条冲突时使用恢复方案。
+
 # 独立新版充值模块
 
 [比特浏览器登录](http://127.0.0.1:4348/#/recharge/start)使用授权 JSON 打开本机比特窗口并核验账号。[线上 ChatGPT](http://127.0.0.1:4348/#/online-recharge/chatgpt)使用独立的代充服务。静态预览不启用该服务，本机业务宿主可按下述方式挂载。
@@ -74,12 +76,12 @@ node server/preview.mjs --local-data --port 4348 --codexdaichong-url "$RECHARGE_
 
 正式接入仍需确定生产任务库、备份和审计策略，接入已核验的执行器与来源限制，并完成实际断电恢复和切换验收。现有 Vendure 历史任务继续由原服务查询。
 
-`node modules/recharge/codexdaichong/runtime.mjs preflight-production [副本目录]` 对已初始化的独立正式库执行只读核对。沿用上述运行参数，库名为 `id_redesign_codexdaichong_prod`，专用账号为 `id_redesign_recharge`。预检发现未结任务、待人工核对记录、已占用却无任务的自助兑换码或资产锁时退出。通过后用 `start-production [副本目录]` 启动。该入口在实际服务进程内取得 MySQL 单实例锁，重新核对任务与占用，失去锁即停止。正式运行保留遗留占用，待操作人员按原任务核对。测试库继续使用 `start`。
+`node modules/recharge/codexdaichong/runtime.mjs preflight-production [副本目录]` 对已初始化的独立正式库执行只读核对。沿用上述运行参数，库名为 `id_redesign_codexdaichong_prod`，专用账号为 `id_redesign_recharge`。预检发现未结任务、待人工核对记录、已占用却无任务的自助兑换码或资产锁时退出。通过后仍需先核验原版私网服务及其启动守卫，再用 `start-production [副本目录]` 启动外围适配器。`start` 同样只启动外围适配器。原版服务按原行为处理资产锁，切换前核对全部未决任务，不通过改写核心保留或清理占用。外围配套和网络要求见恢复方案。
 
-专用执行器的入口为 `node modules/recharge/vendure/codexdaichong-worker.mjs <任务服务回环地址> <独立代充回环地址>`。默认只尝试领取一笔，正式服务追加 `--watch` 逐笔处理。收到停止信号后不再领取，当前任务在租约内完成并尝试回执。通过私有运行环境提供互不相同的 `ID_VENDURE_WORKER_SECRET` 和 `ID_RECHARGE_BRIDGE_SECRET`。执行前要求上游运行副本声明支持商城套餐锁。新版运行副本在占用自助兑换码的 SQL 中核对套餐，拒绝套餐变化或已有在途任务。商城码与执行码可以不同，映射应一对一。执行码及原始授权只经服务间回环传送。
+专用执行器的入口为 `node modules/recharge/vendure/codexdaichong-worker.mjs <任务服务回环地址> <独立代充回环地址>`。默认只尝试领取一笔，正式服务追加 `--watch` 逐笔处理。收到停止信号后不再领取，当前任务在租约内完成并尝试回执。通过私有运行环境提供互不相同的 `ID_VENDURE_WORKER_SECRET` 和 `ID_RECHARGE_BRIDGE_SECRET`。执行前只查询原版健康状态；不再依赖商城专用响应头或改写原版 SQL。任务只传原版支持的充值码与授权资料，套餐及执行规则由原版决定。商城码与执行码可以不同，映射应一对一。执行码及原始授权只经服务间回环传送。
 
 使用 `node server/vendure-task-service.mjs <私有配置文件绝对路径>` 启动任务服务。配置字段为 `directory`、`vendurePort`、`workerPort`、`storageKey`、`vendureKey`、`workerSecret` 和 `codes`。配置文件由服务账号持有，权限为 `0600` 或 `0400`，任务目录为本项目 `.runtime` 下的 `0700` 子目录。`storageKey` 为独立 32 字节密钥的 64 位十六进制表示。`codes` 每项为 `{ code, plan, executionCode }`，`executionCode` 缺省时使用商城码。商城和执行器分别监听不同的回环端口。任务服务默认暂停接收和领取新单，启用前按[切换文档](../../docs/PRODUCTION_CUTOVER.md)核对正式入口。目录锁会拦截第二个实例，异常退出须先核对原任务和占用状态，再处理残留锁。
 
-商城执行通道当前只接浏览器路径，供应商 API 模式仍待按实际报价与订单契约验收。浏览器路径限制一次执行和一次卡片尝试，状态未知保留原任务及兑换码占用，执行器只重传幂等结果回执。正式启动前须核对实际价格、供应商配置、单实例启动策略及历史任务回读，并完成商城、收件和真实业务验收。
+商城执行通道跟随原版配置，不再附加浏览器/供应商模式、单卡或单次执行限制。状态未知保留外围原任务核对，不重新提交充值；原版内部换卡和重试保持原样，外围只重传幂等结果回执。正式启动前须核对实际价格、供应商配置、单实例启动策略及历史任务回读，并完成商城、收件和真实业务验收。
 
 真实专用库、员工权限策略的生产验收、外部服务、设备和实际付款仍需独立验证。比特浏览器继续只接原授权 JSON 登录流程。

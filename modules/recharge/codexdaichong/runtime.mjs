@@ -1,11 +1,13 @@
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
 import { readFile, realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { isIP } from 'node:net';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { CODEXDAICHONG_REVISION, PRODUCTION_GUARD_REVISION } from './prepare.mjs';
+import { CODEXDAICHONG_REVISION, PRODUCTION_GUARD_REVISION, verifyCodexdaichongSource } from './prepare.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
+import { createNativeAdminTokenIssuer, startNativeRechargeAdapter } from './native-adapter.mjs';
+import { verifyNativeNetworkIsolation } from './native-network.mjs';
+import { resolveNativeAdminTokenSecret } from './native-secret.mjs';
 
 const runtimeRoot = fileURLToPath(new URL('../../../.runtime/', import.meta.url));
 const required = [
@@ -44,8 +46,6 @@ export function isolatedCodexdaichongEnv(env = process.env) {
     Buffer.byteLength(env.ID_RECHARGE_BRIDGE_SECRET) < 32
   )
     throw new Error('隔离启动需要专用非 root 数据库账号及至少 32 字节的桥接密钥');
-  if (env.ID_RECHARGE_CHECKOUT_DEBUG_PROXY !== undefined)
-    checked.ID_RECHARGE_CHECKOUT_DEBUG_PROXY = env.ID_RECHARGE_CHECKOUT_DEBUG_PROXY;
   return checked;
 }
 
@@ -67,6 +67,19 @@ export function productionRuntimeEnv(env) {
   if (checked.DB_HOST !== '127.0.0.1' || checked.DB_NAME !== productionDatabase ||
       checked.DB_USER !== productionAccount || Buffer.byteLength(checked.ID_RECHARGE_BRIDGE_SECRET) < 32)
     throw new Error('正式预检只接受独立新版专用回环 MySQL、专用账号和桥接密钥');
+  return checked;
+}
+
+export function nativeProductionRuntimeEnv(env) {
+  const checked = checkedRuntimeEnv(env);
+  const address = checked.DB_HOST;
+  const octets = isIP(address) === 4 ? address.split('.').map(Number) : [];
+  const privateAddress = octets[0] === 10 ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168);
+  if ((!privateAddress && address !== '127.0.0.1') || checked.DB_NAME !== productionDatabase ||
+      checked.DB_USER !== productionAccount || Buffer.byteLength(checked.ID_RECHARGE_BRIDGE_SECRET) < 32)
+    throw new Error('原版正式进程只接受明确的私网 IPv4 或回环 MySQL、专用库、专用账号和桥接密钥');
   return checked;
 }
 
@@ -103,8 +116,7 @@ async function readProductionState(db) {
     throw new Error('存在未确认的代充任务或资产锁，须先核对原任务');
 }
 
-export async function checkProductionDatabase(env, createConnection) {
-  const checked = productionRuntimeEnv(env);
+async function checkDedicatedProductionDatabase(checked, createConnection) {
   let db;
   try {
     db = await connectProduction(checked, createConnection);
@@ -123,8 +135,17 @@ export async function checkProductionDatabase(env, createConnection) {
   }
 }
 
+export async function checkProductionDatabase(env, createConnection) {
+  return checkDedicatedProductionDatabase(productionRuntimeEnv(env), createConnection);
+}
+
+export async function checkNativeProductionDatabase(env, createConnection) {
+  return checkDedicatedProductionDatabase(nativeProductionRuntimeEnv(env), createConnection);
+}
+
 async function holdProductionRuntime(directory) {
-  const checked = productionRuntimeEnv(process.env);
+  const checked = nativeProductionRuntimeEnv(process.env);
+  await verifyCodexdaichongSource(directory);
   const marker = await readFile(join(directory, '.id-business-production-guard'), 'utf8').catch(() => '');
   if (marker.trim() !== PRODUCTION_GUARD_REVISION)
     throw new Error('正式启动需要按当前版本重新准备运行副本');
@@ -189,14 +210,17 @@ export async function checkCodexdaichongRuntime(directory = join(runtimeRoot, 'c
     }
   });
   if (missing.length) throw new Error('运行副本尚缺锁定依赖：' + missing.join('、'));
-  for (const file of ['server.js', 'upstream-bridge.cjs', 'package-lock.json'])
-    await readFile(join(location, file));
+  await verifyCodexdaichongSource(location);
   return location;
 }
 
 if (process.env.ID_RECHARGE_RUNTIME_MODE === 'production' && basename(process.argv[1] || '') === 'server.js') {
   try {
     await holdProductionRuntime(dirname(process.argv[1]));
+    // Configure the original supported signer before server.js imports admin-auth.
+    // Never write a secret into the immutable source, a file or a deployment receipt.
+    const nativeSecret = resolveNativeAdminTokenSecret(process.env);
+    if (!process.env.ADMIN_TOKEN_SECRET?.trim()) process.env.ADMIN_TOKEN_SECRET = nativeSecret;
   } catch (error) {
     const message = error.code ? '正式代充无法取得独立数据库运行锁。' : error.message;
     console.error(message);
@@ -226,24 +250,37 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       if (action === 'preflight')
         console.log('通过：锁定运行副本、依赖和隔离环境参数。MySQL 连通性待启动验证。');
       else {
-        if (production) env.ID_RECHARGE_RUNTIME_MODE = 'production';
-        const preload = production ? ['--import', import.meta.url] : [];
-        const child = spawn(process.execPath, [...preload, join(directory, 'server.js')], {
-          cwd: directory,
-          env,
-          stdio: 'inherit'
+        // The pristine engine is a separate private service. Never start its
+        // wildcard listener on the public host as an implicit side effect.
+        const nativeUrl = process.env.ID_RECHARGE_NATIVE_URL;
+        await verifyNativeNetworkIsolation({ nativeUrl, container: process.env.ID_RECHARGE_NATIVE_CONTAINER,
+          proof: process.env.ID_RECHARGE_NATIVE_NETWORK_PROOF, secret: env.ID_RECHARGE_BRIDGE_SECRET });
+        const requireFromCopy = createRequire(join(directory, 'package.json'));
+        const nativeAuth = requireFromCopy('./admin-auth.js');
+        const nativeSecret = resolveNativeAdminTokenSecret(process.env);
+        const pool = requireFromCopy('mysql2/promise').createPool({
+          host: env.DB_HOST, port: Number(env.DB_PORT), database: env.DB_NAME,
+          user: env.DB_USER, password: env.DB_PASSWORD, connectionLimit: 1, connectTimeout: 3000
         });
-        const interrupt = () => child.kill('SIGINT');
-        const terminate = () => child.kill('SIGTERM');
-        process.once('SIGINT', interrupt);
-        process.once('SIGTERM', terminate);
         try {
-          const [code] = await once(child, 'exit');
-          process.exitCode = code ?? 1;
-        } finally {
-          process.removeListener('SIGINT', interrupt);
-          process.removeListener('SIGTERM', terminate);
-        }
+          const getNativeAdminToken = createNativeAdminTokenIssuer({
+            issueSignedToken: nativeAuth.issueSignedToken, secret: nativeSecret,
+            async readPasswordVersion() {
+              const [rows] = await pool.execute({ sql: 'SELECT config_value FROM app_config WHERE config_key = ?', timeout: 3000 },
+                ['admin_password_version']);
+              return rows.length === 1 ? Number(rows[0].config_value) : NaN;
+            }
+          });
+          const adapter = await startNativeRechargeAdapter({ nativeUrl, secret: env.ID_RECHARGE_BRIDGE_SECRET,
+            getNativeAdminToken }, Number(env.PORT));
+          let closing;
+          const stop = () => {
+            closing ??= adapter.close().finally(() => pool.end()).catch(() => { process.exitCode = 1; });
+            return closing;
+          };
+          process.once('SIGINT', stop);
+          process.once('SIGTERM', stop);
+        } catch (error) { await pool.end(); throw error; }
       }
     } else {
       throw new Error(

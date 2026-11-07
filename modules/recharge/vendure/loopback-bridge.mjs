@@ -3,7 +3,8 @@ import { isIP } from 'node:net';
 
 export const vendureRechargePrefix = '/api/id-business-v2/online-recharge/integrations/vendure';
 export const rechargeWorkerPrefix = '/integrations/recharge-worker';
-const plans = new Set(['plus', 'pro_5x', 'pro_20x']);
+// Match the pinned engine's canonical and readable legacy plan types.
+const plans = new Set(['plus', 'pro100', 'pro200', 'pro500', 'pro_5x', 'pro_20x']);
 const vendureFields = new Map([
   ['config', []],
   ['verify', ['code']],
@@ -11,6 +12,25 @@ const vendureFields = new Map([
   ['submit', ['code', 'session']],
   ['task', ['id', 'taskToken']]
 ]);
+const progressLabels = new Map([
+  ['queued', '等待执行'],
+  ['started', '已开始执行'],
+  ['processing', '处理中'],
+  ['payment_details', '填写支付资料'],
+  ['paying', '正在付款'],
+  ['paid', '付款成功'],
+  ['subscription_check', '确认订阅'],
+  ['succeeded', '开通成功'],
+  ['failed', '执行失败，请联系客服处理。'],
+  ['awaiting_review', '结果待核实，请勿重复充值，请联系客服处理。']
+]);
+const workerProgressStages = new Set(['started', 'processing', 'payment_details', 'paying', 'paid', 'subscription_check']);
+const workerFields = new Map([
+  ['claim', []],
+  ['progress', ['id', 'leaseToken', 'stage', 'upstreamJobId']],
+  ['result', ['id', 'leaseToken', 'outcome', 'evidenceId', 'upstreamJobId']]
+]);
+const upstreamJobPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const workerOutcomes = new Map([
   ['confirmed_success', 'succeeded'],
   ['confirmed_failure', 'failed'],
@@ -168,10 +188,15 @@ export function createLoopbackVendureRechargeBridge({
   let needsRecovery = false;
 
   function taskView(task, includeToken = false) {
+    const stage = task.status === 'running'
+      ? workerProgressStages.has(task.stage) ? task.stage : 'processing'
+      : task.status;
     return {
       id: task.id,
       plan: task.plan,
       status: task.status,
+      stage,
+      message: progressLabels.get(stage) ?? '处理中',
       updatedAt: new Date(task.updatedAt).toISOString(),
       ...(includeToken ? { taskToken: fingerprint('task', task.id) } : {})
     };
@@ -317,13 +342,29 @@ export function createLoopbackVendureRechargeBridge({
       !secureEqual(task.leaseRef, fingerprint('lease', body.leaseToken))
     )
       return finish(404, { error: '执行租约不可用' });
+    if (action === 'progress') {
+      if (task.status !== 'running') return finish(409, { error: '原任务已结束或需核对' });
+      if (!workerProgressStages.has(body.stage) || typeof body.upstreamJobId !== 'string' ||
+          !upstreamJobPattern.test(body.upstreamJobId) ||
+          (task.upstreamJobId && task.upstreamJobId !== body.upstreamJobId))
+        return finish(400, { error: '进度格式无效' });
+      const progressed = {
+        ...transition(task, 'running', at),
+        stage: body.stage,
+        upstreamJobId: body.upstreamJobId,
+        leaseUntil: at + leaseLifetimeMs
+      };
+      nextTasks.set(task.id, progressed);
+      return finish(200, { ...taskView(progressed), leaseUntil: progressed.leaseUntil });
+    }
     const status = workerOutcomes.get(body.outcome);
     const evidenceId = body.evidenceId;
     const upstreamJobId = body.upstreamJobId;
     const confirmed = status === 'succeeded' || status === 'failed';
     if (
       !status ||
-      (upstreamJobId !== undefined && (typeof upstreamJobId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(upstreamJobId))) ||
+      (task.upstreamJobId && upstreamJobId !== task.upstreamJobId) ||
+      (upstreamJobId !== undefined && (typeof upstreamJobId !== 'string' || !upstreamJobPattern.test(upstreamJobId))) ||
       (confirmed
         ? typeof evidenceId !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(evidenceId)
         : evidenceId !== undefined)
@@ -354,7 +395,7 @@ export function createLoopbackVendureRechargeBridge({
       /^\/api\/id-business-v2\/online-recharge\/integrations\/vendure\/(config|verify|query|submit|task)$/.exec(
         url
       );
-    const worker = /^\/integrations\/recharge-worker\/(claim|result)$/.exec(url);
+    const worker = /^\/integrations\/recharge-worker\/(claim|progress|result)$/.exec(url);
     if ((!vendure && !worker) || method !== 'POST') return send(res, 404, { error: '接口不存在' });
     if (req.socket.remoteAddress !== '127.0.0.1' || headers.origin || headers.cookie)
       return send(res, 403, { error: '只接受本机服务请求' });
@@ -395,6 +436,8 @@ export function createLoopbackVendureRechargeBridge({
     }
     if (vendure && Object.keys(body).some((field) => !vendureFields.get(vendure[1]).includes(field)))
       return send(res, 400, { error: '不支持的请求字段' });
+    if (worker && Object.keys(body).some((field) => !workerFields.get(worker[1]).includes(field)))
+      return send(res, 400, { error: '不支持的执行字段' });
     expire(at);
     if (worker && nonces.has(nonceRef)) return send(res, 409, { error: '执行请求已接收' });
     return vendure
