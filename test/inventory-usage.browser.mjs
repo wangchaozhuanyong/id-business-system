@@ -89,7 +89,8 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   await page.locator('#commerce-stock-options option').filter({ hasText: '已提取' }).waitFor({ state: 'attached' });
   assert.equal(await page.locator('#commerce-stock-options option').first().getAttribute('value'), stock.email);
   await page.locator('#commerce-email').fill(stock.email);
-  await page.locator('#commerce-customerId').selectOption('customer-1');
+  await page.locator('#commerce-customerId-picker').click();
+  await page.locator('#commerce-customerId-options [data-value="customer-1"]').click();
   await page.locator('#commerce-payment').selectOption({ label: '银行卡' });
   await page.locator('#commerce-cardId').fill('card-test');
   await page.locator('#commerce-paymentId').fill('000001');

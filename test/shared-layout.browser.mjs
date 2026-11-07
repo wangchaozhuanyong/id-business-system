@@ -61,16 +61,16 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             aligned(await box('label[for="commerce-paidAmount"]'), await box('label[for="commerce-expiry"]'), '第二行文字不齐');
           }
           if (width === 1440) {
-            const search = await box('[data-commerce-picker="cardId"]:visible');
+            const search = await box('#commerce-cardId-picker');
             if (product === 'gpt') {
-              aligned(await box('#commerce-payment'), search, '银行卡搜索应与支付方式同排');
+              aligned(await box('#commerce-payment'), search, '银行卡选择应与支付方式同排');
               aligned(await box('#commerce-payment'), await box('#commerce-paymentId'), '卡尾号不应单独占一行');
             } else {
-              aligned(await box('[data-commerce-picker="tenantId"]:visible'), search, '租户与银行卡搜索应同排');
+              aligned(await box('#commerce-tenantId-picker'), search, '租户与银行卡选择应同排');
             }
           }
           await page.locator('#commerce-payment').selectOption('苹果内购');
-          assert(await page.locator('#commerce-appleIdId').isVisible());
+          assert(await page.locator('#commerce-appleIdId-picker').isVisible());
           await noOverflow();
           const leftLabels = await page.locator('.field:visible').evaluateAll(nodes => nodes.every(n => {
             const label = n.querySelector(':scope > label');
