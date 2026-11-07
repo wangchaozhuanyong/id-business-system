@@ -38,7 +38,7 @@ function localAuthorization() {
   });
 }
 
-async function withLoginFixture(observedIdentity, useFixture) {
+async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
   const requests = [];
   const commands = [];
   const errors = [];
@@ -109,7 +109,7 @@ async function withLoginFixture(observedIdentity, useFixture) {
           assert.equal(body.id, profileId); officialTabOpen = false; break;
         case '/browser/pids/alive':
           assert.deepEqual(body, { ids: [profileId] });
-          data = { [profileId]: officialTabOpen ? 1234 : 0 };
+          data = controls.pidReplies?.length ? controls.pidReplies.shift() : { [profileId]: officialTabOpen ? 1234 : 0 };
           break;
         case '/browser/open':
           assert.equal(body.id, profileId);
@@ -164,12 +164,10 @@ async function withLoginFixture(observedIdentity, useFixture) {
         sessionCookieApplied = true;
         return {};
       case 'Page.navigate':
-        assert.equal(sessionCookieApplied, true);
         assert.deepEqual(params, { url: 'https://chatgpt.com/' });
         officialTabOpen = true;
         return {};
       case 'Runtime.evaluate': {
-        assert.equal(sessionCookieApplied, true);
         const expression = params.expression;
         if (expression.includes('/cdn-cgi/trace')) {
           return { result: { value: { kind: 'proxy_ready' } } };
@@ -184,7 +182,7 @@ async function withLoginFixture(observedIdentity, useFixture) {
         assert.match(invocation, /^"inspect","",/);
         assert.match(invocation, /"sessionOnly":true/);
         assert.ok(expression.includes('/api/auth/session'));
-        return { result: { value: observedIdentity } };
+        return { result: { value: sessionCookieApplied ? observedIdentity : { kind: 'unauthenticated' } } };
       }
       default:
         assert.fail('Unexpected CDP command: ' + method);
@@ -199,6 +197,11 @@ async function withLoginFixture(observedIdentity, useFixture) {
       super();
       assert.equal(endpoint, websocketUrl);
       queueMicrotask(() => {
+        if (controls.failConnections > 0) {
+          controls.failConnections--;
+          this.dispatchEvent(new Event('error'));
+          return;
+        }
         this.readyState = FakeCdpWebSocket.OPEN;
         this.dispatchEvent(new Event('open'));
       });
@@ -241,6 +244,7 @@ async function withLoginFixture(observedIdentity, useFixture) {
     await useFixture({
       requests,
       commands,
+      closeWindow: () => { officialTabOpen = false; },
       socketClosed: () => socketClosed,
       login: (onProgress = () => {}, options = {}) =>
         runBitBrowserJsonLogin({
@@ -348,4 +352,65 @@ test('selected proxies can change on the retained window before country detectio
     assert.equal(changed.body.id, profileId); assert.equal(changed.body.dynamicIpUrl, 'https://second.example.test/get');
     assert.equal(Object.hasOwn(changed.body, 'browserFingerPrint'), false);
   });
+});
+
+test('reopens a manually closed window using its original ID and preserved session', async () => {
+  await withLoginFixture(identity, async ({ requests, commands, closeWindow, login }) => {
+    await login();
+    closeWindow();
+    const before = requests.length;
+    const commandStart = commands.length;
+    assert.equal((await login()).profileId, profileId);
+    assert.deepEqual(requests.slice(before).map(row => row.path),
+      ['/browser/detail', '/browser/pids/alive', '/browser/open']);
+    assert.equal(commands.slice(commandStart).includes('Network.setCookies'), false);
+  });
+});
+
+test('a failed first control connection can retry on the created window without creating another', async () => {
+  await withLoginFixture(identity, async ({ requests, login }) => {
+    await assert.rejects(login(), error => error.reason === 'bitbrowser_direct_debug_unavailable');
+    assert.equal((await login()).profileId, profileId);
+    assert.equal(requests.filter(row => row.path === '/browser/update').length, 1);
+    assert.equal(requests.filter(row => row.path === '/browser/open').length, 2);
+  }, { failConnections: 1 });
+});
+
+test('an inaccessible running window is retained for manual handling as in the original flow', async () => {
+  const controls = {};
+  await withLoginFixture(identity, async ({ requests, login }) => {
+    await login();
+    controls.failConnections = 1;
+    const before = requests.length;
+    await assert.rejects(login(), error => error.reason === 'bitbrowser_existing_window_control_unavailable');
+    assert.deepEqual(requests.slice(before).map(row => row.path),
+      ['/browser/detail', '/browser/pids/alive', '/browser/open']);
+  }, controls);
+});
+
+test('changing IP waits for the original process to exit before updating and reopening', async () => {
+  const controls = {};
+  await withLoginFixture(identity, async ({ requests, login }) => {
+    await login(undefined, { useSelectedProxy: true, dynamicProxyUrl: 'https://first.example.test/get' });
+    controls.pidReplies = [{ [profileId]: 1234 }, { [profileId]: 0 }];
+    const before = requests.length;
+    assert.equal((await login(undefined, { useSelectedProxy: true, dynamicProxyUrl: 'https://second.example.test/get' })).profileId, profileId);
+    assert.deepEqual(requests.slice(before).map(row => row.path), [
+      '/browser/detail', '/browser/close', '/browser/pids/alive', '/browser/pids/alive',
+      '/browser/update', '/browser/detail', '/browser/pids/alive', '/browser/open'
+    ]);
+  }, controls);
+});
+
+test('changing IP refuses to update or reopen when process closure cannot be verified', async () => {
+  const controls = {};
+  await withLoginFixture(identity, async ({ requests, login }) => {
+    await login(undefined, { useSelectedProxy: true, dynamicProxyUrl: 'https://first.example.test/get' });
+    controls.pidReplies = [null];
+    const before = requests.length;
+    await assert.rejects(login(undefined, { useSelectedProxy: true, dynamicProxyUrl: 'https://second.example.test/get' }),
+      error => error.reason === 'bitbrowser_profile_close_unverified');
+    assert.deepEqual(requests.slice(before).map(row => row.path),
+      ['/browser/detail', '/browser/close', '/browser/pids/alive']);
+  }, controls);
 });
