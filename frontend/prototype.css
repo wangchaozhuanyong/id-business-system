@@ -937,6 +937,11 @@ th.table-actions {
 .text-button.secondary {
   color: var(--secondary);
 }
+.text-button[aria-haspopup='menu'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .text-button.danger {
   color: var(--danger);
 }
@@ -1204,8 +1209,20 @@ th.table-actions {
 .field-label-end {
   white-space: nowrap;
 }
+.field > label:has(+ .field-title-help) {
+  grid-area: 1 / 1;
+  padding-right: 32px;
+}
+.field > .field-title-help {
+  grid-area: 1 / 1;
+  justify-self: end;
+  margin-top: 4px;
+}
 .field-control {
   min-width: 0;
+}
+.field:has(> .field-title-help) > :is(.field-control, input, select, textarea) {
+  grid-area: 1 / 2;
 }
 .field-help {
   margin-top: 7px;
@@ -2429,6 +2446,48 @@ dialog::backdrop {
   color: var(--secondary);
   font-size: 12px;
 }
+.row-action-menu[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: max-content;
+  min-width: 160px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.relay-buyer-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+  max-width: 360px;
+  padding-block: 6px;
+  white-space: normal;
+}
+.relay-buyer-code output {
+  flex: 1 1 0;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.relay-buyer-code > .button {
+  flex: none;
+}
+.row-action-menu:popover-open {
+  display: grid;
+  gap: 4px;
+}
+.row-action-menu > .button {
+  justify-content: flex-start;
+  width: 100%;
+}
 .action-menu {
   gap: 0;
   border: 1px solid var(--line);
@@ -2674,6 +2733,12 @@ dialog::backdrop {
   .field > label,
   .field-label {
     padding-top: 13px;
+  }
+  .field > label:has(+ .field-title-help) {
+    padding-right: 46px;
+  }
+  .field > .field-title-help {
+    margin-top: 0;
   }
   .is-collapsed .brand-name,
   .is-collapsed .nav-text,

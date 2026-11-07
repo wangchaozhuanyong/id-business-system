@@ -36,7 +36,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
         }
         selectedBody = request.postDataJSON(); return json({ ...items[0], link: 'socks5://synthetic-user:synthetic-pass@192.0.2.8:8080' });
       }
-      if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email}; return {email}; }` });
+      if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLoginAttempts=(window.fixtureLoginAttempts||0)+1; if(window.fixtureLoginAttempts===1)throw new BitBrowserLoginError('合成控制通道失败'); window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email}; return {email}; }` });
       let file;
       if (path === '/') file = '../frontend/bitbrowser-local.html';
       else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js'].includes(path)) file = '../frontend/' + path.slice(1);
@@ -53,6 +53,15 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-local-group option[value="fixture-group"]').waitFor({ state: 'attached' });
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
     await page.locator('#bit-toggle-connection').click();
+    const keyField = page.locator('#bit-local-token').locator('xpath=ancestor::div[contains(@class,"field")][last()]');
+    const keyHelp = page.locator('#bit-local-token-help');
+    const keyBefore = await page.locator('#bit-local-token').boundingBox();
+    await page.getByLabel('查看本机接口密钥说明', { exact: true }).click();
+    await page.locator('#bit-local-token-help:popover-open').waitFor();
+    assert.match(await keyHelp.innerText(), /加密保存/);
+    assert.deepEqual(await page.locator('#bit-local-token').boundingBox(), keyBefore, '密钥说明不移动输入框');
+    assert.equal(await keyField.locator('.field-control > .field-help').count(), 0);
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: '查看本机接口密钥', exact: true }).click(); assert.equal(await page.locator('#bit-local-token').getAttribute('type'), 'text');
     await page.getByRole('button', { name: '隐藏本机接口密钥', exact: true }).click(); assert.equal(await page.locator('#bit-local-token').getAttribute('type'), 'password');
     assert.equal(await page.locator('#bit-proxy-country').isVisible(), false);
@@ -137,7 +146,13 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-authorization-json').fill(nextAuthorization);
     await page.screenshot({ path: fileURLToPath(new URL(`authorization-${theme}-${width}.png`, output)), fullPage: true });
     await page.locator('#bit-start-login').click();
+    await page.getByText('合成控制通道失败', { exact: true }).waitFor();
+    assert.equal(await page.locator('#bit-start-login').isEnabled(), true);
+    assert.match(await page.locator('#bit-authorization-result').innerText(), /next-fixture@example.test/);
+    await page.locator('#bit-start-login').click();
     await page.getByText('登录成功 · next-fixture@example.test。比特浏览器窗口已保留。', { exact: true }).waitFor();
+    assert.equal(await page.locator('#bit-start-login').isEnabled(), true);
+    assert.equal(await page.evaluate(() => window.fixtureLoginAttempts), 2);
     assert.deepEqual(selectedBody, { id: items[0].id, version: 2 });
     assert.deepEqual(await page.evaluate(() => window.fixtureLaunch), { country: 'PH', protocol: 'socks5', host: '192.0.2.8', port: 8080, email: 'next-fixture@example.test' });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);

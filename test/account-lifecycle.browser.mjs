@@ -69,12 +69,12 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
       await page.getByRole('tab', { name: /已使用/ }).click();
       await more();
-      await drawer.getByRole('button', { name: '恢复可用库存', exact: true }).click();
+      await page.locator('.row-action-menu:popover-open').getByRole('menuitem', { name: '恢复可用库存', exact: true }).click();
       const reason = page.locator('#inventory-lifecycle-reason');
       await reason.fill('客户已结束使用，回收后再次分配');
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await more();
-      await drawer.getByRole('button', { name: '恢复可用库存', exact: true }).click();
+      await page.locator('.row-action-menu:popover-open').getByRole('menuitem', { name: '恢复可用库存', exact: true }).click();
       assert.equal(await reason.inputValue(), '客户已结束使用，回收后再次分配', '关闭重开保留输入');
       await checks();
       commerceVersion++;
@@ -145,7 +145,7 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       await go(`accounts/${type}`);
       await page.getByRole('tab', { name: /已使用/ }).click();
       await more();
-      await drawer.getByRole('button', { name: '停止复用', exact: true }).click();
+      await page.locator('.row-action-menu:popover-open').getByRole('menuitem', { name: '停止复用', exact: true }).click();
       await reason.fill('本次结束后不再交付');
       await checks();
       await page.locator('#inventory-lifecycle-early').check();

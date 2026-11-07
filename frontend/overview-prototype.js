@@ -224,6 +224,7 @@
     }
     return false;
   }
+  A.modules.overview = { refresh: refreshOverview };
   window.IDDesignModules.push({ id: 'overview', matches: route => route === 'overview', render, onClick,
     afterRender({ routeChanged } = {}) {
       if (refreshing) bindOverviewRead();

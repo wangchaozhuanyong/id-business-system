@@ -24,6 +24,7 @@ import { createOrderRechargeClient, readPoolCards } from './order-recharge-clien
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
+import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
 
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
@@ -41,6 +42,7 @@ const files = new Map([
     'apple-balance-prototype',
     'commerce-prototype',
     'order-operations',
+    'change-sync',
     'operations-prototype',
     'bitbrowser-addresses'
   ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
@@ -291,6 +293,16 @@ export async function startPreview(
   function allowsHost(host, port) {
     return publicUrl ? host === publicUrl.host : ['127.0.0.1:' + port, 'localhost:' + port].includes(host);
   }
+  const dataChanges = store ? createDataChangeStream({
+    getActor: request => auth?.getActor(request) || (!authPath && !publicUrl
+      ? { id: 'local-operator', role: 'admin' } : null),
+    getVersions: actor => ({ ...store.changeVersions(actor), operators: auth?.changeVersion() || '0' }),
+    subscribe: listener => store.subscribeChanges(listener),
+    watchPaths: [
+      ...(databasePath && databasePath !== ':memory:' ? [databasePath, databasePath + '-wal', databasePath + '-journal'] : []),
+      ...(authPath ? [authPath] : [])
+    ]
+  }) : null;
   const server = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -335,6 +347,14 @@ export async function startPreview(
       response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
       return response.end(JSON.stringify({ error: actor ? '当前账号无权执行此操作' : '请先登录' }));
     };
+    if (dataChanges && route === dataChangeRoute) {
+      if (loginRequired && !actor) return forbidden();
+      const origin = secureOrigin || `http://${request.headers.host}`;
+      if ((request.headers.origin && request.headers.origin !== origin) ||
+          (request.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(request.headers['sec-fetch-site'])))
+        return response.writeHead(403).end();
+      return dataChanges.handle(request, response, actor || { id: 'local-operator', role: 'admin' });
+    }
     if (store && route.startsWith('/api/local/auth/')) {
       if (publicUrl && route === '/api/local/auth/setup') return response.writeHead(404).end();
       if (route === '/api/local/auth/setup' && setupAdmin) {
@@ -474,6 +494,8 @@ export async function startPreview(
       );
     }
     let body = asset.body;
+    if (store && asset === assets.get('/index.html')) body = Buffer.from(body.toString('utf8')
+      .replace('<head>', '<head>\n<meta name="id-local-data-events" content="enabled" />'));
     if (loginRequired && signedOutIndex && asset === assets.get('/index.html')) {
       if (!actor) response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
       body = actor
@@ -491,6 +513,7 @@ export async function startPreview(
     response.end(request.method === 'HEAD' ? undefined : body);
   });
   if (store) server.once('close', () => store.close());
+  if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
     const timer = setInterval(() => void orderSync.run({ apply: true }).catch(() => {}), 60_000);
     timer.unref();

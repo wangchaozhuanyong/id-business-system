@@ -66,7 +66,7 @@ test('订单优先匹配客户历史邮箱，支持切换、手填和草稿，�
   assert.equal(await email.inputValue(), '', '未选择客户时不匹配任何产品的历史邮箱');
   await customer('alpha');
   assert.equal(await email.inputValue(), 'claude@example.test', '优先该客户最近使用邮箱，即使最近订单属于其他产品');
-  assert.match(await page.locator('[data-commerce-field="email"] .field-help').innerText(), /所选客户最近使用/);
+  assert.match(await page.locator('[data-commerce-field="email"] .field-title-help .title-description').textContent(), /所选客户最近使用/);
   await openHistory();
   await popup.getByRole('option').first().waitFor();
   assert.equal(await popup.getByRole('option').count(), 5, '去重并排除其他客户、撤单、无关联及无效邮箱');
@@ -98,7 +98,7 @@ test('订单优先匹配客户历史邮箱，支持切换、手填和草稿，�
   assert.equal(await trigger.isVisible(), true);
   assert.equal(await email.isVisible(), false);
   assert.equal(await email.getAttribute('list'), null);
-  assert.match(await page.locator('[data-commerce-field="email"] .field-help').innerText(), /可用|未使用/);
+  assert.match(await page.locator('[data-commerce-field="email"] .field-title-help .title-description').textContent(), /可用|未使用/);
   await page.locator('#commerce-businessType').selectOption('续费');
   assert.equal(await email.inputValue(), 'claude@example.test');
   await email.fill('draft-new@example.test');

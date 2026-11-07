@@ -19,6 +19,76 @@ function client(fetch = async () => reply({ success: true })) {
   return { api: window.IDLocalData, window, document, locked: () => locked };
 }
 
+test('change revisions ignore unchanged snapshots and self writes, then invalidate only related reads', async () => {
+  let version = 1;
+  const { api } = client(async () => reply({ version, data: {} }));
+  const changes = [];
+  api.subscribeChanges(scopes => changes.push([...scopes]));
+  await api.load('inventory');
+  await api.queries.read('inventory', 'list', async () => ({ rows: [] }));
+  await api.queries.read('commerce', 'list', async () => ({ rows: [] }));
+  api.acceptChangeVersions({ inventory: '1' }, { reconcile: true });
+  assert.equal(changes.length, 0);
+  api.acceptChangeVersions({ inventory: '2' });
+  api.acceptChangeVersions({ inventory: '2' });
+  assert.deepEqual(changes, [['inventory']]);
+  assert.equal(api.queries.peek('inventory', 'list').stale, true);
+  assert.equal(api.queries.peek('commerce', 'list').stale, false);
+  assert.equal(api.pendingChangeVersions(['inventory']).inventory, '2');
+  version = 2;
+  await api.load('inventory');
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['inventory'])), []);
+  version = 3;
+  await api.save('inventory', 2, {});
+  api.acceptChangeVersions({ inventory: '3' });
+  assert.equal(changes.length, 1, 'own successful write does not cause another data read');
+});
+
+test('a snapshot reconciles missed writes and an old HTTP result cannot hide a newer revision', async () => {
+  let version = 1;
+  const { api } = client(async () => reply({ version, data: {} }));
+  const changes = [];
+  api.subscribeChanges(scopes => changes.push([...scopes]));
+  await api.load('commerce');
+  api.acceptChangeVersions({ commerce: '1' }, { reconcile: true });
+  api.acceptChangeVersions({ commerce: '3' }, { reconcile: true });
+  version = 2;
+  await api.load('commerce');
+  assert.equal(api.pendingChangeVersions(['commerce']).commerce, '3');
+  version = 3;
+  await api.load('commerce');
+  api.acceptChangeVersions({ commerce: '3' }, { reconcile: true });
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['commerce'])), []);
+  assert(changes.every(scopes => scopes.length === 1 && scopes[0] === 'commerce'));
+});
+
+test('metadata revisions are acknowledged without accepting a later unseen change', () => {
+  const { api } = client();
+  api.acceptChangeVersions({ operators: 'before' });
+  api.acceptChangeVersions({ operators: 'after' });
+  const captured = api.pendingChangeVersions(['operators']);
+  api.acceptChangeVersions({ operators: 'newer' });
+  api.acknowledgeChanges(captured);
+  assert.equal(api.pendingChangeVersions(['operators']).operators, 'newer');
+  api.acknowledgeChanges({ operators: 'newer' });
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['operators'])), []);
+  api.acceptChangeVersions({ unknown: '1', inventory: { queryCode: 'never-accepted' } });
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['unknown', 'inventory'])), []);
+});
+
+test('clearing a rejected query cache keeps stream ordering; identity shutdown clears all tracking', async () => {
+  const { api } = client(async () => reply({ version: 1, data: {} }));
+  const changes = [];
+  await api.load('inventory');
+  api.subscribeChanges(scopes => changes.push([...scopes]));
+  api.acceptChangeVersions({ inventory: '1' });
+  api.queries.clear();
+  api.acceptChangeVersions({ inventory: '2' });
+  assert.deepEqual(changes, [['inventory']]);
+  api.clearChangeTracking();
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['inventory'])), []);
+});
+
 test('shared reads normalize parameters, combine requests and isolate returned snapshots', async () => {
   const { api: { queries } } = client();
   const gate = Promise.withResolvers();

@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { CODEXDAICHONG_REVISION } from './prepare.mjs';
 import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
+import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 
 const git = promisify(execFile);
 const clone = fileURLToPath(new URL('../../../.upstream/codexdaichong/', import.meta.url));
@@ -58,6 +59,70 @@ function localUrls(source) {
 }
 
 function adaptAdminScript(source) {
+  source = replaceSection(source, '        async function saveProxyPool() {', '        function applyProxyTestResultToRow', `
+        const normalizeRechargeProxyInput = ${normalizeRechargeProxyInput.toString()};
+        function normalizeProxyPoolEditor(input) {
+            const batch = normalizeRechargeProxyInput(input.value);
+            input.value = batch.proxies.join('\\n');
+            const hint = document.getElementById('proxy_add_hint');
+            if (hint) {
+                hint.setAttribute('role', 'status');
+                hint.textContent = '已识别 ' + batch.proxies.length + ' 条代理，已自动整理格式' +
+                    (batch.duplicates ? '，去重 ' + batch.duplicates + ' 条' : '') + '，请点击保存。';
+            }
+            return batch;
+        }
+        function previewProxyPoolInput(input) {
+            if (!input?.isConnected || !input.value.trim() || input.dataset.saving === 'true') return;
+            try { normalizeProxyPoolEditor(input); }
+            catch (error) {
+                const hint = document.getElementById('proxy_add_hint');
+                if (hint) { hint.setAttribute('role', 'alert'); hint.textContent = error.message; }
+            }
+        }
+        document.addEventListener('paste', event => {
+            const input = event.target;
+            if (input?.id === 'proxy_add_input') setTimeout(() => previewProxyPoolInput(input), 0);
+        });
+        document.addEventListener('change', event => {
+            if (event.target?.id === 'proxy_add_input') previewProxyPoolInput(event.target);
+        });
+        async function saveProxyPool() {
+            const input = document.getElementById('proxy_add_input');
+            const hint = document.getElementById('proxy_add_hint');
+            if (!input || input.dataset.saving === 'true') return;
+            let batch;
+            try { batch = normalizeProxyPoolEditor(input); }
+            catch (error) {
+                if (hint) { hint.setAttribute('role', 'alert'); hint.textContent = error.message; }
+                showMessage(error.message, 'warning');
+                return;
+            }
+            const submitted = input.value;
+            const button = document.querySelector('button[onclick="saveProxyPool()"]');
+            input.dataset.saving = 'true';
+            if (button) button.disabled = true;
+            if (hint) hint.textContent = '正在保存 ' + batch.proxies.length + ' 条代理…';
+            try {
+                const res = await authFetch('/api/admin/proxies', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ proxies: batch.proxies })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || data.message || '保存失败');
+                if (input.value === submitted) input.value = '';
+                if (hint) hint.textContent = data.message || '代理已保存';
+                showMessage(data.message || '代理已保存', 'success');
+                await loadProxyPool();
+            } catch {
+                if (hint) { hint.setAttribute('role', 'alert'); hint.textContent = '保存未完成，输入已保留，请刷新代理列表核对后重试。'; }
+                showMessage('保存代理未完成，请核对列表后重试', 'error');
+            } finally {
+                delete input.dataset.saving;
+                if (button?.isConnected) button.disabled = false;
+            }
+        }
+  `);
   source = replaceSection(source, 'const TOKEN_KEY', 'const BUSINESS_PAGES', '');
   source = replaceSection(source, 'function getAdminToken()', 'function formatDurationText(', '');
   source = replaceSection(
@@ -665,7 +730,11 @@ async function buildCodexdaichongAssets() {
     ['/admin', admin, 'admin'],
     ['/subscription', subscription, 'subscription']
   ]) {
-    const body = adaptHtml(source, kind);
+    const proxyHelp = '一行一条；支持完整代理链接、主机:端口:账号:密码、账号:密码@主机:端口。未带协议默认 SOCKS5；粘贴后自动整理格式，点击保存才入库。';
+    const html = kind === 'admin' ? replaceOne(source,
+      '粘贴一条或多条代理 URL（一行一条），点保存后立即写入代理池并在下方列表显示。', proxyHelp)
+      .replace('socks5://user:pass@host:port\n', 'socks5://host:port:user:pass\nhost:port:user:pass\n') : source;
+    const body = adaptHtml(html, kind);
     assets.set(path, {
       body,
       type: media.html,
