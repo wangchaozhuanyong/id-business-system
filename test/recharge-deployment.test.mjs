@@ -54,8 +54,8 @@ assert m['reload_strategy']('v2.10.2 h1:synthetic')=='restart'
 assert m['reload_strategy']('v2.11.0')=='signal'
 try: m['reload_strategy']('unknown'); raise AssertionError('unknown version accepted')
 except ValueError: pass
-before={'Id':'same-container','Image':'same-image','Mounts':[{'Source':'same-config'}],'State':{'Running':True,'StartedAt':'before'}}
-after=copy.deepcopy(before); after['State']['StartedAt']='after'
+before={'Id':'same-container','Image':'same-image','Mounts':[{'Source':'same-config','Destination':'/etc/caddy/Caddyfile'},{'Source':'same-data','Destination':'/data'}],'State':{'Running':True,'StartedAt':'before'}}
+after=copy.deepcopy(before); after['State']['StartedAt']='after'; after['Mounts'].reverse()
 states=iter([before,after]); commands=[]
 def output(args,**kwargs): return 'v2.10.2' if args[-1]=='version' else json.dumps([next(states)]).encode()
 def run(args,**kwargs): commands.append(args)
@@ -64,6 +64,10 @@ result=m['reload_gateway']()
 assert commands==[['docker','restart','--time','20','id-business-independent-caddy']]
 assert result['strategy']=='restart' and result['containerId']=='same-container'
 assert result['beforeStartedAt']=='before' and result['afterStartedAt']=='after'
+after['Mounts'][0]['Source']='unexpected-data'
+states=iter([before,after])
+try: m['reload_gateway'](); raise AssertionError('changed mount accepted')
+except ValueError: pass
 print('passed')`;
   assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
 });

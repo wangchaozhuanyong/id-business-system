@@ -45,8 +45,10 @@ def reload_gateway():
                ['docker', 'restart', '--time', '20', CONTAINER])
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     after = inspect()
+    before_mounts = sorted(before['Mounts'], key=lambda mount: mount['Destination'])
+    after_mounts = sorted(after['Mounts'], key=lambda mount: mount['Destination'])
     if (before['Id'] != after['Id'] or before['Image'] != after['Image'] or
-            before['Mounts'] != after['Mounts'] or not after['State']['Running']):
+            before_mounts != after_mounts or not after['State']['Running']):
         raise ValueError('Gateway identity changed')
     return {'strategy': strategy, 'containerId': after['Id'], 'imageId': after['Image'],
             'beforeStartedAt': before['State']['StartedAt'], 'afterStartedAt': after['State']['StartedAt']}
