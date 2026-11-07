@@ -412,6 +412,7 @@ export async function startPreview(
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
         readOrderCards: () => readPoolCards(orderRechargeClient),
+        readOrderOwners: () => auth?.orderOwners() || [],
         verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,
         async verifyRelayExtraction(aliasIds, operator) {
           const { items } = await relay.checkExtractionEligibility(aliasIds, operator);

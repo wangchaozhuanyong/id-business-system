@@ -20,6 +20,27 @@ export function checkNewOrder(order) {
       !(typeof order.cardId === 'string' && order.cardId.startsWith(order.product === 'GPT' ? 'recharge:' : 'tenant:')))
     return '请选择对应来源的银行卡';
 }
+export function assignOrderOwner(order, prior, actor, owners = []) {
+  if (prior) {
+    if ((order.ownerId || '') !== (prior.ownerId || ''))
+      return { status: 409, message: '已保存订单的归属人不可在资料更正中更换' };
+    for (const field of ['ownerId', 'owner']) {
+      if (Object.hasOwn(prior, field)) order[field] = prior[field];
+      else delete order[field];
+    }
+    return;
+  }
+  if (order.ownerId !== undefined && typeof order.ownerId !== 'string')
+    return { status: 400, message: '请选择有效的订单归属人' };
+  const id = order.ownerId || actor.id;
+  if (id !== actor.id && !['admin', 'super'].includes(actor.role))
+    return { status: 403, message: '只有管理员可以为其他员工指定订单归属' };
+  const owner = id === actor.id ? actor : owners.find(row => row.id === id && row.active !== false &&
+    ['admin', 'super', 'employee'].includes(row.role));
+  if (!owner) return { status: 409, message: '所选归属人已停用或不存在，请刷新人员列表' };
+  order.ownerId = owner.id;
+  order.owner = owner.name;
+}
 export const validMoney = (value) => typeof value === 'string' && /^\d{1,16}(?:\.\d{1,4})?$/.test(value);
 const moneyUnits = (value) => {
   if (!validMoney(value)) return null;

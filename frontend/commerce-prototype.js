@@ -1270,6 +1270,8 @@
   }
   function readCommerceDraft(form) {
     const draft = A.readDraft(form);
+    const owner = form.querySelector?.('select#commerce-ownerId');
+    if (owner) draft['commerce-ownerId'] = owner.value;
     delete draft['commerce-balanceReversalConfirmed'];
     return draft;
   }
@@ -1303,6 +1305,58 @@
   }
   function canManageOrders() {
     return !localData?.authRequired || ['admin', 'super'].includes(currentOperator().role);
+  }
+  function orderOwnerName(row) {
+    const id = row.ownerId || row.rechargeOwnerId || row.createdById;
+    const fallback = row.ownerId ? row.owner || '历史未记录' : traceName(row, 'createdBy');
+    return localData?.operatorLabel?.(id, fallback) || fallback;
+  }
+  let orderOwners = [];
+  const orderOwnerLoads = new WeakMap();
+  function orderOwnerChoices(selected) {
+    const rows = new Map([currentOperator(), ...orderOwners].filter(row => row.id).map(row => [row.id, row]));
+    const choices = [...rows.values()].map(row => [row.id,
+      `${row.name} · ${{ super: '超级管理员', admin: '管理员', employee: '员工' }[row.role] || '当前账号'}`]);
+    if (selected && !rows.has(selected)) choices.push([selected, '已选归属人（待核对）']);
+    return choices;
+  }
+  function orderOwnerField(v, existing) {
+    if (existing || !canManageOrders())
+      return field('归属人', 'ownerId', `<input id="commerce-ownerId" value="${E(orderOwnerName(existing || {
+        ownerId: currentOperator().id, owner: currentOperator().name
+      }))}" readonly />`, false, existing ? '保留原单归属；录入人与操作记录分别保留。' : '订单归属当前登录账号。');
+    const selected = v('ownerId') || currentOperator().id || '';
+    return field('归属人', 'ownerId', searchableSelect('ownerId', '归属人', orderOwnerChoices(selected), selected,
+      A.button('刷新', 'commerce-order-owner-refresh')), true, '可代员工录单，录入人仍记录当前登录账号。');
+  }
+  async function loadOrderOwners(form, retry = false) {
+    const select = form?.querySelector('select#commerce-ownerId');
+    if (!select || !localData?.authRequired || !localData.orderOwners ||
+        (orderOwnerLoads.has(form) && !retry)) return;
+    const request = {};
+    orderOwnerLoads.set(form, request);
+    const trigger = form.querySelector('#commerce-ownerId-picker');
+    trigger.setAttribute('aria-busy', 'true');
+    try {
+      const { items } = await localData.orderOwners();
+      if (!Array.isArray(items) || items.some(row => typeof row.id !== 'string' || !row.name ||
+          !['admin', 'super', 'employee'].includes(row.role))) throw new Error('人员列表格式不正确');
+      if (!form.isConnected || orderOwnerLoads.get(form) !== request) return;
+      orderOwners = items;
+      const selected = select.value;
+      select.innerHTML = A.options(orderOwnerChoices(selected), selected);
+      const valid = selected === currentOperator().id || items.some(row => row.id === selected);
+      if (!valid) select.selectedOptions[0].disabled = true;
+      filterPicker(select.closest('.commerce-search-picker').querySelector('[data-commerce-picker]'));
+      A.setError('commerce-ownerId', valid ? '' : '所选归属人已停用或不存在，请重新选择');
+    } catch (error) {
+      if (form.isConnected && orderOwnerLoads.get(form) === request) {
+        orderOwnerLoads.delete(form);
+        A.setError('commerce-ownerId', '人员读取失败，请点击右侧刷新重试；仍可归属当前账号。');
+      }
+    } finally {
+      if (orderOwnerLoads.get(form) === request || !orderOwnerLoads.has(form)) trigger.removeAttribute('aria-busy');
+    }
   }
   function traceName(row, key) {
     const fallback = typeof row[key] === 'string' && row[key].trim() ? row[key] : '历史未记录';
@@ -1774,6 +1828,7 @@
           : auto ? '' : '优先匹配本产品最近使用的邮箱，也可直接填写新邮箱。',
         ''
       ).replace('<span class="required">*', `<span class="required"${!stock && product === 'GPT' ? ' hidden' : ''}>*`) +
+      orderOwnerField(v, existing) +
       `<details class="commerce-span-all"><summary>联系方式（自动回填，可展开修改）</summary><div class="commerce-field-grid">${field('客户微信', 'wechat', input('wechat', contact('wechat')))}${field('客户电话', 'customerPhone', input('customerPhone', contact('customerPhone')))}${field('QQ', 'qq', input('qq', contact('qq')))}${field('WhatsApp', 'whatsapp', input('whatsapp', contact('whatsapp')))}${field('Telegram', 'telegram', input('telegram', contact('telegram')))}</div></details>`
     );
   }
@@ -2217,6 +2272,7 @@
     );
     const form = $('#commerce-order-form', $('#drawer') || document);
     if (form) updateCustomerEmailHistory(form);
+    if (form) void loadOrderOwners(form);
     if (form && v('payment') === '苹果内购') loadAppleOptions(form);
     if (form && v('payment') === '银行卡') void loadOrderCards(form);
     if (form) void loadPrices(form);
@@ -2265,7 +2321,6 @@
     } else order.appleIdId = '';
     if (order.product === 'GPT') {
       order.tenantId = '';
-      order.owner = '';
       order.ownerPhone = '';
       order.verifier = '';
       order.verifierPhone = '';
@@ -2277,10 +2332,19 @@
       const tenant = tenants.find((row) => row.id === order.tenantId);
       order.verifier = tenant?.name || existing?.verifier || '';
       order.verifierPhone = tenant?.phone || existing?.verifierPhone || '';
-      order.owner = existing?.owner || '';
       order.ownerPhone = existing?.ownerPhone || '';
     }
     const existingOrder = orders.find((row) => row.id === order.id);
+    if (existingOrder) {
+      order.owner = existingOrder.owner || '';
+      if (Object.hasOwn(existingOrder, 'ownerId')) order.ownerId = existingOrder.ownerId;
+      else delete order.ownerId;
+    } else {
+      const operator = currentOperator();
+      order.ownerId = form.querySelector?.('select#commerce-ownerId')?.value || order.ownerId || operator.id;
+      order.owner = order.ownerId === operator.id ? operator.name :
+        orderOwners.find(row => row.id === order.ownerId)?.name || '';
+    }
     if (automaticOrder(existingOrder)) {
       for (const key of ['source', 'product', 'businessType', 'email', 'plan', 'payment', 'paymentId', 'cardId',
         'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed'])
@@ -2316,6 +2380,7 @@
   function orderColumns(product = '') {
     return [
       { id: 'orderNo', label: '订单编号' },
+      { id: 'owner', label: '归属人', render: (row) => E(orderOwnerName(row)) },
       { id: 'customerId', label: '客户', render: (row) => E(customerLabel(row.customerId)) },
       { id: 'email', label: '邮箱账号', class: 'email-cell' },
       { id: 'plan', label: '套餐' },
@@ -2393,7 +2458,6 @@
               label: '认证电话',
               render: (row) => E(row.verifierPhone || '未记录')
             },
-            { id: 'owner', label: '归属人', render: (row) => E(traceName(row, 'createdBy')) },
             {
               id: 'tenantId',
               label: '租户',
@@ -2435,7 +2499,7 @@
               ? row.refunds.length > 0
               : !row.cancelled) &&
         (!S.query ||
-          `${row.email} ${row.orderNo} ${customerLabel(row.customerId)}`.includes(S.query))
+          `${row.email} ${row.orderNo} ${customerLabel(row.customerId)} ${orderOwnerName(row)}`.includes(S.query))
     );
     return (
       A.header(
@@ -2475,7 +2539,7 @@
             ? timeline(order.id)
             : activeTab === 'renewals'
               ? renewalChain(order)
-              : `<div class="property-list">${property('订单编号', order.orderNo)}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property('邮箱账号', order.email)}${property('客户', customerLabel(order.customerId))}${property('微信', order.wechat)}${property('客户电话', order.customerPhone)}${property('QQ', order.qq)}${property('WhatsApp', order.whatsapp)}${property('Telegram', order.telegram)}${property('支付方式', order.payment)}${property('卡尾号 / ID', order.paymentId)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('租户', tenantLabel(order.tenantId))}${isClaude(order) ? property('归属人', traceName(order, 'createdBy')) : ''}${property('认证人', order.verifier)}${property('认证电话', order.verifierPhone)}${property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录，更正复选框不会删除' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', order.cancelled ? '已撤单' : '正常')}${property('待核对', pendingReasons(order).join('、') || '资料已核对')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
+              : `<div class="property-list">${property('订单编号', order.orderNo)}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property('邮箱账号', order.email)}${property('客户', customerLabel(order.customerId))}${property('微信', order.wechat)}${property('客户电话', order.customerPhone)}${property('QQ', order.qq)}${property('WhatsApp', order.whatsapp)}${property('Telegram', order.telegram)}${property('支付方式', order.payment)}${property('卡尾号 / ID', order.paymentId)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('租户', tenantLabel(order.tenantId))}${property('归属人', orderOwnerName(order))}${property('认证人', order.verifier)}${property('认证电话', order.verifierPhone)}${property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录，更正复选框不会删除' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', order.cancelled ? '已撤单' : '正常')}${property('待核对', pendingReasons(order).join('、') || '资料已核对')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
     const detailBody = `<div class="tabs" role="tablist"${asPage ? ' data-page-actions="tabs"' : ''}>${[
       ['details', '资料'],
       ['costs', '成本与汇率'],
@@ -2759,7 +2823,7 @@
       (row) =>
         row.operation.status === moduleState.claudeTab &&
         (!S.query ||
-          `${row.email} ${customerLabel(row.customerId)} ${tenantLabel(row.tenantId)} ${row.owner}`.includes(
+          `${row.email} ${customerLabel(row.customerId)} ${tenantLabel(row.tenantId)} ${orderOwnerName(row)}`.includes(
             S.query
           ))
     );
@@ -2791,7 +2855,7 @@
         render: (row) => E(row.verifierPhone || '未记录')
       },
       { id: 'tenant', label: '租户', render: (row) => E(tenantLabel(row.tenantId)) },
-      { id: 'owner', label: '归属人', render: (row) => E(traceName(row, 'createdBy')) },
+      { id: 'owner', label: '归属人', render: (row) => E(orderOwnerName(row)) },
       { id: 'createdAt', label: '录入时间', render: (row) => E(row.createdAt || '未记录') },
       { id: 'notes', label: '备注', long: true, render: (row) => E(row.notes || '未记录') },
       ...(moduleState.claudeTab !== 'active'
@@ -3342,6 +3406,8 @@
       if (message) first ||= `commerce-${name}`;
     };
     const auto = automaticOrder(existing);
+    if (!existing) error('ownerId', order.ownerId && (order.ownerId === currentOperator().id ||
+      orderOwners.some(row => row.id === order.ownerId)) ? '' : '请选择可用的订单归属人');
     const optionalEmail = order.product === 'GPT' && order.businessType === '续费';
     error('email', (optionalEmail && !order.email) || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email) ? '' : '请填写有效邮箱');
     error(
@@ -3606,7 +3672,7 @@
     const submitted = JSON.stringify(A.readForm(form));
     A.confirmAction(
       existing ? '确认更正独立订单' : '确认登记新订单',
-      `${saved.email} · ${saved.plan}，订阅 ${saved.start.replace('T', ' ')}，到期 ${saved.expiry.replace('T', ' ')}。${balanceText}${stock ? '保存后所选成品账号标记已使用。' : '保存时核对订单邮箱的提取记录。'}不会执行真实支付。`,
+      `${saved.email} · ${saved.plan}，归属人 ${orderOwnerName(saved)}，订阅 ${saved.start.replace('T', ' ')}，到期 ${saved.expiry.replace('T', ' ')}。${balanceText}${stock ? '保存后所选成品账号标记已使用。' : '保存时核对订单邮箱的提取记录。'}不会执行真实支付。`,
       () => {
         if (committed || !canManageOrders() || form.isConnected === false || S.route !== submittedRoute ||
             S.drawerContext !== submittedContext || JSON.stringify(A.readForm(form)) !== submitted) return;
@@ -3726,7 +3792,7 @@
             log(
               existing ? '更正订单' : '新增独立订单',
               saved.id,
-              `${saved.orderNo} · ${saved.email} · ${saved.plan}${existing ? ` · 原因：${inputOrder.correctionReason}` : ''}`
+              `${saved.orderNo} · ${saved.email} · ${saved.plan} · 归属人 ${orderOwnerName(saved)}${existing ? ` · 原因：${inputOrder.correctionReason}` : ''}`
             );
           },
           () => {
@@ -4264,7 +4330,7 @@
     A.openDrawer(
       'Claude 账号运营',
       '',
-      `<div class="property-list">${property('邮箱账号', row.email)}${property('当前客户', customerLabel(row.customerId))}${property('租户', tenantLabel(row.tenantId))}${property('归属人', traceName(row, 'createdBy'))}${property('认证人', row.verifier)}${property('验证状态', row.kyc)}${property('当前状态', { active: '使用中', frozen: '冻结', abandoned: '弃用' }[row.operation.status])}${property('状态时间', row.operation.at)}</div><div class="toolbar">${row.operation.status === 'active' ? A.button('冻结', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="frozen"`) + A.button('弃用', 'commerce-subscription-state', 'danger', '', `data-id="${id}" data-status="abandoned"`) : A.button('恢复使用', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="active"`)}${A.button('创建付租批次', 'commerce-rent-one', '', 'orders', `data-id="${id}"`)}</div>`,
+      `<div class="property-list">${property('邮箱账号', row.email)}${property('当前客户', customerLabel(row.customerId))}${property('租户', tenantLabel(row.tenantId))}${property('归属人', orderOwnerName(row))}${property('认证人', row.verifier)}${property('验证状态', row.kyc)}${property('当前状态', { active: '使用中', frozen: '冻结', abandoned: '弃用' }[row.operation.status])}${property('状态时间', row.operation.at)}</div><div class="toolbar">${row.operation.status === 'active' ? A.button('冻结', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="frozen"`) + A.button('弃用', 'commerce-subscription-state', 'danger', '', `data-id="${id}" data-status="abandoned"`) : A.button('恢复使用', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="active"`)}${A.button('创建付租批次', 'commerce-rent-one', '', 'orders', `data-id="${id}"`)}</div>`,
       A.button('关闭', 'drawer-close')
     );
   }
@@ -4582,6 +4648,10 @@
   }
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
+    if (action === 'commerce-order-owner-refresh') {
+      if (canManageOrders()) void loadOrderOwners(node.closest('#commerce-order-form'), true);
+      return true;
+    }
     if (action === 'commerce-picker-select') {
       const picker = node.closest('.commerce-search-picker');
       const select = picker.querySelector('select');
@@ -5131,6 +5201,7 @@
     }
     const form = node.closest('#commerce-order-form');
     if (form) {
+      if (node.id === 'commerce-ownerId') A.setError('commerce-ownerId', '');
       if (node.id === 'commerce-product') {
         form.querySelector('#commerce-plan').innerHTML = A.options(
           productPlans[node.value],
@@ -5526,6 +5597,7 @@
       if (!localData || localPhase !== 'ready') return;
       if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) {
         const form = $('#commerce-order-form');
+        if (form) void loadOrderOwners(form);
         if (form?.elements['commerce-payment']?.value === '苹果内购') loadAppleOptions(form);
         else if (form) void loadOrderCards(form);
         if (form) void loadPrices(form);

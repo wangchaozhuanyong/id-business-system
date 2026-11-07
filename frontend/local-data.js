@@ -53,6 +53,7 @@
     operatorLabel: (id, fallback) => labels.get(id) || fallback || '',
     refreshOperatorLabels,
     orderCards: () => request('order-cards'),
+    orderOwners: () => request('auth/order-owners'),
     tenantCards: (tenantId) => request('tenant-cards?tenantId=' + encodeURIComponent(tenantId)),
     tenantCardAction: (command) => request('tenant-cards', command, 'POST'),
     rechargeCodeRequests: () => request('recharge-codes'),
