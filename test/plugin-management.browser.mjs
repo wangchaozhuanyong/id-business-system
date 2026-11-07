@@ -73,6 +73,7 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   assert.equal(await page.locator('#ops-managed-email').inputValue(), 'pending@example.test');
   assert.equal(await page.locator('#ops-managed-email').getAttribute('readonly'), '');
   assert.equal(await page.locator('#ops-managed-provider').inputValue(), 'google');
+  await page.locator('.field').filter({ has: page.locator('#ops-managed-app-password') }).locator('.field-title-help summary').click();
   assert.equal(await page.getByRole('link', { name: '前往 Google 生成', exact: true }).getAttribute('href'), 'https://myaccount.google.com/apppasswords');
   await page.locator('#ops-managed-app-password').fill('synthetic-credential');
   await page.locator('#ops-managed-pool-form button[type="submit"]').click();

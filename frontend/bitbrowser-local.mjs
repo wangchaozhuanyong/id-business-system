@@ -70,6 +70,18 @@ let lastAutomaticName = '';
 let authorizationCheckId = 0;
 let activeCatalogCheck;
 let activeLogin;
+const pendingDataChanges = new Set();
+async function refreshLiveChoices() {
+  if (activeLogin || activeCatalogCheck || profileBusy || document.hidden) return;
+  if (pendingDataChanges.has('bitbrowser-connections') && settings.hidden) {
+    pendingDataChanges.delete('bitbrowser-connections');
+    await loadProfiles();
+  }
+  if (pendingDataChanges.has('bitbrowser-proxies') && !document.querySelector('dialog[open]')) {
+    pendingDataChanges.delete('bitbrowser-proxies');
+    await executionProxies?.refresh();
+  }
+}
 document.documentElement.dataset.rechargeNavigationLocked = 'false';
 function setLoginLock(locked) {
   document.documentElement.dataset.rechargeNavigationLocked = String(locked);
@@ -140,6 +152,7 @@ function updateStartButton() {
   profileChoice.disabled = !profileData || profileBusy || Boolean(activeLogin);
   get('bit-toggle-connection').disabled = Boolean(activeLogin);
   for (const id of ['bit-tab-login', 'bit-tab-library', 'bit-show-library']) get(id).disabled = Boolean(activeLogin);
+  if (pendingDataChanges.size) queueMicrotask(refreshLiveChoices);
 }
 
 function showWorkspace(view, focus = false) {
@@ -710,6 +723,12 @@ window.addEventListener('pagehide', () => {
 });
 
 window.addEventListener('message', (event) => {
+  if (event.origin === location.origin && event.source === window.parent &&
+      event.data?.source === 'id-recharge-shell' && event.data.type === 'data-change') {
+    for (const scope of event.data.scopes || [])
+      if (['bitbrowser-connections', 'bitbrowser-proxies'].includes(scope)) pendingDataChanges.add(scope);
+    void refreshLiveChoices();
+  }
   if (
     event.origin === location.origin &&
     event.source === window.parent &&
@@ -728,6 +747,9 @@ window.addEventListener('message', (event) => {
     document.documentElement.dataset.theme = event.data.theme;
   }
 });
+document.addEventListener('close', () => void refreshLiveChoices(), true);
+get('bit-toggle-connection').addEventListener('click', () => queueMicrotask(refreshLiveChoices));
+window.addEventListener('focus', () => void refreshLiveChoices());
 
 if (window.parent !== window) {
   try {

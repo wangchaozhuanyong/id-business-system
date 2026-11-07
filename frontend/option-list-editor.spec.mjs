@@ -15,6 +15,7 @@ const fragment = (start, end) => {
 const sharedSource = [
   fragment('const escapeHtml =', 'const icons ='),
   fragment('function button(', 'const navigation ='),
+  fragment('function titleInfo(', 'function header('),
   fragment('function readOptionList(', 'function readDraft(')
 ].join('\n');
 

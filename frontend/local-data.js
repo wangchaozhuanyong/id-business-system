@@ -10,6 +10,48 @@
     : Object.freeze({ id: 'local-operator', name: '本机操作员', role: 'admin' });
 
   const queryEntries = new Map();
+  const observedVersions = new Map(), serverVersions = new Map(), changeListeners = new Set();
+  let pendingWrites = 0;
+  const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
+    'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
+    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit']);
+  const newer = (incoming, observed) => observed === undefined ||
+    (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
+      ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
+  function publishChanges(scopes) {
+    if (!scopes.length) return;
+    const expanded = new Set(scopes);
+    if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance'].includes(scope))) expanded.add('overview');
+    if (scopes.includes('inventory')) { expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
+    if (scopes.includes('operators')) expanded.add('order-owners');
+    queries.invalidate([...expanded]);
+    for (const listener of changeListeners) {
+      try { listener([...scopes]); } catch { /* Notifications cannot fail a completed operation. */ }
+    }
+  }
+  function acceptChangeVersions(versions, { reconcile = false } = {}) {
+    if (!versions || typeof versions !== 'object' || Array.isArray(versions)) return;
+    const changed = [];
+    for (const [scope, version] of Object.entries(versions)) {
+      if (!revisionScopes.has(scope) || typeof version !== 'string' || !version || version.length > 128) continue;
+      const previous = serverVersions.get(scope), observed = observedVersions.get(scope);
+      serverVersions.set(scope, version);
+      if (!reconcile && previous === version) continue;
+      if (observed !== undefined ? newer(version, observed) : previous !== undefined && version !== previous) changed.push(scope);
+    }
+    publishChanges(changed);
+  }
+  function observeResult(resource, result) {
+    if (resource === 'batch' && Array.isArray(result)) {
+      for (const entry of result) observeResult(entry.domain, entry);
+      return;
+    }
+    if (!revisionScopes.has(resource) || !Number.isSafeInteger(result?.version)) return;
+    const version = String(result.version), previous = observedVersions.get(resource);
+    if (previous === undefined || !newer(previous, version)) observedVersions.set(resource, version);
+    const expected = serverVersions.get(resource);
+    if (expected !== undefined && newer(expected, observedVersions.get(resource))) publishChanges([resource]);
+  }
   let queryEpoch = 0;
   function queryKey(value) {
     if (Array.isArray(value)) return '[' + value.map(queryKey).join(',') + ']';
@@ -83,13 +125,20 @@
     clear() {
       queryEpoch++;
       queryEntries.clear();
+      observedVersions.clear();
     }
   });
 
   async function write(scopes, operation) {
-    const result = await operation();
-    queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool'] : []), 'overview', 'audit']);
-    return result;
+    pendingWrites++;
+    try {
+      const result = await operation();
+      queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool'] : []), 'overview', 'audit']);
+      return result;
+    } finally {
+      pendingWrites--;
+      if (!pendingWrites) Promise.resolve().then(() => window.dispatchEvent?.(new Event('id-data-write-idle')));
+    }
   }
 
   async function request(resource, data, method = 'PUT') {
@@ -117,6 +166,7 @@
       error.status = response.status;
       throw error;
     }
+    observeResult(resource, result);
     return result;
   }
 
@@ -134,6 +184,21 @@
   }
 
   window.IDLocalData = Object.freeze({
+    acceptChangeVersions,
+    clearChangeTracking() { observedVersions.clear(); serverVersions.clear(); },
+    pendingChangeVersions(scopes) {
+      return Object.fromEntries(scopes.filter(scope => serverVersions.has(scope) &&
+        newer(serverVersions.get(scope), observedVersions.get(scope))).map(scope => [scope, serverVersions.get(scope)]));
+    },
+    acknowledgeChanges(versions) {
+      for (const [scope, version] of Object.entries(versions)) {
+        if (!['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox'].includes(scope) &&
+            serverVersions.get(scope) === version && newer(version, observedVersions.get(scope)))
+          observedVersions.set(scope, version);
+      }
+    },
+    subscribeChanges(listener) { changeListeners.add(listener); return () => changeListeners.delete(listener); },
+    writesPending: () => pendingWrites > 0,
     authRequired,
     actor: () => actor && ({ ...actor, name: labels.get(actor.id) || actor.name }),
     queries,

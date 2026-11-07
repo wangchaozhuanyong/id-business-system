@@ -215,22 +215,24 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
       for (const theme of ['light', 'dark']) {
         if (await page.evaluate(() => document.documentElement.dataset.theme || 'light') !== theme)
           await page.locator('#theme-toggle').click();
-        await action('apple-relay', 'relay-alias-more', { id: 'qa-relay-c' });
-        const binding = page.locator('#drawer [data-action="relay-alias-bind"]');
+        await go('mailboxes/relay');
+        const more = page.locator('[data-action="relay-alias-more"][data-id="qa-relay-c"]');
+        await more.click();
+        const binding = page.locator('.row-action-menu [data-action="relay-alias-bind"]');
         await binding.waitFor();
         const box = await binding.boundingBox();
-        const drawerBox = await page.locator('#drawer').boundingBox();
-        assert(box.x >= drawerBox.x && box.x + box.width <= drawerBox.x + drawerBox.width);
+        assert(box.x >= 0 && box.x + box.width <= width);
         await binding.click();
         await page.locator('#confirm-dialog').getByRole('button', { name: '确认接入', exact: true }).click();
         await page.getByText('隔离测试：收件服务暂时不可用', { exact: true }).waitFor();
-        await page.waitForFunction(() => !document.querySelector('#drawer [data-action="relay-alias-bind"]').disabled);
+        await more.click();
+        await binding.waitFor();
         assert(await binding.isEnabled());
-        assert(await page.locator('#drawer').isVisible());
+        assert.equal(await page.locator('#drawer').isVisible(), false);
         const prior = await page.evaluate(() => window.IDDesignAPI.collections.mailboxes.find(row => row.id === 'qa-relay-c'));
         assert.equal(prior.remoteAliasId, undefined);
         assert.equal(prior.email, 'qa-relay-c@example.test');
-        await close();
+        await page.keyboard.press('Escape');
       }
     }
     await page.setViewportSize({ width: 1440, height: 900 });

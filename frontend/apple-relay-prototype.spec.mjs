@@ -45,6 +45,7 @@ function runtime(store, { relayConfigured = true } = {}) {
     callback = null,
     sequence = 0,
     opened = null,
+    menu = null,
     html = '',
     clock = '2026-11-03 10:30';
   const tables = [],
@@ -140,6 +141,7 @@ function runtime(store, { relayConfigured = true } = {}) {
     go: (route) => {
       api.state.route = route;
     },
+    openActionMenu: (_anchor, body) => { menu = { body }; },
     openDrawer: (title, description, body, footer, key) => {
       opened = { title, description, body, footer, key };
       drawer.open = true;
@@ -294,6 +296,9 @@ function runtime(store, { relayConfigured = true } = {}) {
     get opened() {
       return opened;
     },
+    get menu() {
+      return menu;
+    },
     get html() {
       return html;
     },
@@ -437,7 +442,8 @@ test('本机隐藏邮箱的账号状态独立于使用状态，重新打开后�
   const [initial] = browser.assets;
 
   browser.click('relay-alias-more', { id: initial.id });
-  assert.match(browser.opened.body, /移入死号/);
+  assert.match(browser.menu.body, /移入死号/);
+  assert.equal(browser.drawer.open, false, '更多操作直接显示菜单，不打开中转抽屉');
   browser.click('relay-health', { id: initial.id, health: 'dead' });
   await browser.confirm();
   browser = runtime(store);
@@ -509,7 +515,7 @@ test('既有未接入的隐藏邮箱可从原记录补接收件服务并保留�
   const browser = runtime(store);
   await setImmediate();
   browser.click('relay-alias-more', { id: original.id });
-  assert.match(browser.opened.body, /接入收件服务/);
+  assert.match(browser.menu.body, /接入收件服务/);
   browser.click('relay-alias-bind', { id: original.id });
   await browser.confirm();
   const { mailboxes } = store.load('inventory').data;
@@ -520,8 +526,8 @@ test('既有未接入的隐藏邮箱可从原记录补接收件服务并保留�
   assert.equal(mailboxes[0].remoteAliasId, 'fixture-upstream-previous@example.test');
   assert.deepEqual(mailboxes[0].inventoryHistory.slice(0, -1), original.inventoryHistory);
   browser.click('relay-alias-more', { id: original.id });
-  assert.doesNotMatch(browser.opened.body, /接入收件服务/);
-  assert.match(browser.opened.body, /查看查询码/);
+  assert.doesNotMatch(browser.menu.body, /接入收件服务/);
+  assert.match(browser.menu.body, /查看查询码/);
 });
 
 test('隐藏邮箱及主邮箱的远端 UTC 时间与历史本地时间均按北京时间显示', () => {

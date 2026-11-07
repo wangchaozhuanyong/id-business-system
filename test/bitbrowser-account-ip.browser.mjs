@@ -53,6 +53,15 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-local-group option[value="fixture-group"]').waitFor({ state: 'attached' });
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
     await page.locator('#bit-toggle-connection').click();
+    const keyField = page.locator('#bit-local-token').locator('xpath=ancestor::div[contains(@class,"field")][last()]');
+    const keyHelp = page.locator('#bit-local-token-help');
+    const keyBefore = await page.locator('#bit-local-token').boundingBox();
+    await page.getByLabel('查看本机接口密钥说明', { exact: true }).click();
+    await page.locator('#bit-local-token-help:popover-open').waitFor();
+    assert.match(await keyHelp.innerText(), /加密保存/);
+    assert.deepEqual(await page.locator('#bit-local-token').boundingBox(), keyBefore, '密钥说明不移动输入框');
+    assert.equal(await keyField.locator('.field-control > .field-help').count(), 0);
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: '查看本机接口密钥', exact: true }).click(); assert.equal(await page.locator('#bit-local-token').getAttribute('type'), 'text');
     await page.getByRole('button', { name: '隐藏本机接口密钥', exact: true }).click(); assert.equal(await page.locator('#bit-local-token').getAttribute('type'), 'password');
     assert.equal(await page.locator('#bit-proxy-country').isVisible(), false);

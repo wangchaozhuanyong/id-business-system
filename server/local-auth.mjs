@@ -574,5 +574,10 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     }
   }
 
-  return { getActor, orderOwners, handle };
+  return {
+    getActor, orderOwners, handle,
+    changeVersion: () => createHash('sha256').update(JSON.stringify(
+      readAccounts(accountPath).employees.map(({ id, version }) => [id, version]).sort(([a], [b]) => a.localeCompare(b))
+    )).digest('hex')
+  };
 }

@@ -961,7 +961,7 @@
           label: '操作',
           action: true,
           render: (asset) =>
-            `<div class="action-links">${textAction('编辑', 'inventory-edit', `data-id="${asset.id}"`)}${textAction('详情', 'inventory-detail', `data-id="${asset.id}"`)}${textAction('更多操作', 'inventory-more', `data-id="${asset.id}"`)}</div>`
+            `<div class="action-links">${textAction('编辑', 'inventory-edit', `data-id="${asset.id}"`)}${textAction('详情', 'inventory-detail', `data-id="${asset.id}"`)}${textAction('更多操作', 'inventory-more', `data-id="${asset.id}" aria-haspopup="menu" aria-expanded="false"`, '', 'down')}</div>`
         }
       ];
       const selection = api.getSelection('inventory-module-assets');
@@ -1943,15 +1943,10 @@
       button('关闭', 'inventory-close')
     );
   }
-  function assetMore(id) {
+  function assetMore(id, node) {
     const asset = assetById(id);
     if (!asset) return;
-    showDrawer(
-      '资料操作',
-      '',
-      `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(asset.email)}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`,
-      button('关闭', 'inventory-close')
-    );
+    api.openActionMenu(node, `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(asset.email)}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
   function submissionPage(accountEntry = false) {
     const choices = accountEntry ? accountSubmissionTypes : mailboxWorkflowTypes();
@@ -2407,7 +2402,7 @@
           '',
           '注册记录'
         )
-      : empty('暂无注册记录', '从未使用邮箱的资料操作中登记或模拟注册结果。');
+      : empty('暂无注册记录', '从未使用邮箱的“更多操作”中登记或模拟注册结果。');
   }
   function openRegistration(assetId) {
     const asset = assetById(assetId);
@@ -3378,7 +3373,7 @@
     else if (action === 'inventory-add-type') assetEditor('', node.dataset.type);
     else if (action === 'inventory-edit') assetEditor(id);
     else if (action === 'inventory-detail') assetDetail(id);
-    else if (action === 'inventory-more') assetMore(id);
+    else if (action === 'inventory-more') assetMore(id, node);
     else if (action === 'inventory-account-lifecycle') void openAccountLifecycle(id, node.dataset.operation);
     else if (action === 'inventory-lifecycle-review') void openAccountLifecycle(id, node.dataset.operation, true);
     else if (action === 'inventory-lifecycle-order') api.go(`orders/detail/${encodeURIComponent(id)}`);
