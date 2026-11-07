@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export function signRechargeAssertion(secret, method, path, actor, now = Date.now()) {
@@ -25,7 +26,9 @@ export function verifyRechargeAssertion(secret, method, path, assertion, now = D
         typeof actor?.id !== 'string' || !actor.id.trim() || actor.id.length > 256 ||
         typeof actor.email !== 'string' || actor.email.length > 320 ||
         typeof actor.admin !== 'boolean' || typeof actor.sensitive !== 'boolean' ||
-        actor.sensitive && !actor.admin) return null;
-    return Object.freeze({ id: actor.id, email: actor.email, admin: actor.admin, sensitive: actor.sensitive });
+        actor.sensitive && !actor.admin ||
+        actor?.clientIp !== undefined && !isIP(actor.clientIp)) return null;
+    return Object.freeze({ id: actor.id, email: actor.email, admin: actor.admin, sensitive: actor.sensitive,
+      ...(actor.clientIp === undefined ? {} : { clientIp: actor.clientIp }) });
   } catch { return null; }
 }

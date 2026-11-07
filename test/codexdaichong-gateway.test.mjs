@@ -48,7 +48,7 @@ test('proxy import normalizes a complete batch before forwarding and rejects inv
   assert.equal((await send({ proxies: [raw] }, 'admin', 'http://other.test')).status, 403);
   assert.equal((await send('{invalid')).status, 400);
   assert.equal((await send({ proxies: [raw] }, 'admin', origin, 'text/plain')).status, 415);
-  assert.equal((await send(JSON.stringify({ proxies: ['x'.repeat(512 * 1024)] }))).status, 413);
+  assert.equal((await send(JSON.stringify({ proxies: ['x'.repeat(15 * 1024 * 1024)] }))).status, 413);
   assert.equal(received.length, before, '失败批次没有向执行器发送任何条目');
 });
 
@@ -147,12 +147,14 @@ test('gateway accepts the unified session only and preserves upstream JSON and C
   });
   assert.deepEqual(await success.json(), { success: true });
   assert.equal(success.headers.get('set-cookie'), null);
-  assert.deepEqual(upstreamRequests.at(-1).claim.actor, member);
+  assert.deepEqual(upstreamRequests.at(-1).claim.actor, { ...member, clientIp: '127.0.0.1' });
   assert.equal(upstreamRequests.at(-1).cookie, undefined);
   assert.equal(upstreamRequests.at(-1).authorization, undefined);
   assert.equal(upstreamRequests.at(-1).body, '{"cdks":["fixture"]}');
   assert.equal((await makeRequest('/api/admin/cards', { headers: adminHeaders })).status, 200);
-  assert.deepEqual(upstreamRequests.at(-1).claim.actor, admin);
+  assert.deepEqual(upstreamRequests.at(-1).claim.actor, { ...admin, clientIp: '127.0.0.1' });
+  await makeRequest('/api/public/runtime', { headers: { ...memberHeaders, 'x-forwarded-for': 'spoofed, 203.0.113.17', 'x-real-ip': 'spoofed' } });
+  assert.equal(upstreamRequests.at(-1).claim.actor.clientIp, '203.0.113.17');
 
   const captcha = await makeRequest('/api/task-captcha/fixture', {
     headers: memberHeaders,

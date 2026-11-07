@@ -12,7 +12,7 @@ test('带协议四段、裸四段、账号在前和标准地址统一规范化�
     assert.deepEqual(normalizeRechargeProxyInput(value).proxies, [canonical]);
   }
   assert.equal(normalizeRechargeProxyInput(`HTTP://${raw}`).proxies[0], `http://${user}:example-pass@${host}`);
-  assert.equal(normalizeRechargeProxyInput('https://user:pass@gate.example.test:443/').proxies[0], 'https://user:pass@gate.example.test:443');
+  assert.equal(normalizeRechargeProxyInput('https://user:pass@gate.example.test:443/').proxies[0], 'https://user:pass@gate.example.test:443/');
 });
 
 test('特殊字符密码、IPv6 和会话占位符保留准确，不重复编码', () => {
@@ -34,12 +34,24 @@ test('批量忽略空行且规范后去重；错误整批拒绝并只显示行�
     /第 2 行/.test(error.message) && /整批未保存/.test(error.message) && !error.message.includes(secret));
 });
 
-test('无效端口、缺失凭据、路径、控制字符、协议与超量导入均拒绝', () => {
+test('无效端口、缺失凭据、路径、控制字符、不支持协议均拒绝', () => {
   for (const value of ['', {}, ['not-a-proxy'], 'host.example.test:0:user:pass',
     'host.example.test:65536:user:pass', 'socks5://user:@host.example.test:1080',
-    'socks5://user:pass@host.example.test:1080/path', 'socks4://host.example.test:1080',
+    'socks5://user:pass@host.example.test:1080/path', 'ftp://host.example.test:1080',
     'socks5://user:pa%0Ass@host.example.test:1080', 'host.example.test:1080:user:pass\u0000',
-    Array(501).fill(raw), 'x'.repeat(512 * 1024 + 1)]) {
+    'x'.repeat(512 * 1024 + 1)]) {
     assert.throws(() => normalizeRechargeProxyInput(value));
   }
+});
+
+
+test('原版支持的协议、密码会话占位符和大批次保持原值', () => {
+  for (const scheme of ['http', 'https', 'socks', 'socks4', 'socks5', 'socks5h']) {
+    const value = `${scheme}://user-{session}:pass-{SeSsIoN}@gate.example.test:1080`;
+    assert.equal(normalizeRechargeProxyInput(value).proxies[0], value);
+  }
+  assert.equal(normalizeRechargeProxyInput('gate.example.test:1080:user:pass-{session}').proxies[0],
+    'socks5://user:pass-{session}@gate.example.test:1080');
+  assert.equal(normalizeRechargeProxyInput(Array.from({ length: 501 }, (_, i) =>
+    `socks5://u${i}:pass@gate.example.test:1080`)).proxies.length, 501);
 });

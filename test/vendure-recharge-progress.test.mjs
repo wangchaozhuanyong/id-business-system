@@ -201,3 +201,64 @@ test('collector failure and ambiguous activation never cancel or resend the orig
   assert.equal(activationCount, 1);
   assert.equal(paths.some((path) => /cancel|retry|cards|admin/.test(path)), false);
 });
+
+test('Session shape is delegated unchanged and customer IP reaches the signed original request', async t => {
+  const f = fixture(t);
+  const raw = 'synthetic-bare-credential-delegated-to-native';
+  await f.vendure('submit', { code: 'synthetic-code', session: raw });
+  let seen = false;
+  t.mock.method(globalThis, 'fetch', async (input, options) => {
+    const url = new URL(input);
+    if (url.port === '31992') {
+      const reply = await f.post(url.pathname, JSON.parse(options.body), options.headers);
+      return Response.json(reply.body, { status: reply.status });
+    }
+    if (url.pathname === '/api/public/runtime') return Response.json({ success: true });
+    if (url.pathname === '/api/run-process') {
+      const claims = JSON.parse(Buffer.from(options.headers['x-id-recharge-assertion'].split('.')[0], 'base64url'));
+      assert.equal(claims.actor.clientIp, '203.0.113.10');
+      assert.deepEqual(JSON.parse(options.body), { cdk: 'synthetic-code', session: raw });
+      seen = true;
+      return Response.json({ success: true, jobKey: 'original-manual-job' });
+    }
+    return Response.json({ success: true, data: { jobKey: 'original-manual-job', cdkCode: 'synthetic-code',
+      status: 'failed', isTerminal: true, message: '订单处理超时，已转人工确认，请联系客服处理后再试' } });
+  });
+  const run = createVendureCodexdaichongWorker({ bridgeUrl: 'http://127.0.0.1:31992',
+    upstreamUrl: 'http://127.0.0.1:31993', workerSecret: f.workerSecret,
+    upstreamSecret: randomBytes(32).toString('hex'), pollIntervalMs: 1 });
+  assert.deepEqual(await run(), { status: 'awaiting_review' });
+  assert(seen);
+  assert.deepEqual(await run(), { status: 'idle' });
+});
+
+test('late verified results reconcile the same original job without submitting a second activation', async t => {
+  const f = fixture(t);
+  const submitted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+  const lease = (await f.worker('claim')).body.task;
+  const identity = { id: lease.id, leaseToken: lease.leaseToken, upstreamJobId: 'late-original-job' };
+  await f.worker('progress', { ...identity, stage: 'started' });
+  f.advance(301_000);
+  assert.equal((await f.vendure('task', { id: submitted.id, taskToken: submitted.taskToken })).body.status, 'awaiting_review');
+  assert.equal((await f.vendure('submit', { code: 'synthetic-code', session })).body.id, submitted.id);
+  assert.deepEqual((await f.worker('claim')).body, { task: null });
+  const result = { ...identity, outcome: 'confirmed_success', evidenceId: 'codexdaichong:late-original-job' };
+  assert.equal((await f.worker('result', { ...result, upstreamJobId: 'different' })).status, 400);
+  assert.equal((await f.worker('result', result)).body.status, 'succeeded');
+  assert.equal((await f.worker('result', result)).body.status, 'succeeded');
+});
+
+test('definitive failure allows only an explicit new submission; unknown outcomes stay bound', async t => {
+  const f = fixture(t);
+  const first = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+  const lease = (await f.worker('claim')).body.task;
+  await f.worker('result', { id: lease.id, leaseToken: lease.leaseToken, outcome: 'confirmed_failure',
+    upstreamJobId: 'failed-original-job', evidenceId: 'codexdaichong:failed-original-job' });
+  assert.deepEqual((await f.worker('claim')).body, { task: null });
+  const second = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+  assert.notEqual(second.id, first.id);
+  const retryLease = (await f.worker('claim')).body.task;
+  await f.worker('result', { id: retryLease.id, leaseToken: retryLease.leaseToken, outcome: 'unknown', upstreamJobId: 'unknown-original-job' });
+  assert.equal((await f.vendure('submit', { code: 'synthetic-code', session })).body.id, second.id);
+  assert.equal((await f.vendure('task', { id: first.id, taskToken: first.taskToken })).body.status, 'failed');
+});

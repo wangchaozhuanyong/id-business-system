@@ -90,33 +90,9 @@ async function readBody(req, maxBytes) {
   return Buffer.concat(chunks);
 }
 
-function acceptedSession(raw, now) {
-  if (typeof raw !== 'string' || !raw.trim() || Buffer.byteLength(raw) > 256_000) return false;
-  try {
-    const parsed = JSON.parse(raw);
-    const accessToken = parsed?.accessToken ?? parsed?.access_token;
-    const expires = typeof parsed?.expires === 'string' ? Date.parse(parsed.expires) : undefined;
-    if (
-      typeof parsed?.user?.id !== 'string' ||
-      !parsed.user.id.trim() ||
-      typeof parsed.user.email !== 'string' ||
-      !/^[^\s@]+@[^\s@]+$/.test(parsed.user.email) ||
-      typeof accessToken !== 'string' ||
-      accessToken.length < 20 ||
-      accessToken.length > 24_000 ||
-      (expires !== undefined && (!Number.isFinite(expires) || expires <= now))
-    )
-      return false;
-    try {
-      const claims = JSON.parse(Buffer.from(accessToken.split('.')[1] ?? '', 'base64url'));
-      if (typeof claims?.exp === 'number' && claims.exp * 1000 <= now) return false;
-    } catch {
-      // A worker must verify the credential and target before execution.
-    }
-    return true;
-  } catch {
-    return false;
-  }
+function acceptedSession(raw) {
+  // Credential shape, expiry and user enrichment belong to the pinned engine.
+  return typeof raw === 'string' && raw.trim().length > 0;
 }
 
 function codeKey(value) {
@@ -254,7 +230,7 @@ export function createLoopbackVendureRechargeBridge({
   }, signatureWindowMs);
   timer.unref();
 
-  function handleVendure(action, body, res, at) {
+  function handleVendure(action, body, res, at, clientIp) {
     if (action === 'config') return send(res, 200, { maintenance: !acceptSubmissions });
     if (action === 'task') {
       const task = tasks.get(body.id) ?? legacy.byId.get(body.id);
@@ -268,9 +244,12 @@ export function createLoopbackVendureRechargeBridge({
 
     const codeRef = fingerprint('code', codeKey(body.code));
     const record = registry.get(codeRef);
-    const prior = legacy.byCode.get(codeRef) ?? [...tasks.values()].find((task) => task.codeRef === codeRef);
+    const prior = legacy.byCode.get(codeRef) ?? [...tasks.values()].findLast((task) => task.codeRef === codeRef);
     if (action === 'submit') {
-      if (prior) return send(res, 200, taskView(prior, true));
+      // Only a new, explicit customer submission may retry a definitive failure.
+      // The engine still validates its own CDK state and resource/manual holds.
+      if (prior && (prior.status !== 'failed' || legacy.byCode.has(codeRef)))
+        return send(res, 200, taskView(prior, true));
       if (!acceptSubmissions) return send(res, 200, { rejected: true });
       if (!record || record.disabled || !acceptedSession(body.session, at))
         return send(res, 200, { rejected: true });
@@ -278,6 +257,7 @@ export function createLoopbackVendureRechargeBridge({
         id: randomUUID(),
         codeRef,
         plan: record.plan,
+        clientIp,
         queuedUntil: at + queuedLifetimeMs,
         status: 'queued',
         updatedAt: at
@@ -291,7 +271,8 @@ export function createLoopbackVendureRechargeBridge({
     const status = prior?.codeStatus ?? (prior
       ? prior.status === 'succeeded'
         ? 'used'
-        : 'reserved'
+        : prior.status === 'failed' && !legacy.byCode.has(codeRef) && !record?.disabled
+          ? 'available' : 'reserved'
       : record.disabled
         ? 'disabled'
         : 'available');
@@ -329,7 +310,8 @@ export function createLoopbackVendureRechargeBridge({
         commit(nextTasks, nextNonces);
         sessions.delete(task.id);
         return send(res, 200, {
-          task: { ...taskView(leased), leaseToken, leaseUntil, session, executionCode: record.upstreamCode }
+          task: { ...taskView(leased), leaseToken, leaseUntil, session, executionCode: record.upstreamCode,
+            ...(isIP(task.clientIp ?? '') ? { clientIp: task.clientIp } : {}) }
         });
       }
       return finish(200, { task: null });
@@ -343,7 +325,8 @@ export function createLoopbackVendureRechargeBridge({
     )
       return finish(404, { error: '执行租约不可用' });
     if (action === 'progress') {
-      if (task.status !== 'running') return finish(409, { error: '原任务已结束或需核对' });
+      if (task.status !== 'running' && !(task.status === 'awaiting_review' && !task.result))
+        return finish(409, { error: '原任务已结束或需核对' });
       if (!workerProgressStages.has(body.stage) || typeof body.upstreamJobId !== 'string' ||
           !upstreamJobPattern.test(body.upstreamJobId) ||
           (task.upstreamJobId && task.upstreamJobId !== body.upstreamJobId))
@@ -375,12 +358,14 @@ export function createLoopbackVendureRechargeBridge({
         task.result.upstreamJobId === upstreamJobId)
       return finish(200, taskView(task));
     if (
-      task.status !== 'running' ||
+      !['running', 'awaiting_review'].includes(task.status) ||
+      (task.status === 'awaiting_review' && confirmed && !upstreamJobId) ||
       (confirmed && [...tasks.values()].some((item) => item.result?.evidenceRef === evidenceRef))
     )
       return finish(409, { error: '已有结果、租约失效或凭证重复，需核对原任务' });
     const completed = {
       ...transition(task, status, at),
+      ...(upstreamJobId === undefined ? {} : { upstreamJobId }),
       result: { status, evidenceRef, receiptRef: nonceRef, receivedAt: at,
         ...(upstreamJobId === undefined ? {} : { upstreamJobId }) }
     };
@@ -441,7 +426,7 @@ export function createLoopbackVendureRechargeBridge({
     expire(at);
     if (worker && nonces.has(nonceRef)) return send(res, 409, { error: '执行请求已接收' });
     return vendure
-      ? handleVendure(vendure[1], body, res, at)
+      ? handleVendure(vendure[1], body, res, at, headers['x-vendure-client-ip'])
       : handleWorker(worker[1], body, res, at, nonceRef, nonceUntil);
   }
 
