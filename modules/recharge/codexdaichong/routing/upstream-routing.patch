@@ -20,9 +20,9 @@ diff --git a/server.js b/server.js
  const cfAccess = require('./cf-access');
  const runtimeLog = require('./runtime-log');
 @@ -3330,6 +3341,11 @@
- 
+
  // ─── Region Selector API ────────────────────────────────────────────────────
- 
+
 +app.use('/api/admin/recharge-routing', async (req, res) => {
 +    try { return (await getRechargeRouting()).handleAdmin(req, res); }
 +    catch { return res.status(503).json({ success: false, message: '套餐选路服务尚未就绪' }); }
@@ -52,7 +52,7 @@ diff --git a/server.js b/server.js
 @@ -4223,11 +4241,13 @@
      });
  }
- 
+
 -function spawnCheckoutDebugWorker({ task, token, sessionRaw, planType, region, planNameOverride, email, apiOnly = false }) {
 +function spawnCheckoutDebugWorker({ task, token, sessionRaw, planType, region, executionRoute, planNameOverride, email, apiOnly = false }) {
      (async () => {
@@ -81,12 +81,12 @@ diff --git a/server.js b/server.js
 -                })
 +                }))
              });
- 
+
              const analysis = analyzeCheckoutDebugOutput(run.output, run.timedOut);
 @@ -5019,7 +5039,7 @@
      return [...GPT_API_TERMINAL_FAILED].some((kw) => s.includes(kw.toLowerCase()));
  }
- 
+
 -function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clientIp }) {
 +function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clientIp, executionRoute }) {
      (async () => {
@@ -95,7 +95,7 @@ diff --git a/server.js b/server.js
 @@ -5044,7 +5064,9 @@
                      cdkCode: cdk
                  });
- 
+
 -                const proxy = await store.getActiveProxy();
 +                const routing = await getRechargeRouting();
 +                const proxy = executionRoute.proxy;
@@ -110,7 +110,7 @@ diff --git a/server.js b/server.js
 +                    PAYMENT_REGION_OVERRIDE: executionRoute.region,
                      PROXY: proxy
                  };
- 
+
 @@ -5063,7 +5086,7 @@
                  const run = await spawnWorkerWithBrowser({
                      jobKey: task.jobKey,
@@ -127,12 +127,12 @@ diff --git a/server.js b/server.js
 -                    })
 +                    }))
                  });
- 
+
                  const cardLast4 = extractCardLast4FromOutput(run.output);
 @@ -5389,7 +5412,13 @@
          const gptApiConfig = await store.getGptApiConfig();
          const useGptApi = gptApiConfig.enabled && Boolean(gptApiConfig.api_key);
- 
+
 +        let executionRoute;
          if (!useGptApi) {
 +            try { executionRoute = await (await getRechargeRouting()).resolve(planType); }
@@ -150,7 +150,7 @@ diff --git a/server.js b/server.js
 -            spawnActivationWorker({ task, token, sessionRaw: storedSession, cdk, cdkDetails, clientIp });
 +            spawnActivationWorker({ task, token, sessionRaw: storedSession, cdk, cdkDetails, clientIp, executionRoute });
          }
- 
+
          return res.json({
 diff --git a/region-config.js b/region-config.js
 --- a/region-config.js
@@ -168,7 +168,7 @@ diff --git a/pricing-checkout.js b/pricing-checkout.js
 +++ b/pricing-checkout.js
 @@ -8,6 +8,7 @@
  const PRICING_URL = 'https://chatgpt.com/#pricing';
- 
+
  const REGION_UI_LABELS = {
 +    EG: ['埃及', 'Egypt', 'مصر'],
      PH: ['菲律宾', 'Philippines', 'Pilipinas'],
@@ -176,7 +176,7 @@ diff --git a/pricing-checkout.js b/pricing-checkout.js
      SG: ['新加坡', 'Singapore'],
 @@ -15,6 +16,7 @@
  };
- 
+
  const REGION_CURRENCY_HINTS = {
 +    EG: ['EGP', 'E£', 'ج.م'],
      PH: ['₱'],
@@ -184,7 +184,7 @@ diff --git a/pricing-checkout.js b/pricing-checkout.js
      SG: ['S$', 'SGD'],
 @@ -22,6 +24,7 @@
  };
- 
+
  const REGION_PRICE_PATTERNS = {
 +    EG: [/EGP\s*[\d,.]+/i, /[\d,.]+\s*EGP/i, /E£\s*[\d,.]+/, /ج\.م/],
      PH: [/₱\s*[\d,.]+/, /[\d,.]+\s*₱/],
@@ -192,7 +192,7 @@ diff --git a/pricing-checkout.js b/pricing-checkout.js
      SG: [/S\$\s*[\d,.]+/, /[\d,.]+\s*SGD/i],
 @@ -29,6 +32,7 @@
  };
- 
+
  const REGION_WRONG_CURRENCY = {
 +    EG: [/₱\s*[\d,.]+/, /\bPHP\b/i, /RM\s*[\d,.]+/, /S\$\s*[\d,.]+/, /\bUSD\b/i, /€\s*[\d,.]+/, /\bGBP\b/i],
      PH: [/£\s*[\d,.]+/, /[\d,.]+\s*£/, /\bGBP\b/i, /United Kingdom/i, /Great Britain/i, /€\s*[\d,.]+/, /[\d,.]+\s*€/, /\bEUR\b/i],
@@ -200,7 +200,7 @@ diff --git a/pricing-checkout.js b/pricing-checkout.js
      SG: [/£\s*[\d,.]+/, /₱\s*[\d,.]+/, /\$\s*20(?:\.00)?\s*(?:USD|\/)/i, /RM\s*[\d,.]+/],
 @@ -36,6 +40,7 @@
  };
- 
+
  const REGION_CURRENT_COUNTRY_HINTS = {
 +    EG: [/Egypt|埃及|مصر/i],
      PH: [/菲律宾|Philippines|Pilipinas/i],
@@ -208,20 +208,20 @@ diff --git a/pricing-checkout.js b/pricing-checkout.js
      SG: [/Singapore|新加坡/i],
 @@ -51,7 +56,7 @@
  };
- 
+
  const PRO_TIERS = Object.freeze({ pro100: '100', pro200: '200', pro500: '500' });
 -const CURRENCY_MARKS = Object.freeze({ MYR: ['MYR', 'RM'], PHP: ['PHP', '₱'], SGD: ['SGD', 'S$'], USD: ['USD', 'US$', '$'] });
 +const CURRENCY_MARKS = Object.freeze({ EGP: ['EGP', 'E£', 'ج.م'], MYR: ['MYR', 'RM'], PHP: ['PHP', '₱'], SGD: ['SGD', 'S$'], USD: ['USD', 'US$', '$'] });
- 
+
  function normalizeOptionText(text) {
      return String(text || '').replace(/\s+/g, ' ').trim();
 @@ -238,7 +243,7 @@
      return false;
  }
- 
+
 -const ALL_COUNTRY_NAME_PATTERN = /^(United Kingdom|Philippines|United States|Singapore|Malaysia|Afghanistan|Algeria|Andorra|Albania|Australia|Canada|Japan|China|菲律宾)$/i;
 +const ALL_COUNTRY_NAME_PATTERN = /^(Egypt|埃及|مصر|United Kingdom|Philippines|United States|Singapore|Malaysia|Afghanistan|Algeria|Andorra|Albania|Australia|Canada|Japan|China|菲律宾)$/i;
- 
+
  async function isRegionMenuOpen(page) {
      const viewport = page.locator('[data-radix-scroll-area-viewport]').last();
 @@ -529,7 +534,7 @@
