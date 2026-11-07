@@ -11,11 +11,12 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
   const profile = { id: '11111111-1111-4111-8111-111111111111', name: '办公室电脑', accountName: 'fixture-account', url: 'http://127.0.0.1:54345', groupName: '合成分组', tagName: '合成标签', coreVersion: '152', proxyMode: 'dynamic', proxyType: 'http', expectedCountryCode: '', staticHost: '', staticPort: 8080, sessionWaitMinutes: 2, sessionRetryLimit: 9, hasInterfaceToken: true };
   for (const theme of ['light', 'dark']) for (const width of [1440, 1024, 900, 768, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 } }); const page = await context.newPage(); page.setDefaultTimeout(6000);
-    const errors = [], unexpected = []; let version = 0, items = [], attempts = 0, selectedBody;
+    const errors = [], unexpected = []; let version = 0, items = [], attempts = 0, probeAttempts = 0, selectedBody;
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname;
       const json = (data, status = 200, headers = {}) => route.fulfill({ status, contentType: 'application/json', headers, body: JSON.stringify(data) });
+      if (url.hostname === '127.0.0.1' && path === '/checkagent') return json({ success: true, data: ++probeAttempts <= 2 ? { success: false } : { success: true, data: { ip: '8.8.8.8', countryCode: 'PH' } } }, 200, { 'access-control-allow-origin': origin });
       if (url.hostname === '127.0.0.1') return json({ success: true, data: path === '/group/list' ? { list: [{ id: 'fixture-group', groupName: '合成分组' }] } : path === '/browserTag/list' ? [{ id: 'fixture-tag', tagName: '合成标签' }] : {} }, 200, { 'access-control-allow-origin': origin });
       if (url.origin !== origin) { unexpected.push(url.origin); return route.abort(); }
       if (path === '/api/local/bitbrowser-connections') {
@@ -27,13 +28,13 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
         if (request.method() === 'PUT') {
           const body = request.postDataJSON(); attempts++;
           if (attempts === 1) return json({ error: '合成保存失败，请重试' }, 503);
-          assert.equal(body.countryCode, 'MY'); assert.equal(body.kind, 'mobile');
+          assert.equal(body.countryCode, 'PH'); assert.equal(body.kind, 'dynamic_residential'); assert.equal(body.protocol, 'socks5'); assert.match(body.link || 'socks5://retained', /^socks5:/);
           version++;
           const saved = { id: body.id || '22222222-2222-4222-8222-222222222222', name: body.name, countryCode: body.countryCode, kind: body.kind, mode: body.mode, protocol: body.protocol, endpoint: '192.0.2.8:8080' };
           items = body.id ? items.map(item => item.id === body.id ? saved : item) : [saved];
           return json({ version, items, savedId: saved.id });
         }
-        selectedBody = request.postDataJSON(); return json({ ...items[0], link: 'http://synthetic-user:synthetic-pass@192.0.2.8:8080' });
+        selectedBody = request.postDataJSON(); return json({ ...items[0], link: 'socks5://synthetic-user:synthetic-pass@192.0.2.8:8080' });
       }
       if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort}; return {email:'fixture@example.test'}; }` });
       let file;
@@ -63,11 +64,20 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#bit-connection-help').isVisible(), false);
     await page.locator('#bit-add-proxy').click();
-    await page.locator('#bit-ip-name').fill('新电脑移动 IP'); await page.locator('#bit-ip-country').fill('MY');
-    await page.locator('#bit-ip-link').fill('http://synthetic-user:synthetic-pass@192.0.2.8:8080');
+    assert.equal(await page.locator('#bit-ip-country').isVisible(), false);
+    assert.equal(await page.locator('#bit-ip-mode').isVisible(), false);
+    assert.equal(await page.locator('#bit-ip-protocol').isVisible(), false);
+    await page.locator('#bit-ip-name').fill('新电脑住宅 IP');
+    await page.locator('#bit-ip-link').fill('synthetic-user:synthetic-pass@192.0.2.8:8080');
+    await page.locator('#bit-ip-test').click();
+    await page.getByText('代理检测未通过，请核对代理账号、密码、套餐余额或稍后重试。', { exact: true }).waitFor();
+    assert.equal(await page.locator('#bit-ip-link').inputValue(), 'synthetic-user:synthetic-pass@192.0.2.8:8080');
+    await page.locator('#bit-ip-test').click();
+    await page.waitForFunction(() => document.querySelector('#bit-ip-probe-result').textContent.includes('8.8.8.8'));
+    assert.equal(await page.locator('#bit-ip-country').inputValue(), '菲律宾');
     await page.locator('#bit-ip-save').click(); await page.getByText('合成保存失败，请重试', { exact: true }).waitFor();
-    assert.equal(await page.locator('#bit-ip-link').inputValue(), 'http://synthetic-user:synthetic-pass@192.0.2.8:8080');
-    const alignment = await page.locator('#bit-proxy-editor .field').evaluateAll(fields => fields.map(field => {
+    assert.equal(await page.locator('#bit-ip-link').inputValue(), 'synthetic-user:synthetic-pass@192.0.2.8:8080');
+    const alignment = await page.locator('#bit-proxy-editor .field').evaluateAll(fields => fields.filter(field => field.getBoundingClientRect().height > 0).map(field => {
       const label = field.querySelector('label'), input = field.querySelector('input,select');
       const a = label.getBoundingClientRect(), b = input.getBoundingClientRect(); return { right: a.right, left: b.left, overlap: a.right > b.left + 1 };
     })); assert(alignment.every(item => !item.overlap), JSON.stringify({ width, alignment }));
@@ -83,9 +93,12 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-ip-search').fill('没有匹配的合成资料');
     assert.equal(await page.locator('#bit-ip-empty').isVisible(), true);
     await page.locator('#bit-ip-search').fill('新电脑');
+    await page.locator('#bit-ip-rows').getByRole('button', { name: '测试', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('#bit-library-result').textContent.includes('8.8.8.8'));
     await page.locator('#bit-ip-rows').getByRole('button', { name: '编辑', exact: true }).click();
     assert.equal(await page.locator('#bit-ip-link').inputValue(), '');
-    await page.locator('#bit-ip-name').fill('新电脑移动 IP 已修改');
+    assert.equal(await page.locator('#bit-ip-country').inputValue(), '菲律宾');
+    await page.locator('#bit-ip-name').fill('新电脑住宅 IP 已修改');
     await page.screenshot({ path: fileURLToPath(new URL(`drawer-${theme}-${width}.png`, output)), fullPage: true });
     await page.locator('#bit-ip-save').click(); await page.locator('#bit-proxy-editor').waitFor({ state: 'hidden' });
     await page.locator('#bit-tab-library').click(); await page.locator('#bit-ip-search').fill('');
@@ -93,12 +106,12 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     const actionGeometry = await page.locator('#bit-ip-rows tr:first-child td:last-child button').evaluateAll(buttons => buttons.map(button => { const a=button.getBoundingClientRect(), b=button.closest('.table-viewport').getBoundingClientRect(); return a.left>=b.left && a.right<=b.right+1; }));
     assert(actionGeometry.every(Boolean), `${width} operation clipped`);
     await page.locator('#bit-tab-login').click();
-    assert.match(await page.locator('#bit-execution-proxy option:checked').innerText(), /马来西亚.*移动 IP/);
+    assert.match(await page.locator('#bit-execution-proxy option:checked').innerText(), /菲律宾.*动态住宅/);
     const authorization = JSON.stringify({ sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: 'fixture@example.test' }, account: { id: 'account-fixture' } });
     await page.locator('#bit-authorization-json').fill(authorization); await page.locator('#bit-start-login').click();
     await page.getByText('登录成功 · fixture@example.test。比特浏览器窗口已保留。', { exact: true }).waitFor();
     assert.deepEqual(selectedBody, { id: items[0].id, version: 2 });
-    assert.deepEqual(await page.evaluate(() => window.fixtureLaunch), { country: 'MY', protocol: 'http', host: '192.0.2.8', port: 8080 });
+    assert.deepEqual(await page.evaluate(() => window.fixtureLaunch), { country: 'PH', protocol: 'socks5', host: '192.0.2.8', port: 8080 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     await page.screenshot({ path: fileURLToPath(new URL(`${theme}-${width}.png`, output)), fullPage: true });
     assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); await context.close();

@@ -37,6 +37,7 @@ const messages = {
 };
 const operationMessages = {
   browser_health: '检测比特接口',
+  proxy_check: '检测代理',
   browser_groups: '读取比特分组',
   browser_tags: '读取比特标签',
   browser_list: '核验原窗口资料',
@@ -97,6 +98,7 @@ function directBrowserFailure(error, operation) {
 }
 const requestOperations = {
   '/health': 'browser_health',
+  '/checkagent': 'proxy_check',
   '/group/list': 'browser_groups',
   '/browserTag/list': 'browser_tags',
   '/browser/list': 'browser_list',

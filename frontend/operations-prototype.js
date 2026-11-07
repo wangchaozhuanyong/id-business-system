@@ -94,8 +94,9 @@
   function frameDraftFieldAllowed(scope, key) {
     if (scope === 'admin') return rechargeDraftFields.has(key) ||
       /^address\/(?:new|[1-9]\d{0,15})\/addr_(?:line1|city|state|postal_code|country)$/.test(key);
-    if (scope === 'bit-local') return key === 'bit-window-name' ||
-      /^profile\/[a-zA-Z0-9_-]{1,80}\/(?:version|bit-connection-name|bit-local-url|bit-core|bit-proxy-mode|bit-proxy-type|bit-proxy-country|bit-proxy-host|bit-proxy-port|bit-session-wait|bit-session-retries|groupPreference|tagPreference)$/.test(key);
+    if (scope === 'bit-local') return ['bit-window-name', 'workspace', 'bit-execution-proxy', 'ip-search', 'ip-filter', 'ip-sort', 'ip-page'].includes(key) ||
+      /^ip-draft\/[a-zA-Z0-9_-]{1,80}\/(?:name|country|kind|mode|protocol|version)$/.test(key) ||
+      /^profile\/[a-zA-Z0-9_-]{1,80}\/(?:version|bit-connection-name|bit-account-name|bit-local-url|bit-core|bit-proxy-mode|bit-proxy-type|bit-proxy-country|bit-proxy-host|bit-proxy-port|bit-session-wait|bit-session-retries|groupPreference|tagPreference)$/.test(key);
     return false;
   }
   window.IDRechargeDrafts = Object.freeze({

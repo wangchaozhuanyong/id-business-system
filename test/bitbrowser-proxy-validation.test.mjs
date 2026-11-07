@@ -30,3 +30,9 @@ test('editing keeps the existing secret and id, but requires a new link for prot
   assert.throws(() => validateBitBrowserProxyWrite({ ...input, id: proxy.id, link: '' }, proxy), { status: 400 });
   assert.throws(() => validateBitBrowserProxyWrite({ ...input, id: proxy.id }, undefined), { status: 404 });
 });
+
+test('simple form infers a raw proxy connection and accepts an automatically detected country', () => {
+  const { proxy } = validateBitBrowserProxyWrite({ version: 0, name: '住宅代理', kind: 'dynamic_residential', link: 'user:synthetic-pass@proxy.example.test:8082' });
+  assert.equal(proxy.countryCode, ''); assert.equal(proxy.mode, 'static'); assert.equal(proxy.protocol, 'socks5');
+  assert.match(proxy.link, /^socks5:/);
+});

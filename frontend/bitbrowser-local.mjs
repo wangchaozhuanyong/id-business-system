@@ -160,7 +160,7 @@ for (const name of ['login', 'library']) {
 }
 get('bit-show-library').addEventListener('click', () => showWorkspace('library', true));
 showWorkspace(readConnectionDrafts().workspace === 'library' ? 'library' : 'login');
-executionProxies = initializeExecutionProxies({ get, drafts: draftBridge, onChange: updateStartButton, locked: () => Boolean(activeLogin), onUse: () => showWorkspace('login') });
+executionProxies = initializeExecutionProxies({ get, drafts: draftBridge, onChange: updateStartButton, locked: () => Boolean(activeLogin), onUse: () => showWorkspace('login'), connection: () => ({ url: urlInput.value, token: tokenInput.value }) });
 void executionProxies.refresh();
 get('bit-token-eye').addEventListener('click', () => {
   const visible = tokenInput.type === 'password';
@@ -649,6 +649,7 @@ loginForm.addEventListener('submit', async (event) => {
       },
       proxyType: executionProxy.proxyType,
       expectedCountryCode: executionProxy.expectedCountryCode,
+      useSelectedProxy: true,
       dynamicProxyUrl: executionProxy.dynamicProxyUrl,
       staticProxyCredentials: executionProxy.staticProxyCredentials,
       signal: check.signal,

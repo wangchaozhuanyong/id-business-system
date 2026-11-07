@@ -149,7 +149,7 @@
 .bit-local__ip-table td:first-child { max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
 .bit-local__ip-table td { white-space: nowrap; }
 .bit-local__ip-table tr[aria-selected='true'] { background: var(--primary-soft); }
-.bit-local__ip-table th:last-child, .bit-local__ip-table td:last-child { position: sticky; right: 0; background: var(--surface); min-width: 150px; border-left: 1px solid var(--line); }
+.bit-local__ip-table th:last-child, .bit-local__ip-table td:last-child { position: sticky; right: 0; background: var(--surface); min-width: 218px; border-left: 1px solid var(--line); }
 .bit-local__ip-table tr[aria-selected='true'] td:last-child { background: var(--primary-soft); }
 .bit-local__ip-table th:last-child { background: var(--surface-soft); }
 .bit-local__pagination { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 14px var(--panel-padding-inline); border-top: 1px solid var(--line); color: var(--secondary); }

@@ -43,7 +43,8 @@ export async function runBitBrowserJsonLogin({
   proxyType = 'http',
   dynamicProxyUrl = '',
   staticProxyCredentials,
-  expectedCountryCode = ''
+  expectedCountryCode = '',
+  useSelectedProxy = false
 } = {}) {
   if (globalThis.isSecureContext === false) {
     throw new DirectBrowserError('bitbrowser_secure_context_required');
@@ -85,7 +86,7 @@ export async function runBitBrowserJsonLogin({
   const { localApiToken, ...profileSettings } = settings;
   const proxyConfiguration = await digest(JSON.stringify(profileSettings));
   const networkKeys = new Set(['proxyMode', 'staticHost', 'staticPort', 'dynamicProvider', 'refreshIp']);
-  const profileConfiguration = expectedCountryCode ? await digest(JSON.stringify({ localApiUrl,
+  const profileConfiguration = (useSelectedProxy || expectedCountryCode) ? await digest(JSON.stringify({ localApiUrl,
     groupName, tagName, browserOptions: Object.fromEntries(Object.entries(settings.browserOptions).filter(([key]) => !networkKeys.has(key))) })) : proxyConfiguration;
   if (signal.aborted) throw new DirectBrowserError('bitbrowser_direct_cancelled');
   if (activeLogins.has(key)) throw new Error('该账号已有登录任务正在进行。');
@@ -94,7 +95,7 @@ export async function runBitBrowserJsonLogin({
     throw new Error('该账号已关联本次会话的比特窗口，请用原窗口配置重试。');
   }
 
-  settings.updateOwnedProxy = Boolean(expectedCountryCode && saved && saved.proxyConfiguration !== proxyConfiguration);
+  settings.updateOwnedProxy = Boolean((useSelectedProxy || expectedCountryCode) && saved && saved.proxyConfiguration !== proxyConfiguration);
   activeLogins.add(key);
   try {
     const result = await runDirectJsonSession(settings, expected, profileName, signal, {
