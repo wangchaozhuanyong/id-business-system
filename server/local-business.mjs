@@ -631,7 +631,7 @@ export function createLocalBusinessStore(databasePath) {
       const snapshot = readDocument('inventory');
       const commerce = readDocument('commerce');
       const review = usageReviewRows(inspectInventoryUsage(snapshot.data, commerce.data));
-      return { ...snapshot, usageReview: review, commerceVersion: commerce.version,
+      return { ...snapshot, ...(review.length && { usageReview: review }), commerceVersion: commerce.version,
         accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data) };
     },
     saveAccountLifecycle(body, actor) {
