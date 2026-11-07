@@ -32,16 +32,16 @@ test('recharge transitions keep content and geometry through delayed, superseded
       page.setDefaultTimeout(8000);
       await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
         ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
-      const frameSelector = '.recharge-integration__content iframe:not([hidden])';
+      const frameSelector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
       const frame = () => page.frameLocator(frameSelector);
-      const idle = () => page.locator('.recharge-integration__view[aria-busy="false"]').waitFor();
+      const idle = () => page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view[aria-busy="false"]').waitFor();
       const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const startProbe = () => page.evaluate(() => {
         const probe = { running: true, frames: [] };
         window.__layoutTransitionProbe = probe;
         function tick() {
-          const frame = document.querySelector('.recharge-integration__content iframe:not([hidden])');
-          const bar = document.querySelector('.recharge-integration__toolbar');
+          const frame = document.querySelector('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
+          const bar = document.querySelector('#main > [data-page-region]:not([hidden]) .recharge-integration__toolbar');
           probe.frames.push({ height: frame?.getBoundingClientRect().height || 0,
             view: frame?.dataset.view, toolbarHeight: bar?.getBoundingClientRect().height,
             documentHeight: document.documentElement.scrollHeight,
@@ -132,14 +132,16 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await idle();
         assert.equal(statusChecks, 3, '恢复后重新记录服务状态');
 
+        // Identity cleanup must discard every retained page before the next entry.
+        await page.evaluate(() => window.IDDesignAPI.clearPageRegions());
+        assert.equal(await page.locator('#main [data-page-region]').count(), 0);
         const expired = route => route.fulfill({ status: 401, json: { message: '请通过统一账号登录' } });
-        await page.route('**/integrations/codexdaichong/workspace', expired, { times: 1 });
         await page.route('**' + statusPath, expired, { times: 1 });
         await page.evaluate(() => { location.hash = '#/workspace/recharge'; });
         const denied = page.locator('[data-recharge-module="workspace"] [data-unavailable="401"]');
         await denied.getByRole('button', { name: /去登录/ }).waitFor();
         await idle();
-        assert.equal(statusChecks, 4, '新页面被拒绝时重新核验会话');
+        assert.equal(statusChecks, 4, '身份清理后的新页面重新核验会话');
 
         await page.setViewportSize({ width, height: 460 });
         const navigate = async route => {
@@ -175,7 +177,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await settle();
         const bitScroll = await page.evaluate(() => scrollY);
         assert(bitScroll > 0, '比特登录页面必须覆盖实际滚动');
-        await navigate('workspace/order');
+        await navigate('workspace/order/gpt');
         await page.locator('#commerce-payment').waitFor();
         await startProbe();
         await navigate('recharge/start');

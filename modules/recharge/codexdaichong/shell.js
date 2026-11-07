@@ -9,6 +9,21 @@
   }
   root.dataset.rechargeNavigationLocked = 'false';
   let reportType = '';
+  window.idRechargeVisible = standalone;
+  function setVisible(visible) {
+    window.idRechargeVisible = visible;
+    if (!visible && root.dataset.rechargeNavigationLocked !== 'true') {
+      window.idRechargeClearTransient?.();
+      for (const input of document.querySelectorAll('input[type="password"], #checkout_session_input, #tokenInput, #cdkInput, #queryInput, #batchQueryInput')) {
+        input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+    if (visible && reportType === 'ready') {
+      report('view-context');
+      report('resize');
+    }
+  }
   let restoreDrafts = () => {};
   if (!standalone) syncTheme();
 
@@ -107,6 +122,8 @@
     if (message?.source !== 'id-recharge-shell') return;
     if (message.type === 'theme' && ['light', 'dark'].includes(message.theme)) {
       syncTheme(message.theme);
+    } else if (message.type === 'visibility' && typeof message.visible === 'boolean') {
+      setVisible(message.visible);
     } else if (message.type === 'select-view') window.idRechargeSelect(message.view);
   });
 

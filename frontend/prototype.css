@@ -385,6 +385,9 @@ main {
   flex: 1;
   min-width: 0;
 }
+.design-page-region[hidden] {
+  display: none !important;
+}
 .page-heading {
   position: relative;
   display: flex;

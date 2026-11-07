@@ -124,7 +124,7 @@
     );
     updateFileSummary();
     renderList();
-    void refresh();
+    void refresh('', { force: false });
   }
 
   function feedback(message, kind = '') {
@@ -182,16 +182,25 @@
       </div></div>`;
   }
 
-  async function refresh(completedMessage = '') {
+  async function refresh(completedMessage = '', { force = true } = {}) {
     const panel = opened();
     if (!panel) return;
+    const query = { ...filters };
+    const cached = localData.queries?.peek(endpoint, query);
+    if (cached?.data && !force) {
+      current = cached.data;
+      renderList();
+      if (!cached.stale) return;
+    }
     const status = panel.querySelector('[data-bit-address-read-status]');
     const read = A.beginRegionRead(status.parentElement, status, {
       loadingText: current ? '' : '正在加载地址…',
       refreshButton: panel.querySelector('[data-action="bit-address-refresh"]')
     });
     try {
-      const result = await localData.load(`${endpoint}?${new URLSearchParams(filters)}`);
+      const load = () => localData.load(`${endpoint}?${new URLSearchParams(query)}`);
+      const result = localData.queries
+        ? await localData.queries.read(endpoint, query, load, { refresh: force }) : await load();
       if (!read.current()) return;
       const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize));
       if (result.page > lastPage) {
@@ -203,6 +212,7 @@
       renderList();
       feedback(completedMessage);
     } catch (error) {
+      if (error.name === 'AbortError') return;
       if (read.current())
         feedback(
           `${completedMessage ? completedMessage + ' ' : ''}${error.message}。请点击刷新重试。`,

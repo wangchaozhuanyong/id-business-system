@@ -67,6 +67,10 @@ let lastAutomaticName = '';
 let authorizationCheckId = 0;
 let activeCatalogCheck;
 let activeLogin;
+document.documentElement.dataset.rechargeNavigationLocked = 'false';
+function setLoginLock(locked) {
+  document.documentElement.dataset.rechargeNavigationLocked = String(locked);
+}
 let catalogReady = false;
 let profileData;
 let profileBusy = false;
@@ -586,6 +590,7 @@ loginForm.addEventListener('submit', async (event) => {
   if (startButton.disabled) return;
   const check = new AbortController();
   activeLogin = check;
+  setLoginLock(true);
   const fixedProxy = proxyMode.value === 'static';
   const sessionJson = credential;
   loadAuthorization('');
@@ -635,6 +640,7 @@ loginForm.addEventListener('submit', async (event) => {
         : '登录未完成。请检查本机连接和窗口配置，重新导入授权后再试。';
   } finally {
     activeLogin = undefined;
+    setLoginLock(false);
     loginFields.disabled = false;
     cancelButton.hidden = true;
     cancelButton.disabled = false;
@@ -661,6 +667,14 @@ window.addEventListener('message', (event) => {
   if (
     event.origin === location.origin &&
     event.source === window.parent &&
+    event.data?.source === 'id-recharge-shell' &&
+    event.data.type === 'visibility' && event.data.visible === false && !activeLogin
+  ) {
+    authorizationCheckId++;
+    loadAuthorization('');
+    clearConnectionSecrets();
+  } else if (
+    event.origin === location.origin && event.source === window.parent &&
     event.data?.source === 'id-recharge-shell' &&
     event.data.type === 'theme' &&
     ['light', 'dark'].includes(event.data.theme)
