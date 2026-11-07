@@ -34,7 +34,7 @@
             <summary>账号标记与本机接口</summary>
             <div class="bit-local__connection">
               <div class="form-grid form-grid--paired">
-                <div class="field"><label for="bit-account-name">比特账号名称</label><input id="bit-account-name" maxlength="80" placeholder="填写实际登录的比特账号" /></div>
+                <div class="field"><label for="bit-account-name">比特账号名称</label><input id="bit-account-name" autocomplete="off" maxlength="80" placeholder="填写实际登录的比特账号" /></div>
                 <div class="field"><label for="bit-connection-name">电脑／连接备注<span class="required">*</span></label><input id="bit-connection-name" maxlength="80" placeholder="例如：办公室 Mac、家里电脑" /></div>
               <div class="field">
                 <label for="bit-local-url">本机接口地址</label>
@@ -44,7 +44,7 @@
                 <label for="bit-local-token">本机接口密钥</label>
                 <details class="title-help field-title-help"><summary aria-label="查看本机接口密钥说明" aria-controls="bit-local-token-help">ⓘ</summary><div class="title-description" id="bit-local-token-help" role="note">保存连接时加密保存。输入新密钥可替换已保存的值。</div></details>
                 <div class="field-control">
-                  <div class="bit-local__secret-control"><input id="bit-local-token" type="password" autocomplete="off" required /><button class="button" id="bit-token-eye" type="button" aria-label="查看本机接口密钥" aria-pressed="false" title="查看本机接口密钥"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+                  <div class="bit-local__secret-control"><input id="bit-local-token" type="password" autocomplete="new-password" required /><button class="button" id="bit-token-eye" type="button" aria-label="查看本机接口密钥" aria-pressed="false" title="查看本机接口密钥"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
                 </div>
               </div>
               <div class="field">
@@ -108,7 +108,7 @@
                 </div>
                 <div class="field" data-bit-proxy="dynamic">
                   <label for="bit-proxy-url">动态代理地址</label
-                  ><input id="bit-proxy-url" type="password" placeholder="选填" />
+                  ><input id="bit-proxy-url" autocomplete="new-password" type="password" placeholder="选填" />
                 </div>
                 <div class="field" data-bit-proxy="static" hidden>
                   <label for="bit-proxy-host">代理主机</label><input id="bit-proxy-host" />
@@ -119,11 +119,11 @@
                 </div>
                 <div class="field" data-bit-proxy="static" hidden>
                   <label for="bit-proxy-user">代理用户名</label
-                  ><input id="bit-proxy-user" type="password" autocomplete="off" maxlength="256" />
+                  ><input id="bit-proxy-user" type="password" autocomplete="new-password" maxlength="256" />
                 </div>
                 <div class="field" data-bit-proxy="static" hidden>
                   <label for="bit-proxy-password">代理密码</label
-                  ><input id="bit-proxy-password" type="password" autocomplete="off" maxlength="256" />
+                  ><input id="bit-proxy-password" type="password" autocomplete="new-password" maxlength="256" />
                 </div>
                 </div>
               </div>
@@ -146,7 +146,7 @@
               <div class="field-control">
                 <div class="bit-local__secret-control">
                   <input
-                    id="bit-authorization-json"
+                    id="bit-authorization-json" autocomplete="new-password"
                     type="password"
                     spellcheck="false"
                     placeholder="粘贴完整授权 JSON，将自动载入"
@@ -191,9 +191,9 @@
   <dialog id="bit-proxy-editor" class="bit-local__proxy-editor" aria-labelledby="bit-proxy-editor-title">
     <header class="bit-local__drawer-header"><h2 id="bit-proxy-editor-title">新增执行 IP</h2><button class="button" id="bit-ip-dismiss" type="button" aria-label="关闭 IP 编辑">关闭</button></header>
     <div class="bit-local__drawer-body">
-      <div class="field"><label for="bit-ip-name">备注名称<span class="required">*</span></label><input id="bit-ip-name" maxlength="80" placeholder="例如：菲律宾住宅代理" /></div>
+      <div class="field"><label for="bit-ip-name">备注名称<span class="required">*</span></label><input id="bit-ip-name" autocomplete="off" maxlength="80" placeholder="例如：菲律宾住宅代理" /></div>
       <div class="field"><label for="bit-ip-kind">IP 类型</label><select id="bit-ip-kind"><option value="dynamic_residential">动态住宅</option><option value="static_residential">静态住宅</option><option value="mobile">移动 IP</option></select></div>
-      <div class="field"><label for="bit-ip-link">代理链接<span id="bit-ip-link-required" class="required">*</span></label><input id="bit-ip-link" type="password" autocomplete="off" placeholder="直接粘贴购买平台生成的代理信息" /></div>
+      <div class="field"><label for="bit-ip-link">代理链接<span id="bit-ip-link-required" class="required">*</span></label><input id="bit-ip-link" type="password" autocomplete="new-password" placeholder="直接粘贴购买平台生成的代理信息" /></div>
       <p class="field-help">支持账号:密码@主机:端口、主机:端口:账号:密码和完整代理链接。执行时自动填入比特窗口。</p>
       <p id="bit-ip-probe-result" class="field-help" role="status">尚未测试代理。</p>
       <details id="bit-ip-advanced"><summary>高级设置（通常无需填写）</summary>
