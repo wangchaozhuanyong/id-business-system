@@ -70,9 +70,12 @@ let lastAutomaticName = '';
 let authorizationCheckId = 0;
 let activeCatalogCheck;
 let activeLogin;
+let moduleVisible = true;
+let connectionRestoreId = 0;
+let connectionRestoreController;
 const pendingDataChanges = new Set();
 async function refreshLiveChoices() {
-  if (activeLogin || activeCatalogCheck || profileBusy || document.hidden) return;
+  if (activeLogin || activeCatalogCheck || profileBusy || document.hidden || !moduleVisible) return;
   if (pendingDataChanges.has('bitbrowser-connections') && settings.hidden) {
     pendingDataChanges.delete('bitbrowser-connections');
     await loadProfiles();
@@ -298,10 +301,11 @@ function fillChoices(select, choices, preferredName, previousChoice) {
 }
 
 urlInput.addEventListener('input', () => {
+  cancelConnectionRestore();
   tokenInput.value = '';
   clearCatalog();
 });
-tokenInput.addEventListener('input', clearCatalog);
+tokenInput.addEventListener('input', () => { cancelConnectionRestore(); clearCatalog(); });
 windowName.addEventListener('input', updateStartButton);
 function updateCatalogStatus() {
   if (catalogReady) {
@@ -393,7 +397,15 @@ loginForm.addEventListener('input', () => {
   if (loadedProxyEndpoint && formProxyEndpoint() !== loadedProxyEndpoint) clearProxyCredentials();
 });
 
+function cancelConnectionRestore() {
+  connectionRestoreId++;
+  connectionRestoreController?.abort();
+  connectionRestoreController = undefined;
+  profileBusy = false;
+}
+
 function selectConnection(profile = defaultConnection) {
+  cancelConnectionRestore();
   selectedProfileId = profile.id || '';
   profileChoice.value = selectedProfileId;
   profileName.value = profile.name;
@@ -429,7 +441,11 @@ function lastConnection() {
 async function restoreConnection(profile) {
   selectConnection(profile);
   rememberConnection();
-  if (!profile?.hasInterfaceToken && !profile?.hasStaticProxyCredentials) return;
+  if (!moduleVisible || (!profile?.hasInterfaceToken && !profile?.hasStaticProxyCredentials)) return;
+  const restoreId = ++connectionRestoreId;
+  const controller = new AbortController();
+  connectionRestoreController = controller;
+  const active = () => restoreId === connectionRestoreId && moduleVisible && selectedProfileId === profile.id;
   profileBusy = true;
   updateStartButton();
   profileResult.textContent = '正在载入已保存的连接凭据…';
@@ -438,9 +454,11 @@ async function restoreConnection(profile) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',
-      body: JSON.stringify({ id: profile.id, version: profileData.version })
+      body: JSON.stringify({ id: profile.id, version: profileData.version }),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
     });
     const result = await response.json();
+    if (!active()) return;
     if (!response.ok) {
       if (response.status === 409) {
         profileConflict = true;
@@ -461,12 +479,15 @@ async function restoreConnection(profile) {
     }
     profileResult.textContent = '已载入保存的连接凭据。';
   } catch {
-    profileResult.textContent = '无法载入连接凭据，请重新读取配置或手动填写。';
+    if (active()) profileResult.textContent = '无法载入连接凭据，请重新读取配置或手动填写。';
   } finally {
-    profileBusy = false;
-    updateStartButton();
+    if (active()) {
+      connectionRestoreController = undefined;
+      profileBusy = false;
+      updateStartButton();
+    }
   }
-  if (tokenInput.value) catalogButton.click();
+  if (active() && tokenInput.value) catalogButton.click();
 }
 
 function updateProfileOptions() {
@@ -529,7 +550,7 @@ async function loadProfiles() {
     profileBusy = false;
     updateStartButton();
   }
-  if (restore) await restoreConnection(restore);
+  if (restore && moduleVisible) await restoreConnection(restore);
 }
 
 async function saveProfile() {
@@ -680,6 +701,8 @@ loginForm.addEventListener('submit', async (event) => {
       proxyType: executionProxy.proxyType,
       expectedCountryCode: executionProxy.expectedCountryCode,
       useSelectedProxy: true,
+      persistWindow: profilesEnabled,
+      connectionId: selectedProfileId,
       dynamicProxyUrl: executionProxy.dynamicProxyUrl,
       staticProxyCredentials: executionProxy.staticProxyCredentials,
       signal: check.signal,
@@ -714,6 +737,8 @@ cancelButton.addEventListener('click', () => {
 });
 
 window.addEventListener('pagehide', () => {
+  moduleVisible = false;
+  cancelConnectionRestore();
   authorizationCheckId++;
   activeLogin?.abort();
   clearCatalog();
@@ -722,28 +747,33 @@ window.addEventListener('pagehide', () => {
   clearConnectionSecrets();
 });
 
+function resumeConnection() {
+  if (activeLogin || profileBusy || !moduleVisible) return;
+  const profile = profileData?.profiles.find(({ id }) => id === selectedProfileId);
+  if (!tokenInput.value && profile?.hasInterfaceToken) void restoreConnection(profile);
+  else if (tokenInput.value && !catalogReady) catalogButton.click();
+}
+window.addEventListener('pageshow', event => {
+  if (event.persisted) { moduleVisible = true; resumeConnection(); }
+});
 window.addEventListener('message', (event) => {
-  if (event.origin === location.origin && event.source === window.parent &&
-      event.data?.source === 'id-recharge-shell' && event.data.type === 'data-change') {
+  if (event.origin !== location.origin || event.source !== window.parent || event.data?.source !== 'id-recharge-shell') return;
+  if (event.data.type === 'data-change') {
     for (const scope of event.data.scopes || [])
       if (['bitbrowser-connections', 'bitbrowser-proxies'].includes(scope)) pendingDataChanges.add(scope);
     void refreshLiveChoices();
   }
-  if (
-    event.origin === location.origin &&
-    event.source === window.parent &&
-    event.data?.source === 'id-recharge-shell' &&
-    event.data.type === 'visibility' && event.data.visible === false && !activeLogin
-  ) {
-    authorizationCheckId++;
-    loadAuthorization('');
-    clearConnectionSecrets();
-  } else if (
-    event.origin === location.origin && event.source === window.parent &&
-    event.data?.source === 'id-recharge-shell' &&
-    event.data.type === 'theme' &&
-    ['light', 'dark'].includes(event.data.theme)
-  ) {
+  if (event.data.type === 'visibility' && typeof event.data.visible === 'boolean' && !activeLogin) {
+    moduleVisible = event.data.visible;
+    if (moduleVisible) void refreshLiveChoices().then(resumeConnection, resumeConnection);
+    else {
+      cancelConnectionRestore();
+      clearCatalog();
+      authorizationCheckId++;
+      loadAuthorization('');
+      clearConnectionSecrets();
+    }
+  } else if (event.data.type === 'theme' && ['light', 'dark'].includes(event.data.theme)) {
     document.documentElement.dataset.theme = event.data.theme;
   }
 });

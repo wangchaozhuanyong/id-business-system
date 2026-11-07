@@ -4,14 +4,16 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
+import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 // All requests stay inside the disposable demo host; no business writes or external calls.
 test('recharge transitions keep content and geometry through delayed, superseded and failed loads', { timeout: 90_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const module = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const { chromium } = module.default || module;
-  const host = await startCodexdaichongDemoSite(0);
-  t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
+  const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
+  const host = offline ? { url: offlineOrigin + '/' } : await startCodexdaichongDemoSite(0);
+  if (!offline) t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const origin = new URL(host.url).origin;
@@ -30,7 +32,8 @@ test('recharge transitions keep content and geometry through delayed, superseded
         if (new URL(request.url()).pathname === statusPath) statusChecks++;
       });
       page.setDefaultTimeout(8000);
-      await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
+      if (offline) await interceptDesign(page.context(), { localFixtures: {} });
+      if (!offline) await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
         ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
       const frameSelector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
       const frame = () => page.frameLocator(frameSelector);
@@ -78,7 +81,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await page.route('**/integrations/codexdaichong/admin?view=dashboard', async route => {
           started.resolve();
           await release.promise;
-          await route.continue().catch(() => {});
+          await (offline ? route.fallback() : route.continue()).catch(() => {});
         }, { times: 1 });
         await startProbe();
         try {
@@ -155,7 +158,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await page.route('**/integrations/bitbrowser/local-login', async route => {
           bitStarted.resolve();
           await bitRelease.promise;
-          await route.continue().catch(() => {});
+          await (offline ? route.fallback() : route.continue()).catch(() => {});
         }, { times: 1 });
         await startProbe();
         try {

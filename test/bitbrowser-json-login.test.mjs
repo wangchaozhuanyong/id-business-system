@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 
+import { readWindowRecord, writeWindowRecord } from '../server/bitbrowser-login-windows.mjs';
+
 import { runBitBrowserJsonLogin } from '../modules/recharge/bitbrowser/login/index.mjs';
 
 const profileId = 'a'.repeat(32);
@@ -247,7 +249,7 @@ async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
       closeWindow: () => { officialTabOpen = false; },
       socketClosed: () => socketClosed,
       login: (onProgress = () => {}, options = {}) =>
-        runBitBrowserJsonLogin({
+        (options.runner || runBitBrowserJsonLogin)({
           url: 'http://127.0.0.1:' + server.address().port,
           token: localApiKey,
           groupName,
@@ -413,4 +415,86 @@ test('changing IP refuses to update or reopen when process closure cannot be ver
     assert.deepEqual(requests.slice(before).map(row => row.path),
       ['/browser/detail', '/browser/close', '/browser/pids/alive']);
   }, controls);
+});
+
+async function withWindowRecords(use) {
+  const originalFetch = globalThis.fetch;
+  const writes = [];
+  const controls = {};
+  let rows = null;
+  globalThis.fetch = async (url, options) => {
+    if (url !== '/api/local/bitbrowser-login-windows') return originalFetch(url, options);
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(options.cache, 'no-store');
+    assert(!options.body.includes(authorizationToken));
+    assert(!options.body.includes(localApiKey));
+    const body = JSON.parse(options.body);
+    if (controls.failRead && options.method === 'POST') return Response.json({}, { status: 503 });
+    if (options.method === 'POST') return Response.json({ record: readWindowRecord(rows, body) });
+    if (controls.failWrite) return Response.json({}, { status: 503 });
+    const result = writeWindowRecord(rows, body);
+    rows = result.rows;
+    writes.push(body);
+    if (controls.loseWriteReply) { controls.loseWriteReply = false; throw new TypeError('fixture reply lost'); }
+    return Response.json({ record: result.record });
+  };
+  try {
+    await withLoginFixture(identity, fixture => use({ ...fixture, writes, controls,
+      freshRunner: async () => (await import('../modules/recharge/bitbrowser/login/index.mjs?fixture=' + crypto.randomUUID())).runBitBrowserJsonLogin
+    }));
+  } finally { globalThis.fetch = originalFetch; }
+}
+
+test('a fresh page restores the server-linked original window without creating or injecting again', async () => {
+  await withWindowRecords(async ({ login, freshRunner, closeWindow, requests, commands, writes }) => {
+    await login(undefined, { persistWindow: true, useSelectedProxy: true });
+    closeWindow();
+    const before = requests.length, beforeCommands = commands.length;
+    const result = await login(undefined, { persistWindow: true, useSelectedProxy: true, runner: await freshRunner() });
+    assert.equal(result.profileId, profileId);
+    assert.equal(writes.length, 1);
+    assert.deepEqual(requests.slice(before).map(row => row.path), ['/browser/detail', '/browser/pids/alive', '/browser/open']);
+    assert.equal(commands.slice(beforeCommands).includes('Network.setCookies'), false);
+  });
+});
+
+test('a failed server lookup never falls back to creating an unassociated native window', async () => {
+  await withWindowRecords(async ({ login, requests, controls }) => {
+    controls.failRead = true;
+    await assert.rejects(login(undefined, { persistWindow: true }), error => error.reason === 'bitbrowser_window_record_unavailable');
+    assert.equal(requests.length, 0);
+  });
+});
+
+test('a failed association save stops before opening the window or injecting authorization', async () => {
+  await withWindowRecords(async ({ login, requests, commands, controls }) => {
+    controls.failWrite = true;
+    await assert.rejects(login(undefined, { persistWindow: true }), error => error.reason === 'bitbrowser_window_record_unavailable');
+    assert.equal(requests.some(row => row.path === '/browser/open'), false);
+    assert.equal(commands.includes('Network.setCookies'), false);
+  });
+});
+
+test('a lost save reply is read back before retrying and does not create a duplicate profile', async () => {
+  await withWindowRecords(async ({ login, requests, controls, writes }) => {
+    controls.loseWriteReply = true;
+    await assert.rejects(login(undefined, { persistWindow: true }), error => error.reason === 'bitbrowser_window_record_unavailable');
+    assert.equal((await login(undefined, { persistWindow: true })).profileId, profileId);
+    assert.equal(writes.length, 1);
+    assert.equal(requests.filter(row => row.path === '/browser/update').length, 1);
+  });
+});
+
+test('changing waiting options preserves the original window and changing IP saves the confirmed network', async () => {
+  await withWindowRecords(async ({ login, requests, freshRunner, writes }) => {
+    await login(undefined, { persistWindow: true, useSelectedProxy: true, dynamicProxyUrl: 'https://one.example.test/get' });
+    const before = requests.length;
+    await login(undefined, { persistWindow: true, useSelectedProxy: true, dynamicProxyUrl: 'https://one.example.test/get', browserOptions: { sessionRetryLimit: 1, sessionWaitMinutes: 3 } });
+    assert.equal(requests.slice(before).some(row => ['/browser/update', '/browser/close'].includes(row.path)), false);
+    await login(undefined, { persistWindow: true, useSelectedProxy: true, dynamicProxyUrl: 'https://two.example.test/get' });
+    assert.equal(writes.length, 2);
+    const updated = requests.length;
+    await login(undefined, { persistWindow: true, useSelectedProxy: true, dynamicProxyUrl: 'https://two.example.test/get', runner: await freshRunner() });
+    assert.equal(requests.slice(updated).some(row => ['/browser/update', '/browser/close'].includes(row.path)), false);
+  });
 });
