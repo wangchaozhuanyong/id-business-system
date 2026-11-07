@@ -674,10 +674,11 @@ const stageLabels = {
 
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (startButton.disabled) return;
+  if (activeLogin || startButton.disabled) return;
   const check = new AbortController();
   activeLogin = check;
   setLoginLock(true);
+  updateStartButton();
   const sessionJson = credential;
   loginFields.disabled = true;
   cancelButton.hidden = false;
@@ -685,7 +686,7 @@ loginForm.addEventListener('submit', async (event) => {
   let executionProxy;
   try {
     executionProxy = await executionProxies.settings(check.signal);
-    const { email } = await runBitBrowserJsonLogin({
+    const { email, profileSequence } = await runBitBrowserJsonLogin({
       url: urlInput.value,
       token: tokenInput.value,
       groupName: groupSelect.selectedOptions[0].text,
@@ -712,7 +713,9 @@ loginForm.addEventListener('submit', async (event) => {
         }
       }
     });
-    loginResult.textContent = `登录成功 · ${email}。比特浏览器窗口已保留。`;
+    loginResult.textContent = Number.isSafeInteger(profileSequence) && profileSequence > 0
+      ? `登录成功 · ${email}。比特窗口 #${profileSequence} 已保留。`
+      : `登录成功 · ${email}。比特浏览器窗口已保留。`;
   } catch (error) {
     loginResult.textContent = check.signal.aborted
       ? '已停止登录操作。已打开的比特窗口可手动检查。'

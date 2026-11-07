@@ -116,7 +116,7 @@ async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
         case '/browser/open':
           assert.equal(body.id, profileId);
           assert.ok(body.args.includes('--remote-allow-origins=' + origin));
-          data = { ws: websocketUrl, coreVersion: '152' };
+          data = { ws: websocketUrl, seq: controls.sequence, coreVersion: '152' };
           break;
         default:
           assert.fail('Unexpected BitBrowser API call: ' + request.url);
@@ -511,4 +511,10 @@ test('a record conflict clears the stale pending write so a direct retry reads t
     assert.equal((await login(undefined, { persistWindow: true })).profileId, profileId);
     assert.equal(requests.filter(row => row.path === '/browser/update').length, 1);
   });
+});
+
+test('returns the actual native window sequence after identity verification', async () => {
+  await withLoginFixture(identity, async ({ login }) => {
+    assert.equal((await login()).profileSequence, 56);
+  }, { sequence: 56 });
 });

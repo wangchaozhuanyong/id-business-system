@@ -158,6 +158,7 @@ export async function runBitBrowserJsonLogin({
     return {
       email,
       profileId: result.browser_profile_id,
+      ...(result.browser_profile_seq !== undefined && { profileSequence: result.browser_profile_seq }),
       currentPlan: result.current_plan
     };
   } finally {
