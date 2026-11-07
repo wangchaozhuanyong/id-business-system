@@ -671,11 +671,18 @@ export function createLocalBusinessStore(databasePath) {
               inventoryState: 'available', used: false, inventoryHistory: [], usageLinks: [],
               createdAt: typeof sourceCreatedAt === 'string' ? sourceCreatedAt : '', importedAt: time
             };
-        if (registration) Object.assign(saved, {
+        if (registration && !before) Object.assign(saved, {
           source: 'Apple 主邮箱登记', importId: batchId,
           createdAt: time, createdById: actor.id, createdBy: actor.name,
           inventoryHistory: [{
             id: `relay-asset-event-${randomUUID()}`, action: '登记隐藏邮箱', detail: row.parentMailboxId,
+            actorId: actor.id, actor: actor.name, time
+          }]
+        });
+        if (registration && before) Object.assign(saved, {
+          codeResetIntervalDays: row.codeResetIntervalDays, queryExpiry: row.queryExpiry,
+          inventoryHistory: [...(before.inventoryHistory || []), {
+            id: `relay-asset-event-${randomUUID()}`, action: '接入收件服务', detail: row.parentMailboxId,
             actorId: actor.id, actor: actor.name, time
           }]
         });

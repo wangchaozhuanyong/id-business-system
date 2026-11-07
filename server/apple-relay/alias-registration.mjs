@@ -7,13 +7,16 @@ const emailOf = (value) => String(value ?? '').trim().toLowerCase();
 const batchInput = (rows) => rows.map(({ email, note }) => note ? `${email},${note}` : email).join('\n');
 
 function readInput(input) {
-  const { parentId, parentVersion, days, rows, batch } = input;
-  if (Object.keys(input).some((key) => !['parentId', 'parentVersion', 'days', 'rows', 'batch'].includes(key)) ||
+  const { parentId, parentVersion, days, rows, batch, existingId, existingVersion } = input;
+  if (Object.keys(input).some((key) => !['parentId', 'parentVersion', 'days', 'rows', 'batch', 'existingId', 'existingVersion'].includes(key)) ||
       typeof parentId !== 'string' || !idPattern.test(parentId) ||
       !Number.isSafeInteger(parentVersion) || parentVersion < 1 ||
       !Number.isSafeInteger(days) || days < 1 || days > 3650 ||
       typeof batch !== 'boolean' || !Array.isArray(rows) ||
-      rows.length < 1 || rows.length > (batch ? 500 : 1)) {
+      rows.length < 1 || rows.length > (batch ? 500 : 1) ||
+      (existingId === undefined ? existingVersion !== undefined :
+        batch || typeof existingId !== 'string' || !idPattern.test(existingId) ||
+          !Number.isSafeInteger(existingVersion) || existingVersion < 1)) {
     throw new RelayError(400, '请核对主邮箱、有效天数和登记资料');
   }
   const seen = new Set();
@@ -30,7 +33,7 @@ function readInput(input) {
   });
   if (batch && batchInput(entries).length > 100_000)
     throw new RelayError(400, '批量登记内容过长，请分批提交');
-  return { parentId, parentVersion, days, entries, batch };
+  return { parentId, parentVersion, days, entries, batch, existingId, existingVersion };
 }
 
 function resolveRows(upstream, entries, remoteParentId, localAliases, remoteAliasIdFor) {
@@ -53,7 +56,7 @@ function resolveRows(upstream, entries, remoteParentId, localAliases, remoteAlia
 }
 
 export function registerAppleRelayAliases(input, actor, { perform, provider, remoteIdFor, remoteAliasIdFor, savePrimaries }) {
-  const { parentId, parentVersion, days, entries, batch } = readInput(input);
+  const { parentId, parentVersion, days, entries, batch, existingId, existingVersion } = readInput(input);
   return perform(async (parents, upstream, aliases) => {
     const parent = parents.find((row) => row.id === parentId && !row.deleted);
     const remoteParentId = parent && remoteIdFor(parent);
@@ -63,7 +66,13 @@ export function registerAppleRelayAliases(input, actor, { perform, provider, rem
       throw new RelayError(409, '请刷新并选择已授权且正常的 Apple 主邮箱');
     }
     const localAliases = [...aliases.values()];
-    const localEmails = new Set(localAliases.map((row) => emailOf(row.email)));
+    const prior = existingId ? aliases.get(existingId) : undefined;
+    if (existingId && (!prior || prior.relayDeleted || prior.relayStatus !== 'ACTIVE' ||
+        (prior.version || 1) !== existingVersion || prior.parentMailboxId !== parentId ||
+        emailOf(prior.email) !== entries[0].email || remoteAliasIdFor(prior))) {
+      throw new RelayError(409, '原隐藏邮箱已变化或已有收件绑定，请刷新后重新核对');
+    }
+    const localEmails = new Set(localAliases.filter((row) => row.id !== existingId).map((row) => emailOf(row.email)));
     const duplicateIndex = entries.findIndex(({ email }) => localEmails.has(email));
     if (duplicateIndex >= 0)
       throw new RelayError(409, `第 ${duplicateIndex + 1} 条已在本系统登记，请刷新核对`);
@@ -91,8 +100,8 @@ export function registerAppleRelayAliases(input, actor, { perform, provider, rem
       }
     }
     const records = matches.map((remote, index) => ({
-      id: `apple-alias-${randomUUID()}`,
-      expectedVersion: null,
+      id: prior?.id ?? `apple-alias-${randomUUID()}`,
+      expectedVersion: prior ? (prior.version || 1) : null,
       remoteAliasId: String(remote.id),
       parentMailboxId: parentId,
       email: entries[index].email,
