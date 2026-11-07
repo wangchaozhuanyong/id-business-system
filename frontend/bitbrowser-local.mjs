@@ -80,7 +80,7 @@ async function refreshLiveChoices() {
     pendingDataChanges.delete('bitbrowser-connections');
     await loadProfiles();
   }
-  if (pendingDataChanges.has('bitbrowser-proxies') && !document.querySelector('dialog[open]')) {
+  if (pendingDataChanges.has('bitbrowser-proxies') && !executionProxies?.editing()) {
     pendingDataChanges.delete('bitbrowser-proxies');
     await executionProxies?.refresh();
   }
