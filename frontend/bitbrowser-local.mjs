@@ -194,11 +194,11 @@ function clearCatalog() {
   activeCatalogCheck?.abort();
   activeCatalogCheck = undefined;
   catalogReady = false;
-  groupSelect.replaceChildren();
-  tagSelect.replaceChildren();
+  groupSelect.replaceChildren(new Option('请先检测连接', ''));
+  tagSelect.replaceChildren(new Option('请先检测连接', ''));
   groupSelect.disabled = true;
   tagSelect.disabled = true;
-  catalogResult.textContent = '尚未检测比特浏览器本地接口';
+  catalogResult.textContent = '点击“检测连接”读取当前电脑的窗口分组和标签。';
   updateStartButton();
 }
 

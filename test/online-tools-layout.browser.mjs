@@ -177,7 +177,7 @@ test('五项在线工具恢复老版入口、页面顺序、操作及草稿', { 
   assert.equal(await tiles.count(), 5);
   assert.equal(await drawer.getAttribute('data-layout'), 'workspace-tools');
   const nav = drawer.locator('.drawer-header').getByRole('tablist', { name: '工具分类' });
-  assert.deepEqual(await nav.getByRole('tab').allTextContents(), ['个人工具', '在线工具', '话术文案']);
+  assert.deepEqual(await nav.getByRole('tab').allTextContents(), ['话术文案', '在线工具', '个人工具']);
   assert.equal(await drawer.locator('.drawer-title-row').count(), 0);
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });

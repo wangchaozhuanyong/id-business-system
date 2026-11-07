@@ -1851,7 +1851,7 @@ function personalToolTiles() {
     .join('')}</div>`;
 }
 function openToolboxPanel(tab, body, footer = '') {
-  const tabs = `<div class="tabs toolbox-tabs" role="tablist" aria-label="工具分类">${['个人工具', '在线工具', '话术文案']
+  const tabs = `<div class="tabs toolbox-tabs" role="tablist" aria-label="工具分类">${['话术文案', '在线工具', '个人工具']
     .map((name) => {
       const active = name === tab;
       return `<button type="button" role="tab" aria-selected="${active}" aria-controls="toolbox-content" tabindex="${active ? 0 : -1}" ${active ? 'id="toolbox-active-tab"' : ''} class="tab ${active ? 'active' : ''}" data-action="tools-tab" data-tab="${name}">${name}</button>`;

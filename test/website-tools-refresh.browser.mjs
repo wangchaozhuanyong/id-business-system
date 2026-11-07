@@ -126,7 +126,7 @@ test(
     const drawer = page.locator('#drawer');
     await page.getByRole('button', { name: '工具箱', exact: true }).click();
     const tabs = drawer.getByRole('tablist', { name: '工具分类' });
-    const tabOrder = ['个人工具', '在线工具', '话术文案'];
+    const tabOrder = ['话术文案', '在线工具', '个人工具'];
     for (const name of tabOrder) {
       await tabs.getByRole('tab', { name, exact: true }).click();
       await tabs.getByRole('tab', { name, selected: true }).waitFor();

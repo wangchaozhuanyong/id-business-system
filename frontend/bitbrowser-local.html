@@ -12,7 +12,7 @@
     <form id="bit-login-form" autocomplete="off">
       <div class="bit-local__connection-toolbar">
         <p id="bit-catalog-result" class="bit-local__status" role="status">
-          尚未检测比特浏览器本地接口
+          点击“检测连接”读取当前电脑的窗口分组和标签。
         </p>
         <div class="bit-local__actions">
           <button
@@ -135,11 +135,15 @@
               </div>
               <div class="field">
                 <label for="bit-local-group">窗口分组</label
-                ><select id="bit-local-group" disabled required></select>
+                ><select id="bit-local-group" aria-describedby="bit-catalog-result" disabled required>
+                  <option value="">请先检测连接</option>
+                </select>
               </div>
               <div class="field">
                 <label for="bit-local-tag">窗口标签</label
-                ><select id="bit-local-tag" disabled required></select>
+                ><select id="bit-local-tag" aria-describedby="bit-catalog-result" disabled required>
+                  <option value="">请先检测连接</option>
+                </select>
               </div>
             </div>
             <details class="bit-local__advanced">

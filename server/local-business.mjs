@@ -31,6 +31,7 @@ import {
 } from './bitbrowser-connections.mjs';
 import { checkInventoryHistory } from './inventory-history.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
+import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
@@ -842,6 +843,23 @@ export function createLocalBusinessStore(databasePath) {
     },
     loadSavedTotp(actor) {
       return savedTotpMetadata(readDocument(`${savedTotpDomain}:${actor.id}`));
+    },
+    async importLegacySavedTotp(bundle, secrets, actor, expectedVersion) {
+      const domain = `${savedTotpDomain}:${actor.id}`;
+      const before = readDocument(domain);
+      if (before.version !== expectedVersion)
+        throw new SavedTotpError(409, '2FA 账号已更新，请重新核对');
+      const { items, imported, unchanged } = await planLegacyTotpImport(before, bundle, secrets);
+      return writeTransaction(() => {
+        if (readDocument(domain).version !== before.version)
+          throw new SavedTotpError(409, '2FA 账号已更新，请重新核对');
+        if (!imported) return { version: before.version, imported, unchanged, total: items.length };
+        const version = before.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(items)));
+        log.run(new Date().toISOString(), savedTotpDomain, 'saved_totp_legacy_import',
+          auditSummary(`导入旧 2FA 账号 ${imported} 条`, actor), version);
+        return { version, imported, unchanged, total: items.length };
+      });
     },
     async saveSavedTotp(body, actor) {
       const command = await validateTotpWrite(body);
