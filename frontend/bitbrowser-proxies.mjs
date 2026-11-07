@@ -187,7 +187,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     let link = get('bit-ip-link').value.trim();
     probeLoading = true; onChange();
     get('bit-ip-test').disabled = true; get('bit-ip-save').disabled = true;
-    get('bit-ip-probe-result').textContent = '正在通过当前比特浏览器测试代理…';
+    get('bit-ip-probe-result').textContent = '正在通过当前比特浏览器测试代理，单次最多等待 30 秒…';
     try {
       if (!link && editingId) link = (await request('POST', { id: editingId, version: editVersion })).link;
       const result = await runProbe({ link, protocol: get('bit-ip-protocol').value, mode: get('bit-ip-mode').value });
