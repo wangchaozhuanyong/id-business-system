@@ -36,7 +36,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
         }
         selectedBody = request.postDataJSON(); return json({ ...items[0], link: 'socks5://synthetic-user:synthetic-pass@192.0.2.8:8080' });
       }
-      if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLoginAttempts=(window.fixtureLoginAttempts||0)+1; if(window.fixtureLoginAttempts===1)throw new BitBrowserLoginError('合成控制通道失败'); window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email}; return {email}; }` });
+      if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLoginAttempts=(window.fixtureLoginAttempts||0)+1; await new Promise(resolve=>{window.releaseFixtureLogin=resolve}); if(window.fixtureLoginAttempts===1)throw new BitBrowserLoginError('合成控制通道失败'); window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email}; return {email,profileSequence:56}; }` });
       let file;
       if (path === '/') file = '../frontend/bitbrowser-local.html';
       else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js'].includes(path)) file = '../frontend/' + path.slice(1);
@@ -177,11 +177,20 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-authorization-json').fill(nextAuthorization);
     await page.screenshot({ path: fileURLToPath(new URL(`authorization-${theme}-${width}.png`, output)), fullPage: true });
     await page.locator('#bit-start-login').click();
+    await page.waitForFunction(() => typeof window.releaseFixtureLogin === 'function');
+    assert.equal(await page.locator('#bit-start-login').isDisabled(), true);
+    assert.equal(await page.locator('#bit-cancel-login').isVisible(), true);
+    await page.evaluate(() => document.querySelector('#bit-login-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    assert.equal(await page.evaluate(() => window.fixtureLoginAttempts), 1);
+    await page.evaluate(() => { const finish = window.releaseFixtureLogin; window.releaseFixtureLogin = undefined; finish(); });
     await page.getByText('合成控制通道失败', { exact: true }).waitFor();
     assert.equal(await page.locator('#bit-start-login').isEnabled(), true);
     assert.match(await page.locator('#bit-authorization-result').innerText(), /next-fixture@example.test/);
     await page.locator('#bit-start-login').click();
-    await page.getByText('登录成功 · next-fixture@example.test。比特浏览器窗口已保留。', { exact: true }).waitFor();
+    await page.waitForFunction(() => typeof window.releaseFixtureLogin === 'function');
+    assert.equal(await page.locator('#bit-start-login').isDisabled(), true);
+    await page.evaluate(() => { const finish = window.releaseFixtureLogin; window.releaseFixtureLogin = undefined; finish(); });
+    await page.getByText('登录成功 · next-fixture@example.test。比特窗口 #56 已保留。', { exact: true }).waitFor();
     assert.equal(await page.locator('#bit-start-login').isEnabled(), true);
     assert.equal(await page.evaluate(() => window.fixtureLoginAttempts), 2);
     assert.deepEqual(selectedBody, { id: items[0].id, version: 2 });

@@ -58,6 +58,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
   };
   const api = directBrowserApi(settings.localApiUrl, settings.localApiToken, signal);
   let cdp;
+  let profileSequence;
   let sessionId = '';
   let removeGuard;
   try {
@@ -361,6 +362,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
       );
       remaining();
       verifyDirectProfileConfiguration(detail, settings, opened.data);
+      profileSequence = Number.isSafeInteger(opened.data?.seq) && opened.data.seq > 0 ? opened.data.seq : undefined;
       await hooks.progress('bitbrowser_profile_opened');
       const endpoint = opened.data?.ws;
       if (typeof endpoint !== 'string')
@@ -773,7 +775,8 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
           session_status: 'restored',
           account_matched: true,
           current_plan: state.plan,
-          browser_profile_id: profileId
+          browser_profile_id: profileId,
+          ...(profileSequence !== undefined && { browser_profile_seq: profileSequence })
         };
       }
       if (state.kind === 'unauthenticated' && canInjectOnUnauthenticated) {
