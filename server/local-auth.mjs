@@ -332,6 +332,10 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       return null;
     }
   }
+  function orderOwners() {
+    return readAccounts(accountPath).employees.filter(row => row.active)
+      .map(({ id, name, role }) => ({ id, name, role }));
+  }
 
   function requireActor(request, accounts) {
     const employee = actorRecord(request, accounts);
@@ -542,6 +546,12 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
         requireActor(request, accounts);
         return sendJson(response, 200, { items: accounts.employees.map(({ id, name }) => ({ id, name })) });
       }
+      if (route === '/api/local/auth/order-owners' && method === 'GET') {
+        const actor = requireActor(request);
+        if (!['admin', 'super'].includes(actor.role))
+          throw new AuthError(403, '只有管理员可以选择订单归属人');
+        return sendJson(response, 200, { items: orderOwners() });
+      }
       if (route === '/api/local/auth/nickname' && method === 'POST')
         return await setOwnNickname(request, response);
       if (route === '/api/local/auth/employees') {
@@ -564,5 +574,5 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     }
   }
 
-  return { getActor, handle };
+  return { getActor, orderOwners, handle };
 }

@@ -140,6 +140,7 @@
     operatorLabel: (id, fallback) => labels.get(id) || fallback || '',
     refreshOperatorLabels,
     orderCards: () => request('order-cards'),
+    orderOwners: () => request('auth/order-owners'),
     tenantCards: (tenantId) => request('tenant-cards?tenantId=' + encodeURIComponent(tenantId)),
     tenantCardAction: (command) => ['copy', 'reveal'].includes(command.action)
       ? request('tenant-cards', command, 'POST')

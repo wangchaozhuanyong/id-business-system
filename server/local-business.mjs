@@ -35,7 +35,7 @@ import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
-import { checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices } from './order-policy.mjs';
+import { assignOrderOwner, checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices } from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
   RelayClaimError,
@@ -180,7 +180,7 @@ function readAuditRow(row) {
   return { ...row, summary: label, actorId, actorName, targetId };
 }
 
-function attributeCommerce(data, previous, actor) {
+function attributeCommerce(data, previous, actor, owners) {
   const attributeNew = (rows = [], before = []) => {
     const known = new Set(Array.isArray(before) ? before.map((row) => row?.id) : []);
     for (const row of rows) {
@@ -194,6 +194,10 @@ function attributeCommerce(data, previous, actor) {
     const before = new Map((previous?.[key] || []).map((row) => [row.id, row]));
     for (const row of data[key]) {
       const prior = before.get(row.id);
+      if (key === 'orders') {
+        const error = assignOrderOwner(row, prior, actor, owners);
+        if (error) throw new LocalDataError(error.status, error.message);
+      }
       if (!prior && (key === 'orders' || 'createdById' in row)) {
         row.createdById = actor.id;
         row.createdBy = actor.name;
@@ -482,7 +486,7 @@ function checkedRelayClaims(priorInventory, write, actor) {
   return pendingRelayClaimIds(priorInventory, write.data, { action: write.action, actor });
 }
 
-async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, readOrderCards) {
+async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, readOrderCards, readOrderOwners) {
   const writes = checkWrites(entries);
   const commerce = writes.find(({ domain }) => domain === 'commerce');
   const orderCards = new Map();
@@ -504,7 +508,7 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
       }
     }
   }
-  const options = { actor, [verifiedOrderCards]: orderCards };
+  const options = { actor, readOrderOwners, [verifiedOrderCards]: orderCards };
   const inventory = writes.find(({ domain }) => domain === 'inventory');
   if (!inventory) return store.saveBatch(writes, options);
   const current = store.load('inventory');
@@ -1012,7 +1016,7 @@ export function createLocalBusinessStore(databasePath) {
       });
     },
     saveBatch(entries, {
-      actor, verifyAutomaticSnapshot, [verifiedRelayClaimIds]: verifiedIds,
+      actor, verifyAutomaticSnapshot, readOrderOwners, [verifiedRelayClaimIds]: verifiedIds,
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards
     } = {}) {
       const writes = checkWrites(entries);
@@ -1111,7 +1115,12 @@ export function createLocalBusinessStore(databasePath) {
           checkCustomerTagAssignments(
             priorCommerce, commerce, (incoming.get('settings') ?? current('settings'))?.customerTags
           );
-          if (actor) attributeCommerce(commerce, priorCommerce, actor);
+          if (actor) {
+            let owners = [];
+            try { owners = readOrderOwners?.() || []; }
+            catch { throw new LocalDataError(503, '暂时无法核对订单归属人，请稍后重试'); }
+            attributeCommerce(commerce, priorCommerce, actor, owners);
+          }
           const { action } = writes.find((write) => write.domain === 'commerce');
           if (cards) {
             const oldOrders = priorCommerce?.orders || [];
@@ -1163,7 +1172,6 @@ export function createLocalBusinessStore(databasePath) {
                 row.verifier = tenant?.name || '';
                 row.verifierPhone = tenant?.phone || '';
                 if (!prior) {
-                  row.owner = '';
                   row.ownerPhone = '';
                 }
               }
@@ -1421,7 +1429,7 @@ export async function handleLocalBusiness(
   route,
   store,
   actor,
-  { verifyRelayExtraction, verifyManagedMailbox, publicOrigin, readOrderCards } = {}
+  { verifyRelayExtraction, verifyManagedMailbox, publicOrigin, readOrderCards, readOrderOwners } = {}
 ) {
   try {
     const domain = route.slice('/api/local/'.length);
@@ -1484,7 +1492,7 @@ export async function handleLocalBusiness(
     }
     const body = await readJson(request);
     if (domain === 'batch') {
-      return json(response, 200, await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards));
+      return json(response, 200, await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners));
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       throw new LocalDataError(400, '保存资料格式不正确');
@@ -1500,7 +1508,7 @@ export async function handleLocalBusiness(
     if (domain === bitBrowserAddressDomain) {
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
-    const [entry, inventory] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards);
+    const [entry, inventory] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
     return json(response, 200, {
       version: entry.version, data: entry.data,
       ...(entry.usageReview && { usageReview: entry.usageReview }),
