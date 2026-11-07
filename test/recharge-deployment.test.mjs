@@ -14,6 +14,9 @@ test('the host supervisor keeps credentials off Docker arguments and isolates on
   assert(native.includes('DB_HOST=172.17.0.2'));
   assert(native.includes('type=bind,src=/opt/id-business-independent/formal/recharge-data/debug_screenshots,dst=/candidate/.runtime/codexdaichong/debug_screenshots'));
   assert(native.includes('type=bind,src=/opt/id-business-independent/formal/recharge-data/product_files,dst=/candidate/.runtime/codexdaichong/product_files'));
+  assert(native.includes('2g'));
+  assert(native.some(arg => arg.endsWith('dst=/candidate/.runtime/codexdaichong/data')));
+  assert(native.some(arg => arg.endsWith('dst=/app/data')));
   assert(adapter.includes('DB_HOST=127.0.0.1'));
   assert.equal(adapter.includes('/var/run/docker.sock'), false);
   assert.equal(native.some((arg) => /DB_PASSWORD|BRIDGE_SECRET|ADMIN_TOKEN_SECRET/.test(arg)), false);
@@ -35,7 +38,8 @@ test('the deployed Python proof is accepted by the actual adapter verifier and i
 test('deployment launches the pristine entrypoint and keeps role shutdown separate', async () => {
   const source = await readFile(new URL('../deploy/recharge-core/entry.mjs', import.meta.url), 'utf8');
   assert.match(source, /verifyCodexdaichongSource/);
-  assert.match(source, /'--import', runtime/);
+  assert.doesNotMatch(source, /--import/);
+  assert.match(source, /preflight-native/);
   assert.match(source, /codexdaichong\/server\.js/);
   assert.match(source, /Object.assign\(env, options\)/);
   assert.doesNotMatch(source, /writeFile|replaceSource|ID_VENDURE_SINGLE_ATTEMPT|expectedPlan/);

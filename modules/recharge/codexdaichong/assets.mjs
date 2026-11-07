@@ -344,9 +344,6 @@ function adaptWorkspaceRecharge(source) {
         <dt>目标账号</dt><dd id="workspaceAccount">填写后显示</dd>
         <dt>充值套餐</dt><dd id="workspacePlan">验码后确认</dd>
       </dl>
-      <label class="workspace-recharge-confirm">
-        <input id="workspaceConfirm" type="checkbox" disabled> 我已核对账号与套餐
-      </label>
       <button type="button" id="startBtn" class="btn-primary" disabled><span class="btn-text">充值提交</span><span class="loader"></span></button>
       <p class="field-hint">账号资料仅用于本次充值，请勿转发。</p>
     </fieldset>
@@ -385,7 +382,6 @@ function adaptWorkspaceRechargeScript(source) {
         const accountHint = document.getElementById('workspaceAccountHint');
         const plan = document.getElementById('workspacePlan');
         const verifiedPlan = document.getElementById('workspaceVerifiedPlan');
-        const confirm = document.getElementById('workspaceConfirm');
         const pendingReview = new Set();
         function setWorkspaceVerified(verified) {
             cdkInput.readOnly = verified;
@@ -396,20 +392,14 @@ function adaptWorkspaceRechargeScript(source) {
         function updateConfirmation() {
             const result = validateSessionInput(tokenInput.value, { silent: true });
             account.textContent = result.valid && result.email ? result.email : '填写后显示';
-            accountHint.textContent = tokenInput.value.trim() && !(result.valid && result.email)
-                ? (result.valid ? '账号资料缺少可核对的邮箱' : result.message)
-                : '';
-            confirm.disabled = !verifiedCdk || !result.valid || !result.email ||
-                activationLocked || taskCompleted || pendingReview.has(verifiedCdk);
-            startBtn.disabled = confirm.disabled || !confirm.checked;
+            accountHint.textContent = tokenInput.value.trim() && !result.valid ? result.message : '';
+            startBtn.disabled = !verifiedCdk || !result.valid || activationLocked ||
+                (taskCompleted && activeJobKey) || pendingReview.has(verifiedCdk);
         }
-        confirm.addEventListener('change', updateConfirmation);
         function markUncertain() {
             pendingReview.add(verifiedCdk);
             setActivationLock(false);
             tokenInput.value = '';
-            confirm.checked = false;
-            confirm.disabled = true;
             hideProgress();
             updateFlowUI(2, 'manual');
             toggleLoading(startBtn, false);
@@ -452,7 +442,6 @@ function adaptWorkspaceRechargeScript(source) {
     "redeemBtn.addEventListener('click'",
     `
         tokenInput.addEventListener('input', () => {
-            confirm.checked = false;
             updateConfirmation();
         });
         cdkInput.addEventListener('keydown', (event) => {
@@ -476,12 +465,6 @@ function adaptWorkspaceRechargeScript(source) {
                     const matchedPlan = Object.hasOwn(PLAN_LABELS, planType)
                         ? (typeof data.data.plan_label === 'string' && data.data.plan_label.trim()) || PLAN_LABELS[planType]
                         : '';
-                    const existingTask = data.data?.status === 'processing' && data.data.jobKey;
-                    if (!matchedPlan && !existingTask) {
-                        verifiedCdk = '';
-                        showStatus('暂时无法确认这张兑换码的套餐，请重新验码。', 'error');
-                        return;
-                    }
                     setWorkspaceVerified(true);
                     plan.textContent = matchedPlan || '套餐待确认';
                     verifiedPlan.textContent = matchedPlan ? '已锁定套餐 · ' + matchedPlan : '套餐待确认';
@@ -519,8 +502,6 @@ function adaptWorkspaceRechargeScript(source) {
             startBtn.disabled = true;
             setButtonText(startBtn, START_DEFAULT_TEXT);
             setWorkspaceVerified(false);
-            confirm.checked = false;
-            confirm.disabled = true;
             account.textContent = '填写后显示';
             accountHint.textContent = '';
             plan.textContent = '验码后确认';
@@ -537,31 +518,27 @@ function adaptWorkspaceRechargeScript(source) {
   replace(
     '                startBtn.disabled = false;\n                return;',
     `
-                if (status === 'manual') pendingReview.add(verifiedCdk);
-                confirm.disabled = true;
-                startBtn.disabled = true;
+                if (status === 'manual' || /转人工|人工确认|待核实/.test(message)) {
+                    pendingReview.add(verifiedCdk);
+                    startBtn.disabled = true;
+                } else {
+                    taskCompleted = false;
+                    activeJobKey = '';
+                    updateConfirmation();
+                }
                 return;
   `
   );
   replace(
     '            const rawSession = tokenInput.value.trim();',
     `
-            if (activationLocked || taskCompleted || pendingReview.has(verifiedCdk) || !confirm.checked) return;
+            if (activationLocked || (taskCompleted && activeJobKey) || pendingReview.has(verifiedCdk)) return;
             const rawSession = tokenInput.value.trim();
   `
   );
   replace(
-    '            if (!sessionCheck.valid) {',
-    '            if (!sessionCheck.valid || !sessionCheck.email) {'
-  );
-  replace(
-    "                return showStatus(sessionCheck.message, 'error');",
-    "                return showStatus(sessionCheck.message || '账号资料缺少可核对的邮箱', 'error');"
-  );
-  replace(
     '            setButtonText(startBtn, START_PENDING_TEXT);',
     `
-            confirm.disabled = true;
             tokenInput.readOnly = true;
             setButtonText(startBtn, START_PENDING_TEXT);
   `
@@ -571,7 +548,6 @@ function adaptWorkspaceRechargeScript(source) {
     `
                 if (response.ok && data.success && data.jobKey) {
                     tokenInput.value = '';
-                    confirm.checked = false;
   `
   );
   replace(
@@ -589,7 +565,6 @@ function adaptWorkspaceRechargeScript(source) {
     '                    startBtn.disabled = false;\n                    setActivationLock(false);',
     `
                     setActivationLock(false);
-                    confirm.checked = false;
                     updateConfirmation();
   `
   );

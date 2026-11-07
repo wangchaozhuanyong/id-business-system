@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Host supervisor for one role. Adapter restarts never stop the native engine."""
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
@@ -47,10 +48,11 @@ def docker_arguments(role, sha, database_ip, image, native_url=None):
             '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges']
     if role == 'native':
         args += ['--network', 'bridge', '--publish', '127.0.0.1:' + NATIVE_PORT + ':3000',
-                 '--shm-size', '256m']
-        for directory in ['debug_screenshots', 'product_files']:
+                 '--shm-size', '2g']
+        for directory in ['debug_screenshots', 'product_files', 'data']:
             args += ['--mount', 'type=bind,src=' + str(ROOT / 'formal/recharge-data' / directory) +
                      ',dst=/candidate/.runtime/codexdaichong/' + directory]
+        args += ['--mount', 'type=bind,src=' + str(ROOT / 'formal/recharge-data/data') + ',dst=/app/data']
         host, port, service_port = database_ip, '3306', '3000'
     else:
         args += ['--network', 'host', '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=32m',
@@ -69,6 +71,17 @@ def main():
     role, sha = sys.argv[1:]
     if role not in ['native', 'adapter'] or not re.fullmatch('[a-f0-9]{40}', sha):
         raise ValueError('Invalid release role')
+    # The lock belongs to the host launcher, never to the payment process.
+    # An unavailable Docker daemon is an error, not permission to start twice.
+    launch_lock = None
+    if role == 'native':
+        lock_path = ROOT / 'formal/.native-recharge-launch.lock'
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        launch_lock = os.fdopen(descriptor, 'a')
+        fcntl.flock(launch_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        existing = subprocess.check_output(['docker', 'ps', '-a', '--filter', 'name=^/' + NATIVE + '$', '--format', '{{.Id}}'], text=True).strip()
+        if existing:
+            raise ValueError('An original engine already exists; leave it running')
     image = 'id-business-independent-recharge:' + sha
     built = json.loads(subprocess.check_output(['docker', 'image', 'inspect', image], text=True))[0]
     if built['Config']['Labels'].get('org.opencontainers.image.revision') != sha:
@@ -84,7 +97,7 @@ def main():
                                            len(value) > 32768 for key, value in options.items()):
         raise ValueError('Invalid sealed runtime options')
     if role == 'native':
-        for directory in ['debug_screenshots', 'product_files']:
+        for directory in ['debug_screenshots', 'product_files', 'data']:
             path = ROOT / 'formal/recharge-data' / directory
             if path.is_symlink() or not path.is_dir() or path.stat().st_mode & 0o077:
                 raise ValueError('Private runtime output directory unavailable')
@@ -102,6 +115,15 @@ def main():
             raise ValueError('Native revision mismatch')
         proof = network_proof(native, bridge, native_url)
     args = docker_arguments(role, sha, database_ip, built['Id'], native_url)
+    sealed = (password + '\n' + bridge + '\n' + json.dumps(options, separators=(',', ':')) + '\n' + (proof + '\n' if proof else '')).encode()
+    if role == 'native':
+        preflight = ['docker', 'run', '--pull=never', '--rm', '-i', '--network', 'bridge',
+                     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges']
+        for key, value in {'DB_HOST': database_ip, 'DB_PORT': '3306', 'PORT': '3000',
+                           'DB_NAME': 'id_redesign_codexdaichong_prod', 'DB_USER': 'id_redesign_recharge'}.items():
+            preflight += ['-e', key + '=' + value]
+        subprocess.run(preflight + [built['Id'], 'preflight-native'], input=sealed,
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     child = subprocess.Popen(args, stdin=subprocess.PIPE)
     def stop(signum, _frame):
         # Only this role's process receives the signal. Never cancel a native
@@ -111,12 +133,11 @@ def main():
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
-        child.stdin.write((password + '\n' + bridge + '\n' + json.dumps(options, separators=(',', ':')) +
-                           '\n' + (proof + '\n' if proof else '')).encode())
+        child.stdin.write(sealed)
         child.stdin.close()
         return child.wait()
     finally:
-        if child.poll() is None:
+        if role == 'adapter' and child.poll() is None:
             child.terminate()
 
 

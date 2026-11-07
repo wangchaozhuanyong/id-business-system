@@ -86,6 +86,18 @@ function filterHeaders(source, names) {
   );
 }
 
+function clientAddress(req) {
+  const peer = req.socket.remoteAddress;
+  // The formal gateway connects over loopback and appends the real peer to XFF.
+  // Ignore forwarded claims from external peers and take only the final hop.
+  if (['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer)) {
+    const forwarded = req.headers['x-forwarded-for'];
+    const address = typeof forwarded === 'string' ? forwarded.split(',').at(-1).trim() : '';
+    if (isIP(address)) return address;
+  }
+  return isIP(peer ?? '') ? peer : undefined;
+}
+
 /**
  * The independent host supplies the verified session and permission mapping.
  * This factory does not authenticate users, start the upstream, or open a database.
@@ -118,7 +130,7 @@ export function createCodexdaichongGateway({
 
   let assetsPromise;
   const target = (req, method, path, actor, extraHeaders = {}) => {
-    const clientIp = req.socket.remoteAddress;
+    const clientIp = clientAddress(req);
     return {
       hostname: upstream.hostname,
       port: upstream.port,
@@ -128,7 +140,8 @@ export function createCodexdaichongGateway({
         ...filterHeaders(req.headers, requestHeaders),
         ...extraHeaders,
         ...(isIP(clientIp) ? { 'x-real-ip': clientIp } : {}),
-        'x-id-recharge-assertion': signRechargeAssertion(secret, method, path, actor)
+        'x-id-recharge-assertion': signRechargeAssertion(secret, method, path,
+          clientIp ? { ...actor, clientIp } : actor)
       }
     };
   };
@@ -163,7 +176,7 @@ export function createCodexdaichongGateway({
         upstreamUrl: upstream.origin,
         secret,
         actor,
-        clientIp: req.socket.remoteAddress
+        clientIp: clientAddress(req)
       });
       if (!result.ready) return respond(res, 503, 'ChatGPT 充值服务未就绪');
       res.writeHead(200, {
@@ -205,9 +218,9 @@ export function createCodexdaichongGateway({
       try {
         for await (const chunk of req) {
           length += chunk.length;
-          if (length <= 512 * 1024) chunks.push(chunk);
+          if (length <= 15 * 1024 * 1024) chunks.push(chunk);
         }
-        if (length > 512 * 1024) return respond(res, 413, '单次代理资料过大，请分批导入');
+        if (length > 15 * 1024 * 1024) return respond(res, 413, '单次代理资料过大，请分批导入');
         let data;
         try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
         catch { return respond(res, 400, '代理资料格式不正确'); }

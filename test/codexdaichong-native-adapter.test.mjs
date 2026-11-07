@@ -72,6 +72,8 @@ test('the outer adapter uses native authentication without exposing its token or
   assert.equal((await request('/api/run-process', customer, body)).status, 200);
   assert.deepEqual(JSON.parse(requests.at(-1).body), body);
   assert.equal(requests.at(-1).headers['x-id-recharge-assertion'], undefined);
+  await request('/api/run-process', { ...customer, clientIp: '203.0.113.15' }, body);
+  assert.equal(requests.at(-1).headers['x-real-ip'], '203.0.113.15');
   assert.equal((await request('/api/admin/screenshots?path=fixture.png')).status, 403);
   assert.equal((await request('/api/admin/video?path=fixture.webm')).status, 403);
   assert.equal((await request('/api/admin/screenshots?path=checkout_debug%2Ffixture.png', admin)).status, 200);

@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
+import { checkNativeProductionDatabase } from '../../modules/recharge/codexdaichong/runtime.mjs';
 import { verifyCodexdaichongSource } from '../../modules/recharge/codexdaichong/prepare.mjs';
 import { resolveNativeAdminTokenSecret } from '../../modules/recharge/codexdaichong/native-secret.mjs';
 
 const role = process.argv[2];
-if (!['native', 'adapter', 'canary-native', 'canary-adapter'].includes(role)) throw new Error('Invalid runtime role');
+if (!['native', 'adapter', 'canary-native', 'canary-adapter', 'preflight-native'].includes(role)) throw new Error('Invalid runtime role');
 const canary = role.startsWith('canary-');
 const native = role.endsWith('native');
 const lines = readFileSync(0, 'utf8').trimEnd().split('\n');
@@ -27,9 +29,15 @@ if (canary) {
   delete env.ID_RECHARGE_RUNTIME_MODE;
 } else env.ID_RECHARGE_RUNTIME_MODE = 'production';
 await verifyCodexdaichongSource('/candidate/.runtime/codexdaichong');
+if (role === 'preflight-native') {
+  const require = createRequire('/candidate/.runtime/codexdaichong/package.json');
+  await checkNativeProductionDatabase(env, require('mysql2/promise').createConnection);
+  console.log(JSON.stringify({ ready: true, readOnly: true }));
+  process.exit(0);
+}
 const runtime = '/candidate/modules/recharge/codexdaichong/runtime.mjs';
 const args = native
-  ? [...(canary ? [] : ['--import', runtime]), '/candidate/.runtime/codexdaichong/server.js']
+  ? ['/candidate/.runtime/codexdaichong/server.js']
   : [runtime, canary ? 'start' : 'start-production'];
 const child = spawn(process.execPath, args, { cwd: '/candidate/.runtime/codexdaichong', env, stdio: 'inherit' });
 const interrupt = () => child.kill('SIGINT');
