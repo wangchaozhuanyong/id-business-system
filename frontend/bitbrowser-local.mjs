@@ -645,7 +645,6 @@ loginForm.addEventListener('submit', async (event) => {
   activeLogin = check;
   setLoginLock(true);
   const sessionJson = credential;
-  loadAuthorization('');
   loginFields.disabled = true;
   cancelButton.hidden = false;
   loginResult.textContent = '正在启动登录…';
