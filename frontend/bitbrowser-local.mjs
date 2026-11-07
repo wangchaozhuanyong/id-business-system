@@ -32,6 +32,7 @@ const settings = get('bit-connection-settings');
 const catalogButton = get('bit-check-connection');
 const profileChoice = get('bit-connection-profile');
 const profileName = get('bit-connection-name');
+const accountName = get('bit-account-name');
 const saveProfileButton = get('bit-save-connection');
 const addProfileButton = get('bit-add-connection');
 const reloadProfileButton = get('bit-reload-connections');
@@ -48,6 +49,7 @@ const profileControls = {
 };
 const defaultConnection = {
   name: '',
+  accountName: '',
   url: urlInput.defaultValue,
   groupName: 'gpt账号注册',
   tagName: '申请gpt',
@@ -87,7 +89,7 @@ try {
   if (window.parent !== window && window.parent.location.origin === location.origin)
     draftBridge = window.parent.IDRechargeDrafts;
 } catch { /* Standalone login does not create another draft store. */ }
-const connectionDraftFields = [profileName, urlInput, ...Object.values(profileControls)];
+const connectionDraftFields = [profileName, accountName, urlInput, ...Object.values(profileControls)];
 const readConnectionDrafts = () => draftBridge?.read('bit-local') || {};
 const draftPrefix = () => `profile/${selectedProfileId || 'manual'}/`;
 function restoreConnectionDraft() {
@@ -137,10 +139,28 @@ function updateStartButton() {
   addProfileButton.disabled = !profileData || profileBusy || Boolean(activeLogin);
   profileChoice.disabled = !profileData || profileBusy || Boolean(activeLogin);
   get('bit-toggle-connection').disabled = Boolean(activeLogin);
-  get('bit-toggle-connection-help').disabled = Boolean(activeLogin);
+  for (const id of ['bit-tab-login', 'bit-tab-library', 'bit-show-library']) get(id).disabled = Boolean(activeLogin);
 }
 
-executionProxies = initializeExecutionProxies({ get, drafts: draftBridge, onChange: updateStartButton, locked: () => Boolean(activeLogin) });
+function showWorkspace(view, focus = false) {
+  if (activeLogin) return;
+  for (const name of ['login', 'library']) {
+    const selected = view === name, button = get('bit-tab-' + name);
+    button.setAttribute('aria-selected', String(selected)); button.classList.toggle('active', selected); button.tabIndex = selected ? 0 : -1;
+    get('bit-' + name + '-panel').hidden = !selected;
+    if (selected && focus) button.focus();
+  }
+  const values = readConnectionDrafts(); values.workspace = view; draftBridge?.write('bit-local', values);
+}
+for (const name of ['login', 'library']) {
+  get('bit-tab-' + name).addEventListener('click', () => showWorkspace(name));
+  get('bit-tab-' + name).addEventListener('keydown', event => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); showWorkspace(event.key === 'Home' ? 'login' : event.key === 'End' ? 'library' : name === 'login' ? 'library' : 'login', true); }
+  });
+}
+get('bit-show-library').addEventListener('click', () => showWorkspace('library', true));
+showWorkspace(readConnectionDrafts().workspace === 'library' ? 'library' : 'login');
+executionProxies = initializeExecutionProxies({ get, drafts: draftBridge, onChange: updateStartButton, locked: () => Boolean(activeLogin), onUse: () => showWorkspace('login') });
 void executionProxies.refresh();
 get('bit-token-eye').addEventListener('click', () => {
   const visible = tokenInput.type === 'password';
@@ -346,6 +366,8 @@ function selectConnection(profile = defaultConnection) {
   selectedProfileId = profile.id || '';
   profileChoice.value = selectedProfileId;
   profileName.value = profile.name;
+  accountName.value = profile.accountName || '';
+  settings.open = !profile.id;
   urlInput.value = profile.url;
   groupPreference = profile.groupName;
   tagPreference = profile.tagName;
@@ -419,7 +441,7 @@ async function restoreConnection(profile) {
 function updateProfileOptions() {
   profileChoice.replaceChildren(
     new Option('本次手动设置', ''),
-    ...profileData.profiles.map(({ name, id }) => new Option(name, id))
+    ...profileData.profiles.map(({ name, accountName, id }) => new Option(`${accountName || '账号待确认'} · ${name}`, id))
   );
   profileChoice.value = selectedProfileId;
 }
@@ -503,6 +525,7 @@ async function saveProfile() {
   const profile = {
     ...(selectedProfileId && { id: selectedProfileId }),
     name: profileName.value.trim(),
+    accountName: accountName.value.trim(),
     url: urlInput.value,
     groupName: groupSelect.selectedOptions[0].text,
     tagName: tagSelect.selectedOptions[0].text,
@@ -568,11 +591,6 @@ toggleSettings.addEventListener('click', () => {
 });
 settings.addEventListener('toggle', () => {
   toggleSettings.setAttribute('aria-expanded', String(settings.open));
-});
-const help = get('bit-connection-help');
-get('bit-toggle-connection-help').addEventListener('click', (event) => {
-  help.hidden = !help.hidden;
-  event.currentTarget.setAttribute('aria-expanded', String(!help.hidden));
 });
 selectConnection();
 if (profilesEnabled) {

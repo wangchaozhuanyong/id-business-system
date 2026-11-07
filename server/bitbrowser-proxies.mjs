@@ -3,11 +3,18 @@ import { BitBrowserConnectionError } from './bitbrowser-connections.mjs';
 export const bitBrowserProxyDomain = 'bitbrowser-proxies';
 const uuid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i;
 const fail = message => { throw new BitBrowserConnectionError(400, message); };
-export function validateBitBrowserProxyWrite(body) {
+export function validateBitBrowserProxyWrite(body, previous) {
   if (!body || typeof body !== 'object' || Array.isArray(body) ||
-    Object.keys(body).some(key => !['version', 'name', 'countryCode', 'kind', 'mode', 'protocol', 'link'].includes(key)) ||
-    !Number.isSafeInteger(body.version) || body.version < 0) fail('IP 资料或版本无效');
-  const { version, name, countryCode, kind, mode, protocol, link } = body;
+    Object.keys(body).some(key => !['id', 'version', 'name', 'countryCode', 'kind', 'mode', 'protocol', 'link'].includes(key)) ||
+    !Number.isSafeInteger(body.version) || body.version < 0 || body.version >= Number.MAX_SAFE_INTEGER) fail('IP 资料或版本无效');
+  const { version, name, countryCode, kind, mode, protocol } = body;
+  if (Object.hasOwn(body, 'id') && !uuid.test(body.id || '')) fail('IP 编号无效');
+  if (body.id && (!previous || previous.id !== body.id)) throw new BitBrowserConnectionError(404, '该 IP 已不存在，请刷新列表');
+  let link = body.link;
+  if (body.id && (link === undefined || link === '')) {
+    if (mode !== previous.mode || protocol !== previous.protocol) fail('修改连接方式或协议时，请重新填写代理链接');
+    link = previous.link;
+  }
   if (typeof name !== 'string' || !name.trim() || name.length > 80 || /[\x00-\x1f\x7f]/.test(name)) fail('请填写 80 字以内的 IP 名称或备注');
   if (typeof countryCode !== 'string' || !/^[a-z]{2}$/i.test(countryCode)) fail('请标记两位国家代码，如 PH、US、MY');
   if (!['mobile', 'dynamic_residential', 'static_residential'].includes(kind)) fail('请选择 IP 类型');
@@ -24,7 +31,7 @@ export function validateBitBrowserProxyWrite(body) {
     if (!Number.isInteger(port) || port < 1 || port > 65535) fail('固定代理端口须在 1 至 65535 之间');
     try { decodeURIComponent(url.username); decodeURIComponent(url.password); } catch { fail('代理账号或密码编码无效'); }
   }
-  return { version, proxy: { id: randomUUID(), name: name.trim(), countryCode: countryCode.toUpperCase(), kind, mode,
+  return { version, proxy: { id: body.id || randomUUID(), name: name.trim(), countryCode: countryCode.toUpperCase(), kind, mode,
     protocol: mode === 'static' ? url.protocol.slice(0, -1) : protocol, link: url.href } };
 }
 export function summarizeBitBrowserProxies(items) {

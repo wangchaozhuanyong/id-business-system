@@ -22,3 +22,11 @@ test('invalid proxy metadata, malformed URL and injected fields are rejected', (
     { ownerId: 'another-user' }, { link: 'http://proxy.example.test:8080/path' }])
     assert.throws(() => validateBitBrowserProxyWrite({ ...input, ...changes }), { status: 400 });
 });
+
+test('editing keeps the existing secret and id, but requires a new link for protocol or mode changes', () => {
+  const { proxy } = validateBitBrowserProxyWrite(input);
+  const edited = validateBitBrowserProxyWrite({ ...input, id: proxy.id, version: 1, protocol: proxy.protocol, name: '新名称', link: '' }, proxy).proxy;
+  assert.equal(edited.id, proxy.id); assert.equal(edited.link, proxy.link); assert.equal(edited.name, '新名称');
+  assert.throws(() => validateBitBrowserProxyWrite({ ...input, id: proxy.id, link: '' }, proxy), { status: 400 });
+  assert.throws(() => validateBitBrowserProxyWrite({ ...input, id: proxy.id }, undefined), { status: 404 });
+});

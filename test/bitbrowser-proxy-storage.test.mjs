@@ -14,5 +14,14 @@ test('IP library is per operator, versioned, encrypted by the existing store and
     assert(!JSON.stringify(store.loadBitBrowserProxies(alice)).includes('synthetic-password'));
     assert(!JSON.stringify(store.audit()).includes('synthetic-password'));
     assert.throws(() => store.load('bitbrowser-proxies:alice'), { status: 404 });
+    const changes = { id: saved.savedId, version: 1, name: '改名后的 IP', countryCode: 'PH', kind: 'mobile', mode: 'static', protocol: 'http', link: '' };
+    const edited = store.saveBitBrowserProxy(changes, alice);
+    assert.equal(edited.version, 2); assert.equal(edited.items.length, 1); assert.equal(edited.savedId, saved.savedId);
+    assert.equal(edited.items[0].name, changes.name);
+    assert.match(store.useBitBrowserProxy({ id: saved.savedId, version: 2 }, alice).link, /synthetic-password/);
+    assert.throws(() => store.saveBitBrowserProxy(changes, alice), { status: 409 });
+    assert.throws(() => store.saveBitBrowserProxy({ ...changes, version: 0 }, bob), { status: 404 });
+    assert(store.audit().some(entry => entry.action === 'bitbrowser_proxy_update'));
+    assert(!JSON.stringify(store.audit()).includes('synthetic-password'));
   } finally { store.close(); }
 });
