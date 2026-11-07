@@ -7,6 +7,7 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initializeLocalAdmin } from '../server/local-auth.mjs';
 import { startPreview } from '../server/preview.mjs';
+import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 const analyticsPath = '/api/local/tools/website-analytics';
 const visitsPath = '/api/local/tools/website-visits/search';
@@ -26,7 +27,7 @@ function interceptedTools(page, origin) {
         const url = new URL(route.request().url());
         if (url.origin !== origin) return route.abort();
         const queue = requests.get(url.pathname);
-        if (!queue) return route.continue();
+        if (!queue) return route.fallback();
         queue.push(route);
         events.emit(url.pathname);
       });
@@ -74,6 +75,7 @@ function visitResult(path, { page = 1, pageSize = 20, total = 34 } = {}) {
 }
 
 async function setVisitFilters(page, filters) {
+  await page.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
   await page.locator('#ops-visits-days').selectOption(String(filters.days));
   await page.locator('#ops-visits-sort').selectOption(filters.sort);
   await page.locator('#ops-visits-size').selectOption(String(filters.pageSize));
@@ -87,10 +89,8 @@ test(
     const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
     assert(playwright, '请通过 ID_RECHARGE_QA_PLAYWRIGHT 指定已有 Playwright 模块入口');
     const { chromium } = await import(pathToFileURL(playwright).href);
-    const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
-    await mkdir(runtime, { recursive: true, mode: 0o700 });
-    const directory = await mkdtemp(join(runtime, 'website-tools-browser-test-'));
-    let browser, host;
+    const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
+    let browser, host, directory;
     t.after(async () => {
       try {
         await browser?.close();
@@ -100,7 +100,7 @@ test(
           host.server.closeAllConnections();
           await stopped;
         }
-        await rm(directory, { recursive: true, force: true });
+        if (directory) await rm(directory, { recursive: true, force: true });
       }
     });
     const user = {
@@ -108,35 +108,45 @@ test(
       email: 'website-tools-fixture@example.test',
       password: randomBytes(24).toString('hex')
     };
-    const authPath = join(directory, 'employees.json');
-    await initializeLocalAdmin(authPath, user);
-    host = await startPreview(0, { databasePath: ':memory:', authPath });
+    if (!offline) {
+      const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
+      await mkdir(runtime, { recursive: true, mode: 0o700 });
+      directory = await mkdtemp(join(runtime, 'website-tools-browser-test-'));
+      const authPath = join(directory, 'employees.json');
+      await initializeLocalAdmin(authPath, user);
+      host = await startPreview(0, { databasePath: ':memory:', authPath });
+    }
+    const origin = offline ? offlineOrigin : new URL(host.url).origin;
     browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
     const page = await browser.newPage({ viewport: { width: 1280, height: 850 } });
+    if (offline) await interceptDesign(page.context(), {
+      actor: { id: 'synthetic-admin', name: user.name, role: 'admin' },
+      localFixtures: { toolbox: { version: 0, data: { shortcuts: [], phrases: [] } } }
+    });
     page.setDefaultTimeout(5000);
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    const tools = interceptedTools(page, new URL(host.url).origin);
+    const tools = interceptedTools(page, origin);
     await tools.install();
 
-    await page.goto(host.url + '#/workspace/mail-submit');
-    await page.locator('#local-auth-email').fill(user.email);
-    await page.locator('#local-auth-password').fill(user.password);
-    await page.getByRole('button', { name: '登录', exact: true }).click();
-    const drawer = page.locator('#drawer');
-    await page.getByRole('button', { name: '工具箱', exact: true }).click();
-    const tabs = drawer.getByRole('tablist', { name: '工具分类' });
-    const tabOrder = ['话术文案', '在线工具', '个人工具'];
-    for (const name of tabOrder) {
-      await tabs.getByRole('tab', { name, exact: true }).click();
-      await tabs.getByRole('tab', { name, selected: true }).waitFor();
-      assert.deepEqual(await tabs.getByRole('tab').allTextContents(), tabOrder);
+    await page.goto(origin + '/#/workspace/mail-submit');
+    if (!offline) {
+      await page.locator('#local-auth-email').fill(user.email);
+      await page.locator('#local-auth-password').fill(user.password);
+      await page.getByRole('button', { name: '登录', exact: true }).click();
     }
-    await page.keyboard.press('Escape');
+    const drawer = page.locator('#drawer');
+    const entries = page.getByRole('navigation', { name: '常用工具' });
+    const names = ['个人工具', '在线工具', '话术文案'];
+    assert.deepEqual(await entries.getByRole('button').allTextContents(), names);
+    for (const name of names) {
+      await entries.getByRole('button', { name, exact: true }).click();
+      await drawer.getByRole('heading', { name, exact: true }).waitFor();
+      await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+    }
     async function openMonitor() {
       if (!await drawer.isVisible()) {
-        await page.getByRole('button', { name: '工具箱', exact: true }).click();
-        await drawer.getByRole('tab', { name: '在线工具' }).click();
+        await page.getByRole('button', { name: '在线工具', exact: true }).click();
       }
       await drawer.getByRole('button', { name: '网站监控', exact: true }).click();
       return tools.next(analyticsPath);
@@ -151,12 +161,15 @@ test(
       assert((await status.boundingBox()).height <= 3);
     };
     const showMetric = async (value) => {
+      await drawer.getByRole('tab', { name: '访问统计', exact: true }).click();
       await analytics.getByText(String(value), { exact: true }).waitFor();
     };
     const showVisit = async (path) => {
+      await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
       await visits.getByText(path, { exact: true }).waitFor();
     };
     async function requestAnalytics() {
+      await drawer.getByRole('tab', { name: '访问统计', exact: true }).click();
       await drawer.getByRole('button', { name: '最近 7 天', exact: true }).click();
       const request = await tools.next(analyticsPath);
       assert.equal(request.request().method(), 'GET');
@@ -164,6 +177,7 @@ test(
       return request;
     }
     async function requestVisits() {
+      await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
       await drawer.getByRole('button', { name: '查询明细', exact: true }).click();
       const request = await tools.next(visitsPath);
       assert.equal(request.request().method(), 'POST');

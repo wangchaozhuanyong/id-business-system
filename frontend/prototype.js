@@ -596,9 +596,12 @@ function preserveDrawerDraft() {
   if (form && state.drawerContext) state.drafts.set(state.drawerContext, readDraft(form));
 }
 function closeDrawer() {
+  const toolEntry = $('#drawer').dataset.layout === 'workspace-tools'
+    ? $$('.topbar-tools button').find((button) => button.dataset.tab === state.toolsTab) : null;
   preserveDrawerDraft();
   $('#drawer').close();
   state.drawerContext = '';
+  toolEntry?.focus({ preventScroll: true });
 }
 function dismissDrawer() {
   if ($('#drawer').dataset.layout === 'online-tool') {
@@ -1851,12 +1854,7 @@ function personalToolTiles() {
     .join('')}</div>`;
 }
 function openToolboxPanel(tab, body, footer = '') {
-  const tabs = `<div class="tabs toolbox-tabs" role="tablist" aria-label="工具分类">${['话术文案', '在线工具', '个人工具']
-    .map((name) => {
-      const active = name === tab;
-      return `<button type="button" role="tab" aria-selected="${active}" aria-controls="toolbox-content" tabindex="${active ? 0 : -1}" ${active ? 'id="toolbox-active-tab"' : ''} class="tab ${active ? 'active' : ''}" data-action="tools-tab" data-tab="${name}">${name}</button>`;
-    }).join('')}</div>`;
-  openDrawer('右侧工作区', '', body, footer, '', { kind: 'workspace-tools', tabs });
+  openDrawer(tab, '', body, footer, '', { kind: 'workspace-tools' });
 }
 function onlineToolItems() {
   return [
@@ -1942,7 +1940,7 @@ function editPersonalTool(id = '') {
     ? `<input type="hidden" name="shortcut-version" value="${escapeHtml(draft['shortcut-version'] ?? version)}" /><input type="hidden" name="shortcut-new-id" value="${escapeHtml(draft['shortcut-new-id'] || (id ? '' : crypto.randomUUID()))}" /><div id="shortcut-save-error" class="inline-notice warning" role="alert" hidden></div><div id="shortcut-review" hidden>${button('重新核对当前资料', 'personal-tool-review')}</div>`
     : '';
   showPersonalToolManager(
-    `<section class="guide-item personal-tool-editor"><h3>${tool ? '修改快捷网址' : '新增快捷网址'}</h3><form id="personal-tool-form" novalidate><input type="hidden" name="shortcut-id" value="${escapeHtml(id)}" />${field('网址名称', 'shortcut-name', input('shortcut-name', draft['shortcut-name'] ?? tool?.name ?? '', 'maxlength="60" placeholder="例如：工作邮箱"'), true)}${field('网址', 'shortcut-url', input('shortcut-url', draft['shortcut-url'] ?? tool?.url ?? '', 'maxlength="2048" placeholder="https://example.com" autocomplete="off"'), true, tool && !tool.url ? '待接入。填写常用网址后，即可从工具箱打开。' : '')}${localFields}<div class="form-footer">${button('取消', 'personal-tool-manage')}<button class="button primary" form="personal-tool-form" type="submit">${tool ? '保存' : '添加'}</button></div></form></section>`,
+    `<section class="guide-item personal-tool-editor"><h3>${tool ? '修改快捷网址' : '新增快捷网址'}</h3><form id="personal-tool-form" novalidate><input type="hidden" name="shortcut-id" value="${escapeHtml(id)}" />${field('网址名称', 'shortcut-name', input('shortcut-name', draft['shortcut-name'] ?? tool?.name ?? '', 'maxlength="60" placeholder="例如：工作邮箱"'), true)}${field('网址', 'shortcut-url', input('shortcut-url', draft['shortcut-url'] ?? tool?.url ?? '', 'maxlength="2048" placeholder="https://example.com" autocomplete="off"'), true, tool && !tool.url ? '待接入。填写常用网址后，即可从个人工具打开。' : '')}${localFields}<div class="form-footer">${button('取消', 'personal-tool-manage')}<button class="button primary" form="personal-tool-form" type="submit">${tool ? '保存' : '添加'}</button></div></form></section>`,
     context
   );
 }
@@ -2585,9 +2583,8 @@ document.addEventListener('click', async (event) => {
     });
     return;
   }
-  if (action === 'tools-tab') {
+  if (action === 'tools-open') {
     showTools(node.dataset.tab);
-    $('#toolbox-active-tab')?.focus({ preventScroll: true });
     return;
   }
   if (action === 'tool-open') {
@@ -2599,7 +2596,7 @@ document.addEventListener('click', async (event) => {
       node.dataset.name,
       [node.dataset.caption, '当前为页面结构预览。'].filter(Boolean).join(' '),
       `<div class="inline-notice">${icon('info')}<span>演示原型未连接此工具，不会读取真实资料或执行外部操作。</span></div>`,
-      button('返回工具箱', 'tools-back')
+      button('返回在线工具', 'tools-back')
     );
     return;
   }
@@ -2775,16 +2772,6 @@ dismissOnBackdrop($('#confirm-dialog'), () => {
   pendingConfirm = null;
   $('#confirm-dialog').close();
 });
-$('#drawer').addEventListener('keydown', (event) => {
-  const tab = event.target.closest('.toolbox-tabs [role="tab"]');
-  if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-  event.preventDefault();
-  const tabs = [...tab.parentElement.children];
-  const index = tabs.indexOf(tab);
-  const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
-    : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-  tabs[next].click();
-});
 $('#drawer').addEventListener('cancel', (event) => {
   event.preventDefault();
   dismissDrawer();
@@ -2793,8 +2780,6 @@ $('#confirm-dialog').addEventListener('cancel', () => {
   pendingConfirm = null;
 });
 $('#nav-toggle').innerHTML = icon('menu');
-$('#tools-button').innerHTML = `${icon('grid')}工具箱`;
-$('#tools-button').addEventListener('click', () => showTools());
 $('#theme-toggle').innerHTML = icon('moon');
 $('#theme-toggle').addEventListener('click', () => {
   const dark = document.documentElement.dataset.theme !== 'dark';

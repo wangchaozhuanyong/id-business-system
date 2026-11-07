@@ -9,7 +9,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 const root = fileURLToPath(new URL('../', import.meta.url)),
-  output = path.join(root, '.runtime/tool-parity-20261107');
+  output = process.env.ID_LAYOUT_QA_OUTPUT || path.join(root, '.runtime/tool-parity-20261107');
 await mkdir(output, { recursive: true });
 const origin = 'https://tool-layout.invalid';
 const browser = await chromium.launch({ headless: true });
@@ -141,9 +141,9 @@ try {
       // Theme is a user preference, set through the actual visible control.
       if ((await page.locator('html').getAttribute('data-theme')) !== theme)
         await page.locator('#theme-toggle').click();
-      await page.getByRole('button', { name: '工具箱', exact: true }).click();
+      await page.getByRole('button', { name: '在线工具', exact: true }).click();
       const drawer = page.locator('#drawer');
-      await drawer.getByRole('tab', { name: '在线工具', exact: true }).click();
+
       for (const name of ['计算 2FA 验证码', '抖音解析', '邮箱查询与邮箱池']) {
         await drawer.locator('[data-action="tool-open"]').filter({ hasText: name }).click();
         if (name === '计算 2FA 验证码')
@@ -152,7 +152,10 @@ try {
         const box = await drawer.boundingBox();
         const overflow = await drawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
         assert(!overflow, `${width} ${theme} ${label} overflow`);
-        assert(box.height < 650, `${label} unexpectedly tall: ${box.height}`);
+        if (['totp', 'mail'].includes(label)) {
+          assert.equal(Math.round(box.height), 900, '2FA 使用整高右侧抽屉');
+          assert.equal(Math.round(box.x + box.width), width, '2FA 贴齐视口右侧');
+        } else assert(box.height < 650, `${label} unexpectedly tall: ${box.height}`);
         results.push({ viewportWidth: width, theme, tool: label, ...box, overflow });
         await page.screenshot({ path: path.join(output, `after-${label}-${width}-${theme}.png`) });
         if (name === '计算 2FA 验证码') {
@@ -203,7 +206,7 @@ try {
             await page.locator('#ops-managed-provider').selectOption('google');
             const heading = drawer
               .locator('.section-title-row')
-              .filter({ has: page.getByRole('heading', { name: '添加邮箱', exact: true }) });
+              .filter({ has: page.getByRole('heading', { name: '邮箱池', exact: true }) });
             const fieldBox = await page.locator('#ops-managed-email').boundingBox();
             await heading.locator('summary').click();
             assert.equal((await page.locator('#ops-managed-email').boundingBox()).y, fieldBox.y);
@@ -229,7 +232,7 @@ try {
           await drawer.getByRole('button', { name: '下一页', exact: true }).click();
           await drawer.getByText('合成验收-23@example.test', { exact: true }).waitFor();
           await drawer.getByRole('tab', { name: '邮件查询', exact: true }).click();
-          assert((await drawer.boundingBox()).width <= 740);
+          assert((await drawer.boundingBox()).width <= 860);
           const query = drawer.locator('#ops-managed-mail-query');
           await query.locator('#ops-managed-query-code').fill('MBX-' + 'A'.repeat(32));
           await query.locator('#ops-managed-query-limit').fill('10');
@@ -267,7 +270,7 @@ try {
           assert.equal(await page.locator('#ops-managed-email').inputValue(), 'draft@example.test');
         }
         const populated = await drawer.boundingBox();
-        assert(populated.height <= 876, `${label} does not constrain populated content`);
+        assert(populated.height <= (['totp', 'mail'].includes(label) ? 900 : 876), `${label} does not constrain populated content`);
         assert(
           !(await drawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1)),
           `${label} populated overflow`
