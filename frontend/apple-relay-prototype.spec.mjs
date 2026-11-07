@@ -502,6 +502,34 @@ test('既有未接入的隐藏邮箱可从原记录补接收件服务并保留�
   assert.match(browser.opened.body, /查看查询码/);
 });
 
+test('隐藏邮箱及主邮箱的远端 UTC 时间与历史本地时间均按北京时间显示', () => {
+  const browser = runtime();
+  const row = browser.assets[0];
+  Object.assign(row, {
+    queryExpiry: '2026-11-14T16:45:00.000Z',
+    createdAt: '2026-10-15T16:45:00.083Z',
+    lastOperatedAt: '2026-11-03T10:30:00+08:00',
+    healthChangedAt: '2026-11-03 10:30', lastQueriedAt: ''
+  });
+  const table = browser.table('relay-aliases');
+  const value = id => table.columns.find(column => column.id === id).render(row);
+  assert.equal(value('queryExpiry'), '2026-11-15 00:45');
+  assert.equal(value('createdAt'), '2026-10-16 00:45');
+  assert.equal(value('updatedAt'), '2026-11-03 10:30');
+  assert.equal(value('healthChangedAt'), '2026-11-03 10:30');
+  assert.equal(value('lastQueriedAt'), '—');
+  browser.click('relay-alias-detail', { id: row.id });
+  assert.match(browser.opened.body, /2026-11-15 00:45/);
+  assert.doesNotMatch(browser.opened.body, /16:45:00.*Z/);
+  const parent = browser.parent();
+  parent.queryExpiry = row.queryExpiry;
+  parent.lastSyncedAt = '2026-11-03T02:30:00Z';
+  browser.tab('parents');
+  const columns = browser.table('relay-parents').columns;
+  assert.equal(columns.find(column => column.id === 'queryExpiry').render(parent), '2026-11-15 00:45');
+  assert.equal(columns.find(column => column.id === 'lastSyncedAt').render(parent), '2026-11-03 10:30');
+});
+
 test('新增 Apple 主邮箱需要有效地址、应用专用密码与有效天数', () => {
   for (const bad of [
     { appPassword: '' },

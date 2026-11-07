@@ -87,8 +87,19 @@
     ['claimed', '已提取'],
     ['used', '已使用']
   ];
+  const beijingTime = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  });
   function timestamp(text) {
-    return Date.parse(String(text || '').replace(' ', 'T') + ':00+08:00');
+    const value = String(text || '').trim().replace(' ', 'T');
+    const source = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$/.test(value)
+      ? value + '+08:00' : value;
+    return Date.parse(source);
+  }
+  function timeText(value, fallback = '—') {
+    const time = timestamp(value);
+    return Number.isFinite(time) ? beijingTime.format(new Date(time)) : fallback;
   }
   function expiry(days) {
     const date = new Date(timestamp(now()) + Number(days) * 86400000);
@@ -254,10 +265,10 @@
     return (
       prop('录入人', unknown(row.createdBy)) +
       prop('录入人编号', unknown(row.createdById)) +
-      prop('录入时间', unknown(row.createdAt)) +
+      prop('录入时间', timeText(row.createdAt, '历史未记录')) +
       prop('最近操作人', unknown(row.lastOperatedBy || row.updatedBy)) +
       prop('最近操作人编号', unknown(row.lastOperatedById || row.updatedById)) +
-      prop('最近操作时间', unknown(row.lastOperatedAt || row.updatedAt))
+      prop('最近操作时间', timeText(row.lastOperatedAt || row.updatedAt, '历史未记录'))
     );
   }
   function code(kind) {
@@ -269,10 +280,10 @@
     );
   }
   function lastMailTime(aliasId) {
-    return (
+    return timeText(
       mails
         .filter((mail) => mail.aliasId === aliasId)
-        .sort((a, b) => timestamp(b.receivedAt) - timestamp(a.receivedAt))[0]?.receivedAt || '—'
+        .sort((a, b) => timestamp(b.receivedAt) - timestamp(a.receivedAt))[0]?.receivedAt
     );
   }
   function list(columns, rows, id, emptyState) {
@@ -301,7 +312,7 @@
   function traceColumns() {
     return [
       { id: 'createdBy', label: '录入人', render: (r) => E(unknown(r.createdBy)) },
-      { id: 'createdAt', label: '录入时间', render: (r) => E(unknown(r.createdAt)) },
+      { id: 'createdAt', label: '录入时间', render: (r) => E(timeText(r.createdAt, '历史未记录')) },
       {
         id: 'updatedBy',
         label: '最近操作人',
@@ -310,7 +321,7 @@
       {
         id: 'updatedAt',
         label: '最近操作时间',
-        render: (r) => E(unknown(r.lastOperatedAt || r.updatedAt))
+        render: (r) => E(timeText(r.lastOperatedAt || r.updatedAt, '历史未记录'))
       }
     ];
   }
@@ -401,13 +412,13 @@
             render: (r) => String(aliases().filter((a) => a.parentMailboxId === r.id).length)
           },
           { id: 'queryCode', label: '主查询码', long: true },
-          { id: 'queryExpiry', label: '查询码到期' },
+          { id: 'queryExpiry', label: '查询码到期', render: (r) => E(timeText(r.queryExpiry)) },
           { id: 'days', label: '有效天数' },
           {
             id: 'lastSyncedAt',
             label: '最近同步时间',
             render: (r) =>
-              E((local && remote.parents.get(r.id)?.syncedAt) || r.lastSyncedAt || '—')
+              E(timeText((local && remote.parents.get(r.id)?.syncedAt) || r.lastSyncedAt))
           },
           {
             id: 'lastSyncError',
@@ -494,15 +505,15 @@
             label: '账号状态',
             render: (r) => E(healthLabel(r))
           },
-          { id: 'healthChangedAt', label: '账号状态变更时间' },
+          { id: 'healthChangedAt', label: '账号状态变更时间', render: (r) => E(timeText(r.healthChangedAt)) },
           { id: 'inventoryState', label: '使用状态', render: (r) => {
             const review = A.modules.inventory?.usageReviewFor?.(r.id);
             return E(review ? (review.status === 'used' ? '检测到已使用' : '待核对') : usedLabel(r));
           } },
           { id: 'registration', label: '注册状态', render: (r) => E(registrationLabel(r)) },
           { id: 'queryCode', label: '买家查询码', long: true },
-          { id: 'queryExpiry', label: '查询码到期' },
-          { id: 'lastQueriedAt', label: '最近查询时间' },
+          { id: 'queryExpiry', label: '查询码到期', render: (r) => E(timeText(r.queryExpiry)) },
+          { id: 'lastQueriedAt', label: '最近查询时间', render: (r) => E(timeText(r.lastQueriedAt)) },
           { id: 'codeResetIntervalDays', label: '有效天数' },
           {
             id: 'mailCount',
@@ -600,7 +611,7 @@
           { id: 'from', label: '发件人' },
           { id: 'subject', label: '主题', long: true },
           { id: 'code', label: '验证码' },
-          { id: 'receivedAt', label: '收件时间' },
+          { id: 'receivedAt', label: '收件时间', render: (r) => E(timeText(r.receivedAt)) },
           {
             id: 'actions',
             label: '操作',
@@ -632,7 +643,7 @@
                   [
                     { id: 'subject', label: '邮件主题' },
                     { id: 'code', label: '验证码' },
-                    { id: 'receivedAt', label: '收件时间' },
+                    { id: 'receivedAt', label: '收件时间', render: (r) => E(timeText(r.receivedAt)) },
                     {
                       id: 'actions',
                       label: '操作',
@@ -662,7 +673,7 @@
         [
           { id: 'id', label: '导入批次' },
           { id: 'parentId', label: '主邮箱编号' },
-          { id: 'time', label: '导入时间' },
+          { id: 'time', label: '导入时间', render: (r) => E(timeText(r.time)) },
           { id: 'actor', label: '导入人' },
           { id: 'total', label: '总数' },
           { id: 'success', label: '已登记' },
@@ -1469,7 +1480,7 @@
             { id: 'kind', label: '操作' },
             { id: 'actor', label: '操作人' },
             { id: 'actorId', label: '操作人编号' },
-            { id: 'at', label: '操作时间' },
+          { id: 'at', label: '操作时间', render: (r) => E(timeText(r.at)) },
             { id: 'note', label: '说明' }
           ],
           rows,
@@ -1485,7 +1496,7 @@
     A.openDrawer(
       'Apple 主邮箱详情',
       '主邮箱负责 iCloud 收信；隐藏地址只按实际父级登记，不从账号余额库存推断。',
-      `<div class="property-list">${prop('主邮箱编号', p.id)}${prop('Apple 主邮箱', p.email)}${prop('账号状态', status(p))}${prop('应用专用密码', p.hasCredential ? '已配置（演示，不保存原文）' : '未配置')}${prop('主查询码', p.queryCode)}${prop('查询码到期', p.queryExpiry)}${prop('有效天数', String(p.days))}${prop('最近同步', p.lastSyncedAt)}${prop('同步情况', p.lastSyncError || '尚未同步')}${prop('备注', p.note)}${trace(p)}</div><div class="toolbar">${A.button('登记隐藏邮箱', 'relay-alias-add', 'primary', 'plus', `data-parent-id="${E(p.id)}"`)}${A.button('批量导入', 'relay-import', '', 'upload', `data-parent-id="${E(p.id)}"`)}</div>${A.table(
+      `<div class="property-list">${prop('主邮箱编号', p.id)}${prop('Apple 主邮箱', p.email)}${prop('账号状态', status(p))}${prop('应用专用密码', p.hasCredential ? '已配置（演示，不保存原文）' : '未配置')}${prop('主查询码', p.queryCode)}${prop('查询码到期', timeText(p.queryExpiry))}${prop('有效天数', String(p.days))}${prop('最近同步', timeText(p.lastSyncedAt))}${prop('同步情况', p.lastSyncError || '尚未同步')}${prop('备注', p.note)}${trace(p)}</div><div class="toolbar">${A.button('登记隐藏邮箱', 'relay-alias-add', 'primary', 'plus', `data-parent-id="${E(p.id)}"`)}${A.button('批量导入', 'relay-import', '', 'upload', `data-parent-id="${E(p.id)}"`)}</div>${A.table(
         [
           { id: 'aliasId', label: '隐藏邮箱编号' },
           { id: 'email', label: '隐藏邮箱' },
@@ -1507,7 +1518,7 @@
     A.openDrawer(
       'Apple 隐藏邮箱详情',
       '隐藏邮箱从所属 Apple 主邮箱收信；库存使用和平台注册记录分别保留。',
-      `<div class="property-list">${prop('隐藏邮箱编号', a.aliasId || a.id)}${prop('主邮箱编号', a.parentMailboxId || '待核对')}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', a.healthChangedAt)}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', a.queryExpiry)}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', a.lastQueriedAt)}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', a.importId || (a.createdById ? '单条登记' : '历史未记录'))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
+      `<div class="property-list">${prop('隐藏邮箱编号', a.aliasId || a.id)}${prop('主邮箱编号', a.parentMailboxId || '待核对')}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', a.importId || (a.createdById ? '单条登记' : '历史未记录'))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
       A.button('关闭', 'drawer-close') +
         A.button('查看邮件', 'relay-mails', '', 'mail', `data-id="${E(a.id)}"`) +
         (local && a.inventoryState === 'claimed'
@@ -1724,12 +1735,7 @@
   }
   function showCodeResult(result, kind, id, reset = false) {
     const expiry = result.codeExpiresAt
-      ? new Intl.DateTimeFormat('zh-CN', {
-          timeZone: 'Asia/Shanghai',
-          dateStyle: 'short',
-          timeStyle: 'short',
-          hourCycle: 'h23'
-        }).format(new Date(result.codeExpiresAt))
+      ? timeText(result.codeExpiresAt)
       : '无固定到期时间';
     A.openDrawer(
       reset ? '查询码已重置' : '邮箱查询码',
@@ -2029,7 +2035,7 @@
     A.openDrawer(
       '邮件正文',
       local ? '' : '离线虚构邮件；外部邮件接入仍需真实服务与安全渲染验收。',
-      `<div class="property-list">${prop('主邮箱', parentEmail(row.parentId))}${prop('隐藏邮箱', alias(row.aliasId)?.email || '未分配')}${prop('发件人', row.from)}${prop('主题', row.subject)}${prop('验证码', row.code)}${prop('收件时间', row.receivedAt)}</div><div class="inline-notice">${E(row.body)}</div>`,
+      `<div class="property-list">${prop('主邮箱', parentEmail(row.parentId))}${prop('隐藏邮箱', alias(row.aliasId)?.email || '未分配')}${prop('发件人', row.from)}${prop('主题', row.subject)}${prop('验证码', row.code)}${prop('收件时间', timeText(row.receivedAt))}</div><div class="inline-notice">${E(row.body)}</div>`,
       A.button('关闭', 'drawer-close')
     );
   }
@@ -2198,7 +2204,7 @@
     A.openDrawer(
       '隐藏邮箱导入详情',
       '每个地址都保留相同主邮箱和导入批次；此处不会创建第二份别名资料。',
-      `<div class="property-list">${prop('批次', batch.id)}${prop('所属主邮箱', parentEmail(batch.parentId))}${prop('导入人', batch.actor)}${prop('导入时间', batch.time)}</div>${A.table(
+      `<div class="property-list">${prop('批次', batch.id)}${prop('所属主邮箱', parentEmail(batch.parentId))}${prop('导入人', batch.actor)}${prop('导入时间', timeText(batch.time))}</div>${A.table(
         [
           { id: 'line', label: '行号' },
           { id: 'email', label: '隐藏邮箱' },
