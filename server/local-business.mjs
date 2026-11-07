@@ -557,12 +557,27 @@ export function createLocalBusinessStore(databasePath) {
     INSERT INTO business_document (domain, version, payload) VALUES (?, ?, ?)
     ON CONFLICT(domain) DO UPDATE SET version=excluded.version, payload=excluded.payload
   `);
-  const log = db.prepare(`
+  const logStatement = db.prepare(`
     INSERT INTO business_audit (at, domain, action, summary, version) VALUES (?, ?, ?, ?, ?)
   `);
   const audit = db.prepare(
     'SELECT id, at, domain, action, summary, version FROM business_audit ORDER BY id DESC LIMIT 1000'
   );
+  const revision = db.prepare('SELECT version FROM business_document WHERE domain = ?');
+  const auditRevision = db.prepare('SELECT COALESCE(MAX(id), 0) AS version FROM business_audit');
+  const relayRevision = db.prepare("SELECT COALESCE(MAX(id), 0) AS version FROM business_audit WHERE action IN ('relay_reset_code', 'relay_sync', 'relay_mail_reassign')");
+  const changeListeners = new Set();
+  const notifyChanges = () => {
+    for (const listener of changeListeners) {
+      try { listener(); } catch { /* Notification failures cannot undo a committed write. */ }
+    }
+  };
+  let inTransaction = false;
+  const log = { run(...values) {
+    const result = logStatement.run(...values);
+    if (!inTransaction) notifyChanges();
+    return result;
+  } };
 
   function readDocument(domain) {
     const row = get.get(domain);
@@ -573,14 +588,19 @@ export function createLocalBusinessStore(databasePath) {
 
   function writeTransaction(save) {
     db.exec('BEGIN IMMEDIATE');
+    inTransaction = true;
+    let result;
     try {
-      const result = save();
+      result = save();
       db.exec('COMMIT');
-      return result;
     } catch (error) {
       db.exec('ROLLBACK');
       throw error;
+    } finally {
+      inTransaction = false;
     }
+    notifyChanges();
+    return result;
   }
 
   const mailboxActivity = db.prepare(`
@@ -1410,6 +1430,25 @@ export function createLocalBusinessStore(databasePath) {
         return result;
       });
     },
+    subscribeChanges(listener) {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
+    },
+    notifyChanges,
+    changeVersions(actor) {
+      const version = domain => String(revision.get(domain)?.version ?? 0);
+      const versions = { inventory: version('inventory'), commerce: version('commerce'), 'recharge-codes': version('recharge-codes') };
+      for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
+        versions[scope] = version(`${scope}:${actor.id}`);
+      if (['admin', 'super'].includes(actor.role)) {
+        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync']) versions[scope] = version(scope);
+        versions['tools/mailbox-pool'] = version(managedMailboxDomain);
+        versions['tools/website-visits'] = version(websiteVisitsDomain);
+        versions['apple-relay'] = String(relayRevision.get().version);
+        versions.audit = String(auditRevision.get().version);
+      }
+      return versions;
+    },
     audit: () => audit.all().map(readAuditRow),
     recordAuthEvent({ action, actor, targetId }) {
       if (sessionEventLabels[action])
@@ -1421,7 +1460,7 @@ export function createLocalBusinessStore(databasePath) {
           0
         );
     },
-    close: () => db.close()
+    close: () => { changeListeners.clear(); db.close(); }
   };
 }
 

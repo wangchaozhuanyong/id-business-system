@@ -288,6 +288,9 @@
   window.IDDesignModules.push({
     id: 'bitbrowser-addresses',
     matches: () => false,
+    onDataChanges(scopes) {
+      if (scopes.includes(endpoint) && opened() && !saving) return refresh();
+    },
     onClick(action, node) {
       if (action === 'bit-address-refresh') void refresh();
       else if (action === 'bit-address-columns') {

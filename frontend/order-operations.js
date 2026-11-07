@@ -248,6 +248,10 @@
   }
   window.IDDesignModules.push({
     id: 'order-operations', matches: (route) => routes.has(route), render, onClick, onSubmit, preserveDraft,
+    onDataChanges(scopes) {
+      if (routes.has(routeNow()) && scopes.some(scope => ['commerce', 'recharge-codes', 'operators'].includes(scope)))
+        return load(routeNow(), true);
+    },
     afterRender({ routeChanged } = {}) {
       if (D?.authRequired) void load(routeNow(), Boolean(routeChanged));
     }

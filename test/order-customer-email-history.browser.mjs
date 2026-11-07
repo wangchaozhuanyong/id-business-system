@@ -85,7 +85,7 @@ test('订单优先匹配客户历史邮箱，支持切换、手填和草稿，�
   assert.equal(await email.inputValue(), '');
   assert.equal(await trigger.isVisible(), false);
   assert.equal(await email.getAttribute('list'), 'commerce-stock-options');
-  assert.match(await page.locator('[data-commerce-field="email"] .field-help').innerText(), /可用|未使用/);
+  assert.match(await page.locator('[data-commerce-field="email"] .field-title-help .title-description').textContent(), /可用|未使用/);
   await page.locator('#commerce-businessType').selectOption('续费');
   assert.equal(await email.inputValue(), 'recent@example.test');
   await email.fill('draft-new@example.test');

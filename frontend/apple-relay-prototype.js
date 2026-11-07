@@ -410,6 +410,88 @@
     kind === 'parent'
       ? bound(id)
       : remote.status?.configured && remote.status.aliasIds?.includes(id);
+  const buyerCodeCells = new WeakMap();
+  function buyerCodeCell(row) {
+    const connected = !local || codeTargetBound('alias', row.id);
+    const text = !local ? row.queryCode || '暂无查询码'
+      : !remote.status ? remote.statusError ? '收件服务读取失败' : '正在检测收件服务…'
+        : connected ? '正在读取…' : '未接入收件服务';
+    return `<div class="relay-buyer-code" data-relay-buyer-code="${E(row.id)}"><output aria-label="买家查询码">${E(text)}</output>${A.button('复制', 'relay-buyer-code-copy', 'compact', 'copy', `data-id="${E(row.id)}" aria-label="复制买家查询码" ${local || !row.queryCode ? 'disabled' : ''}`)}${local && connected ? A.button('重试', 'relay-buyer-code-retry', 'compact', '', `data-id="${E(row.id)}" hidden`) : ''}</div>`;
+  }
+  function currentBuyerCodeCell(cell, operatorId, snapshot) {
+    const row = alias(cell.dataset.relayBuyerCode);
+    return cell.isConnected && A.state.route === 'mailboxes/relay' && view.tab === 'aliases' &&
+      actor().id === operatorId && row &&
+      JSON.stringify([row.id, row.version, row.email, row.parentMailboxId,
+        parent(row.parentMailboxId)?.version, row.queryExpiry]) === snapshot;
+  }
+  async function loadBuyerCode(cell, { refresh = false, result } = {}) {
+    const id = cell.dataset.relayBuyerCode, row = alias(id);
+    if (!local || !row || !codeTargetBound('alias', id) || !cell.isConnected) return;
+    const previous = buyerCodeCells.get(cell);
+    if (previous?.pending && !refresh) return previous.pending;
+    const operatorId = actor().id;
+    const snapshot = JSON.stringify([row.id, row.version, row.email, row.parentMailboxId,
+      parent(row.parentMailboxId)?.version, row.queryExpiry]);
+    const state = { value: '', pending: null, operatorId, snapshot };
+    buyerCodeCells.set(cell, state);
+    const current = () => buyerCodeCells.get(cell) === state &&
+      currentBuyerCodeCell(cell, operatorId, snapshot);
+    const output = cell.querySelector('output');
+    const copy = cell.querySelector('[data-action="relay-buyer-code-copy"]');
+    const retry = cell.querySelector('[data-action="relay-buyer-code-retry"]');
+    cell.setAttribute('aria-busy', 'true');
+    output.textContent = '正在读取…';
+    copy.disabled = true;
+    if (retry) retry.hidden = true;
+    const loader = async () => {
+      const value = result || await window.IDLocalData.relay('code-read', { kind: 'alias', id });
+      if (typeof value?.queryCode !== 'string' || !value.queryCode ||
+          String(value.email).toLowerCase() !== row.email.toLowerCase())
+        throw new Error('查询码资料不匹配，请重试');
+      return value;
+    };
+    state.pending = (async () => {
+      try {
+        const queries = window.IDLocalData.queries;
+        const value = queries
+          ? await queries.read('apple-relay', [operatorId, 'buyer-code', snapshot], loader, {
+              refresh, isFresh: () => actor().id === operatorId
+            })
+          : await loader();
+        if (!current()) return;
+        state.value = value.queryCode;
+        output.textContent = value.queryCode;
+        copy.disabled = false;
+      } catch (error) {
+        if (!current()) return;
+        output.textContent = error.status === 404 ? '暂无查询码' : '读取失败';
+        if (retry) retry.hidden = false;
+      } finally {
+        if (current()) cell.setAttribute('aria-busy', 'false');
+        state.pending = null;
+      }
+    })();
+    return state.pending;
+  }
+  function hydrateBuyerCodes({ id, result, refresh = false } = {}) {
+    if (!local || A.state.route !== 'mailboxes/relay' || view.tab !== 'aliases') return;
+    const cells = [...document.querySelectorAll('#main [data-relay-buyer-code]')]
+      .filter(cell => (!id || cell.dataset.relayBuyerCode === id) && !cell.closest('[hidden]'));
+    let next = 0;
+    const worker = async () => {
+      while (next < cells.length) await loadBuyerCode(cells[next++], { refresh, result });
+    };
+    for (let index = 0; index < Math.min(3, cells.length); index++) void worker();
+  }
+  async function copyBuyerCode(node) {
+    const cell = node.closest('[data-relay-buyer-code]');
+    const state = buyerCodeCells.get(cell);
+    const value = local ? state?.value : alias(node.dataset.id)?.queryCode;
+    if (!cell?.isConnected || node.disabled || !value) return;
+    if (local && !currentBuyerCodeCell(cell, state.operatorId, state.snapshot)) return;
+    await A.copyText(value, '买家查询码已复制');
+  }
   function localConnection(id) {
     return remote.parents.get(id)?.message || parent(id)?.connection ||
       (bound(id) ? '已绑定，等待测试' : '未绑定收件服务');
@@ -485,7 +567,7 @@
             label: '操作',
             action: true,
             render: (r) =>
-              `<div class="action-links">${A.textAction('详情', 'relay-parent-detail', `data-id="${E(r.id)}"`)}${A.textAction('登记隐藏邮箱', 'relay-alias-add', `data-parent-id="${E(r.id)}"`)}${A.textAction('更多操作', 'relay-parent-more', `data-id="${E(r.id)}"`)}</div>`
+              `<div class="action-links">${A.textAction('详情', 'relay-parent-detail', `data-id="${E(r.id)}"`)}${A.textAction('登记隐藏邮箱', 'relay-alias-add', `data-parent-id="${E(r.id)}"`)}${A.textAction('更多操作', 'relay-parent-more', `data-id="${E(r.id)}" aria-haspopup="menu" aria-expanded="false"`, '', 'down')}</div>`
           }
         ],
         rows,
@@ -562,7 +644,7 @@
             return E(review ? (review.status === 'used' ? '检测到已使用' : '待核对') : usedLabel(r));
           } },
           { id: 'registration', label: '注册状态', render: (r) => E(registrationLabel(r)) },
-          { id: 'queryCode', label: '买家查询码', long: true },
+          { id: 'queryCode', label: '买家查询码', class: 'relay-buyer-code-column', render: buyerCodeCell },
           { id: 'queryExpiry', label: '查询码到期', render: (r) => E(timeText(r.queryExpiry)) },
           { id: 'lastQueriedAt', label: '最近查询时间', render: (r) => E(timeText(r.lastQueriedAt)) },
           { id: 'codeResetIntervalDays', label: '有效天数' },
@@ -585,7 +667,7 @@
             label: '操作',
             action: true,
             render: (r) =>
-              `<div class="action-links">${A.textAction('详情', 'relay-alias-detail', `data-id="${E(r.id)}"`)}${A.textAction('查看邮件', 'relay-mails', `data-id="${E(r.id)}"`)}${A.textAction('更多操作', 'relay-alias-more', `data-id="${E(r.id)}"`)}</div>`
+              `<div class="action-links">${A.textAction('详情', 'relay-alias-detail', `data-id="${E(r.id)}"`)}${A.textAction('查看邮件', 'relay-mails', `data-id="${E(r.id)}"`)}${A.textAction('更多操作', 'relay-alias-more', `data-id="${E(r.id)}" aria-haspopup="menu" aria-expanded="false"`, '', 'down')}</div>`
           }
         ],
         rows,
@@ -926,7 +1008,7 @@
           'note',
           input('note', d['relay-note'] ?? row?.notes ?? '', 'maxlength="500"')
         ) +
-        `<div class="commerce-span-all footnote">${local ? '收件服务登记后可查看查询码。已签发的查询码可从资料操作中重置。' : '隐藏邮箱无需独立密码、2FA 或电话；查询码和到期时间由系统生成。'}</div>`
+        `<div class="commerce-span-all footnote">${local ? '收件服务登记后可查看查询码。已签发的查询码可从“更多操作”中重置。' : '隐藏邮箱无需独立密码、2FA 或电话；查询码和到期时间由系统生成。'}</div>`
     );
     ctx.parentId = row?.parentMailboxId || '';
   }
@@ -1594,7 +1676,7 @@
       }
     );
   }
-  function more(kind, id) {
+  function more(kind, id, node) {
     const row = kind === 'parent' ? parent(id) : alias(id);
     if (!row) return;
     const attr = `data-id="${E(id)}" data-kind="${kind}"`;
@@ -1658,14 +1740,7 @@
             )
             .join('')
         : '';
-    A.openDrawer(
-      kind === 'parent' ? '主邮箱操作' : '隐藏邮箱操作',
-      local
-        ? '可修改资料和账号状态。'
-        : '操作前核对对象和状态；查询码重置会使旧码失效。禁用不抹去库存或邮件历史。',
-      `<div class="property-list">${prop('邮箱', row.email)}${prop('编号', displayId(kind, row))}${prop(kind === 'alias' ? '邮箱状态' : '账号状态', status(row))}${kind === 'alias' ? prop('账号状态', healthLabel(row)) : ''}</div><div class="drawer-action-bar">${actions}${healthActions}</div>`,
-      A.button('关闭', 'drawer-close')
-    );
+    A.openActionMenu(node, actions + healthActions);
   }
   function bindExistingAlias(id, button) {
     initialize();
@@ -1675,7 +1750,6 @@
     const version = row.version || 1;
     const parentVersion = owner.version || 1;
     const operatorId = actor().id;
-    const drawerContent = document.querySelector('#drawer')?.firstElementChild;
     const pendingKey = 'bind:' + id;
     A.confirmAction(
       '确认接入收件服务',
@@ -1700,8 +1774,7 @@
           A.modules.inventory.applyCommittedInventory(result.inventory);
           initialize();
           await readConnection();
-          if (document.querySelector('#drawer')?.open &&
-              document.querySelector('#drawer').firstElementChild === drawerContent) more('alias', id);
+          renderRelayPage();
           A.notify('原隐藏邮箱已接入收件服务，可查看查询码和收件记录');
         } catch (error) {
           if (actor().id !== operatorId) return;
@@ -1727,7 +1800,7 @@
       '检查所选主邮箱的历史邮件，只显示匹配统计。',
       `<div class="property-list">${prop('主邮箱', parentEmail(id))}</div>
         <div id="relay-history-summary" class="design-region-progress" aria-live="polite" aria-busy="true">正在检查历史邮件…</div>`,
-      A.button('返回操作', 'relay-parent-more', '', '', attr) + A.button('关闭', 'drawer-close')
+      A.button('关闭', 'drawer-close')
     );
     const region = document.getElementById('relay-history-summary');
     const stillOpen = () => region.isConnected && document.getElementById('drawer').open;
@@ -1754,6 +1827,7 @@
     }
   }
   function showCodeResult(result, kind, id, reset = false) {
+    if (reset && kind === 'alias') hydrateBuyerCodes({ id, result, refresh: true });
     const expiry = result.codeExpiresAt
       ? timeText(result.codeExpiresAt)
       : '无固定到期时间';
@@ -1761,13 +1835,7 @@
       reset ? '查询码已重置' : '邮箱查询码',
       reset ? '新查询码已生效，旧码失效。' : '请把查询码交给有权查看此邮箱的人员。',
       `<div class="property-list">${prop('邮箱', result.email)}<div class="property-row"><span>查询码</span><strong id="relay-code-result">${E(result.queryCode)}</strong></div>${prop('有效期（北京时间）', expiry)}</div>`,
-      A.button(
-        '返回操作',
-        kind === 'parent' ? 'relay-parent-more' : 'relay-alias-more',
-        '',
-        '',
-        `data-id="${E(id)}"`
-      ) + A.button('复制查询码', 'relay-live-code-copy', 'primary', 'copy')
+      A.button('关闭', 'drawer-close') + A.button('复制查询码', 'relay-live-code-copy', 'primary', 'copy')
     );
     const drawer = document.getElementById('drawer');
     const node = document.getElementById('relay-code-result');
@@ -1781,12 +1849,21 @@
   async function readCurrentCode(kind, id, button) {
     if (!codeTargetBound(kind, id) || button.disabled) return;
     button.disabled = true;
+    const operatorId = actor().id;
+    A.openDrawer('邮箱查询码', '请把查询码交给有权查看此邮箱的人员。',
+      '<div id="relay-code-loading" class="design-region-progress" role="status" aria-busy="true">正在读取查询码…</div>',
+      A.button('关闭', 'drawer-close'));
+    const loading = document.getElementById('relay-code-loading');
+    const current = () => loading.isConnected && document.getElementById('drawer').open && actor().id === operatorId;
     try {
       const result = await window.IDLocalData.relay('code-read', { kind, id });
-      if (button.isConnected && document.getElementById('drawer').open)
-        showCodeResult(result, kind, id);
+      if (current()) showCodeResult(result, kind, id);
     } catch (error) {
-      A.notify(error.message);
+      if (current()) {
+        loading.className = 'inline-notice warning';
+        loading.innerHTML = `<span>${E(error.message || '查询码读取失败，请重试')}</span>${A.button('重试', 'relay-live-code-read', '', '', `data-kind="${kind}" data-id="${E(id)}"`)}`;
+        loading.setAttribute('aria-busy', 'false');
+      }
     } finally {
       button.disabled = false;
     }
@@ -1858,7 +1935,10 @@
             if (finishLiveDraft(form, snapshot)) showCodeResult(result, kind, id, true);
             else A.notify('查询码已重置，后续填写的内容已保留');
           } catch (error) {
-            if (error.status === 502 && stillOpen()) more(kind, id);
+            if (error.status === 502 && stillOpen()) {
+              window.IDLocalData.queries?.invalidate('apple-relay');
+              hydrateBuyerCodes({ id, refresh: true });
+            }
             A.notify(error.message);
           } finally {
             submit.disabled = false;
@@ -2343,6 +2423,11 @@
       void readConnection();
     } else if (local && action === 'relay-primary-import') {
       importExistingPrimaries();
+    } else if (action === 'relay-buyer-code-copy') {
+      void copyBuyerCode(node);
+    } else if (action === 'relay-buyer-code-retry') {
+      const cell = node.closest('[data-relay-buyer-code]');
+      if (cell) void loadBuyerCode(cell, { refresh: true });
     } else if (local && action === 'relay-live-code-read') {
       void readCurrentCode(kind, id, node);
     } else if (local && action === 'relay-live-code-reset') {
@@ -2410,8 +2495,8 @@
       previewImport(document.getElementById('relay-import-form'));
     else if (action === 'relay-parent-detail') openParentDetail(id);
     else if (action === 'relay-alias-detail') openAliasDetail(id);
-    else if (action === 'relay-parent-more') more('parent', id);
-    else if (action === 'relay-alias-more') more('alias', id);
+    else if (action === 'relay-parent-more') more('parent', id, node);
+    else if (action === 'relay-alias-more') more('alias', id, node);
     else if (action === 'relay-alias-bind') bindExistingAlias(id, node);
     else if (action === 'relay-mails') openMails(id);
     else if (action === 'relay-mail-refresh') refreshMails();
@@ -2613,6 +2698,7 @@
     return true;
   }
   A.modules.appleRelay = {
+    refreshConnection: readConnection,
     displayId,
     render,
     openQuery() {
@@ -2641,6 +2727,11 @@
     id: 'apple-relay',
     matches: (route) => route === 'mailboxes/relay',
     render,
+    afterRender: hydrateBuyerCodes,
+    deactivate() {
+      if (A.state.route !== 'mailboxes/relay' || view.tab !== 'aliases')
+        window.IDLocalData?.queries?.invalidate('apple-relay');
+    },
     onClick,
     onSubmit,
     onInput,

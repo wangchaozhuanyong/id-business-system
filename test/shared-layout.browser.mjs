@@ -113,6 +113,58 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     }
   });
 
+  await t.test('field instructions stay beside labels while validation remains below controls', async () => {
+    for (const width of [1440, 1024, 768, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const dark of [false, true]) {
+        await theme(dark);
+        await go('workspace/order/claude');
+        await page.locator('#commerce-payment').selectOption('银行卡');
+        const field = page.locator('[data-commerce-field="cardId"]:visible');
+        const help = field.locator('.field-title-help');
+        const trigger = help.locator('summary');
+        const note = help.locator('.title-description');
+        await field.scrollIntoViewIfNeeded();
+        assert.equal(await help.getAttribute('open'), null, '说明默认收起');
+        assert.equal(await field.locator('.field-control > .field-help').count(), 0, '控件下方不常驻使用说明');
+        await page.evaluate(() => window.IDDesignAPI.setError('commerce-cardId', '请选择租户银行卡'));
+        const error = field.locator('.field-error');
+        assert(await error.isVisible(), '校验错误仍直接显示');
+        const geometry = await field.evaluate(node => {
+          const rect = element => element.getBoundingClientRect().toJSON();
+          const label = node.querySelector('label');
+          const text = document.createRange();
+          text.selectNodeContents(label);
+          return { label: text.getBoundingClientRect().toJSON(),
+            trigger: rect(node.querySelector('.field-title-help summary')),
+            control: rect(node.querySelector('.commerce-picker-trigger')),
+            error: rect(node.querySelector('.field-error')) };
+        });
+        assert(geometry.label.right <= geometry.trigger.left + 1, '说明按钮位于字段文字右侧');
+        assert(geometry.trigger.right <= geometry.control.left, '说明按钮不占用输入区域');
+        assert(geometry.error.top >= geometry.control.bottom, '校验错误位于控件下方');
+        if (width <= 900) assert(geometry.trigger.width >= 44 && geometry.trigger.height >= 44, '手机帮助按钮触控区至少 44px');
+        const before = await field.locator('.field-control').boundingBox();
+        await trigger.focus();
+        await page.keyboard.press('Enter');
+        await help.locator('.title-description:popover-open').waitFor();
+        assert.match(await note.innerText(), /选择租户后可搜索/);
+        const bounds = await note.boundingBox();
+        assert(bounds.x >= 0 && bounds.x + bounds.width <= width, '字段说明浮层不越过视口');
+        assert.deepEqual(await field.locator('.field-control').boundingBox(), before, '说明展开不推动控件或错误');
+        await page.keyboard.press('Escape');
+        assert.equal(await help.getAttribute('open'), null);
+        assert(await trigger.evaluate(node => document.activeElement === node), 'Escape 返回帮助按钮');
+        await trigger.click();
+        await help.locator('.title-description:popover-open').waitFor();
+        await page.locator('#commerce-cardId-picker').click();
+        assert.equal(await help.getAttribute('open'), null, '点击外部关闭说明');
+        await page.keyboard.press('Escape');
+        await noOverflow();
+      }
+    }
+  });
+
   await t.test('active inventory tabs remain visible after repeated rerender', async () => {
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 900 });

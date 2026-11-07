@@ -58,8 +58,81 @@ function button(label, action, kind = '', iconName = '', attributes = '') {
 function tag(label, kind = '') {
   return `<span class="tag ${kind}">${escapeHtml(label)}</span>`;
 }
-function textAction(label, action, attributes = '', kind = '') {
-  return `<button type="button" class="text-button ${kind}" data-action="${action}" ${attributes}>${escapeHtml(label)}</button>`;
+function textAction(label, action, attributes = '', kind = '', iconName = '') {
+  return `<button type="button" class="text-button ${kind}" data-action="${action}" ${attributes}>${escapeHtml(label)}${iconName ? icon(iconName) : ''}</button>`;
+}
+let activeActionMenu = null;
+let actionMenuSequence = 0;
+const actionMenuInvokers = new WeakMap();
+function closeActionMenu(restoreFocus = false) {
+  const current = activeActionMenu;
+  if (!current) return;
+  activeActionMenu = null;
+  window.removeEventListener('resize', current.position);
+  window.removeEventListener('scroll', current.position, true);
+  if (current.menu.matches(':popover-open')) current.menu.hidePopover();
+  current.menu.remove();
+  current.anchor.setAttribute('aria-expanded', 'false');
+  current.anchor.removeAttribute('aria-controls');
+  if (restoreFocus && current.anchor.isConnected) current.anchor.focus({ preventScroll: true });
+}
+function openActionMenu(anchor, actions) {
+  anchor = actionMenuInvokers.get(anchor) || anchor;
+  const toggle = activeActionMenu?.anchor === anchor;
+  closeActionMenu();
+  if (toggle || !anchor?.isConnected) return;
+  const menu = document.createElement('div');
+  menu.id = `row-action-menu-${++actionMenuSequence}`;
+  menu.className = 'row-action-menu';
+  menu.setAttribute('popover', 'auto');
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', '更多操作');
+  menu.innerHTML = actions;
+  // 复用原操作按钮及禁用条件，去掉中转面板的分组和说明。
+  menu.replaceChildren(...$$('button[data-action]', menu));
+  for (const button of $$('button', menu)) {
+    actionMenuInvokers.set(button, anchor);
+    button.setAttribute('role', 'menuitem');
+    button.tabIndex = -1;
+  }
+  const position = () => {
+    if (!anchor.isConnected || !anchor.checkVisibility()) return closeActionMenu();
+    const trigger = anchor.getBoundingClientRect();
+    const bounds = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(12, Math.min(trigger.right - bounds.width, innerWidth - bounds.width - 12))}px`;
+    const below = trigger.bottom + 6;
+    menu.style.top = `${below + bounds.height <= innerHeight - 12 ? below : Math.max(12, trigger.top - bounds.height - 6)}px`;
+  };
+  activeActionMenu = { anchor, menu, position };
+  anchor.setAttribute('aria-haspopup', 'menu');
+  anchor.setAttribute('aria-expanded', 'true');
+  anchor.setAttribute('aria-controls', menu.id);
+  (anchor.closest('dialog') || document.body).append(menu);
+  menu.addEventListener('toggle', event => {
+    if (event.newState === 'closed' && activeActionMenu?.menu === menu) closeActionMenu();
+  });
+  menu.addEventListener('click', event => {
+    if (event.target.closest('button:not(:disabled)')) closeActionMenu();
+  });
+  menu.addEventListener('keydown', event => {
+    if (event.key === 'Escape' || event.key === 'Tab') {
+      if (event.key === 'Escape') event.preventDefault();
+      closeActionMenu(true);
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const buttons = $$('button:not(:disabled)', menu);
+    const index = buttons.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]?.focus({ preventScroll: true });
+  });
+  menu.showPopover();
+  position();
+  window.addEventListener('resize', position);
+  window.addEventListener('scroll', position, { capture: true, passive: true });
+  $('button:not(:disabled)', menu)?.focus({ preventScroll: true });
 }
 function options(values, selected) {
   return values
@@ -79,7 +152,9 @@ function field(label, name, control, required = false, help = '') {
   const labelHtml = required
     ? `${escapeHtml(labelText.slice(0, -1))}<span class="field-label-end">${escapeHtml(labelText.slice(-1))}<span class="required">*</span></span>`
     : escapeHtml(labelText);
-  return `<div class="field"><label for="${name}">${labelHtml}</label><div class="field-control">${control}${help ? `<div class="field-help">${help}</div>` : ''}<div class="field-error" id="${name}-error" hidden></div></div></div>`;
+  const helpHtml = titleInfo(labelText, help, `${name}-help`, true)
+    .replace('class="title-help"', 'class="title-help field-title-help"');
+  return `<div class="field"><label for="${name}">${labelHtml}</label>${helpHtml}<div class="field-control">${control}<div class="field-error" id="${name}-error" hidden></div></div></div>`;
 }
 function input(name, value = '', attributes = '') {
   return `<input id="${name}" name="${name}" value="${escapeHtml(value)}" ${attributes} />`;
@@ -633,9 +708,9 @@ async function copyText(value, success = '演示内容已复制') {
     area.select();
   }
 }
-function titleInfo(title, description, id) {
+function titleInfo(title, description, id, trustedHtml = false) {
   return description
-    ? `<details class="title-help"><summary aria-label="查看${escapeHtml(title)}说明" aria-controls="${id}">${icon('info')}</summary><div class="title-description" id="${id}" role="note">${escapeHtml(description)}</div></details>`
+    ? `<details class="title-help"><summary aria-label="查看${escapeHtml(title)}说明" aria-controls="${id}">${icon('info')}</summary><div class="title-description" id="${id}" role="note">${trustedHtml ? description : escapeHtml(description)}</div></details>`
     : '';
 }
 function header(title, description, actions = '', label = '') {
@@ -867,7 +942,7 @@ function renderMailbox() {
       label: '操作',
       action: true,
       render: (row) =>
-        `<div class="action-links">${textAction('修改', 'mail-edit', `data-id="${row.id}"`)}${textAction('复制', 'mail-copy', `data-id="${row.id}"`)}${textAction('更多操作', 'mail-more', `data-id="${row.id}"`, 'secondary')}</div>`
+        `<div class="action-links">${textAction('修改', 'mail-edit', `data-id="${row.id}"`)}${textAction('复制', 'mail-copy', `data-id="${row.id}"`)}${textAction('更多操作', 'mail-more', `data-id="${row.id}" aria-haspopup="menu" aria-expanded="false"`, 'secondary', 'down')}</div>`
     }
   ];
   const tableId = isAccount ? '账号库存' : '邮箱库存';
@@ -1031,7 +1106,7 @@ function renderClaude() {
       label: '操作',
       action: true,
       render: (row) =>
-        `<div class="action-links">${textAction('续费', 'claude-renew', `data-id="${row.id}"`)}${textAction('记录', 'claude-history', `data-id="${row.id}"`)}${textAction('更多操作', 'claude-more', `data-id="${row.id}"`, 'secondary')}</div>`
+        `<div class="action-links">${textAction('续费', 'claude-renew', `data-id="${row.id}"`)}${textAction('记录', 'claude-history', `data-id="${row.id}"`)}${textAction('更多操作', 'claude-more', `data-id="${row.id}" aria-haspopup="menu" aria-expanded="false"`, 'secondary', 'down')}</div>`
     }
   ];
   if (!state.columns.has('Claude专属'))
@@ -1230,6 +1305,7 @@ for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
     layoutRenderVersion++;
   }, { passive: true });
 function render() {
+  closeActionMenu();
   const renderVersion = ++layoutRenderVersion;
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
@@ -1306,6 +1382,7 @@ function render() {
   }
   if (['normal', 'refresh', 'refresh-error'].includes(state.previewMode))
     extension?.afterRender?.({ routeChanged: !sameRoute });
+  window.IDChangeSync?.resume();
   applyDesignPreviewState();
   restoreTabScroll(region, tabScroll);
   requestAnimationFrame(() => {
@@ -1634,14 +1711,10 @@ function returnRecords(ids) {
       '<button class="button primary" type="submit" form="return-form">核对归还</button>'
   );
 }
-function showMailboxMore(id) {
+function showMailboxMore(id, node) {
   const row = findRecord(id);
   const undo = state.mailUndo.get(id);
-  openDrawer(
-    '资料操作',
-    row.email,
-    `<div class="guide-list"><div class="guide-item"><h3>库存流转</h3><p>当前资料${row.used ? '已使用' : '未使用'}，操作前将再次确认。</p><div class="toolbar">${row.health !== 'normal' ? button('恢复资料', 'mail-transition', '', 'return', `data-id="${id}" data-health="normal"`) : button('移入死号', 'mail-transition', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'mail-transition', '', '', `data-id="${id}" data-health="unlocking"`)}${row.used ? button('归还', 'record-return', '', 'return', `data-id="${id}"`) : ''}</div></div><div class="guide-item"><h3>修改撤回</h3><p>${undo ? '可以撤回最近一次修改，版本变化时将阻止覆盖。' : '本原型尚未修改该资料，暂无可撤回记录。'}</p><div class="form-footer">${button('撤回最近修改', 'mail-undo', '', 'return', `data-id="${id}" ${undo ? '' : 'disabled'}`)}</div></div>${row.health === 'dead' ? `<div class="guide-item"><h3>永久删除</h3><p>本原型演示删除确认。实际系统需先检查订单、任务及资料引用。</p><div class="form-footer">${button('删除演示资料', 'mail-delete', 'danger', '', `data-id="${id}"`)}</div></div>` : ''}</div>`
-  );
+  openActionMenu(node, `<div class="guide-list"><div class="guide-item"><h3>库存流转</h3><p>当前资料${row.used ? '已使用' : '未使用'}，操作前将再次确认。</p><div class="toolbar">${row.health !== 'normal' ? button('恢复资料', 'mail-transition', '', 'return', `data-id="${id}" data-health="normal"`) : button('移入死号', 'mail-transition', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'mail-transition', '', '', `data-id="${id}" data-health="unlocking"`)}${row.used ? button('归还', 'record-return', '', 'return', `data-id="${id}"`) : ''}</div></div><div class="guide-item"><h3>修改撤回</h3><p>${undo ? '可以撤回最近一次修改，版本变化时将阻止覆盖。' : '本原型尚未修改该资料，暂无可撤回记录。'}</p><div class="form-footer">${button('撤回最近修改', 'mail-undo', '', 'return', `data-id="${id}" ${undo ? '' : 'disabled'}`)}</div></div>${row.health === 'dead' ? `<div class="guide-item"><h3>永久删除</h3><p>本原型演示删除确认。实际系统需先检查订单、任务及资料引用。</p><div class="form-footer">${button('删除演示资料', 'mail-delete', 'danger', '', `data-id="${id}"`)}</div></div>` : ''}</div>`);
 }
 function showColumns(tableId) {
   const columns = columnDefinitions[tableId];
@@ -2103,13 +2176,9 @@ async function reviewPersonalTool(form) {
     '继续编辑'
   );
 }
-function showClaudeMore(id) {
+function showClaudeMore(id, node) {
   const row = subscriptions.find((entry) => entry.id === id);
-  openDrawer(
-    '账号运营',
-    row.email,
-    `<div class="property-list"><div class="property-row"><span>租户</span><strong>${row.tenant}</strong></div><div class="property-row"><span>归属人</span><strong>${row.owner}</strong></div><div class="property-row"><span>认证人</span><strong>${row.verifier}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>运营状态</h3><p>状态变化会保留历史订单和操作记录。</p><div class="toolbar">${row.status === 'active' ? button('冻结账号', 'claude-transition', '', '', `data-id="${id}" data-status="frozen"`) + button('弃用账号', 'claude-transition', 'danger', '', `data-id="${id}" data-status="abandoned"`) : button('恢复使用', 'claude-transition', '', '', `data-id="${id}" data-status="active"`)}</div></div><div class="guide-item"><h3>付租</h3><p>先生成待付款批次，实际付款后再标记完成。</p><div class="form-footer">${button('生成付租批次', 'rental-single', '', 'orders', `data-id="${id}"`)}</div></div></div>`
-  );
+  openActionMenu(node, `<div class="property-list"><div class="property-row"><span>租户</span><strong>${row.tenant}</strong></div><div class="property-row"><span>归属人</span><strong>${row.owner}</strong></div><div class="property-row"><span>认证人</span><strong>${row.verifier}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>运营状态</h3><p>状态变化会保留历史订单和操作记录。</p><div class="toolbar">${row.status === 'active' ? button('冻结账号', 'claude-transition', '', '', `data-id="${id}" data-status="frozen"`) + button('弃用账号', 'claude-transition', 'danger', '', `data-id="${id}" data-status="abandoned"`) : button('恢复使用', 'claude-transition', '', '', `data-id="${id}" data-status="active"`)}</div></div><div class="guide-item"><h3>付租</h3><p>先生成待付款批次，实际付款后再标记完成。</p><div class="form-footer">${button('生成付租批次', 'rental-single', '', 'orders', `data-id="${id}"`)}</div></div></div>`);
 }
 function addCalendarMonth(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2})$/.exec(value || '');
@@ -2312,7 +2381,7 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (action === 'mail-more') {
-    showMailboxMore(id);
+    showMailboxMore(id, node);
     return;
   }
   if (action === 'mail-copy' || action === 'record-copy') {
@@ -2464,7 +2533,7 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (action === 'claude-more') {
-    showClaudeMore(id);
+    showClaudeMore(id, node);
     return;
   }
   if (action === 'claude-history') {
@@ -2987,6 +3056,7 @@ window.IDDesignAPI = {
   button,
   tag,
   textAction,
+  openActionMenu,
   options,
   field,
   input,
@@ -3012,6 +3082,9 @@ window.IDDesignAPI = {
   openDrawer,
   closeDrawer,
   openToolboxPanel,
+  refreshToolbox: () => {
+    if ($('#drawer[open]')?.dataset.layout === 'workspace-tools') showTools(state.toolsTab);
+  },
   copyText,
   render,
   navigate,

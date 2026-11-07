@@ -926,7 +926,7 @@
             label: '操作',
             action: true,
             render: (row) =>
-              `<div class="action-links">${textAction(superView ? '编辑' : '查看', 'ops-staff-edit', actionData(row.id))}${textAction('更多操作', 'ops-staff-more', actionData(row.id))}</div>`
+              `<div class="action-links">${textAction(superView ? '编辑' : '查看', 'ops-staff-edit', actionData(row.id))}${textAction('更多操作', 'ops-staff-more', `${actionData(row.id)} aria-haspopup="menu" aria-expanded="false"`, '', 'down')}</div>`
           }
         ],
         pageRows(rowsByQuery(staff.filter((row) => row.status !== '已删除'))),
@@ -1036,15 +1036,10 @@
       notify('演示员工资料已保存');
     });
   }
-  function staffMore(id) {
+  function staffMore(id, node) {
     const row = staff.find((item) => item.id === id),
       superView = local.staffRole === 'super';
-    openDrawer(
-      '员工操作',
-      '',
-      `<div class="property-list"><div class="property-row"><span>员工</span><strong>${esc(row.name)}</strong></div><div class="property-row"><span>角色</span><strong>${esc(row.role)}</strong></div></div><div class="guide-list"><div class="guide-item"><div class="section-title-row"><h3>账号状态</h3>${titleInfo('账号状态', '唯一超级管理员和存在结果未确认任务的员工受保护。', 'staff-status-description')}</div><div class="toolbar">${button(row.status === '启用' ? '停用员工' : '启用员工', 'ops-staff-toggle', '', '', `${actionData(id)} ${superView ? '' : 'disabled'}`)}${button('模拟重置密码', 'ops-staff-reset', '', '', `${actionData(id)} ${superView ? '' : 'disabled'}`)}${button('删除演示员工', 'ops-staff-delete', 'danger', '', `${actionData(id)} ${superView ? '' : 'disabled'}`)}</div></div></div>`,
-      button('关闭', 'drawer-close')
-    );
+    api.openActionMenu(node, `<div class="property-list"><div class="property-row"><span>员工</span><strong>${esc(row.name)}</strong></div><div class="property-row"><span>角色</span><strong>${esc(row.role)}</strong></div></div><div class="guide-list"><div class="guide-item"><div class="section-title-row"><h3>账号状态</h3>${titleInfo('账号状态', '唯一超级管理员和存在结果未确认任务的员工受保护。', 'staff-status-description')}</div><div class="toolbar">${button(row.status === '启用' ? '停用员工' : '启用员工', 'ops-staff-toggle', '', '', `${actionData(id)} ${superView ? '' : 'disabled'}`)}${button('模拟重置密码', 'ops-staff-reset', '', '', `${actionData(id)} ${superView ? '' : 'disabled'}`)}${button('删除演示员工', 'ops-staff-delete', 'danger', '', `${actionData(id)} ${superView ? '' : 'disabled'}`)}</div></div></div>`);
   }
   function renderMailboxTypes() {
     if (localData && settingsState !== 'ready') return settingsStatusPage('邮箱分类设置');
@@ -3416,7 +3411,7 @@
       if (local.staffRole === 'super') editStaff();
       else notify('只有超级管理员视角可演示此操作');
     } else if (action === 'ops-staff-edit') editStaff(id);
-    else if (action === 'ops-staff-more') staffMore(id);
+    else if (action === 'ops-staff-more') staffMore(id, node);
     else if (['ops-staff-toggle', 'ops-staff-reset', 'ops-staff-delete'].includes(action)) {
       if (local.staffRole !== 'super') {
         notify('只有超级管理员视角可演示此操作');
@@ -3792,6 +3787,15 @@
     showPhrases,
     getAudit: () => (localData ? persistedAudit : audit).map((row) => ({ ...row })),
     loadSettings,
+    refreshAudit: () => loadAudit(true),
+    async refreshLiveReads(scopes) {
+      const jobs = [];
+      const totp = $('#ops-saved-totp'), pool = $('#ops-mailbox-pool'), visits = $('#ops-website-visits-form');
+      if (scopes.includes('saved-totp') && totp?.checkVisibility()) jobs.push(loadSavedTotp(totp, { refresh: true }));
+      if (scopes.includes('tools/mailbox-pool') && pool?.checkVisibility()) jobs.push(loadManagedPool(pool, { refresh: true }));
+      if (scopes.includes('tools/website-visits') && visits?.checkVisibility()) jobs.push(showWebsiteVisits(visits, undefined, { refresh: true }));
+      await Promise.all(jobs);
+    },
     updateStatisticsCurrency
   };
   window.IDDesignModules.push({

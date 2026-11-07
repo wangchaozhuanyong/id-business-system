@@ -2473,7 +2473,7 @@
         label: '操作',
         action: true,
         render: (row) =>
-          `<div class="action-links">${A.textAction('详情', 'commerce-order-detail', `data-id="${E(row.id)}"`)}${canManageOrders() ? A.textAction('编辑', 'commerce-order-edit', `data-id="${E(row.id)}" ${row.cancelled ? 'disabled' : ''}`) + A.textAction('退款', 'commerce-order-refund', `data-id="${E(row.id)}" ${row.cancelled || !row.receiptConfirmed ? 'disabled' : ''}`) + A.textAction('更多', 'commerce-order-more', `data-id="${E(row.id)}"`, 'secondary') : ''}</div>`
+          `<div class="action-links">${A.textAction('详情', 'commerce-order-detail', `data-id="${E(row.id)}"`)}${canManageOrders() ? A.textAction('编辑', 'commerce-order-edit', `data-id="${E(row.id)}" ${row.cancelled ? 'disabled' : ''}`) + A.textAction('退款', 'commerce-order-refund', `data-id="${E(row.id)}" ${row.cancelled || !row.receiptConfirmed ? 'disabled' : ''}`) + A.textAction('更多', 'commerce-order-more', `data-id="${E(row.id)}" aria-haspopup="menu" aria-expanded="false"`, 'secondary', 'down') : ''}</div>`
       }
     ];
   }
@@ -2872,7 +2872,7 @@
         label: '操作',
         action: true,
         render: (row) =>
-          `<div class="action-links">${A.textAction('续费', 'commerce-order-renew', `data-id="${row.id}"`)}${A.textAction('记录', 'commerce-order-detail', `data-id="${row.id}"`)}${A.textAction('更多', 'commerce-subscription-more', `data-id="${row.id}"`, 'secondary')}</div>`
+          `<div class="action-links">${A.textAction('续费', 'commerce-order-renew', `data-id="${row.id}"`)}${A.textAction('记录', 'commerce-order-detail', `data-id="${row.id}"`)}${A.textAction('更多', 'commerce-subscription-more', `data-id="${row.id}" aria-haspopup="menu" aria-expanded="false"`, 'secondary', 'down')}</div>`
       }
     ];
     return (
@@ -4303,7 +4303,7 @@
       }
     );
   }
-  function moreOrder(id) {
+  function moreOrder(id, node) {
     const order = orders.find((row) => row.id === id);
     if (!order) return;
     const ledger = A.modules.appleBalance?.getOrderLedger?.(id);
@@ -4317,22 +4317,12 @@
       : ledger
         ? `<div class="guide-item"><h3>Apple 余额退回</h3><p>本单可确认退回 ${display(ledger.netAmount)} ${currencyLabel('USD')}，仅在 Apple 已实际返还时登记。</p><div class="toolbar">${A.button('确认 Apple 余额退回', 'commerce-apple-refund', '', 'return', `data-id="${id}" ${M.compare(ledger.netAmount, '0') <= 0 ? 'disabled' : ''}`)}</div></div>`
         : '';
-    A.openDrawer(
-      '订单操作',
-      '客户退款、Apple 余额退回、更正和撤单分别记录。',
-      `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${!order.receiptConfirmed ? 'disabled' : ''}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`,
-      A.button('关闭', 'drawer-close')
-    );
+    A.openActionMenu(node, `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${!order.receiptConfirmed ? 'disabled' : ''}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`);
   }
-  function subscriptionMore(id) {
+  function subscriptionMore(id, node) {
     const row = currentSubscriptions().find((order) => order.id === id);
     if (!row) return;
-    A.openDrawer(
-      'Claude 账号运营',
-      '',
-      `<div class="property-list">${property('邮箱账号', row.email)}${property('当前客户', customerLabel(row.customerId))}${property('租户', tenantLabel(row.tenantId))}${property('归属人', orderOwnerName(row))}${property('认证人', row.verifier)}${property('验证状态', row.kyc)}${property('当前状态', { active: '使用中', frozen: '冻结', abandoned: '弃用' }[row.operation.status])}${property('状态时间', row.operation.at)}</div><div class="toolbar">${row.operation.status === 'active' ? A.button('冻结', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="frozen"`) + A.button('弃用', 'commerce-subscription-state', 'danger', '', `data-id="${id}" data-status="abandoned"`) : A.button('恢复使用', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="active"`)}${A.button('创建付租批次', 'commerce-rent-one', '', 'orders', `data-id="${id}"`)}</div>`,
-      A.button('关闭', 'drawer-close')
-    );
+    A.openActionMenu(node, `<div class="property-list">${property('邮箱账号', row.email)}${property('当前客户', customerLabel(row.customerId))}${property('租户', tenantLabel(row.tenantId))}${property('归属人', orderOwnerName(row))}${property('认证人', row.verifier)}${property('验证状态', row.kyc)}${property('当前状态', { active: '使用中', frozen: '冻结', abandoned: '弃用' }[row.operation.status])}${property('状态时间', row.operation.at)}</div><div class="toolbar">${row.operation.status === 'active' ? A.button('冻结', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="frozen"`) + A.button('弃用', 'commerce-subscription-state', 'danger', '', `data-id="${id}" data-status="abandoned"`) : A.button('恢复使用', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="active"`)}${A.button('创建付租批次', 'commerce-rent-one', '', 'orders', `data-id="${id}"`)}</div>`);
   }
   function saveRentBatch(form) {
     const raw = A.readForm(form),
@@ -4889,7 +4879,7 @@
       return true;
     }
     if (action === 'commerce-order-more') {
-      moreOrder(id);
+      moreOrder(id, node);
       return true;
     }
     if (action === 'commerce-order-renew') {
@@ -4933,7 +4923,7 @@
       return true;
     }
     if (action === 'commerce-subscription-more') {
-      subscriptionMore(id);
+      subscriptionMore(id, node);
       return true;
     }
     if (action === 'commerce-subscription-state') {
@@ -5092,12 +5082,14 @@
     select.innerHTML = A.options(choices, selected);
     select.disabled = stock || email.readOnly || choices.length === 1;
     trigger.hidden = stock || email.readOnly;
-    const help = form.querySelector('[data-commerce-field="email"] .field-help');
+    const help = form.querySelector('[data-commerce-field="email"] .field-title-help .title-description');
     if (help) {
       help.textContent = stock
         ? form.elements['commerce-id'].value ? '已保存的交付快照保留，不再次占用库存。' : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
         : '优先匹配本产品最近使用的邮箱，也可直接填写新邮箱。';
-      help.hidden = email.readOnly && !stock;
+      const trigger = help.closest('.field-title-help');
+      trigger.hidden = email.readOnly && !stock;
+      if (trigger.hidden) trigger.open = false;
     }
     if (select.disabled && picker.querySelector('.commerce-picker-popover').matches(':popover-open'))
       picker.querySelector('.commerce-picker-popover').hidePopover();
