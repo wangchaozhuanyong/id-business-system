@@ -26,7 +26,7 @@ async function requestJson(url, options, timeout) {
   const response = await fetch(url, {
     ...options, redirect: 'error', signal: AbortSignal.timeout(timeout)
   });
-  if (!response.ok || !response.body) {
+  if ((!response.ok && response.status !== 409) || !response.body) {
     await response.body?.cancel();
     return { response };
   }
@@ -61,7 +61,7 @@ export function createVendureCodexdaichongWorker({
         ...(body === undefined ? {} : { 'content-type': 'application/json' })
       },
       body: body === undefined ? undefined : JSON.stringify(body)
-    }, timeoutMs);
+    }, path === '/api/run-process' ? timeoutMs + 30_000 : timeoutMs);
   };
   const workerRequest = (action, value) => {
     const path = rechargeWorkerPrefix + '/' + action;
@@ -79,9 +79,12 @@ export function createVendureCodexdaichongWorker({
         !task.executionCode || typeof task.session !== 'string') return unknown;
     let jobKey;
     try {
-      const { data: accepted } = await upstreamRequest('/api/run-process', {
+      const { response, data: accepted } = await upstreamRequest('/api/run-process', {
         cdk: task.executionCode, session: task.session
       }, task.clientIp);
+      if (response.status === 409 && accepted?.success === false &&
+          accepted.code === 'recharge_route_unavailable' && accepted.execution_started === false)
+        return { outcome: 'confirmed_failure', evidenceId: 'codexdaichong:route:' + task.id };
       if (accepted?.success !== true || typeof accepted.jobKey !== 'string' || !jobIdPattern.test(accepted.jobKey))
         return unknown;
       jobKey = accepted.jobKey;

@@ -1,3 +1,19 @@
+[data-recharge-view='admin'] .recharge-routing-panel {
+  margin-top: 24px;
+}
+[data-recharge-view='admin'] .recharge-routing-panel > p[id] {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+[data-recharge-view='admin'] [data-route-country] {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  white-space: normal;
+}
+
 :root {
   color-scheme: light;
   --font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;

@@ -30,10 +30,15 @@ after(async () => {
   if (fixture) await rm(fixture, { recursive: true, force: true });
 });
 
-test('every tracked upstream file including entrypoint, scheduler, store and retries is pristine', async () => {
+test('all 200 upstream files match: 197 original and only three reviewed routing changes', async () => {
   const result = await verifyCodexdaichongSource(prepared);
   assert.equal(result.revision, CODEXDAICHONG_REVISION);
-  assert.ok(result.files > 100);
+  assert.equal(result.files, 200);
+  assert.equal(result.originalFiles, 197);
+  assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
+  for (const name of ['index.js', 'mysql-store.js', 'payment-retry.js', 'stripe-payment.js',
+    'tax-free-address.js', 'package-lock.json'])
+    assert.equal(await readFile(join(prepared, name), 'utf8'), await original(name), name);
 });
 
 test('a tampered core file is rejected even when the revision marker is unchanged', async () => {

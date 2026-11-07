@@ -123,6 +123,33 @@ test('confirmed failure stays bound to the observed original job and exposes onl
   assert.deepEqual(Object.keys(failed.body).sort(), ['id', 'message', 'plan', 'stage', 'status', 'updatedAt']);
 });
 
+test('only an explicit route rejection before execution is definitive; other missing jobs remain unknown', async t => {
+  for (const explicit of [true, false]) {
+    const f = fixture(t);
+    const submitted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+    let starts = 0;
+    const mock = t.mock.method(globalThis, 'fetch', async (input, options) => {
+      const url = new URL(input);
+      if (url.port === '31992') {
+        const reply = await f.post(url.pathname, JSON.parse(options.body), options.headers);
+        return new Response(JSON.stringify(reply.body), { status: reply.status });
+      }
+      if (url.pathname === '/api/public/runtime') return Response.json({ success: true });
+      assert.equal(url.pathname, '/api/run-process'); starts++;
+      return Response.json({ success: false, code: 'recharge_route_unavailable',
+        ...(explicit ? { execution_started: false } : {}) }, { status: 409 });
+    });
+    const run = createVendureCodexdaichongWorker({
+      bridgeUrl: 'http://127.0.0.1:31992', upstreamUrl: 'http://127.0.0.1:31993',
+      workerSecret: f.workerSecret, upstreamSecret: randomBytes(32).toString('hex'), pollIntervalMs: 1
+    });
+    assert.deepEqual(await run(), { status: explicit ? 'failed' : 'awaiting_review' });
+    const view = (await f.vendure('task', { id: submitted.id, taskToken: submitted.taskToken })).body;
+    assert.equal(view.status, explicit ? 'failed' : 'awaiting_review');
+    assert.equal(starts, 1); mock.mock.restore();
+  }
+});
+
 test('worker accepts the original runtime and never adds plan, card or retry overrides', async (t) => {
   const f = fixture(t);
   const submitted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;

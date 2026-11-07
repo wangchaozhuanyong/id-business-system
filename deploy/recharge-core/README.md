@@ -1,9 +1,10 @@
 # 原版核心的生产运行配套
 
-本目录只包含外围部署代码，原版 200 个追踪文件全部按 `f4d7761e0036892e6dd68ec64c5447b513ca37da` 核验。不得在此加入原版替换、请求内重试或付款逻辑。
+本目录只包含外围部署代码，200 个追踪文件全部按 `f4d7761e0036892e6dd68ec64c5447b513ca37da` 及用户批准的三文件选路补丁核验（197 个原文件不变）。不得在此加入请求内支付重试或付款逻辑。选路授权边界和两张新增表见 `docs/RECHARGE_PLAN_ROUTING_20261108.md`。
 
 - `Dockerfile`：从既有固定 Node 24 镜像重新构建，安装原版锁定依赖、Chromium 和按现网状态选择的可选 Python 配套。构建上下文为 `source/`（确定 main 的归档）、`upstream/`（固定原仓库）、`engine/`（未改写原版加两份版本标记）。构建时必须设置 `org.opencontainers.image.revision` 和 `org.id-business.upstream.revision` 标签。
 - `entry.mjs`：私有 stdin 依次接收数据库密码、既有桥接密钥、原运行设置 JSON，adapter 额外接收宿主签发的短期网络证明。原版角色启动前全量核验；宿主预检专用库后直接运行原版 server.js，不向原进程预加载监控；adapter 不加载或替换任何原版执行函数。
+- `entry.mjs migrate-native-routing`：同一私有输入、确定镜像，仅执行新增两张选路表和 INSERT IGNORE 初始配置。必须先完成入口暂停、空闲核验和加密备份；隔离合成数据库对应 `migrate-canary-routing`。不启动充值、不触碰原业务表。
 - `run-recharge.py native <main-sha>`：在独立 bridge 容器运行原版，直连同一受管 MySQL 的私网接口，端口只映射至宿主 `127.0.0.1:44579`。共享内存为 2 GiB，精确挂载私有截图/录像、导出及 data 目录，保留 Python 原路径 /app/data，源码来自确定镜像。
 - `run-recharge.py adapter <main-sha>`：外围容器继续使用原 `127.0.0.1:44575` 接入地址，数据库仍为宿主回环；宿主真实 inspect 后签发 30 秒证明，容器不挂载 Docker socket。两个角色使用独立 systemd 服务，adapter 停止不影响原版进程。
 - `capture-options.mjs`：只通过私有管道将旧原版及其父进程的白名单配置交给 `systemd-creds encrypt`；有效原生签名设置保留，原设置缺失时派生稳定内存签名值。密钥不出现在 Docker 参数、源码、发布回执或本机备份。

@@ -1,0 +1,18 @@
+{
+  "revision": "f4d7761e0036892e6dd68ec64c5447b513ca37da",
+  "patchSha256": "e879564db9ca40ae4b35b36b94cca88833679d6c5cb91280a0d2b1d53d28afe7",
+  "files": {
+    "server.js": {
+      "original": "0d350cd576c0c4a82bec6a5452da6559c9a2e9ad",
+      "approved": "aa8ea80e04812d20f60965d356c31e8e0fb99557"
+    },
+    "region-config.js": {
+      "original": "03dabf797562e37ef570f749a4a9ea5fbf301067",
+      "approved": "e576b10fac92f638aaedfce6409994c4305fe38f"
+    },
+    "pricing-checkout.js": {
+      "original": "f93a288d251afc03f7b17963dbe1157034b5213e",
+      "approved": "17d5982142eec44b1d9aa56adff5db50617df9fe"
+    }
+  }
+}

@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { CODEXDAICHONG_REVISION } from './prepare.mjs';
 import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
+import { routingAdminPanel } from './routing-admin-ui.mjs';
 
 const git = promisify(execFile);
 const clone = fileURLToPath(new URL('../../../.upstream/codexdaichong/', import.meta.url));
@@ -58,7 +59,7 @@ function localUrls(source) {
     );
 }
 
-function adaptAdminScript(source) {
+function adaptAdminScript(source, routingScript) {
   source = replaceSection(source, '        async function saveProxyPool() {', '        function applyProxyTestResultToRow', `
         const normalizeRechargeProxyInput = ${normalizeRechargeProxyInput.toString()};
         function normalizeProxyPoolEditor(input) {
@@ -225,7 +226,7 @@ function adaptAdminScript(source) {
     ]
   ])
     source = replaceOne(source, anchor, replacement);
-  return localUrls(source);
+  return localUrls(source + '\n' + routingScript);
 }
 
 function inlineHashes(html) {
@@ -603,6 +604,11 @@ function adaptHtml(source, kind) {
         : '<body data-recharge-view="' + kind + '"'
     );
   if (kind === 'admin') {
+    source = source.replace('每次任务从「启用」的代理中随机抽取。',
+      '自动充值按套餐要求实测并选择同国家的启用代理；无匹配线路时停止。代理池完全为空时才检查服务器直连出口。');
+    source = source.replace('>支付地区设置</h2>', '>其他流程默认地区</h2>')
+      .replace('选择支付地区后，系统将使用对应的币种进行 Stripe 支付。账单地址请在上方「免税地址」页面管理。',
+        '此设置保留给其他原有流程。自动充值和支付页面调试统一使用上方套餐线路配置；账单地址仍沿用美国地址库。');
     source = replaceOne(
       source,
       '<label style="margin-bottom: 6px;">plan_name（自动跟随套餐，可手动改）</label>',
@@ -624,13 +630,14 @@ function adaptHtml(source, kind) {
       '<!-- 支付地区设置 -->',
       ''
     );
+    source = replaceOne(source, '<!-- 支付地区设置 -->', routingAdminPanel + '\n<!-- 支付地区设置 -->');
     source = replaceOne(
       source,
       '<div style="display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap;">\n' +
         '                    <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 180px; max-width: 280px;">\n' +
         '                        <label style="margin-bottom: 6px;">当前支付地区</label>',
       '<div class="form-group embedded-field-with-actions">\n' +
-        '                    <label for="region_selector">当前支付地区</label>\n' +
+        '                    <label for="region_selector">默认地区</label>\n' +
         '                    <div class="embedded-control-row">'
     );
     source = replaceOne(
@@ -685,7 +692,8 @@ async function buildCodexdaichongAssets() {
     favicon,
     lucide,
     shell,
-    styles
+    styles,
+    routingScript
   ] = await Promise.all([
     original('index.html'),
     original('admin.html'),
@@ -696,7 +704,8 @@ async function buildCodexdaichongAssets() {
     original('favicon.svg'),
     readFile(new URL('vendor/lucide/lucide.min.js', import.meta.url)),
     readFile(new URL('shell.js', import.meta.url)),
-    readFile(new URL('shell.css', import.meta.url))
+    readFile(new URL('shell.css', import.meta.url)),
+    readFile(new URL('routing-admin.js', import.meta.url), 'utf8')
   ]);
   const assets = new Map();
   for (const [path, source, kind] of [
@@ -728,7 +737,7 @@ async function buildCodexdaichongAssets() {
     });
   }
   for (const [name, body, kind] of [
-    ['admin.js', adaptAdminScript(adminJs), 'js'],
+    ['admin.js', adaptAdminScript(adminJs, routingScript), 'js'],
     ['admin.css', adminCss, 'css'],
     ['style.css', publicCss, 'css'],
     ['favicon.svg', favicon, 'svg'],
