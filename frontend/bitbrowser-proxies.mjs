@@ -20,11 +20,19 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   let data, saving = false, probing = false, probeLoading = false, reading = false, generation = 0, alive = true, editingId = '', editVersion = 0, page = 1, opener;
   const pending = new Set(), probeResults = new Map();
   const probeSummary = ({ ip, countryCode, latencyMs, protocol }) => ({ ip, countryCode, latencyMs, protocol, status: 'usable' });
-  let editorProbe, probeController, editReadController, editReadGeneration = 0, editLoading = false;
+  let batch, editorProbe, probeController, editReadController, editReadGeneration = 0, editLoading = false;
   const readDraft = () => drafts?.read('bit-local') || {};
   const draftKey = () => `ip-draft/${editingId || 'new'}/`;
-  const ready = () => Boolean(!reading && !saving && !probing && !probeLoading && !editor.open && data?.items?.some(item => item.id === select.value));
+  const ready = () => Boolean(!reading && !saving && !probing && !probeLoading && !batch && !editor.open && data?.items?.some(item => item.id === select.value));
   function setMessage(text) { message.textContent = text; get('bit-library-result').textContent = text; }
+  function syncActions() {
+    const busy = saving || probing || probeLoading || Boolean(batch) || locked();
+    get('bit-test-all-proxies').disabled = batch ? batch.controller.signal.aborted : busy || reading || editor.open || !data?.items.length;
+    get('bit-test-all-proxies').textContent = batch ? (batch.controller.signal.aborted ? '正在停止' : '停止检测') : '检测全部';
+    get('bit-refresh-proxies').disabled = busy || reading;
+    for (const id of ['bit-add-proxy', 'bit-library-add']) get(id).disabled = busy;
+    select.disabled = !data || busy;
+  }
   function capture() {
     const values = readDraft(); values['bit-execution-proxy'] = select.value;
     values['ip-search'] = search.value; values['ip-filter'] = filter.value; values['ip-sort'] = sort.value; values['ip-page'] = String(page);
@@ -44,13 +52,13 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     const pages = Math.max(1, Math.ceil(items.length / 5)); page = Math.min(Math.max(1, page), pages);
     const rows = items.slice((page - 1) * 5, page * 5).map(item => {
       const row = document.createElement('tr'); row.setAttribute('aria-selected', String(item.id === select.value));
-      for (const value of [item.name, item.countryCode ? `${countryName(item.countryCode)} ${item.countryCode}` : '自动识别', kinds[item.kind], probeResults.has(item.id) ? (probeResults.get(item.id).status === 'usable' ? `可用 · ${probeResults.get(item.id).latencyMs}ms` : probeResults.get(item.id).status === 'failed' ? '检测未通过' : '未完成检测') : '未测试', `${item.endpoint} · ${protocolName(item.protocol)} · ${item.mode === 'dynamic' ? 'API 提取' : '代理地址'}`]) {
+      for (const value of [item.name, item.countryCode ? `${countryName(item.countryCode)} ${item.countryCode}` : '自动识别', kinds[item.kind], probeResults.has(item.id) ? (probeResults.get(item.id).status === 'usable' ? `可用 · ${probeResults.get(item.id).latencyMs}ms` : probeResults.get(item.id).status === 'failed' ? '检测未通过' : probeResults.get(item.id).status === 'testing' ? '检测中' : '未完成检测') : '未测试', `${item.endpoint} · ${protocolName(item.protocol)} · ${item.mode === 'dynamic' ? 'API 提取' : '代理地址'}`]) {
         const cell = document.createElement('td'); cell.textContent = value; cell.title = value; row.append(cell);
       }
       const cell = document.createElement('td'), actions = document.createElement('div'); actions.className = 'bit-local__actions';
       for (const [label, action] of [[item.id === select.value ? '已选用' : '使用', () => use(item.id)], ['测试', () => void testSaved(item)], ['编辑', () => openEditor(item)]]) {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'button'; button.textContent = label;
-        button.disabled = saving || probing || probeLoading || locked(); button.addEventListener('click', action); actions.append(button);
+        button.disabled = saving || probing || probeLoading || Boolean(batch) || locked(); button.addEventListener('click', action); actions.append(button);
       }
       cell.append(actions); row.append(cell); return row;
     });
@@ -59,7 +67,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     get('bit-ip-empty').textContent = !data ? 'IP 列表暂不可用，请刷新重试。' : data.items.length ? '没有匹配的 IP，请调整搜索或筛选。' : '还没有保存 IP，点击右上角“新增 IP”录入。';
     get('bit-ip-count').textContent = data ? String(data.items.length) : '—';
     get('bit-ip-page-info').textContent = `共 ${items.length} 条 · 第 ${page} / ${pages} 页`;
-    get('bit-ip-prev').disabled = page <= 1; get('bit-ip-next').disabled = page >= pages;
+    get('bit-ip-prev').disabled = page <= 1; get('bit-ip-next').disabled = page >= pages; syncActions();
   }
   function render(preferred = select.value || readDraft()['bit-execution-proxy']) {
     select.replaceChildren(new Option(data?.items.length ? '请选择执行 IP' : '暂无 IP，请先新增', ''),
@@ -81,17 +89,17 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     } finally { pending.delete(controller); }
   }
   async function refresh() {
-    if (saving || probing || locked()) return;
+    if (saving || probing || batch || locked()) return;
     const revision = ++generation; reading = true; onChange(); get('bit-refresh-proxies').disabled = true;
     setMessage('正在读取 IP 列表…');
     try {
       const result = await request(); if (!alive || revision !== generation) return;
       data = result; render(); setMessage(data.items.length ? `已保存 ${data.items.length} 个 IP，可直接选择使用。` : '暂无 IP，点击“新增 IP”录入代理链接。');
     } catch (error) { if (alive && revision === generation) { setMessage(error.message); renderList(); } }
-    finally { if (revision === generation) { reading = false; get('bit-refresh-proxies').disabled = false; onChange(); } }
+    finally { if (revision === generation) { reading = false; syncActions(); onChange(); } }
   }
   function use(id) {
-    if (saving || probing || locked()) return;
+    if (saving || probing || batch || locked()) return;
     select.value = id; capture(); renderList(); onChange(); onUse?.(); select.focus();
   }
   select.addEventListener('change', () => { capture(); renderList(); onChange(); });
@@ -112,7 +120,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   }
   function finishEditor() { editReadGeneration++; editReadController?.abort(); editLoading = false; editor.close(); restoreEditor(); }
   function openEditor(item) {
-    if (locked() || saving || probing || probeLoading) return;
+    if (locked() || saving || probing || probeLoading || batch) return;
     editReadController?.abort(); const readGeneration = ++editReadGeneration;
     editingId = item?.id || ''; editVersion = data?.version ?? 0; opener = document.activeElement;
     const draft = readDraft(), prefix = draftKey();
@@ -127,7 +135,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     get('bit-ip-edit-note').textContent = item ? `已保存地址：${item.endpoint}。修改仅影响后续使用；进行中的任务不受影响。` : '保存后会自动选中这个 IP，可在 IP 资料库再次查看和编辑。';
     saveMessage.textContent = ''; get('bit-ip-rebase').hidden = true;
     mountEditor(); editor.showModal(); editor.querySelector('.bit-local__drawer-body').scrollTop = 0;
-    onChange(); get('bit-ip-name').focus({ preventScroll: true });
+    onChange(); syncActions(); get('bit-ip-name').focus({ preventScroll: true });
     editLoading = Boolean(item); get('bit-ip-save').disabled = editLoading; get('bit-ip-test').disabled = editLoading;
     if (item) {
       editReadController = new AbortController();
@@ -153,7 +161,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     capture();
     if (['bit-ip-link', 'bit-ip-protocol', 'bit-ip-mode'].includes(event.target.id)) { editorProbe = undefined; get('bit-ip-probe-result').textContent = '代理资料已修改，请重新测试。'; }
   }); editor.addEventListener('change', capture);
-  editor.addEventListener('close', () => { restoreEditor(); editorProbe = undefined; onChange(); if (opener?.isConnected) opener.focus({ preventScroll: true }); });
+  editor.addEventListener('close', () => { restoreEditor(); editorProbe = undefined; syncActions(); onChange(); if (opener?.isConnected) opener.focus({ preventScroll: true }); });
   function close() { if (!saving && !probing && !probeLoading) { capture(); get('bit-ip-link').value = ''; finishEditor(); } }
   for (const id of ['bit-ip-close', 'bit-ip-dismiss']) get(id).addEventListener('click', close);
   editor.addEventListener('cancel', event => { event.preventDefault(); close(); });
@@ -170,13 +178,12 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     } catch (error) { saveMessage.textContent = error.message; }
     finally { get('bit-ip-rebase').disabled = false; }
   });
-  async function runProbe(proxy) {
+  async function runProbe(proxy, { signal, settings = connection?.() } = {}) {
     if (probing || locked()) throw new Error('已有任务正在执行，请稍候再测试。');
-    const settings = connection?.();
     if (!settings?.token) throw new Error('请先选择可用的比特账号连接，再测试代理。');
     probeController = new AbortController(); probing = true; onChange(); renderList();
     for (const control of editor.querySelectorAll('input,select,button')) control.disabled = true;
-    try { return await testBitBrowserProxy({ ...proxy, ...settings, signal: probeController.signal }); }
+    try { return await testBitBrowserProxy({ ...proxy, ...settings, signal: signal ? AbortSignal.any([probeController.signal, signal]) : probeController.signal }); }
     finally {
       probing = false; probeController = undefined;
       for (const control of editor.querySelectorAll('input,select,button')) control.disabled = false;
@@ -199,9 +206,9 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     } catch (error) { get('bit-ip-probe-result').textContent = error.message; throw error; }
     finally { link = ''; probeLoading = false; get('bit-ip-test').disabled = false; get('bit-ip-save').disabled = false; onChange(); }
   }
-  get('bit-ip-test').addEventListener('click', () => { if (!saving && !probing && !probeLoading && !editLoading && !locked()) void probeEditor().catch(() => {}); });
+  get('bit-ip-test').addEventListener('click', () => { if (!saving && !probing && !probeLoading && !batch && !editLoading && !locked()) void probeEditor().catch(() => {}); });
   async function testSaved(item) {
-    if (saving || probing || locked()) return;
+    if (saving || probing || batch || locked()) return;
     if (probeLoading) return;
     probeLoading = true; renderList(); onChange();
     setMessage(`正在测试“${item.name}”…`);
@@ -214,8 +221,73 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     } catch (error) { probeResults.set(item.id, { status: error.reason === 'proxy_unavailable' ? 'failed' : 'incomplete' }); renderList(); setMessage(error.message); }
     finally { if (proxy) proxy.link = ''; probeLoading = false; renderList(); onChange(); }
   }
+  function stopBatch(reason = '已手动停止') {
+    if (!batch) return;
+    batch.reason = reason; batch.controller.abort(); syncActions();
+    setMessage('正在停止检测，已完成的结果将保留…');
+  }
+  for (const id of ['bit-connection-profile', 'bit-local-url', 'bit-local-token'])
+    get(id)?.addEventListener(id === 'bit-connection-profile' ? 'change' : 'input', () => stopBatch('比特连接已变化，已停止'));
+  function waitForBatch(ms, signal) {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const finish = () => { signal.removeEventListener('abort', abort); resolve(); };
+      const timer = setTimeout(finish, ms);
+      const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason); };
+      signal.addEventListener('abort', abort, { once: true });
+    });
+  }
+  get('bit-test-all-proxies').addEventListener('click', async () => {
+    if (batch) { stopBatch(); return; }
+    if (saving || probing || probeLoading || reading || editor.open || locked() || !data?.items.length) return;
+    const settings = { ...connection?.() };
+    if (!settings.token) { setMessage('请先选择可用的比特账号连接，再检测全部 IP。'); return; }
+    const items = [...data.items], version = data.version;
+    const job = { controller: new AbortController(), completed: 0, usable: 0, failed: 0, incomplete: 0, reason: '' };
+    const counts = () => `已完成 ${job.completed}/${items.length}，可用 ${job.usable}，未通过 ${job.failed}，未完成 ${job.incomplete}`;
+    const connectionChanged = () => { const current = connection?.(); return settings.url !== current?.url || settings.token !== current?.token; };
+    batch = job; renderList(); onChange(); let nextExtractionAt = 0;
+    try {
+      for (const item of items) {
+        if (job.controller.signal.aborted || !alive) break;
+        if (connectionChanged()) { job.reason = '比特连接已变化，已停止'; break; }
+        let proxy;
+        try {
+          // The extraction relay permits 20 requests/minute per user; do not burst it.
+          if (item.mode === 'dynamic' && Date.now() < nextExtractionAt) {
+            setMessage(`正在等待提取间隔 · ${counts()}`);
+            await waitForBatch(nextExtractionAt - Date.now(), job.controller.signal);
+          }
+          job.controller.signal.throwIfAborted();
+          probeResults.set(item.id, { status: 'testing' }); renderList();
+          setMessage(`正在检测“${item.name}” · ${counts()}`);
+          proxy = await request('POST', { id: item.id, version }, job.controller.signal);
+          if (connectionChanged()) { job.reason = '比特连接已变化，已停止'; throw new Error(job.reason); }
+          if (item.mode === 'dynamic') nextExtractionAt = Date.now() + 3100;
+          const result = await runProbe(proxy, { signal: job.controller.signal, settings });
+          job.controller.signal.throwIfAborted();
+          probeResults.set(item.id, probeSummary(result)); job.usable++;
+        } catch (error) {
+          probeResults.set(item.id, { status: error.reason === 'proxy_unavailable' ? 'failed' : 'incomplete' });
+          if (job.controller.signal.aborted || !alive) break;
+          if (error.reason === 'proxy_unavailable') job.failed++; else job.incomplete++;
+          if (!proxy || connectionChanged() || [401, 403, 409, 429].includes(error.status) ||
+              ['bitbrowser_direct_token_invalid', 'bitbrowser_direct_unreachable', 'bitbrowser_secure_context_required'].includes(error.reason)) {
+            job.reason ||= `已停止：${error.message}`;
+          }
+        } finally { if (proxy) proxy.link = ''; }
+        job.completed++; renderList();
+        if (job.reason) break;
+      }
+      if (alive) setMessage(`${job.reason || (job.controller.signal.aborted ? '已停止检测' : '检测全部完成')} · ${counts()}${job.completed < items.length ? `；其余 ${items.length - job.completed} 条未检测完。` : '。'}`);
+    } finally {
+      settings.token = '';
+      if (batch === job) batch = undefined;
+      if (alive) { renderList(); onChange(); }
+    }
+  });
   get('bit-ip-save').addEventListener('click', async () => {
-    if (saving || probing || probeLoading || editLoading || locked()) return;
+    if (saving || probing || probeLoading || batch || editLoading || locked()) return;
     if (!data) { saveMessage.textContent = '请先关闭并刷新 IP 列表，输入已保留。'; return; }
     let parsed;
     const rawLink = get('bit-ip-link').value.trim();
@@ -253,11 +325,11 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       get('bit-refresh-proxies').disabled = false; renderList(); onChange();
     }
   });
-  window.addEventListener('pagehide', () => { alive = false; editReadGeneration++; editReadController?.abort(); probeController?.abort(); for (const controller of pending) controller.abort(); get('bit-ip-link').value = ''; if (editor.open) finishEditor(); restoreEditor(); });
+  window.addEventListener('pagehide', () => { alive = false; batch?.controller.abort(); editReadGeneration++; editReadController?.abort(); probeController?.abort(); for (const controller of pending) controller.abort(); get('bit-ip-link').value = ''; if (editor.open) finishEditor(); restoreEditor(); });
   window.addEventListener('message', event => {
-    if (event.origin === location.origin && event.source === window.parent && event.data?.source === 'id-recharge-shell' && event.data.type === 'visibility' && !event.data.visible) { probeController?.abort(); editorProbe = undefined; get('bit-ip-link').value = ''; if (!saving && editor.open) finishEditor(); }
+    if (event.origin === location.origin && event.source === window.parent && event.data?.source === 'id-recharge-shell' && event.data.type === 'visibility' && !event.data.visible) { stopBatch('离开比特页面，已停止'); probeController?.abort(); editorProbe = undefined; get('bit-ip-link').value = ''; if (!saving && editor.open) finishEditor(); }
   });
-  return { ready, refresh, editing: () => editor.open, async settings(signal) {
+  return { ready, refresh, editing: () => editor.open || Boolean(batch), async settings(signal) {
     if (!ready()) throw new Error('请先选择有效的执行 IP');
     const id = select.value, version = data.version;
     const proxy = await request('POST', { id, version }, signal);
