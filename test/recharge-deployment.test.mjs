@@ -89,3 +89,10 @@ assert not probe('HTTP/2 503 \\r\\nRetry-After: 60\\r\\n\\r\\n'+body,False)
 print('passed')`;
   assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
 });
+
+
+test('the native startup query uses the Docker ps ID field rather than inspect field casing', async () => {
+  const source = await readFile(launcher, 'utf8');
+  assert.match(source, /'--format', '\{\{\.ID\}\}'/);
+  assert.doesNotMatch(source, /'--format', '\{\{\.Id\}\}'/);
+});

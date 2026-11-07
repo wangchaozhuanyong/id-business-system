@@ -79,7 +79,7 @@ def main():
         descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         launch_lock = os.fdopen(descriptor, 'a')
         fcntl.flock(launch_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        existing = subprocess.check_output(['docker', 'ps', '-a', '--filter', 'name=^/' + NATIVE + '$', '--format', '{{.Id}}'], text=True).strip()
+        existing = subprocess.check_output(['docker', 'ps', '-a', '--filter', 'name=^/' + NATIVE + '$', '--format', '{{.ID}}'], text=True).strip()
         if existing:
             raise ValueError('An original engine already exists; leave it running')
     image = 'id-business-independent-recharge:' + sha
