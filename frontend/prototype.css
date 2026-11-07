@@ -1066,6 +1066,14 @@ th.table-actions {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.commerce-search-picker.commerce-email-history > input {
+  flex: 1 1 0;
+  width: 0;
+}
+.commerce-email-history > .commerce-picker-trigger {
+  flex: none;
+  width: auto;
+}
 .commerce-picker-popover {
   position: fixed;
   inset: auto;
@@ -1115,6 +1123,13 @@ th.table-actions {
   color: var(--muted);
 }
 @media (max-width: 900px) {
+  .commerce-email-history > .commerce-picker-trigger {
+    width: 44px;
+    justify-content: center;
+  }
+  .commerce-email-history .commerce-picker-label {
+    display: none;
+  }
   .commerce-picker-option {
     min-height: 44px;
   }
