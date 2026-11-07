@@ -193,7 +193,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       const result = await runProbe({ link, protocol: get('bit-ip-protocol').value, mode: get('bit-ip-mode').value });
       if (!alive) throw new Error('页面已关闭。');
       editorProbe = result;
-      if (result.countryCode) countryInput.value = countryName(result.countryCode);
+      if (result.countryCode && !countryInput.value.trim()) countryInput.value = countryName(result.countryCode);
       get('bit-ip-probe-result').textContent = `代理可用 · 出口 ${result.ip} · ${result.countryCode ? countryName(result.countryCode) : '国家未识别'} · ${result.latencyMs}ms · ${protocolName(result.protocol)}`;
       return result;
     } catch (error) { get('bit-ip-probe-result').textContent = error.message; throw error; }
@@ -233,7 +233,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       }
     } catch (error) { saveMessage.textContent = error.message; return; }
     const body = { ...(editingId && { id: editingId }), version: editVersion, name: get('bit-ip-name').value,
-      countryCode: editorProbe?.countryCode || resolveBitBrowserCountry(country), kind: get('bit-ip-kind').value,
+      countryCode: resolveBitBrowserCountry(country) || editorProbe?.countryCode || '', kind: get('bit-ip-kind').value,
       mode: parsed?.mode || prior?.mode, protocol: parsed?.protocol || prior?.protocol, link: parsed?.link || '' };
     const prefix = draftKey(); capture(); const snapshot = readDraft();
     saving = true; reading = false; generation++; onChange();

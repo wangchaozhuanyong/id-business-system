@@ -195,7 +195,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     assert.equal(await page.locator('#bit-start-login').isEnabled(), true);
     assert.equal(await page.evaluate(() => window.fixtureLoginAttempts), 2);
     assert.deepEqual(selectedBody, { id: items[0].id, version: 2 });
-    assert.deepEqual(await page.evaluate(() => window.fixtureLaunch), { country: 'PH', protocol: 'socks5', host: '192.0.2.8', port: 8080, email: 'next-fixture@example.test' });
+    assert.deepEqual(await page.evaluate(() => window.fixtureLaunch), { country: '', protocol: 'socks5', host: '192.0.2.8', port: 8080, email: 'next-fixture@example.test' });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     await page.screenshot({ path: fileURLToPath(new URL(`${theme}-${width}.png`, output)), fullPage: true });
     assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); await context.close();

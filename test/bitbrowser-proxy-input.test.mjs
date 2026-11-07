@@ -70,3 +70,9 @@ test('a dropped native check retries once, without retrying account operations o
   t.mock.method(globalThis, 'fetch', async () => { calls++; controller.abort(); throw new TypeError('synthetic dropped connection'); });
   await assert.rejects(() => testBitBrowserProxy({ ...input, signal: controller.signal }), /已取消/); assert.equal(calls, 1);
 });
+
+test('the country label is metadata and never becomes a native execution restriction', () => {
+  const settings = bitBrowserProxySettings({ link: 'https://extract.example.test/api?key=synthetic', protocol: 'socks5', mode: 'dynamic', countryCode: 'EG' });
+  assert.equal(settings.expectedCountryCode, ''); assert.equal(settings.proxyType, 'socks5');
+  assert.equal(settings.dynamicProxyUrl, 'https://extract.example.test/api?key=synthetic');
+});

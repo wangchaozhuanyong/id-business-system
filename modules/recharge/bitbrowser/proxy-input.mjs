@@ -36,7 +36,7 @@ export function parseBitBrowserProxyInput(value, { protocol = 'auto', mode = 'au
 }
 export function bitBrowserProxySettings(proxy) {
   const parsed = parseBitBrowserProxyInput(proxy.link, { mode: proxy.mode, protocol: proxy.protocol });
-  return { proxyType: parsed.protocol, expectedCountryCode: proxy.countryCode || '', useSelectedProxy: true,
+  return { proxyType: parsed.protocol, expectedCountryCode: '', useSelectedProxy: true,
     dynamicProxyUrl: parsed.mode === 'dynamic' ? parsed.link : '',
     browserOptions: { proxyMode: parsed.mode, ...(parsed.mode === 'static' && { staticHost: parsed.host, staticPort: parsed.port }) },
     staticProxyCredentials: parsed.mode === 'static' ? { username: parsed.username, password: parsed.password } : undefined };
