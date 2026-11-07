@@ -878,8 +878,10 @@
           : []),
         ...(type === 'relay'
           ? [
-              { id: 'parentMailboxId', label: '主邮箱编号' },
-              { id: 'aliasId', label: '隐藏邮箱编号' },
+              { id: 'parentMailboxId', label: '主邮箱编号',
+                render: (asset) => esc(api.modules.appleRelay?.displayId('parent', asset.parentMailboxId) || '待接入') },
+              { id: 'aliasId', label: '隐藏邮箱编号',
+                render: (asset) => esc(api.modules.appleRelay?.displayId('alias', asset) || '待接入') },
               { id: 'queryCode', label: '查询码', long: true },
               { id: 'queryExpiry', label: '查询码到期' }
             ]
@@ -1767,8 +1769,8 @@
       );
     if (asset.type === 'relay')
       rows.push(
-        ['主邮箱编号', asset.parentMailboxId || '未填写'],
-        ['隐藏邮箱编号', asset.aliasId || '未填写'],
+        ['主邮箱编号', api.modules.appleRelay?.displayId('parent', asset.parentMailboxId) || '待接入'],
+        ['隐藏邮箱编号', api.modules.appleRelay?.displayId('alias', asset) || '待接入'],
         ['查询码', asset.queryCode || '未填写'],
         ['查询码到期', asset.queryExpiry || '未填写']
       );

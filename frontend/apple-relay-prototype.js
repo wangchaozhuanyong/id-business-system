@@ -117,6 +117,23 @@
   function parentEmail(id) {
     return parents.find((row) => row.id === id)?.email || '主邮箱待核对';
   }
+  function displayId(kind, value) {
+    const row = typeof value === 'string'
+      ? kind === 'parent'
+        ? parent(value) || (local && A.modules.inventory.getAppleRelayState().parents
+          .find((item) => item.id === value))
+        : alias(value)
+      : value;
+    const id = row?.id || value;
+    const number = String(
+      row?.[kind === 'parent' ? 'remotePrimaryId' : 'remoteAliasId'] ||
+      remote.status?.numbers?.[kind]?.[id] ||
+      (!local && /^(?:parent|alias)-demo-(\d+)$/.exec(row?.aliasId || id)?.[1]) || ''
+    );
+    return /^\d+$/.test(number) && BigInt(number) > 0n
+      ? (kind === 'parent' ? 'm' : 'y') + BigInt(number).toString().padStart(6, '0')
+      : '待接入';
+  }
   function initialize() {
     if (local) {
       const metadata = A.modules.inventory.getAppleRelayState();
@@ -306,7 +323,7 @@
       ['', '请选择 Apple 主邮箱'],
       ...parents
         .filter((p) => !p.deleted && (p.status === 'ACTIVE' || p.id === current))
-        .map((p) => [p.id, `${p.email} · ${p.id}${p.status === 'DISABLED' ? '（已禁用）' : ''}`])
+        .map((p) => [p.id, `${p.email} · ${displayId('parent', p)}${p.status === 'DISABLED' ? '（已禁用）' : ''}`])
     ];
   }
   function traceColumns() {
@@ -367,7 +384,7 @@
     const rows = parents.filter(
       (p) =>
         !p.deleted &&
-        `${p.email} ${p.id} ${p.note} ${p.createdBy || ''}`
+        `${p.email} ${p.id} ${displayId('parent', p)} ${p.note} ${p.createdBy || ''}`
           .toLowerCase()
           .includes(view.q.toLowerCase())
     );
@@ -384,7 +401,7 @@
         : '') +
       list(
         [
-          { id: 'id', label: '主邮箱编号', class: 'mono' },
+          { id: 'id', label: '主邮箱编号', class: 'mono', render: (r) => E(displayId('parent', r)) },
           { id: 'email', label: 'Apple 主邮箱' },
           { id: 'status', label: '账号状态', render: (r) => E(status(r)) },
           {
@@ -447,7 +464,7 @@
     const matching = allAliases.filter(
       (r) =>
         (!view.parentId || r.parentMailboxId === view.parentId) &&
-        `${r.email} ${r.id} ${r.parentMailboxId || ''} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''}`
+        `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''}`
           .toLowerCase()
           .includes(view.q.toLowerCase())
     );
@@ -491,8 +508,8 @@
         'relay-aliases', filters, usage + health) +
       list(
         [
-          { id: 'aliasId', label: '隐藏邮箱编号' },
-          { id: 'parentMailboxId', label: '主邮箱编号' },
+          { id: 'aliasId', label: '隐藏邮箱编号', class: 'mono', render: (r) => E(displayId('alias', r)) },
+          { id: 'parentMailboxId', label: '主邮箱编号', class: 'mono', render: (r) => E(displayId('parent', r.parentMailboxId)) },
           { id: 'email', label: '隐藏邮箱地址' },
           {
             id: 'parent',
@@ -601,7 +618,7 @@
         : '') +
       list(
         [
-          { id: 'parentId', label: '主邮箱编号' },
+          { id: 'parentId', label: '主邮箱编号', render: (r) => E(displayId('parent', r.parentId)) },
           { id: 'parent', label: '主邮箱', render: (r) => E(parentEmail(r.parentId)) },
           {
             id: 'recipient',
@@ -672,7 +689,7 @@
       list(
         [
           { id: 'id', label: '导入批次' },
-          { id: 'parentId', label: '主邮箱编号' },
+          { id: 'parentId', label: '主邮箱编号', render: (r) => E(displayId('parent', r.parentId)) },
           { id: 'time', label: '导入时间', render: (r) => E(timeText(r.time)) },
           { id: 'actor', label: '导入人' },
           { id: 'total', label: '总数' },
@@ -1496,9 +1513,9 @@
     A.openDrawer(
       'Apple 主邮箱详情',
       '主邮箱负责 iCloud 收信；隐藏地址只按实际父级登记，不从账号余额库存推断。',
-      `<div class="property-list">${prop('主邮箱编号', p.id)}${prop('Apple 主邮箱', p.email)}${prop('账号状态', status(p))}${prop('应用专用密码', p.hasCredential ? '已配置（演示，不保存原文）' : '未配置')}${prop('主查询码', p.queryCode)}${prop('查询码到期', timeText(p.queryExpiry))}${prop('有效天数', String(p.days))}${prop('最近同步', timeText(p.lastSyncedAt))}${prop('同步情况', p.lastSyncError || '尚未同步')}${prop('备注', p.note)}${trace(p)}</div><div class="toolbar">${A.button('登记隐藏邮箱', 'relay-alias-add', 'primary', 'plus', `data-parent-id="${E(p.id)}"`)}${A.button('批量导入', 'relay-import', '', 'upload', `data-parent-id="${E(p.id)}"`)}</div>${A.table(
+      `<div class="property-list">${prop('主邮箱编号', displayId('parent', p))}${prop('Apple 主邮箱', p.email)}${prop('账号状态', status(p))}${prop('应用专用密码', p.hasCredential ? '已配置（演示，不保存原文）' : '未配置')}${prop('主查询码', p.queryCode)}${prop('查询码到期', timeText(p.queryExpiry))}${prop('有效天数', String(p.days))}${prop('最近同步', timeText(p.lastSyncedAt))}${prop('同步情况', p.lastSyncError || '尚未同步')}${prop('备注', p.note)}${trace(p)}</div><div class="toolbar">${A.button('登记隐藏邮箱', 'relay-alias-add', 'primary', 'plus', `data-parent-id="${E(p.id)}"`)}${A.button('批量导入', 'relay-import', '', 'upload', `data-parent-id="${E(p.id)}"`)}</div>${A.table(
         [
-          { id: 'aliasId', label: '隐藏邮箱编号' },
+          { id: 'aliasId', label: '隐藏邮箱编号', render: (r) => E(displayId('alias', r)) },
           { id: 'email', label: '隐藏邮箱' },
           { id: 'relayStatus', label: '邮箱状态', render: (r) => E(status(r)) }
         ],
@@ -1518,7 +1535,7 @@
     A.openDrawer(
       'Apple 隐藏邮箱详情',
       '隐藏邮箱从所属 Apple 主邮箱收信；库存使用和平台注册记录分别保留。',
-      `<div class="property-list">${prop('隐藏邮箱编号', a.aliasId || a.id)}${prop('主邮箱编号', a.parentMailboxId || '待核对')}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', a.importId || (a.createdById ? '单条登记' : '历史未记录'))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
+      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', a.importId || (a.createdById ? '单条登记' : '历史未记录'))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
       A.button('关闭', 'drawer-close') +
         A.button('查看邮件', 'relay-mails', '', 'mail', `data-id="${E(a.id)}"`) +
         (local && a.inventoryState === 'claimed'
@@ -1643,7 +1660,7 @@
       local
         ? '可修改资料和账号状态。'
         : '操作前核对对象和状态；查询码重置会使旧码失效。禁用不抹去库存或邮件历史。',
-      `<div class="property-list">${prop('邮箱', row.email)}${prop('编号', row.id)}${prop(kind === 'alias' ? '邮箱状态' : '账号状态', status(row))}${kind === 'alias' ? prop('账号状态', healthLabel(row)) : ''}</div><div class="drawer-action-bar">${actions}${healthActions}</div>`,
+      `<div class="property-list">${prop('邮箱', row.email)}${prop('编号', displayId(kind, row))}${prop(kind === 'alias' ? '邮箱状态' : '账号状态', status(row))}${kind === 'alias' ? prop('账号状态', healthLabel(row)) : ''}</div><div class="drawer-action-bar">${actions}${healthActions}</div>`,
       A.button('关闭', 'drawer-close')
     );
   }
@@ -2208,7 +2225,7 @@
         [
           { id: 'line', label: '行号' },
           { id: 'email', label: '隐藏邮箱' },
-          { id: 'assetId', label: '隐藏邮箱编号' },
+          { id: 'assetId', label: '隐藏邮箱编号', render: (r) => E(displayId('alias', r.assetId)) },
           { id: 'note', label: '备注' }
         ],
         batch.results,
@@ -2602,6 +2619,7 @@
     return true;
   }
   A.modules.appleRelay = {
+    displayId,
     render,
     openQuery() {
       A.closeDrawer();

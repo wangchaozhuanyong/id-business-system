@@ -1047,6 +1047,8 @@ test('the real Vendure operation names sync the verified parent and filter overb
   const { body: status } = await request('status');
   assert.deepEqual(status.parentIds, ['one', 'two']);
   assert.deepEqual(status.aliasIds, ['first', 'sibling', 'other', 'expired']);
+  assert.equal(status.numbers.parent.one, 'vp-one');
+  assert.equal(status.numbers.alias.first, 'va-first');
   assert.equal(JSON.stringify(status).includes(state.upstream.key), false);
   const tested = await request('test', { parentId: 'one' });
   assert.deepEqual(tested.body, { success: true, message: '主邮箱连接正常' });
