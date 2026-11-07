@@ -13,6 +13,12 @@ export const legacyMailboxCodePattern = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmn
 const isManagedCode = (value) => typeof value === 'string' &&
   (codePattern.test(value) || legacyMailboxCodePattern.test(value));
 
+export function extractManagedMailboxCode(body) {
+  const text = String(body || '').replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ');
+  return /(?:验证码|verification code|security code)\D{0,20}(\d{4,8})(?!\d)/i.exec(text)?.[1] || null;
+}
+
 export class MailboxPoolError extends Error {
   constructor(status, message) {
     super(message);
@@ -324,7 +330,7 @@ export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigi
         success: true, targetType: 'PRIMARY', primaryEmail: user.slice(0, 1) + '***@' + host,
         codeExpiresAt: item.expiresAt,
         items: rows.map(({ body, ...row }) => ({
-          ...row, body, extractedCode: /(?:验证码|verification code|security code)\D{0,20}(\d{4,8})(?!\d)/i.exec(body)?.[1] || null
+          ...row, body, extractedCode: extractManagedMailboxCode(body)
         }))
       });
     } catch {

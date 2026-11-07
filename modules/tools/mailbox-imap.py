@@ -51,9 +51,9 @@ def read_recent(data):
             if not raw:
                 continue
             message = BytesParser(policy=policy.default).parsebytes(raw)
-            part = message.get_body(preferencelist=("html", "plain") if storefront else ("plain",))
+            part = message.get_body(preferencelist=("html", "plain"))
             try:
-                body = str(part.get_content())[:16000 if storefront else 2000] if part is not None else ""
+                body = str(part.get_content())[:16000] if part is not None else ""
             except (LookupError, ValueError):
                 body = ""
             try:
