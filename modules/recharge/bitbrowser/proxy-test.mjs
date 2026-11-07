@@ -20,19 +20,18 @@ export async function testBitBrowserProxy({ link, protocol = 'auto', mode = 'aut
   const source = parsed;
   if (parsed.mode === 'dynamic') {
     try {
-      const response = await fetchExtraction(parsed.link, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
-      if (!response.ok) throw new Error();
-      const reader = response.body.getReader(); let bytes = 0, chunks = '';
-      try {
-        for (;;) { const { value, done } = await reader.read(); if (done) break; bytes += value.byteLength; if (bytes > 8192) throw new Error(); chunks += new TextDecoder().decode(value); }
-      } finally { await reader.cancel().catch(() => {}); }
-      let extracted = chunks.trim();
-      try {
-        const data = JSON.parse(extracted), row = data?.data?.[0] ?? data?.data ?? data?.[0] ?? data;
-        extracted = typeof row === 'string' ? row : row?.host && row?.port ? `${row.host}:${row.port}${row.username && row.password ? `:${row.username}:${row.password}` : ''}` : row?.proxy || row?.url || '';
-      } catch { /* A plain proxy line is also supported. */ }
-      parsed = parseBitBrowserProxyInput(extracted.split(/\r?\n/)[0], { protocol, mode: 'static' });
-    } catch { throw new Error(signal.aborted ? '代理检测已取消。' : '当前电脑无法读取这个提取链接；请确认提取格式或在高级设置中核对协议。打开窗口时仍可交由比特浏览器提取。'); }
+      const response = await fetchExtraction('/api/local/bitbrowser-proxies/extract', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ link: parsed.link, protocol }),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(15000)])
+      });
+      const result = await response.json();
+      if (!response.ok) throw Object.assign(new Error(result.reason === 'extraction' ? result.error : '提取检测未完成，请确认系统会话后重试。'), { reason: 'extraction' });
+      parsed = parseBitBrowserProxyInput(result.link, { protocol: 'auto', mode: 'static' });
+      parsed.automaticProtocol = result.automaticProtocol === true;
+    } catch (error) {
+      throw Object.assign(new Error(signal.aborted ? '代理检测已取消。' : error.reason === 'extraction' ? error.message : '提取检测请求未完成，请稍后重试；这不代表代理不可用。'), { reason: 'extraction' });
+    }
   }
   const candidates = parsed.automaticProtocol ? ['socks5', 'http'] : [parsed.protocol];
   const api = directBrowserApi(url, token, signal), started = Date.now();
@@ -46,7 +45,7 @@ export async function testBitBrowserProxy({ link, protocol = 'auto', mode = 'aut
     } catch (error) {
       if (signal.aborted) throw new Error('代理检测已取消。');
       if (['bitbrowser_direct_token_invalid', 'bitbrowser_direct_unreachable', 'bitbrowser_secure_context_required'].includes(error.reason)) throw error;
-      if (type === candidates.at(-1)) throw new Error('代理检测未通过，请核对代理账号、密码、套餐余额或稍后重试。');
+      if (type === candidates.at(-1)) throw Object.assign(new Error('代理检测未通过，请核对代理账号、密码、套餐余额或稍后重试。'), { reason: 'proxy_unavailable' });
     }
   }
 }

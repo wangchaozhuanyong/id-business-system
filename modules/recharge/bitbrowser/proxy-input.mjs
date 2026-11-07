@@ -20,10 +20,11 @@ export function parseBitBrowserProxyInput(value, { protocol = 'auto', mode = 'au
   const type = url.protocol.slice(0, -1);
   if (!protocols.has(type) || !url.hostname || url.hash) fail();
   const explicitPort = /^[a-z]+:\/\/(?:[^@/]*@)?(?:\[[^\]]+\]|[^:/?#]+):\d+/i.test(text);
-  const extraction = mode === 'dynamic' || (mode === 'auto' && type === 'https' && !url.username && !url.password && !explicitPort);
+  const extraction = mode === 'dynamic' || (mode === 'auto' && ['http', 'https'].includes(type) && !url.username && !url.password && (Boolean(url.search) || url.pathname !== '/' || (type === 'https' && !explicitPort)));
   if (extraction) {
-    if (type !== 'https' || url.username || url.password) fail();
-    return { mode: 'dynamic', protocol: protocol === 'auto' ? 'http' : protocol, link: url.href, automaticProtocol: false };
+    if (!['http', 'https'].includes(type) || url.username || url.password) fail();
+    const hint = ['protocol', 'proxy_type', 'proxyType', 'type'].map(key => url.searchParams.get(key)?.toLowerCase()).find(value => protocols.has(value) || value === 'socks');
+    return { mode: 'dynamic', protocol: protocol === 'auto' ? (hint === 'socks' ? 'socks5' : hint || 'http') : protocol, link: url.href, automaticProtocol: protocol === 'auto' && !hint };
   }
   if (url.search || (url.pathname && url.pathname !== '/') || Boolean(url.username) !== Boolean(url.password)) fail();
   const port = Number(url.port || (type === 'https' ? 443 : type === 'http' ? 80 : 0));

@@ -18,8 +18,8 @@ test('dynamic extraction supports separate protocol and keeps query credentials 
 });
 test('invalid proxy metadata, malformed URL and injected fields are rejected', () => {
   for (const changes of [{ countryCode: 'China' }, { kind: 'unknown' }, { link: 'not-a-link' }, { mode: 'direct' }, { version: -1 },
-    { link: 'socks5://proxy.example.test' }, { link: 'http://user@proxy.example.test:8080' }, { mode: 'dynamic', link: 'http://proxy.example.test/?key=test' },
-    { ownerId: 'another-user' }, { link: 'http://proxy.example.test:8080/path' }])
+    { link: 'socks5://proxy.example.test' }, { link: 'http://user@proxy.example.test:8080' },
+    { ownerId: 'another-user' }, { link: 'socks5://proxy.example.test:8080/path' }])
     assert.throws(() => validateBitBrowserProxyWrite({ ...input, ...changes }), { status: 400 });
 });
 

@@ -355,3 +355,6 @@ export function createWebsiteMonitor({ publicOrigin, resolve = resolveDns, reque
 }
 
 export const handleWebsiteMonitor = createWebsiteMonitor();
+
+// Shared public-network validation; consumers must pin the returned address.
+export { normalizeTarget, resolveDns, resolveTarget, requestTarget };

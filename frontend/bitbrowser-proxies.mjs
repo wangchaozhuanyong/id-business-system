@@ -2,6 +2,7 @@ import { parseBitBrowserProxyInput, bitBrowserProxySettings } from '/assets/bitb
 import { testBitBrowserProxy } from '/assets/bitbrowser/proxy-test.mjs';
 import { bitBrowserCountryOptions, resolveBitBrowserCountry, bitBrowserCountryName as countryName } from '/assets/bitbrowser/countries.mjs';
 const kinds = { mobile: '移动 IP', dynamic_residential: '动态住宅', static_residential: '静态住宅' };
+const protocolName = value => ({ socks5: 'SOCKS5', http: 'HTTP', https: 'HTTPS' })[value] || '自动识别';
 const fields = ['name', 'country', 'kind', 'mode', 'protocol'];
 export function initializeExecutionProxies({ get, drafts, onChange, locked, onUse, connection }) {
   const select = get('bit-execution-proxy'), editor = get('bit-proxy-editor');
@@ -18,8 +19,8 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   });
   let data, saving = false, probing = false, probeLoading = false, reading = false, generation = 0, alive = true, editingId = '', editVersion = 0, page = 1, opener;
   const pending = new Set(), probeResults = new Map();
-  const probeSummary = ({ ip, countryCode, latencyMs, protocol }) => ({ ip, countryCode, latencyMs, protocol });
-  let editorProbe, probeController;
+  const probeSummary = ({ ip, countryCode, latencyMs, protocol }) => ({ ip, countryCode, latencyMs, protocol, status: 'usable' });
+  let editorProbe, probeController, editReadController, editReadGeneration = 0, editLoading = false;
   const readDraft = () => drafts?.read('bit-local') || {};
   const draftKey = () => `ip-draft/${editingId || 'new'}/`;
   const ready = () => Boolean(!reading && !saving && !probing && !probeLoading && !editor.open && data?.items?.some(item => item.id === select.value));
@@ -43,13 +44,13 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     const pages = Math.max(1, Math.ceil(items.length / 5)); page = Math.min(Math.max(1, page), pages);
     const rows = items.slice((page - 1) * 5, page * 5).map(item => {
       const row = document.createElement('tr'); row.setAttribute('aria-selected', String(item.id === select.value));
-      for (const value of [item.name, item.countryCode ? `${countryName(item.countryCode)} ${item.countryCode}` : '自动识别', kinds[item.kind], probeResults.has(item.id) ? `可用 · ${probeResults.get(item.id).latencyMs}ms` : '未测试', item.endpoint]) {
+      for (const value of [item.name, item.countryCode ? `${countryName(item.countryCode)} ${item.countryCode}` : '自动识别', kinds[item.kind], probeResults.has(item.id) ? (probeResults.get(item.id).status === 'usable' ? `可用 · ${probeResults.get(item.id).latencyMs}ms` : probeResults.get(item.id).status === 'failed' ? '检测未通过' : '未完成检测') : '未测试', `${item.endpoint} · ${protocolName(item.protocol)} · ${item.mode === 'dynamic' ? 'API 提取' : '代理地址'}`]) {
         const cell = document.createElement('td'); cell.textContent = value; cell.title = value; row.append(cell);
       }
       const cell = document.createElement('td'), actions = document.createElement('div'); actions.className = 'bit-local__actions';
       for (const [label, action] of [[item.id === select.value ? '已选用' : '使用', () => use(item.id)], ['测试', () => void testSaved(item)], ['编辑', () => openEditor(item)]]) {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'button'; button.textContent = label;
-        button.disabled = saving || probing || locked(); button.addEventListener('click', action); actions.append(button);
+        button.disabled = saving || probing || probeLoading || locked(); button.addEventListener('click', action); actions.append(button);
       }
       cell.append(actions); row.append(cell); return row;
     });
@@ -109,9 +110,10 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     if (editorHome.isConnected) editorHome.append(editor);
     else editor.remove();
   }
-  function finishEditor() { editor.close(); restoreEditor(); }
+  function finishEditor() { editReadGeneration++; editReadController?.abort(); editLoading = false; editor.close(); restoreEditor(); }
   function openEditor(item) {
-    if (locked() || saving || probing) return;
+    if (locked() || saving || probing || probeLoading) return;
+    editReadController?.abort(); const readGeneration = ++editReadGeneration;
     editingId = item?.id || ''; editVersion = data?.version ?? 0; opener = document.activeElement;
     const draft = readDraft(), prefix = draftKey();
     const defaults = { name: item?.name || '', country: item?.countryCode ? countryName(item.countryCode) : '', kind: item?.kind || 'dynamic_residential', mode: item?.mode || 'auto', protocol: item?.protocol || 'auto' };
@@ -120,12 +122,31 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     editorProbe = undefined; get('bit-ip-probe-result').textContent = '尚未测试代理。'; get('bit-ip-advanced').open = false;
     get('bit-proxy-editor-title').textContent = item ? '编辑执行 IP' : '新增执行 IP';
     get('bit-ip-save').textContent = item ? '确认保存修改' : '保存并使用';
-    get('bit-ip-link').value = ''; get('bit-ip-link').placeholder = item ? '留空保留已保存的链接；输入新链接可替换' : '直接粘贴购买平台生成的代理信息';
+    get('bit-ip-link').value = ''; get('bit-ip-link').placeholder = item ? '正在读取已保存的代理链接…' : '直接粘贴购买平台生成的代理信息';
     get('bit-ip-link-required').hidden = Boolean(item);
     get('bit-ip-edit-note').textContent = item ? `已保存地址：${item.endpoint}。修改仅影响后续使用；进行中的任务不受影响。` : '保存后会自动选中这个 IP，可在 IP 资料库再次查看和编辑。';
     saveMessage.textContent = ''; get('bit-ip-rebase').hidden = true;
     mountEditor(); editor.showModal(); editor.querySelector('.bit-local__drawer-body').scrollTop = 0;
     onChange(); get('bit-ip-name').focus({ preventScroll: true });
+    editLoading = Boolean(item); get('bit-ip-save').disabled = editLoading; get('bit-ip-test').disabled = editLoading;
+    if (item) {
+      editReadController = new AbortController();
+      void request('POST', { id: item.id, version: editVersion }, editReadController.signal).then(proxy => {
+        try {
+          if (alive && editor.open && readGeneration === editReadGeneration && editingId === item.id && !get('bit-ip-link').value)
+            get('bit-ip-link').value = proxy.link;
+        } finally { proxy.link = ''; }
+      }).catch(error => {
+        if (alive && editor.open && readGeneration === editReadGeneration) {
+          saveMessage.textContent = error.message; get('bit-ip-rebase').hidden = error.status !== 409;
+        }
+      }).finally(() => {
+        if (readGeneration !== editReadGeneration) return;
+        editLoading = false; editReadController = undefined;
+        get('bit-ip-link').placeholder = '粘贴新的代理链接可替换；留空保留原链接';
+        get('bit-ip-save').disabled = false; get('bit-ip-test').disabled = false;
+      });
+    }
   }
   for (const id of ['bit-add-proxy', 'bit-library-add']) get(id).addEventListener('click', () => openEditor());
   editor.addEventListener('input', event => {
@@ -133,7 +154,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     if (['bit-ip-link', 'bit-ip-protocol', 'bit-ip-mode'].includes(event.target.id)) { editorProbe = undefined; get('bit-ip-probe-result').textContent = '代理资料已修改，请重新测试。'; }
   }); editor.addEventListener('change', capture);
   editor.addEventListener('close', () => { restoreEditor(); editorProbe = undefined; onChange(); if (opener?.isConnected) opener.focus({ preventScroll: true }); });
-  function close() { if (!saving && !probing) { capture(); get('bit-ip-link').value = ''; finishEditor(); } }
+  function close() { if (!saving && !probing && !probeLoading) { capture(); get('bit-ip-link').value = ''; finishEditor(); } }
   for (const id of ['bit-ip-close', 'bit-ip-dismiss']) get(id).addEventListener('click', close);
   editor.addEventListener('cancel', event => { event.preventDefault(); close(); });
   get('bit-ip-rebase').addEventListener('click', async () => {
@@ -164,35 +185,37 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   }
   async function probeEditor() {
     let link = get('bit-ip-link').value.trim();
-    if (!link && editingId) link = (await request('POST', { id: editingId, version: editVersion })).link;
+    probeLoading = true; onChange();
+    get('bit-ip-test').disabled = true; get('bit-ip-save').disabled = true;
     get('bit-ip-probe-result').textContent = '正在通过当前比特浏览器测试代理…';
     try {
+      if (!link && editingId) link = (await request('POST', { id: editingId, version: editVersion })).link;
       const result = await runProbe({ link, protocol: get('bit-ip-protocol').value, mode: get('bit-ip-mode').value });
       if (!alive) throw new Error('页面已关闭。');
       editorProbe = result;
       if (result.countryCode) countryInput.value = countryName(result.countryCode);
-      get('bit-ip-probe-result').textContent = `代理可用 · 出口 ${result.ip} · ${result.countryCode ? countryName(result.countryCode) : '国家未识别'} · ${result.latencyMs}ms`;
+      get('bit-ip-probe-result').textContent = `代理可用 · 出口 ${result.ip} · ${result.countryCode ? countryName(result.countryCode) : '国家未识别'} · ${result.latencyMs}ms · ${protocolName(result.protocol)}`;
       return result;
     } catch (error) { get('bit-ip-probe-result').textContent = error.message; throw error; }
-    finally { link = ''; }
+    finally { link = ''; probeLoading = false; get('bit-ip-test').disabled = false; get('bit-ip-save').disabled = false; onChange(); }
   }
-  get('bit-ip-test').addEventListener('click', () => { if (!saving && !probing && !locked()) void probeEditor().catch(() => {}); });
+  get('bit-ip-test').addEventListener('click', () => { if (!saving && !probing && !probeLoading && !editLoading && !locked()) void probeEditor().catch(() => {}); });
   async function testSaved(item) {
     if (saving || probing || locked()) return;
     if (probeLoading) return;
-    probeLoading = true; onChange();
+    probeLoading = true; renderList(); onChange();
     setMessage(`正在测试“${item.name}”…`);
     let proxy;
     try {
       proxy = await request('POST', { id: item.id, version: data.version });
       const result = await runProbe(proxy); if (!alive) return;
       probeResults.set(item.id, probeSummary(result)); renderList();
-      setMessage(`代理可用 · 出口 ${result.ip} · ${result.countryCode ? countryName(result.countryCode) : '国家未识别'} · ${result.latencyMs}ms`);
-    } catch (error) { probeResults.delete(item.id); renderList(); setMessage(error.message); }
-    finally { if (proxy) proxy.link = ''; probeLoading = false; onChange(); }
+      setMessage(`代理可用 · 出口 ${result.ip} · ${result.countryCode ? countryName(result.countryCode) : '国家未识别'} · ${result.latencyMs}ms · ${protocolName(result.protocol)}`);
+    } catch (error) { probeResults.set(item.id, { status: error.reason === 'proxy_unavailable' ? 'failed' : 'incomplete' }); renderList(); setMessage(error.message); }
+    finally { if (proxy) proxy.link = ''; probeLoading = false; renderList(); onChange(); }
   }
   get('bit-ip-save').addEventListener('click', async () => {
-    if (saving || probing || locked()) return;
+    if (saving || probing || probeLoading || editLoading || locked()) return;
     if (!data) { saveMessage.textContent = '请先关闭并刷新 IP 列表，输入已保留。'; return; }
     let parsed;
     const rawLink = get('bit-ip-link').value.trim();
@@ -203,7 +226,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     try {
       if (rawLink) {
         parsed = parseBitBrowserProxyInput(rawLink, { mode: get('bit-ip-mode').value, protocol: get('bit-ip-protocol').value });
-        if (parsed.automaticProtocol) {
+        if (parsed.automaticProtocol && parsed.mode === 'static') {
           const result = editorProbe || await probeEditor();
           parsed = parseBitBrowserProxyInput(result.link, { mode: result.mode, protocol: result.protocol });
         } else if (editorProbe) parsed.protocol = editorProbe.protocol;
@@ -230,7 +253,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       get('bit-refresh-proxies').disabled = false; renderList(); onChange();
     }
   });
-  window.addEventListener('pagehide', () => { alive = false; probeController?.abort(); for (const controller of pending) controller.abort(); get('bit-ip-link').value = ''; if (editor.open) finishEditor(); restoreEditor(); });
+  window.addEventListener('pagehide', () => { alive = false; editReadGeneration++; editReadController?.abort(); probeController?.abort(); for (const controller of pending) controller.abort(); get('bit-ip-link').value = ''; if (editor.open) finishEditor(); restoreEditor(); });
   window.addEventListener('message', event => {
     if (event.origin === location.origin && event.source === window.parent && event.data?.source === 'id-recharge-shell' && event.data.type === 'visibility' && !event.data.visible) { probeController?.abort(); editorProbe = undefined; get('bit-ip-link').value = ''; if (!saving && editor.open) finishEditor(); }
   });
