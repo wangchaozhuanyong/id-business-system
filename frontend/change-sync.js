@@ -23,6 +23,8 @@
     refreshing = true;
     let failed = false;
     const has = scope => scopes.includes(scope);
+    const inventoryPage = /^(mailboxes\/google|accounts\/(gpt|claude))$/.test(route);
+    const refreshInventory = has('inventory') || (has('commerce') && inventoryPage);
     const run = async operation => {
       try { if (await operation() === false) failed = true; } catch { failed = true; }
     };
@@ -33,10 +35,10 @@
         await run(() => A.modules.overview?.refresh({ refresh: true }));
       } else {
         await Promise.all([
-          has('inventory') ? run(() => A.modules.inventory?.refreshLocalInventory({ keepContent: true })) : null,
+          refreshInventory ? run(() => A.modules.inventory?.refreshLocalInventory({ keepContent: true })) : null,
           has('commerce') ? run(() => A.modules.commerce?.refreshOverview()) : null
         ]);
-        if (has('inventory') && A.state.route === route && /^(mailboxes\/google|accounts\/(gpt|claude))$/.test(route) && !blocked()) A.render();
+        if (refreshInventory && A.state.route === route && inventoryPage && !blocked()) A.render();
       }
       if ((has('inventory') || has('apple-relay')) && A.state.route === 'mailboxes/relay')
         await run(() => A.modules.appleRelay?.refreshConnection());

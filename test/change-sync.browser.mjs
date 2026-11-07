@@ -88,6 +88,15 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
   await settle();
   assert.deepEqual(reads, stableReads);
 
+  // Account lifecycle summaries are derived from orders even if the stock
+  // document itself is unchanged.
+  fixture.commerce.version++;
+  await emit({ commerce: String(fixture.commerce.version) });
+  await page.waitForFunction(version => window.IDLocalData.pendingChangeVersions(['commerce']).commerce === undefined, String(fixture.commerce.version));
+  await idle();
+  assert.equal(reads.inventory, stableReads.inventory + 1, '订单变化同步当前库存页的使用摘要');
+  assert.equal(reads.commerce, stableReads.commerce + 1);
+
   await go('customers/list');
   await page.locator('#commerce-search').fill('stream');
   await page.locator('#main .pagination button[data-page="2"]:not([aria-label])').click();
