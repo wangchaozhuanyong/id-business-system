@@ -236,6 +236,11 @@ const navigation = [
     ]
   ],
   ['数据中心', 'database', [['数据中心', 'data', true]]],
+  ['插件管理', 'grid', [
+    ['邮箱查询与邮箱池', 'plugins/mailboxes'],
+    ['网站监控', 'plugins/websites'],
+    ['谷歌表格同步', 'plugins/sheets']
+  ]],
   ['监控中心', 'monitor', [['监控中心', 'monitor', true]]],
   [
     '系统设置',
@@ -801,7 +806,7 @@ function matchesNav(route, base) {
 }
 function permittedRoute(route) {
   if (!window.IDLocalData?.authRequired || state.actor?.role !== 'employee') return true;
-  return /^(overview$|workspace\/(recharge-codes|my-recharge-codes)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
+  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
     route
   );
 }
@@ -1982,12 +1987,7 @@ function openToolboxPanel(tab, body, footer = '') {
 function onlineToolItems() {
   return [
     ['key', '计算 2FA 验证码', '临时计算验证码，或管理当前账号的常用验证器。'],
-    ['monitor', '网站监控', '检测网站状态，分别查看访问统计和访问明细。'],
     ['play', '抖音解析', '粘贴公开作品链接，解析后选择视频、原声或图片。'],
-    ['mail', '邮箱查询与邮箱池', '通过查询码取信；管理员可登记和管理邮箱。'],
-    ...(!['employee', 'staff', '普通员工'].includes(state.actor?.role)
-      ? [['database', 'Google 表格同步', '待确定新版目标表格、同步字段和执行规则。', true]]
-      : [])
   ];
 }
 function showTools(tab = state.toolsTab) {

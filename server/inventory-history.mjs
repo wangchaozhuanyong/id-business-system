@@ -65,10 +65,18 @@ function checkClaimTransition(asset, previous, next) {
     return '库存使用状态必须与原提取明细的处理结果一致';
 }
 
-export function checkInventoryHistory(previous, next) {
+export function checkInventoryHistory(previous, next, { trustedAccountLifecycle = false } = {}) {
   for (const key of ['mailboxes', 'accounts']) {
     const corrections = new Map(list(previous?.[key]).filter(hasId).map((row) => [row.id, row]));
     for (const row of list(next[key])) {
+      const original = corrections.get(row?.id);
+      for (const field of ['accountLifecycle', 'accountLifecycleEvents']) {
+        if (!trustedAccountLifecycle && !isDeepStrictEqual(original?.[field], row?.[field]))
+          return '账号使用与回收记录必须通过专用操作登记';
+      }
+      if (list(original?.accountLifecycleEvents).some((event, index) =>
+        !isDeepStrictEqual(event, list(row.accountLifecycleEvents)[index])))
+        return '原有账号回收及分配历史必须保留';
       if (!Object.hasOwn(row || {}, 'usageCorrections')) continue;
       const before = corrections.get(row.id);
       if (!before || !isDeepStrictEqual(before.usageCorrections, row.usageCorrections))
@@ -102,17 +110,23 @@ export function checkInventoryHistory(previous, next) {
       const used =
         status === 'used' || links.length > 0 || (hasId(before) && consumed.has(before.id));
       const referenced = status === 'claimed' || (hasId(before) && references.has(before.id));
+      const reusable = ['gpt', 'claude'].includes(before.type) &&
+        before.accountLifecycle?.disposition === 'recovered' && ['available', 'claimed'].includes(useState(after));
       if ((used || referenced) && !after) return '已有使用或领用记录的库存资料必须保留';
       if (status === 'claimed' && hasId(before) && before.claimId)
         claimedAssets.set(before.id, { claimId: before.claimId, after });
       if (
         used &&
-        ((useState(after) !== 'used' && (status === 'used' || useState(after) !== status)) ||
+        ((!reusable && useState(after) !== 'used' && (status === 'used' || useState(after) !== status)) ||
           (!before.relayDeleted && after.relayDeleted) ||
           (before.email && before.email !== after.email) ||
           (before.type && before.type !== after.type))
       )
         return '已实际使用的库存资料不能退回或替换';
+      if (used && ['gpt', 'claude'].includes(before.type) && before.source !== '客户提供' &&
+        !['客户自有', 'customer'].includes(before.accountSource) &&
+        (after.source === '客户提供' || ['客户自有', 'customer'].includes(after.accountSource)))
+        return '已有库存使用历史的账号不能改为客户自有来源';
       if (links.some((link, index) => !isDeepStrictEqual(link, list(after.usageLinks)[index])))
         return '原有库存使用关联必须保留';
     }

@@ -321,3 +321,54 @@ test('工作台和 Claude 本表批导共用城市配置，代理拆分不更改
   assert.equal(record.fields.proxyHost, 'proxy.example.test');
   assert.equal(record.fields.proxyPort, '1080');
 });
+
+test('新增 Claude 默认 SOCKS5，编辑和草稿保留已选协议', () => {
+  const app = setup();
+  app.click('inventory-add-type', { type: 'claude' });
+  assert.equal(app.selections.findLast(row => row.id === 'inventory-proxy-protocol').selected, 'socks5');
+  app.api.state.drafts.set('inventory-edit:new:claude', { 'inventory-proxy-protocol': '' });
+  app.click('inventory-add-type', { type: 'claude' });
+  assert.equal(app.selections.findLast(row => row.id === 'inventory-proxy-protocol').selected, 'socks5');
+  app.api.state.drafts.set('inventory-edit:new:claude', { 'inventory-proxy-protocol': 'https' });
+  app.click('inventory-add-type', { type: 'claude' });
+  assert.equal(app.selections.findLast(row => row.id === 'inventory-proxy-protocol').selected, 'https');
+  app.accounts[0].proxyProtocol = 'http';
+  app.click('inventory-edit', { id: app.accounts[0].id });
+  assert.equal(app.selections.findLast(row => row.id === 'inventory-proxy-protocol').selected, 'http');
+});
+
+test('代理链接自动拆分四项，识别协议和编码凭据，支持四段格式', () => {
+  const app = setup();
+  const control = (name, value = '') => {
+    const node = { id: `inventory-proxy-${name}`, value };
+    app.controls.set(node.id, node);
+    return node;
+  };
+  const protocol = control('protocol', 'socks5');
+  const link = control('url');
+  for (const name of ['host', 'port', 'user', 'pass']) control(name);
+  const cases = [
+    ['socks5://demo:sample%40value@proxy.example.test:1088', 'socks5', 'proxy.example.test', '1088', 'demo', 'sample@value'],
+    ['https://demo:sample@proxy.example.test:8443', 'https', 'proxy.example.test', '8443', 'demo', 'sample'],
+    ['proxy.example.test:1090:demo:sample:with:colon', 'https', 'proxy.example.test', '1090', 'demo', 'sample:with:colon'],
+    ['socks5://[2001:db8::1]:1080', 'socks5', '[2001:db8::1]', '1080', '', ''],
+    ['proxy.example.test:1080', 'socks5', 'proxy.example.test', '1080', '', '']
+  ];
+  for (const [url, scheme, ...values] of cases) {
+    link.value = url;
+    app.inventory.onInput(link);
+    assert.equal(app.errors.get(link.id), '');
+    assert.equal(protocol.value, scheme);
+    assert.deepEqual(['host', 'port', 'user', 'pass'].map(name => app.controls.get(`inventory-proxy-${name}`).value), values);
+  }
+  const before = ['host', 'port', 'user', 'pass'].map(name => app.controls.get(`inventory-proxy-${name}`).value);
+  for (const invalid of ['proxy.example.test:70000', 'ftp://proxy.example.test:1080', 'socks5://bad host:1080']) {
+    link.value = invalid;
+    app.inventory.onInput(link);
+    assert.ok(app.errors.get(link.id));
+    assert.deepEqual(['host', 'port', 'user', 'pass'].map(name => app.controls.get(`inventory-proxy-${name}`).value), before);
+  }
+  link.value = '';
+  app.inventory.onInput(link);
+  assert.deepEqual(['host', 'port', 'user', 'pass'].map(name => app.controls.get(`inventory-proxy-${name}`).value), ['', '', '', '']);
+});

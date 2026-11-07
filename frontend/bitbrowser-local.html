@@ -144,13 +144,16 @@
             <div class="field">
               <label for="bit-authorization-json">授权 JSON</label>
               <div class="field-control">
-                <input
-                  id="bit-authorization-json"
-                  type="password"
-                  spellcheck="false"
-                  placeholder="粘贴完整授权 JSON，将自动载入"
-                  aria-describedby="bit-authorization-result"
-                />
+                <div class="bit-local__secret-control">
+                  <input
+                    id="bit-authorization-json"
+                    type="password"
+                    spellcheck="false"
+                    placeholder="粘贴完整授权 JSON，将自动载入"
+                    aria-describedby="bit-authorization-result"
+                  />
+                  <button class="button" type="button" id="bit-clear-authorization" aria-label="清空授权 JSON">清空</button>
+                </div>
                 <p id="bit-authorization-result" class="field-help" role="status"></p>
               </div>
             </div>

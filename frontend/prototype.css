@@ -1074,6 +1074,9 @@ th.table-actions {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.account-lifecycle-history table :is(th, td) {
+  white-space: nowrap;
+}
 .commerce-search-picker.commerce-email-history > input {
   flex: 1 1 0;
   width: 0;
@@ -2071,26 +2074,66 @@ dialog::backdrop {
 }
 .mailbox-pool-table {
   table-layout: fixed;
-  min-width: 800px;
+  min-width: 1290px;
 }
-.mailbox-column-identity { width: 25%; }
-.mailbox-column-code { width: 23%; }
-.mailbox-column-status { width: 12%; }
-.mailbox-column-date { width: 14%; }
-.mailbox-column-actions { width: 12%; }
+.mailbox-column-identity { width: 210px; }
+.mailbox-column-meta { width: 100px; }
+.mailbox-column-source { width: 90px; }
+.mailbox-column-code { width: 200px; }
+.mailbox-column-status { width: 90px; }
+.mailbox-column-date { width: 125px; }
+.mailbox-column-actions { width: 250px; }
 .mailbox-pool-table :is(th, td) {
   padding: 8px;
   white-space: nowrap;
   vertical-align: middle;
 }
 .mailbox-account__heading {
-  display: grid;
+  display: flex;
   gap: 0;
   line-height: 18px;
 }
 .mailbox-account__heading strong {
   color: var(--text);
   font-size: 13px;
+}
+.mailbox-account__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mailbox-row-actions {
+  display: flex;
+  gap: 8px;
+}
+.plugin-tool-page .plugin-tool-body {
+  padding: 0;
+  overflow: visible;
+}
+.plugin-tool-page .tool-header-row {
+  margin-bottom: 20px;
+}
+.plugin-tool-body > [data-tool-panel] {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.plugin-tool-page .table-viewport :is(th, td) {
+  white-space: nowrap;
+}
+.plugin-tool-page .table-viewport {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.plugin-tool-page {
+  min-width: 0;
+}
+@media (min-width: 1400px) {
+  .mailbox-pool-table :is(th:last-child, td:last-child) {
+    position: sticky;
+    right: 0;
+    z-index: 1;
+    background: var(--surface);
+  }
 }
 .mailbox-account__meta {
   display: flex;

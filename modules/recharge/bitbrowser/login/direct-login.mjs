@@ -184,12 +184,39 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
       throw new DirectBrowserError('bitbrowser_profile_sync_unverified');
     }
     verifyDirectProfileConfiguration(detail, settings);
+    // Keep the original shared 15-second close/PID confirmation budget.
+    const closeProfile = async () => {
+      const closeDeadline = Date.now() + 15_000;
+      await api.post(
+        '/browser/close',
+        { id: profileId },
+        Math.min(remaining(), closeDeadline - Date.now())
+      );
+      for (;;) {
+        signal.throwIfAborted();
+        const closeRemaining = Math.min(remaining(), closeDeadline - Date.now());
+        if (closeRemaining <= 0)
+          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
+        const alive = (await api.post('/browser/pids/alive', { ids: [profileId] }, closeRemaining))
+          .data;
+        if (Date.now() >= closeDeadline)
+          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
+        if (
+          !alive ||
+          typeof alive !== 'object' ||
+          Array.isArray(alive) ||
+          Object.keys(alive).some((id) => id !== profileId)
+        )
+          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
+        const pid = alive[profileId];
+        if (pid === undefined || pid === null || pid === 0) break;
+        if (Date.now() >= closeDeadline)
+          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
+        await waitDirectLogin(signal);
+      }
+    };
     if (ownedProfile && settings.updateOwnedProxy) {
-      await api.post('/browser/close', { id: profileId }, remaining());
-      const alive = (await api.post('/browser/pids/alive', { ids: [profileId] }, remaining())).data;
-      if (!alive || typeof alive !== 'object' || Array.isArray(alive) ||
-        Object.keys(alive).some(id => id !== profileId) || ![undefined, null, 0].includes(alive[profileId]))
-        throw new DirectBrowserError('bitbrowser_profile_close_unverified');
+      await closeProfile();
       const proxyOptions = Object.fromEntries(Object.entries(directProfileOptions(settings)).filter(
         ([key]) => !['browserFingerPrint', 'syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'].includes(key)));
       await api.post('/browser/update', { id: profileId, ...proxyOptions }, remaining());
@@ -522,34 +549,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
       cdp?.close();
       cdp = undefined;
       sessionId = '';
-      const closeDeadline = Date.now() + 15_000;
-      await api.post(
-        '/browser/close',
-        { id: profileId },
-        Math.min(remaining(), closeDeadline - Date.now())
-      );
-      for (;;) {
-        signal.throwIfAborted();
-        const closeRemaining = Math.min(remaining(), closeDeadline - Date.now());
-        if (closeRemaining <= 0)
-          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
-        const alive = (await api.post('/browser/pids/alive', { ids: [profileId] }, closeRemaining))
-          .data;
-        if (Date.now() >= closeDeadline)
-          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
-        if (
-          !alive ||
-          typeof alive !== 'object' ||
-          Array.isArray(alive) ||
-          Object.keys(alive).some((id) => id !== profileId)
-        )
-          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
-        const pid = alive[profileId];
-        if (pid === undefined || pid === null || pid === 0) break;
-        if (Date.now() >= closeDeadline)
-          throw new DirectBrowserError('bitbrowser_profile_close_unverified');
-        await waitDirectLogin(signal);
-      }
+      await closeProfile();
       await hooks.progress('proxy_retrying', {
         session_attempt: attempts + 1,
         session_attempt_limit: attemptLimit

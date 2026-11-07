@@ -44,6 +44,7 @@ const order = (id, values = {}) => ({
   product: 'GPT',
   plan: 'Plus',
   businessType: '续费',
+  customerId: 'buyer-1',
   email: 'buyer@example.test',
   accountId: '',
   payment: '银行卡',
@@ -117,7 +118,7 @@ test('a finished-account order cannot be written directly without a valid atomic
   }
 });
 
-test('one successful atomic stock delivery prevents another delivery without blocking an independent renewal', () => {
+test('one successful atomic stock delivery prevents another delivery and links an independent renewal to its current customer', () => {
   const store = createLocalBusinessStore(':memory:');
   try {
     store.saveBatch([inventoryWrite(0, [account], 'inventory_create')]);
@@ -159,7 +160,15 @@ test('one successful atomic stock delivery prevents another delivery without blo
     const renewed = commerce([first, renewal]);
     store.saveBatch([commerceWrite(1, renewed)]);
     assert.deepEqual(store.load('commerce'), { version: 2, data: renewed });
-    assert.deepEqual(store.load('inventory'), { version: 2, data: inventory([usedAccount]) });
+    const renewedInventory = store.load('inventory');
+    assert.equal(renewedInventory.version, 3);
+    const savedAccount = renewedInventory.data.accounts[0];
+    assert.equal(savedAccount.inventoryState, 'used');
+    assert.deepEqual(savedAccount.usageLinks[0], usedAccount.usageLinks[0]);
+    assert.equal(savedAccount.usageLinks[1].kind, 'order-renewal');
+    assert.equal(savedAccount.usageLinks[1].orderId, renewal.id);
+    assert.equal(savedAccount.accountLifecycleEvents.at(-1).action, 'renew');
+    assert.equal(renewal.accountId, account.id);
   } finally {
     store.close();
   }
@@ -225,7 +234,12 @@ test('Claude inventory must have a known and eligible registration age at delive
     store.saveBatch([inventoryWrite(2, [eligible], 'inventory_edit')]);
     commit(3, eligible);
     assert.deepEqual(store.load('commerce'), { version: 1, data: commerce([delivery]) });
-    assert.deepEqual(store.load('inventory'), { version: 4, data: inventory([used(eligible)]) });
+    const saved = store.load('inventory');
+    assert.equal(saved.version, 4);
+    assert.equal(saved.data.accounts[0].inventoryState, 'used');
+    assert.deepEqual(saved.data.accounts[0].usageLinks, used(eligible).usageLinks);
+    assert.equal(saved.data.accounts[0].accountLifecycle.customerId, delivery.customerId);
+    assert.equal(saved.data.accounts[0].accountLifecycleEvents[0].orderId, delivery.id);
   } finally {
     store.close();
   }

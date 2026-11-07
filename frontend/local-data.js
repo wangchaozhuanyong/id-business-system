@@ -22,7 +22,7 @@
     if (!scopes.length) return;
     const expanded = new Set(scopes);
     if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance'].includes(scope))) expanded.add('overview');
-    if (scopes.includes('inventory')) expanded.add('apple-relay');
+    if (scopes.includes('inventory')) { expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
     queries.invalidate([...expanded]);
     for (const listener of changeListeners) {
@@ -133,7 +133,7 @@
     pendingWrites++;
     try {
       const result = await operation();
-      queries.invalidate([...scopes, 'overview', 'audit']);
+      queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool'] : []), 'overview', 'audit']);
       return result;
     } finally {
       pendingWrites--;
@@ -218,6 +218,7 @@
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
     load: (domain) => request(domain),
+    changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
     save: (domain, version, data, { action } = {}) => write([domain], () => request(domain, { version, data, action })),
     saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
     audit: () => request('audit'),

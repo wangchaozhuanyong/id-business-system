@@ -21,6 +21,9 @@
     pageRows
   } = api;
   const { mailboxes, accounts } = api.collections;
+  const accountSummaries = new Map();
+  let lifecycleCommerceVersion = 0;
+  let accountLifecycleLoaded = false;
   const batches = [];
   const returnRecords = [];
   const importRecords = [];
@@ -112,13 +115,19 @@
     );
   }
 
-  function applyCommittedInventory({ version, data, usageReview: review = [] }) {
+  function applyCommittedInventory({ version, data, usageReview: review = [], accountSummaries: summaries, commerceVersion }) {
     if (version < localInventoryVersion) {
       localInventoryState = 'ready';
       return;
     }
     localInventoryVersion = version;
     applyInventoryDocument(data);
+    if (Array.isArray(summaries)) {
+      accountLifecycleLoaded = true;
+      accountSummaries.clear();
+      for (const summary of summaries) accountSummaries.set(summary.assetId, summary);
+      lifecycleCommerceVersion = commerceVersion;
+    }
     usageReview.clear();
     for (const row of review) usageReview.set(row.assetId, row);
     localInventoryState = 'ready';
@@ -339,6 +348,7 @@
     );
   }
   function accountKyc(asset) {
+    if (accountSummaries.get(asset.id)?.latestKyc) return 'KYC 认证（历史）';
     if (asset.kyc === true || ['KYC 认证', 'KYC认证'].includes(asset.kyc)) return 'KYC 认证';
     if (asset.kyc === false || asset.kyc === '未认证') return '未认证';
     return '未记录';
@@ -409,12 +419,14 @@
       : '';
   }
   function parseRegistrationProxy(link, selected = '') {
-    const raw = link.trim();
+    let raw = link.trim();
     const scheme = /^([a-z][a-z\d+.-]*):\/\//i.exec(raw)?.[1].toLowerCase();
     const proxyProtocol = selected || scheme;
     if (!Object.hasOwn(proxyDefaults, proxyProtocol)) throw new Error('请先选择有效的代理协议');
     if (scheme && scheme !== proxyProtocol) throw new Error('链接协议与所选代理协议不一致');
     try {
+      const parts = !scheme && !raw.includes('@') && /^(\[[^\]]+\]|[^:/@]+):(\d+):([^:]*):(.*)$/.exec(raw);
+      if (parts) raw = `${encodeURIComponent(parts[3])}:${encodeURIComponent(parts[4])}@${parts[1]}:${parts[2]}`;
       const proxyUrl = scheme ? raw : `${proxyProtocol}://${raw}`;
       const parsed = new URL(proxyUrl);
       if (/\s/.test(raw) || !parsed.hostname || parsed.port === '0' ||
@@ -549,7 +561,7 @@
     if (batch && !ownerAllowed(batch)) return '只能归还本人领用资料';
     if (item && asset.claimId !== item.id)
       return '原领用已结束或已被其他批次重新提取，无有效归还资格';
-    if (asset.inventoryState === 'used' || asset.usageLinks.length)
+    if (asset.inventoryState === 'used' || (asset.usageLinks.length && asset.accountLifecycle?.disposition !== 'recovered'))
       return `已使用 · ${asset.usageLinks.at(-1)?.label || '已有使用记录'}`;
     const detected = usageReview.get(asset.id);
     if (detected) return `${detected.status === 'used' ? '已使用' : '待核对'} · ${detected.message}`;
@@ -831,6 +843,7 @@
             ? tag(usageReview.get(asset.id).status === 'used' ? '检测到已使用' : '待核对', 'warning')
             :
             tag(
+              accountSummaries.get(asset.id)?.label ||
               { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[
                 asset.inventoryState
               ],
@@ -841,6 +854,11 @@
                   : ''
             )
         },
+        ...(usesAccountLocation(type) ? [
+          { id: 'currentCustomer', label: '当前客户', render: asset => esc(accountSummaries.get(asset.id)?.customer || '未分配') },
+          { id: 'reuseState', label: '库存用途', render: asset => esc(asset.accountLifecycle?.disposition === 'retired' ? '不再复用' : accountSummaries.get(asset.id)?.lastRecoveredAt ? '回收复用' : '常规库存') },
+          { id: 'lastRecoveredAt', label: '最近回收时间', render: asset => esc(accountSummaries.get(asset.id)?.lastRecoveredAt || '—') }
+        ] : []),
         ...(type === 'claude'
           ? [
               { id: 'proxyUrl', label: '注册 IP 链接', class: 'mono wide-cell', long: true },
@@ -950,7 +968,7 @@
       body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-list-query" aria-label="搜索库存资料" placeholder="搜索账号、备注或用途" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结', '封控中'], v.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${button('提取与归还', 'inventory-center', '', 'return')}${button('复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
     }
     const tabItems = [
-      ['available', '库存', counts.available],
+      ['available', usesAccountLocation(type) ? '可用库存' : '库存', counts.available],
       ['claimed', '已提取', counts.claimed],
       ['used', '已使用', counts.used],
       ['dead', '死号', counts.dead],
@@ -1309,7 +1327,7 @@
       ownerAllowed(batch) &&
       asset.claimId === item.id &&
       asset.inventoryState === 'claimed' &&
-      !asset.usageLinks.length &&
+      (!asset.usageLinks.length || asset.accountLifecycle?.disposition === 'recovered') &&
       !item.taskId &&
       !item.registrationId &&
       !reservations.has(asset.id)
@@ -1529,7 +1547,7 @@
           select(
             'inventory-proxy-protocol',
             [['', '选择代理协议'], ...proxyProtocols],
-            d['inventory-proxy-protocol'] ?? original?.proxyProtocol ?? ''
+            (d['inventory-proxy-protocol'] ?? original?.proxyProtocol) || (original ? '' : 'socks5')
           )
         ) +
         wide(
@@ -1538,10 +1556,10 @@
           input(
             'inventory-proxy-url',
             d['inventory-proxy-url'] ?? original?.proxyUrl ?? '',
-            'placeholder="选择协议后粘贴代理链接"'
+            'placeholder="粘贴代理链接，自动填入下方四项"'
           ),
           false,
-          '支持带协议的链接或主机:端口，解析后填入下方。'
+          '支持代理链接、主机:端口或主机:端口:账号:密码；带协议时自动识别。'
         ) +
         field(
           '代理主机',
@@ -1726,6 +1744,110 @@
       }, '确认更正'
     );
   }
+  function accountLifecycleActions(asset) {
+    const summary = accountSummaries.get(asset.id);
+    if (!localData || !admin() || !summary?.systemOwned || asset.inventoryState !== 'used') return '';
+    return `<div class="toolbar">${button('恢复可用库存', 'inventory-account-lifecycle', '', 'return', `data-id="${esc(asset.id)}" data-operation="release"`)}${summary.disposition !== 'retired' ? button('停止复用', 'inventory-account-lifecycle', '', '', `data-id="${esc(asset.id)}" data-operation="retire"`) : ''}</div>`;
+  }
+  function accountLifecycleDetails(asset) {
+    const summary = accountSummaries.get(asset.id);
+    if (!summary) return '';
+    const kyc = summary.latestKyc;
+    const values = [['当前使用情况', summary.label], ['当前客户', summary.customer],
+      ['最近回收时间', summary.lastRecoveredAt || '未回收'],
+      ...(asset.type === 'claude' ? [['当前 KYC 核实', summary.currentKyc], ['历史 KYC', kyc?.kyc || '未记录'],
+        ['历史认证人', kyc?.verifier || '未记录'], ['历史认证电话', kyc?.verifierPhone || '未记录'],
+        ['历史认证租户', kyc?.tenant || '未记录'], ['认证来源订单', kyc?.orderNo || '未记录']] : [])];
+    const columns = [
+      { id: 'orderNo', label: '订单编号' }, { id: 'customer', label: '历史客户' },
+      { id: 'businessType', label: '业务类型' }, { id: 'start', label: '订阅时间' },
+      { id: 'expiry', label: '到期时间' }, { id: 'payment', label: '付款方式' },
+      { id: 'paymentId', label: '付款账号／尾号' },
+      { id: 'paidAmount', label: '原代付金额', render: row => esc([row.paidAmount, row.paidCurrency].filter(Boolean).join(' ') || '待补充') },
+      { id: 'paidConfirmed', label: '付款确认', render: row => esc(row.paidConfirmed ? '已确认' : '待核对') },
+      ...(asset.type === 'claude' ? [{ id: 'kyc', label: 'KYC 记录' }, { id: 'verifier', label: '认证人' }, { id: 'verifierPhone', label: '认证电话' }] : []),
+      { id: 'released', label: '客户使用关系', render: row => esc(row.released ? '已结束' : '保留中') },
+      { id: 'actions', label: '操作', action: true, render: row => textAction('原订单', 'inventory-lifecycle-order', `data-id="${esc(row.id)}"`) }
+    ];
+    const labels = { release: '恢复可用库存', retire: '停止复用', assign: '分配客户', renew: '原客户续费' };
+    return `<section class="form-section"><h3>账号使用与回收</h3><div class="property-list">${values.map(([label, value]) => `<div class="property-row"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('')}</div>${accountLifecycleActions(asset)}</section><section class="form-section account-lifecycle-history"><h3>历史订单、付款与认证资料</h3>${summary.orders.length ? table(columns, summary.orders, '', '账号历史订单') : empty('暂无明确关联订单', '历史来源不明时保留待核对，不按邮箱猜测归属。')}</section><section class="form-section"><h3>分配与回收记录</h3>${summary.events.length ? `<ul class="timeline">${summary.events.slice().reverse().map(event => `<li><div><strong>${esc(labels[event.action] || '历史记录')}</strong><p>${esc(event.time)} · ${esc(event.actor || '历史未记录')}${event.reason ? ` · ${esc(event.reason)}` : ''}</p></div></li>`).join('')}</ul>` : empty('暂无回收记录', '原始使用记录继续保留。')}</section>`;
+  }
+  let accountLifecycleOpenGeneration = 0;
+  async function openAccountLifecycle(id, operation, review = false) {
+    if (!localData?.changeAccountLifecycle || !admin()) return;
+    const generation = ++accountLifecycleOpenGeneration, route = api.state.route;
+    const origin = document.querySelector('#drawer[open]')?.firstElementChild;
+    if (!await readLocalInventory({ keepContent: true })) return api.notify('暂时无法核对库存，请重试');
+    if (generation !== accountLifecycleOpenGeneration || route !== api.state.route ||
+      document.querySelector('#drawer[open]')?.firstElementChild !== origin) return;
+    const asset = assetById(id), summary = accountSummaries.get(id);
+    if (!asset || !summary?.systemOwned || asset.inventoryState !== 'used') return api.notify('账号状态已变化，请刷新后重新选择');
+    const key = `inventory-account-lifecycle:${id}:${operation}`;
+    const saved = draft(key);
+    if (review) {
+      saved['inventory-lifecycle-version'] = localInventoryVersion;
+      saved['inventory-lifecycle-commerce-version'] = lifecycleCommerceVersion;
+      saved['inventory-lifecycle-asset-version'] = asset.version;
+      saved['inventory-lifecycle-command-id'] = uid('account-lifecycle');
+      for (const name of ['controlled', 'access', 'tasks', 'early']) delete saved[`inventory-lifecycle-${name}`];
+      api.state.drafts.set(key, saved);
+    }
+    const title = operation === 'release' ? '恢复可用库存' : '停止复用';
+    const checked = name => saved[`inventory-lifecycle-${name}`] === 'on' ? ' checked' : '';
+    const confirmation = (name, label, text) => field(label, `inventory-lifecycle-${name}`,
+      `<label class="checkbox-label"><input id="inventory-lifecycle-${name}" name="inventory-lifecycle-${name}" type="checkbox"${checked(name)}><span>${text}</span></label>`, true);
+    showDrawer(title, '结束本系统的客户占用，保留原订单、付款、认证和领用记录；不更改平台订阅或执行退款。',
+      `<div class="property-list"><div class="property-row"><span>账号邮箱</span><strong>${esc(asset.email)}</strong></div><div class="property-row"><span>当前客户</span><strong>${esc(summary.customer)}</strong></div><div class="property-row"><span>处理结果</span><strong>${operation === 'release' ? '进入可用库存，标记回收复用' : '保留已使用，标记不再复用'}</strong></div></div><form id="inventory-account-lifecycle-form" data-inventory-draft="${esc(key)}" novalidate>
+      ${[['id', id], ['operation', operation], ['version', saved['inventory-lifecycle-version'] ?? localInventoryVersion],
+        ['commerce-version', saved['inventory-lifecycle-commerce-version'] ?? lifecycleCommerceVersion],
+        ['asset-version', saved['inventory-lifecycle-asset-version'] ?? asset.version],
+        ['command-id', saved['inventory-lifecycle-command-id'] || uid('account-lifecycle')]].map(([name, value]) => `<input type="hidden" name="inventory-lifecycle-${name}" value="${esc(value)}">`).join('')}
+      <div class="form-grid">${wide('处理原因', 'inventory-lifecycle-reason', area('inventory-lifecycle-reason', saved['inventory-lifecycle-reason'] || '', '记录客户结束使用或停止复用的原因'), true)}
+      ${confirmation('controlled', '账号控制权', '已确认账号仍由我们控制')}${confirmation('access', '客户访问', '已核对并处理原客户的访问权限')}${confirmation('tasks', '执行任务', '已核对没有执行中任务或未知付款结果')}
+      ${field('未到期处理', 'inventory-lifecycle-early', `<label class="checkbox-label"><input id="inventory-lifecycle-early" name="inventory-lifecycle-early" type="checkbox"${checked('early')}><span>如订阅仍未到期，我确认提前结束本次客户使用</span></label>`)}
+      </div><div id="inventory-lifecycle-error" class="field-error" role="alert" hidden></div></form>`,
+      button('取消', 'inventory-close') + `<button class="button primary" type="submit" form="inventory-account-lifecycle-form">核对并${title}</button>`, key);
+  }
+  function submitAccountLifecycle(form) {
+    const values = api.readDraft(form);
+    const reason = String(values['inventory-lifecycle-reason'] || '').trim();
+    api.setError('inventory-lifecycle-reason', reason && reason.length <= 300 ? '' : '请填写 1–300 字处理原因');
+    if (!reason || reason.length > 300) return;
+    const data = { assetId: values['inventory-lifecycle-id'], action: values['inventory-lifecycle-operation'],
+      assetVersion: Number(values['inventory-lifecycle-asset-version']), commandId: values['inventory-lifecycle-command-id'], reason,
+      controlled: values['inventory-lifecycle-controlled'] === 'on', accessReviewed: values['inventory-lifecycle-access'] === 'on',
+      tasksReviewed: values['inventory-lifecycle-tasks'] === 'on', endEarly: values['inventory-lifecycle-early'] === 'on' };
+    const body = { version: Number(values['inventory-lifecycle-version']), commerceVersion: Number(values['inventory-lifecycle-commerce-version']), data };
+    const fingerprint = JSON.stringify(values), key = form.dataset.inventoryDraft, route = api.state.route;
+    api.confirmAction(data.action === 'release' ? '确认恢复可用库存' : '确认停止复用',
+      '保留全部原订单、付款、KYC 与历史记录，只更新本次客户使用关系。', () => {
+        if (!form.isConnected || api.state.route !== route || JSON.stringify(api.readDraft(form)) !== fingerprint)
+          return api.notify('确认期间输入已变化，请重新核对');
+        const submit = document.querySelector('[form="inventory-account-lifecycle-form"][type="submit"]');
+        if (inventorySavePending) return;
+        inventorySavePending = true;
+        if (submit) submit.disabled = true;
+        void localData.changeAccountLifecycle(body).then(result => {
+          applyCommittedInventory(result);
+          const unchanged = form.isConnected && api.state.route === route && JSON.stringify(api.readDraft(form)) === fingerprint;
+          if (unchanged) { form.removeAttribute('data-inventory-draft'); finishDrawer(key); api.render(); }
+          else if (JSON.stringify(api.state.drafts.get(key)) === fingerprint) api.state.drafts.delete(key);
+          api.notify('账号使用处理已保存，原历史资料保留');
+        }).catch(async error => {
+          if (!error.status || error.status === 409) await readLocalInventory({ keepContent: true });
+          const receipt = assetById(data.assetId)?.accountLifecycleEvents?.find(event => event.id === data.commandId);
+          if (receipt && receipt.action === data.action && receipt.actorId === currentActor().id && receipt.request?.reason === reason && form.isConnected && JSON.stringify(api.readDraft(form)) === fingerprint) {
+            form.removeAttribute('data-inventory-draft'); finishDrawer(key); api.render();
+            return api.notify('已回读确认该操作保存成功');
+          }
+          if (form.isConnected) {
+            api.setError('inventory-lifecycle', error.message || '保存结果未确认，输入保留；可原样重试核对回执');
+            if (error.status === 409) form.querySelector('#inventory-lifecycle-error').insertAdjacentHTML('beforeend',
+              button('重新核对', 'inventory-lifecycle-review', '', '', `data-id="${esc(data.assetId)}" data-operation="${esc(data.action)}"`));
+          }
+        }).finally(() => { inventorySavePending = false; if (submit?.isConnected) submit.disabled = false; });
+      });
+  }
   function assetDetail(id) {
     const asset = usageAssetById(id);
     if (!asset) return;
@@ -1747,7 +1869,7 @@
       ['账号状态', { normal: asset.status, dead: '死号', unlocking: '解封中' }[asset.health]],
       [
         '使用状态',
-        { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[asset.inventoryState]
+        accountSummaries.get(asset.id)?.label || { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[asset.inventoryState]
       ],
       ['注册时间', registrationTime(asset) || '未提供'],
       ['录入人', asset.createdBy || '历史未记录'],
@@ -1817,14 +1939,14 @@
     showDrawer(
       '资料详情',
       '资料、提取、实际使用、归还和任务来源保持关联。',
-      `<div class="property-list">${rows.map(([name, value]) => `<div class="property-row"><span>${esc(name)}</span><strong>${esc(value)}</strong></div>`).join('')}</div>${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
+      `<div class="property-list">${rows.map(([name, value]) => `<div class="property-row"><span>${esc(name)}</span><strong>${esc(value)}</strong></div>`).join('')}</div>${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
       button('关闭', 'inventory-close')
     );
   }
   function assetMore(id, node) {
     const asset = assetById(id);
     if (!asset) return;
-    api.openActionMenu(node, `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(asset.email)}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
+    api.openActionMenu(node, `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(asset.email)}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
   function submissionPage(accountEntry = false) {
     const choices = accountEntry ? accountSubmissionTypes : mailboxWorkflowTypes();
@@ -3252,6 +3374,9 @@
     else if (action === 'inventory-edit') assetEditor(id);
     else if (action === 'inventory-detail') assetDetail(id);
     else if (action === 'inventory-more') assetMore(id, node);
+    else if (action === 'inventory-account-lifecycle') void openAccountLifecycle(id, node.dataset.operation);
+    else if (action === 'inventory-lifecycle-review') void openAccountLifecycle(id, node.dataset.operation, true);
+    else if (action === 'inventory-lifecycle-order') api.go(`orders/detail/${encodeURIComponent(id)}`);
     else if (action === 'inventory-return-asset') {
       const asset = assetById(id),
         claim = pendingClaim(asset);
@@ -3473,6 +3598,7 @@
     }
     saveDrafts();
     if (form.id === 'inventory-extract-form') submitExtraction(form);
+    else if (form.id === 'inventory-account-lifecycle-form') submitAccountLifecycle(form);
     else if (form.id === 'inventory-usage-correction-form') submitUsageCorrection(form);
     else if (form.id === 'inventory-return-form') submitReturn(form);
     else if (form.id === 'inventory-use-form') submitUse(form);
@@ -3798,10 +3924,12 @@
     return true;
   }
   function previewRegistrationProxy(node) {
-    const protocol = document.getElementById('inventory-proxy-protocol')?.value || '';
+    const protocolControl = document.getElementById('inventory-proxy-protocol');
+    const scheme = /^([a-z][a-z\d+.-]*):\/\//i.exec(node.value.trim())?.[1].toLowerCase();
+    const protocol = scheme || protocolControl?.value || 'socks5';
     try {
-      if (node.value.trim() && !protocol) throw new Error('请先选择代理协议');
       const values = node.value.trim() ? parseRegistrationProxy(node.value, protocol) : {};
+      if (values.proxyProtocol && protocolControl) protocolControl.value = values.proxyProtocol;
       for (const [name, id] of [
         ['proxyHost', 'host'],
         ['proxyPort', 'port'],
@@ -3838,6 +3966,13 @@
 
   api.modules.inventory = {
     usageDetails,
+    accountLifecycleReady: () => accountLifecycleLoaded,
+    accountSummary: id => accountSummaries.get(id),
+    accountSummaryForEmail(email, product) {
+      const type = String(product || '').startsWith('Claude') ? 'claude' : 'gpt';
+      const matched = accounts.filter(asset => asset.type === type && asset.email.toLowerCase() === String(email || '').trim().toLowerCase());
+      return matched.length === 1 ? accountSummaries.get(matched[0].id) : null;
+    },
     usageReviewButton,
     usageReviewFor: (id) => usageReview.get(id),
     refreshOverview() {

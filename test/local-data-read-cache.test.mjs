@@ -165,7 +165,7 @@ test('only known writes invalidate related snapshots; query POSTs and explicit r
   assert.equal(api.queries.peek('overview', 'fixture').stale, true);
   assert.equal(api.queries.peek('audit', 'fixture').stale, true);
   assert.equal(api.queries.peek('commerce', 'fixture').stale, false);
-  assert.equal(api.queries.peek('tools/mailbox-pool', 'fixture').stale, false);
+  assert.equal(api.queries.peek('tools/mailbox-pool', 'fixture').stale, true, 'Claude 库存改变后刷新待授权邮箱投影');
   assert.equal(api.queries.peek('tools/website-analytics', 'fixture').stale, false);
   await api.saveManagedMailboxPool({ action: 'settings' });
   assert.equal(api.queries.peek('tools/mailbox-pool', 'fixture').stale, true);
