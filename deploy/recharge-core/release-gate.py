@@ -11,6 +11,45 @@ import time
 
 ROOT = Path('/opt/id-business-independent')
 HOST = '54-249-61-238.sslip.io'
+CONTAINER = 'id-business-independent-caddy'
+GATE_BODY = 'Recharge service is updating. Please retry shortly.'
+
+
+def reload_strategy(version):
+    match = re.match(r'^v(\d+)\.(\d+)\.(\d+)(?:\s|$)', version.strip())
+    if not match or int(match[1]) != 2:
+        raise ValueError('Unsupported gateway version')
+    # Caddy added SIGUSR1 config reload in 2.11. The existing 2.10 gateway
+    # has admin off, so it needs a bounded restart of the same container.
+    return 'signal' if int(match[2]) >= 11 else 'restart'
+
+
+def probe_matches(raw, enable):
+    headers, separator, body = raw.partition('\r\n\r\n')
+    status = re.match(r'^HTTP/\S+ (\d{3})(?:\s|$)', headers)
+    if not separator or not status:
+        return False
+    if enable:
+        return (status[1] == '503' and body == GATE_BODY and
+                re.search(r'(?im)^retry-after:\s*60\s*$', headers) is not None)
+    return status[1] in ['401', '403'] and body != GATE_BODY
+
+
+def reload_gateway():
+    def inspect():
+        return json.loads(subprocess.check_output(['docker', 'inspect', CONTAINER]))[0]
+    before = inspect()
+    version = subprocess.check_output(['docker', 'exec', CONTAINER, 'caddy', 'version'], text=True)
+    strategy = reload_strategy(version)
+    command = (['docker', 'kill', '--signal=USR1', CONTAINER] if strategy == 'signal' else
+               ['docker', 'restart', '--time', '20', CONTAINER])
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    after = inspect()
+    if (before['Id'] != after['Id'] or before['Image'] != after['Image'] or
+            before['Mounts'] != after['Mounts'] or not after['State']['Running']):
+        raise ValueError('Gateway identity changed')
+    return {'strategy': strategy, 'containerId': after['Id'], 'imageId': after['Image'],
+            'beforeStartedAt': before['State']['StartedAt'], 'afterStartedAt': after['State']['StartedAt']}
 
 
 def gated_text(text, sha, enable):
@@ -58,18 +97,19 @@ def main():
         if stream.read() != before:
             raise ValueError('Gateway source changed concurrently')
         stream.seek(0); stream.write(after); stream.truncate(); stream.flush(); os.fsync(stream.fileno())
-    subprocess.run(['docker', 'kill', '--signal=USR1', 'id-business-independent-caddy'],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    observed = None
+    reload = reload_gateway()
+    routes = ['verify-cdk', 'run-process', 'admin/cards']
     for _ in range(12):
-        probe = subprocess.run(['curl', '--silent', '--show-error', '--max-time', '3',
-                                '--resolve', HOST + ':443:127.0.0.1', '-X', 'POST',
-                                'https://' + HOST + '/integrations/codexdaichong/api/verify-cdk',
-                                '--output', '/dev/null', '--write-out', '%{http_code}'],
-                               capture_output=True, text=True)
-        observed = probe.stdout.strip()
-        if probe.returncode == 0 and (observed == '503' if enable else observed in ['401', '403']):
-            print(json.dumps({'revision': sha, 'gate': 'enabled' if enable else 'disabled', 'http': observed,
+        confirmed = True
+        for route in routes:
+            probe = subprocess.run(['curl', '--silent', '--show-error', '--max-time', '3',
+                                    '--resolve', HOST + ':443:127.0.0.1', '-X', 'POST',
+                                    'https://' + HOST + '/integrations/codexdaichong/api/' + route,
+                                    '--dump-header', '-'], capture_output=True)
+            confirmed = confirmed and probe.returncode == 0 and probe_matches(probe.stdout.decode(), enable)
+        if confirmed:
+            print(json.dumps({'revision': sha, 'gate': 'enabled' if enable else 'disabled',
+                              'routesVerified': len(routes), 'reload': reload,
                               'sourceSha256': hashlib.sha256(after.encode()).hexdigest()}))
             return
         time.sleep(0.5)
