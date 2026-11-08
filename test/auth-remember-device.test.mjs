@@ -95,6 +95,7 @@ test('device IDs never authorize another account; password, role and disable rev
 });
 test('logout is durable across restart, malformed options and cross-site renewal are rejected', async t => {
   const f = await fixture(t);
+  assert.deepEqual((await f.call('/session')).data, { configured: true, actor: null });
   assert.equal((await f.login('yes')).status, 400);
   const cookie = (await f.login(true)).cookie;
   assert.equal((await f.call('/activity', { cookie, body: {}, foreign: true })).status, 403);

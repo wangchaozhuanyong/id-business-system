@@ -336,6 +336,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
 
   function actorRecord(request, accounts) {
     const token = requestToken(request, cookieName);
+    if (!token) return null;
     const session = sessions.get(token);
     if (!session) { request.localAuthReason = 'invalid'; return null; }
     const current = accounts === undefined ? readAccounts(accountPath) : accounts;
