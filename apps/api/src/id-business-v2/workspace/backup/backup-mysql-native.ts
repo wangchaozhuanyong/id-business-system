@@ -172,7 +172,14 @@ export class MysqlNativeBackupSource {
     }
   }
   /** Uses actual server log inventory; missing/purged or non-contiguous files fail closed. */
-  async incremental(start: MysqlLogPosition, end: MysqlLogPosition, expectedServer: string) {
+  async incremental(
+    start: MysqlLogPosition,
+    end: MysqlLogPosition,
+    expectedServer: string,
+    database: string
+  ) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(database))
+      throw new BackupError('BACKUP_MYSQL_DATABASE_INVALID');
     checkPosition(start);
     checkPosition(end);
     if (!UUID.test(expectedServer) || (await this.serverUuid()) !== expectedServer)
@@ -203,7 +210,9 @@ export class MysqlNativeBackupSource {
     return this.output('mysqlbinlog', [
       '--read-from-remote-server',
       '--verify-binlog-checksum',
+      '--require-row-format',
       '--skip-gtids',
+      `--database=${database}`,
       `--start-position=${start.position}`,
       `--stop-position=${end.position}`,
       ...selected.map((log) => log.file)

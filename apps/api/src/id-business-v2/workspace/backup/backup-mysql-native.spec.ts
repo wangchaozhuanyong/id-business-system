@@ -80,13 +80,16 @@ describe('native MySQL encrypted backup source', () => {
     const stream = await source.incremental(
       { file: 'backup-bin.000001', position: 157 },
       { file: 'backup-bin.000002', position: 300 },
-      server
+      server,
+      'id_backup_test_fixture'
     );
     for await (const chunk of stream) expect(chunk.toString()).toBe('synthetic-binlog');
     expect(launch.mock.calls.find(([tool]) => tool === 'mysqlbinlog')![1]).toEqual(
       expect.arrayContaining([
         '--start-position=157',
         '--stop-position=300',
+        '--database=id_backup_test_fixture',
+        '--require-row-format',
         'backup-bin.000001',
         'backup-bin.000002'
       ])
@@ -95,14 +98,16 @@ describe('native MySQL encrypted backup source', () => {
       source.incremental(
         { file: 'backup-bin.000000', position: 157 },
         { file: 'backup-bin.000002', position: 300 },
-        server
+        server,
+        'id_backup_test_fixture'
       )
     ).rejects.toThrow('BACKUP_MYSQL_LOG_GAP');
     await expect(
       source.incremental(
         { file: 'backup-bin.000001', position: 157 },
         { file: 'backup-bin.000002', position: 300 },
-        '60fe1980-dbb9-45c8-a24e-776cdca05fdc'
+        '60fe1980-dbb9-45c8-a24e-776cdca05fdc',
+        'id_backup_test_fixture'
       )
     ).rejects.toThrow('BACKUP_MYSQL_SERVER_CHANGED');
   });

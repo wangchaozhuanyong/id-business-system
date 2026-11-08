@@ -43,7 +43,12 @@ async function command(command: string, args: string[], input?: string) {
   const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   let size = 0;
   const parts: Buffer[] = [];
-  child.stderr.resume();
+  let diagnostic = '';
+  child.stderr.on('data', (chunk: Buffer) => {
+    // Only codes and line numbers may leave this bounded in-memory stderr prefix.
+    if (diagnostic.length < 4096)
+      diagnostic += chunk.toString('utf8').slice(0, 4096 - diagnostic.length);
+  });
   child.stdin.on('error', () => undefined);
   child.stdin.end(input);
   const completed = new Promise<boolean>((resolve) => {
@@ -58,7 +63,17 @@ async function command(command: string, args: string[], input?: string) {
     }
     parts.push(chunk);
   }
-  if (!(await completed)) throw new Error('CI_COMMAND_FAILED');
+  if (!(await completed)) {
+    const mysql = /ERROR (\d{3,5}) \(([A-Z0-9]{5})\)(?: at line (\d+))?/.exec(diagnostic);
+    const prisma = /\bP(\d{4})\b/.exec(diagnostic);
+    throw new Error(
+      mysql
+        ? `CI_COMMAND_FAILED_MYSQL_${mysql[1]}_${mysql[2]}_LINE_${mysql[3] ?? 0}`
+        : prisma
+          ? `CI_COMMAND_FAILED_PRISMA_P${prisma[1]}`
+          : 'CI_COMMAND_FAILED'
+    );
+  }
   return Buffer.concat(parts).toString('utf8').trim();
 }
 async function sql(kind: 'SOURCE' | 'RESTORE', statement: string) {
@@ -112,7 +127,7 @@ async function snapshot(kind: 'SOURCE' | 'RESTORE') {
   }
   const queries = [...tables].map(
     ([table, fields]) =>
-      `SELECT CONCAT_WS(',',${fields.map((field) => `IF(${identifier(field)} IS NULL,'N',CONCAT('H',HEX(CAST(${identifier(field)} AS BINARY))))`).join(',')}) FROM ${identifier(table)} ORDER BY 1 COLLATE utf8mb4_bin;`
+      `SELECT CONCAT_WS(',',${fields.map((field) => `IF(${identifier(field)} IS NULL,'N',CONCAT('H',HEX(CAST(${identifier(field)} AS BINARY))))`).join(',')}) AS canonical_row FROM ${identifier(table)} ORDER BY BINARY canonical_row;`
   );
   // One native client keeps Docker startup out of the per-table comparison.
   const rows = await sql(kind, queries.map((q, i) => `SELECT '__TABLE_${i}__';\n${q}`).join('\n'));
@@ -189,19 +204,23 @@ suite('new system native MySQL isolated recovery', () => {
         'SOURCE',
         `SET NAMES utf8mb4;
         INSERT INTO users(id,username,password_hash,display_name,updated_at) VALUES('${user}','ci-backup-fixture','synthetic-non-login-hash','隔离验证员工',NOW(6));
-        INSERT INTO id_business_v2_customers(id,name,phone_encrypted,updated_at) VALUES('${customer}','隔离客户中文🙂',${enc('synthetic-phone')},NOW(6)),('${deleted}','待删除的隔离客户',NULL,NOW(6));
+        INSERT INTO id_business_v2_customers(id,name,phone_encrypted,phone_search_tokens,wechat_search_tokens,qq_search_tokens,whatsapp_search_tokens,updated_at) VALUES('${customer}','隔离客户中文🙂',${enc('synthetic-phone')},JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),NOW(6)),('${deleted}','待删除的隔离客户',NULL,JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),NOW(6));
         INSERT INTO id_business_v2_inventory_options(id,scope,kind,name,normalized_name,parent_id,parent_key,updated_at) VALUES
           ('ci_source','google_mailbox','source','隔离来源','隔离来源',NULL,'',NOW(6)),
           ('ci_category','mail_category','category','隔离分类','隔离分类',NULL,'',NOW(6)),
           ('ci_country','claude_account','country','隔离国家','隔离国家',NULL,'',NOW(6)),
           ('ci_city','claude_account','city','隔离城市','隔离城市','ci_country','ci_country',NOW(6));
-        INSERT INTO id_business_v2_google_mailboxes(id,email_encrypted,email_hash,password_encrypted,source_option_id,updated_at) VALUES('ci_mail',${enc('ci@example.invalid')},'${digest('ci-mail')}',${enc('synthetic-password')},'ci_source',NOW(6));
+        INSERT INTO id_business_v2_google_mailboxes(id,email_encrypted,email_hash,password_encrypted,source_option_id,phone_unbound_confirmed,updated_at) VALUES('ci_mail',${enc('ci@example.invalid')},'${digest('ci-mail')}',${enc('synthetic-password')},'ci_source',TRUE,NOW(6));
         INSERT INTO id_business_v2_claude_accounts(id,email_encrypted,email_hash,password_encrypted,mail_category_option_id,country_option_id,city_option_id,updated_at) VALUES('ci_claude',${enc('claude@example.invalid')},'${digest('ci-claude')}',${enc('synthetic-claude-password')},'ci_category','ci_country','ci_city',NOW(6));
         INSERT INTO id_business_v2_bank_recharge_currencies(code,name,minor_units,updated_at) VALUES('USD','隔离美元',2,NOW(6)) ON DUPLICATE KEY UPDATE name=VALUES(name);
         INSERT INTO id_business_v2_bank_recharge_cards(id,label,last4,currency_code,updated_at) VALUES('${card}','隔离卡片，无真实付款','0000','USD',NOW(6));
         INSERT INTO id_business_v2_subscription_orders(id,order_no,plan,business_type,customer_id,customer_snapshot_encrypted,account_email_encrypted,account_email_hash,account_email_search_tokens,card_id,card_last6,paid_amount,paid_currency,sale_amount,sale_currency,opened_at,due_at,paid_confirmed,receipt_confirmed,cost_confirmed,financial_snapshot,request_hash,idempotency_key,created_by_user_id,updated_at)
           VALUES('${order}','CI-BACKUP-1','plus','renewal','${customer}',${enc('synthetic-customer-snapshot')},${enc('ci@example.invalid')},'${digest('order-mail')}',JSON_ARRAY(),'${card}','000000',19.1234,'USD',140.9876,'CNY','2026-11-01','2026-12-01',true,true,true,JSON_OBJECT('fxRate','7.12345678','fee','0.0001'),'${digest('request')}','ci-backup-order','${user}',NOW(6));
         INSERT INTO attachments(id,original_name,storage_key,mime_type,size_bytes,content_encrypted,content_sha256,object_id) VALUES('${randomUUID()}','隔离附件.bin','ci/fixture.bin','application/octet-stream',${attachment.length},${enc(attachment.toString('base64'))},'${attachmentHash}','${order}');`
+      );
+      await sql(
+        'SOURCE',
+        `CREATE DATABASE id_backup_test_other; CREATE TABLE id_backup_test_other.sentinel(id INT PRIMARY KEY);`
       );
       const baseline = await snapshot('SOURCE');
       expect(baseline.tables).toBe(117); // 116 application models + actual _prisma_migrations.
@@ -228,6 +247,7 @@ suite('new system native MySQL isolated recovery', () => {
         `START TRANSACTION;
         UPDATE id_business_v2_customers SET name='增量客户一🙂',updated_at=NOW(6) WHERE id='${customer}';
         UPDATE id_business_v2_google_mailboxes SET password_encrypted=${enc('changed-password')},version=2 WHERE id='ci_mail';
+        INSERT INTO id_backup_test_other.sentinel VALUES(1);
         COMMIT;`
       );
       const full = await fullPromise;
@@ -244,7 +264,7 @@ suite('new system native MySQL isolated recovery', () => {
         }
       };
       const increment1 = await encryptBackupStream(
-        await native.incremental(capture.coordinate, firstEnd, capture.serverUuid),
+        await native.incremental(capture.coordinate, firstEnd, capture.serverUuid, database),
         temp,
         first,
         keys.publicKey
@@ -269,7 +289,7 @@ suite('new system native MySQL isolated recovery', () => {
         boundary: { ...base.boundary!, start: mysqlPosition(firstEnd), end: mysqlPosition(lastEnd) }
       };
       const increment2 = await encryptBackupStream(
-        await native.incremental(firstEnd, lastEnd, capture.serverUuid),
+        await native.incremental(firstEnd, lastEnd, capture.serverUuid, database),
         temp,
         second,
         keys.publicKey
@@ -282,6 +302,7 @@ suite('new system native MySQL isolated recovery', () => {
       ] as const) {
         const output = join(temp, `${identity.id}.restore.sql`);
         await decryptBackupFile(join(temp, blob.filename), output, keys.privateKey, identity);
+        expect((await readFile(output, 'utf8')).includes('id_backup_test_other')).toBe(false);
         await restore(output);
         expect(await snapshot('RESTORE')).toEqual(expected);
         await rm(output);
@@ -289,6 +310,7 @@ suite('new system native MySQL isolated recovery', () => {
       checks.push(
         'full snapshot excludes concurrent later writes; both transaction segments replay exactly across log rotation'
       );
+      checks.push('row-format database filter excludes another synthetic project database');
       checks.push(
         'all tables columns rows indexes constraints triggers routines events and migration records match after each restore step'
       );
