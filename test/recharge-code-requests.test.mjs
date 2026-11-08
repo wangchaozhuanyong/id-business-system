@@ -171,7 +171,9 @@ test('issued codes use a single live status read and preserve privacy when the u
   const adminView = await readCodes(admin);
   assert.equal(reads, 2);
   assert.equal(adminView.canApprove, true);
-  assert.deepEqual(adminView.items, ownerView.items.map(({ code, ...row }) => row));
+  const comparable = ({ code, eligible, returnReason, ...row }) => row;
+  assert.deepEqual(adminView.items.map(comparable), ownerView.items.map(comparable));
+  assert(adminView.items.every(row => !row.code && !row.eligible && row.returnReason === '仅领码人可归还'));
   transport.listCodes = async () => { throw new Error('upstream down'); };
   const unavailable = await readCodes(employee);
   assert.deepEqual(unavailable.items.map(({ code }) => code), original.map(({ code }) => code));

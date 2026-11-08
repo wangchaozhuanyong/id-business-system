@@ -52,24 +52,27 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
     await drawer.locator('#ops-totp-secret').press('Enter');
     await drawer.locator('#ops-totp-result .ops-code').filter({ hasText: /^\d{6}$/ }).waitFor();
     assert.equal(attempts.length, 2, 'Successful module loads stay shared');
+    const calculated = drawer.locator('#ops-totp-result tbody tr');
+    assert.equal(await calculated.count(), 1);
+    assert((await calculated.boundingBox()).height <= 80, '临时计算结果同样一行显示');
+
     await drawer.locator('#ops-totp-secret').press('Enter');
     assert.equal(await drawer.locator('#ops-totp-result .ops-code').filter({ hasText: /^\d{6}$/ }).count(), 1, 'Enter after successful paste must retain the current result');
     await saved.locator('[data-action="ops-totp-copy"]').first().click();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '12345678');
     await settle(page);
-    const measure = async () => saved.locator('.totp-code-card').evaluateAll(nodes => nodes.map(node => {
+    const measure = async () => saved.locator('.saved-totp-table tbody tr').evaluateAll(nodes => nodes.map(node => {
       const rect = selector => node.querySelector(selector).getBoundingClientRect().toJSON();
-      return { card: node.getBoundingClientRect().toJSON(), header: rect('header'), value: rect('.totp-code-card__value'), actions: rect('.totp-code-card__actions'), code: rect('.ops-code'), countdown: rect('.totp-countdown'), copy: rect('[data-action="ops-totp-copy"]'), overflow: node.scrollWidth > node.clientWidth + 1 };
+      return { row: node.getBoundingClientRect().toJSON(), code: rect('.ops-code'), countdown: rect('.totp-countdown'), copy: rect('[data-action="ops-totp-copy"]') };
     }));
     const rows = await measure();
+    assert.equal(rows.length, 8);
     for (const row of rows) {
-      assert(row.card.height <= 126, `${width} compact card too tall: ${row.card.height}`);
-      assert(!row.overflow, `${width} saved card overflow`);
-      assert(row.actions.bottom <= row.header.bottom + 1);
-      assert(row.header.bottom + 6 <= row.value.top);
+      assert(row.row.height <= 80, `${width} table row too tall: ${row.row.height}`);
       assert(row.code.right + 3 <= row.countdown.left, `${width} code overlaps countdown`);
       assert(row.countdown.right + 6 <= row.copy.left, `${width} countdown overlaps copy`);
       assert(row.copy.height >= (width <= 900 ? 44 : 36));
+      if (width >= 768) assert(await saved.locator('[data-action="ops-totp-copy"]').first().evaluate(node => { const r = node.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('button') === node; }), '复制按钮不可被固定操作列遮挡');
     }
     const controls = await drawer.locator('.totp-input-actions').evaluate(node => ({ overflow: node.scrollWidth > node.clientWidth + 1, input: node.querySelector('input').getBoundingClientRect().toJSON(), buttons: [...node.querySelectorAll('button:not([hidden])')].map(n => n.getBoundingClientRect().toJSON()) }));
     assert(!controls.overflow, `${width} input toolbar overflow`);
@@ -81,8 +84,8 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
     await saved.getByRole('button', { name: '取消', exact: true }).click();
     await saved.locator('[data-action="ops-saved-totp-page"]').filter({ hasText: '下一页' }).click();
     await saved.locator('[data-saved-totp-code] .ops-code').waitFor();
-    assert.equal(await saved.locator('.totp-code-card').count(), 1);
-    assert((await measure()).every(row => !row.overflow && row.card.height <= 126));
+    assert.equal(await saved.locator('.saved-totp-table tbody tr').count(), 1);
+    assert((await measure()).every(row => row.row.height <= 80));
     await saved.locator('#ops-saved-totp-search').fill('不存在的合成账号');
     await saved.getByText('没有匹配的账号', { exact: true }).waitFor();
     await saved.locator('#ops-saved-totp-search').fill('');

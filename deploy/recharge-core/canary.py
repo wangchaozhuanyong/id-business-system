@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Owned, disposable native/adapter canary. No production credentials or payment calls."""
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import hmac
 import ipaddress
@@ -24,7 +25,8 @@ FORMAL_MYSQL = 'id-business-independent-formal-mysql'
 REVISION = 'f4d7761e0036892e6dd68ec64c5447b513ca37da'
 OWNER_LABEL = 'com.id-business.native-canary.owner'
 SHA_LABEL = 'com.id-business.native-canary.revision'
-ALLOWED_GETS = {'/api/public/runtime', '/api/admin/session', '/api/admin/cards', '/api/admin/recharge-routing'}
+RETURN_PATHS = {'/api/admin/cdks/returns/check', '/api/admin/cdks/returns/commit', '/api/admin/cdks/returns/receipt'}
+ALLOWED_GETS = RETURN_PATHS | {'/api/public/runtime', '/api/admin/session', '/api/admin/cards', '/api/admin/recharge-routing'}
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
 
@@ -62,7 +64,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def http_json(origin, path, headers=None, method='GET', body=None):
     if path not in ALLOWED_GETS or not re.fullmatch(r'http://127\.0\.0\.1:[1-9][0-9]{0,4}', origin):
         raise CanaryError('read_endpoint_rejected')
-    if method not in ('GET', 'PUT') or (method == 'PUT' and path != '/api/admin/recharge-routing'):
+    if method not in ('GET', 'PUT', 'POST') or (method == 'PUT' and path != '/api/admin/recharge-routing') or (method == 'POST' and path not in RETURN_PATHS):
         raise CanaryError('write_endpoint_rejected')
     request = urllib.request.Request(origin + path, headers=headers or {}, method=method,
                                      data=compact(body).encode() if body is not None else None)
@@ -224,10 +226,79 @@ class Canary:
                   'console.log(JSON.stringify(await verifyCodexdaichongSource("/candidate/.runtime/codexdaichong")));')
         result = json.loads(self.command(['docker', 'exec', identity, 'node', '--input-type=module', '-e', script], timeout=30))
         if (result.get('revision') != REVISION or result.get('files') != 200 or
-            result.get('originalFiles') != 197 or result.get('routingFiles') !=
-            ['pricing-checkout.js', 'region-config.js', 'server.js']):
+            result.get('originalFiles') != 196 or result.get('routingFiles') !=
+            ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js']):
             raise CanaryError('pristine_source_mismatch')
         self.checks.append(code)
+
+    def check_code_returns(self, mysql, native, adapter_url, privileged, sealed):
+        migration = json.loads(self.command(['docker', 'exec', '-i', native, 'node',
+            '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-code-returns'], input=sealed.encode(), timeout=30))
+        if migration != {'migration': 'unused-code-returns-v1', 'tables': 1, 'completed': True}:
+            raise CanaryError('code_returns_migration_failed')
+        codes = ['KC-' + hashlib.sha256((self.sha + ':return:' + str(i)).encode()).hexdigest()[:28].upper() for i in range(13)]
+        values = ','.join("('%s',1,'自助','plus')" % code for code in codes)
+        self.mysql_query(mysql, 'INSERT INTO cdk_codes(cdk_code,is_active,type,plan_type) VALUES ' + values)
+        service = {**privileged, 'id': 'order-reconciliation'}
+        def request(action, body, actor=service):
+            path = '/api/admin/cdks/returns/' + action
+            headers = {'x-id-recharge-assertion': assertion(self.bridge, path, actor, 'POST'), 'Content-Type': 'application/json'}
+            return http_json(adapter_url, path, headers, 'POST', body)
+        def command(index):
+            return {'code': codes[index], 'plan': 'plus', 'operationId': 'return_' + hashlib.sha256((self.sha + ':' + str(index)).encode()).hexdigest()[:32]}
+        status, _ = request('check', {'items': [{'code': codes[0], 'plan': 'plus'}]}, privileged)
+        if status != 403:
+            raise CanaryError('code_returns_service_boundary_failed')
+        status, first = request('commit', command(0))
+        if status != 200 or first.get('receipt', {}).get('state') != 'returned':
+            raise CanaryError('code_return_atomic_commit_failed')
+        for action in ('commit', 'receipt'):
+            status, result = request(action, command(0))
+            if status != 200 or result.get('receipt') != first.get('receipt'):
+                raise CanaryError('code_return_idempotency_failed')
+        if self.mysql_query(mysql, "SELECT is_active FROM cdk_codes WHERE cdk_code='%s'" % codes[0]) != '0':
+            raise CanaryError('returned_code_still_active')
+        try:
+            self.mysql_query(mysql, "DELETE FROM cdk_codes WHERE cdk_code='%s'" % codes[0])
+        except CanaryError:
+            pass
+        else:
+            raise CanaryError('return_tombstone_can_be_deleted')
+        self.checks.append('code_return_atomic_receipt_and_permanent_invalidation')
+        for index in range(1, 9):
+            barrier = threading.Barrier(2)
+            def redeem():
+                barrier.wait(timeout=5)
+                return self.mysql_query(mysql, "UPDATE cdk_codes SET used_at=CURRENT_TIMESTAMP WHERE cdk_code='%s' AND is_active=1 AND used_at IS NULL; SELECT ROW_COUNT()" % codes[index])
+            def give_back():
+                barrier.wait(timeout=5)
+                return request('commit', command(index))
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                use = executor.submit(redeem)
+                returned = executor.submit(give_back)
+                used, (status, result) = use.result(), returned.result()
+            receipt = result.get('receipt', {})
+            if status != 200 or receipt.get('state') not in ('returned', 'blocked') or used not in ('0', '1'):
+                raise CanaryError('code_return_race_unknown_result')
+            if int(used) + int(receipt.get('state') == 'returned') != 1:
+                raise CanaryError('code_return_and_redeem_both_succeeded_or_failed')
+        self.checks.append('code_return_vs_native_claim_compare_and_set_eight_races')
+        self.mysql_query(mysql, "INSERT INTO task_logs(job_key,token_preview,cdk_code,status,message,display_time) VALUES('return-canary-task','synthetic','%s','failed','synthetic','synthetic')" % codes[9])
+        self.mysql_query(mysql, "INSERT INTO activation_manual_holds(account_key,cdk_code,reason) VALUES('return-canary','%s','synthetic')" % codes[10])
+        self.mysql_query(mysql, "UPDATE cdk_codes SET shipped_at=CURRENT_TIMESTAMP WHERE cdk_code='%s'" % codes[11])
+        for index in (9, 10, 11):
+            status, result = request('commit', command(index))
+            if status != 200 or result.get('receipt', {}).get('state') != 'blocked':
+                raise CanaryError('code_return_history_hold_or_delivery_not_blocked')
+        status, result = request('commit', {**command(12), 'operationId': command(0)['operationId']})
+        if status != 200 or result.get('receipt', {}).get('state') != 'conflict':
+            raise CanaryError('code_return_operation_collision_not_blocked')
+        count = self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns')
+        self.command(['docker', 'exec', '-i', native, 'node', '/candidate/deploy/recharge-core/entry.mjs',
+                      'migrate-canary-code-returns'], input=sealed.encode(), timeout=30)
+        if self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns') != count:
+            raise CanaryError('code_return_migration_not_idempotent')
+        self.checks.append('code_return_history_delivery_hold_collision_and_additive_migration')
 
     def run(self):
         if not (ROOT / 'releases' / self.sha / 'source/deploy/recharge-core/run-recharge.py').is_file():
@@ -338,6 +409,7 @@ class Canary:
         if status != 200 or config.get('version') != 3 or config.get('auditCount') != 3:
             raise CanaryError('routing_migration_not_idempotent')
         self.checks.append('routing_persistence_version_audit_and_migration_idempotency')
+        self.check_code_returns(mysql, native, adapter_url, privileged, sealed)
         self.source_check(adapter, 'source_200_adapter')
         self.checks.append('no_payment_or_activation_requests')
 

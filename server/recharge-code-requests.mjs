@@ -1,3 +1,4 @@
+import { createCodeReturnManager, codeReturnEntry, publicReturnRecord } from './recharge-code-returns.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 
 export const rechargeCodesRoute = '/api/local/recharge-codes';
@@ -31,7 +32,7 @@ async function readAction(request) {
   let bytes = 0;
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     bytes += chunk.length;
-    if (bytes > 4096) {
+    if (bytes > 8192) {
       request.resume();
       throw new RequestError(400, '充值码申请内容过长');
     }
@@ -52,7 +53,8 @@ function visibleRequest(row, actorId) {
   return {
     id, plan, count, applicantId, applicantName, status, createdAt, updatedAt, approvedById,
     approvedAt, issuedAt, rejectedById, rejectedAt, reason, issueProblem,
-    ...(status === 'issued' && actorId === applicantId ? { codes: row.codes } : {})
+    returns: (row.returns || []).map(publicReturnRecord),
+    ...(status === 'issued' && actorId === applicantId ? { codes: row.codes.filter(code => !['returned', 'pending'].includes(codeReturnEntry(row, code)?.state)) } : {})
   };
 }
 
@@ -87,39 +89,6 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
   const issuing = new Set();
   const time = () => new Date(clock()).toISOString();
 
-  async function listIssuedCodes(rows, actorId) {
-    const issued = rows.filter(row => row.status === 'issued');
-    if (!issued.length) return [];
-    const codes = new Set(issued.flatMap(row => row.codes));
-    const current = new Map();
-    try {
-      const upstream = await transport?.listCodes();
-      if (Array.isArray(upstream)) {
-        for (const item of upstream) {
-          if (!codes.has(item?.code)) continue;
-          current.set(item.code, current.has(item.code) ? null : item);
-        }
-      }
-    } catch {
-      current.clear();
-    }
-    return issued.flatMap(row => row.codes.map(code => {
-      const record = current.get(code);
-      const status = record?.plan_type === row.plan && record.type === '自助' && codeStatuses.has(record.status)
-        ? record.status : 'unavailable';
-      return {
-        requestId: row.id,
-        plan: row.plan,
-        applicantId: row.applicantId,
-        applicantName: row.applicantName,
-        ...(actorId === row.applicantId ? { code } : {}),
-        last4: code.slice(-4),
-        status,
-        usedAt: status === 'used' && typeof record.used_at === 'string' ? record.used_at : null
-      };
-    }));
-  }
-
   async function change(actor, prepare) {
     // A concurrent change to another application can advance the document version.
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -131,13 +100,15 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
         ? previous.map(entry => entry.id === row.id ? row : entry)
         : [row, ...previous];
       try {
-        await store.save(snapshot.version, { requests }, { action, targetId: row.id, actor });
+        await store.save(snapshot.version, { ...snapshot.data, requests }, { action, targetId: row.id, actor });
         return row;
       } catch (error) {
         if (error?.status !== 409 || attempt === 3) throw error;
       }
     }
   }
+
+  const returns = createCodeReturnManager({ store, transport, change, time });
 
   function findRequest(rows, id) {
     const row = rows.find(entry => entry.id === id);
@@ -263,10 +234,22 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
         const rows = (data?.requests ?? []).filter(row => canApprove || row.applicantId === actor.id);
         const params = new URLSearchParams((request.url || '').split('?', 2)[1]);
         if (params.get('view') === 'codes')
-          return reply(response, 200, { canApprove, items: await listIssuedCodes(rows, actor.id) });
+          return reply(response, 200, { canApprove, items: await returns.view(rows, actor.id) });
+        const items = await returns.view(rows, actor.id);
         return reply(response, 200, {
           canApprove,
-          requests: rows.map(row => visibleRequest(row, actor.id))
+          requests: rows.map(row => {
+            const own = items.filter(item => item.requestId === row.id);
+            return { ...visibleRequest(row, actor.id), counts: {
+              returnable: own.filter(item => item.eligible).length,
+              unused: own.filter(item => item.status === 'unused').length,
+              used: own.filter(item => item.status === 'used').length,
+              processing: own.filter(item => item.status === 'processing').length,
+              unavailable: own.filter(item => item.status === 'unavailable').length,
+              returned: own.filter(item => item.status === 'returned').length,
+              pendingReturns: own.filter(item => item.status === 'return-pending').length
+            } };
+          })
         });
       }
       if (request.method !== 'POST') throw new RequestError(405, '仅支持读取或提交充值码申请');
@@ -275,6 +258,10 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
         (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin')
       ) throw new RequestError(403, '请在本系统提交充值码申请');
       const body = await readAction(request);
+      if (body.action === 'return-preview')
+        return reply(response, 200, { items: await returns.preview(body.itemIds, actor) });
+      if (['return', 'return-reconcile'].includes(body.action))
+        return reply(response, 200, { items: await returns.execute(body.itemIds, actor, body.note, body.action === 'return-reconcile') });
       if (body.action === 'request') {
         const { row, created } = await createRequest(body, actor);
         return reply(response, created ? 201 : 200, { request: visibleRequest(row, actor.id) });
@@ -288,6 +275,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       return reply(response, 200, { request: visibleRequest(row, actor.id) });
     } catch (error) {
       if (response.destroyed || response.headersSent) return;
+      if (error instanceof returns.ReturnError) return reply(response, error.status, { error: error.message, ...(error.items && { items: error.items }) });
       if (error instanceof RequestError) return reply(response, error.status, { error: error.message });
       if (error?.status === 409) return reply(response, 409, { error: '申请记录已变化，请刷新后重试' });
       return reply(response, 500, { error: '未能确认充值码申请结果，请刷新后核对' });

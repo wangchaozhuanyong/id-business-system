@@ -813,11 +813,45 @@ function titleInfo(title, description, id, trustedHtml = false) {
 function header(title, description, actions = '', label = '') {
   return `<div class="page-header"><div class="page-heading"><h1 id="page-title-heading">${escapeHtml(title)}</h1>${titleInfo(title, [description, label].filter(Boolean).join(' · '), 'page-description')}</div><div class="page-header-actions">${actions}</div></div>`;
 }
+function compactListToolbars(region) {
+  const simple = /^(workspace\/(customer-loss|renewals|extractions)|customers\/(list|tenants)|orders\/(gpt|pro|max|exclusive|statistics)|settings\/(accounts|login-logs|exchange-rates))$/.test(state.route);
+  const relay = state.route === 'mailboxes/relay' && ['parents', 'imports'].includes($('.panel > .tabs .tab.active', region)?.dataset.tab);
+  if (state.route === 'settings/login-logs') {
+    const tabs = $(':scope > .tabs', region), panel = tabs?.nextElementSibling;
+    if (panel?.matches('.panel') && $(':scope > .toolbar', panel)) panel.prepend(tabs);
+  }
+  if (simple || relay) for (const panel of $$('.panel', region)) {
+    const header = $(':scope > .tabs, :scope > .content-toolbar', panel), controls = header?.nextElementSibling;
+    if (!controls?.matches('.toolbar')) continue;
+    const tabs = header.matches('.tabs') ? header : $(':scope > .tabs', header);
+    if (!tabs) continue;
+    const row = document.createElement('div');
+    row.className = 'list-controls';
+    header.before(row);
+    if (header !== tabs) {
+      let right = $(':scope > .toolbar-right', controls);
+      if (!right) { right = document.createElement('div'); right.className = 'toolbar-right'; controls.append(right); }
+      for (const actions of $$(':scope > .page-actions', header)) right.append(...actions.childNodes);
+    }
+    row.append(tabs, controls);
+    if (header !== tabs) header.remove();
+  }
+  if (/^(mailboxes\/(google|relay)|accounts\/(gpt|claude))$/.test(state.route))
+    for (const controls of $$('.panel > .toolbar', region)) controls.classList.add('list-filters');
+  const pool = $('#ops-mailbox-pool', region), heading = pool && $('.panel-heading', pool);
+  const filters = pool && $('#ops-mailbox-pool-search-form', pool);
+  if (heading && filters && !heading.closest('.list-controls')) {
+    const row = document.createElement('div'); row.className = 'list-controls list-controls--filters';
+    heading.before(row);
+    row.append($('.section-title-row', heading), filters, $('.mailbox-pool-actions', heading));
+    heading.remove();
+  }
+}
 function mountPageContext(region = $('#main')) {
   const source = $('.page-header', region);
   const title = $('#page-title');
   title.replaceChildren();
-  if (!source) return;
+  if (!source) { compactListToolbars(region); return; }
   title.append($('.page-heading', source));
   const actions = $('.page-header-actions', source);
   if (actions.innerHTML.trim()) {
@@ -844,6 +878,7 @@ function mountPageContext(region = $('#main')) {
     }
   }
   source.remove();
+  compactListToolbars(region);
 }
 function summary(items) {
   return `<div class="summary-strip">${items.map(([label, count, note, accent]) => `<div class="summary-item ${accent ? 'accent' : ''}"><div class="summary-label">${escapeHtml(label)}</div><div class="summary-number">${escapeHtml(count)}<small>${escapeHtml(note || '条')}</small></div></div>`).join('')}</div>`;
@@ -3190,6 +3225,7 @@ window.IDDesignAPI = {
   modules: {},
   navigation,
   canVisit: permittedRoute,
+  compactListToolbars,
   legacy: {
     editMailbox,
     showImport,

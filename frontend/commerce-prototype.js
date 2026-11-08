@@ -66,8 +66,117 @@
     CLP: '智利比索',
     IDR: '印尼盾'
   };
-  const currencyLabel = (code) => `${currencyNames[code] || code} ${code}`;
-  const currencyChoices = (codes = currencies) => codes.map((code) => [code, currencyLabel(code)]);
+  const currencyLabel = (code) => currencyNames[code] ? `${currencyNames[code]} ${code}` : code;
+  let currencySettings = {};
+  let currencySettingsRevision = 0;
+  let orderSettingsReturn = null;
+  const currencyFamily = product => product === 'GPT' ? 'GPT' : 'Claude';
+  function orderCurrencyRows(product) {
+    return currencySettings.orderCurrenciesByProduct?.[currencyFamily(product)] || currencySettings.orderCurrencies ||
+      currencies.map(code => ({ code, name: currencyNames[code] }));
+  }
+  const orderCurrencyCodes = product => orderCurrencyRows(product).map(row => row.code);
+  const currencyChoices = (codes = currencies, selected = '', product = '') =>
+    [...new Set([...codes, ...(selected ? [selected] : [])])].map(code => {
+      const name = orderCurrencyRows(product).find(row => row.code === code)?.name || currencyNames[code];
+      return [code, `${name ? name + ' ' : ''}${code}` + (codes.includes(code) ? '' : '（已移出选项）')];
+    });
+  function refreshCurrencyFields(form, preserve = true) {
+    if (!form?.isConnected) return;
+    const product = form.elements['commerce-product'].value;
+    const apple = form.elements['commerce-payment'].value === '苹果内购';
+    for (const key of ['paidCurrency', 'saleCurrency']) {
+      const select = form.querySelector(`select#commerce-${key}`);
+      if (!select) continue;
+      const allowed = apple && key === 'paidCurrency' ? ['USD'] : orderCurrencyCodes(product);
+      const selected = !preserve && !allowed.includes(select.value) ? allowed[0] : select.value;
+      select.innerHTML = A.options(currencyChoices(allowed, selected, product), selected);
+    }
+  }
+  function captureOrderSettingsReturn() {
+    const form = $('#main #commerce-order-form') || $('#drawer[open] #commerce-order-form');
+    return form ? { route: S.route, actorId: currentOperator().id, main: Boolean(form.closest('#main')),
+      id: form.elements['commerce-id'].value, renewalId: form.elements['commerce-claudeRenewalId'].value } : null;
+  }
+  function currencySettingsButton(product) {
+    return canManageOrders() ? A.button('币种设置', 'commerce-currency-settings', 'compact', 'settings',
+      `data-product="${E(product)}"`) : '';
+  }
+  function saleSettingsActions(product) {
+    return canManageOrders() ? `<div class="order-financial-actions">${currencySettingsButton(product)}${
+      A.button('套餐售价设置', 'commerce-price-settings', 'compact', 'settings', `data-product="${E(product)}"`)}</div>` : '';
+  }
+  async function openCurrencySettings(product, reset = false) {
+    if (!canManageOrders()) return;
+    saveDrafts();
+    const family = currencyFamily(product), key = `commerce-order-currencies:${family}`;
+    if (reset) S.drafts.delete(key);
+    const route = S.route, actorId = currentOperator().id, context = S.drawerContext;
+    const back = captureOrderSettingsReturn() || orderSettingsReturn;
+    try {
+      const snapshot = localData ? await localData.load('settings') : { version: 0, data: currencySettings };
+      if (S.route !== route || currentOperator().id !== actorId || S.drawerContext !== context) return;
+      currencySettings = snapshot.data || {};
+      const draft = S.drafts.get(key) || {};
+      orderSettingsReturn = back;
+      A.openDrawer(`${family} 币种设置`, '只影响本产品的代付和售卖选项，GPT 与 Claude 分别保存。移除不改变历史订单；苹果内购代付仍固定为美元。',
+        `<form id="commerce-currencies-form" data-commerce-draft="${key}" novalidate>${input('currency-product', family, 'type="hidden"')}${input('currency-version', draft['commerce-currency-version'] ?? snapshot.version, 'type="hidden"')}${A.optionListEditor({ id: 'commerce-currency-options', label: '可选币种', itemLabel: '币种', values: orderCurrencyRows(product).map(row => `${row.name} ${row.code}`), minItems: 1, draft })}<p class="footnote">填写币种名称和三位代码，例如：欧元 EUR。没有有效汇率的新增币种保持待核算。</p></form>`,
+        A.button('关闭', 'drawer-close') + A.button('读取最新', 'commerce-currency-reload', '', '', `data-product="${E(product)}"`) +
+        '<button type="submit" form="commerce-currencies-form" class="button primary">保存币种设置</button>', key);
+    } catch (error) { A.notify(error.message || '币种设置读取失败，请重试'); }
+  }
+  async function saveCurrencySettings(form, confirmed = '') {
+    if (!canManageOrders() || form.getAttribute('aria-busy') === 'true') return;
+    if (A.optionListPending(form)) { A.setError('commerce-currency-options', '请先添加或保存正在编辑的币种'); return; }
+    const raw = A.readForm(form), family = value(raw, 'currency-product');
+    if (!['GPT', 'Claude'].includes(family)) return;
+    const rows = A.readOptionList(raw['commerce-currency-options']).map(text => {
+      const match = /^(.{1,40}?)\s+([a-zA-Z]{3})$/.exec(text);
+      return match ? { name: match[1].trim(), code: match[2].toUpperCase() } : null;
+    });
+    if (!rows.length || rows.length > 100 || rows.some(row => !row || /[\r\n\t]/.test(row.name)) ||
+        new Set(rows.map(row => row?.code)).size !== rows.length) {
+      A.setError('commerce-currency-options', '请填写名称和三位代码，代码不可重复，至少保留一种币种'); return;
+    }
+    A.setError('commerce-currency-options', '');
+    const submitted = JSON.stringify(readCommerceDraft(form)), actorId = currentOperator().id;
+    if (!confirmed) {
+      A.confirmAction('确认保存币种设置', `仅更新 ${family}，历史订单和另一产品设置保持原值。`, () => {
+        if (currentOperator().id === actorId && form.isConnected && JSON.stringify(readCommerceDraft(form)) === submitted)
+          void saveCurrencySettings(form, submitted);
+        else A.notify('输入或登录身份已变化，请重新核对后保存');
+      });
+      return;
+    }
+    form.setAttribute('aria-busy', 'true');
+    try {
+      const version = Number(raw['commerce-currency-version']);
+      const snapshot = localData ? await localData.load('settings') : { version, data: currencySettings };
+      if (currentOperator().id !== actorId || !form.isConnected) return;
+      if (snapshot.version !== version) throw new Error('币种设置已变化，输入已保留；请读取最新清单后重新编辑');
+      const data = snapshot.data || { costSettings: safeClone(costSettings), mailboxTypes: A.modules.operations?.getMailboxTypes?.() || [] };
+      const next = { ...data, orderCurrenciesByProduct: { ...data.orderCurrenciesByProduct, [family]: rows } };
+      let savedVersion = version;
+      if (localData) {
+        const result = await localData.save('settings', version, next, { action: 'order_currencies_save' });
+        if (!Number.isInteger(result?.version) || result.version <= version ||
+            JSON.stringify(result.data?.orderCurrenciesByProduct?.[family]) !== JSON.stringify(rows))
+          throw new Error('尚未确认币种保存成功，请重新读取核对');
+        savedVersion = result.version;
+      }
+      if (currentOperator().id !== actorId) return;
+      currencySettingsRevision++;
+      currencySettings = next;
+      priceLoad = null;
+      if (form.isConnected) {
+        if (JSON.stringify(readCommerceDraft(form)) === confirmed) cleanClose(form.dataset.commerceDraft);
+        else { form.elements['commerce-currency-version'].value = savedVersion; saveDrafts(); }
+      }
+      refreshCurrencyFields($('#commerce-order-form'));
+      A.notify(`${family} 币种设置已保存`);
+    } catch (error) { A.notify(error.message || '币种设置保存失败，输入已保留'); }
+    finally { form.removeAttribute('aria-busy'); }
+  }
   const productPlans = {
     GPT: ['Plus', 'Pro 100', 'Pro 200', 'Pro 500'],
     'Claude Pro': ['Pro'],
@@ -342,7 +451,7 @@
               }
             }
             if (matches(S.route) && !$('#main form[data-commerce-draft]')) A.render();
-            A.notify(unchanged ? '记录已保存到本机' : '记录已保存，后续输入已保留');
+            A.notify(unchanged ? '记录已保存到服务器数据库' : '记录已保存，后续输入已保留');
           }
         },
         async (error) => {
@@ -355,10 +464,10 @@
             }
             A.notify(`${error.message || '资料已经变化'}。本次未保存，请重新打开并核对当前数据`);
           } else if (error?.status >= 400 && error.status < 500) {
-            A.notify('本机保存失败，未登记本次操作，请重新核对');
+            A.notify('服务器保存失败，未登记本次操作，请重新核对');
           } else {
             localPhase = 'error';
-            A.notify('暂时无法确认本机保存结果，请刷新页面核对记录后再提交');
+            A.notify('暂时无法确认服务器保存结果，请刷新页面核对记录后再提交');
           }
         }
       )
@@ -1274,7 +1383,7 @@
   }
   function readCommerceDraft(form) {
     const draft = A.readDraft(form);
-    const owner = form.querySelector?.('select#commerce-ownerId');
+    const owner = form.querySelector?.('select#commerce-ownerId, select#commerce-contact-ownerId');
     if (owner) draft['commerce-ownerId'] = owner.value;
     delete draft['commerce-balanceReversalConfirmed'];
     return draft;
@@ -1324,22 +1433,26 @@
     if (selected && !rows.has(selected)) choices.push([selected, '已选归属人（待核对）']);
     return choices;
   }
-  function orderOwnerField(v, existing) {
-    if (existing || !canManageOrders())
-      return field('归属人', 'ownerId', `<input id="commerce-ownerId" value="${E(orderOwnerName(existing || {
-        ownerId: currentOperator().id, owner: currentOperator().name
-      }))}" readonly />`, false, existing ? '保留原单归属；录入人与操作记录分别保留。' : '订单归属当前登录账号。');
+  function orderOwnerField(v, existing, tenant = false) {
+    const id = tenant ? 'contact-ownerId' : 'ownerId';
+    const noun = tenant ? '租户' : '订单';
+    if (existing || !canManageOrders()) {
+      const name = existing ? tenant ? existing.owner || '历史未记录' : orderOwnerName(existing) : currentOperator().name;
+      return field('归属人', id, `<input id="commerce-${id}" value="${E(name)}" readonly />`, false,
+        existing ? `保留原${noun}归属；录入人与操作记录分别保留。` : `${noun}归属当前登录账号。`);
+    }
     const selected = v('ownerId') || currentOperator().id || '';
-    return field('归属人', 'ownerId', searchableSelect('ownerId', '归属人', orderOwnerChoices(selected), selected,
-      A.button('刷新', 'commerce-order-owner-refresh')), true, '可代员工录单，录入人仍记录当前登录账号。');
+    return field('归属人', id, searchableSelect(id, '归属人', orderOwnerChoices(selected), selected,
+      A.button('刷新', 'commerce-order-owner-refresh')).replace(`name="commerce-${id}"`, 'name="commerce-ownerId"'),
+      true, tenant ? '可选择启用的系统员工；录入人仍记录当前登录账号。' : '可代员工录单，录入人仍记录当前登录账号。');
   }
   async function loadOrderOwners(form, retry = false) {
-    const select = form?.querySelector('select#commerce-ownerId');
+    const select = form?.querySelector('select#commerce-ownerId, select#commerce-contact-ownerId');
     if (!select || !localData?.authRequired || !localData.orderOwners ||
         (orderOwnerLoads.has(form) && !retry)) return;
     const request = {};
     orderOwnerLoads.set(form, request);
-    const trigger = form.querySelector('#commerce-ownerId-picker');
+    const trigger = form.querySelector(`#${select.id}-picker`);
     trigger.setAttribute('aria-busy', 'true');
     try {
       const { items } = await localData.orderOwners();
@@ -1352,12 +1465,12 @@
       const valid = selected === currentOperator().id || items.some(row => row.id === selected);
       if (!valid) select.selectedOptions[0].disabled = true;
       filterPicker(select.closest('.commerce-search-picker').querySelector('[data-commerce-picker]'));
-      A.setError('commerce-ownerId', valid ? '' : '所选归属人已停用或不存在，请重新选择');
+      A.setError(select.id, valid ? '' : '所选归属人已停用或不存在，请重新选择');
       return true;
     } catch (error) {
       if (form.isConnected && orderOwnerLoads.get(form) === request) {
         orderOwnerLoads.delete(form);
-        A.setError('commerce-ownerId', '人员读取失败，请点击右侧刷新重试；仍可归属当前账号。');
+        A.setError(select.id, '人员读取失败，请点击右侧刷新重试；仍可归属当前账号。');
         return false;
       }
     } finally {
@@ -1592,7 +1705,7 @@
       tenant
     );
     const source = tenant
-      ? contactField('归属人', 'owner', contactInput('owner', 'placeholder="业务归属人员"'))
+      ? orderOwnerField(v, row, true)
       : contactField(
           '来源渠道',
           'source',
@@ -1609,14 +1722,16 @@
     const name = contactField(
       `${tenant ? '租户' : '客户'}姓名`, 'name', contactInput('name', 'maxlength="80" required'), true
     );
+    const initialCardCount = Math.min(99, Math.max(0, Number(draft['commerce-initial-card-count']) || 0));
+    const cardFields = tenant && !row ? `<section class="form-section"><div class="panel-heading"><div class="section-title-row"><h3>银行卡</h3>${A.titleInfo('银行卡', '可随租户一起登记，最多 99 张；保存后在租户银行卡管理中维护。', 'tenant-initial-card-help')}</div>${A.button('新增银行卡', 'commerce-initial-card-add', '', 'plus', initialCardCount >= 99 ? 'disabled' : '')}</div><input type="hidden" name="commerce-initial-card-count" value="${initialCardCount}" />${Array.from({ length: initialCardCount }, (_, i) => `<div class="guide-item"><div class="commerce-field-grid">${field(`银行卡 ${i + 1} 名称`, `initial-card-${i}-label`, input(`initial-card-${i}-label`, draft[`commerce-initial-card-${i}-label`] || '', 'maxlength="80"'))}${field('银行卡号', `initial-card-${i}-number`, input(`initial-card-${i}-number`, draft[`commerce-initial-card-${i}-number`] || '', 'inputmode="numeric" maxlength="32" autocomplete="off"'), true)}</div>${A.textAction('移除这张银行卡', 'commerce-initial-card-remove', `data-index="${i}"`, 'danger')}</div>`).join('')}</section>` : '';
     const details = tenant
-      ? `<div class="commerce-field-grid">${name}${phone}${source}${notes}</div><p class="footnote">录入人和修改人自动记录。</p>`
+      ? `<div class="commerce-field-grid">${name}${phone}${source}${notes}</div>${cardFields}<p class="footnote">录入人和修改人自动记录。</p>`
       : [
           section('01', '基本资料', name + source + contactField('客户标签', 'tags',
             customerTagPicker(A.readOptionList(draft['commerce-tags'] ?? row?.tags ?? []), row?.tags || [])
           ), '', false, 'commerce-section', customerSettingsButtons()),
           section('02', '联系方式', phone + channels + notes,
-            '电话、微信、QQ、WhatsApp、Telegram 至少填写一项。', false, 'commerce-customer-section')
+            '联系方式选填，可先登记直接在网站下单的客户。', false, 'commerce-customer-section')
         ].join('');
     const body = `<form id="commerce-contact-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-kind" value="${tenant ? 'tenant' : 'customer'}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || row?.version || '')}" /><input type="hidden" name="commerce-quick" value="${quick ? 'yes' : ''}" />${details}</form>`;
     const cancel = standalone
@@ -1643,6 +1758,7 @@
       footer,
       key
     );
+    if (tenant) void loadOrderOwners($('#commerce-contact-form', $('#drawer') || document));
     return '';
   }
   function contactDetail(id, tenant) {
@@ -1791,8 +1907,10 @@
   }
   function customerEmailChoices(customerId, product) {
     if (!customerId) return [['', '直接填写新邮箱']];
+    const products = product === 'GPT' ? ['GPT']
+      : ['Claude Pro', 'Claude Max'].includes(product) ? ['Claude Pro', 'Claude Max'] : [];
     const usedAt = row => parseDate(row.start) || parseDate(row.createdAt) || 0;
-    const history = orders.filter(row => row.customerId === customerId && !row.cancelled &&
+    const history = orders.filter(row => row.customerId === customerId && products.includes(row.product) && !row.cancelled &&
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(row.email || '').trim()))
       .sort((a, b) => usedAt(b) - usedAt(a));
     const unique = new Map();
@@ -1842,7 +1960,7 @@
           ? existing
             ? '已保存的交付快照保留，不再次占用库存。'
             : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
-          : auto ? '' : '优先匹配所选客户最近使用的邮箱，也可直接填写新邮箱。',
+          : auto ? '' : '优先匹配所选客户在当前产品最近使用的邮箱，也可直接填写新邮箱。',
         ''
       ).replace('<span class="required">*', `<span class="required"${!stock && product === 'GPT' ? ' hidden' : ''}>*`) +
       orderOwnerField(v, existing) +
@@ -1863,42 +1981,52 @@
   }
   async function loadPrices(form) {
     if (!localData) return;
-    priceLoad ||= localData.load('settings').then((snapshot) => {
-      orderPrices = snapshot.data?.orderPrices || {};
-      return snapshot;
-    }).catch(() => {
+    const revision = currencySettingsRevision;
+    priceLoad ||= localData.load('settings').catch(() => {
       priceLoad = null;
       return null;
     });
     const snapshot = await priceLoad;
-    if (snapshot && form?.isConnected && !form.elements['commerce-saleAmount'].value) applyOrderPrice(form);
+    if (snapshot && revision === currencySettingsRevision) {
+      orderPrices = snapshot.data?.orderPrices || {};
+      currencySettings = snapshot.data || {};
+    }
+    if (snapshot && form?.isConnected) {
+      const preserve = form.dataset.currencyInitialized === 'yes' || S.drafts.has(form.dataset.commerceDraft) || Boolean(form.elements['commerce-id'].value);
+      refreshCurrencyFields(form, preserve);
+      form.dataset.currencyInitialized = 'yes';
+      if (!form.elements['commerce-saleAmount'].value) applyOrderPrice(form);
+    }
   }
   async function openPrices(product) {
     if (!canManageOrders()) return;
     const route = S.route;
     const context = S.drawerContext;
+    const actorId = currentOperator().id, back = captureOrderSettingsReturn();
     const choices = product === 'GPT' ? ['GPT'] : ['Claude Pro', 'Claude Max'];
     let snapshot;
     try {
-      snapshot = localData ? await localData.load('settings') : { version: 0, data: { orderPrices } };
+      snapshot = localData ? await localData.load('settings') : { version: 0, data: { ...currencySettings, orderPrices } };
     } catch (error) {
       A.notify(error.message || '未能读取套餐售价，请重试');
       return;
     }
-    if (S.route !== route || S.drawerContext !== context) return;
+    if (S.route !== route || S.drawerContext !== context || currentOperator().id !== actorId) return;
+    currencySettings = snapshot.data || {};
+    orderSettingsReturn = back;
     if (localData) orderPrices = snapshot.data?.orderPrices || {};
     const key = `commerce-prices:${product === 'GPT' ? 'gpt' : 'claude'}`;
     const draft = S.drafts.get(key) || {};
     const rows = choices.flatMap((kind) => productPlans[kind].map((plan, index) => {
-      const priceFields = ['CNY', 'MYR'].map((currency) => {
+      const priceFields = orderCurrencyCodes(product).map((currency) => {
         const fieldId = `price-${kind === 'Claude Max' ? 'max' : 'base'}-${index}-${currency}`;
         const current = draft[`commerce-${fieldId}`] ?? orderPrice(kind, plan, currency);
-        return field(`${plan} ${currencyLabel(currency)}`, fieldId, input(fieldId, current,
+        return field(`${plan} ${currencyChoices([currency], '', product)[0][1]}`, fieldId, input(fieldId, current,
           `data-price-product="${E(kind)}" data-price-plan="${E(plan)}" data-price-currency="${currency}" inputmode="decimal"`));
       });
       return priceFields.join('');
     })).join('');
-    A.openDrawer('套餐售价设置', '选择套餐和币种时自动带入售价，实际到账后再确认实收。',
+    A.openDrawer(`${currencyFamily(product)} 套餐售价设置`, '选择套餐和币种时自动带入售价，实际到账后再确认实收。',
       `<form id="commerce-prices-form" data-commerce-draft="${key}" novalidate>${input('price-version', draft['commerce-price-version'] ?? snapshot.version, 'type="hidden"')}<div class="commerce-field-grid">${rows}</div></form>`,
       A.button('关闭', 'drawer-close') + '<button type="submit" form="commerce-prices-form" class="button primary">保存套餐售价</button>', key);
   }
@@ -2025,10 +2153,10 @@
           ? A.textAction('停用', 'commerce-tenant-card-deactivate', `data-id="${E(card.id)}" data-tenant="${E(tenantId)}"`)
           : '—' }
       ], items, '', 'commerce-tenant-cards') : A.empty('暂无银行卡', '登记后可在 Claude 提交订单选择。');
-      A.openDrawer('租户银行卡', `${row?.name || '租户'} · 已登记 ${items.length} 张，最多 999 张。`,
+      A.openDrawer('租户银行卡', `${row?.name || '租户'} · 已登记 ${items.length} 张，最多 99 张。`,
         `<form id="commerce-tenant-cards-form" novalidate><input type="hidden" name="tenant-id" value="${E(tenantId)}" /><div class="commerce-field-grid">${field('银行卡名称', 'tenant-card-label', input('tenant-card-label', '', 'maxlength="80" placeholder="如银行卡 1"'))}${field('银行卡号', 'tenant-card-number', input('tenant-card-number', '', 'inputmode="numeric" maxlength="32" autocomplete="off" data-no-draft'), true)}</div></form>${list}`,
         A.button('返回租户资料', 'commerce-contact-detail', '', 'return', `data-kind="tenant" data-id="${E(tenantId)}"`) +
-          '<button type="submit" form="commerce-tenant-cards-form" class="button primary">添加银行卡</button>', 'commerce-tenant-cards');
+          `<button type="submit" form="commerce-tenant-cards-form" class="button primary" ${items.length >= 99 ? 'disabled' : ''}>添加银行卡</button>`, 'commerce-tenant-cards');
     } catch (error) {
       A.notify(error.message || '无法读取租户银行卡，请重试');
     }
@@ -2061,6 +2189,7 @@
   function orderPaymentFields(v, existing) {
     const auto = automaticOrder(existing);
     const apple = v('payment') === '苹果内购';
+    const product = v('product'), codes = orderCurrencyCodes(product);
     const match = appleMatch(v('plan'), v('appleMatchMin'), v('appleMatchMax'));
     const appleSelection = {
       id: existing?.id, product: v('product'), plan: v('plan'), businessType: v('businessType'),
@@ -2085,7 +2214,7 @@
       field('余额上限（USD）', 'appleMatchMax', input('appleMatchMax', match[1], 'inputmode="decimal" placeholder="留空不限"'),
         false, '', '', !apple || v('businessType') === '续费') +
       `</div>` +
-      `<div class="order-financial-groups commerce-span-all"><div class="order-financial-group"><h3>代付</h3>${field('代付币种', 'paidCurrency', auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '', 'readonly placeholder="待核对"') : select('paidCurrency', currencyChoices(apple ? ['USD'] : currencies), apple ? 'USD' : v('paidCurrency')), true)}${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'), auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}</div><div class="order-financial-group"><h3>售卖</h3>${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(), v('saleCurrency')), true)}${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}</div><div class="order-financial-group"><h3>订阅周期</h3>${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true, '本次实际开通时间，只登记一次。')}${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}</div></div>` +
+      `<div class="order-financial-groups commerce-span-all"><div class="order-financial-group"><div class="order-financial-heading"><h3>代付</h3><div class="order-financial-actions">${currencySettingsButton(product)}</div></div>${field('代付币种', 'paidCurrency', auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '', 'readonly placeholder="待核对"') : select('paidCurrency', currencyChoices(apple ? ['USD'] : codes, apple ? 'USD' : v('paidCurrency'), product), apple ? 'USD' : v('paidCurrency')), true)}${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'), auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>售卖</h3>${saleSettingsActions(product)}</div>${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency')), true)}${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>订阅周期</h3></div>${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true, '本次实际开通时间，只登记一次。')}${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}</div></div>` +
       (v('claudeRenewalId')
         ? `<div class="commerce-cost-strip commerce-span-all">Claude 专属续费：当前订阅到期 ${E(orders.find((row) => row.id === v('claudeRenewalId'))?.expiry || '')}，本次新单到期 ${E(v('expiry'))}。原单保持独立可见。</div>`
         : '') +
@@ -2133,7 +2262,7 @@
       field(
         '成本币种',
         'actualCostCurrency',
-        select('actualCostCurrency', currencyChoices(), v('actualCostCurrency')),
+        select('actualCostCurrency', currencyChoices(currencies, v('actualCostCurrency'), v('product')), v('actualCostCurrency')),
         false,
         '',
         '',
@@ -2158,7 +2287,7 @@
       field(
         '邮箱成本币种',
         'emailCostCurrency',
-        select('emailCostCurrency', currencyChoices(), v('emailCostCurrency') || 'CNY')
+        select('emailCostCurrency', currencyChoices(currencies, v('emailCostCurrency'), v('product')), v('emailCostCurrency') || 'CNY')
       ) +
       (v('product') === 'GPT' && v('payment') === '银行卡'
         ? '<p class="footnote commerce-span-all">首次确认用卡时按费用规则记录开卡费。</p>' : '') +
@@ -2671,7 +2800,7 @@
     const draft = S.drafts.get(key) || {};
     const v = (name) => value(draft, name);
     const required = finance.requiredQuoteCurrencies(order);
-    const rateInputs = currencies.filter((code) => code !== 'CNY').map((code) => {
+    const rateInputs = [...new Set([...currencies, ...required])].filter((code) => code !== 'CNY').map((code) => {
       const fieldId = `fx-${code}`;
       return field(currencyLabel(code), fieldId, input(fieldId, v(fieldId), 'inputmode="decimal"'), required.includes(code));
     }).join('');
@@ -2699,7 +2828,7 @@
         source: value(raw, 'fx-source'),
         at: value(raw, 'fx-at'),
         expiresAt: value(raw, 'fx-expiresAt'),
-        rates: Object.fromEntries(currencies.filter((code) => code !== 'CNY').map((code) => [code, value(raw, `fx-${code}`)]))
+        rates: Object.fromEntries([...new Set([...currencies, ...finance.requiredQuoteCurrencies(order)])].filter(code => code !== 'CNY').map(code => [code, value(raw, `fx-${code}`)]))
       }, order);
     } catch (error) {
       A.notify(error.message);
@@ -3296,8 +3425,29 @@
       }
     }
     const tenant = kind === 'tenant';
+    const initialCards = [];
+    if (tenant && !existing) {
+      const count = Number(raw['commerce-initial-card-count'] || 0), seen = new Set();
+      if (!Number.isInteger(count) || count < 0 || count > 99) return A.notify('每位租户最多登记 99 张银行卡');
+      for (let i = 0; i < count; i++) {
+        const number = String(raw[`commerce-initial-card-${i}-number`] || '').replace(/[ -]/g, '');
+        const label = String(raw[`commerce-initial-card-${i}-label`] || '').trim();
+        const error = !/^\d{12,19}$/.test(number) ? '请输入有效银行卡号' : seen.has(number) ? '银行卡号重复' : label.length > 80 ? '名称最多 80 个字' : '';
+        A.setError(`commerce-initial-card-${i}-number`, error);
+        if (error) return;
+        seen.add(number); initialCards.push({ number, label });
+      }
+    }
+    const ownerId = tenant && !existing
+      ? form.querySelector?.('select#commerce-contact-ownerId')?.value || value(raw, 'ownerId') || operator.id
+      : '';
+    if (tenant && !existing) {
+      const valid = ownerId === operator.id || (canManageOrders() && orderOwners.some(row => row.id === ownerId));
+      A.setError('commerce-contact-ownerId', valid ? '' : '请选择可用的租户归属人');
+      if (!valid) return;
+    }
     const contacts = Object.fromEntries(customerChannels.map(([key]) => [key, value(raw, key)]));
-    const contactError = tenant ? !phone : !Object.values(contacts).some(Boolean);
+    const contactError = tenant && !phone;
     for (const [key] of customerChannels)
       A.setError(
         `commerce-contact-${key}`,
@@ -3329,7 +3479,7 @@
       : match?.sharedContact
         ? `其他客户已使用此${match.sharedContact}。请核对是否为不同客户，分别保存不会合并资料。`
         : localData
-          ? '将保存到本机数据库。'
+          ? '将保存到服务器数据库。'
           : '将保存本次演示资料。';
     const back = value(raw, 'quick') === 'yes' ? quickReturn : null;
     const route = S.route;
@@ -3344,6 +3494,10 @@
         }
         if (form.isConnected === false || S.route !== route || (back && quickReturn !== back))
           return;
+        if (JSON.stringify(A.readForm(form)) !== JSON.stringify(raw)) {
+          A.notify('确认期间资料已变化，请重新核对后保存');
+          return;
+        }
         if (match) {
           const latest = customerDuplicates(id, name, contacts);
           if (latest.duplicate) {
@@ -3360,8 +3514,12 @@
           name,
           ...contacts,
           notes: value(raw, 'notes'),
-          owner: value(raw, 'owner'),
+          ...(tenant ? existing
+            ? Object.fromEntries(['ownerId', 'owner'].filter(key => Object.hasOwn(existing, key)).map(key => [key, existing[key]]))
+            : { ownerId, owner: ownerId === operator.id ? operator.name : orderOwners.find(row => row.id === ownerId)?.name || '' }
+            : { owner: value(raw, 'owner') }),
           ...(tenant ? {} : { tags }),
+          ...(tenant && !existing && initialCards.length ? { initialCards } : {}),
           updatedById: operator.id,
           updatedBy: operator.name,
           updatedAt: editedAt,
@@ -3414,7 +3572,7 @@
             ) {
               showNewContactInList(tenant);
             } else A.render();
-            A.notify(localData ? '资料已保存到本机' : '演示资料已保存');
+            A.notify(localData ? '资料已保存到服务器数据库' : '演示资料已保存');
           }
         );
       },
@@ -3448,7 +3606,9 @@
     error('paidAmount', amountValid(order.paidAmount, allowPending || auto) ? '' : '请输入非负金额，最多四位小数');
     error('saleAmount', amountValid(order.saleAmount, !order.receiptConfirmed && (allowPending || auto)) ? '' : '请输入非负金额，最多四位小数');
     for (const name of ['paidCurrency', 'saleCurrency', 'emailCostCurrency', 'actualCostCurrency'])
-      error(name, (auto && name === 'paidCurrency' && !order[name]) || currencies.includes(order[name]) ? '' : '请选择有效币种');
+      error(name, (auto && name === 'paidCurrency' && !order[name]) || existing?.[name] === order[name] ||
+        (['paidCurrency', 'saleCurrency'].includes(name) ? orderCurrencyCodes(order.product) : currencies).includes(order[name]) ||
+        (name === 'paidCurrency' && order.payment === '苹果内购' && order[name] === 'USD') ? '' : '请选择有效币种');
     error(
       'emailCostAmount',
       amountValid(order.emailCostAmount || '0') ? '' : '补充成本应为非负金额'
@@ -4670,7 +4830,7 @@
     if (!action.startsWith('commerce-')) return false;
     if (action === 'commerce-order-owner-refresh') {
       if (canManageOrders()) void A.withActionFeedback(node,
-        () => loadOrderOwners(node.closest('#commerce-order-form'), true),
+        () => loadOrderOwners(node.closest('form'), true),
         { pending: '正在刷新归属人…', success: '归属人列表已刷新', failure: '人员读取失败，请重试' });
       return true;
     }
@@ -4710,6 +4870,13 @@
     if (action === 'commerce-tenant-card-deactivate') {
       A.confirmAction('停用租户银行卡', '停用后停止用于新单，历史订单仍可核对。', () => {
         void changeTenantCard(null, node.dataset.tenant, node.dataset.id);
+      });
+      return true;
+    }
+    if (action === 'commerce-currency-settings') { void openCurrencySettings(node.dataset.product); return true; }
+    if (action === 'commerce-currency-reload') {
+      if (canManageOrders()) A.confirmAction('读取最新币种', '替换当前币种设置草稿，订单输入会保留。', () => {
+        void openCurrencySettings(node.dataset.product, true);
       });
       return true;
     }
@@ -4774,6 +4941,32 @@
     }
     if (action === 'commerce-contact-entry-tab') {
       A.go(node.dataset.tab === 'tenant' ? 'customers/new/tenant' : 'customers/new');
+      return true;
+    }
+    if (action === 'commerce-initial-card-add' || action === 'commerce-initial-card-remove') {
+      const form = document.getElementById('commerce-contact-form');
+      if (!form) return true;
+      const raw = A.readForm(form);
+      if (value(raw, 'kind') !== 'tenant' || value(raw, 'id')) return true;
+      const count = Number(raw['commerce-initial-card-count'] || 0);
+      if (!Number.isInteger(count) || count < 0 || count > 99) return true;
+      const cards = Array.from({ length: count }, (_, i) => ({ number: raw[`commerce-initial-card-${i}-number`] || '', label: raw[`commerce-initial-card-${i}-label`] || '' }));
+      if (action === 'commerce-initial-card-add') {
+        if (count >= 99) { A.notify('每位租户最多登记 99 张银行卡'); return true; }
+        cards.push({ number: '', label: '' });
+      } else {
+        const index = Number(node.dataset.index);
+        if (!Number.isInteger(index) || index < 0 || index >= count) return true;
+        cards.splice(index, 1);
+      }
+      for (const name of Object.keys(raw)) if (name.startsWith('commerce-initial-card-')) delete raw[name];
+      raw['commerce-initial-card-count'] = String(cards.length);
+      cards.forEach((card, i) => { raw[`commerce-initial-card-${i}-number`] = card.number; raw[`commerce-initial-card-${i}-label`] = card.label; });
+      const key = form.dataset.commerceDraft, standalone = !form.closest('dialog');
+      form.removeAttribute('data-commerce-draft');
+      S.drafts.set(key, raw);
+      if (standalone) A.render();
+      else contactForm(true, '', value(raw, 'quick') === 'yes');
       return true;
     }
     if (action === 'commerce-contact-add') {
@@ -5064,6 +5257,7 @@
       saveReversal(form);
       return true;
     }
+    if (form.id === 'commerce-currencies-form') { void saveCurrencySettings(form); return true; }
     if (form.id === 'commerce-contact-form') {
       saveContact(form);
       return true;
@@ -5136,7 +5330,7 @@
     if (help) {
       help.textContent = stock
         ? form.elements['commerce-id'].value ? '已保存的交付快照保留，不再次占用库存。' : '按邮箱搜索可用库存账号，保存成功后标记为已使用。'
-        : '优先匹配所选客户最近使用的邮箱，也可直接填写新邮箱。';
+        : '优先匹配所选客户在当前产品最近使用的邮箱，也可直接填写新邮箱。';
       const helpTrigger = help.closest('.field-title-help');
       helpTrigger.hidden = email.readOnly && !stock;
       if (helpTrigger.hidden) helpTrigger.open = false;
@@ -5213,6 +5407,7 @@
   }
   function onChange(node) {
     if (node.dataset?.commercePicker) return true;
+    if (node.id === 'commerce-contact-ownerId') A.setError(node.id, '');
     if (node.id === 'commerce-renewal-product') {
       S.status = node.value;
       S.page = 1;
@@ -5245,7 +5440,9 @@
         );
         form.querySelector('#commerce-claudeRenewalId').value = '';
         if (form.querySelector('#commerce-payment').value !== '苹果内购')
-          form.querySelector('#commerce-paidCurrency').value = node.value === 'GPT' ? 'PHP' : 'MYR';
+          form.querySelector('#commerce-paidCurrency').value = orderCurrencyCodes(node.value).includes(node.value === 'GPT' ? 'PHP' : 'MYR')
+            ? node.value === 'GPT' ? 'PHP' : 'MYR' : orderCurrencyCodes(node.value)[0];
+        refreshCurrencyFields(form, false);
         if (
           form.querySelector('#commerce-businessType').value === '成品交付' &&
           !form.querySelector('#commerce-id').value
@@ -5288,7 +5485,7 @@
               : 'MYR';
         if (paid.value !== nextCurrency) amount.value = '';
         paid.innerHTML = A.options(
-          currencyChoices(node.value === '苹果内购' ? ['USD'] : currencies),
+          currencyChoices(node.value === '苹果内购' ? ['USD'] : orderCurrencyCodes(form.elements['commerce-product'].value), '', form.elements['commerce-product'].value),
           nextCurrency
         );
         if (node.value === '苹果内购') {
@@ -5599,6 +5796,15 @@
   const drawer = $('#drawer');
   drawer?.addEventListener('close', () => {
     if (drawer.open) return;
+    if (orderSettingsReturn) {
+      const back = orderSettingsReturn;
+      orderSettingsReturn = null;
+      if (S.route === back.route && currentOperator().id === back.actorId) {
+        if (back.main) refreshCurrencyFields($('#main #commerce-order-form'));
+        else orderEditor(back.id, back.renewalId, false);
+      }
+      return;
+    }
     const closedOrder = drawer.querySelector('#commerce-order-form');
     if (closedOrder) clearRevealedCard(closedOrder);
     const cardInput = drawer.querySelector('#commerce-tenant-card-number');
@@ -5642,6 +5848,7 @@
       }
       updateRenewalReminder();
       if (!localData || localPhase !== 'ready') return;
+      for (const form of document.querySelectorAll('#main #commerce-contact-form, #drawer[open] #commerce-contact-form')) void loadOrderOwners(form);
       if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) {
         const form = $('#commerce-order-form');
         if (form) void loadOrderOwners(form);

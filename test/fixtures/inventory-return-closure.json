@@ -1,0 +1,1223 @@
+[
+  {
+    "name": "all-used",
+    "route": "workspace/mail-extract",
+    "inventory": {
+      "mailboxes": [
+        {
+          "id": "mail-1",
+          "type": "google",
+          "email": "mail.1@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-3",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-22",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-2",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-2",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-2",
+          "type": "google",
+          "email": "mail.2@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-5",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-23",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-4",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-4",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-3",
+          "type": "google",
+          "email": "mail.3@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-7",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-24",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-6",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-6",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-4",
+          "type": "google",
+          "email": "mail.4@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-9",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-25",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-8",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-8",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-5",
+          "type": "google",
+          "email": "mail.5@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-11",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-26",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-10",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-10",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-6",
+          "type": "google",
+          "email": "mail.6@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-13",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-27",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-12",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-12",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-7",
+          "type": "google",
+          "email": "mail.7@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-15",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-28",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-14",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-14",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-8",
+          "type": "google",
+          "email": "mail.8@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-17",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-29",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-16",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-16",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-9",
+          "type": "google",
+          "email": "mail.9@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-19",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-30",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-18",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-18",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-10",
+          "type": "google",
+          "email": "mail.10@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 3,
+          "inventoryState": "used",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-21",
+              "action": "提取",
+              "detail": "MAIL-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            },
+            {
+              "id": "asset-event-31",
+              "action": "确认使用",
+              "detail": "合成使用记录",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [
+            {
+              "kind": "manual-use",
+              "label": "合成使用记录",
+              "time": "2026-11-04 10:30",
+              "claimId": "claim-20",
+              "batchId": "MAIL-1"
+            }
+          ],
+          "claimId": "claim-20",
+          "claimBatchId": "MAIL-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30",
+          "actualUsedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "mail-11",
+          "type": "google",
+          "email": "mail.11@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": false,
+          "version": 1
+        },
+        {
+          "id": "mail-12",
+          "type": "google",
+          "email": "mail.12@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": false,
+          "version": 1
+        }
+      ],
+      "accounts": [],
+      "batches": [
+        {
+          "id": "MAIL-1",
+          "kind": "mail",
+          "purpose": "业务备用",
+          "notes": "演示批次",
+          "actorId": "actor-1",
+          "actorName": "演示测试员",
+          "time": "2026-11-04 10:30",
+          "items": [
+            {
+              "id": "claim-2",
+              "assetId": "mail-1",
+              "email": "mail.1@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-4",
+              "assetId": "mail-2",
+              "email": "mail.2@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-6",
+              "assetId": "mail-3",
+              "email": "mail.3@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-8",
+              "assetId": "mail-4",
+              "email": "mail.4@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-10",
+              "assetId": "mail-5",
+              "email": "mail.5@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-12",
+              "assetId": "mail-6",
+              "email": "mail.6@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-14",
+              "assetId": "mail-7",
+              "email": "mail.7@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-16",
+              "assetId": "mail-8",
+              "email": "mail.8@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-18",
+              "assetId": "mail-9",
+              "email": "mail.9@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-20",
+              "assetId": "mail-10",
+              "email": "mail.10@example.test",
+              "type": "google",
+              "status": "used",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "2026-11-04 10:30",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            }
+          ]
+        }
+      ],
+      "returnRecords": [],
+      "importRecords": [],
+      "registrationRecords": [],
+      "tableSettings": [],
+      "undo": [],
+      "appleRelay": {
+        "parents": [],
+        "imports": [],
+        "events": []
+      }
+    }
+  },
+  {
+    "name": "ambiguous-products",
+    "route": "workspace/extractions",
+    "query": "account.1@example.test",
+    "inventory": {
+      "mailboxes": [],
+      "accounts": [
+        {
+          "id": "account-1",
+          "type": "gpt",
+          "email": "account.1@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-3",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-2",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-2",
+          "type": "gpt",
+          "email": "account.2@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-5",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-4",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-3",
+          "type": "gpt",
+          "email": "account.3@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-7",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-6",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-4",
+          "type": "gpt",
+          "email": "account.4@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-9",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-8",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-5",
+          "type": "gpt",
+          "email": "account.5@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-11",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-10",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-6",
+          "type": "gpt",
+          "email": "account.6@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-13",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-12",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-7",
+          "type": "gpt",
+          "email": "account.7@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-15",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-14",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-8",
+          "type": "gpt",
+          "email": "account.8@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-17",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-16",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-9",
+          "type": "gpt",
+          "email": "account.9@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-19",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-18",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-10",
+          "type": "gpt",
+          "email": "account.10@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-21",
+              "action": "提取",
+              "detail": "ACCOUNT-1 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-20",
+          "claimBatchId": "ACCOUNT-1",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "演示批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-11",
+          "type": "claude",
+          "email": "account.1@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": true,
+          "version": 2,
+          "inventoryState": "claimed",
+          "inventoryHistory": [
+            {
+              "id": "asset-event-24",
+              "action": "提取",
+              "detail": "ACCOUNT-22 · 业务备用",
+              "actorId": "actor-1",
+              "actor": "演示测试员",
+              "time": "2026-11-04 10:30"
+            }
+          ],
+          "usageLinks": [],
+          "claimId": "claim-23",
+          "claimBatchId": "ACCOUNT-22",
+          "purpose": "业务备用",
+          "claimedAt": "2026-11-04 10:30",
+          "extractionNotes": "合成 Claude 批次",
+          "lastOperatedById": "actor-1",
+          "lastOperatedBy": "演示测试员",
+          "lastOperatedAt": "2026-11-04 10:30"
+        },
+        {
+          "id": "account-12",
+          "type": "gpt",
+          "email": "account.12@example.test",
+          "password": "Fictional-Only",
+          "status": "正常",
+          "health": "normal",
+          "used": false,
+          "version": 1
+        }
+      ],
+      "batches": [
+        {
+          "id": "ACCOUNT-22",
+          "kind": "account",
+          "purpose": "业务备用",
+          "notes": "合成 Claude 批次",
+          "actorId": "actor-1",
+          "actorName": "演示测试员",
+          "time": "2026-11-04 10:30",
+          "items": [
+            {
+              "id": "claim-23",
+              "assetId": "account-11",
+              "email": "account.1@example.test",
+              "type": "claude",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "合成 Claude 批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            }
+          ]
+        },
+        {
+          "id": "ACCOUNT-1",
+          "kind": "account",
+          "purpose": "业务备用",
+          "notes": "演示批次",
+          "actorId": "actor-1",
+          "actorName": "演示测试员",
+          "time": "2026-11-04 10:30",
+          "items": [
+            {
+              "id": "claim-2",
+              "assetId": "account-1",
+              "email": "account.1@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-4",
+              "assetId": "account-2",
+              "email": "account.2@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-6",
+              "assetId": "account-3",
+              "email": "account.3@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-8",
+              "assetId": "account-4",
+              "email": "account.4@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-10",
+              "assetId": "account-5",
+              "email": "account.5@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-12",
+              "assetId": "account-6",
+              "email": "account.6@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-14",
+              "assetId": "account-7",
+              "email": "account.7@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-16",
+              "assetId": "account-8",
+              "email": "account.8@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-18",
+              "assetId": "account-9",
+              "email": "account.9@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            },
+            {
+              "id": "claim-20",
+              "assetId": "account-10",
+              "email": "account.10@example.test",
+              "type": "gpt",
+              "status": "pending",
+              "claimedAt": "2026-11-04 10:30",
+              "usedAt": "",
+              "returnedAt": "",
+              "reason": "",
+              "notes": "演示批次",
+              "taskId": "",
+              "orderId": "",
+              "registrationId": ""
+            }
+          ]
+        }
+      ],
+      "returnRecords": [],
+      "importRecords": [],
+      "registrationRecords": [],
+      "tableSettings": [],
+      "undo": [],
+      "appleRelay": {
+        "parents": [],
+        "imports": [],
+        "events": []
+      }
+    }
+  }
+]

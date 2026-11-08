@@ -33,7 +33,7 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       [...target.searchParams.keys()].every((name) => ['page_size', 'keyword', 'recharge_status'].includes(name));
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
-          method === 'POST' && path === '/api/admin/cdks/import'))
+          method === 'POST' && (path === '/api/admin/cdks/import' || /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path))))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
       method, redirect: 'error', signal: AbortSignal.timeout(6000),
@@ -55,6 +55,13 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       if (!Array.isArray(result)) throw new Error('代充码列表格式不正确');
       return result;
     },
+    async checkReturns(items) {
+      const result = await request('POST', '/api/admin/cdks/returns/check', { items });
+      if (!Array.isArray(result.items)) throw new Error('归还核对资料无效');
+      return result.items;
+    },
+    async commitReturn(item) { return (await request('POST', '/api/admin/cdks/returns/commit', item)).receipt; },
+    async returnReceipt(item) { return (await request('POST', '/api/admin/cdks/returns/receipt', item)).receipt; },
     async importCodes({ codes, plan, actor }) {
       const principal = actor?.id && actor?.email
         ? { id: actor.id, email: actor.email, admin: true, sensitive: true }

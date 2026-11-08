@@ -76,13 +76,15 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   await page.locator('.field').filter({ has: page.locator('#ops-managed-app-password') }).locator('.field-title-help summary').click();
   assert.equal(await page.getByRole('link', { name: '前往 Google 生成', exact: true }).getAttribute('href'), 'https://myaccount.google.com/apppasswords');
   await page.locator('#ops-managed-app-password').fill('synthetic-credential');
-  await page.locator('#ops-managed-pool-form button[type="submit"]').click();
+  await page.locator('#drawer button[form="ops-managed-pool-form"]').click();
   await page.getByText(/邮箱授权验证失败/).waitFor();
   assert.equal(await page.locator('#ops-managed-app-password').inputValue(), 'synthetic-credential', '失败保留本次输入供重试');
   rejectAuthorization = false;
-  await page.locator('#ops-managed-pool-form button[type="submit"]').click();
+  await page.locator('#drawer button[form="ops-managed-pool-form"]').click();
   await pending.getByText('可查询', { exact: true }).waitFor();
   assert.equal(await pending.count(), 1, '授权后按邮箱合并，不保留重复待授权记录');
+  await page.locator('#drawer [data-action="drawer-close"]').first().click();
+  await page.locator('#drawer').waitFor({ state: 'hidden' });
   await pending.locator('[data-action="ops-mailbox-pool-query"]').click();
   const link = page.getByRole('link', { name: '验证邮箱按钮', exact: true });
   await link.waitFor();
@@ -95,6 +97,8 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   const popup = await popupEvent;
   await popup.waitForURL('https://example.test/verify/synthetic');
   await popup.close();
+  await page.locator('#drawer [data-action="drawer-close"]').first().click();
+  await page.locator('#drawer').waitFor({ state: 'hidden' });
   await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
   await pool.getByRole('searchbox', { name: '搜索邮箱池' }).fill('');
   await page.goto(origin + '/#/plugins/websites');

@@ -27,15 +27,42 @@ async function approvedRouting() {
   return manifest;
 }
 
-/** Apply only the explicitly authorized startup routing and Egypt region metadata. */
+async function approvedReturns(routing) {
+  const directory = new URL('./returns/', import.meta.url);
+  const manifest = JSON.parse(await readFile(new URL('manifest.json', directory), 'utf8'));
+  const patch = await readFile(new URL('upstream-returns.patch', directory));
+  const names = [...patch.toString().matchAll(/^diff --git a\/(\S+) b\/\1$/gm)].map(match => match[1]).sort();
+  const files = ['mysql-store.js', 'server.js'];
+  if (manifest.revision !== CODEXDAICHONG_REVISION ||
+      JSON.stringify(Object.keys(manifest.files).sort()) !== JSON.stringify(files) ||
+      JSON.stringify(names) !== JSON.stringify(files) ||
+      manifest.files['server.js'].original !== routing.files['server.js'].approved ||
+      createHash('sha256').update(patch).digest('hex') !== manifest.patchSha256)
+    throw new Error('充值码归还补丁与审查清单不符');
+  return manifest;
+}
+
+/** Apply only the separately reviewed routing and unused-code return boundaries. */
 export async function applyApprovedRechargeRouting(directory) {
-  await approvedRouting();
+  const routing = await approvedRouting();
+  const returnManifest = await approvedReturns(routing);
   const args = ['--git-dir=' + resolve(sourceRoot, '.git'), '--work-tree=' + await realpath(directory),
     'apply'];
   const patch = fileURLToPath(new URL('upstream-routing.patch', routingDirectory));
   // git apply is constrained by the checked manifest and never touches the upstream index.
   await exec('git', [...args, '--check', patch], { cwd: directory });
   await exec('git', [...args, patch], { cwd: directory });
+  const returns = fileURLToPath(new URL('./returns/upstream-returns.patch', import.meta.url));
+  // Zero-context insertion patches still require the exact complete preimage for both files.
+  for (const [name, expected] of Object.entries(returnManifest.files)) {
+    const file = resolve(directory, name), stat = await lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('归还补丁输入文件类型不符');
+    const content = await readFile(file);
+    const hash = createHash('sha1').update('blob ' + content.length + '\0').update(content).digest('hex');
+    if (hash !== expected.original) throw new Error('归还补丁输入源码不符：' + name);
+  }
+  await exec('git', [...args, '--unidiff-zero', '--check', returns], { cwd: directory });
+  await exec('git', [...args, '--unidiff-zero', returns], { cwd: directory });
 }
 
 function isDescendant(base, target) {
@@ -60,6 +87,7 @@ async function extractPinnedSource(directory) {
 export async function verifyCodexdaichongSource(directory) {
   const destination = await realpath(directory);
   const routing = await approvedRouting();
+  const returns = await approvedReturns(routing);
   const { stdout } = await exec('git', ['-C', sourceRoot, 'ls-tree', '-rz', CODEXDAICHONG_REVISION], {
     maxBuffer: 8 * 1024 * 1024
   });
@@ -70,7 +98,10 @@ export async function verifyCodexdaichongSource(directory) {
     const name = entry.slice(separator + 1);
     const approved = routing.files[name];
     if (approved && approved.original !== original) throw new Error('选路补丁基准不符：' + name);
-    const expected = approved?.approved || original;
+    const returnFile = returns.files[name];
+    if (returnFile && returnFile.original !== (approved?.approved || original))
+      throw new Error('归还补丁基准不符：' + name);
+    const expected = returnFile?.approved || approved?.approved || original;
     if (type !== 'blob' || !['100644', '100755', '120000'].includes(mode))
       throw new Error('锁定仓库包含不支持的文件类型');
     const path = resolve(destination, name);
@@ -88,8 +119,8 @@ export async function verifyCodexdaichongSource(directory) {
     files++;
   }
   if (!files) throw new Error('锁定充值仓库没有可核验的源码');
-  return { revision: CODEXDAICHONG_REVISION, files, originalFiles: files - routingFiles.length,
-    routingFiles: [...routingFiles], routingPatchSha256: routing.patchSha256 };
+  return { revision: CODEXDAICHONG_REVISION, files, originalFiles: files - new Set([...routingFiles, ...Object.keys(returns.files)]).size,
+    routingFiles: [...routingFiles], returnFiles: Object.keys(returns.files), returnPatchSha256: returns.patchSha256, routingPatchSha256: routing.patchSha256 };
 }
 
 export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'codexdaichong')) {

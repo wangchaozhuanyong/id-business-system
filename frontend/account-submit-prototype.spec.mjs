@@ -339,7 +339,7 @@ test('Claude批导保留国家城市和代理资料，注册时间与录入时�
   r.open('claude');
   r.preview({
     'inventory-import-content':
-      '邮箱,邮箱类型,注册国家,注册城市,注册时间,代理类型,代理主机,代理端口,代理账号,代理密码\nnew.claude@example.test,苹果隐藏邮箱,美国,纽约,2026-10-01T10:30,socks5,proxy.example.test,1080,demo,DEMO-PROXY'
+      '邮箱,邮箱类型,注册国家,注册城市,注册时间,代理类型,代理主机,代理端口,代理账号,代理密码,登录设备,注册代理链接\nnew.claude@example.test,苹果隐藏邮箱,美国,纽约,2026-10-01T10:30,socks5,proxy.example.test,1080,demo,DEMO-PROXY,合成设备,socks5://demo:DEMO-PROXY@proxy.example.test:1080'
   });
   r.requestImport();
   r.confirm();
@@ -414,18 +414,19 @@ test('Apple生日无效或没有确认空电话时均不能批量入库', () => 
   }
 });
 
-test('继续接受账号旧七列格式，但保留真实注册时间和类型边界', () => {
+test('GPT 保留旧七列导入；Claude 旧模板缺设备和代理时明确拒绝', () => {
   const r = runtime();
-  r.open('claude');
-  r.preview({
-    'inventory-import-content':
-      'legacy.claude@example.test,Demo,,美国,纽约,2026-10-01T10:30,Claude账号'
-  });
-  r.requestImport();
-  r.confirm();
-  assert.equal(r.accounts.length, 1);
-  assert.equal(r.accounts[0].type, 'claude');
+  r.open('gpt');
+  r.preview({ 'inventory-import-content': 'legacy.gpt@example.test,Demo,,美国,纽约,2026-10-01T10:30,GPT账号' });
+  r.requestImport(); r.confirm();
+  assert.equal(r.accounts[0].type, 'gpt');
   assert.equal(r.accounts[0].registered, '2026-10-01T10:30');
+  r.open('claude');
+  r.preview({ 'inventory-import-content': 'legacy.claude@example.test,Demo,,美国,纽约,2026-10-01T10:30,Claude账号' });
+  r.requestImport();
+  assert.equal(r.pending, false);
+  assert.equal(r.accounts.length, 1);
+  assert([...r.errors.values()].some(Boolean));
 });
 
 for (const header of ['余额', '使用状态', '养号时长', 'KYC', '录入时间', '未知字段'])

@@ -30,13 +30,17 @@ after(async () => {
   if (fixture) await rm(fixture, { recursive: true, force: true });
 });
 
-test('all 200 upstream files match: 197 original and only three reviewed routing changes', async () => {
+test('all 200 upstream files match: 196 original and four precisely reviewed routing and return boundaries', async () => {
   const result = await verifyCodexdaichongSource(prepared);
   assert.equal(result.revision, CODEXDAICHONG_REVISION);
   assert.equal(result.files, 200);
-  assert.equal(result.originalFiles, 197);
+  await exec(process.execPath, ['--check', join(prepared, 'server.js')]);
+  await exec(process.execPath, ['--check', join(prepared, 'mysql-store.js')]);
+  assert.equal(result.originalFiles, 196);
   assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
-  for (const name of ['index.js', 'mysql-store.js', 'payment-retry.js', 'stripe-payment.js',
+  assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
+  assert.equal((await readFile(join(prepared, 'mysql-store.js'), 'utf8')).replace('module.exports = {\n    withTransaction,', 'module.exports = {'), await original('mysql-store.js'), '事务导出不改变任何原版数据库函数');
+  for (const name of ['index.js', 'payment-retry.js', 'stripe-payment.js',
     'tax-free-address.js', 'package-lock.json'])
     assert.equal(await readFile(join(prepared, name), 'utf8'), await original(name), name);
 });
