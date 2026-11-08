@@ -150,3 +150,98 @@ test('Apple renewals enforce original binding and first-use card fees use actual
   assert.equal(deriveCardIssueFee(cardOrder, null, [], { usageCount: 2 }).pending, true);
   assert.equal(nextOrderNo([{ orderNo: 'OD-LOCAL-0042' }]), 'OD-LOCAL-0043');
 });
+
+test('collection, table-write and quote failures affect only auxiliary synchronization, never native recharge', async t => {
+  for (const point of ['checkpoint', 'read', 'write', 'quote']) await t.test(point, async () => {
+    const privateDiagnostic = 'synthetic-private-storage-or-provider-diagnostic';
+    const privateValues = [privateDiagnostic, 'synthetic-authorization', 'synthetic-cvc', '4000000000002345'];
+    const task = { ...session, gptApiOrderId: 'provider-a', gptApiRaw: JSON.stringify({
+      orderId: 'provider-a', status: 'succeeded', targetEmail: 'account@example.test', planCode: 'plus',
+      completedAt, payment: { amount: '123', currency: 'PHP' }, accessToken: privateValues[1], cvc: privateValues[2]
+    }) };
+    const originalTask = structuredClone(task);
+    const attempts = [];
+    const writes = [];
+    let fail = true;
+    let checkpoint = { version: 1, data: point === 'checkpoint' ? null : {
+      since: Date.parse('2026-10-31T15:00:00.000Z'), rows: []
+    } };
+    const store = {
+      featureDocument: name => name === 'order-sync' ? checkpoint : { data: ownerData },
+      saveFeatureDocument(_name, version, data) {
+        if (fail && point === 'checkpoint') throw new Error(privateDiagnostic);
+        checkpoint = { version: version + 1, data };
+        return checkpoint;
+      },
+      load: () => ({ data: {} }),
+      applyRechargeOrder({ row, order }) {
+        if (fail && point === 'write') throw new Error(privateDiagnostic);
+        writes.push({ row, order });
+        return { ...row, ...(order && { orderNo: 'OD-LOCAL-0001' }) };
+      }
+    };
+    const client = createOrderRechargeClient({ upstreamUrl: 'http://127.0.0.1:31993', secret: 'x'.repeat(40) },
+      async (url, options) => {
+        attempts.push({ path: url.pathname, method: options.method });
+        assert.equal(options.method, 'GET');
+        if (url.pathname === '/api/admin/cdks') return Response.json([]);
+        if (url.pathname === '/api/admin/cards') return Response.json({ cards: [{
+          id: 1, last4: '2345', card_number: privateValues[3], cvc: privateValues[2], session: privateValues[1]
+        }] });
+        if (url.pathname === '/api/admin/billing') return Response.json({ total: 0, records: [] });
+        if (url.pathname === '/api/admin/orbitcard/usage') return Response.json({ cards: [] });
+        assert.equal(url.pathname, '/api/admin/task-logs/task-a');
+        if (fail && point === 'read') throw new Error(privateDiagnostic);
+        return Response.json({ task, runtimeEntries: [] });
+      });
+    const sync = createRechargeOrderSync({ store, client, clock: () => now, publicOrigin: 'http://fixture.local',
+      quoteService: { enabled: true, async snapshotFor() { if (fail && point === 'quote') throw new Error(privateDiagnostic); } }
+    });
+    const request = {
+      method: 'POST', headers: { origin: 'http://fixture.local' },
+      async *[Symbol.asyncIterator]() { yield JSON.stringify({ mode: 'apply', jobKeys: ['task-a'] }); }
+    };
+    const response = {
+      writeHead(status) { this.status = status; },
+      end(raw) { this.body = JSON.parse(raw); }
+    };
+    await sync.handle(request, response, { role: 'admin' });
+    assert.equal(response.status, ['checkpoint', 'write'].includes(point) ? 503 : 200);
+    if (point === 'read') {
+      assert.deepEqual(response.body.rows, [{ jobKey: 'task-a', needs: ['本次回读未确认，可重试'], orderNo: '' }]);
+      assert.equal(writes.some(write => write.order), false);
+    }
+    if (point === 'quote') assert.equal(writes.filter(write => write.order).length, 1);
+    assert.deepEqual(task, originalTask);
+    for (const value of privateValues) {
+      assert.equal(JSON.stringify(response.body).includes(value), false);
+      assert.equal(JSON.stringify(writes).includes(value), false);
+    }
+    assert(attempts.every(attempt => attempt.method === 'GET' && !/run-process|checkout|cancel|retry/.test(attempt.path)));
+    fail = false;
+    await sync.run({ jobKeys: ['task-a'] });
+    assert.deepEqual(task, originalTask);
+    assert(attempts.every(attempt => attempt.method === 'GET'));
+  });
+});
+
+test('a paid-looking payload on a failed, running or unknown task never creates a successful order', () => {
+  const raw = JSON.stringify({ orderId: 'provider-a', status: 'succeeded', targetEmail: 'account@example.test',
+    planCode: 'plus', completedAt, payment: { amount: '123', currency: 'PHP' } });
+  for (const status of ['failed', 'running', 'manual', 'awaiting_review']) {
+    const task = { ...session, status, gptApiOrderId: 'provider-a', gptApiRaw: raw };
+    const original = structuredClone(task);
+    assert.equal(rechargeOrderEvidence(task, { now }), null);
+    assert.deepEqual(task, original);
+  }
+});
+
+test('the collection transport cannot call payment, cancellation or card mutation endpoints even as GET', async () => {
+  const attempts = [];
+  const client = createOrderRechargeClient({ upstreamUrl: 'http://127.0.0.1:31993', secret: 'x'.repeat(40) },
+    async (...args) => { attempts.push(args); throw new Error('network must never be used'); });
+  for (const path of ['/api/run-process', '/api/admin/checkout/generate', '/api/admin/cancel-renewal',
+    '/api/admin/cards/1', '/api/admin/orbitcard/sync', '/api/admin/orbitcard/usage?refresh=1'])
+    await assert.rejects(client.get(path), /不支持/);
+  assert.equal(attempts.length, 0);
+});

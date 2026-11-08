@@ -92,18 +92,19 @@ diff --git a/server.js b/server.js
      (async () => {
          const checkoutScript = path.join(__dirname, 'index.js');
          let finalRun = null;
-@@ -5044,7 +5064,9 @@
+@@ -5044,7 +5064,10 @@
                      cdkCode: cdk
                  });
 
 -                const proxy = await store.getActiveProxy();
 +                const routing = await getRechargeRouting();
-+                const proxy = executionRoute.proxy;
-+                logTask(task.jobKey, routing.describe(executionRoute));
++                const attemptRoute = attempt === 1 ? executionRoute : await routing.nextAttempt(executionRoute);
++                const proxy = attemptRoute.proxy;
++                logTask(task.jobKey, routing.describe(attemptRoute));
                  const hcaptchaCfg = await store.getHcaptchaConfig();
                  const { env: hcaptchaEnv } = buildHcaptchaEnvFromConfig(hcaptchaCfg);
                  const runtimeEnv = {
-@@ -5055,6 +5077,7 @@
+@@ -5055,6 +5078,7 @@
                      CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
                      CDK_CODE: cdk,
                      CDK_PLAN_TYPE: planType,
@@ -111,16 +112,16 @@ diff --git a/server.js b/server.js
                      PROXY: proxy
                  };
 
-@@ -5063,7 +5086,7 @@
+@@ -5063,7 +5087,7 @@
                  const run = await spawnWorkerWithBrowser({
                      jobKey: task.jobKey,
                      runtimeEnv,
 -                    runScript: (workerEnv) => runCheckoutScript(task.jobKey, checkoutScript, workerEnv, attempt, async (progress, liveOutput) => {
-+                    runScript: routing.verifiedStart(executionRoute, (workerEnv) => runCheckoutScript(task.jobKey, checkoutScript, workerEnv, attempt, async (progress, liveOutput) => {
++                    runScript: routing.verifiedStart(attemptRoute, (workerEnv) => runCheckoutScript(task.jobKey, checkoutScript, workerEnv, attempt, async (progress, liveOutput) => {
                          if (progress > 0) {
                              const runningProgress = normalizeTaskProgress(progress, 'running', lastProgress);
                              lastProgress = runningProgress;
-@@ -5093,7 +5116,7 @@
+@@ -5093,7 +5117,7 @@
                                  videos: liveOutput ? extractTaskMediaFromOutput(liveOutput).videos : undefined
                              });
                          }
@@ -129,7 +130,7 @@ diff --git a/server.js b/server.js
                  });
 
                  const cardLast4 = extractCardLast4FromOutput(run.output);
-@@ -5389,7 +5412,13 @@
+@@ -5389,7 +5413,13 @@
          const gptApiConfig = await store.getGptApiConfig();
          const useGptApi = gptApiConfig.enabled && Boolean(gptApiConfig.api_key);
 
@@ -143,7 +144,7 @@ diff --git a/server.js b/server.js
              const hasCard = await store.hasAvailableCard();
              if (!hasCard) {
                  const poolEmail = extractEmailFromSession(rawSession);
-@@ -5430,7 +5459,7 @@
+@@ -5430,7 +5460,7 @@
                  console.error(`[GPT API Worker] ${task.jobKey}:`, error);
              });
          } else {

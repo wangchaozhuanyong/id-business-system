@@ -1,10 +1,10 @@
 {
   "revision": "f4d7761e0036892e6dd68ec64c5447b513ca37da",
-  "patchSha256": "7ffb6cfe00e443da8c615faa5b07b06cc3d2396377ec621470999d3169a11501",
+  "patchSha256": "444e1878f91aabeea42eb3b80d1fac00cb60d6900511c65c43476df3038f8029",
   "files": {
     "server.js": {
       "original": "0d350cd576c0c4a82bec6a5452da6559c9a2e9ad",
-      "approved": "aa8ea80e04812d20f60965d356c31e8e0fb99557"
+      "approved": "dbec17d8bd2b1fc555d5d1d382a636e0ea132f9c"
     },
     "region-config.js": {
       "original": "03dabf797562e37ef570f749a4a9ea5fbf301067",

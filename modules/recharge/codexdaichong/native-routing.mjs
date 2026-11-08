@@ -102,7 +102,7 @@ const shuffle = rows => {
 
 /** Only resolves the startup environment. It never starts, cancels or retries payment. */
 export function createNativeRechargeRouting({ store, engineDir, probe, substituteSession, now = Date.now,
-  chooseOrder = shuffle }) {
+  chooseOrder = shuffle, onWarning = message => console.warn('[Recharge routing] ' + message) }) {
   const exitProbe = probe ?? createExitProbe(engineDir);
   const substitute = substituteSession ?? createRequire(join(engineDir, 'package.json'))('./proxy-pool').substituteProxySession;
   const query = async (sql, values = []) => {
@@ -113,6 +113,14 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     try { return await store.runExecute(sql, values); }
     catch { throw new RechargeRouteError('无法保存选路资料，请稍后核对', 'route_storage_unavailable'); }
   };
+  // Observation and usage records are auxiliary. Their errors must never turn a
+  // successful live probe into a failed route or expose a database/proxy error.
+  const auxiliary = async (message, operation) => {
+    try { return await operation(); }
+    catch {
+      try { onWarning(message)?.catch?.(() => {}); } catch { /* Logging is auxiliary too. */ }
+    }
+  };
   async function policy() {
     const [row] = await query('SELECT version, plans_json, audit_json FROM id_recharge_route_config WHERE singleton_id = 1');
     if (!row || !Number.isSafeInteger(Number(row.version)) || Number(row.version) < 1)
@@ -120,12 +128,14 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     return { version: Number(row.version), plans: validatePlanRoutes(json(row.plans_json)), audit: json(row.audit_json) };
   }
   async function observations() {
-    const rows = await query(`SELECT proxy_id, config_hash, country_code, exit_ip, check_status,
-      check_source, UNIX_TIMESTAMP(checked_at)*1000 AS checked_ms, latency_ms FROM id_recharge_proxy_checks`);
-    return rows.map(row => ({ proxyId: Number(row.proxy_id), configHash: row.config_hash,
-      countryCode: row.country_code, ip: row.exit_ip, status: row.check_status,
-      source: row.check_source, checkedAt: new Date(Number(row.checked_ms)).toISOString(),
-      latencyMs: row.latency_ms == null ? null : Number(row.latency_ms) }));
+    return await auxiliary('检测历史读取失败，本次以实时出口检测为准', async () => {
+      const rows = await query(`SELECT proxy_id, config_hash, country_code, exit_ip, check_status,
+        check_source, UNIX_TIMESTAMP(checked_at)*1000 AS checked_ms, latency_ms FROM id_recharge_proxy_checks`);
+      return rows.map(row => ({ proxyId: Number(row.proxy_id), configHash: row.config_hash,
+        countryCode: row.country_code, ip: row.exit_ip, status: row.check_status,
+        source: row.check_source, checkedAt: new Date(Number(row.checked_ms)).toISOString(),
+        latencyMs: row.latency_ms == null ? null : Number(row.latency_ms) }));
+    }) ?? [];
   }
   async function saveCheck(id, hash, result, status = 'verified') {
     await execute(`INSERT INTO id_recharge_proxy_checks
@@ -138,18 +148,21 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
   }
   async function inspectExit(id, raw, resolved, timeout) {
     const hash = id ? fingerprint(raw.trim()) : directHash;
+    let result;
     try {
-      const result = await exitProbe(resolved, timeout);
+      result = await exitProbe(resolved, timeout);
       if (!publicIp(result?.ip ?? '') || !/^[A-Z]{2}$/.test(result?.countryCode ?? '') || result.countryCode === 'XX')
         throw new RechargeRouteError('检测服务没有提供可核实的国家');
-      await saveCheck(id, hash, result);
-      if (id) await store.updateProxyAssetCheck(id, { ok: true, ip: result.ip, latencyMs: result.latencyMs });
-      return { ...result, checkedAt: new Date(now()).toISOString(), configHash: hash };
     } catch {
-      await saveCheck(id, hash, null, 'failed');
-      if (id) await store.updateProxyAssetCheck(id, { ok: false, error: '出口国家检测失败' });
+      await auxiliary('出口检测失败记录保存失败', () => saveCheck(id, hash, null, 'failed'));
+      if (id) await auxiliary('代理检测状态保存失败', () =>
+        store.updateProxyAssetCheck(id, { ok: false, error: '出口国家检测失败' }));
       throw new RechargeRouteError('出口国家检测失败，请检查线路后重试');
     }
+    await auxiliary('出口检测成功，检测记录保存失败', () => saveCheck(id, hash, result));
+    if (id) await auxiliary('出口检测成功，代理检测状态保存失败', () =>
+      store.updateProxyAssetCheck(id, { ok: true, ip: result.ip, latencyMs: result.latencyMs }));
+    return { ...result, checkedAt: new Date(now()).toISOString(), configHash: hash };
   }
   async function proxies() {
     return query('SELECT id, proxy_url, is_active FROM proxy_assets ORDER BY sort_order ASC, id ASC');
@@ -170,13 +183,24 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     const config = await policy();
     const country = Object.hasOwn(config.plans, planType) ? config.plans[planType] : '';
     if (!country) throw new RechargeRouteError('该套餐尚未配置支付地区', 'plan_route_missing');
-    const rows = await proxies();
     const base = { planType, region: country, currency: ROUTE_REGIONS[country].currency, configVersion: config.version };
+    return selectRoute(base, true);
+  }
+  // Re-enter only at the upstream outer-attempt proxy selection point. The
+  // accepted task's country stays fixed; every new attempt gets a fresh route.
+  async function nextAttempt(route) {
+    return selectRoute({ planType: route.planType, region: route.region,
+      currency: route.currency, configVersion: route.configVersion }, false);
+  }
+  async function selectRoute(base, requireCurrentPolicy) {
+    const country = base.region;
+    const rows = await proxies();
+    const policyChanged = async () => requireCurrentPolicy && (await policy()).version !== base.configVersion;
     if (!rows.length) {
       const result = await inspectExit(0, '', '', 10000);
       if (result.countryCode !== country)
         throw new RechargeRouteError(`代理池为空；服务器直连出口为 ${result.countryCode}，套餐要求 ${country}`);
-      if ((await proxies()).length || (await policy()).version !== config.version)
+      if ((await proxies()).length || await policyChanged())
         throw new RechargeRouteError('选路配置在检测期间发生变化，请重新提交');
       return Object.freeze({ ...base, ...result, proxyId: 0, proxy: '' });
     }
@@ -199,9 +223,10 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
       const latest = await currentProxy(Number(row.id));
       if (!latest || Number(latest.is_active) !== 1 || fingerprint(String(latest.proxy_url).trim()) !== result.configHash)
         throw new RechargeRouteError('代理在检测期间发生变化，请重新提交');
-      if ((await policy()).version !== config.version)
+      if (await policyChanged())
         throw new RechargeRouteError('套餐地区配置已更新，请重新提交');
-      await execute('UPDATE proxy_assets SET usage_count = usage_count + 1 WHERE id = ?', [Number(row.id)]);
+      await auxiliary('代理使用次数保存失败', () =>
+        execute('UPDATE proxy_assets SET usage_count = usage_count + 1 WHERE id = ?', [Number(row.id)]));
       return Object.freeze({ ...base, ...result, proxyId: Number(row.id), proxy: resolved });
     }
     throw new RechargeRouteError(`未找到已核验的 ${ROUTE_REGIONS[country].label}（${country}）可用出口，任务未启动`);
@@ -273,7 +298,7 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     }
   }
   return {
-    resolve, revalidate, checkProxy,
+    resolve, nextAttempt, revalidate, checkProxy,
     view, savePolicy, checkLocal, handleAdmin,
     verifiedStart(route, run) { return async env => { await revalidate(route); return run(env); }; },
     describe(route) { return `套餐选路 plan=${route.planType} region=${route.region} currency=${route.currency} network=${route.proxyId ? 'proxy#' + route.proxyId : 'direct'} country=${route.countryCode}`; }
