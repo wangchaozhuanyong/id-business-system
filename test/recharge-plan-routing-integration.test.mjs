@@ -35,14 +35,15 @@ test('failed selection returns before card availability, CDK locking or task cre
   assert.match(result.body.message, /联系客服/);
   assert.ok(!JSON.stringify(result).includes('private internal')); assert.deepEqual(calls, []);
 });
-test('debug worker passes the selected route despite conflicting global settings, never selects a second proxy', async () => {
+test('debug worker passes the selected route and preserves all upstream api_only variants', async t => {
+  for (const apiOnly of [undefined, false, true]) await t.test(String(apiOnly), async () => {
   const route = { proxy: 'socks5://synthetic-sticky', region: 'PH' };
   let actual, verifyCount = 0, finish;
   const done = new Promise(resolve => { finish = resolve; });
   const worker = section(server, 'function spawnCheckoutDebugWorker(', '/**\n * 第三方 GPT');
   const sandbox = {
     path: { join: (...parts) => parts.join('/') }, __dirname: '/synthetic',
-    process: { env: { PROXY: 'wrong-global', PAYMENT_REGION_OVERRIDE: 'MY' } }, console: { error: finish },
+    process: { env: { PROXY: 'wrong-global', PAYMENT_REGION_OVERRIDE: 'MY', CHECKOUT_API_ONLY: '1' } }, console: { error: finish },
     store: { getActiveProxy: async () => { throw new Error('must not select again'); },
       getHcaptchaConfig: async () => ({}), updateTaskLog: async (_key, result) => { if (result.status !== 'running') finish(); } },
     getRechargeRouting: async () => ({ describe: () => 'safe route', verifiedStart(selected, callback) {
@@ -56,11 +57,133 @@ test('debug worker passes the selected route despite conflicting global settings
   };
   runInNewContext(worker + '\nspawnCheckoutDebugWorker(input);', { ...sandbox,
     input: { task: { jobKey: 'synthetic' }, token: 'synthetic', sessionRaw: '{}', planType: 'plus',
-      region: route.region, executionRoute: route } });
+      region: route.region, executionRoute: route, ...(apiOnly === undefined ? {} : { apiOnly }) } });
   await done;
   assert.equal(actual.PROXY, route.proxy); assert.equal(actual.PAYMENT_REGION_OVERRIDE, 'PH');
   assert.equal(actual.CHECKOUT_DEBUG_ONLY, '1'); assert.equal(actual.CHECKOUT_MODE, 'api');
-  assert.equal(actual.CHECKOUT_API_ONLY, '0'); assert.equal(verifyCount, 1);
+  assert.equal(actual.CHECKOUT_API_ONLY, apiOnly === true ? '1' : '0'); assert.equal(verifyCount, 1);
+  });
+});
+
+test('admin generate keeps the original optional api_only contract with the new routing dependency supplied', async () => {
+  const original = await readFile(fileURLToPath(new URL('../.upstream/codexdaichong/server.js', import.meta.url)), 'utf8');
+  async function invoke(source, apiOnly) {
+    let handler, selected = 0;
+    const spawned = [], created = [];
+    const response = { statusCode: 200, status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; } };
+    runInNewContext(section(source, "app.post('/api/admin/checkout/generate'", "app.get('/api/admin/checkout/status/:jobKey'"), {
+      app: { post: (_path, callback) => { handler = callback; } }, ensureStoreReady: async () => {},
+      parseSessionJson: JSON.parse, normalizeSessionToken: () => 'synthetic', validateAccessToken: () => ({ valid: true }),
+      requireCanonicalPlanType: value => value, isSupportedRegion: value => value === 'PH',
+      buildStoredSessionPayload: value => value, extractEmailFromSession: () => 'fixture@example.test',
+      extractSessionPreview: () => 'synthetic', logTask() {},
+      spawnCheckoutDebugWorker: value => spawned.push({ apiOnly: value.apiOnly, region: value.region }),
+      getRechargeRouting: async () => ({ resolve: async () => { selected++; return { region: 'PH', proxy: '' }; } }),
+      store: { resolvePlanName: () => 'chatgptplusplan', getPaymentRegion: async () => 'PH',
+        createTaskLog: async value => { created.push(value.cdkCode); return { jobKey: 'synthetic' }; }, updateTaskLog: async () => {} }
+    });
+    await handler({ body: { session: '{"accessToken":"synthetic"}',
+      ...(apiOnly === undefined ? {} : { api_only: apiOnly }) } }, response);
+    return { status: response.statusCode, body: JSON.parse(JSON.stringify(response.body)), spawned, created, selected };
+  }
+  for (const value of [undefined, false, true, 'true', 'false', 1, null, {}]) {
+    const { selected: originalSelected, ...baseline } = await invoke(original, value);
+    const { selected, ...candidate } = await invoke(server, value);
+    assert.deepEqual(candidate, baseline);
+    assert.equal(originalSelected, 0);
+    assert.equal(selected, value === undefined || typeof value === 'boolean' ? 1 : 0);
+    if (candidate.status === 200) {
+      assert.equal(candidate.spawned.length, 1); assert.equal(candidate.spawned[0].apiOnly, value === true);
+      assert.deepEqual(candidate.created, ['[checkout-debug]']);
+    } else { assert.equal(candidate.status, 400); assert.match(candidate.body.error, /api_only/); }
+  }
+});
+
+async function activationTrace(source, analyses, integrated, failReselect = false) {
+  const trace = [], runs = [], failures = [];
+  let selected = 1, released;
+  const finished = new Promise(resolve => { released = resolve; });
+  const route = number => ({ planType: 'plus', region: 'PH', proxy: 'synthetic-proxy-' + number });
+  const nativeStore = {
+    getActiveProxy: async () => {
+      if (failReselect && selected === 2) throw new Error('synthetic route unavailable');
+      return route(selected++).proxy;
+    },
+    getHcaptchaConfig: async () => ({}),
+    updateTaskLog: async (_key, value) => { trace.push(['task', JSON.parse(JSON.stringify(value))]); },
+    createActivationManualHold: async value => { trace.push(['hold', value.reason]); },
+    markCdkUnused: async () => { trace.push(['release-code']); },
+    resetCdkFailure: async () => { trace.push(['reset-code']); },
+    resetActivationAttemptFailure: async () => {},
+    recordCdkFailure: async () => false
+  };
+  const routing = {
+    nextAttempt: async accepted => {
+      if (failReselect) throw new Error('synthetic route unavailable');
+      assert.equal(accepted.region, 'PH'); selected++;
+      return route(selected);
+    },
+    describe: () => 'safe selected route',
+    verifiedStart(selectedRoute, callback) {
+      return async env => {
+        assert.equal(env.PROXY, selectedRoute.proxy);
+        assert.equal(env.PAYMENT_REGION_OVERRIDE, 'PH');
+        return callback(env);
+      };
+    }
+  };
+  const sandbox = {
+    path: { join: (...parts) => parts.join('/') }, __dirname: '/synthetic',
+    process: { env: {} }, console: { error: (...values) => failures.push(String(values[1])), warn() {} },
+    store: nativeStore, MAX_PROCESS_ATTEMPTS: 3,
+    extractEmailFromSession: () => 'fixture@example.test', getActivationAccountKey: () => 'synthetic-account',
+    requireReadablePlanType: value => value, getRechargeRouting: async () => routing,
+    normalizeTaskProgress: value => value, broadcastToTask() {}, logTask() {},
+    buildHcaptchaEnvFromConfig: () => ({ env: {} }),
+    spawnWorkerWithBrowser: async ({ runtimeEnv, runScript }) => runScript(runtimeEnv),
+    runCheckoutScript: async (_key, _path, env, attempt) => {
+      runs.push({ attempt, proxy: env.PROXY, region: env.PAYMENT_REGION_OVERRIDE });
+      return { output: 'synthetic attempt ' + attempt,
+        analysis: analyses[Math.min(attempt - 1, analyses.length - 1)] };
+    },
+    extractCardLast4FromOutput: () => '', getCheckoutProgress: () => 20,
+    getManualReviewMessage: value => 'review: ' + value,
+    extractTaskMediaFromOutput: () => ({ screenshots: [], videos: [] }),
+    isCardPoolExhaustedIssue: () => false, isNoActivationEligibilityMessage: () => false,
+    notifyTaskOutcome: value => { trace.push(['notification', value.event]); },
+    releaseForegroundSlot: () => { trace.push(['release-slot']); released(); }, getTotalActiveJobs: () => 1
+  };
+  const worker = section(source, 'function spawnActivationWorker(', 'async function handleActivationRequest(');
+  runInNewContext(worker + '\nspawnActivationWorker(input);', { ...sandbox,
+    input: { task: { jobKey: 'synthetic-job' }, token: 'synthetic', sessionRaw: '{}', cdk: 'synthetic-code',
+      cdkDetails: { plan_type: 'plus' }, executionRoute: integrated ? route(1) : undefined } });
+  await finished;
+  if (failReselect) {
+    assert.equal(failures.length, 1); assert.match(failures[0], /synthetic route unavailable/);
+  } else assert.deepEqual(failures, []);
+  return { runs, trace };
+}
+
+test('native outer attempts, stop decisions and resource cleanup match upstream while every attempt reselects a proxy', async () => {
+  const original = await readFile(fileURLToPath(new URL('../.upstream/codexdaichong/server.js', import.meta.url)), 'utf8');
+  for (const analyses of [
+    [{ status: 'retry', shouldRetry: true }, { status: 'success', shouldRetry: false }],
+    [{ status: 'retry', shouldRetry: true }],
+    [{ status: 'manual', shouldRetry: false }]
+  ]) {
+    const baseline = await activationTrace(original, analyses, false);
+    const candidate = await activationTrace(server, analyses, true);
+    assert.deepEqual(candidate.trace, baseline.trace);
+    assert.deepEqual(candidate.runs.map(({ region, ...run }) => run), baseline.runs.map(({ region, ...run }) => run));
+    assert.ok(candidate.runs.every(run => run.region === 'PH'));
+    assert.equal(new Set(candidate.runs.map(run => run.proxy)).size, candidate.runs.length);
+  }
+  const retry = [{ status: 'retry', shouldRetry: true }];
+  const baseline = await activationTrace(original, retry, false, true);
+  const candidate = await activationTrace(server, retry, true, true);
+  assert.deepEqual(candidate.trace, baseline.trace);
+  assert.equal(candidate.runs.length, 1, 'a failed reselection must not launch another child');
 });
 test('adapted management bundle parses and has one authoritative read-only debug region', () => {
   const js = String(assets.get('/admin.js').body), html = String(assets.get('/admin').body);
