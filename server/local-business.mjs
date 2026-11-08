@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderCurrencySettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransferView, TenantOwnerTransferError } from './tenant-owner-transfer.mjs';
 import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
@@ -194,6 +195,7 @@ function readAuditRow(row) {
 }
 
 export function attributeCommerce(data, previous, actor, owners) {
+  checkTenantTransferHistory(data.tenants, previous?.tenants);
   const attributeNew = (rows = [], before = []) => {
     const known = new Set(Array.isArray(before) ? before.map((row) => row?.id) : []);
     for (const row of rows) {
@@ -660,6 +662,19 @@ export function createLocalBusinessStore(databasePath) {
   }
 
   return {
+    tenantOwnerTransferView(tenantId) {
+      return tenantOwnerTransferView(readDocument('commerce'), tenantId);
+    },
+    transferTenantOwner(command, actor, readOwners) {
+      return writeTransaction(() => {
+        const result = planTenantOwnerTransfer(readDocument('commerce'), command, actor, readOwners);
+        if (result.replayed) return result;
+        put.run('commerce', result.version, encrypt(key, 'commerce', result.version, JSON.stringify(result.data)));
+        log.run(result.receipt.at, 'commerce', 'tenant_owner_transfer',
+          auditSummary('转交租户归属', actor, command.tenantId), result.version);
+        return result;
+      });
+    },
     load(domain) {
       checkDomain(domain);
       return readDocument(domain);
@@ -1231,7 +1246,7 @@ export function createLocalBusinessStore(databasePath) {
             try { owners = readOrderOwners?.() || []; }
             catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
             attributeCommerce(commerce, priorCommerce, actor, owners);
-          }
+          } else checkTenantTransferHistory(commerce.tenants, priorCommerce?.tenants);
           const { action } = writes.find((write) => write.domain === 'commerce');
           const renewalError = checkInventoryRenewals(priorCommerce, commerce, inventory);
           if (renewalError) throw new LocalDataError(409, renewalError);
@@ -1592,6 +1607,16 @@ export async function handleLocalBusiness(
     ) {
       throw new LocalDataError(403, '仅允许从本机页面访问');
     }
+    if (domain === 'tenant-owner-transfer') {
+      if (!actor?.id || !['admin', 'super'].includes(actor.role))
+        throw new LocalDataError(403, '只有管理员可以转交租户归属');
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (request.method === 'GET')
+        return json(response, 200, store.tenantOwnerTransferView(new URL(request.url, origin).searchParams.get('tenantId')));
+      if (request.method !== 'POST') throw new LocalDataError(405, '不支持此归属操作');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面转交归属');
+      return json(response, 200, store.transferTenantOwner(await readJson(request), actor, readOrderOwners));
+    }
     if (domain === 'tools/mailbox-pool') {
       if (!['admin', 'super'].includes(actor?.role)) throw new LocalDataError(403, '只有管理员可以管理邮箱池');
       response.setHeader('Cache-Control', 'private, no-store');
@@ -1689,6 +1714,7 @@ export async function handleLocalBusiness(
     if (response.destroyed) return;
     if (
       error instanceof LocalDataError ||
+      error instanceof TenantOwnerTransferError ||
       error instanceof AccountLifecycleError ||
       error instanceof RelayClaimError ||
       error instanceof BitBrowserAddressError ||

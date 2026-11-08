@@ -206,6 +206,8 @@
     refreshOperatorLabels,
     orderCards: () => request('order-cards'),
     orderOwners: () => request('auth/order-owners'),
+    tenantOwnerTransfer: (tenantId) => request('tenant-owner-transfer?tenantId=' + encodeURIComponent(tenantId)),
+    transferTenantOwner: (command) => write(['commerce'], () => request('tenant-owner-transfer', command, 'POST')),
     tenantCards: (tenantId) => request('tenant-cards?tenantId=' + encodeURIComponent(tenantId)),
     tenantCardAction: (command) => ['copy', 'reveal'].includes(command.action)
       ? request('tenant-cards', command, 'POST')

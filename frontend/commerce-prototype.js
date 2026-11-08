@@ -1433,16 +1433,16 @@
     if (selected && !rows.has(selected)) choices.push([selected, '已选归属人（待核对）']);
     return choices;
   }
-  function orderOwnerField(v, existing, tenant = false) {
+  function orderOwnerField(v, existing, tenant = false, label = '归属人') {
     const id = tenant ? 'contact-ownerId' : 'ownerId';
     const noun = tenant ? '租户' : '订单';
     if (existing || !canManageOrders()) {
       const name = existing ? tenant ? existing.owner || '历史未记录' : orderOwnerName(existing) : currentOperator().name;
-      return field('归属人', id, `<input id="commerce-${id}" value="${E(name)}" readonly />`, false,
+      return field(label, id, `<input id="commerce-${id}" value="${E(name)}" readonly />`, false,
         existing ? `保留原${noun}归属；录入人与操作记录分别保留。` : `${noun}归属当前登录账号。`);
     }
     const selected = v('ownerId') || currentOperator().id || '';
-    return field('归属人', id, searchableSelect(id, '归属人', orderOwnerChoices(selected), selected,
+    return field(label, id, searchableSelect(id, label, orderOwnerChoices(selected), selected,
       A.button('刷新', 'commerce-order-owner-refresh')).replace(`name="commerce-${id}"`, 'name="commerce-ownerId"'),
       true, tenant ? '可选择启用的系统员工；录入人仍记录当前登录账号。' : '可代员工录单，录入人仍记录当前登录账号。');
   }
@@ -1609,7 +1609,9 @@
         label: '操作',
         action: true,
         render: (row) =>
-          `<div class="action-links">${A.textAction('详情', 'commerce-contact-detail', `data-id="${row.id}" data-kind="${tenant ? 'tenant' : 'customer'}"`)}${A.textAction('编辑', 'commerce-contact-edit', `data-id="${row.id}" data-kind="${tenant ? 'tenant' : 'customer'}"`)}${A.textAction(row.active ? '停用' : '恢复', 'commerce-contact-disable', `data-id="${row.id}" data-kind="${tenant ? 'tenant' : 'customer'}"`, 'secondary')}</div>`
+          `<div class="action-links">${A.textAction('详情', 'commerce-contact-detail', `data-id="${row.id}" data-kind="${tenant ? 'tenant' : 'customer'}"`)}${A.textAction('编辑', 'commerce-contact-edit', `data-id="${row.id}" data-kind="${tenant ? 'tenant' : 'customer'}"`)}${tenant && localData && canManageOrders()
+            ? A.textAction('更多操作', 'commerce-tenant-more', `data-id="${E(row.id)}"`)
+            : A.textAction(row.active ? '停用' : '恢复', 'commerce-contact-disable', `data-id="${row.id}" data-kind="${tenant ? 'tenant' : 'customer'}"`, 'secondary')}</div>`
       }
     ];
     return (
@@ -1846,9 +1848,138 @@
                 )
               : A.empty('暂无付租记录', '可从 Claude 专属选择账号生成待付租批次。'))
           : ''
-      }${panelTitle('操作记录')}${timeline(row.id)}`,
-      (tenant && localData ? A.button('银行卡管理', 'commerce-tenant-cards', '', '', `data-id="${E(row.id)}"`) : '') + A.button('关闭', 'drawer-close')
+      }${tenant ? tenantTransferHistory(row.ownerTransfers || []) : ''}${panelTitle('操作记录')}${timeline(row.id)}`,
+      (tenant && localData ? A.button('银行卡管理', 'commerce-tenant-cards', '', '', `data-id="${E(row.id)}"`) +
+        (canManageOrders() ? A.button('转交归属', 'commerce-tenant-owner-transfer', '', '', `data-id="${E(row.id)}"`) : '') : '') + A.button('关闭', 'drawer-close')
     );
+  }
+
+  function tenantTransferHistory(history) {
+    return panelTitle('归属转交记录', '按转交时的人员姓名保存历史快照，历史订单归属保持原值。') +
+      (history.length ? A.table([
+        { id: 'at', label: '转交时间', render: row => E(dateInput(row.at).replace('T', ' ')) },
+        { id: 'fromOwner', label: '原归属人', render: row => E(row.fromOwner || '历史未记录') },
+        { id: 'toOwner', label: '新归属人' }, { id: 'actor', label: '操作人' },
+        { id: 'reason', label: '转交原因', long: true }
+      ], [...history].reverse(), '', 'commerce-tenant-owner-history') : A.empty('暂无归属转交记录', '历史姓名不会自动匹配员工编号。'));
+  }
+  let tenantTransferLoad;
+  async function openTenantOwnerTransfer(id, reload = false) {
+    if (!localData || !canManageOrders()) return;
+    const active = $('#drawer[open] #commerce-tenant-owner-form');
+    if (active?.elements['commerce-transfer-attempt']?.value) {
+      A.notify('请先核对上次转交结果，再读取最新资料'); return;
+    }
+    saveDrafts();
+    const route = S.route, context = S.drawerContext, actorId = currentOperator().id;
+    const request = {}; tenantTransferLoad = request;
+    try {
+      const snapshot = await localData.tenantOwnerTransfer(id);
+      if (tenantTransferLoad !== request || S.route !== route || S.drawerContext !== context || currentOperator().id !== actorId) return;
+      const key = `commerce-tenant-transfer:${id}`, draft = { ...S.drafts.get(key) };
+      if (reload || !draft['commerce-transfer-operation']) {
+        Object.assign(draft, { 'commerce-transfer-operation': uid('tenant-transfer'),
+          'commerce-transfer-version': String(snapshot.version),
+          'commerce-transfer-base': JSON.stringify(snapshot.tenant), 'commerce-transfer-attempt': '' });
+        S.drafts.set(key, draft);
+      }
+      const base = JSON.parse(draft['commerce-transfer-base']);
+      const stale = Number(draft['commerce-transfer-version']) !== snapshot.version || base.version !== snapshot.tenant.version;
+      const hidden = input('transfer-id', id, 'type="hidden"') +
+        ['operation', 'version', 'base', 'attempt'].map(name => input('transfer-' + name, draft['commerce-transfer-' + name] || '', 'type="hidden"')).join('');
+      A.openDrawer('转交租户归属', '仅调整租户资料负责人，历史订单、银行卡及付租对象保持原值。',
+        `<form id="commerce-tenant-owner-form" data-commerce-draft="${E(key)}" novalidate>${hidden}<div class="commerce-field-grid">${
+          field('租户姓名', 'transfer-name', `<input id="commerce-transfer-name" value="${E(snapshot.tenant.name)}" readonly />`)}${
+          field('当前归属', 'transfer-current', `<input id="commerce-transfer-current" value="${E(base.owner || '历史未记录')}" readonly />`)}${
+          orderOwnerField(name => draft['commerce-' + name] || '', null, true, '新归属人')}${
+          field('转交原因', 'transfer-reason', `<textarea id="commerce-transfer-reason" name="commerce-transfer-reason" rows="3" maxlength="500">${E(draft['commerce-transfer-reason'] || '')}</textarea>`, true, '', 'commerce-span-all')
+        }</div><p id="commerce-transfer-status" class="footnote" role="status">${draft['commerce-transfer-attempt']
+          ? '上次转交结果待核对，继续将核对原操作，不会重复转交。' : stale ? '资料已变化，输入已保留；请读取最新归属后再确认。' : '新归属人须为启用的系统员工，录入人和历史订单归属保持。'}</p></form>${tenantTransferHistory(snapshot.history)}`,
+        A.button('取消', 'drawer-close') + A.button('读取最新', 'commerce-tenant-owner-reload', '', '', `data-id="${E(id)}"`) +
+        `<button type="submit" form="commerce-tenant-owner-form" class="button primary">${draft['commerce-transfer-attempt'] ? '核对上次转交' : '确认转交'}</button>`, key);
+      const form = $('#commerce-tenant-owner-form');
+      if (draft['commerce-transfer-attempt']) lockTenantTransfer(form, true);
+      else void loadOrderOwners(form);
+      S.drafts.set(key, readCommerceDraft(form));
+    } catch (error) {
+      if (tenantTransferLoad === request && S.route === route && S.drawerContext === context && currentOperator().id === actorId)
+        A.notify(error.message || '无法读取租户归属，请重试');
+    }
+  }
+  function lockTenantTransfer(form, locked) {
+    const select = form.querySelector('#commerce-contact-ownerId');
+    select.disabled = locked;
+    form.querySelector('#commerce-contact-ownerId-picker').disabled = locked;
+    form.querySelector('#commerce-transfer-reason').readOnly = locked;
+    let mirror = form.querySelector('[data-transfer-owner-mirror]');
+    if (locked) {
+      if (!mirror) {
+        mirror = document.createElement('input'); mirror.type = 'hidden';
+        mirror.name = 'commerce-ownerId'; mirror.dataset.transferOwnerMirror = ''; form.append(mirror);
+      }
+      mirror.value = select.value;
+    } else mirror?.remove();
+  }
+  async function saveTenantOwnerTransfer(form, confirmed = '') {
+    if (!canManageOrders() || form.getAttribute('aria-busy') === 'true' || saving) return;
+    const raw = readCommerceDraft(form), key = form.dataset.commerceDraft;
+    const actorId = currentOperator().id, route = S.route, context = S.drawerContext;
+    let command;
+    if (raw['commerce-transfer-attempt']) command = JSON.parse(raw['commerce-transfer-attempt']);
+    else {
+      const base = JSON.parse(raw['commerce-transfer-base']);
+      const ownerId = value(raw, 'ownerId'), reason = value(raw, 'transfer-reason');
+      const ownerError = !ownerId || !orderOwners.some(row => row.id === ownerId) ? '请选择启用的系统员工'
+        : ownerId === base.ownerId ? '新归属人与当前相同，无需转交' : '';
+      A.setError('commerce-contact-ownerId', ownerError);
+      A.setError('commerce-transfer-reason', !reason || reason.length > 500 ? '请填写转交原因，最多 500 字' : '');
+      if (ownerError || !reason || reason.length > 500) return;
+      command = { tenantId: value(raw, 'transfer-id'), ownerId, reason,
+        operationId: value(raw, 'transfer-operation'), version: Number(raw['commerce-transfer-version']), tenantVersion: base.version };
+    }
+    const submitted = JSON.stringify(raw);
+    if (!confirmed) {
+      const label = orderOwners.find(row => row.id === command.ownerId)?.name || '原操作所选员工';
+      A.confirmAction(raw['commerce-transfer-attempt'] ? '核对上次转交' : '确认转交租户归属',
+        `新归属人：${label}。历史订单归属保持原值；实际操作人单独记录。`, () => {
+          if (form.isConnected && S.route === route && S.drawerContext === context && currentOperator().id === actorId &&
+              JSON.stringify(readCommerceDraft(form)) === submitted) void saveTenantOwnerTransfer(form, submitted);
+          else A.notify('输入或登录身份已变化，请重新核对');
+        });
+      return;
+    }
+    const attempt = JSON.stringify(command);
+    form.elements['commerce-transfer-attempt'].value = attempt;
+    saveDrafts(); lockTenantTransfer(form, true);
+    form.setAttribute('aria-busy', 'true'); saving = true;
+    const feedback = A.beginActionFeedback?.(document.querySelector('button[form="commerce-tenant-owner-form"][type="submit"]'), '正在核对并保存转交…');
+    try {
+      const result = await localData.transferTenantOwner(command);
+      if (result.receipt?.id !== command.operationId || !result.data?.tenants || !Number.isInteger(result.version))
+        throw new Error('尚未确认转交结果，请核对原操作');
+      if (currentOperator().id !== actorId) return;
+      acceptLocalCommerce(result);
+      const unchanged = form.isConnected && S.route === route && S.drawerContext === context && form.elements['commerce-transfer-attempt'].value === attempt;
+      if (unchanged) { cleanClose(key); A.render(); }
+      else {
+        saveDrafts();
+        if (S.drafts.get(key)?.['commerce-transfer-attempt'] === attempt) S.drafts.delete(key);
+        if (matches(S.route) && !$('#main form[data-commerce-draft]')) A.render();
+      }
+      A.notify(result.replayed ? '上次转交结果已核对，请以当前租户归属为准' : '租户归属已转交，历史订单归属保持');
+    } catch (error) {
+      if (currentOperator().id !== actorId) return;
+      if (form.isConnected) {
+        if ([400, 403, 404, 409].includes(error.status)) {
+          form.elements['commerce-transfer-attempt'].value = ''; lockTenantTransfer(form, false);
+          $('#commerce-transfer-status', form).textContent = error.message + '。输入已保留，请读取最新资料后核对。';
+        } else $('#commerce-transfer-status', form).textContent = '转交结果待核对，请继续核对原操作；不会重复转交。';
+        const button = document.querySelector('button[form="commerce-tenant-owner-form"][type="submit"]');
+        if (button) button.textContent = form.elements['commerce-transfer-attempt'].value ? '核对上次转交' : '确认转交';
+        saveDrafts();
+      }
+      A.notify(error.message || '转交尚未确认，输入已保留');
+    } finally { form.removeAttribute('aria-busy'); saving = false; feedback?.finish(); }
   }
 
   function orderDefault(product = 'Claude Max') {
@@ -4826,6 +4957,18 @@
   }
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
+    if (action === 'commerce-tenant-more') {
+      if (canManageOrders()) {
+        const tenant = tenants.find(row => row.id === node.dataset.id);
+        if (tenant) A.openActionMenu(node, A.button('转交归属', 'commerce-tenant-owner-transfer', '', '', `data-id="${E(tenant.id)}"`) +
+          A.button(tenant.active ? '停用' : '恢复', 'commerce-contact-disable', '', '', `data-id="${E(tenant.id)}" data-kind="tenant"`));
+      }
+      return true;
+    }
+    if (action === 'commerce-tenant-owner-transfer' || action === 'commerce-tenant-owner-reload') {
+      if (canManageOrders()) void openTenantOwnerTransfer(node.dataset.id, action.endsWith('-reload'));
+      return true;
+    }
     if (action === 'commerce-order-owner-refresh') {
       if (canManageOrders()) void A.withActionFeedback(node,
         () => loadOrderOwners(node.closest('form'), true),
@@ -5243,6 +5386,7 @@
     return false;
   }
   function onSubmit(form) {
+    if (form.id === 'commerce-tenant-owner-form') { void saveTenantOwnerTransfer(form); return true; }
     if (form.id === 'commerce-renewal-settings') {
       saveRenewalSettings(form);
       return true;
