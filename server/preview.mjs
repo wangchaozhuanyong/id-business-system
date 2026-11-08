@@ -304,7 +304,7 @@ export async function startPreview(
     return publicUrl ? host === publicUrl.host : ['127.0.0.1:' + port, 'localhost:' + port].includes(host);
   }
   const dataChanges = store ? createDataChangeStream({
-    getActor: request => auth?.getActor(request) || (!authPath && !publicUrl
+    getActor: request => auth?.getActor(request, { throwOnUnavailable: true }) || (!authPath && !publicUrl
       ? { id: 'local-operator', role: 'admin' } : null),
     getVersions: actor => ({ ...store.changeVersions(actor), operators: auth?.changeVersion() || '0' }),
     subscribe: listener => store.subscribeChanges(listener),

@@ -615,16 +615,30 @@
   if (state.status === 'signed-out' || state.status === 'setup') showLogin();
   if (state.status === 'signed-in') {
     let activityPending = false, lastActivity = 0;
+    let reconnectBanner;
     const watchedDocuments = new WeakSet();
+    function placeConnectionStatus() {
+      if (!reconnectBanner) return;
+      const modals = [...document.querySelectorAll('dialog[open]')].filter(node => node.matches(':modal'));
+      const focusedModal = document.activeElement?.closest('dialog');
+      const host = modals.includes(focusedModal) ? focusedModal : modals.at(-1) || document.body;
+      if (reconnectBanner.parentElement === host) return;
+      const footer = host.querySelector(':scope > .drawer-footer, :scope > .confirm-actions');
+      host.insertBefore(reconnectBanner, footer);
+    }
+    new MutationObserver(placeConnectionStatus).observe(document.body, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['open']
+    });
+    document.addEventListener('focusin', placeConnectionStatus);
     function connectionStatus(failed) {
-      let banner = $('#local-auth-connection');
-      if (!failed) { banner?.remove(); return; }
-      if (banner || reloading) return;
-      banner = document.createElement('div');
+      if (!failed) { reconnectBanner?.remove(); reconnectBanner = undefined; return; }
+      if (reloading) return;
+      if (reconnectBanner) { placeConnectionStatus(); return; }
+      const banner = reconnectBanner = document.createElement('div');
       banner.id = 'local-auth-connection';
       banner.setAttribute('role', 'status');
       banner.innerHTML = '<span>连接暂时中断，已保留当前页面，请稍后重试。</span><button type="button" class="button">重新连接</button>';
-      document.body.append(banner);
+      placeConnectionStatus();
       $('button', banner).addEventListener('click', async event => {
         event.currentTarget.disabled = true;
         try { await refresh(); connectionStatus(false); }

@@ -3,7 +3,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { interceptDesign, origin, root } from './helpers/offline-design.mjs';
-const actor = { id: 'fixture-owner', name: '测试管理员', email: 'owner@example.test', role: 'super', nicknameSet: true };
+const actor = { id: 'fixture-owner', name: '测试管理员', email: 'owner@example.test', role: 'super', nicknameSet: false };
 test('remember login, own-device controls and reconnect states work without local server or business writes', { timeout: 90000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
@@ -76,14 +76,25 @@ test('remember login, own-device controls and reconnect states work without loca
   await page.evaluate(() => { const originalNow = Date.now; Date.now = () => originalNow() + 120001; });
   await page.locator('#profile-button').click();
   await page.locator('#local-auth-connection').waitFor();
-  await page.locator('#drawer .drawer-header [data-action=drawer-close]').click();
+  await page.locator('#self-nickname').fill('隔离的未保存昵称');
+  await page.locator('#drawer > #local-auth-connection button').waitFor();
   await page.evaluate(() => window.IDLocalAuth.refresh().catch(() => {}));
   assert(await page.locator('#profile-button').isVisible(), '503 must preserve current page and login');
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await page.locator('#local-auth-connection').waitFor();
+  // A new confirmation must inherit the retry control; closing it restores the drawer host.
+  await page.locator('[data-device-id]').click();
+  await page.locator('#confirm-dialog > #local-auth-connection button').waitFor();
+  await page.locator('#local-auth-connection button').press('Enter');
+  await page.waitForFunction(() => !document.querySelector('#local-auth-connection button').disabled);
+  await page.locator('[data-action=confirm-cancel]').click();
+  await page.locator('#drawer > #local-auth-connection button').waitFor();
+  assert.equal(await page.locator('#self-nickname').inputValue(), '隔离的未保存昵称');
   fail = false;
   await page.locator('#local-auth-connection button').click();
   await page.locator('#local-auth-connection').waitFor({ state: 'detached' });
+  assert(await page.locator('#drawer').evaluate(node => node.open));
+  assert.equal(await page.locator('#self-nickname').inputValue(), '隔离的未保存昵称');
   expired = true; signedIn = false;
   await page.evaluate(() => window.IDLocalAuth.refresh());
   await page.locator('#local-auth-gate').waitFor();
