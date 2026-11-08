@@ -78,6 +78,36 @@ describe('new-system full snapshot coverage', () => {
       '缺少表：future_feature'
     );
   });
+  it('includes a newly declared encrypted column and refuses a backup receipt omitting it', () => {
+    const { models, snapshot } = fixture();
+    const changed = models.map((model, index) =>
+      index === 0
+        ? {
+            ...model,
+            fields: [
+              ...model.fields,
+              {
+                name: 'futureSecretEncrypted',
+                dbName: 'future_secret_encrypted',
+                kind: 'scalar',
+                type: 'String',
+                isRequired: false,
+                isList: false
+              }
+            ]
+          }
+        : model
+    );
+    const catalog = buildNewSystemBackupCatalog(changed, 'b'.repeat(64));
+    snapshot.schemaSha256 = catalog.schemaSha256;
+    snapshot.catalogSha256 = catalog.catalogSha256;
+    const table = snapshot.tables.find((table) => table.name === models[0]!.dbName)!;
+    expect(checkNewSystemSnapshotCoverage(catalog, snapshot).issues).toContain(
+      `缺少字段：${table.name}.future_secret_encrypted`
+    );
+    table.columns.push('future_secret_encrypted');
+    expect(checkNewSystemSnapshotCoverage(catalog, snapshot).coverageMatches).toBe(true);
+  });
   it('rejects missing fields, including encrypted values, and extra/duplicate tables', () => {
     const { catalog, snapshot } = fixture();
     snapshot.tables[0]!.columns = ['id'];

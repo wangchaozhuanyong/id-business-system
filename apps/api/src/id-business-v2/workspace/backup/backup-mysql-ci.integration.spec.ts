@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { PassThrough, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ConfigService } from '@nestjs/config';
 import { FieldEncryptionService } from '../../../common/crypto/field-encryption.service';
@@ -43,16 +44,24 @@ function launch(kind: 'SOURCE' | 'RESTORE'): MysqlBackupLauncher {
     return child;
   };
 }
+/** Preserve only structured failure codes; arbitrary SQL/stderr never leaves memory. */
+function captureFailure(stream: NodeJS.ReadableStream, prefix: string) {
+  let tail = '',
+    safe = prefix;
+  stream.on('data', (bytes: Buffer) => {
+    tail = (tail + bytes.toString('utf8')).slice(-8192);
+    const mysql = /ERROR (\d{3,5}) \(([A-Z0-9]{5})\)(?: at line (\d+))?/.exec(tail);
+    const prisma = /\bP(\d{4})\b/.exec(tail);
+    if (mysql) safe = `${prefix}_MYSQL_${mysql[1]}_${mysql[2]}_LINE_${mysql[3] ?? 0}`;
+    else if (prisma) safe = `${prefix}_PRISMA_P${prisma[1]}`;
+  });
+  return () => safe;
+}
 async function command(command: string, args: string[], input?: string) {
   const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   let size = 0;
   const parts: Buffer[] = [];
-  let diagnostic = '';
-  child.stderr.on('data', (chunk: Buffer) => {
-    // Only codes and line numbers may leave this bounded in-memory stderr prefix.
-    if (diagnostic.length < 4096)
-      diagnostic += chunk.toString('utf8').slice(0, 4096 - diagnostic.length);
-  });
+  const failure = captureFailure(child.stderr, 'CI_COMMAND_FAILED');
   child.stdin.on('error', () => undefined);
   child.stdin.end(input);
   const completed = new Promise<boolean>((resolve) => {
@@ -67,17 +76,7 @@ async function command(command: string, args: string[], input?: string) {
     }
     parts.push(chunk);
   }
-  if (!(await completed)) {
-    const mysql = /ERROR (\d{3,5}) \(([A-Z0-9]{5})\)(?: at line (\d+))?/.exec(diagnostic);
-    const prisma = /\bP(\d{4})\b/.exec(diagnostic);
-    throw new Error(
-      mysql
-        ? `CI_COMMAND_FAILED_MYSQL_${mysql[1]}_${mysql[2]}_LINE_${mysql[3] ?? 0}`
-        : prisma
-          ? `CI_COMMAND_FAILED_PRISMA_P${prisma[1]}`
-          : 'CI_COMMAND_FAILED'
-    );
-  }
+  if (!(await completed)) throw new Error(failure());
   return Buffer.concat(parts).toString('utf8').trim();
 }
 async function sql(kind: 'SOURCE' | 'RESTORE', statement: string) {
@@ -100,16 +99,28 @@ async function sql(kind: 'SOURCE' | 'RESTORE', statement: string) {
     statement
   );
 }
-async function restore(path: string) {
-  const child = launch('RESTORE')('mysql', ['--default-character-set=utf8mb4', database]);
-  child.stderr.resume();
+async function importSql(child: ChildProcessWithoutNullStreams, input: Readable) {
+  const failure = captureFailure(child.stderr, 'CI_RESTORE_FAILED');
   child.stdout.resume();
   const complete = new Promise<boolean>((resolve) => {
     child.once('error', () => resolve(false));
     child.once('close', (code) => resolve(code === 0));
   });
-  await pipeline(createReadStream(path), child.stdin);
-  if (!(await complete)) throw new Error('CI_RESTORE_FAILED');
+  let transferFailed = false;
+  try {
+    await pipeline(input, child.stdin);
+  } catch {
+    transferFailed = true;
+    child.stdin.destroy();
+  }
+  if (!(await complete)) throw new Error(failure());
+  if (transferFailed) throw new Error('CI_RESTORE_INPUT_FAILED');
+}
+async function restore(path: string) {
+  return importSql(
+    launch('RESTORE')('mysql', ['--default-character-set=utf8mb4', database]),
+    createReadStream(path)
+  );
 }
 function quoted(value: string) {
   return `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`;
@@ -140,6 +151,32 @@ function rowReceipts(output: string, names: string[]) {
 }
 
 describe('bounded recovery comparison receipts', () => {
+  it('preserves a client SQL error when early exit breaks the input pipe', async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('ERROR 1452 (23000) at line 42: synthetic-sensitive-value\\n');process.exit(1)"
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    await expect(importSql(child, Readable.from([Buffer.alloc(2 * 1024 * 1024)]))).rejects.toThrow(
+      'CI_RESTORE_FAILED_MYSQL_1452_23000_LINE_42'
+    );
+  });
+  it('retains split error codes after many warnings without exposing raw stderr', () => {
+    const stderr = new PassThrough(),
+      failure = captureFailure(stderr, 'CI_RESTORE_FAILED');
+    stderr.write('synthetic-sensitive-value\n'.repeat(2000));
+    stderr.write('ERROR 1452 (230');
+    stderr.write('00) at line 42: synthetic-sensitive-value\n');
+    expect(failure()).toBe('CI_RESTORE_FAILED_MYSQL_1452_23000_LINE_42');
+    stderr.end();
+    const unknown = new PassThrough(),
+      fallback = captureFailure(unknown, 'CI_RESTORE_FAILED');
+    unknown.end('synthetic-sensitive-value');
+    expect(fallback()).toBe('CI_RESTORE_FAILED');
+  });
   it('compares unordered rows while retaining empty tables and duplicate counts', () => {
     const a = 'a'.repeat(64),
       b = 'b'.repeat(64),
@@ -281,6 +318,13 @@ suite('new system native MySQL isolated recovery', () => {
         `CREATE DATABASE id_backup_test_other; CREATE TABLE id_backup_test_other.sentinel(id INT PRIMARY KEY);`
       );
       checks.push('four modules seeded with valid relations and encrypted synthetic fields');
+      report.stage = 'added-column-fixture';
+      // CI-only DDL: prove native export follows the actual DB, beyond the compiled ORM metadata.
+      await sql(
+        'SOURCE',
+        `ALTER TABLE id_business_v2_customers ADD COLUMN ci_schema_added_note VARCHAR(128) NULL;
+        UPDATE id_business_v2_customers SET ci_schema_added_note='新增字段完整备份' WHERE id='${customer}';`
+      );
       report.stage = 'source-baseline';
       const baseline = await snapshot('SOURCE');
       expect(baseline.tables).toBe(117); // 116 application models + actual _prisma_migrations.
@@ -307,6 +351,7 @@ suite('new system native MySQL isolated recovery', () => {
         'SOURCE',
         `START TRANSACTION;
         UPDATE id_business_v2_customers SET name='增量客户一🙂',updated_at=NOW(6) WHERE id='${customer}';
+        UPDATE id_business_v2_customers SET ci_schema_added_note='新增字段增量修改' WHERE id='${customer}';
         UPDATE id_business_v2_google_mailboxes SET password_encrypted=${enc('changed-password')},version=2 WHERE id='ci_mail';
         INSERT INTO id_backup_test_other.sentinel VALUES(1);
         COMMIT;`
@@ -374,12 +419,21 @@ suite('new system native MySQL isolated recovery', () => {
         expect((await readFile(output, 'utf8')).includes('id_backup_test_other')).toBe(false);
         await restore(output);
         expect(await snapshot('RESTORE')).toEqual(expected);
+        expect(
+          await sql(
+            'RESTORE',
+            `SELECT ci_schema_added_note FROM id_business_v2_customers WHERE id='${customer}'`
+          )
+        ).toBe(identity.kind === 'full' ? '新增字段完整备份' : '新增字段增量修改');
         await rm(output);
       }
       checks.push(
         'full snapshot excludes concurrent later writes; both transaction segments replay exactly across log rotation'
       );
       checks.push('row-format database filter excludes another synthetic project database');
+      checks.push(
+        'a newly added physical column and its later changes restore without an ORM field mapping'
+      );
       checks.push(
         'all tables columns rows indexes constraints triggers routines events and migration records match after each restore step'
       );
