@@ -73,7 +73,9 @@ describe('native MySQL encrypted backup source', () => {
           ? 'synthetic-binlog'
           : args.some((arg) => arg.includes('server_uuid'))
             ? server
-            : 'backup-bin.000001\t500\tNo\nbackup-bin.000002\t400\tNo'
+            : args.some((arg) => arg.includes('log_bin_basename'))
+              ? '/var/lib/mysql/backup-bin'
+              : 'backup-bin.000001\t500\tNo\nbackup-bin.000002\t400\tNo'
       )
     );
     const source = new MysqlNativeBackupSource(launch);
@@ -90,9 +92,12 @@ describe('native MySQL encrypted backup source', () => {
         '--stop-position=300',
         '--database=id_backup_test_fixture',
         '--require-row-format',
-        'backup-bin.000001',
-        'backup-bin.000002'
+        '/var/lib/mysql/backup-bin.000001',
+        '/var/lib/mysql/backup-bin.000002'
       ])
+    );
+    expect(launch.mock.calls.find(([tool]) => tool === 'mysqlbinlog')![1]).not.toContain(
+      '--read-from-remote-server'
     );
     await expect(
       source.incremental(
@@ -116,5 +121,31 @@ describe('native MySQL encrypted backup source', () => {
     await expect(new MysqlNativeBackupSource(launch, 100).serverUuid()).rejects.toThrow(
       'BACKUP_MYSQL_TOOL_FAILED'
     );
+  });
+  it('refuses a nonlocal or mismatching binary-log path before reading files', async () => {
+    for (const path of [
+      '../backup-bin',
+      '/var/lib/mysql/../backup-bin',
+      '/var/lib/mysql/another-bin'
+    ]) {
+      const launch = launcher((_tool, args) =>
+        print(
+          args.some((arg) => arg.includes('server_uuid'))
+            ? server
+            : args.some((arg) => arg.includes('log_bin_basename'))
+              ? path
+              : 'backup-bin.000001\t500\tNo'
+        )
+      );
+      await expect(
+        new MysqlNativeBackupSource(launch).incremental(
+          { file: 'backup-bin.000001', position: 157 },
+          { file: 'backup-bin.000001', position: 300 },
+          server,
+          'id_backup_test_fixture'
+        )
+      ).rejects.toThrow('BACKUP_MYSQL_LOG_PATH_INVALID');
+      expect(launch.mock.calls.some(([tool]) => tool === 'mysqlbinlog')).toBe(false);
+    }
   });
 });

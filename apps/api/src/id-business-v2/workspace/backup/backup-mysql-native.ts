@@ -1,9 +1,10 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { Readable } from 'node:stream';
+import { posix } from 'node:path';
 import { BackupError, UUID } from './backup-types';
 
 export type MysqlBackupTool = 'mysql' | 'mysqldump' | 'mysqlbinlog';
-/** Credentials belong to the launcher's protected defaults/environment, never argv or logs. */
+/** All tools execute in the source DB host/container context. Credentials never enter argv/logs. */
 export type MysqlBackupLauncher = (
   tool: MysqlBackupTool,
   args: readonly string[]
@@ -207,15 +208,23 @@ export class MysqlNativeBackupSource {
       })
     )
       throw new BackupError('BACKUP_MYSQL_LOG_GAP');
+    const basename = await this.query('SELECT @@global.log_bin_basename');
+    if (
+      !/^\/[A-Za-z0-9_./-]{1,4095}$/.test(basename) ||
+      basename.split('/').includes('..') ||
+      posix.basename(basename) !== reference[1]
+    )
+      throw new BackupError('BACKUP_MYSQL_LOG_PATH_INVALID');
+    // Read original events on the DB host. Remote dumps can synthesize format events,
+    // which are incompatible with strict row-format validation in MySQL 8.4 clients.
     return this.output('mysqlbinlog', [
-      '--read-from-remote-server',
       '--verify-binlog-checksum',
       '--require-row-format',
       '--skip-gtids',
       `--database=${database}`,
       `--start-position=${start.position}`,
       `--stop-position=${end.position}`,
-      ...selected.map((log) => log.file)
+      ...selected.map((log) => posix.join(posix.dirname(basename), log.file))
     ]);
   }
 }
