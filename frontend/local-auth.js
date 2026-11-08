@@ -40,8 +40,12 @@
     window.location.reload();
   }
 
-  function lock() {
-    if (state.status === 'signed-in') reload();
+  function lock(reason = 'invalid') {
+    if (state.status !== 'signed-in' || reloading) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('auth_reason', ['expired', 'revoked', 'logout'].includes(reason) ? reason : 'invalid');
+    window.history.replaceState(null, '', url);
+    reload();
   }
 
   async function request(path, method = 'GET', body) {
@@ -55,7 +59,7 @@
     });
     const result = await response.json().catch(() => null);
     if (!response.ok || result === null) {
-      if (response.status === 401) lock();
+      if (response.status === 401 && path !== 'login') lock(result?.reason);
       const error = new Error(result?.error || '本机账户服务暂不可用，请重试。');
       error.status = response.status;
       throw error;
@@ -69,8 +73,10 @@
       result.configured !== required ||
       result.actor?.id !== state.actor?.id ||
       result.actor?.role !== state.actor?.role
-    )
-      reload();
+    ) {
+      if (!result.actor && state.status === 'signed-in') lock(result.reason);
+      else reload();
+    }
     else if (result.actor && (result.actor.name !== actor.name || result.actor.nicknameSet !== actor.nicknameSet))
       acceptActorLabel(result.actor);
     return state;
@@ -90,7 +96,7 @@
 
   async function logout() {
     await request('logout', 'POST', {});
-    reload();
+    lock('logout');
   }
 
   function showLogin() {
@@ -113,13 +119,22 @@
           ${setup ? `<p id="local-auth-password-hint">请输入至少 12 个字符。</p>
           <label for="local-auth-confirmation">确认密码</label>
           <input id="local-auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required maxlength="256" />` : ''}
+          <label class="local-auth-remember" for="local-auth-remember"><input id="local-auth-remember" name="remember" type="checkbox" />在此设备保持登录</label>
+          <p class="local-auth-reason" role="status" hidden></p>
           <p class="local-auth-error" role="alert" hidden></p>
           <button type="submit" class="button primary">${submitLabel}</button>
         </form>
-        <p class="local-auth-footnote">当前为独立本机版</p>
+        <p class="local-auth-footnote">仅在自己的设备上选择保持登录。</p>
       </section>`;
     document.body.append(gate);
     window.IDTitleHelp.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
+    const help = document.createElement('span');
+    help.textContent = '保持登录后，实际操作时自动续期；闲置30天或首次登录满90天需重新登录。未勾选时登录有效期为8小时。更新网站不会主动退出。';
+    window.IDTitleHelp.attach($('.local-auth-remember', gate), help);
+    const reasons = { expired: '登录已到期，请重新登录。', revoked: '账号密码、权限或启用状态已变化，请重新登录。',
+      invalid: '登录已失效或已在其他设备退出，请重新登录。', logout: '已安全退出登录。' };
+    const reason = reasons[new URL(window.location.href).searchParams.get('auth_reason')];
+    if (reason) { $('.local-auth-reason', gate).textContent = reason; $('.local-auth-reason', gate).hidden = false; }
 
     const form = $('form', gate);
     const submit = $('button[type="submit"]', form);
@@ -143,9 +158,13 @@
         }
         const result = await request('login', 'POST', {
           email: email.value.trim(),
-          password: password.value
+          password: password.value,
+          remember: $('#local-auth-remember', form).checked
         });
         if (!result.actor?.id) throw new Error('登录未完成，请重试。');
+        const url = new URL(window.location.href);
+        url.searchParams.delete('auth_reason');
+        window.history.replaceState(null, '', url);
         reload();
       } catch (error) {
         if (configured || (setup && error.status === 409 && error.message.includes('请直接登录'))) reload();
@@ -173,10 +192,41 @@
     const nickname = actor.nicknameSet ? '' : `<form id="local-auth-nickname" class="form-section">${api.field('设置昵称', 'self-nickname', api.input('self-nickname', '', 'required maxlength="80" autocomplete="off"'), true, '首次保存后由管理员修改。')}<div class="form-footer"><button type="submit" class="button primary">保存昵称</button></div></form>`;
     api.openDrawer(
       '当前登录账户',
-      '',
-      `<div class="property-list"><div class="property-row"><span>昵称</span><strong>${api.esc(actor.name)}</strong></div><div class="property-row"><span>登录邮箱</span><strong>${api.esc(actor.email)}</strong></div><div class="property-row"><span>角色</span><strong>${roles[actor.role]}</strong></div></div>${nickname}`,
+      '登录设备只显示本账号的会话。保持登录会在实际操作时续期，闲置30天或登录满90天需重新登录；退出某个设备会立即撤销该设备的访问权限。',
+      `<div class="property-list"><div class="property-row"><span>昵称</span><strong>${api.esc(actor.name)}</strong></div><div class="property-row"><span>登录邮箱</span><strong>${api.esc(actor.email)}</strong></div><div class="property-row"><span>角色</span><strong>${roles[actor.role]}</strong></div></div>${nickname}<section class="local-auth-devices" aria-labelledby="local-auth-devices-title"><div class="section-heading"><h3 id="local-auth-devices-title">登录设备</h3><button type="button" class="button" id="local-auth-devices-refresh">刷新</button></div><div id="local-auth-device-list" aria-live="polite"></div></section>`,
       `${api.button('关闭', 'drawer-close')}<button type="button" id="local-auth-sign-out" class="button danger">退出登录</button>`
     );
+    const deviceList = $('#local-auth-device-list');
+    const deviceRefresh = $('#local-auth-devices-refresh');
+    async function loadDevices() {
+      if (deviceRefresh.disabled) return;
+      deviceRefresh.disabled = true;
+      deviceList.setAttribute('aria-busy', 'true');
+      if (!deviceList.children.length) deviceList.textContent = '正在读取登录设备…';
+      try {
+        const { items } = await request('devices');
+        if (!deviceList.isConnected) return;
+        const date = value => new Date(value).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
+        deviceList.innerHTML = items.map(row => `<article class="local-auth-device"><div><strong>${api.esc(row.device)}${row.current ? '（当前设备）' : ''}</strong><p>${row.remembered ? '保持登录' : '普通登录'} · 最近使用 ${api.esc(date(row.lastUsedAt))}</p><p>有效至 ${api.esc(date(row.expiresAt))}</p></div><button type="button" class="button danger" data-device-id="${api.esc(row.id)}">退出此设备</button></article>`).join('') || '<p>暂无其他登录设备。</p>';
+        for (const button of deviceList.querySelectorAll('[data-device-id]')) button.addEventListener('click', () => {
+          api.confirmAction('退出登录设备', '该设备将立即失去访问权限，需要重新登录才能继续使用。', async () => {
+            await api.withActionFeedback(button, async () => {
+              const result = await request('devices/' + button.dataset.deviceId, 'DELETE');
+              if (result.current) lock('logout');
+              else await loadDevices();
+              return true;
+            }, { pending: '正在退出设备…', success: '已退出该登录设备', failure: '退出未完成，请重试' });
+          }, '退出此设备');
+        });
+      } catch (error) {
+        if (deviceList.isConnected) deviceList.textContent = error.message || '登录设备读取失败，请点击刷新重试。';
+      } finally {
+        deviceRefresh.disabled = false;
+        deviceList.removeAttribute('aria-busy');
+      }
+    }
+    deviceRefresh.addEventListener('click', () => void loadDevices());
+    void loadDevices();
     $('#local-auth-nickname')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -564,11 +614,50 @@
 
   if (state.status === 'signed-out' || state.status === 'setup') showLogin();
   if (state.status === 'signed-in') {
+    let activityPending = false, lastActivity = 0;
+    const watchedDocuments = new WeakSet();
+    function connectionStatus(failed) {
+      let banner = $('#local-auth-connection');
+      if (!failed) { banner?.remove(); return; }
+      if (banner || reloading) return;
+      banner = document.createElement('div');
+      banner.id = 'local-auth-connection';
+      banner.setAttribute('role', 'status');
+      banner.innerHTML = '<span>连接暂时中断，已保留当前页面，请稍后重试。</span><button type="button" class="button">重新连接</button>';
+      document.body.append(banner);
+      $('button', banner).addEventListener('click', async event => {
+        event.currentTarget.disabled = true;
+        try { await refresh(); connectionStatus(false); }
+        catch { if (banner.isConnected) $('button', banner).disabled = false; }
+      });
+    }
+    async function activity(event) {
+      // Timers, SSE/polling, synthetic events and a merely open tab never renew a session.
+      if (!event.isTrusted || document.hidden || activityPending || reloading || Date.now() - lastActivity < 120_000) return;
+      activityPending = true;
+      lastActivity = Date.now();
+      try { await request('activity', 'POST', {}); connectionStatus(false); }
+      catch { connectionStatus(true); lastActivity = Date.now() - 110_000; }
+      finally { activityPending = false; }
+    }
+    function watchDocument(target) {
+      if (!target || watchedDocuments.has(target)) return;
+      watchedDocuments.add(target);
+      target.addEventListener('pointerdown', activity, { passive: true, capture: true });
+      target.addEventListener('keydown', activity, { passive: true, capture: true });
+    }
+    watchDocument(document);
+    document.addEventListener('load', event => {
+      if (event.target.tagName !== 'IFRAME') return;
+      try { watchDocument(event.target.contentDocument); } catch { /* Cross-origin frames are not inspected. */ }
+    }, true);
+    const checkConnection = () => void refresh().then(() => connectionStatus(false), () => connectionStatus(true));
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) void refresh().catch(() => {});
+      if (!document.hidden) checkConnection();
     });
+    window.addEventListener('online', checkConnection);
     window.addEventListener('pageshow', (event) => {
-      if (event.persisted) void refresh().catch(() => {});
+      if (event.persisted) checkConnection();
     });
   }
 })();
