@@ -256,6 +256,7 @@
     savedTotp: () => request('saved-totp'),
     saveTotp: (data) => write(['saved-totp'], () => request('saved-totp', data)),
     savedTotpCode: (id) => request('saved-totp/code', { id }, 'POST'),
+    savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
     websiteVisits: (filters) => request('tools/website-visits/search', filters, 'POST'),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
     websiteAnalytics: (days) => request('tools/website-analytics?days=' + days),

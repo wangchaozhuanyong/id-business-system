@@ -15,7 +15,7 @@ const origin = 'https://tool-layout.invalid';
 const browser = await chromium.launch({ headless: true });
 const results = [];
 try {
-  for (const width of [1440, 901, 900, 390])
+  for (const width of [1440, 1024, 901, 900, 768, 390])
     for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({
         viewport: { width, height: 900 },
@@ -27,6 +27,15 @@ try {
       let rows = 0,
         mailFailure = false;
       const mailRequests = [];
+      const publicTotpKey = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+      const totpAccounts = Array.from({ length: 9 }, (_, index) => ({
+        id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`,
+        name: `合成账号 ${index + 1}`, issuer: index === 1 ? 'RFC' : ''
+      }));
+      const secretReads = [];
+      let secretFailure = false, secretGate;
+      let allowTotpCreate = false, savedTotpVersion = 0;
+      const totpWrites = [];
       const mailItems = Array.from({ length: 6 }, (_, i) => ({
         subject: '合成邮件 ' + i,
         from: 'sender@example.test',
@@ -79,7 +88,30 @@ try {
                 downloadToken: 'synthetic-only'
               }))
             });
-          if (u.pathname === '/api/local/saved-totp') return respond({ version: 0, items: [] });
+          if (u.pathname === '/api/local/saved-totp') {
+            if (route.request().method() === 'PUT') {
+              const body = route.request().postDataJSON();
+              totpWrites.push(body);
+              if (body.action === 'create' && allowTotpCreate) {
+                totpAccounts.push({ id: '22222222-2222-4222-8222-222222222222', name: body.name, issuer: 'RFC' });
+                savedTotpVersion++;
+                return respond({ version: savedTotpVersion, items: totpAccounts });
+              }
+              return route.fulfill({ status: 422, json: { error: '合成保存失败，请重试' } });
+            }
+            return respond({ version: savedTotpVersion, items: totpAccounts });
+          }
+          if (u.pathname === '/api/local/saved-totp/code') return respond({ code: '123456', serverNow: Date.now(), expiresAt: Date.now() + 30_000 });
+          if (u.pathname === '/api/local/saved-totp/secret') {
+            assert.equal(route.request().method(), 'POST');
+            const body = route.request().postDataJSON();
+            secretReads.push(body);
+            const gate = secretGate;
+            secretGate = undefined;
+            if (gate) await gate;
+            if (secretFailure) return route.fulfill({ status: 503, json: { error: '合成密钥读取失败' } });
+            return respond({ ...body, secret: publicTotpKey });
+          }
           if (u.pathname === '/api/local/toolbox')
             return respond({ version: 0, data: { shortcuts: [], phrases: [] } });
           if (
@@ -148,7 +180,7 @@ try {
         // Exercise the retained tool action; the plugin page entry has its own browser suite.
     await page.evaluate(name => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name } }), name);
         if (name === '计算 2FA 验证码')
-          await drawer.getByText('暂无已保存账号', { exact: true }).waitFor();
+          await drawer.locator('[data-saved-totp-code] .ops-code').nth(7).waitFor();
         const label = name === '计算 2FA 验证码' ? 'totp' : name === '抖音解析' ? 'media' : 'mail';
         const box = await drawer.boundingBox();
         const overflow = await drawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
@@ -166,6 +198,47 @@ try {
             .locator('#ops-totp-result .ops-code')
             .filter({ hasText: /^\d{6}$/ })
             .waitFor();
+          // Public RFC 6238 key only. Spreadsheet cell quoting and blank rows
+          // must not turn one account into a batch or reach the Base32 decoder.
+          const key = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+          const paste = async (value, method) => {
+            await page.evaluate(value => navigator.clipboard.writeText(value), value);
+            if (method === 'button') {
+              await drawer.locator('[data-action="ops-tool-paste"]').click();
+            } else {
+              await drawer.locator('#ops-totp-secret').press('ControlOrMeta+V');
+            }
+          };
+          for (const method of ['button', 'native']) {
+            for (const value of [
+              `"${key}"`,
+              `"${key}\n"`,
+              `\r\n"\r\n${key}\r\n"\r\n`,
+              `\r\n \r\n${key.toLowerCase().match(/.{4}/g).join(' ')}\r\n \t\r\n`,
+              `"fixture|fixture-password|${key}|fixture@example.test\n"`,
+              `"otpauth://totp/RFC:test?secret=${key}&digits=8\r\n"`
+            ]) {
+              await drawer.locator('#ops-totp-secret').fill(' ');
+              await paste(value, method);
+              await drawer.locator('#ops-totp-result .ops-code').filter({ hasText: /^\d{6,8}$/ }).waitFor();
+              assert.equal(await drawer.locator('#ops-totp-form').getAttribute('data-mode'), 'single');
+              assert.equal(await drawer.locator('#ops-totp-result [data-totp-account]').count(), 1);
+              assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), value.trim().replace(/^"|"$/g, '').trim());
+              assert.equal(await drawer.getByText('多条密钥请切换到批量查询。', { exact: true }).count(), 0);
+              await drawer.locator('#ops-totp-secret').press('Enter');
+              assert.equal(await drawer.locator('#ops-totp-result [data-totp-account]').count(), 1);
+            }
+            if (method === 'native') await page.screenshot({ path: path.join(output, `spreadsheet-totp-${width}-${theme}.png`) });
+            await paste(`\n${key}\n \n${key}\ninvalid!\n`, method);
+            await drawer.getByText('多条密钥请切换到批量查询。', { exact: true }).waitFor();
+            assert.equal(await drawer.locator('#ops-totp-form').getAttribute('data-mode'), 'single');
+            await paste('invalid!', method);
+            await drawer.getByText('第 1 行：请输入有效的 Base32 密钥', { exact: true }).waitFor();
+            assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), 'invalid!');
+          }
+          await paste('A'.repeat(20_001), 'native');
+          await drawer.getByText('剪贴板内容超过输入上限。', { exact: true }).waitFor();
+          assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), 'invalid!');
           await drawer.getByRole('button', { name: '批量查询', exact: true }).click();
           await drawer
             .locator('#ops-totp-secret')
@@ -173,6 +246,94 @@ try {
           await drawer.locator('#ops-totp-form button[type="submit"]').click();
           await drawer.locator('#ops-totp-result [data-totp-account]').nth(1).waitFor();
           assert.equal(await drawer.locator('#ops-totp-result [data-totp-account]').count(), 2);
+          await drawer.getByRole('button', { name: '单个查询', exact: true }).click();
+          assert.equal(await drawer.locator('label[for="ops-totp-secret"]').innerText(), '密钥*');
+          assert.equal(await drawer.locator('#ops-totp-secret').getAttribute('type'), 'text');
+          assert.equal(await drawer.getByRole('button', { name: '显示密钥', exact: true }).count(), 0);
+          const saved = drawer.locator('#ops-saved-totp');
+          assert.equal(await saved.getByText('未填写签发方', { exact: true }).count(), 0);
+          assert.equal(await saved.locator('tbody tr').first().locator('.totp-account-name small').count(), 0);
+          assert.equal(await saved.locator('tbody tr').nth(1).locator('.totp-account-name small').innerText(), 'RFC');
+          assert.equal(secretReads.length, 0, 'Listing accounts must not reveal secrets');
+          await saved.locator('[data-action="ops-saved-totp-edit"]').first().click();
+          const secretField = saved.locator('#ops-totp-save-secret');
+          await page.waitForFunction(key => document.querySelector('#ops-totp-save-secret')?.value === key, publicTotpKey);
+          assert.equal(await secretField.getAttribute('type'), 'text');
+          assert.equal(secretReads[0].id, totpAccounts[0].id);
+          assert.equal(await page.evaluate(() => JSON.stringify([...window.IDDesignAPI.state.drafts.values()]).includes('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ')), false);
+          const labelGeometry = await drawer.locator('label[for="ops-totp-secret"],label[for="ops-totp-save-secret"]').evaluateAll(labels => labels.map(label => {
+            const range = document.createRange(); range.selectNodeContents(label);
+            const box = range.getBoundingClientRect(), control = label.closest('.field').querySelector('.field-control').getBoundingClientRect();
+            return { height: box.height, left: box.left, right: box.right, controlLeft: control.left };
+          }));
+          assert(labelGeometry.every(box => box.height <= 20 && box.right <= box.controlLeft), '密钥标签应保持单行且在控件左侧');
+          await page.screenshot({ path: path.join(output, `saved-totp-edit-${width}-${theme}.png`) });
+          await saved.getByRole('button', { name: '保存账号', exact: true }).click();
+          await drawer.getByText('合成保存失败，请重试', { exact: true }).waitFor();
+          assert.equal(await secretField.inputValue(), publicTotpKey, 'Failed saves retain visible edits');
+          await saved.getByRole('button', { name: '取消', exact: true }).click();
+          secretFailure = true;
+          await saved.locator('[data-action="ops-saved-totp-edit"]').first().click();
+          await saved.getByText('合成密钥读取失败', { exact: true }).waitFor();
+          secretFailure = false;
+          await saved.getByRole('button', { name: '重试读取', exact: true }).click();
+          await page.waitForFunction(key => document.querySelector('#ops-totp-save-secret')?.value === key, publicTotpKey);
+          await saved.getByRole('button', { name: '取消', exact: true }).click();
+          let releaseSecret;
+          secretGate = new Promise(resolve => { releaseSecret = resolve; });
+          await saved.locator('[data-action="ops-saved-totp-edit"]').first().click();
+          await secretField.fill('JBSWY3DPEHPK3PXP');
+          releaseSecret();
+          await saved.getByRole('button', { name: '保存账号', exact: true }).waitFor({ state: 'visible' });
+          await page.waitForFunction(() => !document.querySelector('#ops-saved-totp-form [type="submit"]').disabled);
+          assert.equal(await secretField.inputValue(), 'JBSWY3DPEHPK3PXP', 'Late reads must not overwrite input');
+          await saved.getByRole('button', { name: '取消', exact: true }).click();
+          secretGate = new Promise(resolve => { releaseSecret = resolve; });
+          await saved.locator('[data-action="ops-saved-totp-edit"]').first().click();
+          await saved.locator('[data-action="ops-saved-totp-edit"]').nth(1).click();
+          await page.waitForFunction(key => document.querySelector('#ops-totp-save-secret')?.value === key, publicTotpKey);
+          const oldResponse = page.waitForResponse(response => response.url().endsWith('/saved-totp/secret') && response.request().postDataJSON().id === totpAccounts[0].id);
+          releaseSecret();
+          await oldResponse;
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          assert.equal(await saved.locator('#ops-totp-name').inputValue(), totpAccounts[1].name);
+          await saved.getByRole('button', { name: '取消', exact: true }).click();
+          await saved.getByRole('button', { name: '下一页', exact: true }).click();
+          await saved.locator('[data-saved-totp-code] .ops-code').waitFor();
+          assert.equal(await saved.locator('tbody tr').count(), 1);
+          await saved.locator('#ops-saved-totp-search').fill('不存在的合成账号');
+          await saved.getByText('没有匹配的账号', { exact: true }).waitFor();
+          await saved.locator('#ops-saved-totp-search').fill('');
+          await saved.locator('[data-saved-totp-code] .ops-code').nth(7).waitFor();
+          const saveUri = `otpauth://totp/RFC:saved?secret=${publicTotpKey}&issuer=RFC&algorithm=SHA256&digits=8&period=60`;
+          await paste(`"${saveUri}\n"`, 'button');
+          await drawer.locator('#ops-totp-result .ops-code').filter({ hasText: /^\d{8}$/ }).waitFor();
+          assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), saveUri);
+          const quickActions = drawer.locator('#ops-totp-result .action-links');
+          assert.deepEqual(await quickActions.locator('button').allTextContents(), ['复制', '新增账号']);
+          await saved.locator('#ops-saved-totp-search').fill('不会匹配新增账号的筛选');
+          await drawer.locator('[data-action="ops-totp-save"]').click();
+          assert.equal(await secretField.inputValue(), saveUri);
+          assert(await saved.locator('#ops-totp-name').evaluate(node => document.activeElement === node));
+          await saved.locator('#ops-totp-name').fill('从临时查询新增的账号');
+          let writeResponse = page.waitForResponse(response => response.url().endsWith('/saved-totp') && response.request().method() === 'PUT');
+          await saved.getByRole('button', { name: '保存账号', exact: true }).click();
+          await writeResponse;
+          assert.equal(await secretField.inputValue(), saveUri);
+          assert.equal(await saved.locator('#ops-totp-name').inputValue(), '从临时查询新增的账号');
+          allowTotpCreate = true;
+          writeResponse = page.waitForResponse(response => response.url().endsWith('/saved-totp') && response.request().method() === 'PUT');
+          await saved.getByRole('button', { name: '保存账号', exact: true }).click();
+          await writeResponse;
+          await saved.locator('tbody').getByText('从临时查询新增的账号', { exact: true }).waitFor();
+          assert.equal(await saved.locator('#ops-saved-totp-form').count(), 0);
+          assert.equal(await saved.locator('#ops-saved-totp-search').inputValue(), '');
+          assert.equal(await saved.locator('tbody tr').count(), 2, 'New account must be visible on the final page');
+          assert.equal(totpWrites.at(-1).secret, saveUri);
+          assert.equal(totpWrites.filter(body => body.action === 'create').length, 2, 'Only explicit submit/retry may save');
+          assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), saveUri);
+          assert(!await drawer.locator('#ops-totp-result').evaluate((node, key) => node.innerHTML.includes(key), publicTotpKey));
+          await page.screenshot({ path: path.join(output, `temporary-totp-saved-${width}-${theme}.png`) });
         }
         if (name === '抖音解析') {
           await drawer

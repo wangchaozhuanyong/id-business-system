@@ -45,7 +45,7 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
     assert(await drawer.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'Failed load must keep retry reachable');
     await drawer.getByRole('button', { name: '重试', exact: true }).click();
     await drawer.locator('#ops-totp-result .ops-code').filter({ hasText: /^\d{6}$/ }).waitFor();
-    assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), '');
+    assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), key);
     assert.equal(attempts.length, 2);
     assert.notEqual(attempts[0], attempts[1], 'Retry must bypass the document failed-import cache');
     await drawer.locator('#ops-totp-secret').fill(key.toLowerCase());

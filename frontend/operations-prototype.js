@@ -1747,6 +1747,7 @@
     return `<section class="form-section" id="ops-saved-totp" aria-label="已保存 2FA 账号"><div class="panel-heading"><div class="section-title-row"><h3>已保存账号</h3>${titleInfo('已保存账号', '密钥加密保存在服务器，同一账号换电脑仍可使用。支持搜索、分页、编辑、删除和复制当前验证码。', 'saved-totp-help')}</div>${button('新增账号', 'ops-saved-totp-add', 'primary', 'plus')}</div><form class="online-tool-search" id="ops-saved-totp-search-form" onsubmit="return false"><input type="search" id="ops-saved-totp-search" name="ops-saved-totp-search" aria-label="搜索已保存的 2FA 账号" placeholder="搜索账号名称或签发方"></form><div data-saved-totp-editor></div><div data-saved-totp-list role="status"></div></section>`;
   }
   const savedTotpSnapshots = new WeakMap();
+  const temporaryTotpAccounts = new WeakMap();
   const savedTotpPageSize = 8;
 
   function paintSavedTotp(panel, snapshot, requestedPage = getDraft('saved-totp-page').page || 1) {
@@ -1766,7 +1767,7 @@
       return;
     }
     list.innerHTML = `<div class="saved-totp-table">${table([
-      { id: 'name', label: '账号', render: row => `<div class="totp-account-name"><strong title="${esc(row.name)}">${esc(row.name)}</strong><small title="${esc(row.issuer || '')}">${esc(row.issuer || '未填写签发方')}</small></div>` },
+      { id: 'name', label: '账号', render: row => `<div class="totp-account-name"><strong title="${esc(row.name)}">${esc(row.name)}</strong>${row.issuer ? `<small title="${esc(row.issuer)}">${esc(row.issuer)}</small>` : ''}</div>` },
       { id: 'code', label: '验证码', render: row => `<div class="totp-inline-code" data-saved-totp-code data-id="${esc(row.id)}">正在获取验证码…</div>` },
       { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${button('复制', 'ops-totp-copy', 'primary', '', 'disabled aria-label="复制验证码"')}${button('编辑', 'ops-saved-totp-edit', '', '', `data-id="${esc(row.id)}" data-name="${esc(row.name)}"`)}${button('删除', 'ops-saved-totp-delete', '', '', `data-id="${esc(row.id)}" data-name="${esc(row.name)}"`)}</div>` }
     ], items.slice((page - 1) * savedTotpPageSize, page * savedTotpPageSize), '', '已保存验证器账号')}</div>${pages > 1 ? `<div class="toolbar"><span>共 ${items.length} 条 · 第 ${page} / ${pages} 页</span>${button('上一页', 'ops-saved-totp-page', '', '', `data-page="${page - 1}" ${page === 1 ? 'disabled' : ''}`)}${button('下一页', 'ops-saved-totp-page', '', '', `data-page="${page + 1}" ${page === pages ? 'disabled' : ''}`)}</div>` : ''}`;
@@ -1806,17 +1807,54 @@
       editor: true, id: node?.dataset.id || '', name: node?.dataset.name || ''
     });
     const editing = Boolean(node?.dataset.id);
+    const previousSecret = panel.querySelector('#ops-totp-save-secret');
+    if (previousSecret) previousSecret.value = '';
     panel.querySelector('[data-saved-totp-editor]').innerHTML = `<form id="ops-saved-totp-form" novalidate><input type="hidden" name="ops-totp-id" value="${esc(node?.dataset.id || '')}"><input type="hidden" name="ops-totp-version" value="${esc(panel.dataset.version)}">${grid(
       field('账号名称', 'ops-totp-name', input('ops-totp-name', node?.dataset.name || '', 'maxlength="80"'), true) +
-      field('验证器密钥', 'ops-totp-save-secret', '<input type="password" id="ops-totp-save-secret" name="ops-totp-save-secret" autocomplete="off" maxlength="2048" data-no-draft>', !editing, editing ? '留空沿用当前密钥。' : '密钥将加密保存在当前账号下。')
+      field('密钥', 'ops-totp-save-secret', `<div class="tool-input-row"><input type="text" id="ops-totp-save-secret" name="ops-totp-save-secret" autocomplete="off" spellcheck="false" maxlength="2048" data-no-draft>${button('重试读取', 'ops-saved-totp-secret-retry', '', '', 'hidden')}</div>`, !editing, '密钥加密保存在当前账号下，编辑时直接显示。')
     )}<div class="form-footer">${button('取消', 'ops-saved-totp-cancel')}<button type="submit" class="button primary">保存账号</button></div></form>`;
     bindToolDraft(panel.querySelector('#ops-saved-totp-form'), `saved-totp:${node?.dataset.id || 'new'}`);
     panel.querySelector('#ops-totp-name')?.focus();
+    if (editing) void loadSavedTotpSecret(panel.querySelector('#ops-saved-totp-form'));
+  }
+  async function loadSavedTotpSecret(form) {
+    if (!toolActive(form)) return;
+    const control = form.querySelector('#ops-totp-save-secret');
+    const submit = form.querySelector('[type="submit"]');
+    const retry = form.querySelector('[data-action="ops-saved-totp-secret-retry"]');
+    const request = String(Number(form.dataset.secretRequest || 0) + 1);
+    form.dataset.secretRequest = request;
+    let edited = false;
+    const markEdited = () => { edited = true; };
+    control.addEventListener('input', markEdited);
+    submit.disabled = true;
+    retry.hidden = true;
+    control.placeholder = '正在读取密钥…';
+    setError(control.id, '');
+    try {
+      const result = await localData.savedTotpSecret(form.elements['ops-totp-id'].value,
+        Number(form.elements['ops-totp-version'].value));
+      if (!toolActive(form) || form.dataset.secretRequest !== request) return;
+      if (typeof result.secret !== 'string') throw new Error('密钥读取失败，请重试。');
+      if (!edited) control.value = result.secret;
+    } catch (error) {
+      if (toolActive(form) && form.dataset.secretRequest === request) {
+        setError(control.id, error.message || '密钥读取失败，请重试。');
+        retry.hidden = false;
+      }
+    } finally {
+      control.removeEventListener('input', markEdited);
+      if (form.dataset.secretRequest === request) {
+        control.placeholder = '请输入密钥';
+        submit.disabled = false;
+      }
+    }
   }
   async function saveSavedTotp(panel, data, submission) {
     try {
       const snapshot = await localData.saveTotp(data);
-      const unchanged = finishToolSubmission(submission, 'ops-totp-version', snapshot.version);
+      const secretUnchanged = !submission || submission.form.querySelector('#ops-totp-save-secret')?.value === data.secret;
+      const unchanged = finishToolSubmission(submission, 'ops-totp-version', snapshot.version) && secretUnchanged;
       if (submission && !state.drafts.has(submission.key)) {
         const view = getDraft('saved-totp-view');
         if (draftKey(`saved-totp:${view.id || 'new'}`) === submission.key)
@@ -1824,7 +1862,13 @@
       }
       if (!panel.isConnected) return;
       if (unchanged) panel.querySelector('[data-saved-totp-editor]').replaceChildren();
-      paintSavedTotp(panel, snapshot);
+      if (data.action === 'create' && submission?.form.dataset.temporaryTotp === 'true' && unchanged) {
+        const search = panel.querySelector('#ops-saved-totp-search');
+        search.value = '';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        paintSavedTotp(panel, snapshot, Math.ceil(snapshot.items.length / savedTotpPageSize));
+        panel.querySelector('[data-saved-totp-list]').scrollIntoView({ block: 'nearest' });
+      } else paintSavedTotp(panel, snapshot);
       notify('已保存 2FA 账号变更');
     } catch (error) {
       if (panel.isConnected) notify(error.message);
@@ -1890,7 +1934,7 @@
           field(
             '密钥',
             'ops-totp-secret',
-            `<div class="totp-input-actions"><input id="ops-totp-secret" name="ops-totp-secret" type="password" maxlength="20000" placeholder="粘贴 Base32 密钥或 otpauth 链接" autocomplete="off" spellcheck="false" data-no-draft><div class="totp-input-controls"><span data-totp-lines hidden>0 / 50 行</span>${button('显示密钥', 'ops-totp-visibility', '', '', 'aria-pressed="false"')}${button('一键粘贴', 'ops-tool-paste', '', 'copy', 'data-field="ops-totp-secret"')}${button('重试', 'ops-totp-retry', '', 'refresh', 'hidden')}</div></div>`,
+            `<div class="totp-input-actions"><input id="ops-totp-secret" name="ops-totp-secret" type="text" maxlength="20000" placeholder="粘贴 Base32 密钥或 otpauth 链接" autocomplete="off" spellcheck="false" data-no-draft><div class="totp-input-controls"><span data-totp-lines hidden>0 / 50 行</span>${button('一键粘贴', 'ops-tool-paste', '', 'copy', 'data-field="ops-totp-secret"')}${button('重试', 'ops-totp-retry', '', 'refresh', 'hidden')}</div></div>`,
             true,
             '<span data-totp-input-help>粘贴后自动生成。密钥仅在本机计算。</span>'
           )
@@ -1905,6 +1949,7 @@
     if (getDraft('totp-mode').mode === 'batch') selectTotpMode(form, 'batch');
     form.addEventListener('input', (event) => {
       if (event.target.id !== 'ops-totp-secret') return;
+      temporaryTotpAccounts.delete(form);
       form.querySelector('#ops-totp-result').replaceChildren();
       form.querySelector('[data-totp-lines]').textContent =
         `${event.target.value.split(/\r?\n/).filter((line) => line.trim()).length} / 50 行`;
@@ -1922,16 +1967,7 @@
       const value = event.clipboardData?.getData('text');
       if (!value) return;
       event.preventDefault();
-      if (/\r?\n/.test(value.trim())) {
-        setError('ops-totp-secret', '多条密钥请切换到批量查询。');
-        return;
-      }
-      if (value.trim().length > event.target.maxLength) {
-        setError('ops-totp-secret', '剪贴板内容超过输入上限。');
-        return;
-      }
-      event.target.value = value.trim();
-      form.requestSubmit();
+      applyTotpPaste(form, value);
     });
     const saved = $('#ops-saved-totp');
     bindToolDraft($('#ops-saved-totp-search-form'), 'saved-totp-search');
@@ -1946,6 +1982,7 @@
       drawer.removeEventListener('close', clearSensitiveFields);
       if (timer) window.clearInterval(timer);
       form.querySelector('#ops-totp-secret').value = '';
+      temporaryTotpAccounts.delete(form);
       form.querySelector('#ops-totp-result').replaceChildren();
       const savedSecret = saved?.querySelector('#ops-totp-save-secret');
       if (savedSecret) savedSecret.value = '';
@@ -1953,6 +1990,29 @@
       saved?.querySelectorAll('[data-action="ops-totp-copy"]').forEach(button => { button.disabled = true; delete button.dataset.code; delete button.dataset.expiresAt; });
     };
     drawer.addEventListener('close', clearSensitiveFields);
+  }
+  function applyTotpPaste(form, value) {
+    const previous = form.querySelector('#ops-totp-secret');
+    if (!toolActive(form) || previous.disabled || !value.trim()) return;
+    if (value.length > previous.maxLength) {
+      setError(previous.id, '剪贴板内容超过输入上限。');
+      return;
+    }
+    // Spreadsheets wrap cells containing newlines in quotes and escape a quote
+    // inside the cell as two quotes. Unwrap the cell before counting accounts.
+    let text = value.trim();
+    if (text.startsWith('"') && text.endsWith('"')) text = text.slice(1, -1).replaceAll('""', '"');
+    const lines = text.split(/\r\n?|\n/).map(line => line.trim()).filter(Boolean);
+    const autoQuery = form.dataset.mode !== 'batch';
+    if (autoQuery && lines.length > 1) {
+      setError(previous.id, '多条密钥请切换到批量查询。');
+      return;
+    }
+    const control = form.querySelector('#ops-totp-secret');
+    control.value = lines.join('\n');
+    control.dispatchEvent(new Event('input', { bubbles: true }));
+    control.focus();
+    if (autoQuery) form.requestSubmit();
   }
   function selectTotpMode(form, mode) {
     const batch = mode === 'batch';
@@ -1969,12 +2029,12 @@
     if (batch) {
       control.rows = 7;
       control.placeholder = '每行一个密钥、otpauth 链接，或 账号|密码|2FA|邮箱';
-      control.classList.toggle('tool-secret-masked', CSS.supports('-webkit-text-security', 'disc'));
     } else {
-      control.type = 'password';
+      control.type = 'text';
       control.placeholder = '粘贴 Base32 密钥或 otpauth 链接';
     }
     previous.value = '';
+    temporaryTotpAccounts.delete(form);
     previous.replaceWith(control);
     form.dataset.mode = mode;
     const lines = form.querySelector('[data-totp-lines]');
@@ -1982,11 +2042,6 @@
     lines.textContent = '0 / 50 行';
     form.querySelector('[data-totp-input-help]').textContent = batch
       ? '每行一个密钥，无效行会单独提示。' : '粘贴后自动生成。密钥仅在本机计算。';
-    form.querySelector('label[for="ops-totp-secret"]').firstChild.textContent = batch ? '批量密钥' : '2FA 密钥';
-    const toggle = form.querySelector('[data-action="ops-totp-visibility"]');
-    toggle.hidden = batch && !control.classList.contains('tool-secret-masked');
-    toggle.textContent = '显示密钥';
-    toggle.setAttribute('aria-pressed', 'false');
     for (const button of form.querySelectorAll('[data-mode]')) {
       button.classList.toggle('active', button.dataset.mode === mode);
       button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
@@ -1997,6 +2052,24 @@
     control.focus();
   }
   let totpCalculatorModule, totpCalculatorAttempt = 0;
+  async function addTemporaryTotpAccount(node) {
+    const form = node.closest('#ops-totp-form');
+    const accounts = temporaryTotpAccounts.get(form);
+    const account = accounts?.[Number(node.dataset.index)];
+    const panel = $('#ops-saved-totp');
+    if (!account || !panel || !toolActive(form)) return;
+    if (panel.dataset.version === undefined) await loadSavedTotp(panel);
+    if (!toolActive(form) || temporaryTotpAccounts.get(form) !== accounts || panel.dataset.version === undefined) return;
+    editSavedTotp(panel);
+    const editor = panel.querySelector('#ops-saved-totp-form');
+    editor.dataset.temporaryTotp = 'true';
+    editor.querySelector('#ops-totp-save-secret').value = account.secretInput;
+    const name = editor.querySelector('#ops-totp-name');
+    if (!name.value && !/^第 \d+ 行$/.test(account.label)) name.value = account.label;
+    name.dispatchEvent(new Event('input', { bubbles: true }));
+    editor.scrollIntoView({ block: 'nearest' });
+    name.focus();
+  }
   function loadTotpCalculator() {
     if (!totpCalculatorModule) {
       // A failed dynamic import stays cached for its URL in this document.
@@ -2025,6 +2098,7 @@
       return;
     }
     output.replaceChildren();
+    temporaryTotpAccounts.delete(form);
     submit.disabled = true;
     control.disabled = true;
     try {
@@ -2032,12 +2106,12 @@
       const { accounts, errors } = await prepareTotpBatch(source);
       source = '';
       if (!toolActive(form)) return;
-      if (accounts.length) control.value = '';
+      temporaryTotpAccounts.set(form, accounts);
       output.innerHTML = (accounts.length ? table([
         { id: 'label', label: '账号／行号' },
         { id: 'code', label: '验证码', render: () => '<div class="totp-inline-code" data-totp-account><strong class="ops-code" aria-label="当前验证码">—</strong><span class="totp-countdown">剩余 <span data-totp-countdown>—</span> 秒</span></div>' },
-        { id: 'actions', label: '操作', action: true, render: () => button('复制', 'ops-totp-copy', 'primary', '', 'disabled aria-label="复制验证码"') }
-      ], accounts.map(({ label }, index) => ({ id: 'totp-' + index, label })), '', '本次验证码') : '') +
+        { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${button('复制', 'ops-totp-copy', 'primary', '', 'disabled aria-label="复制验证码"')}${localData.authRequired ? button('新增账号', 'ops-totp-save', '', '', `data-index="${row.index}"`) : ''}</div>` }
+      ], accounts.map(({ label }, index) => ({ id: 'totp-' + index, label, index })), '', '本次验证码') : '') +
         (errors.length ? `<div class="inline-notice warning">${errors.map(message => `<div>${esc(message)}</div>`).join('')}</div>` : '');
       const rows = [...output.querySelectorAll('[data-totp-account]')].map((reading) => ({
         code: reading.querySelector('.ops-code'),
@@ -3523,6 +3597,7 @@
       if (action === 'ops-saved-totp-edit') editSavedTotp(panel, node);
       if (action === 'ops-saved-totp-cancel') {
         preserveDraft();
+        panel.querySelector('#ops-totp-save-secret').value = '';
         panel.querySelector('[data-saved-totp-editor]').replaceChildren();
         state.drafts.delete(draftKey('saved-totp-view'));
       }
@@ -3530,6 +3605,7 @@
         () => loadSavedTotp(panel, { refresh: true }),
         { pending: '正在刷新账号列表…', success: '账号列表已刷新', failure: '账号读取失败，请重试' });
       if (action === 'ops-saved-totp-use') void showSavedTotpCode(node.closest('[data-saved-totp-code]'));
+      if (action === 'ops-saved-totp-secret-retry') void loadSavedTotpSecret(node.closest('form'));
       if (action === 'ops-saved-totp-page') {
         const snapshot = savedTotpSnapshots.get(panel);
         if (snapshot) paintSavedTotp(panel, snapshot, Number(node.dataset.page));
@@ -3558,11 +3634,11 @@
       }
       void (async () => {
         try {
-          const value = (await navigator.clipboard.readText()).trim();
+          const clipboardText = await navigator.clipboard.readText();
+          const value = clipboardText.trim();
           if (!field.isConnected || field.disabled || !value) return;
-          const singleTotp = field.id === 'ops-totp-secret' && form.dataset.mode !== 'batch';
-          if (singleTotp && /\r?\n/.test(value)) {
-            setError(field.id, '多条密钥请切换到批量查询。');
+          if (field.id === 'ops-totp-secret') {
+            applyTotpPaste(form, clipboardText);
             return;
           }
           if (value.length > field.maxLength) {
@@ -3572,7 +3648,6 @@
           field.value = value;
           field.dispatchEvent(new Event('input', { bubbles: true }));
           field.focus();
-          if (singleTotp) form.requestSubmit();
         } catch {
           if (field.isConnected) {
             field.focus();
@@ -3590,14 +3665,8 @@
       node.closest('form').requestSubmit();
       return true;
     }
-    if (action === 'ops-totp-visibility') {
-      const field = node.closest('form').querySelector('#ops-totp-secret');
-      const batch = field.tagName === 'TEXTAREA';
-      const show = batch ? field.classList.contains('tool-secret-masked') : field.type === 'password';
-      if (batch) field.classList.toggle('tool-secret-masked', !show);
-      else field.type = show ? 'text' : 'password';
-      node.textContent = show ? '隐藏密钥' : '显示密钥';
-      node.setAttribute('aria-pressed', String(show));
+    if (action === 'ops-totp-save') {
+      void addTemporaryTotpAccount(node);
       return true;
     }
     if (action === 'ops-mail-refresh') {
@@ -3938,7 +4007,6 @@
       const submit = form.querySelector('[type="submit"]');
       if (submit.disabled) return true;
       submit.disabled = true;
-      form.querySelector('#ops-totp-save-secret').value = '';
       void saveSavedTotp(panel, {
         action: id ? 'update' : 'create', id, version: Number(values['ops-totp-version']),
         name: values['ops-totp-name'], secret: values['ops-totp-save-secret']

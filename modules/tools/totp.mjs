@@ -27,6 +27,7 @@ function decodeSecret(secret) {
 
 async function prepareTotp(raw, defaultLabel) {
   let secret = String(raw).trim();
+  const originalInput = secret;
   let label = defaultLabel;
   let algorithm = 'SHA1';
   let digits = 6;
@@ -87,6 +88,7 @@ async function prepareTotp(raw, defaultLabel) {
   }
   return {
     label,
+    secretInput: /^otpauth:/i.test(originalInput) ? originalInput : secret.trim(),
     async generate(now) {
       const counter = Math.floor(now / (period * 1000));
       const counterBytes = new Uint8Array(8);
