@@ -2407,7 +2407,7 @@
       field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"'));
     const saleCurrencyChosen = existing || draft['commerce-saleCurrencyChosen'] === 'yes';
     const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT')}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', v('correctionReason')), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div><div class="form-section"><div class="section-title-row"><h2>费用核对</h2>${A.titleInfo('费用核对', localData ? '保存时记录原币金额与费用规则版本。在订单详情的「成本与汇率」登记有效快照后核算。' : '成本、币种与演示汇率在保存时冻结为订单快照；苹果余额只按已确认实际支出记账。', 'commerce-cost-explanation')}</div><div id="commerce-cost-preview">${costPreview(base)}</div></div></form>`;
-    const footer = `<span class="footnote">${localData ? '订单保存到本机数据库。' : '订单独立保存；确认代付才记苹果余额支出。'}</span>${A.button('保留待补全', 'commerce-order-pending')}<button form="commerce-order-form" type="submit" class="button primary">核对并保存</button>`;
+    const footer = `<span class="footnote">${localData ? '订单保存到数据库。' : '订单独立保存；确认代付才记苹果余额支出。'}</span>${A.button('保留待补全', 'commerce-order-pending')}<button form="commerce-order-form" type="submit" class="button primary">核对并保存</button>`;
     if (main)
       return `<section class="panel form-panel">${html}<div class="form-footer">${footer}</div></section>`;
     A.openDrawer(
@@ -2523,9 +2523,7 @@
       A.header(
         product === 'GPT' ? 'GPT 提交订单' : 'Claude 提交订单',
         '客户、账号、金额和周期分组录入；短字段同排，保存前核对成本与来源。',
-        (renewal ? routeButton('返回续费管理', renewalRoute, '', 'return') : '') +
-          (canManageOrders()
-            ? A.button('套餐售价设置', 'commerce-price-settings', '', 'settings', `data-product="${E(product)}"`) : ''),
+        renewal ? routeButton('返回续费管理', renewalRoute, '', 'return') : '',
         renewal ? '续费录单' : '订单工作台'
       ) + (renewal && !source
         ? `<section class="panel">${A.empty('续费提醒已变化', '请返回续费管理查看最新状态。')}</section>`
