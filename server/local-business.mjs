@@ -2,8 +2,9 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderCurrencySettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
-import { currencies, snapshotAction } from '../modules/finance/accounting.mjs';
+import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
 import {
@@ -33,13 +34,16 @@ import {
 import { bitBrowserWindowDomain, BitBrowserWindowError, readWindowRecord, writeWindowRecord } from './bitbrowser-login-windows.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkInventoryHistory } from './inventory-history.mjs';
+import { validMailExtractionSettings } from './inventory-extraction-settings.mjs';
+import { checkInventoryEntryFields } from './inventory-entry-fields.mjs';
+import { stageInitialTenantCards } from './tenant-initial-cards.mjs';
 import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
 import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
-import { assignOrderOwner, checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices } from './order-policy.mjs';
+import { assignOrderOwner, assignTenantOwner, checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices } from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
   RelayClaimError,
@@ -90,7 +94,8 @@ const settingsActions = {
   mailbox_category_reorder: '调整邮箱分类排序',
   fee_rules_save: '保存费用规则',
   statistics_currency_save: '更改统计币种',
-  order_prices_save: '保存订单套餐售价'
+  order_prices_save: '保存订单套餐售价',
+  order_currencies_save: '保存订单币种设置'
 };
 const appleBalanceActions = {
   apple_order_charge: '登记苹果内购扣款或冲正',
@@ -156,7 +161,10 @@ const orderFeatureAuditLabels = {
   recharge_code_reject: '驳回充值码申请',
   recharge_code_import_started: '提交充值码批次',
   recharge_code_issue_pending: '充值码发放待核对',
-  recharge_code_issued: '确认发放充值码'
+  recharge_code_issued: '确认发放充值码',
+  recharge_code_return_started: '登记充值码归还',
+  recharge_code_return_pending: '核对充值码归还结果',
+  recharge_code_returned: '确认充值码归还'
 };
 const verifiedOrderCards = Symbol('verifiedOrderCards');
 const rechargeEvidenceFields = [
@@ -185,7 +193,7 @@ function readAuditRow(row) {
   return { ...row, summary: label, actorId, actorName, targetId };
 }
 
-function attributeCommerce(data, previous, actor, owners) {
+export function attributeCommerce(data, previous, actor, owners) {
   const attributeNew = (rows = [], before = []) => {
     const known = new Set(Array.isArray(before) ? before.map((row) => row?.id) : []);
     for (const row of rows) {
@@ -199,20 +207,22 @@ function attributeCommerce(data, previous, actor, owners) {
     const before = new Map((previous?.[key] || []).map((row) => [row.id, row]));
     for (const row of data[key]) {
       const prior = before.get(row.id);
-      if (key === 'orders') {
-        const error = assignOrderOwner(row, prior, actor, owners);
+      const tenantChanged = key === 'tenants' && (!prior || !isDeepStrictEqual(row, prior));
+      if (key === 'orders' || key === 'tenants') {
+        const assign = key === 'tenants' ? assignTenantOwner : assignOrderOwner;
+        const error = assign(row, prior, actor, owners);
         if (error) throw new LocalDataError(error.status, error.message);
       }
-      if (!prior && (key === 'orders' || 'createdById' in row)) {
+      if (!prior && (key === 'orders' || key === 'tenants' || 'createdById' in row)) {
         row.createdById = actor.id;
         row.createdBy = actor.name;
-      } else if (prior && (key === 'orders' || 'createdById' in prior)) {
+      } else if (prior && (key === 'orders' || key === 'tenants' || 'createdById' in prior)) {
         for (const field of ['createdById', 'createdBy']) {
           if (Object.hasOwn(prior, field)) row[field] = prior[field];
           else delete row[field];
         }
       }
-      if ('updatedById' in row && row.version !== prior?.version) {
+      if (tenantChanged || ('updatedById' in row && row.version !== prior?.version)) {
         row.updatedById = actor.id;
         row.updatedBy = actor.name;
       }
@@ -267,7 +277,7 @@ function normalizePaymentEvidence(row, prior, automatic) {
   const previous = prior?.paidConfirmed ? prior : null;
   for (const payment of automatic ? [] : [previous, row]) {
     if (!payment?.paidConfirmed || !positiveOrderAmount(payment.paidAmount) ||
-        !currencies.includes(payment.paidCurrency)) continue;
+        !validCurrencyCode(payment.paidCurrency)) continue;
     const cardId = payment.cardId || '';
     if (!normalized.some((item) => item.amount === payment.paidAmount && item.currency === payment.paidCurrency &&
         item.payment === payment.payment && item.cardId === cardId)) {
@@ -443,6 +453,8 @@ function checkWrite(entry) {
   if (!arrayKeys.every((name) => Array.isArray(data[name]))) {
     throw new LocalDataError(400, '本机资料结构不正确');
   }
+  if (domain === 'inventory' && !validMailExtractionSettings(data.tableSettings))
+    throw new LocalDataError(400, '邮箱提取用途设置格式不正确');
   if (domain === 'commerce' && 'renewalWarningDays' in data &&
       (!Number.isInteger(data.renewalWarningDays) || data.renewalWarningDays < 1 || data.renewalWarningDays > 365))
     throw new LocalDataError(400, '提前提醒天数必须是 1–365 的整数');
@@ -466,6 +478,9 @@ function checkWrite(entry) {
   }
   if (domain === 'settings' && 'orderPrices' in data && !validOrderPrices(data.orderPrices))
     throw new LocalDataError(400, '套餐售价设置格式不正确');
+  if (domain === 'settings' && (('orderCurrencies' in data && !validOrderCurrencies(data.orderCurrencies)) ||
+      ('orderCurrenciesByProduct' in data && !validOrderCurrencyGroups(data.orderCurrenciesByProduct))))
+    throw new LocalDataError(400, '订单币种设置格式不正确');
   return {
     domain,
     version,
@@ -1109,7 +1124,10 @@ export function createLocalBusinessStore(databasePath) {
       actor, verifyAutomaticSnapshot, readOrderOwners, [verifiedRelayClaimIds]: verifiedIds,
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards
     } = {}) {
-      const writes = checkWrites(entries);
+      // Initial cards are transient input: preserve the caller's retry snapshot on rollback.
+      const writes = checkWrites(entries).map(write => write.domain === 'commerce' &&
+        write.data.tenants.some(row => Object.hasOwn(row, 'initialCards'))
+        ? { ...write, data: structuredClone(write.data) } : write);
       return writeTransaction(() => {
         for (const { domain, version } of writes) {
           if ((get.get(domain)?.version ?? 0) !== version) {
@@ -1123,6 +1141,7 @@ export function createLocalBusinessStore(databasePath) {
         const settings = writes.find(({ domain }) => domain === 'settings');
         if (settings) {
           const savedSettings = current('settings');
+          settings.data = retainOrderCurrencySettings(settings.data, savedSettings);
           for (const key of ['customerTags', 'customerSources', 'orderPrices']) {
             if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };
@@ -1159,6 +1178,8 @@ export function createLocalBusinessStore(databasePath) {
                 !isDeepStrictEqual(aliasLinks(inventory.mailboxes), aliasLinks(priorInventory?.mailboxes ?? []))))) {
             throw new LocalDataError(409, '请通过主邮箱授权入口修改收件连接');
           }
+          const entryError = checkInventoryEntryFields(priorInventory, inventory, write.action);
+          if (entryError) throw new LocalDataError(400, entryError);
           const attributionError = attributeInventory(priorInventory, inventory, actor, write.action);
           if (attributionError) throw new LocalDataError(409, attributionError);
           defaultInventoryRegistrationTimes(priorInventory, inventory);
@@ -1208,7 +1229,7 @@ export function createLocalBusinessStore(databasePath) {
           if (actor) {
             let owners = [];
             try { owners = readOrderOwners?.() || []; }
-            catch { throw new LocalDataError(503, '暂时无法核对订单归属人，请稍后重试'); }
+            catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
             attributeCommerce(commerce, priorCommerce, actor, owners);
           }
           const { action } = writes.find((write) => write.domain === 'commerce');
@@ -1273,7 +1294,7 @@ export function createLocalBusinessStore(databasePath) {
               }
               if (!automatic && row.payment === '银行卡' && row.paidConfirmed === true &&
                   (!prior?.paidConfirmed || row.paidAmount !== prior.paidAmount || row.paidCurrency !== prior.paidCurrency) &&
-                  (!positiveOrderAmount(row.paidAmount) || !currencies.includes(row.paidCurrency)))
+                  (!positiveOrderAmount(row.paidAmount) || !validCurrencyCode(row.paidCurrency)))
                 throw new LocalDataError(400, '请登记实际银行卡代付金额与币种');
               if (!automatic && hasBankPayment(prior)) {
                 if (row.payment !== prior.payment || row.cardId !== prior.cardId ||
@@ -1355,6 +1376,13 @@ export function createLocalBusinessStore(databasePath) {
             inventory = next;
           }
         }
+        const tenantCardDocument = incoming.has('commerce') ? readDocument('tenant-cards') : null;
+        let initialTenantCards;
+        try {
+          initialTenantCards = incoming.has('commerce')
+            ? stageInitialTenantCards(priorCommerce, commerce, tenantCardDocument.data?.items || [])
+            : { additions: [], targets: [] };
+        } catch (error) { throw new LocalDataError(400, error.message); }
         const result = [];
         for (const { domain, version, data, action } of writes) {
           const next = version + 1;
@@ -1372,6 +1400,13 @@ export function createLocalBusinessStore(databasePath) {
           result.push({ domain, version: next, data, ...(review.length && { usageReview: review }),
             ...(domain === 'inventory' && { accountSummaries: accountLifecycleSummaries(data, commerce),
               commerceVersion: writes.find(write => write.domain === 'commerce')?.version + 1 || readDocument('commerce').version }) });
+        }
+        if (initialTenantCards.additions.length) {
+          const version = tenantCardDocument.version + 1;
+          const data = { ...tenantCardDocument.data, items: [...(tenantCardDocument.data?.items || []), ...initialTenantCards.additions] };
+          put.run('tenant-cards', version, encrypt(key, 'tenant-cards', version, JSON.stringify(data)));
+          for (const id of initialTenantCards.targets)
+            log.run(now, 'tenant-cards', 'tenant_initial_cards', auditSummary('随租户新增登记银行卡', actor, id), version);
         }
         return result;
       });

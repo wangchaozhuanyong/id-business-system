@@ -1,3 +1,5 @@
+import { validCurrencyCode } from '../modules/finance/accounting.mjs';
+
 export const rechargePlanLabels = Object.freeze({
   plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500'
 });
@@ -21,9 +23,15 @@ export function checkNewOrder(order) {
     return '请选择对应来源的银行卡';
 }
 export function assignOrderOwner(order, prior, actor, owners = []) {
+  return assignOwner(order, prior, actor, owners, '订单');
+}
+export function assignTenantOwner(tenant, prior, actor, owners = []) {
+  return assignOwner(tenant, prior, actor, owners, '租户');
+}
+function assignOwner(order, prior, actor, owners, kind) {
   if (prior) {
     if ((order.ownerId || '') !== (prior.ownerId || ''))
-      return { status: 409, message: '已保存订单的归属人不可在资料更正中更换' };
+      return { status: 409, message: `已保存${kind}的归属人不可在资料更正中更换` };
     for (const field of ['ownerId', 'owner']) {
       if (Object.hasOwn(prior, field)) order[field] = prior[field];
       else delete order[field];
@@ -31,10 +39,10 @@ export function assignOrderOwner(order, prior, actor, owners = []) {
     return;
   }
   if (order.ownerId !== undefined && typeof order.ownerId !== 'string')
-    return { status: 400, message: '请选择有效的订单归属人' };
+    return { status: 400, message: `请选择有效的${kind}归属人` };
   const id = order.ownerId || actor.id;
   if (id !== actor.id && !['admin', 'super'].includes(actor.role))
-    return { status: 403, message: '只有管理员可以为其他员工指定订单归属' };
+    return { status: 403, message: `只有管理员可以为其他员工指定${kind}归属` };
   const owner = id === actor.id ? actor : owners.find(row => row.id === id && row.active !== false &&
     ['admin', 'super', 'employee'].includes(row.role));
   if (!owner) return { status: 409, message: '所选归属人已停用或不存在，请刷新人员列表' };
@@ -53,7 +61,7 @@ export function validOrderPrices(prices) {
   return record(prices) && Object.entries(prices).every(([product, rows]) =>
     Object.hasOwn(plans, product) && record(rows) && Object.entries(rows).every(([plan, amounts]) =>
       plans[product].includes(plan) && record(amounts) && Object.entries(amounts).every(([currency, value]) =>
-        ['CNY', 'MYR'].includes(currency) && (value === '' || validMoney(value)))));
+        validCurrencyCode(currency) && (value === '' || validMoney(value)))));
 }
 
 export function nextOrderNo(orders) {

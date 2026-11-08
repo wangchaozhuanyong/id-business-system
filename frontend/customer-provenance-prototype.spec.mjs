@@ -13,7 +13,7 @@ const units = (value = '0') => {
 };
 // Drive the real public handlers with fictional identities and form snapshots.
 // No private exports, production data, network, or database is involved.
-function runtime() {
+function runtime(localData) {
   let sequence = 0,
     callback,
     confirmation,
@@ -89,7 +89,7 @@ function runtime() {
     getElementById: () => null
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules },
+    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
     document,
     structuredClone: globalThis.structuredClone,
     Date,
@@ -245,19 +245,24 @@ test('新增客户保存QQ和标签，录入身份由会话生成而非表单填
   assert.equal(c.updatedById, 'actor-a');
 });
 
-test('姓名和至少一种联系方式必填，失败保留草稿且不写入', () => {
+test('姓名必填而客户联系方式可空，失败保留草稿且不写入', () => {
   const r = runtime();
   const key = 'commerce-contact:customer:new';
   r.api.state.drafts.set(key, { 'commerce-name': '  ' });
   r.contact({ name: '  ', phone: '  ' });
   assert.equal(r.errors.get('commerce-contact-name'), '请填写姓名');
-  assert.equal(r.errors.get('commerce-contact-phone'), '请至少填写一种联系方式');
+  assert.equal(r.errors.get('commerce-contact-phone'), '');
   assert.equal(r.customers().length, 3);
   assert(r.api.state.drafts.has(key));
   r.contact({ phone: '', qq: 'qq-only' });
   r.confirm();
   assert.equal(r.customers()[0].qq, 'qq-only');
   assert(!r.api.state.drafts.has(key));
+  const before = r.customers().length;
+  r.contact({ name: '网站下单无联系方式客户', phone: '', qq: '', wechat: '', whatsapp: '', telegram: '' });
+  r.confirm();
+  assert.equal(r.customers().length, before + 1);
+  assert.equal(r.customers()[0].phone, '');
 });
 
 test('按同渠道核对重复客户，覆盖停用记录、格式差异和编辑冲突', () => {
@@ -342,8 +347,23 @@ test('编辑历史记录不补造录入人，租户业务归属人与录入人�
   r.contact({ name: '新租户', owner: '业务负责人' }, 'tenant');
   r.confirm();
   const t = r.tenants()[0];
-  assert.equal(t.owner, '业务负责人');
+  assert.equal(t.owner, '演示录入员', '新增租户不再信任自由填写的归属人文字');
+  assert.equal(t.ownerId, 'actor-a');
   assert.equal(t.createdBy, '演示录入员');
+  const historical = r.tenants().find(row => row.id === 'tenant-demo-1');
+  r.contact({ id: historical.id, version: String(historical.version), owner: '冒名修改', ownerId: 'actor-a' }, 'tenant');
+  r.confirm();
+  assert.equal(historical.owner, '林负责人');
+  assert.equal(Object.hasOwn(historical, 'ownerId'), false, '历史文字归属不猜测员工编号');
+});
+
+test('员工新增租户只读显示自己，不读取可分配人员目录', () => {
+  const actor = { id: 'staff', name: '当前员工', role: 'employee' };
+  const r = runtime({ authRequired: true, actor: () => actor });
+  r.module.onClick('commerce-contact-add', { dataset: { kind: 'tenant' } });
+  const { body } = r.drawers.at(-1);
+  assert.match(body, /id="commerce-contact-ownerId" value="当前员工" readonly/);
+  assert.doesNotMatch(body, /commerce-contact-ownerId-picker|业务归属人员/);
 });
 
 test('历史业务按明确客户编号汇总次数、首末开通及来源单号，不按邮箱猜客户', () => {

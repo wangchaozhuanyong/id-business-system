@@ -437,6 +437,59 @@ h1 {
 .content-toolbar > .page-actions {
   padding: 8px 0;
 }
+.list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 16px;
+  padding-inline: var(--panel-padding-inline);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.list-controls > .tabs {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 60px;
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+}
+.list-controls > .toolbar {
+  flex: 1 1 max-content;
+  min-width: 0;
+  margin-left: auto;
+  padding: 12px 0;
+}
+.list-controls > .toolbar > .toolbar-left { justify-content: flex-end; }
+.list-controls .search-field { flex: 0 1 280px; max-width: 320px; }
+.panel > .toolbar.list-filters { padding-block: 12px; }
+.list-controls--filters {
+  gap: 12px;
+  padding: 0;
+  border: 0;
+}
+.list-controls--filters .online-tool-mail-filters {
+  display: flex;
+  flex: 1 1 420px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+.list-controls--filters .online-tool-mail-filters input { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+.list-controls--filters .online-tool-mail-filters select { flex: 0 1 130px; min-width: 0; }
+.totp-inline-code { display: flex; align-items: center; gap: 8px; min-width: 170px; }
+.totp-inline-code .ops-code { font-size: 20px; }
+.totp-inline-code .totp-code-card__reading { display: flex; align-items: center; gap: 8px; }
+.totp-inline-code .totp-countdown { white-space: nowrap; }
+.totp-account-name > strong, .totp-account-name > small { display: block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.totp-account-name > small { color: var(--muted); font-size: 12px; }
+@media (max-width: 900px) {
+  .list-controls > .toolbar { flex-basis: 100%; }
+  .list-controls > .toolbar > .toolbar-left { justify-content: flex-start; }
+  .list-controls .search-field { flex-basis: 100%; max-width: none; }
+}
 .page-actions select,
 .entry-switch > .page-actions select {
   width: auto;
@@ -1898,7 +1951,7 @@ dialog::backdrop {
   width: 240px;
   max-width: 100%;
 }
-.drawer[data-layout='online-tool'] .tool-query-options .form-footer {
+.drawer:is([data-layout='online-tool'], [data-layout='mailbox-operation']) .tool-query-options .form-footer {
   margin: 0 0 0 auto;
 }
 .online-tool-search {
@@ -1962,7 +2015,7 @@ dialog::backdrop {
   padding: 0;
   border: 0;
 }
-.drawer[data-layout='online-tool'] .form-footer {
+.drawer:is([data-layout='online-tool'], [data-layout='mailbox-operation']) .form-footer {
   justify-content: flex-end;
   border-top: 0;
   padding-top: 0;
@@ -2000,13 +2053,13 @@ dialog::backdrop {
   width: 24px;
   height: 24px;
 }
-.drawer[data-layout='online-tool'] .panel-heading {
+.drawer:is([data-layout='online-tool'], [data-layout='mailbox-operation']) .panel-heading {
   padding: 0 0 12px;
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 16px;
 }
-.drawer[data-layout='online-tool'] .panel-heading h3 {
+.drawer:is([data-layout='online-tool'], [data-layout='mailbox-operation']) .panel-heading h3 {
   margin: 0;
 }
 .drawer[data-layout='online-tool'] [data-saved-totp-editor]:not(:empty),
@@ -3396,11 +3449,27 @@ details.toolbox-phrase-more[open] > summary {
   border-radius: 8px;
   background: var(--surface-soft);
 }
-.order-financial-group > h3 {
+.order-financial-group > h3,
+.order-financial-heading h3 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
   line-height: 1.5;
+}
+.order-financial-heading {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.order-financial-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 .order-financial-group .field {
   margin: 0;
@@ -3415,7 +3484,8 @@ details.toolbox-phrase-more[open] > summary {
     grid-template-rows: auto auto;
     grid-row: auto;
   }
-  .order-financial-group:last-child > h3 {
+  .order-financial-group:last-child > h3,
+  .order-financial-group:last-child > .order-financial-heading {
     grid-column: 1 / -1;
   }
 }
@@ -3726,4 +3796,158 @@ details:not(.title-help) > summary:focus-visible {
   color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* Mailbox row operations use the shared right drawer without changing the list. */
+.mailbox-operation-summary {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.mailbox-operation-summary > strong {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.mailbox-operation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--muted);
+}
+[data-mailbox-operation] .form-grid,
+[data-mailbox-operation] [data-mailbox-query-slot] {
+  min-width: 0;
+}
+[data-mailbox-operation] .tool-field-guide {
+  overflow-wrap: anywhere;
+}
+
+/* Website tool tabs share one content, heading and action layout in pages and drawers. */
+.website-tool-panel,
+.website-tool-panel > form {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+  min-width: 0;
+}
+.website-tool-panel {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.tool-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.tool-panel-header h3 {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.tool-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.tool-panel-actions .tool-period {
+  margin: 0;
+}
+[data-tool='网站监控'] .online-tool-sections {
+  flex: 1;
+  min-width: 0;
+}
+.form-grid.tool-filter-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.tool-report,
+.tool-report-section {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.tool-report-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.tool-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.tool-metrics--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.tool-metric {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.tool-metric > span {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tool-metric > strong {
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.tool-report .tool-data-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tool-report .toolbar {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+@container (min-width: 1100px) {
+  .form-grid.tool-filter-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@container (max-width: 599px) {
+  .form-grid.tool-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tool-panel-actions {
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+  .tool-metric > strong {
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 900px) {
+  .tool-panel-header h3 {
+    min-height: 44px;
+  }
 }

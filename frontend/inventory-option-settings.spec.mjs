@@ -294,3 +294,54 @@ test('旧换行文本兼容且8760小时上限可保存，重新打开仍正确�
   assert.deepEqual(Array.from(r.editors.at(-2).values), ['日本', '德国']);
   assert.match(drawer.body, /value="8760"/);
 });
+
+function purposeForm(values, extra = {}) {
+  return {
+    id: 'inventory-purpose-settings-form',
+    dataset: { inventoryDraft: 'inventory-purpose-settings:mail' },
+    values: { 'inventory-mail-purposes': JSON.stringify(values), ...extra }
+  };
+}
+
+test('邮箱提取用途设置更新后续选项，保留历史批次并与账号提取隔离', () => {
+  const r = runtime();
+  r.api.state.route = 'workspace/mail-extract';
+  r.inventory.render();
+  const history = JSON.stringify(r.api.modules.inventory.getBatches());
+  r.inventory.onClick('inventory-purpose-settings', { dataset: {} });
+  assert.equal(r.drawers.at(-1).title, '邮箱提取用途设置');
+  assert.deepEqual(Array.from(r.editors.at(-1).values), ['注册 Claude', '注册 GPT', '业务备用', '其他']);
+  r.inventory.onSubmit(purposeForm(['员工测试', '其他']));
+  r.confirm();
+  r.inventory.render();
+  assert.deepEqual(Array.from(r.selects.findLast(s => s.id === 'inventory-purpose').choices), ['员工测试', '其他']);
+  assert.equal(JSON.stringify(r.api.modules.inventory.getBatches()), history);
+  r.api.state.route = 'workspace/account-extract';
+  r.inventory.render();
+  assert.deepEqual(Array.from(r.selects.findLast(s => s.id === 'inventory-purpose').choices), ['客户交付', '比特充值', '业务备用', '其他']);
+});
+
+test('用途设置拒绝空清单、重复、控制字符、过长用途及未完成编辑', () => {
+  for (const [values, extra] of [[[], {}], [['测试', '测试'], {}], [['API', 'api'], {}], [['无效\n用途'], {}], [['长'.repeat(101)], {}], [['测试'], { 'inventory-mail-purposes-pending': '尚未添加' }]]) {
+    const r = runtime();
+    r.api.state.route = 'workspace/mail-extract';
+    r.inventory.onSubmit(purposeForm(values, extra));
+    assert.equal(r.pendingConfirmation(), false);
+    assert(r.notices.length);
+  }
+});
+
+test('已删除用途的提取草稿提示重选，不能静默换首项或继续提取', () => {
+  const r = runtime(), errors = new Map();
+  r.api.state.route = 'workspace/mail-extract';
+  r.api.setError = (id, message) => errors.set(id, message);
+  r.api.state.drafts.set('inventory-extract:mail', { 'inventory-purpose': '注册 Claude' });
+  r.inventory.onSubmit(purposeForm(['业务备用']));
+  r.confirm();
+  const html = r.inventory.render();
+  assert.match(html, /原用途已移除，请重新选择/);
+  assert.equal(r.selects.findLast(s => s.id === 'inventory-purpose').selected, '');
+  r.inventory.onSubmit({ id: 'inventory-extract-form', values: { 'inventory-kind': 'mail', 'inventory-extract-type': 'google', 'inventory-quantity': '1', 'inventory-purpose': '注册 Claude' } });
+  assert.equal(r.pendingConfirmation(), false);
+  assert.match(errors.get('inventory-purpose'), /当前有效/);
+});

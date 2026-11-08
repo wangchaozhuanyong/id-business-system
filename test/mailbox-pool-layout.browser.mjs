@@ -94,11 +94,14 @@ try {
     await pool.locator('.mailbox-account__more').first().click();
     await pool.getByRole('button', { name: '更新授权', exact: true }).first().click();
     assert.equal(await actions.count(), 0);
-    assert(await pool.locator('#ops-managed-pool-form').isVisible());
-    assert(await pool.locator('#ops-managed-pool-form a[href="https://myaccount.google.com/apppasswords"]').isVisible());
-    const editorRect = await pool.locator('#ops-managed-pool-form').boundingBox();
-    assert(editorRect.y >= (await drawer.locator('.drawer-body').boundingBox()).y - 1 && editorRect.y < 900);
-    await pool.getByRole('button', { name: '取消', exact: true }).click();
+    const operation = page.locator('#drawer[open]');
+    assert(await operation.locator('#ops-managed-pool-form').isVisible());
+    await operation.getByLabel('查看应用专用密码说明', { exact: true }).click();
+    assert(await operation.locator('#ops-managed-pool-form a[href="https://myaccount.google.com/apppasswords"]').isVisible());
+    await operation.getByLabel('查看应用专用密码说明', { exact: true }).press('Escape');
+    const editorRect = await operation.locator('#ops-managed-pool-form').boundingBox();
+    assert(editorRect.y >= (await operation.locator('.drawer-body').boundingBox()).y - 1 && editorRect.y < 900);
+    await operation.getByRole('button', { name: '取消', exact: true }).click();
     await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').first().click();
     await page.waitForFunction(async () => await navigator.clipboard.readText() === 'SYNTHETIC-fixture-0-LAYOUT-ONLY');
     await pool.getByRole('button', { name: '下一页', exact: true }).click(); await waitCodes();
@@ -120,8 +123,15 @@ try {
     await actions.waitFor();
     await settle(page);
     assert(await actions.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), '末行操作浮层不能越出屏幕');
-    await pool.locator('.mailbox-account__more').last().press('Escape');
+    const scrollBeforeOperation = await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop }));
+    await actions.getByRole('button', { name: '更新授权', exact: true }).click();
+    await operation.locator('#ops-managed-pool-form').waitFor();
+    await operation.getByRole('button', { name: '取消', exact: true }).click();
+    await operation.waitFor({ state: 'hidden' });
     assert.equal(await actions.count(), 0);
+    assert.equal(await pool.getByLabel('邮箱池页码', { exact: true }).inputValue(), '21', '关闭行操作保留最后一页');
+    assert.equal(await pool.locator('.mailbox-account').count(), 3);
+    assert.deepEqual(await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop })), scrollBeforeOperation, '关闭抽屉保留列表滚动位置');
     await page.goto(origin + '/#/plugins/websites');
     await page.goto(origin + '/#/plugins/mailboxes');
     await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click(); await waitCodes();
@@ -155,10 +165,14 @@ try {
     for (const provider of providers) {
       await editor.locator('#ops-managed-provider').selectOption(provider);
       const href = provider === 'google' ? 'https://myaccount.google.com/apppasswords' : provider === 'apple' ? 'https://account.apple.com/' : 'https://account.microsoft.com/';
-      assert(await editor.locator(`a[href="${href}"]`).last().isVisible());
+      if (provider !== 'microsoft') await editor.getByLabel('查看应用专用密码说明', { exact: true }).click();
+      await editor.locator(`a[href="${href}"]`).last().waitFor();
+      assert(await editor.locator(`a[href="${href}"]`).last().isVisible(), `${width}/${theme}/${provider} 指引应可查看`);
+      if (provider !== 'microsoft') await editor.getByLabel('查看应用专用密码说明', { exact: true }).press('Escape');
     }
     await editor.getByRole('button', { name: '取消', exact: true }).click();
     await pool.getByRole('button', { name: '批量导入', exact: true }).click();
+    await editor.getByLabel('查看收信服务商说明', { exact: true }).click();
     for (const provider of providers) {
       await editor.locator('#ops-managed-batch-provider').selectOption(provider);
       assert(await editor.locator('[data-mailbox-batch-help] a').first().isVisible());

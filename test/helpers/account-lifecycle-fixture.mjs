@@ -1,5 +1,6 @@
 export function lifecycleFixture(type = 'claude') {
-  const account = { id: 'account-a', type, email: 'owned@example.test', source: '自己注册',
+  const account = { id: 'account-a', type,
+    ...(type === 'claude' ? { device: '合成设备', proxyUrl: 'socks5://proxy.example.test:1080' } : {}), email: 'owned@example.test', source: '自己注册',
     version: 1, inventoryState: 'used', used: true, health: 'normal', status: '正常',
     registered: '2026-01-01 12:00', password: 'SYNTHETIC',
     usageLinks: [{ kind: 'order-sale', orderId: 'order-a', label: '原交付', time: '2026-09-01 12:00' }], inventoryHistory: [] };

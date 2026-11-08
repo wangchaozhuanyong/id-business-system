@@ -1,7 +1,7 @@
 FROM node:24.22.1-bookworm-slim@sha256:e1582112fb9f152ed38eefcd712efc93fee1becb519fdfa57574d5e07eaa5e7d
 ARG BUILD_HCAPTCHA_SOLVER=0
 
-# Pinned dependencies; only the reviewed three-file startup routing patch is allowed.
+# Pinned dependencies; only the reviewed routing and unused-code return patches are allowed.
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_BREAK_SYSTEM_PACKAGES=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1 HCAPTCHA_SOLVER_PYTHON=/usr/bin/python3 \

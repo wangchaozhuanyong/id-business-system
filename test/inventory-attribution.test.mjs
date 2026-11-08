@@ -13,6 +13,8 @@ const asset = (id, type = 'gpt', values = {}) => ({
   id,
   type,
   email: `${id}@example.test`,
+  ...(['google', 'claude'].includes(type) ? { country: '马来西亚', device: '合成设备' } : {}),
+  ...(type === 'claude' ? { proxyUrl: 'socks5://proxy.example.test:1080' } : {}),
   inventoryState: 'available',
   used: false,
   usageLinks: [],

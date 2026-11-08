@@ -1,0 +1,146 @@
+import assert from 'node:assert/strict';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import test from 'node:test';
+import { pathToFileURL } from 'node:url';
+import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
+import { validMailExtractionSettings } from '../server/inventory-extraction-settings.mjs';
+import { checkInventoryHistory } from '../server/inventory-history.mjs';
+
+test('邮箱提取用途设置支持增删、草稿、失败重试、旧版本保护，历史和账号用途保持隔离', { timeout: 90_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const evidence = root + '/.runtime/extraction-purpose-settings-20261108';
+  await mkdir(evidence, { recursive: true });
+  const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  const seed = structuredClone(fixture.inventory.data);
+  seed.mailboxes.push({ id: 'purpose-available-mail', type: 'google', email: 'purpose-inventory@example.test', status: '正常', health: 'normal', inventoryState: 'available', used: false, usageLinks: [], version: 1 });
+  const measurements = [];
+  for (const width of [1440, 1024, 390, 320]) for (const theme of ['light', 'dark']) {
+    let inventory = { version: 1, data: structuredClone(seed) }, fail = false;
+    const writes = [], errors = [];
+    const context = await browser.newContext({ viewport: { width, height: 1000 }, locale: 'zh-CN' });
+    const requests = await interceptDesign(context, { localFixtures: { ...fixture, inventory }, actor: { id: 'purpose-admin', name: '用途设置测试员', role: 'admin' } });
+    await context.route('**/api/local/inventory', route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: inventory });
+      const command = route.request().postDataJSON();
+      writes.push(command);
+      if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: '模拟用途保存失败' } }); }
+      if (command.version !== inventory.version) return route.fulfill({ status: 409, json: { error: '用途配置版本已变化' } });
+      assert(validMailExtractionSettings(command.data.tableSettings));
+      assert.equal(checkInventoryHistory(inventory.data, command.data), undefined);
+      inventory = { version: inventory.version + 1, data: structuredClone(command.data) };
+      return route.fulfill({ json: inventory });
+    });
+    const page = await context.newPage(); page.setDefaultTimeout(5000);
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(origin + '/#/workspace/mail-extract');
+    const settings = page.locator('[data-action="inventory-purpose-settings"]');
+    await settings.waitFor();
+    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    await page.locator('#inventory-extract-notes').fill('保留邮箱提取草稿');
+    const geometry = await settings.evaluate(button => {
+      const select = document.querySelector('#inventory-purpose'), label = select.closest('.field').querySelector('label');
+      const b = button.getBoundingClientRect(), s = select.getBoundingClientRect(), l = label.getBoundingClientRect();
+      return { button: b.toJSON(), select: s.toJSON(), label: l.toJSON(), overflow: document.documentElement.scrollWidth > innerWidth + 1 };
+    });
+    assert(!geometry.overflow && geometry.label.right <= geometry.select.left + 1);
+    assert(Math.abs(geometry.button.top - geometry.select.top) <= 1 && Math.abs(geometry.button.height - geometry.select.height) <= 1);
+    assert(geometry.button.left >= geometry.select.right && geometry.button.right <= width + 1);
+    if (width <= 900) assert(geometry.button.height >= 44);
+    measurements.push({ width, theme, ...geometry });
+    await settings.click();
+    const form = page.locator('#inventory-purpose-settings-form');
+    const pending = page.locator('#inventory-mail-purposes-pending');
+    const items = () => page.locator('#inventory-mail-purposes').evaluate(node => JSON.parse(node.value));
+    const close = async () => { await page.locator('#drawer [data-action="drawer-close"]').click(); await page.locator('#drawer:not([open])').waitFor({ state: 'attached' }); };
+    const add = async text => { await pending.fill(text); await form.locator('[data-action="option-add"]').click(); };
+    const save = async (status = 200) => {
+      await page.locator('button[form="inventory-purpose-settings-form"][type="submit"]').click();
+      await page.locator('#confirm-dialog[open]').waitFor();
+      const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/local/inventory' && r.request().method() === 'PUT');
+      await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+      assert.equal((await response).status(), status);
+      if (status === 200) await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
+    };
+    await form.waitFor();
+    const help = page.locator('#drawer .title-help').first();
+    const formBeforeHelp = await form.boundingBox();
+    assert.equal(await help.evaluate(node => node.open), false);
+    await help.locator('summary').click();
+    assert.equal(await help.evaluate(node => node.open), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await help.evaluate(node => node.open), false);
+    assert(Math.abs((await form.boundingBox()).y - formBeforeHelp.y) <= 1, '用途说明开关不能挤动表单');
+    assert.deepEqual(await items(), ['注册 Claude', '注册 GPT', '业务备用', '其他']);
+    if ([1440, 390].includes(width)) {
+      await page.screenshot({ path: evidence + `/purpose-settings-${width}-${theme}.png`, fullPage: true });
+    }
+    if (width === 1440 && theme === 'light') {
+      const originalBatches = JSON.stringify(inventory.data.batches);
+      await add('员工验证用途');
+      await form.getByRole('button', { name: '移除用途 注册 Claude', exact: true }).click();
+      await pending.fill('尚未添加');
+      await close(); await settings.click();
+      assert.equal(await pending.inputValue(), '尚未添加');
+      assert((await items()).includes('员工验证用途'));
+      await page.locator('button[form="inventory-purpose-settings-form"][type="submit"]').click();
+      assert.equal(await page.locator('#confirm-dialog[open]').count(), 0, '未添加内容不能静默丢弃');
+      await pending.fill('');
+      fail = true; await save(503);
+      await page.getByText('本次操作未保存，请检查本机服务后重试', { exact: true }).waitFor();
+      assert((await items()).includes('员工验证用途'));
+      await save();
+      assert.equal(await page.locator('#inventory-purpose').inputValue(), '', '移除原草稿用途后必须重新选择');
+      assert.equal(await page.locator('#inventory-extract-notes').inputValue(), '保留邮箱提取草稿');
+      assert.equal(JSON.stringify(inventory.data.batches), originalBatches);
+      await page.evaluate(() => window.IDDesignAPI.go('workspace/account-extract'));
+      await page.locator('#inventory-purpose').waitFor();
+      assert.deepEqual(await page.locator('#inventory-purpose option').allTextContents(), ['客户交付', '比特充值', '业务备用', '其他']);
+      assert.equal(await settings.count(), 0);
+      await page.evaluate(() => window.IDDesignAPI.go('workspace/mail-extract'));
+      await page.reload(); await settings.waitFor();
+      assert((await page.locator('#inventory-purpose option').allTextContents()).includes('员工验证用途'), '重新加载后从模拟服务读取已保存配置');
+      await page.locator('#inventory-purpose').selectOption('员工验证用途');
+      await page.locator('#inventory-extract-type').selectOption('google');
+      await page.locator('#inventory-quantity').fill('1');
+      await page.getByRole('button', { name: '确认提取', exact: true }).click();
+      const extraction = page.waitForResponse(r => new URL(r.url()).pathname === '/api/local/inventory' && r.request().method() === 'PUT');
+      await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+      assert.equal((await extraction).status(), 200);
+      await page.waitForFunction(() => location.hash.startsWith('#/workspace/extractions/'));
+      assert.equal(inventory.data.batches[0].purpose, '员工验证用途');
+      const newBatch = structuredClone(inventory.data.batches[0]);
+      await page.evaluate(() => window.IDDesignAPI.go('workspace/mail-extract')); await settings.waitFor();
+      await settings.click();
+      await form.getByRole('button', { name: '移除用途 员工验证用途', exact: true }).click();
+      await save();
+      assert.deepEqual(inventory.data.batches[0], newBatch, '删除已使用的用途不会改写历史批次');
+      await settings.click(); await add('旧版本草稿');
+      inventory.version++;
+      inventory.data.tableSettings.find(([key]) => key === 'mail-extraction')[1].purposes.push('另一页新增用途');
+      await save(409);
+      await page.getByText('用途配置版本已变化', { exact: true }).waitFor();
+      const sent = writes.length;
+      await page.locator('button[form="inventory-purpose-settings-form"][type="submit"]').click();
+      await page.getByText('用途设置或库存已变化，输入已保留，请重新读取后再保存', { exact: true }).waitFor();
+      assert.equal(writes.length, sent, '旧草稿不能用刷新后的新版本覆盖另一页设置');
+      assert((await items()).includes('旧版本草稿'));
+      await page.locator('[data-action="inventory-purpose-settings-reload"]').click();
+      await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+      await page.waitForFunction(() => document.querySelector('#inventory-mail-purposes')?.value.includes('另一页新增用途'));
+      assert(!(await items()).includes('旧版本草稿'));
+      await add('重新核对后的用途'); await save();
+      assert(inventory.data.tableSettings.find(([key]) => key === 'mail-extraction')[1].purposes.includes('另一页新增用途'));
+      await page.screenshot({ path: evidence + '/purpose-saved-1440.png', fullPage: true });
+      assert(writes.every(write => ['inventory_table_settings', 'inventory_extract'].includes(write.action)));
+    } else {
+      await add('草稿用途'); await close(); await settings.click();
+      assert((await items()).includes('草稿用途'));
+    }
+    assert.deepEqual(errors, []);
+    assert.deepEqual(requests.external, []); assert.deepEqual(requests.unavailable, []);
+    await context.close();
+  }
+  await writeFile(evidence + '/geometry.json', JSON.stringify(measurements, null, 2));
+});

@@ -202,7 +202,7 @@ test('Claude inventory must have a known and eligible registration age at delive
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-05T02:30:00.000Z') });
   const store = createLocalBusinessStore(':memory:');
   try {
-    const claude = { ...account, id: 'stock-claude-1', type: 'claude', registered: '' };
+    const claude = { ...account, id: 'stock-claude-1', type: 'claude', registered: '', device: '合成设备', proxyUrl: 'socks5://proxy.example.test:1080' };
     const delivery = order('claude-sale', {
       businessType: '成品交付',
       product: 'Claude Pro',

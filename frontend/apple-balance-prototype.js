@@ -865,7 +865,7 @@
       { id: 'security2', label: '密保 2', render: assetValue('security2'), long: true },
       { id: 'security3', label: '密保 3', render: assetValue('security3'), long: true },
       { id: 'birthday', label: '密保生日', render: assetValue('birthday') },
-      { id: 'phone', label: '绑定电话', render: assetValue('phone') },
+      { id: 'phone', label: '绑定电话／验证码', render: row => A.modules.inventory?.phoneValue(assets.get(row.id)?.phone) || '—' },
       { id: 'country', label: '国家地区' },
       { id: 'device', label: '登录设备', render: assetValue('device') },
       { id: 'appPassword', label: '应用专用密码', render: assetValue('appPassword'), long: true },

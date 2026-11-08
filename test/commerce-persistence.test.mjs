@@ -35,7 +35,11 @@ function browser(store, appleAsset = null) {
   const state = { route: 'customers/list', demoOrders: [], drafts: new Map() };
   const bankOrderEntry = {
     isConnected: true,
+    dataset: { commerceDraft: 'local-bank-entry' },
     elements: {
+      'commerce-id': { value: '' },
+      'commerce-saleManual': { value: '' },
+      'commerce-saleCurrency': { value: 'CNY' },
       'commerce-payment': { value: '银行卡' },
       'commerce-product': { value: 'GPT' },
       'commerce-cardId': { tagName: 'SELECT', value: bankCard.id, closest: () => null },

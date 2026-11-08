@@ -50,6 +50,8 @@
     { id: 'microsoft', label: '微软邮箱', enabled: false }
   ];
   const tableSettings = new Map();
+  const mailExtractionSettingsKey = 'mail-extraction';
+  const defaultMailPurposes = ['注册 Claude', '注册 GPT', '业务备用', '其他'];
   const defaultAccountCities = new Map([
     ['马来西亚', ['吉隆坡', '槟城', '新山']],
     ['美国', ['纽约', '洛杉矶', '芝加哥']],
@@ -312,6 +314,19 @@
         id !== 'apple' && (id !== 'relay' || !localData || (extraction && canExtractLocalRelay()))
     );
   }
+  function mailboxSubmissionTypes() {
+    return enabledTypes().filter(([id]) => id !== 'apple' && (id !== 'relay' || !localData || (admin() && localData.relay)));
+  }
+  function phoneCodeUrl(value) {
+    try {
+      const url = new URL(String(value || '').trim());
+      return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
+    } catch { return ''; }
+  }
+  function phoneValue(value) {
+    const url = phoneCodeUrl(value);
+    return url ? `<a class="table-value-button" href="${esc(url)}" target="_blank" rel="noopener noreferrer nofollow">打开验证码</a>` : esc(value || '—');
+  }
   function fundingAppleRoute() {
     return ['accounts/apple-balances', 'mailboxes/apple'].includes(api.state.route);
   }
@@ -500,6 +515,25 @@
       });
     return tableSettings.get(type);
   }
+  function mailExtractionPurposes() {
+    const values = tableSettings.get(mailExtractionSettingsKey)?.purposes;
+    return Array.isArray(values) ? values : defaultMailPurposes;
+  }
+  function openMailPurposeSettings(reset = false) {
+    if (api.state.route !== 'workspace/mail-extract') return;
+    saveDrafts();
+    const key = 'inventory-purpose-settings:mail';
+    if (reset) api.state.drafts.delete(key);
+    const saved = api.state.drafts.get(key) || {};
+    showDrawer(
+      '邮箱提取用途设置',
+      '添加或移除后仅影响邮箱提取的后续选择，历史批次保留原用途。至少保留一个用途。',
+      `<form id="inventory-purpose-settings-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-purpose-settings-version" value="${esc(saved['inventory-purpose-settings-version'] ?? localInventoryVersion)}" />${api.optionListEditor({ id: 'inventory-mail-purposes', label: '提取用途', itemLabel: '用途', values: mailExtractionPurposes(), minItems: 1, draft: saved })}</form>`,
+      button('重新读取', 'inventory-purpose-settings-reload', '', 'return') + button('取消', 'inventory-close') +
+        '<button class="button primary" form="inventory-purpose-settings-form" type="submit">保存设置</button>',
+      key
+    );
+  }
   function choicesWithCurrent(choices, current) {
     return current &&
       !choices.some((choice) => (Array.isArray(choice) ? choice[0] : choice) === current)
@@ -551,7 +585,8 @@
     return {
       pending: batch.items.filter((item) => item.status === 'pending').length,
       used: batch.items.filter((item) => item.status === 'used').length,
-      returned: batch.items.filter((item) => ['returned', 'abnormal'].includes(item.status)).length
+      returned: batch.items.filter((item) => ['returned', 'abnormal'].includes(item.status)).length,
+      returnable: batch.items.filter(item => !returnBlock(assetById(item.assetId), batch, item)).length
     };
   }
   function ownerAllowed(batch) {
@@ -561,6 +596,8 @@
     if (!asset) return '原资料不存在或无查看权限';
     normalize(asset);
     if (batch && !ownerAllowed(batch)) return '只能归还本人领用资料';
+    if (item && ['returned', 'abnormal'].includes(item.status)) return '本次领用已归还';
+    if (item?.status === 'used') return '本次领用已实际使用';
     if (item && asset.claimId !== item.id)
       return '原领用已结束或已被其他批次重新提取，无有效归还资格';
     if (asset.inventoryState === 'used' || (asset.usageLinks.length && asset.accountLifecycle?.disposition !== 'recovered'))
@@ -827,7 +864,7 @@
         ...(type === 'google'
           ? [
               { id: 'auxiliary', label: '辅助邮箱', class: 'wide-cell', long: true },
-              { id: 'phone', label: '绑定电话' },
+              { id: 'phone', label: '绑定电话／验证码', render: asset => phoneValue(asset.phone) },
               { id: 'appPassword', label: '应用专用密码', class: 'mono wide-cell', long: true }
             ]
           : []),
@@ -992,6 +1029,7 @@
   function extractionPage() {
     const account = api.state.route === 'workspace/account-extract';
     const kind = account ? 'account' : 'mail';
+    const purposes = account ? ['客户交付', '比特充值', '业务备用', '其他'] : mailExtractionPurposes();
     const key = `inventory-extract:${kind}`;
     const list = account
       ? [
@@ -1002,8 +1040,13 @@
     const d = draft(key, {
       'inventory-extract-type': list[0]?.[0],
       'inventory-quantity': '3',
-      'inventory-purpose': account ? '客户交付' : '注册 Claude'
+      'inventory-purpose': purposes[0] || ''
     });
+    const selectedPurpose = purposes.includes(d['inventory-purpose']) ? d['inventory-purpose'] : '';
+    const purposeChoices = selectedPurpose ? purposes : [['', '原用途已移除，请重新选择'], ...purposes];
+    const purposeControl = account
+      ? select('inventory-purpose', purposeChoices, selectedPurpose)
+      : `<div class="option-entry-controls">${select('inventory-purpose', purposeChoices, selectedPurpose)}${button('设置', 'inventory-purpose-settings', '', 'settings', 'aria-label="设置邮箱提取用途"')}</div>`;
     const recent = batches
       .filter((batch) => batch.kind === kind && ownerAllowed(batch))
       .slice(0, 5);
@@ -1020,7 +1063,7 @@
         '提取后先进入待使用；确认实际使用后不再进入通用可提取库存。跨天处理请进入提取与归还。',
         button('提取与归还', 'inventory-center', '', 'return')
       ) +
-      `<section class="panel form-panel"><form id="inventory-extract-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-kind" value="${kind}" /><div class="form-grid">${field(account ? '账号类型' : '邮箱类型', 'inventory-extract-type', select('inventory-extract-type', list, d['inventory-extract-type']), true)}${field('提取数量', 'inventory-quantity', input('inventory-quantity', d['inventory-quantity'], 'type="number" min="1" max="100"'), true)}${field('提取用途', 'inventory-purpose', select('inventory-purpose', account ? ['客户交付', '比特充值', '业务备用', '其他'] : ['注册 Claude', '注册 GPT', '业务备用', '其他'], d['inventory-purpose']), true)}${d['inventory-purpose'] === '其他' ? field('用途说明', 'inventory-purpose-other', input('inventory-purpose-other', d['inventory-purpose-other'] || '', 'placeholder="填写具体用途"'), true) : ''}${wide('备注', 'inventory-extract-notes', area('inventory-extract-notes', d['inventory-extract-notes'] || '', '记录本批资料用途和操作说明'))}</div><div class="form-footer" data-page-actions="before-submit"><span class="footnote">当前可用：${availableCounts}</span><button class="button primary" type="submit">确认提取</button></div></form></section><section class="panel result-panel"><div class="panel-heading"><h2>最近提取批次</h2>${button('全部记录', 'inventory-center')}</div>${batchTable(recent)}</section>`
+      `<section class="panel form-panel"><form id="inventory-extract-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-kind" value="${kind}" /><div class="form-grid">${field(account ? '账号类型' : '邮箱类型', 'inventory-extract-type', select('inventory-extract-type', list, d['inventory-extract-type']), true)}${field('提取数量', 'inventory-quantity', input('inventory-quantity', d['inventory-quantity'], 'type="number" min="1" max="100"'), true)}${field('提取用途', 'inventory-purpose', purposeControl, true)}${selectedPurpose === '其他' ? field('用途说明', 'inventory-purpose-other', input('inventory-purpose-other', d['inventory-purpose-other'] || '', 'placeholder="填写具体用途"'), true) : ''}${wide('备注', 'inventory-extract-notes', area('inventory-extract-notes', d['inventory-extract-notes'] || '', '记录本批资料用途和操作说明'))}</div><div class="form-footer" data-page-actions="before-submit"><span class="footnote">当前可用：${availableCounts}</span><button class="button primary" type="submit">确认提取</button></div></form></section><section class="panel result-panel"><div class="panel-heading"><h2>最近提取批次</h2>${button('全部记录', 'inventory-center')}</div>${batchTable(recent)}</section>`
     );
   }
   function batchTable(rows) {
@@ -1052,12 +1095,13 @@
             },
             { id: 'used', label: '已使用', render: (batch) => batchCounts(batch).used },
             { id: 'returned', label: '已归还', render: (batch) => batchCounts(batch).returned },
+            { id: 'returnable', label: '可归还', render: batch => tag(String(batchCounts(batch).returnable), batchCounts(batch).returnable ? 'success' : '') },
             {
               id: 'actions',
               label: '操作',
               action: true,
               render: (batch) =>
-                `<div class="action-links">${textAction('明细', 'inventory-batch', `data-id="${batch.id}"`)}${textAction('快捷归还', 'inventory-batch-return', `data-id="${batch.id}"`)}</div>`
+                `<div class="action-links">${textAction('明细', 'inventory-batch', `data-id="${batch.id}"`)}${textAction(batchCounts(batch).returnable ? `归还（${batchCounts(batch).returnable}）` : '无可归还项', 'inventory-batch-return', `data-id="${batch.id}" ${batchCounts(batch).returnable ? '' : 'disabled title="查看明细了解已使用、已归还或业务占用原因"'}`)}</div>`
             }
           ],
           rows,
@@ -1085,7 +1129,7 @@
           ],
           d['inventory-quick-kind'] || 'all'
         )
-      )}</div><div class="form-footer"><span class="footnote">只查找当前用户可处理的领用记录，不会直接归还。</span><button class="button primary" type="submit">查找并核对</button></div></form></div>`;
+      )}${field('资料类型', 'inventory-quick-type', select('inventory-quick-type', [['', '全部类型'], ['google', '谷歌邮箱'], ['relay', '苹果隐藏邮箱'], ['gpt', 'GPT 账号'], ['claude', 'Claude 账号']], d['inventory-quick-type'] || ''))}</div><div class="form-footer"><span class="footnote">先读取最新库存逐项核对；同一地址匹配多条时须明确选择，不会直接归还。</span><button class="button primary" type="submit">查找并核对</button></div></form></div>`;
     } else if (v.centerTab === 'returns') {
       const rows = returnRecords.filter((entry) => admin() || entry.actorId === currentActor().id);
       body = rows.length
@@ -1168,7 +1212,7 @@
             'inventory-claim-return',
             'primary',
             'return',
-            selected.size ? '' : 'disabled'
+            batch.items.some(item => selected.has(item.id) && !returnBlock(assetById(item.assetId), batch, item)) ? '' : 'disabled'
           )
       ) +
       summary([
@@ -1182,6 +1226,7 @@
           { id: 'email', label: '邮箱 / 账号', class: 'email-cell' },
           { id: 'type', label: '资料类型', render: (item) => typeLabel(item.type) },
           { id: 'status', label: '处理状态', render: itemTag },
+          { id: 'returnEligibility', label: '归还资格', class: 'wide-cell', render: item => esc(returnBlock(assetById(item.assetId), batch, item) || '可归还') },
           { id: 'usageEvidence', label: '使用依据', render: (item) => {
             const asset = assetById(item.assetId);
             const links = asset?.usageLinks || [];
@@ -1201,7 +1246,7 @@
             label: '操作',
             action: true,
             render: (item) =>
-              `<div class="action-links">${textAction('复制', 'inventory-item-copy', `data-id="${item.id}"`)}${textAction('资料', 'inventory-detail', `data-id="${item.assetId}"`)}${item.status === 'pending' ? textAction('归还', 'inventory-item-return', `data-id="${item.id}"`) : textAction('记录', 'inventory-detail', `data-id="${item.assetId}"`)}</div>`
+              `<div class="action-links">${textAction('复制', 'inventory-item-copy', `data-id="${item.id}"`)}${textAction('资料', 'inventory-detail', `data-id="${item.assetId}"`)}${textAction(returnBlock(assetById(item.assetId), batch, item) ? '不可归还' : '归还', 'inventory-item-return', `data-id="${item.id}" ${returnBlock(assetById(item.assetId), batch, item) ? 'disabled' : ''}`)}</div>`
           }
         ],
         batch.items,
@@ -1248,16 +1293,50 @@
     const ready = await readLocalInventory({ keepContent: true });
     if (request !== returnReviewRequest || route !== api.state.route || context !== api.state.drawerContext) return;
     if (!ready) return api.notify('未能核对最新库存，请重试');
-    requestReturn(ids.map(claimById).filter(Boolean), extraRows, preselect);
+    const fresh = ids.map(claimById);
+    requestReturn(fresh.filter(Boolean), [...extraRows, ...fresh.flatMap((entry, i) => entry ? [] : [{ email: claims[i].item.email, reason: '原领用已变化或无查看权限，请重新查找' }])], preselect);
+  }
+  async function reviewQuickReturn(form) {
+    const data = api.readForm(form), snapshot = JSON.stringify(data), request = ++returnReviewRequest;
+    const route = api.state.route, actorId = currentActor().id;
+    const current = () => request === returnReviewRequest && route === api.state.route && actorId === currentActor().id &&
+      form.isConnected !== false && JSON.stringify(api.readForm(form)) === snapshot;
+    const tokens = String(data['inventory-quick-text'] || '').split(/\r?\n/).flatMap((line, index) =>
+      line.split(/[\s,;，；]+/).map(value => value.trim().toLowerCase()).filter(Boolean).map(email => ({ email, line: index + 1 })));
+    if (!tokens.length) return api.setError('inventory-quick-text', '请填写至少一个邮箱或账号');
+    if (localData && !await readLocalInventory({ keepContent: true })) {
+      if (current()) api.notify('未能核对最新库存，输入已保留，请重试');
+      return;
+    }
+    if (!current()) return;
+    const claims = [], errors = [], seen = new Set();
+    for (const { email, line } of tokens) {
+      if (seen.has(email)) { errors.push({ email, line, reason: '重复输入，不重复处理' }); continue; }
+      seen.add(email);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errors.push({ email, line, reason: '邮箱或账号格式不正确' }); continue; }
+      const candidates = allAssets().filter(asset => asset.email.toLowerCase() === email &&
+        (!data['inventory-quick-type'] || asset.type === data['inventory-quick-type']) &&
+        (data['inventory-quick-kind'] === 'all' || (isAccount(asset) ? 'account' : 'mail') === data['inventory-quick-kind']));
+      if (!candidates.length) { errors.push({ email, line, reason: '未找到对应类型资料或无查看权限' }); continue; }
+      for (const asset of candidates) {
+        const match = pendingClaim(asset) || batches.filter(batch => batch.kind === (isAccount(asset) ? 'account' : 'mail'))
+          .flatMap(batch => batch.items.filter(item => item.assetId === asset.id).map(item => ({ batch, item })))[0];
+        if (match && !ownerAllowed(match.batch)) errors.push({ email, line, type: asset.type, reason: '无权处理当前领用记录' });
+        else if (match) claims.push({ ...match, line, ambiguous: candidates.length > 1 });
+        else errors.push({ email, line, type: asset.type, reason: asset.inventoryState === 'used' ? '资料已实际使用，不能归还' : '当前没有有效领用，已在库存或已归还' });
+      }
+    }
+    requestReturn(claims, errors);
   }
   function requestReturn(claims, extraRows = [], preselect = true) {
     if (!claims.length && !extraRows.length) {
       api.notify('请先选择需要处理的资料');
       return;
     }
-    const checked = claims.map(({ batch, item }) => ({
+    const checked = claims.map(({ batch, item, line, ambiguous }) => ({
       batch,
       item,
+      line, ambiguous,
       asset: assetById(item.assetId),
       blocked: returnBlock(assetById(item.assetId), batch, item)
     }));
@@ -1265,7 +1344,7 @@
     const displayRows = [
       ...checked,
       ...extraRows.map((row) => ({
-        item: { email: row.email },
+        item: { email: row.email, type: row.type }, line: row.line,
         batch: { id: row.batchId || '—' },
         blocked: row.reason
       }))
@@ -1278,8 +1357,8 @@
       .sort()
       .join(',')}`;
     const saved = api.state.drafts.get(key);
-    const selected = allowed.filter(({ item }) =>
-      saved ? Boolean(saved[`inventory-return-choice-${item.id}`]) : preselect
+    const selected = allowed.filter(({ item, ambiguous }) =>
+      saved ? Boolean(saved[`inventory-return-choice-${item.id}`]) : preselect && !ambiguous
     );
     showDrawer(
       '核对归还资料',
@@ -1293,12 +1372,15 @@
             render: (row) =>
               `<input type="checkbox" id="inventory-return-choice-${esc(row.item.id || `blocked-${row.id}`)}" name="inventory-return-choice-${esc(row.item.id || `blocked-${row.id}`)}" value="${esc(row.item.id || '')}" data-return-claim aria-label="归还 ${esc(row.item.email)}" ${row.blocked ? 'disabled' : selected.some(({ item }) => item.id === row.item.id) ? 'checked' : ''} />`
           },
+          { id: 'line', label: '输入行', render: row => row.line || '—' },
+          { id: 'type', label: '资料类型', render: row => esc(row.item.type ? typeLabel(row.item.type) : '—') },
           { id: 'email', label: '邮箱 / 账号', render: (row) => esc(row.item.email) },
           { id: 'batch', label: '原批次', render: (row) => esc(row.batch.id) },
           {
             id: 'result',
             label: '处理资格',
-            render: (row) => (row.blocked ? tag(row.blocked, 'danger') : tag('可归还', 'success'))
+            class: 'wide-cell',
+            render: (row) => row.blocked ? esc(row.blocked) : row.ambiguous ? tag('可归还，需明确选择目标', 'warning') : tag('可归还', 'success')
           }
         ],
         displayRows.map((row, index) => ({ ...row, id: String(index) })),
@@ -1385,7 +1467,7 @@
         status: '正常',
         source: '自己注册',
         country: '',
-        registered: ''
+        registered: inventoryNow().replace(' ', 'T')
       }
     );
     const val = (name) => d[`inventory-${name}`] ?? d[name] ?? '';
@@ -1443,7 +1525,8 @@
       fields += field(
         '绑定电话',
         'inventory-phone',
-        `${input('inventory-phone', val('phone'))}<label class="checkbox-label"><input type="checkbox" id="inventory-no-phone" name="inventory-no-phone" ${(api.state.drafts.has(key) ? Boolean(d['inventory-no-phone']) : original && !original.phone) ? 'checked' : ''} />确认未绑定电话</label>`
+        `<div class="option-entry-controls">${input('inventory-phone', val('phone'), 'placeholder="电话号码或 HTTP(S) 验证码链接"')}<a id="inventory-phone-code-link" class="button" href="${esc(phoneCodeUrl(val('phone')) || '#')}" target="_blank" rel="noopener noreferrer nofollow" ${phoneCodeUrl(val('phone')) ? '' : 'hidden'}>查看验证码</a></div><label class="checkbox-label"><input type="checkbox" id="inventory-no-phone" name="inventory-no-phone" ${(api.state.drafts.has(key) ? Boolean(d['inventory-no-phone']) : original && !original.phone) ? 'checked' : ''} />确认未绑定电话</label>`,
+        true
       );
     const countrySelect = select(
       'inventory-country-edit',
@@ -1454,9 +1537,9 @@
       account ? '注册国家' : '国家地区',
       'inventory-country-edit',
       account
-        ? `<div class="field-row">${countrySelect}${locationSettingsButton(type, 'asset', id)}</div>`
+        ? `<div class="option-entry-controls">${countrySelect}${locationSettingsButton(type, 'asset', id)}</div>`
         : countrySelect,
-      account || type === 'apple'
+      account || ['google', 'apple'].includes(type)
     );
     if (account)
       fields += field(
@@ -1492,7 +1575,7 @@
         'inventory-registered',
         input(
           'inventory-registered',
-          d['inventory-registered'] ?? (original ? registrationInput(original) : ''),
+          d['inventory-registered'] ?? (original ? registrationInput(original) : d.registered),
           'type="datetime-local"'
         ),
         false,
@@ -1509,7 +1592,7 @@
         false,
         '系统生成，编辑资料不会改变。'
       ) +
-      field('登录设备', 'inventory-device', input('inventory-device', val('device')));
+      field('登录设备', 'inventory-device', input('inventory-device', val('device')), ['google', 'claude'].includes(type));
     if (type === 'google' || type === 'gpt')
       fields += wide(
         '2FA 密钥',
@@ -1560,7 +1643,7 @@
             d['inventory-proxy-url'] ?? original?.proxyUrl ?? '',
             'placeholder="粘贴代理链接，自动填入下方四项"'
           ),
-          false,
+          true,
           '支持代理链接、主机:端口或主机:端口:账号:密码；带协议时自动识别。'
         ) +
         field(
@@ -1606,7 +1689,7 @@
     );
   }
   function locationSettingsButton(type, from = '', id = '') {
-    return button('国家地区设置', 'inventory-location-settings', '', 'settings',
+    return button('设置', 'inventory-location-settings', '', 'settings',
       `data-type="${esc(type)}" data-from="${esc(from)}" data-id="${esc(id)}"`);
   }
   function cityOptions(type, country) {
@@ -1888,7 +1971,7 @@
     if (asset.type === 'google') rows.push(['辅助邮箱', asset.auxiliary || '未填写']);
     if (['google', 'apple'].includes(asset.type))
       rows.push(
-        ['绑定电话', asset.phone || '未绑定或未记录'],
+        ['绑定电话／验证码', asset.phone || '未绑定或未记录'],
         ['应用专用密码', asset.appPassword || '未填写']
       );
     if (asset.type === 'relay')
@@ -1941,7 +2024,7 @@
     showDrawer(
       '资料详情',
       '资料、提取、实际使用、归还和任务来源保持关联。',
-      `<div class="property-list">${rows.map(([name, value]) => `<div class="property-row"><span>${esc(name)}</span><strong>${esc(value)}</strong></div>`).join('')}</div>${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
+      `<div class="property-list">${rows.map(([name, value]) => `<div class="property-row"><span>${esc(name)}</span><strong>${name === '绑定电话／验证码' ? phoneValue(value) : esc(value)}</strong></div>`).join('')}</div>${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
       button('关闭', 'inventory-close')
     );
   }
@@ -1951,7 +2034,15 @@
     api.openActionMenu(node, `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(asset.email)}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
   function submissionPage(accountEntry = false) {
-    const choices = accountEntry ? accountSubmissionTypes : mailboxWorkflowTypes();
+    const choices = accountEntry ? accountSubmissionTypes : mailboxSubmissionTypes();
+    const relayResults = accountEntry ? [] : (api.state.drafts.get('inventory-relay-entry-results')?.ids || []).map(assetById).filter(asset => asset?.type === 'relay');
+    const results = relayResults.length ? `<section class="panel result-panel"><div class="panel-heading"><h2>本次隐藏邮箱录入结果</h2>${button('继续录入', 'inventory-add-type', '', 'plus', 'data-type="relay"')}</div>${table([
+      { id: 'email', label: '隐藏邮箱' },
+      { id: 'parent', label: '所属主邮箱', render: row => esc(api.modules.appleRelay?.getParent(row.parentMailboxId)?.email || '—') },
+      { id: 'createdAt', label: '录入时间' },
+      { id: 'result', label: '结果', render: () => tag('已登记', 'success') },
+      { id: 'actions', label: '操作', action: true, render: row => textAction('复制邮箱地址', 'inventory-relay-entry-copy', `data-id="${esc(row.id)}"`) }
+    ], relayResults, '', '快捷隐藏邮箱录入结果')}</section>` : '';
     return (
       header(
         accountEntry ? '账号提交' : '邮箱提交',
@@ -1962,11 +2053,11 @@
       `<section class="panel form-panel"><div class="submission-grid">${choices
         .map(
           ([type, label]) =>
-            `<div class="guide-item"><h3>${esc(label)}</h3><div class="toolbar">${button(type === 'relay' ? '登记隐藏邮箱' : '单条录入', 'inventory-add-type', 'primary', 'plus', `data-type="${type}"`)}${button('批量导入', 'inventory-import', '', 'upload', `data-type="${type}"`)}${accountEntry && usesAccountLocation(type) ? locationSettingsButton(type) : ''}</div>${accountEntry ? textAction('查看账号管理', 'inventory-go', `data-route="accounts/${type === 'apple' ? 'apple-balances' : type}"`) : type === 'relay' ? textAction('主邮箱管理', 'inventory-go', 'data-route="mailboxes/relay"') : ''}</div>`
+            `<div class="guide-item"><h3>${esc(label)}</h3><div class="toolbar">${button(type === 'relay' ? '登记隐藏邮箱' : '单条录入', 'inventory-add-type', 'primary', 'plus', `data-type="${type}"`)}${button('批量导入', 'inventory-import', '', 'upload', `data-type="${type}"`)}${accountEntry && usesAccountLocation(type) ? locationSettingsButton(type) : ''}</div>${accountEntry ? textAction('查看账号管理', 'inventory-go', `data-route="accounts/${type === 'apple' ? 'apple-balances' : type}"`) : ''}</div>`
         )
         .join(
           ''
-        )}</div></section><section class="panel result-panel"><div class="panel-heading"><h2>近期导入</h2></div>${importList('', accountEntry ? 'account' : 'mail')}</section>`
+        )}</div></section>${results}<section class="panel result-panel"><div class="panel-heading"><h2>近期导入</h2></div>${importList('', accountEntry ? 'account' : 'mail')}</section>`
     );
   }
   function importList(type = '', scope = '') {
@@ -1977,7 +2068,7 @@
           (record.types || [record.type]).every((id) =>
             scope === 'account'
               ? accountEntryType(id)
-              : mailboxWorkflowTypes().some(([typeId]) => typeId === id)
+              : mailboxSubmissionTypes().some(([typeId]) => typeId === id)
           ))
     );
     return rows.length
@@ -2003,6 +2094,9 @@
           '导入记录'
         )
       : empty('暂无导入记录', '完成预检与确认导入后保留批次。');
+  }
+  function parseRegistrationProxySafe(value) {
+    try { return value ? parseRegistrationProxy(value) : {}; } catch { return {}; }
   }
   function importEditor(type = '') {
     if (accountSubmissionRoute()) {
@@ -2036,7 +2130,7 @@
     showDrawer(
       '批量导入预检',
       '逐行确认最终类型和注册时间后再导入；地址识别仅作建议，不会自动更改类型。',
-      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${field('默认资料类型', 'inventory-import-type', select('inventory-import-type', choices, d['inventory-import-type']), true)}${field('来源渠道', 'inventory-import-source', select('inventory-import-source', ['自己注册', '线上购买', '客户提供'], d['inventory-import-source'] || '自己注册'), true)}${field('CSV 文件', 'inventory-import-file', '<input id="inventory-import-file" type="file" accept=".csv,text/csv" />')}${wide('导入内容', 'inventory-import-content', area('inventory-import-content', d['inventory-import-content'] || '', '邮箱,密码,电话,国家,城市,注册时间,资料类型\ndemo@example.test,Demo-Only!,演示电话,马来西亚,吉隆坡,,苹果 ID', 6), true)}${wide('无绑定电话', 'inventory-import-no-phone', `<label class="checkbox-label"><input id="inventory-import-no-phone" name="inventory-import-no-phone" type="checkbox" ${d['inventory-import-no-phone'] ? 'checked' : ''} />确认空电话资料均未绑定电话号码</label>`)}</div></form><div id="inventory-import-results"></div>`,
+      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${field('默认资料类型', 'inventory-import-type', select('inventory-import-type', choices, d['inventory-import-type']), true)}${field('来源渠道', 'inventory-import-source', select('inventory-import-source', ['自己注册', '线上购买', '客户提供'], d['inventory-import-source'] || '自己注册'), true)}${field('CSV 文件', 'inventory-import-file', '<input id="inventory-import-file" type="file" accept=".csv,text/csv" />')}${wide('导入内容', 'inventory-import-content', area('inventory-import-content', d['inventory-import-content'] || '', '邮箱,密码,电话,国家,城市,注册时间,资料类型,登录设备,注册代理链接\ndemo@example.test,Demo-Only!,演示电话,马来西亚,吉隆坡,,谷歌邮箱,设备名称,', 6), true)}${wide('无绑定电话', 'inventory-import-no-phone', `<label class="checkbox-label"><input id="inventory-import-no-phone" name="inventory-import-no-phone" type="checkbox" ${d['inventory-import-no-phone'] ? 'checked' : ''} />确认空电话资料均未绑定电话号码</label>`)}</div></form><div id="inventory-import-results"></div>`,
       button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-import-form" type="submit">检查并预览</button>',
       key
@@ -2302,6 +2396,9 @@
       if (!error && context.type === 'apple' && !values.phone && !d['inventory-import-no-phone'])
         error = '需确认未绑定电话';
       if (!error && context.type === 'apple' && !values.country) error = '缺少国家';
+      if (!error && context.type === 'claude' && !values.device) error = '缺少登录设备';
+      if (!error && context.type === 'claude' && !values.proxyUrl) error = '缺少注册代理链接';
+      if (!error && values.phone && /^[a-z][a-z0-9+.-]*:/i.test(values.phone) && !phoneCodeUrl(values.phone)) error = '验证码链接仅支持有效的 HTTP(S) 地址';
       if (!error && usesAccountLocation(context.type))
         error = accountLocationError(context.type, values.country, values.city);
       if (!error && values.registered && !validRegisteredDate(values.registered))
@@ -2483,7 +2580,9 @@
     let first = '';
     const required = ['inventory-email'];
     if (['google', 'apple'].includes(type)) required.push('inventory-password');
-    if (type === 'apple') required.push('inventory-country-edit');
+    if (['google', 'apple'].includes(type)) required.push('inventory-country-edit');
+    if (['google', 'claude'].includes(type)) required.push('inventory-device');
+    if (type === 'claude') required.push('inventory-proxy-url');
     for (const name of required) {
       const error = !String(data[name] || '').trim() ? '请填写此项资料' : '';
       api.setError(name, error);
@@ -2513,6 +2612,11 @@
       !data['inventory-no-phone']
     ) {
       api.setError('inventory-phone', '填写电话，或明确确认未绑定电话');
+      first ||= 'inventory-phone';
+    }
+    const phone = String(data['inventory-phone'] || '').trim();
+    if (phone && /^[a-z][a-z0-9+.-]*:/i.test(phone) && !phoneCodeUrl(phone)) {
+      api.setError('inventory-phone', '验证码链接仅支持有效的 HTTP(S) 地址');
       first ||= 'inventory-phone';
     }
     if (first) {
@@ -2601,7 +2705,7 @@
     }
     confirmInventoryChange(
       original ? '确认修改资料' : '确认新增资料',
-      `${data['inventory-email']} · ${typeLabel(type)}，${localData ? '保存到本机库存' : '仅保存到演示内存'}。`,
+      `${data['inventory-email']} · ${typeLabel(type)}，${localData ? '保存到服务器数据库' : '当前为离线演示，内容仅保留在本页内存'}。`,
       () => {
         if (
           accountEntry &&
@@ -2695,7 +2799,7 @@
         return () => {
           finishDrawer(form.dataset.inventoryDraft || `inventory-edit:${id || `new:${type}`}`);
           api.render();
-          api.notify(localData ? '资料已保存到本机库存' : '演示资料已保存');
+          api.notify(localData ? '资料已保存到服务器' : '演示资料已保存');
         };
       },
       '确认保存'
@@ -2815,6 +2919,11 @@
           ? `库存不足，当前可提取 ${candidates.length} 条`
           : '';
     api.setError('inventory-quantity', error);
+    if (kind === 'mail' && !mailExtractionPurposes().includes(d['inventory-purpose'])) {
+      api.setError('inventory-purpose', '请选择当前有效的提取用途，原选项可能已被移除');
+      return;
+    }
+    api.setError('inventory-purpose', '');
     const purpose =
       d['inventory-purpose'] === '其他'
         ? String(d['inventory-purpose-other'] || '').trim()
@@ -2829,6 +2938,10 @@
       '确认提取',
       `${typeLabel(type)} ${quantity} 条，用途为“${purpose}”。领取后进入待使用，不会直接算作实际使用。`,
       () => {
+        if (kind === 'mail' && !mailExtractionPurposes().includes(d['inventory-purpose'])) {
+          api.notify('提取用途已变化，请重新选择');
+          return;
+        }
         const fresh = collection(kind).filter((asset) => asset.type === type && available(asset));
         if (fresh.length < quantity) {
           api.notify('库存已变化，请重新核对');
@@ -3072,7 +3185,9 @@
             country = '',
             city = '',
             registered = '',
-            csvType = ''
+            csvType = '',
+            device = '',
+            proxyUrl = ''
           ] = columns.map((value) => String(value).trim());
           if (
             index === 0 &&
@@ -3100,7 +3215,14 @@
             !d['inventory-import-no-phone']
           )
             error = '需确认未绑定电话';
-          if (!error && finalType === 'apple' && !country) error = '缺少国家';
+          if (!error && columns.length > 9) error = '存在多余列，请按模板填写';
+          if (!error && ['apple', 'google'].includes(finalType) && !country) error = '缺少国家';
+          if (!error && ['google', 'claude'].includes(finalType) && !device) error = '缺少登录设备';
+          if (!error && finalType === 'claude' && !proxyUrl) error = '缺少注册代理链接';
+          if (!error && phone && /^[a-z][a-z0-9+.-]*:/i.test(phone) && !phoneCodeUrl(phone)) error = '验证码链接仅支持有效的 HTTP(S) 地址';
+          if (!error && finalType === 'claude') {
+            try { parseRegistrationProxy(proxyUrl); } catch (issue) { error = issue.message; }
+          }
           if (!error && usesAccountLocation(finalType))
             error = accountLocationError(finalType, country, city);
           if (!error && registered && !validRegisteredDate(registered))
@@ -3117,6 +3239,7 @@
               city,
               registered,
               type: finalType,
+              fields: { device, ...(finalType === 'claude' ? parseRegistrationProxySafe(proxyUrl) : {}) },
               error
             }
           ];
@@ -3374,6 +3497,10 @@
       submitImport(document.getElementById('inventory-import-form'), true);
     else if (action === 'inventory-add') assetEditor();
     else if (action === 'inventory-add-type') assetEditor('', node.dataset.type);
+    else if (action === 'inventory-relay-entry-copy') {
+      const asset = assetById(id);
+      if (asset?.type === 'relay') void api.copyText(asset.email);
+    }
     else if (action === 'inventory-edit') assetEditor(id);
     else if (action === 'inventory-detail') assetDetail(id);
     else if (action === 'inventory-more') assetMore(id, node);
@@ -3529,6 +3656,22 @@
               : empty('历史导入摘要', `${record.success} 条成功。演示历史不伪造逐行原始文件。`)),
           button('关闭', 'inventory-close')
         );
+    } else if (action === 'inventory-purpose-settings') {
+      openMailPurposeSettings();
+    } else if (action === 'inventory-purpose-settings-reload') {
+      const form = document.getElementById('inventory-purpose-settings-form');
+      if (!form || api.state.route !== 'workspace/mail-extract') return true;
+      const snapshot = JSON.stringify(api.readForm(form)), actorId = currentActor().id;
+      api.confirmAction('重新读取用途设置', '将用最新清单替换当前用途设置草稿，邮箱提取表单内容继续保留。', async () => {
+        const current = () => api.state.route === 'workspace/mail-extract' && currentActor().id === actorId &&
+          document.getElementById(form.id) === form && JSON.stringify(api.readForm(form)) === snapshot;
+        if (!current()) return;
+        if (localData && !await readLocalInventory({ keepContent: true })) {
+          api.notify('读取用途设置失败，当前输入已保留，请重试');
+          return;
+        }
+        if (current()) openMailPurposeSettings(true);
+      });
     } else if (action === 'inventory-settings' || action === 'inventory-location-settings') {
       const locationOnly = action === 'inventory-location-settings';
       const type = locationOnly ? node.dataset.type
@@ -3608,60 +3751,42 @@
     else if (form.id === 'inventory-asset-form') saveAsset(form);
     else if (form.id === 'inventory-import-form') submitImport(form);
     else if (form.id === 'inventory-quick-form') {
-      const data = api.readForm(form),
-        needles = data['inventory-quick-text']
-          .split(/[\s,;，；]+/)
-          .map((value) => value.trim().toLowerCase())
-          .filter(Boolean);
-      if (!needles.length) {
-        api.setError('inventory-quick-text', '请填写至少一个邮箱或账号');
+      void reviewQuickReturn(form);
+    } else if (form.id === 'inventory-purpose-settings-form') {
+      const key = 'inventory-purpose-settings:mail';
+      if (api.state.route !== 'workspace/mail-extract' || form.dataset.inventoryDraft !== key) {
+        api.notify('请从邮箱提取页面重新打开用途设置');
         return true;
       }
-      const claims = [],
-        errors = [],
-        seen = new Set();
-      for (const email of needles) {
-        if (seen.has(email)) {
-          errors.push({ email, reason: '重复输入，已在另一行列出，不重复处理' });
-          continue;
-        }
-        seen.add(email);
-        const candidates = allAssets().filter(
-          (asset) =>
-            asset.email.toLowerCase() === email &&
-            (data['inventory-quick-kind'] === 'all' ||
-              (isAccount(asset) ? 'account' : 'mail') === data['inventory-quick-kind'])
-        );
-        if (!candidates.length) {
-          errors.push({ email, reason: '未找到资料或无查看权限' });
-          continue;
-        }
-        for (const asset of candidates) {
-          const active = pendingClaim(asset);
-          const history = batches
-            .filter((batch) => batch.kind === (isAccount(asset) ? 'account' : 'mail'))
-            .flatMap((batch) =>
-              batch.items
-                .filter((item) => item.assetId === asset.id)
-                .map((item) => ({ batch, item }))
-            );
-          const match = active || history[0];
-          if (match && !ownerAllowed(match.batch))
-            errors.push({ email, reason: '无权处理当前领用记录' });
-          else if (match) claims.push(match);
-          else
-            errors.push({
-              email,
-              reason:
-                asset.inventoryState === 'used'
-                  ? '资料已实际使用，不能归还'
-                  : asset.inventoryState === 'available'
-                    ? '当前没有有效占用，已在库存或已归还'
-                    : '领用证据缺失，请核对原批次'
-            });
-        }
+      if (api.optionListPending(form)) {
+        api.notify('请先添加或保存正在输入的用途，也可以取消编辑后再保存设置');
+        return true;
       }
-      void reviewReturn(claims, errors);
+      const data = api.readForm(form);
+      if (localData && Number(data['inventory-purpose-settings-version']) !== localInventoryVersion) {
+        api.notify('用途设置或库存已变化，输入已保留，请重新读取后再保存');
+        return true;
+      }
+      let purposes;
+      try {
+        purposes = api.readOptionList(data['inventory-mail-purposes']);
+      } catch {
+        api.notify('用途列表格式不正确，请重新核对');
+        return true;
+      }
+      if (!purposes.length || purposes.length > 100 || purposes.some(value => value.length > 100 || /[\x00-\x1f\x7f]/.test(value)) ||
+          new Set(purposes.map(value => value.toLowerCase())).size !== purposes.length) {
+        api.notify('请保留 1–100 个不重复的用途，每项不超过 100 个字且不含控制字符');
+        return true;
+      }
+      confirmInventoryChange('确认本表设置', '更新邮箱提取用途，历史批次和账号提取用途保持原值。', () => {
+        tableSettings.set(mailExtractionSettingsKey, { purposes });
+        return () => {
+          finishDrawer(key);
+          api.render();
+          if (!localData) api.notify('邮箱提取用途已保存');
+        };
+      });
     } else if (form.id === 'inventory-settings-form') {
       const data = api.readForm(form),
         type = data['inventory-settings-type'];
@@ -3960,6 +4085,9 @@
     } else if (node.id === 'inventory-email') {
       const suggestion = document.getElementById('inventory-type-suggestion');
       if (suggestion) suggestion.textContent = mailboxSuggestion(node.value);
+    } else if (node.id === 'inventory-phone') {
+      const link = document.getElementById('inventory-phone-code-link');
+      if (link) { const url = phoneCodeUrl(node.value); link.hidden = !url; link.href = url || '#'; }
     } else if (node.id === 'inventory-proxy-url') {
       previewRegistrationProxy(node);
     }
@@ -3968,6 +4096,7 @@
   }
 
   api.modules.inventory = {
+    phoneValue,
     usageDetails,
     accountLifecycleReady: () => accountLifecycleLoaded,
     accountSummary: id => accountSummaries.get(id),

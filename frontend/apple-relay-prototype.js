@@ -335,14 +335,16 @@
   }
   function parentPicker(selected = '', text, locked = false) {
     const choices = parentChoices(selected).filter(([id]) => id);
+    if (!selected && text === undefined && choices.length === 1) selected = choices[0][0];
     const value = text ?? choices.find(([id]) => id === selected)?.[1] ?? '';
     const id = locked ? selected : matchedParentChoice(value, selected)?.[0] || '';
     return field(
       '所属主邮箱', 'parent-choice',
-      input('parent-choice', value,
-        `autocomplete="off" spellcheck="false" placeholder="输入主邮箱或编号搜索并选择" ${locked ? 'readonly' : 'list="relay-parent-options"'}`) +
+      `<div class="option-entry-controls">${input('parent-choice', value,
+        `autocomplete="off" spellcheck="false" placeholder="输入主邮箱或编号搜索并选择" ${locked ? 'readonly' : 'list="relay-parent-options"'}`)}${locked ? '' : A.button('刷新', 'relay-parent-options-refresh', '', 'return')}</div>` +
         `<input type="hidden" id="relay-parentId" name="relay-parentId" value="${E(id)}"${locked ? ' disabled' : ''} />` +
-        (locked ? '' : `<datalist id="relay-parent-options">${choices.map(([, label]) => `<option value="${E(label)}"></option>`).join('')}</datalist>`),
+        (locked ? '' : `<datalist id="relay-parent-options">${choices.map(([, label]) => `<option value="${E(label)}"></option>`).join('')}</datalist>`) +
+        (choices.length ? '' : '<p class="field-error" role="status">暂无可用主邮箱，请联系管理员配置后刷新；已填写内容会保留。</p>'),
       true, locked ? '已绑定的主邮箱不可更换。' : '搜索并选择实际开通该隐藏地址的 Apple 主邮箱。'
     );
   }
@@ -961,7 +963,7 @@
     initialize();
     const row = alias(id),
       d = draft('alias', id),
-      pid = row?.parentMailboxId || d['relay-parentId'] || parentId || view.parentId;
+      pid = row?.parentMailboxId || d['relay-parentId'] || parentId || (A.state.route === 'mailboxes/relay' ? view.parentId : '');
     if (id && !row) {
       A.notify('隐藏邮箱不存在');
       return;
@@ -1022,7 +1024,7 @@
       'import',
       '',
       '批量登记隐藏邮箱',
-      parentPicker(d['relay-parentId'] || parentId || view.parentId, d['relay-parent-choice']) +
+      parentPicker(d['relay-parentId'] || parentId || (A.state.route === 'mailboxes/relay' ? view.parentId : ''), d['relay-parent-choice']) +
         field(
           '有效天数',
           'days',
@@ -1344,6 +1346,13 @@
       const result = await window.IDLocalData.relay('alias-register', payload);
       A.modules.inventory.applyCommittedInventory(result.inventory);
       initialize();
+      if (A.state.route === 'workspace/mail-submit') {
+        const emails = new Set(payload.rows.map(row => row.email.toLowerCase()));
+        const ids = result.inventory.data.mailboxes.filter(row => row.type === 'relay' &&
+          row.parentMailboxId === payload.parentId && emails.has(row.email.toLowerCase())).map(row => row.id);
+        const previous = A.state.drafts.get('inventory-relay-entry-results')?.ids || [];
+        A.state.drafts.set('inventory-relay-entry-results', { ids: [...new Set([...ids, ...previous])].slice(0, 100) });
+      }
       if (context === ctx && document.getElementById(form.id) === form &&
           document.querySelector('#drawer')?.open && fingerprint(A.readForm(form)) === fp) {
         finish(ctx);
@@ -2419,7 +2428,17 @@
     initialize();
     const id = node.dataset.id,
       kind = node.dataset.kind;
-    if (action === 'relay-retry') {
+    if (action === 'relay-parent-options-refresh') {
+      const ctx = context, form = document.getElementById(`relay-${ctx?.kind}-form`);
+      if (!form || !['alias', 'import'].includes(ctx?.kind)) return true;
+      preserveDraft();
+      void A.withActionFeedback(node, async () => {
+        if (local && !await A.modules.inventory.refreshLocalInventory({ keepContent: true })) return false;
+        if (context !== ctx || !form.isConnected) return false;
+        if (ctx.kind === 'alias') openAliasEditor(ctx.id); else openAliasImport();
+        return true;
+      }, { pending: '正在读取主邮箱…', success: '主邮箱已更新', failure: '主邮箱读取失败，输入已保留' });
+    } else if (action === 'relay-retry') {
       void A.withActionFeedback(node, () => A.modules.inventory.refreshLocalInventory(),
         { pending: '正在读取隐藏邮箱资料…', success: '隐藏邮箱资料已重新读取', failure: '隐藏邮箱资料读取失败，请重试' });
       A.render();

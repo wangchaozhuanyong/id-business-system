@@ -198,6 +198,9 @@ const assetFields = (country, city, row = null) => ({
   'inventory-city': city,
   'inventory-source': '自己注册',
   'inventory-status-edit': '正常',
+  'inventory-device': '隔离测试设备',
+  'inventory-proxy-url': 'socks5://proxy.example.test:1080',
+  'inventory-proxy-protocol': 'socks5',
   'inventory-emailType': 'google'
 });
 const editorFor = (app, country) =>
@@ -289,11 +292,11 @@ test('工作台和 Claude 本表批导共用城市配置，代理拆分不更改
   assert.match(fromTable.body, /inventory-import-form/);
   const tableForm = app.form('inventory-import-form', {
     'inventory-import-type': 'claude',
-    'inventory-import-content': 'table@example.test,,,美国,纽约,,claude'
+    'inventory-import-content': 'table@example.test,,,美国,纽约,,claude,合成设备,socks5://proxy.example.test:1080'
   });
   app.inventory.onSubmit(tableForm);
   assert.match(app.tables.at(-1)[0].error, /不在所选国家/);
-  tableForm.values['inventory-import-content'] = 'table@example.test,,,美国,芝加哥,,claude';
+  tableForm.values['inventory-import-content'] = 'table@example.test,,,美国,芝加哥,,claude,合成设备,socks5://proxy.example.test:1080';
   app.inventory.onSubmit(tableForm);
   assert.equal(app.tables.at(-1)[0].error, '');
 
@@ -306,7 +309,7 @@ test('工作台和 Claude 本表批导共用城市配置，代理拆分不更改
     'inventory-import-type': 'claude',
     'inventory-import-email-type': 'google',
     'inventory-import-content':
-      '邮箱,注册国家,注册城市,注册代理链接\nimport@example.test,美国,纽约,socks5://user:secret@proxy.example.test:1080'
+      '邮箱,注册国家,注册城市,注册代理链接,登录设备\nimport@example.test,美国,纽约,socks5://user:secret@proxy.example.test:1080,合成设备'
   });
   app.inventory.onSubmit(form);
   assert.match(app.tables.at(-1)[0].error, /不在所选国家/);

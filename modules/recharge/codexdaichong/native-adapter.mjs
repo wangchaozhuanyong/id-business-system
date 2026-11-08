@@ -62,6 +62,8 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
     const external = path === '/api/external/cards/push';
     if (!admin && !external && !publicPaths.some((pattern) => pattern.test(path)))
       return reply(res, 404, '接口不存在');
+    if (path.startsWith('/api/admin/cdks/returns') && actor.id !== 'order-reconciliation')
+      return reply(res, 403, '归还接口仅供受管业务服务调用');
     if ((admin || external) && !actor.admin) return reply(res, 403, '没有充值管理权限');
     if (sensitivePaths.test(path) && !actor.sensitive) return reply(res, 403, '没有敏感资料权限');
     if (path === '/api/admin/recharge-routing' && req.method === 'PUT' && !actor.sensitive)

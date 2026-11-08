@@ -1,5 +1,6 @@
 // Browser and server share this module. Monetary inputs and outputs are decimal strings.
 export const currencies = Object.freeze(['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR']);
+export const validCurrencyCode = code => typeof code === 'string' && /^[A-Z]{3}$/.test(code);
 export const snapshotAction = '登记订单汇率快照';
 export const automaticProvider = Object.freeze({
   id: 'exchange-rate-api-open',
@@ -57,7 +58,7 @@ function normalizeSnapshot(input, orderAt, clock) {
     throw new Error('请填写兑人民币汇率');
   const rates = { CNY: '1' };
   for (const [currency, value] of Object.entries(input.rates)) {
-    if (!currencies.includes(currency)) throw new Error('汇率币种不受支持');
+    if (!validCurrencyCode(currency)) throw new Error('汇率币种不受支持');
     if (currency !== 'CNY' && value === '') continue;
     const rate = unsigned(value, 8);
     if (!rate || (currency === 'CNY' && rate !== rateOne))
@@ -112,7 +113,7 @@ export function calculateOrder(order, { appleLedger, currency = 'CNY', clock = D
     if (!targets.includes(currency)) throw new Error('统计币种无效');
     const snapshot = readSnapshot(order, clock);
     const rate = (code) => {
-      if (!currencies.includes(code)) throw new Error('订单币种无效');
+      if (!validCurrencyCode(code)) throw new Error('订单币种无效');
       if (!Object.hasOwn(snapshot.rates, code)) {
         missing.add(code);
         return 0n;
@@ -214,7 +215,7 @@ export function requiredQuoteCurrencies(order) {
       required.add(order.emailCostCurrency || 'CNY');
     if (order.payment === '银行卡' && order.product === 'GPT') required.add('USD');
   }
-  return currencies.filter((code) => code !== 'CNY' && required.has(code));
+  return [...new Set([...currencies, ...required])].filter(code => code !== 'CNY' && validCurrencyCode(code) && required.has(code));
 }
 
 function checkFeeSnapshot(order) {
