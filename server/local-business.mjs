@@ -136,6 +136,7 @@ const sessionEventLabels = {
   auth_nickname_set: '设置员工昵称',
   auth_login: '员工登录',
   auth_logout: '退出登录',
+  auth_session_revoke: '退出登录设备',
   auth_employee_create: '新增员工账号',
   auth_employee_update: '修改员工账号',
   relay_test: '测试苹果主邮箱连接',

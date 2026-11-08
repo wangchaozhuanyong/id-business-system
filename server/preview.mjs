@@ -343,6 +343,10 @@ export async function startPreview(
       }
     }
     const actor = auth?.getActor(request);
+    if (request.localAuthUnavailable) {
+      response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '5' });
+      return response.end(JSON.stringify({ error: '登录服务暂时不可用，请稍后重试，登录信息未清除' }));
+    }
     if (route === storefrontMailboxQueryRoute) {
       if (!storefrontMailbox || !auth || request.url !== storefrontMailboxQueryRoute) {
         response.writeHead(storefrontMailbox ? 400 : 404, { 'Cache-Control': 'private, no-store' }).end();
@@ -355,7 +359,8 @@ export async function startPreview(
     const forbidden = () => {
       const code = actor ? 403 : 401;
       response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-      return response.end(JSON.stringify({ error: actor ? '当前账号无权执行此操作' : '请先登录' }));
+      return response.end(JSON.stringify({ error: actor ? '当前账号无权执行此操作' : '登录已过期或已失效，请重新登录',
+        ...(!actor ? { reason: request.localAuthReason || 'invalid' } : {}) }));
     };
     if (dataChanges && route === dataChangeRoute) {
       if (loginRequired && !actor) return forbidden();

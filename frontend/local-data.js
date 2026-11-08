@@ -160,7 +160,7 @@
     if (!response.ok || result === null) {
       if (response.status === 401) {
         queries.clear();
-        window.IDLocalAuth?.lock?.();
+        window.IDLocalAuth?.lock?.(result?.reason);
       }
       const error = new Error(result?.error || result?.message || '本机数据接口未响应，请重试');
       error.status = response.status;
