@@ -75,6 +75,7 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
   }
   await page.goto(origin + '/#/workspace/order/claude');
   await page.waitForFunction(() => document.querySelector('#commerce-saleAmount')?.value === '201');
+  assert.equal(await page.locator('#main [data-action="commerce-price-settings"]').count(), 1, '套餐设置只保留售卖标题入口');
   assert.deepEqual(await codes(paid), ['CNY', 'MYR']);
   assert.deepEqual(await codes(sale), ['CNY', 'MYR']);
   await page.locator('#commerce-email').fill('claude-draft@example.test');
@@ -85,6 +86,7 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
   await close();
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.waitForFunction(() => document.querySelector('#commerce-saleAmount')?.value === '101');
+  assert.equal(await page.locator('#main [data-action="commerce-price-settings"]').count(), 1, '套餐设置只保留售卖标题入口');
   assert.deepEqual(await codes(paid), ['CNY', 'PHP']);
   await openCurrencies(1);
   assert.deepEqual(await currencies(), ['人民币 CNY', '菲律宾比索 PHP'], 'GPT 草稿不混入 Claude 币种');

@@ -137,7 +137,7 @@
   const grid = (html, paired = false) =>
     `<div class="form-grid${paired ? ' form-grid--paired' : ''}">${html}</div>`;
   const formFooter = (form, label = '核对并保存', durable = false) =>
-    `<span class="footnote">${durable ? '保存到本机数据库' : '仅更新演示内存，刷新重置'}</span>${button('取消', 'drawer-close')}<button class="button primary" form="${form}" type="submit">${esc(label)}</button>`;
+    `<span class="footnote">${durable ? '保存到数据库' : '仅更新演示内存，刷新重置'}</span>${button('取消', 'drawer-close')}<button class="button primary" form="${form}" type="submit">${esc(label)}</button>`;
   const search = (placeholder = '搜索名称、备注或编号') =>
     `<div class="search-field">${icon('search')}<input id="ops-list-search" aria-label="搜索当前列表" value="${esc(state.query || '')}" placeholder="${esc(placeholder)}" /></div>`;
   function finishDrawer() {

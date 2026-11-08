@@ -979,7 +979,7 @@ function renderSidebar() {
       })
       .join(
         ''
-      )}</nav><div class="sidebar-bottom"><i class="dot"></i><span>${window.IDLocalData ? '独立新版 · 本机业务' : '新版页面设计 · 第一阶段'}</span></div>`;
+      )}</nav><div class="sidebar-bottom"><i class="dot"></i><span>${window.IDLocalData ? '独立新版 · 业务管理' : '新版页面设计 · 第一阶段'}</span></div>`;
   $('.sidebar-navigation').scrollTop = previousScroll;
   const pageTitle = $('#page-title h1')?.textContent?.trim() || '';
   $('#breadcrumbs').innerHTML =
