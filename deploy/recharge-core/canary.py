@@ -205,7 +205,10 @@ class Canary:
 
     def mysql_query(self, identity, query):
         if query not in ('SELECT 1', "SELECT config_value FROM app_config WHERE config_key = 'admin_password_version'"):
-            raise CanaryError('canary_read_query_rejected')
+            if query not in getattr(self, 'return_queries', ()) or identity != getattr(self, 'return_mysql', None):
+                raise CanaryError('canary_read_query_rejected')
+            if not same_owner(self.inspect(identity), self.sha, self.owner, identity, self.names['mysql']):
+                raise CanaryError('canary_return_query_ownership_rejected')
         return self.command(['docker', 'exec', '-i', identity, 'bash', '-ec',
                              'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec "$@"', '--',
                              'mysql', '--protocol=TCP', '-h127.0.0.1', '-P3306', '-u' + self.user,
@@ -238,6 +241,19 @@ class Canary:
             raise CanaryError('code_returns_migration_failed')
         codes = ['KC-' + hashlib.sha256((self.sha + ':return:' + str(i)).encode()).hexdigest()[:28].upper() for i in range(13)]
         values = ','.join("('%s',1,'自助','plus')" % code for code in codes)
+        # Exact synthetic statements are registered only for this owned fixture container.
+        # General SQL, other containers and the production database remain inaccessible.
+        self.return_mysql = mysql
+        self.return_queries = {
+            'INSERT INTO cdk_codes(cdk_code,is_active,type,plan_type) VALUES ' + values,
+            "SELECT is_active FROM cdk_codes WHERE cdk_code='%s'" % codes[0],
+            "DELETE FROM cdk_codes WHERE cdk_code='%s'" % codes[0],
+            "INSERT INTO task_logs(job_key,token_preview,cdk_code,status,message,display_time) VALUES('return-canary-task','synthetic','%s','failed','synthetic','synthetic')" % codes[9],
+            "INSERT INTO activation_manual_holds(account_key,cdk_code,reason) VALUES('return-canary','%s','synthetic')" % codes[10],
+            "UPDATE cdk_codes SET shipped_at=CURRENT_TIMESTAMP WHERE cdk_code='%s'" % codes[11],
+            'SELECT COUNT(*) FROM id_recharge_code_returns',
+            *("UPDATE cdk_codes SET used_at=CURRENT_TIMESTAMP WHERE cdk_code='%s' AND is_active=1 AND used_at IS NULL; SELECT ROW_COUNT()" % codes[index] for index in range(1, 9))
+        }
         self.mysql_query(mysql, 'INSERT INTO cdk_codes(cdk_code,is_active,type,plan_type) VALUES ' + values)
         service = {**privileged, 'id': 'order-reconciliation'}
         def request(action, body, actor=service):
