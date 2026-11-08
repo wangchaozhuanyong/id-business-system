@@ -212,7 +212,7 @@ class Canary:
         return self.command(['docker', 'exec', '-i', identity, 'bash', '-ec',
                              'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec "$@"', '--',
                              'mysql', '--protocol=TCP', '-h127.0.0.1', '-P3306', '-u' + self.user,
-                             '--database=' + self.database, '--batch', '--skip-column-names',
+                             '--database=' + self.database, '--default-character-set=utf8mb4', '--batch', '--skip-column-names',
                              '--connect-timeout=2', '-e', query], input=(self.password + '\n').encode(), timeout=8)
 
     def published(self, identity, port):
