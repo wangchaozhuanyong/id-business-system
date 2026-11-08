@@ -21,6 +21,7 @@ def rejected(target,sql):
 rejected(identity,query)
 c.return_queries={query};c.return_mysql=identity
 assert c.mysql_query(identity,query)=='0' and len(calls)==1
+assert '--default-character-set=utf8mb4' in calls[0]
 rejected('production-mysql',query)
 rejected(identity,'DELETE FROM cdk_codes')
 c.owner='different-owner'
