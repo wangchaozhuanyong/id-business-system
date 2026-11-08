@@ -61,6 +61,20 @@ jobs:
           done
           task_port="$(docker port "$BACKUP_CI_SOURCE_CONTAINER" 3306/tcp | cut -d: -f2)"
           echo "DATABASE_URL=mysql://root:$task_mysql_password@127.0.0.1:$task_port/$MYSQL_DATABASE" >> "$GITHUB_ENV"
+      - name: Provide matching official binlog tool only in disposable source container
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rpm2cpio cpio
+          task_tool_dir="$GITHUB_WORKSPACE/.runtime/google-backup-ci/tools"
+          mkdir -p "$task_tool_dir/extracted"
+          curl --fail --location --retry 2 --connect-timeout 10 --max-time 60 'https://repo.mysql.com/yum/mysql-8.4-community/el/9/x86_64/mysql-community-client-8.4.11-1.el9.x86_64.rpm' --output "$task_tool_dir/client.rpm"
+          echo '2f1e8317c557363dd1554b29a9f6d69403802dc623fe72d9995f20f542771bb1'"  $task_tool_dir/client.rpm" | sha256sum --check --status
+          cd "$task_tool_dir/extracted"
+          rpm2cpio "$task_tool_dir/client.rpm" | cpio --extract --make-directories --quiet --no-preserve-owner './usr/bin/mysqlbinlog'
+          docker cp "$task_tool_dir/extracted/usr/bin/mysqlbinlog" "$BACKUP_CI_SOURCE_CONTAINER:/usr/local/bin/mysqlbinlog"
+          docker exec "$BACKUP_CI_SOURCE_CONTAINER" mysqlbinlog --version
       - name: Verify native recovery, Linux lock and controlled upload faults
         working-directory: apps/api
         run: npx vitest run src/id-business-v2/workspace/backup src/id-business-v2/workspace/id-business-v2-new-backup-coverage.spec.ts --reporter=default

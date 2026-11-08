@@ -24,6 +24,7 @@ const digest = (value: string | Buffer) => createHash('sha256').update(value).di
 const fixtureDirectory = resolve(process.cwd(), '../../scripts/fixtures/google-backup-new-system');
 const runtime = resolve(process.cwd(), '../../.runtime/google-backup-ci');
 const database = 'id_backup_test_new_system';
+const nativeExits: { tool: string; code: number | null; signal: string | null }[] = [];
 function container(kind: 'SOURCE' | 'RESTORE') {
   const value = process.env[`BACKUP_CI_${kind}_CONTAINER`] ?? '';
   if (!/^id-backup-ci-(source|restore)-[0-9]+$/.test(value))
@@ -32,12 +33,15 @@ function container(kind: 'SOURCE' | 'RESTORE') {
   return value;
 }
 function launch(kind: 'SOURCE' | 'RESTORE'): MysqlBackupLauncher {
-  return (tool, args) =>
-    spawn(
+  return (tool, args) => {
+    const child = spawn(
       'docker',
       ['exec', '-i', '-e', 'MYSQL_PWD', container(kind), tool, '--user=root', ...args],
       { stdio: ['pipe', 'pipe', 'pipe'] }
     );
+    child.once('close', (code, signal) => nativeExits.push({ tool, code, signal }));
+    return child;
+  };
 }
 async function command(command: string, args: string[], input?: string) {
   const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -208,7 +212,17 @@ suite('new system native MySQL isolated recovery', () => {
       checks: []
     };
     const checks = report.checks as string[];
+    nativeExits.length = 0;
     try {
+      report.stage = 'tool-preflight';
+      const versions = [];
+      for (const tool of ['mysql', 'mysqldump', 'mysqlbinlog']) {
+        const version = await command('docker', ['exec', container('SOURCE'), tool, '--version']);
+        if (!/\b8\.4\.11\b/.test(version)) throw new Error('CI_MYSQL_TOOL_VERSION_MISMATCH');
+        versions.push({ tool, version });
+      }
+      report.tools = versions;
+      checks.push('all three native tools available and match pinned MySQL 8.4.11');
       report.stage = 'migrations';
       // Assemble reviewed schema input with unchanged existing migration chain in this private test tree.
       const fs = await import('node:fs/promises');
@@ -298,6 +312,10 @@ suite('new system native MySQL isolated recovery', () => {
         COMMIT;`
       );
       const full = await fullPromise;
+      checks.push(
+        'native consistent full dump streamed directly into encrypted and hashed envelope'
+      );
+      report.stage = 'incremental-1-capture';
       const firstEnd = await native.position();
       const first: BackupIdentity = {
         ...base,
@@ -317,6 +335,8 @@ suite('new system native MySQL isolated recovery', () => {
         keys.publicKey
       );
       const afterFirst = await snapshot('SOURCE');
+      checks.push('first incremental segment captured and encrypted');
+      report.stage = 'incremental-2-capture';
       await sql(
         'SOURCE',
         `FLUSH BINARY LOGS;
@@ -342,6 +362,7 @@ suite('new system native MySQL isolated recovery', () => {
         keys.publicKey
       );
       const final = await snapshot('SOURCE');
+      checks.push('second incremental segment captured across rotation and encrypted');
       for (const [blob, identity, expected] of [
         [full, base, baseline],
         [increment1, first, afterFirst],
@@ -439,6 +460,7 @@ suite('new system native MySQL isolated recovery', () => {
           : 'CI_FAILED';
       throw error;
     } finally {
+      report.nativeExits = nativeExits;
       await writeFile(join(runtime, 'report.json'), JSON.stringify(report, null, 2) + '\n', {
         mode: 0o600
       });
