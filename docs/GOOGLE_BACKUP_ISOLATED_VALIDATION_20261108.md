@@ -104,3 +104,6 @@
 
 - 第 1 次：提交 `cd11ee6323f35c5a4a6fe5bfb3f7c07505adc72e`，[CI 42483119386](https://github.com/wangchaozhuanyong/id-business-system/actions/runs/42483119386) 单 job 63 秒，45 项通过，恢复失败已定位为 MySQL 1064／SQLSTATE 42000／输入第 179 行，属于 SQL 语法错误，尚未获得恢复通过结果。临时容器已清理。
 - 为进一步区分数据语句和结构语句，补充失败行的表名、区段与脱敏 token 结构诊断。只有固定 SQL 关键字和符号保留，字符串、标识符和数值均替换；原始 SQL、字段值和凭据不输出。新增本地测试验证脱敏及越界拒绝，当前该文件 5 项非数据库测试通过。
+- 第 2 次：提交 `4e179ae8fdd7ce1e19e513b2190ceedb33998e41`，[CI 42483812166](https://github.com/wangchaozhuanyong/id-business-system/actions/runs/42483812166) 单 job 64 秒，脱敏上下文确认第 179 行是 `audit_logs` 的简单保护触发器；末尾分号位于 `/*!50003 TRIGGER ... */` 内，与 MySQL 已确认的 [Bug 77856](https://bugs.mysql.com/bug.php?id=77856) 一致。当前批累计 2 次／127 秒。
+- 修正恢复输入流：`MysqlTriggerRestoreFilter` 只解开上述触发器版本注释，保留触发器主体、末尾分号、定义者以及其他 SET／版本注释；不改原加密备份、不改数据库迁移、不关闭审计保护。解析按字节流进行，保留字符串、Unicode、内部注释和分块边界，截断触发器封装拒绝通过。
+- 新增 4 项兼容测试，与恢复诊断用例共运行 9 项通过，真实 MySQL 用例在 Mac 跳过；定向类型、构建、lint 检查通过。下一次验证该明确修正后的候选，不重复原失败输入；为本批第 3 次，仍受累计 600 秒限制。

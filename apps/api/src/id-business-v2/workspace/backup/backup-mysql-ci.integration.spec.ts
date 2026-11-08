@@ -18,6 +18,7 @@ import {
 } from './backup-mysql-native';
 import { BackupProcessLease } from './backup-process-lease';
 import type { BackupIdentity } from './backup-types';
+import { MysqlTriggerRestoreFilter } from './backup-mysql-restore-filter';
 
 const enabled = process.env.GITHUB_ACTIONS === 'true' && process.env.GOOGLE_BACKUP_MYSQL_CI === '1';
 const suite = enabled ? describe : describe.skip;
@@ -108,7 +109,7 @@ async function importSql(child: ChildProcessWithoutNullStreams, input: Readable)
   });
   let transferFailed = false;
   try {
-    await pipeline(input, child.stdin);
+    await pipeline(input, new MysqlTriggerRestoreFilter(), child.stdin);
   } catch {
     transferFailed = true;
     child.stdin.destroy();
