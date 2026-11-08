@@ -215,10 +215,12 @@ function requestToken(request, cookieName) {
   return token ? createHash('sha256').update(token).digest('hex') : null;
 }
 
-function setCookie(response, token, lifetime, cookieName, secure) {
+function setCookie(response, token, lifetime, cookieName, secure, alsoClear = []) {
+  const value = (name, token, age) => `${name}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(age / 1000)}${secure ? '; Secure' : ''}`;
   response.setHeader(
     'Set-Cookie',
-    `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(lifetime / 1000)}${secure ? '; Secure' : ''}`
+    alsoClear.length ? [value(cookieName, token, lifetime), ...alsoClear.map(name => value(name, '', 0))]
+      : value(cookieName, token, lifetime)
   );
 }
 
@@ -309,10 +311,25 @@ export function createLocalAdminSetup(accountPath, { onCreated } = {}) {
 
 export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUrl } = {}) {
   if (!readAccounts(accountPath)) return null;
-  const cookieName = publicUrl ? '__Host-id_session' : localCookieName;
+  const legacyCookieName = publicUrl ? '__Host-id_session' : localCookieName;
+  const cookieName = legacyCookieName + '_v2';
   const sessions = publicUrl ? openLocalSessionStore(accountPath + '.sessions') : new Map();
   const attempts = [];
   let verifying = 0;
+
+  function selectedCookie(request) {
+    // An explicitly present new cookie (including an invalid duplicate) must
+    // never fall back to a different identity in a leftover legacy cookie.
+    return String(request.headers.cookie || '').split(';').some(value => value.trim().startsWith(cookieName + '='))
+      ? cookieName : legacyCookieName;
+  }
+  const sessionToken = request => requestToken(request, selectedCookie(request));
+  function removeBrowserSessions(request) {
+    for (const name of [cookieName, legacyCookieName]) {
+      const digest = requestToken(request, name);
+      if (digest) sessions.delete(digest);
+    }
+  }
 
   function updateSession(digest, change) {
     if (sessions.update) return sessions.update(digest, change);
@@ -335,7 +352,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
   }
 
   function actorRecord(request, accounts) {
-    const token = requestToken(request, cookieName);
+    const token = sessionToken(request);
     if (!token) return null;
     const session = sessions.get(token);
     if (!session) { request.localAuthReason = 'invalid'; return null; }
@@ -353,11 +370,12 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     return employee;
   }
 
-  function getActor(request) {
+  function getActor(request, { throwOnUnavailable = false } = {}) {
     try {
       const employee = actorRecord(request);
       return employee ? publicEmployee(employee) : null;
-    } catch {
+    } catch (error) {
+      if (throwOnUnavailable) throw error;
       request.localAuthUnavailable = true;
       return null;
     }
@@ -422,8 +440,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     if (!matches || !employee?.active || employee.sessionVersion !== previous.sessionVersion) {
       throw new AuthError(401, '邮箱或密码不正确');
     }
-    const previousToken = requestToken(request, cookieName);
-    if (previousToken) sessions.delete(previousToken);
+    removeBrowserSessions(request);
     if (publicUrl) {
       sessions.prune(at);
     } else {
@@ -449,7 +466,9 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       version: employee.sessionVersion,
       expiresAt: createdAt + lifetime
     });
-    setCookie(response, token, lifetime, cookieName, Boolean(publicUrl));
+    // The server enforces rolling idle expiry; the browser cookie lasts only
+    // until the absolute cap. Activity responses cannot overwrite a later login.
+    setCookie(response, token, body.remember === true ? rememberedMaximumLifetime : lifetime, cookieName, Boolean(publicUrl));
     report('auth_login', employee);
     sendJson(response, 200, { actor: publicEmployee(employee) });
   }
@@ -580,7 +599,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       if (route === '/api/local/auth/activity' && method === 'POST') {
         requireActor(request);
         const at = now();
-        const digest = requestToken(request, cookieName);
+        const digest = sessionToken(request);
         const session = updateSession(digest, current => {
           const row = sessionMetadata(current);
           if (row.expiresAt <= at) return undefined;
@@ -588,12 +607,15 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
             expiresAt: row.remembered ? Math.min(at + rememberedIdleLifetime, row.absoluteExpiresAt) : row.expiresAt };
         });
         if (!session) throw new AuthError(401, '登录已过期，请重新登录');
-        setCookie(response, requestCookie(request, cookieName), session.expiresAt - at, cookieName, Boolean(publicUrl));
+        // Previously issued cookies retain rolling renewal under their old name.
+        // A delayed legacy response cannot replace the authoritative v2 cookie.
+        if (selectedCookie(request) === legacyCookieName && session.remembered)
+          setCookie(response, requestCookie(request, legacyCookieName), session.expiresAt - at, legacyCookieName, Boolean(publicUrl));
         return sendJson(response, 200, { expiresAt: session.expiresAt, remembered: session.remembered });
       }
       if (route === '/api/local/auth/devices' && method === 'GET') {
         const employee = requireActor(request);
-        const currentDigest = requestToken(request, cookieName);
+        const currentDigest = sessionToken(request);
         const items = [];
         for (const [digest, current] of sessions.entries()) {
           if (current.employeeId !== employee.id || current.version !== employee.sessionVersion || current.expiresAt <= now()) continue;
@@ -609,7 +631,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       const deviceId = route.match(/^\/api\/local\/auth\/devices\/([0-9a-f-]{36})$/)?.[1];
       if (deviceId && method === 'DELETE') {
         const employee = requireActor(request);
-        const currentDigest = requestToken(request, cookieName);
+        const currentDigest = sessionToken(request);
         let found = false, current = false;
         for (const [digest, row] of sessions.entries()) {
           if (row.employeeId !== employee.id || row.id !== deviceId) continue;
@@ -618,7 +640,10 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
           found = true;
         }
         if (!found) throw new AuthError(404, '该登录设备已退出，请刷新列表');
-        if (current) setCookie(response, '', 0, cookieName, Boolean(publicUrl));
+        if (current) {
+          removeBrowserSessions(request);
+          setCookie(response, '', 0, cookieName, Boolean(publicUrl), [legacyCookieName]);
+        }
         report('auth_session_revoke', employee);
         return sendJson(response, 200, { current });
       }
@@ -626,8 +651,8 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
         return await login(request, response);
       if (route === '/api/local/auth/logout' && method === 'POST') {
         const employee = actorRecord(request);
-        sessions.delete(requestToken(request, cookieName));
-        setCookie(response, '', 0, cookieName, Boolean(publicUrl));
+        removeBrowserSessions(request);
+        setCookie(response, '', 0, cookieName, Boolean(publicUrl), [legacyCookieName]);
         if (employee) report('auth_logout', employee);
         return sendJson(response, 200, { actor: null });
       }

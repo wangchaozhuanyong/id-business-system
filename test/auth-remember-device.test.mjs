@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
+import { createDataChangeStream } from '../server/change-sync.mjs';
 import { createLocalAuth, initializeLocalAdmin } from '../server/local-auth.mjs';
 import { openLocalSessionStore } from '../server/local-auth-sessions.mjs';
 const day = 86400000, origin = 'https://auth.example.test';
@@ -25,23 +27,24 @@ async function fixture(t) {
     let status, data; const headers = {};
     const response = { setHeader(k, v) { headers[k] = v; }, writeHead(value) { status = value; }, end(value) { data = JSON.parse(value); } };
     await auth.handle(request, response);
-    return { status, data, headers, cookie: headers['Set-Cookie']?.split(';', 1)[0] };
+    return { status, data, headers, cookie: (Array.isArray(headers['Set-Cookie']) ? headers['Set-Cookie'][0] : headers['Set-Cookie'])?.split(';', 1)[0] };
   }
   return { dir, path, events, call, advance: value => { time += value; }, at: () => time,
+    streamActor: request => auth.getActor(request, { throwOnUnavailable: true }),
     restart: () => { auth = createLocalAuth(path, options); },
     login: (remember, extra = {}) => call('/login', { body: { ...credentials, ...(remember === undefined ? {} : { remember }), ...extra } }) };
 }
 test('remembered activity renews 30-day idle expiry, survives restart and stops at 90 days', async t => {
   const f = await fixture(t), login = await f.login(true), cookie = login.cookie;
   assert.equal(login.status, 200);
-  assert.match(login.headers['Set-Cookie'], /__Host-id_session=.*HttpOnly; SameSite=Strict; Max-Age=2592000; Secure$/);
+  assert.match(login.headers['Set-Cookie'], /__Host-id_session_v2=.*HttpOnly; SameSite=Strict; Max-Age=7776000; Secure$/);
   const created = f.at();
   for (const days of [29, 29, 29]) {
     f.advance(days * day); f.restart();
     const result = await f.call('/activity', { cookie, body: {} });
     assert.equal(result.status, 200);
     assert.equal(result.data.expiresAt, Math.min(f.at() + 30 * day, created + 90 * day));
-    assert(result.cookie === cookie);
+    assert.equal(result.headers['Set-Cookie'], undefined);
   }
   f.advance(3 * day);
   assert.equal((await f.call('/activity', { cookie, body: {} })).status, 401);
@@ -58,7 +61,8 @@ test('reads and background polling never renew idle expiry, normal login stays e
   assert.match(normal.headers['Set-Cookie'], /Max-Age=28800/);
   f.advance(7 * 3600000);
   const activity = await f.call('/activity', { cookie: normal.cookie, body: {} });
-  assert.match(activity.headers['Set-Cookie'], /Max-Age=3600/);
+  assert.equal(activity.headers['Set-Cookie'], undefined);
+  assert.equal(activity.data.expiresAt, f.at() + 3600000);
   f.advance(3600000);
   assert.equal((await f.call('/activity', { cookie: normal.cookie, body: {} })).status, 401);
 });
@@ -74,7 +78,8 @@ test('devices expose only safe metadata; revoking another device preserves this 
   assert(f.events.some(event => event.action === 'auth_session_revoke'));
   assert.equal((await f.call('/devices/' + items[0].id, { cookie: a, method: 'DELETE', foreign: true })).status, 403);
   const removed = await f.call('/devices/' + items[0].id, { cookie: a, method: 'DELETE' });
-  assert.equal(removed.data.current, true); assert.match(removed.headers['Set-Cookie'], /Max-Age=0/);
+  assert.equal(removed.data.current, true); assert.equal(removed.headers['Set-Cookie'].length, 2);
+  assert(removed.headers['Set-Cookie'].every(header => /Max-Age=0/.test(header)));
   assert.equal((await f.call('/activity', { cookie: a, body: {} })).status, 401);
 });
 test('device IDs never authorize another account; password, role and disable revoke remembered sessions', async t => {
@@ -141,4 +146,56 @@ test('temporary account or session-directory outage is an error and never clears
     await rename(path + '.offline', path);
     assert((await f.call('/session', { cookie })).data.actor);
   }
+});
+
+
+test('legacy cookies keep renewal; new cookies win and logout cannot resurrect a legacy identity', async t => {
+  const f = await fixture(t);
+  const old = (await f.login(true)).cookie.replace('__Host-id_session_v2=', '__Host-id_session=');
+  f.advance(29 * day);
+  const renewal = await f.call('/activity', { cookie: old, body: {} });
+  assert.equal(renewal.status, 200);
+  assert.equal(renewal.cookie, old);
+  assert.match(renewal.headers['Set-Cookie'], /Max-Age=2592000; Secure$/);
+  const newer = (await f.login(true)).cookie;
+  const mixed = newer + '; ' + old;
+  assert((await f.call('/session', { cookie: mixed })).data.actor);
+  assert.equal((await f.call('/activity', { cookie: mixed, body: {} })).headers['Set-Cookie'], undefined);
+  // Invalid or duplicate new cookies cannot fall back to an older valid identity.
+  assert.equal((await f.call('/session', { cookie: '__Host-id_session_v2=invalid; ' + old })).data.actor, null);
+  assert.equal((await f.call('/session', { cookie: mixed + '; ' + newer })).data.actor, null);
+  const logout = await f.call('/logout', { cookie: mixed, body: {} });
+  assert.equal(logout.headers['Set-Cookie'].length, 2);
+  f.restart();
+  assert.equal((await f.call('/session', { cookie: old })).data.actor, null);
+  assert.equal((await f.call('/session', { cookie: newer })).data.actor, null);
+});
+
+test('SSE with real authentication reconnects after storage outages and expires only revoked sessions', async t => {
+  const f = await fixture(t), cookie = (await f.login(true)).cookie;
+  class Response extends EventEmitter {
+    chunks = []; writableLength = 0; destroyed = false;
+    writeHead() { return this; }
+    write(value) { this.chunks.push(value); return true; }
+    end() { this.destroyed = true; this.emit('close'); }
+  }
+  const feed = createDataChangeStream({ getActor: f.streamActor, getVersions: () => ({ inventory: '1' }), subscribe: () => () => {}, heartbeatMs: 10 });
+  t.after(() => feed.close());
+  for (const storage of [f.path, f.path + '.sessions']) for (const heartbeat of [false, true]) {
+    const request = { method: 'GET', headers: { cookie } }, response = new Response();
+    feed.handle(request, response, f.streamActor(request));
+    await rename(storage, storage + '.offline');
+    try {
+      if (heartbeat) await new Promise(resolve => setTimeout(resolve, 25));
+      else { feed.notify(); await new Promise(resolve => setImmediate(resolve)); }
+      assert(response.destroyed);
+      assert(!response.chunks.some(chunk => chunk.includes('auth-expired')));
+    } finally { await rename(storage + '.offline', storage); }
+    assert(f.streamActor(request));
+  }
+  const request = { method: 'GET', headers: { cookie } }, response = new Response();
+  feed.handle(request, response, f.streamActor(request));
+  await f.call('/logout', { cookie, body: {} });
+  feed.notify(); await new Promise(resolve => setImmediate(resolve));
+  assert(response.chunks.some(chunk => chunk.includes('auth-expired')));
 });
