@@ -1,0 +1,35 @@
+{
+  "sourceBranch": "codex/modular-redesign-20261104",
+  "sourceBase": "e51dd9c9974c6292dbbc6572a5d844a672f0d0f1",
+  "fixtureOnly": true,
+  "files": {
+    "migrations/20261105063000_inventory_foundation/migration.sql": {
+      "sha256": "1c3e32e3637a25c0b3563a51b1750b32d7f34169ab1eb4ecf8370bca95b3b983",
+      "origin": "apps/api/prisma-mysql/migrations/20261105063000_inventory_foundation/migration.sql"
+    },
+    "migrations/20261105073000_gpt_inventory/migration.sql": {
+      "sha256": "b2702a4a70eceeaedbdc691223fa525a94b1e56a20fc2aa8b9094b7bbe3c160e",
+      "origin": "apps/api/prisma-mysql/migrations/20261105073000_gpt_inventory/migration.sql"
+    },
+    "migrations/20261105083000_apple_inventory/migration.sql": {
+      "sha256": "f1c923f5a78577d30fd606f6992d218d2daed4e019b832733cb6d144cbca8b6e",
+      "origin": "apps/api/prisma-mysql/migrations/20261105083000_apple_inventory/migration.sql"
+    },
+    "migrations/20261105093000_claude_inventory/migration.sql": {
+      "sha256": "db8311fcd284e6f1fd1ecc61ea2d0e7c8f45e0de64181624849a12ed79933635",
+      "origin": "apps/api/prisma-mysql/migrations/20261105093000_claude_inventory/migration.sql"
+    },
+    "migrations/20261105113000_subscription_orders/migration.sql": {
+      "sha256": "73656e6834b1eb34223d698bd1e0a17d0f6773f0875e0b8eadde958d2d2ce1cb",
+      "origin": "apps/api/prisma-mysql/migrations/20261105113000_subscription_orders/migration.sql"
+    },
+    "migrations/20261105123000_subscription_apple_wallet/migration.sql": {
+      "sha256": "04a958c195f282f567808c56b7becf957911a4fba7bc3dddbd75e091d3be75a5",
+      "origin": "apps/api/prisma-mysql/migrations/20261105123000_subscription_apple_wallet/migration.sql"
+    },
+    "schema.prisma": {
+      "sha256": "e0db24c0120f542e9fb51acd95b015c8add1a10c63737a7ab0da07f78296dcb7",
+      "origin": "apps/api/prisma-mysql/schema.prisma"
+    }
+  }
+}

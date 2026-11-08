@@ -1,0 +1,88 @@
+name: New System Google Backup Isolated Validation
+
+on:
+  push:
+    branches: [codex/google-backup-isolated-validation-20261108]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: google-backup-isolated-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: test
+      GOOGLE_BACKUP_MYSQL_CI: '1'
+      BACKUP_CI_SOURCE_CONTAINER: id-backup-ci-source-${{ github.run_id }}
+      BACKUP_CI_RESTORE_CONTAINER: id-backup-ci-restore-${{ github.run_id }}
+      MYSQL_DATABASE: id_backup_test_new_system
+      MYSQL_IMAGE: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check focused backup source and fixture provenance
+        run: |
+          node scripts/check-google-backup-fixture.mjs
+          npx tsc -p scripts/tsconfig.google-backup.json --noEmit
+          npx eslint apps/api/src/id-business-v2/workspace/backup apps/api/src/id-business-v2/workspace/id-business-v2-new-backup-coverage.ts apps/api/src/id-business-v2/workspace/id-business-v2-new-backup-coverage.spec.ts scripts/check-google-backup-fixture.mjs
+          npm run check:v2-module-architecture
+          npm run check:v2-isolation
+          npm run check:v2-prisma-runtime-boundary
+      - name: Create two disposable synthetic MySQL instances
+        shell: bash
+        run: |
+          set -euo pipefail
+          task_mysql_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$task_mysql_password"
+          export MYSQL_ROOT_PASSWORD="$task_mysql_password" MYSQL_PWD="$task_mysql_password" MYSQL_ROOT_HOST='%'
+          echo "MYSQL_PWD=$task_mysql_password" >> "$GITHUB_ENV"
+          docker run --detach --name "$BACKUP_CI_SOURCE_CONTAINER" --publish 127.0.0.1::3306 --env MYSQL_ROOT_PASSWORD --env MYSQL_ROOT_HOST --env MYSQL_DATABASE "$MYSQL_IMAGE" --server-id=11 --log-bin=backup-bin --binlog-format=ROW --binlog-row-image=FULL --gtid-mode=OFF --log-bin-trust-function-creators=ON --innodb-buffer-pool-size=128M
+          docker run --detach --name "$BACKUP_CI_RESTORE_CONTAINER" --env MYSQL_ROOT_PASSWORD --env MYSQL_ROOT_HOST --env MYSQL_DATABASE "$MYSQL_IMAGE" --server-id=12 --log-bin=restore-bin --log-bin-trust-function-creators=ON --innodb-buffer-pool-size=128M
+          for task_container in "$BACKUP_CI_SOURCE_CONTAINER" "$BACKUP_CI_RESTORE_CONTAINER"; do
+            task_ready=false
+            for task_attempt in $(seq 1 60); do
+              if docker exec --env MYSQL_PWD "$task_container" mysql --user=root --batch --skip-column-names --execute='SELECT 1' >/dev/null 2>&1; then
+                task_ready=true
+                break
+              fi
+              sleep 1
+            done
+            test "$task_ready" = true
+          done
+          task_port="$(docker port "$BACKUP_CI_SOURCE_CONTAINER" 3306/tcp | cut -d: -f2)"
+          echo "DATABASE_URL=mysql://root:$task_mysql_password@127.0.0.1:$task_port/$MYSQL_DATABASE" >> "$GITHUB_ENV"
+      - name: Verify native recovery, Linux lock and controlled upload faults
+        working-directory: apps/api
+        run: npx vitest run src/id-business-v2/workspace/backup src/id-business-v2/workspace/id-business-v2-new-backup-coverage.spec.ts --reporter=default
+      - name: Build focused backup source
+        run: npx tsc -p scripts/tsconfig.google-backup.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: google-backup-isolated-${{ github.sha }}
+          path: .runtime/google-backup-ci/report.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remove only this run's disposable databases
+        if: always()
+        shell: bash
+        run: |
+          for task_container in "$BACKUP_CI_SOURCE_CONTAINER" "$BACKUP_CI_RESTORE_CONTAINER"; do
+            case "$task_container" in
+              id-backup-ci-source-[0-9]*|id-backup-ci-restore-[0-9]*)
+                docker rm --force "$task_container" >/dev/null 2>&1 || true
+                ;;
+              *) exit 1 ;;
+            esac
+          done

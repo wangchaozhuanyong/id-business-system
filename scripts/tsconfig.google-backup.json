@@ -1,0 +1,12 @@
+{
+  "extends": "../apps/api/tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../.runtime/google-backup-ci/compiled",
+    "tsBuildInfoFile": "../.runtime/google-backup-ci/typecheck.tsbuildinfo"
+  },
+  "include": [
+    "../apps/api/src/id-business-v2/workspace/backup/**/*.ts",
+    "../apps/api/src/id-business-v2/workspace/*new-backup-coverage*.ts"
+  ],
+  "exclude": ["../node_modules", "../.runtime"]
+}
