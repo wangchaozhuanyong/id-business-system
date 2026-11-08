@@ -13,7 +13,7 @@ import {
 } from './tools/mailbox-pool.mjs';
 import { withClaudeMailboxCandidates } from './tools/claude-mailbox-candidates.mjs';
 import {
-  applyTotpWrite, generateSavedCode, savedTotpDomain, savedTotpMetadata, SavedTotpError, validateTotpWrite
+  applyTotpWrite, generateSavedCode, revealSavedTotpSecret, savedTotpDomain, savedTotpMetadata, SavedTotpError, validateTotpWrite
 } from './tools/saved-totp.mjs';
 import {
   BitBrowserAddressError,
@@ -926,6 +926,13 @@ export function createLocalBusinessStore(databasePath) {
     loadSavedTotp(actor) {
       return savedTotpMetadata(readDocument(`${savedTotpDomain}:${actor.id}`));
     },
+    revealSavedTotp(body, actor) {
+      return revealSavedTotpSecret(body, actor, {
+        readSnapshot: readDocument,
+        recordView: (id, version) => log.run(new Date().toISOString(), savedTotpDomain, 'saved_totp_view',
+          auditSummary('查看 2FA 密钥', actor, id), version)
+      });
+    },
     async importLegacySavedTotp(bundle, secrets, actor, expectedVersion) {
       const domain = `${savedTotpDomain}:${actor.id}`;
       const before = readDocument(domain);
@@ -1630,7 +1637,7 @@ export async function handleLocalBusiness(
         return json(response, 200, await store.saveVerifiedManagedMailboxPool(await readJson(request), actor, verifyManagedMailbox));
       throw new LocalDataError(405, '本机接口不支持此操作');
     }
-    if (domain === savedTotpDomain || domain === savedTotpDomain + '/code') {
+    if ([savedTotpDomain, savedTotpDomain + '/code', savedTotpDomain + '/secret'].includes(domain)) {
       if (!actor) throw new LocalDataError(401, '请先登录');
       response.setHeader('Cache-Control', 'private, no-store');
       if (domain === savedTotpDomain && request.method === 'GET')
@@ -1642,6 +1649,8 @@ export async function handleLocalBusiness(
         const body = await readJson(request);
         return json(response, 200, await store.useSavedTotp(body?.id, actor));
       }
+      if (domain === savedTotpDomain + '/secret' && request.method === 'POST')
+        return json(response, 200, store.revealSavedTotp(await readJson(request), actor));
       throw new LocalDataError(405, '本机接口不支持此操作');
     }
     if (domain === bitBrowserWindowDomain) {

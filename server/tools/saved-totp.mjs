@@ -27,6 +27,20 @@ export function savedTotpMetadata(snapshot) {
   };
 }
 
+export function revealSavedTotpSecret(body, actor, { readSnapshot, recordView }) {
+  if (!actor?.id) throw new SavedTotpError(401, '请先登录');
+  if (!/^[a-f\d-]{36}$/.test(body?.id || '') ||
+      !Number.isSafeInteger(body?.version) || body.version < 0)
+    throw new SavedTotpError(400, '账号操作格式无效');
+  const snapshot = readSnapshot(`${savedTotpDomain}:${actor.id}`);
+  if (snapshot.version !== body.version)
+    throw new SavedTotpError(409, '账号列表已更新，请重新读取后核对');
+  const account = (snapshot.data || []).find(row => row.id === body.id);
+  if (!account) throw new SavedTotpError(404, '找不到已保存的账号');
+  recordView(account.id, snapshot.version);
+  return { id: account.id, version: snapshot.version, secret: account.secret };
+}
+
 export async function validateTotpWrite(body) {
   if (!body || !['create', 'update', 'delete'].includes(body.action) ||
       !Number.isSafeInteger(body.version) || body.version < 0 ||

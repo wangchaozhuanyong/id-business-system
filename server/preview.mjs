@@ -450,7 +450,7 @@ export async function startPreview(
       if (
         !canManage &&
         route !== '/api/local/toolbox' &&
-        !['/api/local/saved-totp', '/api/local/saved-totp/code'].includes(route) &&
+        !['/api/local/saved-totp', '/api/local/saved-totp/code', '/api/local/saved-totp/secret'].includes(route) &&
         (request.method !== 'GET' || !['inventory', 'commerce'].includes(route.split('/').at(-1)))
       )
         return forbidden();
