@@ -129,6 +129,35 @@ function identifier(value: string) {
   if (!/^[A-Za-z0-9_]+$/.test(value)) throw new Error('CI_IDENTIFIER_INVALID');
   return '`' + value + '`';
 }
+function restoreContext(sqlText: string, line: number) {
+  const lines = sqlText.split('\n');
+  if (!Number.isSafeInteger(line) || line < 1 || line > lines.length) return { line, valid: false };
+  let table = 'unknown',
+    section = 'unknown';
+  for (const text of lines.slice(0, line)) {
+    const match = /^-- (Table structure|Dumping data) for table `([A-Za-z0-9_]+)`/.exec(text);
+    if (match) {
+      section = match[1]!;
+      table = match[2]!;
+    }
+  }
+  const keywords = new Set(
+    'CREATE DROP ALTER TABLE TRIGGER BEFORE AFTER DELETE INSERT UPDATE ON FOR EACH ROW BEGIN END IF THEN SIGNAL SQLSTATE SET MESSAGE_TEXT NOT NULL AND OR IN VALUES PRIMARY KEY CONSTRAINT CHECK REFERENCES SELECT FROM WHERE DELIMITER DEFINER DEFAULT ENGINE VARCHAR CHAR TEXT DATETIME DECIMAL JSON INT INDEX UNIQUE CASE WHEN ELSE UNSIGNED'.split(
+      ' '
+    )
+  );
+  const shape = lines
+    .slice(Math.max(0, line - 3), line + 40)
+    .join('\n')
+    .replace(/'(?:''|\\.|[^'\\])*'|"(?:""|\\.|[^"\\])*"|`(?:``|[^`])*`/g, '?')
+    .replace(/[A-Za-z_][A-Za-z0-9_$]*/g, (word) =>
+      keywords.has(word.toUpperCase()) ? word.toUpperCase() : '?'
+    )
+    .replace(/\d+/g, '#')
+    .replace(/[^\x20-\x7E]/g, (character) => ('\t\n\r'.includes(character) ? character : '?'))
+    .slice(0, 4000);
+  return { line, valid: true, table, section, shape };
+}
 /** The database emits only fixed-size row digests; fixture ordering uses no MySQL filesort. */
 function rowReceipts(output: string, names: string[]) {
   const hashes = names.map(() => [] as string[]);
@@ -151,6 +180,17 @@ function rowReceipts(output: string, names: string[]) {
 }
 
 describe('bounded recovery comparison receipts', () => {
+  it('describes a failing SQL structure while removing quoted data and identifiers', () => {
+    const context = restoreContext(
+      "-- Dumping data for table `attachments`\nINSERT INTO `attachments` VALUES('synthetic-sensitive-value',12345);",
+      2
+    );
+    expect(context.table).toBe('attachments');
+    expect(context.shape).toContain('INSERT');
+    expect(context.shape).not.toContain('synthetic-sensitive-value');
+    expect(context.shape).not.toContain('12345');
+    expect(restoreContext('SELECT 1', 999).valid).toBe(false);
+  });
   it('preserves a client SQL error when early exit breaks the input pipe', async () => {
     const child = spawn(
       process.execPath,
@@ -417,7 +457,17 @@ suite('new system native MySQL isolated recovery', () => {
         const output = join(temp, `${identity.id}.restore.sql`);
         await decryptBackupFile(join(temp, blob.filename), output, keys.privateKey, identity);
         expect((await readFile(output, 'utf8')).includes('id_backup_test_other')).toBe(false);
-        await restore(output);
+        try {
+          await restore(output);
+        } catch (error) {
+          const match = /_LINE_(\d+)$/.exec(error instanceof Error ? error.message : '');
+          if (match)
+            report.restoreContext = restoreContext(
+              await readFile(output, 'utf8'),
+              Number(match[1])
+            );
+          throw error;
+        }
         expect(await snapshot('RESTORE')).toEqual(expected);
         expect(
           await sql(
