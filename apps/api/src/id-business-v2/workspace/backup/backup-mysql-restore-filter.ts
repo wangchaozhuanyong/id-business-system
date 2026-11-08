@@ -3,6 +3,8 @@ import { BackupError } from './backup-types';
 
 const OPEN = Buffer.from('/*!50003 ');
 const TRIGGER = Buffer.from('/*!50003 TRIGGER ');
+const BLOCK_DELIMITER = Buffer.from('DELIMITER ;;');
+const RESET_DELIMITER = Buffer.from('DELIMITER ;');
 
 /** MySQL bug 77856: unwrap trigger bodies without changing their SQL or the stored dump. */
 export class MysqlTriggerRestoreFilter extends Transform {
@@ -11,6 +13,13 @@ export class MysqlTriggerRestoreFilter extends Transform {
   private lineComment = false;
   private blockComment = false;
   private trigger = false;
+  private alternateDelimiter = false;
+  private previousByte = 10;
+  private triggerCount = 0;
+  private delimiterCount = 0;
+  summary() {
+    return { triggers: this.triggerCount, delimiterBlocks: this.delimiterCount };
+  }
 
   private consume(bytes: Buffer, final: boolean) {
     const data = Buffer.concat([this.pending, bytes]);
@@ -40,6 +49,26 @@ export class MysqlTriggerRestoreFilter extends Transform {
           this.blockComment = false;
           index += 2;
         } else index++;
+      } else if (
+        (index === 0
+          ? this.previousByte === 10 || this.previousByte === 13
+          : data[index - 1] === 10 || data[index - 1] === 13) &&
+        data.subarray(index, index + BLOCK_DELIMITER.length).equals(BLOCK_DELIMITER)
+      ) {
+        emit(index);
+        this.push(Buffer.from('DELIMITER $$'));
+        index += BLOCK_DELIMITER.length;
+        start = index;
+        this.alternateDelimiter = true;
+        this.delimiterCount++;
+      } else if (
+        (index === 0
+          ? this.previousByte === 10 || this.previousByte === 13
+          : data[index - 1] === 10 || data[index - 1] === 13) &&
+        data.subarray(index, index + RESET_DELIMITER.length).equals(RESET_DELIMITER)
+      ) {
+        this.alternateDelimiter = false;
+        index += RESET_DELIMITER.length;
       } else if (this.trigger && current === 32 && next === 42 && data[index + 2] === 47) {
         // Remove exactly the one space introduced by mysqldump before the closing wrapper.
         emit(index);
@@ -56,6 +85,12 @@ export class MysqlTriggerRestoreFilter extends Transform {
         start = index + OPEN.length;
         index += TRIGGER.length;
         this.trigger = true;
+        this.triggerCount++;
+      } else if (!this.trigger && this.alternateDelimiter && current === 59 && next === 59) {
+        emit(index);
+        this.push(Buffer.from('$$'));
+        index += 2;
+        start = index;
       } else if (current === 47 && next === 42) {
         this.blockComment = true;
         index += 2;
@@ -71,6 +106,7 @@ export class MysqlTriggerRestoreFilter extends Transform {
       } else index++;
     }
     emit(index);
+    if (index > 0) this.previousByte = data[index - 1]!;
     this.pending = Buffer.from(data.subarray(index));
     if (final && this.trigger) throw new BackupError('BACKUP_MYSQL_TRIGGER_DUMP_INCOMPLETE');
   }

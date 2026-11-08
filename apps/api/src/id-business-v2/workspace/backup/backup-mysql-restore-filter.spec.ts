@@ -28,7 +28,7 @@ const prefix = '/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`%`*/ ';
 describe('native MySQL trigger restore compatibility', () => {
   it('preserves the exact trigger body and definer while unwrapping only the affected comment', async () => {
     const original = `DELIMITER ;;\n${prefix}/*!50003 ${body} */;;\nDELIMITER ;\n`;
-    const expected = `DELIMITER ;;\n${prefix}${body};;\nDELIMITER ;\n`;
+    const expected = `DELIMITER $$\n${prefix}${body}$$\nDELIMITER ;\n`;
     for (const width of [1, 2, 7, 63, 64, 65, 65536])
       expect(await filtered(original, width)).toBe(expected);
   });
@@ -47,6 +47,19 @@ describe('native MySQL trigger restore compatibility', () => {
   it('fails closed when the affected trigger wrapper is truncated', async () => {
     await expect(filtered(`${prefix}/*!50003 ${body}`, 2)).rejects.toThrow(
       'BACKUP_MYSQL_TRIGGER_DUMP_INCOMPLETE'
+    );
+  });
+  it('avoids overlapping a retained body semicolon with the client delimiter', async () => {
+    const script = `DELIMITER ;;\n${prefix}/*!50003 ${body} */;;\nDELIMITER ;\n`;
+    const restored = await filtered(script, 1);
+    expect(restored).toContain("MESSAGE_TEXT = 'immutable';$$");
+    expect(restored).not.toContain(';;;');
+  });
+  it('switches routine terminators but preserves delimiters inside quoted business values', async () => {
+    const script =
+      "DELIMITER ;;\nCREATE FUNCTION `f`() RETURNS TEXT BEGIN RETURN 'inside ;; and $$'; END;;\nDELIMITER ;\nINSERT INTO `notes` VALUES('DELIMITER ;;', ';;');\n";
+    expect(await filtered(script, 2)).toBe(
+      "DELIMITER $$\nCREATE FUNCTION `f`() RETURNS TEXT BEGIN RETURN 'inside ;; and $$'; END$$\nDELIMITER ;\nINSERT INTO `notes` VALUES('DELIMITER ;;', ';;');\n"
     );
   });
 });

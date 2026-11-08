@@ -27,6 +27,7 @@ const fixtureDirectory = resolve(process.cwd(), '../../scripts/fixtures/google-b
 const runtime = resolve(process.cwd(), '../../.runtime/google-backup-ci');
 const database = 'id_backup_test_new_system';
 const nativeExits: { tool: string; code: number | null; signal: string | null }[] = [];
+const restoreFilters: { triggers: number; delimiterBlocks: number }[] = [];
 function container(kind: 'SOURCE' | 'RESTORE') {
   const value = process.env[`BACKUP_CI_${kind}_CONTAINER`] ?? '';
   if (!/^id-backup-ci-(source|restore)-[0-9]+$/.test(value))
@@ -108,12 +109,14 @@ async function importSql(child: ChildProcessWithoutNullStreams, input: Readable)
     child.once('close', (code) => resolve(code === 0));
   });
   let transferFailed = false;
+  const filter = new MysqlTriggerRestoreFilter();
   try {
-    await pipeline(input, new MysqlTriggerRestoreFilter(), child.stdin);
+    await pipeline(input, filter, child.stdin);
   } catch {
     transferFailed = true;
     child.stdin.destroy();
   }
+  restoreFilters.push(filter.summary());
   if (!(await complete)) throw new Error(failure());
   if (transferFailed) throw new Error('CI_RESTORE_INPUT_FAILED');
 }
@@ -291,6 +294,7 @@ suite('new system native MySQL isolated recovery', () => {
     };
     const checks = report.checks as string[];
     nativeExits.length = 0;
+    restoreFilters.length = 0;
     try {
       report.stage = 'tool-preflight';
       const versions = [];
@@ -566,6 +570,7 @@ suite('new system native MySQL isolated recovery', () => {
       throw error;
     } finally {
       report.nativeExits = nativeExits;
+      report.restoreFilters = restoreFilters;
       await writeFile(join(runtime, 'report.json'), JSON.stringify(report, null, 2) + '\n', {
         mode: 0o600
       });
