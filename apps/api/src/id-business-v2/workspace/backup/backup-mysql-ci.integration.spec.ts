@@ -114,6 +114,46 @@ function identifier(value: string) {
   if (!/^[A-Za-z0-9_]+$/.test(value)) throw new Error('CI_IDENTIFIER_INVALID');
   return '`' + value + '`';
 }
+/** The database emits only fixed-size row digests; fixture ordering uses no MySQL filesort. */
+function rowReceipts(output: string, names: string[]) {
+  const hashes = names.map(() => [] as string[]);
+  let current = -1;
+  for (const line of output.split('\n')) {
+    const marker = /^__TABLE_(\d+)__$/.exec(line);
+    if (marker) {
+      const next = Number(marker[1]);
+      if (next !== current + 1 || next >= names.length) throw new Error('CI_SNAPSHOT_INVALID');
+      current = next;
+    } else if (current >= 0 && /^[a-f0-9]{64}$/.test(line)) hashes[current]!.push(line);
+    else throw new Error('CI_SNAPSHOT_INVALID');
+  }
+  if (current !== names.length - 1) throw new Error('CI_SNAPSHOT_INCOMPLETE');
+  return names.map((name, index) => ({
+    name,
+    rowCount: hashes[index]!.length,
+    sha256: digest(hashes[index]!.sort().join('\n'))
+  }));
+}
+
+describe('bounded recovery comparison receipts', () => {
+  it('compares unordered rows while retaining empty tables and duplicate counts', () => {
+    const a = 'a'.repeat(64),
+      b = 'b'.repeat(64),
+      names = ['rows', 'empty'];
+    const first = rowReceipts(`__TABLE_0__\n${a}\n${b}\n__TABLE_1__`, names);
+    expect(rowReceipts(`__TABLE_0__\n${b}\n${a}\n__TABLE_1__`, names)).toEqual(first);
+    expect(first.map(({ rowCount }) => rowCount)).toEqual([2, 0]);
+    expect(rowReceipts(`__TABLE_0__\n${a}\n${b}\n${b}\n__TABLE_1__`, names)).not.toEqual(first);
+  });
+  it('rejects missing table boundaries and unexpected row payloads', () => {
+    expect(() => rowReceipts('__TABLE_0__', ['one', 'two'])).toThrow('CI_SNAPSHOT_INCOMPLETE');
+    expect(() => rowReceipts('__TABLE_1__', ['one', 'two'])).toThrow('CI_SNAPSHOT_INVALID');
+    expect(() => rowReceipts('__TABLE_0__\nraw-synthetic-row', ['one'])).toThrow(
+      'CI_SNAPSHOT_INVALID'
+    );
+  });
+});
+
 /** Exact null/value bytes for every scalar column and every row, including empty tables. */
 async function snapshot(kind: 'SOURCE' | 'RESTORE') {
   const columns = await sql(
@@ -127,10 +167,11 @@ async function snapshot(kind: 'SOURCE' | 'RESTORE') {
   }
   const queries = [...tables].map(
     ([table, fields]) =>
-      `SELECT CONCAT_WS(',',${fields.map((field) => `IF(${identifier(field)} IS NULL,'N',CONCAT('H',HEX(CAST(${identifier(field)} AS BINARY))))`).join(',')}) AS canonical_row FROM ${identifier(table)} ORDER BY BINARY canonical_row;`
+      `SELECT SHA2(CONCAT_WS(',',${fields.map((field) => `IF(${identifier(field)} IS NULL,'N',CONCAT('H',HEX(CAST(${identifier(field)} AS BINARY))))`).join(',')}),256) FROM ${identifier(table)};`
   );
   // One native client keeps Docker startup out of the per-table comparison.
   const rows = await sql(kind, queries.map((q, i) => `SELECT '__TABLE_${i}__';\n${q}`).join('\n'));
+  const receipts = rowReceipts(rows, [...tables.keys()]);
   const metadataQueries = [
     `SELECT table_name,table_type,engine,table_collation FROM information_schema.tables WHERE table_schema=DATABASE() ORDER BY table_name`,
     `SELECT table_name,column_name,ordinal_position,column_type,is_nullable,HEX(column_default),extra,HEX(generation_expression),collation_name FROM information_schema.columns WHERE table_schema=DATABASE() ORDER BY table_name,ordinal_position`,
@@ -149,7 +190,8 @@ async function snapshot(kind: 'SOURCE' | 'RESTORE') {
   return {
     tables: tables.size,
     columns: columns.split('\n').length,
-    rowHash: digest(rows),
+    rowHash: digest(JSON.stringify(receipts)),
+    tableReceipts: receipts,
     schemaHash: digest(metadata)
   };
 }
@@ -167,6 +209,7 @@ suite('new system native MySQL isolated recovery', () => {
     };
     const checks = report.checks as string[];
     try {
+      report.stage = 'migrations';
       // Assemble reviewed schema input with unchanged existing migration chain in this private test tree.
       const fs = await import('node:fs/promises');
       const fixture = join(temp, 'schema');
@@ -200,6 +243,7 @@ suite('new system native MySQL isolated recovery', () => {
         card = randomUUID();
       const attachment = randomBytes(128 * 1024 + 7),
         attachmentHash = digest(attachment);
+      report.stage = 'fixture-inserts';
       await sql(
         'SOURCE',
         `SET NAMES utf8mb4;
@@ -222,9 +266,12 @@ suite('new system native MySQL isolated recovery', () => {
         'SOURCE',
         `CREATE DATABASE id_backup_test_other; CREATE TABLE id_backup_test_other.sentinel(id INT PRIMARY KEY);`
       );
+      checks.push('four modules seeded with valid relations and encrypted synthetic fields');
+      report.stage = 'source-baseline';
       const baseline = await snapshot('SOURCE');
       expect(baseline.tables).toBe(117); // 116 application models + actual _prisma_migrations.
-      checks.push('four modules seeded with valid relations and encrypted synthetic fields');
+      checks.push('source baseline covers every physical table including migration history');
+      report.stage = 'full-and-incremental-capture';
       const native = new MysqlNativeBackupSource(launch('SOURCE'), 120_000);
       const capture = await native.full(database);
       const keys = generateKeyPairSync('rsa', { modulusLength: 3072 });
@@ -300,6 +347,7 @@ suite('new system native MySQL isolated recovery', () => {
         [increment1, first, afterFirst],
         [increment2, second, final]
       ] as const) {
+        report.stage = `restore-${identity.kind}-${identity.id}`;
         const output = join(temp, `${identity.id}.restore.sql`);
         await decryptBackupFile(join(temp, blob.filename), output, keys.privateKey, identity);
         expect((await readFile(output, 'utf8')).includes('id_backup_test_other')).toBe(false);
@@ -314,6 +362,7 @@ suite('new system native MySQL isolated recovery', () => {
       checks.push(
         'all tables columns rows indexes constraints triggers routines events and migration records match after each restore step'
       );
+      report.stage = 'attachment-and-function-verification';
       expect(
         await sql(
           'RESTORE',
@@ -353,6 +402,7 @@ suite('new system native MySQL isolated recovery', () => {
       checks.push(
         'Decimal precision, encrypted database attachment and standalone binary attachment match'
       );
+      report.stage = 'native-linux-lock';
       const leaseDirectory = join(temp, 'lease');
       const lock = await BackupProcessLease.acquire(leaseDirectory);
       await expect(BackupProcessLease.acquire(leaseDirectory)).rejects.toThrow(
@@ -375,6 +425,7 @@ suite('new system native MySQL isolated recovery', () => {
       expect(reacquired).toBe(true);
       checks.push('real Linux flock rejects second process and releases after close');
       report.status = 'passed';
+      report.stage = 'complete';
       report.snapshot = final;
       report.elapsedMs = Math.round(performance.now() - started);
       report.cloudUpload =
