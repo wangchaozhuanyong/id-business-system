@@ -41,7 +41,7 @@ export function originalRechargeStage(message) {
 }
 
 export function originalRechargeNeedsReview(message) {
-  return /转人工|人工确认|人工核|待核实|结果.*(?:未知|不明)|processing.*timeout/i.test(
+  return /转人工|人工确认|人工核|待核实|结果.*(?:未知|不明)|(?:付款|支付|扣款)结果(?:未确认|无法确认|等待超时)|Data too long for column ['"]error_message['"]|processing.*timeout/i.test(
     String(message ?? '')
   );
 }

@@ -22,7 +22,7 @@ import urllib.request
 
 ROOT = Path('/opt/id-business-independent')
 FORMAL_MYSQL = 'id-business-independent-formal-mysql'
-REVISION = 'f4d7761e0036892e6dd68ec64c5447b513ca37da'
+REVISION = '4e9bb201cf481d4bcc85da34970fc26c63ab818a'
 OWNER_LABEL = 'com.id-business.native-canary.owner'
 SHA_LABEL = 'com.id-business.native-canary.revision'
 RETURN_PATHS = {'/api/admin/cdks/returns/check', '/api/admin/cdks/returns/commit', '/api/admin/cdks/returns/receipt'}
@@ -228,8 +228,8 @@ class Canary:
         script = ('import {verifyCodexdaichongSource} from "/candidate/modules/recharge/codexdaichong/prepare.mjs";'
                   'console.log(JSON.stringify(await verifyCodexdaichongSource("/candidate/.runtime/codexdaichong")));')
         result = json.loads(self.command(['docker', 'exec', identity, 'node', '--input-type=module', '-e', script], timeout=30))
-        if (result.get('revision') != REVISION or result.get('files') != 200 or
-            result.get('originalFiles') != 196 or result.get('routingFiles') !=
+        if (result.get('revision') != REVISION or result.get('files') != 203 or
+            result.get('originalFiles') != 199 or result.get('routingFiles') !=
             ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js']):
             raise CanaryError('pristine_source_mismatch')
         self.checks.append(code)
@@ -369,7 +369,7 @@ class Canary:
         if status != 200 or session.get('success') is not True or 'admin' not in session.get('permissions', []):
             raise CanaryError('native_bearer_admin_session_failed')
         self.checks.append('native_bearer_admin_session')
-        self.source_check(native, 'source_200_native')
+        self.source_check(native, 'source_203_native')
         with socket.socket() as reserved:
             reserved.bind(('127.0.0.1', 0))
             adapter_port = reserved.getsockname()[1]
@@ -426,7 +426,7 @@ class Canary:
             raise CanaryError('routing_migration_not_idempotent')
         self.checks.append('routing_persistence_version_audit_and_migration_idempotency')
         self.check_code_returns(mysql, native, adapter_url, privileged, sealed)
-        self.source_check(adapter, 'source_200_adapter')
+        self.source_check(adapter, 'source_203_adapter')
         self.checks.append('no_payment_or_activation_requests')
 
     def cleanup(self):

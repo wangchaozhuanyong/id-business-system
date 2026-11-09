@@ -10,7 +10,7 @@ const projectRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const sourceRoot = resolve(projectRoot, '.upstream/codexdaichong');
 const runtimeRoot = resolve(projectRoot, '.runtime');
 
-export const CODEXDAICHONG_REVISION = 'f4d7761e0036892e6dd68ec64c5447b513ca37da';
+export const CODEXDAICHONG_REVISION = '4e9bb201cf481d4bcc85da34970fc26c63ab818a';
 export const PRODUCTION_GUARD_REVISION = '3';
 const routingDirectory = new URL('./routing/', import.meta.url);
 const routingFiles = ['pricing-checkout.js', 'region-config.js', 'server.js'];

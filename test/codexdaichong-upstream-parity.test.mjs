@@ -30,13 +30,13 @@ after(async () => {
   if (fixture) await rm(fixture, { recursive: true, force: true });
 });
 
-test('all 200 upstream files match: 196 original and four precisely reviewed routing and return boundaries', async () => {
+test('all 203 upstream files match: 199 original and four precisely reviewed routing and return boundaries', async () => {
   const result = await verifyCodexdaichongSource(prepared);
   assert.equal(result.revision, CODEXDAICHONG_REVISION);
-  assert.equal(result.files, 200);
+  assert.equal(result.files, 203);
   await exec(process.execPath, ['--check', join(prepared, 'server.js')]);
   await exec(process.execPath, ['--check', join(prepared, 'mysql-store.js')]);
-  assert.equal(result.originalFiles, 196);
+  assert.equal(result.originalFiles, 199);
   assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
   assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
   assert.equal((await readFile(join(prepared, 'mysql-store.js'), 'utf8')).replace('module.exports = {\n    withTransaction,', 'module.exports = {'), await original('mysql-store.js'), '事务导出不改变任何原版数据库函数');
@@ -147,7 +147,8 @@ async function declinedCardAttempts(source, vendure) {
     },
     './tax-free-address': { pickBillingAddressForCheckout: async () => ({ generated: true }) },
     './region-config': { getRegionConfig: () => ({ currency: 'MYR' }) },
-    './plan-registry': { requireReadablePlanType: (plan) => plan }
+    './plan-registry': { requireReadablePlanType: (plan) => plan },
+    './gpt-api-failure': { redactSensitiveText: (value) => value }
   };
   runInNewContext(source, {
     module, console: quiet,

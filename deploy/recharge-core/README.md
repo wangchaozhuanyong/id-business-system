@@ -1,6 +1,6 @@
 # 原版核心的生产运行配套
 
-本目录只包含外围部署代码，200 个追踪文件全部按 `f4d7761e0036892e6dd68ec64c5447b513ca37da` 及用户批准的选路、未使用码归还两份精确补丁核验（196 个原文件不变，4 个按哈希核验）。未使用码归还边界见 `docs/RECHARGE_CODE_RETURNS_20261108.md`。不得在此加入请求内支付重试或付款逻辑。选路授权边界和两张新增表见 `docs/RECHARGE_PLAN_ROUTING_20261108.md`。
+本目录只包含外围部署代码，203 个追踪文件全部按 `4e9bb201cf481d4bcc85da34970fc26c63ab818a` 及用户批准的选路、未使用码归还两份精确补丁核验（199 个原文件不变，4 个按哈希核验）。未使用码归还边界见 `docs/RECHARGE_CODE_RETURNS_20261108.md`。不得在此加入请求内支付重试或付款逻辑。选路授权边界和两张新增表见 `docs/RECHARGE_PLAN_ROUTING_20261108.md`。
 
 - `Dockerfile`：从既有固定 Node 24 镜像重新构建，安装原版锁定依赖、Chromium 和按现网状态选择的可选 Python 配套。构建上下文为 `source/`（确定 main 的归档）、`upstream/`（固定原仓库）、`engine/`（未改写原版加两份版本标记）。构建时必须设置 `org.opencontainers.image.revision` 和 `org.id-business.upstream.revision` 标签。
 - `entry.mjs`：私有 stdin 依次接收数据库密码、既有桥接密钥、原运行设置 JSON，adapter 额外接收宿主签发的短期网络证明。原版角色启动前全量核验；宿主预检专用库后直接运行原版 server.js，不向原进程预加载监控；adapter 不加载或替换任何原版执行函数。
