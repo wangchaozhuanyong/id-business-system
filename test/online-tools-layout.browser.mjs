@@ -124,7 +124,9 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
   await drawer.getByRole('button', { name: '每日统计', exact: true }).waitFor();
   assert(await drawer.getByText('独立 IP 数', { exact: true }).last().isVisible());
   await drawer.getByRole('button', { name: 'IP 明细', exact: true }).click();
-  await drawer.getByText('/fixture', { exact: true }).waitFor();
+  const pathPreview = drawer.getByRole('button', { name: '查看完整页面路径' });
+  await pathPreview.waitFor();
+  assert.equal(await pathPreview.textContent(), '/fixture');
   await drawer.getByRole('tab', { name: '网站检测', exact: true }).click();
   await page.locator('#ops-monitor-url').fill('https://example.test/retained');
   await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
@@ -142,11 +144,13 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
   assert.match(await page.locator('#ops-media-text').inputValue(), /123456789/);
 
   await openTool('计算 2FA 验证码');
-  const firstRow = drawer.locator('.totp-code-card').filter({ has: page.getByText('验收账号 1', { exact: true }) });
+  const firstRow = drawer.locator('.saved-totp-table tbody tr').filter({ has: page.getByText('验收账号 1', { exact: true }) });
   await firstRow.getByText('135791', { exact: true }).waitFor();
   await firstRow.getByText('246802', { exact: true }).waitFor();
-  await drawer.getByRole('button', { name: '下一页', exact: true }).click();
-  await drawer.getByText('验收账号 9', { exact: true }).waitFor();
+  const totpPager = drawer.locator('[data-pagination="operations-saved-totp"]');
+  await totpPager.getByRole('button', { name: '下一页', exact: true }).click();
+  await drawer.getByText('验收账号 11', { exact: true }).waitFor();
+  assert.equal(await totpPager.getAttribute('data-page'), '2');
 
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
   if (output) await mkdir(output, { recursive: true });
@@ -185,9 +189,12 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
       await page.locator('#ops-mailbox-filter-provider').selectOption('apple');
       await drawer.getByText('没有匹配的邮箱', { exact: true }).waitFor();
       await page.locator('#ops-mailbox-filter-provider').selectOption('');
-      await drawer.getByRole('button', { name: '下一页', exact: true }).click();
-      await table.getByText('layout-23@example.test', { exact: true }).waitFor();
-      await drawer.getByRole('button', { name: '上一页', exact: true }).click();
+      const mailboxPager = drawer.locator('[data-pagination="operations-mailbox-pool"]');
+      await mailboxPager.getByRole('button', { name: '下一页', exact: true }).click();
+      await table.getByText('layout-10@example.test', { exact: true }).waitFor();
+      assert.equal(await mailboxPager.getAttribute('data-page'), '2');
+      await mailboxPager.getByRole('button', { name: '上一页', exact: true }).click();
+      await table.getByText('layout-0@example.test', { exact: true }).waitFor();
       const before = await close.boundingBox();
       await drawer.locator('.drawer-body').evaluate((body) => body.scrollTop = body.scrollHeight);
       await checkFrame();

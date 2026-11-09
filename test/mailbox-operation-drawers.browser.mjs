@@ -72,14 +72,14 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
     return (await response).status();
   }
   await page.goto(origin + '/#/plugins/mailboxes');
-  await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await pool.waitFor();
   await row(0).waitFor();
   await pool.getByRole('searchbox', { name: '搜索邮箱池' }).fill('drawer-');
   const listBefore = await pool.locator('.mailbox-account').count();
   await row(0).getByRole('button', { name: '查询', exact: true }).click();
   await drawer.getByText('合成验证码邮件', { exact: true }).waitFor();
   assert.equal(await page.locator('#ops-managed-mail-query').count(), 1, '复用查询表单，无重复编号');
-  assert.equal(await page.getByRole('tab', { name: '邮箱池管理', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await pool.isVisible(), true, '行内查询不替换邮箱池页面');
   assert.equal(await page.evaluate(() => window.mailInjected), undefined);
   const optionAlignment = await drawer.locator('#ops-managed-mail-query').evaluate(form => Math.abs(form.querySelector('#ops-managed-query-limit').getBoundingClientRect().top - form.querySelector('[type="submit"]').getBoundingClientRect().top));
   assert(optionAlignment <= 1, '查询封数和查询按钮在同一视觉行');

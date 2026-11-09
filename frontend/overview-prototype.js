@@ -56,11 +56,12 @@
         const dates = recentDates();
         const appleLoad = key.finance && key.apple
           ? appleBalance.refreshLocalBalance() : Promise.resolve(false);
-        const jobs = [['inventory', async () => await inventory.refreshOverview() && inventory.overviewSummary()]];
+        const inventoryLoad = inventory.refreshOverview();
+        const jobs = [['inventory', async () => await inventoryLoad && inventory.overviewSummary()]];
         if (key.finance && key.apple)
           jobs.push(['apple', async () => await appleLoad && appleBalance.listRefunds().filter(row => row.status === 'pending').length]);
         if (key.finance) jobs.push(['commerce', async () => {
-            const [ok] = await Promise.all([commerce.refreshOverview(), appleLoad]);
+            const [ok] = await Promise.all([commerce.refreshOverview(), appleLoad, inventoryLoad]);
             return ok && commerce.overviewSummary(dates);
           }]);
         return Object.fromEntries(await Promise.all(jobs.map(async ([section, load]) => {

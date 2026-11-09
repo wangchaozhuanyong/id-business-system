@@ -36,7 +36,7 @@ try {
     if (theme === 'dark') await page.locator('#theme-toggle').click();
     const drawer = page.locator('#plugin-tool-host');
     await page.goto(origin + '/#/plugins/mailboxes');
-    await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+    await drawer.locator('#ops-mailbox-pool').waitFor();
     const pool = drawer.locator('#ops-mailbox-pool'), list = pool.locator('.online-tool-mail-list');
     const waitCodes = () => page.waitForFunction(() => {
       const codes = [...document.querySelectorAll('[data-mailbox-code]')];
@@ -135,7 +135,7 @@ try {
     assert.deepEqual(await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop })), scrollBeforeOperation, '关闭抽屉保留列表滚动位置');
     await page.goto(origin + '/#/plugins/websites');
     await page.goto(origin + '/#/plugins/mailboxes');
-    await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click(); await waitCodes();
+    await drawer.locator('#ops-mailbox-pool').waitFor(); await waitCodes();
     assert.equal(await pool.getByLabel('每页条数', { exact: true }).inputValue(), '50');
     assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41');
     await pool.getByLabel('搜索邮箱池', { exact: true }).fill('layout-1999'); await waitCodes();

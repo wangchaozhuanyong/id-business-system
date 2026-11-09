@@ -142,8 +142,38 @@ export async function settle(page) {
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   );
 }
-export async function spacingSnapshot(page, scope = '#main') {
+export async function separatorSnapshot(page, scope = '#main') {
   return page.locator(scope).evaluate((root) => {
+    const visible = node => node.checkVisibility() && node.getBoundingClientRect().width > 0;
+    const controls = [...root.querySelectorAll('.button,input:not([type=hidden]),select,textarea,summary')]
+      .filter(node => visible(node) && !node.closest('table,.table-viewport,.title-description,[popover]'));
+    const findings = [];
+    let measurements = 0;
+    for (const region of root.querySelectorAll('.list-controls,.content-toolbar,.panel-heading,.toolbar,.form-footer,.tool-header-row,.pagination,.form-section,.tabs')) {
+      if (!visible(region)) continue;
+      const box = region.getBoundingClientRect(), style = getComputedStyle(region);
+      for (const side of ['Top', 'Bottom']) {
+        if (!(parseFloat(style[`border${side}Width`]) > 0) || style[`border${side}Style`] === 'none') continue;
+        const line = side === 'Top' ? box.top : box.bottom;
+        for (const control of controls) {
+          if (control.contains(region)) continue;
+          const rect = control.getBoundingClientRect();
+          if (rect.right <= box.left || rect.left >= box.right) continue;
+          const distance = Math.max(rect.top - line, line - rect.bottom);
+          if (distance >= 24) continue;
+          measurements++;
+          if (distance < 8 - 0.5) findings.push({
+            region: region.className, side, control: control.id || control.getAttribute('aria-label') || control.textContent.trim().slice(0, 40),
+            distance: Math.round(distance * 100) / 100
+          });
+        }
+      }
+    }
+    return { measurements, findings };
+  });
+}
+export async function spacingSnapshot(page, scope = '#main') {
+  const result = await page.locator(scope).evaluate((root) => {
     const findings = [],
       cards = [];
     const visible = (el) => el.checkVisibility() && el.getBoundingClientRect().width > 0;
@@ -211,4 +241,6 @@ export async function spacingSnapshot(page, scope = '#main') {
     }
     return { findings, cards, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
   });
+  const separators = await separatorSnapshot(page, scope);
+  return { ...result, separators, findings: [...result.findings, ...separators.findings] };
 }

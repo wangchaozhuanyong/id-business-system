@@ -172,17 +172,22 @@ const navigation = [
       ['GPT 提交订单', 'workspace/order/gpt'],
       ['Claude 提交订单', 'workspace/order/claude'],
       ['续费管理', 'workspace/renewals'],
-      ['客户流失', 'workspace/customer-loss'],
       ['客户录入', 'customers/new'],
-      ['邮箱提交', 'workspace/mail-submit'],
+      ['充值码提取', 'workspace/recharge-codes'],
+      ['我的充值码', 'workspace/my-recharge-codes'],
+      ['兑换开通', 'workspace/recharge']
+    ]
+  ],
+  [
+    '管理快捷',
+    'bolt',
+    [
       ['账号提交', 'workspace/account-submit'],
+      ['邮箱提交', 'workspace/mail-submit'],
       ['邮箱提取', 'workspace/mail-extract'],
       ['账号提取', 'workspace/account-extract'],
       ['提取与归还', 'workspace/extractions'],
-      ['充值码提取', 'workspace/recharge-codes'],
-      ['我的充值码', 'workspace/my-recharge-codes'],
-      ['比特登录', 'recharge/start'],
-      ['兑换开通', 'workspace/recharge']
+      ['比特登录', 'recharge/start']
     ]
   ],
   [
@@ -217,7 +222,6 @@ const navigation = [
     '订单管理',
     'orders',
     [
-      ['数据统计', 'orders/statistics'],
       ['GPT 订单', 'orders/gpt'],
       ['代充订单同步', 'orders/recharge-sync'],
       ['Claude Pro 订单', 'orders/pro'],
@@ -236,8 +240,11 @@ const navigation = [
     ]
   ],
   ['数据管理', 'database', [
+    ['数据统计', 'orders/statistics'],
     ['银行卡管理', 'data-management/bank-cards'],
-    ['Claude 谷歌订阅管理', 'data-management/claude-google-subscriptions']
+    ['Claude 谷歌订阅管理', 'data-management/claude-google-subscriptions'],
+    ['客户流失', 'workspace/customer-loss'],
+    ['员工数据统计', 'data-management/employee-statistics']
   ]],
   ['数据中心', 'database', [['数据中心', 'data', true]]],
   ['插件管理', 'grid', [

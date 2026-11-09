@@ -30,6 +30,7 @@ import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler 
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
+import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
 
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
@@ -51,6 +52,7 @@ const files = new Map([
     'apple-balance-prototype',
     'commerce-prototype',
     'claude-google-subscriptions',
+    'employee-statistics',
     'order-operations',
     'change-sync',
     'operations-prototype',
@@ -167,6 +169,7 @@ export async function startPreview(
   let handleAutomaticSnapshot = null;
   let financeCollection = null, handleFinanceCollection = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleRechargeCodes, orderSync;
+  let handleEmployeeStatistics;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
   function gatewayFor(host) {
@@ -206,6 +209,9 @@ export async function startPreview(
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
+      handleEmployeeStatistics = createEmployeeStatisticsHandler({
+        store, client: orderRechargeClient, publicOrigin: secureOrigin, readEmployees: () => auth.orderOwners()
+      });
       handleRechargeCodes = createRechargeCodeHandler({
         store: {
           load: () => store.featureDocument('recharge-codes'),
@@ -441,6 +447,8 @@ export async function startPreview(
       if (!actor || !canManage) return forbidden();
       return void handleClaudeGoogleSubscriptions(request, response, route, actor);
     }
+    if (store && route === employeeStatisticsRoute)
+      return void handleEmployeeStatistics(request, response, actor);
     if (store && route.startsWith('/api/local/tools/media/')) {
       if (!actor) return forbidden();
       return void handleMediaResolver(request, response, actor);

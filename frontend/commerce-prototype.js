@@ -557,7 +557,8 @@
       .finally(() => {
         commerceLoad = undefined;
         updateRenewalReminder();
-        if (matches(S.route) && (!hadData || !$('#main form[data-commerce-draft]'))) A.render();
+        if (matches(S.route) && !(S.route === customerLossRoute && retentionRefresh) &&
+            (!hadData || !$('#main form[data-commerce-draft]'))) A.render();
       });
     return commerceLoad;
   }
@@ -1365,7 +1366,7 @@
     return Boolean(subscriptionEmail(a)) && subscriptionEmail(a) === subscriptionEmail(b) &&
       subscriptionFamily(a) === subscriptionFamily(b);
   }
-  function identifyOrderCustomers() {
+  function orderCustomerContacts(knownCustomers) {
     const byContact = new Map();
     const index = (keys, id) => {
       for (const key of keys) {
@@ -1374,21 +1375,28 @@
       }
     };
     for (const row of customers) index(orderContactKeys(row, false), row.id);
-    for (const row of orders) if (row.customerId) index(orderContactKeys(row), row.customerId);
+    for (const row of orders)
+      if (row.customerId && (!knownCustomers || knownCustomers.has(row.customerId)))
+        index(orderContactKeys(row), row.customerId);
+    return byContact;
+  }
+  function customersMatchingContacts(order, byContact) {
+    return new Set(orderContactKeys(order).flatMap(key => [...(byContact.get(key) || [])]));
+  }
+  function identifyOrderCustomers() {
+    const byContact = orderCustomerContacts();
 
-    const identities = new Map(), uncertain = new Map(), anonymous = new Map();
+    const identities = new Map(), anonymous = new Map();
     for (const row of orders) {
       if (row.customerId) {
         identities.set(row.id, row.customerId);
         continue;
       }
       const keys = orderContactKeys(row);
-      const matches = new Set(keys.flatMap((key) => [...(byContact.get(key) || [])]));
+      const matches = customersMatchingContacts(row, byContact);
       if (matches.size === 1) {
         identities.set(row.id, [...matches][0]);
-      } else if (matches.size || !keys.length) {
-        uncertain.set(row.id, matches);
-      } else {
+      } else if (!matches.size && keys.length) {
         const groups = new Set(keys.map((key) => anonymous.get(key)).filter(Boolean));
         const group = groups.values().next().value || { id: `contact:${row.id}`, keys: new Set(), orders: [] };
         for (const other of groups) {
@@ -1403,10 +1411,10 @@
     }
     for (const group of new Set(anonymous.values()))
       for (const id of group.orders) identities.set(id, group.id);
-    return { identities, uncertain };
+    return identities;
   }
   function renewalProjection() {
-    const { identities, uncertain } = identifyOrderCustomers();
+    const identities = identifyOrderCustomers();
     const evaluatedAt = parseDate(now());
     const deadline = evaluatedAt + renewalWarningHours * 3_600_000;
     const rows = orders.flatMap((order) => {
@@ -1418,21 +1426,12 @@
       const subscription = renewalSubscriptionKey(order, identity);
       return [{ order, identity, subscription, start, expiry }];
     });
-    const latest = new Map(), histories = new Map(), active = new Set(), ambiguous = new Set();
+    const latest = new Map();
     for (const row of rows) {
-      if (row.start <= evaluatedAt && row.identity) {
-        const history = histories.get(row.identity) || [];
-        history.push(row);
-        histories.set(row.identity, history);
-      }
       if (row.order.cancelled || row.order.subscriptionEnded || endedInventoryOrder(row.order)) continue;
       const prior = latest.get(row.subscription);
       if (!prior || row.expiry > prior.expiry || (row.expiry === prior.expiry && row.start > prior.start))
         latest.set(row.subscription, row);
-      if (row.start <= evaluatedAt && row.expiry > evaluatedAt) {
-        if (row.identity) active.add(row.identity);
-        else for (const id of uncertain.get(row.order.id) || []) ambiguous.add(id);
-      }
     }
     const decisions = new Map(), links = new Map();
     for (const entry of logs) {
@@ -1460,8 +1459,7 @@
       if (state) reminders.push({ ...row, state, refused: !successor && refused,
         completed: successor?.order || null, decision });
     }
-    return { reminders, histories, active, ambiguous, rows, identities, evaluatedAt, deadline, unresolved: rows.filter((row) =>
-      !row.identity && row.start <= evaluatedAt) };
+    return { reminders, rows, identities, evaluatedAt, deadline };
   }
   function renewalSubscriptionKey(order, identity) {
     const email = subscriptionEmail(order);
@@ -1941,52 +1939,364 @@
         { signal: cleanup.signal });
     }, { pending: '正在读取银行卡…', failure: '银行卡资料复制失败，请重试' });
   }
-  function renderCustomerLoss() {
-    const { histories, active, ambiguous, unresolved } = renewalProjection();
-    const rows = [];
-    for (const [id, history] of histories) {
-      if (active.has(id)) continue;
-      const last = history.reduce((a, b) => a.expiry >= b.expiry ? a : b);
-      const contact = customerForOrder(last.order, id);
-      rows.push({ id, ...contact, ...last, review: ambiguous.has(id) });
-    }
-    for (const row of unresolved)
-      rows.push({ ...row, ...customerForOrder(row.order), id: row.order.id, review: true });
-    const review = S.status === 'review';
-    const selected = rows.filter((row) => row.review === review && matchesRenewalSearch(row, row.order))
-      .sort((a, b) => b.expiry - a.expiry);
-    const columns = [
-      ...renewalContactColumns(),
-      { id: 'qq', label: 'QQ' },
-      { id: 'telegram', label: 'Telegram' },
-      { id: 'lastProduct', label: '最近业务', render: ({ order }) => E(`${order.product} · ${order.plan}`) },
-      { id: 'lastExpiry', label: '最后到期', render: ({ order }) => E(dateInput(order.expiry).replace('T', ' ')) },
-      { id: 'actions', label: '操作', action: true, render: (row) =>
-        row.identity
-          ? A.textAction('历史订单', 'commerce-loss-history', `data-id="${E(row.identity)}"`)
-          : A.textAction('查看订单', 'commerce-order-detail', `data-id="${E(row.order.id)}"`) }
-    ];
-    return A.header('客户流失', '曾确认开通且当前没有有效订阅的客户。换账号或换产品开通后会自动退出。') +
-      `<section class="panel">${tabs([['', `客户流失 ${rows.filter((row) => !row.review).length}`],
-        ['review', `待核对 ${rows.filter((row) => row.review).length}`]], S.status, 'commerce-loss-tab', 'aria-label="客户流失状态"')}
-      ${toolbar('搜索客户、联系方式或最近业务')}${tableList(columns, selected, 'commerce-customer-loss')}</section>`;
+  const retentionFiltersKey = 'customer-retention:filters';
+  const retentionFilterDefaults = { plan: '', age: '', count: '', sort: 'recent' };
+  const retentionPlans = { ...productPlans, GPT: ['Go', ...productPlans.GPT] };
+  const retentionPlanKey = (product, plan = '') => JSON.stringify([product, plan]);
+  const retentionDate = timestamp => Number.isFinite(timestamp) ? beijingClock.format(timestamp) : '—';
+  const retentionDay = timestamp => Math.floor((timestamp + 8 * 3_600_000) / 86_400_000);
+  const retentionTimeOrder = (a, b) => (b.start || 0) - (a.start || 0) ||
+    String(a.order.id).localeCompare(String(b.order.id));
+  let retentionRefresh, retentionRefreshFailed = false;
+
+  function refreshCustomerRetention(node) {
+    if (!localData || retentionRefresh) return;
+    const region = node.closest('.retention-overview');
+    const status = region.querySelector('[data-retention-progress]');
+    const read = A.beginRegionRead(region, status, { refreshButton: node });
+    retentionRefresh = Promise.allSettled([
+      loadLocalCommerce(true, true), A.modules.inventory?.refreshLocalInventory?.({ keepContent: true })
+    ]).then(results => {
+      retentionRefreshFailed = results.some(result => result.status !== 'fulfilled' || !result.value);
+      if (results.some(result => result.status === 'fulfilled' && result.value))
+        localData.queries?.invalidate(['overview']);
+    }).finally(() => {
+      read.finish();
+      retentionRefresh = undefined;
+      if (S.route === customerLossRoute) A.render();
+    });
   }
+
+  function retentionPlan(order) {
+    const recorded = String(order.plan || '').trim();
+    if (!recorded) return '';
+    const value = order.product === 'GPT' || /^max(5|20)$/.test(recorded)
+      ? normalizedPlan(recorded) : recorded;
+    return retentionPlans[order.product].find(plan => plan.toLowerCase() === String(value).toLowerCase()) || '';
+  }
+
+  function retentionStockOrder(order) {
+    return order.businessType === '成品交付' ||
+      Boolean(order.accountId && !['客户自有', 'customer'].includes(order.accountSource));
+  }
+
+  function retentionInventoryEnd(order) {
+    const inventory = A.modules.inventory;
+    const summary = (order.accountId && inventory?.accountSummary?.(order.accountId)) ||
+      inventory?.accountSummaryForEmail?.(order.email, order.product);
+    const relation = summary?.orders?.find(row => row.id === order.id);
+    if (localData && retentionStockOrder(order) &&
+        (!inventory?.accountLifecycleReady?.() || !relation))
+      return { issue: '库存使用关系待核对' };
+    if (!relation?.released) return {};
+    const times = (summary.events || [])
+      .filter(event => ['release', 'retire'].includes(event.action) && event.orderIds?.includes(order.id))
+      .map(event => parseDate(event.time)).filter(Number.isFinite);
+    return times.length ? { end: Math.min(...times) } : { issue: '回收时间待核对' };
+  }
+
+  function retentionOrderFact(order, profiles, contacts, at) {
+    const explicit = profiles.has(order.customerId) ? order.customerId : '';
+    const candidates = explicit ? new Set([explicit]) : customersMatchingContacts(order, contacts);
+    const customerId = explicit || (!order.customerId && candidates.size === 1 ? candidates.values().next().value : '');
+    const start = parseDate(order.start), expiry = parseDate(order.expiry), plan = retentionPlan(order);
+    const automatic = automaticOrder(order);
+    const completed = parseDate(order.rechargeCompletedAt);
+    const paid = paymentStatus(order);
+    const evidence = automatic ? Number.isFinite(completed) && completed <= at &&
+      (!Number.isFinite(start) || completed >= start) && (!Number.isFinite(expiry) || completed < expiry)
+      : paid === '已付款';
+    const hasSignal = evidence || automatic || paid === '付款待核对' || paid === '已付款';
+    const periodValid = Number.isFinite(start) && expiry > start;
+    const cancelled = order.cancelled || ['cancelled', '已撤单'].includes(order.status);
+    const draft = order.draft || ['draft', 'failed', '草稿', '失败'].includes(order.status);
+    const inventory = hasSignal && !cancelled && !draft ? retentionInventoryEnd(order) : {};
+    const end = Math.min(expiry, inventory.end ?? Infinity);
+    let stateIssue = '';
+    if (hasSignal) {
+      if (cancelled || draft) stateIssue = '订单状态与开通证据待核对';
+      else if (!periodValid) stateIssue = '订阅周期缺失或无效';
+      else if (!evidence) stateIssue = automatic ? '代充开通证据待核对' : '开通凭据待核对';
+      else if (inventory.issue) stateIssue = inventory.issue;
+      else if (order.subscriptionEnded) stateIssue = '实际终止时间待核对';
+      else if (end <= start) stateIssue = '使用结束时间与开通时间冲突';
+    }
+    const reasons = [
+      hasSignal && !customerId && (order.customerId ? '客户编号无对应资料'
+        : candidates.size > 1 ? '联系方式匹配多个客户' : '客户归属待核对'),
+      stateIssue,
+      hasSignal && !plan && '套餐待核对'
+    ].filter(Boolean);
+    const confirmed = evidence && periodValid && !cancelled && !draft && end > start;
+    const status = stateIssue ? '待核对' : !confirmed ? cancelled ? '已撤单' : '开通待确认'
+      : start > at ? '待生效' : end > at ? '有效' : '已结束';
+    return { order, customerId, candidates, start, expiry, end, plan, confirmed,
+      status, reasons, blocksLoss: Boolean(stateIssue || hasSignal && !customerId) };
+  }
+
+  function customerRetentionProjection() {
+    const at = localData ? Date.now() : parseDate(now());
+    const profiles = new Map(customers.map(customer => [customer.id, { id: customer.id, customer, history: [] }]));
+    const contacts = orderCustomerContacts(profiles);
+    const groups = new Map();
+    for (const order of orders) {
+      if (!order.id || !Object.hasOwn(retentionPlans, order.product)) continue;
+      const key = automaticOrder(order) ? `任务:${order.taskId}` : `订单:${order.id}`;
+      const rows = groups.get(key) || [];
+      rows.push(order);
+      groups.set(key, rows);
+    }
+    const review = new Map(), blocked = new Set();
+    function record(fact) {
+      if (fact.customerId) profiles.get(fact.customerId).history.push(fact);
+      if (fact.reasons.length) review.set(fact.order.id, fact);
+      if (fact.blocksLoss)
+        for (const id of fact.candidates) blocked.add(id);
+    }
+    for (const group of groups.values()) {
+      const facts = group.map(order => retentionOrderFact(order, profiles, contacts, at));
+      const first = facts[0];
+      const signature = fact => JSON.stringify([fact.customerId, fact.order.customerId || '',
+        fact.order.product, fact.plan || fact.order.plan, subscriptionEmail(fact.order),
+        fact.order.accountId || '', fact.start, fact.expiry, fact.end, fact.confirmed,
+        fact.status, fact.reasons]);
+      if (facts.some(fact => signature(fact) !== signature(first))) {
+        const uniqueOrders = new Map(facts.map(fact => [fact.order.id, fact]));
+        for (const fact of uniqueOrders.values()) record({
+          ...fact, confirmed: false, status: '待核对', blocksLoss: true,
+          candidates: new Set(facts.flatMap(row => [...row.candidates])),
+          reasons: [...fact.reasons, '重复订单或代充任务资料冲突']
+        });
+      } else record(first);
+    }
+    const lost = [], scheduled = [];
+    let active = 0;
+    for (const profile of profiles.values()) {
+      profile.history.sort(retentionTimeOrder);
+      profile.confirmed = profile.history.filter(fact => fact.confirmed && fact.start <= at);
+      profile.pending = profile.history.filter(fact => fact.status === '待生效');
+      profile.activeCount = profile.confirmed.filter(fact => fact.status === '有效').length;
+      profile.latest = profile.confirmed[0];
+      profile.first = profile.confirmed.at(-1);
+      profile.next = profile.pending.at(-1);
+      profile.lastEnd = profile.confirmed.reduce((last, fact) =>
+        fact.status === '已结束' ? Math.max(last, fact.end) : last, -Infinity);
+      profile.days = Number.isFinite(profile.lastEnd) ? retentionDay(at) - retentionDay(profile.lastEnd) : null;
+      const plans = new Map();
+      for (const fact of profile.confirmed) {
+        const key = retentionPlanKey(fact.order.product, fact.plan);
+        const plan = plans.get(key) || { product: fact.order.product, plan: fact.plan, count: 0 };
+        plan.count++;
+        plans.set(key, plan);
+      }
+      profile.plans = [...plans.values()].sort((a, b) => b.count - a.count ||
+        (a.product + a.plan).localeCompare(b.product + b.plan));
+      if (profile.activeCount) active++;
+      else if (profile.confirmed.length && !blocked.has(profile.id)) {
+        if (profile.next) scheduled.push(profile);
+        else if (profile.days !== null) lost.push(profile);
+      }
+    }
+    return { at, profiles, lost, scheduled, review: [...review.values()], active };
+  }
+
+  function retentionPlanLabel(product, plan) {
+    return `${product} · ${plan || '套餐待核对'}`;
+  }
+  function retentionPlanSummary(profile, limit = Infinity) {
+    const labels = profile.plans.slice(0, limit).map(({ product, plan, count }) =>
+      `${retentionPlanLabel(product, plan)} ${count} 次`);
+    if (profile.plans.length > limit) labels.push(`另有 ${profile.plans.length - limit} 种`);
+    return labels.join('、') || '—';
+  }
+  function retentionContact(customer) {
+    const channel = customerChannels.find(([key]) => customer[key]);
+    return channel ? `${channel[1].replace('客户', '')} ${customer[channel[0]]}` : '';
+  }
+  function retentionView() {
+    return { ...retentionFilterDefaults, ...S.drafts.get(retentionFiltersKey) };
+  }
+  function retentionToolbar(view, tab) {
+    const choices = [['', '全部产品'], ...Object.entries(retentionPlans).flatMap(([product, plans]) => [
+      [retentionPlanKey(product), `${product} · 全部`],
+      ...plans.map(plan => [retentionPlanKey(product, plan), retentionPlanLabel(product, plan)])
+    ])];
+    const filter = (name, label, values) =>
+      select(`loss-${name}`, values, view[name], `aria-label="${label}"`);
+    return toolbar('搜索客户、联系方式、历史账号或订单号',
+      filter('plan', '产品和套餐', choices) + (tab ? '' :
+        filter('age', '停用时长', [['', '全部停用时长'], ['recent', '近 7 天'], ['month', '7–29 天'], ['older', '30 天及以上']]) +
+        filter('count', '订阅次数', [['', '全部订阅次数'], ['one', '1 次'], ['few', '2–3 次'], ['many', '4 次及以上']]) +
+        filter('sort', '排序方式', [['recent', '最近停止优先'], ['count', '订阅次数优先']])));
+  }
+  function retentionRecordMatches(fact, key) {
+    return !key || retentionPlanKey(fact.order.product) === key ||
+      retentionPlanKey(fact.order.product, fact.plan) === key;
+  }
+  function retentionSearch(query, customer, history) {
+    if (!query) return true;
+    return [customer.name, ...customerChannels.map(([key]) => customer[key]), ...history.flatMap(({ order, plan }) =>
+      [order.orderNo, order.email, order.product, order.plan, plan, ...orderContactFields.map(([key]) => order[key])]
+    )].join(' ').toLowerCase().includes(query);
+  }
+  function retentionReviewRows(projection, plan, query) {
+    return projection.review
+      .filter(fact => {
+        const customer = projection.profiles.get(fact.customerId)?.customer ||
+          { name: fact.order.customerName || fact.order.customer || '待确认客户' };
+        return retentionRecordMatches(fact, plan) && retentionSearch(query, customer, [fact]);
+      })
+      .sort(retentionTimeOrder)
+      .map(fact => ({
+        id: fact.order.id,
+        name: projection.profiles.get(fact.customerId)?.customer.name || fact.order.customerName ||
+          fact.order.customer || '待确认客户',
+        orderNo: fact.order.orderNo || '—',
+        email: fact.order.email || '—',
+        plans: retentionPlanLabel(fact.order.product, fact.plan),
+        reason: fact.reasons.join('、')
+      }));
+  }
+  function retentionCustomerRows(projection, view, tab, query) {
+    const profiles = tab === 'scheduled' ? projection.scheduled : projection.lost;
+    return profiles.filter(profile => {
+      if (!retentionSearch(query, profile.customer, profile.history)) return false;
+      if (![...profile.confirmed, ...profile.pending].some(fact => retentionRecordMatches(fact, view.plan)))
+        return false;
+      if (tab) return true;
+      const countBand = profile.confirmed.length === 1 ? 'one' : profile.confirmed.length <= 3 ? 'few' : 'many';
+      const ageBand = profile.days < 7 ? 'recent' : profile.days < 30 ? 'month' : 'older';
+      return (!view.count || view.count === countBand) && (!view.age || view.age === ageBand);
+    }).sort((a, b) => (tab ? a.next.start - b.next.start :
+      (view.sort === 'count' ? b.confirmed.length - a.confirmed.length : 0) || b.lastEnd - a.lastEnd) ||
+      String(a.customer.name || '').localeCompare(String(b.customer.name || '')))
+      .map(profile => ({
+        id: profile.id, name: profile.customer.name, contact: retentionContact(profile.customer),
+        count: `${profile.confirmed.length} 次`, plans: retentionPlanSummary(profile, 2),
+        latest: retentionDate(profile.latest.start).slice(0, 10),
+        end: tab ? retentionDate(profile.next.start) : retentionDate(profile.lastEnd),
+        days: profile.days === null ? '—' : `${profile.days} 天`
+      }));
+  }
+  function renderCustomerLoss() {
+    const projection = customerRetentionProjection();
+    const tab = ['review', 'scheduled'].includes(S.status) ? S.status : '';
+    const review = tab === 'review', scheduled = tab === 'scheduled';
+    const view = retentionView(), query = String(S.query || '').trim().toLowerCase();
+    const rows = review ? retentionReviewRows(projection, view.plan, query) :
+      retentionCustomerRows(projection, view, tab, query);
+    const action = review ? 'commerce-order-detail' : 'commerce-loss-history';
+    const label = review ? '查看订单' : '订阅历史';
+    const columns = [{ id: 'name', label: '客户' }, ...(review ? [
+      { id: 'orderNo', label: '订单编号' }, { id: 'plans', label: '产品与套餐' },
+      { id: 'email', label: '订阅账号' }, { id: 'reason', label: '待核对原因', long: true }
+    ] : [
+      { id: 'count', label: '确认订阅' }, { id: 'plans', label: '套餐分布' },
+      { id: 'end', label: scheduled ? '预计生效' : '最后结束' },
+      ...(!scheduled ? [{ id: 'days', label: '停用天数' }] : []),
+      { id: 'latest', label: '最近开通' },
+      { id: 'contact', label: '联系方式', long: true, render: row => E(row.contact || '—') }
+    ]), {
+      id: 'actions', label: '操作', action: true,
+      render: row => A.textAction(label, action, `data-id="${E(row.id)}"${!review ? ' aria-haspopup="dialog"' : ''}`)
+    }];
+    const hasFilters = query || view.plan || !tab && (view.age || view.count);
+    const guidance = hasFilters ? { title: '暂无符合条件的记录', description: '可调整搜索或筛选条件。' } :
+      { title: review ? '暂无待核对订单' : scheduled ? '暂无待生效客户' : '暂无已确认流失客户',
+        description: review ? '订阅归属或开通资料需要核对时，会显示在这里。' :
+          '根据本系统已确认的订阅记录统计。' };
+    const page = A.pageRows(rows);
+    const cards = `<div class="customer-retention-mobile panel-body" aria-label="客户记录">${page.length
+      ? `<div class="guide-list">${page.map(row => `<article class="guide-item" data-retention-card="${E(row.id)}">
+        <h3>${E(row.name)}</h3>
+        <p>${E(review ? row.plans : `${row.count} · ${row.plans}`)}</p>
+        <p>${E(review ? `${row.orderNo} · ${row.reason}` : scheduled ? `预计生效 ${row.end}` : `已停用 ${row.days} · ${row.end}`)}</p>
+        ${!review && row.contact ? `<p>${E(row.contact)}</p>` : ''}
+        <div class="retention-card-action">${A.button(label, action, '', '', `data-id="${E(row.id)}"`)}</div>
+      </article>`).join('')}</div>`
+      : A.empty(guidance.title, guidance.description)}</div>`;
+    return A.header('客户流失', '按本系统已确认的订阅记录归集。同一客户仍有任何有效订阅时，不判为流失。待生效和待核对单独展示。') +
+      `<section class="retention-overview design-async-region" aria-label="客户流失概览">${A.summary([
+        ['已确认流失', projection.lost.length, '位客户', true],
+        ['近 7 天停止服务', projection.lost.filter(profile => profile.days < 7).length, '位客户'],
+        ['待核对订单', projection.review.length, '笔'],
+        ['待生效', projection.scheduled.length, '位客户']
+      ])}<div class="retention-report-meta"><p class="footnote">北京时间 ${E(retentionDate(projection.at))} · GPT、Claude Pro、Claude Max 及已同步的代充记录</p>
+        ${localData ? A.button(retentionRefreshFailed ? '重试' : '刷新', 'commerce-loss-refresh', '', 'return', retentionRefresh ? 'disabled' : '') : ''}</div>
+        <div data-retention-progress role="status" hidden></div>
+        ${retentionRefreshFailed ? '<p class="inline-notice warning" role="status">部分资料读取失败，保留已读取的资料，可重试。</p>' : ''}</section>
+      <section class="panel customer-retention-list">${tabs([
+        ['', `已流失 ${projection.lost.length}`],
+        ['review', `待核对 ${projection.review.length}`],
+        ['scheduled', `待生效 ${projection.scheduled.length}`]
+      ], tab, 'commerce-loss-tab', 'aria-label="客户流失状态"')}
+      ${retentionToolbar(view, tab)}${A.table(columns, page, '', 'commerce-customer-loss', guidance)}
+      ${cards}${A.pagination(rows.length)}</section>`;
+  }
+
   function showCustomerLossHistory(id) {
-    const { identities } = identifyOrderCustomers();
-    const history = orders.filter((row) => identities.get(row.id) === id)
-      .sort((a, b) => (parseDate(b.start) || 0) - (parseDate(a.start) || 0));
-    if (!history.length) return;
+    if (!canManageOrders()) return;
+    const profile = customerRetentionProjection().profiles.get(id);
+    if (!profile) return;
+    const accountId = order => retentionPlanKey(subscriptionFamily(order), order.accountId);
+    const accountEmail = order => retentionPlanKey(subscriptionFamily(order), subscriptionEmail(order));
+    const linkedEmails = new Set(profile.confirmed.filter(({ order }) => order.accountId).map(({ order }) => accountEmail(order)));
+    const accounts = new Set(profile.confirmed.map(({ order }) => order.accountId ? `编号:${accountId(order)}`
+      : subscriptionEmail(order) && !linkedEmails.has(accountEmail(order)) ? `邮箱:${accountEmail(order)}` : '').filter(Boolean));
+    const confirmedOrders = new Map(profile.confirmed.map(fact => [fact.order.id, fact]));
+    const renewals = new Set(logs.filter(entry => {
+      if (entry.type !== '关联续费订单' || entry.entityId === entry.relatedOrderId) return false;
+      const original = confirmedOrders.get(entry.entityId), successor = confirmedOrders.get(entry.relatedOrderId);
+      return original && successor && successor.start >= original.start && successor.expiry > original.expiry &&
+        sameSubscriptionAccount(original.order, successor.order);
+    }).map(entry => entry.relatedOrderId));
+    const records = profile.history.map(({ order, start, expiry, end, plan, status, reasons }) => ({
+      id: order.id, orderNo: order.orderNo || '—', plan: retentionPlanLabel(order.product, plan),
+      recordedPlan: order.plan, email: order.email || '—', source: order.source || '历史订单',
+      start: retentionDate(start), expiry: retentionDate(expiry), end: end < expiry ? retentionDate(end) : '',
+      status, reason: reasons.join('、')
+    }));
     const columns = [
-      { id: 'orderNo', label: '订单编号' },
-      { id: 'product', label: '产品' },
-      { id: 'plan', label: '套餐' },
-      { id: 'email', label: '账号' },
-      { id: 'expiry', label: '到期时间', render: (row) => E(dateInput(row.expiry).replace('T', ' ')) },
-      { id: 'actions', label: '操作', action: true, render: (row) =>
-        A.textAction('详情', 'commerce-order-detail', `data-id="${E(row.id)}"`) }
+      { id: 'orderNo', label: '订单编号', render: row => A.textAction(row.orderNo,
+        'commerce-order-detail', `data-id="${E(row.id)}" aria-label="查看订单 ${E(row.orderNo)}"`) },
+      { id: 'plan', label: '产品与套餐', render: row => `<span title="${E(row.recordedPlan || '')}">${E(row.plan)}</span>` },
+      { id: 'status', label: '订阅状态', render: row => A.tag(row.status, row.reason ? 'warning' : row.status === '有效' ? 'success' : '') },
+      { id: 'start', label: '开通时间' }, { id: 'expiry', label: '登记到期' },
+      { id: 'end', label: '提前结束' }, { id: 'email', label: '账号' },
+      { id: 'source', label: '来源' }, { id: 'reason', label: '核对说明', long: true }
     ];
-    A.openDrawer('历史订单', '', A.table(columns, history, '', 'commerce-loss-history'),
+    const contacts = customerChannels.filter(([key]) => profile.customer[key])
+      .map(([key, label]) => property(label, profile.customer[key])).join('');
+    const historyViewKey = `customer-retention:history:${id}`;
+    A.openDrawer('客户订阅历史', '按本系统可查资料统计。相同订单或代充任务只记一次，开通证据待核对的记录单独标记。',
+      `<section class="form-section retention-profile"><h3>${E(profile.customer.name)}</h3>${A.summary([
+        ['确认订阅', profile.confirmed.length, '次', true], ['有效服务', profile.activeCount, '项'],
+        ['可识别账号', accounts.size, '个'], ['待核对记录', records.filter(row => row.reason).length, '笔']
+      ])}<div class="property-list">
+        ${property('最早可查开通', retentionDate(profile.first?.start))}
+        ${property('最近开通', retentionDate(profile.latest?.start))}
+        ${property('已关联原单的续费', `${renewals.size} 次`)}
+        ${property('套餐分布', retentionPlanSummary(profile))}
+        ${contacts}</div></section>
+      <section class="form-section"><h3>订单记录</h3>
+        ${records.length ? '<p class="footnote">左右滑动可查看订阅周期、账号和来源。点击订单编号可查看原单。</p>' : ''}
+        <div data-retention-history></div></section>`,
       A.button('关闭', 'drawer-close'));
+    const region = $('#drawer [data-retention-history]');
+    if (!region) return;
+    const pagination = window.IDPagination;
+    const renderHistory = ({ page = 1, pageSize = pagination.defaultPageSize } = {}) => {
+      page = Math.min(page, Math.max(1, Math.ceil(records.length / pageSize)));
+      region.innerHTML = A.table(columns, records.slice((page - 1) * pageSize, page * pageSize),
+        '', 'commerce-loss-history', { title: '暂无关联订单', description: '已归属的订单会在这里显示。' }) +
+        pagination.render({ id: 'customer-retention-history', page, pageSize, total: records.length });
+    };
+    renderHistory(S.drafts.get(historyViewKey));
+    region.addEventListener('id-pagination-change', ({ detail }) => {
+      if (detail.id !== 'customer-retention-history') return;
+      S.drafts.set(historyViewKey, { page: detail.page, pageSize: detail.pageSize });
+      renderHistory(detail);
+    });
   }
   function formatRenewalWarning(totalHours) {
     const days = Math.floor(totalHours / 24);
@@ -2520,7 +2830,9 @@
           : ''
       }${tenant ? tenantTransferHistory(row.ownerTransfers || []) : ''}${panelTitle('操作记录')}${timeline(row.id)}`,
       (tenant && localData ? A.button('银行卡管理', 'commerce-tenant-cards', '', '', `data-id="${E(row.id)}"`) +
-        (canManageOrders() ? A.button('转交归属', 'commerce-tenant-owner-transfer', '', '', `data-id="${E(row.id)}"`) : '') : '') + A.button('关闭', 'drawer-close')
+        (canManageOrders() ? A.button('转交归属', 'commerce-tenant-owner-transfer', '', '', `data-id="${E(row.id)}"`) : '') : '') +
+        (!tenant && canManageOrders() ? A.button('订阅历史', 'commerce-loss-history', '', '', `data-id="${E(row.id)}"`) : '') +
+        A.button('关闭', 'drawer-close')
     );
   }
 
@@ -6138,6 +6450,10 @@
       showCustomerLossHistory(id);
       return true;
     }
+    if (action === 'commerce-loss-refresh') {
+      refreshCustomerRetention(node);
+      return true;
+    }
     if (action === 'commerce-renewal-refuse' || action === 'commerce-renewal-restore') {
       changeRenewalDecision(id, action === 'commerce-renewal-restore');
       return true;
@@ -6630,6 +6946,16 @@
         : A.addCalendarMonth(start);
   }
   function onChange(node) {
+    if (S.route === customerLossRoute) {
+      const filter = node.id?.match(/^commerce-loss-(plan|age|count|sort)$/)?.[1];
+      if (filter) {
+        S.drafts.set(retentionFiltersKey, { ...retentionView(), [filter]: node.value });
+        S.page = 1;
+        A.render();
+        $(`#commerce-loss-${filter}`)?.focus({ preventScroll: true });
+        return true;
+      }
+    }
     if (node.id === 'commerce-paid-country' && paymentSettingsActive() && Object.hasOwn(paymentCountries, node.value)) {
       saveDrafts();
       paymentSettingsView().currency = node.value;
@@ -6877,14 +7203,16 @@
   }
   function render() {
     if (S.route === paymentSettingsRoute) return renderPaymentSettings();
+    const lossPage = S.route === customerLossRoute;
     if (localData && localPhase !== 'ready') {
       return (
-        A.header('本机业务资料', '') +
+        A.header(lossPage ? '客户流失' : '本机业务资料', '') +
         `<section class="panel">${
           localPhase === 'error'
-            ? A.empty('无法读取本机业务资料', '请确认本机服务后重试。') +
+            ? A.empty(lossPage ? '无法读取业务资料' : '无法读取本机业务资料',
+              lossPage ? '请重试读取客户与订单资料。' : '请确认本机服务后重试。') +
               A.button('重试', 'commerce-local-retry', 'primary')
-            : A.empty('正在读取本机业务资料', '请稍候。')
+            : A.empty(lossPage ? '正在读取客户与订单资料' : '正在读取本机业务资料', '请稍候。')
         }</section>`
       );
     }
@@ -6904,7 +7232,13 @@
     if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) return renderOrderPage();
     if (S.route === renewalRoute) return renderRenewals();
     if (S.route === subscriptionCardsRoute) return renderSubscriptionCards();
-    if (S.route === customerLossRoute) return renderCustomerLoss();
+    if (lossPage) {
+      if (localData && (!requestedAccountLifecycle || accountLifecycleReading) &&
+          !A.modules.inventory?.accountLifecycleReady?.() && orders.some(retentionStockOrder))
+        return A.header('客户流失', '') +
+          `<section class="panel">${A.empty('正在核对库存使用关系', '请稍候。')}</section>`;
+      return renderCustomerLoss();
+    }
     if (S.route.startsWith('orders/detail/'))
       return orderDetail(S.route.split('/').at(-1), moduleState.detailTab, true);
     if (S.route === 'orders/statistics') return renderStatistics();
@@ -6956,15 +7290,16 @@
       const day = bucket(customer.createdAt);
       if (day) day.customers++;
     }
-    const { reminders, histories, active, ambiguous } = renewalProjection();
+    const { reminders } = renewalProjection();
+    const retention = customerRetentionProjection();
     const pending = reminders.filter(row => row.state !== 'processed');
     return {
-      daily: [...daily.values()], incomplete, renewals: pending.length, active: active.size,
+      daily: [...daily.values()], incomplete, renewals: pending.length, active: retention.active,
       followUp: new Set(pending.map(row => row.identity).filter(Boolean)).size,
-      lost: [...histories.keys()].filter(id => !active.has(id) && !ambiguous.has(id)).length
+      lost: retention.lost.length
     };
   }
-  let requestedAccountLifecycle = false;
+  let requestedAccountLifecycle = false, accountLifecycleReading = false;
   A.modules.commerce = {
     refreshCustomerTagOptions,
     refreshOverview: () => loadLocalCommerce(true, true),
@@ -7123,7 +7458,10 @@
       if (renewalCardDrawerCurrent(panel) && ['commerce', 'inventory', 'card-types', 'finance-rates', 'settings', 'order-cards']
         .some(scope => scopes.includes(scope))) return loadRenewalCardDetails(panel);
     },
-    clearPageState: clearRenewalCardSecrets,
+    clearPageState() {
+      clearRenewalCardSecrets();
+      retentionRefreshFailed = false;
+    },
     render,
     onClick,
     onSubmit,
@@ -7153,8 +7491,14 @@
       loadLocalCommerce();
       if (localData && !requestedAccountLifecycle && !A.modules.inventory?.accountLifecycleReady?.()) {
         requestedAccountLifecycle = true;
+        accountLifecycleReading = true;
         const route = S.route;
         void A.modules.inventory?.refreshLocalInventory?.({ keepContent: true }).then(ready => {
+          accountLifecycleReading = false;
+          if (S.route === customerLossRoute) {
+            if (!retentionRefresh) A.render();
+            return;
+          }
           if (!ready || route !== S.route) return;
           const form = $('#commerce-order-form');
           if (form) updateCustomerEmailHistory(form);
@@ -7189,6 +7533,11 @@
       }
     },
     async onDataChanges(scopes) {
+      if (S.route === customerLossRoute && (scopes.includes('commerce') || scopes.includes('inventory'))) {
+        if (scopes.includes('commerce') && !scopes.includes('inventory') && orders.some(retentionStockOrder))
+          await A.modules.inventory?.refreshLocalInventory?.({ keepContent: true });
+        if (S.route === customerLossRoute && !retentionRefresh) A.render();
+      }
       if (scopes.includes('settings')) {
         currencySettingsRevision++;
         priceLoad = null;
