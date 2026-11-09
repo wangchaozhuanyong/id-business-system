@@ -69,7 +69,10 @@
   const currencyLabel = (code) => currencyNames[code] ? `${currencyNames[code]} ${code}` : code;
   let currencySettings = {};
   let currencySettingsRevision = 0;
-  let orderSettingsReturn = null;
+  const paymentSettingsRoute = 'settings/payment-countries';
+  const paymentCountries = {
+    PHP: '菲律宾', CLP: '智利', USD: '美国', IDR: '印尼', MYR: '马来西亚', CNY: '中国'
+  };
   const currencyFamily = product => product === 'GPT' ? 'GPT' : 'Claude';
   function orderCurrencyRows(product) {
     return currencySettings.orderCurrenciesByProduct?.[currencyFamily(product)] || currencySettings.orderCurrencies ||
@@ -81,52 +84,55 @@
       const name = orderCurrencyRows(product).find(row => row.code === code)?.name || currencyNames[code];
       return [code, `${name ? name + ' ' : ''}${code}` + (codes.includes(code) ? '' : '（已移出选项）')];
     });
+  const gptCardPayment = (product, payment) => product === 'GPT' && payment === '银行卡';
+  function paidCurrencyChoices(product, payment, selected) {
+    if (!gptCardPayment(product, payment))
+      return currencyChoices(payment === '苹果内购' ? ['USD'] : orderCurrencyCodes(product), selected, product);
+    return currencyChoices([...new Set([...Object.keys(paymentCountries), ...orderCurrencyCodes(product)])], selected, product)
+      .map(([code, label]) => [code, paymentCountries[code] ? `${paymentCountries[code]} · ${currencyLabel(code)}` : `其他 · ${label}`]);
+  }
   function refreshCurrencyFields(form, preserve = true) {
     if (!form?.isConnected) return;
     const product = form.elements['commerce-product'].value;
-    const apple = form.elements['commerce-payment'].value === '苹果内购';
+    const payment = form.elements['commerce-payment'].value;
     for (const key of ['paidCurrency', 'saleCurrency']) {
       const select = form.querySelector(`select#commerce-${key}`);
       if (!select) continue;
-      const allowed = apple && key === 'paidCurrency' ? ['USD'] : orderCurrencyCodes(product);
-      const selected = !preserve && !allowed.includes(select.value) ? allowed[0] : select.value;
-      select.innerHTML = A.options(currencyChoices(allowed, selected, product), selected);
+      const paid = key === 'paidCurrency';
+      const preferred = paid && gptCardPayment(product, payment) ? 'PHP' : select.value;
+      const choices = paid ? paidCurrencyChoices(product, payment, preserve ? select.value : '')
+        : currencyChoices(orderCurrencyCodes(product), preserve ? select.value : '', product);
+      const selected = preserve ? select.value : choices.some(([code]) => code === preferred) ? preferred : choices[0]?.[0];
+      select.innerHTML = A.options(choices, selected);
+    }
+    if ($('select#commerce-paidCurrency', form)) {
+      const label = $('label[for="commerce-paidCurrency"]', form);
+      const name = gptCardPayment(product, payment) ? '国家／地区' : '代付币种';
+      label.firstChild.textContent = name.slice(0, -1);
+      label.querySelector('.field-label-end').firstChild.textContent = name.slice(-1);
     }
   }
-  function captureOrderSettingsReturn() {
-    const form = $('#main #commerce-order-form') || $('#drawer[open] #commerce-order-form');
-    return form ? { route: S.route, actorId: currentOperator().id, main: Boolean(form.closest('#main')),
-      id: form.elements['commerce-id'].value, renewalId: form.elements['commerce-claudeRenewalId'].value } : null;
-  }
-  function currencySettingsButton(product) {
-    return canManageOrders() ? A.button('币种设置', 'commerce-currency-settings', 'compact', 'settings',
-      `data-product="${E(product)}"`) : '';
-  }
-  function saleSettingsActions(product) {
-    return canManageOrders() ? `<div class="order-financial-actions">${currencySettingsButton(product)}${
-      A.button('套餐售价设置', 'commerce-price-settings', 'compact', 'settings', `data-product="${E(product)}"`)}</div>` : '';
-  }
   async function openCurrencySettings(product, reset = false) {
-    if (!canManageOrders()) return;
+    if (!paymentSettingsActive()) return;
     saveDrafts();
     const family = currencyFamily(product), key = `commerce-order-currencies:${family}`;
     if (reset) S.drafts.delete(key);
     const route = S.route, actorId = currentOperator().id, context = S.drawerContext;
-    const back = captureOrderSettingsReturn() || orderSettingsReturn;
     try {
       const snapshot = localData ? await localData.load('settings') : { version: 0, data: currencySettings };
       if (S.route !== route || currentOperator().id !== actorId || S.drawerContext !== context) return;
       currencySettings = snapshot.data || {};
       const draft = S.drafts.get(key) || {};
-      orderSettingsReturn = back;
-      A.openDrawer(`${family} 币种设置`, '只影响本产品的代付和售卖选项，GPT 与 Claude 分别保存。移除不改变历史订单；苹果内购代付仍固定为美元。',
+      A.openDrawer(`${family} 币种设置`, family === 'GPT'
+        ? '维护 GPT 售卖币种及其他银行卡代付币种。固定的代付国家继续可选，苹果内购代付为美元。'
+        : '维护 Claude 代付和售卖币种。移除不改变历史订单，苹果内购代付为美元。',
         `<form id="commerce-currencies-form" data-commerce-draft="${key}" novalidate>${input('currency-product', family, 'type="hidden"')}${input('currency-version', draft['commerce-currency-version'] ?? snapshot.version, 'type="hidden"')}${A.optionListEditor({ id: 'commerce-currency-options', label: '可选币种', itemLabel: '币种', values: orderCurrencyRows(product).map(row => `${row.name} ${row.code}`), minItems: 1, draft })}<p class="footnote">填写币种名称和三位代码，例如：欧元 EUR。没有有效汇率的新增币种保持待核算。</p></form>`,
         A.button('关闭', 'drawer-close') + A.button('读取最新', 'commerce-currency-reload', '', '', `data-product="${E(product)}"`) +
         '<button type="submit" form="commerce-currencies-form" class="button primary">保存币种设置</button>', key);
     } catch (error) { A.notify(error.message || '币种设置读取失败，请重试'); }
   }
   async function saveCurrencySettings(form, confirmed = '') {
-    if (!canManageOrders() || form.getAttribute('aria-busy') === 'true') return;
+    if (!paymentSettingsActive() || form.getAttribute('aria-busy') === 'true') return;
     if (A.optionListPending(form)) { A.setError('commerce-currency-options', '请先添加或保存正在编辑的币种'); return; }
     const raw = A.readForm(form), family = value(raw, 'currency-product');
     if (!['GPT', 'Claude'].includes(family)) return;
@@ -168,6 +174,7 @@
       currencySettingsRevision++;
       currencySettings = next;
       priceLoad = null;
+      paymentSettingsVersion = savedVersion;
       if (form.isConnected) {
         if (JSON.stringify(readCommerceDraft(form)) === confirmed) cleanClose(form.dataset.commerceDraft);
         else { form.elements['commerce-currency-version'].value = savedVersion; saveDrafts(); }
@@ -1401,6 +1408,7 @@
     for (const form of document.querySelectorAll(
       '#main form[data-commerce-draft], #drawer[open] form[data-commerce-draft]'
     )) {
+      if (form.id === 'commerce-paid-prices-form' && form.dataset.paidPriceDirty !== 'yes') continue;
       const draft = readCommerceDraft(form);
       S.drafts.set(form.dataset.commerceDraft, draft);
     }
@@ -2110,6 +2118,19 @@
     form.elements['commerce-saleAmount'].value = orderPrice(form.elements['commerce-product'].value,
       form.elements['commerce-plan'].value, form.elements['commerce-saleCurrency'].value);
   }
+  function applyGptPaidPrice(form, selectionChanged = false) {
+    const fields = form.elements;
+    if (fields['commerce-id'].value ||
+        !gptCardPayment(fields['commerce-product'].value, fields['commerce-payment'].value)) return;
+    const manual = fields['commerce-paidManual'];
+    const confirmed = fields['commerce-paidConfirmed'];
+    if (selectionChanged) {
+      manual.value = '';
+      confirmed.checked = false;
+    } else if (manual.value || confirmed.checked) return;
+    fields['commerce-paidAmount'].value =
+      currencySettings.gptPaidPrices?.[fields['commerce-plan'].value]?.[fields['commerce-paidCurrency'].value] ?? '';
+  }
   async function loadPrices(form) {
     if (!localData) return;
     const revision = currencySettingsRevision;
@@ -2118,22 +2139,204 @@
       return null;
     });
     const snapshot = await priceLoad;
-    if (snapshot && revision === currencySettingsRevision) {
-      orderPrices = snapshot.data?.orderPrices || {};
-      currencySettings = snapshot.data || {};
-    }
-    if (snapshot && form?.isConnected) {
+    if (!snapshot || revision !== currencySettingsRevision) return null;
+    orderPrices = snapshot.data?.orderPrices || {};
+    currencySettings = snapshot.data || {};
+    if (form?.isConnected) {
       const preserve = form.dataset.currencyInitialized === 'yes' || S.drafts.has(form.dataset.commerceDraft) || Boolean(form.elements['commerce-id'].value);
       refreshCurrencyFields(form, preserve);
       form.dataset.currencyInitialized = 'yes';
       if (!form.elements['commerce-saleAmount'].value) applyOrderPrice(form);
+      applyGptPaidPrice(form);
     }
+    return snapshot;
+  }
+  const paymentSettingsTabs = [['paid', '代付价格'], ['sale', '套餐售价'], ['currency', '订单币种']];
+  let paymentSettingsVersion = localData ? null : 0;
+  let paymentSettingsLoad, paymentSettingsError = '';
+  let paymentRates, paymentRateLoad, paymentRateError = '', paymentExpiryTimer;
+  let paymentRatesStale = true;
+  let paymentRateNotice;
+  function paymentSettingsActive() {
+    return S.route === paymentSettingsRoute && canManageOrders();
+  }
+  function paymentSettingsView() {
+    const key = 'commerce-payment-settings-view';
+    if (!S.drafts.has(key)) S.drafts.set(key, { tab: 'paid', currency: 'PHP' });
+    return S.drafts.get(key);
+  }
+  const paidPricesDraft = code => 'commerce-gpt-paid-prices:' + code;
+  const countryChoices = () => Object.entries(paymentCountries).map(([code, name]) => [code, `${name} · ${currencyLabel(code)}`]);
+
+  function renderPaymentSettings() {
+    if (!paymentSettingsActive()) return A.header('代付国家', '') + A.empty('当前账号无权管理订单设置', '');
+    const { tab, currency } = paymentSettingsView();
+    const navigation = `<div class="tabs" role="tablist" aria-label="订单设置">${paymentSettingsTabs.map(([id, label]) =>
+      `<button type="button" class="tab${tab === id ? ' active' : ''}" role="tab" aria-selected="${tab === id}" data-action="commerce-payment-settings-tab" data-tab="${id}">${label}</button>`
+    ).join('')}</div>`;
+    let body;
+    if (tab !== 'paid') {
+      const action = tab === 'sale' ? 'commerce-price-settings' : 'commerce-currency-settings';
+      const label = tab === 'sale' ? '套餐售价' : '币种';
+      body = `<div class="panel-body"><div class="toolbar-right">${['GPT', 'Claude'].map(family =>
+        A.button(`${family} ${label}设置`, action, '', 'settings', `data-product="${family}"`)
+      ).join('')}</div></div>`;
+    } else if (paymentSettingsVersion === null) {
+      body = `<div class="panel-body" role="status">${paymentSettingsError
+        ? E(paymentSettingsError) + A.button('重试', 'commerce-paid-settings-retry')
+        : '正在读取代付价格…'}</div>`;
+    } else {
+      const key = paidPricesDraft(currency), draft = S.drafts.get(key) || {};
+      const columns = [
+        { id: 'plan', label: 'GPT 套餐' },
+        { id: 'amount', label: '原币代付金额', render: ({ plan, index }) =>
+          input('paid-price-' + index,
+            draft['commerce-paid-price-' + index] ?? currencySettings.gptPaidPrices?.[plan]?.[currency] ?? '',
+            `data-gpt-paid-price inputmode="decimal" maxlength="21" aria-label="${E(plan)} 原币代付金额" placeholder="未配置"`) +
+          `<p class="field-error" id="commerce-paid-price-${index}-error" hidden></p>` },
+        { id: 'budget', label: '折合人民币预算', render: ({ index }) =>
+          `<output data-paid-budget for="commerce-paid-price-${index}">—</output>` }
+      ];
+      body = `<div class="panel-body">
+        ${field('国家／地区', 'paid-country', select('paid-country', countryChoices(), currency))}
+        ${paymentSettingsError ? `<p class="footnote" role="status">${E(paymentSettingsError)}</p>` : ''}
+        <div class="toolbar-left"><p class="footnote" id="commerce-paid-quote" role="status"></p>${localData ? A.button('刷新汇率', 'commerce-paid-rates-retry') : ''}</div>
+        <form id="commerce-paid-prices-form" data-commerce-draft="${key}"${S.drafts.has(key) ? ' data-paid-price-dirty="yes"' : ''} novalidate>
+          ${input('paid-price-currency', currency, 'type="hidden"')}
+          ${input('paid-price-version', draft['commerce-paid-price-version'] ?? paymentSettingsVersion, 'type="hidden"')}
+          ${A.table(columns, productPlans.GPT.map((plan, index) => ({ id: plan, plan, index })), '', 'GPT 代付价格')}
+          <div class="form-footer">${A.button('读取最新', 'commerce-paid-settings-reload')}<button type="submit" class="button primary">保存代付价格</button></div>
+        </form></div>`;
+    }
+    return A.header('代付国家', '维护 GPT 银行卡代付价格、套餐售价和订单币种。折合人民币仅用于预算。') +
+      `<section class="panel">${navigation}${body}</section>`;
+  }
+
+  function loadPaymentSettings(resetDraft) {
+    if (!localData || paymentSettingsLoad) return paymentSettingsLoad;
+    paymentSettingsLoad = loadPrices().then(snapshot => {
+      if (snapshot) {
+        paymentSettingsVersion = snapshot.version;
+        paymentSettingsError = '';
+        if (resetDraft) {
+          const { key, submitted } = resetDraft;
+          const form = $('#commerce-paid-prices-form');
+          const currentForm = form?.dataset.commerceDraft === key ? form : null;
+          const current = currentForm ? readCommerceDraft(currentForm) : S.drafts.get(key);
+          if (!current || JSON.stringify(current) === submitted) {
+            currentForm?.removeAttribute('data-commerce-draft');
+            S.drafts.delete(key);
+          }
+        }
+      } else paymentSettingsError = '代付价格读取失败，请重试。';
+      if (paymentSettingsActive() && paymentSettingsView().tab === 'paid' && !$('#drawer')?.open) {
+        saveDrafts();
+        A.render();
+      }
+    }).finally(() => { paymentSettingsLoad = null; });
+    return paymentSettingsLoad;
+  }
+
+  function updatePaymentBudgets() {
+    clearTimeout(paymentExpiryTimer);
+    if (!paymentSettingsActive()) return;
+    const form = $('#commerce-paid-prices-form'), status = $('#commerce-paid-quote');
+    if (!form || !status) return;
+    const code = form.elements['commerce-paid-price-currency'].value;
+    const row = paymentRates?.rows.find(quote => quote.currency === code);
+    const now = paymentRates ? paymentRates.at + performance.now() - paymentRates.received : 0;
+    const expiry = Date.parse(row?.expiresAt);
+    const valid = row?.status === 'valid' && expiry > now && Number.isFinite(Date.parse(row.at)) &&
+      /^\d{1,20}(?:\.\d{1,8})?$/.test(row.rate) && M.units(row.rate, 8) > 0n;
+    const rate = code === 'CNY' ? '1' : valid ? row.rate : '';
+    status.textContent = code === 'CNY' ? '人民币基准汇率 1:1。' :
+      valid ? `每 1 ${code} 折合 ${row.rate} CNY · ${row.source} · ${beijingClock.format(new Date(row.at))}${paymentRateError ? '。' + paymentRateError : ''}` :
+        paymentRateError || (
+        row?.rate ? '汇率已过期，等待汇率采集更新。' :
+          paymentRateLoad ? '正在读取系统汇率…' : '暂无有效汇率，请在汇率采集中核对。');
+    const rateUnits = rate ? M.units(rate, 8) : 0n;
+    const centDivisor = 10n ** 10n; // Four amount decimals and eight rate decimals, rounded once to cents.
+    for (const output of form.querySelectorAll('[data-paid-budget]')) {
+      const amount = form.elements[output.getAttribute('for')].value.trim();
+      output.textContent = rate && amount && amountValid(amount)
+        ? `¥ ${M.formatUnits((M.units(amount) * rateUnits + centDivisor / 2n) / centDivisor, 2)}`
+        : '—';
+    }
+    if (code !== 'CNY' && valid)
+      paymentExpiryTimer = setTimeout(updatePaymentBudgets, Math.min(2_147_000_000, expiry - now + 10));
+  }
+  function loadPaymentRates() {
+    if (!localData || !paymentRatesStale || paymentRateLoad) return paymentRateLoad;
+    paymentRatesStale = false;
+    paymentRateError = '';
+    paymentRateLoad = localData.financeCollection({ tab: 'rates', page: '1', pageSize: '8' }).then(result => {
+      if (!Array.isArray(result?.rows) || !Number.isFinite(Date.parse(result.now))) throw new Error();
+      paymentRates = { rows: result.rows, at: Date.parse(result.now), received: performance.now() };
+    }).catch(() => {
+      paymentRateError = '系统汇率读取失败，可点击「刷新汇率」重试。';
+    }).finally(() => {
+      paymentRateLoad = null;
+      updatePaymentBudgets();
+      if (paymentRatesStale && paymentSettingsActive()) void loadPaymentRates();
+    });
+    updatePaymentBudgets();
+    return paymentRateLoad;
+  }
+  async function saveGptPaidPrices(form, confirmed = '') {
+    if (!paymentSettingsActive() || form.getAttribute('aria-busy') === 'true') return;
+    const raw = readCommerceDraft(form), submitted = JSON.stringify(raw), actor = currentOperator().id;
+    const code = raw['commerce-paid-price-currency'];
+    if (!Object.hasOwn(paymentCountries, code)) return;
+    const amounts = [...form.querySelectorAll('[data-gpt-paid-price]')].map(control => {
+      const amount = control.value.trim();
+      A.setError(control.id, amountValid(amount, true) ? '' : '请输入非负金额，最多四位小数');
+      return amount;
+    });
+    if (amounts.length !== productPlans.GPT.length || amounts.some(amount => !amountValid(amount, true))) return;
+    if (!confirmed) {
+      A.confirmAction('确认保存代付价格', `更新 ${paymentCountries[code]} 的 GPT 新单代付预设。`, () => {
+        if (form.isConnected && currentOperator().id === actor && JSON.stringify(readCommerceDraft(form)) === submitted)
+          void saveGptPaidPrices(form, submitted);
+        else A.notify('输入或登录身份已变化，请重新核对后保存');
+      });
+      return;
+    }
+    form.setAttribute('aria-busy', 'true');
+    const feedback = A.beginActionFeedback(form.querySelector('button[type="submit"]'), '正在保存…');
+    try {
+      const snapshot = localData ? await localData.load('settings') : { version: paymentSettingsVersion, data: currencySettings };
+      if (!form.isConnected || currentOperator().id !== actor || !paymentSettingsActive()) return;
+      if (snapshot.version !== Number(raw['commerce-paid-price-version']))
+        throw new Error('代付价格已在其他页面更新，草稿已保留。请读取最新设置后核对。');
+      const next = safeClone(snapshot.data?.gptPaidPrices || {});
+      productPlans.GPT.forEach((plan, index) => { (next[plan] ||= {})[code] = amounts[index]; });
+      const data = { ...(snapshot.data || { costSettings: safeClone(costSettings), mailboxTypes: A.modules.operations?.getMailboxTypes?.() || [] }), gptPaidPrices: next };
+      const result = localData ? await localData.save('settings', snapshot.version, data, { action: 'gpt_paid_prices_save' })
+        : { version: snapshot.version + 1, data };
+      if (result.version <= snapshot.version || productPlans.GPT.some((plan, index) => result.data?.gptPaidPrices?.[plan]?.[code] !== amounts[index]))
+        throw new Error('尚未确认代付价格保存成功，请重新读取核对。');
+      if (currentOperator().id !== actor) return;
+      currencySettingsRevision++;
+      priceLoad = null;
+      currencySettings = result.data;
+      paymentSettingsVersion = result.version;
+      const key = form.dataset.commerceDraft;
+      const current = form.isConnected ? readCommerceDraft(form) : S.drafts.get(key);
+      if (JSON.stringify(current) === confirmed) S.drafts.delete(key);
+      else if (current) S.drafts.set(key, { ...current, 'commerce-paid-price-version': String(result.version) });
+      if (form.isConnected) {
+        form.removeAttribute('data-commerce-draft');
+        A.render();
+      }
+      A.notify('GPT 代付价格已保存');
+    } catch (error) { A.notify(error.message || '代付价格未保存，输入已保留'); }
+    finally { form.removeAttribute('aria-busy'); feedback?.finish(); }
   }
   async function openPrices(product) {
-    if (!canManageOrders()) return;
+    if (!paymentSettingsActive()) return;
     const route = S.route;
     const context = S.drawerContext;
-    const actorId = currentOperator().id, back = captureOrderSettingsReturn();
+    const actorId = currentOperator().id;
     const choices = product === 'GPT' ? ['GPT'] : ['Claude Pro', 'Claude Max'];
     let snapshot;
     try {
@@ -2144,7 +2347,6 @@
     }
     if (S.route !== route || S.drawerContext !== context || currentOperator().id !== actorId) return;
     currencySettings = snapshot.data || {};
-    orderSettingsReturn = back;
     if (localData) orderPrices = snapshot.data?.orderPrices || {};
     const key = `commerce-prices:${product === 'GPT' ? 'gpt' : 'claude'}`;
     const draft = S.drafts.get(key) || {};
@@ -2162,7 +2364,7 @@
       A.button('关闭', 'drawer-close') + '<button type="submit" form="commerce-prices-form" class="button primary">保存套餐售价</button>', key);
   }
   async function savePrices(form, confirmed = '') {
-    if (!canManageOrders() || form.getAttribute('aria-busy') === 'true') return;
+    if (!paymentSettingsActive() || form.getAttribute('aria-busy') === 'true') return;
     const values = [...form.querySelectorAll('[data-price-currency]')];
     const invalid = values.find((node) => !amountValid(node.value.trim(), true));
     if (invalid) {
@@ -2202,7 +2404,9 @@
         const saved = await localData.save('settings', version, { ...data, orderPrices: next }, { action: 'order_prices_save' });
         savedVersion = saved.version;
       }
+      currencySettingsRevision++;
       orderPrices = next;
+      paymentSettingsVersion = savedVersion;
       priceLoad = null;
       if (form.isConnected) {
         if (JSON.stringify(readCommerceDraft(form)) === confirmed) cleanClose(key);
@@ -2345,7 +2549,7 @@
       field('余额上限（USD）', 'appleMatchMax', input('appleMatchMax', match[1], 'inputmode="decimal" placeholder="留空不限"'),
         false, '', '', !apple || v('businessType') === '续费') +
       `</div>` +
-      `<div class="order-financial-groups commerce-span-all"><div class="order-financial-group"><div class="order-financial-heading"><h3>代付</h3><div class="order-financial-actions">${currencySettingsButton(product)}</div></div>${field('代付币种', 'paidCurrency', auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '', 'readonly placeholder="待核对"') : select('paidCurrency', currencyChoices(apple ? ['USD'] : codes, apple ? 'USD' : v('paidCurrency'), product), apple ? 'USD' : v('paidCurrency')), true)}${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'), auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>售卖</h3>${saleSettingsActions(product)}</div>${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency')), true)}${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>订阅周期</h3></div>${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true, '本次实际开通时间，只登记一次。')}${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}</div></div>` +
+      `<div class="order-financial-groups commerce-span-all"><div class="order-financial-group"><div class="order-financial-heading"><h3>代付</h3></div>${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency', auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '', 'readonly placeholder="待核对"') : select('paidCurrency', paidCurrencyChoices(product, v('payment'), apple ? 'USD' : v('paidCurrency')), apple ? 'USD' : v('paidCurrency')), true)}${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'), auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>售卖</h3></div>${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency')), true)}${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>订阅周期</h3></div>${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true, '本次实际开通时间，只登记一次。')}${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}</div></div>` +
       (v('claudeRenewalId')
         ? `<div class="commerce-cost-strip commerce-span-all">Claude 专属续费：当前订阅到期 ${E(orders.find((row) => row.id === v('claudeRenewalId'))?.expiry || '')}，本次新单到期 ${E(v('expiry'))}。原单保持独立可见。</div>`
         : '') +
@@ -2537,7 +2741,7 @@
       field('认证状态', 'kyc', select('kyc', ['未认证', 'KYC 认证'], v('kyc'))) +
       field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"'));
     const saleCurrencyChosen = existing || draft['commerce-saleCurrencyChosen'] === 'yes';
-    const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT')}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', v('correctionReason')), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div><div class="form-section"><div class="section-title-row"><h2>费用核对</h2>${A.titleInfo('费用核对', localData ? '保存时记录原币金额与费用规则版本。在订单详情的「成本与汇率」登记有效快照后核算。' : '成本、币种与演示汇率在保存时冻结为订单快照；苹果余额只按已确认实际支出记账。', 'commerce-cost-explanation')}</div><div id="commerce-cost-preview">${costPreview(base)}</div></div></form>`;
+    const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT')}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', v('correctionReason')), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div><div class="form-section"><div class="section-title-row"><h2>费用核对</h2>${A.titleInfo('费用核对', localData ? '保存时记录原币金额与费用规则版本。在订单详情的「成本与汇率」登记有效快照后核算。' : '成本、币种与演示汇率在保存时冻结为订单快照；苹果余额只按已确认实际支出记账。', 'commerce-cost-explanation')}</div><div id="commerce-cost-preview">${costPreview(base)}</div></div></form>`;
     const footer = `<span class="footnote">${localData ? '订单保存到数据库。' : '订单独立保存；确认代付才记苹果余额支出。'}</span>${A.button('保留待补全', 'commerce-order-pending')}<button form="commerce-order-form" type="submit" class="button primary">核对并保存</button>`;
     if (main)
       return `<section class="panel form-panel">${html}<div class="form-footer">${footer}</div></section>`;
@@ -3734,10 +3938,12 @@
     );
     error('paidAmount', amountValid(order.paidAmount, allowPending || auto) ? '' : '请输入非负金额，最多四位小数');
     error('saleAmount', amountValid(order.saleAmount, !order.receiptConfirmed && (allowPending || auto)) ? '' : '请输入非负金额，最多四位小数');
-    for (const name of ['paidCurrency', 'saleCurrency', 'emailCostCurrency', 'actualCostCurrency'])
+    for (const name of ['paidCurrency', 'saleCurrency', 'emailCostCurrency', 'actualCostCurrency']) {
+      const allowed = name === 'paidCurrency' ? paidCurrencyChoices(order.product, order.payment).map(([code]) => code)
+        : name === 'saleCurrency' ? orderCurrencyCodes(order.product) : currencies;
       error(name, (auto && name === 'paidCurrency' && !order[name]) || existing?.[name] === order[name] ||
-        (['paidCurrency', 'saleCurrency'].includes(name) ? orderCurrencyCodes(order.product) : currencies).includes(order[name]) ||
-        (name === 'paidCurrency' && order.payment === '苹果内购' && order[name] === 'USD') ? '' : '请选择有效币种');
+        allowed.includes(order[name]) ? '' : '请选择有效币种');
+    }
     error(
       'emailCostAmount',
       amountValid(order.emailCostAmount || '0') ? '' : '补充成本应为非负金额'
@@ -4957,6 +5163,40 @@
   }
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
+    if (action === 'commerce-payment-settings-tab') {
+      if (paymentSettingsActive() && paymentSettingsTabs.some(([id]) => id === node.dataset.tab)) {
+        saveDrafts();
+        paymentSettingsView().tab = node.dataset.tab;
+        A.render();
+        $(`[data-action="commerce-payment-settings-tab"][data-tab="${node.dataset.tab}"]`)?.focus();
+      }
+      return true;
+    }
+    if (action === 'commerce-paid-settings-retry' || action === 'commerce-paid-settings-reload') {
+      if (!paymentSettingsActive() || paymentSettingsLoad) return true;
+      const reload = resetDraft => {
+        currencySettingsRevision++;
+        priceLoad = null;
+        void loadPaymentSettings(resetDraft);
+      };
+      if (action === 'commerce-paid-settings-retry') reload();
+      else {
+        const code = paymentSettingsView().currency;
+        A.confirmAction('读取最新代付价格', '放弃当前国家／地区未保存的草稿，重新读取设置。', () => {
+          if (!paymentSettingsActive() || paymentSettingsView().currency !== code) return;
+          const form = $('#commerce-paid-prices-form');
+          if (form) reload({ key: paidPricesDraft(code), submitted: JSON.stringify(readCommerceDraft(form)) });
+        });
+      }
+      return true;
+    }
+    if (action === 'commerce-paid-rates-retry') {
+      if (paymentSettingsActive()) {
+        paymentRatesStale = true;
+        void loadPaymentRates();
+      }
+      return true;
+    }
     if (action === 'commerce-tenant-more') {
       if (canManageOrders()) {
         const tenant = tenants.find(row => row.id === node.dataset.id);
@@ -5386,6 +5626,7 @@
     return false;
   }
   function onSubmit(form) {
+    if (form.id === 'commerce-paid-prices-form') { void saveGptPaidPrices(form); return true; }
     if (form.id === 'commerce-tenant-owner-form') { void saveTenantOwnerTransfer(form); return true; }
     if (form.id === 'commerce-renewal-settings') {
       saveRenewalSettings(form);
@@ -5548,6 +5789,13 @@
         : A.addCalendarMonth(start);
   }
   function onChange(node) {
+    if (node.id === 'commerce-paid-country' && paymentSettingsActive() && Object.hasOwn(paymentCountries, node.value)) {
+      saveDrafts();
+      paymentSettingsView().currency = node.value;
+      A.render();
+      $('#commerce-paid-country')?.focus();
+      return true;
+    }
     if (node.dataset?.commercePicker) return true;
     if (node.id === 'commerce-contact-ownerId') A.setError(node.id, '');
     if (node.id === 'commerce-renewal-product') {
@@ -5625,11 +5873,17 @@
             : form.querySelector('#commerce-product').value === 'GPT'
               ? 'PHP'
               : 'MYR';
-        if (paid.value !== nextCurrency) amount.value = '';
+        if (paid.value !== nextCurrency || (!form.elements['commerce-id'].value &&
+            form.elements['commerce-product'].value === 'GPT')) {
+          amount.value = '';
+          if (!form.elements['commerce-id'].value && form.elements['commerce-product'].value === 'GPT')
+            form.elements['commerce-paidConfirmed'].checked = false;
+        }
         paid.innerHTML = A.options(
-          currencyChoices(node.value === '苹果内购' ? ['USD'] : orderCurrencyCodes(form.elements['commerce-product'].value), '', form.elements['commerce-product'].value),
+          paidCurrencyChoices(form.elements['commerce-product'].value, node.value, nextCurrency),
           nextCurrency
         );
+        refreshCurrencyFields(form);
         if (node.value === '苹果内购') {
           if (
             !form.elements['commerce-saleCurrencyChosen'].value &&
@@ -5640,6 +5894,8 @@
           loadAppleOptions(form, true);
         } else void loadOrderCards(form, true);
       }
+      if (['commerce-plan', 'commerce-product', 'commerce-payment', 'commerce-paidCurrency'].includes(node.id))
+        applyGptPaidPrice(form, true);
       if (node.id === 'commerce-saleCurrency') {
         form.elements['commerce-saleCurrencyChosen'].value = 'yes';
         form.elements['commerce-saleManual'].value = '';
@@ -5703,9 +5959,12 @@
     if (node.closest('form[data-commerce-draft]')) {
       if (node.id === 'commerce-email') updateStockSearch(node.closest('#commerce-order-form'));
       if (node.id === 'commerce-saleAmount') node.form.elements['commerce-saleManual'].value = 'yes';
+      if (node.id === 'commerce-paidAmount') node.form.elements['commerce-paidManual'].value = 'yes';
+      if (node.hasAttribute?.('data-gpt-paid-price')) node.form.dataset.paidPriceDirty = 'yes';
       if (['commerce-emailCostAmount', 'commerce-emailCostCurrency'].includes(node.id) && node.form.elements['commerce-emailCostManual'])
         node.form.elements['commerce-emailCostManual'].value = 'yes';
       saveDrafts();
+      if (node.hasAttribute?.('data-gpt-paid-price')) updatePaymentBudgets();
       const form = node.closest('#commerce-order-form'),
         preview = $('#commerce-cost-preview');
       if (form && preview) {
@@ -5735,7 +5994,8 @@
         'orders/pro',
         'orders/max',
         'orders/exclusive',
-        'orders/statistics'
+        'orders/statistics',
+        paymentSettingsRoute
       ].includes(route) ||
       route.startsWith(renewalOrderPrefix) ||
       route.startsWith('orders/exclusive/rentals') ||
@@ -5743,6 +6003,7 @@
     );
   }
   function render() {
+    if (S.route === paymentSettingsRoute) return renderPaymentSettings();
     if (localData && localPhase !== 'ready') {
       return (
         A.header('本机业务资料', '') +
@@ -5938,15 +6199,6 @@
   const drawer = $('#drawer');
   drawer?.addEventListener('close', () => {
     if (drawer.open) return;
-    if (orderSettingsReturn) {
-      const back = orderSettingsReturn;
-      orderSettingsReturn = null;
-      if (S.route === back.route && currentOperator().id === back.actorId) {
-        if (back.main) refreshCurrencyFields($('#main #commerce-order-form'));
-        else orderEditor(back.id, back.renewalId, false);
-      }
-      return;
-    }
     const closedOrder = drawer.querySelector('#commerce-order-form');
     if (closedOrder) clearRevealedCard(closedOrder);
     const cardInput = drawer.querySelector('#commerce-tenant-card-number');
@@ -5974,7 +6226,23 @@
     onInput,
     preserveDraft: saveDrafts,
     refreshCustomerTagOptions,
-    afterRender() {
+    afterRender({ routeChanged } = {}) {
+      if (paymentSettingsActive()) {
+        if (routeChanged) {
+          paymentRatesStale = true;
+          if (localData) {
+            currencySettingsRevision++;
+            priceLoad = null;
+            void loadPaymentSettings();
+          }
+        }
+        if (paymentSettingsView().tab === 'paid') {
+          if (paymentSettingsVersion === null && !paymentSettingsError) void loadPaymentSettings();
+          updatePaymentBudgets();
+          void loadPaymentRates();
+        }
+        return;
+      }
       for (const form of document.querySelectorAll('#commerce-order-form')) updateCustomerEmailHistory(form);
       for (const search of document.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
       loadLocalCommerce();
@@ -5993,6 +6261,10 @@
       for (const form of document.querySelectorAll('#main #commerce-contact-form, #drawer[open] #commerce-contact-form')) void loadOrderOwners(form);
       if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) {
         const form = $('#commerce-order-form');
+        if (routeChanged) {
+          currencySettingsRevision++;
+          priceLoad = null;
+        }
         if (form) void loadOrderOwners(form);
         if (form?.elements['commerce-payment']?.value === '苹果内购') loadAppleOptions(form);
         else if (form) void loadOrderCards(form);
@@ -6006,6 +6278,26 @@
           });
         }
       }
+    },
+    async onDataChanges(scopes) {
+      if (scopes.includes('settings')) {
+        currencySettingsRevision++;
+        priceLoad = null;
+        if (paymentSettingsActive()) await loadPaymentSettings();
+        else if (canManageOrders()) {
+          const form = $('#commerce-order-form');
+          if (form) await loadPrices(form);
+        }
+      }
     }
+  });
+  // Quote updates change only the displayed estimate, including while an amount is being edited.
+  localData?.subscribeChanges?.(scopes => {
+    if (!scopes.includes('finance-rates')) return;
+    const notice = localData.pendingChangeVersions?.(['finance-rates'])['finance-rates'];
+    if (notice && notice === paymentRateNotice) return;
+    paymentRateNotice = notice;
+    paymentRatesStale = true;
+    if (paymentSettingsActive() && paymentSettingsView().tab === 'paid') void loadPaymentRates();
   });
 })();

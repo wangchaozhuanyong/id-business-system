@@ -892,7 +892,10 @@
       key,
       token: uid('relay-context')
     };
-    const html = `<form id="relay-${kind}-form" data-relay-draft="${E(key)}" novalidate><input type="hidden" name="relay-context" value="${E(next.token)}" /><input type="hidden" name="relay-version" value="${E(next.version)}" /><div class="commerce-field-grid">${fields}</div></form>`;
+    const gridClass = kind === 'alias' && !id
+      ? 'commerce-field-grid commerce-field-grid--single'
+      : 'commerce-field-grid';
+    const html = `<form id="relay-${kind}-form" data-relay-draft="${E(key)}" novalidate><input type="hidden" name="relay-context" value="${E(next.token)}" /><input type="hidden" name="relay-version" value="${E(next.version)}" /><div class="${gridClass}">${fields}</div></form>`;
     A.openDrawer(
       title,
       local
