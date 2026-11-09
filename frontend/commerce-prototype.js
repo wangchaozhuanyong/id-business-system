@@ -108,6 +108,7 @@
         : currencyChoices(orderCurrencyCodes(product), preserve ? select.value : '', product);
       const selected = preserve ? select.value : choices.some(([code]) => code === preferred) ? preferred : choices[0]?.[0];
       select.innerHTML = A.options(choices, selected);
+      updateOrderValueReadout(select);
     }
     if ($('select#commerce-paidCurrency', form)) {
       const label = $('label[for="commerce-paidCurrency"]', form);
@@ -167,6 +168,7 @@
     const selected = touched ? select.value : cardId !== select.dataset.originalCard
       ? (bankCardTypes.items.some(row => row.id === assigned && row.active) ? assigned : '') : select.dataset.savedType;
     select.innerHTML = A.options(bankCardTypeChoices(selected, select.dataset.savedName), selected);
+    updateOrderValueReadout(select);
     const assignment = form.querySelector('[data-commerce-card-type-assign]');
     if (assignment) {
       assignment.dataset.id = cardId;
@@ -535,18 +537,22 @@
     applyCommerceSnapshot(response.data);
     localPhase = 'ready';
   }
-  let commerceLoad;
+  let commerceLoad, orderSyncRead;
   function loadLocalCommerce(retry = false, refresh = false) {
     if (commerceLoad) return commerceLoad;
     if (!localData || (!refresh && localPhase !== 'initial' && !(retry && localPhase === 'error')))
       return Promise.resolve(localPhase === 'ready');
     const hadData = localPhase === 'ready';
+    const syncRead = orderSyncRead;
     if (!hadData) localPhase = 'loading';
     commerceLoad = localData
       .load('commerce')
       .then(
         (result) => {
           acceptLocalCommerce(result);
+          if (orderSyncRead === syncRead) orderSyncRead = undefined;
+          for (const form of document.querySelectorAll('#main #commerce-order-form, #drawer[open] #commerce-order-form'))
+            updateCustomerEmailHistory(form);
           return true;
         },
         () => {
@@ -561,6 +567,20 @@
             (!hadData || !$('#main form[data-commerce-draft]'))) A.render();
       });
     return commerceLoad;
+  }
+  async function refreshAfterOrderSync() {
+    orderSyncRead = Symbol();
+    await commerceLoad;
+    return !orderSyncRead || loadLocalCommerce(true, true);
+  }
+  function syncedOrderId(jobKey, orderNo) {
+    const matches = orders.filter(order => order.product === 'GPT' && automaticOrder(order) && order.taskId === jobKey);
+    return matches.length === 1 && matches[0].orderNo === orderNo ? matches[0].id : '';
+  }
+  function syncedOrderReadNotice() {
+    if (!orderSyncRead || commerceLoad) return '';
+    return `<p class="panel-body inline-notice warning" role="status">同步批次已处理，业务订单暂未刷新。${
+      A.textAction('重读订单', 'commerce-sync-orders-refresh')}</p>`;
   }
   function persistCommerce(action, mutate, completed, dependencies = [], afterCommit) {
     if (!localData) {
@@ -1036,11 +1056,21 @@
         ? '付款待核对'
         : '未登记付款';
   }
+  function hasOpeningEvidence(order, start, expiry, at) {
+    if (!automaticOrder(order)) return paymentStatus(order) === '已付款';
+    const completed = parseDate(order.rechargeCompletedAt);
+    return Number.isFinite(completed) && completed <= at &&
+      (!Number.isFinite(start) || completed >= start) &&
+      (!Number.isFinite(expiry) || completed < expiry);
+  }
+  const orderEvaluationTime = () => localData ? Date.now() : parseDate(now());
   function subscriptionStatus(order) {
     if (order.subscriptionEnded) return '已终止';
     if (!order.expiry || !order.start) return '待确认';
-    if (parseDate(order.start) > parseDate(now())) return '未开始';
-    return parseDate(order.expiry) > parseDate(now()) ? '有效' : '已过期';
+    const start = parseDate(order.start), expiry = parseDate(order.expiry), at = orderEvaluationTime();
+    if (automaticOrder(order) && (!(expiry > start) || !hasOpeningEvidence(order, start, expiry, at))) return '待确认';
+    if (start > at) return '未开始';
+    return expiry > at ? '有效' : '已过期';
   }
   function refundStatus(order) {
     const total = sum(order.refunds || [], (row) => row.amount);
@@ -1415,13 +1445,12 @@
   }
   function renewalProjection() {
     const identities = identifyOrderCustomers();
-    const evaluatedAt = parseDate(now());
+    const evaluatedAt = orderEvaluationTime();
     const deadline = evaluatedAt + renewalWarningHours * 3_600_000;
     const rows = orders.flatMap((order) => {
       const start = parseDate(order.start), expiry = parseDate(order.expiry);
-      const subscriptionConfirmed = automaticOrder(order) && Number.isFinite(parseDate(order.rechargeCompletedAt));
       if (!Object.hasOwn(productPlans, order.product) || !Number.isFinite(start) || !(expiry > start) ||
-          (!subscriptionConfirmed && paymentStatus(order) !== '已付款')) return [];
+          !hasOpeningEvidence(order, start, expiry, evaluatedAt)) return [];
       const identity = identities.get(order.id);
       const subscription = renewalSubscriptionKey(order, identity);
       return [{ order, identity, subscription, start, expiry }];
@@ -1843,10 +1872,14 @@
       { id: 'state', label: '使用状态', render: row => A.tag(subscriptionCardStates.find(([id]) => id === row.state)?.[1]) },
       { id: 'expiry', label: '到期时间', render: row => E(dateInput(row.order.expiry).replace('T', ' ') || '待确认') },
       { id: 'duration', label: '到期时长', render: row => E(subscriptionCardDuration(row)) },
-      { id: 'funding', label: '预计金额', render: row => {
-        const usd = estimateForBankOrder(row.order)?.usd;
-        return E(usd ? usd + ' USD' : '待核算');
-      } },
+      { id: 'funding', label: '预计金额',
+        headerHelp: '预计金额 = 原订单代付金额（折合美元） + 通用付款固定费用 + 2 美元备用金。' +
+          '非美元金额按当前有效国际汇率换算，合计向上取整到美分。缺少可核算的代付金额或所需汇率时显示「待核算」。',
+        render: row => {
+          const usd = estimateForBankOrder(row.order)?.usd;
+          return E(usd ? usd + ' USD' : '待核算');
+        }
+      },
       { id: 'actions', label: '操作', action: true, render: row => {
         const id = `data-id="${E(row.order.id)}"`;
         return `<div class="action-links">${A.textAction('复制', 'commerce-copy-subscription-card', id)}${
@@ -2001,11 +2034,8 @@
     const customerId = explicit || (!order.customerId && candidates.size === 1 ? candidates.values().next().value : '');
     const start = parseDate(order.start), expiry = parseDate(order.expiry), plan = retentionPlan(order);
     const automatic = automaticOrder(order);
-    const completed = parseDate(order.rechargeCompletedAt);
     const paid = paymentStatus(order);
-    const evidence = automatic ? Number.isFinite(completed) && completed <= at &&
-      (!Number.isFinite(start) || completed >= start) && (!Number.isFinite(expiry) || completed < expiry)
-      : paid === '已付款';
+    const evidence = hasOpeningEvidence(order, start, expiry, at);
     const hasSignal = evidence || automatic || paid === '付款待核对' || paid === '已付款';
     const periodValid = Number.isFinite(start) && expiry > start;
     const cancelled = order.cancelled || ['cancelled', '已撤单'].includes(order.status);
@@ -2035,7 +2065,7 @@
   }
 
   function customerRetentionProjection() {
-    const at = localData ? Date.now() : parseDate(now());
+    const at = orderEvaluationTime();
     const profiles = new Map(customers.map(customer => [customer.id, { id: customer.id, customer, history: [] }]));
     const contacts = orderCustomerContacts(profiles);
     const groups = new Map();
@@ -2485,15 +2515,13 @@
   }
   function customerServices(customerId) {
     const services = new Map();
+    const at = orderEvaluationTime();
     for (const order of orders) {
-      if (
-        order.customerId !== customerId ||
-        (!order.paidConfirmed && !hasPaymentHistory(order)) ||
-        !order.start
-      )
-        continue;
-      const openedAt = parseDate(order.start);
-      if (!Number.isFinite(openedAt) || openedAt > parseDate(now())) continue;
+      if (order.customerId !== customerId) continue;
+      const openedAt = parseDate(order.start), expiry = parseDate(order.expiry);
+      if (!Number.isFinite(openedAt) || openedAt > at ||
+          (automaticOrder(order) && !(expiry > openedAt)) ||
+          !hasOpeningEvidence(order, openedAt, expiry, at)) continue;
       const name = `${order.product} · ${order.plan}`;
       const service = services.get(name) || {
         id: `${customerId}:${order.product}:${order.plan}`,
@@ -2760,7 +2788,7 @@
           ? ''
           : panelTitle(
               '历史开通业务',
-              '按客户编号汇总已登记开通时间且确认代付的订单；退款、撤单不会抹去开通过的历史。'
+              '按客户编号汇总已核实开通的订单，保留已开通订单的历史记录。'
             ) +
             A.table(
               [
@@ -3050,7 +3078,7 @@
         auto ? input('businessType', v('businessType'), 'readonly') : select('businessType', ['续费', '成品交付'], v('businessType')),
         true
       ) +
-      `</div>` +
+      `</div><div class="commerce-span-all order-wide-fields">` +
       field(
         '客户资料',
         'customerId',
@@ -3077,6 +3105,7 @@
         ''
       ).replace('<span class="required">*', `<span class="required"${!stock && product === 'GPT' ? ' hidden' : ''}>*`) +
       orderOwnerField(v, existing) +
+      '</div>' +
       `<details class="commerce-span-all"><summary>联系方式（自动回填，可展开修改）</summary><div class="commerce-field-grid">${field('客户微信', 'wechat', input('wechat', contact('wechat')))}${field('客户电话', 'customerPhone', input('customerPhone', contact('customerPhone')))}${field('QQ', 'qq', input('qq', contact('qq')))}${field('WhatsApp', 'whatsapp', input('whatsapp', contact('whatsapp')))}${field('Telegram', 'telegram', input('telegram', contact('telegram')))}</div></details>`
     );
   }
@@ -3086,6 +3115,44 @@
   }
   function orderPrice(product, plan, currency) {
     return orderPrices[product]?.[plan]?.[currency] || '';
+  }
+  function orderPaidPrices(product, settings = currencySettings) {
+    return (product === 'GPT' ? settings?.gptPaidPrices : settings?.claudePaidPrices?.[product]) || {};
+  }
+  function orderAmountReference(v, paid, status) {
+    if (paid && v('payment') === '苹果内购') return '苹果内购按实际美元金额填写。';
+    if (status === 'loading') return '<span role="status">正在读取金额设置…</span>';
+    if (status === 'error') return '<span role="status">金额设置暂时无法读取。</span> ' +
+      A.textAction('重试', 'commerce-order-prices-retry');
+    const product = v('product'), plan = v('plan');
+    const current = v(paid ? 'paidCurrency' : 'saleCurrency');
+    const prices = (paid ? orderPaidPrices(product)[plan] : orderPrices[product]?.[plan]) || {};
+    const configured = Object.keys(prices).filter(code => prices[code]);
+    const codes = [...new Set([current, ...configured])].filter(Boolean);
+    const title = `<strong>${E(product)} · ${E(plan)} · ${paid ? '银行卡代付价' : '套餐售价'}</strong>`;
+    if (!codes.length) return title + '<div>暂无已配置金额</div>';
+    const rows = codes.map(code => {
+      const currency = orderCurrencyRows(product).find(row => row.code === code)?.name || currencyNames[code] || code;
+      const label = (paid && paymentCountries[code]) || currency;
+      const amount = prices[code] ? `${prices[code]} ${code}` : `未配置（${code}）`;
+      return `<div${code === current ? ' aria-current="true"' : ''}><dt>${E(label)}</dt><dd>${E(amount)}</dd></div>`;
+    });
+    return title + `<dl class="order-price-reference-list">${rows.join('')}</dl>`;
+  }
+  function orderAmountHeading(label, paid, v) {
+    const content = orderAmountReference(v, paid, localData ? 'loading' : 'ready');
+    const id = paid ? 'commerce-paid-price-reference' : 'commerce-sale-price-reference';
+    return `<div class="order-financial-heading"><div class="title-with-help"><h3>${label}</h3>${A.titleInfo(label + '金额', content, id, true)}</div></div>`;
+  }
+  function refreshOrderAmountReferences(form, status = form.dataset.priceReferenceStatus || (localData ? 'loading' : 'ready')) {
+    form.dataset.priceReferenceStatus = status;
+    const v = name => {
+      const control = form.elements['commerce-' + name];
+      return control?.dataset.currencyCode ?? control?.value ?? '';
+    };
+    $('#commerce-paid-price-reference', form).innerHTML = orderAmountReference(v, true, status);
+    $('#commerce-sale-price-reference', form).innerHTML = orderAmountReference(v, false, status);
+    window.IDTitleHelp?.reposition?.();
   }
   function applyOrderPrice(form) {
     if (form.elements['commerce-id'].value || form.elements['commerce-saleManual'].value) return;
@@ -3103,7 +3170,7 @@
       confirmed.checked = false;
     } else if (manual.value || confirmed.checked) return;
     fields['commerce-paidAmount'].value =
-      currencySettings.gptPaidPrices?.[fields['commerce-plan'].value]?.[fields['commerce-paidCurrency'].value] ?? '';
+      orderPaidPrices('GPT')[fields['commerce-plan'].value]?.[fields['commerce-paidCurrency'].value] ?? '';
   }
   async function loadPrices(form) {
     if (!localData) return;
@@ -3113,7 +3180,11 @@
       return null;
     });
     const snapshot = await priceLoad;
-    if (!snapshot || revision !== currencySettingsRevision) return null;
+    if (revision !== currencySettingsRevision) return null;
+    if (!snapshot) {
+      if (form?.isConnected) refreshOrderAmountReferences(form, 'error');
+      return null;
+    }
     orderPrices = snapshot.data?.orderPrices || {};
     currencySettings = snapshot.data || {};
     if (form?.isConnected) {
@@ -3122,6 +3193,7 @@
       form.dataset.currencyInitialized = 'yes';
       if (!form.elements['commerce-saleAmount'].value) applyOrderPrice(form);
       applyGptPaidPrice(form);
+      refreshOrderAmountReferences(form, 'ready');
     }
     return snapshot;
   }
@@ -3136,15 +3208,16 @@
   }
   function paymentSettingsView() {
     const key = 'commerce-payment-settings-view';
-    if (!S.drafts.has(key)) S.drafts.set(key, { tab: 'paid', currency: 'PHP' });
+    if (!S.drafts.has(key)) S.drafts.set(key, { tab: 'paid', currency: 'PHP', product: 'GPT' });
     return S.drafts.get(key);
   }
-  const paidPricesDraft = code => 'commerce-gpt-paid-prices:' + code;
+  const paidPricesDraft = (product, code) => product === 'GPT' ? 'commerce-gpt-paid-prices:' + code
+    : `commerce-paid-prices:${product}:${code}`;
   const countryChoices = () => Object.entries(paymentCountries).map(([code, name]) => [code, `${name} · ${currencyLabel(code)}`]);
 
   function renderPaymentSettings() {
     if (!paymentSettingsActive()) return A.header('代付国家', '') + A.empty('当前账号无权管理订单设置', '');
-    const { tab, currency } = paymentSettingsView();
+    const { tab, currency, product = 'GPT' } = paymentSettingsView();
     const navigation = `<div class="tabs" role="tablist" aria-label="订单设置">${paymentSettingsTabs.map(([id, label]) =>
       `<button type="button" class="tab${tab === id ? ' active' : ''}" role="tab" aria-selected="${tab === id}" data-action="commerce-payment-settings-tab" data-tab="${id}">${label}</button>`
     ).join('')}</div>`;
@@ -3160,29 +3233,34 @@
         ? E(paymentSettingsError) + A.button('重试', 'commerce-paid-settings-retry')
         : '正在读取代付价格…'}</div>`;
     } else {
-      const key = paidPricesDraft(currency), draft = S.drafts.get(key) || {};
+      const key = paidPricesDraft(product, currency), draft = S.drafts.get(key) || {};
+      const prices = orderPaidPrices(product);
       const columns = [
-        { id: 'plan', label: 'GPT 套餐' },
+        { id: 'plan', label: '套餐' },
         { id: 'amount', label: '原币代付金额', render: ({ plan, index }) =>
           input('paid-price-' + index,
-            draft['commerce-paid-price-' + index] ?? currencySettings.gptPaidPrices?.[plan]?.[currency] ?? '',
-            `data-gpt-paid-price inputmode="decimal" maxlength="21" aria-label="${E(plan)} 原币代付金额" placeholder="未配置"`) +
+            draft['commerce-paid-price-' + index] ?? prices[plan]?.[currency] ?? '',
+            `data-paid-price inputmode="decimal" maxlength="21" aria-label="${E(plan)} 原币代付金额" placeholder="未配置"`) +
           `<p class="field-error" id="commerce-paid-price-${index}-error" hidden></p>` },
         { id: 'budget', label: '折合人民币预算', render: ({ index }) =>
           `<output data-paid-budget for="commerce-paid-price-${index}">—</output>` }
       ];
       body = `<div class="panel-body">
-        ${field('国家／地区', 'paid-country', select('paid-country', countryChoices(), currency))}
+        <div class="commerce-field-grid">
+          ${field('产品', 'paid-product', select('paid-product', Object.keys(productPlans), product))}
+          ${field('国家／地区', 'paid-country', select('paid-country', countryChoices(), currency))}
+        </div>
         ${paymentSettingsError ? `<p class="footnote" role="status">${E(paymentSettingsError)}</p>` : ''}
         <div class="toolbar-left"><p class="footnote" id="commerce-paid-quote" role="status"></p>${localData ? A.button('刷新汇率', 'commerce-paid-rates-retry') : ''}</div>
         <form id="commerce-paid-prices-form" data-commerce-draft="${key}"${S.drafts.has(key) ? ' data-paid-price-dirty="yes"' : ''} novalidate>
+          ${input('paid-price-product', product, 'type="hidden"')}
           ${input('paid-price-currency', currency, 'type="hidden"')}
           ${input('paid-price-version', draft['commerce-paid-price-version'] ?? paymentSettingsVersion, 'type="hidden"')}
-          ${A.table(columns, productPlans.GPT.map((plan, index) => ({ id: plan, plan, index })), '', 'GPT 代付价格')}
+          ${A.table(columns, productPlans[product].map((plan, index) => ({ id: plan, plan, index })), '', `${product} 代付价格`)}
           <div class="form-footer">${A.button('读取最新', 'commerce-paid-settings-reload')}<button type="submit" class="button primary">保存代付价格</button></div>
         </form></div>`;
     }
-    return A.header('代付国家', '维护 GPT 银行卡代付价格、套餐售价和订单币种。折合人民币仅用于预算。') +
+    return A.header('代付国家', '维护 GPT 和 Claude 的银行卡代付价格、套餐售价及订单币种。折合人民币仅用于预算。') +
       `<section class="panel">${navigation}${body}</section>`;
   }
 
@@ -3256,21 +3334,22 @@
     updatePaymentBudgets();
     return paymentRateLoad;
   }
-  async function saveGptPaidPrices(form, confirmed = '') {
+  async function savePaidPrices(form, confirmed = '') {
     if (!paymentSettingsActive() || form.getAttribute('aria-busy') === 'true') return;
     const raw = readCommerceDraft(form), submitted = JSON.stringify(raw), actor = currentOperator().id;
-    const code = raw['commerce-paid-price-currency'];
-    if (!Object.hasOwn(paymentCountries, code)) return;
-    const amounts = [...form.querySelectorAll('[data-gpt-paid-price]')].map(control => {
+    const code = raw['commerce-paid-price-currency'], product = raw['commerce-paid-price-product'];
+    if (!Object.hasOwn(paymentCountries, code) || !Object.hasOwn(productPlans, product)) return;
+    const plans = productPlans[product];
+    const amounts = [...form.querySelectorAll('[data-paid-price]')].map(control => {
       const amount = control.value.trim();
       A.setError(control.id, amountValid(amount, true) ? '' : '请输入非负金额，最多四位小数');
       return amount;
     });
-    if (amounts.length !== productPlans.GPT.length || amounts.some(amount => !amountValid(amount, true))) return;
+    if (amounts.length !== plans.length || amounts.some(amount => !amountValid(amount, true))) return;
     if (!confirmed) {
-      A.confirmAction('确认保存代付价格', `更新 ${paymentCountries[code]} 的 GPT 新单代付预设。`, () => {
+      A.confirmAction('确认保存代付价格', `更新 ${product} 在${paymentCountries[code]}的银行卡代付参考价。`, () => {
         if (form.isConnected && currentOperator().id === actor && JSON.stringify(readCommerceDraft(form)) === submitted)
-          void saveGptPaidPrices(form, submitted);
+          void savePaidPrices(form, submitted);
         else A.notify('输入或登录身份已变化，请重新核对后保存');
       });
       return;
@@ -3282,12 +3361,16 @@
       if (!form.isConnected || currentOperator().id !== actor || !paymentSettingsActive()) return;
       if (snapshot.version !== Number(raw['commerce-paid-price-version']))
         throw new Error('代付价格已在其他页面更新，草稿已保留。请读取最新设置后核对。');
-      const next = safeClone(snapshot.data?.gptPaidPrices || {});
-      productPlans.GPT.forEach((plan, index) => { (next[plan] ||= {})[code] = amounts[index]; });
-      const data = { ...(snapshot.data || { costSettings: safeClone(costSettings), mailboxTypes: A.modules.operations?.getMailboxTypes?.() || [] }), gptPaidPrices: next };
-      const result = localData ? await localData.save('settings', snapshot.version, data, { action: 'gpt_paid_prices_save' })
+      const next = safeClone(orderPaidPrices(product, snapshot.data ?? null));
+      plans.forEach((plan, index) => { (next[plan] ||= {})[code] = amounts[index]; });
+      const data = { ...(snapshot.data || { costSettings: safeClone(costSettings), mailboxTypes: A.modules.operations?.getMailboxTypes?.() || [] }) };
+      if (product === 'GPT') data.gptPaidPrices = next;
+      else data.claudePaidPrices = { ...data.claudePaidPrices, [product]: next };
+      const action = product === 'GPT' ? 'gpt_paid_prices_save' : 'claude_paid_prices_save';
+      const result = localData ? await localData.save('settings', snapshot.version, data, { action })
         : { version: snapshot.version + 1, data };
-      if (result.version <= snapshot.version || productPlans.GPT.some((plan, index) => result.data?.gptPaidPrices?.[plan]?.[code] !== amounts[index]))
+      const savedPrices = orderPaidPrices(product, result.data ?? null);
+      if (result.version <= snapshot.version || plans.some((plan, index) => savedPrices[plan]?.[code] !== amounts[index]))
         throw new Error('尚未确认代付价格保存成功，请重新读取核对。');
       if (currentOperator().id !== actor) return;
       currencySettingsRevision++;
@@ -3302,7 +3385,7 @@
         form.removeAttribute('data-commerce-draft');
         A.render();
       }
-      A.notify('GPT 代付价格已保存');
+      A.notify(`${product} 代付价格已保存`);
     } catch (error) { A.notify(error.message || '代付价格未保存，输入已保留'); }
     finally { form.removeAttribute('aria-busy'); feedback?.finish(); }
   }
@@ -3516,16 +3599,16 @@
     return (
       `<div class="commerce-span-all order-payment-options">` +
       field('支付方式', 'payment', auto ? input('payment', v('payment'), 'readonly') : select('payment', ['银行卡', '苹果内购'], v('payment')), true) +
+      field('卡尾号', 'paymentId', input('paymentId', v('paymentId'), 'readonly'), false, '', '', apple || product !== 'GPT') +
       (product === 'GPT' ? '' :
+        field('填写方式', 'proMaterialMode', select('proMaterialMode', proChoices, proMode), true, '', '', !proBank) +
         field('银行卡号', 'proCardNumber', input('proCardNumber', v('proCardNumber'),
           `inputmode="numeric" maxlength="32" autocomplete="off"${proLocked && proMode === 'manual_card' ? ' readonly' : ''}`),
           true, '', '', !proBank || proMode !== 'manual_card') +
         field('卡序列号', 'proCardSerial', input('proCardSerial', v('proCardSerial'), 'maxlength="120" autocomplete="off"'),
-          true, '业务登记编号，可保留前导零。', '', !proBank || proMode !== 'manual_card') +
-        field('填写方式', 'proMaterialMode', select('proMaterialMode', proChoices, proMode), true, '', '', !proBank)) +
+          true, '业务登记编号，可保留前导零。', '', !proBank || proMode !== 'manual_card')) +
       (product === 'GPT' && !auto ? orderCardPicker(v, apple, { optional: true }) : '') +
       (product !== 'GPT' ? orderCardPicker(v, !proBank || proMode !== 'pool_card', { id: 'proPoolCardId', pool: true }) : '') +
-      field('卡尾号', 'paymentId', input('paymentId', v('paymentId'), 'readonly'), false, '', '', apple || v('product') !== 'GPT') +
       field(
         '苹果 ID',
         'appleIdId',
@@ -3541,7 +3624,29 @@
         false, '', '', !apple || v('businessType') === '续费') +
       `</div>` +
       orderCardTypeField(v, existing) +
-      `<div class="order-financial-groups commerce-span-all"><div class="order-financial-group"><div class="order-financial-heading"><h3>代付</h3></div>${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency', auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '', 'readonly placeholder="待核对"') : select('paidCurrency', paidCurrencyChoices(product, v('payment'), apple ? 'USD' : v('paidCurrency')), apple ? 'USD' : v('paidCurrency')), true)}${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'), auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>售卖</h3></div>${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency')), true)}${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>订阅周期</h3></div>${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true, '本次实际开通时间，只登记一次。')}${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}</div></div>` +
+      `<div class="order-financial-groups commerce-span-all">
+        <div class="order-financial-group">
+          ${orderAmountHeading('代付', true, v)}
+          ${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency',
+            auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '',
+              `readonly placeholder="待核对" data-currency-code="${E(v('paidCurrency'))}"`)
+              : select('paidCurrency', paidCurrencyChoices(product, v('payment'), apple ? 'USD' : v('paidCurrency')),
+                apple ? 'USD' : v('paidCurrency')), true)}
+          ${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'),
+            auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}
+        </div>
+        <div class="order-financial-group">
+          ${orderAmountHeading('售卖', false, v)}
+          ${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency')), true)}
+          ${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}
+        </div>
+        <div class="order-financial-group">
+          <div class="order-financial-heading"><h3>订阅周期</h3></div>
+          ${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'),
+            true, '本次实际开通时间，只登记一次。')}
+          ${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}
+        </div>
+      </div>` +
       (v('claudeRenewalId')
         ? `<div class="commerce-cost-strip commerce-span-all">Claude 专属续费：当前订阅到期 ${E(orders.find((row) => row.id === v('claudeRenewalId'))?.expiry || '')}，本次新单到期 ${E(v('expiry'))}。原单保持独立可见。</div>`
         : '') +
@@ -3734,12 +3839,14 @@
     const selectedTenant = tenants.find((row) => row.id === v('tenantId'));
     const activeProMode = proMaterialMode({ product, payment: v('payment'), proMaterialMode: v('proMaterialMode') });
     const personnel =
+      '<div class="commerce-span-all order-wide-fields">' +
       field(
         '认证人',
         'tenantId',
         searchableSelect('tenantId', '租户', [['', '未关联租户'], ...tenants.filter((row) => row.active || row.id === v('tenantId')).map((row) => [row.id, `${row.name} · ${row.phone}`])], v('tenantId'), A.button('新增', 'commerce-quick-tenant', '', 'plus'))
       ) +
       (product !== 'GPT' ? orderCardPicker(v, v('payment') !== '银行卡' || (activeProMode && activeProMode !== 'tenant_card')) : '') +
+      '</div>' +
       field('认证电话', 'verifierPhone', input('verifierPhone', selectedTenant?.phone || existing?.verifierPhone || '', 'readonly')) +
       field('认证状态', 'kyc', select('kyc', ['未认证', 'KYC 认证'], v('kyc'))) +
       field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"'));
@@ -4036,7 +4143,7 @@
           `data-product="${product}"`
         ) : ''
       ) +
-      `<section class="panel">${tabs(
+      `<section class="panel">${product === 'GPT' ? A.gptOrderTabs?.() || '' : ''}${tabs(
         [
           ['all', '当前订单'],
           ['pending', '待补全'],
@@ -4045,7 +4152,7 @@
         ],
         moduleState.orderTab,
         'commerce-order-tab'
-      )}${toolbar(product === 'Claude Pro' ? '搜索订单编号、邮箱、客户、卡号或序列号' : '搜索订单编号、邮箱或客户', columnSettingsButton(`commerce-orders-${product}`) + routeButton('数据统计', 'orders/statistics'), 'data-page-actions')}${tableList(orderColumns(product), filtered, `commerce-orders-${product}`)}${quoteAttribution(filtered)}</section>`
+      )}${toolbar(product === 'Claude Pro' ? '搜索订单编号、邮箱、客户、卡号或序列号' : '搜索订单编号、邮箱或客户', columnSettingsButton(`commerce-orders-${product}`) + routeButton('数据统计', 'orders/statistics'), 'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${tableList(orderColumns(product), filtered, `commerce-orders-${product}`)}${quoteAttribution(filtered)}</section>`
     );
   }
 
@@ -6252,6 +6359,15 @@
   }
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
+    if (action === 'commerce-order-prices-retry') {
+      const form = node.closest('#commerce-order-form');
+      if (form?.dataset.priceReferenceStatus === 'error') {
+        node.closest('.title-help').querySelector('summary').focus({ preventScroll: true });
+        refreshOrderAmountReferences(form, 'loading');
+        void loadPrices(form);
+      }
+      return true;
+    }
     if (action === 'commerce-payment-settings-tab') {
       if (paymentSettingsActive() && paymentSettingsTabs.some(([id]) => id === node.dataset.tab)) {
         saveDrafts();
@@ -6270,11 +6386,10 @@
       };
       if (action === 'commerce-paid-settings-retry') reload();
       else {
-        const code = paymentSettingsView().currency;
-        A.confirmAction('读取最新代付价格', '放弃当前国家／地区未保存的草稿，重新读取设置。', () => {
-          if (!paymentSettingsActive() || paymentSettingsView().currency !== code) return;
-          const form = $('#commerce-paid-prices-form');
-          if (form) reload({ key: paidPricesDraft(code), submitted: JSON.stringify(readCommerceDraft(form)) });
+        const form = $('#commerce-paid-prices-form');
+        A.confirmAction('读取最新代付价格', '放弃当前产品和国家／地区未保存的草稿，重新读取设置。', () => {
+          if (paymentSettingsActive() && form?.isConnected)
+            reload({ key: form.dataset.commerceDraft, submitted: JSON.stringify(readCommerceDraft(form)) });
         });
       }
       return true;
@@ -6423,6 +6538,14 @@
       void A.withActionFeedback(node, () => loadLocalCommerce(true),
         { pending: '正在读取业务资料…', success: '业务资料已重新读取', failure: '业务资料读取失败，请重试' });
       A.render();
+      return true;
+    }
+    if (action === 'commerce-sync-orders-refresh') {
+      void A.withActionFeedback(node, async () => {
+        const ready = await loadLocalCommerce(true, true);
+        if (S.route === A.gptOrderSyncRoute) A.render();
+        return ready;
+      }, { pending: '正在读取订单…', success: '订单已刷新', failure: '订单暂时无法读取，请重试' });
       return true;
     }
     const id = node.dataset.id;
@@ -6772,7 +6895,7 @@
     return false;
   }
   function onSubmit(form) {
-    if (form.id === 'commerce-paid-prices-form') { void saveGptPaidPrices(form); return true; }
+    if (form.id === 'commerce-paid-prices-form') { void savePaidPrices(form); return true; }
     if (['commerce-card-type-form', 'commerce-card-type-assignment-form'].includes(form.id)) {
       void saveBankCardType(form);
       return true;
@@ -6830,6 +6953,40 @@
     apple: 'appleCostCny', relay: 'appleCostCny', '苹果邮箱': 'appleCostCny', '苹果隐藏邮箱': 'appleCostCny',
     microsoft: 'microsoftCostCny', '微软邮箱': 'microsoftCostCny'
   };
+  const orderValueObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(entries => {
+    for (const { target } of entries) {
+      if (target.isConnected) updateOrderValueReadout(target);
+      else orderValueObserver.unobserve(target);
+    }
+  }) : null;
+  let orderValueMeasure;
+  function updateOrderValueReadout(control) {
+    const fieldControl = control.closest('.field-control');
+    const current = fieldControl?.querySelector('.order-value-readout');
+    let value = '';
+    if (control.clientWidth && control.tagName === 'SELECT') {
+      const label = control.selectedOptions[0]?.textContent || '';
+      const style = getComputedStyle(control);
+      orderValueMeasure ??= document.createElement('canvas').getContext('2d');
+      orderValueMeasure.font = style.font;
+      const reserved = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.fontSize);
+      if (orderValueMeasure.measureText(label).width > control.clientWidth - reserved)
+        value = label;
+    } else if (control.clientWidth && control.scrollWidth > control.clientWidth + 1) {
+      value = control.value;
+    }
+    if (!value || !fieldControl) {
+      current?.remove();
+      return;
+    }
+    const readout = current || document.createElement('p');
+    if (readout.textContent !== value) readout.textContent = value;
+    if (!current) {
+      readout.className = 'footnote order-value-readout';
+      readout.setAttribute('aria-hidden', 'true');
+      fieldControl.querySelector('.field-error').before(readout);
+    }
+  }
   const stockForms = new WeakSet();
   function updateCustomerEmailHistory(form, match = false) {
     const email = form.querySelector('#commerce-email');
@@ -6871,6 +7028,10 @@
     if (select.disabled && picker.querySelector('.commerce-picker-popover').matches(':popover-open'))
       picker.querySelector('.commerce-picker-popover').hidePopover();
     filterPicker(search);
+    for (const control of form.querySelectorAll('#commerce-email, #commerce-ownerId[readonly], #commerce-paidCurrency, #commerce-saleCurrency, #commerce-cardTypeId')) {
+      orderValueObserver?.observe(control);
+      updateOrderValueReadout(control);
+    }
   }
   function updateStockSearch(form) {
     const email = form.querySelector('#commerce-email');
@@ -6956,11 +7117,12 @@
         return true;
       }
     }
-    if (node.id === 'commerce-paid-country' && paymentSettingsActive() && Object.hasOwn(paymentCountries, node.value)) {
+    const paidSetting = node.id === 'commerce-paid-country' ? 'currency' : node.id === 'commerce-paid-product' ? 'product' : '';
+    if (paidSetting && paymentSettingsActive() && Object.hasOwn(paidSetting === 'currency' ? paymentCountries : productPlans, node.value)) {
       saveDrafts();
-      paymentSettingsView().currency = node.value;
+      paymentSettingsView()[paidSetting] = node.value;
       A.render();
-      $('#commerce-paid-country')?.focus();
+      $(`#${node.id}`)?.focus();
       return true;
     }
     const cardFilter = node.id?.match(/^commerce-subscription-card-(state|purpose|type|plan)$/)?.[1];
@@ -7110,6 +7272,8 @@
       }
       if (node.id === 'commerce-start') updateOrderPeriod(form);
       updateOrderVisibility(form);
+      if (['commerce-product', 'commerce-plan', 'commerce-payment', 'commerce-paidCurrency', 'commerce-saleCurrency'].includes(node.id))
+        refreshOrderAmountReferences(form);
       for (const search of form.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
       const preview = form.querySelector('#commerce-cost-preview');
       if (preview) {
@@ -7150,11 +7314,11 @@
       if (node.id === 'commerce-email') updateStockSearch(node.closest('#commerce-order-form'));
       if (node.id === 'commerce-saleAmount') node.form.elements['commerce-saleManual'].value = 'yes';
       if (node.id === 'commerce-paidAmount') node.form.elements['commerce-paidManual'].value = 'yes';
-      if (node.hasAttribute?.('data-gpt-paid-price')) node.form.dataset.paidPriceDirty = 'yes';
+      if (node.hasAttribute?.('data-paid-price')) node.form.dataset.paidPriceDirty = 'yes';
       if (['commerce-emailCostAmount', 'commerce-emailCostCurrency'].includes(node.id) && node.form.elements['commerce-emailCostManual'])
         node.form.elements['commerce-emailCostManual'].value = 'yes';
       saveDrafts();
-      if (node.hasAttribute?.('data-gpt-paid-price')) updatePaymentBudgets();
+      if (node.hasAttribute?.('data-paid-price')) updatePaymentBudgets();
       const form = node.closest('#commerce-order-form'),
         preview = $('#commerce-cost-preview');
       if (form && preview) {
@@ -7205,9 +7369,10 @@
     if (S.route === paymentSettingsRoute) return renderPaymentSettings();
     const lossPage = S.route === customerLossRoute;
     if (localData && localPhase !== 'ready') {
+      const gptOrdersPage = S.route === 'orders/gpt';
       return (
-        A.header(lossPage ? '客户流失' : '本机业务资料', '') +
-        `<section class="panel">${
+        A.header(gptOrdersPage ? 'GPT 订单' : lossPage ? '客户流失' : '本机业务资料', '') +
+        `<section class="panel">${gptOrdersPage ? A.gptOrderTabs?.() || '' : ''}${
           localPhase === 'error'
             ? A.empty(lossPage ? '无法读取业务资料' : '无法读取本机业务资料',
               lossPage ? '请重试读取客户与订单资料。' : '请确认本机服务后重试。') +
@@ -7303,6 +7468,9 @@
   A.modules.commerce = {
     refreshCustomerTagOptions,
     refreshOverview: () => loadLocalCommerce(true, true),
+    refreshAfterOrderSync,
+    syncedOrderId,
+    syncedOrderReadNotice,
     overviewSummary,
     addRechargeOrder,
     getCostSettings: () => safeClone(costSettings),
@@ -7488,7 +7656,7 @@
       }
       for (const form of document.querySelectorAll('#commerce-order-form')) updateCustomerEmailHistory(form);
       for (const search of document.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
-      loadLocalCommerce();
+      loadLocalCommerce(false, routeChanged && Boolean(orderSyncRead));
       if (localData && !requestedAccountLifecycle && !A.modules.inventory?.accountLifecycleReady?.()) {
         requestedAccountLifecycle = true;
         accountLifecycleReading = true;

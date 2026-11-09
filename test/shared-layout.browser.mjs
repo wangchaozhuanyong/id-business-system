@@ -147,8 +147,9 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         assert(geometry.trigger.right <= geometry.control.left, '说明按钮不占用输入区域');
         assert(geometry.error.top >= geometry.control.bottom, '校验错误位于控件下方');
         if (width <= 900) assert(geometry.trigger.width >= 44 && geometry.trigger.height >= 44, '手机帮助按钮触控区至少 44px');
-        const before = await field.locator('.field-control').boundingBox();
         await trigger.focus();
+        await settled();
+        const before = await field.locator('.field-control').boundingBox();
         await page.keyboard.press('Enter');
         await help.locator('.title-description:popover-open').waitFor();
         assert.match(await note.innerText(), /选择租户后可搜索/);
