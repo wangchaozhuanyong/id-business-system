@@ -228,6 +228,29 @@ describe('durable resumable backup upload', () => {
     );
     expect(f.http).not.toHaveBeenCalled();
   });
+  it('refuses to write into a folder outside the configured backup root', async () => {
+    const f = await fixture();
+    const http = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        id: 'folder_full_00001',
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: ['other_project_root'],
+        capabilities: { canAddChildren: true }
+      })
+    );
+    const lease = { assertCurrent: async () => undefined };
+    const uploader = new BackupUploader(
+      f.journal,
+      new BackupDriveClient(async () => 'synthetic-token', http),
+      { encrypt: () => null, decrypt: () => null },
+      lease,
+      262_144,
+      'configured_backup_root'
+    );
+    expect((await uploader.run(f.blob.identity.id)).errorCode).toBe('BACKUP_DRIVE_FOLDER_INVALID');
+    expect(http).toHaveBeenCalledOnce();
+    expect(http.mock.calls[0]?.[1]?.method).toBeUndefined();
+  });
   it('rejects an enqueue conflict and invalid filenames rather than reading outside the outbox', async () => {
     const f = await fixture();
     await expect(

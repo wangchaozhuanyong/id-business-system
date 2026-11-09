@@ -22,9 +22,24 @@ export class BackupJournal {
 
   async load(id: string): Promise<BackupUploadState | null> {
     if (!UUID.test(id)) throw new BackupError('BACKUP_ID_INVALID');
+    const value = await this.readState<BackupUploadState>(`${id}.json`);
+    if (value === null) return null;
+    this.validate(value, id);
+    return value;
+  }
+
+  loadCaptureCheckpoint(): Promise<unknown> {
+    return this.readState('capture-checkpoint.json');
+  }
+
+  saveCaptureCheckpoint(value: unknown) {
+    return this.writeState('capture-checkpoint.json', value);
+  }
+
+  private async readState<T>(name: string): Promise<T | null> {
     await this.lease.assertCurrent();
     await privateBackupDirectory(this.directory);
-    const path = join(this.directory, `${id}.json`);
+    const path = join(this.directory, name);
     let info;
     try {
       info = await lstat(path);
@@ -34,13 +49,18 @@ export class BackupJournal {
     }
     if (!info.isFile() || info.isSymbolicLink() || info.size > 65_536 || info.mode & 0o077)
       throw new BackupError('BACKUP_JOURNAL_INVALID');
-    const value = JSON.parse(await readFile(path, 'utf8')) as BackupUploadState;
-    this.validate(value, id);
-    return value;
+    const value: unknown = JSON.parse(await readFile(path, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new BackupError('BACKUP_JOURNAL_INVALID');
+    return value as T;
   }
 
   async save(value: BackupUploadState) {
     this.validate(value, value.blob.identity.id);
+    return this.writeState(`${value.blob.identity.id}.json`, value);
+  }
+
+  private async writeState(name: string, value: unknown) {
     await this.lease.assertCurrent();
     await privateBackupDirectory(this.directory);
     const temp = join(this.directory, `.${randomUUID()}.json.partial`);
@@ -50,7 +70,7 @@ export class BackupJournal {
       await file.sync();
       await file.close();
       await this.lease.assertCurrent();
-      await rename(temp, join(this.directory, `${value.blob.identity.id}.json`));
+      await rename(temp, join(this.directory, name));
       await syncBackupDirectory(this.directory);
     } catch (error) {
       await file.close().catch(() => undefined);

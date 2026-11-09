@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { posix } from 'node:path';
+import { createHash } from 'node:crypto';
 import { BackupError, UUID } from './backup-types';
 
 export type MysqlBackupTool = 'mysql' | 'mysqldump' | 'mysqlbinlog';
@@ -21,6 +22,14 @@ function checkPosition(value: MysqlLogPosition) {
 export function mysqlPosition(value: MysqlLogPosition) {
   checkPosition(value);
   return `${value.file}:${value.position}`;
+}
+
+export function parseMysqlPosition(value: string): MysqlLogPosition {
+  const [file, position, extra] = value.split(':');
+  const parsed = { file: file ?? '', position: Number(position) };
+  if (extra !== undefined || mysqlPosition(parsed) !== value)
+    throw new BackupError('BACKUP_MYSQL_POSITION_INVALID');
+  return parsed;
 }
 
 /** Bounded stderr is discarded; child failures cannot expose SQL or authentication details. */
@@ -106,6 +115,25 @@ export class MysqlNativeBackupSource {
     checkPosition(result);
     return result;
   }
+  /** Schema deployments must run through Prisma and suspend capture during DDL. */
+  async migrationRevision(database: string) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(database))
+      throw new BackupError('BACKUP_MYSQL_DATABASE_INVALID');
+    const output = await this.query(
+      `SELECT @@global.log_bin,@@global.binlog_format,@@global.binlog_row_image;
+       SELECT IF(finished_at IS NULL,'pending','applied'),checksum,migration_name FROM \`${database}\`._prisma_migrations WHERE rolled_back_at IS NULL ORDER BY migration_name,id`
+    );
+    const [logFormat, ...entries] = output.split('\n');
+    if (logFormat !== '1\tROW\tFULL') throw new BackupError('BACKUP_MYSQL_LOG_FORMAT_INVALID');
+    if (
+      !entries.length ||
+      entries.some((entry) => !/^applied\t[a-f0-9]{64}\t[0-9_a-z-]+$/.test(entry))
+    )
+      throw new BackupError('BACKUP_MYSQL_MIGRATION_UNAVAILABLE');
+    if (!entries.some((entry) => entry.endsWith('\t20261108120000_claude_pro_order_materials')))
+      throw new BackupError('BACKUP_MYSQL_NEW_VERSION_REQUIRED');
+    return createHash('sha256').update(entries.join('\n')).digest('hex');
+  }
   /** Caller must freeze DDL for the capture. Data writes continue under an InnoDB snapshot. */
   async full(database: string) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(database))
@@ -148,23 +176,25 @@ export class MysqlNativeBackupSource {
         if (!match) continue;
         const coordinate = { file: match[1]!, position: Number(match[2]) };
         checkPosition(coordinate);
+        const stream = Readable.from(
+          (async function* () {
+            try {
+              yield* prefix;
+              while (true) {
+                const chunk = await iterator.next();
+                if (chunk.done) break;
+                yield chunk.value;
+              }
+            } finally {
+              input.destroy();
+            }
+          })()
+        );
+        stream.once('close', () => input.destroy());
         return {
           serverUuid,
           coordinate,
-          stream: Readable.from(
-            (async function* () {
-              try {
-                yield* prefix;
-                while (true) {
-                  const chunk = await iterator.next();
-                  if (chunk.done) break;
-                  yield chunk.value;
-                }
-              } finally {
-                input.destroy();
-              }
-            })()
-          )
+          stream
         };
       }
     } catch (error) {

@@ -117,9 +117,10 @@ export async function encryptBackupStream(
     await publishBackupPartial(partial.path, join(directory, filename));
     await syncBackupDirectory(directory);
     return { identity, filename, ...(await hashBackupFile(join(directory, filename))) };
-  } catch {
+  } catch (error) {
     if (!closed) await partial.file.close().catch(() => undefined);
     await unlink(partial.path).catch(() => undefined);
+    if (error instanceof BackupError) throw error;
     throw new BackupError('BACKUP_ENCRYPTION_FAILED');
   }
 }

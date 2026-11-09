@@ -22,7 +22,8 @@ export class BackupUploader {
     private readonly drive: BackupDriveClient,
     private readonly codec: BackupStateCodec,
     private readonly lease: BackupLease,
-    private readonly chunkBytes = CHUNK_BYTES
+    private readonly chunkBytes = CHUNK_BYTES,
+    private readonly rootFolder?: string
   ) {
     if (
       !Number.isSafeInteger(chunkBytes) ||
@@ -62,6 +63,7 @@ export class BackupUploader {
       state = await this.journal.load(id);
       if (!state) throw new BackupError('BACKUP_BATCH_MISSING');
       if (state.phase === 'verified' || state.retryAt > Date.now()) return state;
+      if (this.rootFolder) await this.drive.assertBackupFolder(state.folderId, this.rootFolder);
       await this.assertParent(state);
       const path = join(this.journal.directory, state.blob.filename);
       const actual = await hashBackupFile(path, () => this.lease.assertCurrent());

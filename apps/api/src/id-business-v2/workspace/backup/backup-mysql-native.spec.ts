@@ -19,6 +19,26 @@ const queryReply = (args: readonly string[]) =>
   args.some((arg) => arg.includes('server_uuid')) ? server : '0';
 
 describe('native MySQL encrypted backup source', () => {
+  it('starts a capture only from the migrated new system with complete row binlogs', async () => {
+    const base = `applied\t${'a'.repeat(64)}\t20261108120000_claude_pro_order_materials`;
+    const revision = (format: string, history: string) =>
+      new MysqlNativeBackupSource(launcher(() => print(`${format}\n${history}`))).migrationRevision(
+        'id_backup_test_fixture'
+      );
+    expect(await revision('1\tROW\tFULL', base)).toMatch(/^[a-f0-9]{64}$/);
+    await expect(revision('1\tROW\tMINIMAL', base)).rejects.toThrow(
+      'BACKUP_MYSQL_LOG_FORMAT_INVALID'
+    );
+    await expect(revision('1\tROW\tFULL', base.replace('applied', 'pending'))).rejects.toThrow(
+      'BACKUP_MYSQL_MIGRATION_UNAVAILABLE'
+    );
+    await expect(
+      revision(
+        '1\tROW\tFULL',
+        base.replace('20261108120000_claude_pro_order_materials', '20260821000000_baseline')
+      )
+    ).rejects.toThrow('BACKUP_MYSQL_NEW_VERSION_REQUIRED');
+  });
   it('gets the consistent coordinate from the dump header and retains the exact stream', async () => {
     const launch = launcher((tool, args) =>
       print(tool === 'mysqldump' ? header + 'synthetic SQL\n' : queryReply(args))

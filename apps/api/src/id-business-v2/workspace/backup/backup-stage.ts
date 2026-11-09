@@ -20,7 +20,7 @@ export async function stageNewSystemBackup(
   identity: BackupIdentity,
   folderId: string,
   recipient: KeyObject,
-  source: () => Readable
+  source?: () => Readable
 ) {
   validateBackupIdentity(identity);
   identity = copyBackupIdentity(identity);
@@ -45,7 +45,8 @@ export async function stageNewSystemBackup(
     // Recover an encrypted file published immediately before a crash interrupted enqueue.
     await assertBackupEnvelope(path, identity);
     blob = { identity, filename, ...(await hashBackupFile(path, () => journal.assertCurrent())) };
-  } else
+  } else {
+    if (!source) throw new BackupError('BACKUP_CAPTURE_NOT_STAGED');
     blob = await encryptBackupStream(
       Readable.from(
         (async function* () {
@@ -59,6 +60,7 @@ export async function stageNewSystemBackup(
       identity,
       recipient
     );
+  }
   const state = {
     version: 1 as const,
     blob,

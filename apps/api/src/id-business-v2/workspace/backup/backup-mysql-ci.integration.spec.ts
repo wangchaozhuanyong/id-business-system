@@ -20,6 +20,9 @@ import { BackupProcessLease } from './backup-process-lease';
 import type { BackupIdentity } from './backup-types';
 import { MysqlTriggerRestoreFilter } from './backup-mysql-restore-filter';
 import { mysqlSchemaReceipts, mysqlSchemaDifferences } from './backup-mysql-schema-receipts';
+import { BackupJournal } from './backup-journal';
+import { MysqlBackupCapture } from './backup-mysql-capture';
+import { stageNewSystemBackup } from './backup-stage';
 
 const enabled = process.env.GITHUB_ACTIONS === 'true' && process.env.GOOGLE_BACKUP_MYSQL_CI === '1';
 const suite = enabled ? describe : describe.skip;
@@ -657,6 +660,62 @@ suite('new system native MySQL isolated recovery', () => {
       expect(schemaDifferences.filter((receipt) => !receipt.schemaMatched)).toEqual([]);
       checks.push(
         'physical schema matches after each restore, allowing only reviewed trigger terminators'
+      );
+      report.stage = 'scheduled-native-capture';
+      const captureDirectory = join(temp, 'scheduled-capture');
+      const captureLease = await BackupProcessLease.acquire(captureDirectory);
+      try {
+        const journal = new BackupJournal(captureDirectory, captureLease);
+        const stage = (
+          identity: BackupIdentity,
+          key: typeof keys.publicKey,
+          source?: () => Readable
+        ) => stageNewSystemBackup(journal, identity, 'ci_synthetic_backup_folder', key, source);
+        const config = {
+          database,
+          serverUuid: capture.serverUuid,
+          sourceId: randomUUID(),
+          key: keys.publicKey
+        };
+        await new MysqlBackupCapture(native, journal, stage, config).tick();
+        const stagedFull = ((await journal.loadCaptureCheckpoint()) as { head: BackupIdentity })
+          .head;
+        expect(stagedFull.kind).toBe('full');
+        expect(await journal.load(stagedFull.id)).toMatchObject({ phase: 'ready' });
+        await sql(
+          'SOURCE',
+          `UPDATE id_business_v2_customers SET ci_schema_added_note='调度器重启后恢复' WHERE id='${customer}'`
+        );
+        // Recreate the scheduler so the next batch must start from the durable on-disk boundary.
+        await new MysqlBackupCapture(native, journal, stage, config).tick();
+        const stagedIncrement = (
+          (await journal.loadCaptureCheckpoint()) as { head: BackupIdentity }
+        ).head;
+        expect(stagedIncrement).toMatchObject({
+          kind: 'incremental',
+          previousId: stagedFull.id,
+          boundary: { start: stagedFull.boundary!.end }
+        });
+        const restored = join(temp, 'scheduled-increment.sql');
+        await decryptBackupFile(
+          join(captureDirectory, `${stagedIncrement.id}.idbackup`),
+          restored,
+          keys.privateKey,
+          stagedIncrement
+        );
+        await restore(restored);
+        expect(
+          await sql(
+            'RESTORE',
+            `SELECT ci_schema_added_note FROM id_business_v2_customers WHERE id='${customer}'`
+          )
+        ).toBe('调度器重启后恢复');
+        await rm(restored);
+      } finally {
+        captureLease.close();
+      }
+      checks.push(
+        'scheduled native capture resumes from disk and its encrypted increment restores exactly'
       );
       report.status = 'passed';
       report.stage = 'complete';

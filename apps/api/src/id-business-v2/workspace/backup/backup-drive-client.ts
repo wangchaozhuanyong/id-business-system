@@ -43,6 +43,29 @@ export class BackupDriveClient {
     }
     return this.json<BackupRemoteFile>(response);
   }
+  async assertBackupFolder(id: string, rootId: string) {
+    if (![id, rootId].every((value) => /^[A-Za-z0-9_-]{10,200}$/.test(value)) || id === rootId)
+      throw new BackupError('BACKUP_DRIVE_FOLDER_INVALID');
+    const response = await this.request(
+      `${FILES}/${encodeURIComponent(id)}?fields=id,mimeType,parents,trashed,capabilities(canAddChildren)&supportsAllDrives=true`
+    );
+    const folder = await this.json<{
+      id?: string;
+      mimeType?: string;
+      parents?: string[];
+      trashed?: boolean;
+      capabilities?: { canAddChildren?: boolean };
+    }>(response);
+    if (
+      folder.id !== id ||
+      folder.mimeType !== 'application/vnd.google-apps.folder' ||
+      folder.trashed ||
+      !Array.isArray(folder.parents) ||
+      !folder.parents.includes(rootId) ||
+      folder.capabilities?.canAddChildren !== true
+    )
+      throw new BackupError('BACKUP_DRIVE_FOLDER_INVALID');
+  }
   async start(state: BackupUploadState) {
     const response = await this.request(
       `${UPLOAD}?uploadType=resumable&supportsAllDrives=true&fields=${FIELDS}`,
