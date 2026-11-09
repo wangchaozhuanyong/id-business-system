@@ -38,6 +38,11 @@ function browser(store, appleAsset = null) {
     dataset: { commerceDraft: 'local-bank-entry' },
     elements: {
       'commerce-id': { value: '' },
+      'commerce-plan': { value: 'Plus' },
+      'commerce-paidManual': { value: '' },
+      'commerce-paidConfirmed': { checked: false },
+      'commerce-paidCurrency': { value: 'PHP' },
+      'commerce-paidAmount': { value: '' },
       'commerce-saleManual': { value: '' },
       'commerce-saleCurrency': { value: 'CNY' },
       'commerce-payment': { value: '银行卡' },
