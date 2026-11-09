@@ -31,6 +31,24 @@
   overflow-wrap: anywhere;
 }
 
+[data-recharge-view='admin'] .recharge-table-pagination.table-footer {
+  display: block;
+  margin-top: 0;
+}
+
+[data-recharge-view='admin'] .recharge-table-pagination .id-pagination {
+  --line: var(--border);
+  --text: var(--text-main);
+  --secondary: var(--text-secondary);
+  display: block;
+}
+
+[data-recharge-view='admin'] .recharge-pagination-note {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 :root {
   color-scheme: light;
   --font-sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -124,6 +142,42 @@
 
 :root[data-id-theme='dark']:has(body[data-recharge-view]:not([data-standalone])) {
   --on-primary: #102b2a;
+}
+
+[data-recharge-view='redeem'] .task-progress-header {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+[data-recharge-view='redeem'] .task-progress-text {
+  color: var(--text-main);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+[data-recharge-view='redeem'] .task-progress-hint {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+[data-recharge-view='redeem'] .task-progress-hint:empty {
+  display: none;
+}
+
+[data-recharge-view='redeem'] .task-progress[data-state='review'] .task-progress-bar {
+  background: var(--warning-text);
+}
+
+[data-recharge-view='redeem'] .task-progress[data-state='review'] .task-progress-bar::after {
+  display: none;
+}
+
+[data-recharge-view='redeem'] .batch-query-state {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 body[data-recharge-view] {
@@ -501,9 +555,67 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   white-space: nowrap;
 }
 
+[data-recharge-view='admin'] .recharge-cell-text {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+[data-recharge-view='admin'] .recharge-cell-text:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.recharge-cell-phase,
+.recharge-cell-checkout {
+  font-size: 12px;
+}
+
+.recharge-cell-phase {
+  color: var(--text-dim);
+}
+
+.recharge-cell-checkout {
+  color: var(--primary-text);
+}
+
+.recharge-cell-dialog {
+  position: fixed;
+  inset: var(--embed-visible-top, 0px) 0 auto;
+  margin: max(8px, min(32px, calc(var(--embed-visible-height, 100dvh) / 12))) auto 0;
+  width: min(36rem, calc(100% - 24px));
+  max-height: max(48px, calc(var(--embed-visible-height, 100dvh) - 48px));
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-main);
+}
+
+.recharge-cell-full-text {
+  margin-block: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 [data-recharge-view='admin'] .table-container .data-table {
   min-width: 100%;
   width: max-content;
+}
+
+[data-recharge-view='admin'] .manual-holds-table {
+  min-width: 1000px;
 }
 
 [data-recharge-view='admin']:not([data-standalone]) .session-table-container {

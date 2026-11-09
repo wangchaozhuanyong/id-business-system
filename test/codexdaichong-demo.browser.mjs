@@ -145,26 +145,20 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
 
   await page.goto(host.url + '#/recharge/start');
   const bitFrame = page.frameLocator('.recharge-integration__frame--bit-local');
-  const addressButton = bitFrame.getByRole('button', { name: '地址管理', exact: true });
-  await addressButton.waitFor();
+  const addresses = page.locator('#bit-addresses-host');
+  await addresses.getByRole('heading', { name: '地址管理', exact: true }).waitFor();
+  assert.equal(await bitFrame.getByRole('button', { name: '地址管理', exact: true }).count(), 0);
   assert.equal(
     await page.locator('[data-recharge-module="bit"] .recharge-integration__toolbar').count(),
     0
   );
   const bitToolbar = bitFrame.locator('.bit-local__connection-toolbar');
-  const bitPositions = await bitToolbar.evaluate((node) =>
-    [...node.querySelectorAll('[role="status"], button:not([hidden])')].map((control) => {
-      const { top, height } = control.getBoundingClientRect();
-      return Math.round(top + height / 2);
-    })
-  );
-  assert.equal(bitPositions.length, 5);
-  assert(Math.max(...bitPositions) - Math.min(...bitPositions) <= 2);
+  const bitToolbarFits = () =>
+    bitToolbar.evaluate((node) => node.scrollWidth <= node.clientWidth);
+  assert.equal(await bitToolbarFits(), true);
   await bitFrame.locator('#bit-window-name').fill('演示窗口名称');
-  await addressButton.click();
-  await page.getByRole('dialog').getByRole('heading', { name: '地址管理', exact: true }).waitFor();
-  const countField = page.getByLabel('生成数量');
-  const generate = page.getByRole('button', { name: '一键生成地址', exact: true });
+  const countField = addresses.getByLabel('生成数量');
+  const generate = addresses.getByRole('button', { name: '一键生成地址', exact: true });
   assert.equal(await countField.inputValue(), '10');
   await countField.fill('101');
   await generate.click();
@@ -174,11 +168,11 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await page.getByText('已生成 3 条账单地址，付款前请核对资料。', { exact: true }).waitFor();
   assert.equal(await page.locator('#bit-address-list tbody tr').count(), 3);
   assert.equal(await page.getByRole('button', { name: '导入地址', exact: true }).count(), 1);
-  await page.getByRole('button', { name: '关闭抽屉' }).click();
   assert.equal(await bitFrame.locator('#bit-window-name').inputValue(), '演示窗口名称');
   await page.setViewportSize({ width: 390, height: 820 });
-  await addressButton.waitFor();
-  assert.equal(await bitToolbar.evaluate((node) => node.scrollWidth <= node.clientWidth), true);
+  await page.getByRole('button', { name: '前往地址管理', exact: true }).click();
+  assert.equal(await addresses.evaluate((node) => document.activeElement === node), true);
+  assert.equal(await bitToolbarFits(), true);
   await page.setViewportSize({ width: 1280, height: 850 });
 
   await page.goto(host.url + '#/workspace/recharge');
@@ -304,7 +298,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await frame.locator('#startBtn').click();
   const { jobKey } = await (await submission).json();
   assert.ok(jobKey);
-  await frame.getByText('演示任务正在处理', { exact: true }).first().waitFor();
+  await frame.locator('#taskProgressTitle').getByText('开通中', { exact: true }).waitFor();
   await frame
     .locator('html[data-recharge-navigation-locked="true"]')
     .waitFor({ state: 'attached' });
@@ -324,7 +318,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
     1
   );
   clock += 1500;
-  await frame.getByText('演示任务已转待人工核对', { exact: true }).first().waitFor();
+  await frame.locator('#taskProgressTitle').getByText('开通结果待核对', { exact: true }).waitFor();
   await frame
     .locator('html[data-recharge-navigation-locked="false"]')
     .waitFor({ state: 'attached' });

@@ -39,7 +39,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
       if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLoginAttempts=(window.fixtureLoginAttempts||0)+1; await new Promise(resolve=>{window.releaseFixtureLogin=resolve}); if(window.fixtureLoginAttempts===1)throw new BitBrowserLoginError('合成控制通道失败'); window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email}; return {email,profileSequence:56}; }` });
       let file;
       if (path === '/') file = '../frontend/bitbrowser-local.html';
-      else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js'].includes(path)) file = '../frontend/' + path.slice(1);
+      else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
       else if (path === '/assets/bitbrowser/local.mjs') file = '../frontend/bitbrowser-local.mjs';
       else if (path === '/assets/bitbrowser/proxies.mjs') file = '../frontend/bitbrowser-proxies.mjs';
       else if (path.startsWith('/assets/bitbrowser/')) file = '../modules/recharge/bitbrowser/' + path.slice('/assets/bitbrowser/'.length);
@@ -97,9 +97,16 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     items.push(...Array.from({ length: 11 }, (_, i) => ({ ...items[0], id: `fixture-${i}`, name: `合成长名称代理 ${i + 1} · 办公室备用网络资料` })));
     await page.locator('#bit-tab-library').click(); await page.locator('#bit-refresh-proxies').click();
     await page.waitForFunction(() => document.querySelector('#bit-ip-count').textContent === '12');
-    await page.locator('#bit-ip-next').click(); await page.locator('#bit-ip-next').click();
-    assert.match(await page.locator('#bit-ip-page-info').innerText(), /3 \/ 3/);
-    assert.equal(await page.locator('#bit-ip-next').isDisabled(), true);
+    const ipPager = page.locator('nav[data-pagination="bit-ip"]');
+    assert.equal(await ipPager.locator('[data-pagination-size]').inputValue(), '10');
+    await ipPager.locator('.pagination-jump summary').click();
+    await ipPager.locator('[data-pagination-target]').fill('2');
+    await ipPager.locator('[data-pagination-target]').press('Enter');
+    assert.equal(await page.locator('#bit-ip-rows tr').count(), 2);
+    assert.equal(await ipPager.getByRole('button', { name: '下一页' }).isDisabled(), true);
+    await ipPager.locator('[data-pagination-size]').selectOption('20');
+    assert.equal(await page.locator('#bit-ip-rows tr').count(), 12);
+    assert.equal(await ipPager.getAttribute('data-page'), '1');
     await page.locator('#bit-ip-search').fill('没有匹配的合成资料');
     assert.equal(await page.locator('#bit-ip-empty').isVisible(), true);
     await page.locator('#bit-ip-search').fill('新电脑');

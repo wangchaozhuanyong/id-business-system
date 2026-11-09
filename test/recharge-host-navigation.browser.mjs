@@ -72,14 +72,13 @@ test(
     await page.goto(host.url + workspace);
     await frame.getByRole('button', { name: '填入演示资料' }).click();
     await frame.locator('#redeemBtn').click();
-    await frame.locator('#workspaceConfirm').check();
     const submitted = page.waitForResponse(
       (response) => response.url() === base + '/api/run-process'
     );
     await frame.locator('#startBtn').click();
     const { jobKey } = await (await submitted).json();
     assert(jobKey);
-    await frame.getByText('演示任务正在处理', { exact: true }).first().waitFor();
+    await frame.locator('#taskProgressTitle').getByText('开通中', { exact: true }).waitFor();
     await lock(true);
     const runningFrame = await captureFrame(page);
     const task = async () => {
@@ -107,7 +106,7 @@ test(
     await runningFrame.dispose();
 
     clock += 1500;
-    await frame.getByText('演示任务已转待人工核对', { exact: true }).first().waitFor();
+    await frame.locator('#taskProgressTitle').getByText('开通结果待核对', { exact: true }).waitFor();
     await lock(false);
     assert.equal((await task()).isTerminal, true);
     assert.equal((await task()).jobKey, jobKey);

@@ -104,7 +104,7 @@
   function frameDraftFieldAllowed(scope, key) {
     if (scope === 'admin') return rechargeDraftFields.has(key) ||
       /^address\/(?:new|[1-9]\d{0,15})\/addr_(?:line1|city|state|postal_code|country)$/.test(key);
-    if (scope === 'bit-local') return ['bit-window-name', 'workspace', 'bit-execution-proxy', 'ip-search', 'ip-filter', 'ip-sort', 'ip-page'].includes(key) ||
+    if (scope === 'bit-local') return ['bit-window-name', 'workspace', 'bit-execution-proxy', 'ip-search', 'ip-filter', 'ip-sort', 'ip-page', 'ip-page-size'].includes(key) ||
       /^ip-draft\/[a-zA-Z0-9_-]{1,80}\/(?:name|country|kind|mode|protocol|version)$/.test(key) ||
       /^profile\/[a-zA-Z0-9_-]{1,80}\/(?:version|bit-connection-name|bit-account-name|bit-local-url|bit-core|bit-proxy-mode|bit-proxy-type|bit-proxy-country|bit-proxy-host|bit-proxy-port|bit-session-wait|bit-session-retries|groupPreference|tagPreference)$/.test(key);
     return false;
@@ -138,8 +138,9 @@
     `<div class="form-grid${paired ? ' form-grid--paired' : ''}">${html}</div>`;
   const formFooter = (form, label = '核对并保存', durable = false) =>
     `<span class="footnote">${durable ? '保存到数据库' : '仅更新演示内存，刷新重置'}</span>${button('取消', 'drawer-close')}<button class="button primary" form="${form}" type="submit">${esc(label)}</button>`;
-  const search = (placeholder = '搜索名称、备注或编号') =>
-    `<div class="search-field">${icon('search')}<input id="ops-list-search" aria-label="搜索当前列表" value="${esc(state.query || '')}" placeholder="${esc(placeholder)}" /></div>`;
+  const search = (placeholder = '搜索名称、备注或编号', query = state.query || '') =>
+    `<div class="search-field">${icon('search')}<input id="ops-list-search" aria-label="搜索当前列表" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
+  const renderPagination = (options) => window.IDPagination?.render(options) || '';
   function finishDrawer() {
     const context = state.drawerContext;
     closeDrawer();
@@ -152,6 +153,7 @@
     taskFilter: '',
     phraseQuery: '',
     phrasePage: 1,
+    phrasePageSize: 10,
     phraseSort: 'custom',
     toolName: '',
     toolResult: null
@@ -234,9 +236,11 @@
   let settingsState = 'idle';
   let settingsLoading;
   let settingsSaving = false;
-  const persistedAudit = [];
-  let auditState = 'idle';
-  let auditLoading;
+  const auditViews = {
+    audit: { query: '', pageSize: 10, dirty: true },
+    login: { query: '', pageSize: 10, dirty: true }
+  };
+  let composingAuditSearch;
 
   function settingsSnapshot() {
     return {
@@ -312,7 +316,7 @@
           summary: '更新本机业务设置'
         })
       );
-      auditState = 'idle';
+      for (const view of Object.values(auditViews)) view.dirty = true;
       return true;
     } catch (error) {
       if (error?.status === 409) {
@@ -343,64 +347,99 @@
     if (saved) notify('统计币种已保存到本机');
     return saved;
   }
-  const auditDomainLabels = {
-    inventory: '库存',
-    commerce: '客户与订单',
-    settings: '系统设置',
-    auth: '员工与权限',
-    toolbox: '个人工具箱',
-    appleBalance: '苹果 ID 余额',
-    'recharge-codes': '充值码审核',
-    'tenant-cards': '租户银行卡',
-    'order-sync': '代充订单同步',
-    'finance-rates': '汇率采集'
-  };
-  const auditActionLabels = {
-    customer_tags_save: '保存客户标签设置',
-    customer_sources_save: '保存客户来源设置',
-    mailbox_category_save: '保存邮箱分类',
-    mailbox_category_reorder: '调整邮箱分类顺序',
-    fee_rules_save: '保存费用规则',
-    statistics_currency_save: '修改统计币种'
-  };
-  const auditDate = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Shanghai',
-    dateStyle: 'short',
-    timeStyle: 'medium'
-  });
-  function loadAudit(retry = false) {
-    if (!localData) return Promise.resolve();
-    if (auditLoading) return auditLoading;
-    if (!retry && auditState !== 'idle') return Promise.resolve();
-    auditState = 'loading';
-    auditLoading = (async () => {
-      try {
-        const rows = await localData.audit();
-        const records = rows.map(({ id, at, domain, action, summary, version, actorName }) => {
-          const date = new Date(at);
-          return {
-            id: String(id ?? `${domain}:${version}`),
-            time: Number.isNaN(date.valueOf()) ? '未知' : auditDate.format(date),
-            actor: actorName || '本机操作',
-            action: auditActionLabels[action] || summary || '保存资料',
-            loginEvent: domain === 'auth' && (action === 'auth_login' || action === 'auth_logout'),
-            subject: auditDomainLabels[domain] || domain,
-            result: summary || '已保存'
-          };
-        });
-        persistedAudit.splice(0, persistedAudit.length, ...records);
-        auditState = 'ready';
-        return true;
-      } catch {
-        auditState = 'error';
-        return false;
-      } finally {
-        auditLoading = undefined;
-        if (state.route === 'settings/audit' ||
-            (state.route === loginLogsRoute && loginLogTab === 'system')) render();
+  function activeAuditView() {
+    if (!localData || !isAdmin()) return;
+    if (state.route === 'settings/audit') return 'audit';
+    if (state.route === loginLogsRoute && loginLogTab === 'system' && localData.authRequired) return 'login';
+  }
+  function resetAuditViews() {
+    for (const list of Object.values(auditViews)) Object.assign(list, {
+      query: '', pageSize: 10, dirty: true, pending: null, failedRequest: null,
+      result: undefined, resultQuery: undefined, error: false
+    });
+  }
+  function renderAuditRead(view) {
+    if (activeAuditView() !== view) return;
+    const focused = document.activeElement;
+    if (composingAuditSearch && focused === composingAuditSearch) return;
+    const editingSearch = focused?.id === 'ops-list-search';
+    const paging = focused?.closest?.(`[data-pagination="operations-${view}"]`);
+    const pageControl = paging && (focused.hasAttribute('data-pagination-size') ? '[data-pagination-size]'
+      : focused.dataset.paginationNav ? `[data-pagination-nav="${focused.dataset.paginationNav}"]`
+        : focused.closest('.pagination-jump') ? '.pagination-jump summary' : '[aria-current="page"]');
+    const start = editingSearch ? focused.selectionStart : null;
+    const end = editingSearch ? focused.selectionEnd : null;
+    render();
+    if (editingSearch) {
+      const next = $('#ops-list-search');
+      next?.focus({ preventScroll: true });
+      if (start !== null && end !== null) next?.setSelectionRange(start, end);
+    } else if (pageControl) {
+      const pager = $(`[data-pagination="operations-${view}"]`);
+      const target = pager?.querySelector(pageControl);
+      (target && !target.disabled ? target : pager?.querySelector('[aria-current="page"], [data-pagination-size]'))
+        ?.focus({ preventScroll: true });
+    }
+  }
+  async function loadAudit(view = activeAuditView(), { page, pageSize, fresh = false } = {}) {
+    if (!view) return;
+    const list = auditViews[view];
+    const request = {
+      view,
+      page: page ?? list.pending?.page ?? list.result?.page ?? 1,
+      pageSize: pageSize ?? list.pageSize,
+      query: list.query,
+      ...(!fresh && list.result && list.resultQuery === list.query ? { snapshot: list.result.snapshot } : {})
+    };
+    list.dirty = false;
+    list.error = false;
+    list.failedRequest = null;
+    list.pageSize = request.pageSize;
+    list.pending = request;
+    const status = $('[data-audit-read-status]');
+    if (activeAuditView() === view && status) status.innerHTML = auditReadStatus(list);
+    try {
+      const result = await localData.auditPage(request);
+      if (list.pending !== request) return;
+      list.result = result;
+      list.resultQuery = request.query;
+      return true;
+    } catch (error) {
+      if (list.pending !== request) return;
+      if (error?.status === 401 || error?.status === 403) {
+        resetAuditViews();
+        list.pending = request;
+        list.dirty = false;
+        composingAuditSearch = undefined;
+      } else list.failedRequest = request;
+      list.error = true;
+      return false;
+    } finally {
+      if (list.pending === request) {
+        list.pending = null;
+        renderAuditRead(view);
       }
-    })();
-    return auditLoading;
+    }
+  }
+  function retryAudit(view = activeAuditView()) {
+    if (!view) return;
+    const failed = auditViews[view].failedRequest;
+    return failed
+      ? loadAudit(view, { page: failed.page, pageSize: failed.pageSize, fresh: failed.snapshot === undefined })
+      : loadAudit(view, { fresh: true });
+  }
+  function auditReadStatus(list) {
+    if (list.error)
+      return `<p class="inline-notice warning" role="status">日志读取失败。${list.result ? '已保留上次结果和页码。' : ''}请重试。</p>`;
+    if (list.pending || !list.result)
+      return `<p class="inline-notice" role="status">${list.result ? '正在更新日志…' : '正在读取日志…'}</p>`;
+    return '';
+  }
+  function auditPageContent(view, columns, tableId) {
+    const list = auditViews[view];
+    const result = list.result;
+    return `<div data-audit-read-status>${auditReadStatus(list)}</div>${result ? table(columns, result.items, '', tableId) +
+      renderPagination({ id: `operations-${view}`, page: result.page, pageSize: result.pageSize, total: result.total }) : ''}`;
   }
   const staff = [
     {
@@ -543,12 +582,16 @@
     return `<nav class="recharge-integration__nav" aria-label="ChatGPT 充值功能">${actions}</nav>`;
   }
   function renderBitBrowserLogin() {
+    const showAddresses = localData && isAdmin();
+    const jump = showAddresses
+      ? button('前往地址管理', 'ops-bit-address-jump', 'bit-address-jump', '', 'aria-controls="bit-addresses-host"')
+      : '';
+    const login = renderRechargeRegion('bit');
     return (
-      header(
-        '比特登录',
-        '使用授权 JSON 登录账号，登录后保留比特浏览器窗口。'
-      ) +
-      renderRechargeRegion('bit')
+      header('比特登录', '使用授权 JSON 登录账号，登录后保留比特浏览器窗口。') +
+      (showAddresses
+        ? `<div class="bit-login-layout">${jump}${login}<aside id="bit-addresses-host" aria-label="地址管理" tabindex="-1"></aside></div>`
+        : login)
     );
   }
   function renderRechargeRegion(module, toolbar = '') {
@@ -678,17 +721,8 @@
       event.data.type === 'resize' &&
       Number.isFinite(event.data.height) && event.data.height > 0
     ) {
-      let height = event.data.height;
-      const addresses = frame.contentDocument?.getElementById('bit-open-addresses');
-      if (addresses && addresses.hidden && localData && isAdmin() && api.modules.bitbrowserAddresses) {
-        addresses.addEventListener('click', () => {
-          if (isAdmin()) api.modules.bitbrowserAddresses.open();
-        });
-        addresses.hidden = false;
-        height = frame.contentDocument.body.getBoundingClientRect().height;
-      }
-      if (request?.frame === frame) revealRechargeFrame(view, frame, request, height);
-      else if (!frame.hidden) resizeRechargeFrame(frame, height);
+      if (request?.frame === frame) revealRechargeFrame(view, frame, request, event.data.height);
+      else if (!frame.hidden) resizeRechargeFrame(frame, event.data.height);
       return;
     }
     if (event.data?.source !== 'id-codexdaichong') return;
@@ -1386,37 +1420,21 @@
     );
   }
   function renderAudit() {
-    if (localData && auditState !== 'ready') {
-      const failed = auditState === 'error';
-      return (
-        header('审计日志', '记录保存到本机数据库的业务操作。') +
-        `<section class="panel">${empty(
-          failed ? '本机审计日志读取失败' : '正在读取本机审计日志',
-          failed ? '请重新读取。' : '正在查询已保存的业务操作。'
-        )}${failed ? `<div class="toolbar">${button('重新读取', 'ops-audit-refresh')}</div>` : ''}</section>`
-      );
-    }
-    return listPanel(
-      '审计日志',
-      localData
-        ? '按北京时间记录业务操作及实际操作账号。'
-        : '仅记录当前原型中的演示操作，不包含密码、Session、安全码或生产日志。',
-      [
-        { id: 'time', label: '时间' },
-        { id: 'actor', label: '操作人' },
-        { id: 'action', label: '操作类型' },
-        { id: 'subject', label: '对象' },
-        { id: 'result', label: '结果' },
-        {
-          id: 'actions',
-          label: '操作',
-          action: true,
-          render: (row) => textAction('查看详情', 'ops-audit-detail', actionData(row.id))
-        }
-      ],
-      localData ? persistedAudit : audit,
-      localData ? button('刷新日志', 'ops-audit-refresh') : ''
-    );
+    const columns = [
+      { id: 'time', label: '时间' },
+      { id: 'actor', label: '操作人' },
+      { id: 'action', label: '操作类型' },
+      { id: 'subject', label: '对象' },
+      { id: 'result', label: '结果' },
+      {
+        id: 'actions', label: '操作', action: true,
+        render: (row) => textAction('查看详情', 'ops-audit-detail', actionData(row.id))
+      }
+    ];
+    if (!localData) return listPanel('审计日志', '仅记录当前原型中的演示操作，不包含密码、Session、安全码或生产日志。', columns, audit);
+    const tableId = '运营审计日志';
+    return header('审计日志', '按北京时间记录业务操作及实际操作账号。') +
+      `<section class="panel"><div class="toolbar"><div class="toolbar-left">${search('搜索操作人、操作、对象或编号', auditViews.audit.query)}</div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(auditViews.audit.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div><p class="tool-report-meta">可查询最近 1,000 条业务日志。</p>${auditPageContent('audit', columns, tableId)}</section>`;
   }
   function renderLoginLogs() {
     const title = header('登录日志', '统一账号的登录与退出记录。充值服务原有记录和 IP 封禁可在对应页签查看。');
@@ -1432,21 +1450,16 @@
         renderRechargeRegion('login-logs');
     if (!localData?.authRequired)
       return title + tabs + `<section class="panel">${empty('当前预览未启用统一登录', '启用员工账号后，登录和退出记录会显示在这里。')}</section>`;
-    if (auditState !== 'ready')
-      return title + tabs + `<section class="panel">${empty(
-        auditState === 'error' ? '登录日志读取失败' : '正在读取登录日志',
-        auditState === 'error' ? '请重新读取。' : ''
-      )}${auditState === 'error' ? `<div class="toolbar">${button('重新读取', 'ops-audit-refresh')}</div>` : ''}</section>`;
-    const rows = rowsByQuery(persistedAudit.filter((row) => row.loginEvent));
     const columns = [
       { id: 'time', label: '时间' },
       { id: 'actor', label: '账号' },
       { id: 'action', label: '事件' }
     ];
     return title + tabs + `<section class="panel">
-      <div class="toolbar"><div class="toolbar-left">${search()}</div>
-      <div class="toolbar-right">${button('刷新日志', 'ops-audit-refresh')}</div></div>
-      ${table(columns, pageRows(rows), '', '系统登录日志')}${pagination(rows.length)}
+      <div class="toolbar"><div class="toolbar-left">${search('搜索账号、事件或编号', auditViews.login.query)}</div>
+      <div class="toolbar-right">${button(auditViews.login.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>
+      <p class="tool-report-meta">从最近 1,000 条业务日志中查找系统登录与退出记录。</p>
+      ${auditPageContent('login', columns, '系统登录日志')}
     </section>`;
   }
   function phraseRows() {
@@ -1475,19 +1488,20 @@
     if (local.phraseSort === 'title') rows.sort((left, right) => left.title.localeCompare(right.title, 'zh-CN'));
     if (local.phraseSort === 'updated') rows.sort((left, right) =>
       (right.updatedAt || '').localeCompare(left.updatedAt || ''));
-    const pageSize = 8;
-    const pages = local.phraseSort === 'custom' ? 1 : Math.max(1, Math.ceil(rows.length / pageSize));
+    const pageSize = local.phrasePageSize;
+    const pages = Math.max(1, Math.ceil(rows.length / pageSize));
     local.phrasePage = Math.max(1, Math.min(local.phrasePage, pages));
-    const displayed = local.phraseSort === 'custom' ? rows
-      : rows.slice((local.phrasePage - 1) * pageSize, local.phrasePage * pageSize);
+    const offset = (local.phrasePage - 1) * pageSize;
+    const displayed = rows.slice(offset, offset + pageSize);
     const canReorder = !local.showDeleted && local.phraseSort === 'custom' && !query && rows.length > 1;
     const cards = displayed.map((row, index) => {
       const attrs = actionData(row.id);
+      const position = offset + index;
       const title = canReorder
         ? `<button class="toolbox-phrase-title" type="button" draggable="true" data-phrase-order="${esc(row.id)}" aria-label="调整顺序：${esc(row.title)}" title="拖动标题或按上下键调整顺序">${esc(row.title)}</button>`
         : `<strong class="toolbox-phrase-title" title="${esc(row.title)}">${esc(row.title)}</strong>`;
       const more = local.showDeleted ? button('恢复', 'ops-phrase-restore', '', '', attrs)
-        : `<details class="toolbox-phrase-more" data-dismiss-outside><summary aria-label="更多：${esc(row.title)}">更多</summary><div class="toolbox-phrase-menu">${textAction('查看全文', 'ops-phrase-more', attrs)}${textAction('编辑文案', 'ops-phrase-edit', attrs)}${canReorder ? textAction('上移', 'ops-phrase-move', `${attrs} data-offset="-1" ${index === 0 ? 'disabled' : ''}`) + textAction('下移', 'ops-phrase-move', `${attrs} data-offset="1" ${index === rows.length - 1 ? 'disabled' : ''}`) : ''}${textAction('删除文案', 'ops-phrase-delete', attrs, 'danger')}</div></details>`;
+        : `<details class="toolbox-phrase-more" data-dismiss-outside><summary aria-label="更多：${esc(row.title)}">更多</summary><div class="toolbox-phrase-menu">${textAction('查看全文', 'ops-phrase-more', attrs)}${textAction('编辑文案', 'ops-phrase-edit', attrs)}${canReorder ? textAction('上移', 'ops-phrase-move', `${attrs} data-offset="-1" ${position === 0 ? 'disabled' : ''}`) + textAction('下移', 'ops-phrase-move', `${attrs} data-offset="1" ${position === rows.length - 1 ? 'disabled' : ''}`) : ''}${textAction('删除文案', 'ops-phrase-delete', attrs, 'danger')}</div></details>`;
       return `<article class="toolbox-phrase-card" data-phrase-id="${esc(row.id)}">${title}${button('复制文案', 'ops-phrase-copy', '', '', attrs)}${more}</article>`;
     }).join('');
     const sort = select('ops-phrase-sort', [['custom', '自定义排序'], ['updated', '最近修改'], ['title', '标题排序']], local.phraseSort)
@@ -1496,7 +1510,7 @@
     openToolboxPanel(state.toolsTab,
       `<div class="toolbox-phrase-toolbar"><input type="search" id="ops-phrase-search" aria-label="搜索话术标题或内容" value="${esc(local.phraseQuery)}" placeholder="搜索文案" maxlength="100" />${sort}${button('新增', 'ops-phrase-add', 'primary')}</div>
         <div id="ops-phrase-list">${cards || empty(emptyTitle, query ? '请调整搜索词。' : '新增后可一键复制正文。')}</div>
-        ${pages > 1 ? `<div class="pagination"><span>共 ${rows.length} 条 · 第 ${local.phrasePage} / ${pages} 页</span><div class="pagination-controls">${button('上一页', 'ops-phrase-page', 'compact', '', `data-page="${local.phrasePage - 1}" ${local.phrasePage === 1 ? 'disabled' : ''}`)}${button('下一页', 'ops-phrase-page', 'compact', '', `data-page="${local.phrasePage + 1}" ${local.phrasePage === pages ? 'disabled' : ''}`)}</div></div>` : ''}
+        ${renderPagination({ id: 'operations-phrases', page: local.phrasePage, pageSize, total: rows.length })}
         <div class="toolbox-phrase-archive">${textAction(local.showDeleted ? '返回正常话术' : '已删除', 'ops-phrase-deleted')}</div>`);
     if (!canReorder) return;
     const list = $('#ops-phrase-list');
@@ -1530,6 +1544,7 @@
   let phraseOrdering = false;
   async function reorderPhrase(id, target) {
     if (phraseOrdering || id === target) return;
+    const startingPage = local.phrasePage;
     phraseOrdering = true;
     try {
       await changePhrases(toolbox?.current()?.version, (rows) => {
@@ -1542,8 +1557,13 @@
         let next = 0;
         rows.forEach((row, index) => { if (!row.deleted) rows[index] = active[next++]; });
       }, '调整话术顺序', () => {
+        if (local.phrasePage === startingPage && local.phraseSort === 'custom' &&
+            !local.showDeleted && !local.phraseQuery.trim()) {
+          const position = phraseRows().filter((row) => !row.deleted).findIndex((row) => row.id === id);
+          if (position !== -1) local.phrasePage = Math.floor(position / local.phrasePageSize) + 1;
+        }
         showPhrases();
-        $('#ops-phrase-list').querySelector(`[data-phrase-order="${CSS.escape(id)}"]`)?.focus();
+        $('#ops-phrase-list')?.querySelector(`[data-phrase-order="${CSS.escape(id)}"]`)?.focus();
       });
     } finally {
       phraseOrdering = false;
@@ -1748,7 +1768,6 @@
   }
   const savedTotpSnapshots = new WeakMap();
   const temporaryTotpAccounts = new WeakMap();
-  const savedTotpPageSize = 8;
 
   function paintSavedTotp(panel, snapshot, requestedPage = getDraft('saved-totp-page').page || 1) {
     if (!panel.isConnected) return;
@@ -1757,20 +1776,22 @@
     const search = panel.querySelector('#ops-saved-totp-search').value.trim().toLowerCase();
     const items = snapshot.items.filter((row) => [row.name, row.issuer].some((value) =>
       value?.toLowerCase().includes(search)));
-    const pages = Math.max(1, Math.ceil(items.length / savedTotpPageSize));
+    const pageSize = getDraft('saved-totp-page').pageSize || 10;
+    const pages = Math.max(1, Math.ceil(items.length / pageSize));
     const page = Math.min(pages, Math.max(1, requestedPage));
-    state.drafts.set(draftKey('saved-totp-page'), { page });
+    state.drafts.set(draftKey('saved-totp-page'), { page, pageSize });
     const list = panel.querySelector('[data-saved-totp-list]');
     if (!items.length) {
-      list.innerHTML = snapshot.items.length ? empty('没有匹配的账号', '可按账号名称或签发方搜索。')
-        : empty('暂无已保存账号', '可将常用验证器账号保存到当前登录账户。');
+      list.innerHTML = (snapshot.items.length ? empty('没有匹配的账号', '可按账号名称或签发方搜索。')
+        : empty('暂无已保存账号', '可将常用验证器账号保存到当前登录账户。')) +
+        renderPagination({ id: 'operations-saved-totp', page, pageSize, total: 0 });
       return;
     }
     list.innerHTML = `<div class="saved-totp-table">${table([
       { id: 'name', label: '账号', render: row => `<div class="totp-account-name"><strong title="${esc(row.name)}">${esc(row.name)}</strong>${row.issuer ? `<small title="${esc(row.issuer)}">${esc(row.issuer)}</small>` : ''}</div>` },
       { id: 'code', label: '验证码', render: row => `<div class="totp-inline-code" data-saved-totp-code data-id="${esc(row.id)}">正在获取验证码…</div>` },
       { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${button('复制', 'ops-totp-copy', 'primary', '', 'disabled aria-label="复制验证码"')}${button('编辑', 'ops-saved-totp-edit', '', '', `data-id="${esc(row.id)}" data-name="${esc(row.name)}"`)}${button('删除', 'ops-saved-totp-delete', '', '', `data-id="${esc(row.id)}" data-name="${esc(row.name)}"`)}</div>` }
-    ], items.slice((page - 1) * savedTotpPageSize, page * savedTotpPageSize), '', '已保存验证器账号')}</div>${pages > 1 ? `<div class="toolbar"><span>共 ${items.length} 条 · 第 ${page} / ${pages} 页</span>${button('上一页', 'ops-saved-totp-page', '', '', `data-page="${page - 1}" ${page === 1 ? 'disabled' : ''}`)}${button('下一页', 'ops-saved-totp-page', '', '', `data-page="${page + 1}" ${page === pages ? 'disabled' : ''}`)}</div>` : ''}`;
+    ], items.slice((page - 1) * pageSize, page * pageSize), '', '已保存验证器账号')}</div>${renderPagination({ id: 'operations-saved-totp', page, pageSize, total: items.length })}`;
     refreshVisibleSavedTotp(panel);
   }
   async function loadSavedTotp(panel, { refresh = false } = {}) {
@@ -1866,7 +1887,7 @@
         const search = panel.querySelector('#ops-saved-totp-search');
         search.value = '';
         search.dispatchEvent(new Event('input', { bubbles: true }));
-        paintSavedTotp(panel, snapshot, Math.ceil(snapshot.items.length / savedTotpPageSize));
+        paintSavedTotp(panel, snapshot, Math.ceil(snapshot.items.length / (getDraft('saved-totp-page').pageSize || 10)));
         panel.querySelector('[data-saved-totp-list]').scrollIntoView({ block: 'nearest' });
       } else paintSavedTotp(panel, snapshot);
       notify('已保存 2FA 账号变更');
@@ -2318,15 +2339,6 @@
       const snapshot = mailboxPoolSnapshots.get(pool);
       if (snapshot) paintManagedPool(pool, snapshot, 1);
     });
-    pool?.addEventListener('change', event => {
-      if (event.target.id !== 'ops-mailbox-page-size') return;
-      const pageSize = Number(event.target.value);
-      if (![20, 50, 100].includes(pageSize)) return;
-      state.drafts.set(draftKey('mailbox-pool-page'), { page: 1, pageSize });
-      const snapshot = mailboxPoolSnapshots.get(pool);
-      if (snapshot) paintManagedPool(pool, snapshot, 1);
-      pool.querySelector('#ops-mailbox-page-size')?.focus({ preventScroll: true });
-    });
     const positionMailboxActions = menu => {
       const anchor = menu.previousElementSibling.getBoundingClientRect();
       const body = drawer.querySelector('.drawer-body').getBoundingClientRect();
@@ -2506,24 +2518,25 @@
       (!provider || row.provider === provider) && (!status || statusFor(row) === status) &&
       [row.email, row.label].some((value) => value?.toLowerCase().includes(search)));
     const draftSize = getDraft('mailbox-pool-page').pageSize;
-    const pageSize = [20, 50, 100].includes(draftSize) ? draftSize : 20;
+    const pageSize = [10, 20, 50].includes(draftSize) ? draftSize : 10;
     const pages = Math.max(1, Math.ceil(items.length / pageSize));
     const page = Math.min(pages, Math.max(1, Math.trunc(Number(requestedPage)) || 1));
     state.drafts.set(draftKey('mailbox-pool-page'), { page, pageSize });
     const list = panel.querySelector('[data-mailbox-pool-list]');
     if (!items.length) {
-      list.innerHTML = snapshot.items.length ? empty('没有匹配的邮箱', '可调整邮箱类型、状态或搜索词。')
-        : empty('邮箱池暂无记录', '添加并验证邮箱后会显示在这里。');
+      list.innerHTML = (snapshot.items.length ? empty('没有匹配的邮箱', '可调整邮箱类型、状态或搜索词。')
+        : empty('邮箱池暂无记录', '添加并验证邮箱后会显示在这里。')) +
+        renderPagination({ id: 'operations-mailbox-pool', page, pageSize, total: 0 });
       return;
     }
-    list.innerHTML = `<div class="pagination mailbox-pool-pagination"><span role="status">共 ${items.length} 条 · 第 ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, items.length)} 条</span><div class="mailbox-page-controls">${select('ops-mailbox-page-size', [[20, '20 条 / 页'], [50, '50 条 / 页'], [100, '100 条 / 页']], pageSize).replace('<select ', '<select aria-label="邮箱池每页条数" ')}${button('上一页', 'ops-mailbox-pool-page', '', '', `data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}`)}<span>第 ${page} / ${pages} 页</span>${button('下一页', 'ops-mailbox-pool-page', '', '', `data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}`)}</div><form id="ops-mailbox-pool-page-form" class="mailbox-page-jump"><label for="ops-mailbox-page-number">跳至</label><input id="ops-mailbox-page-number" name="ops-mailbox-page-number" aria-label="邮箱池页码" type="number" min="1" max="${pages}" step="1" value="${page}" required><span>页</span><button class="button" type="submit">跳转</button></form></div><p class="mailbox-table-hint">左右滑动可查看完整列表与操作</p><div class="table-viewport online-tool-mail-list" tabindex="0" role="region" aria-label="邮箱池列表，可横向滚动"><table class="mailbox-pool-table"><colgroup><col class="mailbox-column-identity"><col class="mailbox-column-meta"><col class="mailbox-column-meta"><col class="mailbox-column-source"><col class="mailbox-column-code"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-date"><col class="mailbox-column-actions"></colgroup><thead><tr><th scope="col">邮箱账号</th><th scope="col">类型</th><th scope="col">备注</th><th scope="col">来源</th><th scope="col">买家查询码</th><th scope="col">状态</th><th scope="col">到期时间</th><th scope="col">最近查询</th><th scope="col">操作</th></tr></thead><tbody>${items.slice((page - 1) * pageSize, page * pageSize).map((row, index) => {
+    list.innerHTML = `<p class="mailbox-table-hint">左右滑动可查看完整列表与操作</p><div class="table-viewport online-tool-mail-list" tabindex="0" role="region" aria-label="邮箱池列表，可横向滚动"><table class="mailbox-pool-table"><colgroup><col class="mailbox-column-identity"><col class="mailbox-column-meta"><col class="mailbox-column-meta"><col class="mailbox-column-source"><col class="mailbox-column-code"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-date"><col class="mailbox-column-actions"></colgroup><thead><tr><th scope="col">邮箱账号</th><th scope="col">类型</th><th scope="col">备注</th><th scope="col">来源</th><th scope="col">买家查询码</th><th scope="col">状态</th><th scope="col">到期时间</th><th scope="col">最近查询</th><th scope="col">操作</th></tr></thead><tbody>${items.slice((page - 1) * pageSize, page * pageSize).map((row, index) => {
       const attrs = `data-id="${esc(row.id)}" data-active="${row.active}" data-provider="${esc(row.provider)}" data-email="${esc(row.email)}"`;
       const status = statusFor(row);
       const menuId = `mailbox-account-actions-${index}`;
       const authorize = button('去授权', 'ops-mailbox-pool-authorize', '', '', attrs);
       const actions = row.authorizationPending ? authorize : `${button('查询', 'ops-mailbox-pool-query', '', '', attrs)}${authorize}<button type="button" class="button mailbox-account__more" popovertarget="${menuId}" aria-label="更多操作：${esc(row.email)}">更多操作</button><div class="mailbox-account__actions" id="${menuId}" popover="auto" role="group" aria-label="邮箱操作">${button(row.active ? '停用' : '启用', 'ops-mailbox-pool-status', '', '', attrs + (row.authFailed ? ' disabled' : ''))}${button(row.provider === 'microsoft' ? '重新授权' : '更新授权', 'ops-mailbox-pool-credential', '', '', attrs)}${button('重置查询码', 'ops-mailbox-pool-rotate', '', '', attrs)}</div>`;
       return `<tr class="mailbox-account"><td><div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong></div></td><td class="mailbox-account__text" title="${esc(mailboxProviders[row.provider] || '待选择')}">${esc(mailboxProviders[row.provider] || '待选择')}</td><td class="mailbox-account__text" title="${esc(row.label || '未填写备注')}">${esc(row.label || '—')}</td><td>${row.source === 'claude' ? 'Claude 账号' : '手工登记'}</td><td><div class="mailbox-account__code">${row.authorizationPending ? '<span>授权后生成</span>' : `<output data-mailbox-code="${esc(row.id)}">正在读取…</output>${button('复制', 'ops-mailbox-pool-copy-existing', '', '', attrs)}`}</div></td><td>${tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning')}</td><td class="mailbox-account__date">${formatMailboxDate(row.expiresAt)}</td><td class="mailbox-account__date">${formatMailboxDate(row.lastQueriedAt)}</td><td><div class="mailbox-row-actions">${actions}</div></td></tr>`;
-    }).join('')}</tbody></table></div>`;
+    }).join('')}</tbody></table></div>${renderPagination({ id: 'operations-mailbox-pool', page, pageSize, total: items.length })}`;
     void loadVisibleMailboxCodes(panel);
   }
   async function loadVisibleMailboxCodes(panel) {
@@ -3084,7 +3097,7 @@
       `<div class="tool-metric"><span>${esc(label)}</span><strong>${amount}</strong></div>`).join('')}</div>`;
   }
   function websiteVisitsPanel() {
-    return `<section class="form-section website-tool-panel" id="ops-website-visits"><form id="ops-website-visits-form" novalidate>${websiteToolHeader('访问记录与访客 IP', button('刷新记录', 'ops-website-visit-page', '', 'return', 'data-page="1" data-async-refresh') + '<button type="submit" class="button primary">查询明细</button>')}${grid(
+    return `<section class="form-section website-tool-panel" id="ops-website-visits"><form id="ops-website-visits-form" novalidate>${websiteToolHeader('访问记录与访客 IP', button('刷新记录', 'ops-website-visit-refresh', '', 'return', 'data-async-refresh') + '<button type="submit" class="button primary">查询明细</button>')}${grid(
       field(
         '最近天数',
         'ops-visits-days',
@@ -3110,18 +3123,6 @@
           )
         ) +
         field(
-          '每页条数',
-          'ops-visits-size',
-          select(
-            'ops-visits-size',
-            [
-              ['20', '20 条'],
-              ['50', '50 条']
-            ],
-            '20'
-          )
-        ) +
-        field(
           'IP 地址',
           'ops-visits-ip',
           input('ops-visits-ip', '', 'maxlength="45" autocomplete="off" data-no-draft'),
@@ -3130,24 +3131,24 @@
         )
     ).replace('class="form-grid"', 'class="form-grid tool-filter-grid"')}</form><div class="design-async-region" aria-busy="false"><div data-visits-status role="status" hidden></div><div data-visits-result></div></div></section>`;
   }
-  async function showWebsiteVisits(form, page, { refresh = false } = {}) {
+  async function showWebsiteVisits(form, paging, { refresh = false } = {}) {
     if (!form) return;
     const panel = form.closest('#ops-website-visits');
     if (!panel) return;
     const output = panel.querySelector('[data-visits-result]');
     const status = panel.querySelector('[data-visits-status]');
     let query;
-    if (page !== undefined) {
+    if (paging) {
       const previous = websiteVisitQueries.get(output);
       if (!previous) return;
-      query = { ...previous, page };
+      query = { ...previous, ...paging };
     } else {
       const values = readForm(form);
       query = {
         days: Number(values['ops-visits-days']),
         sort: values['ops-visits-sort'],
         page: 1,
-        pageSize: Number(values['ops-visits-size']),
+        pageSize: websiteVisitQueries.get(output)?.pageSize || 10,
         ip: values['ops-visits-ip'].trim()
       };
     }
@@ -3168,24 +3169,30 @@
           ? websiteMetrics([['已采集浏览量', count(report.summary.pageViews)], ['独立 IP 数', count(report.summary.visitors)]])
           : '';
         const view = getDraft('website-visits-view').view || 'daily';
+        const dailyDraft = getDraft('website-visits-daily-page');
+        const dailySize = dailyDraft.pageSize || 10;
+        const dailyTotal = report.daily?.length || 0;
+        const dailyPage = Math.min(dailyDraft.page || 1, Math.max(1, Math.ceil(dailyTotal / dailySize)));
         const daily = report.daily?.length
           ? `<div class="tool-period" role="group" aria-label="访问记录展示方式">${button('每日统计', 'ops-website-visit-view', '', '', `data-view="daily" aria-pressed="${view === 'daily'}"`)}${button('IP 明细', 'ops-website-visit-view', '', '', `data-view="records" aria-pressed="${view === 'records'}"`)}</div><div class="tool-report-section" data-visit-view="daily" ${view === 'daily' ? '' : 'hidden'}><div class="table-viewport"><table><thead><tr><th scope="col">日期（北京时间）</th><th scope="col" class="tool-data-number">已采集浏览量</th><th scope="col" class="tool-data-number">独立 IP 数</th></tr></thead><tbody>${[...report.daily].reverse().map((row, index) =>
-              `<tr data-visit-day ${index >= 7 ? 'hidden' : ''}><td>${esc(row.date)}</td><td class="tool-data-number">${count(row.metrics?.pageViews)}</td><td class="tool-data-number">${count(row.metrics?.visitors)}</td></tr>`
-            ).join('')}</tbody></table></div>${report.daily.length > 7 ? `<div class="toolbar"><span data-visit-day-page>第 1 / ${Math.ceil(report.daily.length / 7)} 页</span>${button('上一页', 'ops-website-visit-day', '', '', 'data-direction="-1" disabled')}${button('下一页', 'ops-website-visit-day', '', '', 'data-direction="1"')}</div>` : ''}</div>`
+              `<tr data-visit-day ${Math.floor(index / dailySize) + 1 !== dailyPage ? 'hidden' : ''}><td>${esc(row.date)}</td><td class="tool-data-number">${count(row.metrics?.pageViews)}</td><td class="tool-data-number">${count(row.metrics?.visitors)}</td></tr>`
+            ).join('')}</tbody></table></div><div data-visit-daily-pagination>${renderPagination({ id: 'operations-website-days', page: dailyPage, pageSize: dailySize, total: dailyTotal })}</div></div>`
           : '';
         const updated = report.lastReceivedAt ? ` · 最近接收 ${esc(time.format(new Date(report.lastReceivedAt)))}` : '';
         const content = report.items.length
-          ? `<p class="tool-report-meta">${filters} · 北京时间${updated} · 共 ${report.total} 条 · 第 ${report.page} 页</p><div class="table-viewport"><table><thead><tr><th scope="col">访问时间</th><th scope="col">页面</th><th scope="col">IP 地址</th></tr></thead><tbody>${report.items
-              .map(
-                (row) =>
-                  `<tr><td>${esc(time.format(new Date(row.occurredAt)))}</td><td>${esc(row.path)}</td><td><span data-visit-ip>${esc(row.ipMasked)}</span> ${button('查看', 'ops-website-visit-ip', '', '', `data-id="${esc(row.id)}"`)}</td></tr>`
-              )
+          ? `<p class="tool-report-meta">${filters} · 北京时间${updated}</p><div class="table-viewport"><table><thead><tr><th scope="col">访问时间</th><th scope="col">页面</th><th scope="col">IP 地址</th></tr></thead><tbody>${report.items
+              .map((row, index) => {
+                const pathId = `website-visit-path-${index}`;
+                const path = esc(row.path);
+                return `<tr><td>${esc(time.format(new Date(row.occurredAt)))}</td><td><button type="button" class="text-button table-value-ellipsis" popovertarget="${pathId}" aria-label="查看完整页面路径" data-table-value-preview>${path}</button><div id="${pathId}" class="table-value-popover" popover="auto" role="region" aria-label="完整页面路径">${path}</div></td><td><span data-visit-ip>${esc(row.ipMasked)}</span> ${button('查看', 'ops-website-visit-ip', '', '', `data-id="${esc(row.id)}"`)}</td></tr>`;
+              })
               .join(
                 ''
-              )}</tbody></table></div><div class="toolbar">${button('上一页', 'ops-website-visit-page', '', '', `data-page="${report.page - 1}" ${report.page <= 1 ? 'disabled' : ''}`)}${button('下一页', 'ops-website-visit-page', '', '', `data-page="${report.page + 1}" ${report.page * report.pageSize >= report.total ? 'disabled' : ''}`)}</div>`
+              )}</tbody></table></div>`
           : empty('没有匹配的访问记录', `${filters}。可调整时间范围或 IP 后重新查询。`);
-        websiteVisitQueries.set(output, query);
-        return `<div class="tool-report">${metrics}${daily}<div class="tool-report-section" data-visit-view="records" ${daily && view === 'daily' ? 'hidden' : ''}>${content}</div></div>`;
+        websiteVisitQueries.set(output, { ...query, page: report.page, pageSize: report.pageSize });
+        const pager = renderPagination({ id: 'operations-website-visits', page: report.page, pageSize: report.pageSize, total: report.total });
+        return `<div class="tool-report">${metrics}${daily}<div class="tool-report-section" data-visit-view="records" ${daily && view === 'daily' ? 'hidden' : ''}>${content}${pager}</div></div>`;
       },
       { scope: 'tools/website-visits', key: query, refresh }
     );
@@ -3457,7 +3464,7 @@
     if (route === 'settings/costs') return renderCosts();
     if (route === loginLogsRoute) return renderLoginLogs();
     if (route === 'settings/audit')
-      return localData || isAdmin()
+      return isAdmin()
         ? renderAudit()
         : header('审计日志', '普通员工无权访问审计日志。') +
             `<section class="panel">${empty('无权访问审计日志', '正式系统继续沿用管理员边界。')}</section>`;
@@ -3474,8 +3481,8 @@
       selectToolSection(node.dataset.panel);
       return true;
     }
-    if (action === 'ops-website-visit-page') {
-      void showWebsiteVisits($('#ops-website-visits-form'), Number(node.dataset.page), { refresh: node.hasAttribute('data-async-refresh') });
+    if (action === 'ops-website-visit-refresh') {
+      void showWebsiteVisits($('#ops-website-visits-form'), { page: 1 }, { refresh: true });
       return true;
     }
     if (action === 'ops-website-visit-view') {
@@ -3484,18 +3491,6 @@
       state.drafts.set(draftKey('website-visits-view'), { view });
       for (const tab of result.querySelectorAll('[data-view]')) tab.setAttribute('aria-pressed', String(tab === node));
       for (const pane of result.querySelectorAll('[data-visit-view]')) pane.hidden = pane.dataset.visitView !== view;
-      return true;
-    }
-    if (action === 'ops-website-visit-day') {
-      const pane = node.closest('[data-visit-view="daily"]');
-      const rows = [...pane.querySelectorAll('[data-visit-day]')];
-      const pages = Math.ceil(rows.length / 7);
-      const page = Math.max(1, Math.min(pages, Number(pane.dataset.page || 1) + Number(node.dataset.direction)));
-      pane.dataset.page = String(page);
-      rows.forEach((row, index) => { row.hidden = Math.floor(index / 7) !== page - 1; });
-      pane.querySelector('[data-visit-day-page]').textContent = `第 ${page} / ${pages} 页`;
-      pane.querySelector('[data-direction="-1"]').disabled = page <= 1;
-      pane.querySelector('[data-direction="1"]').disabled = page >= pages;
       return true;
     }
     if (action === 'ops-website-visit-ip') {
@@ -3561,15 +3556,6 @@
         state.drafts.set(draftKey('mailbox-tools-view'), { tab: 'manage' });
       }
       if (action === 'ops-mailbox-pool-copy-existing') void copyManagedMailboxCode(panel, node);
-      if (action === 'ops-mailbox-pool-page') {
-        const snapshot = mailboxPoolSnapshots.get(panel);
-        if (snapshot) {
-          paintManagedPool(panel, snapshot, Number(node.dataset.page));
-          panel.querySelector('.mailbox-pool-pagination')?.scrollIntoView({ block: 'nearest' });
-          const buttons = [...panel.querySelectorAll(`[data-action="${action}"]:not(:disabled)`)];
-          (buttons.find(button => button.textContent === node.textContent) || buttons[0])?.focus({ preventScroll: true });
-        }
-      }
       if (action === 'ops-mailbox-pool-copy') void copyText(node.dataset.code, '查询码已复制');
       if (action === 'ops-mailbox-pool-reload') void api.withActionFeedback(node,
         () => loadManagedPool(panel, { refresh: true }),
@@ -3606,10 +3592,6 @@
         { pending: '正在刷新账号列表…', success: '账号列表已刷新', failure: '账号读取失败，请重试' });
       if (action === 'ops-saved-totp-use') void showSavedTotpCode(node.closest('[data-saved-totp-code]'));
       if (action === 'ops-saved-totp-secret-retry') void loadSavedTotpSecret(node.closest('form'));
-      if (action === 'ops-saved-totp-page') {
-        const snapshot = savedTotpSnapshots.get(panel);
-        if (snapshot) paintSavedTotp(panel, snapshot, Number(node.dataset.page));
-      }
       if (action === 'ops-saved-totp-delete') {
         const version = Number(panel.dataset.version);
         confirmAction('删除已保存 2FA 账号', '删除后将无法使用此记录生成验证码。', () =>
@@ -3703,6 +3685,10 @@
         selectOnlineView(node.closest('nav'), view);
         void loadIntegratedRecharge();
       }
+    } else if (action === 'ops-bit-address-jump' && state.route === bitLoginRoute) {
+      const host = $('#bit-addresses-host', integrationRoot());
+      host?.focus({ preventScroll: true });
+      host?.scrollIntoView({ block: 'start' });
     } else if (action === 'ops-login-log-tab' && state.route === loginLogsRoute && isAdmin()) {
       loginLogTab = node.dataset.tab;
       state.page = 1;
@@ -3819,9 +3805,8 @@
         confirmAction('确认重新读取费用规则', '成功读取后清除当前未提交的费用草稿。', reload);
       } else reload();
     } else if (action === 'ops-audit-refresh') {
-      void api.withActionFeedback(node, () => loadAudit(true),
+      void api.withActionFeedback(node, () => retryAudit(),
         { pending: '正在刷新操作记录…', success: '操作记录已刷新', failure: '操作记录读取失败，请重试' });
-      render();
     } else if (action === 'ops-mail-type-add') editMailboxType();
     else if (action === 'ops-mail-type-edit') editMailboxType(id);
     else if (action === 'ops-mail-type-reload') {
@@ -3863,7 +3848,7 @@
         render();
       });
     } else if (action === 'ops-audit-detail') {
-      const row = (localData ? persistedAudit : audit).find((item) => item.id === id);
+      const row = (localData ? auditViews.audit.result?.items || [] : audit).find((item) => item.id === id);
       if (!row) return true;
       openDrawer(
         '审计详情',
@@ -3895,9 +3880,6 @@
     } else if (action === 'ops-phrase-deleted') {
       local.showDeleted = !local.showDeleted;
       local.phrasePage = 1;
-      showPhrases();
-    } else if (action === 'ops-phrase-page') {
-      local.phrasePage = Number(node.dataset.page);
       showPhrases();
     } else if (action === 'ops-phrase-delete' || action === 'ops-phrase-restore') {
       const row = phraseRows().find((item) => item.id === id),
@@ -3934,15 +3916,11 @@
     else if (form.id === 'ops-phrase-form') savePhrase(form);
     else if (form.id === 'ops-totp-form') void runTotp(form);
     else if (form.id === 'ops-website-monitor-form') void checkWebsite(form);
-    else if (form.id === 'ops-website-visits-form') void showWebsiteVisits(form, undefined, { refresh: true });
-    else if (form.id === 'ops-managed-mail-query') void queryManagedMail(form);
-    else if (form.id === 'ops-mailbox-pool-page-form') {
-      if (!form.reportValidity()) return true;
-      const panel = form.closest('#ops-mailbox-pool');
-      const snapshot = mailboxPoolSnapshots.get(panel);
-      if (snapshot) paintManagedPool(panel, snapshot, Number(form.elements['ops-mailbox-page-number'].value));
-      panel.querySelector('#ops-mailbox-page-number')?.focus({ preventScroll: true });
+    else if (form.id === 'ops-website-visits-form') {
+      state.drafts.delete(draftKey('website-visits-daily-page'));
+      void showWebsiteVisits(form, undefined, { refresh: true });
     }
+    else if (form.id === 'ops-managed-mail-query') void queryManagedMail(form);
     else if (form.id === 'ops-managed-pool-form') {
       const data = readForm(form);
       const submission = toolSubmission(form);
@@ -4079,6 +4057,13 @@
   }
   function onInput(node) {
     if (node.id === 'ops-list-search') {
+      const view = activeAuditView();
+      if (view) {
+        if (node === composingAuditSearch || auditViews[view].query === node.value) return true;
+        auditViews[view].query = node.value;
+        void loadAudit(view, { page: 1, fresh: true });
+        return true;
+      }
       state.query = node.value;
       state.page = 1;
       const cursor = node.selectionStart;
@@ -4100,6 +4085,54 @@
     }
     return false;
   }
+  document.addEventListener('compositionstart', ({ target }) => {
+    if (target.id === 'ops-list-search' && activeAuditView()) composingAuditSearch = target;
+  });
+  document.addEventListener('compositionend', ({ target }) => {
+    if (target !== composingAuditSearch) return;
+    composingAuditSearch = undefined;
+    const view = activeAuditView();
+    if (view && auditViews[view].query === target.value) renderAuditRead(view);
+    else if (view) onInput(target);
+  });
+  document.addEventListener('id-pagination-change', (event) => {
+    const { id, page, pageSize } = event.detail;
+    const auditView = activeAuditView();
+    if (auditView && id === `operations-${auditView}`) {
+      void loadAudit(auditView, { page, pageSize });
+    } else if (id === 'operations-saved-totp') {
+      const panel = $('#ops-saved-totp');
+      const snapshot = savedTotpSnapshots.get(panel);
+      if (snapshot && panel.checkVisibility()) {
+        state.drafts.set(draftKey('saved-totp-page'), { page, pageSize });
+        paintSavedTotp(panel, snapshot, page);
+      }
+    } else if (id === 'operations-mailbox-pool') {
+      const panel = $('#ops-mailbox-pool');
+      const snapshot = mailboxPoolSnapshots.get(panel);
+      if (snapshot && panel.checkVisibility()) {
+        state.drafts.set(draftKey('mailbox-pool-page'), { page, pageSize });
+        paintManagedPool(panel, snapshot, page);
+      }
+    } else if (id === 'operations-phrases') {
+      if ($('#ops-phrase-list')?.checkVisibility()) {
+        local.phrasePage = page;
+        local.phrasePageSize = pageSize;
+        showPhrases();
+      }
+    } else if (id === 'operations-website-visits') {
+      if ($('[data-visit-view="records"]')?.checkVisibility())
+        void showWebsiteVisits($('#ops-website-visits-form'), { page, pageSize });
+    } else if (id === 'operations-website-days') {
+      const pane = $('[data-visit-view="daily"]');
+      if (!pane?.checkVisibility()) return;
+      const rows = [...pane.querySelectorAll('[data-visit-day]')];
+      state.drafts.set(draftKey('website-visits-daily-page'), { page, pageSize });
+      rows.forEach((row, index) => { row.hidden = Math.floor(index / pageSize) + 1 !== page; });
+      pane.querySelector('[data-visit-daily-pagination]').innerHTML =
+        renderPagination({ id, page, pageSize, total: rows.length });
+    }
+  });
   api.modules.operations = {
     blockRechargeNavigation,
     getResources: (kind) =>
@@ -4112,15 +4145,16 @@
     getCostRules: () => api.modules.commerce?.getCostSettings?.() || null,
     recordAudit,
     showPhrases,
-    getAudit: () => (localData ? persistedAudit : audit).map((row) => ({ ...row })),
+    getAudit: () => (localData ? auditViews.audit.result?.items || [] : audit).map((row) => ({ ...row })),
     loadSettings,
-    refreshAudit: () => loadAudit(true),
+    refreshAudit: () => loadAudit('audit', { fresh: true }),
     async refreshLiveReads(scopes) {
       const jobs = [];
+      if (scopes.includes('audit') && activeAuditView() === 'login') jobs.push(loadAudit('login', { fresh: true }));
       const totp = $('#ops-saved-totp'), pool = $('#ops-mailbox-pool'), visits = $('#ops-website-visits-form');
       if (scopes.includes('saved-totp') && totp?.checkVisibility()) jobs.push(loadSavedTotp(totp, { refresh: true }));
       if (scopes.some(scope => ['inventory', 'tools/mailbox-pool'].includes(scope)) && pool?.checkVisibility()) jobs.push(loadManagedPool(pool, { refresh: true }));
-      if (scopes.includes('tools/website-visits') && visits?.checkVisibility()) jobs.push(showWebsiteVisits(visits, undefined, { refresh: true }));
+      if (scopes.includes('tools/website-visits') && visits?.checkVisibility()) jobs.push(showWebsiteVisits(visits, {}, { refresh: true }));
       await Promise.all(jobs);
     },
     updateStatisticsCurrency
@@ -4140,6 +4174,8 @@
     clearPageState() {
       deactivateIntegration(document.getElementById('main'));
       onlineAdmin = undefined;
+      composingAuditSearch = undefined;
+      resetAuditViews();
     },
     matches: (route) =>
       [
@@ -4153,10 +4189,16 @@
         'settings/audit'
       ].includes(route) || Object.hasOwn(pluginPages, route),
     afterRender() {
+      if (state.route === bitLoginRoute) {
+        const host = $('#bit-addresses-host', integrationRoot());
+        if (host && isAdmin()) api.modules.bitbrowserAddresses?.mount(host);
+        void loadIntegratedRecharge();
+        return;
+      }
       if (pluginPages[state.route]) { openOnlineTool(pluginPages[state.route].tool); api.compactListToolbars?.(document.getElementById('main')); return; }
-      if (state.route === 'settings/audit' && (localData || isAdmin())) void loadAudit();
-      else if (state.route === loginLogsRoute && loginLogTab === 'system') {
-        if (localData?.authRequired && isAdmin()) void loadAudit();
+      const auditView = activeAuditView();
+      if (auditView) {
+        if (auditViews[auditView].dirty && !auditViews[auditView].pending) void loadAudit(auditView, { fresh: true });
       }
       else if (localData && state.route === 'settings/accounts')
         void window.IDLocalAuth?.loadEmployees(api);

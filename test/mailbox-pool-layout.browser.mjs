@@ -6,7 +6,7 @@ import { root, origin, interceptDesign, settle } from './helpers/offline-design.
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
 const output = process.env.ID_LAYOUT_QA_OUTPUT || path.join(root, '.runtime/mailbox-rows-20261107');
 await mkdir(output, { recursive: true });
-const browser = await chromium.launch({ headless: true }), results = [];
+const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL, headless: true }), results = [];
 const providers = ['google', 'apple', 'microsoft'];
 const fixture = Array.from({ length: 2003 }, (_, i) => ({
   id: `fixture-${i}`, email: i === 0 ? 'layout-0000.with-a-long-synthetic-address@example.test' : `layout-${String(i).padStart(4, '0')}@example.test`,
@@ -50,8 +50,8 @@ try {
           const r = n.getBoundingClientRect();
           return { x: r.x, y: r.y, width: r.width, height: r.height, bottom: r.bottom };
         });
-        const pager = el.querySelector('.mailbox-pool-pagination');
-        const clipped = pager ? [...pager.querySelectorAll('button,input,select')].some(n => { const r = n.getBoundingClientRect(), p = pager.getBoundingClientRect(); return r.left < p.left - 1 || r.right > p.right + 1; }) : false;
+        const pager = el.querySelector('[data-pagination="operations-mailbox-pool"]');
+        const clipped = pager ? [...pager.querySelectorAll('button,input,select')].some(n => { const r = n.getBoundingClientRect(), p = pager.getBoundingClientRect(); return r.width > 0 && (r.left < p.left - 1 || r.right > p.right + 1); }) : false;
         return { rows, overflow: el.scrollWidth > el.clientWidth + 1 || body.scrollWidth > body.clientWidth + 1, clipped, tableOverflow: viewport ? viewport.scrollWidth > viewport.clientWidth : false };
       });
       assert(!geometry.overflow && !geometry.clipped, `${width}/${theme}/${label} overflow`);
@@ -61,8 +61,8 @@ try {
       if ([1440,390].includes(width)) await page.screenshot({ path: path.join(output, `${label}-${width}-${theme}.png`) });
     };
     await waitCodes();
-    assert.equal(await pool.locator('.mailbox-account').count(), 20);
-    assert.deepEqual(codeReads, fixture.slice(0,20).map(r => r.id), '只读取当前页查询码');
+    assert.equal(await pool.locator('.mailbox-account').count(), 10);
+    assert.deepEqual(codeReads, fixture.slice(0,10).map(r => r.id), '只读取当前页查询码');
     await measure('first-page');
     const firstRow = pool.locator('.mailbox-account').first();
     const rowHeight = (await firstRow.boundingBox()).height;
@@ -88,10 +88,6 @@ try {
     await pool.locator('.mailbox-account__more').first().press('Escape');
     assert.equal(await actions.count(), 0);
     await pool.locator('.mailbox-account__more').first().click();
-    await actions.waitFor();
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-    await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
-    await pool.locator('.mailbox-account__more').first().click();
     await pool.getByRole('button', { name: '更新授权', exact: true }).first().click();
     assert.equal(await actions.count(), 0);
     const operation = page.locator('#drawer[open]');
@@ -105,15 +101,20 @@ try {
     await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').first().click();
     await page.waitForFunction(async () => await navigator.clipboard.readText() === 'SYNTHETIC-fixture-0-LAYOUT-ONLY');
     await pool.getByRole('button', { name: '下一页', exact: true }).click(); await waitCodes();
-    assert.equal(await pool.locator('.mailbox-account').first().locator('strong').textContent(), fixture[20].email);
+    assert.equal(await pool.locator('.mailbox-account').first().locator('strong').textContent(), fixture[10].email);
     await measure('second-page');
-    for (const size of [50,100]) {
+    for (const size of [20,50]) {
       const before = codeReads.length;
-      await pool.getByLabel('邮箱池每页条数', { exact: true }).selectOption(String(size)); await waitCodes();
+      await pool.getByLabel('每页条数', { exact: true }).selectOption(String(size)); await waitCodes();
       assert.equal(await pool.locator('.mailbox-account').count(), size);
       assert.deepEqual(codeReads.slice(before), fixture.slice(0,size).map(r => r.id));
     }
-    await pool.getByLabel('邮箱池页码', { exact: true }).fill('21');
+    await pool.locator('.mailbox-account__more').first().click();
+    await actions.waitFor();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
+    await pool.locator('.pagination-jump summary').click();
+    await pool.getByLabel('跳至页码', { exact: true }).fill('41');
     await pool.getByRole('button', { name: '跳转', exact: true }).click(); await waitCodes();
     assert.equal(await pool.locator('.mailbox-account').count(), 3);
     assert.equal(await pool.locator('.mailbox-account').last().locator('strong').textContent(), fixture[2002].email);
@@ -129,14 +130,14 @@ try {
     await operation.getByRole('button', { name: '取消', exact: true }).click();
     await operation.waitFor({ state: 'hidden' });
     assert.equal(await actions.count(), 0);
-    assert.equal(await pool.getByLabel('邮箱池页码', { exact: true }).inputValue(), '21', '关闭行操作保留最后一页');
+    assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41', '关闭行操作保留最后一页');
     assert.equal(await pool.locator('.mailbox-account').count(), 3);
     assert.deepEqual(await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop })), scrollBeforeOperation, '关闭抽屉保留列表滚动位置');
     await page.goto(origin + '/#/plugins/websites');
     await page.goto(origin + '/#/plugins/mailboxes');
     await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click(); await waitCodes();
-    assert.equal(await pool.getByLabel('邮箱池每页条数', { exact: true }).inputValue(), '100');
-    assert.equal(await pool.getByLabel('邮箱池页码', { exact: true }).inputValue(), '21');
+    assert.equal(await pool.getByLabel('每页条数', { exact: true }).inputValue(), '50');
+    assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41');
     await pool.getByLabel('搜索邮箱池', { exact: true }).fill('layout-1999'); await waitCodes();
     assert.equal(await pool.locator('.mailbox-account').count(), 1);
     assert.equal(await pool.locator('.mailbox-account strong').textContent(), fixture[1999].email);

@@ -76,7 +76,7 @@ test('买家查询码完整显示并可复制，按页读取、失败重试且�
     ![...document.querySelectorAll('[data-relay-buyer-code] output')].some(node => node.textContent.includes('正在')));
   await cell(aliases[0].id).waitFor();
   await ready();
-  assert.equal(reads.length, 8, '只读取当前页，不扫描全部隐藏邮箱');
+  assert.equal(reads.length, 10, '只读取当前页，不扫描全部隐藏邮箱');
   assert(maximum <= 3, '当前页使用受控并发');
   assert.equal(await output(aliases[0].id).textContent(), codes.get(aliases[0].id));
   assert.equal(await output(aliases[1].id).textContent(), '读取失败');
@@ -117,19 +117,19 @@ test('买家查询码完整显示并可复制，按页读取、失败重试且�
   }
   await cell(aliases[0].id).getByRole('button', { name: '复制买家查询码', exact: true }).click();
   assert.equal(await page.evaluate(() => window.copiedBuyerCode), codes.get(aliases[0].id));
-  await page.locator('#main .pagination button[data-page="2"]:not([aria-label])').click();
+  await page.locator('#main .pagination').getByRole('button', { name: '下一页' }).click();
   await ready();
   assert.equal(await output(aliases[10].id).textContent(), '未接入收件服务');
   assert(await cell(aliases[10].id).getByRole('button', { name: '复制买家查询码', exact: true }).isDisabled());
   assert(!reads.includes(aliases[10].id));
   assert.equal(reads.filter(id => [aliases[8].id, aliases[9].id].includes(id)).length, 2);
-  await page.locator('#main .pagination button[data-page="1"]:not([aria-label])').click();
+  await page.locator('#main .pagination').getByRole('button', { name: '上一页' }).click();
   await ready();
   assert.equal(reads.filter(id => id === aliases[0].id).length, 1, '重置结果直接更新缓存，不重复读取');
   const before = reads.length;
-  await page.locator('#main .pagination button[data-page="2"]:not([aria-label])').click();
+  await page.locator('#main .pagination').getByRole('button', { name: '下一页' }).click();
   await ready();
-  await page.locator('#main .pagination button[data-page="1"]:not([aria-label])').click();
+  await page.locator('#main .pagination').getByRole('button', { name: '上一页' }).click();
   await ready();
   assert.equal(reads.length, before, '数据未失效时，切换分页复用已成功结果');
   assert(await page.evaluate(() => !JSON.stringify({ ...localStorage, ...sessionStorage }).includes('BUYER-')), '查询码不写入浏览器持久存储');

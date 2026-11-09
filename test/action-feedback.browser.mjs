@@ -50,10 +50,11 @@ test('操作反馈可见于抽屉和确认框之上，复制与异步结果按�
     let ready;
     await context.route(origin + '/api/local/**', async route => {
       if (!['GET', 'HEAD'].includes(route.request().method())) { writes.push(route.request().url()); return route.abort(); }
-      if (new URL(route.request().url()).pathname !== '/api/local/audit') return route.fallback();
+      if (new URL(route.request().url()).pathname !== '/api/local/audit/page') return route.fallback();
       reads++;
       if (auditMode === 'held') { started(); await new Promise(resolve => { release = resolve; }); }
-      return auditMode === 'failed' ? route.fulfill({ status: 503, json: { error: '合成读取失败' } }) : route.fulfill({ json: [] });
+      return auditMode === 'failed' ? route.fulfill({ status: 503, json: { error: '合成读取失败' } })
+        : route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 10, snapshot: 0 } });
     });
     t.after(() => release?.());
     const page = await context.newPage();
@@ -107,7 +108,8 @@ test('操作反馈可见于抽屉和确认框之上，复制与异步结果按�
     await page.locator('[data-action="ops-audit-refresh"]').click();
     await ready;
     await page.locator('#toast[data-kind="loading"]:not([hidden])').waitFor();
-    await page.locator('[data-action="ops-audit-refresh"]').click();
+    assert(await page.locator('[data-action="ops-audit-refresh"]').isDisabled());
+    await page.locator('[data-action="ops-audit-refresh"]').evaluate(node => node.click());
     assert.equal(reads, beforeReads + 1, '慢读取期间重复点击不重复请求');
     auditMode = 'normal'; release();
     await page.locator('#toast[data-kind="success"]:not([hidden])').waitFor();

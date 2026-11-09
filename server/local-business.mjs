@@ -18,6 +18,7 @@ import {
 import {
   BitBrowserAddressError,
   bitBrowserAddressDomain,
+  deleteUsedBitBrowserAddresses,
   generateBitBrowserAddresses,
   importBitBrowserAddresses,
   isBitBrowserAddressId,
@@ -206,6 +207,68 @@ function readAuditRow(row) {
   if (!row.summary.startsWith('{')) return row;
   const { label, actorId, actorName, targetId } = JSON.parse(row.summary);
   return { ...row, summary: label, actorId, actorName, targetId };
+}
+
+
+const auditDomainLabels = {
+  inventory: '库存',
+  commerce: '客户与订单',
+  settings: '系统设置',
+  auth: '员工与权限',
+  toolbox: '个人工具箱',
+  appleBalance: '苹果 ID 余额',
+  'recharge-codes': '充值码审核',
+  'tenant-cards': '租户银行卡',
+  'order-sync': '代充订单同步',
+  'finance-rates': '汇率采集'
+};
+const auditActionLabels = {
+  customer_tags_save: '保存客户标签设置',
+  customer_sources_save: '保存客户来源设置',
+  mailbox_category_save: '保存邮箱分类',
+  mailbox_category_reorder: '调整邮箱分类顺序',
+  fee_rules_save: '保存费用规则',
+  statistics_currency_save: '修改统计币种'
+};
+const auditDate = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Asia/Shanghai',
+  dateStyle: 'short',
+  timeStyle: 'medium'
+});
+
+export function pageAuditRows(rows, search) {
+  const view = search.get('view') ?? 'audit';
+  const pageSize = Number(search.get('pageSize') ?? 10);
+  const requestedPage = Number(search.get('page') ?? 1);
+  const query = (search.get('query') ?? '').toLowerCase().trim();
+  const currentSnapshot = rows[0]?.id ?? 0;
+  const requestedSnapshot = Number(search.get('snapshot') ?? currentSnapshot);
+  if (![...search.keys()].every(key =>
+    ['view', 'pageSize', 'page', 'query', 'snapshot'].includes(key) && search.getAll(key).length === 1
+  ) || !['audit', 'login'].includes(view) || ![10, 20, 50].includes(pageSize) ||
+      !Number.isSafeInteger(requestedPage) || requestedPage < 1 ||
+      !Number.isSafeInteger(requestedSnapshot) || requestedSnapshot < 0 ||
+      (search.get('query')?.length ?? 0) > 120)
+    throw new LocalDataError(400, '日志查询条件无效');
+  const snapshot = Math.min(currentSnapshot, requestedSnapshot);
+  const matches = rows.filter(({ id, domain, action }) =>
+    id <= snapshot && (view === 'audit' ||
+      (domain === 'auth' && ['auth_login', 'auth_logout'].includes(action))))
+    .map(({ id, at, domain, action, summary, actorName }) => {
+      const date = new Date(at);
+      return {
+        id: String(id),
+        time: Number.isNaN(date.valueOf()) ? '未知' : auditDate.format(date),
+        actor: actorName || '本机操作',
+        action: auditActionLabels[action] || summary || '保存资料',
+        subject: auditDomainLabels[domain] || domain,
+        result: summary || '已保存'
+      };
+    })
+    .filter(row => !query || Object.values(row).some(value => String(value).toLowerCase().includes(query)));
+  const total = matches.length;
+  const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
+  return { items: matches.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize, snapshot };
 }
 
 export function attributeCommerce(data, previous, actor, owners) {
@@ -1210,8 +1273,8 @@ export function createLocalBusinessStore(databasePath) {
       });
     },
     listBitBrowserAddresses(search, actor = localToolboxActor) {
-      const { data } = readDocument(`${bitBrowserAddressDomain}:${actor.id}`);
-      return listBitBrowserAddresses(data ?? [], search);
+      const { version, data } = readDocument(`${bitBrowserAddressDomain}:${actor.id}`);
+      return { ...listBitBrowserAddresses(data ?? [], search), version };
     },
     loadBitBrowserAddressBackup(domain) {
       const prefix = `${bitBrowserAddressDomain}:`;
@@ -1229,7 +1292,10 @@ export function createLocalBusinessStore(databasePath) {
       }
       const importing = Object.hasOwn(body, 'streets');
       const generating = Object.hasOwn(body, 'count');
-      const keys = importing ? ['streets'] : generating ? ['count'] : ['id', 'status', 'expectedStatus'];
+      const deleting = Object.hasOwn(body, 'deleteUsed');
+      const keys = importing ? ['streets']
+        : generating ? ['count']
+          : deleting ? ['deleteUsed', 'version'] : ['id', 'status', 'expectedStatus'];
       if (
         Object.keys(body).length !== keys.length ||
         !keys.every((key) => Object.hasOwn(body, key))
@@ -1241,24 +1307,34 @@ export function createLocalBusinessStore(databasePath) {
         const current = readDocument(domain);
         const previous = current.data ?? [];
         const now = new Date().toISOString();
-        const { rows, result } = importing
-          ? importBitBrowserAddresses(previous, body.streets, now)
-          : generating
-            ? generateBitBrowserAddresses(previous, body.count, now)
-            : updateBitBrowserAddress(previous, body, now);
+        let write;
+        let action;
+        let label;
+        if (importing) {
+          write = importBitBrowserAddresses(previous, body.streets, now);
+          const { imported, duplicated, rejected } = write.result;
+          action = 'bitbrowser_address_import';
+          label = `批量导入比特地址，新增 ${imported} 条，重复 ${duplicated} 条，无效 ${rejected} 条`;
+        } else if (generating) {
+          write = generateBitBrowserAddresses(previous, body.count, now);
+          action = 'bitbrowser_address_generate';
+          label = `生成比特账单地址 ${write.result.count} 条`;
+        } else if (deleting) {
+          write = deleteUsedBitBrowserAddresses(previous, body, current.version);
+          action = 'bitbrowser_address_delete_used';
+          label = `删除已使用比特地址 ${write.result.deleted} 条`;
+        } else {
+          write = updateBitBrowserAddress(previous, body, now);
+          action = 'bitbrowser_address_status';
+          label = '标记比特地址已使用';
+        }
+        const { rows, result } = write;
+        if (rows === previous && !importing) return result;
         let version = current.version;
         if (rows !== previous) {
           version++;
           put.run(domain, version, encrypt(key, domain, version, JSON.stringify(rows)));
         }
-        const action = importing ? 'bitbrowser_address_import'
-          : generating ? 'bitbrowser_address_generate' : 'bitbrowser_address_status';
-        const label = importing
-          ? `批量导入比特地址，新增 ${result.imported} 条，重复 ${result.duplicated} 条，无效 ${result.rejected} 条`
-          : generating ? `生成比特账单地址 ${result.count} 条`
-          : { used: '标记比特地址已使用', disabled: '停用比特地址', unused: '启用比特地址' }[
-              result.status
-            ];
         log.run(
           now,
           bitBrowserAddressDomain,
@@ -1726,6 +1802,7 @@ export function createLocalBusinessStore(databasePath) {
       return versions;
     },
     audit: () => audit.all().map(readAuditRow),
+    auditPage: (search) => pageAuditRows(audit.all().map(readAuditRow), search),
     recordAuthEvent({ action, actor, targetId }) {
       if (sessionEventLabels[action])
         log.run(
@@ -1862,6 +1939,10 @@ export async function handleLocalBusiness(
       if (domain === bitBrowserAddressDomain) {
         const { searchParams } = new URL(request.url, origin);
         return json(response, 200, store.listBitBrowserAddresses(searchParams, actor));
+      }
+      if (domain === 'audit/page') {
+        const { searchParams } = new URL(request.url, origin);
+        return json(response, 200, store.auditPage(searchParams));
       }
       if (domain === 'inventory') return json(response, 200, store.inventorySnapshot());
       if (domain === 'commerce') return json(response, 200, redactClaudeProOrderMaterials(store.load(domain), actor));
