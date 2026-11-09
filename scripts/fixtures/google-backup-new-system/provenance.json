@@ -27,8 +27,12 @@
       "sha256": "04a958c195f282f567808c56b7becf957911a4fba7bc3dddbd75e091d3be75a5",
       "origin": "apps/api/prisma-mysql/migrations/20261105123000_subscription_apple_wallet/migration.sql"
     },
+    "migrations/20261108120000_claude_pro_order_materials/migration.sql": {
+      "sha256": "73e6060c0edef9ef7784f300cbb358144f470cd4307aff83a6afa29d72afebf6",
+      "origin": "apps/api/prisma-mysql/migrations/20261108120000_claude_pro_order_materials/migration.sql"
+    },
     "schema.prisma": {
-      "sha256": "e0db24c0120f542e9fb51acd95b015c8add1a10c63737a7ab0da07f78296dcb7",
+      "sha256": "e83c8558d6cc85ab310539392736990fadf2e7d2bcbb4310f49b8883548da6c0",
       "origin": "apps/api/prisma-mysql/schema.prisma"
     }
   }

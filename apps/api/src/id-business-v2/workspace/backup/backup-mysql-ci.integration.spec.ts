@@ -19,6 +19,7 @@ import {
 import { BackupProcessLease } from './backup-process-lease';
 import type { BackupIdentity } from './backup-types';
 import { MysqlTriggerRestoreFilter } from './backup-mysql-restore-filter';
+import { mysqlSchemaReceipts, mysqlSchemaDifferences } from './backup-mysql-schema-receipts';
 
 const enabled = process.env.GITHUB_ACTIONS === 'true' && process.env.GOOGLE_BACKUP_MYSQL_CI === '1';
 const suite = enabled ? describe : describe.skip;
@@ -277,7 +278,8 @@ async function snapshot(kind: 'SOURCE' | 'RESTORE') {
     columns: columns.split('\n').length,
     rowHash: digest(JSON.stringify(receipts)),
     tableReceipts: receipts,
-    schemaHash: digest(metadata)
+    schemaHash: digest(metadata),
+    schemaReceipts: mysqlSchemaReceipts(metadata)
   };
 }
 
@@ -293,6 +295,12 @@ suite('new system native MySQL isolated recovery', () => {
       checks: []
     };
     const checks = report.checks as string[];
+    const schemaFailures: {
+      stage: string;
+      expectedHash: string;
+      actualHash: string;
+      differences: ReturnType<typeof mysqlSchemaDifferences>;
+    }[] = [];
     nativeExits.length = 0;
     restoreFilters.length = 0;
     try {
@@ -325,9 +333,7 @@ suite('new system native MySQL isolated recovery', () => {
         '--schema',
         join(fixture, 'schema.prisma')
       ]);
-      checks.push(
-        'fresh schema applied via existing migrations plus six reviewed new-version migrations'
-      );
+      checks.push('fresh schema applied via existing migrations plus seven new-version migrations');
       const codec = new FieldEncryptionService(
         new ConfigService({ FIELD_ENCRYPTION_KEY: randomBytes(32).toString('hex') })
       );
@@ -336,7 +342,9 @@ suite('new system native MySQL isolated recovery', () => {
         customer = randomUUID(),
         order = randomUUID(),
         deleted = randomUUID(),
-        card = randomUUID();
+        card = randomUUID(),
+        claudeOrder = randomUUID(),
+        claudePerson = randomUUID();
       const attachment = randomBytes(128 * 1024 + 7),
         attachmentHash = digest(attachment);
       report.stage = 'fixture-inserts';
@@ -358,6 +366,15 @@ suite('new system native MySQL isolated recovery', () => {
           VALUES('${order}','CI-BACKUP-1','plus','renewal','${customer}',${enc('synthetic-customer-snapshot')},${enc('ci@example.invalid')},'${digest('order-mail')}',JSON_ARRAY(),'${card}','000000',19.1234,'USD',140.9876,'CNY','2026-11-01','2026-12-01',true,true,true,JSON_OBJECT('fxRate','7.12345678','fee','0.0001'),'${digest('request')}','ci-backup-order','${user}',NOW(6));
         INSERT INTO attachments(id,original_name,storage_key,mime_type,size_bytes,content_encrypted,content_sha256,object_id) VALUES('${randomUUID()}','隔离附件.bin','ci/fixture.bin','application/octet-stream',${attachment.length},${enc(attachment.toString('base64'))},'${attachmentHash}','${order}');`
       );
+      report.stage = 'subscription-material-fixture';
+      await sql(
+        'SOURCE',
+        `INSERT INTO id_business_v2_claude_pro_people(id,kind,name,phone_encrypted,phone_hash,request_hash,idempotency_key,created_by_user_id)
+          VALUES('${claudePerson}','owner','隔离人员',${enc('synthetic-person-phone')},'${digest('ci-person-phone')}','${digest('ci-person-request')}','ci-backup-person','${user}');
+        INSERT INTO id_business_v2_subscription_orders(id,order_no,product,plan,business_type,customer_id,customer_snapshot_encrypted,account_email_encrypted,account_email_hash,account_email_search_tokens,claude_pro_mode,claude_pro_people_encrypted,paid_amount,paid_currency,sale_amount,sale_currency,opened_at,due_at,paid_confirmed,receipt_confirmed,cost_confirmed,financial_snapshot,request_hash,idempotency_key,created_by_user_id,updated_at)
+          SELECT '${claudeOrder}','CI-BACKUP-CLAUDE','claude','claude_pro',business_type,customer_id,customer_snapshot_encrypted,${enc('claude-order@example.invalid')},'${digest('claude-order-mail')}',JSON_ARRAY(),'people',${enc(JSON.stringify({ personId: claudePerson, detail: '隔离人员资料' }))},paid_amount,paid_currency,sale_amount,sale_currency,opened_at,due_at,paid_confirmed,receipt_confirmed,cost_confirmed,financial_snapshot,'${digest('claude-order-request')}','ci-backup-claude-order',created_by_user_id,NOW(6)
+          FROM id_business_v2_subscription_orders WHERE id='${order}';`
+      );
       await sql(
         'SOURCE',
         `CREATE DATABASE id_backup_test_other; CREATE TABLE id_backup_test_other.sentinel(id INT PRIMARY KEY);`
@@ -372,7 +389,17 @@ suite('new system native MySQL isolated recovery', () => {
       );
       report.stage = 'source-baseline';
       const baseline = await snapshot('SOURCE');
-      expect(baseline.tables).toBe(117); // 116 application models + actual _prisma_migrations.
+      expect(baseline.tables).toBe(119); // 118 application models + actual _prisma_migrations.
+      expect(baseline.tableReceipts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'id_business_v2_claude_pro_people', rowCount: 1 }),
+          expect.objectContaining({
+            name: 'id_business_v2_claude_pro_order_revisions',
+            rowCount: 0
+          }),
+          expect.objectContaining({ name: 'id_business_v2_subscription_orders', rowCount: 2 })
+        ])
+      );
       checks.push('source baseline covers every physical table including migration history');
       report.stage = 'full-and-incremental-capture';
       const native = new MysqlNativeBackupSource(launch('SOURCE'), 120_000);
@@ -433,6 +460,9 @@ suite('new system native MySQL isolated recovery', () => {
         START TRANSACTION;
         DELETE FROM id_business_v2_customers WHERE id='${deleted}';
         UPDATE id_business_v2_subscription_orders SET paid_amount=19.1235,version=2 WHERE id='${order}';
+        UPDATE id_business_v2_subscription_orders SET claude_pro_people_encrypted=${enc(JSON.stringify({ personId: claudePerson, detail: '隔离修订资料' }))},version=2 WHERE id='${claudeOrder}';
+        INSERT INTO id_business_v2_claude_pro_order_revisions(id,order_id,from_version,to_version,before_encrypted,after_encrypted,reason_encrypted,idempotency_key,request_hash,operator_user_id)
+          VALUES('${randomUUID()}','${claudeOrder}',1,2,${enc('隔离变更前')},${enc('隔离变更后')},${enc('隔离变更原因')},'ci-backup-claude-revision','${digest('ci-backup-claude-revision')}','${user}');
         UPDATE id_business_v2_claude_accounts SET remark1='增量二跨日志文件',version=2 WHERE id='ci_claude';
         COMMIT;`
       );
@@ -452,7 +482,18 @@ suite('new system native MySQL isolated recovery', () => {
         keys.publicKey
       );
       const final = await snapshot('SOURCE');
+      expect(final.tableReceipts).toContainEqual(
+        expect.objectContaining({ name: 'id_business_v2_claude_pro_order_revisions', rowCount: 1 })
+      );
       checks.push('second incremental segment captured across rotation and encrypted');
+      const restoredStages: {
+        kind: BackupIdentity['kind'];
+        tables: number;
+        columns: number;
+        rowDataMatched: boolean;
+        schemaMatched: boolean;
+      }[] = [];
+      report.restoredStages = restoredStages;
       for (const [blob, identity, expected] of [
         [full, base, baseline],
         [increment1, first, afterFirst],
@@ -473,13 +514,40 @@ suite('new system native MySQL isolated recovery', () => {
             );
           throw error;
         }
-        expect(await snapshot('RESTORE')).toEqual(expected);
+        const observed = await snapshot('RESTORE');
+        const {
+          schemaReceipts: sourceReceipts,
+          schemaHash: expectedSchema,
+          ...expectedValues
+        } = expected;
+        const {
+          schemaReceipts: restoredReceipts,
+          schemaHash: restoredSchema,
+          ...restoredValues
+        } = observed;
+        if (restoredSchema !== expectedSchema) {
+          schemaFailures.push({
+            stage: `${identity.kind}:${identity.id}`,
+            expectedHash: expectedSchema,
+            actualHash: restoredSchema,
+            differences: mysqlSchemaDifferences(sourceReceipts, restoredReceipts)
+          });
+          report.schemaDifferences = schemaFailures;
+        }
+        expect(restoredValues).toEqual(expectedValues);
         expect(
           await sql(
             'RESTORE',
             `SELECT ci_schema_added_note FROM id_business_v2_customers WHERE id='${customer}'`
           )
         ).toBe(identity.kind === 'full' ? '新增字段完整备份' : '新增字段增量修改');
+        restoredStages.push({
+          kind: identity.kind,
+          tables: observed.tables,
+          columns: observed.columns,
+          rowDataMatched: true,
+          schemaMatched: restoredSchema === expectedSchema
+        });
         await rm(output);
       }
       checks.push(
@@ -490,8 +558,9 @@ suite('new system native MySQL isolated recovery', () => {
         'a newly added physical column and its later changes restore without an ORM field mapping'
       );
       checks.push(
-        'all tables columns rows indexes constraints triggers routines events and migration records match after each restore step'
+        'all table/column counts and row digests match at every step; schema verification is separate'
       );
+      checks.push('new encrypted subscription materials and correction history match');
       report.stage = 'attachment-and-function-verification';
       expect(
         await sql(
@@ -554,6 +623,9 @@ suite('new system native MySQL isolated recovery', () => {
       }
       expect(reacquired).toBe(true);
       checks.push('real Linux flock rejects second process and releases after close');
+      report.stage = 'schema-verification';
+      expect(schemaFailures).toEqual([]); // Defer failure reporting, never relax the success criterion.
+      checks.push('all physical schema fingerprints match after each restore step');
       report.status = 'passed';
       report.stage = 'complete';
       report.snapshot = final;

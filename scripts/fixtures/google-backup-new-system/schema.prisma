@@ -879,6 +879,8 @@ model User {
   subscriptionRefundsUpdated           IdBusinessV2SubscriptionRefund[]     @relation("SubscriptionRefundUpdatedBy")
   subscriptionRefundsReceived          IdBusinessV2SubscriptionRefund[]     @relation("SubscriptionRefundReceivedBy")
   subscriptionRefundsReversed          IdBusinessV2SubscriptionRefund[]     @relation("SubscriptionRefundReversedBy")
+  claudeProPeopleCreated               IdBusinessV2ClaudeProPerson[]        @relation("ClaudeProPersonCreatedBy")
+  claudeProOrderRevisions              IdBusinessV2ClaudeProOrderRevision[] @relation("ClaudeProRevisionOperator")
 
   @@index([status])
   @@index([createdByUserId])
@@ -3732,6 +3734,22 @@ enum IdBusinessV2SubscriptionOrderPlan {
   pro_5x
   pro_20x
   pro_50x
+  claude_pro
+}
+
+enum IdBusinessV2SubscriptionOrderProduct {
+  gpt
+  claude
+}
+
+enum IdBusinessV2ClaudeProMaterialMode {
+  manual_card
+  people
+}
+
+enum IdBusinessV2ClaudeProPersonKind {
+  tenant
+  owner
 }
 
 enum IdBusinessV2SubscriptionOrderBusinessType {
@@ -3755,6 +3773,12 @@ model IdBusinessV2SubscriptionOrder {
   id                       String                                   @id @default(uuid()) @db.Char(36)
   orderNo                  String                                   @unique(map: "subscription_order_no_uq") @map("order_no") @db.VarChar(40)
   plan                     IdBusinessV2SubscriptionOrderPlan
+  product                  IdBusinessV2SubscriptionOrderProduct @default(gpt)
+  claudeProMode            IdBusinessV2ClaudeProMaterialMode? @map("claude_pro_mode")
+  claudeProManualCardEncrypted String? @map("claude_pro_manual_card_encrypted") @db.Text
+  claudeProPeopleEncrypted  String? @map("claude_pro_people_encrypted") @db.Text
+  claudeProCardSerialHash   String? @map("claude_pro_card_serial_hash") @db.Char(64)
+  claudeProRenewalSourceId  String? @unique(map: "claude_pro_renewal_source_uq") @map("claude_pro_renewal_source_id") @db.Char(36)
   businessType             IdBusinessV2SubscriptionOrderBusinessType @map("business_type")
   customerId               String                                   @map("customer_id") @db.Char(36)
   customerSnapshotEncrypted String                                  @map("customer_snapshot_encrypted") @db.Text
@@ -3793,6 +3817,9 @@ model IdBusinessV2SubscriptionOrder {
   appleAccount             IdBusinessV2Account?                      @relation(fields: [appleAccountId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "subscription_order_apple_account_fk")
   balanceLedger            IdBusinessV2BalanceLedger[]
   refunds                  IdBusinessV2SubscriptionRefund[]
+  claudeProRenewalSource    IdBusinessV2SubscriptionOrder? @relation("ClaudeProRenewalSource", fields: [claudeProRenewalSourceId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "claude_pro_renewal_source_fk")
+  claudeProRenewedOrder     IdBusinessV2SubscriptionOrder? @relation("ClaudeProRenewalSource")
+  claudeProRevisions        IdBusinessV2ClaudeProOrderRevision[]
 
   @@unique([createdByUserId, idempotencyKey], map: "subscription_order_actor_key_uq")
   @@index([openedAt, id], map: "subscription_order_opened_idx")
@@ -3800,7 +3827,48 @@ model IdBusinessV2SubscriptionOrder {
   @@index([accountEmailHash, openedAt, id], map: "subscription_order_email_idx")
   @@index([updatedByUserId], map: "subscription_order_editor_idx")
   @@index([appleAccountId], map: "subscription_order_apple_account_idx")
+  @@index([product, openedAt, id], map: "subscription_order_product_opened_idx")
+  @@index([product, accountEmailHash, openedAt], map: "subscription_order_product_email_idx")
+  @@index([claudeProCardSerialHash], map: "claude_pro_card_serial_idx")
   @@map("id_business_v2_subscription_orders")
+}
+
+model IdBusinessV2ClaudeProPerson {
+  id                String @id @default(uuid()) @db.Char(36)
+  kind              IdBusinessV2ClaudeProPersonKind
+  name              String @db.VarChar(120)
+  phoneEncrypted    String @map("phone_encrypted") @db.Text
+  phoneHash         String @map("phone_hash") @db.Char(64)
+  version           Int @default(1)
+  requestHash       String @map("request_hash") @db.Char(64)
+  idempotencyKey    String @map("idempotency_key") @db.VarChar(100)
+  createdByUserId   String @map("created_by_user_id") @db.Char(36)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  createdBy         User @relation("ClaudeProPersonCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "claude_pro_person_creator_fk")
+  @@unique([createdByUserId, idempotencyKey], map: "claude_pro_person_actor_key_uq")
+  @@index([kind, name, id], map: "claude_pro_person_kind_name_idx")
+  @@index([phoneHash], map: "claude_pro_person_phone_idx")
+  @@map("id_business_v2_claude_pro_people")
+}
+
+model IdBusinessV2ClaudeProOrderRevision {
+  id                String @id @default(uuid()) @db.Char(36)
+  orderId           String @map("order_id") @db.Char(36)
+  fromVersion       Int @map("from_version")
+  toVersion         Int @map("to_version")
+  beforeEncrypted   String @map("before_encrypted") @db.LongText
+  afterEncrypted    String @map("after_encrypted") @db.LongText
+  reasonEncrypted   String @map("reason_encrypted") @db.Text
+  idempotencyKey    String @map("idempotency_key") @db.VarChar(100)
+  requestHash       String @map("request_hash") @db.Char(64)
+  operatorUserId    String @map("operator_user_id") @db.Char(36)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(6)
+  order             IdBusinessV2SubscriptionOrder @relation(fields: [orderId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "claude_pro_revision_order_fk")
+  operator          User @relation("ClaudeProRevisionOperator", fields: [operatorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "claude_pro_revision_operator_fk")
+  @@unique([operatorUserId, idempotencyKey], map: "claude_pro_revision_actor_key_uq")
+  @@unique([orderId, toVersion], map: "claude_pro_revision_version_uq")
+  @@index([orderId, createdAt], map: "claude_pro_revision_history_idx")
+  @@map("id_business_v2_claude_pro_order_revisions")
 }
 
 model IdBusinessV2SubscriptionFeeRule {

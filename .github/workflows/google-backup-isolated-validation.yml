@@ -14,7 +14,7 @@ concurrency:
 jobs:
   native-recovery:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 5
     env:
       NODE_ENV: test
       GOOGLE_BACKUP_MYSQL_CI: '1'
