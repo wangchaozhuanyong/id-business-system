@@ -44,7 +44,7 @@ import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
-import { assignOrderOwner, assignTenantOwner, checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices } from './order-policy.mjs';
+import { assignOrderOwner, assignTenantOwner, checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices, validGptPaidPrices } from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
   RelayClaimError,
@@ -57,6 +57,12 @@ import {
   checkRelayInventory,
   checkStockDeliveries
 } from './local-business-integrity.mjs';
+
+export const bitBrowserDefaultsDomain = 'bitbrowser-defaults';
+const bitBrowserDefaultKeys = {
+  [bitBrowserConnectionDomain]: 'connectionId',
+  [bitBrowserProxyDomain]: 'proxyId'
+};
 
 const domainLabels = {
   inventory: '库存',
@@ -96,7 +102,8 @@ const settingsActions = {
   fee_rules_save: '保存费用规则',
   statistics_currency_save: '更改统计币种',
   order_prices_save: '保存订单套餐售价',
-  order_currencies_save: '保存订单币种设置'
+  order_currencies_save: '保存订单币种设置',
+  gpt_paid_prices_save: '保存 GPT 代付价格'
 };
 const appleBalanceActions = {
   apple_order_charge: '登记苹果内购扣款或冲正',
@@ -480,6 +487,8 @@ function checkWrite(entry) {
   }
   if (domain === 'settings' && 'orderPrices' in data && !validOrderPrices(data.orderPrices))
     throw new LocalDataError(400, '套餐售价设置格式不正确');
+  if (domain === 'settings' && 'gptPaidPrices' in data && !validGptPaidPrices(data.gptPaidPrices))
+    throw new LocalDataError(400, 'GPT 代付价格格式不正确');
   if (domain === 'settings' && (('orderCurrencies' in data && !validOrderCurrencies(data.orderCurrencies)) ||
       ('orderCurrenciesByProduct' in data && !validOrderCurrencyGroups(data.orderCurrenciesByProduct))))
     throw new LocalDataError(400, '订单币种设置格式不正确');
@@ -605,6 +614,12 @@ export function createLocalBusinessStore(databasePath) {
     return row
       ? { version: row.version, data: decrypt(key, domain, row.version, row.payload) }
       : { version: 0, data: null };
+  }
+
+  function readBitBrowserDefault(scope, actor, choices) {
+    const { data } = readDocument(`${bitBrowserDefaultsDomain}:${actor.id}`);
+    const defaultId = data?.[bitBrowserDefaultKeys[scope]];
+    return choices.some(({ id }) => id === defaultId) ? { defaultId } : {};
   }
 
   function writeTransaction(save) {
@@ -1012,7 +1027,34 @@ export function createLocalBusinessStore(databasePath) {
     },
     loadBitBrowserConnections(actor = localToolboxActor) {
       const { version, data } = readDocument(`${bitBrowserConnectionDomain}:${actor.id}`);
-      return { version, profiles: summarizeBitBrowserConnections(data ?? []) };
+      const profiles = summarizeBitBrowserConnections(data ?? []);
+      return { version, profiles, ...readBitBrowserDefault(bitBrowserConnectionDomain, actor, profiles) };
+    },
+    loadBitBrowserDefaults(actor) {
+      return readDocument(`${bitBrowserDefaultsDomain}:${actor.id}`);
+    },
+    saveBitBrowserDefault(scope, body, actor) {
+      if (!actor?.id) throw new LocalDataError(401, '请先登录');
+      const field = bitBrowserDefaultKeys[scope];
+      if (!Object.hasOwn(bitBrowserDefaultKeys, scope) || !body || Object.keys(body).length !== 1 ||
+          !Object.hasOwn(body, 'defaultId') || (body.defaultId !== null && typeof body.defaultId !== 'string'))
+        throw new LocalDataError(400, '默认选项无效');
+      const { defaultId } = body;
+      const domain = `${bitBrowserDefaultsDomain}:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        const { data: choices } = readDocument(`${scope}:${actor.id}`);
+        if (defaultId !== null && !choices?.some(({ id }) => id === defaultId))
+          throw new LocalDataError(404, '该选项不在你的资料中，请刷新后重试');
+        if ((current.data?.[field] ?? null) === defaultId) return { defaultId };
+        const version = current.version + 1;
+        const data = { ...current.data, [field]: defaultId };
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(data)));
+        log.run(new Date().toISOString(), bitBrowserDefaultsDomain, 'bitbrowser_default_save',
+          auditSummary(field === 'connectionId' ? '修改个人默认比特账号' : '修改个人默认执行 IP', actor, defaultId),
+          version);
+        return { defaultId };
+      });
     },
     useBitBrowserConnectionSecrets(body, actor) {
       const domain = `${bitBrowserConnectionDomain}:${actor.id}`;
@@ -1037,7 +1079,8 @@ export function createLocalBusinessStore(databasePath) {
           auditSummary(command.profile.id ? '修改比特连接配置' : '保存比特连接配置', actor, savedId),
           version
         );
-        return { version, profiles: summarizeBitBrowserConnections(profiles), savedId };
+        return { version, profiles: summarizeBitBrowserConnections(profiles), savedId,
+          ...readBitBrowserDefault(bitBrowserConnectionDomain, actor, profiles) };
       });
     },
     loadBitBrowserWindow(body, actor) {
@@ -1057,7 +1100,8 @@ export function createLocalBusinessStore(databasePath) {
     },
     loadBitBrowserProxies(actor) {
       const { version, data } = readDocument(`${bitBrowserProxyDomain}:${actor.id}`);
-      return { version, items: summarizeBitBrowserProxies(data ?? []) };
+      const items = summarizeBitBrowserProxies(data ?? []);
+      return { version, items, ...readBitBrowserDefault(bitBrowserProxyDomain, actor, items) };
     },
     useBitBrowserProxy(body, actor) {
       return writeTransaction(() => {
@@ -1079,7 +1123,8 @@ export function createLocalBusinessStore(databasePath) {
         put.run(domain, version + 1, encrypt(key, domain, version + 1, JSON.stringify(items)));
         log.run(new Date().toISOString(), bitBrowserProxyDomain, previous ? 'bitbrowser_proxy_update' : 'bitbrowser_proxy_create',
           auditSummary('保存比特执行 IP', actor, proxy.id), version + 1);
-        return { version: version + 1, items: summarizeBitBrowserProxies(items), savedId: proxy.id };
+        return { version: version + 1, items: summarizeBitBrowserProxies(items), savedId: proxy.id,
+          ...readBitBrowserDefault(bitBrowserProxyDomain, actor, items) };
       });
     },
     listBitBrowserAddresses(search, actor = localToolboxActor) {
@@ -1164,7 +1209,7 @@ export function createLocalBusinessStore(databasePath) {
         if (settings) {
           const savedSettings = current('settings');
           settings.data = retainOrderCurrencySettings(settings.data, savedSettings);
-          for (const key of ['customerTags', 'customerSources', 'orderPrices']) {
+          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'gptPaidPrices']) {
             if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };
             }
@@ -1661,6 +1706,12 @@ export async function handleLocalBusiness(
       if (request.method === 'PUT') return json(response, 200, store.saveBitBrowserWindow(await readJson(request), actor));
       throw new LocalDataError(405, '原窗口接口不支持该操作');
     }
+    if (request.method === 'PATCH' && Object.hasOwn(bitBrowserDefaultKeys, domain)) {
+      if (!actor?.id) throw new LocalDataError(401, '请先登录');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      response.setHeader('Cache-Control', 'private, no-store');
+      return json(response, 200, store.saveBitBrowserDefault(domain, await readJson(request), actor));
+    }
     if (domain === bitBrowserProxyDomain) {
       if (!actor?.id) throw new LocalDataError(401, '请先登录');
       response.setHeader('Cache-Control', 'private, no-store');
@@ -1679,6 +1730,7 @@ export async function handleLocalBusiness(
     if (request.method === 'GET') {
       if (domain === 'toolbox') return json(response, 200, store.loadToolbox(actor));
       if (domain === bitBrowserConnectionDomain) {
+        response.setHeader('Cache-Control', 'private, no-store');
         if (actor?.id) response.setHeader('X-ID-BitBrowser-Token-Storage', 'enabled');
         return json(response, 200, store.loadBitBrowserConnections(actor));
       }

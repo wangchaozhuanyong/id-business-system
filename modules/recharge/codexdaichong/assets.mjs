@@ -318,9 +318,16 @@ function adaptWorkspaceRecharge(source) {
         <label for="cdkInput">兑换码</label>
         <div class="workspace-code-controls">
           <input type="text" id="cdkInput" placeholder="请输入兑换码" maxlength="32" autocomplete="off" spellcheck="false">
-          <button type="button" id="redeemBtn" class="btn-primary"><span class="btn-text">验证兑换码</span><span class="loader"></span></button>
+          <div class="workspace-code-actions">
+            <div class="workspace-clipboard-actions" data-workspace-clipboard="cdkInput">
+              <button type="button" class="btn-secondary" data-paste aria-label="粘贴兑换码">粘贴</button>
+              <button type="button" class="btn-secondary" data-clear aria-label="清空兑换码" disabled>清空</button>
+            </div>
+            <button type="button" id="redeemBtn" class="btn-primary"><span class="btn-text">验证兑换码</span><span class="loader"></span></button>
+            <button type="button" id="backToStep1" class="btn-secondary" hidden>更换兑换码</button>
+          </div>
           <p id="workspaceVerifiedPlan" class="workspace-recharge-verified" role="status" hidden></p>
-          <button type="button" id="backToStep1" class="btn-secondary" hidden>更换兑换码</button>
+          <p class="field-hint workspace-clipboard-status" id="cdkInputClipboardStatus" role="status"></p>
         </div>
       </div>
     </section>
@@ -332,6 +339,11 @@ function adaptWorkspaceRecharge(source) {
         <label for="tokenInput">账号资料（JSON）</label>
         <div class="workspace-recharge-account">
           <textarea id="tokenInput" placeholder="请粘贴完整账号资料" rows="4" autocomplete="off" spellcheck="false" aria-describedby="workspaceAccountHint"></textarea>
+          <div class="workspace-clipboard-actions" data-workspace-clipboard="tokenInput">
+            <button type="button" class="btn-secondary" data-paste aria-label="粘贴账号资料">粘贴</button>
+            <button type="button" class="btn-secondary" data-clear aria-label="清空账号资料" disabled>清空</button>
+          </div>
+          <p class="field-hint" id="tokenInputClipboardStatus" role="status"></p>
           <p id="workspaceAccountHint" class="field-hint" aria-live="polite"></p>
         </div>
       </div>

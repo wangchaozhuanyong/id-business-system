@@ -3308,6 +3308,9 @@ details.toolbox-phrase-more[open] > summary {
 .form-grid--paired {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.commerce-field-grid.commerce-field-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+}
 .form-grid > .field,
 .form-grid > .form-field-wide > .field,
 .commerce-field-grid > .field,

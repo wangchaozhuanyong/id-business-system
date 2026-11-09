@@ -290,6 +290,74 @@
     restoreDrafts();
   }
 
+  function setupWorkspaceClipboard() {
+    for (const actions of document.querySelectorAll('[data-workspace-clipboard]')) {
+      const input = document.getElementById(actions.dataset.workspaceClipboard);
+      const status = document.getElementById(input.id + 'ClipboardStatus');
+      const paste = actions.querySelector('[data-paste]');
+      const clear = actions.querySelector('[data-clear]');
+      const singleLine = input instanceof HTMLInputElement;
+      let revision = 0;
+      function syncButtons() {
+        paste.disabled = input.readOnly;
+        clear.disabled = input.readOnly || !input.value;
+      }
+      function editable() {
+        return window.idRechargeVisible && input.getClientRects().length > 0 &&
+          !input.readOnly && !input.matches(':disabled');
+      }
+      function apply(value) {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      input.addEventListener('input', () => {
+        revision++;
+        status.textContent = '';
+        syncButtons();
+      });
+      new MutationObserver(() => {
+        revision++;
+        syncButtons();
+      }).observe(input, { attributes: true, attributeFilter: ['readonly'] });
+      syncButtons();
+      clear.addEventListener('click', () => {
+        if (!editable()) return;
+        apply('');
+        input.focus();
+      });
+      paste.addEventListener('click', async () => {
+        if (!editable()) return;
+        const started = ++revision;
+        const previous = input.value;
+        const current = () => started === revision && previous === input.value && editable();
+        status.textContent = '';
+        let text;
+        try {
+          text = await navigator.clipboard.readText();
+        } catch {
+          if (current()) {
+            input.focus();
+            status.textContent = '无法读取剪贴板，请在输入框内手动粘贴。';
+          }
+          return;
+        }
+        if (!current()) return;
+        if (!text.trim()) {
+          status.textContent = '剪贴板没有可粘贴的文本。';
+          return;
+        }
+        if (singleLine) {
+          text = text.trim();
+          if (text.length > input.maxLength || /[\r\n]/.test(text)) {
+            status.textContent = '请复制一条完整的兑换码后再粘贴。';
+            return;
+          }
+        }
+        apply(text);
+      });
+    }
+  }
+
   function setupWorkspaceGuide() {
     for (const control of document.querySelectorAll('[data-workspace-tab]')) {
       control.addEventListener('click', (event) => {
@@ -372,6 +440,7 @@
           document.querySelector('#workspace-account-title + p')
         );
         setupWorkspaceGuide();
+        setupWorkspaceClipboard();
       } else if (!standalone && tab === 'query') {
         document.body.dataset.rechargeQuery = '';
       } else {

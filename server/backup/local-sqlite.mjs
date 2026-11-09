@@ -7,9 +7,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { backup, DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
-import { createLocalBusinessStore } from '../local-business.mjs';
+import { bitBrowserDefaultsDomain, createLocalBusinessStore } from '../local-business.mjs';
 import { bitBrowserAddressDomain } from '../bitbrowser-addresses.mjs';
 import { bitBrowserConnectionDomain } from '../bitbrowser-connections.mjs';
+import { bitBrowserProxyDomain } from '../bitbrowser-proxies.mjs';
 
 const root = await realpath(fileURLToPath(new URL('../../', import.meta.url)));
 const snapshotName = 'local-business.sqlite';
@@ -240,6 +241,11 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
         const { version, profiles } = store.loadBitBrowserConnections({ id: owner });
         if (!Array.isArray(profiles)) throw new Error();
         result = { version, data: profiles };
+      } else if (domain.startsWith(`${bitBrowserDefaultsDomain}:`)) {
+        result = store.loadBitBrowserDefaults({ id: domain.slice(bitBrowserDefaultsDomain.length + 1) });
+      } else if (domain.startsWith(`${bitBrowserProxyDomain}:`)) {
+        const { version, items } = store.loadBitBrowserProxies({ id: domain.slice(bitBrowserProxyDomain.length + 1) });
+        result = { version, data: items };
       } else {
         result = store.load(domain);
       }

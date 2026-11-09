@@ -17,11 +17,16 @@ test('redemption workspace aligns navigation, steps, account summary and actions
   const prefix = '/integrations/codexdaichong';
   for (const width of baseline ? [1440] : [1440, 1024, 768, 390, 320]) for (const theme of baseline ? ['light'] : ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
+    if (!baseline) await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
     const intercepted = await interceptDesign(context);
     const mutations = [];
+    let verifications = 0;
     await context.route(origin + prefix + '/api/**', async route => {
       const resource = new URL(route.request().url()).pathname.slice((prefix + '/api/').length);
-      if (resource === 'verify-cdk') return route.fulfill({ json: { success: true, data: { plan_type: 'plus', plan_label: 'Plus（离线验收）' } } });
+      if (resource === 'verify-cdk') {
+        verifications++;
+        return route.fulfill({ json: { success: true, data: { plan_type: 'plus', plan_label: 'Plus（离线验收）' } } });
+      }
       if (route.request().method() !== 'GET') { mutations.push(resource); return route.abort(); }
       return intercepted.handle(route);
     });
@@ -83,16 +88,62 @@ test('redemption workspace aligns navigation, steps, account summary and actions
     assert(await page.locator('#flowStatusBadge').isHidden());
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await page.getByRole('button', { name: '自助充值', exact: true }).click();
-    await page.locator('#cdkInput').fill('LAYOUT-ONLY');
+    const codeInput = page.locator('#cdkInput');
+    const pasteCode = page.getByRole('button', { name: '粘贴兑换码' });
+    const clearCode = page.getByRole('button', { name: '清空兑换码' });
+    const pasteAccount = page.getByRole('button', { name: '粘贴账号资料' });
+    const clearAccount = page.getByRole('button', { name: '清空账号资料' });
+    const clipboard = value => page.evaluate(text => navigator.clipboard.writeText(text), value);
+    assert(await pasteAccount.isDisabled());
+    for (const button of [pasteCode, clearCode, pasteAccount, clearAccount]) {
+      const box = await button.boundingBox();
+      assert(box.x + box.width <= width && box.height >= (width <= 900 ? 44 : 36));
+    }
+    await codeInput.fill('OLD-CODE');
+    if (width === 1440 && theme === 'light') {
+      await page.evaluate(() => Object.defineProperty(navigator.clipboard, 'readText', {
+        configurable: true,
+        writable: true,
+        value: () => Promise.reject(new DOMException('Clipboard unavailable', 'NotAllowedError'))
+      }));
+      await pasteCode.click();
+      await page.getByText('无法读取剪贴板，请在输入框内手动粘贴。', { exact: true }).waitFor();
+      assert.equal(await codeInput.inputValue(), 'OLD-CODE');
+      await page.evaluate(() => {
+        navigator.clipboard.readText = () => new Promise(resolve => { window.finishClipboardRead = resolve; });
+      });
+      await pasteCode.click();
+      await page.waitForFunction(() => typeof window.finishClipboardRead === 'function');
+      await codeInput.fill('NEW-TYPED-CODE');
+      await page.evaluate(() => window.finishClipboardRead('LATE-CLIPBOARD-CODE'));
+      await settle(page);
+      assert.equal(await codeInput.inputValue(), 'NEW-TYPED-CODE');
+      await page.evaluate(() => { delete navigator.clipboard.readText; delete window.finishClipboardRead; });
+    }
+    await clearCode.click();
+    assert.equal(await codeInput.inputValue(), '');
+    await clipboard(' LAYOUT-ONLY ');
+    await pasteCode.click();
+    await page.waitForFunction(() => document.getElementById('cdkInput').value === 'LAYOUT-ONLY');
+    assert.equal(verifications, 0, '粘贴和清空只编辑输入');
     await page.locator('#redeemBtn').click();
     await page.locator('#workspaceVerifiedPlan:not([hidden])').waitFor();
+    assert(await pasteCode.isHidden());
+    assert(await clearCode.isHidden());
     assert(!(await page.locator('#tokenInput').isDisabled()));
     await page.locator('#tokenInput').fill('invalid fixture');
     await page.locator('#workspaceAccountHint').filter({ hasText: /JSON|资料/ }).waitFor();
     assert(await page.locator('#startBtn').isDisabled());
     const part = data => Buffer.from(JSON.stringify(data)).toString('base64url');
     const json = JSON.stringify({ user: { id: 'layout-fixture', email: 'layout@example.test' }, accessToken: [part({ typ: 'JWT', alg: 'RS256' }), part({ iss: 'https://auth.openai.com', aud: ['https://api.openai.com/v1'], scp: ['model.request'], exp: Math.floor(Date.now() / 1000) + 3600, 'https://api.openai.com/auth': { chatgpt_account_id: 'fixture', chatgpt_user_id: 'fixture' } }), 'synthetic'].join('.') });
-    await page.locator('#tokenInput').fill(json);
+    await clipboard(json);
+    await pasteAccount.click();
+    await page.locator('#workspaceAccount').filter({ hasText: 'layout@example.test' }).waitFor();
+    await clearAccount.click();
+    assert.equal(await page.locator('#tokenInput').inputValue(), '');
+    assert.equal(await page.locator('#workspaceAccount').textContent(), '填写后显示');
+    assert(await page.locator('#startBtn').isDisabled());
+    await pasteAccount.click();
     await page.locator('#workspaceAccount').filter({ hasText: 'layout@example.test' }).waitFor();
     await page.locator('#startBtn:not([disabled])').waitFor();
     await page.getByRole('button', { name: '兑换码查询', exact: true }).click();
@@ -103,6 +154,7 @@ test('redemption workspace aligns navigation, steps, account summary and actions
     assert(Math.abs(query.x - initial.step1.left) <= 1, 'Tabs use the same panel edge');
     await page.getByRole('button', { name: '自助充值', exact: true }).click();
     assert.equal(await page.locator('#tokenInput').inputValue(), json);
+    assert.equal(verifications, 1);
     assert.deepEqual(mutations, [], 'No recharge or payment request may be submitted');
     assert.deepEqual(errors, []);
     assert.deepEqual(intercepted.unavailable, []);
@@ -111,6 +163,7 @@ test('redemption workspace aligns navigation, steps, account summary and actions
   }
   if (!baseline) for (const width of [1440, 390]) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
     const intercepted = await interceptDesign(context, { localFixtures: {}, actor: { id: 'fixture', name: '离线验收', role: 'admin' } });
     const page = await context.newPage();
     page.setDefaultTimeout(6000);
@@ -128,6 +181,16 @@ test('redemption workspace aligns navigation, steps, account summary and actions
     assert(!geometry.overflow);
     assert.equal(geometry.step1.left, geometry.step2.left);
     assert.equal(geometry.code.left, geometry.account.left);
+    if (width === 390 && theme === 'light') {
+      await page.evaluate(() => navigator.clipboard.writeText('EMBEDDED-ONLY'));
+      await frame.getByRole('button', { name: '粘贴兑换码' }).click();
+      await page.waitForFunction(() => {
+        const iframe = document.querySelector('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
+        return iframe?.contentDocument.getElementById('cdkInput').value === 'EMBEDDED-ONLY';
+      });
+      await frame.getByRole('button', { name: '清空兑换码' }).click();
+      assert.equal(await frame.locator('#cdkInput').inputValue(), '');
+    }
     await page.screenshot({ path: path.join(output, `after-embedded-${width}-${theme}.png`), fullPage: true });
     results.push({ width, theme, embedded: true, geometry });
     assert.deepEqual(intercepted.external, []);

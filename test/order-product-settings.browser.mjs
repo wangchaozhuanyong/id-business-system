@@ -4,9 +4,9 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 import { validOrderCurrencyGroups, retainOrderCurrencySettings } from '../server/order-currency-settings.mjs';
-import { validOrderPrices } from '../server/order-policy.mjs';
+import { validGptPaidPrices, validOrderPrices } from '../server/order-policy.mjs';
 
-test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、草稿和旧单保留', { timeout: 90_000 }, async t => {
+test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维护，代付预设、草稿和旧单保留', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
@@ -28,8 +28,16 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
   await interceptDesign(context, { localFixtures: fixture, actor });
   await context.route('**/api/local/auth/order-owners', route => route.fulfill({ json: { items: [actor] } }));
   await context.route('**/api/local/auth/display-names', route => route.fulfill({ json: { items: [actor] } }));
-  let failSave = false;
+  let failSave = false, rateVersion = 1, phpRate = '0.125';
   const writes = [], businessWrites = [];
+  await context.route('**/api/local/finance/collection?**', route => route.fulfill({ json: {
+    version: rateVersion,
+    now: '2026-11-09T13:00:00Z',
+    rows: [
+      { currency: 'PHP', rate: phpRate, status: 'valid', source: 'ExchangeRate-API', at: '2026-11-09T12:00:00Z', expiresAt: '2026-11-10T12:00:00Z' },
+      { currency: 'CLP', rate: '0.008', status: 'expired', at: '2026-11-08T12:00:00Z', expiresAt: '2026-11-09T12:00:00Z' }
+    ]
+  } }));
   await context.route('**/api/local/settings', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: settings });
     const command = route.request().postDataJSON();
@@ -38,6 +46,7 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
     if (command.version !== settings.version) return route.fulfill({ status: 409, json: { error: '设置版本已变化' } });
     assert(validOrderCurrencyGroups(command.data.orderCurrenciesByProduct));
     assert(validOrderPrices(command.data.orderPrices));
+    if ('gptPaidPrices' in command.data) assert(validGptPaidPrices(command.data.gptPaidPrices));
     settings = { version: command.version + 1, data: retainOrderCurrencySettings(command.data, settings.data) };
     return route.fulfill({ json: settings });
   });
@@ -51,56 +60,68 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const paid = page.locator('#commerce-paidCurrency'), sale = page.locator('#commerce-saleCurrency');
-  const group = index => page.locator('.order-financial-group').nth(index);
   const currencyForm = page.locator('#drawer[open] #commerce-currencies-form');
   const pending = currencyForm.locator('#commerce-currency-options-pending');
   const currencies = () => currencyForm.locator('#commerce-currency-options').evaluate(node => JSON.parse(node.value));
   const codes = node => node.locator('option').evaluateAll(nodes => nodes.map(node => node.value));
   async function add(text) { await pending.fill(text); await currencyForm.locator('[data-action="option-add"]').click(); }
-  async function openCurrencies(index = 0) {
-    await group(index).locator('[data-action="commerce-currency-settings"]').click();
+  async function settingsTab(label) {
+    if (!page.url().endsWith('#/settings/payment-countries')) await page.goto(origin + '/#/settings/payment-countries');
+    await page.getByRole('tab', { name: label, exact: true }).click();
+  }
+  async function openCurrencies(family) {
+    await settingsTab('订单币种');
+    await page.getByRole('button', { name: family + ' 币种设置', exact: true }).click();
     await currencyForm.waitFor();
+  }
+  async function openPrices(family) {
+    await settingsTab('套餐售价');
+    await page.getByRole('button', { name: family + ' 套餐售价设置', exact: true }).click();
   }
   async function close() {
     await page.locator('#drawer [data-action="drawer-close"]').first().click();
     await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
   }
   async function save(formId, status = 200) {
-    await page.locator(`button[form="${formId}"][type="submit"]:visible`).click();
+    await page.locator(`button[form="${formId}"][type="submit"]:visible, #${formId} button[type="submit"]:visible`).click();
     const response = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/settings');
     await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
     assert.equal((await response).status(), status);
-    if (status === 200) await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
+    if (status === 200 && formId === 'commerce-paid-prices-form')
+      await page.getByText('GPT 代付价格已保存', { exact: true }).waitFor();
+    else if (status === 200) await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
     else await page.getByText('模拟设置保存失败', { exact: true }).waitFor();
   }
   await page.goto(origin + '/#/workspace/order/claude');
   await page.waitForFunction(() => document.querySelector('#commerce-saleAmount')?.value === '201');
-  assert.equal(await page.locator('#main [data-action="commerce-price-settings"]').count(), 1, '套餐设置只保留售卖标题入口');
+  assert.equal(await page.locator('#main :is([data-action="commerce-price-settings"], [data-action="commerce-currency-settings"])').count(), 0);
   assert.deepEqual(await codes(paid), ['CNY', 'MYR']);
   assert.deepEqual(await codes(sale), ['CNY', 'MYR']);
   await page.locator('#commerce-email').fill('claude-draft@example.test');
   await page.locator('#commerce-paidAmount').fill('24.0001');
-  await openCurrencies();
+  await openCurrencies('Claude');
   await add('欧元 EUR');
   await currencyForm.getByRole('button', { name: '移除币种 马币 MYR', exact: true }).click();
   await close();
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.waitForFunction(() => document.querySelector('#commerce-saleAmount')?.value === '101');
-  assert.equal(await page.locator('#main [data-action="commerce-price-settings"]').count(), 1, '套餐设置只保留售卖标题入口');
-  assert.deepEqual(await codes(paid), ['CNY', 'PHP']);
-  await openCurrencies(1);
+  assert.equal(await page.locator('#main :is([data-action="commerce-price-settings"], [data-action="commerce-currency-settings"])').count(), 0);
+  assert.equal(await paid.inputValue(), 'PHP');
+  assert.deepEqual(await codes(paid), ['PHP', 'CLP', 'USD', 'IDR', 'MYR', 'CNY']);
+  await openCurrencies('GPT');
   assert.deepEqual(await currencies(), ['人民币 CNY', '菲律宾比索 PHP'], 'GPT 草稿不混入 Claude 币种');
   await add('英镑 GBP');
   await close();
   await page.goto(origin + '/#/workspace/order/claude');
   assert.equal(await page.locator('#commerce-email').inputValue(), 'claude-draft@example.test');
-  await openCurrencies(1);
+  await openCurrencies('Claude');
   assert.deepEqual(await currencies(), ['人民币 CNY', '欧元 EUR'], 'Claude 设置草稿与 GPT 隔离');
   await save('commerce-currencies-form');
   assert.deepEqual(settings.data.orderCurrenciesByProduct.GPT.map(row => row.code), ['CNY', 'PHP']);
+  await page.goto(origin + '/#/workspace/order/claude');
+  await page.waitForFunction(() => document.querySelector('#commerce-saleCurrency option[value="EUR"]'));
   assert.deepEqual(await codes(sale), ['CNY', 'EUR']);
-  await page.goto(origin + '/#/workspace/order/gpt');
-  await openCurrencies();
+  await openCurrencies('GPT');
   assert((await currencies()).includes('英镑 GBP'));
   const before = writes.length;
   await page.locator('button[form="commerce-currencies-form"][type="submit"]').click();
@@ -117,10 +138,11 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
   await save('commerce-currencies-form');
   assert.deepEqual(settings.data.orderCurrenciesByProduct.GPT.map(row => row.code), ['CNY', 'PHP', 'GBP']);
   assert.deepEqual(settings.data.orderCurrenciesByProduct.Claude.map(row => row.code), ['CNY', 'EUR']);
+  await page.goto(origin + '/#/workspace/order/gpt');
+  await page.waitForFunction(() => document.querySelector('#commerce-saleCurrency option[value="GBP"]'));
   assert(!await sale.locator('option[value="EUR"]').count());
 
-  await page.goto(origin + '/#/workspace/order/claude');
-  await group(1).locator('[data-action="commerce-price-settings"]').click();
+  await openPrices('Claude');
   const prices = page.locator('#drawer[open] #commerce-prices-form');
   await prices.waitFor();
   assert.deepEqual(await prices.locator('[data-price-product]').evaluateAll(nodes => [...new Set(nodes.map(node => node.dataset.priceProduct))]), ['Claude Pro', 'Claude Max']);
@@ -128,19 +150,81 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
   await prices.locator('[data-price-product="Claude Max"][data-price-plan="Max 5x"][data-price-currency="EUR"]').fill('99.1234');
   await save('commerce-prices-form');
   assert.equal(settings.data.orderPrices.GPT.Plus.CNY, '101');
+  await page.goto(origin + '/#/workspace/order/claude');
   await sale.selectOption('EUR');
   assert.equal(await page.locator('#commerce-saleAmount').inputValue(), '49.9900');
   await page.locator('#commerce-product').selectOption('Claude Max');
   assert.equal(await sale.inputValue(), 'EUR');
   assert.equal(await page.locator('#commerce-saleAmount').inputValue(), '99.1234');
-  await page.goto(origin + '/#/workspace/order/gpt');
-  await group(1).locator('[data-action="commerce-price-settings"]').click();
+  await openPrices('GPT');
   await prices.waitFor();
   assert.deepEqual(await prices.locator('[data-price-product]').evaluateAll(nodes => [...new Set(nodes.map(node => node.dataset.priceProduct))]), ['GPT']);
   await prices.locator('[data-price-plan="Plus"][data-price-currency="CNY"]').fill('111.1111');
   await save('commerce-prices-form');
   assert.equal(settings.data.orderPrices['Claude Pro'].Pro.EUR, '49.9900');
   assert.equal(settings.data.orderPrices['Claude Max']['Max 5x'].EUR, '99.1234');
+
+  await settingsTab('代付价格');
+  const country = page.locator('#commerce-paid-country');
+  const paidForm = page.locator('#commerce-paid-prices-form');
+  const plus = paidForm.getByRole('textbox', { name: 'Plus 原币代付金额', exact: true });
+  const pro = paidForm.getByRole('textbox', { name: 'Pro 100 原币代付金额', exact: true });
+  const budget = paidForm.locator('[data-paid-budget]').first();
+  const quote = page.locator('#commerce-paid-quote');
+  await plus.fill('983');
+  await pro.fill('1200');
+  await budget.filter({ hasText: '¥ 122.88' }).waitFor();
+  phpRate = '0.13';
+  rateVersion++;
+  await page.evaluate(version => window.IDLocalData.acceptChangeVersions({ 'finance-rates': String(version) }), rateVersion);
+  await budget.filter({ hasText: '¥ 127.79' }).waitFor();
+  assert.equal(await plus.inputValue(), '983');
+  await save('commerce-paid-prices-form');
+  assert.equal(settings.data.gptPaidPrices.Plus.PHP, '983');
+  assert.equal(settings.data.orderPrices.GPT.Plus.CNY, '111.1111');
+  await country.selectOption('CLP');
+  await plus.fill('10000');
+  await quote.getByText(/汇率已过期/).waitFor();
+  assert.equal(await budget.textContent(), '—');
+  await save('commerce-paid-prices-form');
+  await country.selectOption('IDR');
+  await quote.getByText(/暂无有效汇率/).waitFor();
+  assert.equal(await plus.inputValue(), '');
+  for (const width of [1440, 390, 320]) for (const dark of [false, true]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    const countryBox = await country.boundingBox();
+    assert(countryBox && countryBox.x >= 0 && countryBox.x + countryBox.width <= width);
+    assert(await paidForm.getByRole('button', { name: '保存代付价格' }).isVisible());
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
+  const paidAmount = page.locator('#commerce-paidAmount'), plan = page.locator('#commerce-plan');
+  await page.goto(origin + '/#/workspace/order/gpt');
+  await page.waitForFunction(() => document.querySelector('#commerce-paidAmount')?.value === '983');
+  assert.match(await page.locator('label[for="commerce-paidCurrency"]').textContent(), /国家／地区/);
+  assert.equal(await paid.inputValue(), 'PHP');
+  assert.equal(await page.getByText('折合人民币预算', { exact: true }).count(), 0);
+  await page.locator('[name="commerce-paidConfirmed"]').check();
+  await plan.selectOption('Pro 100');
+  assert.equal(await paidAmount.inputValue(), '1200');
+  assert(!(await page.locator('[name="commerce-paidConfirmed"]').isChecked()));
+  await paid.selectOption('CLP');
+  assert.equal(await paidAmount.inputValue(), '');
+  await plan.selectOption('Plus');
+  assert.equal(await paidAmount.inputValue(), '10000');
+  await paidAmount.fill('9876.1234');
+  await settingsTab('代付价格');
+  await page.goto(origin + '/#/workspace/order/gpt');
+  assert.equal(await paid.inputValue(), 'CLP');
+  assert.equal(await paidAmount.inputValue(), '9876.1234');
+  await page.locator('#commerce-payment').selectOption('苹果内购');
+  assert.equal(await paid.inputValue(), 'USD');
+  assert.equal(await paidAmount.inputValue(), '');
+  await page.locator('#commerce-payment').selectOption('银行卡');
+  assert.equal(await paid.inputValue(), 'PHP');
+  assert.equal(await paidAmount.inputValue(), '983');
 
   const evidence = new URL('../.runtime/order-product-settings-20261108/', import.meta.url);
   const screenshots = process.env.ID_ORDER_SETTINGS_SCREENSHOTS === '1';
@@ -166,22 +250,23 @@ test('GPT 与 Claude 各自维护币种及套餐售价，标题右侧设置、�
     }
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await openCurrencies('Claude');
+  await currencyForm.getByRole('button', { name: '移除币种 欧元 EUR', exact: true }).click();
+  await save('commerce-currencies-form');
   await page.goto(origin + '/#/orders/pro');
   await page.locator('#commerce-search').fill('legacy-eur@example.test');
   await page.locator('[data-action="commerce-order-edit"][data-id="legacy-eur"]').click();
-  assert.equal(await paid.inputValue(), 'EUR');
-  assert.equal(await page.locator('#commerce-paidAmount').inputValue(), '30.1234');
-  await openCurrencies();
-  await currencyForm.getByRole('button', { name: '移除币种 欧元 EUR', exact: true }).click();
-  await page.locator('button[form="commerce-currencies-form"][type="submit"]').click();
-  const saved = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/settings');
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
-  assert.equal((await saved).status(), 200);
-  await page.locator('#drawer[open] #commerce-order-form').waitFor();
   assert.equal(await paid.inputValue(), 'EUR', '编辑原单在移除币种后仍保留原值');
   assert.match(await paid.locator('option:checked').textContent(), /已移出选项/);
   assert.equal(await page.locator('#commerce-paidAmount').inputValue(), '30.1234');
   assert.deepEqual(fixture.commerce.data.orders, originalOrders);
   assert.deepEqual(businessWrites, []);
   assert.deepEqual(errors, []);
+  const employeeContext = await browser.newContext();
+  await interceptDesign(employeeContext, { localFixtures: fixture, actor: { ...actor, role: 'employee' } });
+  const employee = await employeeContext.newPage();
+  await employee.goto(origin + '/#/settings/payment-countries');
+  await employee.getByRole('heading', { name: '访问受限' }).waitFor();
+  assert.equal(await employee.locator('a[href="#/settings/payment-countries"]').count(), 0);
+  await employeeContext.close();
 });

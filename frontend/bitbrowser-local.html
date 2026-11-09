@@ -29,7 +29,7 @@
           <div class="bit-local__actions"><button class="button" type="button" id="bit-toggle-connection" aria-controls="bit-connection-settings" aria-expanded="false">连接设置</button><button class="button" type="button" id="bit-add-connection" data-bit-profile hidden disabled>新增连接</button></div>
         </header>
         <div class="panel-body">
-          <div class="field" data-bit-profile hidden><label for="bit-connection-profile">比特账号</label><div class="field-control"><select id="bit-connection-profile" disabled></select><p id="bit-catalog-result" class="field-help" role="status">请选择账号连接，或新增这台电脑的连接。</p></div></div>
+          <div class="field" data-bit-profile hidden><label for="bit-connection-profile">比特账号</label><div class="field-control"><div class="option-entry-controls"><select id="bit-connection-profile" disabled></select><button class="button" type="button" id="bit-default-connection" title="仅对当前登录账号生效" disabled>设为默认</button></div><p id="bit-catalog-result" class="field-help" role="status">请选择账号连接，或新增这台电脑的连接。</p><p id="bit-default-connection-result" class="field-help" role="status" hidden></p></div></div>
           <details id="bit-connection-settings">
             <summary>账号标记与本机接口</summary>
             <div class="bit-local__connection">
@@ -136,7 +136,7 @@
       </section>
       <section class="panel bit-local__section" aria-labelledby="bit-proxy-title">
         <header class="panel-heading"><div class="title-with-help"><h2 id="bit-proxy-title"><span class="bit-local__step">2</span>选择执行 IP</h2><details class="title-help"><summary aria-label="查看执行 IP 说明">ⓘ</summary><div class="title-description" role="note">录入 IP 时标记国家和类型。每次执行直接选择 IP，无需另选国家。已保存的资料可以在 IP 资料库查看和编辑。</div></details></div><div class="bit-local__actions"><button class="button" id="bit-show-library" type="button">管理 IP</button><button class="button" id="bit-add-proxy" type="button">新增 IP</button></div></header>
-        <div class="panel-body"><div class="field"><label for="bit-execution-proxy">执行 IP<span class="required">*</span></label><div class="field-control"><select id="bit-execution-proxy" disabled><option value="">正在读取 IP…</option></select><p id="bit-proxy-result" class="field-help" role="status">正在读取已保存的 IP。</p></div></div></div>
+        <div class="panel-body"><div class="field"><label for="bit-execution-proxy">执行 IP<span class="required">*</span></label><div class="field-control"><div class="option-entry-controls"><select id="bit-execution-proxy" disabled><option value="">正在读取 IP…</option></select><button class="button" type="button" id="bit-default-proxy" data-bit-profile title="仅对当前登录账号生效" hidden disabled>设为默认</button></div><p id="bit-proxy-result" class="field-help" role="status">正在读取已保存的 IP。</p></div></div></div>
       </section>
       <section class="panel bit-local__section" aria-labelledby="bit-auth-title">
         <header class="panel-heading"><h2 id="bit-auth-title"><span class="bit-local__step">3</span>填写登录资料</h2><span class="tag">授权 JSON 登录</span></header>
