@@ -929,7 +929,7 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
     : '';
   const headers = visible.map((column) => {
     const label = escapeHtml(column.label);
-    const help = titleInfo(column.label, column.headerHelp,
+    const help = column.headerHelp && titleInfo(column.label, column.headerHelp,
       `column-help-${encodeURIComponent(tableId)}-${encodeURIComponent(column.id)}`);
     const content = help ? `<div class="title-with-help"><span>${label}</span>${help}</div>` : label;
     return `<th class="${column.action ? 'table-actions' : ''}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;

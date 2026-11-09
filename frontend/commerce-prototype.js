@@ -3148,7 +3148,7 @@
     form.dataset.priceReferenceStatus = status;
     const v = name => {
       const control = form.elements['commerce-' + name];
-      return control?.dataset.currencyCode ?? control?.value ?? '';
+      return control?.dataset?.currencyCode ?? control?.value ?? '';
     };
     $('#commerce-paid-price-reference', form).innerHTML = orderAmountReference(v, true, status);
     $('#commerce-sale-price-reference', form).innerHTML = orderAmountReference(v, false, status);

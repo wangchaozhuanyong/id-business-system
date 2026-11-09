@@ -33,6 +33,10 @@ function browser(store, appleAsset = null) {
   const errors = new Map();
   const modules = [];
   const state = { route: 'customers/list', demoOrders: [], drafts: new Map() };
+  const amountReferences = {
+    '#commerce-paid-price-reference': { innerHTML: '' },
+    '#commerce-sale-price-reference': { innerHTML: '' }
+  };
   const bankOrderEntry = {
     isConnected: true,
     dataset: { commerceDraft: 'local-bank-entry' },
@@ -51,7 +55,7 @@ function browser(store, appleAsset = null) {
       'commerce-paymentId': { value: bankCard.last4 },
       'commerce-saleAmount': { value: '150' }
     },
-    querySelector: () => null
+    querySelector: (selector) => amountReferences[selector] || null
   };
   const api = {
     state,
