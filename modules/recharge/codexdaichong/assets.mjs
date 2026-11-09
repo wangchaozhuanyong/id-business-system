@@ -375,6 +375,22 @@ function adaptAdminScript(source, routingScript) {
     "                const jobKey = viewTaskLogBtn.dataset.viewTaskLog;\n" +
       '                if (!window.idRechargeOpenTaskLog(jobKey)) openTaskLogModal(jobKey);'
   );
+  source = replaceOne(
+    source,
+    '        function formatTaskDetailLog(task, runtimeEntries) {',
+    String.raw`        function formatTaskDetailLog(task, runtimeEntries) {
+            const terminalFailure = ['failed', 'manual'].includes(String(task.status || '').toLowerCase());
+            if (terminalFailure && /^[A-Za-z0-9_-]{1,128}$/.test(task.jobKey || '')) {
+                const lastAttempt = String(task.rawOutput || '')
+                    .split(/^===== ATTEMPT \d+(?: \| CARD \d{4})? =====\r?$/m).at(-1);
+                const submit = /^\[Stripe\] ✅ 已点击提交按钮 \([^\r\n]+\)\r?$/m.exec(lastAttempt);
+                const billingError = /^❌ \[运行时错误\]: MySQL 执行失败: Data too long for column ['"]error_message['"] at row \d+\r?$/mi.exec(lastAttempt);
+                if (submit && billingError && submit.index < billingError.index) {
+                    return '<p class="task-log-step-detail">任务编号：' + escapeHtml(task.jobKey) + '</p>' +
+                        '<p class="task-log-step-title">已点击付款，失败记录保存异常；付款结果待核实</p>';
+                }
+            }`
+  );
   source = replaceOne(source, '                loadAdminSecurityStatus().catch(() => { });', '');
   for (const call of ['fetchRuntimeLogsIncremental();', 'fetchCheckoutDebugLogsIncremental();', 'pollCheckoutDebugStatus(false);'])
     source = replaceOne(source, '                ' + call,
@@ -614,8 +630,8 @@ function adaptRechargeProgress(source, workspace) {
         const openingStages = ${JSON.stringify(RECHARGE_STAGE_LABELS)};
         const openingResults = {
             success: { title: '开通成功', tone: 'success', flow: 'success', label: '请前往 ChatGPT 查看目标账号的订阅状态。', button: START_SUCCESS_TEXT },
-            failed: { title: '本次开通未完成', tone: 'error', flow: 'failed', label: '请核对账号资料后再决定是否重试。', button: START_FAILED_TEXT },
-            manual: { title: '开通结果待核对', tone: 'review', flow: 'manual', label: '请保留兑换码，查询原任务，请勿重复提交。', button: '待核对' },
+            failed: { title: '本次开通未完成', tone: 'error', flow: 'failed', label: '执行失败，请联系客服处理。', button: START_FAILED_TEXT },
+            manual: { title: '开通结果待核对', tone: 'review', flow: 'manual', label: '结果待核实，请勿重复充值，请联系客服处理。', button: '待核对' },
             maintenance: { title: '本次开通未完成', tone: 'error', flow: 'failed', label: '服务暂时不可用，请用原兑换码查询。', button: START_FAILED_TEXT }
         };
         let activeJobKey = '';
