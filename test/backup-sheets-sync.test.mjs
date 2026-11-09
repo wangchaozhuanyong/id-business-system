@@ -24,7 +24,7 @@ const reports = () => projectBusinessReports({
   managedMailboxes: [{ id: 'managed-1', email: 'pool@example.test', active: true, queryCode: 'CODE_SECRET' }]
 });
 
-function fakeGoogle({ shared = false, saved = reports() } = {}) {
+function fakeGoogle({ shared = false, saved = reports(), rowCount = 1000 } = {}) {
   const calls = [];
   const writes = [];
   const fetchImpl = async (url, init) => {
@@ -47,8 +47,11 @@ function fakeGoogle({ shared = false, saved = reports() } = {}) {
     return Response.json({ spreadsheetId: workbook, properties: { timeZone: 'Asia/Kuala_Lumpur' },
       sheets: titles.map((title, sheetId) => ({
         properties: { title, sheetId, sheetType: 'GRID',
-          gridProperties: { rowCount: 1000, columnCount: 26, frozenRowCount: 1 } },
-        basicFilter: { range: { sheetId, endColumnIndex: reportColumns[title].length } }
+          gridProperties: { rowCount, columnCount: 26, frozenRowCount: 1 } },
+        basicFilter: {
+          range: { sheetId, endRowIndex: rowCount, endColumnIndex: reportColumns[title].length },
+          filterSpecs: [{ columnIndex: 0, filterCriteria: { hiddenValues: ['fixture-hidden'] } }]
+        }
       })) });
   };
   return { target: createBusinessSheets({ workbook, folder, oauth, fetchImpl }), calls, writes };
@@ -71,6 +74,26 @@ test('private workbook gets only approved columns, literal text, deltas and boun
   assert.equal(rows[0].values[1].userEnteredValue.stringValue, '=1+1');
   assert.equal(rows[0].values[2].userEnteredValue.stringValue, '00123');
   assert.ok(rows[1].values.every(value => Object.keys(value).length === 0));
+});
+
+test('unchanged Sheets data with Google-normalized filters issues no write', async () => {
+  const { target, calls, writes } = fakeGoogle();
+  assert.equal((await target.apply(reports())).writes, 0);
+  assert.equal(writes.length, 0);
+  assert.ok(!calls.some(({ pathname }) => pathname.endsWith(':batchUpdate')));
+});
+
+test('a sheet that grows extends its filter and preserves existing criteria', async () => {
+  const data = reports();
+  const { target, writes } = fakeGoogle({ rowCount: 3, saved: structuredClone(data) });
+  data.客户管理.push(['customer-2', '新增客户'], ['customer-3', '新增客户']);
+  assert.equal((await target.apply(data)).writes, 1);
+  const filters = writes.filter(request => request.setBasicFilter);
+  assert.equal(filters.length, 1);
+  assert.deepEqual(filters[0].setBasicFilter.filter, {
+    range: { sheetId: 3, startRowIndex: 0, endRowIndex: 4, startColumnIndex: 0, endColumnIndex: reportColumns.客户管理.length },
+    filterSpecs: [{ columnIndex: 0, filterCriteria: { hiddenValues: ['fixture-hidden'] } }]
+  });
 });
 
 test('shared targets or mismatching headers receive no data', async () => {
