@@ -11,8 +11,8 @@ import { interceptDesign, origin as offlineOrigin } from './helpers/offline-desi
 
 const analyticsPath = '/api/local/tools/website-analytics';
 const visitsPath = '/api/local/tools/website-visits/search';
-const firstVisitFilters = { days: 7, sort: 'newest', page: 1, pageSize: 20, ip: '203.0.113.7' };
-const nextVisitFilters = { days: 30, sort: 'oldest', page: 1, pageSize: 50, ip: '203.0.113.8' };
+const firstVisitFilters = { days: 7, sort: 'newest', page: 1, pageSize: 10, ip: '203.0.113.7' };
+const nextVisitFilters = { days: 30, sort: 'oldest', page: 1, pageSize: 10, ip: '203.0.113.8' };
 const loading = /正在|加载|读取|查询/;
 
 function interceptedTools(page, origin) {
@@ -58,7 +58,7 @@ function analyticsResult(pageViews) {
   };
 }
 
-function visitResult(path, { page = 1, pageSize = 20, total = 34 } = {}) {
+function visitResult(path, { page = 1, pageSize = 10, total = 34 } = {}) {
   return {
     page,
     pageSize,
@@ -78,7 +78,6 @@ async function setVisitFilters(page, filters) {
   await page.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
   await page.locator('#ops-visits-days').selectOption(String(filters.days));
   await page.locator('#ops-visits-sort').selectOption(filters.sort);
-  await page.locator('#ops-visits-size').selectOption(String(filters.pageSize));
   await page.locator('#ops-visits-ip').fill(filters.ip);
 }
 
@@ -172,7 +171,8 @@ test(
     };
     const showVisit = async (path) => {
       await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
-      await visits.getByText(path, { exact: true }).waitFor();
+      await visits.getByRole('button', { name: '查看完整页面路径' })
+        .and(visits.getByText(path, { exact: true })).waitFor();
     };
     let analyticsDays = 7;
     async function requestAnalytics(days) {
@@ -193,7 +193,7 @@ test(
     }
 
     const firstAnalytics = await openMonitor();
-    await tools.reply(await tools.next(visitsPath), { items: [], page: 1, pageSize: 20, total: 0 });
+    await tools.reply(await tools.next(visitsPath), { items: [], page: 1, pageSize: 10, total: 0 });
     await analyticsStatus.waitFor();
     assert.match(await analyticsStatus.textContent(), loading);
     await tools.reply(firstAnalytics, analyticsResult(111));
@@ -259,11 +259,16 @@ test(
     await showVisit('/first-page');
     const newerVisits = await requestVisits();
     assert.deepEqual(newerVisits.request().postDataJSON(), nextVisitFilters);
-    await tools.reply(newerVisits, visitResult('/new-query', { pageSize: 50, total: 55 }));
+    await tools.reply(newerVisits, visitResult('/new-query', { total: 55 }));
     await showVisit('/new-query');
     await tools.reply(slowerPage, visitResult('/stale-page-two', { page: 2 }));
     await showVisit('/new-query');
     assert.equal(await visits.getByText('/stale-page-two', { exact: true }).count(), 0);
+    await visits.getByLabel('每页条数', { exact: true }).selectOption('50');
+    const resizedVisits = await tools.next(visitsPath);
+    assert.deepEqual(resizedVisits.request().postDataJSON(), { ...nextVisitFilters, pageSize: 50 });
+    await tools.reply(resizedVisits, visitResult('/new-size', { pageSize: 50, total: 55 }));
+    await showVisit('/new-size');
 
     const closedAnalytics = await requestAnalytics();
     const closedVisits = await requestVisits();

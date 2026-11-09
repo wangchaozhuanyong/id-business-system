@@ -279,7 +279,7 @@ const state = {
   query: '',
   country: '',
   status: '',
-  pageSize: 8,
+  pageSize: window.IDPagination.defaultPageSize,
   collapsed: false,
   expanded: new Set(['快速操作', '邮箱管理']),
   selections: new Map(),
@@ -727,10 +727,10 @@ function tabScrollKey(tabs, index) {
     `${tabs.querySelector('[data-action]')?.dataset.action || 'tabs'}:${index}`;
 }
 function captureTabScroll(root) {
-  return new Map($$('.tabs, .pagination-pages', root).map((tabs, index) => [tabScrollKey(tabs, index), tabs.scrollLeft]));
+  return new Map($$('.tabs', root).map((tabs, index) => [tabScrollKey(tabs, index), tabs.scrollLeft]));
 }
 function restoreTabScroll(root, previous = new Map()) {
-  $$('.tabs, .pagination-pages', root).forEach((tabs, index) => {
+  $$('.tabs', root).forEach((tabs, index) => {
     tabs.scrollLeft = previous.get(tabScrollKey(tabs, index)) || 0;
     const active = tabs.querySelector('.tab.active, [role="tab"][aria-selected="true"], [aria-current="page"]');
     if (!active) return;
@@ -909,28 +909,33 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
   const check = scope
     ? `<th class="check-cell"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /></th>`
     : '';
-  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? `stable-table page-size-${state.pageSize}` : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${visible.map((column) => `<th class="${column.action ? 'table-actions' : ''}" scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
+  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${visible.map((column) => `<th class="${column.action ? 'table-actions' : ''}" scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
 }
 function fixedTableColumn(column) {
   return column.action || ['email', 'orderNo', 'name'].includes(column.id);
 }
+// Long credential columns retain their explicit full-content action only.
+const tableHoverColumns = new Set([
+  'auxiliary', 'device', 'extractionNotes', 'importId', 'note', 'notes', 'notes2', 'orderNos',
+  'reason', 'services', 'tags', 'usageEvidence'
+]);
 function renderTableCell(column, row, tableId) {
   const value = row[column.id];
   const content = column.render ? column.render(row) : escapeHtml(value ?? '—');
   if (!column.long || value === undefined || value === null || value === '') return content;
-  return `<button class="table-value-button" type="button" data-action="table-cell-view" data-table-id="${escapeHtml(tableId)}" data-column="${escapeHtml(column.id)}" data-row-id="${escapeHtml(row.id)}" aria-label="查看${escapeHtml(column.label)}完整内容"><span>${content}</span>${icon('info')}</button>`;
+  const preview = tableHoverColumns.has(column.id) ? ' data-table-value-preview' : '';
+  return `<button class="table-value-button" type="button" data-action="table-cell-view" data-table-id="${escapeHtml(tableId)}" data-column="${escapeHtml(column.id)}" data-row-id="${escapeHtml(row.id)}" aria-label="查看${escapeHtml(column.label)}完整内容"${preview}><span class="table-value-ellipsis">${content}</span>${icon('info')}</button>`;
 }
-function pagination(total) {
-  const pages = Math.max(1, Math.ceil(total / state.pageSize));
-  state.page = Math.min(state.page, pages);
-  return `<div class="pagination" data-total="${total}" data-page-size="${state.pageSize}"><span>共 ${total} 条记录${total ? `，当前第 ${(state.page - 1) * state.pageSize + 1}–${Math.min(state.page * state.pageSize, total)} 条` : ''}</span><div class="pagination-controls"><select id="page-size" aria-label="每页条数">${options(
-    [
-      ['8', '8 条 / 页'],
-      ['16', '16 条 / 页']
-    ],
-    state.pageSize
-  )}</select><button class="page-number" data-action="page" data-page="${state.page - 1}" aria-label="上一页" ${state.page === 1 ? 'disabled' : ''}>${icon('chevron')}</button><div class="pagination-pages" role="group" aria-label="页码">${Array.from({ length: pages }, (_, i) => `<button class="page-number ${state.page === i + 1 ? 'active' : ''}" data-action="page" data-page="${i + 1}" ${state.page === i + 1 ? 'aria-current="page"' : ''}>${i + 1}</button>`).join('')}</div><button class="page-number" data-action="page" data-page="${state.page + 1}" aria-label="下一页" ${state.page === pages ? 'disabled' : ''}>${icon('chevron')}</button></div></div>`;
+function pagination(total, { page = state.page, pageSize = state.pageSize, disabled = false } = {}) {
+  return window.IDPagination.render({ id: 'main-list', page, pageSize, total, disabled });
 }
+document.addEventListener('id-pagination-change', (event) => {
+  const { id, page, pageSize } = event.detail;
+  if (id !== 'main-list' || !activePageRegion().contains(event.target)) return;
+  state.page = page;
+  state.pageSize = pageSize;
+  render();
+});
 function pageRows(rows) {
   state.page = Math.min(state.page, Math.max(1, Math.ceil(rows.length / state.pageSize)));
   return rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
@@ -947,7 +952,7 @@ function permittedRoute(route) {
 }
 const designTableFrames = new Map();
 function stabilizeDesignTables() {
-  for (const pager of $$('#main .pagination')) {
+  for (const pager of $$('[data-pagination="main-list"]', activePageRegion())) {
     let viewport = pager.previousElementSibling;
     while (viewport && !viewport.classList.contains('table-viewport'))
       viewport = viewport.previousElementSibling;
@@ -962,6 +967,7 @@ function stabilizeDesignTables() {
     designTableFrames.set(key, rows);
     viewport.classList.add('stable-table');
     viewport.dataset.frameRows = String(rows);
+    viewport.style.setProperty('--table-page-rows', String(rows));
   }
 }
 function renderSidebar() {
@@ -1567,6 +1573,7 @@ function navigate() {
     if (state.route)
       state.viewDrafts.set(state.route, {
         page: state.page,
+        pageSize: state.pageSize,
         query: state.query,
         country: state.country,
         status: state.status,
@@ -1578,7 +1585,7 @@ function navigate() {
     state.previewMode = 'normal';
     Object.assign(
       state,
-      { page: 1, query: '', country: '', status: '', mailTab: 'available', claudeTab: 'active' },
+      { page: 1, pageSize: window.IDPagination.defaultPageSize, query: '', country: '', status: '', mailTab: 'available', claudeTab: 'active' },
       state.viewDrafts.get(next) || {}
     );
     state.selections.clear();
@@ -2433,6 +2440,15 @@ function saveOrder(form, renewal = false) {
     }
   );
 }
+document.addEventListener('pointerover', (event) => {
+  const target = event.target.closest('[data-table-value-preview]');
+  if (!target || target.contains(event.relatedTarget)) return;
+  const text = target.querySelector('.table-value-ellipsis') || target;
+  // Use the displayed text so previews respect the column's formatting and masking.
+  if (text.scrollWidth > text.clientWidth) target.title = text.textContent.trim();
+  else target.removeAttribute('title');
+});
+
 document.addEventListener('click', async (event) => {
   const navigationLink = event.target.closest('a[href^="#/"]');
   if (navigationLink && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
@@ -2499,11 +2515,6 @@ document.addEventListener('click', async (event) => {
     state.mailTab = node.dataset.tab;
     state.page = 1;
     getSelection('inventory').clear();
-    render();
-    return;
-  }
-  if (action === 'page') {
-    state.page = Number(node.dataset.page);
     render();
     return;
   }
@@ -2934,10 +2945,6 @@ document.addEventListener('change', async (event) => {
   } else if (node.id === 'mail-type') {
     preserveDrawerDraft();
     editMailbox($('input[name="recordId"]', $('#drawer'))?.value || '');
-  } else if (node.id === 'page-size') {
-    state.pageSize = Number(node.value);
-    state.page = 1;
-    render();
   } else if (node.id === 'country-filter') {
     state.country = node.value;
     state.page = 1;

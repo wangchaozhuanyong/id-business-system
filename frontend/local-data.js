@@ -240,6 +240,7 @@
     save: (domain, version, data, { action } = {}) => write([domain], () => request(domain, { version, data, action })),
     saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
     audit: () => request('audit'),
+    auditPage: (params) => request('audit/page?' + new URLSearchParams(params)),
     relay: (operation, data) => ['primary-save', 'primary-import', 'alias-register', 'code-reset-confirm', 'mail-reassign-confirm'].includes(operation)
       ? write(['inventory', 'apple-relay', 'tools/mailbox-pool'], () => request('apple-relay/' + operation, data, 'POST'))
       : request('apple-relay/' + operation, data, 'POST'),

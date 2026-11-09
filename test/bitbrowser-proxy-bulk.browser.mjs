@@ -10,7 +10,7 @@ test('bulk IP detection spans filters/pages, remains sequential, stops safely an
   for (const width of [1440, 390, 320]) for (const theme of ['light', 'dark']) await t.test(`${width} ${theme}`, async () => {
     const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(7000);
     const origin = 'https://bit-proxy-bulk.test', errors = [], writes = [], external = [];
-    let items = Array.from({ length: 6 }, (_, n) => ({ id: String(n + 1), name: `示例 ${n + 1}`, countryCode: 'PH', kind: 'mobile', mode: n === 5 ? 'dynamic' : 'static', protocol: 'socks5', endpoint: n === 5 ? 'extract.example.test' : `proxy-${n + 1}.example.test:1080` }));
+    let items = Array.from({ length: 11 }, (_, n) => ({ id: String(n + 1), name: `示例 ${n + 1}`, countryCode: 'PH', kind: 'mobile', mode: n === 5 ? 'dynamic' : 'static', protocol: 'socks5', endpoint: n === 5 ? 'extract.example.test' : `proxy-${n + 1}.example.test:1080` }));
     let reads = [], calls = [], extractionCalls = 0, active = 0, maxActive = 0, holdNative = false, holdRead = false, heldNative, heldRead, nativeArrival, readArrival, conflict = false, extractionMode = 'provider-failure';
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
@@ -44,7 +44,7 @@ test('bulk IP detection spans filters/pages, remains sequential, stops safely an
       if (path === '/') file = '../frontend/bitbrowser-local.html';
       else if (path === '/assets/bitbrowser/proxies.mjs') file = '../frontend/bitbrowser-proxies.mjs';
       else if (path.startsWith('/assets/bitbrowser/')) file = '../modules/recharge/bitbrowser/' + path.slice('/assets/bitbrowser/'.length);
-      else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js'].includes(path)) file = '../frontend/' + path.slice(1);
+      else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
       if (!file) { external.push(path); return route.abort(); }
       let body = await readFile(new URL(file, import.meta.url), 'utf8');
       if (path === '/') body = body.replace('<script type="module" src="/assets/bitbrowser/local.mjs"></script>', `<script type="module">
@@ -61,16 +61,18 @@ test('bulk IP detection spans filters/pages, remains sequential, stops safely an
     await page.goto(origin); await page.waitForFunction(() => !document.querySelector('#bit-test-all-proxies').disabled);
     await page.locator('#bit-execution-proxy').evaluate(e => { e.value='1'; e.dispatchEvent(new Event('change',{bubbles:true})); });
     assert.equal(await page.evaluate(() => window.proxies.ready()), true);
-    await page.locator('#bit-ip-search').fill('示例 1'); // All six must run even while only one is visible.
+    await page.locator('#bit-ip-search').fill('示例 3'); // All eleven must run even while only one is visible.
     await page.locator('#bit-test-all-proxies').click();
     await page.locator('#bit-library-result').filter({ hasText: '检测全部完成' }).waitFor();
-    assert.match(await page.locator('#bit-library-result').innerText(), /已完成 6\/6，可用 4，未通过 1，未完成 1/);
-    assert.equal(new Set(reads.map(x => x.id)).size, 6); assert.equal(calls.length, 5); assert.equal(maxActive, 1);
-    assert.equal(await page.locator('#bit-ip-search').inputValue(), '示例 1');
+    assert.match(await page.locator('#bit-library-result').innerText(), /已完成 11\/11，可用 9，未通过 1，未完成 1/);
+    assert.equal(new Set(reads.map(x => x.id)).size, 11); assert.equal(calls.length, 10); assert.equal(maxActive, 1);
+    assert.equal(await page.locator('#bit-ip-search').inputValue(), '示例 3');
     await page.locator('#bit-ip-search').fill('');
     assert.match(await page.locator('#bit-ip-rows tr').filter({ hasText: '示例 2' }).innerText(), /检测未通过/);
     assert.match(await page.locator('#bit-ip-rows tr').filter({ hasText: '示例 6' }).innerText(), /未完成检测/);
-    await page.locator('#bit-ip-next').click(); assert.match(await page.locator('#bit-ip-page-info').innerText(), /2 \/ 2/);
+    const ipPager = page.locator('nav[data-pagination="bit-ip"]');
+    await ipPager.getByRole('button', { name: '下一页' }).click();
+    assert.equal(await ipPager.locator('[data-pagination-target]').inputValue(), '2');
     assert.match(await page.locator('#bit-ip-rows tr').innerText(), /可用/);
     const idleBounds = await page.locator('#bit-test-all-proxies').boundingBox();
     reads = []; calls = []; holdNative = true;

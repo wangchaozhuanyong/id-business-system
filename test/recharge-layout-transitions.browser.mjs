@@ -179,6 +179,18 @@ test('recharge transitions keep content and geometry through delayed, superseded
           sample.form && sample.theme === (dark ? 'dark' : 'light') &&
           Math.abs(sample.height - bitHeight) <= 1 && !sample.overflow),
         '比特登录首帧应包含完整表单、正确主题和测量后的高度');
+        const addresses = page.locator('#bit-addresses-host');
+        await addresses.getByRole('heading', { name: '地址管理', exact: true }).waitFor();
+        const loginBox = await page.locator('[data-recharge-module="bit"]').boundingBox();
+        const addressBox = await addresses.boundingBox();
+        const jumpToAddresses = page.getByRole('button', { name: '前往地址管理', exact: true });
+        if (width === 1440) {
+          assert(addressBox.x > loginBox.x + loginBox.width && Math.abs(addressBox.y - loginBox.y) <= 1);
+          assert.equal(await jumpToAddresses.isVisible(), false);
+        } else {
+          assert(addressBox.y > loginBox.y + loginBox.height && Math.abs(addressBox.x - loginBox.x) <= 1);
+          assert.equal(await jumpToAddresses.isVisible(), true);
+        }
 
         await page.evaluate(() => scrollTo(0, 180));
         await settle();
@@ -194,29 +206,30 @@ test('recharge transitions keep content and geometry through delayed, superseded
         assert(bitReturned.length > 0 && bitReturned.every(sample => sample.scroll === bitScroll),
           '返回比特登录的第一个可见帧应恢复阅读位置');
         if (width === 1440 && !dark) {
-          await page.frameLocator(bitSelector).getByRole('button', { name: '地址管理' }).click();
-          const addressList = page.locator('#bit-address-list');
-          await addressList.getByText('暂无地址', { exact: true }).waitFor();
+          const addressList = addresses.locator('#bit-address-list');
+          await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
           const releaseAddressRead = Promise.withResolvers();
           await page.route('**/api/local/bitbrowser-addresses?*', async route => {
             await releaseAddressRead.promise;
             await route.fulfill({ status: 503, json: { error: '地址读取暂时失败' } });
           }, { times: 1 });
-          const refreshAddresses = page.getByRole('dialog').getByRole('button', { name: '刷新', exact: true });
+          const refreshAddresses = addresses.getByRole('button', { name: '刷新', exact: true });
           try {
             await refreshAddresses.click();
-            const progress = page.locator('[data-bit-address-read-status]:not([hidden])');
+            const progress = addresses.locator('[data-bit-address-read-status]:not([hidden])');
             await progress.waitFor();
             assert.equal(await progress.textContent(), '');
             assert((await progress.boundingBox()).height <= 3);
             assert(await refreshAddresses.isDisabled());
-            await addressList.getByText('暂无地址', { exact: true }).waitFor();
+            await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
           } finally {
             releaseAddressRead.resolve();
           }
           await page.getByText(/地址读取暂时失败/).waitFor();
-          await addressList.getByText('暂无地址', { exact: true }).waitFor();
-          await page.getByRole('button', { name: '关闭抽屉' }).click();
+          await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
+        } else if (width === 390) {
+          await jumpToAddresses.click();
+          assert.equal(await addresses.evaluate((node) => document.activeElement === node), true);
         }
         assert.deepEqual(errors, []);
         if (output) await page.screenshot({ path: join(output, `transition-${width}-${dark ? 'dark' : 'light'}.png`) });

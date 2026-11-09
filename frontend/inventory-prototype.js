@@ -850,7 +850,7 @@
           label: kind === 'account' ? '账号 / 邮箱' : '邮箱账号',
           class: 'email-cell',
           render: (asset) =>
-            textAction(asset.email, 'inventory-detail', `data-id="${esc(asset.id)}"`)
+            textAction(asset.email, 'inventory-detail', `data-id="${esc(asset.id)}" data-table-value-preview`, 'table-value-ellipsis')
         },
         {
           id: 'password',
@@ -1155,10 +1155,10 @@
               { id: 'id', label: '归还编号' },
               { id: 'batchId', label: '原提取批次', render: (entry) => esc(numbers.get(entry.batchId) ?? entry.batchId) },
               { id: 'email', label: '邮箱 / 账号' },
-              { id: 'reason', label: '归还理由' },
+              { id: 'reason', label: '归还理由', long: true },
               { id: 'time', label: '归还时间' },
               { id: 'actor', label: '操作人' },
-              { id: 'notes', label: '备注' },
+              { id: 'notes', label: '备注', long: true },
               {
                 id: 'actions',
                 label: '操作',
@@ -1245,20 +1245,12 @@
           { id: 'type', label: '资料类型', render: (item) => typeLabel(item.type) },
           { id: 'status', label: '处理状态', render: itemTag },
           { id: 'returnEligibility', label: '归还资格', class: 'wide-cell', render: item => esc(returnBlock(assetById(item.assetId), batch, item) || '可归还') },
-          { id: 'usageEvidence', label: '使用依据', render: (item) => {
-            const asset = assetById(item.assetId);
-            const links = asset?.usageLinks || [];
-            const link = links.find((entry) => entry.claimId === item.id) ||
-              (item.status === 'used' && links.at(-1));
-            const corrected = asset?.usageCorrections?.some((row) => row.originalLink?.claimId === item.id);
-            return esc(link?.label || (item.status === 'pending' && usageReview.get(item.assetId)?.message) ||
-              (corrected ? '原使用关联已更正' : '—'));
-          } },
+          { id: 'usageEvidence', label: '使用依据', long: true },
           { id: 'claimedAt', label: '提取时间' },
           { id: 'usedAt', label: '实际使用时间' },
           { id: 'returnedAt', label: '归还时间' },
-          { id: 'reason', label: '归还理由' },
-          { id: 'notes', label: '备注' },
+          { id: 'reason', label: '归还理由', long: true },
+          { id: 'notes', label: '备注', long: true },
           {
             id: 'actions',
             label: '操作',
@@ -1267,7 +1259,17 @@
               `<div class="action-links">${textAction('复制', 'inventory-item-copy', `data-id="${item.id}"`)}${textAction('资料', 'inventory-detail', `data-id="${item.assetId}"`)}${textAction(returnBlock(assetById(item.assetId), batch, item) ? '不可归还' : '归还', 'inventory-item-return', `data-id="${item.id}" ${returnBlock(assetById(item.assetId), batch, item) ? 'disabled' : ''}`)}</div>`
           }
         ],
-        batch.items,
+        batch.items.map((item) => {
+          const asset = assetById(item.assetId);
+          const links = asset?.usageLinks || [];
+          const link = links.find((entry) => entry.claimId === item.id) ||
+            (item.status === 'used' && links.at(-1));
+          const corrected = asset?.usageCorrections?.some((row) => row.originalLink?.claimId === item.id);
+          const usageEvidence = link?.label ||
+            (item.status === 'pending' && usageReview.get(item.assetId)?.message) ||
+            (corrected ? '原使用关联已更正' : undefined);
+          return { ...item, usageEvidence };
+        }),
         'inventory-claims',
         '批次明细'
       )}</section>`

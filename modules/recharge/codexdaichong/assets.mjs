@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { CODEXDAICHONG_REVISION } from './prepare.mjs';
 import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
+import { RECHARGE_STAGE_LABELS } from './progress-presentation.mjs';
 import { routingAdminPanel } from './routing-admin-ui.mjs';
 import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
 
@@ -60,7 +61,190 @@ function localUrls(source) {
     );
 }
 
+function adaptAdminPagination(source) {
+  source = replaceSection(source, '        const paginationState = {', '        const RUNTIME_LOG_TEXT_CAP',
+    `        const paginationState = Object.fromEntries([
+            'phone_pool', 'card_pool', 'cdk', 'product', 'log', 'session', 'proxy_pool',
+            'address', 'manual_hold', 'admin_login', 'ip_ban'
+        ].map(key => [key, { page: 1, pageSize: 10 }]));`);
+  source = replaceSection(source, '        function changePage(', '        function getItemKey(', `
+        const adminPageSizes = [10, 20, 50];
+        const paginationMarkup = new WeakMap();
+        const adminLoadedRows = { admin_login: [], ip_ban: [] };
+        function changePage(stateKey, nextPage) {
+            if (stateKey === 'session') return loadSessions(false, { page: nextPage });
+            paginationState[stateKey].page = nextPage;
+            if (stateKey === 'phone_pool') renderPhoneTable();
+            if (stateKey === 'card_pool') renderCardPoolTable();
+            if (stateKey === 'cdk') renderCDKTable();
+            if (stateKey === 'log') renderLogTable(window.__adminLogs || []);
+            if (stateKey === 'product') renderProductTable();
+            if (stateKey === 'proxy_pool') renderProxyPoolTable();
+            if (stateKey === 'address') renderAddressTable();
+            if (stateKey === 'manual_hold') renderActivationManualHolds();
+            if (stateKey === 'admin_login') renderAdminLoginRows();
+            if (stateKey === 'ip_ban') renderIpBanRows();
+        }
+        document.addEventListener('id-pagination-change', event => {
+            const { id, page, pageSize } = event.detail || {};
+            if (typeof id !== 'string' || !id.startsWith('recharge-') ||
+                !Number.isSafeInteger(page) || page < 1 || !adminPageSizes.includes(pageSize)) return;
+            const stateKey = id.slice('recharge-'.length);
+            if (stateKey === 'orbitcard' || stateKey === 'session') {
+                // The current control describes the last confirmed response until the new one succeeds.
+                const size = event.target.querySelector('[data-pagination-size]');
+                if (size) size.value = event.target.dataset.pageSize;
+                if (stateKey === 'orbitcard') return void loadOrbitcardUsage(false, false, page, { pageSize });
+                return void loadSessions(false, { page, pageSize });
+            }
+            if (!Object.hasOwn(paginationState, stateKey)) return;
+            paginationState[stateKey].pageSize = pageSize;
+            changePage(stateKey, page);
+        });
+  `);
+  source = replaceSection(source, '        function getPaginationItems(', '        function switchAdminSection(', `
+        function renderSharedAdminPagination(container, stateKey, { page, pageSize, total }) {
+            if (!container) return;
+            const note = ['log', 'manual_hold', 'admin_login', 'ip_ban'].includes(stateKey)
+                ? '<p class="recharge-pagination-note">仅统计本次已加载的最近记录。</p>' : '';
+            const markup = note + window.IDPagination.render({
+                id: 'recharge-' + stateKey, page, pageSize, total, pageSizes: adminPageSizes
+            });
+            // Three-second refreshes must not clear an in-progress jump or steal focus.
+            if (paginationMarkup.get(container) === markup && container.firstElementChild) return;
+            container.classList.add('recharge-table-pagination');
+            container.innerHTML = markup;
+            paginationMarkup.set(container, markup);
+        }
+        function renderPagination(containerId, stateKey, total) {
+            renderSharedAdminPagination(document.getElementById(containerId), stateKey, {
+                ...paginationState[stateKey], total
+            });
+        }
+        function paginateAdminRows(body, stateKey, rows) {
+            const data = getPageItems(rows, stateKey);
+            const id = 'recharge_' + stateKey + '_pagination';
+            let container = document.getElementById(id);
+            if (!container) {
+                container = document.createElement('div');
+                container.id = id;
+                container.className = 'table-footer';
+                body.closest('table').parentElement.after(container);
+            }
+            renderSharedAdminPagination(container, stateKey, data);
+            return data.items;
+        }
+  `);
+  for (const [collection, key] of [
+    ['cardPoolList', 'card_pool'], ['proxyPoolList', 'proxy_pool'],
+    ['regionAddressList', 'address'], ['activationManualHolds', 'manual_hold']
+  ]) {
+    const bodyStart = {
+      card_pool: "            const tbody = document.getElementById('card_pool_list_body');",
+      proxy_pool: "            const summary = document.getElementById('proxy_pool_summary');\n            if (!tbody) return;",
+      address: "            const hint = document.getElementById('address_empty_hint');\n            if (!tbody) return;",
+      manual_hold: "        function renderActivationManualHolds() {\n            const tbody = document.getElementById('activation_manual_hold_body');\n            if (!tbody) return;"
+    }[key];
+    source = replaceOne(source, bodyStart,
+      `${bodyStart}\n            const pageRows = paginateAdminRows(tbody, '${key}', ${collection});`);
+    source = replaceOne(source, `tbody.innerHTML = ${collection}.map(`, 'tbody.innerHTML = pageRows.map(');
+  }
+  for (const [collection, key, field, bodyId, renderer, anchor] of [
+    ['logs', 'admin_login', 'logs', 'admin_login_logs_body', 'renderAdminLoginRows', 'async function loadIpBans()'],
+    ['bans', 'ip_ban', 'bans', 'ip_ban_body', 'renderIpBanRows', 'async function submitIpBan()']
+  ]) {
+    const rowStart = `                const ${collection} = data.${field} || [];\n`;
+    const start = source.indexOf(rowStart);
+    const end = source.indexOf('            } catch (error) {', start);
+    if (start < 0 || end < 0) throw new Error('上游后台列表适配点不一致');
+    const originalRows = source.slice(start + rowStart.length, end);
+    source = replaceOne(source, rowStart + originalRows,
+      `                adminLoadedRows.${key} = Array.isArray(data.${field}) ? data.${field} : [];\n                ${renderer}();\n`);
+    source = replaceOne(source, anchor, `function ${renderer}() {
+            const body = document.getElementById('${bodyId}');
+            if (!body) return;
+            const ${collection} = paginateAdminRows(body, '${key}', adminLoadedRows.${key});
+${originalRows}        }
+
+        ${anchor}`);
+  }
+  return adaptRemoteAdminPagination(source);
+}
+
+function adaptRemoteAdminPagination(source) {
+  source = replaceOne(source, `            paginationState.session.page = 1;
+            loadSessions(false).catch(() => { });`,
+    `            loadSessions(false, { page: 1 }).catch(() => { });`);
+  source = replaceOne(source, '        async function loadSessions(showToast = false, options = {}) {',
+    `        let sessionPageRequestId = 0;
+        async function loadSessions(showToast = false, options = {}) {
+            const requestId = ++sessionPageRequestId;`);
+  source = replaceOne(source, `            state.page = page;
+            const query = new URLSearchParams({
+                limit: String(state.pageSize),
+                offset: String((page - 1) * state.pageSize),`,
+    `            const pageSize = options.pageSize ?? state.pageSize;
+            const query = new URLSearchParams({
+                limit: String(pageSize),
+                offset: String((page - 1) * pageSize),`);
+  source = replaceOne(source, `                const res = await authFetch(\`/api/admin/sessions?\${query.toString()}\`);
+                const parsed = await readJsonResponse(res);
+                if (!parsed.ok) {
+                    throw new Error(parsed.message);
+                }`,
+    `                const res = await authFetch(\`/api/admin/sessions?\${query.toString()}\`);
+                const parsed = await readJsonResponse(res);
+                if (requestId !== sessionPageRequestId) return;
+                if (!res.ok || !parsed.ok) throw new Error(parsed.message || '加载 Session 失败');`);
+  source = replaceOne(source, `                sessionTotal = Math.max(0, Number(data.total) || nextList.length);
+                const totalPages = Math.max(1, Math.ceil(sessionTotal / state.pageSize));
+                if (state.page > totalPages) {
+                    state.page = totalPages;
+                    return loadSessions(showToast, { ...options, page: totalPages, search });
+                }`,
+    `                const total = Math.max(0, Number(data.total) || nextList.length);
+                const totalPages = Math.max(1, Math.ceil(total / pageSize));
+                if (page > totalPages) {
+                    return loadSessions(showToast, { ...options, page: totalPages, pageSize, search });
+                }
+                state.page = page;
+                state.pageSize = pageSize;
+                sessionTotal = total;`);
+  source = replaceOne(source, `                if (showToast) {
+                    showMessage(error.message || '加载 Session 失败', 'error');`,
+    `                if (requestId === sessionPageRequestId && (showToast || options.page != null)) {
+                    showMessage(error.message || '加载 Session 失败', 'error');`);
+  source = replaceOne(source, '        const orbitcardUsageState = {\n            page: 1,\n            pageSize: 20,',
+    '        const orbitcardUsageState = {\n            page: 1,\n            pageSize: 10,');
+  source = replaceOne(source, 'page = orbitcardUsageState.page) {', 'page = orbitcardUsageState.page, options = {}) {');
+  source = replaceOne(source, `            orbitcardUsageState.page = Math.max(1, Number(page) || 1);
+            try {
+                const params = new URLSearchParams({
+                    page: String(orbitcardUsageState.page),
+                    page_size: String(orbitcardUsageState.pageSize),`,
+    `            const requestedPage = Math.max(1, Number(page) || 1);
+            const pageSize = options.pageSize ?? orbitcardUsageState.pageSize;
+            try {
+                const params = new URLSearchParams({
+                    page: String(requestedPage),
+                    page_size: String(pageSize),`);
+  source = replaceOne(source, '                orbitcardUsageState.page = Number(data.page || orbitcardUsageState.page);',
+    '                orbitcardUsageState.page = Number(data.page || requestedPage);\n                orbitcardUsageState.pageSize = pageSize;');
+  source = replaceOne(source, "                console.error('loadOrbitcardUsage failed', error);",
+    `                console.error('loadOrbitcardUsage failed', error);
+                if (options.pageSize != null) {
+                    showMessage(error.message || '加载 Orbitcard 记录失败', 'error');
+                    return;
+                }`);
+  return replaceSection(source, '        function renderOrbitcardUsagePagination(', '        function formatOrbitcardPlan(', `
+        function renderOrbitcardUsagePagination() {
+            renderSharedAdminPagination(document.getElementById('orbitcard_usage_pagination'), 'orbitcard', orbitcardUsageState);
+        }
+  `);
+}
+
 function adaptAdminScript(source, routingScript) {
+  source = adaptAdminPagination(source);
   source = replaceSection(source, '        async function saveProxyPool() {', '        function applyProxyTestResultToRow', `
         const normalizeRechargeProxyInput = ${normalizeRechargeProxyInput.toString()};
         function normalizeProxyPoolEditor(input) {
@@ -250,6 +434,36 @@ function adaptAdminScript(source, routingScript) {
     "            }).join('');\n            lucide.createIcons();\n        }\n\n        function getCardStatusBadge(card)",
     "            }).join('');\n            paintRechargeCardTypes();\n            lucide.createIcons();\n        }\n\n        function getCardStatusBadge(card)"
   );
+  for (const [anchor, replacement] of [
+    [
+      '        function renderLogTable(logs) {',
+      `        function renderRechargeCellText(value) {
+            if (!value) return '-';
+            const text = escapeHtml(value);
+            return '<button type="button" class="recharge-cell-text" aria-haspopup="dialog" title="' + text + '">' + text + '</button>';
+        }
+        function renderLogTable(logs) {`
+    ],
+    ['infoParts.push(escapeHtml(l.message));', 'infoParts.push(renderRechargeCellText(l.message));'],
+    [
+      '<span style="color:var(--text-dim); font-size:12px;">阶段：${escapeHtml(l.automation.phase)}</span>',
+      "<div class=\"recharge-cell-phase\">${renderRechargeCellText('阶段：' + l.automation.phase)}</div>"
+    ],
+    [
+      '<span style="color:#047857; font-size:12px;">Checkout 已打开</span>',
+      '<div class="recharge-cell-checkout">Checkout 已打开</div>'
+    ],
+    ["infoParts.join('<br>')", "infoParts.join('')"],
+    [
+      'data-label="任务信息">${escapeHtml(row.message || \'-\')}</td>',
+      'data-label="任务信息">${renderRechargeCellText(row.message)}</td>'
+    ],
+    [
+      '<td style="max-width:320px; white-space:normal;">${escapeHtml(hold.reason || \'-\')}</td>',
+      '<td>${renderRechargeCellText(hold.reason)}</td>'
+    ]
+  ])
+    source = replaceOne(source, anchor, replacement);
   // Add the local settings call after namespacing upstream URLs. It goes to the host, not the engine.
   return replaceOne(localUrls(source + '\n' + routingScript), '        let cardPoolList = [];', `
         let cardPoolList = [];
@@ -332,6 +546,215 @@ function adaptRedeemHtml(source) {
             backToStep1.hidden = true;
             tokenInput.dispatchEvent(new Event('input', { bubbles: true }));
         };`);
+  return source;
+}
+
+function adaptRechargeProgress(source, workspace) {
+  const replacements = [
+    ['<span>开通进度</span>', '<strong id="taskProgressTitle">开通中</strong>'],
+    [
+      '<p id="taskProgressText" class="task-progress-text"></p>',
+      '<p id="taskProgressText" class="task-progress-text" aria-live="polite"></p>\n' +
+        '                <p id="taskProgressHint" class="task-progress-hint" aria-live="polite"></p>'
+    ],
+    ["const START_SUCCESS_TEXT = '激活成功';", "const START_SUCCESS_TEXT = '开通成功';"],
+    [
+      "setProgress(3, '正在恢复任务进度...');",
+      "applyTaskState({ status: 'running' });"
+    ],
+    ["                        showStatus(data.data?.message || '检测到当前 CDK 正在开通中，正在恢复任务进度...', 'success');", ''],
+    ["setProgress(3, '正在启动自动化...', 'running', { force: true });", "setProgress(0, '正在确认提交结果…', 'submitting');"],
+    ["setProgress(8, '任务已启动，正在开通中...');", "applyTaskState({ ...data, status: 'running' });"],
+    ["                    showStatus('任务已启动，正在为您开通中...', 'success');", ''],
+    ['                        initWebSocket(data.data.jobKey);\n', ''],
+    ['                    initWebSocket(data.jobKey);\n', ''],
+    ['            clearTimeout(reconnectTimer);', ''],
+    [
+      '            taskProgressValue = 0;',
+      "            taskProgressValue = 0;\n            setProgressHint('');"
+    ],
+    [
+      "            const maxAllowed = (type === 'success' || type === 'error') ? 100 : 99;",
+      "            const maxAllowed = type === 'success' ? 100 : 99;\n            taskProgress.dataset.state = type;"
+    ],
+    [
+      '            taskProgressPercent.textContent = `${next}%`;',
+      `            taskProgressPercent.textContent = next + '%';
+            const titles = { submitting: '正在提交', running: '开通中', success: '开通成功',
+                review: '开通结果待核对', error: '本次开通未完成' };
+            document.getElementById('taskProgressTitle').textContent = titles[type];`
+    ],
+    ["                taskProgressText.textContent = label || '';", "                if (taskProgressText.textContent !== label) taskProgressText.textContent = label;"],
+    [
+      "                    const statusClass = isProcessing ? 'processing' : (isUsed ? 'used' : 'unused');",
+      "                    const statusClass = isProcessing ? 'processing' : (isUsed ? 'used' : 'unused');\n" +
+        '                    if (queryInput.value.trim() !== cdk || !querySection.checkVisibility()) return;\n' +
+        '                    const taskSummary = queryTaskSummary(data.data);'
+    ],
+    [
+      '<div class="query-row"><span>当前状态</span><strong class="status-${statusClass}">${escapeHtml(statusText)}</strong></div>',
+      '<div class="query-row"><span>兑换码状态</span><strong class="status-${statusClass}">${escapeHtml(statusText)}</strong></div>\n' +
+        '                            ${taskSummary ? `<div class="query-row"><span>开通进度</span><strong data-recharge-query-stage>${escapeHtml(taskSummary)}</strong></div>` : \'\'}'
+    ],
+    [
+      "                    showStatus(resultHtml, isUsed ? 'error' : 'success', true);",
+      "                    showStatus(resultHtml, isUsed ? 'error' : 'success', true);\n" +
+        "                    const stageNode = statusMsg.querySelector('[data-recharge-query-stage]');\n" +
+        "                    if (stageNode) void lookupQueryTaskSummary(data.data).then((label) => {\n" +
+        "                        if (stageNode.isConnected && queryInput.value.trim() === cdk) stageNode.textContent = label;\n" +
+        "                    });"
+    ],
+    [
+      '<span class="status-${getBatchStatusClass(item.status)}">${escapeHtml(item.status)}</span>',
+      '<div class="batch-query-state"><span class="status-${getBatchStatusClass(item.status)}">${escapeHtml(item.status)}</span>\n' +
+        '                    ${queryTaskSummary(item) ? `<small>${escapeHtml(queryTaskSummary(item))}</small>` : \'\'}</div>'
+    ]
+  ];
+  source = replaceSection(source, '        let socket = null;', 'function resetRedeemFlow(options = {}) {', `
+        const openingStages = ${JSON.stringify(RECHARGE_STAGE_LABELS)};
+        const openingResults = {
+            success: { title: '开通成功', tone: 'success', flow: 'success', label: '请前往 ChatGPT 查看目标账号的订阅状态。', button: START_SUCCESS_TEXT },
+            failed: { title: '本次开通未完成', tone: 'error', flow: 'failed', label: '请核对账号资料后再决定是否重试。', button: START_FAILED_TEXT },
+            manual: { title: '开通结果待核对', tone: 'review', flow: 'manual', label: '请保留兑换码，查询原任务，请勿重复提交。', button: '待核对' },
+            maintenance: { title: '本次开通未完成', tone: 'error', flow: 'failed', label: '服务暂时不可用，请用原兑换码查询。', button: START_FAILED_TEXT }
+        };
+        let activeJobKey = '';
+        let taskCompleted = false;
+        let taskStatusPollTimer = null;
+
+        function stageLabel(stage) {
+            return Object.hasOwn(openingStages, stage) ? openingStages[stage] : '处理中';
+        }
+
+        function taskOutcome(data, status) {
+            if (status === 'failed' && (data.manualReview === true || /转人工|人工确认|待核实/.test(String(data.message || ''))))
+                return 'manual';
+            return status;
+        }
+
+        function queryTaskSummary(data) {
+            const status = data.taskStatus || (data.status === '开通中' ? 'running' : null);
+            if (status === 'running') return stageLabel(data.stage);
+            return Object.hasOwn(openingResults, status) ? openingResults[status].title : '';
+        }
+
+        function validRechargeJobKey(jobKey) {
+            return typeof jobKey === 'string' && /^[\\w-]{1,128}$/.test(jobKey);
+        }
+
+        async function readRechargeTask(jobKey) {
+            const response = await fetch('/api/task-status/' + encodeURIComponent(jobKey), {
+                cache: 'no-store', signal: AbortSignal.timeout(10000)
+            });
+            if (!response.ok) throw new Error('任务进度暂不可用');
+            const result = await response.json();
+            const data = result.data;
+            if (result.success !== true || data?.jobKey !== jobKey ||
+                (data.status !== 'running' && !Object.hasOwn(openingResults, data.status)))
+                throw new Error('任务进度回执不完整');
+            return data;
+        }
+
+        async function lookupQueryTaskSummary(data) {
+            const initial = queryTaskSummary(data);
+            if ((data.taskStatus || (data.status === '开通中' ? 'running' : null)) !== 'running' ||
+                !validRechargeJobKey(data.jobKey) || Object.hasOwn(openingStages, data.stage)) return initial;
+            try {
+                const task = await readRechargeTask(data.jobKey);
+                return queryTaskSummary({ taskStatus: taskOutcome(task, task.status), stage: task.stage }) || initial;
+            } catch { return initial; }
+        }
+
+        function clearTaskStatusPolling() {
+            clearTimeout(taskStatusPollTimer);
+            taskStatusPollTimer = null;
+        }
+
+        async function pollTaskStatus(jobKey) {
+            if (!jobKey || taskCompleted || activeJobKey !== jobKey) return;
+            try {
+                const data = await readRechargeTask(jobKey);
+                if (activeJobKey === jobKey) applyTaskState(data);
+            } catch {
+                if (activeJobKey === jobKey && !taskCompleted)
+                    setProgressHint('正在重新连接，已保留上次进度。');
+            } finally {
+                if (activeJobKey === jobKey && !taskCompleted)
+                    taskStatusPollTimer = setTimeout(() => pollTaskStatus(jobKey), 5000);
+            }
+        }
+
+        function startTaskStatusPolling(jobKey) {
+            clearTaskStatusPolling();
+            activeJobKey = jobKey;
+            pollTaskStatus(jobKey);
+        }
+
+        function setProgressHint(text) {
+            const hint = document.getElementById('taskProgressHint');
+            if (hint.textContent !== text) hint.textContent = text;
+        }
+  `);
+  source = replaceSection(source, 'function applyTaskState(data) {', "startBtn.addEventListener('click'", `
+        function applyTaskState(data) {
+            const status = taskOutcome(data, data.status);
+            if (taskCompleted || (status !== 'running' && !Object.hasOwn(openingResults, status))) return;
+            const progress = Number.isFinite(data.progress) ? data.progress : taskProgressValue;
+            if (Object.hasOwn(data, 'captcha')) updateCaptchaVerification(data.captcha);
+            showProgress();
+            statusMsg.style.display = 'none';
+            if (status === 'running') {
+                const needsVerification = activeCaptcha?.stage === 'awaiting_captcha' || activeCaptcha?.status === 'pending';
+                const verificationSubmitted = activeCaptcha?.stage === 'captcha_submitted' || activeCaptcha?.status === 'submitted';
+                const label = needsVerification ? '等待完成验证' : verificationSubmitted ? '正在确认验证结果' : stageLabel(data.stage);
+                setProgress(progress, label);
+                setProgressHint(needsVerification && !captchaVerificationBtn.disabled
+                    ? '请在验证页面完成操作后返回。' : '请稍候，同一兑换码无需重复提交。');
+                updateFlowUI(2, 'running');
+                return;
+            }
+
+            taskCompleted = true;
+            clearTaskStatusPolling();
+            activeJobKey = '';
+            hideCaptchaVerification();
+            const result = openingResults[status];
+            const succeeded = status === 'success';
+            ${workspace ? "if (status === 'manual') pendingReview.add(verifiedCdk);" : ''}
+            setProgress(succeeded ? 100 : progress, result.label, result.tone);
+            const renewalUnconfirmed = succeeded && data.renewalUnconfirmed === true;
+            setProgressHint(renewalUnconfirmed ? '自动续订取消状态未确认，请到目标账号账单页核对。' : '');
+            updateFlowUI(2, result.flow);
+            setButtonText(startBtn, result.button);
+            toggleLoading(startBtn, false);
+            setActivationLock(false);
+            if (status === 'failed') {
+                taskCompleted = false;
+                ${workspace ? 'syncWorkspaceAccountLock(); updateConfirmation();' : 'startBtn.disabled = false;'}
+            } else startBtn.disabled = true;
+        }
+  `);
+  source = replaceOne(source, '            closeTaskSocket();', "            activeJobKey = '';");
+  source = replaceOne(source, 'if (isProcessing && data.data?.jobKey) {', 'if (isProcessing && validRechargeJobKey(data.data?.jobKey)) {');
+  source = replaceOne(source,
+    workspace ? 'if (response.ok && data.success && data.jobKey) {' : 'if (data.success && data.jobKey) {',
+    'if (response.ok && data.success === true && validRechargeJobKey(data.jobKey)) {');
+  for (const [anchor, replacement] of replacements) source = replaceOne(source, anchor, replacement);
+  if (workspace) {
+    source = replaceOne(source,
+      "                    querySection.style.display = 'none';",
+      "                    querySection.style.display = 'none';\n" +
+        '                    if (taskProgress.dataset.state) showProgress();'
+    );
+    source = replaceOne(source,
+      "                    hideProgress();\n                    setQueryMode('single');",
+      "                    taskProgress.style.display = 'none';\n                    setQueryMode('single');"
+    );
+    source = replaceOne(source,
+      "            taskProgress.style.display = 'none';\n            resetProgressState();",
+      "            taskProgress.style.display = 'none';\n            delete taskProgress.dataset.state;\n            resetProgressState();"
+    );
+  }
   return source;
 }
 
@@ -444,18 +867,23 @@ function adaptWorkspaceRechargeScript(source) {
         const plan = document.getElementById('workspacePlan');
         const verifiedPlan = document.getElementById('workspaceVerifiedPlan');
         const pendingReview = new Set();
+        function syncWorkspaceAccountLock() {
+            tokenInput.readOnly = activationLocked || taskCompleted || pendingReview.has(verifiedCdk) ||
+                tokenInput.dataset.demoReadonly === 'true';
+        }
         function setWorkspaceVerified(verified) {
             cdkInput.readOnly = verified;
             redeemBtn.hidden = verified;
             backToStep1.hidden = !verified;
             step2.disabled = !verified;
+            syncWorkspaceAccountLock();
         }
         function updateConfirmation() {
             const result = validateSessionInput(tokenInput.value, { silent: true });
             account.textContent = result.valid && result.email ? result.email : '填写后显示';
             accountHint.textContent = tokenInput.value.trim() && !result.valid ? result.message : '';
             startBtn.disabled = !verifiedCdk || !result.valid || activationLocked ||
-                (taskCompleted && activeJobKey) || pendingReview.has(verifiedCdk);
+                taskCompleted || pendingReview.has(verifiedCdk);
         }
         function markUncertain() {
             pendingReview.add(verifiedCdk);
@@ -502,9 +930,7 @@ function adaptWorkspaceRechargeScript(source) {
     'function applyTokenInput(',
     "redeemBtn.addEventListener('click'",
     `
-        tokenInput.addEventListener('input', () => {
-            updateConfirmation();
-        });
+        tokenInput.addEventListener('input', updateConfirmation);
         cdkInput.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' && !redeemBtn.hidden) redeemBtn.click();
         });
@@ -577,23 +1003,9 @@ function adaptWorkspaceRechargeScript(source) {
     ''
   );
   replace(
-    '                startBtn.disabled = false;\n                return;',
-    `
-                if (status === 'manual' || /转人工|人工确认|待核实/.test(message)) {
-                    pendingReview.add(verifiedCdk);
-                    startBtn.disabled = true;
-                } else {
-                    taskCompleted = false;
-                    activeJobKey = '';
-                    updateConfirmation();
-                }
-                return;
-  `
-  );
-  replace(
     '            const rawSession = tokenInput.value.trim();',
     `
-            if (activationLocked || (taskCompleted && activeJobKey) || pendingReview.has(verifiedCdk)) return;
+            if (activationLocked || taskCompleted || pendingReview.has(verifiedCdk)) return;
             const rawSession = tokenInput.value.trim();
   `
   );
@@ -614,7 +1026,9 @@ function adaptWorkspaceRechargeScript(source) {
   replace(
     "                } else {\n                    hideProgress();\n                    updateFlowUI(2, 'failed');",
     `
-                } else if (response.status >= 500 || data.success !== false) {
+                } else if (response.ok || data.success !== false || (response.status >= 500 && !(
+                    response.status === 503 && data.notAccepted === true && data.code === 'maintenance_mode'
+                ))) {
                     markUncertain();
                 } else {
                     if (data.manualReview) pendingReview.add(verifiedCdk);
@@ -634,19 +1048,28 @@ function adaptWorkspaceRechargeScript(source) {
     `
                 markUncertain();
             } finally {
-                tokenInput.readOnly = tokenInput.dataset.demoReadonly === 'true';
+                syncWorkspaceAccountLock();
   `
   );
   replace(
     '<div id="statusMessage" class="status-message">',
     '<div id="statusMessage" class="status-message" role="status">'
   );
-  return source;
+  replace(
+    '            window.idRechargeSetNavigationLock(activationLocked);',
+    '            window.idRechargeSetNavigationLock(activationLocked);\n            syncWorkspaceAccountLock();'
+  );
+  return replaceSection(source, '        window.idRechargeClearTransient = () => {', 'const START_DEFAULT_TEXT', `
+        window.idRechargeClearTransient = () => {
+            if (!activationLocked) resetRedeemFlow();
+        };
+  `);
 }
 
 function adaptHtml(source, kind) {
   if (kind === 'redeem' || kind === 'workspace') source = adaptRedeemHtml(source);
   if (kind === 'workspace') source = adaptWorkspaceRecharge(source);
+  if (kind === 'redeem' || kind === 'workspace') source = adaptRechargeProgress(source, kind === 'workspace');
   source = source
     .replace(/^[ \t]*<link\b[^>]*https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>\s*$/gm, '')
     .replaceAll('src="https://unpkg.com/lucide@latest"', 'src="' + prefix + '/lucide.js"')
@@ -767,7 +1190,9 @@ async function buildCodexdaichongAssets() {
     lucide,
     shell,
     styles,
-    routingScript
+    routingScript,
+    paginationScript,
+    paginationStyles
   ] = await Promise.all([
     original('index.html'),
     original('admin.html'),
@@ -779,7 +1204,9 @@ async function buildCodexdaichongAssets() {
     readFile(new URL('vendor/lucide/lucide.min.js', import.meta.url)),
     readFile(new URL('shell.js', import.meta.url)),
     readFile(new URL('shell.css', import.meta.url)),
-    readFile(new URL('routing-admin.js', import.meta.url), 'utf8')
+    readFile(new URL('routing-admin.js', import.meta.url), 'utf8'),
+    readFile(new URL('../../../frontend/pagination.js', import.meta.url), 'utf8'),
+    readFile(new URL('../../../frontend/pagination.css', import.meta.url), 'utf8')
   ]);
   const assets = new Map();
   for (const [path, source, kind] of [
@@ -811,13 +1238,13 @@ async function buildCodexdaichongAssets() {
     });
   }
   for (const [name, body, kind] of [
-    ['admin.js', adaptAdminScript(adminJs, routingScript), 'js'],
+    ['admin.js', paginationScript + '\n' + adaptAdminScript(adminJs, routingScript), 'js'],
     ['admin.css', adminCss, 'css'],
     ['style.css', publicCss, 'css'],
     ['favicon.svg', favicon, 'svg'],
     ['lucide.js', lucide, 'js'],
     ['shell.js', shell, 'js'],
-    ['shell.css', styles, 'css']
+    ['shell.css', paginationStyles + '\n' + styles, 'css']
   ])
     assets.set('/' + name, { body, type: media[kind] });
   return assets;

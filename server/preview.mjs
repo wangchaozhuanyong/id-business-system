@@ -34,6 +34,7 @@ import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['prototype.css', 'text/css; charset=utf-8'],
+  ['pagination.css', 'text/css; charset=utf-8'],
   ['title-help.css', 'text/css; charset=utf-8'],
   ['overview-prototype.css', 'text/css; charset=utf-8'],
   ['finance-collection.css', 'text/css; charset=utf-8'],
@@ -41,6 +42,7 @@ const files = new Map([
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
   ...[
     'prototype',
+    'pagination',
     'overview-prototype',
     'finance-collection',
     'title-help',

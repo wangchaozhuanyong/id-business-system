@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
+import { listBitBrowserAddresses } from '../server/bitbrowser-addresses.mjs';
 import { initializeLocalAdmin } from '../server/local-auth.mjs';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { startPreview } from '../server/preview.mjs';
@@ -19,6 +20,23 @@ async function fixtureDirectory(t) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
+
+test('address page size policy supports shared and legacy sizes', () => {
+  const rows = Array.from({ length: 21 }, (_, index) => ({
+    id: 'fixture-' + index, line1: 'Fixture Street ' + index, status: 'unused',
+    createdAt: '2026-11-09T00:00:00.000Z'
+  }));
+  const list = (query = '') => listBitBrowserAddresses(rows, new URLSearchParams(query));
+  assert.equal(list().pageSize, 20);
+  for (const pageSize of [10, 20, 50, 100, 2000]) {
+    const result = list(`pageSize=${pageSize}`);
+    assert.equal(result.pageSize, pageSize);
+    assert.equal(result.items.length, Math.min(rows.length, pageSize));
+    assert.equal(result.total, rows.length);
+  }
+  assert.equal(list('page=3&pageSize=10').items.length, 1);
+  assert.throws(() => list('pageSize=11'), { status: 400 });
+});
 
 test('normalizes and deduplicates TXT rows, returns legacy columns and scopes by owner', async (t) => {
   const path = join(await fixtureDirectory(t), 'addresses.sqlite');
@@ -41,9 +59,11 @@ test('normalizes and deduplicates TXT rows, returns legacy columns and scopes by
       rejected: 0
     });
     assert.equal(filter('', other).total, 0);
-    assert.throws(() => filter('pageSize=10'), { status: 400 });
+    assert.equal(filter('', other).version, 0);
+    assert.throws(() => filter('pageSize=11'), { status: 400 });
     const filtered = filter('keyword=fIxTuRe');
     assert.equal(filtered.total, 1);
+    assert.equal(filtered.version, 1);
     assert.deepEqual(filtered.totals, { unused: 2, used: 0, disabled: 0 });
     assert.deepEqual(filtered.items[0], {
       id: filtered.items[0].id,
@@ -81,30 +101,52 @@ test('normalizes and deduplicates TXT rows, returns legacy columns and scopes by
   }
 });
 
-test('address state is checked against the reviewed status and used addresses stay locked', () => {
+test('marking used is idempotent and deleting used requires the reviewed document version', () => {
   const store = createLocalBusinessStore(':memory:');
-  const list = (query = '') => store.listBitBrowserAddresses(new URLSearchParams(query), owner);
+  const list = (query = '', actor = owner) =>
+    store.listBitBrowserAddresses(new URLSearchParams(query), actor);
   try {
-    store.saveBitBrowserAddresses({ streets: [street] }, owner);
+    const unusedStreet = '88 Other Street';
+    store.saveBitBrowserAddresses({ streets: [street, unusedStreet] }, owner);
+    store.saveBitBrowserAddresses({ streets: ['99 Isolated Street'] }, other);
     const { id } = list().items[0];
-    const change = (status, expectedStatus, actor = owner) =>
-      store.saveBitBrowserAddresses({ id, status, expectedStatus }, actor);
-    assert.throws(() => change('disabled', 'unused', other), { status: 404 });
-    assert.equal(change('disabled', 'unused').status, 'disabled');
-    assert.throws(() => change('used', 'unused'), { status: 409 });
-    assert.equal(list('status=unused').total, 0);
-    assert.equal(change('unused', 'disabled').usedAt, null);
-    assert.equal(change('disabled', 'unused').status, 'disabled');
-    const used = change('used', 'disabled');
+    const pendingVersion = list().version;
+    const markUsed = { id, status: 'used', expectedStatus: 'unused' };
+    assert.throws(() => store.saveBitBrowserAddresses(markUsed, other), { status: 404 });
+    assert.throws(() => store.saveBitBrowserAddresses({ ...markUsed, status: 'disabled' }, owner), {
+      status: 400
+    });
+    const used = store.saveBitBrowserAddresses(markUsed, owner);
     assert.equal(used.status, 'used');
     assert.ok(used.usedAt);
-    assert.throws(() => change('unused', 'used'), { status: 409 });
-    assert.throws(() => change('disabled', 'used'), { status: 409 });
+    const reviewedVersion = list().version;
+    assert.equal(reviewedVersion, pendingVersion + 1);
+    assert.deepEqual(store.saveBitBrowserAddresses(markUsed, owner), used);
+    assert.equal(list().version, reviewedVersion);
     assert.deepEqual(list('status=used').items, [used]);
+    assert.throws(() => store.saveBitBrowserAddresses({ deleteUsed: true, version: pendingVersion }, owner), {
+      status: 409
+    });
+    assert.deepEqual(list('status=used').items, [used]);
+    assert.deepEqual(store.saveBitBrowserAddresses({ deleteUsed: true, version: reviewedVersion }, owner), {
+      deleted: 1
+    });
+    assert.equal(list('status=used').total, 0);
+    assert.equal(list('status=unused').total, 1);
+    assert.equal(list().version, reviewedVersion + 1);
+    assert.equal(list('', other).total, 1);
+    assert.throws(() => store.saveBitBrowserAddresses({ deleteUsed: true, version: reviewedVersion }, owner), {
+      status: 409
+    });
     const audit = store.audit();
-    assert.equal(audit[0].targetId, id);
+    const statusAudit = audit.filter(({ action }) => action === 'bitbrowser_address_status');
+    assert.equal(statusAudit.length, 1);
+    assert.equal(statusAudit[0].targetId, id);
+    assert.equal(statusAudit[0].actorId, owner.id);
+    assert.equal(audit[0].action, 'bitbrowser_address_delete_used');
     assert.equal(audit[0].actorId, owner.id);
-    assert.equal(audit.length, 5);
+    assert.equal(audit[0].version, reviewedVersion + 1);
+    assert.equal(JSON.stringify(audit).includes(used.line1), false);
   } finally {
     store.close();
   }
@@ -227,8 +269,9 @@ test('address endpoint requires the existing administrator session and a same-or
       cookie
     });
     assert.equal(response.status, 200);
-    const { items, pageSize } = await response.json();
+    const { items, pageSize, version } = await response.json();
     assert.equal(pageSize, 50);
+    assert.equal(version, 1);
     assert.equal(items[0].line1, street);
     const competing = (status) =>
       request(resource, {
@@ -236,8 +279,18 @@ test('address endpoint requires the existing administrator session and a same-or
         cookie,
         data: { id: items[0].id, status, expectedStatus: 'unused' }
       });
-    const outcomes = await Promise.all([competing('disabled'), competing('used')]);
-    assert.deepEqual(outcomes.map((entry) => entry.status).sort(), [200, 409]);
+    assert.equal((await competing('disabled')).status, 400);
+    const outcomes = await Promise.all([competing('used'), competing('used')]);
+    assert.deepEqual(outcomes.map((entry) => entry.status), [200, 200]);
+    const [first, second] = await Promise.all(outcomes.map((entry) => entry.json()));
+    assert.deepEqual(first, second);
+    const deleteUsed = (reviewedVersion) =>
+      request(resource, { method: 'PUT', cookie, data: { deleteUsed: true, version: reviewedVersion } });
+    assert.equal((await deleteUsed(version)).status, 409);
+    const { version: currentVersion } = await (await request(resource, { cookie })).json();
+    const deleted = await deleteUsed(currentVersion);
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), { deleted: 1 });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

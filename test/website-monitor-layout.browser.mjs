@@ -92,12 +92,21 @@ test('网站监控三个页签共享标题、工具栏、筛选和结果布局�
       await page.locator('#ops-visits-sort').selectOption('oldest');
       await host.getByRole('button', { name: '查询明细', exact: true }).click();
       await host.getByRole('button', { name: 'IP 明细', exact: true }).click();
-      await host.getByText('/synthetic-page/0', { exact: true }).waitFor();
-      await host.getByRole('button', { name: '下一页', exact: true }).click();
-      await host.getByText(/第 2 页/).waitFor();
-      await host.getByRole('button', { name: '下一页', exact: true }).click();
-      await host.getByText(/第 3 页/).waitFor();
-      assert(await host.getByRole('button', { name: '下一页', exact: true }).isDisabled());
+      const pathButton = host.getByRole('button', { name: '查看完整页面路径', exact: true })
+        .filter({ hasText: /^\/synthetic-page\/0$/ });
+      await pathButton.click();
+      const fullPath = host.getByRole('region', { name: '完整页面路径', exact: true });
+      assert.equal(await fullPath.textContent(), '/synthetic-page/0');
+      await page.keyboard.press('Escape');
+      await fullPath.waitFor({ state: 'hidden' });
+      const pager = host.locator('[data-pagination="operations-website-visits"]');
+      const nextPage = pager.getByRole('button', { name: '下一页', exact: true });
+      assert.equal(await pager.getAttribute('data-page-size'), '10');
+      for (let pageNumber = 2; pageNumber <= 5; pageNumber++) {
+        await nextPage.click();
+        await host.locator(`[data-pagination="operations-website-visits"][data-page="${pageNumber}"]`).waitFor();
+      }
+      assert(await nextPage.isDisabled());
       await host.getByRole('tab', { name: '访问统计', exact: true }).click();
       assert.match(await host.getByText(/统计时区/).textContent(), /Asia\/Kuala_Lumpur/);
       mode = 'empty';

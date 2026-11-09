@@ -777,63 +777,12 @@ input[type='radio'] {
   scrollbar-color: var(--line) transparent;
 }
 .table-viewport.stable-table {
-  --table-page-rows: 8;
+  --table-page-rows: 10;
   min-height: calc(43px + var(--table-page-rows) * 51px);
-}
-.table-viewport.page-size-16 {
-  --table-page-rows: 16;
 }
 .table-viewport[data-frame-rows] {
   height: calc(43px + var(--table-page-rows) * 51px);
   min-height: 0;
-}
-.table-viewport[data-frame-rows='1'] {
-  --table-page-rows: 1;
-}
-.table-viewport[data-frame-rows='2'] {
-  --table-page-rows: 2;
-}
-.table-viewport[data-frame-rows='3'] {
-  --table-page-rows: 3;
-}
-.table-viewport[data-frame-rows='4'] {
-  --table-page-rows: 4;
-}
-.table-viewport[data-frame-rows='5'] {
-  --table-page-rows: 5;
-}
-.table-viewport[data-frame-rows='6'] {
-  --table-page-rows: 6;
-}
-.table-viewport[data-frame-rows='7'] {
-  --table-page-rows: 7;
-}
-.table-viewport[data-frame-rows='8'] {
-  --table-page-rows: 8;
-}
-.table-viewport[data-frame-rows='9'] {
-  --table-page-rows: 9;
-}
-.table-viewport[data-frame-rows='10'] {
-  --table-page-rows: 10;
-}
-.table-viewport[data-frame-rows='11'] {
-  --table-page-rows: 11;
-}
-.table-viewport[data-frame-rows='12'] {
-  --table-page-rows: 12;
-}
-.table-viewport[data-frame-rows='13'] {
-  --table-page-rows: 13;
-}
-.table-viewport[data-frame-rows='14'] {
-  --table-page-rows: 14;
-}
-.table-viewport[data-frame-rows='15'] {
-  --table-page-rows: 15;
-}
-.table-viewport[data-frame-rows='16'] {
-  --table-page-rows: 16;
 }
 .table-viewport .empty-state {
   display: flex;
@@ -1001,11 +950,14 @@ th.table-actions {
 .text-button:hover {
   text-decoration: underline;
 }
+.table-value-button,
+.table-value-ellipsis {
+  max-width: 260px;
+}
 .table-value-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 260px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1015,11 +967,26 @@ th.table-actions {
   vertical-align: middle;
   cursor: pointer;
 }
-.table-value-button > span {
+.table-value-ellipsis {
+  display: block;
   min-width: 0;
   overflow: hidden;
+  text-align: start;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.table-value-popover {
+  max-width: min(36rem, calc(100vw - 32px));
+  max-height: min(50vh, 24rem);
+  padding: 12px 16px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }
 .table-value-button .icon {
   flex: none;
@@ -1030,68 +997,6 @@ th.table-actions {
 .table-value-button:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 3px;
-}
-.pagination {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  padding: 16px var(--panel-padding-inline);
-  border-top: 1px solid var(--line);
-  color: var(--secondary);
-  font-size: 12px;
-  min-height: 66px;
-}
-.pagination-controls {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  min-width: 0;
-  max-width: 100%;
-}
-.pagination-pages {
-  display: flex;
-  gap: inherit;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
-}
-.pagination-controls > select,
-.pagination-controls .page-number {
-  flex: none;
-}
-.pagination select {
-  width: 94px;
-  min-height: 36px;
-  padding-top: 4px;
-  padding-bottom: 4px;
-  font-size: 12px;
-}
-.page-number {
-  height: 36px;
-  min-width: 36px;
-  border-radius: 5px;
-  background: none;
-  border: 1px solid transparent;
-  color: var(--secondary);
-}
-.page-number.active {
-  color: var(--primary);
-  background: var(--primary-soft);
-  border-color: var(--primary-soft);
-  font-weight: 600;
-}
-.page-number:focus-visible {
-  outline-offset: -3px;
-}
-.page-number .icon {
-  width: 13px;
-  height: 13px;
-}
-.page-number[aria-label='上一页'] .icon {
-  transform: rotate(180deg);
 }
 .workspace-footer {
   display: flex;
@@ -2814,13 +2719,6 @@ dialog::backdrop {
   .action-links .text-button {
     min-height: 44px;
   }
-  .pagination select {
-    min-height: 44px;
-  }
-  .page-number {
-    height: 44px;
-    min-width: 44px;
-  }
   .entry-button {
     min-height: 44px;
   }
@@ -2953,14 +2851,6 @@ dialog::backdrop {
   }
   .step-line {
     min-width: 5px;
-  }
-  .pagination {
-    padding: 14px 16px;
-  }
-  .pagination-controls {
-    width: 100%;
-    justify-content: flex-end;
-    gap: 5px;
   }
   .workspace-footer {
     padding: 0 17px 18px;

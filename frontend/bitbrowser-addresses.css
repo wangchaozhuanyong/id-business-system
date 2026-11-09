@@ -1,10 +1,7 @@
-.drawer:has(#bit-addresses-panel) {
-  width: min(960px, 100%);
-}
-
-#bit-addresses-panel {
+.bit-address-body,
+#bit-address-tabpanel {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -23,7 +20,7 @@
 }
 
 #bit-address-import {
-  flex: 1 1 24rem;
+  flex: 1 1 20rem;
   min-width: 0;
 }
 
@@ -47,17 +44,27 @@
   padding: 0;
 }
 
-.bit-address-counts,
+.bit-address-filters > .toolbar-left {
+  flex: 1 1 15rem;
+}
+
+.bit-address-filters .search-field {
+  min-width: 8rem;
+}
+
+.bit-address-tabs {
+  min-height: 44px;
+}
+
+.bit-address-tabs .tab {
+  padding-block: 10px;
+}
+
 .bit-address-columns:not([hidden]) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 18px;
-}
-
-.bit-address-counts {
-  color: var(--secondary);
-  padding-bottom: 10px;
 }
 
 .bit-address-columns {
@@ -75,4 +82,20 @@
 #bit-address-list .pagination {
   margin-top: 8px;
   padding-inline: 0;
+}
+
+#bit-address-list .table-actions {
+  min-width: 6rem;
+}
+
+#bit-address-list td[data-column='line1'] {
+  min-width: 10rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  #bit-address-list .text-button {
+    min-height: 44px;
+  }
 }
