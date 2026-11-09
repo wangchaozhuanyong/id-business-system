@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import {
   closeSync,
   constants,
@@ -309,7 +309,16 @@ export function createLocalAdminSetup(accountPath, { onCreated } = {}) {
   };
 }
 
-export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUrl } = {}) {
+export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date.now, publicUrl } = {}) {
+  const monitoringKey = onMonitoring && randomBytes(32);
+  function monitor(kind, email) {
+    if (!onMonitoring) return;
+    try {
+      onMonitoring({ kind, ...(email && email.length <= 254 && {
+        accountKey: createHmac('sha256', monitoringKey).update(email).digest('hex')
+      }) });
+    } catch { /* Auth decisions do not depend on monitoring. */ }
+  }
   if (!readAccounts(accountPath)) return null;
   const legacyCookieName = publicUrl ? '__Host-id_session' : localCookieName;
   const cookieName = legacyCookieName + '_v2';
@@ -421,11 +430,13 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       attempts.filter((attempt) => attempt.email === email).length >= accountAttempts ||
       verifying >= 2
     ) {
+      monitor('limited', email);
       response.setHeader('Retry-After', '60');
       throw new AuthError(429, '登录尝试过于频繁，请稍后再试');
     }
     attempts.push({ email: email.slice(0, 254), at });
     if (email.length > 254 || password.length > 256 || Buffer.byteLength(password, 'utf8') > 512) {
+      monitor('rejected', email);
       throw new AuthError(401, '邮箱或密码不正确');
     }
     const previous = readAccounts(accountPath)?.employees.find((row) => row.email === email);
@@ -438,6 +449,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     }
     const employee = readAccounts(accountPath)?.employees.find((row) => row.id === previous?.id);
     if (!matches || !employee?.active || employee.sessionVersion !== previous.sessionVersion) {
+      monitor('rejected', email);
       throw new AuthError(401, '邮箱或密码不正确');
     }
     removeBrowserSessions(request);
@@ -523,6 +535,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       return row;
     });
     report('auth_employee_create', operator, employee.id);
+    if (employee.role === 'admin' && employee.active) monitor('admin_access');
     sendJson(response, 201, { employee: publicEmployee(employee) });
   }
 
@@ -542,6 +555,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     const name = nameValue === undefined ? undefined : validatedName(nameValue);
     const credential =
       body.password === undefined ? undefined : await createCredential(body.password);
+    let accessChanged = false;
     const { employee, operator } = mutate(request, (employees, actor) => {
       const row = employees.find((entry) => entry.id === employeeId);
       if (!row) throw new AuthError(404, '员工账号不存在');
@@ -554,7 +568,8 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       ) {
         throw new AuthError(403, '超级管理员角色与启用状态受保护');
       }
-      if (role !== row.role || active !== row.active || credential) row.sessionVersion++;
+      accessChanged = Boolean(role !== row.role || active !== row.active || credential);
+      if (accessChanged) row.sessionVersion++;
       if (body.nickname !== undefined || (name !== undefined && name !== row.name)) row.nicknameSet = true;
       row.name = name ?? row.name;
       row.role = role;
@@ -565,6 +580,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       return row;
     });
     report('auth_employee_update', operator, employee.id);
+    if (accessChanged) monitor('admin_access');
     sendJson(response, 200, { employee: publicEmployee(employee) });
   }
 
@@ -692,6 +708,13 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
 
   return {
     getActor, orderOwners, handle,
+    ready() {
+      // Validate the account store and the existing session directory without
+      // creating a session or reading a real user's token.
+      if (!readAccounts(accountPath)) return false;
+      sessions.get('0'.repeat(64));
+      return true;
+    },
     changeVersion: () => createHash('sha256').update(JSON.stringify(
       readAccounts(accountPath).employees.map(({ id, version }) => [id, version]).sort(([a], [b]) => a.localeCompare(b))
     )).digest('hex')

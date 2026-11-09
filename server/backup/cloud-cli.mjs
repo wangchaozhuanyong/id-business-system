@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { createWorkerReceipt } from '../monitoring-worker-receipts.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createPrivateKey } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -64,6 +65,7 @@ async function run(config) {
     return;
   }
   const recipient = await privateBackupFile(config.recipientFile, 16_384);
+  const report = createWorkerReceipt(process.env.ID_MONITOR_WORKER_RECEIPTS_DIR, 'backup', config.dataDir);
   const shutdown = new AbortController();
   const lock = await lockOutbox(config.outbox, shutdown);
   let worker;
@@ -77,9 +79,12 @@ async function run(config) {
         const result = await worker.tick();
         if (result.captured) process.stdout.write(JSON.stringify({ status: 'verified', ...result }) + '\n');
         failures = 0;
+        await report({ verified: result.captured });
       } catch (error) {
         failures = Math.min(failures + 1, 6);
         process.stderr.write(JSON.stringify({ status: 'retry', code: message(error) }) + '\n');
+        await report({ failures, integrityFailure: ['BACKUP_PENDING_DIGEST_MISMATCH', 'BACKUP_CHECKPOINT_INVALID',
+          'BACKUP_PENDING_FILE_MISSING'].includes(error.message) });
       }
       await delay(5000 * 2 ** failures, undefined, { signal: shutdown.signal }).catch((error) => {
         if (error.name !== 'AbortError') throw error;

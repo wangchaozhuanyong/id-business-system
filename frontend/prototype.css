@@ -3259,6 +3259,27 @@ details.toolbox-phrase-more[open] > summary {
 .form-grid--paired {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.system-monitor-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+.system-monitor-mobile {
+  display: none;
+}
+.system-monitor-mobile .property-row strong {
+  overflow-wrap: anywhere;
+}
+.system-monitor-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+@media (max-width: 760px) {
+  .system-monitor-list > .table-viewport { display: none; }
+  .system-monitor-mobile { display: block; }
+}
 .commerce-field-grid.commerce-field-grid--single {
   grid-template-columns: minmax(0, 1fr);
 }

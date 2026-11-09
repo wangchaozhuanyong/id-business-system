@@ -153,7 +153,13 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await page.setViewportSize({ width, height: 460 });
         const navigate = async route => {
           if (width <= 900) await page.locator('#nav-toggle').click();
-          await page.locator(`#sidebar a[href="#/${route}"]`).click();
+          const link = page.locator(`#sidebar a[href="#/${route}"]`);
+          if (!await link.count()) {
+            const group = await page.evaluate(target => window.IDDesignAPI.navigation
+              .find(([, , children]) => children.some(([, key]) => key === target))?.[0], route);
+            await page.locator('#sidebar').getByRole('button', { name: group, exact: true }).click();
+          }
+          await link.click();
         };
         const bitSelector = '.recharge-integration__frame--bit-local';
         const bitReady = () => page.locator(bitSelector + ':not([hidden])').waitFor();

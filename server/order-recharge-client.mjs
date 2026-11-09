@@ -23,7 +23,7 @@ async function readBoundedJson(response) {
 
 export function createOrderRechargeClient(config, fetchImpl = fetch) {
   const upstream = config && new URL(config.upstreamUrl);
-  async function request(method, path, body, actor = service) {
+  async function request(method, path, body, actor = service, monitoring = false) {
     if (!upstream || upstream.protocol !== 'http:' || upstream.hostname !== '127.0.0.1' ||
         upstream.pathname !== '/' || upstream.username || upstream.password || !upstream.port ||
         typeof config.secret !== 'string' || Buffer.byteLength(config.secret) < 32)
@@ -31,9 +31,12 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
     const target = new URL(path, upstream);
     const orbitRead = target.pathname !== '/api/admin/orbitcard/usage' ||
       [...target.searchParams.keys()].every((name) => ['page_size', 'keyword', 'recharge_status'].includes(name));
+    const monitoringPath = monitoring && (method === 'GET' && path === '/api/admin/data' ||
+      method === 'POST' && path === '/api/admin/telegram');
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
-          method === 'POST' && (path === '/api/admin/cdks/import' || /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path))))
+          method === 'POST' && (path === '/api/admin/cdks/import' || /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path)) ||
+          monitoringPath))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
       method, redirect: 'error', signal: AbortSignal.timeout(6000),
@@ -50,6 +53,13 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
   }
   return Object.freeze({
     get: (path) => request('GET', path),
+    readLegacyNotificationSettings: () => request('GET', '/api/admin/data', undefined, service, true),
+    async disableLegacyBusinessNotifications({ adminChat, groupChat, notifyAdmin, notifyGroup }) {
+      await request('POST', '/api/admin/telegram', {
+        admin_chat_id: adminChat, group_chat_id: groupChat, notify_admin: notifyAdmin, notify_group: notifyGroup,
+        on_success: false, on_failure: false, on_card_pool_empty: false
+      }, service, true);
+    },
     async listCodes() {
       const result = await request('GET', '/api/admin/cdks');
       if (!Array.isArray(result)) throw new Error('代充码列表格式不正确');

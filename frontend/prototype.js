@@ -263,6 +263,7 @@ const navigation = [
       ['代付国家', 'settings/payment-countries'],
       ['汇率采集', 'settings/exchange-rates'],
       ['登录日志', 'settings/login-logs'],
+      ['监控与通知', 'settings/monitoring'],
       ['操作记录', 'settings/audit']
     ]
   ]
@@ -952,6 +953,7 @@ function matchesNav(route, base) {
   return route === base || route.startsWith(base + '/');
 }
 function permittedRoute(route) {
+  if (route === 'settings/monitoring' && window.IDLocalData?.authRequired) return state.actor?.role === 'super';
   if (!window.IDLocalData?.authRequired || state.actor?.role !== 'employee') return true;
   return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
     route

@@ -170,8 +170,18 @@ const sessionEventLabels = {
   relay_mail_reassign: '分配苹果邮箱邮件归属',
   relay_history_preview: '预检苹果邮箱历史邮件归属'
 };
-const orderFeatureDomains = new Set(['recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument]);
+const orderFeatureDomains = new Set([
+  'recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument,
+  'system-monitoring-config', 'system-monitoring-state'
+]);
 const orderFeatureAuditLabels = {
+  monitor_settings: '保存监控与通知设置',
+  monitor_test: '提交 Telegram 测试投递',
+  monitor_acknowledge: '确认监控告警',
+  monitor_legacy_import: '导入原代充通知订阅',
+  monitor_legacy_begin: '开始接管原代充通知',
+  monitor_legacy_finish: '确认接管原代充通知',
+  monitor_verified: '登记已核实的监控事件',
   recharge_code_request: '申请充值码',
   recharge_code_approve: '批准充值码申请',
   recharge_code_reject: '驳回充值码申请',
@@ -220,7 +230,9 @@ const auditDomainLabels = {
   'recharge-codes': '充值码审核',
   'tenant-cards': '租户银行卡',
   'order-sync': '代充订单同步',
-  'finance-rates': '汇率采集'
+  'finance-rates': '汇率采集',
+  'system-monitoring-config': '监控与通知',
+  'system-monitoring-state': '监控中心'
 };
 const auditActionLabels = {
   customer_tags_save: '保存客户标签设置',

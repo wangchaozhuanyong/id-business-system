@@ -142,7 +142,7 @@
     { id: 'claude', title: 'Claude 代充', icon: 'bolt', scope: '线上代充', route: 'online-recharge/claude', status: '业务占位', text: '待执行链路完善后展示任务进展，不影响已有 Claude 订单业务。', fields: ['排队与执行中', '成功与失败', '任务与订单对账'] },
     { id: 'sheets', title: 'Google 表格同步', icon: 'database', scope: '同步任务', route: 'data', status: '业务占位', text: '按新版需要同步的表格和字段完善，不沿用旧版同步内容。', fields: ['同步表格与范围', '最近成功时间', '失败任务与待同步记录'] },
     { id: 'data', title: '数据中心', icon: 'database', scope: '数据质量', route: 'data', status: '业务占位', text: '规划资料完整度、重复记录与跨模块对账，不复制业务列表。', fields: ['资料缺失与重复', '订单与库存对账', '核对进展'] },
-    { id: 'monitor', title: '监控中心', icon: 'monitor', scope: '服务运行', route: 'monitor', status: '业务占位', text: '规划采集已确认的服务状态和异常，不以页面能打开代表服务健康。', fields: ['服务可用性', '执行器连接状态', '最近异常与恢复时间'] },
+    { id: 'monitor', title: '监控中心', icon: 'monitor', scope: '服务运行', route: 'monitor', status: '已接入', text: '查看监测依据、异常、人工确认和恢复记录。', fields: ['服务可用性', '执行器连接状态', '最近异常与恢复时间'] },
     { id: 'traffic', title: '网站访问', icon: 'monitor', scope: 'GA4 与访问采集', route: 'monitor', status: '待接入总览', text: '复用已授权的数据源接入总览；目前不推断线上是否已配置。', fields: ['访客与访问量', '流量来源', '最近采集时间与状态'] },
     { id: 'recharge', title: 'ChatGPT 代充概况', icon: 'bolt', scope: '任务进展', route: 'online-recharge/chatgpt', status: '待接入总览', text: '现有代充页面保留，后续以执行器确认的任务结果接入总览。', fields: ['等待与执行中', '成功与失败', '任务更新时间'] }
   ];

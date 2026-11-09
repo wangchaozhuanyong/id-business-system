@@ -31,6 +31,12 @@ import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-r
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
 import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
+import { monitorPath, monitorConfigDomain, monitorReportPath, readyPath } from './monitoring-policy.mjs';
+import { createSystemMonitoring } from './system-monitoring.mjs';
+import { createMonitoringSources } from './monitoring-sources.mjs';
+import { createMonitoringHandler, createMonitoringReadiness, createProbeReportHandler } from './monitoring-route.mjs';
+import { createLegacyRechargeNotifications } from './monitoring-recharge.mjs';
+import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/runtime-health.mjs';
 
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
@@ -56,6 +62,7 @@ const files = new Map([
     'order-operations',
     'change-sync',
     'operations-prototype',
+    'system-monitoring',
     'bitbrowser-addresses'
   ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
 ]);
@@ -83,7 +90,9 @@ export async function startPreview(
     mailboxPublicOrigin,
     microsoftMailboxConfig,
     microsoftMailboxFetch,
-    rechargeOrderSync = false
+    rechargeOrderSync = false,
+    monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
+    monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR
   } = {}
 ) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
@@ -170,6 +179,7 @@ export async function startPreview(
   let financeCollection = null, handleFinanceCollection = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleRechargeCodes, orderSync;
   let handleEmployeeStatistics;
+  let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
   function gatewayFor(host) {
@@ -182,6 +192,10 @@ export async function startPreview(
           upstreamUrl: rechargeConfig.upstreamUrl,
           publicOrigin: secureOrigin || `http://${host}`,
           secret: rechargeConfig.secret,
+          legacyNotificationLocked: () => systemMonitoring?.legacyLocked() === true,
+          onRechargeOutcome: outcome => queueMicrotask(() => {
+            try { monitoringSources?.recordRecharge(outcome); } catch {}
+          }),
           getActor: (request) => auth?.getActor(request)
         })
       );
@@ -194,7 +208,9 @@ export async function startPreview(
       if (authPath) {
         const { createLocalAuth, createLocalAdminSetup, localAdminEmail } = await import('./local-auth.mjs');
         loadAuth = () => createLocalAuth(authPath, {
-          onEvent: (event) => store.recordAuthEvent(event), publicUrl
+          onEvent: (event) => store.recordAuthEvent(event),
+          onMonitoring: publicUrl ? (event) => queueMicrotask(() => monitoringSources?.recordAuth(event)) : undefined,
+          publicUrl
         });
         auth = loadAuth();
         if (publicUrl && !auth) throw new Error('正式站管理员尚未初始化');
@@ -206,6 +222,23 @@ export async function startPreview(
         };
       }
       store = localBusiness.createLocalBusinessStore(databasePath);
+      systemMonitoring = createSystemMonitoring({ store, origin: secureOrigin,
+        native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
+        send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
+      handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin });
+      if (publicUrl) {
+        const externalProbe = typeof monitoringProbeSecret === 'string' && Buffer.byteLength(monitoringProbeSecret) >= 32;
+        handleReadiness = createMonitoringReadiness({ check() {
+          if (!auth?.ready()) return false;
+          store.featureDocument(monitorConfigDomain);
+          return true;
+        } });
+        handleProbeReport = createProbeReportHandler({ monitor: systemMonitoring, secret: monitoringProbeSecret });
+        monitoringSources = createMonitoringSources({ monitor: systemMonitoring, databasePath, externalProbe,
+          workerReceiptDirectory: monitoringWorkerReceiptsDirectory,
+          runtimeProbe: rechargeConfig ? () => probeCodexdaichongRuntime(rechargeConfig) : undefined,
+          rechargeClient: orderRechargeClient, getFinance: () => financeCollection, syncEnabled: Boolean(rechargeConfig && rechargeOrderSync) });
+      }
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
@@ -339,6 +372,8 @@ export async function startPreview(
       response.writeHead(403).end();
       return;
     }
+    if (route === readyPath && handleReadiness) return handleReadiness(request, response);
+    if (route === monitorReportPath && handleProbeReport) return void handleProbeReport(request, response);
     if (vendureRehearsal && route.startsWith(vendureRechargePrefix + '/'))
       return void vendureRehearsal.handle(request, response);
     if (handleLegacyToolRoute && [legacyMicrosoftMailboxCallback, legacyWebsiteVisitIngest].includes(route)) {
@@ -356,6 +391,8 @@ export async function startPreview(
       }
     }
     const actor = auth?.getActor(request);
+    if (monitoringSources && (route.startsWith('/api/') || route.startsWith('/integrations/codexdaichong/api/')))
+      response.once('finish', () => monitoringSources.recordHttp(route, response.statusCode, actor));
     if (request.localAuthUnavailable) {
       response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '5' });
       return response.end(JSON.stringify({ error: '登录服务暂时不可用，请稍后重试，登录信息未清除' }));
@@ -421,6 +458,7 @@ export async function startPreview(
       if (!canManage || (loginRequired && !actor)) return forbidden();
       return void handleFinanceCollection(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
+    if (route === monitorPath && handleMonitoring) return void handleMonitoring(request, response, actor);
     if (store && route === automaticSnapshotRoute) {
       if (!canManage) return forbidden();
       return void handleAutomaticSnapshot(request, response, actor);
@@ -561,10 +599,14 @@ export async function startPreview(
     response.end(request.method === 'HEAD' ? undefined : body);
   });
   if (financeCollection) server.once('close', () => financeCollection.close());
+  if (systemMonitoring) server.once('close', () => { monitoringSources?.close(); systemMonitoring.close(); });
   if (store) server.once('close', () => store.close());
   if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
-    const timer = setInterval(() => void orderSync.run({ apply: true }).catch(() => {}), 60_000);
+    const timer = setInterval(() => void orderSync.run({ apply: true }).then(
+      () => monitoringSources?.recordOrderSync(true),
+      error => { if (error.status !== 409) monitoringSources?.recordOrderSync(false); }
+    ), 60_000);
     timer.unref();
     server.once('close', () => clearInterval(timer));
   }
@@ -595,6 +637,7 @@ export async function startPreview(
     });
   });
   financeCollection?.start();
+  monitoringSources?.start();
   return { server, url: 'http://127.0.0.1:' + server.address().port + '/' };
 }
 
