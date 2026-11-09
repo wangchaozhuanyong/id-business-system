@@ -132,7 +132,8 @@ try {
         }
       }
       assert.deepEqual(errors, []);
-      assert.deepEqual(requests, { unavailable: [], external: [] });
+      assert.deepEqual(requests.unavailable, []);
+      assert.deepEqual(requests.external, []);
       console.log(JSON.stringify({ width, theme, routes: routes.length }));
       await context.close();
     }

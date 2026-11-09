@@ -2307,11 +2307,12 @@
     form.querySelector('[type="submit"]').disabled = false;
   }
   function openMailboxTools() {
+    const pageMode = pluginPages[state.route]?.tool === '邮箱查询与邮箱池';
     const manage = isAdmin() && localData.authRequired;
     openToolDrawer(
       '邮箱查询与邮箱池',
       '查询由本系统验证，直接读取已授权的谷歌、苹果或微软邮箱。买家查询码与邮箱应用专用密码相互独立。邮件正文只在本次请求中返回，不写入服务器数据库或浏览器持久缓存。',
-      `<section class="form-section" id="ops-mailbox-query-panel"><form id="ops-managed-mail-query">${grid(
+      `<section class="form-section" id="ops-mailbox-query-panel"${pageMode ? ' hidden' : ''}><form id="ops-managed-mail-query">${grid(
         wide(field('邮件查询码', 'ops-managed-query-code', `<div class="tool-input-row"><input type="password" id="ops-managed-query-code" name="ops-managed-query-code" maxlength="100" autocomplete="off" data-no-draft required placeholder="请输入邮件查询码">${button('一键粘贴', 'ops-tool-paste', '', 'copy', 'data-field="ops-managed-query-code"')}</div>`, true))
       )}<div class="tool-query-options"><div class="form-grid">${wide(field('返回封数', 'ops-managed-query-limit', input('ops-managed-query-limit', '5', 'type="number" min="1" max="20"'), true))}</div><div class="form-footer">
         ${button('清空', 'ops-tool-clear', '', '', 'data-field="ops-managed-query-code"')}
@@ -2319,13 +2320,13 @@
       </div></div><p class="footnote">邮件内容仅在本次查询时实时读取，不保存邮件正文。</p><div class="toolbar" data-mail-refresh hidden>
         <label><input type="checkbox" data-mail-auto-refresh> 每 30 秒自动刷新</label>
         ${button('立即刷新', 'ops-mail-refresh')}
-      </div><div class="design-async-region"><div id="ops-managed-query-progress" role="status" hidden></div><div id="ops-managed-query-results"></div></div></form></section>${manage ? `<section class="form-section" id="ops-mailbox-pool" hidden><div class="form-section"><div class="panel-heading"><div class="section-title-row"><h3>邮箱池</h3>${titleInfo('邮箱池', '按实际收信服务商登记邮箱。谷歌与苹果使用应用专用密码，Microsoft 使用只读 OAuth 授权，不填写普通登录密码。验证通过后加密保存。邮件正文不持久化；查询码到期后需手动重置并重新交付。停用后买家无法查询，授权失效应先更新授权。', 'mailbox-pool-help')}</div><div class="mailbox-pool-actions">${button('登记邮箱', 'ops-mailbox-pool-add', 'primary', 'plus')}${button('批量导入', 'ops-mailbox-pool-batch')}${button('查询码设置', 'ops-mailbox-pool-settings')}${button('刷新', 'ops-mailbox-pool-reload', '', 'return')}${button('相关入口', 'ops-mailbox-related', '', 'more')}</div></div><div data-mailbox-pool-editor></div><div data-mailbox-pool-issued role="status"></div><form class="online-tool-mail-filters" id="ops-mailbox-pool-search-form" onsubmit="return false"><input type="search" id="ops-mailbox-pool-search" name="ops-mailbox-pool-search" aria-label="搜索邮箱池" placeholder="搜索邮箱或备注">
+      </div><div class="design-async-region"><div id="ops-managed-query-progress" role="status" hidden></div><div id="ops-managed-query-results"></div></div></form></section>${manage ? `<section class="form-section" data-tool-panel id="ops-mailbox-pool"${pageMode ? '' : ' hidden'}><div class="form-section"><div class="panel-heading"><div class="section-title-row"><h3>邮箱池</h3>${titleInfo('邮箱池', '按实际收信服务商登记邮箱。谷歌与苹果使用应用专用密码，Microsoft 使用只读 OAuth 授权，不填写普通登录密码。验证通过后加密保存。邮件正文不持久化；查询码到期后需手动重置并重新交付。停用后买家无法查询，授权失效应先更新授权。', 'mailbox-pool-help')}</div><div class="mailbox-pool-actions">${pageMode ? button('邮箱查询', 'ops-mailbox-query-open', '', 'search', 'aria-haspopup="dialog" aria-controls="drawer"') : ''}${button('登记邮箱', 'ops-mailbox-pool-add', 'primary', 'plus')}${button('批量导入', 'ops-mailbox-pool-batch')}${button('查询码设置', 'ops-mailbox-pool-settings')}${button('刷新', 'ops-mailbox-pool-reload', '', 'return')}${button('相关入口', 'ops-mailbox-related', '', 'more')}</div></div><div data-mailbox-pool-editor></div><div data-mailbox-pool-issued role="status"></div><form class="online-tool-mail-filters" id="ops-mailbox-pool-search-form" onsubmit="return false"><input type="search" id="ops-mailbox-pool-search" name="ops-mailbox-pool-search" aria-label="搜索邮箱池" placeholder="搜索邮箱或备注">
         ${select('ops-mailbox-filter-provider', [['', '全部类型'], ['google', '谷歌邮箱'], ['apple', '苹果云邮箱'], ['microsoft', '微软邮箱']]).replace('<select ', '<select aria-label="邮箱类型" ')}
         ${select('ops-mailbox-filter-status', [['', '全部状态'], ['pending', '待授权'], ['active', '可查询'], ['disabled', '已停用'], ['auth_failed', '授权失效'], ['expired', '查询码已过期']]).replace('<select ', '<select aria-label="邮箱状态" ')}
         </form><div class="design-async-region"><div data-mailbox-pool-status role="status" hidden></div><div data-mailbox-pool-list></div></div></div></section>` : ''}`,
       '',
-      [['ops-mailbox-query-panel', '邮件查询'], ...(manage ? [['ops-mailbox-pool', '邮箱池管理']] : [])],
-      '<div class="tool-query-actions"><a class="button" href="/mailbox-query" target="_blank" rel="noopener noreferrer">打开买家查询页</a></div>'
+      pageMode ? [] : [['ops-mailbox-query-panel', '邮件查询'], ...(manage ? [['ops-mailbox-pool', '邮箱池管理']] : [])],
+      pageMode && manage ? '' : `<div class="tool-query-actions">${pageMode ? button('邮箱查询', 'ops-mailbox-query-open', 'primary', 'search', 'aria-haspopup="dialog" aria-controls="drawer"') : ''}<a class="button" href="/mailbox-query" target="_blank" rel="noopener noreferrer">打开买家查询页</a></div>`
     );
     const form = $('#ops-managed-mail-query');
     const drawer = form.closest('[data-plugin-tool], dialog');
@@ -2400,6 +2401,7 @@
     };
     drawer.addEventListener('close', clear);
     if (drawer.matches('[data-plugin-tool]')) pluginCleanup = () => clear(true);
+    if (pageMode && pool) void loadManagedPool(pool);
   }
   const mailQuerySnapshots = new WeakMap();
   function mailBodyParts(body) {
@@ -2688,6 +2690,30 @@
     return root;
   }
   const mailboxQueryHosts = new WeakMap();
+  function openMailboxQueryDrawer(panel, row) {
+    const form = $('#ops-managed-mail-query');
+    const host = mailboxQueryHosts.get(form) || form.parentElement;
+    mailboxQueryHosts.set(form, host);
+    const root = openMailboxOperation(panel, 'query', row ? '查询邮箱邮件' : '邮箱查询', row,
+      '<div data-mailbox-query-slot></div>', button('关闭', 'drawer-close'));
+    root.querySelector('[data-mailbox-query-slot]').append(form);
+    form.querySelector('#ops-managed-query-code').closest('.field').parentElement.hidden = Boolean(row);
+    form.querySelector('[data-action="ops-tool-clear"]').hidden = Boolean(row);
+    onMailboxOperationClose(root, () => {
+      finishManagedMailRead(form);
+      form.querySelector('#ops-managed-query-code').value = '';
+      form.querySelector('#ops-managed-query-code').closest('.field').parentElement.hidden = false;
+      form.querySelector('[data-action="ops-tool-clear"]').hidden = false;
+      form.querySelector('[type="submit"]').disabled = false;
+      form.querySelector('[data-mail-auto-refresh]').checked = false;
+      form.querySelector('[data-mail-refresh]').hidden = true;
+      form.querySelector('#ops-managed-query-progress').hidden = true;
+      form.querySelector('#ops-managed-query-results').replaceChildren();
+      mailQuerySnapshots.delete(form);
+      if (host.isConnected) host.append(form);
+    });
+    return root;
+  }
   async function openMailboxPoolQuery(panel, id) {
     const row = mailboxPoolSnapshots.get(panel)?.items.find(item => item.id === id);
     if (!row) return;
@@ -2695,27 +2721,8 @@
     const inDrawer = Boolean(panel.closest('dialog'));
     if (inDrawer) selectToolSection('ops-mailbox-query-panel');
     let root = mailboxOperation(panel);
-    if (!inDrawer && (!root || root.dataset.mailboxOperation !== 'query' || root.dataset.mailboxId !== id)) {
-      const host = mailboxQueryHosts.get(form) || form.parentElement;
-      mailboxQueryHosts.set(form, host);
-      root = openMailboxOperation(panel, 'query', '查询邮箱邮件', row, '<div data-mailbox-query-slot></div>', button('关闭', 'drawer-close'));
-      root.dataset.mailboxId = id;
-      root.querySelector('[data-mailbox-query-slot]').append(form);
-      form.querySelector('#ops-managed-query-code').closest('.field').parentElement.hidden = true;
-      form.querySelector('[data-action="ops-tool-clear"]').hidden = true;
-      onMailboxOperationClose(root, () => {
-        finishManagedMailRead(form);
-        form.querySelector('#ops-managed-query-code').value = '';
-        form.querySelector('#ops-managed-query-code').closest('.field').parentElement.hidden = false;
-        form.querySelector('[data-action="ops-tool-clear"]').hidden = false;
-        form.querySelector('[type="submit"]').disabled = false;
-        form.querySelector('[data-mail-auto-refresh]').checked = false;
-        form.querySelector('[data-mail-refresh]').hidden = true;
-        form.querySelector('#ops-managed-query-results').replaceChildren();
-        mailQuerySnapshots.delete(form);
-        if (host.isConnected) host.append(form);
-      });
-    }
+    if (!inDrawer && (!root || root.dataset.mailboxOperation !== 'query' || root.dataset.mailboxId !== id))
+      root = openMailboxQueryDrawer(panel, row);
     const current = root;
     const field = form.querySelector('#ops-managed-query-code');
     field.value = '';
@@ -3656,8 +3663,17 @@
       if (form) void queryManagedMail(form);
       return true;
     }
+    if (action === 'ops-mailbox-buyer-page') {
+      window.open('/mailbox-query', '_blank', 'noopener,noreferrer');
+      return true;
+    }
+    if (action === 'ops-mailbox-query-open') {
+      const panel = $('#ops-mailbox-pool') || $('#plugin-tool-host');
+      if (panel) openMailboxQueryDrawer(panel);
+      return true;
+    }
     if (action === 'ops-mailbox-related') {
-      api.openActionMenu(node, `<div class="toolbar">${button('查看谷歌邮箱库存', 'ops-go', '', 'mail', 'data-route="mailboxes/google"')}${button('提取邮箱', 'ops-go', '', 'database', 'data-route="workspace/mail-extract"')}${button('后台查询隐藏邮箱', 'ops-relay-query', '', 'search')}</div>`);
+      api.openActionMenu(node, `<div class="toolbar">${button('查看谷歌邮箱库存', 'ops-go', '', 'mail', 'data-route="mailboxes/google"')}${button('提取邮箱', 'ops-go', '', 'database', 'data-route="workspace/mail-extract"')}${button('后台查询隐藏邮箱', 'ops-relay-query', '', 'search')}${button('打开买家查询页', 'ops-mailbox-buyer-page')}</div>`);
       return true;
     }
     if (action === 'ops-relay-query') {

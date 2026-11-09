@@ -130,10 +130,14 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     assert.equal(newOrder.cardId, '');
     assert.equal(newOrder.issueFeeSnapshot.pending, true);
     assert.equal(snapshot.data.orders.find((item) => item.id === 'QA-EXPIRED').expiry, '2026-11-05T14:35');
-    await page.getByRole('link', { name: '客户流失' }).click();
+    const sidebar = page.locator('#sidebar');
+    await sidebar.getByRole('button', { name: '数据管理', exact: true }).click();
+    await sidebar.locator('[data-group="数据管理"] + .nav-children')
+      .getByRole('link', { name: '客户流失', exact: true }).click();
     await loss.getByText('换号客户丙', { exact: true }).waitFor();
+    assert.equal(await page.locator('#breadcrumbs').innerText(), '数据管理');
     assert.equal(await loss.getByText(/续费客户甲|拒续客户乙/).count(), 0);
-    await loss.getByRole('button', { name: '历史订单' }).click();
+    await loss.getByRole('button', { name: '订阅历史' }).click();
     const lostOrder = snapshot.data.orders.find(item => item.id === 'QA-LOST');
     await drawer.getByText(lostOrder.orderNo, { exact: true }).waitFor();
     await page.keyboard.press('Escape');

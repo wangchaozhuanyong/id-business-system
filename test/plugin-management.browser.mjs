@@ -62,7 +62,7 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/plugins/mailboxes');
   assert.equal(await page.locator('#drawer').isVisible(), false, '插件使用整页布局');
-  await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await page.locator('#ops-mailbox-pool').waitFor();
   const pool = page.locator('#ops-mailbox-pool');
   await pool.locator('.mailbox-account').first().waitFor();
   await pool.getByRole('searchbox', { name: '搜索邮箱池' }).fill('pending@example.test');
@@ -99,7 +99,7 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   await popup.close();
   await page.locator('#drawer [data-action="drawer-close"]').first().click();
   await page.locator('#drawer').waitFor({ state: 'hidden' });
-  await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await page.locator('#ops-mailbox-pool').waitFor();
   await pool.getByRole('searchbox', { name: '搜索邮箱池' }).fill('');
   await page.goto(origin + '/#/plugins/websites');
   await page.goto(origin + '/#/plugins/mailboxes');
@@ -132,7 +132,7 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   await page.goto(origin + '/#/plugins/sheets');
   assert.match(await page.locator('#main').innerText(), /待开发/);
   await page.goto(origin + '/#/plugins/mailboxes');
-  await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await page.locator('#ops-mailbox-pool').waitFor();
   assert.equal(await pool.getByRole('searchbox', { name: '搜索邮箱池' }).inputValue(), '');
   assert.deepEqual(errors, []);
   assert(!codeReads.some(id => id.startsWith('claude:')));

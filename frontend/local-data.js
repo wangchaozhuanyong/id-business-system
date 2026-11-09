@@ -213,6 +213,7 @@
     copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
       request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
     claudeGoogleSubscriptions: (params) => request('claude-google-subscriptions/list', params, 'POST'),
+    employeeStatistics: (params) => request('employee-statistics?' + new URLSearchParams(params)),
     copyClaudeGoogleSubscription: (command) => request('claude-google-subscriptions/copy', command, 'POST'),
     claudeGoogleCopySettings: () => request('claude-google-subscriptions/copy-settings'),
     saveClaudeGoogleCopySettings: (command) =>

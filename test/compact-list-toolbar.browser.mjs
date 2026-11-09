@@ -33,7 +33,10 @@ test('常规列表页签、搜索与操作共享紧凑工具区，窄屏自然�
         if (control.text) assert(control.text.x >= control.box.x - 1 && control.text.right <= control.box.right + 1, `${route} ${width} clipped text`);
       }
       if (width === 1440) assert(Math.min(layout.tabs.bottom, layout.toolbar.bottom) > Math.max(layout.tabs.y, layout.toolbar.y), `${route} 宽屏不应提前换行`);
-      if (route === 'workspace/customer-loss' && width === 1024) assert(Math.abs(layout.tabs.y - layout.toolbar.y) < 15, '客户流失在 1024px 仍可同排');
+      if (route === 'workspace/customer-loss' && width === 1024) {
+        assert(layout.toolbar.y >= layout.tabs.bottom - 1, '客户流失的完整筛选组在 1024px 自然换行');
+        assert(layout.controls.every(({ box }) => box.bottom <= layout.frame.bottom - 7.5), '筛选控件到分隔线保留间距');
+      }
       if (['workspace/customer-loss', 'orders/gpt'].includes(route) && [1440, 390].includes(width))
         await page.screenshot({ path: fileURLToPath(new URL(`compact-${route.replaceAll('/', '-')}-${width}-${theme}.png`, output)) });
       measurements.push({ route, width, theme, layout });

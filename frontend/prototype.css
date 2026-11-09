@@ -20,6 +20,7 @@
   --radius: 10px;
   --panel-padding-inline: 22px;
   --panel-padding-block: 20px;
+  --toolbar-padding-block: 12px;
   --sidebar-width: 224px;
   --header-height: 64px;
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -459,14 +460,14 @@ h1 {
   flex: 1 1 max-content;
   min-width: 0;
   margin-left: auto;
-  padding: 12px 0;
+  padding: var(--toolbar-padding-block) 0;
 }
 .list-controls > .toolbar > .toolbar-left { justify-content: flex-end; }
 .list-controls .search-field { flex: 0 1 280px; max-width: 320px; }
-.panel > .toolbar.list-filters { padding-block: 12px; }
+.panel > .toolbar.list-filters { padding-block: var(--toolbar-padding-block); }
 .list-controls--filters {
   gap: 12px;
-  padding: 0;
+  padding: var(--toolbar-padding-block) 0;
   border: 0;
 }
 .list-controls--filters .online-tool-mail-filters {
@@ -493,6 +494,59 @@ h1 {
 .page-actions select,
 .entry-switch > .page-actions select {
   width: auto;
+}
+.retention-overview {
+  margin-bottom: 16px;
+}
+.retention-overview .summary-strip {
+  margin-bottom: 8px;
+}
+.retention-report-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding-inline: var(--panel-padding-inline);
+}
+.retention-report-meta > .footnote {
+  flex: 1 1 220px;
+  margin: 0;
+}
+.customer-retention-list .toolbar-left {
+  flex: 1 1 200px;
+}
+.customer-retention-list .toolbar select {
+  width: 126px;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.customer-retention-list td[data-column="contact"] .table-value-button {
+  max-width: 110px;
+}
+.customer-retention-mobile {
+  display: none;
+}
+.retention-profile .property-row strong,
+.customer-retention-mobile .guide-item {
+  overflow-wrap: anywhere;
+}
+.retention-card-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+@media (max-width: 900px) {
+  .customer-retention-list .toolbar-left { flex-basis: 100%; }
+  .customer-retention-list .toolbar-right:not(:empty) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .customer-retention-list .toolbar select { width: 100%; }
+}
+@media (max-width: 760px) {
+  .customer-retention-list > .table-viewport { display: none; }
+  .customer-retention-mobile { display: block; }
 }
 .page-actions-host > select {
   width: auto;
@@ -671,6 +725,9 @@ html[data-theme='dark'] .button.primary {
 .toolbar-left {
   flex: 1;
   min-width: 0;
+}
+.toolbar-left:has(.search-field) {
+  min-width: min(100%, 180px);
 }
 .relay-alias-toolbar {
   gap: 10px 14px;
@@ -2205,7 +2262,8 @@ dialog::backdrop {
 }
 @media (max-width: 760px) {
   .mailbox-pool-actions,
-  .online-tool-mail-filters {
+  .online-tool-mail-filters,
+  .list-controls--filters .online-tool-mail-filters {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
@@ -2216,6 +2274,9 @@ dialog::backdrop {
   .online-tool-mail-filters > :is(input, select) {
     width: 100%;
     min-width: 0;
+  }
+  .list-controls--filters .online-tool-mail-filters input {
+    max-width: none;
   }
 }
 .online-tool-download-option {
