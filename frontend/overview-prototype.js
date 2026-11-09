@@ -136,7 +136,7 @@
     ['Claude 账号', 'accounts/claude', '含养号条件', 'claude']
   ];
   const future = [
-    { id: 'microsoft', title: '微软邮箱', icon: 'mail', scope: '邮箱库存', route: 'mailboxes/microsoft', status: '业务占位', text: '规划库存、提取、使用和归还概况；与在线工具中的邮箱查询分开。', fields: ['库存登记数量', '已领用与待归还', '账号状态与异常'] },
+    { id: 'microsoft', title: '微软邮箱', icon: 'mail', scope: '邮箱库存', route: 'mailboxes/microsoft', status: '已支持库存登记', text: '邮箱管理可登记登录与验证资料。总览统计随提取和使用流程接入。', fields: ['库存登记数量', '已领用与待归还', '账号状态与异常'] },
     { id: 'gemini', title: 'Gemini 业务', icon: 'key', scope: '账号与订单', route: 'accounts/gemini', status: '业务占位', text: '账号库存和订单能力完善后，再接入经营指标。', fields: ['可用账号与异常', '订单与续费', '实收与已核算利润'] },
     { id: 'grok', title: 'Grok 业务', icon: 'key', scope: '账号与订单', route: 'accounts/grok', status: '业务占位', text: '保留账号和订单概况的位置，不提前展示业务数量。', fields: ['账号库存', '订单与订阅状态', '客户与续费'] },
     { id: 'claude', title: 'Claude 代充', icon: 'bolt', scope: '线上代充', route: 'online-recharge/claude', status: '业务占位', text: '待执行链路完善后展示任务进展，不影响已有 Claude 订单业务。', fields: ['排队与执行中', '成功与失败', '任务与订单对账'] },
