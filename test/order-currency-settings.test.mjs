@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderCurrencySettings } from '../server/order-currency-settings.mjs';
-import { validGptPaidPrices, validOrderPrices } from '../server/order-policy.mjs';
+import { validClaudePaidPrices, validGptPaidPrices, validOrderPrices } from '../server/order-policy.mjs';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { calculateOrder, createOrderSnapshot, requiredQuoteCurrencies } from '../modules/finance/accounting.mjs';
 
@@ -45,21 +45,31 @@ test('新增币种沿用精确金额和冻结汇率，缺少所需汇率时保�
   assert.equal(calculateOrder(order, { clock }).profit, '69.9992');
 });
 
-test('GPT 代付价格限已知套餐与币种，并与售价及旧客户端保存隔离', () => {
+test('GPT 与 Claude 的代付价格限各自套餐和国家币种，其他设置保存时保留', () => {
   const presets = { Plus: { PHP: '983', CLP: '10000', IDR: '' } };
+  const claudePresets = { 'Claude Pro': { Pro: { MYR: '89.0001' } }, 'Claude Max': { 'Max 5x': { USD: '105' } } };
   assert(validGptPaidPrices(presets));
+  assert(validClaudePaidPrices(claudePresets));
   for (const invalid of [null, { Go: { PHP: '1' } }, { Plus: { EUR: '1' } },
     { Plus: { PHP: 983 } }, { Plus: { PHP: '-1' } }, { Plus: { PHP: '1.00001' } }])
     assert(!validGptPaidPrices(invalid));
+  for (const invalid of [{ GPT: presets }, { 'Claude Max': { Pro: { USD: '1' } } },
+    { 'Claude Pro': { Pro: { EUR: '1' } } }, { 'Claude Pro': { Pro: { MYR: '1.00001' } } }])
+    assert(!validClaudePaidPrices(invalid));
   const store = createLocalBusinessStore(':memory:');
   try {
     const initial = { mailboxTypes: [], costSettings: {}, orderPrices: { GPT: { Plus: { CNY: '100' } } } };
     const command = (version, data, action) => [{ domain: 'settings', version, data, action }];
     store.saveBatch(command(0, { ...initial, gptPaidPrices: presets }, 'gpt_paid_prices_save'));
     assert.throws(() => store.saveBatch(command(0, initial, 'order_prices_save')), { status: 409 });
-    store.saveBatch(command(1, { ...initial, orderCurrenciesByProduct: { Claude: claude } }, 'order_currencies_save'));
+    assert.throws(() => store.saveBatch(command(1, { ...initial, claudePaidPrices: { GPT: presets } },
+      'claude_paid_prices_save')), { status: 400 });
+    store.saveBatch(command(1, { ...initial, claudePaidPrices: claudePresets }, 'claude_paid_prices_save'));
+    store.saveBatch(command(2, { ...initial, orderCurrenciesByProduct: { Claude: claude } }, 'order_currencies_save'));
     assert.deepEqual(store.load('settings').data.gptPaidPrices, presets);
+    assert.deepEqual(store.load('settings').data.claudePaidPrices, claudePresets);
     assert.deepEqual(store.load('settings').data.orderPrices, initial.orderPrices);
     assert(store.audit().some(row => row.action === 'gpt_paid_prices_save'));
+    assert(store.audit().some(row => row.action === 'claude_paid_prices_save'));
   } finally { store.close(); }
 });

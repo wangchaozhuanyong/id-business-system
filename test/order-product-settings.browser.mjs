@@ -4,7 +4,7 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 import { validOrderCurrencyGroups, retainOrderCurrencySettings } from '../server/order-currency-settings.mjs';
-import { validGptPaidPrices, validOrderPrices } from '../server/order-policy.mjs';
+import { validClaudePaidPrices, validGptPaidPrices, validOrderPrices } from '../server/order-policy.mjs';
 
 test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维护，代付预设、草稿和旧单保留', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -47,6 +47,7 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
     assert(validOrderCurrencyGroups(command.data.orderCurrenciesByProduct));
     assert(validOrderPrices(command.data.orderPrices));
     if ('gptPaidPrices' in command.data) assert(validGptPaidPrices(command.data.gptPaidPrices));
+    if ('claudePaidPrices' in command.data) assert(validClaudePaidPrices(command.data.claudePaidPrices));
     settings = { version: command.version + 1, data: retainOrderCurrencySettings(command.data, settings.data) };
     return route.fulfill({ json: settings });
   });
@@ -83,12 +84,13 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
     await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
   }
   async function save(formId, status = 200) {
+    const paidProduct = formId === 'commerce-paid-prices-form' && await page.locator('#commerce-paid-product').inputValue();
     await page.locator(`button[form="${formId}"][type="submit"]:visible, #${formId} button[type="submit"]:visible`).click();
     const response = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/settings');
     await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
     assert.equal((await response).status(), status);
-    if (status === 200 && formId === 'commerce-paid-prices-form')
-      await page.getByText('GPT 代付价格已保存', { exact: true }).waitFor();
+    if (status === 200 && paidProduct)
+      await page.getByText(paidProduct + ' 代付价格已保存', { exact: true }).waitFor();
     else if (status === 200) await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
     else await page.getByText('模拟设置保存失败', { exact: true }).waitFor();
   }
@@ -200,18 +202,67 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
 
+  const paidProduct = page.locator('#commerce-paid-product');
+  await paidProduct.selectOption('Claude Pro');
+  await country.selectOption('CNY');
+  const claudePro = paidForm.getByRole('textbox', { name: 'Pro 原币代付金额', exact: true });
+  await claudePro.fill('95.0010');
+  await paidProduct.selectOption('Claude Max');
+  await paidForm.getByRole('textbox', { name: 'Max 5x 原币代付金额', exact: true }).fill('405.1234');
+  await paidProduct.selectOption('Claude Pro');
+  assert.equal(await claudePro.inputValue(), '95.0010');
+  await save('commerce-paid-prices-form');
+  await paidProduct.selectOption('Claude Max');
+  await page.getByRole('button', { name: '读取最新', exact: true }).click();
+  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  const claudeMax = paidForm.getByRole('textbox', { name: 'Max 5x 原币代付金额', exact: true });
+  await page.waitForFunction(() => document.querySelector('[aria-label="Max 5x 原币代付金额"]')?.value === '');
+  await claudeMax.fill('405.1234');
+  await save('commerce-paid-prices-form');
+  assert.equal(settings.data.claudePaidPrices['Claude Pro'].Pro.CNY, '95.0010');
+  assert.equal(settings.data.claudePaidPrices['Claude Max']['Max 5x'].CNY, '405.1234');
+  assert.equal(settings.data.gptPaidPrices.Plus.PHP, '983');
+
+  async function checkReference(kind, expected) {
+    const id = 'commerce-' + kind + '-price-reference';
+    const note = page.locator('#' + id);
+    const trigger = page.locator(`summary[aria-controls="${id}"]`);
+    assert(!(await note.isVisible()));
+    await trigger.scrollIntoViewIfNeeded();
+    const groups = page.locator('.order-financial-groups');
+    const height = (await groups.boundingBox()).height;
+    await trigger.press('Enter');
+    await page.locator('#' + id + ':popover-open').waitFor();
+    await note.locator('[aria-current="true"] dd').filter({ hasText: expected[0][1] }).waitFor();
+    const rows = await note.locator('dl > div').evaluateAll(nodes =>
+      nodes.map(node => [node.querySelector('dt').textContent, node.querySelector('dd').textContent]));
+    assert.deepEqual(rows, expected);
+    assert.doesNotMatch(await note.innerText(), /汇率|成本|折合|¥/u);
+    assert.equal((await groups.boundingBox()).height, height);
+    assert(await note.evaluate(node => {
+      const box = node.getBoundingClientRect();
+      return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight &&
+        node.scrollWidth <= node.clientWidth + 1;
+    }));
+    await trigger.press('Escape');
+    await note.waitFor({ state: 'hidden' });
+  }
+
   const paidAmount = page.locator('#commerce-paidAmount'), plan = page.locator('#commerce-plan');
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.waitForFunction(() => document.querySelector('#commerce-paidAmount')?.value === '983');
   assert.match(await page.locator('label[for="commerce-paidCurrency"]').textContent(), /国家／地区/);
   assert.equal(await paid.inputValue(), 'PHP');
   assert.equal(await page.getByText('折合人民币预算', { exact: true }).count(), 0);
+  await checkReference('paid', [['菲律宾', '983 PHP'], ['智利', '10000 CLP']]);
+  await checkReference('sale', [['人民币', '111.1111 CNY']]);
   await page.locator('[name="commerce-paidConfirmed"]').check();
   await plan.selectOption('Pro 100');
   assert.equal(await paidAmount.inputValue(), '1200');
   assert(!(await page.locator('[name="commerce-paidConfirmed"]').isChecked()));
   await paid.selectOption('CLP');
   assert.equal(await paidAmount.inputValue(), '');
+  await checkReference('paid', [['智利', '未配置（CLP）'], ['菲律宾', '1200 PHP']]);
   await plan.selectOption('Plus');
   assert.equal(await paidAmount.inputValue(), '10000');
   await paidAmount.fill('9876.1234');
@@ -222,9 +273,25 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
   await page.locator('#commerce-payment').selectOption('苹果内购');
   assert.equal(await paid.inputValue(), 'USD');
   assert.equal(await paidAmount.inputValue(), '');
+  await page.getByLabel('查看代付金额说明').click();
+  await page.locator('#commerce-paid-price-reference:popover-open').getByText('苹果内购按实际美元金额填写。').waitFor();
+  await page.getByLabel('查看代付金额说明').press('Escape');
   await page.locator('#commerce-payment').selectOption('银行卡');
   assert.equal(await paid.inputValue(), 'PHP');
   assert.equal(await paidAmount.inputValue(), '983');
+
+  await page.goto(origin + '/#/workspace/order/claude');
+  await page.locator('#commerce-product').selectOption('Claude Pro');
+  await paid.selectOption('CNY');
+  await sale.selectOption('EUR');
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await checkReference('paid', [['中国', '95.0010 CNY']]);
+  await checkReference('sale', [['欧元', '49.9900 EUR'], ['人民币', '201 CNY']]);
+  await page.locator('#commerce-product').selectOption('Claude Max');
+  await paid.selectOption('CNY');
+  await checkReference('paid', [['中国', '405.1234 CNY']]);
+  await checkReference('sale', [['欧元', '99.1234 EUR'], ['人民币', '301 CNY']]);
+  await page.setViewportSize({ width: 1440, height: 1000 });
 
   const evidence = new URL('../.runtime/order-product-settings-20261108/', import.meta.url);
   const screenshots = process.env.ID_ORDER_SETTINGS_SCREENSHOTS === '1';
@@ -237,9 +304,10 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
       await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
       const geometry = await page.locator('.order-financial-group').evaluateAll(groups => groups.map(group => {
         const rect = group.getBoundingClientRect(), title = group.querySelector('h3').getBoundingClientRect();
-        const actions = [...group.querySelectorAll('.order-financial-actions button')].map(node => node.getBoundingClientRect());
+        const actions = [...group.querySelectorAll('.order-financial-heading summary')].map(node => node.getBoundingClientRect());
         return { top: rect.top, left: rect.left, right: rect.right, titleY: title.top + title.height / 2,
-          actionsFit: actions.every(a => a.left >= title.right && a.right <= rect.right && a.height > 0) };
+          actionsFit: actions.every(a => a.left >= title.right && a.right <= rect.right &&
+            a.height >= (innerWidth <= 900 ? 44 : 28) && Math.abs(a.top + a.height / 2 - title.top - title.height / 2) <= 1) };
       }));
       assert(geometry.every(row => row.actionsFit && row.left >= 0 && row.right <= width), JSON.stringify({ product, width, dark, geometry }));
       if (width === 1440) assert(geometry.every(row => Math.abs(row.titleY - geometry[0].titleY) <= 1), '并排标题文字居中模型一致');

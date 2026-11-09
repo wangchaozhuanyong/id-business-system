@@ -36,6 +36,7 @@
   window.addEventListener('scroll', reposition, { capture: true, passive: true });
 
   window.IDTitleHelp = {
+    reposition,
     attach(title, description) {
       if (!title || !description || title.parentElement.classList.contains('title-with-help'))
         return;

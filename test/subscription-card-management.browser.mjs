@@ -100,7 +100,39 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         assert.equal(await list.locator('[data-row-id="switch-new"]').getByText('使用中').count(), 1);
         assert.equal(await list.getByText('no-card@example.test').count(), 0);
         assert.ok(!(await list.innerText()).includes(pan));
-        assert.equal(await rows.count(), 8);
+        assert.equal(await rows.count(), 10);
+        const amountHeading = list.getByRole('columnheader', { name: '预计金额', exact: true });
+        const amountHelp = amountHeading.getByLabel('查看预计金额说明');
+        const amountNote = amountHeading.locator('.title-description');
+        await amountHelp.scrollIntoViewIfNeeded();
+        assert.equal(await amountNote.isVisible(), false);
+        const triggerLayout = await amountHelp.evaluate(node => {
+          const trigger = node.getBoundingClientRect();
+          const label = node.closest('.title-with-help').firstElementChild.getBoundingClientRect();
+          return {
+            width: trigger.width, height: trigger.height, gap: trigger.left - label.right,
+            centerOffset: Math.abs((trigger.top + trigger.bottom - label.top - label.bottom) / 2)
+          };
+        });
+        assert.ok(triggerLayout.gap > 0 && triggerLayout.centerOffset <= 1);
+        const targetSize = width <= 900 ? 44 : 28;
+        assert.ok(triggerLayout.width >= targetSize && triggerLayout.height >= targetSize);
+        const tableHeight = (await list.boundingBox()).height;
+        await amountHelp.click();
+        await amountHeading.locator('.title-description:popover-open').waitFor();
+        assert.match(await amountNote.innerText(), /通用付款固定费用 \+ 2 美元备用金。.*向上取整到美分/u);
+        const noteBounds = await amountNote.boundingBox();
+        assert.ok(noteBounds.x >= 0 && noteBounds.x + noteBounds.width <= width);
+        assert.ok(noteBounds.y >= 0 && noteBounds.y + noteBounds.height <= 900);
+        assert.equal(await amountNote.evaluate(note => note.scrollWidth <= note.clientWidth + 1), true);
+        assert.equal((await list.boundingBox()).height, tableHeight);
+        await amountHelp.press('Escape');
+        await amountNote.waitFor({ state: 'hidden' });
+        assert.equal(await amountHelp.evaluate(node => document.activeElement === node), true);
+        await amountHelp.press('Enter');
+        await amountHeading.locator('.title-description:popover-open').waitFor();
+        await page.getByLabel('搜索当前列表').click();
+        await amountNote.waitFor({ state: 'hidden' });
         const copyButton = expired.getByRole('button', { name: '复制', exact: true });
         await copyButton.scrollIntoViewIfNeeded();
         assert.equal(await copyButton.evaluate(button => {
@@ -109,7 +141,8 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
           return rect.left >= table.left - 1 && rect.right <= Math.min(innerWidth, table.right) + 1;
         }), true);
         await page.getByRole('button', { name: '下一页', exact: true }).click();
-        assert.equal(await rows.count(), 4);
+        assert.equal(await rows.count(), 2);
+        assert.equal(await amountHelp.count(), 1);
         assert.ok(await page.getByRole('button', { name: '下一页', exact: true }).isDisabled());
         await page.getByLabel('使用状态', { exact: true }).selectOption('upcoming');
         assert.equal(await rows.count(), 1);
@@ -124,6 +157,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         assert.deepEqual(copied[0], { orderId: 'upcoming', cardId: 'recharge:7' });
         await page.getByLabel('搜索当前列表').fill('不匹配的检索词');
         await page.getByText('暂无符合条件的记录').waitFor();
+        assert.equal(await amountHelp.count(), 1);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1), false);
         await page.goto(origin + '/#/workspace/renewals');
         const renewalRow = page.locator('table[data-table="commerce-renewals"] [data-row-id="upcoming"]');

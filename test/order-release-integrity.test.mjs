@@ -15,6 +15,8 @@ test('自动入单按来源任务去重，迟到回执只补缺项并保留人�
   };
   const first = store.applyRechargeOrder({ since: at, row, order: buildRechargeOrder(evidence, {}, at) });
   const original = store.load('commerce');
+  original.data.customers.push({ id: 'verified-customer', name: '已核对客户', active: true });
+  original.data.orders[0].customerId = 'verified-customer';
   original.data.orders[0].notes = '人工补充的备注';
   original.data.orders[0].version++;
   store.saveBatch([{ domain: 'commerce', version: original.version, data: original.data, action: '更正订单' }]);
@@ -31,6 +33,7 @@ test('自动入单按来源任务去重，迟到回执只补缺项并保留人�
   assert.equal(orders[0].paidAmount, '99.00');
   assert.equal(orders[0].expiry, '2026-12-07T10:00');
   assert.equal(orders[0].notes, '人工补充的备注');
+  assert.equal(orders[0].customerId, 'verified-customer');
   assert.equal(store.load('inventory').version, 0);
   assert.throws(() => store.load('order-sync'), /资料|模块/);
 });

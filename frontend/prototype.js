@@ -163,6 +163,7 @@ function select(name, values, selected = '') {
   return `<select id="${name}" name="${name}">${options(values, selected)}</select>`;
 }
 
+const gptOrderSyncRoute = 'orders/gpt/recharge-sync';
 const navigation = [
   ['网站总览', 'grid', [['网站总览', 'overview']]],
   [
@@ -223,7 +224,6 @@ const navigation = [
     'orders',
     [
       ['GPT 订单', 'orders/gpt'],
-      ['代充订单同步', 'orders/recharge-sync'],
       ['Claude Pro 订单', 'orders/pro'],
       ['Claude Max 订单', 'orders/max'],
       ['Claude 专属', 'orders/exclusive'],
@@ -829,6 +829,15 @@ function titleInfo(title, description, id, trustedHtml = false) {
 function header(title, description, actions = '', label = '') {
   return `<div class="page-header"><div class="page-heading"><h1 id="page-title-heading">${escapeHtml(title)}</h1>${titleInfo(title, [description, label].filter(Boolean).join(' · '), 'page-description')}</div><div class="page-header-actions">${actions}</div></div>`;
 }
+function gptOrderTabs() {
+  if (!permittedRoute(gptOrderSyncRoute)) return '';
+  const views = [['orders/gpt', '订单列表'], [gptOrderSyncRoute, '代充订单同步']];
+  const links = views.map(([route, label]) => {
+    const active = state.route === route;
+    return `<a class="tab${active ? ' active' : ''}" href="#/${route}"${active ? ' aria-current="page"' : ''}>${label}</a>`;
+  }).join('');
+  return `<nav class="tabs" data-route-tabs aria-label="GPT 订单视图">${links}</nav>`;
+}
 function compactListToolbars(region) {
   const simple = /^(workspace\/(customer-loss|renewals|extractions)|customers\/(list|tenants)|orders\/(gpt|pro|max|exclusive|statistics)|settings\/(accounts|login-logs|exchange-rates))$/.test(state.route);
   const relay = state.route === 'mailboxes/relay' && ['parents', 'imports'].includes($('.panel > .tabs .tab.active', region)?.dataset.tab);
@@ -837,7 +846,8 @@ function compactListToolbars(region) {
     if (panel?.matches('.panel') && $(':scope > .toolbar', panel)) panel.prepend(tabs);
   }
   if (simple || relay) for (const panel of $$('.panel', region)) {
-    const header = $(':scope > .tabs, :scope > .content-toolbar', panel), controls = header?.nextElementSibling;
+    const header = $(':scope > .tabs:not([data-route-tabs]), :scope > .content-toolbar', panel);
+    const controls = header?.nextElementSibling;
     if (!controls?.matches('.toolbar')) continue;
     const tabs = header.matches('.tabs') ? header : $(':scope > .tabs', header);
     if (!tabs) continue;
@@ -917,7 +927,14 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
   const check = scope
     ? `<th class="check-cell"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /></th>`
     : '';
-  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${visible.map((column) => `<th class="${column.action ? 'table-actions' : ''}" scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
+  const headers = visible.map((column) => {
+    const label = escapeHtml(column.label);
+    const help = column.headerHelp && titleInfo(column.label, column.headerHelp,
+      `column-help-${encodeURIComponent(tableId)}-${encodeURIComponent(column.id)}`);
+    const content = help ? `<div class="title-with-help"><span>${label}</span>${help}</div>` : label;
+    return `<th class="${column.action ? 'table-actions' : ''}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;
+  }).join('');
+  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${headers}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
 }
 function fixedTableColumn(column) {
   return column.action || ['email', 'orderNo', 'name'].includes(column.id);
@@ -1569,6 +1586,10 @@ function navigate() {
   }
   if (next === 'mailboxes/apple') {
     next = 'accounts/apple-balances';
+    history.replaceState(null, '', '#/' + next);
+  }
+  if (next === 'orders/recharge-sync') {
+    next = gptOrderSyncRoute;
     history.replaceState(null, '', '#/' + next);
   }
   if (
@@ -3213,6 +3234,8 @@ window.IDDesignAPI = {
   input,
   select,
   header,
+  gptOrderSyncRoute,
+  gptOrderTabs,
   summary,
   empty,
   table,

@@ -207,9 +207,16 @@ export function validOrderPrices(prices) {
         validCurrencyCode(currency) && (value === '' || validMoney(value)))));
 }
 
+const paidPriceCurrenciesValid = (prices) =>
+  Object.values(prices).every(amounts => Object.keys(amounts).every(code => currencies.includes(code)));
+
 export function validGptPaidPrices(prices) {
-  return validOrderPrices({ GPT: prices }) &&
-    Object.values(prices).every(amounts => Object.keys(amounts).every(code => currencies.includes(code)));
+  return validOrderPrices({ GPT: prices }) && paidPriceCurrenciesValid(prices);
+}
+
+export function validClaudePaidPrices(prices) {
+  return validOrderPrices(prices) && !Object.hasOwn(prices, 'GPT') &&
+    Object.values(prices).every(paidPriceCurrenciesValid);
 }
 
 export function nextOrderNo(orders) {

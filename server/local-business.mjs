@@ -51,7 +51,7 @@ import {
   assignOrderOwner, assignTenantOwner, checkAppleOrder, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee,
   isClaudeProBankMaterials, nextOrderNo, normalizeClaudeProMaterials, redactClaudeProOrderMaterials,
-  validGptPaidPrices, validMoney, validOrderPrices
+  validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices
 } from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
@@ -111,7 +111,8 @@ const settingsActions = {
   statistics_currency_save: '更改统计币种',
   order_prices_save: '保存订单套餐售价',
   order_currencies_save: '保存订单币种设置',
-  gpt_paid_prices_save: '保存 GPT 代付价格'
+  gpt_paid_prices_save: '保存 GPT 代付价格',
+  claude_paid_prices_save: '保存 Claude 代付价格'
 };
 const appleBalanceActions = {
   apple_order_charge: '登记苹果内购扣款或冲正',
@@ -608,6 +609,8 @@ function checkWrite(entry) {
     throw new LocalDataError(400, '套餐售价设置格式不正确');
   if (domain === 'settings' && 'gptPaidPrices' in data && !validGptPaidPrices(data.gptPaidPrices))
     throw new LocalDataError(400, 'GPT 代付价格格式不正确');
+  if (domain === 'settings' && 'claudePaidPrices' in data && !validClaudePaidPrices(data.claudePaidPrices))
+    throw new LocalDataError(400, 'Claude 代付价格格式不正确');
   if (domain === 'settings' && (('orderCurrencies' in data && !validOrderCurrencies(data.orderCurrencies)) ||
       ('orderCurrenciesByProduct' in data && !validOrderCurrencyGroups(data.orderCurrenciesByProduct))))
     throw new LocalDataError(400, '订单币种设置格式不正确');
@@ -1383,7 +1386,7 @@ export function createLocalBusinessStore(databasePath) {
         if (settings) {
           const savedSettings = current('settings');
           settings.data = retainOrderCurrencySettings(settings.data, savedSettings);
-          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'gptPaidPrices']) {
+          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'gptPaidPrices', 'claudePaidPrices']) {
             if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };
             }
