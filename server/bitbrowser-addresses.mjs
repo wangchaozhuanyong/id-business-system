@@ -9,7 +9,7 @@ const location = Object.freeze({
 });
 const streetPattern = /^[A-Za-z0-9][A-Za-z0-9 .,'#/-]{1,179}$/;
 const uuidPattern = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i;
-const statuses = ['unused', 'used', 'disabled'];
+const statuses = ['all', 'unused', 'used'];
 const generatedLocations = [
   ['Portland', 'Oregon', ['97201', '97205', '97209', '97214']],
   ['Salem', 'Oregon', ['97301', '97302', '97306']],
@@ -88,9 +88,9 @@ export function listBitBrowserAddresses(rows, search) {
     !Number.isSafeInteger(page) ||
     page < 1 ||
     page > 100_000 ||
-    ![20, 50, 100, 2000].includes(pageSize) ||
+    ![10, 20, 50, 100, 2000].includes(pageSize) ||
     keyword.length > 80 ||
-    (status !== 'all' && !statuses.includes(status))
+    !statuses.includes(status)
   ) {
     throw new BitBrowserAddressError(400, '地址查询条件无效');
   }
@@ -98,15 +98,18 @@ export function listBitBrowserAddresses(rows, search) {
   const matches = [];
   const query = streetKey(keyword);
   for (const row of rows) {
-    totals[row.status]++;
-    if ((status === 'all' || row.status === status) && streetKey(row.line1).includes(query)) {
-      matches.push(row);
+    const currentStatus = row.status === 'disabled' ? 'unused' : row.status;
+    totals[currentStatus]++;
+    if ((status === 'all' || currentStatus === status) && streetKey(row.line1).includes(query)) {
+      matches.push(currentStatus === row.status ? row : { ...row, status: currentStatus });
     }
   }
-  matches.sort(
-    (left, right) =>
-      right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
-  );
+  const byCreation = (left, right) =>
+    right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id);
+  matches.sort(status === 'used'
+    ? (left, right) => (right.usedAt || right.createdAt).localeCompare(left.usedAt || left.createdAt)
+        || byCreation(left, right)
+    : byCreation);
   const offset = (page - 1) * pageSize;
   return {
     items: matches.slice(offset, offset + pageSize),
@@ -157,19 +160,28 @@ export function updateBitBrowserAddress(rows, { id, status, expectedStatus }, no
   if (!isBitBrowserAddressId(id)) {
     throw new BitBrowserAddressError(400, '地址编号无效');
   }
-  if (!statuses.includes(status) || !statuses.includes(expectedStatus)) {
+  if (status !== 'used' || expectedStatus !== 'unused') {
     throw new BitBrowserAddressError(400, '地址状态无效');
   }
   const index = rows.findIndex((row) => row.id === id);
   if (index < 0) throw new BitBrowserAddressError(404, '找不到该地址');
   const prior = rows[index];
-  if (prior.status !== expectedStatus) {
+  if (prior.status === 'used') return { rows, result: prior };
+  if (prior.status !== 'unused' && prior.status !== 'disabled') {
     throw new BitBrowserAddressError(409, '地址状态已在其他页面更新，请重新核对');
   }
-  if (prior.status === status) return { rows, result: prior };
-  if (prior.status === 'used') {
-    throw new BitBrowserAddressError(409, '已使用地址不能恢复为可用状态');
-  }
-  const result = { ...prior, status, usedAt: status === 'used' ? now : null };
+  const result = { ...prior, status, usedAt: now };
   return { rows: rows.with(index, result), result };
+}
+
+export function deleteUsedBitBrowserAddresses(rows, { deleteUsed, version }, currentVersion) {
+  if (deleteUsed !== true || !Number.isSafeInteger(version) || version < 0) {
+    throw new BitBrowserAddressError(400, '删除已使用地址的请求格式不正确');
+  }
+  if (version !== currentVersion) {
+    throw new BitBrowserAddressError(409, '地址列表已更新，请重新核对后再删除');
+  }
+  const kept = rows.filter((row) => row.status !== 'used');
+  const deleted = rows.length - kept.length;
+  return { rows: deleted ? kept : rows, result: { deleted } };
 }

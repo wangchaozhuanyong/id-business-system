@@ -91,7 +91,7 @@ export function parseWebsiteVisitSearch(value) {
   if (
     Object.keys(input).some((k) => !['days', 'page', 'pageSize', 'sort', 'ip'].includes(k)) ||
     ![7, 30].includes(input.days) ||
-    ![20, 50].includes(input.pageSize) ||
+    ![10, 20, 50].includes(input.pageSize) ||
     !['newest', 'oldest'].includes(input.sort) ||
     !Number.isInteger(input.page) ||
     Number(input.page) < 1 ||

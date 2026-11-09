@@ -5,6 +5,7 @@ import { signRechargeAssertion } from '../assertion.mjs';
 import { loadCodexdaichongAssets } from './assets.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
+import { readsRechargePresentation, rechargeBrowserPresentation } from './progress-presentation.mjs';
 
 export const CODEXDAICHONG_PREFIX = '/integrations/codexdaichong';
 const allowedMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -34,6 +35,32 @@ function respond(res, status, message) {
     'Cache-Control': 'no-store'
   });
   res.end(JSON.stringify({ ready: false, success: false, message }));
+}
+
+async function writeRechargePresentation(reply, res, path, secret) {
+  const chunks = [];
+  let bytes = 0;
+  let body;
+  try {
+    for await (const chunk of reply) {
+      bytes += chunk.length;
+      if (bytes > 128 * 1024) throw new Error('充值回执超过处理上限');
+      chunks.push(chunk);
+    }
+    body = JSON.parse(Buffer.concat(chunks));
+  } catch {
+    if (!res.destroyed) respond(res, 502, '暂时无法确认充值回执，请用原兑换码查询。');
+    return;
+  }
+  if (res.destroyed) return;
+  const projected = rechargeBrowserPresentation(path, reply.statusCode, body, secret);
+  res.writeHead(reply.statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...filterHeaders(reply.headers, ['retry-after'])
+  });
+  res.end(JSON.stringify(projected));
 }
 
 function classify(path) {
@@ -257,6 +284,14 @@ export function createCodexdaichongGateway({
               .end();
           }
           respond(res, 502, '充值服务返回了无效跳转');
+          return;
+        }
+        if (readsRechargePresentation(req.method, path.pathname, reply.statusCode, reply.headers['content-type'])) {
+          void writeRechargePresentation(reply, res, path.pathname, secret).catch(() => {
+            if (res.destroyed) return;
+            if (res.headersSent) res.destroy();
+            else respond(res, 502, '暂时无法确认充值回执，请用原兑换码查询。');
+          });
           return;
         }
         res.writeHead(reply.statusCode, {

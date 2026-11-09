@@ -165,6 +165,26 @@
       viewChanges.observe(view, { attributes: true, attributeFilter: ['class'] });
   }
 
+  function setupRechargeCellText() {
+    let dialog;
+    document.addEventListener('click', (event) => {
+      const preview = event.target.closest('.recharge-cell-text');
+      if (!preview) return;
+      if (!dialog) {
+        dialog = document.createElement('dialog');
+        dialog.className = 'recharge-cell-dialog';
+        dialog.setAttribute('aria-labelledby', 'recharge-cell-dialog-title');
+        dialog.innerHTML = `
+          <h2 id="recharge-cell-dialog-title">完整内容</h2>
+          <div class="recharge-cell-full-text"></div>
+          <form method="dialog"><button class="btn btn-secondary" autofocus>关闭</button></form>`;
+        document.body.append(dialog);
+      }
+      dialog.querySelector('.recharge-cell-full-text').textContent = preview.textContent;
+      dialog.showModal();
+    });
+  }
+
   function setupAdminDrafts() {
     if (standalone || document.body.dataset.rechargeView !== 'admin') return;
     let bridge;
@@ -407,6 +427,7 @@
     if (standalone) document.body.dataset.standalone = 'true';
     setupAdminDrafts();
     if (document.body.dataset.rechargeView === 'admin') {
+      setupRechargeCellText();
       const subtitleSelector =
         'p:not([id]):not([role]), #orbitcard_usage_hint, .log-page-toolbar-hint';
       for (const title of document.querySelectorAll('h2.panel-title, .log-page-toolbar h2')) {

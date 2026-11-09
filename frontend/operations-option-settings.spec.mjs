@@ -88,6 +88,7 @@ function runtime() {
   runInNewContext(source, {
     window: { IDDesignAPI: api, IDDesignModules: modules },
     document: {
+      addEventListener: () => {},
       querySelectorAll: () => [],
       querySelector: (selector) => (selector === '#main form' ? mainForm : null),
       getElementById: (id) => ({ focus: () => focused.push(id) })

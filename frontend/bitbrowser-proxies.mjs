@@ -12,6 +12,9 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   get = id => editor.querySelector(`#${id}`) || sourceGet(id);
   const message = get('bit-proxy-result'), saveMessage = get('bit-ip-save-result');
   const search = get('bit-ip-search'), filter = get('bit-ip-filter'), sort = get('bit-ip-sort');
+  const pagination = get('bit-ip-pagination');
+  const { defaultPageSize, pageSizes } = window.IDPagination;
+  let pageSize = defaultPageSize, renderedPagination;
   const countryInput = get('bit-ip-country');
   get('bit-ip-countries').replaceChildren(...bitBrowserCountryOptions.map(({ code, name }) => new Option(code, name)));
   countryInput.addEventListener('change', () => {
@@ -39,6 +42,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   function capture() {
     const values = readDraft(); values['bit-execution-proxy'] = select.value;
     values['ip-search'] = search.value; values['ip-filter'] = filter.value; values['ip-sort'] = sort.value; values['ip-page'] = String(page);
+    values['ip-page-size'] = String(pageSize);
     if (editor.open) {
       for (const field of fields) values[draftKey() + field] = get('bit-ip-' + field).value;
       values[draftKey() + 'version'] = String(editVersion);
@@ -46,14 +50,16 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     drafts?.write('bit-local', values);
   }
   const initial = readDraft(); search.value = initial['ip-search'] || ''; filter.value = initial['ip-filter'] || ''; sort.value = initial['ip-sort'] || 'recent'; page = Number(initial['ip-page']) || 1;
+  const savedPageSize = Number(initial['ip-page-size']);
+  if (pageSizes.includes(savedPageSize)) pageSize = savedPageSize;
   function renderList() {
     const query = search.value.trim().toLocaleLowerCase();
     const items = (data?.items || []).filter(item => (!filter.value || item.kind === filter.value) &&
       `${item.name} ${countryName(item.countryCode)} ${item.countryCode} ${item.endpoint}`.toLocaleLowerCase().includes(query));
     if (sort.value === 'recent') items.reverse();
     else items.sort((a,b) => (sort.value === 'country' ? countryName(a.countryCode).localeCompare(countryName(b.countryCode), 'zh-Hans') : a.name.localeCompare(b.name, 'zh-Hans')) || a.id.localeCompare(b.id));
-    const pages = Math.max(1, Math.ceil(items.length / 5)); page = Math.min(Math.max(1, page), pages);
-    const rows = items.slice((page - 1) * 5, page * 5).map(item => {
+    const pages = Math.max(1, Math.ceil(items.length / pageSize)); page = Math.min(Math.max(1, page), pages);
+    const rows = items.slice((page - 1) * pageSize, page * pageSize).map(item => {
       const row = document.createElement('tr'); row.setAttribute('aria-selected', String(item.id === select.value));
       for (const value of [item.name, item.countryCode ? `${countryName(item.countryCode)} ${item.countryCode}` : '自动识别', kinds[item.kind], probeResults.has(item.id) ? (probeResults.get(item.id).status === 'usable' ? `可用 · ${probeResults.get(item.id).latencyMs}ms` : probeResults.get(item.id).status === 'failed' ? '检测未通过' : probeResults.get(item.id).status === 'testing' ? '检测中' : '未完成检测') : '未测试', `${item.endpoint} · ${protocolName(item.protocol)} · ${item.mode === 'dynamic' ? 'API 提取' : '代理地址'}`]) {
         const cell = document.createElement('td'); cell.textContent = value; cell.title = value; row.append(cell);
@@ -69,8 +75,12 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     get('bit-ip-empty').hidden = Boolean(items.length);
     get('bit-ip-empty').textContent = !data ? 'IP 列表暂不可用，请刷新重试。' : data.items.length ? '没有匹配的 IP，请调整搜索或筛选。' : '还没有保存 IP，点击右上角“新增 IP”录入。';
     get('bit-ip-count').textContent = data ? String(data.items.length) : '—';
-    get('bit-ip-page-info').textContent = `共 ${items.length} 条 · 第 ${page} / ${pages} 页`;
-    get('bit-ip-prev').disabled = page <= 1; get('bit-ip-next').disabled = page >= pages; syncActions();
+    const nextPagination = window.IDPagination.render({ id: 'bit-ip', page, pageSize, total: items.length });
+    if (nextPagination !== renderedPagination) {
+      pagination.innerHTML = nextPagination;
+      renderedPagination = nextPagination;
+    }
+    syncActions();
   }
   function render(preferred = select.value) {
     select.replaceChildren(new Option(data?.items.length ? '请选择执行 IP' : '暂无 IP，请先新增', ''),
@@ -127,7 +137,13 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     finally { saving = false; if (alive) { renderList(); onChange(); } }
   });
   for (const control of [search, filter, sort]) control.addEventListener(control === search ? 'input' : 'change', () => { page = 1; renderList(); capture(); });
-  for (const [id, delta] of [['bit-ip-prev', -1], ['bit-ip-next', 1]]) get(id).addEventListener('click', () => { page += delta; renderList(); capture(); });
+  document.addEventListener('id-pagination-change', ({ detail }) => {
+    if (detail?.id !== 'bit-ip') return;
+    page = detail.page;
+    pageSize = detail.pageSize;
+    renderList();
+    capture();
+  });
   get('bit-refresh-proxies').addEventListener('click', refresh);
   function mountEditor() {
     try {

@@ -238,7 +238,15 @@ test('管理接口拒绝员工、跨站、非法参数和未经预览确认的�
   assert.equal((await call({ actor: { ...actor, role: 'employee' } })).status, 403);
   assert.equal((await call({ headers: { origin: 'https://other.invalid' } })).status, 403);
   for (const query of ['?page=-1', '?from=2026-02-31', '?tab=untrusted', '?page=1&page=2']) assert.equal((await call({ query })).status, 400);
-  assert.equal((await call()).status, 200);
+  const defaults = await call();
+  assert.equal(defaults.status, 200);
+  assert.equal(defaults.result.pageSize, 8);
+  for (const pageSize of [8, 10, 16, 20, 32, 50]) {
+    const response = await call({ query: `?pageSize=${pageSize}` });
+    assert.equal(response.status, 200);
+    assert.equal(response.result.pageSize, pageSize);
+  }
+  assert.equal((await call({ query: '?pageSize=11' })).status, 400);
   const headers = { origin: 'https://fixture.invalid', 'content-type': 'application/json' };
   assert.equal((await call({ method: 'POST', body: { action: 'collect' } })).status, 403);
   assert.equal((await call({ method: 'POST', headers, body: { action: 'cleanup', confirm: false } })).status, 400);

@@ -4,18 +4,14 @@
   if (!localData) return;
 
   const A = window.IDDesignAPI;
-  const { $, esc, button, textAction, tag, field, input, options } = A;
+  const { $, esc, button, textAction, field, input } = A;
   const endpoint = 'bitbrowser-addresses';
-  const statuses = [
-    ['all', '全部状态'],
-    ['unused', '未使用'],
-    ['used', '已使用'],
-    ['disabled', '已停用']
-  ];
+  const statuses = [['unused', '未使用'], ['used', '已使用']];
   const labels = Object.fromEntries(statuses);
-  const filters = { page: 1, pageSize: 20, keyword: '', status: 'all' };
-  const draft = { keyword: '', status: 'all', generationCount: '10' };
+  const filters = { page: 1, pageSize: window.IDPagination.defaultPageSize, keyword: '', status: 'unused' };
+  const draft = { keyword: '', generationCount: '10' };
   const hiddenColumns = new Set();
+  const pendingCopied = new Set();
   const dates = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Shanghai',
     dateStyle: 'short',
@@ -23,6 +19,7 @@
   });
   let pendingFile = null;
   let current = null;
+  let totals = null;
   let readingFile = false;
   let saving = false;
 
@@ -33,12 +30,6 @@
     { id: 'postalCode', label: '邮编' },
     { id: 'country', label: '国家', render: () => '美国 US' },
     {
-      id: 'status',
-      label: '状态',
-      render: (row) =>
-        tag(labels[row.status], { unused: 'green', used: 'blue', disabled: 'warning' }[row.status])
-    },
-    {
       id: 'usedAt',
       label: '使用时间',
       render: (row) => (row.usedAt ? dates.format(new Date(row.usedAt)) : '—')
@@ -48,95 +39,136 @@
   ];
 
   function rowActions(row) {
-    const id = `data-id="${esc(row.id)}"`;
-    const transitions =
-      row.status === 'used'
-        ? '<span class="footnote">不可恢复</span>'
-        : textAction('标记已使用', 'bit-address-status', `${id} data-status="used"`) +
-          (row.status === 'unused'
-            ? textAction('停用', 'bit-address-status', `${id} data-status="disabled"`)
-            : textAction('启用', 'bit-address-status', `${id} data-status="unused"`));
-    return `<div class="action-links">${textAction('复制地址', 'bit-address-copy', id)}${transitions}</div>`;
+    const label = pendingCopied.has(row.id) && row.status === 'unused' ? '重试标记' : '复制地址';
+    return textAction(label, 'bit-address-copy', `data-id="${esc(row.id)}"`);
   }
 
-  function opened() {
-    return $('#drawer').open ? $('#bit-addresses-panel') : null;
+  function addressPanel() {
+    return $('#bit-addresses-panel');
   }
 
-  function showAddresses() {
-    A.openDrawer(
-      '地址管理',
-      '可一键生成美国账单地址模板，付款前请核对资料。TXT 导入仍使用 Portland、OR、97204，时间按北京时间显示。',
-      `<div id="bit-addresses-panel">
+  function mount(host) {
+    if (host.querySelector('#bit-addresses-panel')) return;
+    host.innerHTML = `<section class="panel" id="bit-addresses-panel" aria-labelledby="bit-address-heading">
+      <header class="panel-heading">
+        <div class="title-with-help"><h2 id="bit-address-heading">地址管理</h2>${A.titleInfo(
+          '地址管理',
+          '生成美国账单地址模板，或导入 TXT 街道地址。导入沿用 Portland、OR、97204。复制成功后自动移入已使用，使用前请核对。',
+          'bit-address-help'
+        )}</div>
+      </header>
+      <div class="panel-body bit-address-body">
         <div class="bit-address-source-toolbar">
-        <form id="bit-address-generate" class="bit-address-form" aria-label="生成账单地址" novalidate>
-          ${field(
-            '生成数量',
-            'bit-address-generate-count',
-            '<div class="bit-address-generate-controls">' +
-              input(
-                'bit-address-generate-count',
-                draft.generationCount,
-                'type="number" min="1" max="100" step="1" required'
-              ) +
-              '<button id="bit-address-generate-button" class="button primary" type="submit">一键生成地址</button></div>',
-            true
-          )}
-        </form>
-        <form id="bit-address-import" class="bit-address-form" novalidate>
-          ${field(
-            '地址文件',
-            'bit-address-file',
-            '<div class="bit-address-import-controls"><input id="bit-address-file" type="file" accept=".txt,text/plain" /><button id="bit-address-import-button" class="button" type="submit">导入地址</button></div>',
-            true
-          )}
-          <p id="bit-address-file-summary" class="footnote" hidden></p>
-        </form>
+          <form id="bit-address-generate" class="bit-address-form" aria-label="生成账单地址" novalidate>
+            ${field(
+              '生成数量',
+              'bit-address-generate-count',
+              '<div class="bit-address-generate-controls">' +
+                input(
+                  'bit-address-generate-count',
+                  draft.generationCount,
+                  'type="number" min="1" max="100" step="1" required'
+                ) +
+                '<button id="bit-address-generate-button" class="button primary" type="submit">一键生成地址</button></div>',
+              true
+            )}
+          </form>
+          <form id="bit-address-import" class="bit-address-form" novalidate>
+            ${field(
+              '地址文件',
+              'bit-address-file',
+              '<div class="bit-address-import-controls"><input id="bit-address-file" type="file" accept=".txt,text/plain" /><button id="bit-address-import-button" class="button" type="submit">导入地址</button></div>',
+              true
+            )}
+            <p id="bit-address-file-summary" class="footnote" hidden></p>
+          </form>
         </div>
-        <form id="bit-address-filters" class="toolbar bit-address-filters" aria-label="地址查询" novalidate>
-          <div class="toolbar-left">
-            <div class="search-field">${A.icon('search')}${input('bit-address-keyword', draft.keyword, 'aria-label="搜索街道地址" placeholder="搜索街道地址" maxlength="80"')}</div>
-            <select id="bit-address-filter-status" name="bit-address-filter-status" aria-label="地址状态">${options(statuses, draft.status)}</select>
-            <button class="button" type="submit">查询</button>
-          </div>
-          <div class="toolbar-right">
-            ${button('列设置', 'bit-address-columns', '', 'columns', 'aria-expanded="false" aria-controls="bit-address-columns"')}
-            ${button('刷新', 'bit-address-refresh')}
-          </div>
-        </form>
-        <fieldset id="bit-address-columns" class="bit-address-columns" hidden>
-          <legend>显示字段</legend>
-          ${columns
-            .slice(1, -1)
-            .map(
-              ({ id, label }) =>
-                `<label class="checkbox-label"><input type="checkbox" data-bit-address-column="${id}" ${hiddenColumns.has(id) ? '' : 'checked'} /><span>${esc(label)}</span></label>`
-            )
-            .join('')}
-        </fieldset>
-        <div id="bit-address-feedback" aria-live="polite" hidden></div>
-        <div class="design-async-region">
-          <div data-bit-address-read-status role="status" hidden></div>
-          <section id="bit-address-list" aria-label="地址清单"></section>
+        <div class="tabs bit-address-tabs" role="tablist" aria-label="地址状态">
+          ${statuses.map(([id, label]) => `
+            <button id="bit-address-tab-${id}" class="tab" type="button" role="tab"
+              aria-controls="bit-address-tabpanel" data-action="bit-address-tab" data-status="${id}">
+              ${label}<span class="tab-count">—</span>
+            </button>`).join('')}
         </div>
-      </div>`,
-      button('关闭', 'drawer-close')
-    );
-    updateFileSummary();
+        <div id="bit-address-tabpanel" role="tabpanel">
+          <form id="bit-address-filters" class="toolbar bit-address-filters" aria-label="地址查询" novalidate>
+            <div class="toolbar-left">
+              <div class="search-field">${A.icon('search')}${input('bit-address-keyword', draft.keyword, 'aria-label="搜索街道地址" placeholder="搜索街道地址" maxlength="80"')}</div>
+              <button class="button" type="submit">查询</button>
+            </div>
+            <div class="toolbar-right">
+              ${button('列设置', 'bit-address-columns', '', 'columns', 'aria-expanded="false" aria-controls="bit-address-columns"')}
+              ${button('刷新', 'bit-address-refresh')}
+              ${button('一键删除已使用', 'bit-address-delete-used', 'danger', '', 'hidden disabled')}
+            </div>
+          </form>
+          <fieldset id="bit-address-columns" class="bit-address-columns" hidden>
+            <legend>显示字段</legend>
+            ${columns
+              .slice(1, -1)
+              .map(
+                ({ id, label }) =>
+                  `<label class="checkbox-label" data-bit-address-field="${id}"><input type="checkbox" data-bit-address-column="${id}" ${hiddenColumns.has(id) ? '' : 'checked'} /><span>${esc(label)}</span></label>`
+              )
+              .join('')}
+          </fieldset>
+          <div id="bit-address-feedback" aria-live="polite" hidden></div>
+          <div class="design-async-region">
+            <div data-bit-address-read-status role="status" hidden></div>
+            <div id="bit-address-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>`;
+    $('.bit-address-tabs', host).addEventListener('keydown', onTabKeydown);
+    renderTabs();
     renderList();
     void refresh('', { force: false });
   }
 
+  function renderTabs() {
+    for (const [id] of statuses) {
+      const active = id === filters.status;
+      const tab = $(`#bit-address-tab-${id}`);
+      tab.classList.toggle('active', active);
+      tab.tabIndex = active ? 0 : -1;
+      tab.setAttribute('aria-selected', String(active));
+      tab.querySelector('.tab-count').textContent = totals?.[id] ?? '—';
+    }
+    $('#bit-address-tabpanel').setAttribute('aria-labelledby', `bit-address-tab-${filters.status}`);
+    $('[data-bit-address-field="usedAt"]').hidden = filters.status !== 'used';
+  }
+
+  function selectTab(status) {
+    if (filters.status === status || !Object.hasOwn(labels, status)) return;
+    filters.status = status;
+    filters.page = 1;
+    current = null;
+    renderTabs();
+    renderList();
+    feedback('');
+    void refresh('', { force: false });
+  }
+
+  function onTabKeydown(event) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const status = event.key === 'Home' || (event.key !== 'End' && filters.status === 'used')
+      ? 'unused' : 'used';
+    selectTab(status);
+    $(`#bit-address-tab-${status}`).focus();
+  }
+
   function feedback(message, kind = '') {
     const output = $('#bit-address-feedback');
-    if (!opened() || !output) return;
+    if (!addressPanel() || !output) return;
     output.textContent = message;
     output.hidden = !message;
     output.className = kind === 'loading' ? 'design-region-progress' : `inline-notice ${kind}`;
   }
 
-  function updateFileSummary() {
-    if (!opened()) return;
+  function updateControls() {
+    if (!addressPanel()) return;
     const summary = $('#bit-address-file-summary');
     summary.hidden = !pendingFile;
     summary.textContent = pendingFile
@@ -146,50 +178,43 @@
     $('#bit-address-import-button').disabled = saving || readingFile || !pendingFile;
     $('#bit-address-generate-count').disabled = saving || readingFile;
     $('#bit-address-generate-button').disabled = saving || readingFile;
+    const remove = $('[data-action="bit-address-delete-used"]');
+    remove.hidden = filters.status !== 'used';
+    remove.disabled = saving || !current?.totals?.used || !Number.isSafeInteger(current.version);
+    for (const control of addressPanel().querySelectorAll('[data-action="bit-address-copy"]'))
+      control.disabled = saving;
   }
 
   function renderList() {
     const list = $('#bit-address-list');
-    if (!opened() || !current) return;
-    const { items, total, totals, page, pageSize } = current;
-    const pages = Math.max(1, Math.ceil(total / pageSize));
-    const description =
-      filters.keyword || filters.status !== 'all'
-        ? '当前筛选条件下没有地址。'
-        : '可一键生成地址或导入 TXT 地址文件。';
+    if (!list) return;
+    if (!current) {
+      list.replaceChildren();
+      updateControls();
+      return;
+    }
+    const { items, total, page, pageSize } = current;
+    const { status, keyword } = filters;
+    const tableColumns = columns.filter(({ id }) =>
+      !hiddenColumns.has(id) && (id !== 'usedAt' || status === 'used')
+    );
     list.innerHTML = `
-      <div class="bit-address-counts" aria-label="地址数量">${statuses
-        .slice(1)
-        .map(([id, label]) => `<span>${label} <strong>${totals[id]}</strong></span>`)
-        .join('')}</div>
-      ${
-        items.length
-          ? A.table(
-              columns.filter(({ id }) => !hiddenColumns.has(id)),
-              items,
-              '',
-              '比特账单地址'
-            )
-          : A.empty('暂无地址', description)
-      }
-      <div class="pagination"><span>共 ${total} 条 · 第 ${page} / ${pages} 页</span><div class="pagination-controls">
-        <select id="bit-address-page-size" aria-label="每页条数">${options(
-          [20, 50, 100].map((count) => [count, `${count} 条 / 页`]),
-          pageSize
-        )}</select>
-        ${button('上一页', 'bit-address-page', '', '', `data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}`)}
-        ${button('下一页', 'bit-address-page', '', '', `data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}`)}
-      </div></div>`;
+      ${A.table(tableColumns, items, '', labels[status] + '地址', {
+        title: keyword ? '暂无符合条件的地址' : '暂无' + labels[status] + '地址',
+        description: keyword ? '可调整搜索条件。' : status === 'unused'
+          ? '可生成地址或导入 TXT 地址文件。' : '复制成功的地址会显示在这里。'
+      })}
+      ${window.IDPagination.render({ id: endpoint, page, pageSize, total })}`;
+    updateControls();
   }
 
   async function refresh(completedMessage = '', { force = true } = {}) {
-    const panel = opened();
+    const panel = addressPanel();
     if (!panel) return;
     const query = { ...filters };
     const cached = localData.queries?.peek(endpoint, query);
     if (cached?.data && !force) {
-      current = cached.data;
-      renderList();
+      showResult(cached.data);
       if (!cached.stale) return;
     }
     const status = panel.querySelector('[data-bit-address-read-status]');
@@ -201,20 +226,18 @@
       const load = () => localData.load(`${endpoint}?${new URLSearchParams(query)}`);
       const result = localData.queries
         ? await localData.queries.read(endpoint, query, load, { refresh: force }) : await load();
-      if (!read.current()) return;
+      if (!read.current() || Object.keys(query).some((key) => query[key] !== filters[key])) return;
       const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize));
       if (result.page > lastPage) {
         filters.page = lastPage;
         return await refresh(completedMessage);
       }
-      current = result;
-      filters.page = result.page;
-      renderList();
+      showResult(result);
       feedback(completedMessage);
       return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
-      if (read.current())
+      if (read.current() && Object.keys(query).every((key) => query[key] === filters[key]))
         feedback(
           `${completedMessage ? completedMessage + ' ' : ''}${error.message}。请点击刷新重试。`,
           'warning'
@@ -225,8 +248,18 @@
     }
   }
 
+  function showResult(result) {
+    current = result;
+    totals = result.totals;
+    filters.page = result.page;
+    for (const row of result.items)
+      if (row.status === 'used') pendingCopied.delete(row.id);
+    renderTabs();
+    renderList();
+  }
+
   async function readAddressFile(control) {
-    const panel = opened();
+    const panel = addressPanel();
     const file = control.files?.[0];
     if (!file || saving) return;
     control.value = '';
@@ -234,7 +267,7 @@
     readingFile = true;
     control.disabled = true;
     A.setError('bit-address-file', '');
-    updateFileSummary();
+    updateControls();
     try {
       if (!/\.txt$/i.test(file.name)) throw new Error('请选择 TXT 文件');
       if (file.size > 256000) throw new Error('TXT 文件不能超过 256 KB');
@@ -246,77 +279,107 @@
         throw new Error('文件需要包含 1 至 2000 行街道地址');
       pendingFile = { name: file.name, streets };
     } catch (error) {
-      if (opened() === panel) A.setError('bit-address-file', error.message || '无法读取地址文件');
+      if (addressPanel() === panel) A.setError('bit-address-file', error.message || '无法读取地址文件');
     } finally {
       readingFile = false;
-      updateFileSummary();
+      updateControls();
     }
   }
 
-  async function save(payload, complete) {
+  async function save(payload, complete, { beforeWrite, failurePrefix = '' } = {}) {
     if (saving) return;
     saving = true;
-    updateFileSummary();
-    feedback('正在保存地址…', 'loading');
+    updateControls();
     try {
+      if (beforeWrite && !(await beforeWrite())) return;
+      feedback('正在保存地址…', 'loading');
       const result = await localData.saveBitBrowserAddresses(payload);
       const message = complete(result);
-      if (opened()) await refresh(message);
+      if (addressPanel()) await refresh(message);
       else A.notify(message);
     } catch (error) {
-      if (opened()) {
-        if (error.status === 409) await refresh(error.message);
-        else feedback(error.message, 'warning');
-      } else A.notify(error.message);
+      const message = failurePrefix + error.message;
+      if (addressPanel()) {
+        renderList();
+        if (error.status === 409) await refresh(message);
+        else feedback(message, 'warning');
+      } else A.notify(message, { kind: 'warning' });
     } finally {
       saving = false;
-      updateFileSummary();
+      updateControls();
     }
   }
 
-  function changeStatus(row, status) {
-    if (saving || row.status === 'used') return;
-    const label = { used: '标记已使用', disabled: '停用', unused: '启用' }[status];
-    const description = status === 'used' ? '标记后不可恢复。' : '';
+  function copyAddress(row) {
+    if (saving) return;
+    const state = row.state === 'OR' ? 'Oregon' : row.state;
+    const value = [
+      '国家：United States',
+      '街道地址：' + row.line1,
+      '州：' + state,
+      '城市：' + row.city,
+      '邮编：' + row.postalCode
+    ].join('\n');
+    if (row.status === 'used') {
+      void A.copyText(value, '地址已复制');
+      return;
+    }
+    void save({ id: row.id, status: 'used', expectedStatus: 'unused' }, () => {
+      pendingCopied.delete(row.id);
+      return '地址已复制并移入已使用。';
+    }, {
+      beforeWrite: async () => {
+        if (pendingCopied.has(row.id)) return true;
+        if (!(await A.copyText(value, '地址已复制'))) return false;
+        pendingCopied.add(row.id);
+        return true;
+      },
+      failurePrefix: '地址已复制，标记暂未完成。请点击「重试标记」。'
+    });
+  }
+
+  function deleteUsed() {
+    if (saving || !current?.totals?.used || !Number.isSafeInteger(current.version)) return;
+    const { version, totals: { used } } = current;
     A.confirmAction(
-      `确认${label}`,
-      `街道地址 ${row.line1}。${description}`,
-      () => void save({ id: row.id, status, expectedStatus: row.status }, () => '地址状态已更新。'),
-      '确认'
+      '删除已使用地址',
+      `将删除当前地址库的 ${used} 条已使用地址，包含所有分页。删除后无法恢复。`,
+      () => void save({ deleteUsed: true, version }, ({ deleted }) => `已删除 ${deleted} 条已使用地址。`),
+      '确认删除'
     );
   }
 
-  A.modules.bitbrowserAddresses = { open: showAddresses };
+  document.addEventListener('id-pagination-change', ({ detail }) => {
+    if (detail?.id !== endpoint || !addressPanel()) return;
+    Object.assign(filters, { page: detail.page, pageSize: detail.pageSize });
+    void refresh();
+  });
+
+  A.modules.bitbrowserAddresses = { mount };
   window.IDDesignModules.push({
     id: 'bitbrowser-addresses',
     matches: () => false,
     onDataChanges(scopes) {
-      if (scopes.includes(endpoint) && opened() && !saving) return refresh();
+      if (scopes.includes(endpoint) && addressPanel() && !saving) return refresh();
     },
     onClick(action, node) {
-      if (action === 'bit-address-refresh') void A.withActionFeedback(node, () => refresh(),
+      if (action === 'bit-address-tab') selectTab(node.dataset.status);
+      else if (action === 'bit-address-delete-used') deleteUsed();
+      else if (action === 'bit-address-refresh') void A.withActionFeedback(node, () => refresh(),
         { pending: '正在刷新地址…', success: '地址列表已刷新', failure: '地址读取失败，请重试' });
       else if (action === 'bit-address-columns') {
         const choices = $('#bit-address-columns');
         choices.hidden = !choices.hidden;
         node.setAttribute('aria-expanded', String(!choices.hidden));
-      } else if (action === 'bit-address-page') {
-        filters.page = Number(node.dataset.page);
-        void refresh();
-      } else if (action === 'bit-address-copy' || action === 'bit-address-status') {
+      } else if (action === 'bit-address-copy') {
         const row = current?.items.find(({ id }) => id === node.dataset.id);
-        if (row && action === 'bit-address-copy')
-          void A.copyText(
-            `${row.line1}\n${row.city}, ${row.state} ${row.postalCode}\nUnited States`,
-            '地址已复制'
-          );
-        else if (row) changeStatus(row, node.dataset.status);
+        if (row) copyAddress(row);
       } else return false;
       return true;
     },
     onSubmit(form) {
       if (form.id === 'bit-address-filters') {
-        Object.assign(filters, { keyword: draft.keyword.trim(), status: draft.status, page: 1 });
+        Object.assign(filters, { keyword: draft.keyword.trim(), page: 1 });
         void refresh();
       } else if (form.id === 'bit-address-generate') {
         if (saving || readingFile) return true;
@@ -343,11 +406,7 @@
     },
     onChange(node) {
       if (node.id === 'bit-address-file') void readAddressFile(node);
-      else if (node.id === 'bit-address-filter-status') draft.status = node.value;
-      else if (node.id === 'bit-address-page-size') {
-        Object.assign(filters, { pageSize: Number(node.value), page: 1 });
-        void refresh();
-      } else if (node.dataset.bitAddressColumn) {
+      else if (node.dataset.bitAddressColumn) {
         const id = node.dataset.bitAddressColumn;
         if (node.checked) hiddenColumns.delete(id);
         else hiddenColumns.add(id);
