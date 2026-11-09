@@ -411,6 +411,32 @@
     }
   }
 
+  async function showMonitoringSettingsLink() {
+    const panel = document.querySelector('#telegram_bot_token')?.closest('.panel');
+    const title = panel?.querySelector('.panel-title');
+    if (!title) return;
+    const anchor = document.createElement('a');
+    anchor.className = 'btn btn-secondary';
+    anchor.href = '/#/settings/monitoring';
+    anchor.target = '_top';
+    anchor.textContent = '打开监控与通知';
+    const controls = document.createElement('div');
+    controls.className = 'panel-header';
+    controls.append(anchor);
+    panel.append(controls);
+    try {
+      const response = await fetch('/api/local/system-monitoring?tab=legacy', { cache: 'no-store' });
+      if (!response.ok) return;
+      const { phase } = await response.json();
+      if (phase === 'managed' || phase === 'switching') {
+        panel.replaceChildren(title, controls);
+        const note = document.createElement('p');
+        note.textContent = phase === 'managed' ? '代充业务通知由系统设置统一管理。' : '代充业务通知接管待核对，请在系统设置继续。';
+        window.IDTitleHelp.attach(title, panel.appendChild(note));
+      }
+    } catch { /* The host enforces the handoff independently of this shortcut. */ }
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
     if (window.idRechargeTaskLog) {
       const dialog = document.querySelector('#task_log_modal_overlay .task-log-modal');
@@ -427,6 +453,7 @@
     if (standalone) document.body.dataset.standalone = 'true';
     setupAdminDrafts();
     if (document.body.dataset.rechargeView === 'admin') {
+      void showMonitoringSettingsLink();
       setupRechargeCellText();
       const subtitleSelector =
         'p:not([id]):not([role]), #orbitcard_usage_hint, .log-page-toolbar-hint';

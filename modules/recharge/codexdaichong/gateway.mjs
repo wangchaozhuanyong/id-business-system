@@ -37,7 +37,33 @@ function respond(res, status, message) {
   res.end(JSON.stringify({ ready: false, success: false, message }));
 }
 
-async function writeRechargePresentation(reply, res, path, secret) {
+function recordRechargeResponse(status, body, report) {
+  if (!report) return;
+  let outcome;
+  if (status === 503 && body?.success === false &&
+      body.message === '银行卡池暂无可用卡片，请先在后台「银行卡池」导入银行卡后再试')
+    outcome = 'recharge_cards';
+  if (status === 409 && body?.success === false && body.code === 'recharge_route_unavailable' && body.execution_started === false)
+    outcome = 'recharge_route';
+  if (outcome) {
+    try { report(outcome); } catch {}
+  }
+}
+
+function observeRouteRejection(reply, report) {
+  const chunks = [];
+  let size = 0;
+  reply.on('data', chunk => {
+    size += chunk.length;
+    if (size <= 4096) chunks.push(chunk);
+  });
+  reply.once('end', () => {
+    if (size > 4096) return;
+    try { recordRechargeResponse(reply.statusCode, JSON.parse(Buffer.concat(chunks)), report); } catch {}
+  });
+}
+
+async function writeRechargePresentation(reply, res, path, secret, report) {
   const chunks = [];
   let bytes = 0;
   let body;
@@ -52,6 +78,7 @@ async function writeRechargePresentation(reply, res, path, secret) {
     if (!res.destroyed) respond(res, 502, '暂时无法确认充值回执，请用原兑换码查询。');
     return;
   }
+  if (path === '/api/run-process') recordRechargeResponse(reply.statusCode, body, report);
   if (res.destroyed) return;
   const projected = rechargeBrowserPresentation(path, reply.statusCode, body, secret);
   res.writeHead(reply.statusCode, {
@@ -135,6 +162,8 @@ export function createCodexdaichongGateway({
   getUnifiedPrincipal,
   getExternalCardPrincipal,
   publicOrigin,
+  legacyNotificationLocked,
+  onRechargeOutcome,
   assets = loadCodexdaichongAssets
 }) {
   const upstream = new URL(upstreamUrl);
@@ -198,6 +227,11 @@ export function createCodexdaichongGateway({
     }
     if (!external && !readMethods.has(req.method) && !canMutate(req))
       return respond(res, 403, '请求来源未通过校验');
+    if (legacyNotificationLocked && /^\/api\/admin\/telegram(?:\/test)?\/?$/i.test(path.pathname)) {
+      try {
+        if (legacyNotificationLocked()) return respond(res, 409, '代充业务通知已进入统一接管，请在系统设置查看');
+      } catch { return respond(res, 503, '暂时无法确认通知配置状态'); }
+    }
     if (path.pathname === '/status' && readMethods.has(req.method)) {
       const result = await probeCodexdaichongRuntime({
         upstreamUrl: upstream.origin,
@@ -287,7 +321,7 @@ export function createCodexdaichongGateway({
           return;
         }
         if (readsRechargePresentation(req.method, path.pathname, reply.statusCode, reply.headers['content-type'])) {
-          void writeRechargePresentation(reply, res, path.pathname, secret).catch(() => {
+          void writeRechargePresentation(reply, res, path.pathname, secret, onRechargeOutcome).catch(() => {
             if (res.destroyed) return;
             if (res.headersSent) res.destroy();
             else respond(res, 502, '暂时无法确认充值回执，请用原兑换码查询。');
@@ -299,6 +333,8 @@ export function createCodexdaichongGateway({
           'Cache-Control': 'no-store',
           'X-Content-Type-Options': 'nosniff'
         });
+        if (onRechargeOutcome && req.method === 'POST' && path.pathname === '/api/run-process' && reply.statusCode === 409)
+          observeRouteRejection(reply, onRechargeOutcome);
         reply.on('error', () => res.destroy());
         reply.pipe(res);
       }

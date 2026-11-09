@@ -529,6 +529,20 @@
   let onlineAdmin;
   const currentIntegrationRequest = new WeakMap();
   const integrationRoot = () => api.activePageRegion?.() || document;
+  function openRechargeTaskLog(jobKey, returnFocus) {
+    if (!isAdmin() || typeof jobKey !== 'string' || !/^[\w-]{1,128}$/.test(jobKey)) return;
+    const src = onlineRechargeMount + 'admin?taskLog=' + encodeURIComponent(jobKey);
+    openDrawer('充值详细日志', '', `<iframe class="recharge-task-log-frame" src="${src}" title="任务详情"></iframe>`);
+    const drawer = $('#drawer');
+    const logFrame = $('.recharge-task-log-frame', drawer);
+    function releaseLog() {
+      if (drawer.open && logFrame.isConnected) return;
+      drawer.removeEventListener('close', releaseLog);
+      logFrame.remove();
+      if (!drawer.open) returnFocus?.();
+    }
+    drawer.addEventListener('close', releaseLog);
+  }
   function setFrameVisible(frame, visible) {
     frame.contentWindow?.postMessage(
       { source: 'id-recharge-shell', type: 'visibility', visible }, window.location.origin
@@ -730,15 +744,10 @@
       if (state.route !== onlineRechargeRoute || activeOnlineView !== 'logs' ||
           frame.hidden || frame.dataset.viewGroup !== 'admin' ||
           typeof message.jobKey !== 'string' || !/^[\w-]{1,128}$/.test(message.jobKey)) return;
-      const src = onlineRechargeMount + 'admin?taskLog=' + encodeURIComponent(message.jobKey);
-      openDrawer('充值详细日志', '', `<iframe class="recharge-task-log-frame" src="${src}" title="任务详情"></iframe>`);
-      const drawer = $('#drawer');
-      const logFrame = $('.recharge-task-log-frame', drawer);
-      drawer.addEventListener('close', () => {
-        logFrame.remove();
-        if (!drawer.open && frame.isConnected && !frame.hidden)
+      openRechargeTaskLog(message.jobKey, () => {
+        if (frame.isConnected && !frame.hidden)
           frame.contentDocument?.querySelector(`[data-view-task-log="${message.jobKey}"]`)?.focus({ preventScroll: true });
-      }, { once: true });
+      });
       return;
     }
     if (event.data.type === 'ready' && request?.frame === frame) {
@@ -4152,6 +4161,7 @@
   });
   api.modules.operations = {
     blockRechargeNavigation,
+    openRechargeTaskLog,
     getResources: (kind) =>
       !localData && kind === 'cards' ? resources.cards.map((row) => ({ ...row })) : [],
     getMailboxTypes: () => mailboxTypes.map((row) => ({ ...row })),
