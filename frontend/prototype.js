@@ -235,6 +235,10 @@ const navigation = [
       ['Claude 充值', 'online-recharge/claude', true]
     ]
   ],
+  ['数据管理', 'database', [
+    ['银行卡管理', 'data-management/bank-cards'],
+    ['Claude 谷歌订阅管理', 'data-management/claude-google-subscriptions']
+  ]],
   ['数据中心', 'database', [['数据中心', 'data', true]]],
   ['插件管理', 'grid', [
     ['邮箱查询与邮箱池', 'plugins/mailboxes'],
@@ -785,14 +789,17 @@ function dismissDrawer() {
   else if ($('#drawer').dataset.layout === 'toolbox-phrase-detail') showTools('话术文案');
   else closeDrawer();
 }
-async function copyText(value, success = '内容已复制') {
+async function copyText(value, success = '内容已复制', { current = () => true } = {}) {
+  if (!current()) return false;
   const text = String(value ?? '');
   if (!text) { notify('暂无可复制内容', { kind: 'warning' }); return false; }
   try {
     await withActionFeedback(null, () => navigator.clipboard.writeText(text), { pending: '正在复制…' });
+    if (!current()) return false;
     notify(success, { kind: 'success' });
     return true;
   } catch {
+    if (!current()) return false;
     openDrawer(
       '复制内容',
       '当前浏览器无法直接写入剪贴板，可选中下方内容复制。',

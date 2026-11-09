@@ -3953,4 +3953,8 @@ details:not(.title-help) > summary:focus-visible {
   .tool-panel-header h3 {
     min-height: 44px;
   }
+
+  #claude-google-subscriptions .table-value-button {
+    min-height: 44px;
+  }
 }

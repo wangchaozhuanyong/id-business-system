@@ -124,7 +124,12 @@
       syncTheme(message.theme);
     } else if (message.type === 'visibility' && typeof message.visible === 'boolean') {
       setVisible(message.visible);
-    } else if (message.type === 'select-view') window.idRechargeSelect(message.view);
+    } else if (message.type === 'select-view') {
+      window.idRechargeSelect(message.view);
+    } else if (!standalone && message.type === 'data-change' &&
+        Array.isArray(message.scopes) && message.scopes.includes('card-types')) {
+      window.idRechargeCardTypesChanged?.();
+    }
   });
 
   function styleAdminLayout() {

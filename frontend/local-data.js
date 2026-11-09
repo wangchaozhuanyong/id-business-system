@@ -14,7 +14,7 @@
   let pendingWrites = 0;
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
-    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates']);
+    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types']);
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
@@ -205,6 +205,18 @@
     operatorLabel: (id, fallback) => labels.get(id) || fallback || '',
     refreshOperatorLabels,
     orderCards: () => request('order-cards'),
+    cardTypes: () => request('card-types'),
+    cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
+    subscriptionCardEstimates: () => request('subscription-card-estimates'),
+    subscriptionCardDetails: (command) => request('subscription-card-details', command, 'POST'),
+    revealSubscriptionCard: (orderId, version) => request('subscription-card-reveal', { orderId, version }, 'POST'),
+    copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
+      request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
+    claudeGoogleSubscriptions: (params) => request('claude-google-subscriptions/list', params, 'POST'),
+    copyClaudeGoogleSubscription: (command) => request('claude-google-subscriptions/copy', command, 'POST'),
+    claudeGoogleCopySettings: () => request('claude-google-subscriptions/copy-settings'),
+    saveClaudeGoogleCopySettings: (command) =>
+      write([], () => request('claude-google-subscriptions/copy-settings', command)),
     orderOwners: () => request('auth/order-owners'),
     tenantOwnerTransfer: (tenantId) => request('tenant-owner-transfer?tenantId=' + encodeURIComponent(tenantId)),
     transferTenantOwner: (command) => write(['commerce'], () => request('tenant-owner-transfer', command, 'POST')),

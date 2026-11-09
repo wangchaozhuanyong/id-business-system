@@ -44,7 +44,14 @@ import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
-import { assignOrderOwner, assignTenantOwner, checkAppleOrder, checkNewOrder, deriveCardIssueFee, nextOrderNo, validMoney, validOrderPrices, validGptPaidPrices } from './order-policy.mjs';
+import { cardTypeDocument, cardTypeSnapshot } from './card-management.mjs';
+import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
+import {
+  assignOrderOwner, assignTenantOwner, checkAppleOrder, checkClaudeProMaterialHistory,
+  checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee,
+  isClaudeProBankMaterials, nextOrderNo, normalizeClaudeProMaterials, redactClaudeProOrderMaterials,
+  validGptPaidPrices, validMoney, validOrderPrices
+} from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
   RelayClaimError,
@@ -162,7 +169,7 @@ const sessionEventLabels = {
   relay_mail_reassign: '分配苹果邮箱邮件归属',
   relay_history_preview: '预检苹果邮箱历史邮件归属'
 };
-const orderFeatureDomains = new Set(['recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates']);
+const orderFeatureDomains = new Set(['recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument]);
 const orderFeatureAuditLabels = {
   recharge_code_request: '申请充值码',
   recharge_code_approve: '批准充值码申请',
@@ -259,6 +266,9 @@ const hasBankPayment = (order) => order?.payment === '银行卡' && (
 const needsOrderCardCheck = (row, prior) => row.payment === '银行卡' && !hasBankPayment(prior) &&
   (row.cardId !== prior?.cardId || row.tenantId !== prior?.tenantId || row.product !== prior?.product ||
     row.payment !== prior?.payment || (row.paidConfirmed && !prior?.paidConfirmed));
+const usesRechargeCard = (row) =>
+  (row.product === 'GPT' || (row.product === 'Claude Pro' && row.proMaterialMode === 'pool_card')) &&
+  typeof row.cardId === 'string' && row.cardId.startsWith('recharge:');
 
 function orderCostSnapshot(settings) {
   const snapshot = { ...defaultOrderCosts };
@@ -276,6 +286,40 @@ function orderCostSnapshot(settings) {
 function retainOrderField(row, prior, field) {
   if (prior && Object.hasOwn(prior, field)) row[field] = prior[field];
   else delete row[field];
+}
+
+function normalizeOrderCardType(row, prior, restorePrior, action, types) {
+  delete row.cardTypeName;
+  if (row.payment === '银行卡') {
+    try {
+      const { id, name } = cardTypeSnapshot(types, {
+        cardId: row.cardId, cardTypeId: restorePrior ? restorePrior.cardTypeId : row.cardTypeId,
+        prior: restorePrior || prior
+      });
+      if (id) {
+        row.cardTypeId = id;
+        row.cardTypeName = name;
+      } else delete row.cardTypeId;
+    } catch (error) {
+      if (error.status === 400) throw new LocalDataError(400, error.message);
+      throw error;
+    }
+  } else {
+    if (row.cardTypeId !== undefined && row.cardTypeId !== '')
+      throw new LocalDataError(400, '只有银行卡付款可登记银行卡类型');
+    delete row.cardTypeId;
+  }
+  if (prior && (row.cardTypeId || '') !== (prior.cardTypeId || '') &&
+      (row.version !== prior.version + 1 || (action !== '更正订单' && !restorePrior)))
+    throw new LocalDataError(409, '请通过订单更正更新银行卡类型，并重新核对订单版本');
+  if (!Array.isArray(row.corrections)) return;
+  for (const [index, correction] of row.corrections.entries()) {
+    if (!correction?.previous || typeof correction.previous !== 'object') continue;
+    const original = prior?.corrections?.[index]?.previous;
+    const before = original || (action === '更正订单' && correction.previous.version === prior?.version &&
+      correction.versionAfter === row.version ? prior : undefined);
+    for (const field of ['cardTypeId', 'cardTypeName']) retainOrderField(correction.previous, before, field);
+  }
 }
 
 function normalizePaymentEvidence(row, prior, automatic) {
@@ -528,8 +572,7 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
     const previous = new Map((current.data?.orders || []).map((row) => [row.id, row]));
     const needPool = commerce.data.orders.some((row) => {
       const prior = previous.get(row.id);
-      return row.product === 'GPT' && typeof row.cardId === 'string' && row.cardId.startsWith('recharge:') &&
-        needsOrderCardCheck(row, prior);
+      return usesRechargeCard(row) && needsOrderCardCheck(row, prior);
     });
     if (needPool) {
       try {
@@ -693,6 +736,45 @@ export function createLocalBusinessStore(databasePath) {
     load(domain) {
       checkDomain(domain);
       return readDocument(domain);
+    },
+    withClaudeGoogleSubscriptions(actor, operation) {
+      if (!actor?.id || !['admin', 'super'].includes(actor.role))
+        throw new LocalDataError(403, '只有管理员可以查看或复制订阅资料');
+      return writeTransaction(() => {
+        const commerce = readDocument('commerce');
+        const snapshots = { commerce, inventory: readDocument('inventory'), mailboxes: readDocument(managedMailboxDomain) };
+        const audit = (action, orderIds) => {
+          const labels = { view: '查看谷歌订阅资料', copy_1: '复制谷歌订阅资料 1', copy_2: '复制谷歌订阅资料 2' };
+          const label = labels[action];
+          if (!label) throw new TypeError('未知谷歌订阅资料操作');
+          const now = new Date().toISOString();
+          for (const id of orderIds)
+            log.run(now, 'commerce', 'claude_google_subscription_' + action, auditSummary(label, actor, id), commerce.version);
+        };
+        return operation(snapshots, audit);
+      });
+    },
+    loadClaudeGoogleCopySettings(actor) {
+      if (!actor?.id || !['admin', 'super'].includes(actor.role))
+        throw new LocalDataError(403, '只有管理员可以读取订阅复制后缀');
+      const { version, data } = readDocument(claudeGoogleCopyDomainPrefix + actor.id);
+      return { version, copy1: data?.copy1 || '', copy2: data?.copy2 || '' };
+    },
+    saveClaudeGoogleCopySettings(body, actor) {
+      if (!actor?.id || !['admin', 'super'].includes(actor.role))
+        throw new LocalDataError(403, '只有管理员可以保存订阅复制后缀');
+      const data = validateClaudeGoogleCopySettings(body);
+      return writeTransaction(() => {
+        const domain = claudeGoogleCopyDomainPrefix + actor.id;
+        const current = readDocument(domain);
+        if (body.version !== current.version)
+          throw new LocalDataError(409, '复制后缀已变化，请刷新后重新核对');
+        const version = current.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(data)));
+        log.run(new Date().toISOString(), domain, 'claude_google_copy_settings',
+          auditSummary('保存谷歌订阅复制后缀', actor), version);
+        return { version, ...data };
+      });
     },
     inventorySnapshot() {
       const snapshot = readDocument('inventory');
@@ -1302,9 +1384,34 @@ export function createLocalBusinessStore(databasePath) {
           const { action } = writes.find((write) => write.domain === 'commerce');
           const renewalError = checkInventoryRenewals(priorCommerce, commerce, inventory);
           if (renewalError) throw new LocalDataError(409, renewalError);
+          const oldOrders = priorCommerce?.orders || [];
+          const priorById = new Map(oldOrders.map((row) => [row.id, row]));
+          const nextById = new Map(commerce.orders.map((row) => [row.id, row]));
+          let cardTypes;
+          for (const row of commerce.orders) {
+            const prior = priorById.get(row.id);
+            if (prior && isDeepStrictEqual(row, prior)) continue;
+            const lastCorrection = prior?.corrections?.at(-1);
+            const restorePrior = action === '补偿撤回更正' && lastCorrection?.versionAfter === prior?.version
+              ? lastCorrection?.previous : undefined;
+            // HTTP writes always supply the verified card map. Internal imports may contain historical Pro rows.
+            const materialError = normalizeClaudeProMaterials(row, restorePrior || prior, commerce.tenants,
+              { allowLegacyCreate: !cards && !prior });
+            if (materialError) throw new LocalDataError(400, materialError);
+            if (prior?.product === 'Claude Pro' && hasBankPayment(prior) && (
+              row.payment !== prior.payment ||
+              (row.cardId || '') !== (prior.cardId || '') ||
+              (typeof prior.cardId === 'string' && prior.cardId.startsWith('tenant:') && row.tenantId !== prior.tenantId) ||
+              ((row.proMaterialMode === 'manual_card' || prior.proMaterialMode === 'manual_card') &&
+                (row.proMaterialMode !== prior.proMaterialMode || row.proCardNumber !== prior.proCardNumber))
+            )) throw new LocalDataError(409, '已确认银行卡付款的原订单不可更换原付款来源');
+            if (cardTypes === undefined) cardTypes = current(cardTypeDocument);
+            normalizeOrderCardType(row, prior, restorePrior, action, cardTypes);
+            const historyError = checkClaudeProMaterialHistory(row, prior, action) ||
+              checkClaudeProRenewalSource(row, prior, priorById, nextById);
+            if (historyError) throw new LocalDataError(409, historyError);
+          }
           if (cards) {
-            const oldOrders = priorCommerce?.orders || [];
-            const priorById = new Map(oldOrders.map((row) => [row.id, row]));
             const nextIds = new Set(commerce.orders.map(({ id }) => id));
             if (oldOrders.some((row) => row.source === '线上代充' && !nextIds.has(row.id)))
               throw new LocalDataError(409, '请使用既有业务撤单流程处理代充订单');
@@ -1346,7 +1453,7 @@ export function createLocalBusinessStore(databasePath) {
                 for (const movement of incoming.get('appleBalance')?.movements || [])
                   if (movement.orderId === row.id) movement.orderNo = row.orderNo;
               }
-              if (row.product?.startsWith('Claude') && (!prior || row.tenantId !== prior.tenantId)) {
+              if (!isClaudeProBankMaterials(row) && row.product?.startsWith('Claude') && (!prior || row.tenantId !== prior.tenantId)) {
                 const tenant = commerce.tenants.find((item) => item.id === row.tenantId && item.active !== false);
                 if (row.tenantId && !tenant) throw new LocalDataError(409, '请选择可用的认证人');
                 row.verifier = tenant?.name || '';
@@ -1363,24 +1470,34 @@ export function createLocalBusinessStore(databasePath) {
                   (!prior?.paidConfirmed || row.paidAmount !== prior.paidAmount || row.paidCurrency !== prior.paidCurrency) &&
                   (!positiveOrderAmount(row.paidAmount) || !validCurrencyCode(row.paidCurrency)))
                 throw new LocalDataError(400, '请登记实际银行卡代付金额与币种');
-              if (!automatic && hasBankPayment(prior)) {
+              if (!automatic && isClaudeProBankMaterials(row) && !row.cardId) {
+                if (hasBankPayment(prior) && prior.paymentId) retainOrderField(row, prior, 'paymentId');
+              } else if (!automatic && hasBankPayment(prior)) {
                 if (row.payment !== prior.payment || row.cardId !== prior.cardId ||
                     (typeof prior.cardId === 'string' && prior.cardId.startsWith('tenant:') && row.tenantId !== prior.tenantId))
                   throw new LocalDataError(409, '已确认银行卡付款的原订单不可换卡或付款方式');
                 retainOrderField(row, prior, 'paymentId');
               } else if (!automatic && needsOrderCardCheck(row, prior)) {
-                if (row.product === 'GPT' && typeof row.cardId === 'string' && row.cardId.startsWith('recharge:')) {
+                if (usesRechargeCard(row)) {
                   const card = cards.get(row.cardId);
                   if (!card?.active) throw new LocalDataError(409, '请选择当前可用的代充卡池银行卡');
                   row.paymentId = card.last4;
-                  const fee = deriveCardIssueFee(row, prior, [...oldOrders, ...settledThisWrite], card);
-                  if (fee) row.issueFeeSnapshot = fee;
-                  else delete row.issueFeeSnapshot;
-                  if (row.paidConfirmed) row.cardUsedAt = new Date().toISOString();
+                  if (row.product === 'GPT') {
+                    const fee = deriveCardIssueFee(row, prior, [...oldOrders, ...settledThisWrite], card);
+                    if (fee) row.issueFeeSnapshot = fee;
+                    else delete row.issueFeeSnapshot;
+                    if (row.paidConfirmed) row.cardUsedAt = new Date().toISOString();
+                  }
                 } else if (row.product?.startsWith('Claude') && typeof row.cardId === 'string' && row.cardId.startsWith('tenant:')) {
                   const card = tenantCards.find((item) => item.id === row.cardId && item.tenantId === row.tenantId && item.active);
-                  if (!card) throw new LocalDataError(409, '请选择当前认证人名下的银行卡');
+                  if (!card || (row.proMaterialMode === 'tenant_card' &&
+                      !commerce.tenants.some((item) => item.id === row.tenantId && item.active !== false)))
+                    throw new LocalDataError(409, '请选择当前认证人名下的银行卡');
                   row.paymentId = card.number.slice(-4);
+                } else if (row.product === 'GPT' && !row.cardId) {
+                  row.cardId = '';
+                  row.paymentId = '';
+                  if (row.paidConfirmed) row.issueFeeSnapshot = { cardId: '', applied: false, pending: true };
                 } else if (row.cardId || row.paidConfirmed) {
                   throw new LocalDataError(409, '请选择对应来源的银行卡');
                 } else row.paymentId = '';
@@ -1556,6 +1673,13 @@ export function createLocalBusinessStore(databasePath) {
           result.orderNo = orderNo;
         }
         if (changed) {
+          if (changed.cardId && !old?.cardId && !changed.cardTypeId) {
+            const { id, name } = cardTypeSnapshot(readDocument(cardTypeDocument).data, { cardId: changed.cardId });
+            if (id) {
+              changed.cardTypeId = id;
+              changed.cardTypeName = name;
+            }
+          }
           if (changed.cardId && changed.issueFeeSnapshot?.pending) {
             const earlierFee = data.orders.some((item) => item.id !== changed.id &&
               item.cardId === changed.cardId && item.issueFeeSnapshot?.applied);
@@ -1593,7 +1717,7 @@ export function createLocalBusinessStore(databasePath) {
       for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
-        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates']) versions[scope] = version(scope);
+        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates', cardTypeDocument]) versions[scope] = version(scope);
         versions['tools/mailbox-pool'] = version(managedMailboxDomain);
         versions['tools/website-visits'] = version(websiteVisitsDomain);
         versions['apple-relay'] = String(relayRevision.get().version);
@@ -1652,6 +1776,7 @@ export async function handleLocalBusiness(
 ) {
   try {
     const domain = route.slice('/api/local/'.length);
+    if (domain === 'commerce' || domain === 'batch') response.setHeader('Cache-Control', 'private, no-store');
     const origin = publicOrigin || `http://${request.headers.host}`;
     if (
       (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin') ||
@@ -1739,6 +1864,7 @@ export async function handleLocalBusiness(
         return json(response, 200, store.listBitBrowserAddresses(searchParams, actor));
       }
       if (domain === 'inventory') return json(response, 200, store.inventorySnapshot());
+      if (domain === 'commerce') return json(response, 200, redactClaudeProOrderMaterials(store.load(domain), actor));
       return json(response, 200, domain === 'audit' ? store.audit() : store.load(domain));
     }
     if (request.method !== 'PUT') throw new LocalDataError(405, '本机接口不支持此操作');
@@ -1747,7 +1873,9 @@ export async function handleLocalBusiness(
     }
     const body = await readJson(request);
     if (domain === 'batch') {
-      return json(response, 200, await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners));
+      const entries = await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
+      return json(response, 200, entries.map((entry) =>
+        entry.domain === 'commerce' ? redactClaudeProOrderMaterials(entry, actor) : entry));
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       throw new LocalDataError(400, '保存资料格式不正确');
@@ -1766,7 +1894,8 @@ export async function handleLocalBusiness(
     }
     const [entry, inventory] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
     return json(response, 200, {
-      version: entry.version, data: entry.data,
+      version: entry.version, data: entry.domain === 'commerce'
+        ? redactClaudeProOrderMaterials(entry.data, actor) : entry.data,
       ...(entry.accountSummaries && { accountSummaries: entry.accountSummaries, commerceVersion: entry.commerceVersion }),
       ...(entry.usageReview && { usageReview: entry.usageReview }),
       ...(inventory?.domain === 'inventory' && { inventory })

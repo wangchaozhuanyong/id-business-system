@@ -53,6 +53,8 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         for (const product of ['gpt', 'claude']) {
           await go(`workspace/order/${product}`);
           await page.locator('#commerce-payment').selectOption('银行卡');
+          if (product === 'claude')
+            await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
           await settled();
           const groups = await page.locator('.order-financial-group').evaluateAll(nodes =>
             nodes.map(n => n.getBoundingClientRect().top));
@@ -120,6 +122,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         await theme(dark);
         await go('workspace/order/claude');
         await page.locator('#commerce-payment').selectOption('银行卡');
+        await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
         const field = page.locator('[data-commerce-field="cardId"]:visible');
         const help = field.locator('.field-title-help');
         const trigger = help.locator('summary');

@@ -31,6 +31,10 @@
   let orderCards = [];
   const tenantCards = new Map();
   const cardLoads = new WeakMap();
+  let bankCardTypes = { version: 0, items: [], assignments: {} };
+  let bankCardTypesLoaded = false;
+  let bankCardTypesRequest;
+  let bankCardTypeReturn;
   const appleMatchDefaults = {
     Plus: ['20', '99'], 'Pro 100': ['100', '199'], 'Pro 200': ['220', '499'], 'Pro 500': ['500', ''],
     Pro: ['20', '99'], 'Max 5x': ['100', '249'], 'Max 20x': ['250', '']
@@ -111,6 +115,185 @@
       label.firstChild.textContent = name.slice(0, -1);
       label.querySelector('.field-label-end').firstChild.textContent = name.slice(-1);
     }
+  }
+  function captureOrderSettingsReturn() {
+    const form = $('#main #commerce-order-form') || $('#drawer[open] #commerce-order-form');
+    return form ? { route: S.route, actorId: currentOperator().id, main: Boolean(form.closest('#main')),
+      id: form.elements['commerce-id'].value, renewalId: form.elements['commerce-claudeRenewalId'].value } : null;
+  }
+  const demoBankCardTypes = [
+    ['card-type-vccwc999', 'vccwc999'], ['card-type-wise-pan', 'wise潘'],
+    ['card-type-wise-jia', 'wise佳'], ['card-type-xiaohong-feng', '小红卡峰']
+  ].map(([id, name]) => ({ id, name, active: true }));
+  function bankCardTypeName(id) {
+    return (localData ? bankCardTypes.items : demoBankCardTypes).find(row => row.id === id)?.name || '';
+  }
+  function bankCardTypeChoices(selected = '', savedName = '') {
+    const rows = localData ? bankCardTypes.items : demoBankCardTypes;
+    const options = rows.filter(row => row.active).map(row => [row.id, row.name]);
+    if (selected && !options.some(([id]) => id === selected))
+      options.unshift([selected, `${savedName || bankCardTypeName(selected) || '原银行卡类型'}（历史）`]);
+    return [['', '未填写'], ...options];
+  }
+  async function readBankCardTypes(force = false) {
+    if (!localData) return { ...bankCardTypes, items: demoBankCardTypes };
+    if (bankCardTypesLoaded && !force) return bankCardTypes;
+    if (!bankCardTypesRequest) bankCardTypesRequest = localData.cardTypes().then(snapshot => {
+      updateBankCardTypes(snapshot);
+      bankCardTypesLoaded = true;
+      return bankCardTypes;
+    }).finally(() => { bankCardTypesRequest = null; });
+    return bankCardTypesRequest;
+  }
+  function updateBankCardTypes(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.items)) throw new Error('银行卡类型返回格式无效');
+    const { items, assignments } = snapshot;
+    const version = Number.isSafeInteger(snapshot.version) ? snapshot.version : 0;
+    if (version < bankCardTypes.version) return;
+    bankCardTypes = {
+      version,
+      items: items.filter(row => typeof row?.id === 'string' && typeof row.name === 'string'),
+      assignments: assignments && typeof assignments === 'object' && !Array.isArray(assignments) ? assignments : {}
+    };
+  }
+  function refreshOrderCardType(form) {
+    if (!form?.isConnected) return;
+    const select = form.elements['commerce-cardTypeId'];
+    if (!select) return;
+    const source = orderCardSource(form);
+    const cardId = source ? form.elements[`commerce-${source.field}`]?.value || '' : '';
+    const touched = form.elements['commerce-card-type-touched']?.value === 'yes';
+    const assigned = bankCardTypes.assignments[cardId];
+    const selected = touched ? select.value : cardId !== select.dataset.originalCard
+      ? (bankCardTypes.items.some(row => row.id === assigned && row.active) ? assigned : '') : select.dataset.savedType;
+    select.innerHTML = A.options(bankCardTypeChoices(selected, select.dataset.savedName), selected);
+    const assignment = form.querySelector('[data-commerce-card-type-assign]');
+    if (assignment) {
+      assignment.dataset.id = cardId;
+      assignment.hidden = !/^(?:recharge:|tenant:).+/.test(cardId);
+    }
+  }
+  async function loadOrderCardType(form, force = false) {
+    if (!form?.isConnected || form.elements['commerce-payment']?.value !== '银行卡') return;
+    try {
+      await readBankCardTypes(force);
+      refreshOrderCardType(form);
+      if (form.isConnected) A.setError('commerce-cardTypeId', '');
+    } catch {
+      if (form.isConnected && form.elements['commerce-payment']?.value === '银行卡')
+        A.setError('commerce-cardTypeId', '银行卡类型读取失败，可点管理类型重试');
+    }
+  }
+  function orderCardTypeField(v, existing) {
+    return field('银行卡类型', 'cardTypeId', `<div class="field-row">${select('cardTypeId',
+      bankCardTypeChoices(v('cardTypeId'), v('cardTypeName')), v('cardTypeId'),
+      `data-saved-name="${E(v('cardTypeName'))}" data-saved-type="${E(v('cardTypeId'))}" data-original-card="${E(existing?.cardId || '')}"`)}${
+      input('card-type-touched', v('card-type-touched'), 'type="hidden"')}${canManageOrders() ?
+      A.button('管理类型', 'commerce-card-types', 'compact', '', 'aria-label="管理银行卡类型"') +
+      A.button('设置所选卡类型', 'commerce-card-type-assign', 'compact', '', 'data-commerce-card-type-assign hidden') : ''}</div>`,
+      false, '可留空。订单所选类型独立保存，修改卡片分类请使用设置所选卡类型。', 'commerce-span-all', v('payment') !== '银行卡');
+  }
+  function cardTypeDrawerReturn(onClose) {
+    if (bankCardTypeReturn) return;
+    const order = captureOrderSettingsReturn();
+    bankCardTypeReturn = { route: S.route, actorId: currentOperator().id, order, onClose };
+  }
+  async function openBankCardTypeEditor(id = '', refreshVersion = false) {
+    if (!localData || !canManageOrders()) return;
+    saveDrafts();
+    const route = S.route, actorId = currentOperator().id, context = S.drawerContext;
+    try {
+      const snapshot = bankCardTypesLoaded && !refreshVersion && context.startsWith('commerce-card-type:')
+        ? bankCardTypes : await readBankCardTypes(true);
+      if (route !== S.route || actorId !== currentOperator().id || context !== S.drawerContext) return;
+      const item = id ? snapshot.items.find(row => row.id === id && row.active) : null;
+      if (id && !item) throw new Error('银行卡类型已停用，请选择其他类型');
+      const key = `commerce-card-type:${id || 'new'}`;
+      const draft = S.drafts.get(key) || {};
+      const columns = [
+        { id: 'name', label: '银行卡类型' },
+        { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${
+          A.textAction('修改', 'commerce-card-type-edit', `data-id="${E(row.id)}"`)}${
+          A.textAction('移除', 'commerce-card-type-remove', `data-id="${E(row.id)}"`, 'danger')}</div>` }
+      ];
+      const active = snapshot.items.filter(row => row.active);
+      const list = active.length ? A.table(columns, active, '', 'commerce-card-types') : A.empty('暂无类型', '可在下方新增银行卡类型。');
+      cardTypeDrawerReturn();
+      A.openDrawer('银行卡类型管理', '全站共用类型。移除后不再用于新单，历史订单保留原类型。',
+        `${list}<form id="commerce-card-type-form" data-commerce-draft="${E(key)}" novalidate>${
+          input('card-type-id', id, 'type="hidden"')}${input('card-type-version',
+          refreshVersion ? snapshot.version : draft['commerce-card-type-version'] ?? snapshot.version, 'type="hidden"')}${field(item ? '修改名称' : '新增名称',
+          'card-type-name', input('card-type-name', draft['commerce-card-type-name'] ?? item?.name ?? '', 'maxlength="40"'), true)}</form>`,
+        A.button('关闭', 'drawer-close') + A.button('读取最新', 'commerce-card-type-reload', '', '', `data-id="${E(id)}"`) +
+          (item ? A.button('返回新增', 'commerce-card-types') : '') +
+          `<button type="submit" class="button primary" form="commerce-card-type-form">${item ? '保存修改' : '新增类型'}</button>`, key);
+    } catch (error) { A.notify(error.message || '银行卡类型读取失败，请重试'); }
+  }
+  async function openBankCardTypeAssignment(cardId, onClose, refreshVersion = false) {
+    if (!localData || !canManageOrders() || !/^(?:recharge:|tenant:).+/.test(cardId)) return;
+    saveDrafts();
+    const route = S.route, actorId = currentOperator().id, context = S.drawerContext;
+    try {
+      const snapshot = await readBankCardTypes(true);
+      if (route !== S.route || actorId !== currentOperator().id || context !== S.drawerContext) return;
+      const key = `commerce-card-type-assignment:${cardId}`;
+      const draft = S.drafts.get(key) || {};
+      const selected = draft['commerce-assignment-type'] ?? snapshot.assignments[cardId] ?? '';
+      cardTypeDrawerReturn(onClose);
+      A.openDrawer('设置银行卡类型', '应用到此卡的共享类型。订单已经保存的类型按原记录显示。',
+        `<form id="commerce-card-type-assignment-form" data-commerce-draft="${E(key)}" novalidate>${
+          input('assignment-card', cardId, 'type="hidden"')}${input('assignment-version',
+          refreshVersion ? snapshot.version : draft['commerce-assignment-version'] ?? snapshot.version, 'type="hidden"')}${field('银行卡类型',
+          'assignment-type', select('assignment-type', bankCardTypeChoices(selected), selected))}</form>`,
+        A.button('取消', 'drawer-close') + A.button('读取最新', 'commerce-card-type-assignment-reload', '', '', `data-id="${E(cardId)}"`) +
+          '<button type="submit" class="button primary" form="commerce-card-type-assignment-form">保存类型</button>', key);
+    } catch (error) { A.notify(error.message || '银行卡类型读取失败，请重试'); }
+  }
+  async function saveBankCardType(form) {
+    if (!canManageOrders() || form.getAttribute('aria-busy') === 'true') return;
+    const raw = A.readForm(form);
+    const assignment = form.id === 'commerce-card-type-assignment-form';
+    const id = value(raw, 'card-type-id'), name = value(raw, 'card-type-name');
+    if (!assignment && (!name || name.length > 40 || /[\p{Cc}\p{Cf}/]/u.test(name))) {
+      A.setError('commerce-card-type-name', '请输入 1 至 40 字的银行卡类型名称，名称不能含斜杠');
+      return;
+    }
+    const command = assignment
+      ? { action: 'assign', version: Number(value(raw, 'assignment-version')),
+          cardId: value(raw, 'assignment-card'), typeId: value(raw, 'assignment-type') }
+      : { action: id ? 'rename' : 'add', version: Number(value(raw, 'card-type-version')), id, name };
+    const submitted = JSON.stringify(raw), actorId = currentOperator().id;
+    form.setAttribute('aria-busy', 'true');
+    try {
+      const snapshot = await localData.cardTypeAction(command);
+      if (actorId !== currentOperator().id) return;
+      updateBankCardTypes(snapshot);
+      bankCardTypesLoaded = true;
+      if (form.isConnected && submitted === JSON.stringify(A.readForm(form))) {
+        S.drafts.delete(form.dataset.commerceDraft);
+        form.removeAttribute('data-commerce-draft');
+        if (assignment) cleanClose();
+        else void openBankCardTypeEditor();
+      }
+      A.notify('银行卡类型已保存');
+    } catch (error) { A.notify(error.message || '银行卡类型保存失败，输入已保留'); }
+    finally { form.removeAttribute('aria-busy'); }
+  }
+  function removeBankCardType(id) {
+    const item = bankCardTypes.items.find(row => row.id === id && row.active);
+    if (!item || !canManageOrders()) return;
+    const version = bankCardTypes.version, route = S.route, actorId = currentOperator().id;
+    const context = S.drawerContext;
+    A.confirmAction('移除银行卡类型', `${item.name} 停止用于新单，历史订单保留原名称。`, async () => {
+      if (route !== S.route || actorId !== currentOperator().id || context !== S.drawerContext) return;
+      try {
+        const snapshot = await localData.cardTypeAction({ action: 'remove', version, id });
+        if (actorId !== currentOperator().id) return;
+        updateBankCardTypes(snapshot);
+        A.notify('银行卡类型已移除');
+        if (route === S.route && context === S.drawerContext) void openBankCardTypeEditor();
+      } catch (error) { A.notify(error.message || '银行卡类型移除失败，请重试'); }
+    });
   }
   async function openCurrencySettings(product, reset = false) {
     if (!paymentSettingsActive()) return;
@@ -279,6 +462,7 @@
   const rentBatches = [];
   const logs = [];
   const renewalRoute = 'workspace/renewals';
+  const subscriptionCardsRoute = 'data-management/bank-cards';
   const customerLossRoute = 'workspace/customer-loss';
   const renewalOrderPrefix = 'workspace/order/renew/';
   const gptOrderRoute = 'workspace/order/gpt';
@@ -557,8 +741,9 @@
   function input(id, initial = '', attributes = '') {
     return A.input(`commerce-${id}`, initial, attributes);
   }
-  function select(id, choices, selected = '') {
-    return A.select(`commerce-${id}`, choices, selected);
+  function select(id, choices, selected = '', attributes = '') {
+    const html = A.select(`commerce-${id}`, choices, selected);
+    return attributes ? html.replace('<select ', `<select ${attributes} `) : html;
   }
   function searchableSelect(id, label, choices, selected = '', actions = '', editable = '') {
     const value = choices.find(([value]) => String(value) === String(selected))?.[1] || choices[0]?.[1] || '请选择';
@@ -730,37 +915,51 @@
     const gpt = product === 'GPT';
     const items = gpt ? cards() : (tenantCards.get(tenantId)?.items || []);
     const options = items.filter((row) => (gpt ? row.status !== '停用' && row.active !== false : row.active) || row.id === selected)
-      .map((row) => [row.id, [row.label || row.name, `尾号 ${cardTail(row)}`, gpt && Number.isInteger(row.usageCount) ? `已用 ${row.usageCount} 次` : ''].filter(Boolean).join(' · ')]);
+      .map((row) => [row.id, [row.label || row.name, `尾号 ${cardTail(row)}`, bankCardTypeName(bankCardTypes.assignments[row.id]), gpt && Number.isInteger(row.usageCount) ? `已用 ${row.usageCount} 次` : ''].filter(Boolean).join(' · ')]);
     if (selected && !options.some(([id]) => id === selected)) options.unshift([selected, savedTail ? `已选银行卡 · 尾号 ${savedTail}` : '已选银行卡']);
     return [['', gpt ? '选择银行卡' : '选择租户银行卡'], ...options];
   }
+  function orderCardSource(form) {
+    const product = form.elements['commerce-product']?.value;
+    const mode = form.elements['commerce-proMaterialMode']?.value;
+    if (form.elements['commerce-payment']?.value !== '银行卡') return null;
+    if (product === 'GPT') return { field: 'cardId', pool: true };
+    if (product === 'Claude Pro' && mode === 'pool_card') return { field: 'proPoolCardId', pool: true };
+    if (product === 'Claude Max' || (product === 'Claude Pro' && (!mode || mode === 'tenant_card')))
+      return { field: 'cardId', pool: false };
+    return null;
+  }
   async function loadOrderCards(form, force = false) {
-    if (!localData || form.elements['commerce-payment']?.value !== '银行卡') return;
-    const product = form.elements['commerce-product'].value;
+    const source = orderCardSource(form);
+    if (!localData || !source) return;
     const tenantId = form.elements['commerce-tenantId']?.value || '';
-    const select = form.elements['commerce-cardId'];
+    const select = form.elements[`commerce-${source.field}`];
     if (!select || select.tagName !== 'SELECT') return;
-    const loadKey = product === 'GPT' ? 'gpt' : tenantId;
+    const loadKey = source.pool ? `pool:${source.field}` : tenantId;
     if (!loadKey || (!force && cardLoads.get(form)?.key === loadKey)) return;
     const request = { key: loadKey };
     cardLoads.set(form, request);
     try {
-      const snapshot = product === 'GPT' ? await localData.orderCards() : await localData.tenantCards(tenantId);
+      const snapshot = source.pool ? await localData.orderCards() : await localData.tenantCards(tenantId);
       if (cardLoads.get(form) !== request) return;
-      if (product === 'GPT') orderCards = snapshot.items || [];
+      if (source.pool) orderCards = snapshot.items || [];
       else tenantCards.set(tenantId, snapshot);
-      if (form.isConnected && (product === 'GPT' || form.elements['commerce-tenantId'].value === tenantId)) {
-        select.innerHTML = A.options(cardChoices(product, tenantId, select.value, form.elements['commerce-paymentId'].value), select.value);
+      const current = orderCardSource(form);
+      if (form.isConnected && current?.field === source.field && current.pool === source.pool &&
+          (source.pool || form.elements['commerce-tenantId'].value === tenantId)) {
+        select.innerHTML = A.options(cardChoices(source.pool ? 'GPT' : 'Claude', tenantId, select.value,
+          form.elements['commerce-paymentId'].value), select.value);
         const search = select.closest('.commerce-search-picker')?.querySelector('input[type="search"]');
         if (search) filterPicker(search);
-        if (product === 'GPT') refreshPoolUsage(form);
-        A.setError('commerce-cardId', '');
+        if (source.pool && source.field === 'cardId') refreshPoolUsage(form);
+        A.setError(`commerce-${source.field}`, '');
         return true;
       }
     } catch (error) {
       if (cardLoads.get(form) !== request) return;
       cardLoads.delete(form);
-      if (form.isConnected) A.setError('commerce-cardId', error.message || '未能读取银行卡，请重试');
+      if (form.isConnected && orderCardSource(form)?.field === source.field)
+        A.setError(`commerce-${source.field}`, error.message || '未能读取银行卡，请重试');
       return false;
     }
   }
@@ -781,6 +980,8 @@
       return safeClone(existing.issueFeeSnapshot);
     return {
       cardId: order.cardId || '',
+      ...(order.product === 'GPT' && order.payment === '银行卡' && order.paidConfirmed && !order.cardId
+        ? { pending: true } : {}),
       applied:
         order.product === 'GPT' &&
         order.payment === '银行卡' &&
@@ -798,8 +999,12 @@
     if (!amountValid(order.saleAmount || '')) reasons.push('售卖金额待补充');
     if (!amountValid(order.paidAmount || '') || !order.paidCurrency) reasons.push('代付金额或币种待核对');
     if (!order.start || !order.expiry) reasons.push('订阅周期待补充');
-    if (!order.paymentId) reasons.push('支付资料待补充');
-    if (order.payment === '银行卡' && order.product === 'GPT' && !order.cardId && !order.taskId) reasons.push('银行卡待确认');
+    if (!proMaterialMode(order) && !order.paymentId && !(order.product === 'GPT' && order.payment === '银行卡' && !order.cardId))
+      reasons.push('支付资料待补充');
+    if (proMaterialMode(order) === 'manual_card' &&
+        (!order.proCardNumber || (canManageOrders() && !order.proCardSerial)))
+      reasons.push('银行卡资料待补充');
+    if (proMaterialMode(order) === 'people' && !hasProPeople(order)) reasons.push('人员资料待补充');
 
     return reasons;
   }
@@ -861,6 +1066,39 @@
   }
   function isClaude(order) {
     return String(order?.product || '').startsWith('Claude');
+  }
+  function isProBankOrder(order) {
+    return order?.product === 'Claude Pro' && order.payment === '银行卡';
+  }
+  const proMaterialLabels = {
+    manual_card: '银行卡资料', pool_card: 'GPT 订阅卡池', tenant_card: '认证人银行卡',
+    people: 'Claude 人员与补充资料', none: '暂不登记银行卡资料'
+  };
+  function showProPeople(mode) {
+    return !mode || mode === 'people' || mode === 'tenant_card';
+  }
+  function proMaterialMode(order) {
+    return isProBankOrder(order) && Object.hasOwn(proMaterialLabels, order.proMaterialMode)
+      ? order.proMaterialMode : '';
+  }
+  function hasProPeople(order) {
+    return Boolean(order.tenantId || order.phone);
+  }
+  function proMaterialLabel(order) {
+    const mode = proMaterialMode(order);
+    return mode ? proMaterialLabels[mode] : isProBankOrder(order) ? '原订单资料' : '不适用';
+  }
+  function proPaymentSourceLocked(order) {
+    return isProBankOrder(order) && hasPaymentHistory(order) &&
+      Boolean(order.cardId || proMaterialMode(order) === 'manual_card');
+  }
+  function pruneProMaterialFields(order) {
+    const mode = proMaterialMode(order);
+    if (!mode) delete order.proMaterialMode;
+    if (mode !== 'manual_card') {
+      delete order.proCardNumber;
+      delete order.proCardSerial;
+    }
   }
   function availableStock(product) {
     return A.modules.inventory?.listDeliverableAccounts?.(product) ||
@@ -947,9 +1185,16 @@
     return sum(order.bankReturns || [], (row) => row.amount);
   }
   function bankReturnLimit(order) {
-    return order.payment === '银行卡' && order.paidConfirmed && order.cardId && !order.cancelled
+    return order.payment === '银行卡' && order.paidConfirmed &&
+      (order.cardId || proMaterialMode(order)) && !order.cancelled
       ? M.subtract(order.paidAmount || '0', bankReturned(order))
       : '0';
+  }
+  function bankReturnSource(order) {
+    const mode = proMaterialMode(order);
+    if (mode === 'manual_card') return `尾号 ${order.paymentId || String(order.proCardNumber || '').slice(-4)} · 卡序列号 ${order.proCardSerial || '未记录'}`;
+    if (mode === 'people') return proMaterialLabels.people;
+    return `${cardLabel(order.cardId)} · ${order.paymentId}`;
   }
   function profit(order, accounting = localData ? localAccounting(order) : null) {
     if (order.cancelled || pendingReasons(order, accounting).length) return null;
@@ -1170,9 +1415,7 @@
       if (!Object.hasOwn(productPlans, order.product) || !Number.isFinite(start) || !(expiry > start) ||
           (!subscriptionConfirmed && paymentStatus(order) !== '已付款')) return [];
       const identity = identities.get(order.id);
-      const family = subscriptionFamily(order);
-      const email = subscriptionEmail(order);
-      const subscription = identity && email ? JSON.stringify([identity, family, email]) : order.id;
+      const subscription = renewalSubscriptionKey(order, identity);
       return [{ order, identity, subscription, start, expiry }];
     });
     const latest = new Map(), histories = new Map(), active = new Set(), ambiguous = new Set();
@@ -1217,8 +1460,12 @@
       if (state) reminders.push({ ...row, state, refused: !successor && refused,
         completed: successor?.order || null, decision });
     }
-    return { reminders, histories, active, ambiguous, unresolved: rows.filter((row) =>
+    return { reminders, histories, active, ambiguous, rows, identities, evaluatedAt, deadline, unresolved: rows.filter((row) =>
       !row.identity && row.start <= evaluatedAt) };
+  }
+  function renewalSubscriptionKey(order, identity) {
+    const email = subscriptionEmail(order);
+    return identity && email ? JSON.stringify([identity, subscriptionFamily(order), email]) : order.id;
   }
   function customerForOrder(row, identity) {
     const customer = customers.find((item) => item.id === identity);
@@ -1261,6 +1508,8 @@
       ] : []),
       { id: 'actions', label: '操作', action: true, render: (row) =>
         `<div class="action-links">${A.textAction('订单', 'commerce-order-detail', `data-id="${E(row.id)}"`)}${
+          row.order.payment === '银行卡' && canManageOrders()
+            ? A.textAction('银行卡', 'commerce-renewal-card-open', `data-id="${E(row.id)}"`) : ''}${
           row.refused ? A.textAction('恢复提醒', 'commerce-renewal-restore', `data-id="${E(row.id)}"`) :
           row.completed ? A.textAction('新订单', 'commerce-order-detail', `data-id="${E(row.completed.id)}"`) :
           A.textAction('续费', 'commerce-renewal-open', `data-id="${E(row.id)}"`) +
@@ -1278,6 +1527,419 @@
     const query = String(S.query || '').trim().toLowerCase();
     return !query || [contact.name, ...orderContactFields.map(([key]) => contact[key]),
       order.email, order.orderNo, order.product, order.plan].join(' ').toLowerCase().includes(query);
+  }
+  const renewalCardDrawers = new WeakMap();
+  function renewalCardDrawerCurrent(panel) {
+    const binding = renewalCardDrawers.get(panel);
+    return Boolean(binding && S.route === renewalRoute && panel.isConnected && panel.closest('dialog')?.open &&
+      binding.actorId === currentOperator().id && canManageOrders());
+  }
+  function renewalCardActionCurrent(panel, node) {
+    return node.isConnected && renewalCardDrawerCurrent(panel) &&
+      $('[data-renewal-card-region]', panel).getAttribute('aria-busy') !== 'true';
+  }
+  function renewalCardCanRenew(id) {
+    const reminder = renewalProjection().reminders.find(row => row.order.id === id);
+    return reminder?.state === 'upcoming' || reminder?.state === 'expired';
+  }
+  function clearRenewalCardNumbers(root) {
+    if (!root) return;
+    for (const input of root.querySelectorAll('[data-renewal-card-number]')) {
+      input.value = '';
+      input.closest('[data-renewal-card-full]').hidden = true;
+    }
+    for (const button of root.querySelectorAll('[data-action="commerce-renewal-card-reveal"]')) {
+      button.textContent = '显示完整卡号';
+      button.setAttribute('aria-expanded', 'false');
+    }
+  }
+  function renewalCardAmount(amount, currency, fallback) {
+    return amount !== null && amount !== undefined && amount !== '' && currency ? `${amount} ${currency}` : fallback;
+  }
+  function renderRenewalCardOrder(detail, kind, actionable) {
+    const original = kind === 'order';
+    const preparing = original && actionable;
+    const order = orders.find(row => row.id === detail.id);
+    const account = detail.account || {};
+    const card = detail.card || {};
+    const estimate = card.estimate;
+    const paid = Object.hasOwn(card, 'paid') ? card.paid : estimate;
+    const balance = card.balance;
+    const bank = detail.payment === '银行卡';
+    const funding = renewalCardAmount(estimate?.usd, 'USD', '待核算');
+    const last4 = /^\d{4}$/.test(card.last4) ? card.last4 : '';
+    const accountItems = [
+      ['订单编号', detail.orderNo], ['订阅账号', account.email], ['账号来源', account.source], ['账号状态', account.status],
+      ['产品 / 套餐', [order?.product, order?.plan].filter(Boolean).join(' / ')], ['付款方式', detail.payment],
+      ['订阅时间', order?.start], ['到期时间', order?.expiry]
+    ];
+    const cardItems = [
+      ['银行卡来源', card.source], ['银行卡类型', card.typeName],
+      ['银行卡尾号', last4 ? `•••• ${last4}` : '未登记'], ['用卡状态', card.status],
+      ['实际代付', renewalCardAmount(paid?.amount, paid?.currency, '待核对')],
+      ...(!preparing ? [['备款参考金额', funding]] : []),
+      [balance ? '最近同步余额' : '卡余额', renewalCardAmount(balance?.amount, balance?.currency, '暂无余额记录')],
+      ...(balance?.updatedAt ? [['余额记录时间', dateInput(balance.updatedAt).replace('T', ' ')]] : [])
+    ];
+    const attrs = `data-id="${E(detail.id)}"`;
+    const numberId = `commerce-renewal-card-number-${kind}`;
+    return `<section class="form-section" data-renewal-card-kind="${kind}" data-renewal-card-last4="${last4}">
+      <div class="section-heading section-heading--actions"><h3>${original ? '原单' : '续费单'}</h3>
+        ${account.email ? A.button('复制账号', 'commerce-renewal-card-copy-account', '', 'copy') : ''}</div>
+      <div class="property-list">${accountItems.map(([label, value]) => property(label, value)).join('')}</div>
+      <div class="section-title-row"><h4>${preparing ? '续费用卡' : original ? '原单用卡' : '新单用卡'}</h4></div>
+      ${bank ? (preparing ? `<div class="commerce-cost-strip"><span>预计续费需备款 <strong>${E(funding)}</strong></span></div>` : '') +
+        `<div class="property-list">${cardItems.map(([label, value]) => property(label, value)).join('')}</div>` +
+        (card.canReveal ? `<div class="drawer-action-bar">
+          ${A.button('显示完整卡号', 'commerce-renewal-card-reveal', '', '',
+            `${attrs} aria-expanded="false" aria-controls="${numberId}-field"`)}
+          ${A.button('复制银行卡资料', 'commerce-copy-subscription-card', '', 'copy', attrs)}
+          </div><div id="${numberId}-field" data-renewal-card-full hidden>${A.field('完整银行卡号', numberId,
+            A.input(numberId, '', 'readonly autocomplete="off" data-no-draft data-renewal-card-number'))}</div>` : '') :
+        '<p class="footnote">此单使用其他付款方式。</p>'}
+    </section>`;
+  }
+  async function loadRenewalCardDetails(panel) {
+    if (!renewalCardDrawerCurrent(panel)) return;
+    const binding = renewalCardDrawers.get(panel);
+    const region = $('[data-renewal-card-region]', panel);
+    const status = $('[data-renewal-card-status]', panel);
+    const content = $('[data-renewal-card-content]', panel);
+    const error = $('[data-renewal-card-error]', panel);
+    const refresh = $('[data-action="commerce-renewal-card-refresh"]', panel);
+    const renew = $('[data-renewal-card-renew]', panel.closest('dialog'));
+    const renewStatus = $('[data-renewal-card-renew-status]', panel);
+    if (renew) renew.disabled = true;
+    renewStatus.hidden = true;
+    clearRenewalCardNumbers(content);
+    error.hidden = true;
+    const read = A.beginRegionRead(region, status, { loadingText: '正在读取银行卡资料…', refreshButton: refresh });
+    const current = () => read.current() && renewalCardDrawerCurrent(panel);
+    for (const button of content.querySelectorAll('button')) button.disabled = true;
+    try {
+      const data = await localData.subscriptionCardDetails({ orderId: binding.orderId,
+        ...(binding.renewalOrderId ? { renewalOrderId: binding.renewalOrderId } : {}) });
+      if (!current()) return;
+      if (data?.order?.id !== binding.orderId || (data.renewal && data.renewal.id !== binding.renewalOrderId))
+        throw new Error('银行卡资料与当前订单不符');
+      clearRenewalCardNumbers(content);
+      const actionable = Boolean(renew && data.order.account?.canRenew !== false && renewalCardCanRenew(binding.orderId));
+      binding.details = data;
+      if (renew) {
+        renew.disabled = !actionable;
+        renewStatus.hidden = actionable;
+      }
+      content.innerHTML = renderRenewalCardOrder(data.order, 'order', actionable) + (data.renewal
+        ? renderRenewalCardOrder(data.renewal, 'renewal', false) : binding.renewalOrderId
+          ? `<p class="footnote">${E(data.renewalStatus || '暂未读取到续费单资料，请刷新后重试。')}</p>` : '');
+      return true;
+    } catch (failure) {
+      if (!current()) return;
+      if ([401, 403].includes(failure?.status)) {
+        content.replaceChildren();
+        binding.details = undefined;
+      }
+      error.textContent = content.childElementCount ? '银行卡资料暂未更新，已保留上次的摘要。请刷新重试。' :
+        '无法读取银行卡资料，请刷新重试。';
+      error.hidden = false;
+      return false;
+    } finally {
+      if (current()) for (const button of content.querySelectorAll('button')) button.disabled = false;
+      read.finish();
+    }
+  }
+  function openRenewalCardDrawer(id) {
+    if (S.route !== renewalRoute || !canManageOrders()) return;
+    const reminder = renewalProjection().reminders.find(row => row.order.id === id);
+    if (reminder?.order.payment !== '银行卡') return;
+    const { order, identity, completed, refused } = reminder;
+    const contact = customerForOrder(order, identity);
+    const linkedCustomer = order.customerId && customers.some(customer => customer.id === order.customerId);
+    const contacts = [['客户姓名', contact.name], ...orderContactFields.map(([key, field]) =>
+      [customerChannels.find(([name]) => name === field)[1], contact[key]])];
+    A.openDrawer('续费银行卡资料', '', `<div id="commerce-renewal-card-panel">
+      <section class="form-section">
+        <div class="section-heading section-heading--actions"><h3>客户资料</h3>
+          ${A.button('刷新', 'commerce-renewal-card-refresh')}</div>
+        ${linkedCustomer ? '' : '<p class="footnote">客户关联待核对。以下联系方式来自历史订单或已匹配资料。</p>'}
+        <div class="property-list">${contacts.map(([label, value]) => property(label, value)).join('')}</div>
+      </section>
+      <div class="design-async-region" data-renewal-card-region>
+        <div role="status" data-renewal-card-status hidden></div>
+        <p class="inline-notice warning" role="status" data-renewal-card-error hidden></p>
+        <div data-renewal-card-content></div>
+        <p class="footnote" data-renewal-card-renew-status hidden>原单账号或提醒状态暂不支持续费。</p>
+      </div>
+    </div>`, A.button('关闭', 'drawer-close') + (completed || refused ? '' :
+      A.button('续费', 'commerce-renewal-open', 'primary', '', `data-id="${E(id)}" data-renewal-card-renew disabled`)),
+    `renewal-bank-card:${id}`);
+    const panel = $('#commerce-renewal-card-panel');
+    renewalCardDrawers.set(panel, { orderId: id, renewalOrderId: completed?.id, actorId: currentOperator().id });
+    const drawer = panel.closest('dialog');
+    const cleanup = new AbortController();
+    const dispose = () => {
+      clearRenewalCardNumbers(panel);
+      A.finishRegionRead($('[data-renewal-card-region]', panel));
+      renewalCardDrawers.delete(panel);
+      cleanup.abort();
+    };
+    drawer.addEventListener('id-view-deactivate', dispose, { signal: cleanup.signal });
+    drawer.addEventListener('close', () => { if (!drawer.open) dispose(); }, { signal: cleanup.signal });
+    void loadRenewalCardDetails(panel);
+  }
+  async function revealRenewalCard(node) {
+    const panel = node.closest('#commerce-renewal-card-panel');
+    const section = node.closest('[data-renewal-card-kind]');
+    const current = () => renewalCardActionCurrent(panel, node);
+    if (!current() || !section) return;
+    const input = $('[data-renewal-card-number]', section);
+    if (!input) return;
+    if (input.value) return clearRenewalCardNumbers(section);
+    const binding = renewalCardDrawers.get(panel);
+    const id = node.dataset.id;
+    const detail = binding.details?.[section.dataset.renewalCardKind];
+    if (id !== detail?.id || !detail.card?.canReveal) return;
+    await A.withActionFeedback(node, async () => {
+      let result;
+      try { result = await localData.revealSubscriptionCard(id, detail.version); }
+      catch (failure) { if (current()) throw failure; return; }
+      if (!current()) return;
+      const last4 = section.dataset.renewalCardLast4;
+      if (!/^\d{12,19}$/.test(result?.number) || (last4 && !result.number.endsWith(last4)))
+        throw new Error('完整卡号无法核对，请刷新后重试');
+      input.value = result.number;
+      input.closest('[data-renewal-card-full]').hidden = false;
+      node.textContent = '隐藏完整卡号';
+      node.setAttribute('aria-expanded', 'true');
+    }, { pending: '正在读取完整卡号…', failure: '无法读取完整卡号，请重试' });
+  }
+  function copyRenewalCardAccount(node) {
+    const panel = node.closest('#commerce-renewal-card-panel');
+    const current = () => renewalCardActionCurrent(panel, node);
+    if (!current()) return;
+    const kind = node.closest('[data-renewal-card-kind]')?.dataset.renewalCardKind;
+    const email = renewalCardDrawers.get(panel).details?.[kind]?.account?.email;
+    if (email) void A.copyText(email, '订阅账号已复制', { current });
+  }
+  const subscriptionCardStates = [
+    ['active', '使用中'], ['upcoming', '即将到期'], ['expired', '已过期'],
+    ['pending', '待确认'], ['replaced', '历史用卡']
+  ];
+  const subscriptionCardFilters = { state: '', type: '', plan: '', purpose: '' };
+  const stableSubscriptionCard = id => typeof id === 'string' &&
+    /^(?:recharge:[1-9]\d*|tenant:[a-zA-Z0-9-]{1,120}|orbitcard:[1-9]\d*)$/.test(id);
+  function subscriptionCardReference(order) {
+    if (order.payment !== '银行卡') return '';
+    if (stableSubscriptionCard(order.cardId)) return order.cardId;
+    const refs = [...new Set((order.financialEvidence || []).filter(row =>
+      row.kind === 'payment' && row.payment === '银行卡' && stableSubscriptionCard(row.cardId)).map(row => row.cardId))];
+    return refs.length === 1 ? refs[0] : '';
+  }
+  function subscriptionCardRows() {
+    const { rows, identities, evaluatedAt, deadline } = renewalProjection();
+    const periods = new Map(rows.map(row => [row.order.id, row]));
+    const latest = new Map();
+    const later = (a, b) => a.expiry > b.expiry || (a.expiry === b.expiry && a.start > b.start);
+    for (const row of rows) {
+      if (row.start > evaluatedAt || row.order.cancelled || row.order.subscriptionEnded || endedInventoryOrder(row.order)) continue;
+      const prior = latest.get(row.subscription);
+      if (!prior || later(row, prior)) latest.set(row.subscription, row);
+    }
+    const bindings = new Map();
+    for (const order of orders) {
+      const cardId = subscriptionCardReference(order);
+      if (!cardId) continue;
+      const identity = identities.get(order.id);
+      const period = periods.get(order.id);
+      const subscription = period?.subscription ?? renewalSubscriptionKey(order, identity);
+      const start = parseDate(order.start), expiry = parseDate(order.expiry);
+      const key = JSON.stringify([cardId, subscription]);
+      const history = bindings.get(key) || [];
+      history.push({ order, identity, subscription, cardId, start, expiry, period });
+      bindings.set(key, history);
+    }
+    return [...bindings.values()].map(history => {
+      history.sort((a, b) => (b.expiry || 0) - (a.expiry || 0) || (b.start || 0) - (a.start || 0));
+      const current = latest.get(history[0].subscription);
+      const matching = history.find(row => row.order.id === current?.order.id);
+      const row = matching || history.find(row => row.period && row.start <= evaluatedAt) || history[0];
+      const state = matching ? row.expiry <= evaluatedAt ? 'expired' : row.expiry <= deadline ? 'upcoming' : 'active'
+        : row.order.cancelled || row.order.subscriptionEnded || endedInventoryOrder(row.order) ||
+          (row.period && row.start <= evaluatedAt && current) ? 'replaced' : 'pending';
+      const snapshot = bankCardTypes.items.find(type => type.id === bankCardTypes.assignments[row.cardId]);
+      const typeId = (snapshot?.active && snapshot.id) || row.order.cardTypeId || snapshot?.id || '';
+      const typeName = (snapshot?.active && snapshot.name) || row.order.cardTypeName || snapshot?.name || '未设置';
+      return { ...row, id: row.order.id, history, state, typeId, typeName, ...customerForOrder(row.order, row.identity), evaluatedAt,
+        source: row.cardId.startsWith('tenant:') ? '认证人银行卡' :
+          row.cardId.startsWith('recharge:') ? '充值卡池' : '线上代充用卡',
+        tail: /^\d{4}$/.test(row.order.paymentId) ? row.order.paymentId : '',
+        plan: [row.order.product, row.order.plan].filter(Boolean).join(' ') };
+    });
+  }
+  let subscriptionEstimates = new Map();
+  let subscriptionEstimateRequest, subscriptionEstimateKey, subscriptionEstimateError;
+  function loadSubscriptionCardEstimates(force = false) {
+    if (!localData?.subscriptionCardEstimates || S.route !== subscriptionCardsRoute) return;
+    const actorId = currentOperator().id;
+    const key = [actorId, localVersion, Math.floor(Date.now() / 60_000)].join(':');
+    if (subscriptionEstimateRequest)
+      return force ? subscriptionEstimateRequest.then(() => loadSubscriptionCardEstimates(true)) : subscriptionEstimateRequest;
+    if (!force && subscriptionEstimateKey === key) return;
+    subscriptionEstimateKey = key;
+    subscriptionEstimateError = '';
+    subscriptionEstimateRequest = Promise.allSettled([
+      localData.subscriptionCardEstimates(), readBankCardTypes(force)
+    ]).then(([estimate, types]) => {
+      if (actorId !== currentOperator().id) return;
+      const ready = estimate.status === 'fulfilled' && Array.isArray(estimate.value.items);
+      if (ready) subscriptionEstimates = new Map(estimate.value.items.map(row => [row.id, row]));
+      else subscriptionEstimates = new Map();
+      if (!ready || types.status === 'rejected')
+        subscriptionEstimateError = '部分银行卡类型或预计金额暂时无法读取';
+      return !subscriptionEstimateError;
+    }).finally(() => {
+      subscriptionEstimateRequest = undefined;
+      if (S.route === subscriptionCardsRoute) A.render();
+    });
+    return subscriptionEstimateRequest;
+  }
+  function estimateForBankOrder(order) {
+    const estimate = subscriptionEstimates.get(order.id);
+    if (estimate?.version !== order.version || (estimate?.expiresAt && Date.parse(estimate.expiresAt) <= Date.now())) return null;
+    return estimate;
+  }
+  function subscriptionCardDuration(row) {
+    if (row.state === 'pending' || row.state === 'replaced') return '—';
+    const elapsed = row.expiry <= row.evaluatedAt;
+    const hours = Math.floor(Math.abs(row.expiry - row.evaluatedAt) / 3_600_000);
+    return `${elapsed ? '已过期 ' : '剩余 '}${formatRenewalWarning(hours) || '不足 1 小时'}`;
+  }
+  function renderSubscriptionCards() {
+    const all = subscriptionCardRows();
+    const typeOptions = new Map(all.filter(row => row.typeId).map(row => [row.typeId, row.typeName]));
+    const plans = [...new Set(all.map(row => row.plan).filter(Boolean))];
+    const query = String(S.query || '').trim().toLowerCase();
+    const rows = all.filter(row =>
+      (!subscriptionCardFilters.state || row.state === subscriptionCardFilters.state) &&
+      (!subscriptionCardFilters.type || row.typeId === subscriptionCardFilters.type) &&
+      (!subscriptionCardFilters.plan || row.plan === subscriptionCardFilters.plan) &&
+      (!subscriptionCardFilters.purpose || row.order.businessType === subscriptionCardFilters.purpose) &&
+      (!query || [row.name, row.tail, row.order.email, row.order.orderNo, row.typeName, row.plan,
+        ...orderContactFields.map(([key]) => row[key])].some(value => String(value || '').toLowerCase().includes(query))))
+      .sort((a, b) => (a.expiry || Infinity) - (b.expiry || Infinity));
+    const filters = [
+      ['state', '使用状态', [['', '全部状态'], ...subscriptionCardStates]],
+      ['purpose', '业务类型', [['', '全部业务'], '续费', '成品交付']],
+      ['type', '银行卡类型', [['', '全部卡类型'], ...typeOptions]],
+      ['plan', '订阅套餐', [['', '全部套餐'], ...plans]]
+    ].map(([key, label, choices]) => select('subscription-card-' + key, choices, subscriptionCardFilters[key],
+      `aria-label="${label}"`)).join('');
+    const columns = [
+      { id: 'name', label: '客户姓名' },
+      { id: 'contact', label: '联系方式', render: row => E(orderContactFields.map(([key]) => row[key]).filter(Boolean).join(' · ') || '待补充') },
+      { id: 'email', label: '订阅账号', render: row => E(row.order.email || '待补充') },
+      { id: 'source', label: '银行卡来源' },
+      { id: 'typeName', label: '银行卡类型' },
+      { id: 'tail', label: '银行卡号', render: row => E(row.tail ? '•••• ' + row.tail : '历史未登记尾号') },
+      { id: 'plan', label: '订阅套餐' },
+      { id: 'state', label: '使用状态', render: row => A.tag(subscriptionCardStates.find(([id]) => id === row.state)?.[1]) },
+      { id: 'expiry', label: '到期时间', render: row => E(dateInput(row.order.expiry).replace('T', ' ') || '待确认') },
+      { id: 'duration', label: '到期时长', render: row => E(subscriptionCardDuration(row)) },
+      { id: 'funding', label: '预计金额', render: row => {
+        const usd = estimateForBankOrder(row.order)?.usd;
+        return E(usd ? usd + ' USD' : '待核算');
+      } },
+      { id: 'actions', label: '操作', action: true, render: row => {
+        const id = `data-id="${E(row.order.id)}"`;
+        return `<div class="action-links">${A.textAction('复制', 'commerce-copy-subscription-card', id)}${
+          A.textAction('修改', 'commerce-subscription-card-edit', id)}${
+          A.textAction('详情', 'commerce-subscription-card-detail', id)}</div>`;
+      } }
+    ];
+    return A.header('银行卡管理', '按订单的用卡记录管理订阅。预计金额用于准备续费余额，卡号可通过复制操作读取。',
+      A.button('提醒设置', 'commerce-renewal-settings', '', 'settings') +
+      columnSettingsButton('commerce-subscription-cards')) + `<section class="panel">${toolbar(
+      '搜索客户、联系方式、账号、订单或卡号尾四位', filters)}${
+      subscriptionEstimateError ? `<p class="footnote" role="status">${E(subscriptionEstimateError)} ${
+        A.textAction('重试', 'commerce-subscription-card-refresh')}</p>` :
+        localData?.subscriptionCardEstimates && (!subscriptionEstimateKey || subscriptionEstimateRequest)
+          ? '<p class="footnote" role="status">正在核对预计金额…</p>' : ''}${
+      tableList(columns, rows, 'commerce-subscription-cards')}</section>`;
+  }
+  function showSubscriptionCardHistory(id) {
+    const row = subscriptionCardRows().find(item => item.order.id === id);
+    if (!row) return;
+    const estimate = estimateForBankOrder(row.order);
+    const cost = estimate?.usd ? `${estimate.usd} USD` : '待核算';
+    const amount = estimate?.amount && estimate.currency ? `${estimate.amount} ${estimate.currency}` : '待核对';
+    const quote = estimate?.quotedAt ? `${estimate.source} · ${dateInput(estimate.quotedAt).replace('T', ' ')}`
+      : estimate?.currency === 'USD' ? '原代付为美元' : '暂无有效报价';
+    const rates = estimate?.originalRateToCny && estimate?.usdRateToCny
+      ? `1 ${estimate.currency} = ${estimate.originalRateToCny} CNY · 1 USD = ${estimate.usdRateToCny} CNY` : '';
+    const columns = [
+      { id: 'orderNo', label: '订单编号' }, { id: 'businessType', label: '业务类型' },
+      { id: 'plan', label: '订阅套餐' }, { id: 'start', label: '订阅时间' }, { id: 'expiry', label: '到期时间' },
+      { id: 'paid', label: '付款状态', render: order => A.tag(paymentStatus(order)) },
+      { id: 'actions', label: '操作', action: true, render: order =>
+        A.textAction('查看订单', 'commerce-order-detail', `data-id="${E(order.id)}"`) }
+    ];
+    const details = [
+      ['客户姓名', row.name], ['订阅账号', row.order.email], ['银行卡来源', row.source],
+      ['银行卡类型', row.typeName], ['银行卡号', row.tail ? '•••• ' + row.tail : '历史未登记尾号'],
+      ['预计金额', cost], ['原单代付', amount], ['报价来源', quote],
+      ...(rates ? [['国际汇率', rates]] : []),
+      ['费用与预留', estimate ? `${estimate.fixedFee} USD + ${estimate.bufferUsd} USD` : '待核算']
+    ].map(([label, value]) => property(label, value)).join('');
+    A.openDrawer('银行卡详情', '', `<div class="property-list">${details}</div>${
+      A.table(columns, row.history.map(item => item.order), '', 'commerce-subscription-card-history')}`,
+    A.button('关闭', 'drawer-close') + A.button('复制银行卡资料', 'commerce-copy-subscription-card', '', 'copy',
+      `data-id="${E(row.order.id)}"`));
+  }
+  function editSubscriptionCard(id, node) {
+    const row = subscriptionCardRows().find(item => item.order.id === id);
+    if (!row) return;
+    const orderAttr = `data-id="${E(row.order.id)}"`;
+    const customer = customers.find(item => item.id === (row.order.customerId || row.identity));
+    A.openActionMenu(node, (!row.cardId.startsWith('orbitcard:') ?
+      A.button('修改卡类型', 'commerce-subscription-card-type', '', '', orderAttr) : '') +
+      (customer ? A.button('修改客户资料', 'commerce-contact-edit', '', '', `data-id="${E(customer.id)}" data-kind="customer"`) : '') +
+      A.button('更正订单资料', 'commerce-order-edit', '', '', `${orderAttr} ${row.order.cancelled ? 'disabled' : ''}`));
+  }
+  let clearSubscriptionCardCopyFallback;
+  async function copySubscriptionBankCard(orderId, node) {
+    if (!canManageOrders() || !localData?.copySubscriptionCard) return;
+    const order = orders.find(row => row.id === orderId);
+    if (!order) return;
+    const route = S.route, actorId = currentOperator().id, context = S.drawerContext;
+    const panel = node.closest('#commerce-renewal-card-panel');
+    const kind = node.closest('[data-renewal-card-kind]')?.dataset.renewalCardKind;
+    const detail = renewalCardDrawers.get(panel)?.details?.[kind];
+    const current = () => node.isConnected && route === S.route && actorId === currentOperator().id &&
+      context === S.drawerContext && canManageOrders() && (!panel || renewalCardActionCurrent(panel, node));
+    if (!current()) return;
+    if (panel && (detail?.id !== orderId || !detail.card?.canReveal)) return;
+    await A.withActionFeedback(node, async () => {
+      let result;
+      try {
+        result = await localData.copySubscriptionCard(order.id, subscriptionCardReference(order) || undefined,
+          panel ? { context: 'renewal', version: detail.version } : undefined);
+      } catch (failure) { if (current()) throw failure; return; }
+      if (!current() || await A.copyText(result.text, '银行卡资料已复制', { current })) return;
+      const drawer = $('#drawer[open]');
+      const fallback = drawer && $('textarea.copy-block', drawer);
+      if (!fallback || fallback.value !== result.text) return;
+      clearSubscriptionCardCopyFallback?.();
+      const cleanup = new AbortController();
+      clearSubscriptionCardCopyFallback = () => {
+        fallback.value = '';
+        fallback.textContent = '';
+        cleanup.abort();
+        clearSubscriptionCardCopyFallback = undefined;
+      };
+      drawer.addEventListener('id-view-deactivate', clearSubscriptionCardCopyFallback, { signal: cleanup.signal });
+      drawer.addEventListener('close', () => { if (!drawer.open) clearSubscriptionCardCopyFallback?.(); },
+        { signal: cleanup.signal });
+    }, { pending: '正在读取银行卡…', failure: '银行卡资料复制失败，请重试' });
   }
   function renderCustomerLoss() {
     const { histories, active, ambiguous, unresolved } = renewalProjection();
@@ -2427,17 +3089,18 @@
       form.removeAttribute('aria-busy');
     }
   }
-  function orderCardPicker(v, hidden) {
-    const gpt = v('product') === 'GPT';
-    const choices = cardChoices(v('product'), v('tenantId'), v('cardId'), v('paymentId'));
-    const actions = !localData ? '' : gpt
+  function orderCardPicker(v, hidden, { id = 'cardId', pool = v('product') === 'GPT', optional = false } = {}) {
+    const selected = v(id);
+    const choices = cardChoices(pool ? 'GPT' : 'Claude', v('tenantId'), selected, v('paymentId'));
+    const actions = !localData ? '' : pool
       ? A.button('刷新', 'commerce-order-card-retry', 'compact', '', 'aria-label="刷新银行卡"')
       : A.button('读取', 'commerce-tenant-card-reveal', 'compact', '', 'aria-label="读取完整卡号"');
-    const full = !gpt && localData ? `<div class="field-row" data-commerce-card-revealed hidden><input type="text" readonly autocomplete="off" aria-label="完整银行卡号" data-commerce-card-number /><div>${A.button('复制', 'commerce-tenant-card-copy', '', '', 'aria-label="复制完整卡号"')}</div></div>` : '';
-    const metadata = poolUsage(v('cardId'));
-    const usage = gpt && localData ? `<p class="footnote" data-commerce-pool-usage${metadata ? '' : ' hidden'}>${E(metadata)}</p>` : '';
-    return field('银行卡', 'cardId', searchableSelect('cardId', '银行卡', choices, v('cardId'), actions) + full + usage,
-      true, !gpt ? '选择租户后可搜索该租户的银行卡。' : '', '', hidden);
+    const full = !pool && localData ? `<div class="field-row" data-commerce-card-revealed hidden><input type="text" readonly autocomplete="off" aria-label="完整银行卡号" data-commerce-card-number /><div>${A.button('复制', 'commerce-tenant-card-copy', '', '', 'aria-label="复制完整卡号"')}</div></div>` : '';
+    const metadata = poolUsage(selected);
+    const usage = pool && id === 'cardId' && localData ? `<p class="footnote" data-commerce-pool-usage${metadata ? '' : ' hidden'}>${E(metadata)}</p>` : '';
+    const label = id === 'proPoolCardId' ? 'GPT 订阅卡池' : '银行卡';
+    return field(label, id, searchableSelect(id, label, choices, selected, actions) + full + usage,
+      !optional, !pool ? '选择租户后可搜索该租户的银行卡。' : '', '', hidden);
   }
   function clearRevealedCard(form) {
     const row = form.querySelector('[data-commerce-card-revealed]');
@@ -2447,6 +3110,7 @@
   }
   async function useTenantCard(form, action) {
     if (!canManageOrders()) return;
+    if (orderCardSource(form)?.pool !== false) return;
     const tenantId = form.elements['commerce-tenantId'].value;
     const id = form.elements['commerce-cardId'].value;
     if (!tenantId || !id) {
@@ -2456,7 +3120,7 @@
     try {
       const response = await localData.tenantCardAction({ action, tenantId, id });
       if (!form.isConnected || form.elements['commerce-tenantId'].value !== tenantId ||
-          form.elements['commerce-cardId'].value !== id || form.elements['commerce-payment'].value !== '银行卡') return;
+          form.elements['commerce-cardId'].value !== id || orderCardSource(form)?.pool !== false) return;
       if (action === 'copy') await A.copyText(response.number, '银行卡号已复制');
       else {
         const row = form.querySelector('[data-commerce-card-revealed]');
@@ -2525,6 +3189,13 @@
     const auto = automaticOrder(existing);
     const apple = v('payment') === '苹果内购';
     const product = v('product'), codes = orderCurrencyCodes(product);
+    const proBank = isProBankOrder({ product, payment: v('payment') });
+    const proMode = v('proMaterialMode');
+    const proLocked = proPaymentSourceLocked(existing);
+    const proChoices = [
+      ...(isProBankOrder(existing) && !proMaterialMode(existing) ? [['', '沿用原订单资料']] : []),
+      ...Object.entries(proMaterialLabels)
+    ].filter(([mode]) => !proLocked || mode === proMaterialMode(existing));
     const match = appleMatch(v('plan'), v('appleMatchMin'), v('appleMatchMax'));
     const appleSelection = {
       id: existing?.id, product: v('product'), plan: v('plan'), businessType: v('businessType'),
@@ -2533,7 +3204,15 @@
     return (
       `<div class="commerce-span-all order-payment-options">` +
       field('支付方式', 'payment', auto ? input('payment', v('payment'), 'readonly') : select('payment', ['银行卡', '苹果内购'], v('payment')), true) +
-      (v('product') === 'GPT' && !auto ? orderCardPicker(v, apple) : '') +
+      (product === 'GPT' ? '' :
+        field('银行卡号', 'proCardNumber', input('proCardNumber', v('proCardNumber'),
+          `inputmode="numeric" maxlength="32" autocomplete="off"${proLocked && proMode === 'manual_card' ? ' readonly' : ''}`),
+          true, '', '', !proBank || proMode !== 'manual_card') +
+        field('卡序列号', 'proCardSerial', input('proCardSerial', v('proCardSerial'), 'maxlength="120" autocomplete="off"'),
+          true, '业务登记编号，可保留前导零。', '', !proBank || proMode !== 'manual_card') +
+        field('填写方式', 'proMaterialMode', select('proMaterialMode', proChoices, proMode), true, '', '', !proBank)) +
+      (product === 'GPT' && !auto ? orderCardPicker(v, apple, { optional: true }) : '') +
+      (product !== 'GPT' ? orderCardPicker(v, !proBank || proMode !== 'pool_card', { id: 'proPoolCardId', pool: true }) : '') +
       field('卡尾号', 'paymentId', input('paymentId', v('paymentId'), 'readonly'), false, '', '', apple || v('product') !== 'GPT') +
       field(
         '苹果 ID',
@@ -2549,6 +3228,7 @@
       field('余额上限（USD）', 'appleMatchMax', input('appleMatchMax', match[1], 'inputmode="decimal" placeholder="留空不限"'),
         false, '', '', !apple || v('businessType') === '续费') +
       `</div>` +
+      orderCardTypeField(v, existing) +
       `<div class="order-financial-groups commerce-span-all"><div class="order-financial-group"><div class="order-financial-heading"><h3>代付</h3></div>${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency', auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '', 'readonly placeholder="待核对"') : select('paidCurrency', paidCurrencyChoices(product, v('payment'), apple ? 'USD' : v('paidCurrency')), apple ? 'USD' : v('paidCurrency')), true)}${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'), auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>售卖</h3></div>${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency')), true)}${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}</div><div class="order-financial-group"><div class="order-financial-heading"><h3>订阅周期</h3></div>${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true, '本次实际开通时间，只登记一次。')}${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}</div></div>` +
       (v('claudeRenewalId')
         ? `<div class="commerce-cost-strip commerce-span-all">Claude 专属续费：当前订阅到期 ${E(orders.find((row) => row.id === v('claudeRenewalId'))?.expiry || '')}，本次新单到期 ${E(v('expiry'))}。原单保持独立可见。</div>`
@@ -2667,6 +3347,8 @@
         'phone',
         'kyc',
         'payment',
+        'cardTypeId',
+        'cardTypeName',
         'paidAmount',
         'paidCurrency',
         'emailCostAmount',
@@ -2675,6 +3357,7 @@
         base[name] = previous[name] ?? base[name];
       base.businessType = '续费';
       base.claudeRenewalId = isClaude(previous) ? previous.id : '';
+      if (previous.product === 'Claude Pro') base.proRenewalSourceVersion = previous.version;
       base.start = dateInput(now());
       base.expiry =
         isClaude(previous) && parseDate(previous.expiry) > parseDate(base.start)
@@ -2683,6 +3366,8 @@
       base.appleIdId = previous.payment === '苹果内购' ? previous.appleIdId || '' : '';
       base.paymentId = previous.payment === '苹果内购' ? previous.paymentId : '';
       base.cardId = '';
+      if (isProBankOrder(previous) && proMaterialMode(previous))
+        base.proMaterialMode = proMaterialMode(previous);
       base.saleCurrency = previous.payment === '苹果内购' ? 'USD' : previous.saleCurrency;
       base.saleAmount =
         previous.payment !== '苹果内购' || previous.saleCurrency === 'USD'
@@ -2711,6 +3396,11 @@
     const plan = orderPlanChoices(initialProduct, nextPlan, existing).includes(nextPlan) ? nextPlan : productPlans[initialProduct][0];
     const v = (name) =>
       name === 'product' ? initialProduct : name === 'plan' ? plan :
+      name === 'proMaterialMode' ? (draft['commerce-proMaterialMode'] ??
+        (isProBankOrder(existing) ? proMaterialMode(existing) : base.proMaterialMode || 'manual_card')) :
+      name === 'proPoolCardId' ? (draft['commerce-proPoolCardId'] ??
+        (proMaterialMode(existing) === 'pool_card' ? existing.cardId : '')) :
+      name === 'cardId' && proMaterialMode(existing) === 'pool_card' ? (draft['commerce-cardId'] ?? '') :
       name === 'appleMatchMax' || name === 'appleMatchMin' ? draft[`commerce-${name}`] ?? base[name] :
       name === 'saleAmount' && !existing && !draft['commerce-saleManual'] ?
         orderPrice(initialProduct, plan, draft['commerce-saleCurrency'] || base.saleCurrency) || (draft['commerce-saleAmount'] ?? base.saleAmount) :
@@ -2730,18 +3420,19 @@
       customer?.[name === 'customerPhone' ? 'phone' : name] ??
       '';
     const selectedTenant = tenants.find((row) => row.id === v('tenantId'));
+    const activeProMode = proMaterialMode({ product, payment: v('payment'), proMaterialMode: v('proMaterialMode') });
     const personnel =
       field(
         '认证人',
         'tenantId',
         searchableSelect('tenantId', '租户', [['', '未关联租户'], ...tenants.filter((row) => row.active || row.id === v('tenantId')).map((row) => [row.id, `${row.name} · ${row.phone}`])], v('tenantId'), A.button('新增', 'commerce-quick-tenant', '', 'plus'))
       ) +
-      (product !== 'GPT' ? orderCardPicker(v, v('payment') !== '银行卡') : '') +
+      (product !== 'GPT' ? orderCardPicker(v, v('payment') !== '银行卡' || (activeProMode && activeProMode !== 'tenant_card')) : '') +
       field('认证电话', 'verifierPhone', input('verifierPhone', selectedTenant?.phone || existing?.verifierPhone || '', 'readonly')) +
       field('认证状态', 'kyc', select('kyc', ['未认证', 'KYC 认证'], v('kyc'))) +
       field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"'));
     const saleCurrencyChosen = existing || draft['commerce-saleCurrencyChosen'] === 'yes';
-    const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT')}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', v('correctionReason')), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div><div class="form-section"><div class="section-title-row"><h2>费用核对</h2>${A.titleInfo('费用核对', localData ? '保存时记录原币金额与费用规则版本。在订单详情的「成本与汇率」登记有效快照后核算。' : '成本、币种与演示汇率在保存时冻结为订单快照；苹果余额只按已确认实际支出记账。', 'commerce-cost-explanation')}</div><div id="commerce-cost-preview">${costPreview(base)}</div></div></form>`;
+    const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${previous?.product === 'Claude Pro' ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT' || !showProPeople(activeProMode))}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', v('correctionReason')), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div><div class="form-section"><div class="section-title-row"><h2>费用核对</h2>${A.titleInfo('费用核对', localData ? '保存时记录原币金额与费用规则版本。在订单详情的「成本与汇率」登记有效快照后核算。' : '成本、币种与演示汇率在保存时冻结为订单快照；苹果余额只按已确认实际支出记账。', 'commerce-cost-explanation')}</div><div id="commerce-cost-preview">${costPreview(base)}</div></div></form>`;
     const footer = `<span class="footnote">${localData ? '订单保存到数据库。' : '订单独立保存；确认代付才记苹果余额支出。'}</span>${A.button('保留待补全', 'commerce-order-pending')}<button form="commerce-order-form" type="submit" class="button primary">核对并保存</button>`;
     if (main)
       return `<section class="panel form-panel">${html}<div class="form-footer">${footer}</div></section>`;
@@ -2759,6 +3450,7 @@
     if (form) void loadOrderOwners(form);
     if (form && v('payment') === '苹果内购') loadAppleOptions(form);
     if (form && v('payment') === '银行卡') void loadOrderCards(form);
+    if (form && v('payment') === '银行卡') void loadOrderCardType(form);
     if (form) void loadPrices(form);
     return '';
   }
@@ -2782,7 +3474,7 @@
     const raw = A.readForm(form),
       order = {};
     for (const [key, inputValue] of Object.entries(raw))
-      if (key.startsWith('commerce-') && !['commerce-saleCurrencyChosen', 'commerce-saleManual', 'commerce-emailCostManual'].includes(key))
+      if (key.startsWith('commerce-') && !['commerce-saleCurrencyChosen', 'commerce-saleManual', 'commerce-emailCostManual', 'commerce-proPoolCardId', 'commerce-card-type-touched'].includes(key))
         order[key.slice(9)] = String(inputValue).trim();
     for (const key of [
       'paidConfirmed',
@@ -2820,11 +3512,31 @@
     if (order.product !== 'GPT') {
       const existing = orders.find((row) => row.id === order.id);
       const tenant = tenants.find((row) => row.id === order.tenantId);
-      order.verifier = tenant?.name || existing?.verifier || '';
-      order.verifierPhone = tenant?.phone || existing?.verifierPhone || '';
+      const fallback = proMaterialMode(order) !== 'people' || order.tenantId === existing?.tenantId;
+      order.verifier = tenant?.name || (fallback && existing?.verifier) || '';
+      order.verifierPhone = tenant?.phone || (fallback && existing?.verifierPhone) || '';
       order.ownerPhone = existing?.ownerPhone || '';
     }
     const existingOrder = orders.find((row) => row.id === order.id);
+    const mode = proMaterialMode(order);
+    if (mode) {
+      if (mode === 'pool_card') {
+        order.cardId = value(raw, 'proPoolCardId');
+        order.paymentId = cardTail(cards().find(row => row.id === order.cardId)) ||
+          (existingOrder?.cardId === order.cardId ? existingOrder.paymentId : '');
+      } else if (mode !== 'tenant_card') {
+        order.cardId = '';
+        order.paymentId = '';
+      }
+      if (mode === 'manual_card') {
+        order.proCardNumber = String(order.proCardNumber || '').replace(/[\s-]/g, '');
+      }
+      if (!showProPeople(mode)) for (const name of ['tenantId', 'verifier', 'verifierPhone', 'phone', 'kyc']) order[name] = '';
+    }
+    pruneProMaterialFields(order);
+    if (order.payment !== '银行卡') order.cardTypeId = '';
+    else if (value(raw, 'card-type-touched') !== 'yes' && (existingOrder?.cardId || '') !== (order.cardId || ''))
+      delete order.cardTypeId;
     if (existingOrder) {
       order.owner = existingOrder.owner || '';
       if (Object.hasOwn(existingOrder, 'ownerId')) order.ownerId = existingOrder.ownerId;
@@ -2839,6 +3551,12 @@
       for (const key of ['source', 'product', 'businessType', 'email', 'plan', 'payment', 'paymentId', 'cardId',
         'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed'])
         order[key] = existingOrder[key];
+    }
+    if (!existingOrder && proMaterialMode(order) && order.businessType === '续费' && order.claudeRenewalId) {
+      order.proRenewalSourceId = order.claudeRenewalId;
+      order.proRenewalSourceVersion = Number(order.proRenewalSourceVersion);
+    } else {
+      delete order.proRenewalSourceVersion;
     }
     order.includeIssueFee = Boolean(order.product === 'GPT' && order.payment === '银行卡' &&
       order.cardId && order.paidConfirmed && order.costBasis === 'standard' &&
@@ -2874,7 +3592,13 @@
       { id: 'plan', label: '套餐' },
       { id: 'businessType', label: '业务类型' },
       { id: 'payment', label: '支付方式' },
+      { id: 'cardTypeName', label: '银行卡类型', render: row => E(row.cardTypeName || '—') },
       { id: 'paymentId', label: '卡尾号 / ID' },
+      ...(product === 'Claude Pro' ? [
+        { id: 'proMaterialMode', label: '填写方式', render: (row) => E(proMaterialLabel(row)) },
+        { id: 'proCardNumber', label: '银行卡号', render: (row) => E(row.proCardNumber || '—') },
+        { id: 'proCardSerial', label: '卡序列号', render: (row) => E(proCardSerialLabel(row)) }
+      ] : []),
       {
         id: 'paidAmount',
         label: '代付金额',
@@ -2986,8 +3710,7 @@
             : moduleState.orderTab === 'refunded'
               ? row.refunds.length > 0
               : !row.cancelled) &&
-        (!S.query ||
-          `${row.email} ${row.orderNo} ${customerLabel(row.customerId)} ${orderOwnerName(row)}`.includes(S.query))
+        (!S.query || orderMatchesSearch(row, S.query))
     );
     return (
       A.header(
@@ -3010,8 +3733,31 @@
         ],
         moduleState.orderTab,
         'commerce-order-tab'
-      )}${toolbar('搜索订单编号、邮箱或客户', columnSettingsButton(`commerce-orders-${product}`) + routeButton('数据统计', 'orders/statistics'), 'data-page-actions')}${tableList(orderColumns(product), filtered, `commerce-orders-${product}`)}${quoteAttribution(filtered)}</section>`
+      )}${toolbar(product === 'Claude Pro' ? '搜索订单编号、邮箱、客户、卡号或序列号' : '搜索订单编号、邮箱或客户', columnSettingsButton(`commerce-orders-${product}`) + routeButton('数据统计', 'orders/statistics'), 'data-page-actions')}${tableList(orderColumns(product), filtered, `commerce-orders-${product}`)}${quoteAttribution(filtered)}</section>`
     );
+  }
+
+  function orderMatchesSearch(row, query) {
+    const base = `${row.email} ${row.orderNo} ${customerLabel(row.customerId)} ${orderOwnerName(row)} ${row.cardTypeName || ''}`;
+    if (row.product !== 'Claude Pro') return base.includes(query);
+    const fields = [base, row.paymentId, row.proCardNumber, row.proCardSerial, row.verifier,
+      row.verifierPhone, row.phone, row.tenantId ? tenantLabel(row.tenantId) : ''];
+    if (fields.some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase()))) return true;
+    const digits = query.replace(/[\s-]/g, '');
+    return /^\d+$/.test(digits) && String(row.proCardNumber || '').includes(digits);
+  }
+
+  function proCardSerialLabel(order) {
+    return order.proCardSerial ||
+      (proMaterialMode(order) === 'manual_card' && !canManageOrders() ? '仅管理员可查看' : '—');
+  }
+
+  function proOrderProperties(order) {
+    if (!isProBankOrder(order)) return '';
+    const mode = proMaterialMode(order);
+    return property('填写方式', proMaterialLabel(order)) + (mode === 'manual_card'
+      ? property('银行卡号', order.proCardNumber) + property('卡序列号', proCardSerialLabel(order)) : '') +
+      (mode === 'people' ? property('订阅电话', order.phone) : '');
   }
   function orderDetail(id, activeTab = 'details', asPage = false) {
     const order = orders.find((row) => row.id === id);
@@ -3027,7 +3773,7 @@
             ? timeline(order.id)
             : activeTab === 'renewals'
               ? renewalChain(order)
-              : `<div class="property-list">${property('订单编号', order.orderNo)}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property('邮箱账号', order.email)}${property('客户', customerLabel(order.customerId))}${property('微信', order.wechat)}${property('客户电话', order.customerPhone)}${property('QQ', order.qq)}${property('WhatsApp', order.whatsapp)}${property('Telegram', order.telegram)}${property('支付方式', order.payment)}${property('卡尾号 / ID', order.paymentId)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('租户', tenantLabel(order.tenantId))}${property('归属人', orderOwnerName(order))}${property('认证人', order.verifier)}${property('认证电话', order.verifierPhone)}${property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录，更正复选框不会删除' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', order.cancelled ? '已撤单' : '正常')}${property('待核对', pendingReasons(order).join('、') || '资料已核对')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
+              : `<div class="property-list">${property('订单编号', order.orderNo)}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property('邮箱账号', order.email)}${property('客户', customerLabel(order.customerId))}${property('微信', order.wechat)}${property('客户电话', order.customerPhone)}${property('QQ', order.qq)}${property('WhatsApp', order.whatsapp)}${property('Telegram', order.telegram)}${property('支付方式', order.payment)}${order.payment === '银行卡' ? property('银行卡类型', order.cardTypeName) : ''}${property('卡尾号 / ID', order.paymentId)}${proOrderProperties(order)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('租户', tenantLabel(order.tenantId))}${property('归属人', orderOwnerName(order))}${property('认证人', order.verifier)}${property('认证电话', order.verifierPhone)}${property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录，更正复选框不会删除' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', order.cancelled ? '已撤单' : '正常')}${property('待核对', pendingReasons(order).join('、') || '资料已核对')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
     const detailBody = `<div class="tabs" role="tablist"${asPage ? ' data-page-actions="tabs"' : ''}>${[
       ['details', '资料'],
       ['costs', '成本与汇率'],
@@ -3973,12 +4719,27 @@
           : '请输入不超过实际总成本的非负金额'
       );
     }
-    if (order.payment === '银行卡') {
-      const selected = (order.product === 'GPT' ? cards() : (tenantCards.get(order.tenantId)?.items || []))
+    const mode = proMaterialMode(order);
+    if (mode === 'manual_card') {
+      error('proCardNumber', /^\d{12,19}$/.test(order.proCardNumber) ? '' : '请填写 12 至 19 位银行卡号');
+      error('proCardSerial', order.proCardSerial && order.proCardSerial.length <= 120 &&
+        !/[\p{Cc}\p{Cf}]/u.test(order.proCardSerial) ? '' : '请填写有效的卡序列号');
+    } else if (mode === 'people') {
+      error('proMaterialMode', hasProPeople(order) ? '' : '请选择认证人或填写订阅电话');
+      const digits = order.phone.replace(/\D/g, '');
+      error('phone', !order.phone || (/^\+?[0-9][0-9 ()-]{4,31}$/.test(order.phone) &&
+        digits.length >= 5 && digits.length <= 20) ? '' : '请填写有效的订阅电话');
+    } else if (!mode && isProBankOrder(order) && (!isProBankOrder(existing) || proMaterialMode(existing))) {
+      error('proMaterialMode', '请选择填写方式');
+    } else if (order.payment === '银行卡' && mode !== 'none') {
+      const usePool = order.product === 'GPT' || mode === 'pool_card';
+      const selected = (usePool ? cards() : (tenantCards.get(order.tenantId)?.items || []))
         .find((row) => row.id === order.cardId);
       const historic = existing?.payment === order.payment && existing.cardId === order.cardId &&
         existing.paymentId === order.paymentId && existing.tenantId === order.tenantId;
-      error('cardId', auto || historic ? '' : !selected && (!allowPending || order.cardId)
+      const optional = order.product === 'GPT' || (!mode && allowPending);
+      if (mode === 'tenant_card') error('tenantId', order.tenantId ? '' : '请先选择认证人');
+      error(mode === 'pool_card' ? 'proPoolCardId' : 'cardId', auto || historic ? '' : !selected && (!optional || order.cardId)
         ? '请选择本次使用的银行卡' : selected && cardTail(selected) !== order.paymentId
           ? '尾号与所选银行卡不符，请重新选择' : '');
     } else if (order.payment === '苹果内购') {
@@ -3989,7 +4750,9 @@
           ? ''
           : '请选择用于本次订阅的苹果 ID'
       );
-    } else error('payment', '请选择有效支付方式');
+    } else if (mode !== 'none') error('payment', '请选择有效支付方式');
+    if (order.payment === '银行卡' && order.cardTypeId && order.cardTypeId !== existing?.cardTypeId && bankCardTypesLoaded)
+      error('cardTypeId', bankCardTypes.items.some(row => row.id === order.cardTypeId && row.active) ? '' : '请选择当前启用的银行卡类型');
     if (!existing && order.businessType === '成品交付') {
       const selected = availableStock(order.product).find(
         (row) => row.email.toLowerCase() === order.email.toLowerCase()
@@ -4036,7 +4799,12 @@
         hasPaymentHistory(existing) &&
         (existing.payment !== order.payment || existing.cardId !== order.cardId)
       )
-        error('cardId', '已确认银行卡付款的旧单不可换卡；本次续费请新建订单并选择新卡');
+        error(existing.payment !== order.payment ? 'payment' : mode ? 'proMaterialMode' : 'cardId',
+          '已确认付款的订单须保留原付款来源；请通过独立续费登记新的付款资料');
+      if (proPaymentSourceLocked(existing) &&
+          (mode !== proMaterialMode(existing) ||
+            (mode === 'manual_card' && order.proCardNumber !== existing.proCardNumber)))
+        error('proMaterialMode', '已确认付款的订单须保留原付款来源');
       if (existing.bankReturns?.length) {
         if (order.paidCurrency !== existing.paidCurrency)
           error('paidCurrency', '已有银行卡实际回款，需保留原代付币种');
@@ -4159,6 +4927,9 @@
       previousOrderId: '',
       balanceReversalConfirmed: false
     };
+    pruneProMaterialFields(saved);
+    if (!Object.hasOwn(inputOrder, 'cardTypeId')) delete saved.cardTypeId;
+    if (saved.cardTypeId !== existing?.cardTypeId) delete saved.cardTypeName;
     const stock = !existing && saved.businessType === '成品交付';
     const stockCheck = () =>
       stock
@@ -4308,6 +5079,7 @@
                   : balanceService?.get?.(saved.appleIdId)?.version || null
               });
               Object.assign(existing, saved);
+              pruneProMaterialFields(existing);
             } else orders.unshift(saved);
             if (renewalSource && !existing && saved.businessType === '续费' &&
                 sameSubscriptionAccount(saved, renewalSource.order))
@@ -4499,7 +5271,7 @@
     A.openDrawer(
       '登记银行卡实际回款',
       '按原代付币种登记实际到账，客户退款单独记录。',
-      `<div class="property-list">${property('订单编号', order.orderNo)}${property('原付款银行卡', `${cardLabel(order.cardId)} · ${order.paymentId}`)}</div><form id="commerce-bank-return-form" data-commerce-draft="${key}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || order.version)}" /><div class="commerce-field-grid">${field('实际回款金额', 'bankReturnAmount', input('bankReturnAmount', draft['commerce-bankReturnAmount'] || '', 'inputmode="decimal"'), true, `当前最多 ${display(bankReturnLimit(order))} ${currencyLabel(order.paidCurrency)}`)}${field('到账时间', 'bankReturnAt', input('bankReturnAt', draft['commerce-bankReturnAt'] ?? dateInput(now()), 'type="datetime-local"'), true)}${field('到账依据', 'bankReturnReason', input('bankReturnReason', draft['commerce-bankReturnReason'] || ''), true, '', 'commerce-span-all')}</div></form>`,
+      `<div class="property-list">${property('订单编号', order.orderNo)}${property(proMaterialMode(order) ? '原付款来源' : '原付款银行卡', bankReturnSource(order))}</div><form id="commerce-bank-return-form" data-commerce-draft="${key}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || order.version)}" /><div class="commerce-field-grid">${field('实际回款金额', 'bankReturnAmount', input('bankReturnAmount', draft['commerce-bankReturnAmount'] || '', 'inputmode="decimal"'), true, `当前最多 ${display(bankReturnLimit(order))} ${currencyLabel(order.paidCurrency)}`)}${field('到账时间', 'bankReturnAt', input('bankReturnAt', draft['commerce-bankReturnAt'] ?? dateInput(now()), 'type="datetime-local"'), true)}${field('到账依据', 'bankReturnReason', input('bankReturnReason', draft['commerce-bankReturnReason'] || ''), true, '', 'commerce-span-all')}</div></form>`,
       A.button('取消', 'drawer-close') +
         '<button type="submit" form="commerce-bank-return-form" class="button primary">核对回款</button>',
       key
@@ -4530,7 +5302,7 @@
     if (!validAmount || !validTime || !reason) return;
     A.confirmAction(
       '确认银行卡实际回款',
-      `${order.orderNo} · ${display(amount)} ${currencyLabel(order.paidCurrency)} · 原付款银行卡 ${cardLabel(order.cardId)}`,
+      `${order.orderNo} · ${display(amount)} ${currencyLabel(order.paidCurrency)} · ${proMaterialMode(order) ? `原付款来源 ${bankReturnSource(order)}` : `原付款银行卡 ${cardLabel(order.cardId)}`}`,
       () => {
         if (
           orders.find((row) => row.id === order.id) !== order ||
@@ -4801,6 +5573,11 @@
                 fromVersion: order.version,
                 toVersion: preserved.version
               });
+              if (order.product === 'Claude Pro') {
+                delete order.proMaterialMode;
+                delete order.proCardNumber;
+                delete order.proCardSerial;
+              }
               Object.assign(order, change.previous, preserved, { balanceReversalConfirmed: false });
             } else {
               order.cancelled = mode === 'cancel';
@@ -5197,6 +5974,54 @@
       }
       return true;
     }
+    if (action === 'commerce-renewal-card-open') {
+      openRenewalCardDrawer(node.dataset.id);
+      return true;
+    }
+    if (action === 'commerce-renewal-card-refresh') {
+      void loadRenewalCardDetails(node.closest('#commerce-renewal-card-panel'));
+      return true;
+    }
+    if (action === 'commerce-renewal-card-reveal') {
+      void revealRenewalCard(node);
+      return true;
+    }
+    if (action === 'commerce-renewal-card-copy-account') {
+      copyRenewalCardAccount(node);
+      return true;
+    }
+    if (action === 'commerce-copy-subscription-card') {
+      void copySubscriptionBankCard(node.dataset.id, node);
+      return true;
+    }
+    if (action === 'commerce-subscription-card-refresh') {
+      loadSubscriptionCardEstimates(true);
+      return true;
+    }
+    if (action === 'commerce-subscription-card-edit') {
+      editSubscriptionCard(node.dataset.id, node);
+      return true;
+    }
+    if (action === 'commerce-subscription-card-detail') {
+      showSubscriptionCardHistory(node.dataset.id);
+      return true;
+    }
+    if (action === 'commerce-subscription-card-type') {
+      const row = subscriptionCardRows().find(item => item.order.id === node.dataset.id);
+      if (row) void openBankCardTypeAssignment(row.cardId, () => A.render());
+      return true;
+    }
+    if (action === 'commerce-card-types' || action === 'commerce-card-type-edit') {
+      void openBankCardTypeEditor(action === 'commerce-card-type-edit' ? node.dataset.id : '');
+      return true;
+    }
+    if (action === 'commerce-card-type-remove') { removeBankCardType(node.dataset.id); return true; }
+    if (action === 'commerce-card-type-assign') { void openBankCardTypeAssignment(node.dataset.id); return true; }
+    if (action === 'commerce-card-type-reload') { void openBankCardTypeEditor(node.dataset.id, true); return true; }
+    if (action === 'commerce-card-type-assignment-reload') {
+      void openBankCardTypeAssignment(node.dataset.id, bankCardTypeReturn?.onClose, true);
+      return true;
+    }
     if (action === 'commerce-tenant-more') {
       if (canManageOrders()) {
         const tenant = tenants.find(row => row.id === node.dataset.id);
@@ -5301,6 +6126,11 @@
       return true;
     }
     if (action === 'commerce-renewal-open') {
+      if (node.hasAttribute('data-renewal-card-renew')) {
+        const panel = $('#commerce-renewal-card-panel');
+        if (!renewalCardActionCurrent(panel, node) || !renewalCardCanRenew(id) ||
+            renewalCardDrawers.get(panel)?.details?.order?.account?.canRenew === false) return true;
+      }
       if (id) A.go(renewalOrderPrefix + encodeURIComponent(id));
       return true;
     }
@@ -5627,6 +6457,10 @@
   }
   function onSubmit(form) {
     if (form.id === 'commerce-paid-prices-form') { void saveGptPaidPrices(form); return true; }
+    if (['commerce-card-type-form', 'commerce-card-type-assignment-form'].includes(form.id)) {
+      void saveBankCardType(form);
+      return true;
+    }
     if (form.id === 'commerce-tenant-owner-form') { void saveTenantOwnerTransfer(form); return true; }
     if (form.id === 'commerce-renewal-settings') {
       saveRenewalSettings(form);
@@ -5759,7 +6593,8 @@
   }
   function updateOrderVisibility(form) {
     const order = orderFromForm(form),
-      actual = order.costBasis === 'actual';
+      actual = order.costBasis === 'actual',
+      proBank = isProBankOrder(order), mode = proMaterialMode(order);
     const toggle = (name, show) => {
       const node = form.querySelector(`[data-commerce-field="${name}"]`);
       if (node) node.hidden = !show;
@@ -5767,14 +6602,20 @@
     toggle('actualCostAmount', actual);
     toggle('actualCostCurrency', actual);
     toggle('appleRecoverableCostAmount', actual && order.payment === '苹果内购');
-    toggle('cardId', order.payment === '银行卡');
+    toggle('cardId', order.payment === '银行卡' && (!mode || mode === 'tenant_card'));
+    toggle('proPoolCardId', mode === 'pool_card');
+    toggle('cardTypeId', order.payment === '银行卡');
+    toggle('proMaterialMode', proBank);
+    toggle('proCardNumber', mode === 'manual_card');
+    toggle('proCardSerial', mode === 'manual_card');
     toggle('paymentId', order.payment === '银行卡' && order.product === 'GPT');
     toggle('appleIdId', order.payment === '苹果内购');
     toggle('appleMatchMin', order.payment === '苹果内购' && order.businessType === '成品交付');
     toggle('appleMatchMax', order.payment === '苹果内购' && order.businessType === '成品交付');
     refreshAppleOptions(form);
     const personnel = form.querySelector('[data-commerce-section="03"]');
-    if (personnel) personnel.hidden = order.product === 'GPT';
+    if (personnel) personnel.hidden = order.product === 'GPT' || !showProPeople(mode);
+    refreshOrderCardType(form);
     updateStockSearch(form);
   }
   function updateOrderPeriod(form) {
@@ -5794,6 +6635,13 @@
       paymentSettingsView().currency = node.value;
       A.render();
       $('#commerce-paid-country')?.focus();
+      return true;
+    }
+    const cardFilter = node.id?.match(/^commerce-subscription-card-(state|purpose|type|plan)$/)?.[1];
+    if (cardFilter) {
+      subscriptionCardFilters[cardFilter] = node.value;
+      S.page = 1;
+      A.render();
       return true;
     }
     if (node.dataset?.commercePicker) return true;
@@ -5822,6 +6670,7 @@
     }
     const form = node.closest('#commerce-order-form');
     if (form) {
+      if (node.id === 'commerce-cardTypeId') form.elements['commerce-card-type-touched'].value = 'yes';
       if (node.id === 'commerce-ownerId') A.setError('commerce-ownerId', '');
       if (node.id === 'commerce-product') {
         form.querySelector('#commerce-plan').innerHTML = A.options(
@@ -5841,6 +6690,7 @@
           form.querySelector('#commerce-accountId').value = '';
         }
         updateOrderPeriod(form);
+        void loadOrderCards(form, true);
       }
       if (node.id === 'commerce-businessType') {
         form.querySelector('#commerce-claudeRenewalId').value = '';
@@ -5892,7 +6742,17 @@
             form.querySelector('#commerce-saleCurrency').value = 'USD';
           clearRevealedCard(form);
           loadAppleOptions(form, true);
-        } else void loadOrderCards(form, true);
+        } else {
+          void loadOrderCards(form, true);
+          void loadOrderCardType(form);
+        }
+      }
+      if (node.id === 'commerce-proMaterialMode') {
+        clearRevealedCard(form);
+        for (const name of ['proMaterialMode', 'proCardNumber', 'proCardSerial', 'proPoolCardId', 'tenantId', 'phone', 'verifierPhone', 'cardId'])
+          A.setError(`commerce-${name}`, '');
+        resetProPaymentChecks(form);
+        void loadOrderCards(form, true);
       }
       if (['commerce-plan', 'commerce-product', 'commerce-payment', 'commerce-paidCurrency'].includes(node.id))
         applyGptPaidPrice(form, true);
@@ -5901,14 +6761,17 @@
         form.elements['commerce-saleManual'].value = '';
         applyOrderPrice(form);
       }
-      if (node.id === 'commerce-cardId') {
+      if (['commerce-cardId', 'commerce-proPoolCardId'].includes(node.id)) {
         const tenantId = form.elements['commerce-tenantId']?.value;
         const product = form.elements['commerce-product'].value;
-        const options = product === 'GPT' ? cards() : tenantCards.get(tenantId)?.items || [];
-        form.elements['commerce-paymentId'].value = cardTail(options.find((row) => row.id === node.value));
+        const pool = product === 'GPT' || node.id === 'commerce-proPoolCardId';
+        const options = pool ? cards() : tenantCards.get(tenantId)?.items || [];
+        if (node.id === 'commerce-cardId')
+          form.elements['commerce-paymentId'].value = cardTail(options.find((row) => row.id === node.value));
         clearRevealedCard(form);
         if (product === 'GPT') refreshPoolUsage(form);
-        else if (node.value) void useTenantCard(form, 'reveal');
+        else if (!pool && node.value) void useTenantCard(form, 'reveal');
+        if (product === 'Claude Pro') resetProPaymentChecks(form);
       }
       if (node.id === 'commerce-tenantId') {
         const tenant = tenants.find((row) => row.id === node.value);
@@ -5957,6 +6820,7 @@
       return true;
     }
     if (node.closest('form[data-commerce-draft]')) {
+      if (node.id === 'commerce-proCardNumber') resetProPaymentChecks(node.form);
       if (node.id === 'commerce-email') updateStockSearch(node.closest('#commerce-order-form'));
       if (node.id === 'commerce-saleAmount') node.form.elements['commerce-saleManual'].value = 'yes';
       if (node.id === 'commerce-paidAmount') node.form.elements['commerce-paidManual'].value = 'yes';
@@ -5980,6 +6844,14 @@
     }
     return false;
   }
+  function resetProPaymentChecks(form) {
+    const existing = orders.find((row) => row.id === form.elements['commerce-id'].value);
+    if (existing && hasPaymentHistory(existing)) return;
+    for (const key of ['paidConfirmed', 'costConfirmed']) {
+      const control = form.elements[`commerce-${key}`];
+      if (control) control.checked = false;
+    }
+  }
   function matches(route) {
     return (
       [
@@ -5990,6 +6862,7 @@
         'workspace/order', gptOrderRoute, claudeOrderRoute,
         renewalRoute,
         customerLossRoute,
+        subscriptionCardsRoute,
         'orders/gpt',
         'orders/pro',
         'orders/max',
@@ -6030,6 +6903,7 @@
     if (S.route === 'customers/tenants') return renderContacts(true);
     if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) return renderOrderPage();
     if (S.route === renewalRoute) return renderRenewals();
+    if (S.route === subscriptionCardsRoute) return renderSubscriptionCards();
     if (S.route === customerLossRoute) return renderCustomerLoss();
     if (S.route.startsWith('orders/detail/'))
       return orderDetail(S.route.split('/').at(-1), moduleState.detailTab, true);
@@ -6139,7 +7013,7 @@
     updateRenewalReminder();
     if (localData) window.setInterval(() => {
       updateRenewalReminder();
-      if ((S.route === renewalRoute || S.route === customerLossRoute) &&
+      if ([renewalRoute, customerLossRoute, subscriptionCardsRoute].includes(S.route) &&
           localPhase === 'ready' && !$('#drawer')?.open && !$('#confirm-dialog')?.open &&
           !document.activeElement?.closest('input, select, textarea, button'))
         A.render();
@@ -6197,8 +7071,30 @@
   window.visualViewport?.addEventListener('resize', positionOpenPickers);
   window.visualViewport?.addEventListener('scroll', positionOpenPickers, { passive: true });
   const drawer = $('#drawer');
+  function clearRenewalCardSecrets() {
+    const panel = $('#commerce-renewal-card-panel');
+    clearRenewalCardNumbers(panel);
+    if (panel) renewalCardDrawers.delete(panel);
+    clearSubscriptionCardCopyFallback?.();
+  }
+  window.addEventListener?.('pagehide', () => {
+    const openSensitiveDrawer = $('#drawer[open] #commerce-renewal-card-panel') || clearSubscriptionCardCopyFallback;
+    clearRenewalCardSecrets();
+    if (openSensitiveDrawer && drawer.open) A.closeDrawer();
+  });
   drawer?.addEventListener('close', () => {
     if (drawer.open) return;
+    if (bankCardTypeReturn) {
+      const back = bankCardTypeReturn;
+      bankCardTypeReturn = null;
+      if (S.route === back.route && currentOperator().id === back.actorId) {
+        if (back.onClose) back.onClose();
+        else if (!back.order) A.render();
+        else if (back.order.main) refreshOrderCardType($('#main #commerce-order-form'));
+        else orderEditor(back.order.id, back.order.renewalId, false);
+      }
+      return;
+    }
     const closedOrder = drawer.querySelector('#commerce-order-form');
     if (closedOrder) clearRevealedCard(closedOrder);
     const cardInput = drawer.querySelector('#commerce-tenant-card-number');
@@ -6219,6 +7115,15 @@
   window.IDDesignModules.push({
     id: 'commerce',
     matches,
+    onDataChanges(scopes) {
+      if (scopes.includes('card-types')) bankCardTypesLoaded = false;
+      if (S.route === subscriptionCardsRoute && ['card-types', 'finance-rates', 'settings'].some(scope => scopes.includes(scope)))
+        return loadSubscriptionCardEstimates(true);
+      const panel = $('#commerce-renewal-card-panel');
+      if (renewalCardDrawerCurrent(panel) && ['commerce', 'inventory', 'card-types', 'finance-rates', 'settings', 'order-cards']
+        .some(scope => scopes.includes(scope))) return loadRenewalCardDetails(panel);
+    },
+    clearPageState: clearRenewalCardSecrets,
     render,
     onClick,
     onSubmit,
@@ -6258,6 +7163,7 @@
       }
       updateRenewalReminder();
       if (!localData || localPhase !== 'ready') return;
+      if (S.route === subscriptionCardsRoute) loadSubscriptionCardEstimates();
       for (const form of document.querySelectorAll('#main #commerce-contact-form, #drawer[open] #commerce-contact-form')) void loadOrderOwners(form);
       if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) {
         const form = $('#commerce-order-form');
@@ -6267,7 +7173,10 @@
         }
         if (form) void loadOrderOwners(form);
         if (form?.elements['commerce-payment']?.value === '苹果内购') loadAppleOptions(form);
-        else if (form) void loadOrderCards(form);
+        else if (form) {
+          void loadOrderCards(form);
+          void loadOrderCardType(form);
+        }
         if (form) void loadPrices(form);
       } else if (S.route.startsWith('orders/')) {
         const apple = A.modules.appleBalance;
