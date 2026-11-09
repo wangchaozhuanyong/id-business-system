@@ -71,9 +71,14 @@ function planTab({ properties, basicFilter }, expected, current) {
     properties: { sheetId, gridProperties: resize },
     fields: Object.keys(resize).map(key => 'gridProperties.' + key).join(',')
   } });
-  if (!basicFilter || basicFilter.range?.endRowIndex !== undefined || basicFilter.range?.endColumnIndex !== width)
+  const range = basicFilter?.range;
+  const rowCount = resize.rowCount ?? grid.rowCount;
+  const columnCount = resize.columnCount ?? grid.columnCount;
+  // Sheets can return the grid's explicit end for an unbounded filter.
+  if (!range || (range.startRowIndex ?? 0) !== 0 || (range.startColumnIndex ?? 0) !== 0 ||
+      (range.endRowIndex ?? rowCount) !== rowCount || (range.endColumnIndex ?? columnCount) !== width)
     requests.push({ setBasicFilter: { filter: { ...basicFilter,
-      range: { sheetId, startRowIndex: 0, startColumnIndex: 0, endColumnIndex: width } } } });
+      range: { sheetId, startRowIndex: 0, endRowIndex: rowCount, startColumnIndex: 0, endColumnIndex: width } } } });
   return [...requests, ...updateRanges(sheetId, expected, current, width)];
 }
 
