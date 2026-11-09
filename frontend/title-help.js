@@ -7,7 +7,8 @@
     const anchor = help.querySelector('summary').getBoundingClientRect();
     const bounds = note.getBoundingClientRect();
     const margin = 12;
-    const left = Math.max(margin, Math.min(anchor.left, innerWidth - bounds.width - margin));
+    const usableWidth = document.documentElement.clientWidth;
+    const left = Math.max(margin, Math.min(anchor.left, usableWidth - bounds.width - margin));
     const below = anchor.bottom + 8;
     const top = below + bounds.height <= innerHeight - margin
       ? below

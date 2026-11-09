@@ -8,7 +8,8 @@ import { validClaudePaidPrices, validGptPaidPrices, validOrderPrices } from '../
 
 test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维护，代付预设、草稿和旧单保留', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL,
+    ignoreDefaultArgs: ['--hide-scrollbars'] });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN' });
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
@@ -241,7 +242,7 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
     assert.equal((await groups.boundingBox()).height, height);
     assert(await note.evaluate(node => {
       const box = node.getBoundingClientRect();
-      return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight &&
+      return box.left >= 0 && box.right <= document.documentElement.clientWidth && box.top >= 0 && box.bottom <= innerHeight &&
         node.scrollWidth <= node.clientWidth + 1;
     }));
     await trigger.press('Escape');
