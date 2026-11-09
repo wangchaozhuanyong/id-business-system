@@ -265,7 +265,7 @@ async function snapshot(kind: 'SOURCE' | 'RESTORE') {
     `SELECT table_name,constraint_name,constraint_type FROM information_schema.table_constraints WHERE table_schema=DATABASE() ORDER BY table_name,constraint_name`,
     `SELECT table_name,constraint_name,column_name,ordinal_position,referenced_table_name,referenced_column_name FROM information_schema.key_column_usage WHERE table_schema=DATABASE() ORDER BY table_name,constraint_name,ordinal_position`,
     `SELECT constraint_name,HEX(check_clause) FROM information_schema.check_constraints WHERE constraint_schema=DATABASE() ORDER BY constraint_name`,
-    `SELECT trigger_name,event_manipulation,event_object_table,action_order,HEX(action_statement),action_orientation,action_timing,definer FROM information_schema.triggers WHERE trigger_schema=DATABASE() ORDER BY trigger_name`,
+    `SELECT trigger_name,event_manipulation,event_object_table,action_order,HEX(action_statement),action_orientation,action_timing,definer,sql_mode,character_set_client,collation_connection,database_collation FROM information_schema.triggers WHERE trigger_schema=DATABASE() ORDER BY trigger_name`,
     `SELECT routine_name,routine_type,data_type,HEX(routine_definition),is_deterministic,sql_data_access,security_type,definer FROM information_schema.routines WHERE routine_schema=DATABASE() ORDER BY routine_name`,
     `SELECT event_name,HEX(event_definition),event_type,interval_value,interval_field,status FROM information_schema.events WHERE event_schema=DATABASE() ORDER BY event_name`
   ];
@@ -295,10 +295,11 @@ suite('new system native MySQL isolated recovery', () => {
       checks: []
     };
     const checks = report.checks as string[];
-    const schemaFailures: {
+    const schemaDifferences: {
       stage: string;
       expectedHash: string;
       actualHash: string;
+      schemaMatched: boolean;
       differences: ReturnType<typeof mysqlSchemaDifferences>;
     }[] = [];
     nativeExits.length = 0;
@@ -343,6 +344,7 @@ suite('new system native MySQL isolated recovery', () => {
         order = randomUUID(),
         deleted = randomUUID(),
         card = randomUUID(),
+        audit = randomUUID(),
         claudeOrder = randomUUID(),
         claudePerson = randomUUID();
       const attachment = randomBytes(128 * 1024 + 7),
@@ -352,6 +354,7 @@ suite('new system native MySQL isolated recovery', () => {
         'SOURCE',
         `SET NAMES utf8mb4;
         INSERT INTO users(id,username,password_hash,display_name,updated_at) VALUES('${user}','ci-backup-fixture','synthetic-non-login-hash','隔离验证员工',NOW(6));
+        INSERT INTO audit_logs(id,user_id,module,action) VALUES('${audit}','${user}','backup-ci','fixture');
         INSERT INTO id_business_v2_customers(id,name,phone_encrypted,phone_search_tokens,wechat_search_tokens,qq_search_tokens,whatsapp_search_tokens,updated_at) VALUES('${customer}','隔离客户中文🙂',${enc('synthetic-phone')},JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),NOW(6)),('${deleted}','待删除的隔离客户',NULL,JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),NOW(6));
         INSERT INTO id_business_v2_inventory_options(id,scope,kind,name,normalized_name,parent_id,parent_key,updated_at) VALUES
           ('ci_source','google_mailbox','source','隔离来源','隔离来源',NULL,'',NOW(6)),
@@ -525,14 +528,20 @@ suite('new system native MySQL isolated recovery', () => {
           schemaHash: restoredSchema,
           ...restoredValues
         } = observed;
-        if (restoredSchema !== expectedSchema) {
-          schemaFailures.push({
+        let schemaMatched = restoredSchema === expectedSchema;
+        if (!schemaMatched) {
+          const differences = mysqlSchemaDifferences(sourceReceipts, restoredReceipts);
+          schemaMatched =
+            differences.length > 0 &&
+            differences.every((difference) => 'terminalDelimiterOnly' in difference);
+          schemaDifferences.push({
             stage: `${identity.kind}:${identity.id}`,
             expectedHash: expectedSchema,
             actualHash: restoredSchema,
-            differences: mysqlSchemaDifferences(sourceReceipts, restoredReceipts)
+            schemaMatched,
+            differences
           });
-          report.schemaDifferences = schemaFailures;
+          report.schemaDifferences = schemaDifferences;
         }
         expect(restoredValues).toEqual(expectedValues);
         expect(
@@ -546,7 +555,7 @@ suite('new system native MySQL isolated recovery', () => {
           tables: observed.tables,
           columns: observed.columns,
           rowDataMatched: true,
-          schemaMatched: restoredSchema === expectedSchema
+          schemaMatched
         });
         await rm(output);
       }
@@ -623,9 +632,32 @@ suite('new system native MySQL isolated recovery', () => {
       }
       expect(reacquired).toBe(true);
       checks.push('real Linux flock rejects second process and releases after close');
+      report.stage = 'trigger-behavior-verification';
+      const ledger = randomUUID();
+      for (const kind of ['SOURCE', 'RESTORE'] as const) {
+        await expect(
+          sql(kind, `UPDATE audit_logs SET remark='ci-must-fail' WHERE id='${audit}'`)
+        ).rejects.toThrow('CI_COMMAND_FAILED_MYSQL_1644_45000_LINE_1');
+        // Use synthetic FK references to exercise the actual INSERT trigger, then roll back.
+        const result = await sql(
+          kind,
+          `SET SESSION foreign_key_checks=0;
+          START TRANSACTION;
+          INSERT INTO id_business_v2_balance_ledger
+            (id,account_id,order_id,entry_type,direction,balance_amount,cost_amount,balance_before,balance_after,cost_before,cost_after,average_cost_before,average_cost_after,idempotency_key)
+          VALUES('${ledger}','${ledger}','${order}','order_consumption','debit',1,1,2,1,2,1,1,1,'ci-trigger-probe');
+          SELECT order_singleton_key FROM id_business_v2_balance_ledger WHERE id='${ledger}';
+          ROLLBACK;
+          SELECT COUNT(*) FROM id_business_v2_balance_ledger WHERE id='${ledger}';`
+        );
+        expect(result).toBe(`${order}:order_consumption\n0`);
+      }
+      checks.push('source and restored SIGNAL and ledger assignment triggers behave identically');
       report.stage = 'schema-verification';
-      expect(schemaFailures).toEqual([]); // Defer failure reporting, never relax the success criterion.
-      checks.push('all physical schema fingerprints match after each restore step');
+      expect(schemaDifferences.filter((receipt) => !receipt.schemaMatched)).toEqual([]);
+      checks.push(
+        'physical schema matches after each restore, allowing only reviewed trigger terminators'
+      );
       report.status = 'passed';
       report.stage = 'complete';
       report.snapshot = final;
