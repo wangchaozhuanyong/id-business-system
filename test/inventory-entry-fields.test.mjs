@@ -33,3 +33,42 @@ test('历史资料只补齐运行元数据时不强补业务字段；新建及�
   assert.match(check(null, inventory({ type: 'google', country: {}, device: [] }), 'inventory_create'), /必填/);
   assert.match(check(null, inventory({ type: 'claude', device: '设备', proxyUrl: 'not-a-proxy' }), 'inventory_import'), /格式/);
 });
+
+const microsoft = (changes = {}) => ({
+  id: 'ms-fixture', type: 'microsoft', email: 'ms@example.test', password: 'fixture-only',
+  source: '自己注册', status: '正常', ...changes,
+  microsoftSecurity: { loginMode: 'password', recoveryAccess: 'unknown', twoStep: 'unknown',
+    verificationMethods: [], verificationDevice: '', ...changes.microsoftSecurity }
+});
+test('微软邮箱密码与无密码模式均可保存，手机号可留空', () => {
+  for (const action of ['inventory_create', 'inventory_edit', 'inventory_import']) {
+    assert.equal(check(null, inventory(microsoft()), action), undefined);
+    assert.match(check(null, inventory(microsoft({ password: '' })), action), /必须填写登录密码/);
+    const security = { loginMode: 'passwordless', verificationMethods: ['authenticator', 'passkey'] };
+    assert.equal(check(null, inventory(microsoft({ password: '', microsoftSecurity: security })), action), undefined);
+    assert.match(check(null, inventory(microsoft({ microsoftSecurity: security })), action), /清空登录密码/);
+    assert.match(check(null, inventory(microsoft({ password: '', microsoftSecurity: { loginMode: 'passwordless' } })), action), /选择实际使用/);
+    assert.match(check(null, inventory(microsoft({ totp: 'FIXTURE' })), action), /动态验证码/);
+    assert.match(check(null, inventory(microsoft({ phone: 'javascript:alert(1)' })), action), /链接/);
+  }
+});
+test('微软邮箱关联按同一地址与稳定编号校验，重复或自关联拒绝', () => {
+  const recovery = { id: 'recovery', type: 'google', email: 'recover@example.test', device: '设备', country: '马来西亚' };
+  const linked = microsoft({ auxiliary: 'recover@example.test',
+    microsoftSecurity: { recoveryAccess: 'inventory', recoveryMailboxId: 'recovery', verificationMethods: ['email'] } });
+  const document = { mailboxes: [linked, recovery], accounts: [] };
+  assert.equal(check(inventory(recovery), document, 'inventory_create'), undefined);
+  assert.match(check(null, inventory(linked), 'inventory_create'), /唯一对应/);
+  assert.match(check(null, inventory({ ...linked, auxiliary: linked.email }), 'inventory_create'), /不同于当前账号/);
+  const sameAddress = microsoft({ id: 'duplicate', email: 'MS@example.test' });
+  assert.match(check(document, { ...document, mailboxes: [...document.mailboxes, sameAddress] }, 'inventory_import'), /重复/);
+  assert.match(check(document, { ...document, mailboxes: [{ ...linked, email: 'changed@example.test' }, recovery] }, 'inventory_edit'), /不可修改/);
+});
+test('微软邮箱库存录入不创建领用状态，也不进入账号库存', () => {
+  const before = inventory(microsoft());
+  assert.match(check(before, inventory(microsoft({ inventoryState: 'claimed', claimId: 'claim' })), 'inventory_extract'), /暂未接入/);
+  assert.match(check(null, { mailboxes: [], accounts: [microsoft()] }, 'inventory_create'), /微软邮箱库存/);
+  const historic = inventory({ id: 'ms-old', type: 'microsoft', email: 'OLD@example.test' });
+  assert.equal(check(historic, structuredClone(historic), 'inventory_edit'), undefined);
+  assert.equal(check(historic, inventory({ ...historic.mailboxes[0], health: 'dead' }), 'inventory_health_change'), undefined);
+});

@@ -839,10 +839,14 @@ export function createLocalBusinessStore(databasePath) {
         return { version, ...data };
       });
     },
-    inventorySnapshot() {
+    inventorySnapshot(actor) {
       const snapshot = readDocument('inventory');
       const commerce = readDocument('commerce');
       const review = usageReviewRows(inspectInventoryUsage(snapshot.data, commerce.data));
+      if (actor?.id && snapshot.data?.mailboxes?.some(row => row?.type === 'microsoft')) {
+        log.run(new Date().toISOString(), 'inventory', 'inventory_microsoft_read',
+          auditSummary('读取含微软邮箱的库存资料', actor), snapshot.version);
+      }
       return { ...snapshot, ...(review.length && { usageReview: review }), commerceVersion: commerce.version,
         accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data) };
     },
@@ -1944,7 +1948,10 @@ export async function handleLocalBusiness(
         const { searchParams } = new URL(request.url, origin);
         return json(response, 200, store.auditPage(searchParams));
       }
-      if (domain === 'inventory') return json(response, 200, store.inventorySnapshot());
+      if (domain === 'inventory') {
+        response.setHeader('Cache-Control', 'private, no-store');
+        return json(response, 200, store.inventorySnapshot(actor));
+      }
       if (domain === 'commerce') return json(response, 200, redactClaudeProOrderMaterials(store.load(domain), actor));
       return json(response, 200, domain === 'audit' ? store.audit() : store.load(domain));
     }

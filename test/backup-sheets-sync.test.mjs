@@ -24,6 +24,20 @@ const reports = () => projectBusinessReports({
   managedMailboxes: [{ id: 'managed-1', email: 'pool@example.test', active: true, queryCode: 'CODE_SECRET' }]
 });
 
+test('邮箱报表保留托管微软邮箱并隔离新增微软库存', () => {
+  const projected = projectBusinessReports({
+    inventory: { mailboxes: [
+      { id: 'google-fixture', type: 'google', email: 'google@example.test' },
+      { id: 'ms-fixture', type: 'microsoft', email: 'inventory-ms@example.test', password: 'FIXTURE_SECRET' }
+    ] },
+    managedMailboxes: [{ id: 'pool-fixture', provider: 'microsoft', email: 'pool-ms@example.test', active: true }]
+  }).邮箱管理;
+  assert.deepEqual(projected.slice(1).map(row => row.slice(0, 4)), [
+    ['库存邮箱', 'google-fixture', 'google@example.test', 'Google'],
+    ['托管邮箱池', 'pool-fixture', 'pool-ms@example.test', 'Microsoft']
+  ]);
+});
+
 function fakeGoogle({ shared = false, saved = reports(), rowCount = 1000 } = {}) {
   const calls = [];
   const writes = [];

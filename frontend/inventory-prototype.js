@@ -49,6 +49,17 @@
     { id: 'relay', label: '苹果隐藏邮箱', enabled: true },
     { id: 'microsoft', label: '微软邮箱', enabled: false }
   ];
+  const microsoftMailboxRoute = 'mailboxes/microsoft';
+  const microsoftLoginModes = [['password', '密码登录'], ['passwordless', '无密码登录']];
+  const microsoftRecoveryOptions = [
+    ['unknown', '未核验'], ['inventory', '系统内邮箱'], ['manual', '人工取码'], ['unavailable', '无法取码']
+  ];
+  const microsoftTwoStepOptions = [['unknown', '未核验'], ['enabled', '已开启'], ['disabled', '未开启']];
+  const microsoftVerificationOptions = [
+    ['email', '邮箱验证码'], ['authenticator', 'Authenticator 手机确认'],
+    ['totp', '动态验证码'], ['passkey', '通行密钥'], ['sms', '短信验证']
+  ];
+  const microsoftImportPreviews = new WeakMap();
   const tableSettings = new Map();
   const mailExtractionSettingsKey = 'mail-extraction';
   const defaultMailPurposes = ['注册 Claude', '注册 GPT', '业务备用', '其他'];
@@ -112,7 +123,7 @@
   }
 
   function inventoryRoute(route = api.state.route) {
-    return /^(mailboxes\/(google|relay)|accounts\/(gpt|claude|apple-balances)|workspace\/(mail-submit|account-submit|mail-extract|account-extract|extractions(?:\/[^/]+)?))$/.test(
+    return /^(mailboxes\/(google|relay|microsoft)|accounts\/(gpt|claude|apple-balances)|workspace\/(mail-submit|account-submit|mail-extract|account-extract|extractions(?:\/[^/]+)?))$/.test(
       route
     );
   }
@@ -284,6 +295,7 @@
   }
 
   function copyAssetLine(asset) {
+    if (asset.type === 'microsoft') return asset.email;
     return `${asset.email}\t${asset.type === 'relay' ? asset.queryCode || '' : asset.password || ''}`;
   }
   function currentActor() {
@@ -326,6 +338,76 @@
   function phoneValue(value) {
     const url = phoneCodeUrl(value);
     return url ? `<a class="table-value-button" href="${esc(url)}" target="_blank" rel="noopener noreferrer nofollow">打开验证码</a>` : esc(value || '—');
+  }
+  function choiceLabel(choices, value, fallback = '未记录') {
+    return choices.find(([key]) => key === value)?.[1] ?? fallback;
+  }
+  function microsoftRecoveryLabel(asset) {
+    if (!asset.auxiliary) return '未绑定';
+    const security = asset.microsoftSecurity;
+    if (security?.recoveryAccess === 'inventory' &&
+        !microsoftRecoveryMailbox(asset)) return '需核对关联';
+    return choiceLabel(microsoftRecoveryOptions, security?.recoveryAccess, '未核验');
+  }
+  function microsoftRecoveryMailbox(asset) {
+    const recoveryId = asset.microsoftSecurity?.recoveryMailboxId;
+    const mailbox = recoveryId && assetById(recoveryId);
+    return mailbox && ['google', 'relay', 'microsoft'].includes(mailbox.type) && !isAccount(mailbox) && !mailbox.relayDeleted &&
+      mailbox.email.trim().toLowerCase() === asset.auxiliary?.trim().toLowerCase() ? mailbox : null;
+  }
+  function microsoftVerificationLabel(asset) {
+    return (asset.microsoftSecurity?.verificationMethods || [])
+      .map((method) => choiceLabel(microsoftVerificationOptions, method))
+      .join('、') || '未记录';
+  }
+  function readMicrosoftSecurity(values, {
+    loginMode = 'password', recoveryAccess = 'unknown', twoStep = 'unknown',
+    verificationMethods = [], verificationDevice = ''
+  } = {}) {
+    const email = values.email.trim().toLowerCase();
+    const auxiliary = (values.auxiliary || '').trim().toLowerCase();
+    if (email.length > 254) throw new Error('邮箱地址最多 254 个字符', { cause: 'inventory-email' });
+    if (values.source?.length > 200) throw new Error('来源渠道最多 200 个字符', { cause: 'inventory-source' });
+    for (const [key, label] of [['password', '登录密码'], ['phone', '绑定手机号'], ['totp', '2FA 密钥'], ['appPassword', '应用专用密码']]) {
+      if (values[key]?.length > 4096) throw new Error(`${label}超过长度限制`, { cause: `inventory-${key}` });
+    }
+    if (!microsoftLoginModes.some(([key]) => key === loginMode) ||
+        !microsoftRecoveryOptions.some(([key]) => key === recoveryAccess) ||
+        !microsoftTwoStepOptions.some(([key]) => key === twoStep) ||
+        new Set(verificationMethods).size !== verificationMethods.length ||
+        verificationMethods.some((method) => !microsoftVerificationOptions.some(([key]) => key === method))) {
+      throw new Error('请核对登录方式、取码方式、两步验证和验证方式');
+    }
+    if (loginMode === 'password' && !values.password?.trim()) {
+      throw new Error('密码登录必须填写登录密码', { cause: 'inventory-password' });
+    }
+    if (loginMode === 'passwordless' && values.password) {
+      throw new Error('无密码登录请清空登录密码', { cause: 'inventory-password' });
+    }
+    if (loginMode === 'passwordless' && !verificationMethods.length) {
+      throw new Error('无密码登录请选择实际使用的验证方式');
+    }
+    if (auxiliary && (auxiliary.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(auxiliary) || auxiliary === email)) {
+      throw new Error('辅助邮箱必须是不同于当前账号的有效地址', { cause: 'inventory-auxiliary' });
+    }
+    if (!auxiliary && (recoveryAccess !== 'unknown' || verificationMethods.includes('email'))) {
+      throw new Error('请填写已绑定的辅助邮箱，再登记取码或邮箱验证方式', { cause: 'inventory-auxiliary' });
+    }
+    if (values.totp && !verificationMethods.includes('totp')) throw new Error('填写 2FA 密钥时请选择动态验证码');
+    if (verificationDevice.length > 200) throw new Error('验证设备最多 200 个字符', { cause: 'inventory-microsoft-device' });
+    let recoveryMailboxId;
+    if (recoveryAccess === 'inventory') {
+      const matches = allAssets().filter((row) => ['google', 'relay', 'microsoft'].includes(row.type) &&
+        !isAccount(row) && !row.relayDeleted &&
+        row.email.trim().toLowerCase() === auxiliary);
+      if (matches.length !== 1) throw new Error('辅助邮箱须唯一对应一条可查看的邮箱库存资料', { cause: 'inventory-auxiliary' });
+      recoveryMailboxId = matches[0].id;
+    }
+    return {
+      loginMode, recoveryAccess, twoStep, verificationDevice,
+      verificationMethods: microsoftVerificationOptions.map(([key]) => key).filter((key) => verificationMethods.includes(key)),
+      ...(recoveryMailboxId ? { recoveryMailboxId } : {})
+    };
   }
   function fundingAppleRoute() {
     return ['accounts/apple-balances', 'mailboxes/apple'].includes(api.state.route);
@@ -799,6 +881,8 @@
   function inventoryPage() {
     const kind = api.state.route.startsWith('accounts/') ? 'account' : 'mail';
     const type = api.state.route.split('/')[1];
+    const microsoft = type === 'microsoft';
+    const canManage = !microsoft || !localData || admin();
     const v = view();
     const assets = collection(kind)
       .map(normalize)
@@ -815,10 +899,10 @@
       unlocking: assets.filter((asset) => asset.health === 'unlocking').length
     };
     const title = typeLabel(type);
-    const actions =
-      usageReviewButton() + button('本表设置', 'inventory-settings', '', 'settings') +
+    const actions = canManage ?
+      (microsoft ? '' : usageReviewButton()) + button('本表设置', 'inventory-settings', '', 'settings') +
       button('批量导入', 'inventory-import', '', 'upload') +
-      button(kind === 'account' ? '新增账号' : '新增邮箱', 'inventory-add', 'primary', 'plus');
+      button(kind === 'account' ? '新增账号' : '新增邮箱', 'inventory-add', 'primary', 'plus') : '';
     let body;
     if (v.tab === 'imports') body = importList(type);
     else if (v.tab === 'registrations') body = registrationList();
@@ -829,7 +913,7 @@
             ? asset.health === v.tab
             : (v.tab === 'used' || asset.health === 'normal') && asset.inventoryState === v.tab) &&
           (!v.query ||
-            `${asset.email} ${asset.notes || ''} ${asset.purpose || ''}`
+            `${asset.email} ${asset.notes || ''} ${asset.purpose || ''} ${microsoft ? asset.auxiliary || '' : ''}`
               .toLowerCase()
               .includes(v.query.toLowerCase())) &&
           (!v.country || asset.country === v.country) &&
@@ -854,10 +938,21 @@
         },
         {
           id: 'password',
-          label: kind === 'account' ? '账号密码' : '邮箱密码',
+          label: kind === 'account' ? '账号密码' : microsoft ? '登录密码' : '邮箱密码',
           class: 'mono',
           long: true
         },
+        ...(microsoft ? [
+          { id: 'loginMode', label: '登录方式', render: (asset) => esc(choiceLabel(microsoftLoginModes, asset.microsoftSecurity?.loginMode)) },
+          { id: 'auxiliary', label: '辅助邮箱', class: 'wide-cell', long: true },
+          { id: 'recoveryAccess', label: '辅助邮箱取码方式', render: (asset) => esc(microsoftRecoveryLabel(asset)) },
+          { id: 'twoStep', label: '两步验证', render: (asset) => esc(choiceLabel(microsoftTwoStepOptions, asset.microsoftSecurity?.twoStep, '未核验')) },
+          { id: 'verificationMethods', label: '验证方式', render: (asset) => esc(microsoftVerificationLabel(asset)) },
+          { id: 'verificationDevice', label: '验证设备／审批人', long: true, render: (asset) => esc(asset.microsoftSecurity?.verificationDevice || '—') },
+          { id: 'totp', label: '2FA 密钥', class: 'mono wide-cell', long: true },
+          { id: 'phone', label: '绑定手机号', render: (asset) => phoneValue(asset.phone) },
+          { id: 'appPassword', label: '应用专用密码', class: 'mono wide-cell', long: true }
+        ] : []),
         ...(['google', 'gpt'].includes(type)
           ? [{ id: 'totp', label: '2FA 密钥', class: 'mono wide-cell', long: true }]
           : []),
@@ -999,12 +1094,14 @@
           id: 'actions',
           label: '操作',
           action: true,
-          render: (asset) =>
-            `<div class="action-links">${textAction('编辑', 'inventory-edit', `data-id="${asset.id}"`)}${textAction('详情', 'inventory-detail', `data-id="${asset.id}"`)}${textAction('更多操作', 'inventory-more', `data-id="${asset.id}" aria-haspopup="menu" aria-expanded="false"`, '', 'down')}</div>`
+          render: (asset) => {
+            const attrs = `data-id="${esc(asset.id)}"`;
+            return `<div class="action-links">${canManage ? textAction('编辑', 'inventory-edit', attrs) : ''}${textAction('详情', 'inventory-detail', attrs)}${canManage ? textAction('更多操作', 'inventory-more', `${attrs} aria-haspopup="menu" aria-expanded="false"`, '', 'down') : ''}</div>`;
+          }
         }
       ];
       const selection = api.getSelection('inventory-module-assets');
-      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-list-query" aria-label="搜索库存资料" placeholder="搜索账号、备注或用途" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结', '封控中'], v.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${button('提取与归还', 'inventory-center', '', 'return')}${button('复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
+      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结', '封控中'], v.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
     }
     const tabItems = [
       ['available', usesAccountLocation(type) ? '可用库存' : '库存', counts.available],
@@ -1015,10 +1112,11 @@
       ['imports', '导入记录', '']
     ];
     return (
-      header(title, '资料只保存一份，提取、实际使用、归还与异常记录分别追溯。', actions) +
+      header(title, microsoft ? '维护 Outlook、Hotmail 等个人微软邮箱的登录、验证和辅助邮箱资料，并追溯状态与导入记录。'
+        : '资料只保存一份，提取、实际使用、归还与异常记录分别追溯。', actions) +
       summary([
         ['全部资料', assets.length, '条'],
-        ['当前可提取', assets.filter(available).length, '条', true],
+        [microsoft ? '库存资料' : '当前可提取', microsoft ? counts.available : assets.filter(available).length, '条', true],
         ['待使用', counts.claimed, '条'],
         ['已实际使用', counts.used, '条']
       ]) +
@@ -1476,6 +1574,8 @@
       else api.notify('隐藏邮箱管理尚未就绪，请刷新页面后重试');
       return;
     }
+    const microsoft = type === 'microsoft';
+    if (microsoft && api.state.route !== microsoftMailboxRoute) return;
     const account = usesAccountLocation(type);
     const fundingApple = type === 'apple' && (fundingAppleRoute() || accountEntry);
     const key = accountEntry ? accountAssetKey(type) : `inventory-edit:${id || `new:${type}`}`;
@@ -1494,7 +1594,9 @@
     const val = (name) => d[`inventory-${name}`] ?? d[name] ?? '';
     const config = settingsFor(type);
     const country = d['inventory-country-edit'] ?? d.country ?? '';
-    const typeChoices = accountEntry
+    const typeChoices = microsoft
+      ? [['microsoft', typeLabel('microsoft')]]
+      : accountEntry
       ? accountSubmissionTypes
       : account
         ? [
@@ -1536,11 +1638,19 @@
         select('inventory-emailType', enabledTypes(), val('emailType') || 'google'),
         true
       );
+    const security = original?.microsoftSecurity || {};
+    if (microsoft)
+      fields += field(
+        '登录方式', 'inventory-microsoft-login',
+        select('inventory-microsoft-login', microsoftLoginModes, d['inventory-microsoft-login'] ?? security.loginMode ?? 'password'),
+        true
+      );
     fields += field(
-      account ? '账号密码' : '邮箱密码',
+      account ? '账号密码' : microsoft ? '登录密码' : '邮箱密码',
       'inventory-password',
       input('inventory-password', val('password'), 'autocomplete="off"'),
-      ['google', 'apple'].includes(type)
+      ['google', 'apple'].includes(type),
+      microsoft ? '密码登录必填。无密码登录留空，并记录实际验证方式。' : ''
     );
     if (['google', 'apple'].includes(type))
       fields += wide(
@@ -1549,6 +1659,8 @@
         `<div class="option-entry-controls">${input('inventory-phone', val('phone'), 'placeholder="电话号码或 HTTP(S) 验证码链接"')}<a id="inventory-phone-code-link" class="button" href="${esc(phoneCodeUrl(val('phone')) || '#')}" target="_blank" rel="noopener noreferrer nofollow" ${phoneCodeUrl(val('phone')) ? '' : 'hidden'}>查看验证码</a></div><label class="checkbox-label"><input type="checkbox" id="inventory-no-phone" name="inventory-no-phone" ${(api.state.drafts.has(key) ? Boolean(d['inventory-no-phone']) : original && !original.phone) ? 'checked' : ''} />确认未绑定电话</label>`,
         true
       );
+    if (microsoft)
+      fields += field('绑定手机号', 'inventory-phone', input('inventory-phone', val('phone')));
     const countrySelect = select(
       'inventory-country-edit',
       choicesWithCurrent([['', '请选择国家'], ...config.countries], country),
@@ -1614,19 +1726,42 @@
         '系统生成，编辑资料不会改变。'
       ) +
       field('登录设备', 'inventory-device', input('inventory-device', val('device')), ['google', 'claude'].includes(type));
-    if (type === 'google' || type === 'gpt')
+    if (type === 'google' || type === 'gpt' || microsoft)
       fields += wide(
         '2FA 密钥',
         'inventory-totp',
         input('inventory-totp', val('totp'), 'autocomplete="off"')
       );
-    if (type === 'google')
+    if (type === 'google' || microsoft)
       fields += wide(
         '辅助邮箱',
         'inventory-auxiliary',
         input('inventory-auxiliary', val('auxiliary'))
       );
-    if (type === 'google' || type === 'apple')
+    if (microsoft) {
+      fields += field(
+        '辅助邮箱取码方式', 'inventory-microsoft-recovery',
+        select('inventory-microsoft-recovery', microsoftRecoveryOptions, d['inventory-microsoft-recovery'] ?? security.recoveryAccess ?? 'unknown'),
+        false, '选择系统内邮箱时，辅助邮箱地址须对应唯一一条已有库存资料。'
+      ) + field(
+        '两步验证', 'inventory-microsoft-two-step',
+        select('inventory-microsoft-two-step', microsoftTwoStepOptions, d['inventory-microsoft-two-step'] ?? security.twoStep ?? 'unknown')
+      );
+      const methods = microsoftVerificationOptions.map(([method, label]) => {
+        const name = `inventory-microsoft-method-${method}`;
+        const checked = d[name] ?? security.verificationMethods?.includes(method);
+        return `<label class="checkbox-label"><input type="checkbox" id="${name}" name="${name}" ${checked ? 'checked' : ''} />${esc(label)}</label>`;
+      }).join('');
+      fields += wide(
+        '验证方式', 'inventory-microsoft-methods',
+        `<div class="inline-checks" id="inventory-microsoft-methods" role="group" aria-label="验证方式" tabindex="-1">${methods}</div>`
+      ) + wide(
+        '验证设备／审批人', 'inventory-microsoft-device',
+        input('inventory-microsoft-device', d['inventory-microsoft-device'] ?? security.verificationDevice ?? '', 'maxlength="200"'),
+        false, '需要手机确认或通行密钥时，可登记实际可用的设备或确认人。'
+      );
+    }
+    if (type === 'google' || type === 'apple' || microsoft)
       fields += wide(
         '应用专用密码',
         'inventory-appPassword',
@@ -1963,10 +2098,13 @@
       return;
     }
     const claim = pendingClaim(asset);
+    const microsoft = asset.type === 'microsoft';
+    const security = asset.microsoftSecurity;
+    const recoveryMailbox = microsoft && microsoftRecoveryMailbox(asset);
     const rows = [
       ['资料编号', asset.id],
       ['邮箱 / 账号', asset.email],
-      ['密码', asset.password || '未填写'],
+      [microsoft ? '登录密码' : '密码', asset.password || (security?.loginMode === 'passwordless' ? '无密码登录' : '未填写')],
       ['资料类型', typeLabel(asset.type)],
       ...(isAccount(asset) ? [['邮箱类型', accountEmailType(asset)]] : []),
       [isAccount(asset) ? '注册国家' : '国家地区', asset.country || '未填写'],
@@ -1988,9 +2126,17 @@
       ['备注 1', asset.notes || '未填写'],
       ['备注 2', asset.notes2 || '未填写']
     ];
-    if (['google', 'gpt'].includes(asset.type)) rows.push(['2FA 密钥', asset.totp || '未填写']);
-    if (asset.type === 'google') rows.push(['辅助邮箱', asset.auxiliary || '未填写']);
-    if (['google', 'apple'].includes(asset.type))
+    if (microsoft)
+      rows.push(
+        ['登录方式', choiceLabel(microsoftLoginModes, security?.loginMode)],
+        ['辅助邮箱取码方式', microsoftRecoveryLabel(asset)],
+        ['两步验证', choiceLabel(microsoftTwoStepOptions, security?.twoStep, '未核验')],
+        ['验证方式', microsoftVerificationLabel(asset)],
+        ['验证设备／审批人', security?.verificationDevice || '未填写']
+      );
+    if (['google', 'gpt', 'microsoft'].includes(asset.type)) rows.push(['2FA 密钥', asset.totp || '未填写']);
+    if (['google', 'microsoft'].includes(asset.type)) rows.push(['辅助邮箱', asset.auxiliary || '未填写']);
+    if (['google', 'apple', 'microsoft'].includes(asset.type))
       rows.push(
         ['绑定电话／验证码', asset.phone || '未绑定或未记录'],
         ['应用专用密码', asset.appPassword || '未填写']
@@ -2045,7 +2191,7 @@
     showDrawer(
       '资料详情',
       '资料、提取、实际使用、归还和任务来源保持关联。',
-      `<div class="property-list">${rows.map(([name, value]) => `<div class="property-row"><span>${esc(name)}</span><strong>${name === '绑定电话／验证码' ? phoneValue(value) : esc(value)}</strong></div>`).join('')}</div>${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
+      `<div class="property-list">${rows.map(([name, value]) => `<div class="property-row"><span>${esc(name)}</span><strong>${name === '绑定电话／验证码' ? phoneValue(value) : esc(value)}</strong></div>`).join('')}</div>${recoveryMailbox ? button('查看辅助邮箱资料', 'inventory-detail', '', 'mail', `data-id="${esc(recoveryMailbox.id)}"`) : ''}${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
       button('关闭', 'inventory-close')
     );
   }
@@ -2130,9 +2276,12 @@
       return;
     }
     accountImportContext = null;
+    const microsoft = api.state.route === microsoftMailboxRoute;
     const fundingApple = fundingAppleRoute();
     const account = !fundingApple && api.state.route.startsWith('accounts/');
-    const choices = fundingApple
+    const choices = microsoft
+      ? [['microsoft', '微软邮箱']]
+      : fundingApple
       ? [['apple', '苹果 ID']]
       : account
         ? [
@@ -2140,7 +2289,7 @@
             ['claude', 'Claude 账号']
           ]
         : mailboxWorkflowTypes().filter(([id]) => id !== 'relay');
-    const key = fundingApple ? 'inventory-import:apple-balance' : 'inventory-import';
+    const key = microsoft ? 'inventory-import:microsoft' : fundingApple ? 'inventory-import:apple-balance' : 'inventory-import';
     const d = draft(key, {
       'inventory-import-type':
         type ||
@@ -2148,11 +2297,19 @@
           ? api.state.route.split('/')[1]
           : choices[0]?.[0])
     });
+    const example = microsoft ? accountCsvTemplate('microsoft') :
+      '邮箱,密码,电话,国家,城市,注册时间,资料类型,登录设备,注册代理链接\ndemo@example.test,Demo-Only!,演示电话,马来西亚,吉隆坡,,谷歌邮箱,设备名称,';
+    const typeField = microsoft
+      ? '<input type="hidden" name="inventory-import-type" value="microsoft" />' + field('资料类型', 'inventory-import-type-display', input('inventory-import-type-display', '微软邮箱', 'readonly'))
+      : field('默认资料类型', 'inventory-import-type', select('inventory-import-type', choices, d['inventory-import-type']), true);
+    const sourceOptions = microsoft ? settingsFor('microsoft').sources : ['自己注册', '线上购买', '客户提供'];
+    const noPhoneField = microsoft ? '' : wide('无绑定电话', 'inventory-import-no-phone', `<label class="checkbox-label"><input id="inventory-import-no-phone" name="inventory-import-no-phone" type="checkbox" ${d['inventory-import-no-phone'] ? 'checked' : ''} />确认空电话资料均未绑定电话号码</label>`);
     showDrawer(
       '批量导入预检',
-      '逐行确认最终类型和注册时间后再导入；地址识别仅作建议，不会自动更改类型。',
-      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${field('默认资料类型', 'inventory-import-type', select('inventory-import-type', choices, d['inventory-import-type']), true)}${field('来源渠道', 'inventory-import-source', select('inventory-import-source', ['自己注册', '线上购买', '客户提供'], d['inventory-import-source'] || '自己注册'), true)}${field('CSV 文件', 'inventory-import-file', '<input id="inventory-import-file" type="file" accept=".csv,text/csv" />')}${wide('导入内容', 'inventory-import-content', area('inventory-import-content', d['inventory-import-content'] || '', '邮箱,密码,电话,国家,城市,注册时间,资料类型,登录设备,注册代理链接\ndemo@example.test,Demo-Only!,演示电话,马来西亚,吉隆坡,,谷歌邮箱,设备名称,', 6), true)}${wide('无绑定电话', 'inventory-import-no-phone', `<label class="checkbox-label"><input id="inventory-import-no-phone" name="inventory-import-no-phone" type="checkbox" ${d['inventory-import-no-phone'] ? 'checked' : ''} />确认空电话资料均未绑定电话号码</label>`)}</div></form><div id="inventory-import-results"></div>`,
-      button('取消', 'inventory-close') +
+      microsoft ? '仅导入微软邮箱。可录入邮箱和登录密码两列，也可按示例表头补齐验证资料。多种验证方式用分号分隔。'
+        : '逐行确认最终类型和注册时间后再导入；地址识别仅作建议，不会自动更改类型。',
+      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${typeField}${field('来源渠道', 'inventory-import-source', select('inventory-import-source', sourceOptions, d['inventory-import-source'] || sourceOptions[0]), true)}${field('CSV 文件', 'inventory-import-file', '<input id="inventory-import-file" type="file" accept=".csv,text/csv" />')}${wide('导入内容', 'inventory-import-content', area('inventory-import-content', d['inventory-import-content'] || '', example, 6), true)}${noPhoneField}</div></form><div id="inventory-import-results"></div>`,
+      (microsoft ? button('复制示例 CSV', 'inventory-copy-microsoft-template', '', 'copy') : '') + button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-import-form" type="submit">检查并预览</button>',
       key
     );
@@ -2161,22 +2318,28 @@
   }
   const accountCsvFields = [
     ['email', '账号邮箱', ['邮箱', '邮箱账号', '苹果ID', 'ID账号', 'email']],
-    ['password', '账号密码', ['密码', '邮箱密码', 'password']],
+    ['password', '账号密码', ['密码', '邮箱密码', '登录密码', 'password']],
     ['emailType', '邮箱类型', ['emailType'], ['gpt', 'claude']],
-    ['phone', '绑定电话', ['电话', '手机号', 'phone'], ['apple']],
+    ['phone', '绑定电话', ['电话', '手机号', '绑定手机号', 'phone'], ['apple', 'microsoft']],
     ['country', '国家地区', ['国家', '注册国家', 'country']],
     ['city', '注册城市', ['城市', '地区', '地区／城市', '地区/城市', '注册地区', '注册地区／城市', 'city', 'region'], ['gpt', 'claude']],
     ['status', '账号状态', ['状态', 'status']],
     ['source', '来源渠道', ['来源', 'source']],
     ['registered', '注册时间', ['registered', 'registeredAt']],
-    ['totp', '2FA密钥', ['2FA', 'totp'], ['gpt']],
+    ['totp', '2FA密钥', ['2FA', 'totp'], ['gpt', 'microsoft']],
+    ['auxiliary', '辅助邮箱', ['恢复邮箱', 'auxiliary'], ['microsoft']],
+    ['loginMode', '登录方式', ['loginMode'], ['microsoft']],
+    ['recoveryAccess', '辅助邮箱取码方式', ['取码方式', 'recoveryAccess'], ['microsoft']],
+    ['twoStep', '两步验证', ['twoStep'], ['microsoft']],
+    ['verificationMethods', '验证方式', ['verificationMethods'], ['microsoft']],
+    ['verificationDevice', '验证设备／审批人', ['验证设备', '审批人', 'verificationDevice'], ['microsoft']],
     ['proxyUrl', '注册代理链接', ['注册IP链接', '注册代理', 'proxyUrl'], ['claude']],
     ['proxyProtocol', '代理协议', ['代理类型', 'proxyProtocol'], ['claude']],
     ['proxyHost', '代理主机', ['proxyHost'], ['claude']],
     ['proxyPort', '代理端口', ['proxyPort'], ['claude']],
     ['proxyUser', '代理账号', ['proxyUser'], ['claude']],
     ['proxyPassword', '代理密码', ['proxyPassword'], ['claude']],
-    ['appPassword', '应用专用密码', ['appPassword'], ['apple']],
+    ['appPassword', '应用专用密码', ['appPassword'], ['apple', 'microsoft']],
     ['security1', '密保1', ['security1'], ['apple']],
     ['security2', '密保2', ['security2'], ['apple']],
     ['security3', '密保3', ['security3'], ['apple']],
@@ -2228,11 +2391,16 @@
       notes: '演示备注一',
       notes2: '演示备注二'
     };
+    if (type === 'microsoft') Object.assign(values, {
+      phone: '', auxiliary: 'recovery@example.test', loginMode: '密码登录', recoveryAccess: '人工取码',
+      twoStep: '已开启', verificationMethods: '邮箱验证码;动态验证码', verificationDevice: '',
+      appPassword: ''
+    });
     const fields = accountCsvFields.filter(
       ([key, , , types]) => key !== 'type' && (!types || types.includes(type))
     );
     return [
-      fields.map(([, label]) => label).join(','),
+      fields.map(([key, label]) => type === 'microsoft' && key === 'password' ? '登录密码' : label).join(','),
       fields
         .map(([key]) => {
           const value = values[key] || '';
@@ -2360,11 +2528,19 @@
       accountEntryType(context.type)
     );
   }
+  function csvChoice(value, choices, fallback, label) {
+    if (!value) return fallback;
+    const selected = choices.find((pair) => pair.some((name) => csvFieldName(name) === csvFieldName(value)));
+    if (!selected) throw new Error(`请填写有效的${label}`);
+    return selected[0];
+  }
   function parseAccountImport(rows, d, context) {
-    const legacyKeys = ['email', 'password', 'phone', 'country', 'city', 'registered', 'type'];
+    const microsoft = context.type === 'microsoft';
+    const legacyKeys = ['email', 'password', 'phone', 'country', 'city', 'registered', 'type',
+      ...(microsoft ? ['device', 'proxyUrl'] : [])];
     const firstKeys = rows[0].map((value) => csvField(value)?.[0] || '');
     const legacyHeader =
-      firstKeys.length === 7 && firstKeys.every((key, index) => key === legacyKeys[index]);
+      !microsoft && firstKeys.length === 7 && firstKeys.every((key, index) => key === legacyKeys[index]);
     const hasHeader =
       legacyHeader ||
       (!String(rows[0][0]).includes('@') && rows[0].some((value) => csvField(value)));
@@ -2378,14 +2554,14 @@
         const definition = csvField(rows[0][index]);
         if (!definition) headerErrors.push(`不支持的表头：${rows[0][index] || '空表头'}`);
         else if (definition[3] && !definition[3].includes(context.type))
-          headerErrors.push(`本类账号不支持字段：${definition[1]}`);
+          headerErrors.push(`本类资料不支持字段：${definition[1]}`);
         else if (seenKeys.has(definition[0])) headerErrors.push(`重复表头：${definition[1]}`);
         seenKeys.add(keys[index]);
       }
       if (!keys.includes('email')) headerErrors.push('缺少账号邮箱表头');
     }
     const knownTypes = new Map(
-      accountSubmissionTypes.flatMap(([id, label]) => [
+      (microsoft ? [['microsoft', '微软邮箱']] : accountSubmissionTypes).flatMap(([id, label]) => [
         [csvFieldName(id), id],
         [csvFieldName(label), id],
         [csvFieldName(typeLabel(id)), id]
@@ -2398,8 +2574,11 @@
       const line = index + (hasHeader ? 2 : 1),
         values = {};
       keys.forEach((key, column) => {
-        if (key) values[key] = String(columns[column] ?? '').trim();
+        if (!key) return;
+        const value = String(columns[column] ?? '');
+        values[key] = microsoft && ['password', 'appPassword'].includes(key) ? value : value.trim();
       });
+      if (microsoft) values.email = (values.email || '').toLowerCase();
       const email = values.email || '',
         selectedType = d[`inventory-import-row-type-${line}`] ?? context.type,
         csvType = values.type ? knownTypes.get(csvFieldName(values.type)) : context.type,
@@ -2409,7 +2588,8 @@
         error = '存在多余列；扩展字段请使用完整表头，不会静默丢弃';
       if (!error && dataRows.length > 500) error = '单次最多导入 500 条资料';
       if (!error && (selectedType !== context.type || csvType !== context.type))
-        error = '本批类型与账号卡片不一致，请修改 CSV 后重新预检';
+        error = microsoft ? '本页仅导入微软邮箱，请修改 CSV 后重新预检'
+          : '本批类型与账号卡片不一致，请修改 CSV 后重新预检';
       if (!error && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) error = '邮箱格式错误';
       if (!error && existing.has(key)) error = '相同类型邮箱重复，不覆盖原资料';
       existing.add(key);
@@ -2430,7 +2610,26 @@
       if (!error && !['正常', '冻结', '封控中'].includes(values.status))
         error = '账号状态只能填写正常、冻结或封控中';
       values.source ||= d['inventory-import-source'] || '自己注册';
-      if (context.type !== 'apple') {
+      if (microsoft && !error) {
+        try {
+          const { loginMode, recoveryAccess, twoStep, verificationMethods, verificationDevice, ...fields } = values;
+          if (fields.city || fields.proxyUrl) throw new Error('微软邮箱不录入注册城市或代理链接');
+          values.microsoftSecurity = readMicrosoftSecurity(fields, {
+            loginMode: csvChoice(loginMode, microsoftLoginModes, 'password', '登录方式'),
+            recoveryAccess: csvChoice(recoveryAccess, microsoftRecoveryOptions, 'unknown', '辅助邮箱取码方式'),
+            twoStep: csvChoice(twoStep, microsoftTwoStepOptions, 'unknown', '两步验证状态'),
+            verificationMethods: (verificationMethods || '').split(/[;；、]/).filter((value) => value.trim())
+              .map((value) => csvChoice(value, microsoftVerificationOptions, '', '验证方式')),
+            verificationDevice
+          });
+          values.auxiliary = (values.auxiliary || '').toLowerCase();
+          for (const key of ['loginMode', 'recoveryAccess', 'twoStep', 'verificationMethods', 'verificationDevice', 'proxyUrl'])
+            delete values[key];
+        } catch (issue) {
+          error = issue.message;
+        }
+      }
+      if (context.type !== 'apple' && !microsoft) {
         const emailType = values.emailType || d['inventory-import-email-type'];
         values.emailType =
           enabledTypes().find(([id, label]) =>
@@ -2583,7 +2782,12 @@
       accountSubmissionRoute() ||
       data['inventory-entry-scope'] === 'account-submit' ||
       String(form.dataset.inventoryDraft || '').startsWith('inventory-edit:account-submit:');
-    const inputSnapshot = accountEntry ? formFingerprint(data) : '';
+    const microsoft = type === 'microsoft';
+    const inputSnapshot = accountEntry || microsoft ? formFingerprint(data) : '';
+    if (microsoft !== (api.state.route === microsoftMailboxRoute)) {
+      api.notify('请从对应的邮箱管理页面重新录入');
+      return;
+    }
     if (
       accountEntry &&
       (!entryContext ||
@@ -2609,7 +2813,8 @@
       api.setError(name, error);
       if (error && !first) first = name;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data['inventory-email'] || '')) {
+    const email = String(data['inventory-email'] || '');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(microsoft ? email.trim() : email)) {
       api.setError('inventory-email', '邮箱格式不正确');
       first ||= 'inventory-email';
     }
@@ -2660,7 +2865,7 @@
       api.setError('inventory-birthday', '密保生日不是有效日期');
       return;
     }
-    if (accountEntry && !['正常', '冻结', '封控中'].includes(data['inventory-status-edit'])) {
+    if ((accountEntry || microsoft) && !['正常', '冻结', '封控中'].includes(data['inventory-status-edit'])) {
       api.setError('inventory-status-edit', '请选择有效账号状态');
       return;
     }
@@ -2670,6 +2875,7 @@
         'gpt',
         'claude',
         ...enabledTypes().map(([value]) => value),
+        ...(microsoft ? ['microsoft'] : []),
         ...(fundingAppleRoute() ? ['apple'] : [])
       ].includes(type) ||
       (id && !original)
@@ -2697,6 +2903,39 @@
     if (data['inventory-registered'] && !validRegisteredDate(data['inventory-registered'])) {
       api.setError('inventory-registered', '注册时间无效或晚于当前时间，请按北京时间填写');
       return;
+    }
+    let microsoftSecurity;
+    if (microsoft) {
+      for (const field of ['inventory-password', 'inventory-auxiliary', 'inventory-totp', 'inventory-appPassword',
+        'inventory-source', 'inventory-phone', 'inventory-microsoft-device', 'inventory-microsoft-methods'])
+        api.setError(field, '');
+      if (!String(data['inventory-source'] || '').trim()) {
+        api.setError('inventory-source', '请选择来源渠道');
+        return;
+      }
+      try {
+        microsoftSecurity = readMicrosoftSecurity({
+          email,
+          password: data['inventory-password'],
+          phone,
+          auxiliary: data['inventory-auxiliary'],
+          totp: data['inventory-totp']?.trim(),
+          appPassword: data['inventory-appPassword'],
+          source: data['inventory-source']
+        }, {
+          loginMode: data['inventory-microsoft-login'],
+          recoveryAccess: data['inventory-microsoft-recovery'],
+          twoStep: data['inventory-microsoft-two-step'],
+          verificationMethods: microsoftVerificationOptions
+            .map(([method]) => method).filter((method) => data[`inventory-microsoft-method-${method}`]),
+          verificationDevice: String(data['inventory-microsoft-device'] || '').trim()
+        });
+      } catch (issue) {
+        const field = issue.cause || 'inventory-microsoft-methods';
+        api.setError(field, issue.message);
+        document.getElementById(field)?.focus();
+        return;
+      }
     }
     let proxyFields;
     if (type === 'claude') {
@@ -2728,6 +2967,12 @@
       original ? '确认修改资料' : '确认新增资料',
       `${data['inventory-email']} · ${typeLabel(type)}，${localData ? '保存到服务器数据库' : '当前为离线演示，内容仅保留在本页内存'}。`,
       () => {
+        if (microsoft && (api.state.route !== microsoftMailboxRoute || !form.isConnected ||
+            formFingerprint(api.readForm(form)) !== inputSnapshot ||
+            (original && assetById(id) !== original))) {
+          api.notify('确认期间微软邮箱资料已变化，请重新核对');
+          return;
+        }
         if (
           accountEntry &&
           (accountAssetContext !== entryContext ||
@@ -2753,7 +2998,7 @@
           return;
         }
         const update = {
-          ...(!original ? { type, email: data['inventory-email'].trim() } : {}),
+          ...(!original ? { type, email: microsoft ? email.trim().toLowerCase() : email.trim() } : {}),
           country: data['inventory-country-edit'],
           status: data['inventory-status-edit']
         };
@@ -2779,6 +3024,11 @@
           'queryExpiry'
         ])
           if (data[`inventory-${key}`] !== undefined) update[key] = data[`inventory-${key}`];
+        if (microsoft) {
+          update.auxiliary = (update.auxiliary || '').trim().toLowerCase();
+          update.totp = (update.totp || '').trim();
+          update.microsoftSecurity = microsoftSecurity;
+        }
         if (proxyFields) Object.assign(update, proxyFields);
         if (original) {
           if (original.registered && update.registered === registrationInput(original))
@@ -2787,18 +3037,21 @@
             update.registered = original.createdAt || original.importedAt || original.registered;
           if (
             localData &&
-            ['google', 'gpt', 'claude'].includes(type) &&
-            Object.entries(update).every(([key, value]) => (original[key] ?? '') === (value ?? ''))
+            ['google', 'gpt', 'claude', 'microsoft'].includes(type) &&
+            Object.entries(update).every(([key, value]) => key === 'microsoftSecurity'
+              ? JSON.stringify(original[key]) === JSON.stringify(value)
+              : (original[key] ?? '') === (value ?? ''))
           ) {
             api.notify('资料没有变化，无需保存');
             return;
           }
           const snapshot = {};
           for (const key of Object.keys(update))
-            snapshot[key] = localData ? (original[key] ?? null) : original[key];
+            snapshot[key] = localData && !microsoft ? (original[key] ?? null) : original[key];
+          const canUndo = !microsoft || !!original.microsoftSecurity;
           Object.assign(original, update);
           log(original, '修改资料', '普通资料已更新');
-          undo.set(original.id, { version: original.version, snapshot });
+          if (canUndo) undo.set(original.id, { version: original.version, snapshot });
         } else {
           const createdAt = inventoryNow();
           const asset = normalize({
@@ -3126,6 +3379,12 @@
   function submitImport(form, commit = false, restored = null) {
     const d = { ...(restored || api.readForm(form)) },
       type = d['inventory-import-type'];
+    const microsoft = api.state.route === microsoftMailboxRoute;
+    if (microsoft !== (type === 'microsoft') ||
+        microsoft !== (form.dataset.inventoryDraft === 'inventory-import:microsoft')) {
+      api.notify('导入类型或入口已变化，请重新打开批量导入');
+      return;
+    }
     if (type === 'relay') {
       api.setError('inventory-import-type', '隐藏邮箱须选择所属主邮箱后单独导入');
       return;
@@ -3135,9 +3394,10 @@
       d['inventory-import-scope'] === 'account-submit' ||
       String(form.dataset.inventoryDraft || '').startsWith('inventory-import:account-submit:');
     const clearAccountPreview = () => {
-      if (accountEntry) {
+      if (accountEntry || microsoft) {
         const target = document.getElementById('inventory-import-results');
         if (target) target.innerHTML = '';
+        if (microsoft) microsoftImportPreviews.delete(form);
       }
     };
     const entryContext = accountEntry ? accountImportContext : null;
@@ -3154,7 +3414,7 @@
     }
     const fundingApple = fundingAppleRoute();
     const account = !fundingApple && ['gpt', 'claude'].includes(type);
-    const choices = entryContext
+    const choices = microsoft ? [['microsoft', '微软邮箱']] : entryContext
       ? [[entryContext.type, typeLabel(entryContext.type)]]
       : fundingApple
         ? [['apple', '苹果 ID']]
@@ -3172,11 +3432,14 @@
         )
       )?.[0] || '';
     const source = d['inventory-import-content'] || '';
-    let previewSource = JSON.stringify([type, source]);
-    let hasPreviousPreview = d['inventory-import-preview-source'] === previewSource;
+    const snapshot = microsoft ? formFingerprint(d) : '';
+    const previous = microsoft ? microsoftImportPreviews.get(form) : null;
+    let previewSource = microsoft ? (previous?.id || '') : JSON.stringify([type, source]);
+    let hasPreviousPreview = d['inventory-import-preview-source'] === previewSource &&
+      (!microsoft || previous?.snapshot === snapshot);
     let rows;
     try {
-      rows = api.legacy.parseCsv(source);
+      rows = api.legacy.parseCsv(source, { trimCells: !microsoft });
     } catch {
       clearAccountPreview();
       api.setError('inventory-import-content', 'CSV 格式不正确，请检查引号');
@@ -3187,7 +3450,7 @@
       api.setError('inventory-import-content', '请先填写导入内容');
       return;
     }
-    if (rows.length > (entryContext ? 501 : 500)) {
+    if (rows.length > (entryContext || microsoft ? 501 : 500)) {
       clearAccountPreview();
       api.setError(
         'inventory-import-content',
@@ -3196,8 +3459,8 @@
       return;
     }
     const seen = new Set(allAssets().map((asset) => `${asset.type}:${asset.email.toLowerCase()}`));
-    const results = entryContext
-      ? parseAccountImport(rows, d, entryContext)
+    const results = entryContext || microsoft
+      ? parseAccountImport(rows, d, entryContext || { type })
       : rows.flatMap((columns, index) => {
           const [
             email = '',
@@ -3265,6 +3528,10 @@
             }
           ];
         });
+    if (microsoft) {
+      if (!hasPreviousPreview) previewSource = uid('PREVIEW');
+      microsoftImportPreviews.set(form, { id: previewSource, snapshot });
+    }
     if (entryContext) {
       previewSource = accountImportFingerprint(d, entryContext, results);
       hasPreviousPreview = d['inventory-import-preview-source'] === previewSource;
@@ -3291,17 +3558,17 @@
         [
           { id: 'line', label: '行号' },
           { id: 'email', label: '邮箱 / 账号' },
-          {
+          ...(!microsoft ? [{
             id: 'suggestion',
             label: '地址建议',
             render: (row) =>
               esc(account ? '产品与邮箱类型由人工确认' : mailboxSuggestion(row.email))
-          },
+          }] : []),
           {
             id: 'type',
             label: '最终资料类型',
             render: (row) =>
-              select(
+              microsoft ? '微软邮箱' : select(
                 `inventory-import-row-type-${row.line}`,
                 [['', '请选择类型'], ...choices],
                 row.type
@@ -3310,7 +3577,13 @@
                 `<select form="inventory-import-form" aria-label="第 ${row.line} 行最终资料类型" `
               )
           },
-          ...(entryContext
+          ...(microsoft ? [
+            { id: 'login', label: '登录方式', render: (row) => esc(choiceLabel(microsoftLoginModes, row.fields?.microsoftSecurity?.loginMode)) },
+            { id: 'auxiliary', label: '辅助邮箱' },
+            { id: 'recovery', label: '取码方式', render: (row) => esc(microsoftRecoveryLabel(row.fields || {})) },
+            { id: 'verification', label: '验证方式', render: (row) => esc(microsoftVerificationLabel(row.fields || {})) },
+            { id: 'source', label: '来源渠道' }
+          ] : entryContext
             ? accountCsvFields
                 .filter(
                   ([key]) =>
@@ -3344,11 +3617,11 @@
             label: '注册时间',
             render: (row) => esc((row.registered || '保存时取录入时间').replace('T', ' '))
           },
-          {
+          ...(!microsoft ? [{
             id: 'age',
             label: '养号判断',
             render: (row) => (row.type === 'claude' ? esc(row.registered ? ageLabel(row) : '从录入时开始') : '不适用')
-          },
+          }] : []),
           {
             id: 'result',
             label: '检查结果',
@@ -3359,7 +3632,7 @@
         '',
         '导入预览'
       ) +
-      `<input type="hidden" form="inventory-import-form" name="inventory-import-preview-source" value="${esc(previewSource)}" /><div class="form-footer"><span class="footnote">${entryContext ? '本批产品类型固定，扩展字段按表头保存。' : '每行类型可直接修正。'}空白注册时间取录入时间。</span>${button('确认导入', 'inventory-import-confirm', 'primary', '', errors.length ? 'disabled' : '')}</div>`;
+      `<input type="hidden" form="inventory-import-form" name="inventory-import-preview-source" value="${esc(previewSource)}" /><div class="form-footer"><span class="footnote">${microsoft ? '微软验证资料按表头保存。' : entryContext ? '本批产品类型固定，扩展字段按表头保存。' : '每行类型可直接修正。'}空白注册时间取录入时间。</span>${button('确认导入', 'inventory-import-confirm', 'primary', '', errors.length ? 'disabled' : '')}</div>`;
     saveDrafts();
     if (errors.length) {
       api.setError(
@@ -3378,6 +3651,12 @@
       '确认批量导入',
       `确认导入 ${results.length} 条资料。已填写的注册时间按原值保存，空白取录入时间。`,
       () => {
+        if (microsoft && (api.state.route !== microsoftMailboxRoute || !form.isConnected ||
+            formFingerprint(api.readForm(form)) !== snapshot ||
+            microsoftImportPreviews.get(form)?.id !== previewSource)) {
+          api.notify('确认期间导入资料或来源已变化，请重新预检');
+          return;
+        }
         if (entryContext) {
           const current = api.readForm(form);
           if (
@@ -3514,7 +3793,9 @@
       for (const control of form?.querySelectorAll('input[data-return-claim]:not(:disabled)') || [])
         control.checked = action === 'inventory-return-all';
       updateReturnSelection(form);
-    } else if (action === 'inventory-import-confirm')
+    } else if (action === 'inventory-copy-microsoft-template' && api.state.route === microsoftMailboxRoute)
+      void api.copyText(accountCsvTemplate('microsoft'));
+    else if (action === 'inventory-import-confirm')
       submitImport(document.getElementById('inventory-import-form'), true);
     else if (action === 'inventory-add') assetEditor();
     else if (action === 'inventory-add-type') assetEditor('', node.dataset.type);
@@ -4359,7 +4640,7 @@
   window.IDDesignModules.push({
     id: 'inventory',
     matches(route) {
-      return /^(mailboxes\/google|accounts\/(gpt|claude)|workspace\/(mail-submit|account-submit|mail-extract|account-extract|extractions(?:\/[^/]+)?))$/.test(
+      return /^(mailboxes\/(google|microsoft)|accounts\/(gpt|claude)|workspace\/(mail-submit|account-submit|mail-extract|account-extract|extractions(?:\/[^/]+)?))$/.test(
         route
       );
     },

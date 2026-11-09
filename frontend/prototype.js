@@ -196,7 +196,7 @@ const navigation = [
     [
       ['谷歌邮箱', 'mailboxes/google'],
       ['苹果隐藏邮箱', 'mailboxes/relay'],
-      ['微软邮箱', 'mailboxes/microsoft', true]
+      ['微软邮箱', 'mailboxes/microsoft']
     ]
   ],
   [
@@ -1920,7 +1920,7 @@ function showImport() {
     $('#import-no-phone').checked = Boolean(draft['import-no-phone']);
   }
 }
-function parseCsv(text) {
+function parseCsv(text, { trimCells = true } = {}) {
   const rows = [];
   let row = [],
     value = '',
@@ -1933,18 +1933,18 @@ function parseCsv(text) {
         i++;
       } else quoted = !quoted;
     } else if (char === ',' && !quoted) {
-      row.push(value.trim());
+      row.push(trimCells ? value.trim() : value);
       value = '';
     } else if (char === '\n' && !quoted) {
-      row.push(value.trim());
-      if (row.some(Boolean)) rows.push(row);
+      row.push(trimCells ? value.trim() : value);
+      if (row.some((cell) => cell.trim())) rows.push(row);
       row = [];
       value = '';
-    } else if (char !== '\r') value += char;
+    } else if (char !== '\r' || (!trimCells && quoted)) value += char;
   }
   if (quoted) throw new Error('CSV 引号未闭合，请检查内容');
-  row.push(value.trim());
-  if (row.some(Boolean)) rows.push(row);
+  row.push(trimCells ? value.trim() : value);
+  if (row.some((cell) => cell.trim())) rows.push(row);
   return rows;
 }
 function validateImport(form) {

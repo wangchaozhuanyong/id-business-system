@@ -41,7 +41,8 @@ export function projectBusinessReports({ inventory, commerce, managedMailboxes, 
   const status = (row) => row?.excluded ? '已排除' : row?.needs?.length ? '待核对' : row?.orderNo ? '已同步' : '';
   const projected = {
     邮箱管理: [
-      ...mailboxInventory.filter(row => row.type !== 'apple').map(row => ['库存邮箱', row.id, row.email, platform(row),
+      // Microsoft inventory requires its own approved report scope. The existing managed pool remains separate.
+      ...mailboxInventory.filter(row => !['apple', 'microsoft'].includes(row.type)).map(row => ['库存邮箱', row.id, row.email, platform(row),
         health[row.health] ?? row.status, use[row.inventoryState], row.country, row.source,
         row.createdAt || row.importedAt, row.lastOperatedAt]),
       ...managedMailboxes.map(row => ['托管邮箱池', row.id, row.email, platform(row),
