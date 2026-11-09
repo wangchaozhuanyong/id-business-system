@@ -179,7 +179,7 @@ function runtime(kind = 'account') {
   const vmSource = source.replace(
     '  api.modules.inventory = {',
     '  api.modules.returnTest = {createBatch,requestReturn,submitReturn,updateReturnSelection,' +
-      'returnRecords,batches,consume,skipSeed(){initialized=true;}};\n  api.modules.inventory = {'
+      'returnRecords,batches,consume,extractionBatchNumbers,skipSeed(){initialized=true;}};\n  api.modules.inventory = {'
   );
   assert.notEqual(vmSource, source, 'VM test export injection point must exist');
   runInNewContext(vmSource, {
@@ -222,6 +222,17 @@ function runtime(kind = 'account') {
     }
   };
 }
+
+test('同日提取批次顺序编号，新增批次后保留历史短号与原领用关联', () => {
+  const { T, batch, assets } = runtime('mail');
+  const next = T.createBatch('mail', [assets[10]], '注册 Claude');
+  const nextDay = T.createBatch('mail', [assets[11]], '注册 Claude', '', undefined, '2026-11-05 10:30');
+  const numbers = T.extractionBatchNumbers();
+  assert.equal(numbers.get(batch.id), 'hd261104-01');
+  assert.equal(numbers.get(next.id), 'hd261104-02');
+  assert.equal(numbers.get(nextDay.id), 'hd261105-01');
+  assert.equal(assets[0].claimBatchId, batch.id);
+});
 
 for (const kind of ['account', 'mail']) {
   test(

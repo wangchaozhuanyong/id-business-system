@@ -249,6 +249,7 @@ const navigation = [
       ['员工与权限', 'settings/accounts'],
       ['邮箱分类', 'settings/mail-types'],
       ['费用规则', 'settings/costs'],
+      ['代付国家', 'settings/payment-countries'],
       ['汇率采集', 'settings/exchange-rates'],
       ['登录日志', 'settings/login-logs'],
       ['操作记录', 'settings/audit']

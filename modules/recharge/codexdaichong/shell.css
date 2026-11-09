@@ -922,6 +922,25 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   grid-row: 2;
 }
 
+[data-recharge-workspace] :is(.workspace-code-actions, .workspace-clipboard-actions) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+[data-recharge-workspace] .workspace-code-actions:has(#backToStep1:not([hidden])) .workspace-clipboard-actions {
+  display: none;
+}
+
+[data-recharge-workspace] .workspace-clipboard-status {
+  grid-column: 1 / -1;
+}
+
+[data-recharge-workspace] .workspace-recharge-account > .workspace-clipboard-actions {
+  justify-content: flex-end;
+}
+
 [data-recharge-workspace] #step2 {
   grid-template-columns: var(--workspace-label) minmax(0, 1fr);
   column-gap: 16px;

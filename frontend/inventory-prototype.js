@@ -1066,14 +1066,30 @@
       `<section class="panel form-panel"><form id="inventory-extract-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-kind" value="${kind}" /><div class="form-grid">${field(account ? '账号类型' : '邮箱类型', 'inventory-extract-type', select('inventory-extract-type', list, d['inventory-extract-type']), true)}${field('提取数量', 'inventory-quantity', input('inventory-quantity', d['inventory-quantity'], 'type="number" min="1" max="100"'), true)}${field('提取用途', 'inventory-purpose', purposeControl, true)}${selectedPurpose === '其他' ? field('用途说明', 'inventory-purpose-other', input('inventory-purpose-other', d['inventory-purpose-other'] || '', 'placeholder="填写具体用途"'), true) : ''}${wide('备注', 'inventory-extract-notes', area('inventory-extract-notes', d['inventory-extract-notes'] || '', '记录本批资料用途和操作说明'))}</div><div class="form-footer" data-page-actions="before-submit"><span class="footnote">当前可用：${availableCounts}</span><button class="button primary" type="submit">确认提取</button></div></form></section><section class="panel result-panel"><div class="panel-heading"><h2>最近提取批次</h2>${button('全部记录', 'inventory-center')}</div>${batchTable(recent)}</section>`
     );
   }
-  function batchTable(rows) {
+  function extractionBatchNumbers() {
+    const numbers = new Map();
+    const dailyCounts = new Map();
+    // New batches are prepended. Number the full history from oldest to newest.
+    for (const batch of batches.slice().reverse()) {
+      const date = /^(\d{4})-(\d{2})-(\d{2})(?:[ T]|$)/.exec(batch.time);
+      if (!date) continue;
+      const day = date[1].slice(-2) + date[2] + date[3];
+      const sequence = (dailyCounts.get(day) || 0) + 1;
+      dailyCounts.set(day, sequence);
+      numbers.set(batch.id, `hd${day}-${String(sequence).padStart(2, '0')}`);
+    }
+    return numbers;
+  }
+  function batchTable(rows, numbers = extractionBatchNumbers()) {
     return rows.length
       ? table(
           [
             {
               id: 'id',
               label: '提取批次',
-              render: (batch) => textAction(batch.id, 'inventory-batch', `data-id="${batch.id}"`)
+              render: (batch) =>
+                textAction(numbers.get(batch.id) ?? batch.id, 'inventory-batch',
+                  `data-id="${esc(batch.id)}" title="${esc(batch.id)}"`)
             },
             {
               id: 'kind',
@@ -1112,6 +1128,7 @@
   }
   function centerPage() {
     const v = view();
+    const numbers = extractionBatchNumbers();
     const visible = batches.filter((batch) => ownerAllowed(batch));
     const pending = visible.reduce((sum, batch) => sum + batchCounts(batch).pending, 0);
     let body;
@@ -1136,7 +1153,7 @@
         ? table(
             [
               { id: 'id', label: '归还编号' },
-              { id: 'batchId', label: '原提取批次' },
+              { id: 'batchId', label: '原提取批次', render: (entry) => esc(numbers.get(entry.batchId) ?? entry.batchId) },
               { id: 'email', label: '邮箱 / 账号' },
               { id: 'reason', label: '归还理由' },
               { id: 'time', label: '归还时间' },
@@ -1160,11 +1177,11 @@
         (batch) =>
           (v.centerTab !== 'pending' || batchCounts(batch).pending > 0) &&
           (!v.query ||
-            `${batch.id} ${batch.purpose} ${batch.actorName} ${batch.items.map((item) => item.email).join(' ')}`
+            `${numbers.get(batch.id) ?? ''} ${batch.id} ${batch.purpose} ${batch.actorName} ${batch.items.map((item) => item.email).join(' ')}`
               .toLowerCase()
               .includes(v.query.toLowerCase()))
       );
-      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-center-query" aria-label="搜索提取记录" placeholder="搜索批次、邮箱、用途或提取人" value="${esc(v.query)}" /></div></div>${button('提取邮箱', 'inventory-go', '', 'download', 'data-route="workspace/mail-extract"')}${button('提取账号', 'inventory-go', '', 'download', 'data-route="workspace/account-extract"')}</div>${batchTable(pageRows(rows))}${pagination(rows.length)}`;
+      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-center-query" aria-label="搜索提取记录" placeholder="搜索批次、邮箱、用途或提取人" value="${esc(v.query)}" /></div></div>${button('提取邮箱', 'inventory-go', '', 'download', 'data-route="workspace/mail-extract"')}${button('提取账号', 'inventory-go', '', 'download', 'data-route="workspace/account-extract"')}</div>${batchTable(pageRows(rows), numbers)}${pagination(rows.length)}`;
     }
     return (
       header(
@@ -1199,11 +1216,12 @@
         empty('批次不存在或无权限', '返回提取与归还查找记录。')
       );
     const count = batchCounts(batch);
+    const number = extractionBatchNumbers().get(batch.id) ?? batch.id;
     const selected = api.getSelection('inventory-claims');
     return (
       header(
         '提取批次明细',
-        `${batch.id} · ${batch.actorName} · ${batch.time} · ${batch.purpose}`,
+        `${number} · ${batch.actorName} · ${batch.time} · ${batch.purpose}`,
         button('返回提取与归还', 'inventory-center') +
           button('复制所选', 'inventory-claim-copy', '', 'copy', selected.size ? '' : 'disabled') +
           button('登记使用', 'inventory-claim-use', '', 'check', selected.size ? '' : 'disabled') +
@@ -1221,7 +1239,7 @@
         ['已实际使用', count.used, '条'],
         ['已归还', count.returned, '条']
       ]) +
-      `<section class="panel"><div class="panel-heading"><h2>${esc(batch.id)}</h2><div class="toolbar-right" data-page-actions></div></div>${table(
+      `<section class="panel"><div class="panel-heading"><h2 title="${esc(batch.id)}">${esc(number)}</h2><div class="toolbar-right" data-page-actions></div></div>${table(
         [
           { id: 'email', label: '邮箱 / 账号', class: 'email-cell' },
           { id: 'type', label: '资料类型', render: (item) => typeLabel(item.type) },
@@ -1341,6 +1359,7 @@
       blocked: returnBlock(assetById(item.assetId), batch, item)
     }));
     const allowed = checked.filter((entry) => !entry.blocked);
+    const numbers = extractionBatchNumbers();
     const displayRows = [
       ...checked,
       ...extraRows.map((row) => ({
@@ -1375,7 +1394,7 @@
           { id: 'line', label: '输入行', render: row => row.line || '—' },
           { id: 'type', label: '资料类型', render: row => esc(row.item.type ? typeLabel(row.item.type) : '—') },
           { id: 'email', label: '邮箱 / 账号', render: (row) => esc(row.item.email) },
-          { id: 'batch', label: '原批次', render: (row) => esc(row.batch.id) },
+          { id: 'batch', label: '原批次', render: (row) => esc(numbers.get(row.batch.id) ?? row.batch.id) },
           {
             id: 'result',
             label: '处理资格',
@@ -1522,7 +1541,7 @@
       ['google', 'apple'].includes(type)
     );
     if (['google', 'apple'].includes(type))
-      fields += field(
+      fields += wide(
         '绑定电话',
         'inventory-phone',
         `<div class="option-entry-controls">${input('inventory-phone', val('phone'), 'placeholder="电话号码或 HTTP(S) 验证码链接"')}<a id="inventory-phone-code-link" class="button" href="${esc(phoneCodeUrl(val('phone')) || '#')}" target="_blank" rel="noopener noreferrer nofollow" ${phoneCodeUrl(val('phone')) ? '' : 'hidden'}>查看验证码</a></div><label class="checkbox-label"><input type="checkbox" id="inventory-no-phone" name="inventory-no-phone" ${(api.state.drafts.has(key) ? Boolean(d['inventory-no-phone']) : original && !original.phone) ? 'checked' : ''} />确认未绑定电话</label>`,

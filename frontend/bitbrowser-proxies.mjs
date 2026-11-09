@@ -6,6 +6,7 @@ const protocolName = value => ({ socks5: 'SOCKS5', http: 'HTTP', https: 'HTTPS' 
 const fields = ['name', 'country', 'kind', 'mode', 'protocol'];
 export function initializeExecutionProxies({ get, drafts, onChange, locked, onUse, connection }) {
   const select = get('bit-execution-proxy'), editor = get('bit-proxy-editor');
+  const defaultButton = get('bit-default-proxy');
   const sourceGet = get, editorHome = editor.parentNode;
   // Keep the original controls and listeners when the same-origin host owns the modal.
   get = id => editor.querySelector(`#${id}`) || sourceGet(id);
@@ -32,6 +33,8 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     get('bit-refresh-proxies').disabled = busy || reading;
     for (const id of ['bit-add-proxy', 'bit-library-add']) get(id).disabled = busy;
     select.disabled = !data || busy;
+    defaultButton.disabled = select.disabled || reading || !select.value;
+    defaultButton.textContent = select.value && select.value === data?.defaultId ? '取消默认' : '设为默认';
   }
   function capture() {
     const values = readDraft(); values['bit-execution-proxy'] = select.value;
@@ -69,10 +72,11 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     get('bit-ip-page-info').textContent = `共 ${items.length} 条 · 第 ${page} / ${pages} 页`;
     get('bit-ip-prev').disabled = page <= 1; get('bit-ip-next').disabled = page >= pages; syncActions();
   }
-  function render(preferred = select.value || readDraft()['bit-execution-proxy']) {
+  function render(preferred = select.value) {
     select.replaceChildren(new Option(data?.items.length ? '请选择执行 IP' : '暂无 IP，请先新增', ''),
-      ...(data?.items || []).map(item => new Option(`${item.name} · ${item.countryCode ? countryName(item.countryCode) : '国家自动识别'} · ${kinds[item.kind]} · ${item.endpoint}`, item.id)));
-    select.value = preferred || ''; select.disabled = !data || locked(); renderList(); onChange();
+      ...(data?.items || []).map(item => new Option(`${item.name}${item.id === data.defaultId ? '（我的默认）' : ''} · ${item.countryCode ? countryName(item.countryCode) : '国家自动识别'} · ${kinds[item.kind]} · ${item.endpoint}`, item.id)));
+    select.value = data?.items.some(item => item.id === preferred) ? preferred : '';
+    renderList(); onChange();
   }
   async function request(method = 'GET', body, signal) {
     const controller = new AbortController(); pending.add(controller);
@@ -81,6 +85,10 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
         ...(body && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
       const result = await response.json();
       if (!response.ok) { const error = new Error(result.error || 'IP 操作失败，请重试'); error.status = response.status; throw error; }
+      if (method === 'PATCH') {
+        if (result?.defaultId !== body.defaultId) throw new Error('无法确认默认 IP 已保存，请刷新后核对。');
+        return result;
+      }
       if (method !== 'POST' && (!Number.isSafeInteger(result.version) || !Array.isArray(result.items) ||
         !result.items.every(item => typeof item.id === 'string' && typeof item.name === 'string' && typeof item.endpoint === 'string' &&
           /^(?:[A-Z]{2})?$/.test(item.countryCode) && Object.hasOwn(kinds, item.kind)) ||
@@ -94,7 +102,8 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     setMessage('正在读取 IP 列表…');
     try {
       const result = await request(); if (!alive || revision !== generation) return;
-      data = result; render(); setMessage(data.items.length ? `已保存 ${data.items.length} 个 IP，可直接选择使用。` : '暂无 IP，点击“新增 IP”录入代理链接。');
+      const preferred = data ? select.value : readDraft()['bit-execution-proxy'] ?? result.defaultId;
+      data = result; render(preferred); setMessage(data.items.length ? `已保存 ${data.items.length} 个 IP，可直接选择使用。` : '暂无 IP，点击“新增 IP”录入代理链接。');
     } catch (error) { if (alive && revision === generation) { setMessage(error.message); renderList(); } }
     finally { if (revision === generation) { reading = false; syncActions(); onChange(); } }
   }
@@ -103,6 +112,20 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     select.value = id; capture(); renderList(); onChange(); onUse?.(); select.focus();
   }
   select.addEventListener('change', () => { capture(); renderList(); onChange(); });
+  defaultButton.addEventListener('click', async () => {
+    if (defaultButton.disabled || locked()) return;
+    const defaultId = select.value === data.defaultId ? null : select.value;
+    saving = true; syncActions(); onChange();
+    setMessage('正在保存个人默认执行 IP…');
+    try {
+      const result = await request('PATCH', { defaultId });
+      if (!alive) return;
+      data.defaultId = result.defaultId;
+      render();
+      setMessage(defaultId ? '已设为我的默认执行 IP。' : '已取消默认执行 IP。');
+    } catch (error) { if (alive) setMessage(error.message); }
+    finally { saving = false; if (alive) { renderList(); onChange(); } }
+  });
   for (const control of [search, filter, sort]) control.addEventListener(control === search ? 'input' : 'change', () => { page = 1; renderList(); capture(); });
   for (const [id, delta] of [['bit-ip-prev', -1], ['bit-ip-next', 1]]) get(id).addEventListener('click', () => { page += delta; renderList(); capture(); });
   get('bit-refresh-proxies').addEventListener('click', refresh);

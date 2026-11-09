@@ -1,4 +1,4 @@
-import { validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
 
 export const rechargePlanLabels = Object.freeze({
   plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500'
@@ -62,6 +62,11 @@ export function validOrderPrices(prices) {
     Object.hasOwn(plans, product) && record(rows) && Object.entries(rows).every(([plan, amounts]) =>
       plans[product].includes(plan) && record(amounts) && Object.entries(amounts).every(([currency, value]) =>
         validCurrencyCode(currency) && (value === '' || validMoney(value)))));
+}
+
+export function validGptPaidPrices(prices) {
+  return validOrderPrices({ GPT: prices }) &&
+    Object.values(prices).every(amounts => Object.keys(amounts).every(code => currencies.includes(code)));
 }
 
 export function nextOrderNo(orders) {
