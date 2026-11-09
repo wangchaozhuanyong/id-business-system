@@ -23,9 +23,7 @@ async function json(response) {
   return JSON.parse(Buffer.concat(parts).toString('utf8'));
 }
 
-export function createBackupDrive({ oauth, root, folder, fetchImpl = fetch }) {
-  if (![root, folder].every((id) => typeof id === 'string' && folderId.test(id)) || root === folder)
-    throw fail('DRIVE_FOLDER_INVALID');
+export function createGoogleBackupRequest({ oauth, fetchImpl = fetch }) {
   if (![oauth?.clientId, oauth?.clientSecret, oauth?.refreshToken]
     .every((value) => typeof value === 'string' && value.trim() && value.length <= 8192))
     throw fail('DRIVE_AUTH_CONFIG_INVALID');
@@ -61,6 +59,14 @@ export function createBackupDrive({ oauth, root, folder, fetchImpl = fetch }) {
     }
     return response;
   }
+  return request;
+}
+
+export function createBackupDrive({ oauth, root, folder, fetchImpl = fetch }) {
+  if (![root, folder].every((id) => typeof id === 'string' && folderId.test(id)) || root === folder)
+    throw fail('DRIVE_FOLDER_INVALID');
+  const request = createGoogleBackupRequest({ oauth, fetchImpl });
+
   async function preflight() {
     const data = await json(await request(
       `${files}/${folder}?supportsAllDrives=true&fields=id,mimeType,parents,trashed,capabilities(canAddChildren)`
