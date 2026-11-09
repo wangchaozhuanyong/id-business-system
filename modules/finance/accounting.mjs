@@ -24,6 +24,17 @@ function formatted(units, places = 4) {
   return `${units < 0n ? '-' : ''}${digits.slice(0, -places)}.${digits.slice(-places)}`;
 }
 
+export function renewalFundingUsd(amount, fixedFee, rateToCny = '1', usdRateToCny = '1') {
+  const paid = unsigned(amount);
+  const fee = unsigned(fixedFee) + 2n * one;
+  const rate = unsigned(rateToCny, 8);
+  const usdRate = unsigned(usdRateToCny, 8);
+  if (!paid || !rate || !usdRate) throw new Error('续费预计金额的计算依据无效');
+  const units = paid * rate + fee * usdRate;
+  const cent = usdRate * (one / 100n);
+  return formatted((units + cent - 1n) / cent, 2);
+}
+
 function rounded(numerator, denominator) {
   const magnitude = numerator < 0n ? -numerator : numerator;
   const result = (magnitude + denominator / 2n) / denominator;

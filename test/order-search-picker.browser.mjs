@@ -90,6 +90,8 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         assert(input.y + input.height <= option.y, '搜索框必须在选项上方');
         await page.keyboard.press('Escape');
         await page.locator('#commerce-payment').selectOption('银行卡');
+        if (product === 'claude')
+          await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
         await page.locator('#commerce-cardId-picker').click();
         await page.getByRole('searchbox', { name: '搜索银行卡' }).waitFor();
         await page.keyboard.press('Escape');

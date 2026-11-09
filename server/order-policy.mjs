@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
 
 export const rechargePlanLabels = Object.freeze({
@@ -18,10 +19,152 @@ export function checkNewOrder(order) {
   if (order.costBasis === 'actual') return '新订单按费用规则核算，实际总成本请通过有依据的订单更正登记';
   if ((order.email || order.product !== 'GPT' || order.businessType !== '续费') &&
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email || '')) return '请填写有效订单邮箱';
-  if (order.payment === '银行卡' && (order.paidConfirmed || order.cardId) &&
-      !(typeof order.cardId === 'string' && order.cardId.startsWith(order.product === 'GPT' ? 'recharge:' : 'tenant:')))
-    return '请选择对应来源的银行卡';
+  if (order.payment === '银行卡' && !isClaudeProBankMaterials(order)) {
+    const gpt = order.product === 'GPT';
+    if ((order.cardId || (!gpt && order.paidConfirmed)) &&
+        !(typeof order.cardId === 'string' && order.cardId.startsWith(gpt ? 'recharge:' : 'tenant:')))
+      return '请选择对应来源的银行卡';
+  }
 }
+const proMaterialFields = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
+const proPeopleFields = ['tenantId', 'verifier', 'verifierPhone', 'phone', 'kyc'];
+const proMaterialModes = new Set(['manual_card', 'people', 'pool_card', 'tenant_card', 'none']);
+const nonempty = (value) => value !== undefined && value !== null && value !== '';
+
+const isClaudeProBank = (order) => order?.product === 'Claude Pro' && order.payment === '银行卡';
+
+export function isClaudeProBankMaterials(order) {
+  return isClaudeProBank(order) && proMaterialModes.has(order.proMaterialMode);
+}
+
+export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacyCreate = false } = {}) {
+  if (!isClaudeProBank(order)) {
+    if (proMaterialFields.some((field) => nonempty(order[field])))
+      return '只有 Claude Pro 银行卡订单可以填写这组资料';
+    return;
+  }
+  const { proMaterialMode: mode } = order;
+  if (!nonempty(mode) && (allowLegacyCreate || (isClaudeProBank(prior) && !nonempty(prior.proMaterialMode)))) {
+    if (proMaterialFields.slice(1).some((field) => nonempty(order[field])))
+      return '请先选择银行卡资料或人员与补充资料';
+    return;
+  }
+  if (!isClaudeProBankMaterials(order)) return '请选择 Claude Pro 银行卡资料方式';
+  if (nonempty(order.appleIdId)) return '银行卡资料不能关联苹果 ID';
+  const prefix = mode === 'pool_card' ? 'recharge:' : mode === 'tenant_card' ? 'tenant:' : '';
+  if (prefix) {
+    if (typeof order.cardId !== 'string' || !order.cardId.startsWith(prefix) || order.cardId.length <= prefix.length)
+      return '请选择对应来源的银行卡';
+  } else {
+    if (nonempty(order.cardId)) return '所选资料方式不能关联银行卡池';
+    order.cardId = '';
+  }
+  if (mode === 'manual_card') {
+    if (proPeopleFields.some((field) => nonempty(order[field])))
+      return '银行卡资料和人员与补充资料只能选择一种';
+    const number = typeof order.proCardNumber === 'string'
+      ? order.proCardNumber.trim().replace(/[ -]/g, '') : '';
+    if (!/^\d{12,19}$/.test(number)) return '请输入 12 至 19 位有效银行卡号';
+    const serial = typeof order.proCardSerial === 'string' ? order.proCardSerial.trim() : '';
+    if (!serial || serial.length > 120 || /[\p{Cc}\p{Cf}]/u.test(serial)) return '请填写有效的卡序列号';
+    order.proCardNumber = number;
+    order.proCardSerial = serial;
+    order.paymentId = number.slice(-4);
+    return;
+  }
+  if (nonempty(order.proCardNumber) || nonempty(order.proCardSerial))
+    return '银行卡资料和人员与补充资料只能选择一种';
+  delete order.proCardNumber;
+  delete order.proCardSerial;
+  if (!prefix) order.paymentId = '';
+  if (mode === 'pool_card' || mode === 'none') {
+    if (proPeopleFields.some((field) => nonempty(order[field])))
+      return '所选资料方式不能混填认证人或补充资料';
+    return;
+  }
+  if (mode === 'tenant_card' && !nonempty(order.tenantId)) return '请先选择认证人，再选择名下银行卡';
+  const phone = typeof order.phone === 'string' ? order.phone.trim() : '';
+  const phoneDigits = phone.replace(/\D/g, '').length;
+  if (nonempty(order.phone) &&
+      (!/^\+?\d[\d ()-]{4,31}$/.test(phone) || phoneDigits < 5 || phoneDigits > 20))
+    return '请填写有效的订阅电话';
+  if (!order.tenantId && !phone) return '请选择认证人或填写订阅电话';
+  if (order.kyc && !['未认证', 'KYC 认证'].includes(order.kyc)) return '请选择有效的认证状态';
+  const sameTenant = prior?.proMaterialMode === mode && prior.tenantId && prior.tenantId === order.tenantId;
+  const tenant = sameTenant ? null : tenants.find((row) => row.id === order.tenantId && row.active !== false);
+  if (order.tenantId && !sameTenant && !tenant) return '请选择可用的认证人';
+  if (!order.tenantId && (order.verifier || order.verifierPhone))
+    return '请先选择有效的认证人';
+  order.verifier = (sameTenant ? prior.verifier : tenant?.name) || '';
+  order.verifierPhone = (sameTenant ? prior.verifierPhone : tenant?.phone) || '';
+  if (order.kyc === 'KYC 认证' && (!order.tenantId || !order.verifierPhone))
+    return 'KYC 认证须选择有联系电话的认证人';
+  if (phone) order.phone = phone;
+}
+
+const proSnapshotFields = ['payment', 'cardId', ...proMaterialFields, ...proPeopleFields];
+const sameProMaterials = (left, right) => proSnapshotFields.every((field) =>
+  (left?.[field] ?? '') === (right?.[field] ?? ''));
+
+export function checkClaudeProMaterialHistory(order, prior, action) {
+  if (!prior || (!isClaudeProBankMaterials(prior) && !isClaudeProBankMaterials(order))) return;
+  const before = prior.corrections || [];
+  const after = order.corrections || [];
+  if (!Array.isArray(after) || before.some((entry, index) => !isDeepStrictEqual(entry, after[index])))
+    return '原 Claude Pro 资料更正记录必须保留';
+  if (sameProMaterials(prior, order)) return;
+  if (order.version !== prior.version + 1) return 'Claude Pro 订单版本已变化，请重新核对';
+  if (action === '补偿撤回更正') {
+    const correction = before.at(-1);
+    if (correction?.versionAfter === prior.version && sameProMaterials(order, correction.previous))
+      return;
+  } else if (action === '更正订单' && after.length === before.length + 1) {
+    const correction = after.at(-1);
+    if (correction?.versionAfter === order.version && correction.previous?.version === prior.version &&
+        typeof correction.reason === 'string' && correction.reason.trim() &&
+        sameProMaterials(prior, correction.previous))
+      return;
+  }
+  return '请通过订单更正操作登记 Claude Pro 资料变化并保留原记录';
+}
+
+export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOrders) {
+  const fields = ['proRenewalSourceId', 'proRenewalSourceVersion'];
+  if (prior) {
+    if (fields.some((field) => (order[field] ?? '') !== (prior[field] ?? '')) ||
+        (prior.proRenewalSourceId && (order.claudeRenewalId ?? '') !== (prior.claudeRenewalId ?? '')))
+      return '已登记的 Claude Pro 续费来源不可更换';
+    return;
+  }
+  const hasNewSource = fields.some((field) => nonempty(order[field]));
+  const proBank = isClaudeProBankMaterials(order);
+  if (!hasNewSource && (!proBank || !nonempty(order.claudeRenewalId))) return;
+  if (!proBank || order.businessType !== '续费' ||
+      (nonempty(order.claudeRenewalId) && order.claudeRenewalId !== order.proRenewalSourceId) ||
+      typeof order.proRenewalSourceId !== 'string' || !Number.isSafeInteger(order.proRenewalSourceVersion))
+    return 'Claude Pro 续费来源格式无效';
+  const source = previousOrders.get(order.proRenewalSourceId);
+  if (!source || !isDeepStrictEqual(source, nextOrders.get(source.id)) ||
+      source.cancelled || source.product !== order.product ||
+      source.version !== order.proRenewalSourceVersion || source.customerId !== order.customerId ||
+      source.email?.trim().toLowerCase() !== order.email?.trim().toLowerCase())
+    return '原 Claude Pro 订单已变化，请重新核对客户和邮箱后续费';
+  for (const row of [...previousOrders.values(), ...nextOrders.values()]) {
+    if (row.id !== order.id && (row.proRenewalSourceId === source.id || row.claudeRenewalId === source.id))
+      return '该 Claude Pro 订单已有续费记录，请从最新订单续费';
+  }
+}
+
+export function redactClaudeProOrderMaterials(value, actor) {
+  if (['admin', 'super'].includes(actor?.role)) return value;
+  return JSON.parse(JSON.stringify(value, (field, fieldValue) => {
+    if (field === 'proCardSerial') return undefined;
+    if (field !== 'proCardNumber') return fieldValue;
+    return typeof fieldValue === 'string' && /^\d{12,19}$/.test(fieldValue)
+      ? `•••• ${fieldValue.slice(-4)}` : undefined;
+  }));
+}
+
 export function assignOrderOwner(order, prior, actor, owners = []) {
   return assignOwner(order, prior, actor, owners, '订单');
 }

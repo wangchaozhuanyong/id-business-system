@@ -181,6 +181,25 @@ test('Claude Pro 与 Max 订单各自补齐人员和租户列，空值明确显�
   }
 });
 
+test('银行卡资料列只注册在 Pro，旧单和 Apple 内购各自显示原口径', () => {
+  const context = runtime();
+  const pro = context.render('orders/pro', 'commerce-orders-Claude Pro');
+  const columns = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
+  requireColumns(pro, columns);
+  const manual = {
+    product: 'Claude Pro', payment: '银行卡', proMaterialMode: 'manual_card',
+    proCardNumber: '•••• 4242', proCardSerial: '00042-QA'
+  };
+  const render = (id, row) => pro.columns.find((column) => column.id === id).render(row);
+  assert.equal(render('proMaterialMode', manual), '银行卡资料');
+  assert.equal(render('proCardNumber', manual), '•••• 4242');
+  assert.equal(render('proCardSerial', manual), '00042-QA');
+  assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '银行卡' }), '原订单资料');
+  assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '苹果内购' }), '不适用');
+  const max = context.render('orders/max', 'commerce-orders-Claude Max');
+  assert.equal(max.columns.some(({ id }) => columns.includes(id)), false);
+});
+
 test('Claude 专属显示认证电话、备注、录入时间；客户租户列表字段与列设置齐全', () => {
   const context = runtime();
   const current = context.render('orders/exclusive', 'commerce-current-subscriptions');

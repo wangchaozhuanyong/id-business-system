@@ -207,6 +207,11 @@ test('Claude inventory must have a known and eligible registration age at delive
       businessType: '成品交付',
       product: 'Claude Pro',
       plan: 'Pro',
+      cardId: '',
+      paymentId: '4242',
+      proMaterialMode: 'manual_card',
+      proCardNumber: '4242424242424242',
+      proCardSerial: '000-CLAUDE-PRO-FIXTURE',
       accountId: claude.id,
       email: claude.email
     });

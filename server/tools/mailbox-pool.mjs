@@ -10,7 +10,7 @@ const workerFile = fileURLToPath(new URL('../../modules/tools/mailbox-imap.py', 
 const providers = ['google', 'apple'];
 const codePattern = /^MBX-[A-Za-z0-9_-]{32}$/;
 export const legacyMailboxCodePattern = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/;
-const isManagedCode = (value) => typeof value === 'string' &&
+export const isManagedCode = (value) => typeof value === 'string' &&
   (codePattern.test(value) || legacyMailboxCodePattern.test(value));
 
 export function extractManagedMailboxCode(body) {

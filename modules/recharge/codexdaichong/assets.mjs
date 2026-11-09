@@ -8,6 +8,7 @@ import { CODEXDAICHONG_REVISION } from './prepare.mjs';
 import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 import { routingAdminPanel } from './routing-admin-ui.mjs';
+import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
 
 const git = promisify(execFile);
 const clone = fileURLToPath(new URL('../../../.upstream/codexdaichong/', import.meta.url));
@@ -226,7 +227,59 @@ function adaptAdminScript(source, routingScript) {
     ]
   ])
     source = replaceOne(source, anchor, replacement);
-  return localUrls(source + '\n' + routingScript);
+  source = replaceOne(
+    source,
+    '        async function loadCardPoolList() {',
+    '        async function loadCardPoolList() {\n' +
+      "            if (document.getElementById('cards')?.classList.contains('active')) " +
+      'void rechargeCardTypes.refresh();'
+  );
+  source = replaceOne(
+    source,
+    '<tr><td colspan="10" style="text-align:center; color: var(--text-dim); padding: 40px 0;">暂无卡片，请使用批量导入添加</td></tr>',
+    '<tr><td colspan="11" style="text-align:center; color: var(--text-dim); padding: 40px 0;">暂无卡片，请使用批量导入添加</td></tr>'
+  );
+  source = replaceOne(
+    source,
+    '<td><code>${cardNumber}</code></td>',
+    '<td><code>${cardNumber}</code></td>\n' +
+      '                    <td data-recharge-card-type="${rechargeCardTypes.cardKey(card.id)}"></td>'
+  );
+  source = replaceOne(
+    source,
+    "            }).join('');\n            lucide.createIcons();\n        }\n\n        function getCardStatusBadge(card)",
+    "            }).join('');\n            paintRechargeCardTypes();\n            lucide.createIcons();\n        }\n\n        function getCardStatusBadge(card)"
+  );
+  // Add the local settings call after namespacing upstream URLs. It goes to the host, not the engine.
+  return replaceOne(localUrls(source + '\n' + routingScript), '        let cardPoolList = [];', `
+        let cardPoolList = [];
+        const rechargeCardTypes = (${createRechargeCardTypeOverlay.toString()})({
+            async fetchSettings() {
+                const response = await authFetch('/api/local/card-types', {
+                    cache: 'no-store', signal: AbortSignal.timeout(5000)
+                });
+                if (!response.ok) throw new Error('无法读取银行卡类型');
+                return response.json();
+            },
+            onChange: paintRechargeCardTypes
+        });
+        window.idRechargeCardTypesChanged = () => {
+            if (!document.hidden && window.idRechargeVisible !== false &&
+                document.getElementById('cards')?.classList.contains('active'))
+                void rechargeCardTypes.invalidate();
+        };
+        function paintRechargeCardTypes() {
+            const status = document.getElementById('card_pool_type_status');
+            const retry = document.getElementById('card_pool_type_retry');
+            if (status) status.textContent = rechargeCardTypes.status;
+            if (retry) retry.hidden = !rechargeCardTypes.failed;
+            for (const cell of document.querySelectorAll('#card_pool_list_body [data-recharge-card-type]'))
+                cell.textContent = rechargeCardTypes.label(cell.dataset.rechargeCardType);
+        }
+        document.getElementById('card_pool_type_retry')?.addEventListener('click', () => {
+            void rechargeCardTypes.refresh();
+        });
+  `);
 }
 
 function inlineHashes(html) {
@@ -611,6 +664,20 @@ function adaptHtml(source, kind) {
         : '<body data-recharge-view="' + kind + '"'
     );
   if (kind === 'admin') {
+    source = replaceOne(
+      source,
+      '<th width="200px">卡号</th>',
+      '<th width="200px">卡号</th>\n' +
+        '                                <th width="110px" scope="col">银行卡类型</th>'
+    );
+    source = replaceOne(
+      source,
+      '<div class="table-container">\n                    <table class="admin-action-table card-pool-table">',
+      '<div class="card-pool-type-feedback">' +
+        '<span id="card_pool_type_status" role="status"></span>' +
+        '<button type="button" id="card_pool_type_retry" class="btn btn-secondary" hidden>重试读取类型</button>' +
+        '</div>\n                <div class="table-container">\n                    <table class="admin-action-table card-pool-table">'
+    );
     source = source.replace('每次任务从「启用」的代理中随机抽取。',
       '自动充值按套餐要求实测并选择同国家的启用代理；无匹配线路时停止。代理池完全为空时才检查服务器直连出口。');
     source = source.replace('>支付地区设置</h2>', '>其他流程默认地区</h2>')

@@ -13,6 +13,23 @@
   color: var(--text-secondary);
   white-space: normal;
 }
+[data-recharge-view='admin'] .card-pool-type-feedback {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+[data-recharge-view='admin'] .card-pool-type-feedback:has(#card_pool_type_status:not(:empty)) {
+  margin-bottom: 8px;
+}
+[data-recharge-view='admin'] #card_pool_type_retry[hidden] {
+  display: none;
+}
+[data-recharge-view='admin'] [data-recharge-card-type] {
+  overflow-wrap: anywhere;
+}
 
 :root {
   color-scheme: light;

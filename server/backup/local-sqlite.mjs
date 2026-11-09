@@ -5,6 +5,7 @@ import {
 import { createHash } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
+import { claudeGoogleCopyDomainPrefix } from '../claude-google-subscriptions.mjs';
 import { fileURLToPath } from 'node:url';
 
 import { bitBrowserDefaultsDomain, createLocalBusinessStore } from '../local-business.mjs';
@@ -223,6 +224,11 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
       let result;
       if (domain.startsWith('toolbox:')) {
         result = store.loadToolbox({ id: domain.slice('toolbox:'.length) });
+      } else if (domain.startsWith(claudeGoogleCopyDomainPrefix)) {
+        const snapshot = store.loadClaudeGoogleCopySettings({
+          id: domain.slice(claudeGoogleCopyDomainPrefix.length), role: 'admin'
+        });
+        result = { version: snapshot.version, data: snapshot };
       } else if (domain.startsWith('saved-totp:')) {
         const snapshot = store.loadSavedTotp({ id: domain.slice('saved-totp:'.length) });
         result = { version: snapshot.version, data: snapshot.items };
@@ -232,7 +238,7 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
       } else if (domain === 'website-visits') {
         const snapshot = store.loadWebsiteVisitBackup();
         result = { version: snapshot.version, data: snapshot };
-      } else if (['recharge-codes', 'tenant-cards', 'order-sync'].includes(domain)) {
+      } else if (['recharge-codes', 'tenant-cards', 'order-sync', 'card-types', 'finance-rates'].includes(domain)) {
         result = store.featureDocument(domain);
       } else if (domain.startsWith(`${bitBrowserAddressDomain}:`)) {
         result = store.loadBitBrowserAddressBackup(domain);

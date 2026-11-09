@@ -25,6 +25,8 @@ import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-brid
 import { productionDataPaths } from './production-data.mjs';
 import { createOrderRechargeClient, readPoolCards } from './order-recharge-client.mjs';
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
+import { cardManagementRoutes, createCardManagementHandler } from './card-management.mjs';
+import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
@@ -46,6 +48,7 @@ const files = new Map([
     'apple-relay-prototype',
     'apple-balance-prototype',
     'commerce-prototype',
+    'claude-google-subscriptions',
     'order-operations',
     'change-sync',
     'operations-prototype',
@@ -161,7 +164,7 @@ export async function startPreview(
   let setupIndex = null;
   let handleAutomaticSnapshot = null;
   let financeCollection = null, handleFinanceCollection = null;
-  let handleOrderAuxiliary, handleRechargeCodes, orderSync;
+  let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleRechargeCodes, orderSync;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
   function gatewayFor(host) {
@@ -199,6 +202,8 @@ export async function startPreview(
       }
       store = localBusiness.createLocalBusinessStore(databasePath);
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
+      handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
+      handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
       handleRechargeCodes = createRechargeCodeHandler({
         store: {
           load: () => store.featureDocument('recharge-codes'),
@@ -423,6 +428,16 @@ export async function startPreview(
     if (store && orderAuxiliaryRoutes.has(route)) {
       if (!actor || !canManage) return forbidden();
       return void handleOrderAuxiliary(request, response, route, actor);
+    }
+    if (store && cardManagementRoutes.has(route)) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (!actor || !canManage) return forbidden();
+      return void handleCardManagement(request, response, route, actor);
+    }
+    if (store && claudeGoogleSubscriptionRoutes.has(route)) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (!actor || !canManage) return forbidden();
+      return void handleClaudeGoogleSubscriptions(request, response, route, actor);
     }
     if (store && route.startsWith('/api/local/tools/media/')) {
       if (!actor) return forbidden();

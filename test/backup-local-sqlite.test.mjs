@@ -64,6 +64,58 @@ function seed(source) {
   }
 }
 
+test('银行卡类型和稳定卡 ID 关联随加密快照恢复', async t => {
+  const paths = await drill(t);
+  const store = createLocalBusinessStore(paths.source);
+  const data = {
+    items: [{ id: 'type-fixture', name: '合成卡类型', active: true }],
+    assignments: { 'recharge:74': 'type-fixture' }
+  };
+  try {
+    store.saveFeatureDocument('card-types', 0, data, {
+      action: '设置银行卡类型', actor: { id: 'fixture-actor', name: '合成操作员' }, targetId: 'recharge:74'
+    });
+  } finally {
+    store.close();
+  }
+  await createSnapshot({ source: paths.source, output: paths.output });
+  assert.ok(!(await readFile(join(paths.output, snapshotFile))).includes(Buffer.from('合成卡类型')));
+  await restoreSnapshot({ input: paths.output, output: paths.restore, key: paths.source + '.key' });
+  const recovered = createLocalBusinessStore(join(paths.restore, snapshotFile));
+  try {
+    assert.deepEqual(recovered.featureDocument('card-types'), { version: 1, data });
+  } finally {
+    recovered.close();
+  }
+});
+
+test('Claude 邮箱复制后缀按操作员分开备份和恢复', async t => {
+  const paths = await drill(t);
+  const alpha = { id: 'synthetic-alpha', name: '合成甲', role: 'admin' };
+  const beta = { id: 'synthetic-beta', name: '合成乙', role: 'super' };
+  const suffix = 'synthetic-copy-suffix-marker';
+  const store = createLocalBusinessStore(paths.source);
+  const rates = { quotes: [{ id: 'synthetic-quote', rates: { USD: '7.2' } }] };
+  try {
+    store.saveClaudeGoogleCopySettings({ version: 0, copy1: suffix, copy2: '合成后缀二' }, alpha);
+    store.saveClaudeGoogleCopySettings({ version: 0, copy1: '合成乙后缀', copy2: '' }, beta);
+    store.saveFeatureDocument('finance-rates', 0, rates);
+  } finally {
+    store.close();
+  }
+  await createSnapshot({ source: paths.source, output: paths.output });
+  assert.ok(!(await readFile(join(paths.output, snapshotFile))).includes(Buffer.from(suffix)));
+  await restoreSnapshot({ input: paths.output, output: paths.restore, key: paths.source + '.key' });
+  const recovered = createLocalBusinessStore(join(paths.restore, snapshotFile));
+  try {
+    assert.deepEqual(recovered.loadClaudeGoogleCopySettings(alpha), { version: 1, copy1: suffix, copy2: '合成后缀二' });
+    assert.deepEqual(recovered.loadClaudeGoogleCopySettings(beta), { version: 1, copy1: '合成乙后缀', copy2: '' });
+    assert.deepEqual(recovered.featureDocument('finance-rates'), { version: 1, data: rates });
+  } finally {
+    recovered.close();
+  }
+});
+
 test('CLI produces a standalone committed WAL snapshot and restores business documents with a separate key', async (t) => {
   const paths = await drill(t);
   createLocalBusinessStore(paths.source).close();
