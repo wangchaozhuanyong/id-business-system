@@ -497,6 +497,9 @@
   const rentBatches = [];
   const logs = [];
   const renewalRoute = 'workspace/renewals';
+  const tenantRoute = 'customers/tenants';
+  const tenantRenewalHandledAction = '处理租户续费提醒';
+  const tenantRenewalSettingsAction = '更新租户续费提醒设置';
   const subscriptionCardsRoute = 'data-management/bank-cards';
   const customerLossRoute = 'workspace/customer-loss';
   const renewalOrderPrefix = 'workspace/order/renew/';
@@ -511,12 +514,12 @@
   const defaultWarningHours = 72;
   const maxWarningHours = 365 * 24;
   let renewalWarningHours = defaultWarningHours;
+  let tenantRenewalWarningHours;
   let localVersion = 0;
   let localPhase = localData ? 'initial' : 'ready';
   let saving = false;
   const moduleState = {
     customerMode: 'active',
-    tenantMode: 'active',
     orderTab: 'all',
     claudeTab: 'active',
     statsTab: 'overview',
@@ -552,7 +555,10 @@
     return structuredClone(input);
   }
   function commerceSnapshot() {
-    return safeClone({ customers, tenants, orders, operating: [...operating], rentBatches, logs, renewalWarningHours });
+    return safeClone({
+      customers, tenants, orders, operating: [...operating], rentBatches, logs, renewalWarningHours,
+      ...(tenantRenewalWarningHours !== undefined && { tenantRenewalWarningHours })
+    });
   }
   function applyCommerceSnapshot(data) {
     cardIssueContext = undefined;
@@ -564,6 +570,7 @@
     const legacyWarningDays = data?.renewalWarningDays;
     renewalWarningHours = data?.renewalWarningHours ??
       (legacyWarningDays == null ? defaultWarningHours : legacyWarningDays * 24);
+    tenantRenewalWarningHours = data?.tenantRenewalWarningHours;
     operating.clear();
     for (const [key, row] of data?.operating || []) operating.set(key, row);
   }
@@ -619,7 +626,7 @@
     return `<p class="panel-body inline-notice warning" role="status">同步批次已处理，业务订单暂未刷新。${
       A.textAction('重读订单', 'commerce-sync-orders-refresh')}</p>`;
   }
-  function persistCommerce(action, mutate, completed, dependencies = [], afterCommit) {
+  function persistCommerce(action, mutate, completed, dependencies = [], afterCommit, submitter) {
     if (!localData) {
       if (mutate() !== false) A.completeAction ? A.completeAction(completed) : completed();
       return;
@@ -667,53 +674,70 @@
     } else {
       commit = localData.save('commerce', localVersion, next, { action, summary: action });
     }
-    const feedback = A.beginActionFeedback?.(null, '正在保存记录…');
+    const protectedContent = submitter?.closest('#drawer[open]')?.querySelector('[data-protect-drawer-dismiss]');
+    protectedContent?.setAttribute('aria-busy', 'true');
+    const feedback = A.beginActionFeedback?.(submitter || null, '正在保存记录…');
+    const acceptSave = (result) => {
+      if (result.inventory) A.modules.inventory?.applyCommittedInventory?.(result.inventory);
+      acceptLocalCommerce(result);
+      afterCommit?.();
+      const unchanged = !submittedForm || (submittedForm.isConnected &&
+        JSON.stringify(readCommerceDraft(submittedForm)) === submittedDraft);
+      if (S.route === route && S.drawerContext === drawerContext && unchanged)
+        A.completeAction ? A.completeAction(completed, '记录已保存') : completed();
+      else {
+        saveDrafts();
+        const activeForms = [...document.querySelectorAll(
+          '#main form[data-commerce-draft], #drawer[open] form[data-commerce-draft]'
+        )].filter(form => form.dataset.commerceDraft === submittedKey);
+        if (submittedKey && !activeForms.length &&
+            JSON.stringify(S.drafts.get(submittedKey)) === submittedDraft)
+          S.drafts.delete(submittedKey);
+        else if (submittedValues) {
+          const prior = recordForDraft(before, submittedForm.id, submittedValues);
+          const saved = recordForDraft(result.data, submittedForm.id, submittedValues);
+          const draft = S.drafts.get(submittedKey);
+          if (prior && saved && draft &&
+              String(prior.version) === submittedValues['commerce-version'] &&
+              draft['commerce-id'] === submittedValues['commerce-id'] &&
+              draft['commerce-version'] === submittedValues['commerce-version']) {
+            draft['commerce-version'] = String(saved.version);
+            for (const form of activeForms)
+              form.elements.namedItem('commerce-version').value = String(saved.version);
+          }
+        }
+        if (matches(S.route) && !$('#main form[data-commerce-draft]')) A.render();
+        A.notify(unchanged ? '记录已保存到服务器数据库' : '记录已保存，后续输入已保留');
+      }
+    };
     void commit
       .then(
-        (result) => {
-          if (result.inventory) A.modules.inventory?.applyCommittedInventory?.(result.inventory);
-          acceptLocalCommerce(result);
-          afterCommit?.();
-          const unchanged = !submittedForm || (submittedForm.isConnected &&
-            JSON.stringify(readCommerceDraft(submittedForm)) === submittedDraft);
-          if (S.route === route && S.drawerContext === drawerContext && unchanged)
-            A.completeAction ? A.completeAction(completed, '记录已保存') : completed();
-          else {
-            saveDrafts();
-            const activeForms = [...document.querySelectorAll(
-              '#main form[data-commerce-draft], #drawer[open] form[data-commerce-draft]'
-            )].filter(form => form.dataset.commerceDraft === submittedKey);
-            if (submittedKey && !activeForms.length &&
-                JSON.stringify(S.drafts.get(submittedKey)) === submittedDraft)
-              S.drafts.delete(submittedKey);
-            else if (submittedValues) {
-              const prior = recordForDraft(before, submittedForm.id, submittedValues);
-              const saved = recordForDraft(result.data, submittedForm.id, submittedValues);
-              const draft = S.drafts.get(submittedKey);
-              if (prior && saved && draft &&
-                  String(prior.version) === submittedValues['commerce-version'] &&
-                  draft['commerce-id'] === submittedValues['commerce-id'] &&
-                  draft['commerce-version'] === submittedValues['commerce-version']) {
-                draft['commerce-version'] = String(saved.version);
-                for (const form of activeForms)
-                  form.elements.namedItem('commerce-version').value = String(saved.version);
-              }
-            }
-            if (matches(S.route) && !$('#main form[data-commerce-draft]')) A.render();
-            A.notify(unchanged ? '记录已保存到服务器数据库' : '记录已保存，后续输入已保留');
-          }
-        },
+        acceptSave,
         async (error) => {
           if (error?.status === 409) {
             try {
               acceptLocalCommerce(await localData.load('commerce'));
               await Promise.all(participants.map((item) => item.reload?.()));
+              if (submitter && S.route === route) A.render();
             } catch {
-              localPhase = 'error';
+              if (!submitter) localPhase = 'error';
             }
             A.notify(`${error.message || '资料已经变化'}。本次未保存，请重新打开并核对当前数据`);
           } else if (error?.status >= 400 && error.status < 500) {
             A.notify('服务器保存失败，未登记本次操作，请重新核对');
+          } else if (submitter) {
+            try {
+              const result = await localData.load('commerce');
+              if (result.data?.logs?.some(entry => entry.id === next.logs[0]?.id)) {
+                acceptSave(result);
+                return;
+              }
+              acceptLocalCommerce(result);
+              if (S.route === route) A.render();
+              A.notify('已重新读取资料，本次操作未登记，可重试');
+            } catch {
+              A.notify('暂时无法确认保存结果，可重试核对');
+            }
           } else {
             localPhase = 'error';
             A.notify('暂时无法确认服务器保存结果，请刷新页面核对记录后再提交');
@@ -722,6 +746,7 @@
       )
       .finally(() => {
         feedback?.finish();
+        protectedContent?.removeAttribute('aria-busy');
         saving = false;
       });
   }
@@ -736,6 +761,7 @@
       actor: currentOperator().name || '历史未记录',
       actorId: currentOperator().id
     });
+    return logs[0];
   }
   function normalizedPlan(plan) {
     return (
@@ -886,7 +912,10 @@
   function timeline(entityId) {
     const rows = logs.filter((row) => row.entityId === entityId);
     return rows.length
-      ? `<ul class="timeline">${rows.map((row) => `<li><div><strong>${E(row.type)}</strong><p>${E(row.at)} · ${E(localData?.operatorLabel?.(row.actorId, row.actor) || row.actor)} · ${E(row.detail)}</p></div></li>`).join('')}</ul>`
+      ? `<ul class="timeline">${rows.map((row) => {
+        const at = row.type === tenantRenewalHandledAction ? dateInput(row.at).replace('T', ' ') : row.at;
+        return `<li><div><strong>${E(row.type)}</strong><p>${E(at)} · ${E(localData?.operatorLabel?.(row.actorId, row.actor) || row.actor)} · ${E(row.detail)}</p></div></li>`;
+      }).join('')}</ul>`
       : A.empty('暂无操作记录', '新的修改、退款、续费和付款登记会显示在这里。');
   }
   function costsFor(order) {
@@ -1511,18 +1540,23 @@
       for (const id of group.orders) identities.set(id, group.id);
     return identities;
   }
+  function confirmedRenewalOrders(at) {
+    return orders.flatMap((order) => {
+      if (isClaude(order) && !claudeAccountTracked(order)) return [];
+      const start = parseDate(order.start), expiry = parseDate(order.expiry);
+      if (!Object.hasOwn(productPlans, order.product) || !Number.isFinite(start) || !(expiry > start) ||
+          !hasOpeningEvidence(order, start, expiry, at)) return [];
+      return [{ order, start, expiry }];
+    });
+  }
   function renewalProjection() {
     const identities = identifyOrderCustomers();
     const evaluatedAt = orderEvaluationTime();
     const deadline = evaluatedAt + renewalWarningHours * 3_600_000;
-    const rows = orders.flatMap((order) => {
-      if (isClaude(order) && !claudeAccountTracked(order)) return [];
-      const start = parseDate(order.start), expiry = parseDate(order.expiry);
-      if (!Object.hasOwn(productPlans, order.product) || !Number.isFinite(start) || !(expiry > start) ||
-          !hasOpeningEvidence(order, start, expiry, evaluatedAt)) return [];
+    const rows = confirmedRenewalOrders(evaluatedAt).map((row) => {
+      const { order } = row;
       const identity = identities.get(order.id);
-      const subscription = renewalSubscriptionKey(order, identity);
-      return [{ order, identity, subscription, start, expiry }];
+      return { ...row, identity, subscription: renewalSubscriptionKey(order, identity) };
     });
     const latest = new Map();
     for (const row of rows) {
@@ -2400,22 +2434,27 @@
     const hours = totalHours % 24;
     return [days && `${days} 天`, hours && `${hours} 小时`].filter(Boolean).join(' ');
   }
-  function openRenewalSettings() {
-    const key = 'commerce-renewal-settings';
+  function openRenewalSettings(tenant = false) {
+    const key = tenant ? 'commerce-tenant-renewal-settings' : 'commerce-renewal-settings';
+    const warningHours = tenant ? tenantRenewalWarningHours ?? defaultWarningHours : renewalWarningHours;
     const draft = S.drafts.get(key);
-    const days = draft?.['commerce-renewal-days'] ?? Math.floor(renewalWarningHours / 24);
-    const hours = draft?.['commerce-renewal-hours'] ?? renewalWarningHours % 24;
-    A.openDrawer('提醒设置', '全站共用这项设置，保存后立即更新提醒列表。',
-      `<form id="commerce-renewal-settings" data-commerce-draft="${key}" novalidate><div class="commerce-field-grid">${
+    const days = draft?.['commerce-renewal-days'] ?? Math.floor(warningHours / 24);
+    const hours = draft?.['commerce-renewal-hours'] ?? warningHours % 24;
+    A.openDrawer(tenant ? '租户续费提醒设置' : '提醒设置', tenant
+      ? '租户数据页共用这项设置，保存后立即更新待处理列表。'
+      : '全站共用这项设置，保存后立即更新提醒列表。',
+      `<form id="${key}" data-commerce-draft="${key}"${tenant ? ' data-protect-drawer-dismiss' : ''} novalidate><div class="commerce-field-grid">${
         field('提前天数', 'renewal-days',
           input('renewal-days', days, `type="number" min="0" max="${maxWarningHours / 24}" step="1"`))
       }${
         field('提前小时数', 'renewal-hours',
           input('renewal-hours', hours, 'type="number" min="0" max="23" step="1"'))
       }</div><p class="footnote">少于 1 天时只填小时。两项合计最短 1 小时，最长 365 天。</p></form>`, A.button('取消', 'drawer-close') +
-      '<button type="submit" form="commerce-renewal-settings" class="button primary">保存设置</button>', key);
+      `<button type="submit" form="${key}" class="button primary">保存设置</button>`, key);
   }
   function saveRenewalSettings(form) {
+    const tenant = form.id === 'commerce-tenant-renewal-settings';
+    if (tenant && (S.route !== tenantRoute || !canManageOrders())) return;
     const data = A.readForm(form);
     const days = Number(value(data, 'renewal-days'));
     const hours = Number(value(data, 'renewal-hours'));
@@ -2431,14 +2470,16 @@
     A.setError('commerce-renewal-hours', hourError);
     if (dayError || hourError) return;
     const duration = formatRenewalWarning(totalHours);
-    persistCommerce('更新续费提醒设置', () => {
-      renewalWarningHours = totalHours;
-      log('更新续费提醒设置', 'renewal-settings', `提前 ${duration}`);
+    const action = tenant ? tenantRenewalSettingsAction : '更新续费提醒设置';
+    persistCommerce(action, () => {
+      if (tenant) tenantRenewalWarningHours = totalHours;
+      else renewalWarningHours = totalHours;
+      log(action, tenant ? 'tenant-renewal-settings' : 'renewal-settings', `提前 ${duration}`);
     }, () => {
       cleanClose(form.dataset.commerceDraft);
       A.render();
       A.notify(`已设为提前 ${duration}提醒`);
-    });
+    }, [], undefined, tenant ? $(`button[form="${form.id}"]`) : undefined);
   }
   function changeRenewalDecision(id, restore) {
     const canChange = () => renewalProjection().reminders.some((row) =>
@@ -2699,13 +2740,189 @@
       .map((service) => `${service.name}（${service.count} 次）`)
       .join('、');
   }
+  function tenantView() {
+    const key = 'commerce-tenant-list';
+    if (!S.drafts.has(key)) S.drafts.set(key, { tab: 'active', tenantId: '' });
+    return S.drafts.get(key);
+  }
+  function tenantRenewalCustomers(relatedOrders) {
+    const contacts = new Map();
+    for (const order of relatedOrders) {
+      const contact = customerForOrder(order, order.customerId);
+      const channels = orderContactFields.map(([key]) => contact[key]);
+      const key = order.customerId || JSON.stringify([contact.name, ...channels]);
+      const known = contacts.get(key);
+      if (!known) contacts.set(key, contact);
+      else for (const [field] of orderContactFields) known[field] ||= contact[field];
+    }
+    return [...contacts.values()];
+  }
+  function projectTenantRenewals() {
+    const at = orderEvaluationTime();
+    const deadline = at + (tenantRenewalWarningHours ?? defaultWarningHours) * 3_600_000;
+    const tenantsById = new Map(tenants.map(tenant => [tenant.id, tenant]));
+    const ordersById = new Map(orders.map(order => [order.id, order]));
+    const groups = new Map(), handled = new Set();
+    const cycleKey = (tenantId, orderId, expiry) => JSON.stringify([tenantId, orderId, expiry]);
+    const processed = logs.filter(entry => entry.type === tenantRenewalHandledAction && entry.tenantRenewal)
+      .map(record => {
+        const { orderIds, expiry } = record.tenantRenewal;
+        for (const id of orderIds) handled.add(cycleKey(record.entityId, id, expiry));
+        const related = orderIds.map(id => ordersById.get(id)).filter(order => order?.tenantId === record.entityId);
+        return { id: 'handled-' + encodeURIComponent(record.id), record, tenantId: record.entityId,
+          tenant: tenantsById.get(record.entityId), order: related[0], related, expiry,
+          contacts: tenantRenewalCustomers(related) };
+      });
+    for (const row of confirmedRenewalOrders(at)) {
+      const { order, expiry } = row;
+      const email = subscriptionEmail(order);
+      if (!email || !tenantsById.has(order.tenantId) || order.cancelled || order.subscriptionEnded || endedInventoryOrder(order)) continue;
+      const key = JSON.stringify([order.tenantId, subscriptionFamily(order), email, order.platformAccountId || '']);
+      const prior = groups.get(key);
+      if (!prior || expiry > prior.expiry) groups.set(key, { expiry, rows: [row] });
+      else if (expiry === prior.expiry) prior.rows.push(row);
+    }
+    const pending = [];
+    const counts = new Map();
+    for (const { expiry, rows } of groups.values()) {
+      if (expiry > deadline) continue;
+      const related = rows.filter(row => row.start <= at).map(row => row.order);
+      const order = related[0];
+      if (!order || related.some(row => handled.has(cycleKey(order.tenantId, row.id, expiry)))) continue;
+      pending.push({ id: 'due-' + encodeURIComponent(order.id), tenantId: order.tenantId,
+        tenant: tenantsById.get(order.tenantId), order, related, expiry, expired: expiry <= at,
+        contacts: tenantRenewalCustomers(related) });
+      counts.set(order.tenantId, (counts.get(order.tenantId) || 0) + 1);
+    }
+    return { pending: pending.sort((left, right) => left.expiry - right.expiry), processed, counts };
+  }
+  function tenantRenewalStatus(row) {
+    return row.record ? A.tag('已处理', 'success')
+      : A.tag(row.expired ? '已到期' : '即将到期', row.expired ? 'danger' : 'warning');
+  }
+  function tenantRenewalActions(row) {
+    const attrs = `data-id="${E(row.id)}"`;
+    const mark = !row.record && canManageOrders() ? A.textAction('标记已处理',
+      'commerce-tenant-renewal-handle', `${attrs} data-expiry="${row.expiry}"`) : '';
+    return `<div class="action-links">${A.textAction('详情', 'commerce-tenant-renewal-detail', attrs)}${mark}</div>`;
+  }
+  function renderTenantRenewalList(projection, view) {
+    const processed = view.tab === 'processed';
+    const query = String(S.query || '').trim().toLowerCase();
+    const rows = projection[view.tab].filter(row => {
+      if (view.tenantId && view.tenantId !== row.tenantId) return false;
+      return !query || [row.tenant?.name, ...customerChannels.map(([key]) => row.tenant?.[key]),
+        orderIdentity(row.order), row.order?.product, row.order?.plan,
+        ...row.related.map(order => order.orderNo),
+        ...row.contacts.flatMap(contact => [contact.name, ...orderContactFields.map(([key]) => contact[key])])
+      ].some(value => String(value || '').toLowerCase().includes(query));
+    });
+    const columns = [
+      { id: 'name', label: '租户', render: row => E(row.tenant?.name || '租户资料已移除') },
+      { id: 'phone', label: '租户联系方式', render: row => E(row.tenant?.phone || row.tenant?.wechat || '待补充') },
+      { id: 'email', label: '订阅账号', render: row => E(orderIdentity(row.order) || '订单资料已移除') },
+      { id: 'plan', label: '订阅套餐', render: row => E(row.order ? `${row.order.product} · ${row.order.plan}` : '—') },
+      { id: 'expiry', label: '到期时间', render: row => E(beijingClock.format(row.expiry)) },
+      { id: 'customers', label: '关联客户', render: row => E(row.contacts.length > 1
+        ? `${row.contacts[0].name}等 ${row.contacts.length} 位` : row.contacts[0]?.name || '待补充') },
+      { id: 'customerContact', label: '客户联系方式', render: row => E(
+        row.contacts.map(contact => contact.wechat || contact.customerPhone || contact.whatsapp || contact.telegram || contact.qq)
+          .find(Boolean) || '待补充') },
+      { id: 'status', label: '提醒状态', render: tenantRenewalStatus },
+      ...(processed ? [
+        { id: 'processedBy', label: '处理人', render: row => E(row.record.actor || '历史未记录') },
+        { id: 'processedAt', label: '处理时间', render: row => E(dateInput(row.record.at).replace('T', ' ')) }
+      ] : []),
+      { id: 'actions', label: '操作', action: true, render: tenantRenewalActions }
+    ];
+    const tenantIds = new Set(projection[view.tab].map(row => row.tenantId));
+    if (view.tenantId) tenantIds.add(view.tenantId);
+    const choices = [['', '全部租户'], ...[...tenantIds].map(id => [id, tenantLabel(id)])];
+    const tableId = processed ? 'commerce-tenant-renewals-processed' : 'commerce-tenant-renewals-pending';
+    const empty = query || view.tenantId
+      ? { title: '暂无符合条件的提醒', description: '可调整搜索或租户筛选。' }
+      : processed ? { title: '暂无已处理记录', description: '已完成的续费跟进会记录在这里。' }
+        : { title: '暂无待处理续费', description: '进入提醒时间且尚未处理的账号会列在这里。' };
+    return toolbar('搜索租户、客户、账号或联系方式',
+      `<label for="commerce-tenant-renewal-filter">租户</label>${select('tenant-renewal-filter', choices, view.tenantId)}` +
+      columnSettingsButton(tableId), 'data-page-actions') +
+      A.table(columns, A.pageRows(rows), '', tableId, empty) + A.pagination(rows.length);
+  }
+  function renewalContactProperties(record, fields) {
+    return fields.map(([key, label]) => {
+      const text = record?.[key];
+      if (!text) return '';
+      return property(label, `${E(text)} ${A.textAction('复制', 'copy-value',
+        `data-value="${E(text)}" aria-label="复制${E(label)}"`)}`, true);
+    }).join('') || property('联系方式', '待补充');
+  }
+  function openTenantRenewal(id) {
+    const { pending, processed } = projectTenantRenewals();
+    const row = [...pending, ...processed].find(entry => entry.id === id);
+    if (!row) return A.notify('提醒已更新，请重新选择');
+    const channels = customerChannels.map(([key, label]) => [key, key === 'wechat' ? '微信' : label]);
+    const customerFields = channels.map(([key, label]) => [key === 'phone' ? 'customerPhone' : key, label]);
+    const related = row.related.map(order => A.textAction(order.orderNo || '查看订单',
+      'commerce-order-detail', `data-id="${E(order.id)}"`)).join(' ');
+    const body = `<section class="form-section" data-protect-drawer-dismiss><h3>订阅与提醒</h3><div class="property-list">${[
+      property('订阅账号', orderIdentity(row.order)),
+      property('订阅套餐', row.order ? `${row.order.product} · ${row.order.plan}` : ''),
+      property('到期时间', beijingClock.format(row.expiry)),
+      property('提醒状态', tenantRenewalStatus(row), true),
+      property('关联订单', related || '订单资料已移除', true),
+      row.record ? property('处理人', row.record.actor) +
+        property('处理时间', dateInput(row.record.at).replace('T', ' ')) : ''
+    ].join('')}</div></section>
+    <section class="form-section"><h3>租户联系方式</h3><div class="property-list">${property(
+      '租户', row.tenant?.name || '租户资料已移除')}${renewalContactProperties(row.tenant, channels)}</div></section>
+    <section class="form-section"><h3>关联客户联系方式</h3>${row.contacts.length ? row.contacts.map(contact =>
+      `<div class="property-list">${property('客户', contact.name)}${renewalContactProperties(contact, customerFields)}</div>`
+    ).join('') : A.empty('暂无关联客户资料', '可从关联订单核对。')}</section>`;
+    A.openDrawer('租户续费详情', '联系方式来自关联租户、客户资料及本周期订单。处理记录按原提醒周期保留。',
+      body, A.button('关闭', 'drawer-close') + (!row.record && canManageOrders()
+        ? A.button('标记已处理', 'commerce-tenant-renewal-handle', 'primary', '',
+          `data-id="${E(id)}" data-expiry="${row.expiry}"`) : ''), `tenant-renewal-detail:${id}`);
+  }
+  function markTenantRenewalHandled(node) {
+    if (S.route !== tenantRoute || !canManageOrders()) return;
+    if (saving) return A.notify('正在保存，请稍候');
+    const current = () => projectTenantRenewals().pending.find(row =>
+      row.id === node.dataset.id && row.expiry === Number(node.dataset.expiry));
+    const row = current();
+    if (!row) return A.notify('提醒已更新，请重新核对');
+    A.confirmAction('标记已处理',
+      `${row.tenant.name} · ${orderIdentity(row.order)}。确认后移入已处理，并记录处理人和时间。`, () => {
+        if (S.route !== tenantRoute || !canManageOrders()) return;
+        const latest = current();
+        if (!latest) return A.notify('提醒已更新，请重新核对');
+        persistCommerce(tenantRenewalHandledAction, () => {
+          log(tenantRenewalHandledAction, latest.tenantId, '已标记处理本次到期提醒').tenantRenewal =
+            { orderIds: latest.related.map(order => order.id), expiry: latest.expiry };
+        }, () => {
+          if (node.closest('#drawer')) cleanClose();
+          A.render();
+          A.notify('已移入「已处理」');
+        }, [], undefined, node);
+      }, '确认已处理');
+  }
   function renderContacts(tenant = false) {
     const data = tenant ? tenants : customers,
       noun = tenant ? '租户' : '客户';
     const query = String(S.query || '')
       .trim()
       .toLocaleLowerCase();
-    const mode = tenant ? moduleState.tenantMode : moduleState.customerMode;
+    const view = tenant ? tenantView() : null;
+    const mode = tenant ? view.tab : moduleState.customerMode;
+    const reminders = tenant ? projectTenantRenewals() : null;
+    const states = [['active', '使用中'], ['inactive', '已停用']];
+    if (tenant) states.push(['pending', `待处理 ${reminders.pending.length}`], ['processed', `已处理 ${reminders.processed.length}`]);
+    const listTabs = tabs(states, mode, 'commerce-contact-tab', tenant ? 'aria-label="租户数据分类"' : '');
+    const renewalSettings = tenant && canManageOrders() ? A.button(
+      `提醒设置 · 提前 ${formatRenewalWarning(tenantRenewalWarningHours ?? defaultWarningHours)}`,
+      'commerce-tenant-renewal-settings', '', 'settings', 'aria-label="租户续费提醒设置"') : '';
+    if (tenant && (mode === 'pending' || mode === 'processed')) return A.header('租户数据',
+      '按已确认的订阅周期查看租户待处理续费和处理记录。到期时间使用北京时间。',
+      renewalSettings) + `<section class="panel">${listTabs}${renderTenantRenewalList(reminders, view)}</section>`;
     const rows = data.filter(
       (row) =>
         row.active === (mode === 'active') &&
@@ -2744,6 +2961,12 @@
               label: '关联账号',
               render: (row) =>
                 String(currentSubscriptions().filter((order) => order.tenantId === row.id).length)
+            },
+            {
+              id: 'renewals',
+              label: '待续费',
+              render: (row) => reminders.counts.has(row.id) ? A.textAction(`${reminders.counts.get(row.id)} 个待处理`,
+                'commerce-tenant-renewal-filter-open', `data-id="${E(row.id)}"`) : '—'
             }
           ]
         : [
@@ -2793,9 +3016,9 @@
       A.header(
         `${noun}数据`,
         tenant
-          ? '查看租户关联账号、开通周期与逐项付租记录；归属人与资料录入人分别记录。'
+          ? '查看租户关联账号、续费提醒和逐项付租记录；归属人与资料录入人分别记录。'
           : '客户标签独立维护；历史业务按客户编号关联订单汇总，录入人与最近修改人自动记录。',
-        (tenant ? '' : customerSettingsButtons()) + A.button(
+        (tenant ? renewalSettings : customerSettingsButtons()) + A.button(
           `新增${noun}`,
           'commerce-contact-add',
           'primary',
@@ -2803,14 +3026,7 @@
           `data-kind="${tenant ? 'tenant' : 'customer'}"`
         )
       ) +
-      `<section class="panel">${tabs(
-        [
-          ['active', '使用中'],
-          ['inactive', '已停用']
-        ],
-        mode,
-        'commerce-contact-tab'
-      )}${toolbar(`搜索${noun}、联系方式、标签、历史业务或录入人`, columnSettingsButton(`commerce-${tenant ? 'tenants' : 'customers'}`), 'data-page-actions')}${tableList(columns, displayRows, `commerce-${tenant ? 'tenants' : 'customers'}`)}</section>`
+      `<section class="panel">${listTabs}${toolbar(`搜索${noun}、联系方式、标签、历史业务或录入人`, columnSettingsButton(`commerce-${tenant ? 'tenants' : 'customers'}`), 'data-page-actions')}${tableList(columns, displayRows, `commerce-${tenant ? 'tenants' : 'customers'}`)}</section>`
     );
   }
   function customerSettingsButtons() {
@@ -5521,8 +5737,9 @@
     document.getElementById(fieldId)?.focus();
   }
   function showNewContactInList(tenant) {
-    const list = tenant ? 'customers/tenants' : 'customers/list';
-    moduleState[tenant ? 'tenantMode' : 'customerMode'] = 'active';
+    const list = tenant ? tenantRoute : 'customers/list';
+    if (tenant) tenantView().tab = 'active';
+    else moduleState.customerMode = 'active';
     if (S.route === list) {
       S.query = '';
       S.page = 1;
@@ -7292,6 +7509,26 @@
       openRenewalSettings();
       return true;
     }
+    if (action === 'commerce-tenant-renewal-settings') {
+      if (S.route === tenantRoute && canManageOrders()) openRenewalSettings(true);
+      return true;
+    }
+    if (action === 'commerce-tenant-renewal-detail') {
+      if (S.route === tenantRoute) openTenantRenewal(id);
+      return true;
+    }
+    if (action === 'commerce-tenant-renewal-handle') {
+      markTenantRenewalHandled(node);
+      return true;
+    }
+    if (action === 'commerce-tenant-renewal-filter-open') {
+      if (S.route === tenantRoute) {
+        Object.assign(tenantView(), { tab: 'pending', tenantId: id });
+        S.page = 1;
+        A.render();
+      }
+      return true;
+    }
     if (action === 'commerce-renewal-open') {
       if (node.hasAttribute('data-renewal-card-renew')) {
         const panel = $('#commerce-renewal-card-panel');
@@ -7368,8 +7605,8 @@
       return true;
     }
     if (action === 'commerce-contact-tab') {
-      const key = S.route === 'customers/tenants' ? 'tenantMode' : 'customerMode';
-      moduleState[key] = node.dataset.tab;
+      if (S.route === tenantRoute) tenantView().tab = node.dataset.tab;
+      else moduleState.customerMode = node.dataset.tab;
       S.page = 1;
       A.render();
       return true;
@@ -7637,7 +7874,7 @@
       return true;
     }
     if (form.id === 'commerce-tenant-owner-form') { void saveTenantOwnerTransfer(form); return true; }
-    if (form.id === 'commerce-renewal-settings') {
+    if (form.id === 'commerce-renewal-settings' || form.id === 'commerce-tenant-renewal-settings') {
       saveRenewalSettings(form);
       return true;
     }
@@ -7911,6 +8148,12 @@
         : A.addCalendarMonth(start);
   }
   function onChange(node) {
+    if (node.id === 'commerce-tenant-renewal-filter') {
+      tenantView().tenantId = node.value;
+      S.page = 1;
+      A.render();
+      return true;
+    }
     if (node.matches('[data-entry-date]')) {
       const panel = node.closest('#commerce-entry-records');
       entryView(panel.dataset.kind, panel.dataset.product)[node.dataset.entryDate + 'Draft'] = node.value;
@@ -8221,7 +8464,7 @@
         'customers/new',
         'customers/new/tenant',
         'customers/list',
-        'customers/tenants',
+        tenantRoute,
         'workspace/order', gptOrderRoute, claudeOrderRoute, ...Object.keys(personalEntries),
         renewalRoute,
         customerLossRoute,
@@ -8243,10 +8486,11 @@
   function render() {
     if (S.route === paymentSettingsRoute) return renderPaymentSettings();
     const lossPage = S.route === customerLossRoute;
+    const tenantPage = S.route === tenantRoute;
     if (localData && localPhase !== 'ready') {
       const gptOrdersPage = S.route === 'orders/gpt';
       return (
-        A.header(gptOrdersPage ? 'GPT 订单' : lossPage ? '客户流失' : '本机业务资料', '') +
+        A.header(gptOrdersPage ? 'GPT 订单' : lossPage ? '客户流失' : tenantPage ? '租户数据' : '本机业务资料', '') +
         `<section class="panel">${gptOrdersPage ? A.gptOrderTabs?.() || '' : ''}${
           localPhase === 'error'
             ? A.empty(lossPage ? '无法读取业务资料' : '无法读取本机业务资料',
@@ -8268,7 +8512,7 @@
       );
     }
     if (S.route === 'customers/list') return renderContacts(false);
-    if (S.route === 'customers/tenants') return renderContacts(true);
+    if (tenantPage) return renderContacts(true);
     if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) return renderOrderPage();
     if (S.route === renewalRoute) return renderRenewals();
     if (S.route === subscriptionCardsRoute) return renderSubscriptionCards();
