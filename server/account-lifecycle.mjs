@@ -47,9 +47,11 @@ export function accountLifecycleSummary(account, commerce, now = Date.now()) {
   const closed = lifecycle && ['recovered', 'retired'].includes(lifecycle.disposition);
   const latest = current[0];
   const customerId = closed ? '' : lifecycle?.customerId || latest?.customerId || '';
-  const label = lifecycle?.disposition === 'retired' ? '不再复用'
+  const label = account.claudeHistory && account.health === 'dead' ? '已归档'
+    : lifecycle?.disposition === 'retired' ? '不再复用'
     : held ? '已保留待核对'
     : state(account) === 'claimed' ? '已提取待使用'
+    : state(account) === 'available' && account.source === '历史入库' && account.status === '冻结' ? '待核对交付资料'
     : state(account) === 'available' ? lifecycle?.disposition === 'recovered' ? '已回收可用' : '首次可用'
     : latest && instant(latest.expiry) && instant(latest.expiry) <= now ? '到期待处理' : '使用中';
   const name = id => rows(commerce?.customers).find(customer => customer.id === id)?.name || (id ? '历史客户' : '未分配');
@@ -167,8 +169,9 @@ export function checkInventoryRenewals(previousCommerce, commerce, inventory) {
       continue;
     }
     if (order.businessType !== '续费' || !productType(order)) continue;
-    const matches = rows(inventory?.accounts).filter(account => systemAccount(account) &&
-      account.type === productType(order) && emailKey(account.email) === emailKey(order.email));
+    const email = emailKey(order.email);
+    const matches = email ? rows(inventory?.accounts).filter(account => systemAccount(account) &&
+      account.type === productType(order) && emailKey(account.email) === email) : [];
     if (!matches.length) {
       if (order.accountId) return '库存账号与本次续费邮箱不一致';
       continue;

@@ -36,6 +36,14 @@
   let accountImportContext = null;
   let locationSettingsReturn = null;
   let importFileReadVersion = 0;
+  const claudeHistoryStates = { opened: '已开通', aging: '养号中', dead: '死号' };
+  const claudeHistoryKey = 'inventory-claude-history';
+  const claudeHistoryContentId = 'inventory-claude-history-content';
+  const claudeHistoryFields = [
+    ['邮箱', 'email'], ['登记状态', 'state'], ['注册时间', 'registered'], ['套餐', 'plan'],
+    ['开通时间', 'start'], ['到期时间', 'expiry'], ['国家地区', 'country'], ['登录设备', 'device'], ['来源备注', 'note']
+  ];
+  let preparedClaudeHistory;
   const accountSubmissionTypes = [
     ['gpt', 'GPT 账号'],
     ['claude', 'Claude 账号'],
@@ -516,7 +524,8 @@
     return Number.isFinite(date) && date <= now ? Math.floor((now - date) / 3600000) : null;
   }
   function registrationTime(asset) {
-    return String(asset.registered || '').trim() || asset.createdAt || asset.importedAt || '';
+    return String(asset.registered || '').trim() ||
+      (asset.claudeHistory ? '' : asset.createdAt || asset.importedAt || '');
   }
   function registrationInstant(value) {
     const text = String(value || '').trim().replace(' ', 'T');
@@ -947,6 +956,7 @@
     const title = typeLabel(type);
     const actions = canManage ?
       (microsoft ? '' : usageReviewButton()) + button('本表设置', 'inventory-settings', '', 'settings') +
+      (type === 'claude' && localData && admin() ? button('历史入库', 'inventory-claude-history', '', 'upload') : '') +
       button('批量导入', 'inventory-import', '', 'upload') +
       button(kind === 'account' ? '新增账号' : '新增邮箱', 'inventory-add', 'primary', 'plus') : '';
     let body;
@@ -982,6 +992,11 @@
           render: (asset) =>
             textAction(displayIdentity(asset), 'inventory-detail', `data-id="${esc(asset.id)}" data-table-value-preview`, 'table-value-ellipsis')
         },
+        ...(type === 'claude' && assets.some(asset => asset.claudeHistory) ? [
+          { id: 'claudeHistoryState', label: '历史登记状态', render: asset => esc(claudeHistoryStates[asset.claudeHistory?.phase] || '—') },
+          { id: 'claudeHistoryPlan', label: '历史套餐', render: asset => esc(asset.claudeHistory?.plan || '—') },
+          { id: 'claudeHistoryExpiry', label: '历史到期时间', render: asset => esc(asset.claudeHistory?.expiry?.replace('T', ' ') || '—') }
+        ] : []),
         {
           id: 'password',
           label: kind === 'account' ? '账号密码' : microsoft ? '登录密码' : '邮箱密码',
@@ -1068,8 +1083,9 @@
               {
                 id: 'ready',
                 label: '是否可用',
-                render: (asset) =>
-                  tag(
+                render: (asset) => asset.claudeHistory && asset.health === 'dead' ? tag('死号', 'warning')
+                  : asset.claudeHistory && asset.status === '冻结' ? tag('资料待核对', 'warning')
+                  : tag(
                     age(asset) === null
                       ? '注册时间未提供'
                       : age(asset) >= settingsFor(type).hours
@@ -2219,6 +2235,14 @@
       ...(usesAccountLocation(asset.type) ? [[asset.type === 'claude' ? '注册城市' : '注册地区／城市', asset.city || '未填写']] : []),
       ['来源渠道', asset.source || '未填写'],
       ['账号状态', { normal: asset.status, dead: '死号', unlocking: '解封中' }[asset.health]],
+      ...(asset.claudeHistory ? [
+        ['历史登记状态', claudeHistoryStates[asset.claudeHistory.phase]],
+        ...(asset.claudeHistory.plan ? [
+          ['历史套餐', asset.claudeHistory.plan],
+          ['历史开通时间', asset.claudeHistory.start.replace('T', ' ')],
+          ['历史到期时间', asset.claudeHistory.expiry.replace('T', ' ')]
+        ] : [])
+      ] : []),
       [
         '使用状态',
         accountSummaries.get(asset.id)?.label || { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[asset.inventoryState]
@@ -2390,6 +2414,115 @@
   });
   function parseRegistrationProxySafe(value) {
     try { return value ? parseRegistrationProxy(value) : {}; } catch { return {}; }
+  }
+  function openClaudeHistoryIntake() {
+    if (!localData || !admin() || api.state.route !== 'accounts/claude') return;
+    saveDrafts();
+    preparedClaudeHistory = null;
+    const header = claudeHistoryFields.map(([label]) => label).join('\t');
+    const content = draft(claudeHistoryKey)[claudeHistoryContentId] ?? header + '\n';
+    showDrawer('Claude 历史入库', '登记自有 Claude 账号的开通、养号或死号历史。',
+      `<form id="${claudeHistoryKey}-form" data-inventory-draft="${claudeHistoryKey}" novalidate><div class="form-grid">${
+        wide('历史资料', claudeHistoryContentId, area(claudeHistoryContentId, content, '', 8), true,
+          '按表头粘贴表格或 CSV，最多 100 条。日期写为 YYYY-MM-DD 或 YYYY-MM-DD HH:mm。已开通填写套餐及开通、到期时间，缺失的其他资料留空。来源备注可填写原表位置。')
+      }</div><div id="${claudeHistoryKey}-review" class="section-gap" aria-live="polite"></div></form>`,
+      button('取消', 'inventory-close') + button('预检资料', 'inventory-claude-history-preview') +
+      `<button class="button primary" form="${claudeHistoryKey}-form" type="submit" disabled>确认入库</button>`,
+      claudeHistoryKey);
+  }
+  function claudeHistoryFormCurrent(form, content) {
+    return form.closest('#drawer[open]') && api.state.route === 'accounts/claude' &&
+      form.elements.namedItem(claudeHistoryContentId)?.value === content;
+  }
+  function claudeHistorySubmitButton() {
+    return document.querySelector('button[form="' + claudeHistoryKey + '-form"][type="submit"]');
+  }
+  async function previewClaudeHistory(form) {
+    if (!form || form.dataset.checking || inventorySavePending) return;
+    const content = form.elements.namedItem(claudeHistoryContentId).value;
+    const review = form.querySelector('#' + claudeHistoryKey + '-review');
+    const submit = claudeHistorySubmitButton();
+    preparedClaudeHistory = null;
+    submit.disabled = true;
+    review.textContent = '';
+    let lines;
+    try {
+      lines = content.split(/\r?\n/)[0].includes('\t')
+        ? content.split(/\r?\n/).map(line => line.split('\t')).filter(line => line.some(value => value.trim()))
+        : api.legacy.parseCsv(content);
+    } catch {
+      return api.setError(claudeHistoryContentId, '请检查 CSV 引号和列格式');
+    }
+    const labels = lines.shift();
+    if (labels?.length !== claudeHistoryFields.length ||
+        claudeHistoryFields.some(([label], index) => labels[index].trim() !== label) ||
+        !lines.length || lines.length > 100 || lines.some(line => line.length > claudeHistoryFields.length))
+      return api.setError(claudeHistoryContentId, '请保留完整表头并填写 1 至 100 条账号资料');
+
+    const rows = lines.map(line => Object.fromEntries(claudeHistoryFields.map(([, field], index) => [field, line[index] || ''])));
+    api.setError(claudeHistoryContentId, '');
+    form.dataset.checking = 'true';
+    review.textContent = '正在预检历史资料…';
+    try {
+      const result = await localData.claudeHistoryIntake({ mode: 'preview', rows });
+      if (!claudeHistoryFormCurrent(form, content)) return;
+      preparedClaudeHistory = { form, content, inputRows: rows, ...result };
+      review.innerHTML = table([
+        { id: 'line', label: '序号' }, { id: 'email', label: '邮箱' }, { id: 'state', label: '登记状态' },
+        { id: 'plan', label: '套餐' }, { id: 'registered', label: '注册时间' }, { id: 'start', label: '开通时间' },
+        { id: 'expiry', label: '到期时间' }, { id: 'result', label: '核对结果' }, { id: 'error', label: '待修正' }
+      ], result.rows, '', 'claude-history-preview');
+      const invalid = result.rows.some(row => row.error);
+      submit.disabled = invalid || !result.pending;
+      api.notify(invalid ? '请修正问题后重新预检' :
+        result.pending ? '预检通过，待入库 ' + result.pending + ' 条' : '这些账号已登记');
+    } catch (error) {
+      if (claudeHistoryFormCurrent(form, content)) {
+        review.textContent = '';
+        api.setError(claudeHistoryContentId, error.message);
+      }
+    } finally {
+      delete form.dataset.checking;
+    }
+  }
+  function submitClaudeHistory(form) {
+    const prepared = preparedClaudeHistory;
+    if (!prepared || prepared.form !== form || !claudeHistoryFormCurrent(form, prepared.content) ||
+        !prepared.pending || prepared.rows.some(row => row.error))
+      return api.setError(claudeHistoryContentId, '请先按当前内容完成预检');
+    const actor = currentActor();
+    api.confirmAction('确认 Claude 历史入库', '将按预检结果保存 ' + prepared.pending + ' 条 Claude 账号历史。',
+      async () => {
+        if (inventorySavePending || preparedClaudeHistory !== prepared ||
+            !claudeHistoryFormCurrent(form, prepared.content)) return;
+        inventorySavePending = true;
+        const submit = claudeHistorySubmitButton();
+        submit.disabled = true;
+        const input = form.elements.namedItem(claudeHistoryContentId);
+        input.readOnly = true;
+        try {
+          const result = await localData.claudeHistoryIntake({ mode: 'confirm',
+            rows: prepared.inputRows, inventoryVersion: prepared.inventoryVersion });
+          if (currentActor().id !== actor.id) return;
+          applyCommittedInventory(result.inventory);
+          if (claudeHistoryFormCurrent(form, prepared.content)) {
+            finishDrawer(claudeHistoryKey);
+            api.render();
+          } else if (api.state.drafts.get(claudeHistoryKey)?.[claudeHistoryContentId] === prepared.content) {
+            api.state.drafts.delete(claudeHistoryKey);
+          }
+          api.notify('Claude 历史入库 ' + result.imported + ' 条，已有 ' + result.reused + ' 条');
+        } catch (error) {
+          if (claudeHistoryFormCurrent(form, prepared.content)) {
+            form.querySelector('#' + claudeHistoryKey + '-review').textContent = '';
+            api.setError(claudeHistoryContentId, error.message + '，请重新预检');
+          } else api.notify(error.message);
+        } finally {
+          inventorySavePending = false;
+          input.readOnly = false;
+          if (preparedClaudeHistory === prepared) preparedClaudeHistory = null;
+        }
+      });
   }
   function importEditor(type = '') {
     const routeType = api.state.route.split('/')[1];
@@ -4120,7 +4253,10 @@
             };
           }
         );
-    } else if (action === 'inventory-import') importEditor(node.dataset.type);
+    } else if (action === 'inventory-claude-history') openClaudeHistoryIntake();
+    else if (action === 'inventory-claude-history-preview')
+      void previewClaudeHistory(document.getElementById(claudeHistoryKey + '-form'));
+    else if (action === 'inventory-import') importEditor(node.dataset.type);
     else if (action === 'inventory-import-example') {
       const form = document.getElementById('inventory-import-form');
       const context = accountImportContext;
@@ -4259,6 +4395,7 @@
     else if (form.id === 'inventory-return-form') submitReturn(form);
     else if (form.id === 'inventory-use-form') submitUse(form);
     else if (form.id === 'inventory-asset-form') saveAsset(form);
+    else if (form.id === claudeHistoryKey + '-form') submitClaudeHistory(form);
     else if (form.id === 'inventory-import-form') submitImport(form);
     else if (form.id === 'inventory-quick-form') {
       void reviewQuickReturn(form);
@@ -4609,6 +4746,10 @@
       if (link) { const url = phoneCodeUrl(node.value); link.hidden = !url; link.href = url || '#'; }
     } else if (node.id === 'inventory-proxy-url') {
       previewRegistrationProxy(node);
+    } else if (node.id === claudeHistoryContentId) {
+      preparedClaudeHistory = null;
+      claudeHistorySubmitButton().disabled = true;
+      node.form.querySelector('#' + claudeHistoryKey + '-review').textContent = '';
     }
     saveDrafts();
     return true;

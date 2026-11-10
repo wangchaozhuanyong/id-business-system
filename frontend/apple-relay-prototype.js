@@ -610,6 +610,8 @@
     const hasParent = parents.some((p) => !p.deleted && p.status === 'ACTIVE');
     const actions = hasParent
       ? A.button('批量导入', 'relay-import', '', 'upload') +
+        (local && remote.status?.configured && ['admin', 'super'].includes(actor().role)
+          ? A.button('历史入库', 'relay-intake', '', 'upload') : '') +
         A.button('登记隐藏邮箱', 'relay-alias-add', 'primary', 'plus')
       : A.button('新增主邮箱', 'relay-parent-add', 'primary', 'plus');
     const hasDetailFilter = view.q || view.parentId || view.health;
@@ -1044,6 +1046,125 @@
         A.button('预检资料', 'relay-import-preview') +
         '<button type="submit" form="relay-import-form" class="button primary">确认导入</button>'
     );
+  }
+  const intakeFields = [
+    ['隐藏邮箱', 'email'], ['注册时间', 'registered'], ['客户微信', 'wechat'], ['套餐', 'plan'],
+    ['开通时间', 'start'], ['到期时间', 'expiry'], ['付款方式', 'payment'], ['备注', 'note']
+  ];
+  function openAliasIntake() {
+    initialize();
+    preview = null;
+    const d = draft('intake');
+    const heading = intakeFields.map(([label]) => label).join('\t');
+    openForm('intake', '', '苹果隐藏邮箱历史入库',
+      parentPicker(d['relay-parentId'] || view.parentId, d['relay-parent-choice']) +
+      field('有效天数', 'days', input('days', d['relay-days'] || 30, 'type="number" min="1" max="3650"'), true) +
+      `<div class="commerce-span-all">${field('历史资料', 'intake-content',
+        `<textarea id="relay-intake-content" name="relay-intake-content" rows="7">${E(d['relay-intake-content'] ?? heading + '\n')}</textarea>`,
+        true, '可粘贴表格或 CSV，最多 100 条。仅登记注册时，保留邮箱和已核实的注册时间。已售还需填写已建档客户微信、原套餐、开通时间、到期时间及付款方式。')}</div>` +
+      '<div class="commerce-span-all" id="relay-intake-preview" aria-live="polite"></div>',
+      A.button('取消', 'drawer-close') + A.button('预检资料', 'relay-intake-preview') +
+      '<button type="submit" form="relay-intake-form" class="button primary">确认入库</button>');
+  }
+  async function previewIntake(form) {
+    if (form.dataset.checking || form.dataset.saving) return;
+    const check = checked(form, 'intake');
+    if (!check) return;
+    const { raw, ctx } = check;
+    const fp = fingerprint(raw), who = actor(), p = parent(val(raw, 'parentId'));
+    preview = null;
+    const target = document.getElementById('relay-intake-preview');
+    target.innerHTML = '';
+    if (!p || p.status !== 'ACTIVE') return fail('parentId', '请选择正常的 Apple 主邮箱');
+    if (!validDays(raw)) return fail('days', '有效天数应为 1 至 3650 的整数');
+    const content = val(raw, 'intake-content');
+    let lines;
+    try {
+      lines = content.split('\n')[0].includes('\t')
+        ? content.split(/\r?\n/).map(line => line.split('\t').map(value => value.trim())).filter(line => line.some(Boolean))
+        : A.legacy.parseCsv(content);
+    } catch {
+      return fail('intake-content', '请检查 CSV 引号和列格式');
+    }
+    if (lines[0]?.[0] === intakeFields[0][0]) {
+      const header = lines.shift();
+      if (header.length !== intakeFields.length || !intakeFields.every(([label], index) => header[index] === label))
+        return fail('intake-content', '请按抽屉中的表头顺序填写');
+    }
+    if (!lines.length || lines.length > 100 || lines.some(line => line.length > intakeFields.length))
+      return fail('intake-content', '请按表头填写 1 至 100 条历史资料');
+    A.setError('relay-intake-content', '');
+    const payload = { parentId: p.id, parentVersion: p.version || 1, days: Number(val(raw, 'days')),
+      rows: lines.map(line => Object.fromEntries(intakeFields.map(([, field], i) => [field, line[i] || '']))) };
+    form.dataset.checking = 'true';
+    target.textContent = '正在核对历史资料…';
+    try {
+      const result = await window.IDLocalData.relay('alias-intake-preview', payload);
+      if (!stillCurrent(form, ctx, fp, who)) {
+        target.textContent = '';
+        return;
+      }
+      preview = { ctx, fingerprint: fp, payload, ...result };
+      target.innerHTML = A.table([
+        { id: 'line', label: '行号' }, { id: 'email', label: '隐藏邮箱' },
+        { id: 'mailbox', label: '邮箱资料' }, { id: 'account', label: '账号资料' },
+        { id: 'order', label: '成品订单' }, { id: 'error', label: '待核对' }
+      ], result.rows, '', 'relay-intake-preview-table');
+      A.notify(result.rows.some(row => row.error) ? '请修正待核对的记录后重新预检' :
+        result.pending ? `预检通过，待入库 ${result.pending} 条` : '全部记录已匹配');
+    } catch (error) {
+      if (context === ctx && form.isConnected) {
+        target.innerHTML = '';
+        fail('intake-content', error.message || '读取预检结果失败，请重试');
+      }
+    } finally {
+      delete form.dataset.checking;
+    }
+  }
+  function saveIntake(form) {
+    if (form.dataset.saving || form.dataset.checking) return;
+    const check = checked(form, 'intake');
+    if (!check) return;
+    const { raw, ctx } = check;
+    const fp = fingerprint(raw), who = actor(), prepared = preview;
+    if (prepared?.ctx !== ctx || prepared.fingerprint !== fp || prepared.rows.some(row => row.error))
+      return fail('intake-content', '请先按当前内容完成预检并核对错误行');
+    if (!prepared.pending) return A.notify('全部记录已匹配');
+    A.confirmAction('确认历史入库',
+      `${prepared.pending} 条历史资料登记到 ${parentEmail(prepared.payload.parentId)}。历史成品订单保存为待补全。`,
+      async () => {
+        if (!stillCurrent(form, ctx, fp, who) || form.dataset.saving) return;
+        form.dataset.saving = 'true';
+        const submit = document.querySelector('button[form="relay-intake-form"][type="submit"]');
+        if (submit) submit.disabled = true;
+        try {
+          const { payload, inventoryVersion, commerceVersion } = prepared;
+          const result = await window.IDLocalData.relay('alias-intake-confirm', { ...payload, inventoryVersion, commerceVersion });
+          if (actor().id !== who.id) return;
+          if (result.inventory) A.modules.inventory.applyCommittedInventory(result.inventory);
+          initialize();
+          if (context === ctx && form.isConnected && fingerprint(A.readForm(form)) === fp) finish(ctx);
+          else {
+            const saved = A.state.drafts.get(ctx.key);
+            if (saved && fingerprint(saved) === fp) A.state.drafts.delete(ctx.key);
+            renderRelayPage();
+          }
+          if (result.ordersCreated) void A.modules.commerce?.refreshOverview?.();
+          void readConnection();
+          A.notify(`历史入库 ${result.processed || 0} 条，复用 ${result.reused} 条，新增 GPT 账号 ${result.accountsCreated || 0} 个、成品订单 ${result.ordersCreated || 0} 笔`);
+        } catch (error) {
+          if (actor().id !== who.id) return;
+          if (preview === prepared) preview = null;
+          if (error.status === 409) {
+            await A.modules.inventory.refreshLocalInventory({ keepContent: true });
+            initialize();
+          }
+          A.notify(error.message || '请重新预检核对保存结果，当前输入已保留');
+        } finally {
+          delete form.dataset.saving;
+          if (submit) submit.disabled = false;
+        }
+      }, '确认入库');
   }
   function finish(ctx) {
     A.state.drafts.delete(ctx.key);
@@ -2438,7 +2559,9 @@
       void A.withActionFeedback(node, async () => {
         if (local && !await A.modules.inventory.refreshLocalInventory({ keepContent: true })) return false;
         if (context !== ctx || !form.isConnected) return false;
-        if (ctx.kind === 'alias') openAliasEditor(ctx.id); else openAliasImport();
+        if (ctx.kind === 'alias') openAliasEditor(ctx.id);
+        else if (ctx.kind === 'intake') openAliasIntake();
+        else openAliasImport();
         return true;
       }, { pending: '正在读取主邮箱…', success: '主邮箱已更新', failure: '主邮箱读取失败，输入已保留' });
     } else if (action === 'relay-retry') {
@@ -2520,6 +2643,8 @@
     else if (action === 'relay-import') openAliasImport(node.dataset.parentId || '');
     else if (action === 'relay-import-preview')
       previewImport(document.getElementById('relay-import-form'));
+    else if (action === 'relay-intake') openAliasIntake();
+    else if (action === 'relay-intake-preview') void previewIntake(document.getElementById('relay-intake-form'));
     else if (action === 'relay-parent-detail') openParentDetail(id);
     else if (action === 'relay-alias-detail') openAliasDetail(id);
     else if (action === 'relay-parent-more') more('parent', id, node);
@@ -2625,6 +2750,7 @@
     else if (form.id === 'relay-parent-form') saveParent(form);
     else if (form.id === 'relay-alias-form') saveAlias(form);
     else if (form.id === 'relay-import-form') saveImport(form);
+    else if (form.id === 'relay-intake-form') saveIntake(form);
     else if (form.id === 'relay-query-form') queryMail(form);
     else if (form.id === 'relay-reassign-form' && !local) saveReassign(form);
     else return false;

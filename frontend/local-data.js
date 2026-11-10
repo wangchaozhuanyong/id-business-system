@@ -213,6 +213,9 @@
     copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
       request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
     claudeGoogleSubscriptions: (params) => request('claude-google-subscriptions/list', params, 'POST'),
+    claudeHistoryIntake: (command) => command.mode === 'preview'
+      ? request('claude-history-intake', command, 'POST')
+      : write(['inventory'], () => request('claude-history-intake', command, 'POST')),
     employeeStatistics: (params) => request('employee-statistics?' + new URLSearchParams(params)),
     systemMonitoring: (params) => request('system-monitoring?' + new URLSearchParams(params)),
     systemMonitoringAction: (command) => write(['system-monitoring'], () => request('system-monitoring', command, 'POST')),
@@ -246,9 +249,12 @@
     saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
     audit: () => request('audit'),
     auditPage: (params) => request('audit/page?' + new URLSearchParams(params)),
-    relay: (operation, data) => ['primary-save', 'primary-import', 'alias-register', 'code-reset-confirm', 'mail-reassign-confirm'].includes(operation)
-      ? write(['inventory', 'apple-relay', 'tools/mailbox-pool'], () => request('apple-relay/' + operation, data, 'POST'))
-      : request('apple-relay/' + operation, data, 'POST'),
+    relay(operation, data) {
+      const send = () => request('apple-relay/' + operation, data, 'POST');
+      if (operation === 'alias-intake-confirm') return write(['inventory', 'commerce', 'apple-relay'], send);
+      return ['primary-save', 'primary-import', 'alias-register', 'code-reset-confirm', 'mail-reassign-confirm'].includes(operation)
+        ? write(['inventory', 'apple-relay', 'tools/mailbox-pool'], send) : send();
+    },
     saveBitBrowserAddresses: (data) => write(['bitbrowser-addresses'], () => request('bitbrowser-addresses', data)),
     startMicrosoftMailbox: (data) => request('tools/mailbox-microsoft/start', data, 'POST'),
     finishMicrosoftMailbox: (authorizationId) => write(['tools/mailbox-pool'], () => request('tools/mailbox-microsoft/finish', { authorizationId }, 'POST')),

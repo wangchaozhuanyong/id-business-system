@@ -275,6 +275,7 @@ export async function startPreview(
         config: relayConfig,
         publicOrigin: secureOrigin,
         readInventory: () => store.load('inventory').data,
+        planIntake: (input) => store.planAppleRelayIntake(input),
         savePrimaries: (rows, actor, aliases, registration) =>
           store.saveAppleRelayPrimaries(rows, actor, aliases, registration),
         fetchImpl: relayFetch,
