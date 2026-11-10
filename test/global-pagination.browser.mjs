@@ -21,11 +21,17 @@ test('shared pagination remains compact for 10,000 records and restores each lis
   page.on('pageerror', (error) => errors.push(error.message));
   const pager = page.locator('#main [data-pagination="main-list"]');
   const rows = page.locator('#main tbody tr[data-row-id]');
+  const viewport = page.locator('#main .table-viewport');
   const size = pager.getByRole('combobox', { name: '每页条数' });
   const previous = pager.getByRole('button', { name: '上一页' });
   const next = pager.getByRole('button', { name: '下一页' });
   const jump = async (number) => {
-    await pager.locator('summary').click();
+    const summary = pager.locator('summary');
+    const height = (await pager.boundingBox()).height;
+    await summary.click();
+    const popup = await pager.locator('.pagination-jump-controls').boundingBox();
+    assert(popup.y + popup.height <= (await summary.boundingBox()).y);
+    assert.equal((await pager.boundingBox()).height, height);
     await checkVisibleBounds();
     const input = pager.getByRole('spinbutton', { name: '跳至页码' });
     await input.fill(String(number));
@@ -47,17 +53,55 @@ test('shared pagination remains compact for 10,000 records and restores each lis
           });
     }));
   };
+  const checkSingleRow = async (includeCount) => {
+    const centers = await pager.evaluate((node, includeCount) => {
+      const elements = node.querySelectorAll(
+        (includeCount ? '.pagination-count, ' : '') + 'select, summary, button[data-pagination-page]'
+      );
+      return [...elements].filter((element) => element.checkVisibility()).map((element) => {
+        const { top, height } = element.getBoundingClientRect();
+        return top + height / 2;
+      });
+    }, includeCount);
+    assert(Math.max(...centers) - Math.min(...centers) <= 1, JSON.stringify(centers));
+  };
 
   await page.goto(origin + '/#/customers/list');
   await rows.first().waitFor();
-  assert.equal(await size.inputValue(), '10');
-  assert.equal(await rows.count(), 10);
+  assert.equal(await size.inputValue(), '20');
+  assert.equal(await size.locator('option:checked').textContent(), '20条/页');
+  assert.equal(await rows.count(), 20);
   assert.equal(await previous.isDisabled(), true);
   assert.equal(await pager.locator('.pagination-pages button').count(), 7);
-  assert.match(await pager.locator('.pagination-count').textContent(), /10,000 条 · 第 1–10 条/);
+  assert.match(await pager.locator('.pagination-count').textContent(), /10,000 条 · 第 1–20 条/);
+  await checkSingleRow(true);
   await checkVisibleBounds();
-  await jump(500);
-  assert.match(await pager.locator('.pagination-count').textContent(), /4,991–5,000/);
+  const beforeScroll = await viewport.evaluate((element) => ({
+    header: element.querySelector('thead').getBoundingClientRect().top,
+    page: scrollY, scrollable: element.scrollHeight > element.clientHeight
+  }));
+  const footer = await pager.boundingBox();
+  assert(beforeScroll.scrollable);
+  assert(footer.y + footer.height <= 900);
+  await viewport.hover();
+  await page.mouse.wheel(0, 260);
+  await page.waitForFunction(() => document.querySelector('#main .table-viewport').scrollTop > 0);
+  const afterScroll = await viewport.evaluate((element) => ({
+    header: element.querySelector('thead').getBoundingClientRect().top,
+    page: scrollY, scrollable: element.scrollHeight > element.clientHeight
+  }));
+  assert.deepEqual(afterScroll, beforeScroll);
+  assert.deepEqual(await pager.boundingBox(), footer);
+  const rowOffset = await viewport.evaluate((element) => element.scrollTop);
+  await page.evaluate(() => window.IDDesignAPI.render());
+  assert.equal(await viewport.evaluate((element) => element.scrollTop), rowOffset);
+  await pager.locator('summary').click();
+  await pager.locator('[data-pagination-target]').press('Escape');
+  assert.equal(await pager.locator('details').getAttribute('open'), null);
+  assert(await pager.locator('summary').evaluate((node) => node === document.activeElement));
+  await jump(250);
+  assert.equal(await viewport.evaluate((element) => element.scrollTop), 0);
+  assert.match(await pager.locator('.pagination-count').textContent(), /4,981–5,000/);
   assert.equal(await pager.locator('.pagination-ellipsis').count(), 2);
   assert.equal(await pager.locator('.pagination-pages button').count(), 7);
   await size.selectOption('50');
@@ -66,7 +110,7 @@ test('shared pagination remains compact for 10,000 records and restores each lis
   await jump(7);
   await goto('orders/gpt');
   await size.waitFor();
-  assert.equal(await size.inputValue(), '10');
+  assert.equal(await size.inputValue(), '20');
   await goto('customers/list');
   await rows.first().waitFor();
   assert.equal(await size.inputValue(), '50');
@@ -75,6 +119,7 @@ test('shared pagination remains compact for 10,000 records and restores each lis
   await page.setViewportSize({ width: 320, height: 850 });
   assert.equal(await pager.locator('.pagination-pages').isVisible(), false);
   assert((await next.boundingBox()).height >= 44);
+  await checkSingleRow(false);
   await checkVisibleBounds();
   await size.selectOption('10');
   await jump(1000);

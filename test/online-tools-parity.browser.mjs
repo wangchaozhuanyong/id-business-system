@@ -28,7 +28,7 @@ try {
         mailFailure = false;
       const mailRequests = [];
       const publicTotpKey = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
-      const totpAccounts = Array.from({ length: 9 }, (_, index) => ({
+      const totpAccounts = Array.from({ length: 21 }, (_, index) => ({
         id: `11111111-1111-4111-8111-${String(index + 1).padStart(12, '0')}`,
         name: `合成账号 ${index + 1}`, issuer: index === 1 ? 'RFC' : ''
       }));
@@ -56,8 +56,10 @@ try {
           if (u.pathname === '/api/local/tools/mailbox-pool') {
             if (route.request().method() === 'PUT')
               return route.fulfill({ status: 422, json: { error: '合成授权验证失败，请重试' } });
-            if (route.request().method() === 'POST')
-              return respond({ code: 'SYNTHETIC-CODE-ONLY' });
+            if (route.request().method() === 'POST') {
+              const { ids, version } = route.request().postDataJSON(), code = 'SYNTHETIC-CODE-ONLY';
+              return respond(ids ? { version, items: ids.map(id => ({ id, code })) } : { code });
+            }
             return respond({
               version: 0,
               defaultValidDays: 30,
@@ -101,7 +103,11 @@ try {
             }
             return respond({ version: savedTotpVersion, items: totpAccounts });
           }
-          if (u.pathname === '/api/local/saved-totp/code') return respond({ code: '123456', serverNow: Date.now(), expiresAt: Date.now() + 30_000 });
+          if (u.pathname === '/api/local/saved-totp/code') {
+            const { ids, version } = route.request().postDataJSON();
+            const serverNow = Date.now();
+            return respond({ version, serverNow, items: ids.map(id => ({ id, code: '123456', expiresAt: serverNow + 30_000 })) });
+          }
           if (u.pathname === '/api/local/saved-totp/secret') {
             assert.equal(route.request().method(), 'POST');
             const body = route.request().postDataJSON();

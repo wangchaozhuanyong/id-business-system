@@ -111,6 +111,10 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         await orderCount.press('Enter');
         const details = page.locator('#employee-statistics-detail');
         await details.getByText('p***@example.test', { exact: true }).first().waitFor();
+        assert.equal(await details.locator('nav[data-pagination]').getAttribute('data-page-size'), '20');
+        assert.equal(await details.locator('tbody tr').count(), 13);
+        await details.getByLabel('每页条数').selectOption('10');
+        await details.locator('nav[data-pagination][data-page-size="10"]').waitFor();
         assert.equal(await details.locator('tbody tr').count(), 10);
         await details.getByRole('button', { name: '下一页' }).click();
         await page.waitForFunction(() => document.querySelector('#employee-statistics-detail nav[data-pagination]').dataset.page === '2');

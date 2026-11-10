@@ -140,6 +140,7 @@
     `<span class="footnote">${durable ? '保存到数据库' : '仅更新演示内存，刷新重置'}</span>${button('取消', 'drawer-close')}<button class="button primary" form="${form}" type="submit">${esc(label)}</button>`;
   const search = (placeholder = '搜索名称、备注或编号', query = state.query || '') =>
     `<div class="search-field">${icon('search')}<input id="ops-list-search" aria-label="搜索当前列表" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
+  const { defaultPageSize, pageSizes } = window.IDPagination || {};
   const renderPagination = (options) => window.IDPagination?.render(options) || '';
   function finishDrawer() {
     const context = state.drawerContext;
@@ -153,7 +154,7 @@
     taskFilter: '',
     phraseQuery: '',
     phrasePage: 1,
-    phrasePageSize: 10,
+    phrasePageSize: defaultPageSize,
     phraseSort: 'custom',
     toolName: '',
     toolResult: null
@@ -237,8 +238,8 @@
   let settingsLoading;
   let settingsSaving = false;
   const auditViews = {
-    audit: { query: '', pageSize: 10, dirty: true },
-    login: { query: '', pageSize: 10, dirty: true }
+    audit: { query: '', pageSize: defaultPageSize, dirty: true },
+    login: { query: '', pageSize: defaultPageSize, dirty: true }
   };
   let composingAuditSearch;
 
@@ -354,7 +355,7 @@
   }
   function resetAuditViews() {
     for (const list of Object.values(auditViews)) Object.assign(list, {
-      query: '', pageSize: 10, dirty: true, pending: null, failedRequest: null,
+      query: '', pageSize: defaultPageSize, dirty: true, pending: null, failedRequest: null,
       result: undefined, resultQuery: undefined, error: false
     });
   }
@@ -567,7 +568,7 @@
     for (const control of nav?.querySelectorAll('[data-view]') || []) {
       const selected = control.dataset.view === view;
       control.setAttribute('aria-pressed', String(selected));
-      control.classList.toggle('primary', selected);
+      control.classList.toggle('active', selected);
     }
   }
   function preserveLockedRecharge(view) {
@@ -583,17 +584,9 @@
   }
   function integrationNavigation() {
     const actions = onlineRechargeViews
-      .map(([id, label, publicPath]) =>
-        button(
-          label,
-          'ops-integrated-view',
-          id === activeOnlineView ? 'primary' : '',
-          '',
-          `data-view="${id}" aria-pressed="${id === activeOnlineView}" ${onlineAdmin === false && !publicPath ? 'disabled' : ''}`
-        )
-      )
+      .map(([id, label, publicPath]) => `<button type="button" class="tab${id === activeOnlineView ? ' active' : ''}" data-action="ops-integrated-view" data-view="${id}" aria-pressed="${id === activeOnlineView}" ${onlineAdmin === false && !publicPath ? 'disabled' : ''}>${esc(label)}</button>`)
       .join('');
-    return `<nav class="recharge-integration__nav" aria-label="ChatGPT 充值功能">${actions}</nav>`;
+    return `<nav class="recharge-integration__nav tabs" aria-label="ChatGPT 充值功能">${actions}</nav>`;
   }
   function renderBitBrowserLogin() {
     const showAddresses = localData && isAdmin();
@@ -622,7 +615,7 @@
       return header('兑换开通', '验码后自动匹配套餐，请核对账号再提交。') +
         renderRechargeRegion('workspace');
     return header('ChatGPT 充值', '查询充值状态并管理线上代充资源与任务。') +
-      renderRechargeRegion('online', `<div class="recharge-integration__toolbar">
+      renderRechargeRegion('online', `<div class="recharge-integration__toolbar content-toolbar">
         ${integrationNavigation()}${button('刷新', 'ops-integrated-refresh')}
       </div>`);
   }
@@ -1774,19 +1767,20 @@
     }
   }
   function savedTotpPanel() {
-    return `<section class="form-section" id="ops-saved-totp" aria-label="已保存 2FA 账号"><div class="panel-heading"><div class="section-title-row"><h3>已保存账号</h3>${titleInfo('已保存账号', '密钥加密保存在服务器，同一账号换电脑仍可使用。支持搜索、分页、编辑、删除和复制当前验证码。', 'saved-totp-help')}</div>${button('新增账号', 'ops-saved-totp-add', 'primary', 'plus')}</div><form class="online-tool-search" id="ops-saved-totp-search-form" onsubmit="return false"><input type="search" id="ops-saved-totp-search" name="ops-saved-totp-search" aria-label="搜索已保存的 2FA 账号" placeholder="搜索账号名称或签发方"></form><div data-saved-totp-editor></div><div data-saved-totp-list role="status"></div></section>`;
+    return `<section class="form-section" id="ops-saved-totp" aria-label="已保存 2FA 账号"><div class="panel-heading"><div class="section-title-row"><h3>已保存账号</h3>${titleInfo('已保存账号', '密钥加密保存在服务器，同一账号换电脑仍可使用。支持搜索、分页、编辑、删除和复制当前验证码。', 'saved-totp-help')}</div>${button('新增账号', 'ops-saved-totp-add', 'primary', 'plus')}</div><form class="online-tool-search" id="ops-saved-totp-search-form" onsubmit="return false"><input type="search" id="ops-saved-totp-search" name="ops-saved-totp-search" aria-label="搜索已保存的 2FA 账号" placeholder="搜索账号名称或签发方"></form><div data-saved-totp-editor></div><div class="design-async-region"><div data-saved-totp-status role="status" hidden></div><div data-saved-totp-list></div></div></section>`;
   }
   const savedTotpSnapshots = new WeakMap();
   const temporaryTotpAccounts = new WeakMap();
 
   function paintSavedTotp(panel, snapshot, requestedPage = getDraft('saved-totp-page').page || 1) {
-    if (!panel.isConnected) return;
+    if (!toolActive(panel) || snapshot.version < Number(panel.dataset.version)) return;
     savedTotpSnapshots.set(panel, snapshot);
     panel.dataset.version = String(snapshot.version);
     const search = panel.querySelector('#ops-saved-totp-search').value.trim().toLowerCase();
     const items = snapshot.items.filter((row) => [row.name, row.issuer].some((value) =>
       value?.toLowerCase().includes(search)));
-    const pageSize = getDraft('saved-totp-page').pageSize || 10;
+    const draftSize = getDraft('saved-totp-page').pageSize;
+    const pageSize = pageSizes.includes(draftSize) ? draftSize : defaultPageSize;
     const pages = Math.max(1, Math.ceil(items.length / pageSize));
     const page = Math.min(pages, Math.max(1, requestedPage));
     state.drafts.set(draftKey('saved-totp-page'), { page, pageSize });
@@ -1797,7 +1791,7 @@
         renderPagination({ id: 'operations-saved-totp', page, pageSize, total: 0 });
       return;
     }
-    list.innerHTML = `<div class="saved-totp-table">${table([
+    list.innerHTML = `<div class="saved-totp-table" data-pagination-table>${table([
       { id: 'name', label: '账号', render: row => `<div class="totp-account-name"><strong title="${esc(row.name)}">${esc(row.name)}</strong>${row.issuer ? `<small title="${esc(row.issuer)}">${esc(row.issuer)}</small>` : ''}</div>` },
       { id: 'code', label: '验证码', render: row => `<div class="totp-inline-code" data-saved-totp-code data-id="${esc(row.id)}">正在获取验证码…</div>` },
       { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${button('复制', 'ops-totp-copy', 'primary', '', 'disabled aria-label="复制验证码"')}${button('编辑', 'ops-saved-totp-edit', '', '', `data-id="${esc(row.id)}" data-name="${esc(row.name)}"`)}${button('删除', 'ops-saved-totp-delete', '', '', `data-id="${esc(row.id)}" data-name="${esc(row.name)}"`)}</div>` }
@@ -1805,17 +1799,17 @@
     refreshVisibleSavedTotp(panel);
   }
   async function loadSavedTotp(panel, { refresh = false } = {}) {
-    if (!panel) return;
+    if (!toolActive(panel)) return;
     const list = panel.querySelector('[data-saved-totp-list]');
-    const entry = localData.queries?.peek('saved-totp', 'metadata');
-    const cached = entry?.data === undefined ? undefined : entry;
-    if (cached) paintSavedTotp(panel, cached.data);
-    else list.textContent = '正在读取账号…';
+    const status = panel.querySelector('[data-saved-totp-status]');
+    const read = api.beginRegionRead(status.parentElement, status, {
+      loadingText: savedTotpSnapshots.has(panel) ? '' : '正在读取账号…'
+    });
     try {
       const snapshot = localData.queries
         ? await localData.queries.read('saved-totp', 'metadata', () => localData.savedTotp(), { refresh })
         : await localData.savedTotp();
-      if (!panel.closest('dialog[open], [data-plugin-tool]')) return;
+      if (!read.current() || !toolActive(panel)) return;
       paintSavedTotp(panel, snapshot);
       const view = getDraft('saved-totp-view');
       if (panel.isConnected && view.editor && !panel.querySelector('#ops-saved-totp-form'))
@@ -1823,12 +1817,20 @@
       return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
-      if (panel.isConnected) {
-        if (!cached || error.status === 401 || error.status === 403) list.textContent = error.message;
-        else notify(error.message + '，已保留账号列表。');
-        list.insertAdjacentHTML('beforeend', button('重试', 'ops-saved-totp-reload'));
+      if (read.current() && toolActive(panel)) {
+        if (error.status === 401 || error.status === 403) {
+          list.replaceChildren();
+          savedTotpSnapshots.delete(panel);
+        }
+        read.finish();
+        status.hidden = false;
+        status.className = 'inline-notice warning';
+        status.textContent = error.message || '账号读取失败，请重试';
+        status.insertAdjacentHTML('beforeend', button('重试', 'ops-saved-totp-reload'));
       }
       return false;
+    } finally {
+      read.finish();
     }
   }
   function editSavedTotp(panel, node) {
@@ -1897,7 +1899,7 @@
         const search = panel.querySelector('#ops-saved-totp-search');
         search.value = '';
         search.dispatchEvent(new Event('input', { bubbles: true }));
-        paintSavedTotp(panel, snapshot, Math.ceil(snapshot.items.length / (getDraft('saved-totp-page').pageSize || 10)));
+        paintSavedTotp(panel, snapshot, Math.ceil(snapshot.items.length / (getDraft('saved-totp-page').pageSize || defaultPageSize)));
         panel.querySelector('[data-saved-totp-list]').scrollIntoView({ block: 'nearest' });
       } else paintSavedTotp(panel, snapshot);
       notify('已保存 2FA 账号变更');
@@ -1911,45 +1913,70 @@
     node.closest('.totp-countdown')?.classList.toggle('is-expiring', remaining <= 5);
   }
   function refreshVisibleSavedTotp(panel) {
-    if (!panel?.isConnected || panel.hidden || document.hidden || !panel.closest('dialog[open], [data-plugin-tool]')) return;
+    if (!toolActive(panel) || panel.hidden || document.hidden) return;
     const now = Date.now();
+    const due = [];
     for (const output of panel.querySelectorAll('[data-saved-totp-code]')) {
       const expiry = Number(output.dataset.expiry || 0);
       if (expiry > now) {
         paintTotpCountdown(output.querySelector('[data-totp-countdown]'), Math.ceil((expiry - now) / 1000));
       } else if (!output.dataset.pending && now >= Number(output.dataset.retryAt || 0)) {
-        void showSavedTotpCode(output);
+        due.push(output);
       }
     }
+    if (due.length) void loadSavedTotpCodes(panel, due);
   }
-  async function showSavedTotpCode(output) {
-    if (!output || output.dataset.pending) return;
+  async function loadSavedTotpCodes(panel, outputs) {
+    if (!toolActive(panel)) return;
+    const version = Number(panel.dataset.version);
     const started = Date.now();
-    output.dataset.pending = 'true';
-    const copyControl = output.closest('tr')?.querySelector('[data-action="ops-totp-copy"]');
-    if (copyControl) { copyControl.disabled = true; delete copyControl.dataset.code; delete copyControl.dataset.expiresAt; }
-    output.textContent = '正在获取验证码…';
+    const rows = outputs.filter(output => output?.isConnected && !output.dataset.pending).map(output => {
+      const copy = output.closest('tr').querySelector('[data-action="ops-totp-copy"]');
+      output.dataset.pending = 'true';
+      delete output.dataset.expiry;
+      copy.disabled = true;
+      delete copy.dataset.code;
+      delete copy.dataset.expiresAt;
+      output.textContent = '正在获取验证码…';
+      return { output, copy, id: output.dataset.id };
+    });
+    if (!rows.length) return;
+    let codes, serverNow, failure;
     try {
-      const { code, expiresAt, serverNow } = await localData.savedTotpCode(output.dataset.id);
-      if (!output.closest('dialog[open]')) return;
+      const result = await localData.savedTotpCodePage(rows.map(row => row.id), version);
+      if (result?.version !== version || !Number.isFinite(result.serverNow) || !Array.isArray(result.items))
+        throw new Error('验证码读取失败，请重试');
+      codes = new Map(result.items.map(item => [item.id, item]));
+      serverNow = result.serverNow;
+    } catch (error) {
+      failure = error;
+    }
+    const current = toolActive(panel) && !panel.hidden && Number(panel.dataset.version) === version;
+    for (const { output, copy, id } of rows) {
+      delete output.dataset.pending;
+      if (!current || !output.isConnected) continue;
+      const result = codes?.get(id);
+      if (!/^\d{6,8}$/.test(result?.code || '') || !Number.isFinite(result?.expiresAt)) {
+        const stale = failure?.status === 409;
+        output.dataset.retryAt = stale ? 'Infinity' : String(Date.now() + 15_000);
+        output.innerHTML = `<span>${esc(failure?.message || result?.error || '验证码读取失败，请重试')}</span> ${stale
+          ? button('刷新账号列表', 'ops-saved-totp-reload') : button('重试取码', 'ops-saved-totp-use')}`;
+        continue;
+      }
+      const { code, expiresAt } = result;
       const expiry = started + Math.max(0, expiresAt - serverNow);
-      if (!/^\d{6,8}$/.test(code) || !Number.isFinite(expiry)) throw new Error('验证码返回格式无效');
       const remaining = Math.ceil((expiry - Date.now()) / 1000);
       if (remaining <= 0) {
         output.textContent = '验证码已过期，正在更新…';
         output.dataset.retryAt = String(Date.now() + 500);
-        return;
+        continue;
       }
       output.dataset.expiry = String(expiry);
       output.innerHTML = `<div class="totp-code-card__reading"><strong class="ops-code" aria-label="当前验证码">${esc(code)}</strong><span class="totp-countdown"><span class="totp-countdown__label">剩余</span><span data-totp-countdown>${remaining}</span>秒</span></div>`;
-      if (copyControl) { copyControl.dataset.code = code; copyControl.dataset.expiresAt = String(expiry); copyControl.disabled = false; }
+      copy.dataset.code = code;
+      copy.dataset.expiresAt = String(expiry);
+      copy.disabled = false;
       paintTotpCountdown(output.querySelector('[data-totp-countdown]'), remaining);
-    } catch (error) {
-      if (!output.closest('dialog[open]')) return;
-      output.dataset.retryAt = String(Date.now() + 15_000);
-      output.innerHTML = `<span>${esc(error.message)}</span> ${button('重试取码', 'ops-saved-totp-use')}`;
-    } finally {
-      delete output.dataset.pending;
     }
   }
   function openTotp() {
@@ -2353,7 +2380,9 @@
     const positionMailboxActions = menu => {
       const anchor = menu.previousElementSibling.getBoundingClientRect();
       const body = drawer.querySelector('.drawer-body').getBoundingClientRect();
-      if (anchor.bottom <= Math.max(0, body.top) || anchor.top >= Math.min(innerHeight, body.bottom) || anchor.right <= body.left || anchor.left >= body.right) {
+      const table = menu.closest('.table-viewport').getBoundingClientRect();
+      if (anchor.bottom <= Math.max(0, body.top, table.top) || anchor.top >= Math.min(innerHeight, body.bottom, table.bottom) ||
+          anchor.right <= Math.max(body.left, table.left) || anchor.left >= Math.min(body.right, table.right)) {
         menu.hidePopover();
         return;
       }
@@ -2405,6 +2434,7 @@
       form.querySelector('#ops-managed-query-code').value = '';
       mailQuerySnapshots.delete(form);
       form.querySelector('#ops-managed-query-results').replaceChildren();
+      pool?.querySelector('[data-mailbox-pool-list]')?.replaceChildren();
       pool?.querySelector('[data-mailbox-pool-issued]')?.replaceChildren();
       const secret = pool?.querySelector('#ops-managed-app-password');
       if (secret) secret.value = '';
@@ -2517,7 +2547,7 @@
     return Number.isFinite(Date.parse(value)) ? mailboxDate.format(new Date(value)) : '—';
   }
   function paintManagedPool(panel, snapshot, requestedPage = getDraft('mailbox-pool-page').page || 1) {
-    if (!panel.isConnected || snapshot.version < Number(panel.dataset.version)) return;
+    if (!toolActive(panel) || snapshot.version < Number(panel.dataset.version)) return;
     mailboxPoolSnapshots.set(panel, snapshot);
     panel.dataset.version = String(snapshot.version);
     panel.dataset.defaultValidDays = String(snapshot.defaultValidDays);
@@ -2530,7 +2560,7 @@
       (!provider || row.provider === provider) && (!status || statusFor(row) === status) &&
       [row.email, row.label].some((value) => value?.toLowerCase().includes(search)));
     const draftSize = getDraft('mailbox-pool-page').pageSize;
-    const pageSize = [10, 20, 50].includes(draftSize) ? draftSize : 10;
+    const pageSize = pageSizes.includes(draftSize) ? draftSize : defaultPageSize;
     const pages = Math.max(1, Math.ceil(items.length / pageSize));
     const page = Math.min(pages, Math.max(1, Math.trunc(Number(requestedPage)) || 1));
     state.drafts.set(draftKey('mailbox-pool-page'), { page, pageSize });
@@ -2547,22 +2577,32 @@
       const menuId = `mailbox-account-actions-${index}`;
       const authorize = button('去授权', 'ops-mailbox-pool-authorize', '', '', attrs);
       const actions = row.authorizationPending ? authorize : `${button('查询', 'ops-mailbox-pool-query', '', '', attrs)}${authorize}<button type="button" class="button mailbox-account__more" popovertarget="${menuId}" aria-label="更多操作：${esc(row.email)}">更多操作</button><div class="mailbox-account__actions" id="${menuId}" popover="auto" role="group" aria-label="邮箱操作">${button(row.active ? '停用' : '启用', 'ops-mailbox-pool-status', '', '', attrs + (row.authFailed ? ' disabled' : ''))}${button(row.provider === 'microsoft' ? '重新授权' : '更新授权', 'ops-mailbox-pool-credential', '', '', attrs)}${button('重置查询码', 'ops-mailbox-pool-rotate', '', '', attrs)}</div>`;
-      return `<tr class="mailbox-account"><td><div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong></div></td><td class="mailbox-account__text" title="${esc(mailboxProviders[row.provider] || '待选择')}">${esc(mailboxProviders[row.provider] || '待选择')}</td><td class="mailbox-account__text" title="${esc(row.label || '未填写备注')}">${esc(row.label || '—')}</td><td>${row.source === 'claude' ? 'Claude 账号' : '手工登记'}</td><td><div class="mailbox-account__code">${row.authorizationPending ? '<span>授权后生成</span>' : `<output data-mailbox-code="${esc(row.id)}">正在读取…</output>${button('复制', 'ops-mailbox-pool-copy-existing', '', '', attrs)}`}</div></td><td>${tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning')}</td><td class="mailbox-account__date">${formatMailboxDate(row.expiresAt)}</td><td class="mailbox-account__date">${formatMailboxDate(row.lastQueriedAt)}</td><td><div class="mailbox-row-actions">${actions}</div></td></tr>`;
+      return `<tr class="mailbox-account"><td><div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong></div></td><td class="mailbox-account__text" title="${esc(mailboxProviders[row.provider] || '待选择')}">${esc(mailboxProviders[row.provider] || '待选择')}</td><td class="mailbox-account__text" title="${esc(row.label || '未填写备注')}">${esc(row.label || '—')}</td><td>${row.source === 'claude' ? 'Claude 账号' : '手工登记'}</td><td><div class="mailbox-account__code">${row.authorizationPending ? '<span>授权后生成</span>' : `<output data-mailbox-code="${esc(row.id)}">正在读取…</output>${button('复制', 'ops-mailbox-pool-copy-existing', '', '', attrs + ' disabled')}`}</div></td><td>${tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning')}</td><td class="mailbox-account__date">${formatMailboxDate(row.expiresAt)}</td><td class="mailbox-account__date">${formatMailboxDate(row.lastQueriedAt)}</td><td><div class="mailbox-row-actions">${actions}</div></td></tr>`;
     }).join('')}</tbody></table></div>${renderPagination({ id: 'operations-mailbox-pool', page, pageSize, total: items.length })}`;
     void loadVisibleMailboxCodes(panel);
   }
   async function loadVisibleMailboxCodes(panel) {
-    for (const output of panel.querySelectorAll('[data-mailbox-code]')) {
-      try {
-        const { code } = await localData.managedMailboxCode(output.dataset.mailboxCode);
-        if (!output.isConnected || !panel.closest('dialog[open], [data-plugin-tool]')) return;
-        output.textContent = code;
-        output.title = code;
-      } catch {
-        if (!output.isConnected) return;
-        output.textContent = '读取失败';
-        output.title = '读取失败，点击复制重试';
-      }
+    const outputs = [...panel.querySelectorAll('[data-mailbox-code]')];
+    if (!outputs.length) return;
+    const version = Number(panel.dataset.version);
+    let codes, failure;
+    try {
+      const result = await localData.managedMailboxCodePage(outputs.map(output => output.dataset.mailboxCode), version);
+      if (result?.version !== version || !Array.isArray(result.items)) throw new Error('查询码返回格式无效');
+      codes = new Map(result.items.map(({ id, code }) => [id, code]));
+    } catch (error) {
+      failure = error;
+    }
+    if (!toolActive(panel) || Number(panel.dataset.version) !== version) return;
+    for (const output of outputs) {
+      if (!output.isConnected) continue;
+      const copy = output.nextElementSibling;
+      const code = codes?.get(output.dataset.mailboxCode);
+      const unavailable = !failure && typeof code === 'string' && !code;
+      output.textContent = code || (unavailable ? '未登记查询码' : '读取失败');
+      output.title = code || (unavailable ? '未登记查询码' :
+        failure?.status === 409 ? '邮箱池已更新，请刷新列表' : '读取失败，点击复制重试');
+      copy.disabled = unavailable || [401, 403, 409].includes(failure?.status);
     }
   }
   async function copyManagedMailboxCode(panel, node) {
@@ -2592,9 +2632,6 @@
   async function loadManagedPool(panel, { refresh = false } = {}) {
     if (!panel) return;
     const scope = 'tools/mailbox-pool';
-    const entry = localData.queries?.peek(scope, 'list');
-    const cached = entry?.data === undefined ? undefined : entry;
-    if (cached) paintManagedPool(panel, cached.data);
     const status = panel.querySelector('[data-mailbox-pool-status]');
     const read = api.beginRegionRead(status.parentElement, status, {
       loadingText: mailboxPoolSnapshots.has(panel) ? '' : '正在读取邮箱池…',
@@ -2604,7 +2641,7 @@
       const snapshot = localData.queries
         ? await localData.queries.read(scope, 'list', () => localData.managedMailboxPool(), { refresh })
         : await localData.managedMailboxPool();
-      if (!read.current()) return;
+      if (!read.current() || !toolActive(panel)) return;
       paintManagedPool(panel, snapshot);
       if (panel.isConnected && !mailboxOperation(panel) && !panel.querySelector('#ops-managed-pool-form')) {
         const view = getDraft('mailbox-tools-view');
@@ -3165,7 +3202,7 @@
         days: Number(values['ops-visits-days']),
         sort: values['ops-visits-sort'],
         page: 1,
-        pageSize: websiteVisitQueries.get(output)?.pageSize || 10,
+        pageSize: websiteVisitQueries.get(output)?.pageSize || defaultPageSize,
         ip: values['ops-visits-ip'].trim()
       };
     }
@@ -3187,17 +3224,17 @@
           : '';
         const view = getDraft('website-visits-view').view || 'daily';
         const dailyDraft = getDraft('website-visits-daily-page');
-        const dailySize = dailyDraft.pageSize || 10;
+        const dailySize = dailyDraft.pageSize || defaultPageSize;
         const dailyTotal = report.daily?.length || 0;
         const dailyPage = Math.min(dailyDraft.page || 1, Math.max(1, Math.ceil(dailyTotal / dailySize)));
         const daily = report.daily?.length
-          ? `<div class="tool-period" role="group" aria-label="访问记录展示方式">${button('每日统计', 'ops-website-visit-view', '', '', `data-view="daily" aria-pressed="${view === 'daily'}"`)}${button('IP 明细', 'ops-website-visit-view', '', '', `data-view="records" aria-pressed="${view === 'records'}"`)}</div><div class="tool-report-section" data-visit-view="daily" ${view === 'daily' ? '' : 'hidden'}><div class="table-viewport"><table><thead><tr><th scope="col">日期（北京时间）</th><th scope="col" class="tool-data-number">已采集浏览量</th><th scope="col" class="tool-data-number">独立 IP 数</th></tr></thead><tbody>${[...report.daily].reverse().map((row, index) =>
+          ? `<div class="tool-period" role="group" aria-label="访问记录展示方式">${button('每日统计', 'ops-website-visit-view', '', '', `data-view="daily" aria-pressed="${view === 'daily'}"`)}${button('IP 明细', 'ops-website-visit-view', '', '', `data-view="records" aria-pressed="${view === 'records'}"`)}</div><div class="tool-report-section" data-visit-view="daily" ${view === 'daily' ? '' : 'hidden'}><div class="table-viewport" tabindex="0" role="region" aria-label="每日访问统计"><table><thead><tr><th scope="col">日期（北京时间）</th><th scope="col" class="tool-data-number">已采集浏览量</th><th scope="col" class="tool-data-number">独立 IP 数</th></tr></thead><tbody>${[...report.daily].reverse().map((row, index) =>
               `<tr data-visit-day ${Math.floor(index / dailySize) + 1 !== dailyPage ? 'hidden' : ''}><td>${esc(row.date)}</td><td class="tool-data-number">${count(row.metrics?.pageViews)}</td><td class="tool-data-number">${count(row.metrics?.visitors)}</td></tr>`
-            ).join('')}</tbody></table></div><div data-visit-daily-pagination>${renderPagination({ id: 'operations-website-days', page: dailyPage, pageSize: dailySize, total: dailyTotal })}</div></div>`
+            ).join('')}</tbody></table></div><div data-visit-daily-pagination data-pagination-footer>${renderPagination({ id: 'operations-website-days', page: dailyPage, pageSize: dailySize, total: dailyTotal })}</div></div>`
           : '';
         const updated = report.lastReceivedAt ? ` · 最近接收 ${esc(time.format(new Date(report.lastReceivedAt)))}` : '';
         const content = report.items.length
-          ? `<p class="tool-report-meta">${filters} · 北京时间${updated}</p><div class="table-viewport"><table><thead><tr><th scope="col">访问时间</th><th scope="col">页面</th><th scope="col">IP 地址</th></tr></thead><tbody>${report.items
+          ? `<p class="tool-report-meta">${filters} · 北京时间${updated}</p><div class="table-viewport" tabindex="0" role="region" aria-label="访问记录"><table><thead><tr><th scope="col">访问时间</th><th scope="col">页面</th><th scope="col">IP 地址</th></tr></thead><tbody>${report.items
               .map((row, index) => {
                 const pathId = `website-visit-path-${index}`;
                 const path = esc(row.path);
@@ -3607,7 +3644,7 @@
       if (action === 'ops-saved-totp-reload') void api.withActionFeedback(node,
         () => loadSavedTotp(panel, { refresh: true }),
         { pending: '正在刷新账号列表…', success: '账号列表已刷新', failure: '账号读取失败，请重试' });
-      if (action === 'ops-saved-totp-use') void showSavedTotpCode(node.closest('[data-saved-totp-code]'));
+      if (action === 'ops-saved-totp-use') void loadSavedTotpCodes(panel, [node.closest('[data-saved-totp-code]')]);
       if (action === 'ops-saved-totp-secret-retry') void loadSavedTotpSecret(node.closest('form'));
       if (action === 'ops-saved-totp-delete') {
         const version = Number(panel.dataset.version);

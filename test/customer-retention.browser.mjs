@@ -120,6 +120,8 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
     const recovered = list(page).getByRole('row').filter({ hasText: '账号回收客户' });
     assert.match(await recovered.innerText(), /2026-11-06 15:00.*3 天/s);
     assert.doesNotMatch(await list(page).innerText(), /仍有有效服务|账号接手客户|周期缺失客户|共享联系甲|等待生效客户/);
+    assert.equal(await mainPager(page).getAttribute('data-page-size'), '20');
+    await mainPager(page).getByLabel('每页条数').selectOption('10');
     await mainPager(page).getByRole('button', { name: '下一页' }).click();
     assert.equal(await mainPager(page).getAttribute('data-page'), '2');
     assert.equal(await list(page).locator('tbody tr[data-row-id]').count(), 3);
@@ -136,6 +138,8 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
     assert.match(await drawer(page).locator('.property-list').innerText(), /已关联原单的续费\s+1 次/);
     assert.equal(await history.locator('nav').getAttribute('data-total'), '14');
     assert.match(await history.innerText(), /开通待确认/);
+    assert.equal(await history.locator('nav').getAttribute('data-page-size'), '20');
+    await history.getByLabel('每页条数').selectOption('10');
     await history.getByRole('button', { name: '下一页' }).click();
     assert.equal(await history.locator('nav').getAttribute('data-page'), '2');
     await history.getByRole('button', { name: '查看订单 QA-GPT-LEGACY', exact: true }).click();

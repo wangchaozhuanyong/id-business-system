@@ -208,7 +208,7 @@
     updateControls();
   }
 
-  async function refresh(completedMessage = '', { force = true } = {}) {
+  async function refresh(completedMessage = '', { force = true, quietSuccess = false } = {}) {
     const panel = addressPanel();
     if (!panel) return;
     const query = { ...filters };
@@ -244,10 +244,10 @@
       const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize));
       if (result.page > lastPage) {
         filters.page = lastPage;
-        return await refresh(completedMessage);
+        return await refresh(completedMessage, { quietSuccess });
       }
       showResult(result);
-      feedback(completedMessage);
+      feedback(quietSuccess ? '' : completedMessage);
       return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
@@ -300,7 +300,7 @@
     }
   }
 
-  async function save(payload, complete, { beforeWrite, failurePrefix = '' } = {}) {
+  async function save(payload, complete, { beforeWrite, failurePrefix = '', successToast = false } = {}) {
     if (saving) return;
     saving = true;
     updateControls();
@@ -309,10 +309,14 @@
       feedback('正在保存地址…', 'loading');
       const result = await localData.saveBitBrowserAddresses(payload);
       const message = complete(result);
+      if (successToast) {
+        feedback('');
+        A.notify(message, { kind: 'success' });
+      }
       if (addressPanel()) {
-        feedback(message);
-        await refresh(message);
-      } else A.notify(message);
+        if (!successToast) feedback(message);
+        await refresh(message, { quietSuccess: successToast });
+      } else if (!successToast) A.notify(message);
     } catch (error) {
       const message = failurePrefix + error.message;
       if (addressPanel()) {
@@ -407,8 +411,8 @@
         A.setError('bit-address-generate-count', '');
         void save({ count }, (result) => {
           filters.page = 1;
-          return `已生成 ${result.count} 条账单地址，付款前请核对资料。`;
-        });
+          return `已成功生成 ${result.count} 条地址`;
+        }, { successToast: true });
       } else if (form.id === 'bit-address-import') {
         if (pendingFile && !readingFile) {
           void save({ streets: pendingFile.streets }, ({ imported, duplicated, rejected }) => {

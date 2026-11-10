@@ -260,6 +260,7 @@
     finishMicrosoftMailbox: (authorizationId) => write(['tools/mailbox-pool'], () => request('tools/mailbox-microsoft/finish', { authorizationId }, 'POST')),
     managedMailboxPool: () => request('tools/mailbox-pool'),
     managedMailboxCode: (id) => request('tools/mailbox-pool', { id }, 'POST'),
+    managedMailboxCodePage: (ids, version) => request('tools/mailbox-pool', { ids, version }, 'POST'),
     saveManagedMailboxPool: (data) => write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', data)),
     async queryManagedMailbox(queryCode, limit) {
       const legacy = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/.test(queryCode);
@@ -279,7 +280,7 @@
     },
     savedTotp: () => request('saved-totp'),
     saveTotp: (data) => write(['saved-totp'], () => request('saved-totp', data)),
-    savedTotpCode: (id) => request('saved-totp/code', { id }, 'POST'),
+    savedTotpCodePage: (ids, version) => request('saved-totp/code', { ids, version }, 'POST'),
     savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
     websiteVisits: (filters) => request('tools/website-visits/search', filters, 'POST'),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),

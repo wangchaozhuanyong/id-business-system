@@ -101,8 +101,8 @@ test('网站监控三个页签共享标题、工具栏、筛选和结果布局�
       await fullPath.waitFor({ state: 'hidden' });
       const pager = host.locator('[data-pagination="operations-website-visits"]');
       const nextPage = pager.getByRole('button', { name: '下一页', exact: true });
-      assert.equal(await pager.getAttribute('data-page-size'), '10');
-      for (let pageNumber = 2; pageNumber <= 5; pageNumber++) {
+      assert.equal(await pager.getAttribute('data-page-size'), '20');
+      for (let pageNumber = 2; pageNumber <= 3; pageNumber++) {
         await nextPage.click();
         await host.locator(`[data-pagination="operations-website-visits"][data-page="${pageNumber}"]`).waitFor();
       }

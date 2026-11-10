@@ -29,7 +29,7 @@ async function fixture() {
     row('upcoming', customers[1].id, 'upcoming@example.test', -720, 48),
     row('history', customers[1].id, 'upcoming@example.test', -1450, -721),
     row('no-card', customers[0].id, 'no-card@example.test', -4, 40, ''),
-    ...Array.from({ length: 8 }, (_, i) => row('active-' + i, customers[0].id, 'active-' + i + '@example.test', -500, 260 + i, 'recharge:' + (100 + i))));
+    ...Array.from({ length: 18 }, (_, i) => row('active-' + i, customers[0].id, 'active-' + i + '@example.test', -500, 260 + i, 'recharge:' + (100 + i))));
   data['card-types'] = { version: 1, items: [{ id: 'a', name: 'wise潘', active: true }],
     assignments: { 'recharge:7': 'a' } };
   data['subscription-card-estimates'] = { items: orders.filter(order => order.cardId).map(order => ({
@@ -100,7 +100,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         assert.equal(await list.locator('[data-row-id="switch-new"]').getByText('使用中').count(), 1);
         assert.equal(await list.getByText('no-card@example.test').count(), 0);
         assert.ok(!(await list.innerText()).includes(pan));
-        assert.equal(await rows.count(), 10);
+        assert.equal(await rows.count(), 20);
         const amountHeading = list.getByRole('columnheader', { name: '预计金额', exact: true });
         const amountHelp = amountHeading.getByLabel('查看预计金额说明');
         const amountNote = amountHeading.locator('.title-description');

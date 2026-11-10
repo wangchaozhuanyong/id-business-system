@@ -21,8 +21,7 @@ function checkDestinations(channels) {
     throw monitoringError(422, '代充群组须与安全和运维接收人分开');
 }
 
-function pageOf(rows, requested) {
-  const pageSize = 10;
+function pageOf(rows, requested, pageSize) {
   const total = rows.length;
   const page = Math.min(requested, Math.max(1, Math.ceil(total / pageSize)));
   return { items: rows.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total };
@@ -386,13 +385,13 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     return { acknowledged: true };
   }
 
-  function view({ tab = 'incidents', status = '', page = 1 } = {}) {
+  function view({ tab = 'incidents', status = '', page = 1, pageSize = 20 } = {}) {
     const { data } = state();
     if (tab === 'deliveries') return pageOf(data.deliveries.filter(row => !status || row.status === status).map(row => ({
       id: row.id, incidentId: row.incidentId, label: row.kind === 'test' ? '渠道测试' : monitorRules[row.code].label,
       kind: row.kind, target: monitorChannels[row.target], status: row.status, attempts: row.attempts,
       at: row.at, finishedAt: row.finishedAt, messageId: row.messageId, reason: row.reason
-    })), page);
+    })), page, pageSize);
     const checks = Object.entries(monitorRules).filter(([, rule]) => !rule.oneShot).map(([code, rule]) => {
       const readings = [...samples.values()].filter(sample => sample.code === code);
       const observed = readings.sort((a, b) => b.at - a.at)[0];
@@ -412,7 +411,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       queueFull: row.queueFull, external: row.external,
       accepted: row.externalAccepted || data.deliveries.some(item => item.incidentId === row.id &&
         item.kind === 'opened' && item.status === 'accepted')
-    })), page) };
+    })), page, pageSize) };
   }
 
   return { observe, receiveProbe, configView, view, save, importLegacy, takeOver, acknowledge, queueTest, dispatch,

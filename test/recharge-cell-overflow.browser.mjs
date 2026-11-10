@@ -17,7 +17,7 @@ test(
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     const message = '结账阶段等待超时。' + '长文字'.repeat(100) + ' <img src=x> "末尾"';
-    const tasks = Array.from({ length: 13 }, (_, index) => ({
+    const tasks = Array.from({ length: 23 }, (_, index) => ({
       id: `fixture-${index}`,
       cdk: 'KC-FIXTURE',
       token: 'test@example.test',

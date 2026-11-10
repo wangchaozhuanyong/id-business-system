@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>比特登录</title>
-  <link rel="stylesheet" href="/prototype.css" />
+  <link rel="stylesheet" href="/prototype.css?v=20261110-tabs" />
   <link rel="stylesheet" href="/title-help.css" />
-  <link rel="stylesheet" href="/recharge-integration.css" />
+  <link rel="stylesheet" href="/recharge-integration.css?v=20261110-tabs" />
   <link rel="stylesheet" href="/pagination.css" />
   <script src="/title-help.js" defer></script>
   <script src="/pagination.js" defer></script>
@@ -20,6 +20,7 @@
       <button class="tab" type="button" id="bit-tab-library" role="tab" aria-selected="false" aria-controls="bit-library-panel" tabindex="-1">IP 资料库 <span class="tab-count" id="bit-ip-count">—</span></button>
     </div>
   </div>
+  <div class="bit-local__body">
   <div id="bit-login-panel" role="tabpanel" aria-labelledby="bit-tab-login">
     <fieldset id="bit-login-fields">
       <section class="panel bit-local__section" aria-labelledby="bit-account-title">
@@ -187,8 +188,9 @@
     <div class="toolbar bit-local__filters"><input id="bit-ip-search" type="search" aria-label="搜索 IP" placeholder="搜索名称、国家或代理地址" /><select id="bit-ip-filter" aria-label="筛选 IP 类型"><option value="">全部 IP 类型</option><option value="mobile">移动 IP</option><option value="dynamic_residential">动态住宅</option><option value="static_residential">静态住宅</option></select><select id="bit-ip-sort" aria-label="IP 排序"><option value="recent">最近添加优先</option><option value="name">按名称排序</option><option value="country">按国家排序</option></select></div>
     <p id="bit-library-result" class="bit-local__library-status" role="status"></p>
     <div class="table-viewport bit-local__ip-table" tabindex="0" aria-label="IP 资料表，可横向滚动"><table><thead><tr><th>名称／备注</th><th>国家</th><th>IP 类型</th><th>检测状态</th><th>代理地址／协议</th><th>操作</th></tr></thead><tbody id="bit-ip-rows"></tbody></table><div id="bit-ip-empty" class="empty-state" hidden></div></div>
-    <footer id="bit-ip-pagination"></footer>
+    <footer id="bit-ip-pagination" data-pagination-footer></footer>
   </section>
+  </div>
   <dialog id="bit-proxy-editor" class="bit-local__proxy-editor" aria-labelledby="bit-proxy-editor-title">
     <header class="bit-local__drawer-header"><h2 id="bit-proxy-editor-title">新增执行 IP</h2><button class="button" id="bit-ip-dismiss" type="button" aria-label="关闭 IP 编辑">关闭</button></header>
     <div class="bit-local__drawer-body">

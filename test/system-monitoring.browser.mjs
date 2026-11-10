@@ -17,7 +17,7 @@ const config = () => ({
   rules: Object.entries(monitorRules).map(([code, rule]) => ({ code, ...rule })),
   legacy: { available: true, phase: 'native', imported: false, recipients: [] }
 });
-const fixtures = Array.from({ length: 12 }, (_, index) => ({
+const fixtures = Array.from({ length: 24 }, (_, index) => ({
   id: 'monitor-fixture-' + (index + 1), label: index === 0 ? '代充付款待核实' : '业务接口异常',
   category: '运行', priority: 'P1', kind: 'incident', at, count: 5, accepted: index === 0,
   taskId: index === 0 ? 'synthetic-job-4821' : undefined,
@@ -53,14 +53,16 @@ async function prepare(browser, width, role = 'super', phase = 'native') {
       return request.fulfill({ status: 400, json: { error: '离线操作不可用' } });
     }
     if (failRead) return request.fulfill({ status: 503, json: { error: '合成读取失败' } });
-    const tab = url.searchParams.get('tab'), page = Number(url.searchParams.get('page') || 1);
+    const tab = url.searchParams.get('tab'), requestedPage = Number(url.searchParams.get('page') || 1);
+    const pageSize = Number(url.searchParams.get('pageSize') || 20);
     if (tab === 'config') return request.fulfill({ json: settings });
     if (tab === 'legacy') return request.fulfill({ json: { phase } });
-    if (tab === 'deliveries') return request.fulfill({ json: { page: 1, total: 1, pageSize: 10,
+    if (tab === 'deliveries') return request.fulfill({ json: { page: 1, total: 1, pageSize,
       items: [{ id: 'receipt-fixture', label: '渠道测试', status: 'accepted', target: '运维接收人', at, attempts: 1, messageId: 421 }] } });
     const matched = url.searchParams.get('status') === 'resolved' ? [] : records;
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(matched.length / pageSize)));
     return request.fulfill({ json: { checks: [{ label: '站外探针', status: 'unknown' }, { label: '执行器', status: 'ok' }],
-      page: matched.length ? page : 1, total: matched.length, pageSize: 10, items: matched.slice((page - 1) * 10, page * 10) } });
+      page, total: matched.length, pageSize, items: matched.slice((page - 1) * pageSize, page * pageSize) } });
   });
   const page = await context.newPage();
   const errors = [];
@@ -115,8 +117,13 @@ test('监控配置和告警使用实际路由并兼容桌面、手机及深浅�
       page.getByRole('cell', { name: '代充付款待核实' })).waitFor();
     await pageGeometry(page);
     if (output && width !== 320) await page.screenshot({ path: join(output, 'incidents-' + width + '-' + theme + '.png') });
-    await page.getByRole('button', { name: '下一页' }).click();
-    await page.locator('[data-row-id="monitor-fixture-11"]:visible, [data-monitor-card="monitor-fixture-11"]:visible').waitFor();
+    const pager = page.locator('[data-pagination="system-monitoring"]');
+    const size = pager.getByRole('combobox', { name: '每页条数' });
+    assert.equal(await size.inputValue(), '20');
+    await pager.getByRole('button', { name: '下一页' }).click();
+    await page.locator('[data-row-id="monitor-fixture-21"]:visible, [data-monitor-card="monitor-fixture-21"]:visible').waitFor();
+    await size.selectOption('10');
+    await page.locator('[data-pagination="system-monitoring"][data-page="1"][data-page-size="10"]').waitFor();
     await pageGeometry(page);
     await page.locator('#system-monitor-filter').selectOption('resolved');
     await page.getByRole('heading', { name: '暂无符合条件的告警' }).waitFor();

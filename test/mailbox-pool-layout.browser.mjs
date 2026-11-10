@@ -18,13 +18,22 @@ try {
   for (const width of (process.env.ID_QA_WIDTHS || '1440,1024,901,900,768,390,320').split(',').map(Number)) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
     const requests = await interceptDesign(context, { localFixtures: {}, actor: { id: 'synthetic', name: '离线验收', role: 'admin' } });
-    let rows = fixture, fail = false;
-    const codeReads = [], mutations = [], errors = [];
+    let rows = fixture, fail = false, failCodes = false, metadataReads = 0;
+    const codeReads = [], singleReads = [], mutations = [], errors = [];
     await context.route(origin + '/api/local/tools/mailbox-pool', route => {
       const request = route.request();
-      if (request.method() === 'GET') return route.fulfill(fail ? { status: 502, json: { error: '合成读取失败，请重试' } } : { json: { version: 1, defaultValidDays: 30, items: rows } });
+      if (request.method() === 'GET') {
+        metadataReads++;
+        return route.fulfill(fail ? { status: 502, json: { error: '合成读取失败，请重试' } } : { json: { version: 1, defaultValidDays: 30, items: rows } });
+      }
       if (request.method() === 'POST') {
-        const { id } = request.postDataJSON(); codeReads.push(id);
+        const { id, ids, version } = request.postDataJSON();
+        if (ids) {
+          codeReads.push({ ids, version });
+          if (failCodes) return route.fulfill({ status: 503, json: { error: '合成取码失败' } });
+          return route.fulfill({ json: { version, items: ids.map(id => ({ id, code: `SYNTHETIC-${id}-LAYOUT-ONLY` })) } });
+        }
+        singleReads.push(id);
         return route.fulfill({ json: { code: `SYNTHETIC-${id}-LAYOUT-ONLY` } });
       }
       mutations.push(request.method());
@@ -61,8 +70,8 @@ try {
       if ([1440,390].includes(width)) await page.screenshot({ path: path.join(output, `${label}-${width}-${theme}.png`) });
     };
     await waitCodes();
-    assert.equal(await pool.locator('.mailbox-account').count(), 10);
-    assert.deepEqual(codeReads, fixture.slice(0,10).map(r => r.id), '只读取当前页查询码');
+    assert.equal(await pool.locator('.mailbox-account').count(), 20);
+    assert.deepEqual(codeReads, [{ version: 1, ids: fixture.slice(0,20).map(r => r.id) }], '当前页查询码只发送一次请求');
     await measure('first-page');
     const firstRow = pool.locator('.mailbox-account').first();
     const rowHeight = (await firstRow.boundingBox()).height;
@@ -100,18 +109,19 @@ try {
     await operation.getByRole('button', { name: '取消', exact: true }).click();
     await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').first().click();
     await page.waitForFunction(async () => await navigator.clipboard.readText() === 'SYNTHETIC-fixture-0-LAYOUT-ONLY');
+    assert.deepEqual(singleReads, [fixture[0].id], '手动复制继续使用既有单条读取');
     await pool.getByRole('button', { name: '下一页', exact: true }).click(); await waitCodes();
-    assert.equal(await pool.locator('.mailbox-account').first().locator('strong').textContent(), fixture[10].email);
+    assert.equal(await pool.locator('.mailbox-account').first().locator('strong').textContent(), fixture[20].email);
     await measure('second-page');
-    for (const size of [20,50]) {
+    for (const size of [10,50]) {
       const before = codeReads.length;
       await pool.getByLabel('每页条数', { exact: true }).selectOption(String(size)); await waitCodes();
       assert.equal(await pool.locator('.mailbox-account').count(), size);
-      assert.deepEqual(codeReads.slice(before), fixture.slice(0,size).map(r => r.id));
+      assert.deepEqual(codeReads.slice(before), [{ version: 1, ids: fixture.slice(0,size).map(r => r.id) }]);
     }
     await pool.locator('.mailbox-account__more').first().click();
     await actions.waitFor();
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await pool.locator('.online-tool-mail-list').evaluate(element => { element.scrollTop = element.scrollHeight; });
     await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
     await pool.locator('.pagination-jump summary').click();
     await pool.getByLabel('跳至页码', { exact: true }).fill('41');
@@ -133,9 +143,24 @@ try {
     assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41', '关闭行操作保留最后一页');
     assert.equal(await pool.locator('.mailbox-account').count(), 3);
     assert.deepEqual(await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop })), scrollBeforeOperation, '关闭抽屉保留列表滚动位置');
+    const readsBeforeReturn = codeReads.length;
+    const metadataBeforeReturn = metadataReads;
     await page.goto(origin + '/#/plugins/websites');
+    assert.equal(await page.locator('[data-mailbox-code]').count(), 0);
     await page.goto(origin + '/#/plugins/mailboxes');
     await drawer.locator('#ops-mailbox-pool').waitFor(); await waitCodes();
+    assert.deepEqual(codeReads.slice(readsBeforeReturn), [{ version: 1, ids: fixture.slice(2000).map(r => r.id) }],
+      '切回复用列表资料，只为最后一页重新取码一次');
+    assert.equal(metadataReads, metadataBeforeReturn);
+    if (width === 1440 && theme === 'light') {
+      await page.goBack();
+      await pool.waitFor({ state: 'detached' });
+      await page.goForward();
+      await waitCodes();
+      assert.deepEqual(codeReads.slice(readsBeforeReturn + 1), [{ version: 1, ids: fixture.slice(2000).map(r => r.id) }],
+        '浏览器前进、后退各只挂载一次当前页面');
+      assert.equal(metadataReads, metadataBeforeReturn);
+    }
     assert.equal(await pool.getByLabel('每页条数', { exact: true }).inputValue(), '50');
     assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41');
     await pool.getByLabel('搜索邮箱池', { exact: true }).fill('layout-1999'); await waitCodes();
@@ -187,8 +212,17 @@ try {
     await pool.getByRole('button', { name: '刷新', exact: true }).click();
     await pool.getByText('合成读取失败，请重试', { exact: false }).waitFor();
     assert.equal(await pool.locator('.mailbox-account').count(), 1, '刷新失败保留已有结果');
+    if (width === 1440 && theme === 'light') {
+      fail = false;
+      failCodes = true;
+      await pool.getByRole('button', { name: '重试', exact: true }).click();
+      await pool.locator('[data-mailbox-code]').getByText('读取失败', { exact: true }).waitFor();
+      await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').click();
+      await waitCodes();
+      assert.deepEqual(singleReads, [fixture[0].id, fixture[1].id]);
+    }
     fail = false; rows = [];
-    await pool.getByRole('button', { name: '重试', exact: true }).click();
+    await pool.getByRole('button', { name: failCodes ? '刷新' : '重试', exact: true }).click();
     await pool.getByText('邮箱池暂无记录', { exact: true }).waitFor(); await measure('empty');
     assert.deepEqual(errors, []); assert.deepEqual(mutations, []);
     assert.deepEqual(requests.external, []); assert.deepEqual(requests.unavailable, []);

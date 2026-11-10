@@ -29,21 +29,21 @@ test('default phrase order is paged and can be adjusted across a page boundary',
   const drawer = page.locator('#drawer');
   const list = drawer.locator('#ops-phrase-list');
   const pager = drawer.locator('[data-pagination="operations-phrases"]');
-  await list.locator('[data-phrase-id="phrase-10"]').waitFor();
-  assert.equal(await list.locator('[data-phrase-id]').count(), 10);
+  await list.locator('[data-phrase-id="phrase-20"]').waitFor();
+  assert.equal(await list.locator('[data-phrase-id]').count(), 20);
   assert.equal(await pager.getAttribute('data-total'), '23');
   assert.equal(await drawer.locator('#ops-phrase-sort').inputValue(), 'custom');
-  const keyboard = list.getByRole('button', { name: '调整顺序：合成话术 10', exact: true });
+  const keyboard = list.getByRole('button', { name: '调整顺序：合成话术 20', exact: true });
   await keyboard.press('ArrowDown');
   await page.waitForFunction(() => document.querySelector('[data-pagination="operations-phrases"]')?.dataset.page === '2');
-  assert.equal(await list.locator('[data-phrase-id]').first().getAttribute('data-phrase-id'), 'phrase-10');
+  assert.equal(await list.locator('[data-phrase-id]').first().getAttribute('data-phrase-id'), 'phrase-20');
   assert(await keyboard.evaluate(node => node === document.activeElement));
-  assert.equal(snapshot.data.phrases.filter(row => !row.deleted)[9].id, 'phrase-11');
+  assert.equal(snapshot.data.phrases.filter(row => !row.deleted)[19].id, 'phrase-21');
   assert.equal(snapshot.data.phrases[4].id, 'deleted');
-  await list.getByLabel('更多：合成话术 10', { exact: true }).click();
+  await list.getByLabel('更多：合成话术 20', { exact: true }).click();
   await list.getByRole('button', { name: '上移', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[data-pagination="operations-phrases"]')?.dataset.page === '1');
-  assert.equal(await list.locator('[data-phrase-id]').last().getAttribute('data-phrase-id'), 'phrase-10');
+  assert.equal(await list.locator('[data-phrase-id]').last().getAttribute('data-phrase-id'), 'phrase-20');
 
   const source = list.getByRole('button', { name: '调整顺序：合成话术 1', exact: true });
   const target = list.locator('[data-phrase-id="phrase-2"]');

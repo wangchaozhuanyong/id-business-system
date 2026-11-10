@@ -42,6 +42,7 @@ const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['prototype.css', 'text/css; charset=utf-8'],
   ['design-tokens.css', 'text/css; charset=utf-8'],
+  ['tabs.css', 'text/css; charset=utf-8'],
   ['design-charts.css', 'text/css; charset=utf-8'],
   ['design-charts.js', 'text/javascript; charset=utf-8'],
   ['interaction-preferences.css', 'text/css; charset=utf-8'],

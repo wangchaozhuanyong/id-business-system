@@ -112,7 +112,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     await panel.locator('#bit-address-generate-button').click();
     await total(10);
     await settled();
-    await panel.getByText('已生成 10 条账单地址，付款前请核对资料。', { exact: true }).waitFor();
+    await page.locator('#toast').getByText('已成功生成 10 条地址', { exact: true }).waitFor();
     assert.equal(state.writes.length, 1);
     assert.equal(state.rows.length, 10);
     assert.equal(state.reads, 3, '初次读取加两次保存后读取，不重复生成');
@@ -153,7 +153,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     const { page, panel, state, total, settled, assertClean } = await setup(t);
     state.invalidations = 3;
     await panel.locator('#bit-address-generate-button').click();
-    await panel.getByText(/已生成 10 条.*地址列表持续更新.*请点击刷新重试/).waitFor();
+    await panel.getByText(/已成功生成 10 条地址.*地址列表持续更新.*请点击刷新重试/).waitFor();
     await settled();
     assert.equal(state.reads, 4, '自动读取最多三次，避免持续通知造成无限请求');
     assert.equal(state.writes.length, 1);
@@ -164,7 +164,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
 
     state.failRead = true;
     await panel.locator('#bit-address-generate-button').click();
-    await panel.getByText(/已生成 10 条.*合成读取失败.*请点击刷新重试/).waitFor();
+    await panel.getByText(/已成功生成 10 条地址.*合成读取失败.*请点击刷新重试/).waitFor();
     await settled();
     assert.equal(state.rows.length, 20);
     assert.equal(state.writes.length, 2);
@@ -198,7 +198,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     assert.equal(state.reads, 2);
     assert.equal(state.writes.length, 1);
     assert.equal(await page.evaluate(() => window.IDLocalData.queries.peek(
-      'bitbrowser-addresses', { page: 1, pageSize: 10, keyword: '', status: 'unused' }
+      'bitbrowser-addresses', { page: 1, pageSize: 20, keyword: '', status: 'unused' }
     )), undefined);
     await assertClean();
   });
@@ -238,9 +238,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     await total(20);
     await settled();
     assert.equal(state.writes.length, 2);
-    // The BitBrowser host retains its connected DOM while another route is open.
-    // Its completed write receipt remains valid when returning to this same view.
-    assert.equal(await panel.locator('#bit-address-feedback').textContent(), '已生成 10 条账单地址，付款前请核对资料。');
+    assert.equal(await panel.locator('#bit-address-feedback').textContent(), '', '成功提示不会留在地址列表里');
     await assertClean();
   });
 });

@@ -981,6 +981,14 @@
           (!v.country || asset.country === v.country) &&
           (!v.status || asset.status === v.status)
       );
+      const totpColumn = {
+        id: 'totp', label: '2FA 密钥', class: 'mono wide-cell', long: true,
+        render: (asset) => esc(asset.totp || '未录入')
+      };
+      const appPasswordColumn = {
+        id: 'appPassword', label: '应用专用密码', class: 'mono wide-cell', long: true,
+        render: (asset) => esc(asset.appPassword || '未录入')
+      };
       const columns = [
         ...(kind === 'account' && !personalAccount(type)
           ? [
@@ -1007,7 +1015,9 @@
           id: 'password',
           label: kind === 'account' ? '账号密码' : microsoft ? '登录密码' : '邮箱密码',
           class: 'mono',
-          long: true
+          long: true,
+          render: (asset) => esc(asset.password ||
+            (microsoft && asset.microsoftSecurity?.loginMode === 'passwordless' ? '无密码登录' : '未录入'))
         },
         ...(personalAccount(type) ? [
           { id: 'loginMethod', label: '登录方式', render: asset => esc(choiceLabel(grokLoginOptions, asset.loginMethod)) },
@@ -1025,18 +1035,16 @@
           { id: 'twoStep', label: '两步验证', render: (asset) => esc(choiceLabel(microsoftTwoStepOptions, asset.microsoftSecurity?.twoStep, '未核验')) },
           { id: 'verificationMethods', label: '验证方式', render: (asset) => esc(microsoftVerificationLabel(asset)) },
           { id: 'verificationDevice', label: '验证设备／审批人', long: true, render: (asset) => esc(asset.microsoftSecurity?.verificationDevice || '—') },
-          { id: 'totp', label: '2FA 密钥', class: 'mono wide-cell', long: true },
+          totpColumn,
           { id: 'phone', label: '绑定手机号', render: (asset) => phoneValue(asset.phone) },
-          { id: 'appPassword', label: '应用专用密码', class: 'mono wide-cell', long: true }
+          appPasswordColumn
         ] : []),
-        ...(['google', 'gpt'].includes(type)
-          ? [{ id: 'totp', label: '2FA 密钥', class: 'mono wide-cell', long: true }]
-          : []),
+        ...(['google', 'gpt'].includes(type) ? [totpColumn] : []),
         ...(type === 'google'
           ? [
               { id: 'auxiliary', label: '辅助邮箱', class: 'wide-cell', long: true },
               { id: 'phone', label: '绑定电话／验证码', render: asset => phoneValue(asset.phone) },
-              { id: 'appPassword', label: '应用专用密码', class: 'mono wide-cell', long: true }
+              appPasswordColumn
             ]
           : []),
         { id: 'country', label: usesAccountLocation(type) ? '注册国家' : '国家地区' },
@@ -1084,7 +1092,8 @@
               { id: 'proxyHost', label: '代理主机', class: 'mono', long: true },
               { id: 'proxyPort', label: '代理端口', class: 'mono' },
               { id: 'proxyUser', label: '代理账号', class: 'mono', long: true },
-              { id: 'proxyPassword', label: '代理密码', class: 'mono', long: true },
+              { id: 'proxyPassword', label: '代理密码', class: 'mono', long: true,
+                render: (asset) => esc(asset.proxyPassword || '未录入') },
               { id: 'age', label: '养号时长', render: (asset) => ageLabel(asset) },
               {
                 id: 'ready',

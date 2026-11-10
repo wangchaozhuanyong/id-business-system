@@ -12,11 +12,13 @@ import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting
 import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
 import {
-  applyMailboxPoolWrite, findMailboxQuery, mailboxPoolItems, mailboxPoolMetadata, managedMailboxDomain, MailboxPoolError, prepareVerifiedMailboxWrite
+  applyMailboxPoolWrite, findMailboxQuery, mailboxPoolCodePage, mailboxPoolItems, mailboxPoolMetadata,
+  managedMailboxDomain, MailboxPoolError, prepareVerifiedMailboxWrite
 } from './tools/mailbox-pool.mjs';
 import { withClaudeMailboxCandidates } from './tools/claude-mailbox-candidates.mjs';
 import {
-  applyTotpWrite, generateSavedCode, revealSavedTotpSecret, savedTotpDomain, savedTotpMetadata, SavedTotpError, validateTotpWrite
+  applyTotpWrite, generateSavedCode, generateSavedCodePage, revealSavedTotpSecret, savedTotpDomain,
+  savedTotpMetadata, SavedTotpError, validateTotpWrite
 } from './tools/saved-totp.mjs';
 import {
   BitBrowserAddressError,
@@ -1115,6 +1117,17 @@ export function createLocalBusinessStore(databasePath) {
         auditSummary('读取买家查询码', actor, id), current.version);
       return { code };
     },
+    readManagedMailboxCodePage(page, actor) {
+      return writeTransaction(() => {
+        const result = mailboxPoolCodePage(readDocument(managedMailboxDomain), page);
+        const at = new Date().toISOString();
+        for (const { id, code } of result.items) {
+          if (code) log.run(at, managedMailboxDomain, 'managed_mailbox_code_read',
+            auditSummary('读取买家查询码', actor, id), result.version);
+        }
+        return result;
+      });
+    },
     markManagedMailboxAuthFailed(id, expectedVersion) {
       return writeTransaction(() => {
         const current = readDocument(managedMailboxDomain);
@@ -1201,6 +1214,20 @@ export function createLocalBusinessStore(databasePath) {
       log.run(new Date().toISOString(), savedTotpDomain, 'saved_totp_use',
         auditSummary('查看 2FA 验证码', actor, id), snapshot.version);
       return result;
+    },
+    async readSavedTotpCodePage(page, actor) {
+      const domain = `${savedTotpDomain}:${actor.id}`;
+      const result = await generateSavedCodePage(readDocument(domain), page);
+      return writeTransaction(() => {
+        if ((revision.get(domain)?.version ?? 0) !== result.version)
+          throw new SavedTotpError(409, '账号列表已更新，请刷新列表');
+        const at = new Date().toISOString();
+        for (const { id, code } of result.items) {
+          if (code) log.run(at, savedTotpDomain, 'saved_totp_use',
+            auditSummary('查看 2FA 验证码', actor, id), result.version);
+        }
+        return result;
+      });
     },
     loadToolbox(actor = localToolboxActor) {
       const { version, data } = readDocument(`toolbox:${actor.id}`);
@@ -1978,6 +2005,15 @@ function json(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function codeReadPage(body) {
+  const { ids, version } = body;
+  if (Object.keys(body).length !== 2 || !Number.isSafeInteger(version) || version < 0 ||
+      !Array.isArray(ids) || ids.length < 1 || ids.length > 50 || new Set(ids).size !== ids.length ||
+      ids.some(id => typeof id !== 'string' || !id.trim() || id.length > 128))
+    throw new LocalDataError(400, '请核对本页账号编号及列表版本');
+  return { ids, version };
+}
+
 export async function handleLocalBusiness(
   request,
   response,
@@ -2036,6 +2072,8 @@ export async function handleLocalBusiness(
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从本机页面使用');
       if (request.method === 'POST') {
         const body = await readJson(request);
+        if (body?.ids !== undefined)
+          return json(response, 200, store.readManagedMailboxCodePage(codeReadPage(body), actor));
         return json(response, 200, store.copyManagedMailboxCode(body?.id, actor));
       }
       if (request.method === 'PUT')
@@ -2052,6 +2090,8 @@ export async function handleLocalBusiness(
         return json(response, 200, await store.saveSavedTotp(await readJson(request), actor));
       if (domain === savedTotpDomain + '/code' && request.method === 'POST') {
         const body = await readJson(request);
+        if (body?.ids !== undefined)
+          return json(response, 200, await store.readSavedTotpCodePage(codeReadPage(body), actor));
         return json(response, 200, await store.useSavedTotp(body?.id, actor));
       }
       if (domain === savedTotpDomain + '/secret' && request.method === 'POST')

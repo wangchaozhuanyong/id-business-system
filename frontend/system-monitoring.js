@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const A = window.IDDesignAPI, D = window.IDLocalData, e = A.esc, $ = A.$;
+  const { defaultPageSize, pageSizes } = window.IDPagination;
   const settingsRoute = 'settings/monitoring';
   const namespace = 'system-monitoring';
   const draftKey = namespace + ':configuration';
@@ -18,7 +19,7 @@
   const superAdmin = () => A.state.actor?.role === 'super';
   const settingsTab = () => A.state.drafts.get(tabKey) || 'channels';
   const queryTab = () => !settingsPage() ? 'incidents' : settingsTab() === 'deliveries' ? 'deliveries' : 'config';
-  const list = (tab = queryTab()) => A.state.drafts.get(listViewKey + tab) || { page: 1, status: '' };
+  const list = (tab = queryTab()) => A.state.drafts.get(listViewKey + tab) || { page: 1, pageSize: defaultPageSize, status: '' };
   const currentDraftKey = () => draftKey + ':' + settingsTab();
   const draft = () => A.state.drafts.get(currentDraftKey());
   const snapshots = new Map();
@@ -27,8 +28,8 @@
   let generation = 0, busy = false;
 
   function params(tab = queryTab()) {
-    const { page, status } = list(tab);
-    return tab === 'config' ? { tab } : { tab, page, status };
+    const { page, pageSize, status } = list(tab);
+    return tab === 'config' ? { tab } : { tab, page, pageSize, status };
   }
 
   function bindRead(tab) {
@@ -57,10 +58,10 @@
     try {
       const data = await D.queries.read(namespace, input, () => D.systemMonitoring(input), { refresh: force });
       if (!current()) return;
-      if (tab === 'config' ? !Array.isArray(data?.rules) || !data.channels : !Array.isArray(data?.items))
+      if (tab === 'config' ? !Array.isArray(data?.rules) || !data.channels : !Array.isArray(data?.items) || !pageSizes.includes(data.pageSize))
         throw new Error('监控资料响应不完整，请重新读取');
       snapshots.set(tab, { key, data });
-      if (tab !== 'config') A.state.drafts.set(listViewKey + tab, { status: input.status, page: data.page });
+      if (tab !== 'config') A.state.drafts.set(listViewKey + tab, { status: input.status, page: data.page, pageSize: data.pageSize });
     } catch (error) {
       if (current()) errors.set(tab, error.message || '读取失败，请重试');
     } finally {
@@ -114,9 +115,9 @@
       : A.empty(empty, guidance);
     return `<div class="toolbar"><div class="toolbar-left"><label for="system-monitor-filter">状态</label>
       <select id="system-monitor-filter" ${pending.has(tab) ? 'disabled' : ''}>${A.options([['', '全部状态'], ...statuses], list(tab).status)}</select></div></div>` +
-      '<div class="system-monitor-list">' + A.table(columns, data.items, '', tableName, { title: empty, description: guidance }) +
-      `<div class="system-monitor-mobile panel-body" aria-label="${tableName}">${cards}</div></div>` +
-      window.IDPagination.render({ id: namespace, page: data.page, pageSize: data.pageSize, total: data.total, pageSizes: [], disabled: pending.has(tab) });
+      '<div class="system-monitor-list" data-pagination-table>' + A.table(columns, data.items, '', tableName, { title: empty, description: guidance }) +
+      `<div class="system-monitor-mobile panel-body" data-pagination-rows tabindex="0" role="region" aria-label="${tableName}">${cards}</div></div>` +
+      window.IDPagination.render({ id: namespace, page: data.page, pageSize: data.pageSize, total: data.total, disabled: pending.has(tab) });
   }
 
   function channelForm(config) {
@@ -280,7 +281,7 @@
   function onChange(node) {
     const tab = queryTab();
     if (node.id === 'system-monitor-filter') {
-      A.state.drafts.set(listViewKey + tab, { status: node.value, page: 1 }); void load(); return true;
+      A.state.drafts.set(listViewKey + tab, { ...list(tab), status: node.value, page: 1 }); void load(); return true;
     }
     if (settingsPage() && (node.dataset.rule || node.dataset.legacyTarget || node.id === 'system-monitor-enabled')) {
       const config = snapshots.get('config')?.data;
@@ -321,7 +322,9 @@
   document.addEventListener('id-pagination-change', event => {
     if (event.detail.id !== namespace || !event.target.closest('[data-system-monitor-region]')) return;
     const tab = queryTab();
-    A.state.drafts.set(listViewKey + tab, { ...list(tab), page: event.detail.page }); void load();
+    const { page, pageSize } = event.detail;
+    A.state.drafts.set(listViewKey + tab, { ...list(tab), page, pageSize });
+    void load();
   });
   window.IDDesignModules.push({
     id: namespace, matches: route => ['monitor', settingsRoute].includes(route), render, onClick, onChange, onSubmit,

@@ -39,6 +39,13 @@ export function mailboxPoolMetadata(snapshot) {
   };
 }
 
+export function mailboxPoolCodePage(snapshot, { ids, version }) {
+  if (snapshot.version !== version)
+    throw new MailboxPoolError(409, '邮箱池已更新，请刷新列表');
+  const codes = new Map(mailboxPoolItems(snapshot).map(({ id, queryCode }) => [id, queryCode]));
+  return { version, items: ids.map(id => ({ id, code: codes.get(id) || '' })) };
+}
+
 export function applyMailboxPoolWrite(snapshot, body, clock = Date.now(), microsoftRefreshToken) {
   if (!body || !['create', 'credential', 'status', 'rotate', 'settings', 'batch'].includes(body.action) ||
       !Number.isSafeInteger(body.version) || body.version < 0)

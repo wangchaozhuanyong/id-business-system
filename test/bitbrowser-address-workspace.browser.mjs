@@ -3,6 +3,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { listBitBrowserAddresses } from '../server/bitbrowser-addresses.mjs';
 import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 const sample = {
@@ -165,7 +166,7 @@ test('比特登录右侧地址库支持复制、重试标记和按快照批量�
       await row.waitFor();
       assert.equal(await used.getAttribute('aria-selected'), 'true');
       const pager = panel.locator('[data-pagination="bitbrowser-addresses"]');
-      assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '10');
+      assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '20');
       await pager.getByRole('button', { name: '下一页', exact: true }).click();
       await panel.locator('[data-pagination="bitbrowser-addresses"][data-page="2"][data-total="22"]').waitFor();
       const remove = panel.getByRole('button', { name: '一键删除已使用' });
@@ -193,7 +194,6 @@ test('比特登录右侧地址库支持复制、重试标记和按快照批量�
     });
   }
 });
-
 
 test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保持一致', { timeout: 60_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -232,7 +232,8 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
       inner.querySelector('#bit-login-panel:not([hidden]) .bit-local__section, #bit-library-panel:not([hidden])'));
     const right = read(document.querySelector('#bit-addresses-panel .bit-workspace-heading'),
       document.querySelector('#bit-address-heading'), 0, document.querySelector('.bit-address-source-toolbar'));
-    return { left, right, overflow: document.documentElement.scrollWidth > innerWidth || inner.documentElement.scrollWidth > iframe.clientWidth };
+    return { left, right, hostOverflow: document.documentElement.scrollWidth - innerWidth,
+      frameOverflow: inner.documentElement.scrollWidth - iframe.clientWidth };
   });
   for (const width of [2040, 1440, 1180, 1024, 900, 390, 320]) {
     await page.setViewportSize({ width, height: 1100 });
@@ -253,7 +254,8 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
           assert(Math.abs(left.bottom - right.bottom) <= 1, '左右分隔线对齐');
           assert(Math.abs(left.textTop - right.textTop) <= 1, '左右实际文字对齐');
         }
-        assert.equal(result.overflow, false, '桌面和窄屏均不溢出');
+        assert(result.hostOverflow <= 0 && result.frameOverflow <= 0,
+          `${width}px ${theme} ${view} 横向溢出，宿主 ${result.hostOverflow}px，嵌入页 ${result.frameOverflow}px`);
         measurements.push({ width, theme, view, ...result });
       }
       assert.equal(await frame.locator('#bit-window-name').inputValue(), '布局验收草稿');
@@ -267,4 +269,89 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
   assert.deepEqual(requests.external, []);
   assert.deepEqual(requests.unavailable, []);
   if (output) await writeFile(join(output, 'heading-geometry.json'), JSON.stringify(measurements, null, 2));
+});
+
+test('地址生成收到保存回执后提示成功并自动消失，写入失败及刷新失败不混淆', async (t) => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  for (const width of [1440, 390]) await t.test(width + 'px', { timeout: 30_000 }, async (t) => {
+    const context = await browser.newContext({ viewport: { width, height: 920 } });
+    t.after(() => context.close());
+    const traffic = await interceptDesign(context, { actor: { id: 'address-qa', name: '离线管理员', role: 'admin' }, localFixtures: {} });
+    let rows = [sample], version = 1, writes = 0, failWrite = false, failRead = false;
+    const writeStarted = Promise.withResolvers(), releaseWrite = Promise.withResolvers();
+    const refreshStarted = Promise.withResolvers(), releaseRefresh = Promise.withResolvers();
+    t.after(() => { releaseWrite.resolve(); releaseRefresh.resolve(); });
+    await context.route('**/api/local/bitbrowser-addresses*', async (route) => {
+      if (route.request().method() === 'GET') {
+        if (version === 2) { refreshStarted.resolve(); await releaseRefresh.promise; }
+        if (failRead) return route.fulfill({ status: 503, json: { error: '列表读取失败' } });
+        return route.fulfill({ json: { ...listBitBrowserAddresses(rows, new URL(route.request().url()).searchParams), version } });
+      }
+      assert.equal(route.request().method(), 'PUT');
+      assert.deepEqual(route.request().postDataJSON(), { count: 3 });
+      writes++;
+      if (writes === 1) { writeStarted.resolve(); await releaseWrite.promise; }
+      if (failWrite) return route.fulfill({ status: 503, json: { error: '地址保存失败，请重试' } });
+      version++;
+      const items = Array.from({ length: 3 }, (_, index) => ({ ...sample, id: `generated-${version}-${index}`, line1: `${version}${index} Fixture Lane` }));
+      rows.push(...items);
+      return route.fulfill({ json: { count: items.length, items } });
+    });
+    const page = await context.newPage(), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.setDefaultTimeout(5000);
+    await page.clock.install();
+    await page.goto(origin + '/#/recharge/start');
+    if (width === 390) await page.locator('#theme-toggle').click();
+    const generate = page.locator('#bit-address-generate-button'), toast = page.locator('#toast');
+    const notice = page.locator('#bit-address-feedback');
+    await page.locator('#bit-address-list').getByText(sample.line1, { exact: true }).waitFor();
+    await page.locator('#bit-address-generate-count').fill('3');
+    await generate.click();
+    await writeStarted.promise;
+    assert(await generate.isDisabled());
+    assert(await toast.isHidden(), '保存尚未确认时不能提示成功');
+    await page.locator('#bit-address-generate').dispatchEvent('submit');
+    assert.equal(writes, 1, '保存中不能重复生成');
+    releaseWrite.resolve();
+    await refreshStarted.promise;
+    await toast.getByText('已成功生成 3 条地址', { exact: true }).waitFor();
+    assert.equal(await toast.getAttribute('data-kind'), 'success');
+    assert.equal(await toast.getAttribute('role'), 'status');
+    assert(await notice.isHidden(), '保存完成后不应残留正在保存');
+    const box = await toast.boundingBox();
+    assert(box.x >= 0 && box.x + box.width <= width && box.y >= 0);
+    await page.clock.fastForward(2000);
+    assert(await toast.isVisible(), '成功提示应留出阅读时间');
+    releaseRefresh.resolve();
+    await page.waitForFunction(() => !document.querySelector('#bit-address-generate-button').disabled);
+    assert(await notice.isHidden(), '列表刷新后不应留下重复成功提示');
+    if (process.env.ID_LAYOUT_QA_OUTPUT) {
+      await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
+      await page.screenshot({ path: join(process.env.ID_LAYOUT_QA_OUTPUT, `generation-success-${width}.png`) });
+    }
+    await page.clock.fastForward(2500);
+    assert(await toast.isHidden(), '成功提示应自动消失');
+
+    failWrite = true;
+    await generate.click();
+    await notice.getByText('地址保存失败，请重试', { exact: true }).waitFor();
+    await page.clock.fastForward(5000);
+    assert(await toast.isHidden(), '写入失败不得弹出成功提示');
+    assert(await notice.isVisible(), '失败原因应保留以便重试');
+    assert.equal(await page.locator('#bit-address-generate-count').inputValue(), '3');
+    failWrite = false;
+    failRead = true;
+    await generate.click();
+    await toast.getByText('已成功生成 3 条地址', { exact: true }).waitFor();
+    await notice.getByText(/已成功生成 3 条地址.*列表读取失败/).waitFor();
+    await page.clock.fastForward(4500);
+    assert(await toast.isHidden());
+    assert(await notice.isVisible(), '生成成功但列表读取失败的说明应保留');
+    assert.deepEqual(errors, []);
+    assert.deepEqual(traffic.external, []);
+    assert.deepEqual(traffic.unavailable, []);
+  });
 });

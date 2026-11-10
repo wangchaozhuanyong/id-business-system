@@ -4,7 +4,7 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
 import { withClaudeMailboxCandidates } from '../server/tools/claude-mailbox-candidates.mjs';
-import { mailboxPoolMetadata, prepareVerifiedMailboxWrite } from '../server/tools/mailbox-pool.mjs';
+import { mailboxPoolCodePage, mailboxPoolMetadata, prepareVerifiedMailboxWrite } from '../server/tools/mailbox-pool.mjs';
 
 test('插件导航、Claude 待授权、授权后取码与可点击邮件链接', { timeout: 90_000 }, async t => {
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
@@ -27,9 +27,11 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
     const request = route.request();
     if (request.method() === 'GET') return route.fulfill({ json: view() });
     if (request.method() === 'POST') {
-      const { id } = request.postDataJSON();
-      codeReads.push(id);
-      assert(!id.startsWith('claude:'), '待授权记录不能读取查询码');
+      const command = request.postDataJSON();
+      const { id, ids } = command;
+      codeReads.push(...(ids || [id]));
+      assert((ids || [id]).every(id => !id.startsWith('claude:')), '待授权记录不能读取查询码');
+      if (ids) return route.fulfill({ json: mailboxPoolCodePage(snapshot, command) });
       return route.fulfill({ json: { code: snapshot.data.items.find(row => row.id === id).queryCode } });
     }
     try {
