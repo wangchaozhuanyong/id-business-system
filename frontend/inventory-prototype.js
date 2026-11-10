@@ -186,6 +186,28 @@
     return inventoryLoad;
   }
 
+  // A new Google mailbox is an independent insertion. Preserve the freshly
+  // loaded document and replay only that insertion after an explicit version
+  // rejection; all other inventory operations keep their original conflict flow.
+  function rebaseGoogleMailboxCreate(before, after, latest, values) {
+    if (values?.['inventory-asset-id'] || values?.['inventory-asset-type'] !== 'google' ||
+        !Array.isArray(before?.mailboxes) || !Array.isArray(after?.mailboxes) ||
+        !Array.isArray(latest?.mailboxes) || !Array.isArray(latest?.accounts)) return null;
+    const originalIds = new Set(before.mailboxes.map(item => item.id));
+    const added = after.mailboxes.filter(item => !originalIds.has(item.id));
+    if (added.length !== 1 || added[0].type !== 'google' || !added[0].id ||
+        !identityKey(added[0]) || identityKey(added[0]) !== String(values['inventory-email'] || '').trim().toLowerCase())
+      return null;
+    const withoutAdded = { ...after, mailboxes: after.mailboxes.filter(item => item !== added[0]) };
+    if (JSON.stringify(withoutAdded) !== JSON.stringify(before)) return null;
+    if ([...latest.mailboxes, ...latest.accounts].some(item =>
+      item.id === added[0].id || (item.type === 'google' && identityKey(item) === identityKey(added[0]))))
+      return { duplicate: true };
+    const rebased = structuredClone(latest);
+    rebased.mailboxes.unshift(added[0]);
+    return { data: rebased };
+  }
+
   async function persistInventory(action, mutate, { relayExtraction = false } = {}) {
     if (localInventoryState !== 'ready' || inventorySavePending) {
       api.notify('库存尚未就绪或仍在保存，请稍候重试');
@@ -200,6 +222,9 @@
     const draftKey = draftForm?.dataset.inventoryDraft;
     const submittedValues = draftForm ? api.readDraft(draftForm) : null;
     const submittedDraft = submittedValues ? JSON.stringify(submittedValues) : '';
+    const actorId = currentActor().id;
+    const viewActorId = api.state.actor?.id;
+    const sentVersion = localInventoryVersion;
     let after, finish, saved;
     try {
       finish = mutate();
@@ -218,7 +243,39 @@
       saved = await localData.save('inventory', localInventoryVersion, after, { action });
       applyCommittedInventory(saved);
     } catch (error) {
-      if (error?.status === 409 || error?.statusCode === 409) {
+      const versionConflict = (error?.status === 409 || error?.statusCode === 409) &&
+        error.message === '库存资料已在其他页面更新，请刷新后重试';
+      if (versionConflict && action === 'inventory_create' &&
+          submittedValues?.['inventory-asset-type'] === 'google' && !submittedValues?.['inventory-asset-id']) {
+        const refreshed = await readLocalInventory({ keepContent: true });
+        const unchanged = refreshed && localInventoryVersion > sentVersion && currentActor().id === actorId &&
+          api.state.actor?.id === viewActorId &&
+          api.state.route === route && document.querySelector('#drawer[open]')?.firstElementChild === drawerContent &&
+          draftForm?.isConnected && JSON.stringify(api.readDraft(draftForm)) === submittedDraft;
+        const rebased = unchanged ? rebaseGoogleMailboxCreate(before, after, inventoryDocument(), submittedValues) : null;
+        if (rebased?.data) {
+          try {
+            saved = await localData.save('inventory', localInventoryVersion, rebased.data, { action });
+            applyCommittedInventory(saved);
+          } catch (retryError) {
+            const rejected = retryError?.status === 409 || retryError?.statusCode === 409;
+            await readLocalInventory({ keepContent: true });
+            saveDrafts();
+            api.notify(rejected
+              ? '库存再次变化，本次未保存，输入已保留，请重新核对后重试'
+              : '保存结果尚未确认，输入已保留，请先核对已有邮箱再重试');
+            return;
+          }
+        } else {
+          saveDrafts();
+          api.notify(!refreshed
+            ? '最新库存读取失败，输入已保留，请稍后重试'
+            : rebased?.duplicate
+              ? '相同的谷歌邮箱已存在，输入已保留，请先核对已有资料'
+              : '库存或输入已变化，输入已保留，请重新核对后重试');
+          return;
+        }
+      } else if (error?.status === 409 || error?.statusCode === 409) {
         await readLocalInventory();
         api.notify(
           localInventoryState === 'ready'
@@ -227,14 +284,15 @@
               : error.message || '库存已刷新，请重新打开并核对'
             : '其他操作已更新库存，本次未保存。重新读取库存失败，请重试'
         );
+        return;
       } else {
         api.notify(
           relayExtraction && error?.status === 503
             ? '隐藏邮箱服务暂不可用，本次未提取，请稍后重试'
             : '本次操作未保存，请检查本机服务后重试'
         );
+        return;
       }
-      return;
     } finally {
       feedback?.finish();
       inventorySavePending = false;
@@ -3083,7 +3141,8 @@
     const route = api.state.route;
     const microsoftDraft = form.dataset.inventoryDraft === 'inventory-edit:new:microsoft';
     const personal = personalAccount(type);
-    const inputSnapshot = accountEntry || microsoft || personal ? formFingerprint(data) : '';
+    const inputSnapshot = accountEntry || microsoft || personal || (type === 'google' && !id)
+      ? formFingerprint(data) : '';
     const sourceEntry = personal && !id && ['mailboxes/google', 'mailboxes/relay'].includes(api.state.route) &&
       Boolean(data['inventory-sourceMailboxId']) && form.dataset.inventoryDraft ===
         'inventory-edit:source:' + data['inventory-sourceMailboxId'] + ':' + type;
@@ -3295,6 +3354,11 @@
       original ? '确认修改资料' : '确认新增资料',
       `${displayIdentity(identity)} · ${typeLabel(type)}，${sourceMailbox ? '保存账号并登记所选邮箱实际使用' : localData ? '保存到服务器数据库' : '当前为离线演示，内容仅保留在本页内存'}。`,
       () => {
+        if (type === 'google' && !original && (api.state.route !== route || !form.isConnected ||
+            formFingerprint(api.readForm(form)) !== inputSnapshot)) {
+          api.notify('确认期间谷歌邮箱输入已变化，请重新核对');
+          return;
+        }
         if (microsoft && (api.state.route !== route || !microsoftEntryAllowed(route) || !form.isConnected ||
             formFingerprint(api.readForm(form)) !== inputSnapshot ||
             (original && assetById(id) !== original))) {

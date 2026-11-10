@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { cardTypeDocument } from '../server/card-management.mjs';
 import { normalizeClaudeProMaterials } from '../server/order-policy.mjs';
+import { historicalFeeAction } from '../server/finance/snapshot-integrity.mjs';
 
 const origin = 'https://orders.example.test';
 const route = '/api/local/commerce';
@@ -324,6 +325,81 @@ test('GPT manual payment can omit a card without applying the pool first-use fee
     assert.deepEqual(manualGpt.issueFeeSnapshot, { cardId: '', applied: false, pending: true });
     const editPayment = edit(manualGpt, { cardId: 'recharge:1' });
     assert.equal((await save(store, 1, { ...saved.data.data, orders: [editPayment] }, '更正订单')).status, 409);
+  } finally { store.close(); }
+});
+
+test('a confirmed GPT payment may attach its verified original card exactly once without a new payment', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const cardId = 'recharge:71';
+    const cards = [{ id: cardId, active: true, last4: '1234', usageCount: 1 }];
+    let reads = 0;
+    const options = { readOrderCards: async () => { reads++; return cards; } };
+    const original = base('gpt-card-backfill', { product: 'GPT', plan: 'Plus', paidConfirmed: true });
+    const created = await save(store, 0, makeDocument([original]), '新增独立订单', options);
+    assert.equal(created.status, 200);
+    const prior = created.data.data.orders[0];
+    const reason = '已按历史付款记录核对';
+    const next = edit(prior, { cardId, paymentId: '1234', cardBackfillConfirmed: true, correctionReason: reason,
+      updatedById: admin.id, updatedBy: admin.name });
+    Object.assign(next.corrections.at(-1), { reason, kind: 'historical-card-backfill', verified: true,
+      actorId: admin.id, actor: admin.name, at: '2026-11-10 12:00' });
+    const nextDoc = { ...created.data.data, orders: [next], logs: [{ id: 'audit-backfill',
+      type: '更正订单', entityId: prior.id, detail: reason, actorId: admin.id, actor: admin.name }, ...created.data.data.logs] };
+    const saved = await save(store, 1, nextDoc, '更正订单', options);
+    assert.equal(saved.status, 200, saved.data.error);
+    const updated = saved.data.data.orders[0];
+    assert.equal(updated.cardId, cardId);
+    assert.equal(updated.paymentId, '1234');
+    assert.deepEqual(updated.financialEvidence, prior.financialEvidence);
+    assert.deepEqual(updated.issueFeeSnapshot, prior.issueFeeSnapshot);
+    assert.equal(updated.cardUsedAt, prior.cardUsedAt);
+    assert.equal(Object.hasOwn(updated, 'cardBackfillConfirmed'), false);
+    assert.equal(reads, 1);
+    const replace = edit(updated, { cardId: 'recharge:72', paymentId: '5678' });
+    assert.equal((await save(store, 2, { ...saved.data.data, orders: [replace] }, '更正订单', options)).status, 409);
+  } finally { store.close(); }
+});
+
+test('historical GPT fee correction preserves the original rule and rejects later audit tampering', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const rules = { version: 2, currency: 'CNY', claudeBankFeeMyr: '100', claudeAccountCostMyr: '50',
+      gmailCostCny: '15', appleCostCny: '25', microsoftCostCny: '2', appleDiscount: '0.925',
+      cardIssueUsd: '0.5', cardPercent: '0.08', cardPerPaymentUsd: '0.3' };
+    const settings = { mailboxTypes: [], costSettings: rules };
+    const firstSettings = await request(store, 'PUT', { version: 0, data: settings, action: 'fee_rules_save' },
+      { path: '/api/local/settings' });
+    assert.equal(firstSettings.status, 200);
+    const created = await save(store, 0, makeDocument([base('gpt-fee-history', {
+      product: 'GPT', plan: 'Plus', source: '管理员手工', receiptConfirmed: true
+    })]));
+    assert.equal(created.status, 200);
+    const prior = created.data.data.orders[0];
+    const correctedRules = { ...rules, version: 3, cardPercent: '0.008' };
+    const secondSettings = await request(store, 'PUT', { version: 1, data: { ...settings, costSettings: correctedRules },
+      action: 'fee_rules_save' }, { path: '/api/local/settings' });
+    assert.equal(secondSettings.status, 200);
+    const previous = structuredClone(prior);
+    delete previous.corrections; delete previous.refunds; delete previous.bankReturns;
+    const reason = '已核对本单付款费率', version = prior.version + 1;
+    const next = { ...structuredClone(prior), costSettings: correctedRules, version,
+      updatedAt: '2026-11-10 12:00', updatedById: admin.id, updatedBy: admin.name,
+      corrections: [...prior.corrections, { id: 'fixture-fee-correction', kind: 'historical-card-fee',
+        verified: true, reason, previous, versionAfter: version, at: '2026-11-10 12:00',
+        actorId: admin.id, actor: admin.name }] };
+    const document = { ...created.data.data, orders: [next], logs: [{ id: 'fee-audit', type: historicalFeeAction,
+      entityId: prior.id, actorId: admin.id, actor: admin.name, detail: reason }, ...created.data.data.logs] };
+    const saved = await save(store, 1, document, historicalFeeAction);
+    assert.equal(saved.status, 200, saved.data.error);
+    const result = saved.data.data.orders[0];
+    assert.deepEqual(result.corrections.at(-1).previous.costSettings, rules);
+    assert.deepEqual(result.costSettings, correctedRules);
+    assert.equal(result.paidAmount, prior.paidAmount);
+    assert.deepEqual(result.financialEvidence, prior.financialEvidence);
+    const tampered = structuredClone(saved.data.data);
+    tampered.orders[0].corrections.at(-1).previous.costSettings.cardPercent = '0.008';
+    assert.equal((await save(store, 2, tampered, '更正订单')).status, 409);
   } finally { store.close(); }
 });
 

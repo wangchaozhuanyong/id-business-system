@@ -26,6 +26,7 @@
   let quickReturn = null;
   let customerSettingsReturn = null;
   let finance, cardIssueContext;
+  let historicalFeeReview;
   let orderPrices = {};
   let priceLoad;
   let orderPriceReferenceReturn = null;
@@ -5059,7 +5060,9 @@
           `<button role="tab" aria-selected="${tab === activeTab}" class="tab ${tab === activeTab ? 'active' : ''}" data-action="commerce-order-detail-tab" data-id="${id}" data-tab="${tab}">${title}</button>`
       )
       .join('')}</div><div class="form-section">${content}</div>`;
-    const actions = canManageOrders() ? A.button(
+    const actions = canManageOrders() ? (canBackfillOriginalGptCard(order) ? A.button(
+      '补录原付款卡', 'commerce-order-card-backfill', '', '', `data-id="${E(id)}"`
+    ) : '') + A.button(
       '编辑资料',
       'commerce-order-edit',
       'primary',
@@ -5099,6 +5102,23 @@
   const accountingLabel = (basis) => basis === 'actual' ? '实账核算' : '参考核算';
   const quoteBasisLabel = (snapshot) => snapshot?.kind === 'automatic' || snapshot?.basis === 'reference'
     ? '历史市场参考报价' : snapshot?.basis === 'settlement' ? '实际结算凭据' : '历史登记报价';
+  const historicalFeeAction = '更正历史付款费率';
+  const historicalFeeKind = 'historical-card-fee';
+  const rateIs = (value, fraction) => typeof value === 'string' && new RegExp(`^0\\.${fraction}0*$`).test(value);
+  function canCorrectHistoricalFee(order) {
+    return Boolean(localData && canManageOrders() && order && order.product === 'GPT' && order.payment === '银行卡' &&
+      order.costBasis === 'standard' && !order.cancelled && order.source !== '线上代充' && !order.taskId &&
+      !order.taskEvidenceId && !order.rechargeCompletedAt && order.costSettings?.version === 2 &&
+      rateIs(order.costSettings.cardPercent, '08') &&
+      !(order.corrections || []).some(item => item?.kind === historicalFeeKind));
+  }
+  function matchingHistoricalFeeRules(previous, next) {
+    if (!next || !Number.isSafeInteger(next.version) || next.version <= 2 || !rateIs(next.cardPercent, '008')) return false;
+    const keys = [...new Set([...Object.keys(previous || {}), ...Object.keys(next)])]
+      .filter(key => !['version', 'cardPercent'].includes(key));
+    return keys.every(key => Object.hasOwn(previous, key) && Object.hasOwn(next, key) &&
+      JSON.stringify(previous[key]) === JSON.stringify(next[key]));
+  }
 
   function localCostDetail(order) {
     const result = localAccounting(order);
@@ -5116,7 +5136,9 @@
         property('实际收回成本', amount(result.recoveredCost)) +
         property('回款后净成本', amount(result.netCost))
       : '';
-    return `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', pending.length || order.cancelled ? '待核算' : accountingLabel(result.basis))}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${output}${property('本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', pending.join('、') || '已确认')}</div>${
+    const feeCorrection = (order.corrections || []).find(item => item?.kind === historicalFeeKind);
+    const originalFeeRules = feeCorrection?.previous?.costSettings;
+    return `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', pending.length || order.cancelled ? '待核算' : accountingLabel(result.basis))}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${output}${property('本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', pending.join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
       panelTitle('订单汇率快照', '每 1 单位外币对应的人民币金额。仅使用本订单记录的汇率。', finance && !snapshot && !order.cancelled
         ? A.button('登记汇率快照', 'commerce-order-fx', 'primary', '', `data-id="${E(order.id)}"`) +
           (finance.requestAutomaticSnapshot && S.actor?.role !== 'employee'
@@ -5127,6 +5149,71 @@
       : A.empty('尚无订单汇率快照', finance?.requestAutomaticSnapshot
         ? '可获取覆盖本次订阅时点的有效报价，或根据原订单的凭据手工登记。'
         : '核对原订单的真实报价凭据后登记。当前使用手工来源。')}${quoteAttribution([order])}`;
+  }
+  async function openHistoricalFeeCorrection(id) {
+    const order = orders.find(row => row.id === id), actorId = currentOperator().id;
+    if (!canCorrectHistoricalFee(order) || !actorId) return;
+    const orderVersion = order.version, route = S.route, context = S.drawerContext;
+    historicalFeeReview = undefined;
+    try {
+      const snapshot = await localData.load('settings');
+      if (currentOperator().id !== actorId || S.route !== route || S.drawerContext !== context ||
+          orders.find(row => row.id === id)?.version !== orderVersion) return;
+      const rules = { ...safeClone(costSettings), ...(snapshot.data?.costSettings || {}) };
+      if (!matchingHistoricalFeeRules(order.costSettings, rules)) {
+        A.notify('当前费用规则与本单原规则的其他项目不一致，暂不能更正，请先核对设置');
+        return;
+      }
+      historicalFeeReview = { id, actorId, version: orderVersion, rules };
+      const key = `commerce-fee-correction:${id}`, draft = S.drafts.get(key) || {};
+      A.openDrawer('更正历史付款费率', `${order.orderNo} · 仅更正这笔订单。原 V2 规则和更正记录会保留。`,
+        `<div class="property-list">${property('原付款手续费', '8%')}${property('核对后付款手续费', '0.8%')}${property('每笔固定手续费', `${rules.cardPerPaymentUsd} 美元`)}${property('开卡费规则', `${rules.cardIssueUsd} 美元`)}</div><form id="commerce-fee-correction-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || orderVersion)}" /><div class="commerce-field-grid">${field('核对依据', 'fee-reason', `<textarea id="commerce-fee-reason" name="commerce-fee-reason" rows="2" maxlength="200">${E(draft['commerce-fee-reason'] || '')}</textarea>`, true, '填写可核对的依据，不填写密码、密钥或完整卡号。', 'commerce-span-all')}${field('逐单核对', 'fee-verified', '<label class="checkbox-label"><input id="commerce-fee-verified" name="commerce-fee-verified" type="checkbox" data-no-draft />已核实本单应使用 0.8% 付款手续费</label>', true, '其他金额、费用和汇率不会修改。', 'commerce-span-all')}</div></form>`,
+        A.button('取消', 'drawer-close') + '<button type="submit" form="commerce-fee-correction-form" class="button primary">核对并更正</button>', key);
+    } catch { A.notify('费用规则读取失败，请稍后重试'); }
+  }
+  function saveHistoricalFeeCorrection(form) {
+    if (!localData || !canManageOrders() || saving) return;
+    const raw = A.readForm(form), id = value(raw, 'id'), reason = value(raw, 'fee-reason');
+    const order = orders.find(row => row.id === id), review = historicalFeeReview;
+    const validReason = reason && reason.length <= 200 && !/(?:\d[ -]?){12,19}/.test(reason);
+    A.setError('commerce-fee-reason', validReason ? '' : '请填写核对依据，最多 200 字且不能包含完整卡号');
+    A.setError('commerce-fee-verified', raw['commerce-fee-verified'] === 'on' ? '' : '请先确认已逐单核实');
+    if (!validReason || raw['commerce-fee-verified'] !== 'on') return;
+    if (!review || review.id !== id || review.actorId !== currentOperator().id ||
+        String(review.version) !== value(raw, 'version') || order?.version !== review.version ||
+        !canCorrectHistoricalFee(order) || !matchingHistoricalFeeRules(order.costSettings, review.rules)) {
+      A.notify('订单或核对资料已变化，请重新打开后核对');
+      return;
+    }
+    const submitted = JSON.stringify(A.readForm(form)), key = form.dataset.commerceDraft;
+    A.confirmAction('确认更正历史付款费率', `${order.orderNo} · 8% → 0.8%。原费用规则和更正记录保留。`, () => {
+      if (!form.isConnected || currentOperator().id !== review.actorId || JSON.stringify(A.readForm(form)) !== submitted) {
+        A.notify('输入或登录身份已变化，请重新核对');
+        return;
+      }
+      persistCommerce(historicalFeeAction, () => {
+        const current = orders.find(row => row.id === id);
+        if (!current || current.version !== review.version || !canCorrectHistoricalFee(current)) {
+          A.notify('订单已变化，请重新核对');
+          return false;
+        }
+        const previous = safeClone(current), operator = currentOperator();
+        delete previous.corrections; delete previous.refunds; delete previous.bankReturns;
+        const version = current.version + 1;
+        current.corrections = [...(current.corrections || []), { id: uid('commerce-correction'),
+          kind: historicalFeeKind, verified: true, reason, previous, versionAfter: version,
+          at: now(), actor: operator.name, actorId: operator.id }];
+        Object.assign(current, { costSettings: safeClone(review.rules), version,
+          updatedAt: now(), updatedBy: operator.name, updatedById: operator.id });
+        log(historicalFeeAction, id, `${current.orderNo} · 原因：${reason}`);
+      }, () => {
+        historicalFeeReview = undefined;
+        cleanClose(key);
+        if (S.route.startsWith('orders/detail/')) A.render();
+        else orderDetail(id, 'costs');
+        A.notify('历史付款费率已更正，原规则已保留');
+      });
+    }, '确认更正');
   }
   async function freezeAutomaticSnapshot(id, trigger) {
     const order = orders.find((row) => row.id === id);
@@ -6711,13 +6798,92 @@
   function hasPaymentHistory(order) {
     return financialEvidence(order).some((record) => record.kind === 'payment');
   }
+  function canBackfillOriginalGptCard(order) {
+    if (!order || order.product !== 'GPT' || order.payment !== '银行卡' || order.paidConfirmed !== true ||
+        order.cardId || order.cancelled || order.source === '线上代充' || order.taskId ||
+        order.taskEvidenceId || order.rechargeCompletedAt || (order.refunds || []).length ||
+        (order.bankReturns || []).length) return false;
+    const history = [order, ...(order.corrections || []).map(item => item?.previous).filter(Boolean)];
+    return !history.some(item => item.cardId || item.issueFeeSnapshot?.cardId || item.issueFeeSnapshot?.applied ||
+      (item.financialEvidence || []).some(entry => entry?.kind === 'payment' && entry.cardId));
+  }
+  let historicalCardReview;
+  async function openHistoricalCardBackfill(id) {
+    const order = orders.find(row => row.id === id), actorId = currentOperator().id;
+    if (!localData || !canManageOrders() || !actorId || !canBackfillOriginalGptCard(order)) return;
+    const version = order.version, route = S.route, context = S.drawerContext;
+    historicalCardReview = undefined;
+    try {
+      const snapshot = await localData.orderCards();
+      if (currentOperator().id !== actorId || S.route !== route || S.drawerContext !== context ||
+          orders.find(row => row.id === id)?.version !== version) return;
+      const available = (snapshot.items || []).filter(card => card.active && /^recharge:.+/.test(card.id || '') &&
+        /^\d{4}$/.test(card.last4 || '') && (!order.paymentId || order.paymentId === card.last4));
+      if (!available.length) { A.notify('没有可匹配的原付款卡，请先核对银行卡资料'); return; }
+      historicalCardReview = { id, actorId, version, cards: available };
+      const key = `commerce-card-backfill:${id}`, draft = S.drafts.get(key) || {};
+      const choices = [['', '选择经核实的原付款卡'], ...available.map(card =>
+        [card.id, [card.label || card.name, `尾号 ${card.last4}`].filter(Boolean).join(' · ')])];
+      A.openDrawer('补录原付款卡', `${order.orderNo} · 仅补录空白的原付款卡，不新增付款。`,
+        `<form id="commerce-card-backfill-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || version)}" /><div class="commerce-field-grid">${field('原付款卡', 'backfill-card', select('backfill-card', choices, draft['commerce-backfill-card'] || ''), true)}${field('核对依据', 'backfill-reason', `<textarea id="commerce-backfill-reason" name="commerce-backfill-reason" rows="2" maxlength="200">${E(draft['commerce-backfill-reason'] || '')}</textarea>`, true, '填写历史付款依据，不填写密码、密钥或完整卡号。', 'commerce-span-all')}${field('原卡核对', 'backfill-verified', '<label class="checkbox-label"><input id="commerce-backfill-verified" name="commerce-backfill-verified" type="checkbox" data-no-draft />已核实所选银行卡就是本单原付款卡</label>', true, '原付款金额和记录保留；开卡费仍需单独核对。', 'commerce-span-all')}</div></form>`,
+        A.button('取消', 'drawer-close') + '<button type="submit" form="commerce-card-backfill-form" class="button primary">核对并补录</button>', key);
+    } catch { A.notify('银行卡资料读取失败，请稍后重试'); }
+  }
+  function saveHistoricalCardBackfill(form) {
+    if (!localData || !canManageOrders() || saving) return;
+    const raw = A.readForm(form), id = value(raw, 'id'), reason = value(raw, 'backfill-reason');
+    const order = orders.find(row => row.id === id), review = historicalCardReview;
+    const card = review?.cards.find(row => row.id === value(raw, 'backfill-card'));
+    const validReason = reason && reason.length <= 200 && !/(?:\d[ -]?){12,19}/.test(reason);
+    A.setError('commerce-backfill-card', card ? '' : '请选择经核实的原付款卡');
+    A.setError('commerce-backfill-reason', validReason ? '' : '请填写核对依据，最多 200 字且不能包含完整卡号');
+    A.setError('commerce-backfill-verified', raw['commerce-backfill-verified'] === 'on' ? '' : '请先确认已核实原付款卡');
+    if (!card || !validReason || raw['commerce-backfill-verified'] !== 'on') return;
+    if (!review || review.id !== id || review.actorId !== currentOperator().id ||
+        String(review.version) !== value(raw, 'version') || order?.version !== review.version ||
+        !canBackfillOriginalGptCard(order)) { A.notify('订单或核对资料已变化，请重新打开后核对'); return; }
+    const submitted = JSON.stringify(A.readForm(form)), key = form.dataset.commerceDraft;
+    A.confirmAction('确认补录原付款卡', `${order.orderNo} · 尾号 ${card.last4}。原付款记录和开卡费快照保留。`, () => {
+      if (!form.isConnected || currentOperator().id !== review.actorId || JSON.stringify(A.readForm(form)) !== submitted) {
+        A.notify('输入或登录身份已变化，请重新核对'); return;
+      }
+      persistCommerce('更正订单', () => {
+        const current = orders.find(row => row.id === id);
+        if (!current || current.version !== review.version || !canBackfillOriginalGptCard(current)) {
+          A.notify('订单已变化，请重新核对'); return false;
+        }
+        const previous = safeClone(current), operator = currentOperator(), version = current.version + 1;
+        delete previous.corrections; delete previous.refunds; delete previous.bankReturns;
+        current.corrections = [...(current.corrections || []), { id: uid('commerce-correction'),
+          kind: 'historical-card-backfill', verified: true, at: now(), reason, actor: operator.name, actorId: operator.id,
+          previous, versionAfter: version }];
+        Object.assign(current, { cardId: card.id, paymentId: card.last4, cardBackfillConfirmed: true,
+          correctionReason: reason, version, updatedAt: now(), updatedBy: operator.name, updatedById: operator.id });
+        log('更正订单', id, `${current.orderNo} · 补录原付款卡 · 原因：${reason}`);
+      }, () => {
+        historicalCardReview = undefined;
+        cleanClose(key);
+        if (S.route.startsWith('orders/detail/')) A.render();
+        else orderDetail(id);
+        A.notify('原付款卡已补录，原付款记录已保留');
+      });
+    }, '确认补录');
+  }
   function hasReceiptHistory(order) {
     return financialEvidence(order).some((record) => record.kind === 'receipt');
   }
   function mergeFinancialEvidence(...ordersToRead) {
     const records = new Map();
+    const backfills = ordersToRead.filter(Boolean).flatMap(order => (order.corrections || [])
+      .filter(change => change.kind === 'historical-card-backfill' && change.verified === true &&
+        change.previous?.paidConfirmed && !change.previous.cardId)
+      .map(change => ({ cardId: order.cardId, original: change.previous })));
     for (const order of ordersToRead.filter(Boolean))
-      for (const record of financialEvidence(order)) {
+      for (const entry of financialEvidence(order)) {
+        const record = safeClone(entry);
+        if (record.kind === 'payment' && backfills.some(({ cardId, original }) => cardId && record.cardId === cardId &&
+            record.amount === original.paidAmount && record.currency === original.paidCurrency && record.payment === original.payment))
+          record.cardId = '';
         const key = [
           record.kind,
           record.amount,
@@ -6725,7 +6891,7 @@
           record.payment || '',
           record.cardId || ''
         ].join('|');
-        if (!records.has(key)) records.set(key, safeClone(record));
+        if (!records.has(key)) records.set(key, record);
       }
     return [...records.values()];
   }
@@ -6757,6 +6923,10 @@
     const order = orders.find((row) => row.id === id);
     if (!order) return;
     const change = order.corrections.at(-1);
+    if (mode === 'undo' && [historicalFeeKind, 'historical-card-backfill'].includes(change?.kind)) {
+      A.notify('历史费率或原付款卡更正不能通过普通撤回覆盖，请保留更正记录');
+      return;
+    }
     if (
       mode === 'undo' &&
       (!change || order.version !== change.versionAfter || hasDownstream(order))
@@ -7421,7 +7591,7 @@
       (email || select).dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
-    if (!canManageOrders() && /^commerce-(?:new-product-order|order-(?:edit|refund|more|pending|auto-fx|fx)|tenant-card)/.test(action)) return true;
+    if (!canManageOrders() && /^commerce-(?:new-product-order|order-(?:edit|refund|more|pending|auto-fx|fx|fee-correction|card-backfill)|tenant-card)/.test(action)) return true;
     if (action === 'commerce-order-card-retry') {
       const form = node.closest('#commerce-order-form');
       if (form) void A.withActionFeedback(node, () => loadOrderCards(form, true),
@@ -7713,6 +7883,14 @@
       openFxSnapshot(id);
       return true;
     }
+    if (action === 'commerce-order-fee-correction') {
+      void openHistoricalFeeCorrection(id);
+      return true;
+    }
+    if (action === 'commerce-order-card-backfill') {
+      void openHistoricalCardBackfill(id);
+      return true;
+    }
     if (action === 'commerce-order-detail') {
       orderDetail(id);
       return true;
@@ -7880,6 +8058,14 @@
     }
     if (form.id === 'commerce-fx-form') {
       saveFxSnapshot(form);
+      return true;
+    }
+    if (form.id === 'commerce-fee-correction-form') {
+      saveHistoricalFeeCorrection(form);
+      return true;
+    }
+    if (form.id === 'commerce-card-backfill-form') {
+      saveHistoricalCardBackfill(form);
       return true;
     }
     if (form.id === 'commerce-reversal-form') {

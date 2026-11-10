@@ -10,7 +10,7 @@ import {
 import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransferView, TenantOwnerTransferError } from './tenant-owner-transfer.mjs';
 import { prepareTenantRenewalWrite, tenantRenewalHandledAction, tenantRenewalSettingsAction } from './tenant-renewal-reminders.mjs';
 import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
-import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
+import { checkFinanceSnapshots, historicalFeeAction } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
 import {
   applyMailboxPoolWrite, findMailboxQuery, mailboxPoolCodePage, mailboxPoolItems, mailboxPoolMetadata,
@@ -61,8 +61,8 @@ import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from '
 import { ownerForSubscriptionAccount, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkAppleOrder, checkClaudeProMaterialHistory,
-  checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee,
-  isClaudeProBankMaterials, nextOrderNo, normalizeClaudeProMaterials, redactClaudeProOrderMaterials,
+  checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee, historicalGptCardBackfillError,
+  isClaudeProBankMaterials, matchesBackfilledPayment, nextOrderNo, normalizeClaudeProMaterials, redactClaudeProOrderMaterials,
   validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices
 } from './order-policy.mjs';
 import {
@@ -151,6 +151,7 @@ const actionsByDomain = {
     '拒续费',
     '恢复续费提醒',
     snapshotAction,
+    historicalFeeAction,
     '更正订单',
     '退款登记',
     '银行卡回款登记',
@@ -425,7 +426,7 @@ function normalizeOrderCardType(row, prior, restorePrior, action, types) {
   for (const [index, correction] of row.corrections.entries()) {
     if (!correction?.previous || typeof correction.previous !== 'object') continue;
     const original = prior?.corrections?.[index]?.previous;
-    const before = original || (action === '更正订单' && correction.previous.version === prior?.version &&
+    const before = original || (['更正订单', historicalFeeAction].includes(action) && correction.previous.version === prior?.version &&
       correction.versionAfter === row.version ? prior : undefined);
     for (const field of ['cardTypeId', 'cardTypeName']) retainOrderField(correction.previous, before, field);
   }
@@ -441,8 +442,9 @@ function normalizePaymentEvidence(row, prior, automatic) {
     if (!payment?.paidConfirmed || !positiveOrderAmount(payment.paidAmount) ||
         !validCurrencyCode(payment.paidCurrency)) continue;
     const cardId = payment.cardId || '';
+    const candidate = { amount: payment.paidAmount, currency: payment.paidCurrency, payment: payment.payment, cardId };
     if (!normalized.some((item) => item.amount === payment.paidAmount && item.currency === payment.paidCurrency &&
-        item.payment === payment.payment && item.cardId === cardId)) {
+        item.payment === payment.payment && (item.cardId === cardId || matchesBackfilledPayment(prior, candidate, item)))) {
       normalized.push({ kind: 'payment', amount: payment.paidAmount, currency: payment.paidCurrency,
         payment: payment.payment, cardId, at: new Date().toISOString() });
     }
@@ -687,7 +689,7 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
     const previous = new Map((current.data?.orders || []).map((row) => [row.id, row]));
     const needPool = commerce.data.orders.some((row) => {
       const prior = previous.get(row.id);
-      return usesRechargeCard(row) && needsOrderCardCheck(row, prior);
+      return usesRechargeCard(row) && (needsOrderCardCheck(row, prior) || row.cardBackfillConfirmed === true);
     });
     if (needPool) {
       try {
@@ -1527,6 +1529,7 @@ export function createLocalBusinessStore(databasePath) {
         const inventoryWrite = writes.find(({ domain }) => domain === 'inventory');
         const priorUsage = checksStock ? inspectInventoryUsage(priorInventory, priorCommerce) : null;
         const returnedBatches = new Set();
+        let isolatedHistoricalOrderCorrection = false;
         if (inventoryWrite) {
           const write = inventoryWrite;
           if (write.action === 'inventory_reconcile_usage') {
@@ -1609,9 +1612,24 @@ export function createLocalBusinessStore(databasePath) {
             catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
             attributeCommerce(commerce, priorCommerce, actor, owners, current(subscriptionDomain));
           } else checkTenantTransferHistory(commerce.tenants, priorCommerce?.tenants);
+          if (action === historicalFeeAction && (writes.length !== 1 || !actor?.id ||
+              !['admin', 'super'].includes(actor.role)))
+            throw new LocalDataError(403, '历史费率更正须由管理员单独核对');
           const oldOrders = priorCommerce?.orders || [];
           const priorById = new Map(oldOrders.map((row) => [row.id, row]));
           const nextById = new Map(commerce.orders.map((row) => [row.id, row]));
+          const cardBackfillRequests = commerce.orders.filter(row => Object.hasOwn(row, 'cardBackfillConfirmed'));
+          const changedOrderCount = commerce.orders.filter(row => !isDeepStrictEqual(row, priorById.get(row.id))).length +
+            oldOrders.filter(row => !nextById.has(row.id)).length + Number(nextById.size !== commerce.orders.length);
+          if (cardBackfillRequests.length && (writes.length !== 1 || cardBackfillRequests.length !== 1 ||
+              [...new Set([...Object.keys(priorCommerce || {}), ...Object.keys(commerce)])].some(key =>
+                !['orders', 'logs'].includes(key) && !isDeepStrictEqual(priorCommerce?.[key], commerce[key]))))
+            throw new LocalDataError(409, '原付款卡补录须单独进行，请保留其他资料');
+          if (cardBackfillRequests.length && (!actor?.id || !['admin', 'super'].includes(actor.role)))
+            throw new LocalDataError(403, '原付款卡补录须由管理员核对');
+          if (!cards && cardBackfillRequests.length)
+            throw new LocalDataError(503, '暂时无法核对原付款卡，请稍后重试');
+          let verifiedCardBackfillId;
           let cardTypes;
           for (const row of commerce.orders) {
             const prior = priorById.get(row.id);
@@ -1640,7 +1658,10 @@ export function createLocalBusinessStore(databasePath) {
                 (row.proMaterialMode !== prior.proMaterialMode || row.proCardNumber !== prior.proCardNumber))
             )) throw new LocalDataError(409, '已确认银行卡付款的原订单不可更换原付款来源');
             if (cardTypes === undefined) cardTypes = current(cardTypeDocument);
-            normalizeOrderCardType(row, prior, restorePrior, action, cardTypes);
+            if (action === historicalFeeAction || row.cardBackfillConfirmed === true) {
+              retainOrderField(row, prior, 'cardTypeId');
+              retainOrderField(row, prior, 'cardTypeName');
+            } else normalizeOrderCardType(row, prior, restorePrior, action, cardTypes);
             const historyError = checkClaudeProMaterialHistory(row, prior, action) ||
               checkClaudeProRenewalSource(row, prior, priorById, nextById);
             if (historyError) throw new LocalDataError(409, historyError);
@@ -1661,7 +1682,8 @@ export function createLocalBusinessStore(databasePath) {
                     !isDeepStrictEqual(prior[field] ?? '', row[field] ?? ''))))
                 throw new LocalDataError(409, '线上代充来源只能由服务端登记');
               if (prior) {
-                for (const field of ['orderNo', 'createdAt', 'costSettings', 'cardUsedAt', 'issueFeeSnapshot'])
+                for (const field of ['orderNo', 'createdAt', 'cardUsedAt', 'issueFeeSnapshot',
+                  ...(action === historicalFeeAction ? [] : ['costSettings'])])
                   retainOrderField(row, prior, field);
                 if (automatic) {
                   if (row.customerId === prior.customerId) retainOrderField(row, prior, 'customerSource');
@@ -1712,7 +1734,25 @@ export function createLocalBusinessStore(databasePath) {
                   (!prior?.paidConfirmed || row.paidAmount !== prior.paidAmount || row.paidCurrency !== prior.paidCurrency) &&
                   (!positiveOrderAmount(row.paidAmount) || !validCurrencyCode(row.paidCurrency)))
                 throw new LocalDataError(400, '请登记实际银行卡代付金额与币种');
-              if (!automatic && isClaudeProBankMaterials(row) && !row.cardId) {
+              let cardBackfilled = false;
+              if (Object.hasOwn(row, 'cardBackfillConfirmed')) {
+                // Do not infer or rewrite the historical card type or first-use fee.
+                retainOrderField(row, prior, 'cardTypeId');
+                retainOrderField(row, prior, 'cardTypeName');
+                const card = cards.get(row.cardId);
+                const issue = historicalGptCardBackfillError(prior, row, {
+                  action, card, changedOrderCount, previousLogs: priorCommerce?.logs || [], nextLogs: commerce.logs, actor
+                });
+                if (issue) throw new LocalDataError(409, issue);
+                delete row.cardBackfillConfirmed;
+                row.paymentId = card.last4;
+                cardBackfilled = true;
+                verifiedCardBackfillId = row.id;
+              }
+              if (cardBackfilled) {
+                // This only associates existing evidence; it neither creates a payment
+                // nor records a new card use or an unverified opening fee.
+              } else if (!automatic && isClaudeProBankMaterials(row) && !row.cardId) {
                 if (hasBankPayment(prior) && prior.paymentId) retainOrderField(row, prior, 'paymentId');
               } else if (!automatic && hasBankPayment(prior)) {
                 if (row.payment !== prior.payment || row.cardId !== prior.cardId ||
@@ -1746,15 +1786,18 @@ export function createLocalBusinessStore(databasePath) {
               } else if (!automatic && row.payment === '银行卡') {
                 retainOrderField(row, prior, 'paymentId');
               }
-              if (action !== snapshotAction) normalizePaymentEvidence(row, prior, automatic);
+              if (action !== snapshotAction && action !== historicalFeeAction && !cardBackfilled)
+                normalizePaymentEvidence(row, prior, automatic);
               if (row.payment === '银行卡' && row.paidConfirmed) settledThisWrite.push(row);
             }
           }
           const error =
             checkBankReturns(priorCommerce, commerce) ||
             checkOrderFinancialHistory(priorCommerce, commerce) ||
-            checkFinanceSnapshots(priorCommerce, commerce, { action, verifyAutomaticSnapshot });
+            checkFinanceSnapshots(priorCommerce, commerce, { action, verifyAutomaticSnapshot, actor, verifiedCardBackfillId,
+              currentCostSettings: action === historicalFeeAction ? orderCostSnapshot(current('settings')?.costSettings) : undefined });
           if (error) throw new LocalDataError(409, error);
+          isolatedHistoricalOrderCorrection = action === historicalFeeAction || Boolean(verifiedCardBackfillId);
         }
         if (checksStock) {
           // Previously delivered accounts can be new to this system. Validate their transition in memory.
@@ -1782,7 +1825,7 @@ export function createLocalBusinessStore(databasePath) {
           if (error) throw new LocalDataError(409, error);
         }
         const now = new Date().toISOString();
-        if (inventory && (inventoryWrite || incoming.has('commerce'))) {
+        if (inventory && (inventoryWrite || incoming.has('commerce')) && !isolatedHistoricalOrderCorrection) {
           const next = inventoryWrite ? inventory : structuredClone(inventory);
           const matches = inspectInventoryUsage(next, commerce, Date.parse(now));
           const oldRegistrationIds = new Set((priorInventory?.registrationRecords || []).map(row => row.id));
