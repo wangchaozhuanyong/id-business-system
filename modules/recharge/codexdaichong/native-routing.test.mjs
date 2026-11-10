@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { createNativeRechargeRouting, DEFAULT_PLAN_ROUTES, parseExitTrace,
   validatePlanRoutes, migrateRechargeRouting } from './native-routing.mjs';
@@ -8,6 +9,7 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
   let plans = { ...DEFAULT_PLAN_ROUTES };
   const audit = [];
   const checks = new Map();
+  const labelAudit = [];
   const calls = [];
   const warnings = [];
   const fail = name => { if (failures.includes(name)) throw new Error('private database credentials'); };
@@ -16,8 +18,11 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
     async runQuery(sql, values) {
       if (sql.startsWith('SELECT version')) { fail('policy'); return [{ version, plans_json: plans, audit_json: audit }]; }
       if (sql.includes('FROM id_recharge_proxy_checks')) { fail('history-read'); return [...checks.values()]; }
-      if (sql.includes('FROM proxy_assets WHERE id')) { fail('proxy-read'); return rows.filter(row => row.id === values[0]); }
-      if (sql.includes('FROM proxy_assets ORDER BY')) { fail('pool-read'); return rows; }
+      if (sql.includes('FROM proxy_assets p LEFT JOIN id_recharge_proxy_country_labels')) {
+        if (sql.includes('WHERE p.id')) { fail('proxy-read'); return rows.filter(row => row.id === values[0]); }
+        fail('pool-read');
+        return rows;
+      }
       throw new Error('Unexpected query: ' + sql);
     },
     async runExecute(sql, values) {
@@ -38,7 +43,34 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
       calls.push(['usage', values[0]]);
       return { affectedRows: 1 };
     },
-    async updateProxyAssetCheck(id, value) { fail('status-write'); calls.push(['check', id, value.ok]); }
+    async updateProxyAssetCheck(id, value) { fail('status-write'); calls.push(['check', id, value.ok]); },
+    async withTransaction(operation) {
+      const draft = structuredClone(rows);
+      const events = [];
+      const result = await operation({
+        async query(sql, [value]) {
+          assert.match(sql, /FOR UPDATE$/);
+          return [draft.filter(row => sql.includes('WHERE p.id') ? row.id === value :
+            createHash('sha256').update(row.proxy_url).digest('hex') === value)];
+        },
+        async execute(sql, values) {
+          if (sql.startsWith('INSERT INTO proxy_assets')) {
+            const id = Math.max(0, ...draft.map(row => row.id)) + 1;
+            draft.push({ id, proxy_url: values[0], is_active: 1 });
+            return [{ insertId: id }];
+          }
+          assert.match(sql, /^INSERT INTO id_recharge_proxy_country_labels/);
+          fail('label-write');
+          const [id, countryCode, event] = values;
+          draft.find(row => row.id === id).label_country_code = countryCode;
+          events.push(JSON.parse(event));
+          return [{ affectedRows: 1 }];
+        }
+      });
+      rows.splice(0, rows.length, ...draft);
+      labelAudit.push(...events);
+      return result;
+    }
   };
   const routing = createNativeRechargeRouting({ store, chooseOrder: rows => rows,
     onWarning(message) { warnings.push(message); fail('warning'); },
@@ -51,9 +83,17 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
       return { ip: '8.8.8.8', countryCode, latencyMs: 12, source: 'Cloudflare trace' };
     }
   });
-  return { routing, calls, rows, checks, warnings, substitutions: () => substitutions };
+  const request = async (method, path, body) => {
+    const response = { statusCode: 200 };
+    await routing.handleAdmin({ method, path, body, admin: { email: 'operator@example.test' } }, {
+      status(code) { response.statusCode = code; return this; },
+      json(payload) { response.payload = payload; }
+    });
+    return response;
+  };
+  return { routing, calls, rows, checks, warnings, labelAudit, request, substitutions: () => substitutions };
 }
-const proxy = (id, enabled = 1) => ({ id, is_active: enabled,
+const proxy = (id, enabled = 1, label = null) => ({ id, is_active: enabled, label_country_code: label,
   proxy_url: 'socks5://synthetic-{session}:synthetic-secret@proxy.example.test:' + (1000 + id) });
 
 test('trace accepts public IPv4/IPv6 and rejects ambiguous, private and oversized responses', () => {
@@ -88,6 +128,84 @@ test('country mismatch and failed proxies never fall back to direct or expose cr
   assert.ok(f.calls.filter(call => call[0] === 'probe').every(call => call[1]));
   assert.ok(!f.calls.some(call => call[0] === 'usage'));
   assert.ok(!JSON.stringify(await f.routing.view()).includes('synthetic-secret'));
+});
+test('the live check tries matching labels first and only then unmarked proxies', async () => {
+  const rows = [proxy(1), proxy(2, 1, 'MX'), proxy(3, 1, 'PH'), proxy(4, 0, 'PH')];
+  const tagged = fixture({ rows });
+  assert.equal((await tagged.routing.resolve('plus')).proxyId, 3);
+  assert.equal(tagged.substitutions(), 1);
+  const fallback = fixture({ rows, countries: ['MX', 'PH'] });
+  assert.equal((await fallback.routing.resolve('plus')).proxyId, 1);
+  assert.deepEqual(fallback.calls.filter(([type]) => type === 'probe').map(([, url]) => url.split(':').at(-1)),
+    ['1003', '1001']);
+  const view = await fallback.routing.view();
+  assert.deepEqual(view.proxyCountries.slice(0, 2).map(({ code }) => code), ['PH', 'EG']);
+  assert.ok(view.proxyCountries.some(({ code, name }) => code === 'MX' && name === '墨西哥'));
+  assert.equal(view.proxyLabels.find(label => label.proxyId === 3).countryCode, 'PH');
+  assert.equal(view.checks.find(check => check.proxyId === 3).countryCode, 'MX');
+  assert.equal(view.proxyLabels.find(label => label.proxyId === 1).countryCode, null);
+  const wrongLabel = fixture({ rows: [proxy(1, 1, 'MX')], countries: ['PH'] });
+  await assert.rejects(wrongLabel.routing.resolve('plus'), /未找到已核验/);
+  assert.equal(wrongLabel.substitutions(), 0);
+});
+test('country edits during either live probe block the selected route', async () => {
+  for (const during of [1, 2]) {
+    let probes = 0;
+    const f = fixture({ rows: [proxy(1, 1, 'PH')], onProbe: ({ rows }) => {
+      if (++probes === during) rows[0].label_country_code = 'MX';
+    } });
+    if (during === 1) {
+      await assert.rejects(f.routing.resolve('plus'), /国家标注在检测期间发生变化/);
+      assert.ok(!f.calls.some(([type]) => type === 'usage'));
+    } else {
+      const route = await f.routing.resolve('plus');
+      let launched = false;
+      await assert.rejects(f.routing.verifiedStart(route, () => { launched = true; })({}), /国家标注已变更/);
+      assert.equal(launched, false);
+    }
+  }
+});
+test('batch import requires a country and atomically adds or labels existing proxies', async () => {
+  const legacy = proxy(1);
+  const other = proxy(2, 1, 'EG');
+  const f = fixture({ rows: [legacy, other] });
+  const raw = 'gate.example.test:8080:synthetic-user:synthetic-password';
+  for (const countryCode of [undefined, 'ZZ', '']) {
+    assert.equal((await f.request('POST', '/proxies', { proxies: [raw], countryCode })).statusCode, 400);
+  }
+  const rejected = await f.request('POST', '/proxies', { proxies: [raw, other.proxy_url], countryCode: 'PH' });
+  assert.equal(rejected.statusCode, 409);
+  assert.deepEqual(f.rows, [legacy, other]);
+  assert.deepEqual(f.labelAudit, []);
+  const batch = { proxies: [raw, legacy.proxy_url, raw], countryCode: 'PH' };
+  const imported = (await f.request('POST', '/proxies', batch)).payload;
+  assert.equal(imported.success, true);
+  assert.deepEqual([imported.added, imported.labeled, imported.skipped], [1, 1, 0]);
+  assert.deepEqual(f.rows.map(row => row.label_country_code), ['PH', 'EG', 'PH']);
+  assert.ok(f.labelAudit.every(event => event.actor === 'operator@example.test' && event.previousCountryCode === null));
+  assert.doesNotMatch(JSON.stringify(f.labelAudit), /synthetic-user|synthetic-password|gate\.example/);
+  const retried = (await f.request('POST', '/proxies', batch)).payload;
+  assert.deepEqual([retried.added, retried.labeled, retried.skipped], [0, 0, 2]);
+  assert.equal(f.labelAudit.length, 2);
+  const failed = fixture({ failures: ['label-write'] });
+  const unavailable = await failed.request('POST', '/proxies', batch);
+  assert.equal(unavailable.statusCode, 503);
+  assert.doesNotMatch(JSON.stringify(unavailable), /private|synthetic/);
+  assert.deepEqual(failed.rows, []);
+});
+test('editing an existing label detects stale edits and never writes exit observations', async () => {
+  const f = fixture({ rows: [proxy(1)] });
+  const edit = (id, countryCode, expectedCountryCode) =>
+    f.request('PUT', '/proxies/' + id + '/country', { countryCode, expectedCountryCode });
+  assert.equal((await edit(99, 'PH', null)).statusCode, 404);
+  assert.equal((await edit(1, 'ZZ', null)).statusCode, 400);
+  assert.equal((await edit(1, 'PH', undefined)).statusCode, 400);
+  assert.deepEqual((await edit(1, 'PH', null)).payload, { success: true, proxyId: 1, countryCode: 'PH' });
+  assert.equal((await edit(1, 'MX', null)).statusCode, 409);
+  assert.equal((await edit(1, 'MX', 'PH')).statusCode, 200);
+  assert.equal((await edit(1, 'MX', 'PH')).statusCode, 200);
+  assert.deepEqual(f.labelAudit.map(event => [event.previousCountryCode, event.countryCode]), [[null, 'PH'], ['PH', 'MX']]);
+  assert.equal(f.checks.size, 0);
 });
 test('selected sticky proxy is resolved once and exactly reused immediately before the worker starts', async () => {
   const f = fixture({ rows: [proxy(1)], countries: ['EG'] });
@@ -177,9 +295,11 @@ test('each new native outer attempt selects a fresh sticky route in the accepted
 test('migration is additive and idempotent without touching upstream payment tables', async () => {
   const sql = [];
   await migrateRechargeRouting({ async query(statement) { sql.push(statement); } });
-  assert.equal(sql.length, 3);
+  assert.equal(sql.length, 4);
   assert.match(sql[0], /^CREATE TABLE IF NOT EXISTS id_recharge_route_config/);
   assert.match(sql[1], /^CREATE TABLE IF NOT EXISTS id_recharge_proxy_checks/);
-  assert.match(sql[2], /^INSERT IGNORE INTO id_recharge_route_config/);
-  assert.ok(sql.every(statement => !/\b(?:DROP|ALTER|DELETE|TRUNCATE)\b/.test(statement)));
+  assert.match(sql[2], /^CREATE TABLE IF NOT EXISTS id_recharge_proxy_country_labels/);
+  assert.match(sql[2], /FOREIGN KEY \(proxy_id\) REFERENCES proxy_assets \(id\) ON DELETE CASCADE/);
+  assert.match(sql[3], /^INSERT IGNORE INTO id_recharge_route_config/);
+  assert.ok(sql.every(statement => !/^(?:DROP|ALTER|DELETE|TRUNCATE)\b/.test(statement)));
 });

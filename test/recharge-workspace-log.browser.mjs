@@ -153,6 +153,7 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
     return route.fulfill({ json: { success: true, jobKey, stage: 'preparing' } });
   });
   await context.route(url => url.pathname === api + 'task-status/' + jobKey, async route => {
+    assert.equal(new URL(route.request().url()).search, '?view=steps');
     reads++;
     if (hold) await hold;
     return next ? route.fulfill({ json: { success: true, data: { jobKey, ...next,
@@ -227,9 +228,28 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
   await frame.locator('#workspaceLogLatest').click();
   assert.equal(await frame.locator('#workspaceLogFollow').isChecked(), true);
   assert(await viewport.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 2));
-  next = { status: 'success', progress: 100, renewalUnconfirmed: true };
+  const openedAt = Date.parse('2026-11-10T15:14:37Z');
+  const steps = [
+    { stage: 'checkout_open', at: openedAt },
+    { stage: 'payment_submitted', at: openedAt + 1000 },
+    { stage: 'PRIVATE-NATIVE-TEXT', at: openedAt + 2000 }
+  ];
+  next = { status: 'running', progress: 85, steps };
+  await refresh.click();
+  await entries.getByText(/结账页面已打开/).waitFor();
+  await idle();
+  const checkout = entries.locator('li').filter({ hasText: '结账页面已打开' });
+  assert.equal(await checkout.locator('time').textContent(), '23:14:37');
+  await entries.getByText(/已发起付款，等待结果确认/).waitFor();
+  await refresh.click();
+  await idle();
+  assert.equal(await checkout.count(), 1, '重复回读同一原始事件只显示一行');
+  assert.equal(await entries.evaluate(node => [...node.querySelectorAll('time')].every((time, i, times) =>
+    i === 0 || time.dateTime >= times[i - 1].dateTime)), true);
+  next = { status: 'success', progress: 100, renewalUnconfirmed: true, steps, terminalAt: openedAt + 3000 };
   await page.clock.fastForward(5100);
   await entries.getByText(/开通成功/).waitFor();
+  assert.equal(await entries.locator('li[data-tone="success"] time').textContent(), '23:14:40');
   assert.equal(await refresh.isEnabled(), false);
   assert.doesNotMatch(await frame.locator('body').innerText(), /PRIVATE-/);
   const finalReads = reads;

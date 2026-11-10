@@ -39,7 +39,11 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
           version: 1,
           regions: { PH: { label: '菲律宾', currency: 'PHP' }, EG: { label: '埃及', currency: 'EGP' } },
           plans: { plus: 'PH', pro100: 'EG', pro200: 'PH', pro500: 'EG' },
-          checks: [], audit: [], auditCount: 0
+          checks: [], audit: [], auditCount: 0,
+          proxyCountries: [
+            { code: 'PH', name: '菲律宾' }, { code: 'EG', name: '埃及' }, { code: 'MX', name: '墨西哥' }
+          ],
+          proxyLabels: []
         },
         'admin/gpt-api': { config: {} },
         'admin/gpt-api/status': {},

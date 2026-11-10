@@ -370,7 +370,7 @@ class Canary:
         migration = json.loads(self.command(['docker', 'exec', '-i', native, 'node',
             '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-routing'],
             input=sealed.encode(), timeout=30))
-        if migration != {'migration': 'per-plan-routing-v1', 'tables': 2, 'completed': True}:
+        if migration != {'migration': 'per-plan-routing-v2', 'tables': 3, 'completed': True}:
             raise CanaryError('routing_migration_failed')
         self.checks.append('routing_additive_migration')
 
@@ -408,10 +408,12 @@ class Canary:
             raise CanaryError('super_empty_cards_failed')
         self.checks.append('super_empty_cards')
         route_path = '/api/admin/recharge-routing'
-        def route(actor, method='GET', body=None):
-            return http_json(adapter_url, route_path,
-                {'x-id-recharge-assertion': assertion(self.bridge, route_path, actor, method),
+        def routing_request(path, actor, method='GET', body=None):
+            return http_json(adapter_url, path,
+                {'x-id-recharge-assertion': assertion(self.bridge, path, actor, method),
                  'Content-Type': 'application/json'}, method, body)
+        def route(actor, method='GET', body=None):
+            return routing_request(route_path, actor, method, body)
         status, _ = route(customer)
         if status != 403:
             raise CanaryError('customer_routing_not_denied')
@@ -421,9 +423,29 @@ class Canary:
         self.checks.append('routing_permissions')
         expected = {'plus': 'PH', 'pro100': 'EG', 'pro200': 'PH', 'pro500': 'EG'}
         status, config = route(privileged)
+        proxy_countries = [item.get('code') for item in config.get('proxyCountries', [])]
         if (status != 200 or config.get('plans') != expected or config.get('version') != 1 or
-            config.get('auditCount') != 1 or config.get('billingAddressCountry') != 'US'):
+            config.get('auditCount') != 1 or config.get('billingAddressCountry') != 'US' or
+            config.get('proxyLabels') != [] or proxy_countries[:2] != ['PH', 'EG'] or 'MX' not in proxy_countries):
             raise CanaryError('routing_defaults_invalid')
+        proxy_path = '/api/admin/proxies'
+        fixture = {'proxies': ['http://proxy.example.test:8080']}
+        status, _ = routing_request(proxy_path, privileged, 'POST', fixture)
+        if status != 400:
+            raise CanaryError('unlabeled_proxy_import_accepted')
+        status, imported = routing_request(proxy_path, privileged, 'POST', {**fixture, 'countryCode': 'PH'})
+        if status != 200 or imported.get('added') != 1 or len(imported.get('ids', [])) != 1:
+            raise CanaryError('labeled_proxy_import_failed')
+        proxy_id = imported['ids'][0]
+        proxy_country_path = route_path + f'/proxies/{proxy_id}/country'
+        status, _ = routing_request(proxy_country_path, privileged, 'PUT',
+                                    {'countryCode': 'MX', 'expectedCountryCode': 'EG'})
+        if status != 409:
+            raise CanaryError('stale_proxy_country_accepted')
+        status, _ = routing_request(proxy_country_path, privileged, 'PUT',
+                                    {'countryCode': 'MX', 'expectedCountryCode': 'PH'})
+        if status != 200:
+            raise CanaryError('proxy_country_edit_failed')
         status, _ = route(privileged, 'PUT', {'version': 1, 'plans': {**expected, 'plus': 'MY'}})
         if status != 200:
             raise CanaryError('routing_save_failed')
@@ -436,7 +458,8 @@ class Canary:
         self.command(['docker', 'exec', '-i', native, 'node',
             '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-routing'], input=sealed.encode(), timeout=30)
         status, config = route(privileged)
-        if status != 200 or config.get('version') != 3 or config.get('auditCount') != 3:
+        if (status != 200 or config.get('version') != 3 or config.get('auditCount') != 3 or
+            config.get('proxyLabels') != [{'proxyId': proxy_id, 'countryCode': 'MX'}] or config.get('checks') != []):
             raise CanaryError('routing_migration_not_idempotent')
         self.checks.append('routing_persistence_version_audit_and_migration_idempotency')
         self.check_code_returns(mysql, native, adapter_url, privileged, sealed)

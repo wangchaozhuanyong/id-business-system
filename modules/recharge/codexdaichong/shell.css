@@ -7,11 +7,49 @@
   font-size: 13px;
   overflow-wrap: anywhere;
 }
-[data-recharge-view='admin'] [data-route-country] {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-secondary);
+[data-recharge-view='admin'] .proxy-country-field > select {
+  max-inline-size: 22rem;
+}
+[data-recharge-view='admin'] .proxy-country-required {
+  color: var(--error-text);
+}
+[data-recharge-view='admin'] .proxy-country-cell {
+  min-inline-size: 12rem;
+}
+[data-recharge-view='admin'] .proxy-country-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+[data-recharge-view='admin'] .proxy-country-mismatch {
+  margin-block-start: 6px;
+}
+[data-recharge-view='admin'] .proxy-country-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-inline-size: 16rem;
+  margin-block-start: 8px;
+}
+[data-recharge-view='admin'] .proxy-country-editor > :is(select, small) {
+  grid-column: 1 / -1;
+  min-inline-size: 0;
+}
+[data-recharge-view='admin'] .proxy-country-editor > small {
+  color: var(--error-text);
   white-space: normal;
+}
+[data-recharge-view='admin'] .proxy-country-editor > small:empty {
+  display: none;
+}
+[data-recharge-view='admin'] .proxy-exit-country {
+  display: block;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+[data-recharge-view='admin'] .proxy-exit-cell > code + .proxy-exit-country {
+  margin-block-start: 4px;
 }
 [data-recharge-view='admin'] .card-pool-type-feedback {
   display: flex;
@@ -29,6 +67,13 @@
 }
 [data-recharge-view='admin'] [data-recharge-card-type] {
   overflow-wrap: anywhere;
+}
+[data-recharge-view='admin'] .card-pool-import-type {
+  margin-block-end: 12px;
+}
+[data-recharge-view='admin'] [data-recharge-card-type] > select {
+  width: 100%;
+  min-width: 0;
 }
 
 [data-recharge-view='admin'] .recharge-table-pagination.table-footer {
@@ -190,6 +235,28 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   width: 100%;
   padding: clamp(12px, 2vw, 24px);
   overflow: visible;
+}
+
+[data-recharge-viewport] body[data-recharge-view='admin'] .main-content {
+  display: flex;
+  flex-direction: column;
+  min-block-size: var(--workspace-available-height);
+}
+
+[data-recharge-viewport] [data-recharge-view='admin'] .page-view.active {
+  flex: 1;
+  margin-inline: 0;
+}
+
+[data-recharge-viewport] .page-view.active:has(> .panel > :is(.runtime-log-pre-wrap, #cancel_renewal_session)),
+[data-recharge-viewport] .page-view.active > .panel:has(> :is(.runtime-log-pre-wrap, #cancel_renewal_session)) {
+  display: flex;
+  flex-direction: column;
+}
+
+[data-recharge-viewport] .page-view.active > .panel:has(> :is(.runtime-log-pre-wrap, #cancel_renewal_session)),
+[data-recharge-viewport] .page-view.active > .panel > :is(.runtime-log-pre-wrap, #cancel_renewal_session) {
+  flex: 1;
 }
 
 [data-recharge-telegram] .main-content > .page-view,
@@ -649,6 +716,16 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   box-shadow: none;
 }
 
+[data-recharge-viewport] [data-recharge-view='admin'] .runtime-log-pre-wrap {
+  contain: size;
+  max-block-size: none;
+  overflow: auto;
+}
+
+[data-recharge-viewport] #cancel_renewal_session {
+  min-block-size: 160px;
+}
+
 [data-recharge-view='admin'] .runtime-log-pre {
   font-family: ui-monospace, 'SF Mono', monospace;
 }
@@ -799,6 +876,33 @@ body[data-recharge-query]::before {
 [data-recharge-query] .recharge-card {
   grid-area: query;
   min-width: 0;
+}
+
+[data-recharge-viewport] [data-recharge-query] .page-shell {
+  grid-template-rows: auto minmax(min-content, 1fr) auto;
+  min-block-size: var(--workspace-available-height);
+}
+
+[data-recharge-viewport] [data-recharge-query] .recharge-card {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+}
+
+[data-recharge-viewport] [data-recharge-query]
+  #querySection:not([style*='display: none']):has(#batchQueryPanel[style*='display: block']) {
+  display: flex !important;
+  flex-direction: column;
+  flex: 1;
+}
+
+[data-recharge-viewport] [data-recharge-query] #batchQueryPanel[style*='display: block'] {
+  flex: 1;
+  grid-template-rows: minmax(120px, 1fr);
+}
+
+[data-recharge-viewport] [data-recharge-query] #batchQueryInput {
+  align-self: stretch;
 }
 
 [data-recharge-query] .faq-panel {

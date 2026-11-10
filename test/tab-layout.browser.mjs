@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 // Real static UI with isolated data; never starts a server or contacts a business API.
 const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -52,7 +52,7 @@ try {
       page.on('pageerror', e => errors.push(e.message));
       page.setDefaultTimeout(7000);
       await page.goto(origin + '/#/overview');
-      if (theme === 'dark') await page.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(page);
       const routes = baseline ? screenshots : await page.evaluate(() => window.IDDesignAPI.navigation.flatMap(g => g[2].map(i => i[1])));
       const capture = async (route, state = 'initial') => {
         await settle(page);
@@ -107,7 +107,7 @@ try {
       const apiTraffic = await interceptDesign(context, { localFixtures: { 'order-completion': { items: [], canAssign: true } } });
       await page.goto(origin + '/#/workspace/order-completion');
       await page.reload();
-      if (theme === 'dark') await page.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(page);
       await page.locator('[data-action="completion-tab"]').first().waitFor();
       await capture('workspace/order-completion', 'API empty');
       if (!baseline) {
@@ -130,7 +130,8 @@ try {
       for (const bar of record.bars) {
         assert(bar.topGap === null || bar.topGap <= 1, '页签上方重复留白: ' + message);
         assert(bar.lineInset === null || Math.abs(bar.lineInset) <= 1, '分隔线未覆盖整个页签行: ' + message);
-        assert(bar.tabs.every(tab => tab.height >= 60 && Math.abs(tab.centerOffset) <= 2), '页签文字未居中: ' + message);
+        const minimumHeight = record.width <= 900 && bar.row === 'content-toolbar' ? 52 : 60;
+        assert(bar.tabs.every(tab => tab.height >= minimumHeight && Math.abs(tab.centerOffset) <= 2), '页签高度或文字居中不符: ' + message);
         assert(bar.tabs.every(tab => tab.font === '14px' && tab.shadow === 'none'), '页签皮肤不一致: ' + message);
         if (bar.row !== 'tabs' && bar.row !== 'tabs recharge-code-tabs' && !bar.row.includes('tabs'))
           assert(bar.border === 0, '页签和操作行重复分隔线: ' + message);

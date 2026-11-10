@@ -104,7 +104,7 @@
   function frameDraftFieldAllowed(scope, key) {
     if (scope === 'admin') return rechargeDraftFields.has(key) ||
       /^address\/(?:new|[1-9]\d{0,15})\/addr_(?:line1|city|state|postal_code|country)$/.test(key);
-    if (scope === 'bit-local') return ['bit-window-name', 'workspace', 'bit-execution-proxy', 'ip-search', 'ip-filter', 'ip-sort', 'ip-page', 'ip-page-size'].includes(key) ||
+    if (scope === 'bit-local') return ['workspace', 'bit-execution-proxy', 'ip-search', 'ip-filter', 'ip-sort', 'ip-page', 'ip-page-size'].includes(key) ||
       /^ip-draft\/[a-zA-Z0-9_-]{1,80}\/(?:name|country|kind|mode|protocol|version)$/.test(key) ||
       /^profile\/[a-zA-Z0-9_-]{1,80}\/(?:version|bit-connection-name|bit-account-name|bit-local-url|bit-core|bit-proxy-mode|bit-proxy-type|bit-proxy-country|bit-proxy-host|bit-proxy-port|bit-session-wait|bit-session-retries|groupPreference|tagPreference)$/.test(key);
     return false;
@@ -541,8 +541,13 @@
   const onlineRechargeMount = '/integrations/codexdaichong/';
   let activeOnlineView = 'query';
   let onlineAdmin;
+  let openingRechargeCardType;
   const currentIntegrationRequest = new WeakMap();
   const integrationRoot = () => api.activePageRegion?.() || document;
+  function visibleRechargeCardFrame() {
+    if (state.route !== onlineRechargeRoute || activeOnlineView !== 'cards') return null;
+    return $('iframe[data-view="cards"][data-view-group="admin"]:not([hidden])', integrationRoot());
+  }
   function openRechargeTaskLog(jobKey, returnFocus) {
     if (!isAdmin() || typeof jobKey !== 'string' || !/^[\w-]{1,128}$/.test(jobKey)) return;
     const src = onlineRechargeMount + 'admin?taskLog=' + encodeURIComponent(jobKey);
@@ -746,6 +751,27 @@
       return;
     }
     if (event.data?.source !== 'id-codexdaichong') return;
+    if (message.type === 'edit-card-type') {
+      const key = message.cardKey;
+      if (!isAdmin() || frame !== visibleRechargeCardFrame() || $('#drawer')?.open ||
+          typeof key !== 'string' || !/^recharge:[1-9]\d{0,19}$/.test(key)) return;
+      const selector = `#cards.active [data-switch-panel="local"]:not([hidden]) [data-edit-recharge-card-type="${key}"]`;
+      const trigger = () => visibleRechargeCardFrame() === frame ? frame.contentDocument?.querySelector(selector) : null;
+      if (!trigger()) return;
+      if (!localData || !api.modules.commerce?.openBankCardTypeAssignment) {
+        notify('银行卡类型设置暂不可用');
+        return;
+      }
+      const request = {};
+      openingRechargeCardType = request;
+      void api.modules.commerce.openBankCardTypeAssignment(key, {
+        isCurrent: () => openingRechargeCardType === request && Boolean(trigger()),
+        onClose: () => trigger()?.focus({ preventScroll: true })
+      }).finally(() => {
+        if (openingRechargeCardType === request) openingRechargeCardType = undefined;
+      });
+      return;
+    }
     if (message.type === 'open-task-log') {
       if (state.route !== onlineRechargeRoute || activeOnlineView !== 'logs' ||
           frame.hidden || frame.dataset.viewGroup !== 'admin' ||
@@ -4214,6 +4240,11 @@
     }
   });
   api.modules.operations = {
+    refreshRechargeCardTypes() {
+      visibleRechargeCardFrame()?.contentWindow?.postMessage(
+        { source: 'id-recharge-shell', type: 'data-change', scopes: ['card-types'] }, window.location.origin
+      );
+    },
     blockRechargeNavigation,
     openRechargeTaskLog,
     getResources: (kind) =>

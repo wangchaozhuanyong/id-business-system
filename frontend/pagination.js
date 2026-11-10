@@ -127,6 +127,14 @@
     return inset;
   }
 
+  function workspaceViewportHeight(hostFrame, main = hostFrame?.closest('main')) {
+    const host = (hostFrame || main)?.ownerDocument.defaultView || window;
+    const footer = main?.nextElementSibling?.matches('.workspace-footer') ? main.nextElementSibling : null;
+    const frameTop = hostFrame ? hostFrame.getBoundingClientRect().top + host.scrollY : 0;
+    const inset = main ? bottomInset(hostFrame?.parentElement || main, main.parentElement) : 0;
+    return Math.max(0, Math.floor(host.innerHeight - (footer?.offsetHeight || 0) - inset - frameTop));
+  }
+
   function watchTableLayout(root, { hostFrame = null, rows = pagedViewport } = {}) {
     if (!root) return;
     const host = hostFrame?.ownerDocument.defaultView || window;
@@ -141,10 +149,8 @@
       const scope = root.querySelector(':scope > [data-page-region]:not([hidden]), .page-view.active') || root;
       if (host.innerWidth > 900) {
         const scroll = window.scrollY + root.scrollTop;
-        const frameOffset = hostFrame ? hostFrame.getBoundingClientRect().top + host.scrollY : 0;
-        const hostInset = main ? bottomInset(hostFrame?.parentElement || main, main.parentElement) : 0;
-        const end = host.innerHeight - (footer?.offsetHeight || 0) - hostInset - frameOffset;
-        const split = scope.querySelector('.commerce-entry-columns');
+        const end = workspaceViewportHeight(hostFrame, main);
+        const split = scope.querySelector('.commerce-entry-columns, .inventory-workspace-columns');
         if (split) {
           const top = split.getBoundingClientRect().top + scroll;
           frames.push([split, 'workspace', Math.max(400, Math.floor(end - top - bottomInset(split.parentElement, stop)))]);
@@ -246,5 +252,7 @@
     jump(pager, event.target);
   });
 
-  window.IDPagination = Object.freeze({ defaultPageSize, pageSizes, render, watchTableLayout, preserveFrame });
+  window.IDPagination = Object.freeze({
+    defaultPageSize, pageSizes, render, watchTableLayout, preserveFrame, workspaceViewportHeight
+  });
 })();

@@ -67,7 +67,6 @@ const defaultConnection = {
 const profilesEnabled = document.body.hasAttribute('data-connection-profiles');
 
 let credential = '';
-let lastAutomaticName = '';
 let authorizationCheckId = 0;
 let activeCatalogCheck;
 let activeLogin;
@@ -116,19 +115,17 @@ function restoreConnectionDraft() {
     if (Object.hasOwn(values, prefix + control.id)) control.value = values[prefix + control.id];
   groupPreference = values[prefix + 'groupPreference'] ?? groupPreference;
   tagPreference = values[prefix + 'tagPreference'] ?? tagPreference;
-  if (Object.hasOwn(values, 'bit-window-name')) windowName.value = values['bit-window-name'];
 }
 function captureConnectionDraft(event) {
   if (!draftBridge || !event.isTrusted) return;
   const control = event.target;
   const values = readConnectionDrafts();
   const prefix = draftPrefix();
-  if (control === windowName) values['bit-window-name'] = control.value;
-  else if (connectionDraftFields.includes(control)) values[prefix + control.id] = control.value;
+  if (connectionDraftFields.includes(control)) values[prefix + control.id] = control.value;
   else if (control === groupSelect && control.value) values[prefix + 'groupPreference'] = control.selectedOptions[0].text;
   else if (control === tagSelect && control.value) values[prefix + 'tagPreference'] = control.selectedOptions[0].text;
   else return;
-  if (control !== windowName && profileData && !Object.hasOwn(values, prefix + 'version'))
+  if (profileData && !Object.hasOwn(values, prefix + 'version'))
     values[prefix + 'version'] = String(profileData.version);
   draftBridge.write('bit-local', values);
 }
@@ -140,7 +137,6 @@ function updateStartButton() {
   startButton.disabled =
     !executionProxies?.ready() ||
     !credential ||
-    !windowName.value.trim() ||
     !groupSelect.value ||
     !tagSelect.value ||
     !tokenInput.value ||
@@ -194,6 +190,7 @@ get('bit-token-eye').addEventListener('click', () => {
 
 function loadAuthorization(value) {
   credential = '';
+  windowName.value = '';
   jsonInput.placeholder = '粘贴完整授权 JSON，将自动载入';
   authorizationResult.textContent = '';
   if (value) {
@@ -203,11 +200,7 @@ function loadAuthorization(value) {
       jsonInput.value = '';
       jsonInput.placeholder = '授权已自动载入，可粘贴新 JSON 替换';
       authorizationResult.textContent = `授权已载入 · ${email}`;
-      const currentName = windowName.value;
-      if (!currentName.trim() || currentName === lastAutomaticName) {
-        lastAutomaticName = `ChatGPT-${email.split('@')[0]}`.slice(0, 80);
-        windowName.value = lastAutomaticName;
-      }
+      windowName.value = email;
     } catch {
       authorizationResult.textContent = '请粘贴完整有效的单账户授权 JSON（不超过 65 KB）。';
     }
@@ -221,15 +214,7 @@ get('bit-clear-authorization').addEventListener('click', () => {
   jsonInput.value = '';
   fileInput.value = '';
   loadAuthorization('');
-  if (lastAutomaticName && windowName.value === lastAutomaticName) {
-    windowName.value = '';
-    const values = readConnectionDrafts();
-    values['bit-window-name'] = '';
-    draftBridge?.write('bit-local', values);
-  }
-  lastAutomaticName = '';
   loginResult.textContent = '等待登录';
-  updateStartButton();
   jsonInput.focus();
 });
 
@@ -312,7 +297,6 @@ urlInput.addEventListener('input', () => {
   clearCatalog();
 });
 tokenInput.addEventListener('input', () => { cancelConnectionRestore(); clearCatalog(); });
-windowName.addEventListener('input', updateStartButton);
 function updateCatalogStatus() {
   if (catalogReady) {
     catalogResult.textContent =
@@ -693,6 +677,8 @@ loginForm.addEventListener('submit', async (event) => {
   setLoginLock(true);
   updateStartButton();
   const sessionJson = credential;
+  // Keep the full email in the form and respect the login adapter's window name limit.
+  const accountWindowName = windowName.value.slice(0, 100);
   loginFields.disabled = true;
   cancelButton.hidden = false;
   loginResult.textContent = '正在启动登录…';
@@ -704,7 +690,7 @@ loginForm.addEventListener('submit', async (event) => {
       token: tokenInput.value,
       groupName: groupSelect.selectedOptions[0].text,
       tagName: tagSelect.selectedOptions[0].text,
-      windowName: windowName.value.trim(),
+      windowName: accountWindowName,
       sessionJson,
       browserOptions: {
         coreVersion: get('bit-core').value,
@@ -758,8 +744,8 @@ window.addEventListener('pagehide', () => {
   authorizationCheckId++;
   activeLogin?.abort();
   clearCatalog();
-  credential = '';
   jsonInput.value = '';
+  loadAuthorization('');
   clearConnectionSecrets();
 });
 
@@ -796,6 +782,8 @@ window.addEventListener('message', (event) => {
 document.addEventListener('close', () => void refreshLiveChoices(), true);
 get('bit-toggle-connection').addEventListener('click', () => queueMicrotask(refreshLiveChoices));
 window.addEventListener('focus', () => void refreshLiveChoices());
+
+if (jsonInput.value) loadAuthorization(jsonInput.value);
 
 window.IDPagination?.watchTableLayout?.(document.body, { hostFrame: window.frameElement });
 

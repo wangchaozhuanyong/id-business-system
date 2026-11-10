@@ -14,6 +14,7 @@
   root.dataset.rechargeNavigationLocked = 'false';
   let reportType = '';
   let updateTableLayout;
+  let syncWorkspaceViewport;
   let telegramStatus;
   window.idRechargeVisible = standalone;
   function setVisible(visible) {
@@ -34,27 +35,37 @@
   if (!standalone) syncTheme();
 
   function setupWorkspaceViewport() {
+    const workspace = document.body.hasAttribute('data-recharge-workspace');
+    const frame = window.frameElement;
+    const embedded = frame?.classList.contains('recharge-integration__frame');
+    if (!embedded && !workspace) return;
+    const host = frame?.ownerDocument.defaultView || window;
     const sync = () => {
-      // Use the host viewport, not the iframe height that our own resize report changes.
-      let height = window.innerHeight;
-      if (!standalone) {
-        const host = window.parent;
-        const frameTop = window.frameElement.getBoundingClientRect().top + host.scrollY;
-        const footer = host.document.querySelector('.workspace-footer');
-        const main = host.document.getElementById('main');
-        const bottom = main ? parseFloat(host.getComputedStyle(main).paddingBottom) || 0 : 0;
-        height = host.innerHeight - frameTop - (footer?.offsetHeight || 0) - bottom - 2;
-      }
-      const value = Math.max(640, Math.floor(height)) + 'px';
+      if (embedded && !frame.getClientRects().length) return;
+      // The budget belongs to the host so reporting the iframe height cannot enlarge it.
+      const available = embedded
+        ? host.IDPagination?.workspaceViewportHeight?.(frame) : host.innerHeight;
+      if (embedded && !Number.isFinite(available)) return;
+      root.toggleAttribute('data-recharge-viewport', embedded === true);
+      const value = (workspace ? Math.max(640, available) : available) + 'px';
       if (root.style.getPropertyValue('--workspace-available-height') !== value)
         root.style.setProperty('--workspace-available-height', value);
     };
     sync();
-    window.addEventListener('resize', sync);
-    if (!standalone) {
-      window.parent.addEventListener('resize', sync);
-      window.addEventListener('pagehide', () => window.parent.removeEventListener('resize', sync), { once: true });
+    host.addEventListener('resize', sync);
+    const observer = new ResizeObserver(sync);
+    if (embedded) {
+      const toolbar = frame.closest('.recharge-integration')?.querySelector('.recharge-integration__toolbar');
+      const footer = frame.closest('main')?.nextElementSibling;
+      if (toolbar) observer.observe(toolbar);
+      if (footer?.matches('.workspace-footer')) observer.observe(footer);
     }
+    window.addEventListener('pagehide', event => {
+      if (event.persisted) return;
+      host.removeEventListener('resize', sync);
+      observer.disconnect();
+    });
+    return sync;
   }
 
   function setupWorkspaceLog() {
@@ -69,6 +80,8 @@
       timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
     let state = 'idle', busy = false, offline = false, lastEntry = '', updated = '';
+    const recordedSteps = new Set();
+    let latestStep;
     const renderStatus = () => {
       refresh.disabled = state !== 'running' || busy;
       refresh.textContent = busy ? '刷新中…' : '刷新';
@@ -90,26 +103,47 @@
         setFollow(false);
     }, { passive: true });
     refresh.addEventListener('click', () => window.idRechargeRefreshTask?.());
-    const record = (text, tone = 'running') => {
-      const signature = tone + ':' + text;
-      if (!text || signature === lastEntry) return;
-      lastEntry = signature;
+    const validTime = at => Number.isSafeInteger(at) && at > 0 && at <= 8.64e15;
+    const append = (text, tone, at) => {
       empty.hidden = true;
       const entry = document.createElement('li');
       entry.dataset.tone = tone;
+      const instant = validTime(at) ? at : Date.now();
+      entry.dataset.at = String(instant);
       const time = document.createElement('time');
-      const now = new Date();
-      time.dateTime = now.toISOString();
-      time.textContent = clock.format(now);
+      const date = new Date(instant);
+      time.dateTime = date.toISOString();
+      time.textContent = clock.format(date);
       entry.append(time, document.createTextNode('  ' + text));
-      entries.append(entry);
+      const following = [...entries.children].find(child => Number(child.dataset.at) > instant);
+      entries.insertBefore(entry, following || null);
       if (follow.checked) scrollLatest();
+    };
+    const record = (text, tone = 'running', at) => {
+      const signature = tone + ':' + text;
+      if (!text || signature === lastEntry) return;
+      lastEntry = signature;
+      append(text, tone, at);
     };
     window.idRechargeWorkspaceLog = {
       record,
+      syncSteps(steps, labels) {
+        for (const step of Array.isArray(steps) ? steps.slice(-80) : []) {
+          if (!step || !Object.hasOwn(labels, step.stage) || !validTime(step.at)) continue;
+          const key = step.stage + ':' + step.at;
+          if (recordedSteps.has(key)) continue;
+          recordedSteps.add(key);
+          const label = labels[step.stage];
+          append(label, 'running', step.at);
+          if (!latestStep || step.at >= latestStep.at) latestStep = { label, at: step.at };
+        }
+        return latestStep?.label;
+      },
       reset() {
         entries.replaceChildren();
         empty.hidden = false;
+        recordedSteps.clear();
+        latestStep = undefined;
         state = 'idle'; busy = false; offline = false; lastEntry = ''; updated = '';
         setFollow(true);
         renderStatus();
@@ -165,7 +199,10 @@
 
   function report(type) {
     if (type === 'ready') restoreDrafts();
-    if (type === 'ready' || type === 'view-context') updateTableLayout?.();
+    if (type === 'ready' || type === 'view-context') {
+      syncWorkspaceViewport?.();
+      updateTableLayout?.();
+    }
     if (type !== 'resize' && type !== 'view-context') {
       reportType = type;
       if (telegramSettings) {
@@ -572,6 +609,7 @@
       return;
     }
     if (standalone) document.body.dataset.standalone = 'true';
+    syncWorkspaceViewport = setupWorkspaceViewport();
     setupAdminDrafts();
     if (document.body.dataset.rechargeView === 'admin') {
       placeTelegramSettings();
@@ -603,7 +641,6 @@
       const tab = new URLSearchParams(location.search).get('tab');
       const workspaceTitle = document.querySelector('.workspace-recharge-standalone-title');
       if (workspaceTitle) {
-        setupWorkspaceViewport();
         setupWorkspaceLog();
         if (standalone)
           window.IDTitleHelp.attach(
@@ -636,9 +673,17 @@
       window.idRechargeSelect(tab);
       report('ready');
     }
-    const observer = new ResizeObserver(() => {
-      if (reportType === 'ready') report('resize');
+    const observer = new ResizeObserver((entries) => {
+      for (const { target } of entries) {
+        if (target === document.body) {
+          if (reportType === 'ready') report('resize');
+        } else if (target.parentElement?.querySelector('input[id$="_log_autoscroll"]:checked')) {
+          target.scrollTop = target.scrollHeight;
+        }
+      }
     });
     observer.observe(document.body);
+    if (root.hasAttribute('data-recharge-viewport'))
+      for (const log of document.querySelectorAll('.runtime-log-pre-wrap')) observer.observe(log);
   });
 })();

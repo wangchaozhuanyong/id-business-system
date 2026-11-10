@@ -5,7 +5,7 @@ import { signRechargeAssertion } from '../assertion.mjs';
 import { loadCodexdaichongAssets } from './assets.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
-import { readsRechargePresentation, rechargeBrowserPresentation } from './progress-presentation.mjs';
+import { readsRechargePresentation, rechargeBrowserPresentation, rechargeTaskStepHistory } from './progress-presentation.mjs';
 
 export const CODEXDAICHONG_PREFIX = '/integrations/codexdaichong';
 const allowedMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -63,17 +63,21 @@ function observeRouteRejection(reply, report) {
   });
 }
 
-async function writeRechargePresentation(reply, res, path, secret, report) {
+async function readPresentationJson(stream, limit) {
   const chunks = [];
   let bytes = 0;
+  for await (const chunk of stream) {
+    bytes += chunk.length;
+    if (bytes > limit) throw new Error('充值回执超过处理上限');
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks));
+}
+
+async function writeRechargePresentation(reply, res, path, secret, report, readSteps) {
   let body;
   try {
-    for await (const chunk of reply) {
-      bytes += chunk.length;
-      if (bytes > 128 * 1024) throw new Error('充值回执超过处理上限');
-      chunks.push(chunk);
-    }
-    body = JSON.parse(Buffer.concat(chunks));
+    body = await readPresentationJson(reply, 128 * 1024);
   } catch {
     if (!res.destroyed) respond(res, 502, '暂时无法确认充值回执，请用原兑换码查询。');
     return;
@@ -81,6 +85,14 @@ async function writeRechargePresentation(reply, res, path, secret, report) {
   if (path === '/api/run-process') recordRechargeResponse(reply.statusCode, body, report);
   if (res.destroyed) return;
   const projected = rechargeBrowserPresentation(path, reply.statusCode, body, secret);
+  if (readSteps && projected.success && projected.data) {
+    try {
+      Object.assign(projected.data, await readSteps(projected.data));
+    } catch {
+      // Detailed steps are supplemental. Always return the original status projection.
+    }
+  }
+  if (res.destroyed) return;
   res.writeHead(reply.statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -203,6 +215,22 @@ export function createCodexdaichongGateway({
     };
   };
 
+  async function readTaskSteps(task, actor) {
+    const path = '/api/admin/task-logs/' + encodeURIComponent(task.jobKey);
+    const reply = await fetch(new URL(path, upstream), {
+      redirect: 'error', signal: AbortSignal.timeout(2500),
+      headers: {
+        accept: 'application/json',
+        'x-id-recharge-assertion': signRechargeAssertion(secret, 'GET', path, actor)
+      }
+    });
+    if (!reply.ok || !reply.body) {
+      await reply.body?.cancel();
+      return null;
+    }
+    return rechargeTaskStepHistory(await readPresentationJson(reply.body, 4 * 1024 * 1024), task);
+  }
+
   function canMutate(req) {
     return req.headers.origin === origin.origin && req.headers['sec-fetch-site'] !== 'cross-site';
   }
@@ -298,10 +326,12 @@ export function createCodexdaichongGateway({
         catch { return respond(res, 400, '代理资料格式不正确'); }
         if (!data || typeof data !== 'object' || Array.isArray(data))
           return respond(res, 400, '代理资料格式不正确');
+        if (typeof data.countryCode !== 'string' || !data.countryCode)
+          return respond(res, 400, '请选择代理国家');
         let batch;
         try { batch = normalizeRechargeProxyInput(data.proxies ?? data.proxy_url ?? data.proxy ?? ''); }
         catch (error) { return respond(res, 400, error.message); }
-        proxyImportBody = Buffer.from(JSON.stringify({ proxies: batch.proxies }));
+        proxyImportBody = Buffer.from(JSON.stringify({ proxies: batch.proxies, countryCode: data.countryCode }));
         extraHeaders['content-type'] = 'application/json';
         extraHeaders['content-length'] = String(proxyImportBody.length);
       } catch { return respond(res, 400, '代理资料读取失败，请重试'); }
@@ -332,7 +362,9 @@ export function createCodexdaichongGateway({
           return;
         }
         if (readsRechargePresentation(req.method, path.pathname, reply.statusCode, reply.headers['content-type'])) {
-          void writeRechargePresentation(reply, res, path.pathname, secret, onRechargeOutcome).catch(() => {
+          const readSteps = req.method === 'GET' && actor.admin && req.headers['sec-fetch-site'] !== 'cross-site' &&
+            path.raw === path.pathname + '?view=steps' ? task => readTaskSteps(task, actor) : undefined;
+          void writeRechargePresentation(reply, res, path.pathname, secret, onRechargeOutcome, readSteps).catch(() => {
             if (res.destroyed) return;
             if (res.headersSent) res.destroy();
             else respond(res, 502, '暂时无法确认充值回执，请用原兑换码查询。');

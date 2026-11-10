@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { Script } from 'node:vm';
 import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
 import { createCodexdaichongGateway } from '../modules/recharge/codexdaichong/gateway.mjs';
+import { createNativeRechargeAdapter } from '../modules/recharge/codexdaichong/native-adapter.mjs';
 
 const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
@@ -151,6 +152,7 @@ test('proxy import normalizes a complete batch before forwarding and rejects inv
   const received = [];
   const secret = randomBytes(48).toString('base64url');
   const engine = await listen(t, async (req, res) => {
+    assert.equal(req.url, '/api/admin/recharge-routing/proxies');
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks);
@@ -159,8 +161,10 @@ test('proxy import normalizes a complete batch before forwarding and rejects inv
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ success: true, added: 1 }));
   });
+  const adapter = await listen(t, createNativeRechargeAdapter({ nativeUrl: engine, secret,
+    getNativeAdminToken: async actor => { assert.equal(actor.id, admin.id); return 'synthetic'; } }).handle);
   const origin = 'http://proxy-import.test';
-  const gateway = createCodexdaichongGateway({ upstreamUrl: engine, publicOrigin: origin, secret,
+  const gateway = createCodexdaichongGateway({ upstreamUrl: adapter, publicOrigin: origin, secret,
     getUnifiedPrincipal: req => req.headers['x-test-role'] === 'admin' ? admin
       : req.headers['x-test-role'] === 'employee' ? member : null });
   const host = await listen(t, (req, res) => { void gateway.handle(req, res); });
@@ -171,11 +175,15 @@ test('proxy import normalizes a complete batch before forwarding and rejects inv
     method: 'POST', headers: { Origin: from, 'content-type': type, 'x-test-role': role },
     body: typeof body === 'string' ? body : JSON.stringify(body)
   });
-  assert.equal((await send({ proxies: [raw, canonical] })).status, 200);
-  assert.deepEqual(received, [{ proxies: [canonical] }]);
-  assert.equal((await send({ proxy_url: raw })).status, 200, '保留原单条别名兼容');
+  assert.equal((await send({ proxies: [raw, canonical], countryCode: 'PH' })).status, 200);
+  assert.deepEqual(received, [{ proxies: [canonical], countryCode: 'PH' }]);
+  assert.equal((await send({ proxy_url: raw, countryCode: 'MX' })).status, 200, '保留原单条别名兼容');
+  assert.deepEqual(received[1], { proxies: [canonical], countryCode: 'MX' });
   const before = received.length;
-  const rejected = await send({ proxies: [raw, 'https://api.example.test/extract?id=synthetic'] });
+  const missing = await send({ proxies: [raw] });
+  assert.equal(missing.status, 400);
+  assert.equal((await missing.json()).message, '请选择代理国家');
+  const rejected = await send({ proxies: [raw, 'https://api.example.test/extract?id=synthetic'], countryCode: 'EG' });
   assert.equal(rejected.status, 400);
   const message = (await rejected.json()).message;
   assert.match(message, /第 2 行.*整批未保存/);

@@ -3258,6 +3258,19 @@ details.toolbox-phrase-more[open] > summary {
 .inventory-workspace-columns > .panel { min-width: 0; margin: 0; }
 @container (min-width: 960px) {
   .inventory-workspace-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .inventory-workspace-columns[data-pagination-layout='workspace'] {
+    min-block-size: var(--pagination-rows-limit);
+  }
+  .inventory-workspace-columns[data-pagination-layout='workspace'] > .panel {
+    display: flex;
+    flex-direction: column;
+  }
+  .inventory-workspace-columns[data-pagination-layout='workspace'] .inventory-workspace-history {
+    flex: 1;
+    contain: size;
+    min-block-size: 200px;
+    max-block-size: none;
+  }
 }
 .inventory-workspace .panel-heading { flex-wrap: wrap; gap: 12px; }
 .inventory-workspace .panel-heading :is(h2, h3) { margin: 0; font-size: 15px; line-height: 24px; }
