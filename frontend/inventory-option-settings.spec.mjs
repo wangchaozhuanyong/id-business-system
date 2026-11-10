@@ -310,7 +310,9 @@ test('邮箱提取用途设置更新后续选项，保留历史批次并与账�
   const history = JSON.stringify(r.api.modules.inventory.getBatches());
   r.inventory.onClick('inventory-purpose-settings', { dataset: {} });
   assert.equal(r.drawers.at(-1).title, '邮箱提取用途设置');
-  assert.deepEqual(Array.from(r.editors.at(-1).values), ['注册 Claude', '注册 GPT', '业务备用', '其他']);
+  assert.deepEqual(Array.from(r.editors.at(-1).values), [
+    '注册 Claude', '注册 GPT', '业务备用', '其他', '注册 Gemini', '注册 Grok'
+  ]);
   r.inventory.onSubmit(purposeForm(['员工测试', '其他']));
   r.confirm();
   r.inventory.render();
