@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 const sample = {
   id: '00000000-0000-4000-8000-000000000001',
@@ -190,4 +192,79 @@ test('比特登录右侧地址库支持复制、重试标记和按快照批量�
       assert.deepEqual(errors, []);
     });
   }
+});
+
+
+test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保持一致', { timeout: 60_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 2040, height: 1100 }, locale: 'zh-CN' });
+  const actor = { id: 'heading-qa', name: '离线验收员', role: 'admin' };
+  const requests = await interceptDesign(context, { actor, localFixtures: {} });
+  await context.route('**/api/local/bitbrowser-addresses*', route => {
+    assert.equal(route.request().method(), 'GET', '对齐验收只读取隔离资料');
+    return route.fulfill({ json: { version: 1, page: 1, pageSize: 10, items: [], total: 0, totals: { unused: 0, used: 0 } } });
+  });
+  const output = process.env.ID_LAYOUT_QA_OUTPUT;
+  if (output) await mkdir(output, { recursive: true });
+  const page = await context.newPage();
+  const errors = [], measurements = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(origin + '/#/recharge/start');
+  const frame = page.frameLocator('.recharge-integration__frame--bit-local');
+  await frame.locator('.bit-local--embedded').waitFor();
+  await frame.locator('#bit-window-name').fill('布局验收草稿');
+  await page.locator('#bit-address-heading').waitFor();
+  const measure = () => page.evaluate(() => {
+    const iframe = document.querySelector('.recharge-integration__frame--bit-local');
+    const inner = iframe.contentDocument;
+    const read = (heading, label, offset, content) => {
+      const box = heading.getBoundingClientRect(), range = document.createRange();
+      range.selectNodeContents(label.firstChild);
+      const text = range.getBoundingClientRect(), style = getComputedStyle(label);
+      return { top: box.top + offset, bottom: box.bottom + offset, height: box.height,
+        textTop: text.top + offset, textHeight: text.height, lineHeight: style.lineHeight, fontSize: style.fontSize,
+        textInset: text.left - box.left, contentTop: content.getBoundingClientRect().top + offset };
+    };
+    const tab = inner.querySelector('.bit-local__workspace-bar [aria-selected="true"]');
+    const left = read(inner.querySelector('.bit-workspace-heading'), tab, iframe.getBoundingClientRect().top,
+      inner.querySelector('#bit-login-panel:not([hidden]) .bit-local__section, #bit-library-panel:not([hidden])'));
+    const right = read(document.querySelector('#bit-addresses-panel .bit-workspace-heading'),
+      document.querySelector('#bit-address-heading'), 0, document.querySelector('.bit-address-source-toolbar'));
+    return { left, right, overflow: document.documentElement.scrollWidth > innerWidth || inner.documentElement.scrollWidth > iframe.clientWidth };
+  });
+  for (const width of [2040, 1440, 1180, 1024, 900, 390, 320]) {
+    await page.setViewportSize({ width, height: 1100 });
+    for (const theme of ['light', 'dark']) {
+      if (await page.evaluate(() => document.documentElement.dataset.theme) !== theme) await page.locator('#theme-toggle').click();
+      for (const view of ['login', 'library', 'login']) {
+        await frame.locator('#bit-tab-' + view).click();
+        await settle(page);
+        const result = await measure();
+        const { left, right } = result;
+        assert.equal(left.height, right.height, '顶部栏高度一致');
+        assert.equal(left.fontSize, right.fontSize, '字号一致');
+        assert.equal(left.lineHeight, right.lineHeight, '行高一致');
+        assert(Math.abs((left.textTop - left.top) - (right.textTop - right.top)) <= 1, '真实文字顶边一致');
+        if (view === 'login') assert(Math.abs(left.textInset - right.textInset) <= 1, '首个标题左右内距一致');
+        assert(Math.abs((left.contentTop - left.bottom) - (right.contentTop - right.bottom)) <= 1, '内容区起始留白一致');
+        if (width >= 1180) {
+          assert(Math.abs(left.bottom - right.bottom) <= 1, '左右分隔线对齐');
+          assert(Math.abs(left.textTop - right.textTop) <= 1, '左右实际文字对齐');
+        }
+        assert.equal(result.overflow, false, '桌面和窄屏均不溢出');
+        measurements.push({ width, theme, view, ...result });
+      }
+      assert.equal(await frame.locator('#bit-window-name').inputValue(), '布局验收草稿');
+      if (output && [2040, 390].includes(width)) {
+        await page.evaluate(() => scrollTo(0, 0));
+        await page.screenshot({ path: join(output, `bit-workspace-${width}-${theme}.png`), fullPage: true, animations: 'disabled' });
+      }
+    }
+  }
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.external, []);
+  assert.deepEqual(requests.unavailable, []);
+  if (output) await writeFile(join(output, 'heading-geometry.json'), JSON.stringify(measurements, null, 2));
 });

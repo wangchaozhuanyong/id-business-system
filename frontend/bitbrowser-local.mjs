@@ -798,8 +798,22 @@ get('bit-toggle-connection').addEventListener('click', () => queueMicrotask(refr
 window.addEventListener('focus', () => void refreshLiveChoices());
 
 if (window.parent !== window) {
+  document.body.classList.add('bit-local--embedded');
+  const syncWorkspaceSpacing = () => {
+    try {
+      const hostStyle = window.parent.getComputedStyle(window.parent.document.documentElement);
+      for (const token of ['--panel-padding-inline', '--panel-padding-block']) {
+        const value = hostStyle.getPropertyValue(token).trim();
+        if (value && document.documentElement.style.getPropertyValue(token) !== value)
+          document.documentElement.style.setProperty(token, value);
+      }
+    } catch { /* Standalone tokens also cover an inaccessible embedding host. */ }
+  };
+  syncWorkspaceSpacing();
   try {
     document.documentElement.dataset.theme = window.parent.document.documentElement.dataset.theme || 'light';
+    window.parent.addEventListener('resize', syncWorkspaceSpacing);
+    window.addEventListener('pagehide', () => window.parent.removeEventListener('resize', syncWorkspaceSpacing), { once: true });
   } catch { /* Standalone styling remains the default for an inaccessible parent. */ }
   const reportHeight = () =>
     window.parent.postMessage(

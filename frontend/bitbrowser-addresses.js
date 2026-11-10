@@ -50,7 +50,7 @@
   function mount(host) {
     if (host.querySelector('#bit-addresses-panel')) return;
     host.innerHTML = `<section class="panel" id="bit-addresses-panel" aria-labelledby="bit-address-heading">
-      <header class="panel-heading">
+      <header class="panel-heading bit-workspace-heading">
         <div class="title-with-help"><h2 id="bit-address-heading">地址管理</h2>${A.titleInfo(
           '地址管理',
           '生成美国账单地址模板，或导入 TXT 街道地址。导入沿用 Portland、OR、97204。复制成功后自动移入已使用，使用前请核对。',
@@ -222,11 +222,25 @@
       loadingText: current ? '' : '正在加载地址…',
       refreshButton: panel.querySelector('[data-action="bit-address-refresh"]')
     });
+    const isCurrent = () => read.current() && addressPanel() === panel &&
+      Object.keys(query).every((key) => query[key] === filters[key]);
     try {
       const load = () => localData.load(`${endpoint}?${new URLSearchParams(query)}`);
-      const result = localData.queries
-        ? await localData.queries.read(endpoint, query, load, { refresh: force }) : await load();
-      if (!read.current() || Object.keys(query).some((key) => query[key] !== filters[key])) return;
+      let result;
+      // A version event can invalidate this GET after the write has succeeded.
+      // Retry only the read while this view still owns it; never repeat a write.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          result = localData.queries
+            ? await localData.queries.read(endpoint, query, load, { refresh: force || attempt > 0 }) : await load();
+          break;
+        } catch (error) {
+          if (error.code !== 'READ_SUPERSEDED') throw error;
+          if (!isCurrent() || !localData.queries.peek(endpoint, query)) return;
+          if (attempt === 2) throw new Error('地址列表持续更新，暂未取得最新结果');
+        }
+      }
+      if (!isCurrent()) return;
       const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize));
       if (result.page > lastPage) {
         filters.page = lastPage;
@@ -237,7 +251,7 @@
       return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
-      if (read.current() && Object.keys(query).every((key) => query[key] === filters[key]))
+      if (isCurrent())
         feedback(
           `${completedMessage ? completedMessage + ' ' : ''}${error.message}。请点击刷新重试。`,
           'warning'
@@ -295,8 +309,10 @@
       feedback('正在保存地址…', 'loading');
       const result = await localData.saveBitBrowserAddresses(payload);
       const message = complete(result);
-      if (addressPanel()) await refresh(message);
-      else A.notify(message);
+      if (addressPanel()) {
+        feedback(message);
+        await refresh(message);
+      } else A.notify(message);
     } catch (error) {
       const message = failurePrefix + error.message;
       if (addressPanel()) {

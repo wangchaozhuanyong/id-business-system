@@ -39,7 +39,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
       if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLoginAttempts=(window.fixtureLoginAttempts||0)+1; await new Promise(resolve=>{window.releaseFixtureLogin=resolve}); if(window.fixtureLoginAttempts===1)throw new BitBrowserLoginError('合成控制通道失败'); window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email}; return {email,profileSequence:56}; }` });
       let file;
       if (path === '/') file = '../frontend/bitbrowser-local.html';
-      else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
+      else if (['/prototype.css', '/design-tokens.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
       else if (path === '/assets/bitbrowser/local.mjs') file = '../frontend/bitbrowser-local.mjs';
       else if (path === '/assets/bitbrowser/proxies.mjs') file = '../frontend/bitbrowser-proxies.mjs';
       else if (path.startsWith('/assets/bitbrowser/')) file = '../modules/recharge/bitbrowser/' + path.slice('/assets/bitbrowser/'.length);

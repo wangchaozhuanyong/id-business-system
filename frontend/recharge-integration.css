@@ -143,6 +143,41 @@
 #bit-login-form { display: grid; gap: 18px; max-width: 1120px; margin-inline: auto; }
 .bit-local__workspace-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
 .bit-local__workspace-bar .tabs { padding: 0; border: 0; }
+/* Both sides use the same header, including the embedded workspace tabs. */
+.bit-workspace-heading {
+  display: flex;
+  align-items: center;
+  min-height: 76px;
+  padding: 0 var(--panel-padding-inline);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.bit-workspace-heading .tabs {
+  min-height: 75px;
+}
+.bit-workspace-heading :is(h2, .tab) {
+  font-size: 15px;
+  line-height: 24px;
+}
+.bit-workspace-heading .tab {
+  display: inline-flex;
+  align-items: center;
+  padding-block: 2px 0;
+}
+.bit-local--embedded {
+  padding: 0;
+  background: var(--surface);
+}
+.bit-local--embedded #bit-login-form {
+  gap: 0;
+  max-width: none;
+}
+.bit-local--embedded #bit-login-panel {
+  padding: var(--panel-padding-block) var(--panel-padding-inline);
+}
+.bit-local--embedded #bit-library-panel {
+  margin: var(--panel-padding-block) var(--panel-padding-inline);
+}
 #bit-login-fields { display: grid; gap: 16px; min-inline-size: 0; margin: 0; padding: 0; border: 0; }
 .bit-local__section { container-type: inline-size; }
 .bit-local__section .panel-heading { padding-block: 14px; }
