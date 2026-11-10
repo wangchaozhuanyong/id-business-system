@@ -60,6 +60,7 @@ const files = new Map([
     'claude-google-subscriptions',
     'employee-statistics',
     'order-operations',
+    'order-completion',
     'change-sync',
     'operations-prototype',
     'system-monitoring',
@@ -513,6 +514,7 @@ export async function startPreview(
       if (
         !canManage &&
         route !== '/api/local/toolbox' &&
+        route !== '/api/local/order-completion' &&
         !['/api/local/saved-totp', '/api/local/saved-totp/code', '/api/local/saved-totp/secret'].includes(route) &&
         (request.method !== 'GET' || !['inventory', 'commerce'].includes(route.split('/').at(-1)))
       )

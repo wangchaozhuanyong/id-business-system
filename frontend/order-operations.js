@@ -57,13 +57,27 @@
       : A.empty(title, '');
   }
 
-  function requestContent(data) {
+  function requestAvailability(stock, plan, count) {
+    const available = stock?.[plan];
+    if (!Number.isSafeInteger(available) || available < 0)
+      return { blocked: true, message: '暂时无法核对库存，请刷新后重试。' };
+    if (!available) return { blocked: true, message: '该套餐剩余可提取 0 个。' };
+    if (count > available) return { blocked: true, message: `该套餐剩余可提取 ${available} 个，请调整申请数量。` };
+    return { blocked: false, message: `该套餐剩余可提取 ${available} 个，审核通过后发码。` };
+  }
+
+  function requestContent(data, error) {
     const draft = A.state.drafts.get('recharge-code-request') || {};
     const rows = data?.requests || [];
+    const stock = error ? null : data?.stock;
+    const plan = draft['recharge-request-plan'] || 'plus';
+    const count = draft['recharge-request-count'] ?? '1';
+    const availability = requestAvailability(stock, plan, Number(count));
     const fields = A.field('套餐', 'recharge-request-plan',
-      A.select('recharge-request-plan', Object.entries(planNames), draft['recharge-request-plan'] || 'plus'), true) +
+      A.select('recharge-request-plan', Object.entries(planNames).map(([value, label]) =>
+        [value, stock ? `${label}（${stock[value]} 个）` : label]), plan), true) +
       A.field('申请数量', 'recharge-request-count',
-        A.input('recharge-request-count', draft['recharge-request-count'] || '1', 'type="number" min="1" max="100" step="1" required'), true);
+        A.input('recharge-request-count', count, 'type="number" min="1" max="100" step="1" required'), true);
     const columns = [
       { id: 'applicantName', label: '申请人', render: (row) => e(actorName(row)) },
       { id: 'plan', label: '套餐', render: (row) => e(planNames[row.plan] || '待核对') },
@@ -79,15 +93,19 @@
     columns.push({ id: 'actions', label: '操作', action: true, render: row => {
       const attrs = 'data-id="' + e(row.id) + '"';
       if (data?.canApprove && row.status === 'pending') return '<div class="action-links">' +
-        A.textAction('批准', 'order-code-approve', attrs) + A.textAction('驳回', 'order-code-reject', attrs) + '</div>';
-      if (data?.canApprove && row.status === 'issuing') return A.textAction('重新核对', 'order-code-reconcile', attrs);
+        A.textAction('批准', 'order-code-approve', attrs + (requestAvailability(stock, row.plan, row.count).blocked
+          ? ' disabled title="库存不足或暂未核对"' : '')) + A.textAction('驳回', 'order-code-reject', attrs) + '</div>';
+      if (data?.canApprove && row.status === 'issuing') return '<div class="action-links">' +
+        A.textAction('重新核对', 'order-code-reconcile', attrs) + A.textAction('驳回', 'order-code-reject', attrs) + '</div>';
       return row.status === 'issued' ? '<div class="action-links">' +
         A.button(row.counts?.returnable ? '归还（' + row.counts.returnable + '）' : '无可归还项', 'order-code-batch-return', '', '', attrs + (row.counts?.returnable ? '' : ' disabled')) +
         A.textAction('明细', 'order-code-batch-detail', attrs) + '</div>' : '';
     } });
     return '<section class="panel form-panel"><form id="recharge-code-request">' +
-      fields + '<div class="form-footer"><span class="footnote">管理员审核通过后发码。</span>' +
-      '<button class="button primary" type="submit"' + (saving ? ' disabled' : '') +
+      fields + '<div class="form-footer"><span class="footnote" id="recharge-request-stock" role="status">' +
+      e(availability.message) + '</span>' +
+      '<button class="button primary" type="submit" aria-describedby="recharge-request-stock"' +
+      (saving || availability.blocked ? ' disabled' : '') +
       '>提交申请</button></div></form></section><section class="panel section-gap">' +
       '<div class="panel-heading"><h2>申请记录</h2></div>' +
       table(columns, rows, 'recharge-code-requests', '暂无申请记录') + '</section>';
@@ -237,13 +255,13 @@
     const view = views.get(route) || {};
     if (route === syncRoute) return renderSync(view);
     const title = route === requestRoute ? '充值码提取' : '我的充值码';
-    const description = route === requestRoute ? '申请经审核后生成充值码。'
+    const description = route === requestRoute ? '管理员在 ChatGPT 充值的 CDK 管理备码。审核通过后从对应套餐的库存发码，待审申请不占库存。'
       : '查看已交付充值码和代充系统使用状态。';
     const head = A.header(title, description, D ? A.button('刷新', 'order-ops-refresh', '', 'refresh') : '');
     if (!D?.authRequired) return head + '<section class="panel">' + A.empty('需使用员工账号登录', '') + '</section>';
     if (!view.loaded) return head + '<section class="panel" aria-busy="true">' + A.empty('正在读取', '') + '</section>';
     const notice = view.error ? '<div class="panel-body inline-notice warning" role="status">' + e(view.error) + '</div>' : '';
-    const content = route === requestRoute ? requestContent(view.data) : codesContent(view.data);
+    const content = route === requestRoute ? requestContent(view.data, view.error) : codesContent(view.data);
     return head + notice + content;
   }
 
@@ -259,6 +277,7 @@
       return await operation(view);
     } catch (error) {
       A.notify(error.message || '操作未完成，请重试');
+      if (route === requestRoute && [409, 503].includes(error.status)) await load(route, true);
     } finally {
       feedback?.finish();
       saving = false;
@@ -309,7 +328,7 @@
         A.field('驳回原因', 'order-code-reason', A.input('order-code-reason', '', 'maxlength="200" required'), true) + '</form>',
         A.button('取消', 'drawer-close') + '<button class="button danger" type="submit" form="order-code-reject">确认驳回</button>');
     } else if (action === 'order-code-approve') {
-      A.confirmAction('批准充值码申请', '通过后将为申请人生成本批充值码。', () => requestAction('approve', node.dataset.id), '批准并发码');
+      A.confirmAction('批准充值码申请', '通过后将从对应套餐的现有库存发码，并登记到申请人名下。', () => requestAction('approve', node.dataset.id), '批准并发码');
     } else if (action === 'order-code-reconcile') {
       await requestAction('reconcile', node.dataset.id);
     } else if (action === 'order-sync-open-order') {
@@ -374,12 +393,19 @@
       A.setError('recharge-request-count', '请输入 1 至 100 的整数');
       return true;
     }
+    const view = views.get(requestRoute);
+    const availability = requestAvailability(view?.error ? null : view?.data?.stock, plan, count);
+    if (availability.blocked) {
+      A.setError('recharge-request-count', availability.message);
+      return true;
+    }
+    const draft = JSON.stringify(A.readDraft(form));
     requestKey ??= crypto.randomUUID();
     await perform(requestRoute, async () => {
       await D.rechargeCodeAction({ action: 'request', requestKey, plan, count });
       requestKey = undefined;
-      form.reset();
-      A.state.drafts.delete('recharge-code-request');
+      if (JSON.stringify(A.state.drafts.get('recharge-code-request')) === draft)
+        A.state.drafts.delete('recharge-code-request');
       await load(requestRoute, true);
       A.notify('申请已提交，等待审核');
     });
@@ -389,6 +415,17 @@
   function onInput(node) {
     if (node.id === 'order-sync-job') {
       A.state.drafts.set('order-sync-lookup', node.value);
+      return true;
+    }
+    if (['recharge-request-plan', 'recharge-request-count'].includes(node.id)) {
+      const form = node.closest('form');
+      const draft = A.readDraft(form);
+      A.state.drafts.set('recharge-code-request', draft);
+      const view = views.get(requestRoute);
+      const { message, blocked } = requestAvailability(view?.error ? null : view?.data?.stock,
+        form.elements['recharge-request-plan'].value, Number(form.elements['recharge-request-count'].value));
+      form.querySelector('#recharge-request-stock').textContent = message;
+      form.querySelector('button[type="submit"]').disabled = saving || blocked;
       return true;
     }
     if (!['code-list-query', 'code-list-plan'].includes(node.id)) return false;

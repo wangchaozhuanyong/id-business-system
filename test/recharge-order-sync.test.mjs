@@ -113,19 +113,21 @@ test('preview writes nothing and confirmed synchronization only reads the select
   assert.equal(checkpoint.data.since, Date.parse('2026-10-31T15:00:00.000Z'));
 });
 
-test('accounting transport rejects checkout routes before any request', async () => {
+test('accounting transport reads stock and rejects checkout and CDK creation routes', async () => {
   const attempts = [];
   const client = createOrderRechargeClient({ upstreamUrl: 'http://127.0.0.1:4349', secret: 'x'.repeat(40) },
     async (url, options) => {
       attempts.push([url.pathname, options.method]);
-      return Response.json([]);
+      return Response.json(url.pathname.endsWith('/stock') ? { items: [] } : []);
     });
   await assert.rejects(client.get('/api/run-process'), /不支持/);
   await assert.rejects(client.get('https://example.test/api/admin/cards'), /不支持/);
   await assert.rejects(client.get('/api/admin/orbitcard/usage?refresh=1'), /不支持/);
+  await assert.rejects(client.get('/api/admin/cdks/generate'), /不支持/);
+  await assert.rejects(client.get('/api/admin/cdks/import'), /不支持/);
   await client.listCodes();
-  await client.importCodes({ codes: ['synthetic-code'], plan: 'plus' });
-  assert.deepEqual(attempts, [['/api/admin/cdks', 'GET'], ['/api/admin/cdks/import', 'POST']]);
+  assert.deepEqual(await client.listCodeStock(), []);
+  assert.deepEqual(attempts, [['/api/admin/cdks', 'GET'], ['/api/admin/cdks/returns/stock', 'GET']]);
 });
 
 test('Apple renewals enforce original binding and first-use card fees use actual history', () => {

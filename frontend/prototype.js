@@ -176,6 +176,7 @@ const navigation = [
       ['客户录入', 'customers/new'],
       ['充值码提取', 'workspace/recharge-codes'],
       ['我的充值码', 'workspace/my-recharge-codes'],
+      ['订单补全', 'workspace/order-completion'],
       ['兑换开通', 'workspace/recharge']
     ]
   ],
@@ -240,7 +241,7 @@ const navigation = [
     ]
   ],
   ['数据管理', 'database', [
-    ['数据统计', 'orders/statistics'],
+    ['订单统计', 'orders/statistics'],
     ['银行卡管理', 'data-management/bank-cards'],
     ['Claude 谷歌订阅管理', 'data-management/claude-google-subscriptions'],
     ['客户流失', 'workspace/customer-loss'],
@@ -972,7 +973,7 @@ function matchesNav(route, base) {
 function permittedRoute(route) {
   if (route === 'settings/monitoring' && window.IDLocalData?.authRequired) return state.actor?.role === 'super';
   if (!window.IDLocalData?.authRequired || state.actor?.role !== 'employee') return true;
-  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
+  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes|order-completion)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
     route
   );
 }

@@ -230,6 +230,8 @@
     rechargeCodeRequests: () => request('recharge-codes'),
     rechargeCodes: () => request('recharge-codes?view=codes'),
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
+    orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
+    saveOrderCompletion: (command) => write(['commerce'], () => request('order-completion', command, 'POST')),
     orderSyncStatus: () => request('order-sync'),
     orderSync: (command) => command.mode === 'preview'
       ? request('order-sync', command, 'POST')

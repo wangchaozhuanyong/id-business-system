@@ -125,7 +125,7 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       const showCodes = new URL(route.request().url()).searchParams.get('view') === 'codes';
       return route.fulfill({ json: showCodes ? { canApprove, items: [{
         ...(!canApprove && { code }), last4: 'ONLY', status: 'unused', plan: 'plus', applicantId: 'employee'
-      }] } : { canApprove, requests } });
+      }] } : { canApprove, requests, stock: { plus: requests[0]?.status === 'issued' ? 0 : 2, pro100: 0, pro200: 1, pro500: 0 } } });
     });
     await context.route('**/api/local/order-sync', (route) => {
       syncReads++;
@@ -148,15 +148,26 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
     page.on('pageerror', (error) => errors.push(error.message));
     page.setDefaultTimeout(4500);
     await page.goto(origin + '/#/workspace/recharge-codes');
+    const remaining = page.locator('#recharge-request-stock');
+    const submit = page.getByRole('button', { name: '提交申请', exact: true });
+    await remaining.getByText(/剩余可提取 2 个/).waitFor();
     if (role === 'employee') {
+      await page.locator('#recharge-request-plan').selectOption('pro100');
+      assert.match(await remaining.textContent(), /剩余可提取 0 个/);
+      assert.equal(await submit.isDisabled(), true);
+      await page.locator('#recharge-request-plan').selectOption('plus');
+      await page.locator('#recharge-request-count').fill('3');
+      assert.equal(await submit.isDisabled(), true);
       await page.locator('#recharge-request-count').fill('2');
-      await page.getByRole('button', { name: '提交申请', exact: true }).click();
+      await submit.click();
       await page.getByRole('cell', { name: '待审核', exact: true }).waitFor();
       assert.equal(await page.getByRole('button', { name: '批准', exact: true }).count(), 0);
     } else {
       await page.getByRole('button', { name: '批准', exact: true }).click();
       await page.locator('#confirm-dialog').getByRole('button', { name: '批准并发码' }).click();
       await page.getByRole('cell', { name: '已发码', exact: true }).waitFor();
+      assert.match(await remaining.textContent(), /剩余可提取 0 个/);
+      assert.equal(await submit.isDisabled(), true);
     }
     await page.goto(origin + '/#/workspace/my-recharge-codes');
     await page.getByRole('cell', { name: '当前员工昵称', exact: true }).waitFor();

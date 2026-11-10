@@ -193,7 +193,7 @@ function assignOwner(order, prior, actor, owners, kind) {
   order.owner = owner.name;
 }
 export const validMoney = (value) => typeof value === 'string' && /^\d{1,16}(?:\.\d{1,4})?$/.test(value);
-const moneyUnits = (value) => {
+export const moneyUnits = (value) => {
   if (!validMoney(value)) return null;
   const [whole, fraction = ''] = value.split('.');
   return BigInt(whole + fraction.padEnd(4, '0'));
