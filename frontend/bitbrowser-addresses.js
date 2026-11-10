@@ -50,39 +50,24 @@
   function mount(host) {
     if (host.querySelector('#bit-addresses-panel')) return;
     host.innerHTML = `<section class="panel" id="bit-addresses-panel" aria-labelledby="bit-address-heading">
-      <header class="panel-heading bit-workspace-heading">
-        <div class="title-with-help"><h2 id="bit-address-heading">地址管理</h2>${A.titleInfo(
+      <header class="panel-heading bit-workspace-heading bit-address-heading">
+        <div class="title-with-help"><h2 id="bit-address-heading" tabindex="-1">地址管理</h2>${A.titleInfo(
           '地址管理',
           '生成美国账单地址模板，或导入 TXT 街道地址。导入沿用 Portland、OR、97204。复制成功后自动移入已使用，使用前请核对。',
           'bit-address-help'
         )}</div>
+        ${button('生成地址', 'bit-address-open-generate', 'primary compact', '', 'id="bit-address-generate-open" aria-haspopup="dialog"')}
+        <form id="bit-address-import" aria-label="导入账单地址" novalidate>
+          ${field(
+            '地址文件',
+            'bit-address-file',
+            '<div class="bit-address-import-controls"><input id="bit-address-file" type="file" accept=".txt,text/plain" /><button id="bit-address-import-button" class="button compact" type="submit">导入地址</button></div>',
+            true
+          )}
+        </form>
       </header>
       <div class="panel-body bit-address-body">
-        <div class="bit-address-source-toolbar">
-          <form id="bit-address-generate" class="bit-address-form" aria-label="生成账单地址" novalidate>
-            ${field(
-              '生成数量',
-              'bit-address-generate-count',
-              '<div class="bit-address-generate-controls">' +
-                input(
-                  'bit-address-generate-count',
-                  draft.generationCount,
-                  'type="number" min="1" max="100" step="1" required'
-                ) +
-                '<button id="bit-address-generate-button" class="button primary" type="submit">一键生成地址</button></div>',
-              true
-            )}
-          </form>
-          <form id="bit-address-import" class="bit-address-form" novalidate>
-            ${field(
-              '地址文件',
-              'bit-address-file',
-              '<div class="bit-address-import-controls"><input id="bit-address-file" type="file" accept=".txt,text/plain" /><button id="bit-address-import-button" class="button" type="submit">导入地址</button></div>',
-              true
-            )}
-            <p id="bit-address-file-summary" class="footnote" hidden></p>
-          </form>
-        </div>
+        <p id="bit-address-file-summary" class="footnote" role="status" hidden></p>
         <div class="tabs bit-address-tabs" role="tablist" aria-label="地址状态">
           ${statuses.map(([id, label]) => `
             <button id="bit-address-tab-${id}" class="tab" type="button" role="tab"
@@ -168,6 +153,17 @@
   }
 
   function updateControls() {
+    const generator = $('#drawer[open] #bit-address-generate');
+    if (generator) {
+      const drawer = generator.closest('dialog');
+      const submit = $('#bit-address-generate-button', drawer);
+      generator.setAttribute('aria-busy', String(saving));
+      $('#bit-address-generate-count', generator).disabled = saving;
+      submit.disabled = saving;
+      submit.textContent = saving ? '生成中…' : '生成地址';
+      for (const close of drawer.querySelectorAll('[data-action="drawer-close"]'))
+        close.disabled = saving;
+    }
     if (!addressPanel()) return;
     const summary = $('#bit-address-file-summary');
     summary.hidden = !pendingFile;
@@ -176,13 +172,59 @@
       : '';
     $('#bit-address-file').disabled = saving || readingFile;
     $('#bit-address-import-button').disabled = saving || readingFile || !pendingFile;
-    $('#bit-address-generate-count').disabled = saving || readingFile;
-    $('#bit-address-generate-button').disabled = saving || readingFile;
+    $('#bit-address-generate-open').disabled = saving || readingFile;
     const remove = $('[data-action="bit-address-delete-used"]');
     remove.hidden = filters.status !== 'used';
     remove.disabled = saving || !current?.totals?.used || !Number.isSafeInteger(current.version);
     for (const control of addressPanel().querySelectorAll('[data-action="bit-address-copy"]'))
       control.disabled = saving;
+  }
+
+  function openGenerateDrawer() {
+    if (saving || readingFile) return;
+    A.openDrawer(
+      '生成地址',
+      '每次可生成 1 至 100 条美国账单地址模板，保存后加入未使用地址库。',
+      `<form id="bit-address-generate" aria-label="生成账单地址" data-protect-drawer-dismiss novalidate>
+        ${field('生成数量', 'bit-address-generate-count',
+          input('bit-address-generate-count', draft.generationCount,
+            'type="number" min="1" max="100" step="1" required autofocus'), true)}
+      </form>
+      <p id="bit-address-generate-error" class="inline-notice warning" role="alert" hidden></p>`,
+      button('取消', 'drawer-close') +
+        '<button id="bit-address-generate-button" class="button primary" type="submit" form="bit-address-generate">生成地址</button>'
+    );
+  }
+
+  function generateAddresses(form) {
+    const drawer = form.closest('#drawer[open]');
+    if (!drawer || saving || readingFile) return;
+    const control = $('#bit-address-generate-count', form);
+    const count = Number(control.value);
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      A.setError(control.id, '每次可生成 1 至 100 条地址', form);
+      control.focus();
+      return;
+    }
+    const error = $('#bit-address-generate-error', drawer);
+    const drawerCurrent = () => drawer.open && form.isConnected;
+    A.setError(control.id, '', form);
+    error.hidden = true;
+    void save({ count }, (result) => {
+      filters.page = 1;
+      if (drawerCurrent()) {
+        A.closeDrawer();
+        $('#bit-address-heading')?.focus({ preventScroll: true });
+      }
+      return `已成功生成 ${result.count} 条地址`;
+    }, {
+      successToast: true,
+      onFailure(message) {
+        if (!drawerCurrent()) return;
+        error.textContent = message;
+        error.hidden = false;
+      }
+    });
   }
 
   function renderList() {
@@ -300,7 +342,7 @@
     }
   }
 
-  async function save(payload, complete, { beforeWrite, failurePrefix = '', successToast = false } = {}) {
+  async function save(payload, complete, { beforeWrite, failurePrefix = '', successToast = false, onFailure } = {}) {
     if (saving) return;
     saving = true;
     updateControls();
@@ -319,6 +361,7 @@
       } else if (!successToast) A.notify(message);
     } catch (error) {
       const message = failurePrefix + error.message;
+      onFailure?.(message);
       if (addressPanel()) {
         renderList();
         if (error.status === 409) await refresh(message);
@@ -383,7 +426,8 @@
       if (scopes.includes(endpoint) && addressPanel() && !saving) return refresh();
     },
     onClick(action, node) {
-      if (action === 'bit-address-tab') selectTab(node.dataset.status);
+      if (action === 'bit-address-open-generate') openGenerateDrawer();
+      else if (action === 'bit-address-tab') selectTab(node.dataset.status);
       else if (action === 'bit-address-delete-used') deleteUsed();
       else if (action === 'bit-address-refresh') void A.withActionFeedback(node, () => refresh(),
         { pending: '正在刷新地址…', success: '地址列表已刷新', failure: '地址读取失败，请重试' });
@@ -402,17 +446,7 @@
         Object.assign(filters, { keyword: draft.keyword.trim(), page: 1 });
         void refresh();
       } else if (form.id === 'bit-address-generate') {
-        if (saving || readingFile) return true;
-        const count = Number(draft.generationCount);
-        if (!Number.isInteger(count) || count < 1 || count > 100) {
-          A.setError('bit-address-generate-count', '每次可生成 1 至 100 条地址');
-          return true;
-        }
-        A.setError('bit-address-generate-count', '');
-        void save({ count }, (result) => {
-          filters.page = 1;
-          return `已成功生成 ${result.count} 条地址`;
-        }, { successToast: true });
+        generateAddresses(form);
       } else if (form.id === 'bit-address-import') {
         if (pendingFile && !readingFile) {
           void save({ streets: pendingFile.streets }, ({ imported, duplicated, rejected }) => {

@@ -2661,7 +2661,18 @@
             }
           ]
         : [
-            { id: 'wechat', label: '客户微信' },
+            {
+              id: 'wechat',
+              label: '客户微信',
+              render: (row) => {
+                const wechat = String(row.wechat ?? '');
+                if (!wechat.trim()) return E(row.wechat ?? '—');
+                const value = E(wechat);
+                const copy = A.button('复制', 'copy-value', 'compact', '',
+                  `data-value="${value}" aria-label="复制微信号"`);
+                return `<div class="action-links"><span>${value}</span>${copy}</div>`;
+              }
+            },
             { id: 'qq', label: 'QQ' },
             { id: 'whatsapp', label: 'WhatsApp' },
             { id: 'telegram', label: 'Telegram' },
@@ -2864,7 +2875,7 @@
       { id: 'businessType', label: '业务类型' },
       { id: 'start', label: '开通时间' },
       { id: 'expiry', label: '到期时间' },
-      { id: 'accountStatus', label: '当前账号运营', render: row => E(accountStatus(row)) },
+      { id: 'accountStatus', label: '账号状态', render: row => E(accountStatus(row)) },
       { id: 'notes', label: '备注', long: true },
       { id: 'actions', label: '操作', action: true, render: row => A.textAction('查看订单',
         'commerce-order-detail', `data-id="${E(row.id)}"`) }
@@ -4384,17 +4395,19 @@
   }
   function entryRecordFilters(kind, product) {
     const view = entryView(kind, product);
-    return `<div class="entry-record-filters content-toolbar">
-      <div class="entry-periods" role="group" aria-label="录入时间">${[
+    return `<div class="entry-record-filters entry-periods" role="group" aria-label="录入时间">${[
         ['all', '全部'], ['today', '今日'], ['yesterday', '昨日'], ['custom', '选择日期']
       ].map(([id, label]) => A.button(label, 'commerce-entry-period', view.period === id ? 'primary' : '', '',
-        `data-period="${id}" aria-pressed="${view.period === id}"${id === 'custom' ? ` aria-expanded="${Boolean(view.dateOpen || view.period === 'custom')}"` : ''}`)).join('')}</div>
-      <div class="entry-date-range" ${view.dateOpen || view.period === 'custom' ? '' : 'hidden'}>
+        `data-period="${id}" aria-pressed="${view.period === id}"${id === 'custom' ? ` aria-expanded="${Boolean(view.dateOpen || view.period === 'custom')}"` : ''}`)).join('')}</div>`;
+  }
+  function entryRecordDateRange(kind, product) {
+    const view = entryView(kind, product);
+    return `<div class="entry-date-range content-toolbar" ${view.dateOpen || view.period === 'custom' ? '' : 'hidden'}>
         <label>开始日期<input type="date" data-entry-date="from" aria-label="开始日期" value="${E(view.fromDraft ?? view.from)}" /></label>
         <label>结束日期<input type="date" data-entry-date="to" aria-label="结束日期" value="${E(view.toDraft ?? view.to)}" /></label>
         ${A.button('查询', 'commerce-entry-query', 'primary')}
         <p class="field-error" data-entry-date-error role="alert" hidden></p>
-      </div></div>`;
+      </div>`;
   }
   function entryWorkspace(form, kind, product = '') {
     const title = kind === 'order' ? '最近订单' : kind === 'tenant' ? '最近租户' : '最近客户';
@@ -4402,8 +4415,9 @@
     return `<div class="commerce-entry-layout"><div class="commerce-entry-columns">${form}
       <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
         <div class="panel-heading"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
-          ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div>
-        ${entryRecordFilters(kind, product)}
+          <div class="entry-record-actions">${entryRecordFilters(kind, product)}
+            ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div></div>
+        ${entryRecordDateRange(kind, product)}
         <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${entryRecordList(kind, product)}</div></div>
         <p class="entry-record-error" data-entry-error role="status" hidden></p>
       </aside></div></div>`;
@@ -4460,6 +4474,7 @@
     }
     view.page = 1;
     panel.querySelector('.entry-record-filters').outerHTML = entryRecordFilters(panel.dataset.kind, panel.dataset.product);
+    panel.querySelector('.entry-date-range').outerHTML = entryRecordDateRange(panel.dataset.kind, panel.dataset.product);
     updateEntryRecords();
     panel.querySelector(`[data-period="${view.period}"]`)?.focus({ preventScroll: true });
   }
