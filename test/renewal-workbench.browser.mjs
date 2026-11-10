@@ -109,9 +109,9 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await period('2026-11-06T15:59', '2026-12-06T15:59');
     await page.getByRole('button', { name: '保留待补全' }).click();
     await confirm.getByRole('button', { name: '确认保存' }).click();
-    await page.waitForURL('**/#/workspace/renewals', { timeout: 5500 }).catch(async (error) => {
-      throw new Error(`待补全保存未返回续费管理：${await page.locator('#toast').textContent()}`, { cause: error });
-    });
+    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+    assert(new URL(page.url()).hash.startsWith('#/workspace/order/renew/'));
+    await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
     await form.waitFor({ state: 'hidden' });
     await row('QA-EXPIRED').getByRole('button', { name: '续费', exact: true }).click();
     await period('2026-11-06T15:59', '2026-12-06T15:59');
@@ -121,7 +121,9 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await form.getByLabel('代付已确认').check();
     await page.getByRole('button', { name: '核对并保存' }).click();
     await confirm.getByRole('button', { name: '确认保存' }).click();
-    await page.waitForURL('**/#/workspace/renewals', { timeout: 5500 });
+    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+    assert(new URL(page.url()).hash.startsWith('#/workspace/order/renew/'));
+    await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
     await form.waitFor({ state: 'hidden' });
     await completed();
     const snapshot = await read();

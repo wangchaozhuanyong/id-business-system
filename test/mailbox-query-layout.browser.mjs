@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { interceptDesign, origin, root, settle, separatorSnapshot } from './helpers/offline-design.mjs';
 
-const output = root + '/.runtime/ui-mailbox-spacing-20261109';
+const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/ui-mailbox-spacing-20261109';
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch();
 const results = [];

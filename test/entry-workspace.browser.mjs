@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
-import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 test('录入工作台：宽表格、日期查询、独立分页与历史抽屉', { timeout: 150_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -51,7 +51,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   page.on('pageerror', error => errors.push(error.message));
   const go = async route => {
     await page.evaluate(route => { location.hash = '#/' + route; }, route);
-    await page.locator('#commerce-entry-records').waitFor();
+    await page.locator('#commerce-entry-records').waitFor({ state: 'attached' });
     await settle(page);
   };
   const checks = [];
@@ -148,7 +148,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     checks.push({ width, route, dark, ...result });
   };
   await page.goto(origin + '/#/workspace/order/gpt');
-  await page.locator('#commerce-entry-records').waitFor();
+  await page.locator('#commerce-entry-records').waitFor({ state: 'attached' });
 
   await t.test('单行表格、动态渠道列、套餐支付备注与业务隔离', async () => {
     const history = page.locator('#commerce-entry-records');
@@ -287,7 +287,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     for (const width of [2300, 1920, 1440, 1280, 1024, 900, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 });
       for (const dark of [false, true]) {
-        if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark) await page.locator('#theme-toggle').click();
+        if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark) await toggleDesignTheme(page);
         for (const route of ['workspace/order/gpt', 'workspace/order/claude', 'workspace/order/gemini', 'workspace/order/grok', 'customers/new', 'customers/new/tenant']) {
           await go(route);
           if (route === 'workspace/order/claude') {
@@ -360,6 +360,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       await page.waitForFunction(() => document.querySelector('#commerce-entry-records [data-pagination]').dataset.total === '12');
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: 1000 });
+        if (width <= 900) await page.getByRole('tab', { name: '最近客户', exact: true }).click();
         for (const label of ['关联订单', '历史开通业务']) {
           await history.locator('tbody tr[data-row-id]').first().getByRole('button', { name: label, exact: true }).click();
           const drawer = page.locator('#drawer[open]');

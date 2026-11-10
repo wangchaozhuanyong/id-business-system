@@ -3,7 +3,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 
 test('mobile navigation remains reachable without losing the long-page reading position', { timeout: 45_000 }, async t => {
@@ -30,7 +30,7 @@ test('mobile navigation remains reachable without losing the long-page reading p
       try {
         await page.goto(origin + '/#/workspace/order/gpt');
         await page.locator('#commerce-payment').waitFor();
-        if (dark) await page.locator('#theme-toggle').click();
+        if (dark) await toggleDesignTheme(page);
         // The first route restores its scroll position on the next animation frame.
         // Finish that initial paint before starting the reading-position scenario.
         await settle();

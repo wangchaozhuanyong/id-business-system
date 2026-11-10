@@ -673,20 +673,72 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
       record('mail_reassign', actor, parent.local.id, alias.local.id)
   });
 
-  async function readCurrentCode({ kind, id }, actor) {
-    if (!actor?.id) throw new RelayError(401, '请先登录');
-    const target = await lookupCodeTarget(kind, id);
+  function codeResult(target, kind) {
     const queryCode =
       kind === 'parent' ? target.remote.masterQueryCode : target.remote.buyerQueryCode;
     if (typeof queryCode !== 'string' || !queryCode)
       throw new RelayError(404, '该邮箱尚无可查看的查询码');
-    if (kind === 'parent') await record('read_code', actor, target.local.id);
-    else await record('read_code', actor, target.owner.local.id, target.local.id);
     return {
       queryCode,
       codeExpiresAt: target.remote.codeExpiresAt ?? null,
       email: target.local.email
     };
+  }
+
+  async function readCurrentCode({ kind, id }, actor) {
+    if (!actor?.id) throw new RelayError(401, '请先登录');
+    const target = await lookupCodeTarget(kind, id);
+    const result = codeResult(target, kind);
+    if (kind === 'parent') await record('read_code', actor, target.local.id);
+    else await record('read_code', actor, target.owner.local.id, target.local.id);
+    return result;
+  }
+
+  async function readCodePage(input, actor) {
+    requireAdministrator(actor, '当前账号无权读取邮箱查询码');
+    const { kind, ids } = input;
+    if (Object.keys(input).length !== 2 || !['parent', 'alias'].includes(kind) ||
+        !Array.isArray(ids) || ids.length < 1 || ids.length > 50 ||
+        !ids.every(boundedId) || new Set(ids).size !== ids.length)
+      throw new RelayError(400, '请提交同一类型的 1 至 50 个不同邮箱编号');
+
+    // Resolve the whole visible page against one upstream catalog, never once per row.
+    const state = await matched(kind === 'alias');
+    const select = (state, id) => kind === 'alias' ? requireAlias(state, id) : requireParent(state, id);
+    const identity = target => JSON.stringify([target.remoteId, target.local.id,
+      target.local.version, target.local.email, target.local.parentMailboxId,
+      target.owner?.remoteId, target.owner?.local.version, target.owner?.local.email]);
+    const failure = (id, error) => {
+      if (!(error instanceof RelayError)) throw error;
+      return { id, status: error.status, error: error.message };
+    };
+    const selected = ids.map(id => {
+      try {
+        const target = select(state, id);
+        return { id, target, identity: identity(target), result: codeResult(target, kind) };
+      } catch (error) {
+        return { id, failure: failure(id, error) };
+      }
+    });
+    await Promise.all(selected.filter(item => item.target).map(({ target }) =>
+      kind === 'parent' ? record('read_code', actor, target.local.id)
+        : record('read_code', actor, target.owner.local.id, target.local.id)));
+
+    // An asynchronous audit must not let a removed/rebound mailbox return an old code.
+    const local = await current();
+    const matchedParents = matchPrimaries(local, state.primaries, remoteIdFor);
+    const latest = { matchedParents,
+      matchedAliases: matchAliases(local, state.aliases, remoteAliasIdFor, matchedParents) };
+    return { items: selected.map(item => {
+      if (item.failure) return item.failure;
+      try {
+        if (identity(select(latest, item.id)) !== item.identity)
+          throw new RelayError(409, '邮箱资料已变化，请刷新后重试');
+        return { id: item.id, ...item.result };
+      } catch (error) {
+        return failure(item.id, error);
+      }
+    }) };
   }
 
   async function sync(parent) {
@@ -1070,14 +1122,15 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
           return writeJson(response, 200, result);
         }
         if (!provider) throw new RelayError(503, 'Vendure 邮箱服务尚未配置');
-        const input = await readBody(request);
+        const input = await readBody(request, action === 'code-read' ? 10 * 1024 : 4096);
         if (action === 'mails') return writeJson(response, 200, await listMails(input, actor));
         if (action === 'history-preview') {
           return writeJson(response, 200, await previewHistory(input, actor));
         }
         if (action === 'query') return writeJson(response, 200, await queryMails(input, actor));
         if (action === 'code-read')
-          return writeJson(response, 200, await readCurrentCode(input, actor));
+          return writeJson(response, 200, await (Object.hasOwn(input, 'ids')
+            ? readCodePage(input, actor) : readCurrentCode(input, actor)));
         if (action === 'code-reset-prepare')
           return writeJson(response, 200, await codeReset.prepare(input, actor));
         if (action === 'code-reset-confirm')

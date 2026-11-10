@@ -98,9 +98,12 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   await page.locator('#commerce-paidAmount').fill('20');
   await page.locator('#commerce-saleAmount').fill('100');
   await page.locator('#commerce-start').fill('2026-01-01T11:30');
+  const entryUrl = page.url();
   await page.getByRole('button', { name: '核对并保存', exact: true }).click();
   await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true }).click();
-  await page.waitForURL('**/#/orders/gpt');
+  await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+  assert.equal(page.url(), entryUrl);
+  await page.goto(host.url + '#/orders/gpt');
   const delivered = await fetch(host.url + 'api/local/inventory').then((response) => response.json());
   const order = await fetch(host.url + 'api/local/commerce').then((response) => response.json());
   assert.equal(delivered.data.batches[1].items[0].status, 'used');

@@ -205,6 +205,7 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       assert(await page.getByRole('button', { name: '同步入单', exact: true }).isDisabled());
       await page.getByRole('button', { name: synced.orderNo, exact: true }).click();
       await page.getByRole('heading', { name: '订单详情', exact: true }).waitFor();
+      const detailUrl = page.url();
       assert.match(await page.locator('#main').innerText(), /客户待补充/);
       await page.getByRole('button', { name: '编辑资料', exact: true }).click();
       const form = page.locator('#drawer[open] #commerce-order-form');
@@ -214,8 +215,9 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       await form.locator('#commerce-correctionReason').fill('核实代充任务的客户归属');
       await page.locator('#drawer[open] button[form="commerce-order-form"][type="submit"]').click();
       await page.locator('#confirm-dialog').getByRole('button', { name: '确认', exact: false }).click();
-      const syncedRow = page.locator(`table[data-table="commerce-orders-GPT"] [data-row-id="${synced.id}"]`);
-      await syncedRow.getByText(customer.name, { exact: true }).waitFor();
+      await page.locator('#toast').filter({ hasText: '订单修改成功' }).waitFor();
+      assert.equal(page.url(), detailUrl, '编辑后保留订单详情页');
+      assert.match(await page.locator('#main').innerText(), new RegExp(customer.name));
       assert.equal(corrections.length, 1);
 
       await page.goto(origin + '/#/customers/list');
@@ -234,7 +236,8 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       await page.setViewportSize({ width: 320, height: 900 });
       await page.goto(origin + '/#/orders/recharge-sync');
       await syncTab.waitFor();
-      await page.getByRole('cell', { name: '实扣金额待核对、首次开卡费待核对', exact: true }).waitFor();
+      const syncedCard = page.locator(`table[data-table="recharge-order-sync"] tr[data-row-id="${synced.taskId}"]`);
+      await syncedCard.locator('td[data-column="needs"]').getByText('实扣金额待核对、首次开卡费待核对', { exact: true }).waitFor();
       assert(await page.getByRole('button', { name: synced.orderNo, exact: true }).isVisible());
       assert.equal(new URL(page.url()).hash, '#/orders/gpt/recharge-sync');
     } else {

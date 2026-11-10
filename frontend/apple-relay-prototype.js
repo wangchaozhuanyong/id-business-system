@@ -456,7 +456,7 @@
     showBuyerCode(cell, { operatorId, snapshot, value: cached.data.queryCode });
     return true;
   }
-  async function loadBuyerCode(cell, { refresh = false, result } = {}) {
+  async function loadBuyerCode(cell, { refresh = false, result, read } = {}) {
     const id = cell.dataset.relayBuyerCode, row = alias(id);
     if (!local || !row || !codeTargetBound('alias', id) || !cell.isConnected) return;
     const previous = buyerCodeCells.get(cell);
@@ -476,7 +476,8 @@
     copy.disabled = true;
     if (retry) retry.hidden = true;
     const loader = async () => {
-      const value = result || await window.IDLocalData.relay('code-read', { kind: 'alias', id });
+      const value = result || await (read ? read(id)
+        : window.IDLocalData.relay('code-read', { kind: 'alias', id }));
       if (typeof value?.queryCode !== 'string' || !value.queryCode ||
           String(value.email).toLowerCase() !== row.email.toLowerCase())
         throw new Error('查询码资料不匹配，请重试');
@@ -517,11 +518,29 @@
       const row = alias(rowId);
       if (row && (refresh || !reuseBuyerCode(cell, row))) cells.push(cell);
     }
-    let next = 0;
-    const worker = async () => {
-      while (next < cells.length) await loadBuyerCode(cells[next++], { refresh, result });
+    const requested = [];
+    let batch;
+    const read = rowId => {
+      requested.push(rowId);
+      // Per-row cache reads still deduplicate and reject stale responses. Only their
+      // actual cache misses enter this page request in the same microtask turn.
+      batch ||= Promise.resolve().then(() =>
+        window.IDLocalData.relay('code-read', { kind: 'alias', ids: requested })
+      ).then(response => {
+        if (!Array.isArray(response?.items) || response.items.length !== requested.length)
+          throw new Error('查询码返回格式无效，请重试');
+        const items = new Map(response.items.map(item => [item?.id, item]));
+        if (items.size !== requested.length || requested.some(id => !items.has(id)))
+          throw new Error('查询码资料不匹配，请重试');
+        return items;
+      });
+      return batch.then(items => {
+        const item = items.get(rowId);
+        if (item.error) throw Object.assign(new Error(item.error), { status: item.status });
+        return item;
+      });
     };
-    for (let index = 0; index < Math.min(3, cells.length); index++) void worker();
+    for (const cell of cells) void loadBuyerCode(cell, { refresh, result, read });
   }
   async function copyBuyerCode(node) {
     const cell = node.closest('[data-relay-buyer-code]');

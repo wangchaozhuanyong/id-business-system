@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
@@ -35,7 +35,7 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(origin + '/#/workspace/recharge');
-        if (dark) await page.locator('#theme-toggle').click();
+        if (dark) await toggleDesignTheme(page);
         const frame = frameOf(page);
         await frame.locator('#workspaceLogViewport').waitFor();
         if (dark) await frame.locator('html[data-id-theme="dark"]').waitFor();
@@ -54,29 +54,52 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
               return range.getBoundingClientRect().top;
             }
           };
+          const borders = selector => {
+            const style = getComputedStyle(document.querySelector(selector));
+            return ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth']
+              .map(name => Number.parseFloat(style[name]));
+          };
           return { width: innerWidth, overflow: document.documentElement.scrollWidth > innerWidth,
             page: box('.page-shell'), form: box('.workspace-recharge-form'), panel: box('.workspace-recharge-progress'),
             log: box('#workspaceLogViewport'), input: box('#tokenInput'), code: box('#cdkInput'),
+            tabs: box('.tab-nav'), step1: box('#step1'), step2: box('#step2'), submit: box('#startBtn'),
+            step1Borders: borders('#step1'), step2Borders: borders('#step2'),
+            panelBorders: borders('.workspace-recharge-progress'), logBorders: borders('#workspaceLogViewport'),
             codeTitle: textTop('#workspace-code-title', '验证兑换码'), progressTitle: textTop('#workspace-progress-title', '充值进度') };
         });
         metrics.push({ width, dark, ...layout });
         assert(!layout.overflow, '嵌入页不得横向溢出');
         assert(layout.form.x <= 24 && layout.panel.right >= layout.width - 24, '工作区必须铺满可用宽度');
+        assert(layout.form.x >= 16 && layout.panel.right <= layout.width - 16, '内容与外框必须保留左右留白');
+        assert.equal(layout.step1.x, layout.tabs.x, '页签与步骤统一左边距');
+        assert.equal(layout.step1.x, layout.step2.x, '两个步骤统一左边距');
+        assert.equal(layout.code.x, layout.input.x, '兑换码与账号资料控件左边缘对齐');
+        assert.deepEqual(layout.step1Borders, [0, 0, 0, 0], '验码步骤不再套卡片');
+        assert.deepEqual(layout.step2Borders, [1, 0, 0, 0], '两个步骤之间只保留分隔线');
+        assert.deepEqual(layout.logBorders, [0, 0, 0, 0], '日志使用底色区分，不再叠加边框');
         assert(layout.log.height >= 320 && layout.input.height >= 220, '日志与账号输入保留大面积阅读空间');
         assert(layout.code.width >= 150, '兑换码输入不能被按钮挤窄');
         if (layout.width > 900) {
           assert(Math.abs(layout.form.bottom - layout.panel.bottom) <= 1, '桌面两栏底边一致');
           assert(Math.abs(layout.codeTitle - layout.progressTitle) <= 1, '并排标题真实文字对齐');
           assert(layout.panel.width >= layout.width * 0.45, '日志使用约一半宽度');
-        } else assert(layout.panel.y >= layout.form.bottom + 16, '窄屏顺序为操作表单、日志');
+          assert.deepEqual(layout.panelBorders, [0, 0, 0, 1], '桌面只保留中间分隔线');
+          assert(layout.log.x - layout.panel.x >= 24, '日志不能贴着中间分隔线');
+        } else {
+          assert(layout.panel.y >= layout.form.bottom + 16, '窄屏顺序为操作表单、日志');
+          assert.deepEqual(layout.panelBorders, [1, 0, 0, 0], '窄屏改用水平分隔线');
+        }
+        assert(Math.abs(layout.submit.right - layout.input.right) <= 1, '提交按钮与账号输入右边缘对齐');
         const emptyHeight = await page.locator('iframe[data-view="redeem"]:visible').evaluate(node => node.offsetHeight);
         await frame.locator('.workspace-log .title-help summary').click();
         await frame.getByText('显示本页收到的任务状态', { exact: false }).waitFor();
         await page.keyboard.press('Escape');
         assert.equal(await frame.getByText('显示本页收到的任务状态', { exact: false }).isVisible(), false);
         assert.equal(await page.locator('iframe[data-view="redeem"]:visible').evaluate(node => node.offsetHeight), emptyHeight);
-        if (output && (width === 1920 || width === 390))
+        if (output && (width === 1920 || width === 390)) {
+          await frame.locator('#workspace-progress-title').click();
           await page.screenshot({ path: `${output}/empty-${width}-${dark ? 'dark' : 'light'}.png`, fullPage: true });
+        }
         if (width === 1920) {
           await page.setViewportSize({ width, height: 900 });
           await frame.locator('body').evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
@@ -86,6 +109,24 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
         }
         await frame.getByRole('button', { name: '兑换码查询', exact: true }).click();
         await frame.locator('#queryInput').waitFor();
+        for (const [tab, selector] of [['兑换码查询', '#querySection'], ['使用说明', '#workspaceGuide']]) {
+          await frame.getByRole('button', { name: tab, exact: true }).click();
+          await page.waitForFunction(() => {
+            const iframe = document.querySelector('iframe[data-view="redeem"]:not([hidden])');
+            return iframe && Math.abs(iframe.offsetHeight - iframe.contentDocument.body.offsetHeight) <= 1;
+          });
+          const region = await frame.locator(selector).evaluate(node => {
+            const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+            return { x: rect.x, right: rect.right, border: ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth']
+              .map(name => Number.parseFloat(style[name])), overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          assert.equal(region.x, layout.form.x, `${tab}沿用统一边距`);
+          assert.equal(region.right, layout.panel.right);
+          assert.deepEqual(region.border, [0, 0, 0, 0], `${tab}不再叠加外框`);
+          assert(!region.overflow);
+          if (output && (width === 1920 || width === 390))
+            await page.screenshot({ path: `${output}/${selector.slice(1)}-${width}-${dark ? 'dark' : 'light'}.png`, fullPage: true });
+        }
         await frame.getByRole('button', { name: '自助充值', exact: true }).click();
         assert.equal(await frame.locator('#workspaceLogEmpty').isVisible(), true);
         assert.deepEqual(errors, []);

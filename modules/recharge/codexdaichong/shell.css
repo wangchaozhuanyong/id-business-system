@@ -925,7 +925,7 @@ body[data-recharge-workspace]::before {
 }
 
 [data-recharge-workspace] .page-shell {
-  --workspace-inset: clamp(16px, 2vw, 24px);
+  --workspace-inset: var(--panel-padding-inline);
   --workspace-label: 104px;
   display: flex;
   flex-direction: column;
@@ -990,7 +990,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   flex-direction: column;
   flex: 1;
   min-width: 0;
-  padding: 16px 0 var(--panel-padding-block);
+  padding: var(--panel-padding-block) var(--panel-padding-inline);
 }
 
 [data-recharge-workspace] #workspaceOperation {
@@ -1008,14 +1008,15 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: stretch;
   flex: 1;
-  gap: 16px;
+  gap: 0;
 }
 
 [data-recharge-workspace] .workspace-recharge-form {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 16px;
+  gap: var(--workspace-inset);
   min-width: 0;
+  padding-inline-end: var(--workspace-inset);
 }
 
 [data-recharge-workspace] :is(.workspace-recharge-step, .workspace-recharge-progress) {
@@ -1023,15 +1024,17 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   gap: 16px;
   min-width: 0;
   margin: 0;
-  padding: var(--workspace-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 [data-recharge-workspace] .workspace-recharge-progress {
   display: flex;
   flex-direction: column;
+  padding-inline-start: var(--workspace-inset);
+  border-inline-start: 1px solid var(--border);
 }
 
 [data-recharge-workspace] .workspace-log {
@@ -1087,7 +1090,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   overflow-anchor: none;
   scrollbar-gutter: stable;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--surface-soft);
   font-size: 13px;
@@ -1243,6 +1246,8 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   grid-template-columns: var(--workspace-label) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   column-gap: 16px;
+  padding-top: var(--workspace-inset);
+  border-top: 1px solid var(--border);
 }
 
 [data-recharge-workspace] #step2 > :is(h2, .title-with-help, .workspace-recharge-field) {
@@ -1267,10 +1272,10 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
 [data-recharge-workspace] #querySection,
 [data-recharge-workspace] .workspace-guide {
-  padding: var(--workspace-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 [data-recharge-workspace] .workspace-guide {
@@ -1399,9 +1404,10 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-soft);
+  padding: 16px 0 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
 }
 
 [data-recharge-workspace] .workspace-recharge-summary dt {
@@ -1711,6 +1717,18 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
   [data-recharge-workspace] #redeemSection {
     grid-template-columns: minmax(0, 1fr);
+    gap: var(--workspace-inset);
+  }
+
+  [data-recharge-workspace] .workspace-recharge-form {
+    padding-inline-end: 0;
+  }
+
+  [data-recharge-workspace] .workspace-recharge-progress {
+    padding-inline-start: 0;
+    padding-top: var(--workspace-inset);
+    border-inline-start: 0;
+    border-top: 1px solid var(--border);
   }
 
   [data-recharge-workspace] .workspace-recharge-field > label {

@@ -25,8 +25,8 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   const startedAt = Date.now();
   const expiringId = aliases[2].id;
   const upcomingExpiry = new Date(startedAt + 60_000).toISOString();
-  await interceptDesign(context, { localFixtures: fixture });
-  const reads = [], unexpected = [], errors = [];
+  await interceptDesign(context, { localFixtures: fixture, skipRechargeAssets: true });
+  const reads = [], pageReads = [], unexpected = [], errors = [];
   let active = 0, maximum = 0, failOnce = true, resetId = '', held = false, release = () => {}, holdStarted;
   const holdReady = new Promise(resolve => { holdStarted = resolve; });
   t.after(() => release());
@@ -36,20 +36,26 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
       configured: true, parentIds: [parent.id], aliasIds: aliases.slice(0, 20).map(row => row.id)
     } });
     if (path.endsWith('/apple-relay/code-read')) {
-      const { id, kind } = request.postDataJSON();
+      const { id, ids, kind } = request.postDataJSON();
       assert.equal(kind, 'alias');
-      reads.push(id);
+      const requested = ids || [id];
+      pageReads.push(requested);
+      reads.push(...requested);
       active++;
       maximum = Math.max(maximum, active);
-      if (held && id === aliases[0].id) await new Promise(resolve => { release = resolve; holdStarted(); });
+      if (held && requested.includes(aliases[0].id)) await new Promise(resolve => { release = resolve; holdStarted(); });
       await new Promise(resolve => setTimeout(resolve, 35));
       active--;
-      if (id === aliases[1].id && failOnce) {
-        failOnce = false;
-        return route.fulfill({ status: 503, json: { error: '合成读取失败' } });
-      }
-      return route.fulfill({ json: { email: aliases.find(row => row.id === id).email,
-        queryCode: codes.get(id), codeExpiresAt: id === expiringId ? upcomingExpiry : '2099-01-01T00:00:00Z' } });
+      const items = requested.map(id => {
+        if (id === aliases[1].id && failOnce) {
+          failOnce = false;
+          return { id, status: 503, error: '合成读取失败' };
+        }
+        return { id, email: aliases.find(row => row.id === id).email,
+          queryCode: codes.get(id), codeExpiresAt: id === expiringId ? upcomingExpiry : '2099-01-01T00:00:00Z' };
+      });
+      return route.fulfill({ status: ids ? 200 : items[0].status || 200,
+        json: ids ? { items } : items[0] });
     }
     if (path.endsWith('/apple-relay/code-reset-prepare')) {
       resetId = request.postDataJSON().id;
@@ -74,6 +80,11 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await page.goto(origin + '/#/mailboxes/relay');
   const cell = id => page.locator(`[data-relay-buyer-code="${id}"]`);
   const output = id => cell(id).locator('output');
+  async function revealCode(id) {
+    if (await cell(id).isVisible()) return;
+    const card = page.locator('tr[data-row-id]').filter({ has: cell(id) });
+    await card.getByRole('button', { name: '更多资料', exact: true }).click();
+  }
   const ready = () => page.waitForFunction(() =>
     document.querySelector('[data-relay-buyer-code]') &&
     !document.querySelector('[data-relay-buyer-code][aria-busy="true"]') &&
@@ -81,7 +92,8 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await cell(aliases[0].id).waitFor();
   await ready();
   assert.equal(reads.length, 20, '只读取当前页，不扫描全部隐藏邮箱');
-  assert(maximum <= 3, '当前页使用受控并发');
+  assert.equal(pageReads.length, 1, '20 行查询码必须只发送一次按页请求，不能分轮逐条读取');
+  assert.equal(maximum, 1);
   assert.equal(await output(aliases[0].id).textContent(), codes.get(aliases[0].id));
   assert.equal(await output(aliases[1].id).textContent(), '读取失败');
   assert(await cell(aliases[1].id).getByRole('button', { name: '复制买家查询码', exact: true }).isDisabled());
@@ -113,9 +125,10 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await ready();
   assert.equal(await output(aliases[0].id).textContent(), codes.get(aliases[0].id), '重置后立即更新列表');
   await page.evaluate(() => window.IDDesignAPI.closeDrawer());
-  for (const width of [1440, 390, 320]) for (const dark of [false, true]) {
+  for (const width of [1440, 1024, 901, 900, 768, 390, 320]) for (const dark of [false, true]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
+    await revealCode(aliases[1].id);
     const copy = cell(aliases[1].id).getByRole('button', { name: '复制买家查询码', exact: true });
     await cell(aliases[1].id).scrollIntoViewIfNeeded();
     await copy.click();
@@ -134,11 +147,13 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
       await page.screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/buyer-code-${width}.png` });
     }
   }
+  await revealCode(aliases[0].id);
   await cell(aliases[0].id).getByRole('button', { name: '复制买家查询码', exact: true }).click();
   assert.equal(await page.evaluate(() => window.copiedBuyerCode), codes.get(aliases[0].id));
   await page.locator('#main .pagination').getByRole('button', { name: '下一页' }).click();
   await ready();
   assert.equal(await output(aliases[20].id).textContent(), '未接入收件服务');
+  await revealCode(aliases[20].id);
   assert(await cell(aliases[20].id).getByRole('button', { name: '复制买家查询码', exact: true }).isDisabled());
   assert(!reads.includes(aliases[20].id));
   assert.equal(reads.filter(id => [aliases[18].id, aliases[19].id].includes(id)).length, 2);
@@ -169,7 +184,8 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await ready();
   assert.equal(reads.length - beforeTimeout, 20, '复用时间到后重新核对当前页');
   held = true;
-  const delayed = page.waitForResponse(response => response.url().endsWith('/code-read') && response.request().postDataJSON().id === 'qa-code-0');
+  const delayed = page.waitForResponse(response => response.url().endsWith('/code-read') &&
+    (response.request().postDataJSON().ids || []).includes('qa-code-0'));
   await page.evaluate(() => { window.IDLocalData.queries.invalidate('apple-relay'); window.IDDesignAPI.render(); });
   await holdReady;
   await page.evaluate(() => window.IDDesignAPI.go('customers/list'));
@@ -187,5 +203,117 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await ready();
   assert.equal(reads.length - beforeClear, 20, '会话清理后需要重新授权读取');
   assert.deepEqual(unexpected, []);
+  assert.deepEqual(errors, []);
+});
+
+test('整页取码合并重复绘制，支持 50 条、空列表、整批失败与迟到响应隔离', { timeout: 60_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  const seed = fixture.inventory.data.mailboxes.find(row => row.type === 'relay');
+  const aliases = Array.from({ length: 51 }, (_, index) => ({ ...seed, id: `page-${index}`,
+    email: `page-${index}@example.test`, health: 'normal', notes: '' }));
+  fixture.inventory.data.mailboxes = aliases;
+  const parent = fixture.inventory.data.appleRelay.parents[0];
+  const intercepted = await interceptDesign(context, { localFixtures: fixture, skipRechargeAssets: true });
+  let held = true, marker = 'FIRST', failure = false, malformed = false;
+  let heldReady = Promise.withResolvers();
+  const reads = [], releases = [], errors = [];
+  t.after(() => releases.forEach(release => release()));
+  await context.route('**/api/local/apple-relay/**', async route => {
+    if (new URL(route.request().url()).pathname.endsWith('/status'))
+      return route.fulfill({ json: { configured: true, parentIds: [parent.id], aliasIds: aliases.map(row => row.id) } });
+    assert(route.request().url().endsWith('/code-read'), '本场景只允许查询码读取');
+    const { kind, ids } = route.request().postDataJSON();
+    assert.equal(kind, 'alias');
+    assert(Array.isArray(ids) && ids.length <= 50);
+    reads.push(ids);
+    const version = marker;
+    if (held) await new Promise(resolve => { releases.push(resolve); heldReady.resolve(); });
+    if (failure) return route.fulfill({ status: 503, json: { error: '合成整批失败' } });
+    const items = [...ids].reverse().map(id => ({ id, email: aliases.find(row => row.id === id).email,
+      queryCode: `${version}-${id}`, codeExpiresAt: '2099-01-01T00:00:00Z' }));
+    if (malformed) items[1] = items[0];
+    return route.fulfill({ json: { items } });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  page.on('pageerror', error => errors.push(error.message));
+  const ready = () => page.waitForFunction(() =>
+    document.querySelector('[data-relay-buyer-code]') &&
+    ![...document.querySelectorAll('[data-relay-buyer-code] output')].some(node => node.textContent.includes('正在')));
+  const cell = id => page.locator(`[data-relay-buyer-code="${id}"]`);
+  await page.goto(origin + '/#/mailboxes/relay');
+  await cell('page-0').waitFor();
+  // Wait for a concrete held batch rather than a timing-based performance assertion.
+  await heldReady.promise;
+  await page.evaluate(() => {
+    for (let i = 0; i < 3; i++) window.IDDesignAPI.render();
+    window.pageCodeFrames = [];
+    window.capturePageCodeFrames = true;
+    const sample = () => {
+      window.pageCodeFrames.push([...document.querySelectorAll('[data-relay-buyer-code] output')]
+        .filter(node => node.textContent.startsWith('FIRST-')).length);
+      if (window.capturePageCodeFrames) requestAnimationFrame(sample);
+    };
+    sample();
+  });
+  assert.equal(reads.length, 1, '读取中连续重绘复用同一批请求');
+  held = false;
+  releases.shift()();
+  await ready();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => {
+    window.capturePageCodeFrames = false; resolve();
+  })));
+  const frames = await page.evaluate(() => window.pageCodeFrames);
+  assert(frames.includes(0) && frames.includes(20));
+  assert(frames.every(count => count === 0 || count === 20), '同一页一次呈现，不出现分轮补齐的中间帧');
+  assert.equal(await cell('page-0').locator('output').textContent(), 'FIRST-page-0', '乱序响应按资料编号关联');
+  await page.locator('#main [data-pagination-size]').selectOption('50');
+  await ready();
+  assert.equal(reads.length, 2);
+  assert.deepEqual(reads[1], aliases.slice(20, 50).map(row => row.id), '50 条分页只补读尚未缓存的 30 条');
+  await page.locator('#main .pagination').getByRole('button', { name: '下一页' }).click();
+  await ready();
+  assert.deepEqual(reads.at(-1), ['page-50']);
+  await page.locator('#main .pagination').getByRole('button', { name: '上一页' }).click();
+  await ready();
+  const beforeEmpty = reads.length;
+  await page.locator('#main input[placeholder="搜索邮箱、编号或备注"]').fill('no-synthetic-match');
+  await page.waitForFunction(() => !document.querySelector('[data-relay-buyer-code]'));
+  assert.equal(reads.length, beforeEmpty, '空结果不读取查询码');
+  await page.locator('#main input[placeholder="搜索邮箱、编号或备注"]').fill('');
+  await ready();
+  assert.equal(reads.length, beforeEmpty);
+
+  for (const mode of ['failure', 'malformed']) {
+    failure = mode === 'failure'; malformed = mode === 'malformed';
+    await page.evaluate(() => { window.IDLocalData.queries.invalidate('apple-relay'); window.IDDesignAPI.render(); });
+    await ready();
+    assert.equal(await cell('page-0').locator('output').textContent(), '读取失败');
+    assert(await cell('page-0').getByRole('button', { name: '复制买家查询码', exact: true }).isDisabled());
+    assert(await cell('page-0').getByRole('button', { name: '重试', exact: true }).isVisible());
+  }
+  failure = false; malformed = false; held = true; marker = 'OLD';
+  heldReady = Promise.withResolvers();
+  await page.evaluate(() => { window.IDLocalData.queries.invalidate('apple-relay'); window.IDDesignAPI.render(); });
+  await heldReady.promise;
+  assert.equal(reads.at(-1).length, 50, '失效后的 50 行仍只有一批');
+  marker = 'CURRENT'; held = false;
+  await page.evaluate(() => { window.IDLocalData.queries.clear(); window.IDDesignAPI.render(); });
+  await ready();
+  assert.equal(await cell('page-0').locator('output').textContent(), 'CURRENT-page-0');
+  const late = page.waitForResponse(response => response.url().endsWith('/code-read'));
+  releases.shift()();
+  await late;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  assert.equal(await cell('page-0').locator('output').textContent(), 'CURRENT-page-0', '已清理代次的迟到结果不得回写');
+  await page.evaluate(() => window.IDDesignAPI.render());
+  await ready();
+  assert.equal(await cell('page-0').locator('output').textContent(), 'CURRENT-page-0', '缓存也只保留新代次');
+  assert.deepEqual(intercepted.external, []);
+  assert.deepEqual(intercepted.unavailable, []);
   assert.deepEqual(errors, []);
 });

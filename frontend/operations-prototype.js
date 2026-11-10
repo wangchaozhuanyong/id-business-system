@@ -311,12 +311,25 @@
     }
     settingsSaving = true;
     try {
+      const priorOptions = { sources: [...customerSources], tags: [...customerTags] };
       applySettings(
         await localData.save('settings', expectedVersion, data, {
           action,
           summary: '更新本机业务设置'
         })
       );
+      // A successful save of another setting leaves these option lists unchanged.
+      // Advance only that unchanged draft's document version, preserving its edits.
+      for (const kind of ['sources', 'tags']) {
+        const config = customerOptionConfig(kind);
+        if (action === `customer_${kind}_save` || JSON.stringify(priorOptions[kind]) !==
+            JSON.stringify(kind === 'sources' ? customerSources : customerTags)) continue;
+        const draft = state.drafts.get(draftKey(config.key));
+        if (draft?.[config.versionField] === String(expectedVersion))
+          draft[config.versionField] = String(settingsVersion);
+        const control = document.getElementById(config.formId)?.elements[config.versionField];
+        if (control?.value === String(expectedVersion)) control.value = String(settingsVersion);
+      }
       for (const view of Object.values(auditViews)) view.dirty = true;
       return true;
     } catch (error) {
@@ -1197,36 +1210,39 @@
       versionField: sources ? 'ops-customer-sources-version' : 'ops-customer-tags-version'
     };
   }
-  function openCustomerOptionSettings(kind = 'tags', retry = false) {
-    if (!isAdmin()) return false;
+  function renderCustomerOptionSettings(kind) {
     const config = customerOptionConfig(kind);
-    const context = draftKey(config.key);
-    const title = `${config.label}设置`;
-    const description = `维护客户${config.label}的可选清单。移除选项不修改历史客户资料；关闭保留当前设置草稿。`;
-    const close = button('返回客户资料', 'drawer-close');
-    if (localData && (settingsState !== 'ready' || retry)) {
-      openDrawer(title, description, `<div role="status">正在读取客户${config.label}设置…</div>`, close, context);
-      void loadSettings(retry).then((loaded) => {
-        if (state.drawerContext !== context || !$('#drawer')?.open) return;
-        if (loaded) openCustomerOptionSettings(config.kind);
-        else openDrawer(title, description,
-          `<div role="alert">客户${config.label}设置读取失败，请重试。</div>`,
-          button('重新读取', 'ops-customer-options-retry', '', '', `data-kind="${config.kind}"`) + close, context);
-      });
-      return true;
-    }
     const draft = getDraft(config.key);
-    openDrawer(title, description,
-      `<form id="${config.formId}" data-customer-options="${config.kind}" novalidate>
+    return `<div class="form-panel design-async-region" aria-busy="false"><div data-customer-options-status role="status" hidden></div>
+      <form id="${config.formId}" data-customer-options="${config.kind}" novalidate>
         <input type="hidden" name="${config.versionField}" value="${esc(draft[config.versionField] ?? settingsVersion)}" />
         ${api.optionListEditor({ id: config.id, label: `${config.label}清单`, itemLabel: config.label, values: config.kind === 'sources' ? customerSources : customerTags, minItems: 0, draft })}
-      </form>`,
-      (localData ? button('重新读取', 'ops-customer-options-reload', '', '', `data-kind="${config.kind}"`) : '') +
-      close + `<button class="button primary" type="submit" form="${config.formId}">保存${config.label}设置</button>`, context);
-    return true;
+        <div class="form-footer"><span class="footnote">移除选项不影响已保存的客户资料。</span>
+          <button class="button primary" type="submit" form="${config.formId}">保存${config.label}设置</button></div>
+      </form></div>`;
+  }
+  function dropdownSettingsTab() {
+    const tab = getDraft('dropdown-settings').tab;
+    return isAdmin() && ['sources', 'tags'].includes(tab) ? tab : 'costs';
+  }
+  function renderDropdownSettings() {
+    const selected = dropdownSettingsTab();
+    const tabs = [['costs', '费用规则'], ...(isAdmin() ? [['sources', '来源设置'], ['tags', '标签设置']] : [])];
+    const ready = !localData || settingsState === 'ready';
+    const actions = ready && localData ? button('重新读取', selected === 'costs' ? 'ops-settings-reload' : 'ops-customer-options-reload', '', '', `data-kind="${selected}"`) : '';
+    const content = !ready
+      ? `<div class="panel-body" role="${settingsState === 'error' ? 'alert' : 'status'}">${empty(
+          settingsState === 'error' ? '设置读取失败' : '正在读取设置',
+          settingsState === 'error' ? '请重新读取后继续编辑。' : '读取完成后可编辑。'
+        )}${settingsState === 'error' ? `<div class="toolbar">${button('重新读取', 'ops-settings-reload')}</div>` : ''}</div>`
+      : selected === 'costs' ? renderCosts() : renderCustomerOptionSettings(selected);
+    return header('下拉设置', '统一维护费用规则、客户来源和客户标签。切换页签保留未保存输入。', actions) +
+      `<section class="panel dropdown-settings"><div class="tabs" role="tablist" aria-label="下拉设置分类" data-page-actions="tabs">${tabs.map(([id, label]) =>
+        `<button type="button" class="tab${id === selected ? ' active' : ''}" id="dropdown-settings-${id}" role="tab" aria-selected="${id === selected}" tabindex="${id === selected ? '0' : '-1'}" aria-controls="dropdown-settings-content" data-action="ops-dropdown-tab" data-tab="${id}">${label}</button>`).join('')}</div>
+        <div id="dropdown-settings-content" role="tabpanel" aria-labelledby="dropdown-settings-${selected}">${content}</div></section>`;
   }
   function saveCustomerOptionSettings(form) {
-    if (settingsSaving) return;
+    if (!isAdmin() || settingsSaving) return;
     const config = customerOptionConfig(form.dataset.customerOptions);
     if (api.optionListPending(form)) {
       setError(config.id, `请先添加或保存正在编辑的${config.label}。`);
@@ -1259,8 +1275,9 @@
           else customerTags = options;
           recordAudit(`保存客户${config.label}设置`, '客户资料');
         }
-        if (form.isConnected && JSON.stringify(readForm(form)) === submitted) {
-          closeDrawer();
+        preserveDraft();
+        const unchanged = form.isConnected && JSON.stringify(readForm(form)) === submitted;
+        if (unchanged) {
           state.drafts.delete(key);
         } else {
           const draft = state.drafts.get(key);
@@ -1268,10 +1285,11 @@
           else if (draft?.[config.versionField] === values[config.versionField])
             draft[config.versionField] = String(settingsVersion);
           const currentForm = document.getElementById(config.formId);
-          if (state.drawerContext === key && currentForm?.elements[config.versionField]?.value === values[config.versionField])
+          if (currentForm?.elements[config.versionField]?.value === values[config.versionField])
             currentForm.elements[config.versionField].value = String(settingsVersion);
         }
-        refreshSettingsPage();
+        if (unchanged) refreshSettingsPage();
+        else api.modules.commerce?.refreshCustomerTagOptions?.();
         notify(`客户${config.label}设置已保存`);
       } finally {
         if (submit?.isConnected) submit.disabled = false;
@@ -1291,13 +1309,9 @@
     ['cardPerPaymentUsd', '通用付款固定费用', 'USD / 每笔']
   ];
   function renderCosts() {
-    if (localData && settingsState !== 'ready') return settingsStatusPage('费用规则');
     const config = api.modules.commerce?.getCostSettings?.();
     if (!config)
-      return (
-        header('费用规则', '费用配置由订单模块唯一持有。') +
-        `<section class="panel">${empty('订单配置服务未加载', '请刷新完整原型，不创建独立规则副本。')}</section>`
-      );
+      return `<div class="panel-body">${empty('订单配置服务未加载', '请刷新页面后重试。')}</div>`;
     const draft = getDraft('costs');
     const fields =
       field(
@@ -1331,13 +1345,7 @@
     const rates = api.modules.commerce.getFxRates?.() || {};
     const hasRates = Object.keys(rates).length > 0;
     return (
-      header(
-        '费用规则',
-        'Claude 每笔订单包含对应手续费、账号和邮箱成本；旧订单使用冻结快照。',
-        tag(`配置版本 ${config.version}`, 'blue') +
-          (localData ? button('重新读取', 'ops-settings-reload') : '')
-      ) +
-      `<div class="${hasRates ? 'two-column' : 'cost-layout'}"><section class="panel form-panel design-async-region" aria-busy="false"><div data-cost-read-status role="status" hidden></div><form id="ops-cost-form" novalidate><input type="hidden" name="ops-cost-version" value="${esc(draft['ops-cost-version'] ?? config.version)}" />${grid(fields)}${hasRates ? '' : `<div class="commerce-cost-strip section-gap"><span class="section-title-row"><strong>汇率状态</strong>${titleInfo('汇率状态', '订单核算使用各自登记的汇率快照，费用规则变化不会回写历史订单。', 'cost-rates-description')}</span><span>暂无汇率报价</span></div>`}<div class="form-footer" data-page-actions="before-submit"><span class="footnote">保存后只影响新订单，历史金额不自动重算。</span><button class="button primary" type="submit">核对费用规则</button></div></form></section>${hasRates ? `<section class="panel side-panel"><div class="section-title-row"><h2>演示汇率</h2>${titleInfo('演示汇率', '全部为固定示例汇率，不是当前市场报价。正式接入复用已有供应商、有效期和快照，不把配置变化回写历史订单。', 'cost-rates-description')}</div><dl class="definition-list">${Object.entries(
+      `<div class="${hasRates ? 'two-column' : 'cost-layout'}"><section class="form-panel design-async-region" aria-busy="false"><div data-cost-read-status role="status" hidden></div><form id="ops-cost-form" novalidate><input type="hidden" name="ops-cost-version" value="${esc(draft['ops-cost-version'] ?? config.version)}" />${grid(fields)}${hasRates ? '' : `<div class="commerce-cost-strip section-gap"><span class="section-title-row"><strong>汇率状态</strong>${titleInfo('汇率状态', '订单核算使用各自登记的汇率快照，费用规则变化不会回写历史订单。', 'cost-rates-description')}</span><span>暂无汇率报价</span></div>`}<div class="form-footer"><span class="footnote">配置版本 ${config.version} · 保存后只影响新订单，历史金额不自动重算。</span><button class="button primary" type="submit">核对费用规则</button></div></form></section>${hasRates ? `<section class="side-panel"><div class="section-title-row"><h2>演示汇率</h2>${titleInfo('演示汇率', '全部为固定示例汇率，不是当前市场报价。正式接入复用已有供应商、有效期和快照，不把配置变化回写历史订单。', 'cost-rates-description')}</div><dl class="definition-list">${Object.entries(
         rates
       )
         .map(([code, value]) => `<dt>${esc(code)} / CNY</dt><dd>${esc(value)}</dd>`)
@@ -3496,6 +3504,8 @@
     const key =
       {
         'ops-cost-form': 'costs',
+        'ops-customer-sources-form': 'customer-sources',
+        'ops-customer-tags-form': 'customer-tags',
         'ops-security-form': 'security',
       }[form.id];
     if (!key) return;
@@ -3515,7 +3525,7 @@
     if (route === onlineRechargeRoute) return renderIntegratedRecharge();
     if (route === 'settings/accounts') return renderStaff();
     if (route === 'settings/mail-types') return renderMailboxTypes();
-    if (route === 'settings/costs') return renderCosts();
+    if (route === 'settings/costs') return renderDropdownSettings();
     if (route === loginLogsRoute) return renderLoginLogs();
     if (route === 'settings/audit')
       return isAdmin()
@@ -3824,22 +3834,27 @@
           notify('演示操作已登记');
         }
       );
-    } else if (action === 'ops-customer-options-retry') {
-      openCustomerOptionSettings(node.dataset.kind, true);
+    } else if (action === 'ops-dropdown-tab') {
+      if (!['costs', 'sources', 'tags'].includes(node.dataset.tab) || !isAdmin()) return true;
+      preserveDraft();
+      state.drafts.set(draftKey('dropdown-settings'), { tab: node.dataset.tab });
+      render();
+      document.getElementById(`dropdown-settings-${node.dataset.tab}`)?.focus({ preventScroll: true });
     } else if (action === 'ops-customer-options-reload') {
+      if (!isAdmin()) return true;
       const config = customerOptionConfig(node.dataset.kind);
       const form = document.getElementById(config.formId);
       const submitted = form && JSON.stringify(readForm(form));
       confirmAction(`确认重新读取客户${config.label}`, '成功读取后清除当前未提交的设置。', () => {
+        const region = form?.parentElement;
+        const read = region && api.beginRegionRead(region, region.querySelector('[data-customer-options-status]'), { refreshButton: node });
         void loadSettings(true).then((loaded) => {
           if (!loaded) return notify('读取失败，已保留当前设置草稿');
           if (!form?.isConnected || JSON.stringify(readForm(form)) !== submitted) return;
-          closeDrawer();
           state.drafts.delete(draftKey(config.key));
-          openCustomerOptionSettings(config.kind);
           refreshSettingsPage();
           notify('客户选项已重新读取', { kind: 'success' });
-        });
+        }).finally(() => read?.finish());
       });
     } else if (action === 'ops-settings-reload') {
       const form = $('#main #ops-cost-form');
@@ -3853,10 +3868,12 @@
         const read = region && api.beginRegionRead(region, region.querySelector('[data-cost-read-status]'), {
           refreshButton: node
         });
+        const label = form ? '费用规则' : '设置';
         void api.withActionFeedback(node, () => loadSettings(true),
-          { pending: '正在读取费用规则…', success: '费用规则已重新读取' }).then((loaded) => {
+          { pending: `正在读取${label}…`, success: `${label}已重新读取` }).then((loaded) => {
           read?.finish();
           const activeForm = $('#main #ops-cost-form');
+          if (form && activeForm !== form) return;
           if (activeForm) preserveDraft();
           if (!loaded) notify('读取失败，已保留当前设置草稿');
           if (loaded && form && activeForm === form && JSON.stringify(readDraft(form)) === snapshot)
@@ -4204,8 +4221,6 @@
     getMailboxTypes: () => mailboxTypes.map((row) => ({ ...row })),
     getCustomerTags: () => [...customerTags],
     getCustomerSources: () => [...customerSources],
-    canManageCustomerOptions: isAdmin,
-    openCustomerOptionSettings,
     getCostRules: () => api.modules.commerce?.getCostSettings?.() || null,
     recordAudit,
     showPhrases,
@@ -4253,6 +4268,17 @@
         'settings/audit'
       ].includes(route) || Object.hasOwn(pluginPages, route),
     afterRender() {
+      const settingsTabs = $('.dropdown-settings [role="tablist"]');
+      settingsTabs?.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const tabs = [...settingsTabs.querySelectorAll('[role="tab"]')];
+        const index = tabs.indexOf(event.target);
+        if (index < 0) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        tabs[next].click();
+      });
       if (state.route === bitLoginRoute) {
         const host = $('#bit-addresses-host', integrationRoot());
         if (host && isAdmin()) api.modules.bitbrowserAddresses?.mount(host);
