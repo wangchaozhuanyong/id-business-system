@@ -32,6 +32,104 @@
   let restoreDrafts = () => {};
   if (!standalone) syncTheme();
 
+  function setupWorkspaceViewport() {
+    const sync = () => {
+      // Use the host viewport, not the iframe height that our own resize report changes.
+      let height = window.innerHeight;
+      if (!standalone) {
+        const host = window.parent;
+        const frameTop = window.frameElement.getBoundingClientRect().top + host.scrollY;
+        const footer = host.document.querySelector('.workspace-footer');
+        const main = host.document.getElementById('main');
+        const bottom = main ? parseFloat(host.getComputedStyle(main).paddingBottom) || 0 : 0;
+        height = host.innerHeight - frameTop - (footer?.offsetHeight || 0) - bottom - 2;
+      }
+      const value = Math.max(640, Math.floor(height)) + 'px';
+      if (root.style.getPropertyValue('--workspace-available-height') !== value)
+        root.style.setProperty('--workspace-available-height', value);
+    };
+    sync();
+    window.addEventListener('resize', sync);
+    if (!standalone) {
+      window.parent.addEventListener('resize', sync);
+      window.addEventListener('pagehide', () => window.parent.removeEventListener('resize', sync), { once: true });
+    }
+  }
+
+  function setupWorkspaceLog() {
+    const viewport = document.getElementById('workspaceLogViewport');
+    const entries = document.getElementById('workspaceLogEntries');
+    const empty = document.getElementById('workspaceLogEmpty');
+    const follow = document.getElementById('workspaceLogFollow');
+    const latest = document.getElementById('workspaceLogLatest');
+    const refresh = document.getElementById('workspaceLogRefresh');
+    const status = document.getElementById('workspaceLogStatus');
+    const clock = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+    let state = 'idle', busy = false, offline = false, lastEntry = '', updated = '';
+    const renderStatus = () => {
+      refresh.disabled = state !== 'running' || busy;
+      refresh.textContent = busy ? '刷新中…' : '刷新';
+      status.textContent = offline ? '连接中断，正在重连' : state === 'running'
+        ? '自动更新中' + (updated ? ' · ' + updated : '')
+        : state === 'finished' ? '更新已结束' + (updated ? ' · ' + updated : '')
+        : state === 'uncertain' ? '提交结果待核对' : state === 'submitting' ? '正在确认提交结果' : '等待提交';
+    };
+    const scrollLatest = () => { viewport.scrollTop = viewport.scrollHeight; };
+    const setFollow = (enabled) => {
+      follow.checked = enabled;
+      latest.hidden = enabled;
+      if (enabled) scrollLatest();
+    };
+    follow.addEventListener('change', () => setFollow(follow.checked));
+    latest.addEventListener('click', () => setFollow(true));
+    viewport.addEventListener('scroll', () => {
+      if (follow.checked && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 24)
+        setFollow(false);
+    }, { passive: true });
+    refresh.addEventListener('click', () => window.idRechargeRefreshTask?.());
+    const record = (text, tone = 'running') => {
+      const signature = tone + ':' + text;
+      if (!text || signature === lastEntry) return;
+      lastEntry = signature;
+      empty.hidden = true;
+      const entry = document.createElement('li');
+      entry.dataset.tone = tone;
+      const time = document.createElement('time');
+      const now = new Date();
+      time.dateTime = now.toISOString();
+      time.textContent = clock.format(now);
+      entry.append(time, document.createTextNode('  ' + text));
+      entries.append(entry);
+      if (follow.checked) scrollLatest();
+    };
+    window.idRechargeWorkspaceLog = {
+      record,
+      reset() {
+        entries.replaceChildren();
+        empty.hidden = false;
+        state = 'idle'; busy = false; offline = false; lastEntry = ''; updated = '';
+        setFollow(true);
+        renderStatus();
+      },
+      state(value) { state = value; renderStatus(); },
+      refreshing(value) { busy = value; renderStatus(); },
+      connected() {
+        if (offline) record('连接已恢复，继续更新任务状态。');
+        offline = false;
+        updated = clock.format(new Date());
+        renderStatus();
+      },
+      disconnected() {
+        if (!offline) record('连接暂时中断，已保留记录，正在重新连接。', 'review');
+        offline = true;
+        renderStatus();
+      }
+    };
+    window.IDTitleHelp.attach(document.getElementById('workspace-log-title'), document.getElementById('workspace-log-help'));
+  }
+
   function syncTheme(theme) {
     try {
       const host = window.parent.document.documentElement;
@@ -499,6 +597,8 @@
       const tab = new URLSearchParams(location.search).get('tab');
       const workspaceTitle = document.querySelector('.workspace-recharge-standalone-title');
       if (workspaceTitle) {
+        setupWorkspaceViewport();
+        setupWorkspaceLog();
         if (standalone)
           window.IDTitleHelp.attach(
             workspaceTitle.querySelector('h1'),

@@ -2,7 +2,10 @@
   'use strict';
   const A = window.IDDesignAPI, D = window.IDLocalData, route = 'settings/exchange-rates';
   const e = A.esc, $ = selector => document.querySelector(selector);
-  const labels = { USD: '美元 USD', MYR: '马币 MYR', PHP: '菲律宾比索 PHP', CLP: '智利比索 CLP', IDR: '印尼盾 IDR' };
+  const labels = {
+    USD: '美元 USD', MYR: '马币 MYR', PHP: '菲律宾比索 PHP',
+    CLP: '智利比索 CLP', IDR: '印尼盾 IDR', EGP: '埃及镑 EGP'
+  };
   const states = { running: '采集中', updated: '成功且有更新', unchanged: '成功但无变化', partial: '部分失败', failed: '失败',
     valid: '有效', expired: '已过期', missing: '缺少报价' };
   const modes = { automatic: '自动采集', manual: '手动采集', order: '订单取价' };

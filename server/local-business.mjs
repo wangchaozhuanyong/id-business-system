@@ -617,6 +617,8 @@ function checkWrite(entry) {
   }
   if (domain === 'settings' && 'orderPrices' in data && !validOrderPrices(data.orderPrices))
     throw new LocalDataError(400, '套餐售价设置格式不正确');
+  if (domain === 'settings' && 'stockOrderPrices' in data && !validOrderPrices(data.stockOrderPrices))
+    throw new LocalDataError(400, '成品号售价设置格式不正确');
   if (domain === 'settings' && 'gptPaidPrices' in data && !validGptPaidPrices(data.gptPaidPrices))
     throw new LocalDataError(400, 'GPT 代付价格格式不正确');
   if (domain === 'settings' && 'claudePaidPrices' in data && !validClaudePaidPrices(data.claudePaidPrices))
@@ -1432,7 +1434,7 @@ export function createLocalBusinessStore(databasePath) {
         if (settings) {
           const savedSettings = current('settings');
           settings.data = retainOrderCurrencySettings(settings.data, savedSettings);
-          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'gptPaidPrices', 'claudePaidPrices']) {
+          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'stockOrderPrices', 'gptPaidPrices', 'claudePaidPrices']) {
             if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };
             }
