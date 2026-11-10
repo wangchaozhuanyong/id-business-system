@@ -1,0 +1,373 @@
+[
+  {
+    "group": "网站总览",
+    "title": "网站总览",
+    "route": "overview",
+    "placeholder": false,
+    "template": "网站总览"
+  },
+  {
+    "group": "快速操作",
+    "title": "GPT 提交订单",
+    "route": "workspace/order/gpt",
+    "placeholder": false,
+    "template": "GPT 提交订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "Claude 提交订单",
+    "route": "workspace/order/claude",
+    "placeholder": false,
+    "template": "GPT 提交订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "Gemini 提交订单",
+    "route": "workspace/order/gemini",
+    "placeholder": false,
+    "template": "GPT 提交订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "Grok 提交订单",
+    "route": "workspace/order/grok",
+    "placeholder": false,
+    "template": "GPT 提交订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "续费管理",
+    "route": "workspace/renewals",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "客户录入",
+    "route": "customers/new",
+    "placeholder": false,
+    "template": "GPT 提交订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "充值码提取",
+    "route": "workspace/recharge-codes",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "我的充值码",
+    "route": "workspace/my-recharge-codes",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "订单补全",
+    "route": "workspace/order-completion",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "快速操作",
+    "title": "兑换开通",
+    "route": "workspace/recharge",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "管理快捷",
+    "title": "账号提交",
+    "route": "workspace/account-submit",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "管理快捷",
+    "title": "邮箱提交",
+    "route": "workspace/mail-submit",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "管理快捷",
+    "title": "邮箱提取",
+    "route": "workspace/mail-extract",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "管理快捷",
+    "title": "账号提取",
+    "route": "workspace/account-extract",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "管理快捷",
+    "title": "提取与归还",
+    "route": "workspace/extractions",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "管理快捷",
+    "title": "比特登录",
+    "route": "recharge/start",
+    "placeholder": false,
+    "template": "ChatGPT 充值"
+  },
+  {
+    "group": "邮箱管理",
+    "title": "谷歌邮箱",
+    "route": "mailboxes/google",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "邮箱管理",
+    "title": "苹果隐藏邮箱",
+    "route": "mailboxes/relay",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "邮箱管理",
+    "title": "微软邮箱",
+    "route": "mailboxes/microsoft",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "账号管理",
+    "title": "GPT 账号",
+    "route": "accounts/gpt",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "账号管理",
+    "title": "Claude 账号",
+    "route": "accounts/claude",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "账号管理",
+    "title": "苹果 ID 余额",
+    "route": "accounts/apple-balances",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "账号管理",
+    "title": "Gemini 账号",
+    "route": "accounts/gemini",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "账号管理",
+    "title": "Grok 账号",
+    "route": "accounts/grok",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "客户资料",
+    "title": "客户数据",
+    "route": "customers/list",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "客户资料",
+    "title": "租户数据",
+    "route": "customers/tenants",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "订单管理",
+    "title": "GPT 订单",
+    "route": "orders/gpt",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "订单管理",
+    "title": "Claude Pro 订单",
+    "route": "orders/pro",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "订单管理",
+    "title": "Claude Max 订单",
+    "route": "orders/max",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "订单管理",
+    "title": "Claude 专属",
+    "route": "orders/exclusive",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "订单管理",
+    "title": "Gemini 订单",
+    "route": "orders/gemini",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "订单管理",
+    "title": "Grok 订单",
+    "route": "orders/grok",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "线上代充",
+    "title": "ChatGPT 充值",
+    "route": "online-recharge/chatgpt",
+    "placeholder": false,
+    "template": "ChatGPT 充值"
+  },
+  {
+    "group": "线上代充",
+    "title": "Claude 充值",
+    "route": "online-recharge/claude",
+    "placeholder": true,
+    "template": "ChatGPT 充值"
+  },
+  {
+    "group": "数据管理",
+    "title": "订单统计",
+    "route": "orders/statistics",
+    "placeholder": false,
+    "template": "订单统计"
+  },
+  {
+    "group": "数据管理",
+    "title": "银行卡管理",
+    "route": "data-management/bank-cards",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "数据管理",
+    "title": "Claude 谷歌订阅管理",
+    "route": "data-management/claude-google-subscriptions",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "数据管理",
+    "title": "客户流失",
+    "route": "workspace/customer-loss",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "数据管理",
+    "title": "员工数据统计",
+    "route": "data-management/employee-statistics",
+    "placeholder": false,
+    "template": "订单统计"
+  },
+  {
+    "group": "数据中心",
+    "title": "数据中心",
+    "route": "data",
+    "placeholder": true,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "插件管理",
+    "title": "邮箱查询与邮箱池",
+    "route": "plugins/mailboxes",
+    "placeholder": false,
+    "template": "在线工具"
+  },
+  {
+    "group": "插件管理",
+    "title": "网站监控",
+    "route": "plugins/websites",
+    "placeholder": false,
+    "template": "在线工具"
+  },
+  {
+    "group": "插件管理",
+    "title": "谷歌表格同步",
+    "route": "plugins/sheets",
+    "placeholder": false,
+    "template": "在线工具"
+  },
+  {
+    "group": "监控中心",
+    "title": "监控中心",
+    "route": "monitor",
+    "placeholder": true,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "员工与权限",
+    "route": "settings/accounts",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "邮箱分类",
+    "route": "settings/mail-types",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "费用规则",
+    "route": "settings/costs",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "代付国家",
+    "route": "settings/payment-countries",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "汇率采集",
+    "route": "settings/exchange-rates",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "登录日志",
+    "route": "settings/login-logs",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "监控与通知",
+    "route": "settings/monitoring",
+    "placeholder": false,
+    "template": "GPT 订单"
+  },
+  {
+    "group": "系统设置",
+    "title": "操作记录",
+    "route": "settings/audit",
+    "placeholder": false,
+    "template": "GPT 订单"
+  }
+]

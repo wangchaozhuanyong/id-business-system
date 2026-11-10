@@ -90,8 +90,17 @@
       : snapshot.date + ' · 北京时间 · 数据截至 ' + displayTime(snapshot.asOf);
     const warning = !snapshot.codeSourceAvailable
       ? '<p class="inline-notice warning">代充码池暂不可读，涉及的使用和未归还状态待核对。</p>' : '';
-    return `<div class="panel-body"><p class="footnote">${esc(scope)}</p>${warning}</div>` +
-      A.table(columns, A.pageRows(rows), '', pending ? '员工待处理资产' : '员工工作量', {
+    const pageRows = A.pageRows(rows);
+    const chartMetric = metrics[0];
+    const chart = chartMetric && pageRows.length ? `<div class="statistics-visual"><div class="section-title-row"><h2>${esc(chartMetric[1])}</h2>${A.titleInfo(chartMetric[1], '按当前页员工与筛选条件展示，详细数据在下方表格。来源待核验的数量不绘制为零。', 'employee-statistics-chart-help')}</div>${window.IDCharts.bars({
+      title: chartMetric[1], unit: '条', details: false,
+      rows: pageRows.map(row => ({ label: row.name, shortLabel: row.name.length > 4 ? row.name.slice(0, 3) + '…' : row.name,
+        value: ['unusedCodes', 'deliveredCodes', 'processingCodes'].includes(chartMetric[0]) && row.unverifiedCodes
+          ? null : row.counts[chartMetric[0]] ?? null })),
+      series: [{ key: 'value', label: chartMetric[1], tone: pending ? 'amber' : 'blue' }]
+    })}</div>` : '';
+    return `<div class="panel-body"><p class="footnote">${esc(scope)}</p>${warning}</div>` + chart +
+      A.table(columns, pageRows, '', pending ? '员工待处理资产' : '员工工作量', {
         title: pending ? '暂无符合条件的待处理资产' : '暂无符合条件的员工记录',
         description: '可以调整员工或业务类型筛选。'
       }) + A.pagination(rows.length);

@@ -1,0 +1,40 @@
+.design-chart { min-width: 0; color: var(--text); container-type: inline-size; }
+.design-chart-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 16px; padding-bottom: 8px; font-size: 12px; color: var(--secondary); }
+.design-chart-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.design-chart-legend i { width: 9px; height: 9px; border-radius: 3px; background: var(--tone); }
+.design-chart-plot { position: relative; min-width: 0; }
+.design-chart-plot > svg { display: block; width: 100%; height: auto; min-height: 180px; max-height: 300px; }
+.design-chart-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.design-chart-axis { stroke: var(--control-border); stroke-width: 1; }
+.design-chart-tick { fill: var(--secondary); font: 12px -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+.design-chart-bar { fill: var(--tone); }
+.design-chart-hit { fill: transparent; }
+[data-chart-point] { cursor: crosshair; outline: none; }
+[data-chart-point]:is(:hover, :focus-visible) .design-chart-hit { fill: var(--primary-soft); }
+[data-chart-point]:focus-visible .design-chart-hit { stroke: var(--primary); stroke-width: 2; }
+.design-chart-tooltip { position: absolute; pointer-events: none; max-width: calc(100% - 8px); padding: 10px 12px; border: 1px solid var(--control-border); border-radius: var(--radius-control); box-shadow: var(--shadow-raised); background: var(--surface); color: var(--text); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.design-chart-details { margin-top: 8px; color: var(--secondary); font-size: 12px; }
+.design-chart-details > summary { width: fit-content; min-height: 36px; display: flex; align-items: center; cursor: pointer; color: var(--primary); }
+.design-chart-data { overflow-x: auto; max-height: 280px; }
+.design-chart-data caption { padding: 12px; text-align: left; }
+.design-chart-data td { text-align: right; }
+.design-chart-empty { min-height: 220px; display: grid; place-items: center; color: var(--secondary); border-radius: var(--radius-control); background: var(--surface-soft); }
+.design-stock-comparison { min-width: 80px; height: 21px; color: var(--secondary); font-size: 12px; }
+.design-stock-comparison > svg { display: block; width: 100%; height: 21px; }
+.design-stock-comparison rect { fill: var(--tone); }
+.design-stock-comparison .design-stock-track { fill: var(--surface-soft); }
+.design-chart-unavailable { font-size: 12px; color: var(--secondary); }
+.statistics-visual { padding: var(--panel-padding-block) var(--panel-padding-inline); border-bottom: 1px solid var(--line); }
+.statistics-visual > .section-title-row { margin-bottom: 12px; }
+.statistics-visual h2 { margin: 0; font-size: 15px; }
+@container (max-width: 500px) {
+  .design-chart-tick { font-size: 22px; }
+  .design-chart-tick[data-mobile-tick=minor] { display: none; }
+}
+@container (max-width: 340px) {
+  .design-chart-tick { font-size: 28px; }
+}
+@media (max-width: 900px) {
+  .design-chart-details > summary { min-height: 44px; }
+  .design-chart-plot > svg { min-height: 160px; }
+}

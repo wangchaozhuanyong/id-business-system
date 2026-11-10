@@ -1,0 +1,20 @@
+.interaction-preferences { flex: none; }
+.interaction-preferences > summary { list-style: none; display: flex; align-items: center; gap: 6px; cursor: pointer; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--secondary); background: var(--surface); white-space: nowrap; }
+.interaction-preferences > summary::-webkit-details-marker { display: none; }
+.interaction-preferences > summary:hover, .interaction-preferences[open] > summary { color: var(--primary); background: var(--primary-soft); border-color: var(--primary); }
+.interaction-preferences[data-enabled=true] > summary { color: var(--success); }
+.interaction-preferences .sound-on-mark, .interaction-preferences[data-enabled=true] .sound-off-mark { display: none; }
+.interaction-preferences[data-enabled=true] .sound-on-mark { display: block; }
+.interaction-preferences-panel { position: fixed; inset: auto; margin: 0; width: min(280px, calc(100vw - 16px)); box-sizing: border-box; padding: 20px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-raised); z-index: 200; }
+.interaction-preferences-panel:popover-open { display: grid; gap: 16px; }
+.interaction-preferences-panel label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.interaction-preferences-panel label:has(input) { justify-content: flex-start; min-height: 36px; }
+.interaction-preferences-panel input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--primary); }
+.interaction-preferences-panel input[type=range] { width: 100%; accent-color: var(--primary); padding: 0; min-width: 0; height: 28px; }
+.interaction-preferences-panel p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--secondary); }
+@media (max-width: 900px) {
+  .interaction-preferences > summary { height: 44px; min-width: 44px; justify-content: center; padding: 0; }
+  .interaction-preferences > summary > span { display: none; }
+  .interaction-preferences-panel label:has(input) { min-height: 44px; }
+  .interaction-preferences-panel input[type=range] { height: 44px; }
+}

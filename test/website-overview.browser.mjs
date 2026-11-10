@@ -76,7 +76,7 @@ test('网站总览真实汇总、失败恢复、入口、占位、权限和响�
     await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
   };
   await page.goto(origin + '/#/overview');
-  await page.getByText(/订单与客户 更新于/).waitFor();
+  await page.getByText('数据已更新', { exact: true }).waitFor();
   await settled();
   assert.equal(await page.getByRole('heading', { name: '网站总览', exact: true }).count(), 1);
   assert.equal(await page.locator('#sidebar a[href="#/overview"]').innerText(), '网站总览');
@@ -96,7 +96,7 @@ test('网站总览真实汇总、失败恢复、入口、占位、权限和响�
   assert.match(await page.locator('.overview-metric-footer').nth(2).innerText(), /待核算 3 笔/);
   await page.getByRole('button', { name: '今日', exact: true }).click();
   assert.deepEqual(await values(), ['1', '250.00 CNY', '68.24', '1']);
-  assert.equal(await page.locator('.overview-chart-data g').count(), 1);
+  assert.equal(await page.locator('.overview-chart-data [data-chart-point]').count(), 1);
   assert.deepEqual(await product('Gemini'), ['0', '0', '0', '0', '0.00', '0', '0']);
   assert.deepEqual(await product('GPT'), ['1', '1', '250.00 CNY', '50.00 CNY', '68.24', '0', '2']);
   mode = 'delay';
@@ -113,7 +113,10 @@ test('网站总览真实汇总、失败恢复、入口、占位、权限和响�
     assert.deepEqual(await values(), ['1', '250.00 CNY', '68.24', '1']);
   } finally { releaseRefresh.resolve(); }
   await settled();
-  assert.match(await page.locator('.overview-design-label').innerText(), /订单与客户 读取失败 · 保留/);
+  assert.match(await page.locator('.overview-design-label').innerText(), /部分数据读取失败/);
+  await page.locator('.overview-design-label summary').click();
+  assert.match(await page.locator('.title-description:popover-open').innerText(), /订单与客户 读取失败 · 保留/);
+  await page.keyboard.press('Escape');
   mode = 'success';
   await page.getByRole('button', { name: '刷新数据', exact: true }).click();
   await settled();
