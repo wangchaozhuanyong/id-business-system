@@ -214,6 +214,11 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   overflow: visible;
 }
 
+[data-recharge-telegram] .main-content > .page-view,
+:root:not([data-recharge-telegram='ready']) [data-recharge-telegram-form] {
+  display: none;
+}
+
 [data-recharge-view='admin']:not([data-standalone]) :is(.page-view, .page-view.active) {
   max-width: none;
   animation: none;

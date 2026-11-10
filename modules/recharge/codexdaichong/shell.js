@@ -2,13 +2,18 @@
   const origin = window.location.origin;
   const standalone = window.parent === window;
   const root = document.documentElement;
-  const taskLog = new URLSearchParams(window.location.search).get('taskLog');
+  const search = new URLSearchParams(window.location.search);
+  const taskLog = search.get('taskLog');
+  const telegramSettings = !standalone && window.location.pathname.endsWith('/admin') &&
+    search.get('section') === 'telegram' && !taskLog;
+  if (telegramSettings) root.dataset.rechargeTelegram = 'loading';
   if (!standalone && window.location.pathname.endsWith('/admin') && /^[\w-]{1,128}$/.test(taskLog ?? '')) {
     root.dataset.rechargeTaskLog = '';
     window.idRechargeTaskLog = taskLog;
   }
   root.dataset.rechargeNavigationLocked = 'false';
   let reportType = '';
+  let telegramStatus;
   window.idRechargeVisible = standalone;
   function setVisible(visible) {
     window.idRechargeVisible = visible;
@@ -61,7 +66,13 @@
 
   function report(type) {
     if (type === 'ready') restoreDrafts();
-    if (type !== 'resize' && type !== 'view-context') reportType = type;
+    if (type !== 'resize' && type !== 'view-context') {
+      reportType = type;
+      if (telegramSettings) {
+        root.dataset.rechargeTelegram = type;
+        updateTelegramStatus();
+      }
+    }
     if (standalone) return;
     const context = type === 'ready' || type === 'view-context';
     window.parent.postMessage(
@@ -411,30 +422,40 @@
     }
   }
 
-  async function showMonitoringSettingsLink() {
-    const panel = document.querySelector('#telegram_bot_token')?.closest('.panel');
-    const title = panel?.querySelector('.panel-title');
-    if (!title) return;
-    const anchor = document.createElement('a');
-    anchor.className = 'btn btn-secondary';
-    anchor.href = '/#/settings/monitoring';
-    anchor.target = '_top';
-    anchor.textContent = '打开监控与通知';
-    const controls = document.createElement('div');
-    controls.className = 'panel-header';
-    controls.append(anchor);
-    panel.append(controls);
-    try {
-      const response = await fetch('/api/local/system-monitoring?tab=legacy', { cache: 'no-store' });
-      if (!response.ok) return;
-      const { phase } = await response.json();
-      if (phase === 'managed' || phase === 'switching') {
-        panel.replaceChildren(title, controls);
-        const note = document.createElement('p');
-        note.textContent = phase === 'managed' ? '代充业务通知由系统设置统一管理。' : '代充业务通知接管待核对，请在系统设置继续。';
-        window.IDTitleHelp.attach(title, panel.appendChild(note));
-      }
-    } catch { /* The host enforces the handoff independently of this shortcut. */ }
+  function updateTelegramStatus() {
+    if (!telegramStatus) return;
+    const status = root.dataset.rechargeTelegram;
+    telegramStatus.hidden = status === 'ready';
+    telegramStatus.textContent = {
+      loading: '正在读取原代充 Telegram 设置…',
+      'telegram-locked': '代充通知已进入统一接管，请在监控与通知核对。',
+      'session-expired': '统一登录已失效，请重新登录。',
+      unavailable: '暂时无法读取原代充 Telegram 设置，请关闭后重新打开。'
+    }[status] || '';
+  }
+
+  function placeTelegramSettings() {
+    const panel = document.querySelector('[data-recharge-telegram-form]');
+    if (!panel) return;
+    if (!telegramSettings) {
+      panel.remove();
+      return;
+    }
+    const main = panel.closest('main');
+    const title = panel.querySelector('.panel-title');
+    title.nextElementSibling?.remove();
+    title.remove();
+    panel.style.removeProperty('margin-top');
+    for (const row of panel.querySelectorAll('.toggle-field')) {
+      const label = row.querySelector('.toggle-label');
+      const input = row.querySelector('input');
+      label.id = input.id + '-label';
+      input.setAttribute('aria-labelledby', label.id);
+    }
+    telegramStatus = document.createElement('p');
+    telegramStatus.setAttribute('role', 'status');
+    main.append(telegramStatus, panel);
+    updateTelegramStatus();
   }
 
   window.addEventListener('DOMContentLoaded', () => {
@@ -453,7 +474,7 @@
     if (standalone) document.body.dataset.standalone = 'true';
     setupAdminDrafts();
     if (document.body.dataset.rechargeView === 'admin') {
-      void showMonitoringSettingsLink();
+      placeTelegramSettings();
       setupRechargeCellText();
       const subtitleSelector =
         'p:not([id]):not([role]), #orbitcard_usage_hint, .log-page-toolbar-hint';

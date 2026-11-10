@@ -142,6 +142,7 @@
         A.tag(item.verified ? '已取得回执' : item.configured ? '待测试' : '未配置')).join('')}</div></div>
       <div class="toolbar"><div class="toolbar-left"><strong>代充通知</strong>${A.tag(phases[config.legacy.phase] || '未知')}
         ${config.legacy.available && config.legacy.phase !== 'managed' ? (config.legacy.phase === 'native' ?
+          A.button('原代充 Telegram 设置', 'system-monitor-legacy-settings') +
           A.button(config.legacy.imported ? '重新核对并导入' : '导入原代充订阅', 'system-monitor-import') : '') +
           (config.legacy.imported ? A.button(config.legacy.phase === 'switching' ? '继续核对接管' : '接管代充业务通知', 'system-monitor-takeover') : '') : ''}
       </div></div>`;
@@ -251,6 +252,12 @@
         </fieldset><p data-system-monitor-error class="field-error" role="alert" hidden></p></form>`,
         '<button class="button primary" type="submit" form="system-monitor-verified-form">登记事件</button>' + A.button('关闭', 'drawer-close'));
     if (!config || !settingsPage() || !superAdmin()) return true;
+    if (action === 'system-monitor-legacy-settings' && config.legacy.available && config.legacy.phase === 'native') {
+      A.openDrawer('原代充 Telegram 设置', '继续使用原代充保存的 Bot 和接收人。代充消息可能包含账号邮箱和兑换码。',
+        '<iframe class="system-monitor-legacy-frame" src="/integrations/codexdaichong/admin?section=telegram" title="代充 Telegram 配置表单"></iframe>');
+      const drawer = $('#drawer'), frame = $('.system-monitor-legacy-frame', drawer);
+      drawer.addEventListener('close', () => frame.remove(), { once: true });
+    }
     if (action === 'system-monitor-rebase' && draft()) {
       A.confirmAction('核对监控设置', '保留您已改动的选项，使用当前服务器版本作为下次保存依据。', () => {
         A.state.drafts.set(currentDraftKey(), { ...draft(), version: config.version }); A.render();

@@ -350,6 +350,19 @@ function adaptAdminScript(source, routingScript) {
             }
             try {
                 await ensureAdminSession();
+                if (document.documentElement.hasAttribute('data-recharge-telegram')) {
+                    const statusUrl = new URL('api/local/system-monitoring?tab=legacy', location.origin);
+                    const status = await authFetch(statusUrl, { cache: 'no-store' });
+                    if (!status.ok) throw new Error('无法核对代充通知状态');
+                    if ((await status.json()).phase !== 'native') {
+                        window.idRechargeReport('telegram-locked');
+                        return;
+                    }
+                    await reloadSystemConfigFromServer();
+                    lucide.createIcons();
+                    window.idRechargeReport('ready');
+                    return;
+                }
                 await loadData(true);
                 await loadRegionConfig();
                 await loadGptApiConfig();
@@ -1103,6 +1116,8 @@ function adaptHtml(source, kind) {
         : '<body data-recharge-view="' + kind + '"'
     );
   if (kind === 'admin') {
+    const telegramPanel = '<div class="panel" style="margin-top: 24px;">\n                <h2 class="panel-title">Telegram 通知</h2>';
+    source = replaceOne(source, telegramPanel, telegramPanel.replace('class="panel"', 'class="panel" data-recharge-telegram-form'));
     source = replaceOne(
       source,
       '<th width="200px">卡号</th>',

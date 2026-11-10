@@ -76,12 +76,12 @@
   background: var(--surface);
 }
 
-.drawer-body:has(> .recharge-task-log-frame) {
+.drawer-body:has(> :is(.recharge-task-log-frame, .system-monitor-legacy-frame)) {
   padding: 0;
   overflow: hidden;
 }
 
-.recharge-task-log-frame {
+:is(.recharge-task-log-frame, .system-monitor-legacy-frame) {
   display: block;
   width: 100%;
   height: 100%;
