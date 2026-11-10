@@ -34,6 +34,62 @@ export function checkNewOrder(order) {
       return '请选择对应来源的银行卡';
   }
 }
+
+// This is an association of an already-recorded payment, not another payment.
+// The original order and its evidence must remain intact apart from the card
+// reference, one correction entry and the normal update metadata.
+export function historicalGptCardBackfillError(prior, next, {
+  action, card, changedOrderCount, previousLogs, nextLogs, actor
+} = {}) {
+  const fail = '原付款卡补录条件未满足，请单独核对订单和付款凭据';
+  if (!prior || !next || action !== '更正订单' || changedOrderCount !== 1 ||
+      next.cardBackfillConfirmed !== true || prior.product !== 'GPT' || prior.payment !== '银行卡' ||
+      prior.paidConfirmed !== true || prior.cardId || prior.cancelled || prior.source === '线上代充' ||
+      prior.taskId || prior.taskEvidenceId || prior.rechargeCompletedAt ||
+      (prior.refunds || []).length || (prior.bankReturns || []).length) return fail;
+  if (!/^recharge:.+/.test(next.cardId || '') || !card?.active || card.id !== next.cardId ||
+      !/^\d{4}$/.test(card.last4 || '') || next.paymentId !== card.last4 ||
+      (prior.paymentId && prior.paymentId !== card.last4)) return fail;
+  const history = [prior, ...(prior.corrections || []).map(item => item?.previous).filter(Boolean)];
+  if (history.some(item => item.cardId || item.issueFeeSnapshot?.cardId || item.issueFeeSnapshot?.applied ||
+      (item.paymentId && item.paymentId !== card.last4) ||
+      (item.financialEvidence || []).some(entry => entry?.kind === 'payment' && entry.cardId))) return fail;
+  const ignored = new Set(['cardId', 'paymentId', 'version', 'updatedAt', 'updatedBy', 'updatedById',
+    'correctionReason', 'corrections', 'cardBackfillConfirmed', 'cardTypeId', 'cardTypeName']);
+  const fields = new Set([...Object.keys(prior), ...Object.keys(next)]);
+  for (const key of fields)
+    if (!ignored.has(key) && !isDeepStrictEqual(prior[key], next[key])) return fail;
+  if (!Number.isSafeInteger(prior.version) || next.version !== prior.version + 1) return fail;
+  const corrections = prior.corrections || [];
+  if (!Array.isArray(next.corrections) || next.corrections.length !== corrections.length + 1 ||
+      !isDeepStrictEqual(next.corrections.slice(0, -1), corrections)) return fail;
+  const correction = next.corrections.at(-1), reason = String(next.correctionReason || '').trim();
+  const { corrections: _corrections, refunds: _refunds, bankReturns: _returns, ...snapshot } = prior;
+  if (!reason || reason.length > 200 || /(?:\d[ -]?){12,19}/.test(reason) ||
+      correction?.kind !== 'historical-card-backfill' || correction.verified !== true ||
+      typeof correction.id !== 'string' || !correction.id || corrections.some(item => item?.id === correction.id) ||
+      typeof correction.at !== 'string' || !correction.at ||
+      correction?.reason !== reason || correction.versionAfter !== next.version ||
+      !actor?.id || !['admin', 'super'].includes(actor.role) || correction.actorId !== actor.id ||
+      next.updatedById !== actor.id ||
+      !isDeepStrictEqual(correction.previous, snapshot)) return fail;
+  if (!Array.isArray(previousLogs) || !Array.isArray(nextLogs)) return fail;
+  if (nextLogs.length !== previousLogs.length + 1 || !isDeepStrictEqual(nextLogs.slice(1), previousLogs)) return fail;
+  const entry = nextLogs[0], priorLogIds = new Set(previousLogs.map(item => item?.id));
+  if (!entry?.id || priorLogIds.has(entry.id) || entry.type !== '更正订单' || entry.entityId !== prior.id || entry.actorId !== actor.id ||
+      typeof entry.detail !== 'string' || !entry.detail.includes(reason)) return fail;
+}
+
+// The card was attached to the original payment after the fact; do not count
+// the same payment twice merely because the old evidence had no card id.
+export function matchesBackfilledPayment(order, payment, evidence) {
+  if (!order?.cardId || !payment || !evidence || evidence.cardId || payment.cardId !== order.cardId ||
+      payment.amount !== evidence.amount || payment.currency !== evidence.currency ||
+      payment.payment !== evidence.payment) return false;
+  return (order.corrections || []).some(item => item?.kind === 'historical-card-backfill' && item.verified === true &&
+    item.previous?.paidConfirmed === true && !item.previous.cardId && item.previous.payment === payment.payment &&
+    item.previous.paidAmount === payment.amount && item.previous.paidCurrency === payment.currency);
+}
 const proMaterialFields = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
 const proPeopleFields = ['tenantId', 'verifier', 'verifierPhone', 'phone', 'kyc'];
 const proMaterialModes = new Set(['manual_card', 'people', 'pool_card', 'tenant_card', 'none']);
