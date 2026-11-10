@@ -57,7 +57,8 @@ export function personalOrderError(order, prior, orders, customers) {
   if (customers && !customers.some(row => row.id === order.customerId)) return '请选择订单客户';
   if (!personalPlans[order.product].includes(order.plan) || !['首次开通', '续费', '成品交付'].includes(order.businessType))
     return '请选择对应产品的可售套餐与业务类型';
-  if (['tenantId', 'verifier', 'verifierPhone', 'phone', 'proMaterialMode'].some(field => order[field]) ||
+  if (['tenantId', 'verifier', 'verifierPhone', 'phone'].some(field => order[field]) ||
+      (order.proMaterialMode && !['manual_card', 'pool_card'].includes(order.proMaterialMode)) ||
     (order.kyc && order.kyc !== '未认证')) return '认证人与租户资料仅适用于 Claude';
   const series = subscriptionSeries(order);
   if (order.subscriptionSeries !== series) return '订阅系列与套餐不匹配';

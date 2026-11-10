@@ -102,9 +102,11 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     for (const [id, window] of privateAccess) if (!counts(window, now).total) privateAccess.delete(id);
     return [
       { code: 'api_errors', status: apiWindow.total < 50 ? 'unknown' :
-        apiWindow.failures >= 5 && apiWindow.failures / apiWindow.total >= 0.05 ? 'bad' : 'ok', count: apiWindow.failures },
+        apiWindow.failures >= 5 && apiWindow.failures / apiWindow.total >= 0.05 ? 'bad' : 'ok', count: apiWindow.failures,
+      reason: apiWindow.total < 50 ? 'insufficient_requests' : undefined },
       { code: 'mailbox', status: mailboxWindow.failures >= 3 ? 'bad' :
-        mailboxWindow.total - mailboxWindow.failures >= 2 && mailboxWindow.failures === 0 ? 'ok' : 'unknown', count: mailboxWindow.failures },
+        mailboxWindow.total - mailboxWindow.failures >= 2 && mailboxWindow.failures === 0 ? 'ok' : 'unknown', count: mailboxWindow.failures,
+      reason: mailboxWindow.failures < 3 && (mailboxWindow.failures || mailboxWindow.total < 2) ? 'mailbox_samples' : undefined },
       { code: 'login_abuse', status: maxAttempts >= 5 || attempts.failures >= 12 ? 'bad' : 'ok',
         count: maxAttempts >= 5 ? maxAttempts : attempts.failures },
       { code: 'sensitive_reads', status: access >= 20 ? 'bad' : 'ok', count: access }
@@ -121,35 +123,47 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     const job = (code, receipt, stale) => ({ code, status: !workerReports ? 'disabled' :
       !receipt || receipt.at > now + minute ? 'unknown' :
       receipt.integrityFailure || receipt.failures >= 3 || now - receipt.at > stale ? 'bad' :
-        receipt.verifiedAt && receipt.failures === 0 ? 'ok' : 'unknown', count: receipt?.failures });
+        receipt.verifiedAt && receipt.failures === 0 ? 'ok' : 'unknown', count: receipt?.failures,
+      reason: !workerReports ? 'receipt_disabled' : !receipt ? 'receipt_missing' :
+        receipt.at > now + minute ? 'receipt_future' : receipt.integrityFailure ? 'integrity_failed' :
+        now - receipt.at > stale ? 'receipt_stale' : !receipt.verifiedAt ? 'verification_missing' :
+        receipt.failures > 0 && receipt.failures < 3 ? 'recovering' : undefined });
     const output = [
-      { code: 'disk_space', status: available === null ? 'unknown' : available < 15 ? 'bad' : 'ok', count: available },
+      { code: 'disk_space', status: available === null ? 'unknown' : available < 15 ? 'bad' : 'ok', count: available,
+        reason: available === null ? 'disk_unavailable' : undefined },
       job('backup', backup, 20 * minute), job('sheets', sheets, 15 * minute),
       { code: 'order_sync', status: !syncEnabled ? 'disabled' : !orderSync.at ? 'unknown' :
         orderSync.failures >= 3 || now - orderSync.at > 10 * minute ? 'bad' : orderSync.failures === 0 ? 'ok' : 'unknown',
-      count: orderSync.failures }
+      count: orderSync.failures, reason: !syncEnabled ? 'sync_disabled' : !orderSync.at ? 'sync_missing' :
+        now - orderSync.at > 10 * minute ? 'sync_stale' : orderSync.failures > 0 && orderSync.failures < 3 ? 'recovering' : undefined }
     ];
     try {
       const finance = getFinance?.()?.read()?.data;
       const enabled = finance?.settings.enabled && finance.settings.provider !== 'disabled';
       output.push({ code: 'exchange_rates', status: !enabled ? 'disabled' : finance.state.failures >= 3 ? 'bad' :
-        finance.state.failures === 0 && finance.state.lastSuccessAt ? 'ok' : 'unknown', count: finance?.state.failures });
-    } catch { output.push({ code: 'exchange_rates', status: 'unknown' }); }
+        finance.state.failures === 0 && finance.state.lastSuccessAt ? 'ok' : 'unknown', count: finance?.state.failures,
+        reason: !enabled ? 'rates_disabled' : finance.state.failures > 0 && finance.state.failures < 3 ? 'recovering' :
+          !finance.state.lastSuccessAt && finance.state.failures < 3 ? 'rates_missing' : undefined });
+    } catch { output.push({ code: 'exchange_rates', status: 'unknown', reason: 'rates_unavailable' }); }
     return output;
   }
 
   async function recharge(now) {
-    if (!runtimeProbe) return [{ code: 'recharge_runtime', status: 'disabled' }];
+    if (!runtimeProbe) return ['recharge_runtime', 'recharge_review', 'recharge_stuck', 'recharge_burst']
+      .map(code => ({ code, status: 'disabled', reason: 'runtime_disabled' }));
     const [runtime, tasks] = await Promise.allSettled([runtimeProbe(), rechargeClient.get('/api/admin/task-logs?limit=200')]);
     const result = [{ code: 'recharge_runtime', status: runtime.status === 'fulfilled' && runtime.value.ready ? 'ok' : 'bad' }];
     for (const code of ['recharge_cards', 'recharge_route']) {
       const row = refusals.get(code);
       if (row && now - row.at < 15 * minute) result.push(row);
     }
-    if (tasks.status === 'rejected') return [...result, ...['recharge_review', 'recharge_stuck', 'recharge_burst']
-      .map(code => ({ code, status: 'unknown' }))];
+    if (tasks.status === 'rejected' || !Array.isArray(tasks.value?.tasks)) return [...result,
+      ...['recharge_review', 'recharge_stuck', 'recharge_burst']
+        .map(code => ({ code, status: 'unknown', reason: 'tasks_unavailable' }))];
     const projection = projectRechargeMonitoring(tasks.value.tasks, now, monitor.legacyStatus().since);
     const output = [...result, ...projection.samples];
+    for (const code of ['recharge_review', 'recharge_stuck']) if (!projection.samples.some(row => row.code === code))
+      output.push({ code, status: 'unknown', reason: projection.complete ? 'tasks_empty' : 'tasks_incomplete' });
     const dayKey = beijingDay(now - day);
     if (projection.complete && lastDigest !== dayKey && new Date(now + 8 * 60 * minute).getUTCHours() >= 9) {
       const cohort = projection.rows.filter(row => beijingDay(row.createdAt) === dayKey);
@@ -174,7 +188,10 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
       const output = usageSamples(now);
       if (!externalProbe || now - (site || startedAt) > 4 * minute || !site)
         output.push({ code: 'external_probe', status: !externalProbe ? 'disabled' :
-          now - (site || startedAt) > 4 * minute ? 'bad' : 'unknown' });
+          now - (site || startedAt) > 4 * minute ? 'bad' : 'unknown',
+          reason: !externalProbe ? 'probe_disabled' : now - (site || startedAt) > 4 * minute ? 'probe_stale' : 'probe_missing' });
+      if (!externalProbe || !site) for (const code of ['public_site', 'tls_expiry'])
+        output.push({ code, status: 'unknown', reason: !externalProbe ? 'probe_disabled' : 'probe_missing' });
       const results = await Promise.allSettled([background(now), recharge(now)]);
       for (const result of results) if (result.status === 'fulfilled') output.push(...result.value);
       if (closed) return;

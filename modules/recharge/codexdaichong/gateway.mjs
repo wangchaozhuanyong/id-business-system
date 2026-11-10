@@ -164,6 +164,7 @@ export function createCodexdaichongGateway({
   publicOrigin,
   legacyNotificationLocked,
   onRechargeOutcome,
+  beforeCardDelete,
   assets = loadCodexdaichongAssets
 }) {
   const upstream = new URL(upstreamUrl);
@@ -227,6 +228,16 @@ export function createCodexdaichongGateway({
     }
     if (!external && !readMethods.has(req.method) && !canMutate(req))
       return respond(res, 403, '请求来源未通过校验');
+    const deletedCard = req.method === 'DELETE' && /^\/api\/admin\/cards\/([^/]+)\/?$/i.exec(path.pathname);
+    if (deletedCard && beforeCardDelete) {
+      let id;
+      try { id = decodeURIComponent(deletedCard[1]); }
+      catch { return respond(res, 400, '银行卡编号无效'); }
+      if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))
+        return respond(res, 400, '银行卡编号无效');
+      try { await beforeCardDelete('recharge:' + id, actor); }
+      catch { return respond(res, 409, '历史订单银行卡资料尚未留存，未删除银行卡，请核对后重试'); }
+    }
     if (legacyNotificationLocked && /^\/api\/admin\/telegram(?:\/test)?\/?$/i.test(path.pathname)) {
       try {
         if (legacyNotificationLocked()) return respond(res, 409, '代充业务通知已进入统一接管，请在系统设置查看');

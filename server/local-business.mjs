@@ -59,13 +59,14 @@ import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usag
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
 import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding } from './apple-funding.mjs';
-import { cardTypeDocument, cardTypeSnapshot } from './card-management.mjs';
+import { cardTypeDocument, cardTypeSnapshot, orderCardArchiveDocument } from './card-management.mjs';
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
 import { ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee, historicalGptCardBackfillError,
-  isClaudeProBankMaterials, matchesBackfilledPayment, nextOrderNo, normalizeClaudeProMaterials, redactClaudeProOrderMaterials,
+  isClaudeProBankMaterials, isOrderBankMaterials, nextOrderNo, normalizeClaudeProMaterials,
+  redactClaudeProOrderMaterials, retainOrderCardNumber, normalizePaymentEvidence,
   validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices, validApplePaidPrices
 } from './order-policy.mjs';
 import {
@@ -196,7 +197,7 @@ const sessionEventLabels = {
   relay_history_preview: '预检苹果邮箱历史邮件归属'
 };
 const orderFeatureDomains = new Set([
-  'recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument,
+  'recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
   'system-monitoring-config', 'system-monitoring-state', subscriptionDomain
 ]);
 const orderFeatureAuditLabels = {
@@ -254,6 +255,7 @@ const auditDomainLabels = {
   appleBalance: '苹果 ID 余额',
   'recharge-codes': '充值码审核',
   'tenant-cards': '租户银行卡',
+  [orderCardArchiveDocument]: '订单银行卡留存',
   'order-sync': '代充订单同步',
   'finance-rates': '汇率采集',
   'subscription-management': '订阅管理',
@@ -371,11 +373,11 @@ const hasBankPayment = (order) => order?.payment === '银行卡' && (
     order.financialEvidence.some((item) => item?.kind === 'payment' && item.payment === '银行卡')) ||
   (Array.isArray(order.corrections) && order.corrections.some(({ previous }) =>
     previous?.payment === '银行卡' && previous.paidConfirmed === true)));
-const needsOrderCardCheck = (row, prior) => row.payment === '银行卡' && !hasBankPayment(prior) &&
-  (row.cardId !== prior?.cardId || row.tenantId !== prior?.tenantId || row.product !== prior?.product ||
-    row.payment !== prior?.payment || (row.paidConfirmed && !prior?.paidConfirmed));
+const needsOrderCardCheck = (row, prior) => row.payment === '银行卡' &&
+  (['cardId', 'tenantId', 'product', 'payment'].some(field => (row[field] || '') !== (prior?.[field] || '')) ||
+    (row.paidConfirmed && !prior?.paidConfirmed && !hasBankPayment(prior) && !prior?.proCardNumber));
 const usesRechargeCard = (row) =>
-  (row.product === 'GPT' || personalProduct(row.product) || (row.product === 'Claude Pro' && row.proMaterialMode === 'pool_card')) &&
+  (row.product === 'GPT' || personalProduct(row.product) || row.proMaterialMode === 'pool_card') &&
   typeof row.cardId === 'string' && row.cardId.startsWith('recharge:');
 
 function orderCostSnapshot(settings) {
@@ -428,28 +430,6 @@ function normalizeOrderCardType(row, prior, restorePrior, action, types) {
       correction.versionAfter === row.version ? prior : undefined);
     for (const field of ['cardTypeId', 'cardTypeName']) retainOrderField(correction.previous, before, field);
   }
-}
-
-function normalizePaymentEvidence(row, prior, automatic) {
-  if (!row.product) return;
-  const evidence = Array.isArray(row.financialEvidence) ? row.financialEvidence : [];
-  const historical = Array.isArray(prior?.financialEvidence) ? prior.financialEvidence : [];
-  const normalized = historical.filter((item) => item?.kind === 'payment');
-  const previous = prior?.paidConfirmed ? prior : null;
-  for (const payment of automatic ? [] : [previous, row]) {
-    if (!payment?.paidConfirmed || !positiveOrderAmount(payment.paidAmount) ||
-        !validCurrencyCode(payment.paidCurrency)) continue;
-    const cardId = payment.cardId || '';
-    const candidate = { amount: payment.paidAmount, currency: payment.paidCurrency, payment: payment.payment, cardId };
-    if (!normalized.some((item) => item.amount === payment.paidAmount && item.currency === payment.paidCurrency &&
-        item.payment === payment.payment && (item.cardId === cardId || matchesBackfilledPayment(prior, candidate, item)))) {
-      normalized.push({ kind: 'payment', amount: payment.paidAmount, currency: payment.paidCurrency,
-        payment: payment.payment, cardId, at: new Date().toISOString() });
-    }
-  }
-  const receipts = evidence.filter((item) => item?.kind !== 'payment');
-  if (!isDeepStrictEqual(evidence.filter((item) => item?.kind === 'payment'), normalized))
-    row.financialEvidence = [...normalized, ...receipts];
 }
 
 function checkToolbox({ version, data }) {
@@ -689,7 +669,8 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
     const previous = new Map((current.data?.orders || []).map((row) => [row.id, row]));
     const needPool = commerce.data.orders.some((row) => {
       const prior = previous.get(row.id);
-      return usesRechargeCard(row) && (needsOrderCardCheck(row, prior) || row.cardBackfillConfirmed === true);
+      return commerce.action !== '补偿撤回更正' && usesRechargeCard(row) &&
+        (needsOrderCardCheck(row, prior) || row.cardBackfillConfirmed === true);
     });
     if (needPool) {
       try {
@@ -1654,13 +1635,8 @@ export function createLocalBusinessStore(databasePath) {
             const materialError = normalizeClaudeProMaterials(row, restorePrior || prior, commerce.tenants,
               { allowLegacyCreate: !cards && !prior });
             if (materialError) throw new LocalDataError(400, materialError);
-            if (prior?.product === 'Claude Pro' && hasBankPayment(prior) && (
-              row.payment !== prior.payment ||
-              (row.cardId || '') !== (prior.cardId || '') ||
-              (typeof prior.cardId === 'string' && prior.cardId.startsWith('tenant:') && row.tenantId !== prior.tenantId) ||
-              ((row.proMaterialMode === 'manual_card' || prior.proMaterialMode === 'manual_card') &&
-                (row.proMaterialMode !== prior.proMaterialMode || row.proCardNumber !== prior.proCardNumber))
-            )) throw new LocalDataError(409, '已确认银行卡付款的原订单不可更换原付款来源');
+            if (hasBankPayment(prior) && row.payment !== prior.payment)
+              throw new LocalDataError(409, '已确认银行卡付款的原订单不可更换支付方式');
             if (cardTypes === undefined) cardTypes = current(cardTypeDocument);
             if (action === historicalFeeAction || row.cardBackfillConfirmed === true) {
               retainOrderField(row, prior, 'cardTypeId');
@@ -1682,7 +1658,8 @@ export function createLocalBusinessStore(databasePath) {
               if (prior && isDeepStrictEqual(row, prior)) continue;
               const automatic = prior?.source === '线上代充';
               if ((!automatic && row.source === '线上代充') || (row.taskId ?? '') !== (prior?.taskId ?? '') ||
-                  (automatic && rechargeEvidenceFields.some((field) =>
+                  (automatic && rechargeEvidenceFields.filter(field =>
+                    !['更正订单', '补偿撤回更正'].includes(action) || !['cardId', 'paymentId'].includes(field)).some((field) =>
                     !isDeepStrictEqual(prior[field] ?? '', row[field] ?? ''))))
                 throw new LocalDataError(409, '线上代充来源只能由服务端登记');
               if (prior) {
@@ -1746,25 +1723,31 @@ export function createLocalBusinessStore(databasePath) {
                 if (issue) throw new LocalDataError(409, issue);
                 delete row.cardBackfillConfirmed;
                 row.paymentId = card.last4;
+                retainOrderCardNumber(row, prior, card);
+                if (!row.proCardNumber)
+                  throw new LocalDataError(503, '银行卡完整资料未能核对，请刷新后重试');
                 cardBackfilled = true;
                 verifiedCardBackfillId = row.id;
               }
               if (cardBackfilled) {
                 // This only associates existing evidence; it neither creates a payment
                 // nor records a new card use or an unverified opening fee.
-              } else if (!automatic && isClaudeProBankMaterials(row) && !row.cardId) {
-                if (hasBankPayment(prior) && prior.paymentId) retainOrderField(row, prior, 'paymentId');
-              } else if (!automatic && hasBankPayment(prior)) {
-                if (row.payment !== prior.payment || row.cardId !== prior.cardId ||
-                    (typeof prior.cardId === 'string' && prior.cardId.startsWith('tenant:') && row.tenantId !== prior.tenantId))
-                  throw new LocalDataError(409, '已确认银行卡付款的原订单不可换卡或付款方式');
-                retainOrderField(row, prior, 'paymentId');
-              } else if (!automatic && needsOrderCardCheck(row, prior)) {
+              } else if (action === '补偿撤回更正' && row.payment === '银行卡' &&
+                  prior?.corrections?.at(-1)?.versionAfter === prior.version) {
+                const original = prior.corrections.at(-1).previous;
+                row.paymentId = original.paymentId;
+                retainOrderCardNumber(row, original);
+              } else if (isOrderBankMaterials(row) && !row.cardId) {
+                // Manual materials were normalized above and live in the encrypted order document.
+              } else if (needsOrderCardCheck(row, prior)) {
                 if (usesRechargeCard(row)) {
                   const card = cards.get(row.cardId);
                   if (!card?.active) throw new LocalDataError(409, '请选择当前可用的代充卡池银行卡');
+                  if (!/^\d{12,19}$/.test(card.number || '') || !card.number.endsWith(card.last4))
+                    throw new LocalDataError(503, '银行卡完整资料未能核对，请刷新重试或手动填写');
                   row.paymentId = card.last4;
-                  if (row.product === 'GPT' || personalProduct(row.product)) {
+                  retainOrderCardNumber(row, prior, card);
+                  if (!hasBankPayment(prior) && (row.product === 'GPT' || personalProduct(row.product))) {
                     const fee = deriveCardIssueFee(row, prior, [...oldOrders, ...settledThisWrite], card);
                     if (fee) row.issueFeeSnapshot = fee;
                     else delete row.issueFeeSnapshot;
@@ -1776,6 +1759,7 @@ export function createLocalBusinessStore(databasePath) {
                       !commerce.tenants.some((item) => item.id === row.tenantId && item.active !== false)))
                     throw new LocalDataError(409, '请选择当前认证人名下的银行卡');
                   row.paymentId = card.number.slice(-4);
+                  retainOrderCardNumber(row, prior, card);
                 } else if (row.product === 'GPT' && !row.cardId) {
                   row.cardId = '';
                   row.paymentId = '';
@@ -1783,8 +1767,9 @@ export function createLocalBusinessStore(databasePath) {
                 } else if (row.cardId || row.paidConfirmed) {
                   throw new LocalDataError(409, '请选择对应来源的银行卡');
                 } else row.paymentId = '';
-              } else if (!automatic && row.payment === '银行卡') {
+              } else if (row.payment === '银行卡') {
                 retainOrderField(row, prior, 'paymentId');
+                retainOrderCardNumber(row, prior);
               }
               if (action !== snapshotAction && action !== historicalFeeAction && !cardBackfilled)
                 normalizePaymentEvidence(row, prior, automatic);
@@ -2007,7 +1992,9 @@ export function createLocalBusinessStore(databasePath) {
               for (const field of ['start', 'expiry', 'rechargeCompletedAt']) next[field] = order[field];
             }
             if (!old.paymentId && order.paymentId) next.paymentId = order.paymentId;
-            if (!old.cardId && order.cardId && next.paymentId === order.paymentId) next.cardId = order.cardId;
+            if (!old.cardId && order.cardId && next.paymentId === order.paymentId && old.proMaterialMode !== 'manual_card') next.cardId = order.cardId;
+            if (!old.proCardNumber && order.proCardNumber && next.cardId === order.cardId && next.paymentId === order.paymentId)
+              next.proCardNumber = order.proCardNumber;
             if (!old.fxSnapshot && order.fxSnapshot && next.start === order.start &&
                 next.paidCurrency === order.paidCurrency && next.saleCurrency === order.saleCurrency)
               next.fxSnapshot = order.fxSnapshot;

@@ -183,11 +183,12 @@
     const draft = listView(codesRoute);
     const tabs = [['unused', '未使用'], ['used', '已使用'], ['other', '处理中与待核对'], ['returned', '已归还'], ['returns', '归还记录']]
       .map(([key, label]) => `<button type="button" class="tab ${key === codeTab ? 'active' : ''}" role="tab" aria-selected="${key === codeTab}" data-action="order-code-tab" data-id="${key}">${label}</button>`).join('');
-    return '<div class="tabs recharge-code-tabs" role="tablist" aria-label="充值码状态">' + tabs + '</div>' +
-      '<div class="toolbar recharge-code-toolbar"><form class="toolbar-left" id="code-list-filters">' +
+    return '<div class="list-controls recharge-code-toolbar">' +
+      '<div class="tabs recharge-code-tabs" role="tablist" aria-label="充值码状态">' + tabs + '</div>' +
+      '<form class="toolbar recharge-code-filters" id="code-list-filters">' +
       '<div class="search-field">' + A.icon('search') + A.input('code-list-query', draft['code-list-query'] || '', 'type="search" aria-label="搜索充值码或批次" placeholder="搜索充值码或批次"') + '</div>' +
       A.select('code-list-plan', [['', '全部套餐'], ...Object.entries(planNames)], draft['code-list-plan'] || '').replace('<select ', '<select aria-label="筛选套餐" ') +
-      '</form><div class="toolbar-right">' + A.button('归还所选', 'order-code-return-selected', '', '', 'disabled') + '</div></div>' +
+      A.button('归还所选', 'order-code-return-selected', '', '', 'disabled') + '</form></div>' +
       '<div id="recharge-code-new-batch" class="recharge-new-batch" hidden></div><div id="recharge-code-list">' + codesList(view) + '</div>';
   }
   function workspaceRegion(route) {

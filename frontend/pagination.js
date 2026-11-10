@@ -76,6 +76,29 @@
       ?.focus({ preventScroll: true });
   }
 
+  // Keep only measured geometry. The caller owns and clears this map with its page lifecycle.
+  function preserveFrame(root, frames, scope = '') {
+    const pager = root?.querySelector('[data-pagination]');
+    const viewport = [...root?.querySelectorAll('.table-viewport, [data-pagination-rows]') || []]
+      .find(node => node.getClientRects().length);
+    if (!pager || !viewport?.firstElementChild) return;
+    const width = Math.round(viewport.getBoundingClientRect().width);
+    if (!width) return;
+    const key = `${scope}:${pager.dataset.pageSize}:${width}:${viewport.hasAttribute('data-pagination-rows') ? 'cards' : 'table'}`;
+    const style = getComputedStyle(viewport);
+    const content = viewport.querySelector('table') || viewport.firstElementChild;
+    const contentHeight = content.getBoundingClientRect().height +
+      parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + viewport.offsetHeight - viewport.clientHeight;
+    const previous = frames.get(key);
+    const frame = { rows: Math.max(previous?.rows || 0, contentHeight),
+      footer: Math.max(previous?.footer || 0, pager.getBoundingClientRect().height) };
+    frames.set(key, frame);
+    const limit = 'var(--pagination-rows-limit)';
+    viewport.style.minHeight = `min(${frame.rows}px, ${limit})`;
+    viewport.style.maxHeight = limit;
+    pager.style.minHeight = `${frame.footer}px`;
+  }
+
   function closeJump(details) {
     details.open = false;
     details.querySelector('summary').focus({ preventScroll: true });
@@ -223,5 +246,5 @@
     jump(pager, event.target);
   });
 
-  window.IDPagination = Object.freeze({ defaultPageSize, pageSizes, render, watchTableLayout });
+  window.IDPagination = Object.freeze({ defaultPageSize, pageSizes, render, watchTableLayout, preserveFrame });
 })();

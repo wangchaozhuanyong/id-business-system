@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
-import { cardTypeDocument } from '../server/card-management.mjs';
+import { cardTypeDocument, orderCardArchiveDocument, preserveReferencedOrderCard } from '../server/card-management.mjs';
 import { normalizeClaudeProMaterials } from '../server/order-policy.mjs';
 import { historicalFeeAction } from '../server/finance/snapshot-integrity.mjs';
 
@@ -90,12 +90,10 @@ test('Pro rejects missing, mixed and out-of-product materials without touching o
     const invalid = [
       base('no-mode'),
       manual('mixed', { tenantId: tenant.id }),
-      manual('missing-serial', { proCardSerial: '' }),
       manual('card-pool', { cardId: 'tenant:pool' }),
       people('no-people', { phone: '' }),
       people('mixed-people', { proCardSerial: sampleSerial }),
       people('unverified-tenant', { tenantId: 'absent', kyc: 'KYC 认证' }),
-      manual('max', { product: 'Claude Max', plan: 'Max 5x' }),
       manual('apple', { payment: '苹果内购' })
     ];
     for (const order of invalid) {
@@ -170,7 +168,7 @@ test('Pro can correct unconfirmed material mode and retains the original encrypt
   } finally { store.close(); }
 });
 
-test('Pro protects confirmed payment, supports people-mode return and allows same-card serial correction', async () => {
+test('Pro card and optional serial corrections preserve confirmed payment and people-mode returns', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {
     const created = await save(store, 0, makeDocument([
@@ -180,15 +178,17 @@ test('Pro protects confirmed payment, supports people-mode return and allows sam
     const [card, person] = created.data.data.orders;
     const replacement = edit(card, { proCardNumber: '4000000000000002' });
     const update = (version, orders, action = '更正订单') => save(store, version, { ...created.data.data, orders }, action);
-    assert.equal((await update(1, [replacement, person])).status, 409);
-    const serialOnly = edit(card, { proCardSerial: '00043-REVISED' });
-    const correction = await update(1, [serialOnly, person]);
+    const changed = await update(1, [replacement, person]);
+    assert.equal(changed.status, 200);
+    assert.equal(changed.data.data.orders[0].corrections.at(-1).previous.proCardNumber, sampleNumber);
+    const serialOnly = edit(changed.data.data.orders[0], { proCardSerial: '' });
+    const correction = await update(2, [serialOnly, person]);
     assert.equal(correction.status, 200);
     assert.deepEqual(correction.data.data.orders[0].financialEvidence, card.financialEvidence);
     const back = { ...person, version: 2, bankReturns: [
       { id: 'return-pro-people', cardId: '', amount: '2', currency: 'USD' }
     ] };
-    const returned = await update(2, [correction.data.data.orders[0], back], '银行卡回款登记');
+    const returned = await update(3, [correction.data.data.orders[0], back], '银行卡回款登记');
     assert.equal(returned.status, 200);
     assert.equal(returned.data.data.orders[1].bankReturns[0].amount, '2');
   } finally { store.close(); }
@@ -261,7 +261,7 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     let poolReads = 0;
     const options = { readOrderCards: async () => {
       poolReads++;
-      return [{ id: poolCardId, active: poolActive, last4: '1919', usageCount: 0 }];
+      return [{ id: poolCardId, active: poolActive, last4: '1919', number: '4000000000001919', usageCount: 0 }];
     } };
     store.saveFeatureDocument('tenant-cards', 0, {
       items: [{ id: tenantCardId, tenantId: tenant.id, active: true, number: sampleNumber }]
@@ -276,7 +276,6 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     const none = base('none-order', { proMaterialMode: 'none', paidConfirmed: true, paymentId: '9999' });
     const create = (orders) => save(store, 0, makeDocument(orders, tenants), '新增独立订单', options);
     assert.equal((await create([{ ...tenantOrder, tenantId: secondTenant.id }])).status, 409);
-    assert.equal((await create([{ ...pool, proCardNumber: sampleNumber }])).status, 400);
     assert.equal((await create([{ ...pool, cardId: tenantCardId }])).status, 400);
     assert.equal((await create([{ ...none, tenantId: tenant.id }])).status, 400);
     assert.equal((await create([{ ...pool, product: 'Claude Max', plan: 'Max 5x', proMaterialMode: '' }])).status, 400);
@@ -295,13 +294,11 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     assert.equal(tenantSaved.verifierPhone, tenant.phone);
     assert.equal(noneSaved.paymentId, '');
     assert.equal(noneSaved.financialEvidence[0].cardId, '');
-    assert.doesNotMatch(JSON.stringify(created.data), /4242424242424242/);
+    assert.equal(poolSaved.proCardNumber, '4000000000001919');
+    assert.equal(tenantSaved.proCardNumber, sampleNumber);
     const reads = poolReads;
     const change = async (orders, action = '更正订单') =>
       save(store, 1, { ...created.data.data, orders }, action, options);
-    assert.equal((await change([poolSaved, tenantSaved, edit(noneSaved, {
-      proMaterialMode: 'pool_card', cardId: poolCardId
-    })])).status, 409);
     assert.equal((await change([poolSaved, edit(tenantSaved, { tenantId: secondTenant.id }), noneSaved])).status, 409);
     const bankReturn = { ...poolSaved, version: 2, bankReturns: [
       { id: 'pool-return', cardId: tenantCardId, currency: 'USD', amount: '1' }
@@ -324,7 +321,7 @@ test('GPT manual payment can omit a card without applying the pool first-use fee
     assert.equal(manualGpt.financialEvidence[0].cardId, '');
     assert.deepEqual(manualGpt.issueFeeSnapshot, { cardId: '', applied: false, pending: true });
     const editPayment = edit(manualGpt, { cardId: 'recharge:1' });
-    assert.equal((await save(store, 1, { ...saved.data.data, orders: [editPayment] }, '更正订单')).status, 409);
+    assert.equal((await save(store, 1, { ...saved.data.data, orders: [editPayment] }, '更正订单')).status, 503);
   } finally { store.close(); }
 });
 
@@ -332,7 +329,7 @@ test('a confirmed GPT payment may attach its verified original card exactly once
   const store = createLocalBusinessStore(':memory:');
   try {
     const cardId = 'recharge:71';
-    const cards = [{ id: cardId, active: true, last4: '1234', usageCount: 1 }];
+    const cards = [{ id: cardId, active: true, last4: '1234', number: '4000000000001234', usageCount: 1 }];
     let reads = 0;
     const options = { readOrderCards: async () => { reads++; return cards; } };
     const original = base('gpt-card-backfill', { product: 'GPT', plan: 'Plus', paidConfirmed: true });
@@ -351,6 +348,7 @@ test('a confirmed GPT payment may attach its verified original card exactly once
     const updated = saved.data.data.orders[0];
     assert.equal(updated.cardId, cardId);
     assert.equal(updated.paymentId, '1234');
+    assert.equal(updated.proCardNumber, cards[0].number);
     assert.deepEqual(updated.financialEvidence, prior.financialEvidence);
     assert.deepEqual(updated.issueFeeSnapshot, prior.issueFeeSnapshot);
     assert.equal(updated.cardUsedAt, prior.cardUsedAt);
@@ -412,7 +410,7 @@ test('bank card type snapshots come from the current taxonomy and retain histori
     store.saveFeatureDocument(cardTypeDocument, 0, data);
     assert.equal(store.changeVersions(admin)[cardTypeDocument], '1');
     assert.equal(store.changeVersions(employee)[cardTypeDocument], undefined);
-    const options = { readOrderCards: async () => [{ id: cardId, active: true, last4: '1234', usageCount: 1 }] };
+    const options = { readOrderCards: async () => [{ id: cardId, active: true, last4: '1234', number: '4000000000001234', usageCount: 1 }] };
     const order = base('type-snapshot', { proMaterialMode: 'pool_card', cardId, cardTypeName: '客户端伪造类型' });
     const saved = await save(store, 0, makeDocument([order]), '新增独立订单', options);
     assert.equal(saved.status, 200);
@@ -467,25 +465,53 @@ test('confirmed recharge readback snapshots a type only on first association wit
   } finally { store.close(); }
 });
 
-test('Pro file-backed isolated fixture reopens with data intact and no plaintext card data', async () => {
+test('isolated file-backed orders and legacy card archives reopen encrypted after concurrent archive attempts', async () => {
   const root = fileURLToPath(new URL('../.runtime/', import.meta.url));
   await mkdir(root, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(join(root, 'claude-pro-'));
   const file = join(directory, 'fixture.sqlite');
+  const archiveId = 'recharge:51', archiveNumber = '4000000000005556';
+  const selectedCard = { id: 'recharge:52', active: true, last4: '0002', number: '4000000000000002', usageCount: 1 };
   let store = createLocalBusinessStore(file);
   try {
-    const saved = await save(store, 0, makeDocument([manual('reopen')]));
+    const legacy = base('legacy-reopen', {
+      product: 'GPT', plan: 'Plus', cardId: archiveId, paymentId: '5556', paidConfirmed: true
+    });
+    const [initial] = store.saveBatch([{ domain: 'commerce', version: 0, data: makeDocument([legacy]) }]);
+    const original = initial.data.orders[0];
+    assert.equal(original.proCardNumber, undefined);
+    const saved = await save(store, initial.version, makeDocument([
+      original,
+      manual('reopen'),
+      base('verified-reopen', { cardId: selectedCard.id, proMaterialMode: 'pool_card', paidConfirmed: true })
+    ]), '新增独立订单', { readOrderCards: async () => [selectedCard] });
     assert.equal(saved.status, 200);
+    assert.equal(saved.data.data.orders.find(order => order.id === 'verified-reopen').proCardNumber, selectedCard.number);
+    const client = { get: async () => ({ cards: [{ id: 51, last4: '5556', card_number: archiveNumber }] }) };
+    const second = createLocalBusinessStore(file);
+    try {
+      const attempts = await Promise.allSettled([store, second].map(connection =>
+        preserveReferencedOrderCard(connection, client, archiveId, admin)));
+      assert.equal(attempts.filter(result => result.status === 'fulfilled').length, 1);
+      assert.equal(attempts.find(result => result.status === 'rejected')?.reason?.status, 409);
+    } finally { second.close(); }
+    assert.equal(store.featureDocument(orderCardArchiveDocument).version, 1);
+    assert.deepEqual(store.load('commerce').data.orders.find(order => order.id === legacy.id), original);
     store.close();
     store = undefined;
     const bytes = await readFile(file);
-    assert.ok(!bytes.includes(Buffer.from(sampleNumber)));
-    assert.ok(!bytes.includes(Buffer.from(sampleSerial)));
+    for (const material of [sampleNumber, sampleSerial, archiveNumber, selectedCard.number])
+      assert.ok(!bytes.includes(Buffer.from(material)));
     store = createLocalBusinessStore(file);
-    const order = store.load('commerce').data.orders[0];
+    const orders = store.load('commerce').data.orders;
+    const order = orders.find(row => row.id === 'reopen');
     assert.equal(order.proCardNumber, sampleNumber);
     assert.equal(order.proCardSerial, sampleSerial);
-    assert.doesNotMatch(JSON.stringify(store.audit()), /4242424242424242|00042-FIXTURE-CARD-SERIAL/);
+    assert.equal(orders.find(row => row.id === 'verified-reopen').proCardNumber, selectedCard.number);
+    assert.equal(store.featureDocument(orderCardArchiveDocument).data.cards[archiveId].number, archiveNumber);
+    await preserveReferencedOrderCard(store, { get() { throw new Error('测试卡已删除'); } }, archiveId, admin);
+    assert.equal(store.featureDocument(orderCardArchiveDocument).version, 1);
+    assert.doesNotMatch(JSON.stringify(store.audit()), new RegExp([sampleNumber, sampleSerial, archiveNumber, selectedCard.number].join('|')));
   } finally {
     store?.close();
     await rm(directory, { recursive: true, force: true });

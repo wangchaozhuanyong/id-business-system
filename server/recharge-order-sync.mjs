@@ -78,6 +78,7 @@ export function rechargeOrderEvidence(task, {
   const card = matchingCards.length === 1 ? matchingCards[0] : null;
   const cardId = tail && orbit && orbit.cardLast4 === tail ? 'orbitcard:' + orbit.cardId
     : card && !orbit ? 'recharge:' + card.id : '';
+  const savedNumber = card?.card_number || (orbit && orbitCards.find(row => Number(row.cardId) === orbit.cardId)?.cardNumber) || rawPan;
   const terminal = runtimeEntries.find((entry) => entry.jobKey === task.jobKey && entry.source === 'task' &&
     /^任务结束 status=success progress=100(?: |$)/.test(entry.text) && Number.isSafeInteger(entry.ts));
   const completed = Number.isFinite(provider?.completedAt) ? provider.completedAt : terminal?.ts;
@@ -102,6 +103,7 @@ export function rechargeOrderEvidence(task, {
     expiry: start ? expiryFor(start) : '',
     paidAmount: provider?.paidAmount || '', paidCurrency: provider?.paidCurrency || '',
     paymentId: tail, cardId, employeeId: owner?.employeeId || '',
+    ...(/^\d{12,19}$/.test(savedNumber || '') && tail && savedNumber.endsWith(tail) && { proCardNumber: savedNumber }),
     firstUse, needs
   };
 }
@@ -112,6 +114,7 @@ export function buildRechargeOrder(evidence, settings, at) {
   return {
     product: 'GPT', businessType: '续费', accountSource: '客户自有', accountId: '',
     taskId: jobKey, source: '线上代充', email, plan, payment: '银行卡', paymentId, cardId,
+    ...(evidence.proCardNumber && { proCardNumber: evidence.proCardNumber }),
     paidAmount, paidCurrency, paidConfirmed: Boolean(paidAmount && paidCurrency),
     receiptConfirmed: false, costConfirmed: false, costBasis: 'standard',
     costSettings: { ...fallbackRules, ...settings?.costSettings, currency: 'CNY' }, rates: {},

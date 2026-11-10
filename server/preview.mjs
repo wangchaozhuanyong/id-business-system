@@ -25,7 +25,7 @@ import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-brid
 import { productionDataPaths } from './production-data.mjs';
 import { createOrderRechargeClient, readPoolCards } from './order-recharge-client.mjs';
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
-import { cardManagementRoutes, createCardManagementHandler } from './card-management.mjs';
+import { cardManagementRoutes, createCardManagementHandler, preserveReferencedOrderCard } from './card-management.mjs';
 import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
@@ -204,6 +204,10 @@ export async function startPreview(
           publicOrigin: secureOrigin || `http://${host}`,
           secret: rechargeConfig.secret,
           legacyNotificationLocked: () => systemMonitoring?.legacyLocked() === true,
+          beforeCardDelete: (cardId, actor) => {
+            if (!store) throw new Error('订单资料尚未就绪');
+            return preserveReferencedOrderCard(store, orderRechargeClient, cardId, actor);
+          },
           onRechargeOutcome: outcome => queueMicrotask(() => {
             try { monitoringSources?.recordRecharge(outcome); } catch {}
           }),
@@ -539,7 +543,7 @@ export async function startPreview(
         return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
-        readOrderCards: () => readPoolCards(orderRechargeClient),
+        readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),
         readOrderOwners: () => auth?.orderOwners() || [],
         verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,
         async verifyRelayExtraction(aliasIds, operator) {

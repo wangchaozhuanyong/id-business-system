@@ -7,9 +7,21 @@
   const draftKey = namespace + ':configuration';
   const listViewKey = namespace + ':list';
   const tabKey = namespace + ':tab';
+  const checksKey = namespace + ':checks';
   const checks = { ok: '正常', bad: '异常', watch: '观察中', unknown: '未知', disabled: '未启用' };
   const delivery = { queued: '等待发送', sending: '正在发送', accepted: 'Telegram 已接收', failed: '投递失败',
     unknown: '结果待核对', cancelled: '配置变化，已取消' };
+  const incidentDelivery = { ...delivery, partial: '部分接收', no_record: '无投递记录',
+    external_unknown: '站外投递待核对', queue_full: '投递队列已满' };
+  const notificationLabels = { disabled: '未启用', inactive: '无启用规则', unready: '待接通', partial: '部分接通', ready: '已就绪' };
+  const sourceLinks = {
+    login_abuse: ['查看登录日志', 'settings/login-logs'], sensitive_reads: ['查看操作记录', 'settings/audit'],
+    recharge_runtime: ['打开代充后台', 'online-recharge/chatgpt'],
+    recharge_review: ['打开代充后台', 'online-recharge/chatgpt'],
+    recharge_stuck: ['打开代充后台', 'online-recharge/chatgpt'],
+    recharge_burst: ['打开代充后台', 'online-recharge/chatgpt'],
+    exchange_rates: ['查看汇率采集', 'settings/exchange-rates'], mailbox: ['查看邮箱查询与邮箱池', 'plugins/mailboxes']
+  };
   const phases = { native: '原代充继续发送', switching: '接管结果待核对', managed: '已由系统统一发送' };
   const timeFormat = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short',
     timeStyle: 'medium', hourCycle: 'h23' });
@@ -25,7 +37,23 @@
   const snapshots = new Map();
   const pending = new Map();
   const errors = new Map();
-  let generation = 0, busy = false;
+  const listFrames = new Map();
+  let generation = 0, busy = false, refreshTimer, frameObserver;
+  const checkFilter = () => A.state.drafts.get(checksKey) || 'attention';
+  const statusKind = status => status === 'bad' ? 'danger' : ['watch', 'unknown', 'disabled'].includes(status) ? 'warning' : 'success';
+  const receiptLabel = row => incidentDelivery[row.deliveryStatus] ||
+    (row.accepted ? delivery.accepted : row.external ? incidentDelivery.external_unknown : '暂无回执');
+
+  function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+    if (document.hidden || A.state.route !== 'monitor' || !local()) return;
+    refreshTimer = setTimeout(() => {
+      if (A.state.route !== 'monitor' || document.hidden || !local()) return;
+      if (busy || pending.size || document.querySelector('dialog[open], [popover]:popover-open') ||
+          document.activeElement?.matches('input,select,textarea')) return scheduleRefresh();
+      void load(true);
+    }, 60_000);
+  }
 
   function params(tab = queryTab()) {
     const { page, pageSize, status } = list(tab);
@@ -60,6 +88,11 @@
       if (!current()) return;
       if (tab === 'config' ? !Array.isArray(data?.rules) || !data.channels : !Array.isArray(data?.items) || !pageSizes.includes(data.pageSize))
         throw new Error('监控资料响应不完整，请重新读取');
+      if (tab === 'incidents' && (!Array.isArray(data.checks) || data.checks.some(row =>
+        !row || typeof row.code !== 'string' || !Object.hasOwn(checks, row.status)) ||
+        !Number.isSafeInteger(data.generatedAt) || !data.notifications ||
+        !Object.hasOwn(notificationLabels, data.notifications.status)))
+        throw new Error('监控状态响应不完整，请重新读取');
       snapshots.set(tab, { key, data });
       if (tab !== 'config') A.state.drafts.set(listViewKey + tab, { status: input.status, page: data.page, pageSize: data.pageSize });
     } catch (error) {
@@ -76,7 +109,7 @@
   function details(row) {
     const fields = [['事件编号', row.id], ['级别', row.priority], ['发生时间', time(row.at)],
       ['本次观测', row.count ?? '—'], ['任务尾号', row.taskTail || '—'],
-      ['投递', row.accepted ? 'Telegram 已接收' : row.queueFull ? '投递队列已满' : '暂无接收回执'],
+      ['投递', receiptLabel(row)],
       ['人工确认', row.ackAt ? time(row.ackAt) + ' · ' + row.ackBy : '待确认'],
       ['恢复', row.kind === 'event' ? '单次事件' : row.resolvedAt ? time(row.resolvedAt) : '尚无恢复证据']];
     if (row.summary) fields.push(['日报', '成功 ' + row.summary.success + ' · 失败 ' + row.summary.failure +
@@ -100,7 +133,7 @@
     ] : [
       { id: 'label', label: '告警' }, { id: 'priority', label: '级别', render: row => A.tag(row.priority, row.priority === 'P0' ? 'danger' : 'warning') },
       { id: 'state', label: '处置状态', render: row => A.tag(row.resolvedAt ? '已恢复' : row.ackAt ? '已确认' : '待确认') },
-      { id: 'receipt', label: '投递', render: row => e(row.accepted ? 'Telegram 已接收' : row.external ? '站外投递待核对' : '暂无回执') },
+      { id: 'receipt', label: '投递', render: row => e(receiptLabel(row)) },
       { id: 'at', label: '发生时间（北京）', render: row => e(time(row.at)) },
       { id: 'actions', label: '操作', action: true, render: row => action(row, 'compact') }
     ];
@@ -115,9 +148,89 @@
       : A.empty(empty, guidance);
     return `<div class="toolbar"><div class="toolbar-left"><label for="system-monitor-filter">状态</label>
       <select id="system-monitor-filter" ${pending.has(tab) ? 'disabled' : ''}>${A.options([['', '全部状态'], ...statuses], list(tab).status)}</select></div></div>` +
-      '<div class="system-monitor-list" data-pagination-table>' + A.table(columns, data.items, '', tableName, { title: empty, description: guidance }) +
+      '<div data-monitor-list-frame><div class="system-monitor-list" data-pagination-table>' + A.table(columns, data.items, '', tableName, { title: empty, description: guidance }) +
       `<div class="system-monitor-mobile panel-body" data-pagination-rows tabindex="0" role="region" aria-label="${tableName}">${cards}</div></div>` +
-      window.IDPagination.render({ id: namespace, page: data.page, pageSize: data.pageSize, total: data.total, disabled: pending.has(tab) });
+      window.IDPagination.render({ id: namespace, page: data.page, pageSize: data.pageSize, total: data.total, disabled: pending.has(tab) }) + '</div>';
+  }
+
+  function notificationDetails() {
+    const current = snapshots.get('incidents')?.data.notifications;
+    if (!current) return;
+    const fields = [['统一通知', notificationLabels[current.status] || '未知'],
+      ['接收通道', '已配置 ' + current.configured + ' / ' + current.total + '，已验证 ' + current.verified],
+      ['待接通接收方', current.missingChannels?.join('、') || '无'],
+      ['代充通知归属', phases[current.legacyPhase] || '未知']];
+    A.openDrawer('通知接通情况', '已就绪表示具备自动投递条件；消息是否收到，以投递记录的接收回执为准。',
+      '<div class="property-list">' + fields.map(([label, value]) =>
+        `<div class="property-row"><span>${e(label)}</span><strong>${e(value)}</strong></div>`).join('') + '</div>' +
+      `<p class="system-monitor-guidance">${e(current.status === 'disabled'
+        ? '自动发送已关闭。请超级管理员配置接收人、核对测试回执后再启用。'
+        : current.missingChannels?.length ? '部分规则缺少已验证的接收方，请超级管理员在通知设置补齐。'
+        : '可在投递记录核对各条通知的实际结果。原代充通知的接管需单独核对。')}</p>`,
+      (superAdmin() ? A.button('打开监控与通知', 'goto', 'primary', '', 'data-route="settings/monitoring"') : '') +
+      A.button('关闭', 'drawer-close'));
+  }
+
+  function checkDetails(code) {
+    const row = snapshots.get('incidents')?.data.checks?.find(item => item.code === code);
+    if (!row) return;
+    const fields = [['当前状态', checks[row.status] || '未知'], ['最近检查（北京）', time(row.at)],
+      ['采集来源', row.source || '尚未说明'], ['检测依据', row.detail || '尚未取得有效检测结果。'],
+      ...(row.measurement ? [['观测值', row.measurement]] : []), ['判断规则', row.threshold || '尚未说明']];
+    const link = sourceLinks[code];
+    A.openDrawer(row.title || row.label, '当前状态来自最近检查；告警确认、恢复与通知接收分别记录。',
+      '<div class="property-list">' + fields.map(([label, value]) =>
+        `<div class="property-row"><span>${e(label)}</span><strong>${e(value)}</strong></div>`).join('') + '</div>' +
+      `<p class="system-monitor-guidance">${e(row.guidance || '请核对采集来源及相关运行记录。')}</p>`,
+      (link ? A.button(link[0], 'goto', 'primary', '', `data-route="${e(link[1])}"`) : '') +
+      A.button('关闭', 'drawer-close'));
+  }
+
+  function monitorOverview(data) {
+    const rows = data.checks || [];
+    const count = status => rows.filter(row => row.status === status).length;
+    const notification = data.notifications;
+    const metrics = [
+      ['当前异常', count('bad'), '观察中 ' + count('watch') + ' 项'],
+      ['监测正常', count('ok'), '共 ' + rows.length + ' 项监控'],
+      ['未知／未接入', count('unknown') + count('disabled'), '未知 ' + count('unknown') + ' · 未启用 ' + count('disabled')],
+      ['通知状态', notificationLabels[notification?.status] || '未知', notification
+        ? '已验证 ' + notification.verified + ' / ' + notification.total + ' 个接收通道' : '尚未取得渠道状态']
+    ];
+    return '<div class="summary-strip system-monitor-summary" aria-label="监控概览">' + metrics.map(([label, value, detail], index) =>
+      `<div class="summary-item" data-monitor-metric="${index}"><div class="summary-label">${e(label)}</div>
+        <div class="summary-number">${e(value)}</div><div class="system-monitor-metric-detail">${e(detail)}</div>
+        ${index === 3 && notification ? A.button('查看接通情况', 'system-monitor-notifications', 'compact') : ''}</div>`).join('') + '</div>';
+  }
+
+  function monitoringChecks(data) {
+    const severity = { bad: 0, watch: 1, unknown: 2, disabled: 3, ok: 4 };
+    const groups = [['运行', '系统运行'], ['安全', '访问安全'], ['代充', '代充服务'], ['后台任务', '后台任务']];
+    const rows = (data.checks || []).filter(row => checkFilter() === 'all' ||
+      (checkFilter() === 'normal' ? row.status === 'ok' : row.status !== 'ok'));
+    const renderedGroups = groups.map(([category, label]) => {
+      const selected = rows.filter(row => row.category === category).sort((a, b) => severity[a.status] - severity[b.status]);
+      if (!selected.length) return '';
+      return `<section class="system-monitor-group" aria-label="${label}"><h3>${label}<span>${selected.length} 项</span></h3>` +
+        selected.map(row => `<article class="system-monitor-check" data-monitor-check="${e(row.code)}">
+          <div class="system-monitor-check-heading"><h4>${e(row.title || row.label)}</h4>${A.tag(checks[row.status] || '未知', statusKind(row.status))}</div>
+          <p>${e(row.detail || '尚未取得有效检测结果。')}</p>
+          ${row.measurement ? `<p class="system-monitor-measurement">${e(row.measurement)}</p>` : ''}
+          <div class="system-monitor-check-footer"><span>最近检查 ${e(time(row.at))}</span>
+            ${A.button('查看与处理', 'system-monitor-check', 'compact', '', `data-code="${e(row.code)}" aria-label="查看${e(row.title || row.label)}与处理"`)}</div>
+        </article>`).join('') + '</section>';
+    });
+    const rendered = [renderedGroups.slice(0, 2), renderedGroups.slice(2)].map(column => {
+      const content = column.join('');
+      return content ? '<div class="system-monitor-column">' + content + '</div>' : '';
+    }).join('');
+    return `<section class="panel"><div class="toolbar system-monitor-toolbar"><div class="toolbar-left">
+      <h2>监控项目</h2>${A.titleInfo('监控项目', '按系统、安全、代充和后台任务分组。默认显示异常、观察中、未知和未启用项目；可切换查看正常项目。时间均为北京时间。', 'system-monitor-checks-help')}
+      <label for="system-monitor-check-filter">显示</label><select id="system-monitor-check-filter">${A.options([
+        ['attention', '需关注'], ['all', '全部项目'], ['normal', '正常项目']], checkFilter())}</select>
+      </div><div class="toolbar-right" data-page-actions></div></div>
+      <div class="system-monitor-read-time">最近更新 ${e(time(data.generatedAt))} · 页面可见时每 60 秒更新</div>
+      <div class="panel-body system-monitor-groups">${rendered || A.empty('暂无符合条件的监控项目', '可切换显示范围查看其他监控状态。')}</div></section>`;
   }
 
   function channelForm(config) {
@@ -181,16 +294,17 @@
           `<div class="toolbar"><span>服务器设置已更新，草稿待核对。</span>${A.button('使用最新版本继续编辑', 'system-monitor-rebase')}</div>`;
         content += settingsTab() === 'channels' ? channelForm(snapshot) : ruleForm(snapshot);
       } else {
-        if (!setting && snapshot.checks?.length) content +=
-          `<div class="toolbar"><div class="toolbar-left">${snapshot.checks.map(row =>
-            A.tag(row.label + ' · ' + (checks[row.status] || '未知'), row.status === 'bad' ? 'danger' : '')).join('')}</div></div>`;
-        content += tableView(tab, snapshot);
+        if (!setting) content += monitorOverview(snapshot) + monitoringChecks(snapshot) +
+          `<section class="panel system-monitor-incidents"><div class="panel-heading"><div class="section-title-row"><h2>告警记录</h2>
+            ${A.titleInfo('告警记录', '待确认、已确认、已恢复依次展示，组内按紧急程度及发生时间排序。人工确认只记录已知悉，恢复由后续检测确认。', 'system-monitor-incidents-help')}</div></div>` +
+          tableView(tab, snapshot) + '</section>';
+        else content += tableView(tab, snapshot);
       }
     } else if (!error) content = '<div class="toolbar" role="status">等待读取监控资料</div>';
     if (error) content = `<div class="inline-notice warning" role="alert">${e(error)} ${snapshot ? '已保留上次读取。' : ''}</div>` + content;
     return A.header(title, description, refresh + jump +
       (!setting && superAdmin() ? A.button('登记已核实事件', 'system-monitor-verified') : '')) +
-      `<section class="panel" data-system-monitor-region>${nav}<div id="system-monitor-progress" role="status" hidden></div>${content}</section>`;
+      `<${setting ? 'section' : 'div'} class="${setting ? 'panel' : 'system-monitor-center'}" data-system-monitor-region>${nav}<div id="system-monitor-progress" role="status" hidden></div>${content}</${setting ? 'section' : 'div'}>`;
   }
 
   async function act(command, success, form) {
@@ -236,6 +350,8 @@
     const config = snapshots.get('config')?.data;
     const row = snapshots.get('incidents')?.data.items.find(item => item.id === node.dataset.id);
     if (action === 'system-monitor-refresh') void load(true);
+    if (action === 'system-monitor-check') checkDetails(node.dataset.code);
+    if (action === 'system-monitor-notifications') notificationDetails();
     if (action === 'system-monitor-tab' && ['channels', 'rules', 'deliveries'].includes(node.dataset.tab)) {
       A.state.drafts.set(tabKey, node.dataset.tab); A.render(); void load();
     }
@@ -280,6 +396,9 @@
 
   function onChange(node) {
     const tab = queryTab();
+    if (node.id === 'system-monitor-check-filter' && ['attention', 'all', 'normal'].includes(node.value)) {
+      A.state.drafts.set(checksKey, node.value); A.render(); return true;
+    }
     if (node.id === 'system-monitor-filter') {
       A.state.drafts.set(listViewKey + tab, { ...list(tab), status: node.value, page: 1 }); void load(); return true;
     }
@@ -326,14 +445,27 @@
     A.state.drafts.set(listViewKey + tab, { ...list(tab), page, pageSize });
     void load();
   });
+  document.addEventListener('visibilitychange', scheduleRefresh);
   window.IDDesignModules.push({
     id: namespace, matches: route => ['monitor', settingsRoute].includes(route), render, onClick, onChange, onSubmit,
     afterRender({ routeChanged } = {}) {
       bindRead(queryTab());
+      scheduleRefresh();
+      frameObserver?.disconnect();
+      const frame = $('[data-monitor-list-frame]');
+      if (frame) {
+        const preserve = () => window.IDPagination.preserveFrame(frame, listFrames, queryTab());
+        preserve();
+        frameObserver = new ResizeObserver(preserve);
+        frameObserver.observe(frame);
+      }
       if (routeChanged) queueMicrotask(() => {
         if (['monitor', settingsRoute].includes(A.state.route)) void load(true);
       });
     },
-    clearPageState() { generation++; busy = false; snapshots.clear(); pending.clear(); errors.clear(); }
+    clearPageState() {
+      generation++; busy = false; clearTimeout(refreshTimer); frameObserver?.disconnect(); listFrames.clear();
+      snapshots.clear(); pending.clear(); errors.clear();
+    }
   });
 })();

@@ -64,8 +64,15 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
       const rect = node => node.getBoundingClientRect().toJSON();
       const text = node => { const r = document.createRange(); r.selectNodeContents(node); return r.getBoundingClientRect().toJSON(); };
       const [left, right] = container.children;
+      const toolbar = right.querySelector('.recharge-code-toolbar');
+      const tabs = toolbar.querySelector('.recharge-code-tabs');
+      const controls = ['#code-list-query', '#code-list-plan', '[data-action="order-code-return-selected"]']
+        .map(selector => rect(toolbar.querySelector(selector)));
       return { container: rect(container), left: rect(left), right: rect(right), lt: text(left.querySelector('h2')), rt: text(right.querySelector('h2')),
         fields: [...left.querySelectorAll('.field')].map(field => ({ label: rect(field.querySelector('label')), control: rect(field.querySelector('input,select')) })),
+        toolbar: { bounds: rect(toolbar), tabs: rect(tabs), tabText: text(tabs.querySelector('.active')), controls,
+          scrolling: tabs.scrollWidth > tabs.clientWidth + 1, border: getComputedStyle(toolbar).borderBottomWidth,
+          tabBorder: getComputedStyle(tabs).borderBottomWidth },
         overflow: document.documentElement.scrollWidth > innerWidth + 1 };
     });
     assert(!geometry.overflow);
@@ -75,6 +82,20 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
       assert(Math.abs(geometry.fields[0].control.top - geometry.fields[1].control.top) < 1, '套餐与数量同排');
     } else assert(geometry.right.top >= geometry.left.bottom + 19);
     for (const field of geometry.fields) assert(field.label.right <= field.control.left + 1);
+    const { bounds, tabs, tabText, controls, scrolling, border, tabBorder } = geometry.toolbar;
+    assert.equal(border, '1px');
+    assert.equal(tabBorder, '0px');
+    assert(controls.every(control => control.left >= bounds.left && control.right <= bounds.right + 1), '筛选与归还按钮完整可见');
+    if (geometry.right.width >= 900) {
+      const centerY = rect => (rect.top + rect.bottom) / 2;
+      assert(!scrolling && tabs.right <= controls[0].left, '宽面板完整显示五个页签，右侧同排');
+      assert(controls.every(control => Math.abs(centerY(tabs) - centerY(control)) <= 1), '页签与筛选控件同排居中');
+      assert(Math.abs(centerY(tabs) - centerY(tabText)) <= 2, '页签文字垂直居中');
+      if (width === 1680) assert(controls[0].width >= 180 && controls[0].width < 280, '先收窄搜索框，筛选组保持同排');
+    }
+    if (width <= 390) {
+      assert(scrolling && controls[0].top >= tabs.bottom, '窄面板页签横滑，筛选组整体换行');
+    }
     const codeBounds = await page.locator('#recharge-code-list .recharge-code-text').evaluateAll(nodes => nodes.map(node => ({ width: node.clientWidth, scroll: node.scrollWidth })));
     assert(codeBounds.every(value => value.scroll <= value.width + 1), '充值码完整换行');
     const list = left.locator('.recharge-request-list');
@@ -88,10 +109,12 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
     await page.evaluate(() => window.scrollTo(0, 0));
     measurements.push({ width, theme, state, geometry });
   };
-  for (const width of [1920, 1680, 1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
+  for (const width of [2480, 1920, 1680, 1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
     await page.setViewportSize({ width, height: 1050 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     await measure(width, theme, 'first-page');
+    if ([1680, 390].includes(width))
+      await right.locator('.recharge-code-toolbar').screenshot({ path: `${output}/codes-toolbar-${width}-${theme}.png`, animations: 'disabled' });
     if ([1680, 390].includes(width)) await page.screenshot({ path: `${output}/workspace-${width}-${theme}.png`, fullPage: width === 1680, animations: 'disabled' });
     if (width === 390) {
       await right.evaluate(node => window.scrollTo(0, node.getBoundingClientRect().top + window.scrollY - document.querySelector('.topbar').getBoundingClientRect().height - 16));
@@ -172,7 +195,15 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   await right.locator('[data-action="order-code-item-detail"]').click();
   await page.locator('#drawer').getByText(assigned, { exact: true }).waitFor();
   await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  const returnSelected = right.locator('[data-action="order-code-return-selected"]');
+  const returnPosition = () => returnSelected.evaluate(node => {
+    const { x, y, width, height } = node.getBoundingClientRect();
+    const toolbar = node.closest('.recharge-code-toolbar').getBoundingClientRect();
+    return { x: x - toolbar.x, y: y - toolbar.y, width, height };
+  });
+  const unselected = await returnPosition();
   await right.locator('[data-select="recharge-code-items"]').check();
+  assert.deepEqual(await returnPosition(), unselected, '显示已选数量后，归还按钮保持原位置和宽度');
   await right.getByRole('button', { name: '归还所选（1）', exact: true }).click();
   await page.locator('#code-return-form').waitFor();
   assert.equal(await page.locator('#code-return-form input[type="checkbox"]:checked').count(), 1);

@@ -3,8 +3,8 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { interceptDesign, origin, settle, spacingSnapshot } from './helpers/offline-design.mjs';
-import { monitorChannels, monitorRules } from '../server/monitoring-policy.mjs';
+import { interceptDesign, origin, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { monitorChannels, monitorRules, monitorCheckDetail } from '../server/monitoring-policy.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
   ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
@@ -20,16 +20,30 @@ const config = () => ({
 const fixtures = Array.from({ length: 24 }, (_, index) => ({
   id: 'monitor-fixture-' + (index + 1), label: index === 0 ? '代充付款待核实' : '业务接口异常',
   category: '运行', priority: 'P1', kind: 'incident', at, count: 5, accepted: index === 0,
+  deliveryStatus: index === 0 ? 'accepted' : 'no_record',
   taskId: index === 0 ? 'synthetic-job-4821' : undefined,
   taskTail: index === 0 ? '4821' : undefined
 }));
 const output = process.env.ID_MONITORING_QA_OUTPUT;
+const checkStates = {
+  public_site: 'unknown', external_probe: 'disabled', tls_expiry: 'unknown', api_errors: 'unknown',
+  disk_space: 'ok', login_abuse: 'ok', sensitive_reads: 'ok', recharge_runtime: 'ok',
+  recharge_review: 'unknown', recharge_stuck: 'unknown', recharge_burst: 'ok', order_sync: 'disabled',
+  exchange_rates: 'ok', mailbox: 'unknown', backup: 'disabled', sheets: 'disabled'
+};
+const checkFixtures = () => Object.entries(checkStates).map(([code, status]) => ({
+  code, status, label: monitorRules[code].label, category: monitorRules[code].category, at,
+  ...monitorCheckDetail(code, status, { status,
+    reason: ['public_site', 'external_probe', 'tls_expiry'].includes(code) ? 'probe_disabled' :
+      ['backup', 'sheets'].includes(code) ? 'receipt_disabled' : code === 'api_errors' ? 'insufficient_requests' : undefined })
+}));
 
 async function prepare(browser, width, role = 'super', phase = 'native') {
   const context = await browser.newContext({ viewport: { width, height: 940 }, locale: 'zh-CN' });
   const offline = await interceptDesign(context, { localFixtures: {},
     actor: { id: 'fixture-monitor-' + role, name: '合成管理员', role } });
-  const records = structuredClone(fixtures), settings = config(), writes = [];
+  const records = structuredClone(fixtures), settings = config(), writes = [], reads = [];
+  let readings = checkFixtures();
   settings.legacy.phase = phase;
   let failSave = false, failRead = false;
   await context.route('**/api/local/system-monitoring*', async request => {
@@ -52,6 +66,7 @@ async function prepare(browser, width, role = 'super', phase = 'native') {
       }
       return request.fulfill({ status: 400, json: { error: '离线操作不可用' } });
     }
+    reads.push(url.searchParams.get('tab'));
     if (failRead) return request.fulfill({ status: 503, json: { error: '合成读取失败' } });
     const tab = url.searchParams.get('tab'), requestedPage = Number(url.searchParams.get('page') || 1);
     const pageSize = Number(url.searchParams.get('pageSize') || 20);
@@ -61,21 +76,34 @@ async function prepare(browser, width, role = 'super', phase = 'native') {
       items: [{ id: 'receipt-fixture', label: '渠道测试', status: 'accepted', target: '运维接收人', at, attempts: 1, messageId: 421 }] } });
     const matched = url.searchParams.get('status') === 'resolved' ? [] : records;
     const page = Math.min(requestedPage, Math.max(1, Math.ceil(matched.length / pageSize)));
-    return request.fulfill({ json: { checks: [{ label: '站外探针', status: 'unknown' }, { label: '执行器', status: 'ok' }],
+    return request.fulfill({ json: { checks: readings, generatedAt: at,
+      notifications: { status: 'disabled', configured: 1, verified: 1, total: 4,
+        missingChannels: ['安全管理员', '代充管理员'], legacyPhase: phase },
       page, total: matched.length, pageSize, items: matched.slice((page - 1) * pageSize, page * pageSize) } });
   });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(7000);
-  return { page, context, offline, errors, writes, setLegacyStatus(value) { phase = value; },
+  return { page, context, offline, errors, writes, reads, setChecks(value) { readings = value; }, setLegacyStatus(value) { phase = value; },
     setFailSave(value) { failSave = value; }, setFailRead(value) { failRead = value; } };
 }
 
 async function pageGeometry(page) {
   await settle(page);
-  const geometry = await page.locator('#main').evaluate(root => ({
+  const geometry = await page.locator('#main').evaluate(root => {
+    const textBox = node => {
+      const range = document.createRange();
+      range.selectNodeContents(node.firstChild);
+      return range.getBoundingClientRect().toJSON();
+    };
+    return {
     documentOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+    width: innerWidth,
+    overflowing: [...root.querySelectorAll('*')].filter(node =>
+      node.getBoundingClientRect().right > innerWidth + 1 && node.getClientRects().length)
+      .slice(0, 12).map(node => ({ tag: node.tagName, className: String(node.className),
+        right: Math.round(node.getBoundingClientRect().right), parent: String(node.parentElement.className) })),
     clippedActions: [...root.querySelectorAll('[data-action="system-monitor-detail"]')].filter(node => node.checkVisibility())
       .some(node => { const box = node.getBoundingClientRect(); return box.left < 0 || box.right > innerWidth + 1; }),
     controls: [...root.querySelectorAll('.field')].filter(row => row.checkVisibility()).map(row => {
@@ -85,11 +113,17 @@ async function pageGeometry(page) {
       const a = label.getBoundingClientRect(), b = control.getBoundingClientRect();
       return { label: label.textContent, before: a.left < b.left, overlap: a.right > b.left + 1,
         row: Math.min(a.bottom, b.bottom) >= Math.max(a.top, b.top) - 1 };
-    }).filter(Boolean)
-  }));
-  assert.equal(geometry.documentOverflow, false);
+    }).filter(Boolean),
+    metricHeadings: [...root.querySelectorAll('.summary-label')].map(node => textBox(node).top),
+    groupHeadings: [...root.querySelectorAll('.system-monitor-group h3')].map(textBox)
+  }; });
+  assert.equal(geometry.documentOverflow, false, JSON.stringify({ width: geometry.width, overflowing: geometry.overflowing }));
   assert.equal(geometry.clippedActions, false);
   assert(geometry.controls.every(row => row.before && !row.overlap && row.row), JSON.stringify(geometry.controls));
+  if (page.viewportSize().width >= 1024 && geometry.metricHeadings.length)
+    assert(Math.max(...geometry.metricHeadings) - Math.min(...geometry.metricHeadings) < 1);
+  if (geometry.groupHeadings.length > 1 && geometry.groupHeadings[0].left !== geometry.groupHeadings[1].left)
+    assert(Math.abs(geometry.groupHeadings[0].top - geometry.groupHeadings[1].top) < 1);
   const spacing = await spacingSnapshot(page);
   assert.deepEqual(spacing.findings, []);
 }
@@ -98,40 +132,137 @@ test('监控配置和告警使用实际路由并兼容桌面、手机及深浅�
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   if (output) await mkdir(output, { recursive: true });
-  for (const width of [1440, 390, 320]) for (const theme of ['light', 'dark']) {
+  for (const width of [1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
     const { page, context, offline, errors } = await prepare(browser, width);
     await page.goto(origin + route);
-    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    if (theme === 'dark') await toggleDesignTheme(page);
     await page.getByRole('button', { name: '保存渠道', exact: true }).waitFor();
     await pageGeometry(page);
-    if (output && width !== 320) await page.screenshot({ path: join(output, 'channels-' + width + '-' + theme + '.png') });
+    if (output && [1440, 390].includes(width)) await page.screenshot({ path: join(output, 'channels-' + width + '-' + theme + '.png') });
     await page.getByRole('tab', { name: '通知规则' }).click();
     await page.getByRole('button', { name: '保存通知规则' }).waitFor();
     await pageGeometry(page);
     await page.getByRole('tab', { name: '投递记录' }).click();
-    await (width <= 760 ? page.locator('[data-monitor-card="receipt-fixture"]') :
-      page.getByRole('cell', { name: 'Telegram 已接收', exact: true })).waitFor();
+    const receipt = page.locator('[data-monitor-card="receipt-fixture"]:visible, [data-row-id="receipt-fixture"]:visible');
+    await receipt.getByText('Telegram 已接收', { exact: true }).waitFor();
+    assert.equal(await receipt.count(), 1);
     await pageGeometry(page);
     await page.evaluate(() => { location.hash = '#/monitor'; });
-    await (width <= 760 ? page.getByRole('heading', { name: '代充付款待核实' }) :
-      page.getByRole('cell', { name: '代充付款待核实' })).waitFor();
+    const incident = page.locator('[data-monitor-card="monitor-fixture-1"]:visible, [data-row-id="monitor-fixture-1"]:visible');
+    await incident.getByText('代充付款待核实', { exact: true }).waitFor();
+    assert.equal(await incident.count(), 1);
     await pageGeometry(page);
-    if (output && width !== 320) await page.screenshot({ path: join(output, 'incidents-' + width + '-' + theme + '.png') });
+    if (output && [1440, 390].includes(width)) {
+      await page.screenshot({ path: join(output, 'incidents-' + width + '-' + theme + '.png') });
+      if (width === 1440) await page.screenshot({ path: join(output, 'incidents-full-' + theme + '.png'), fullPage: true });
+    }
     const pager = page.locator('[data-pagination="system-monitoring"]');
+    const frameHeight = () => page.locator('.system-monitor-incidents').evaluate(node => node.getBoundingClientRect().height);
+    const firstHeight = await frameHeight();
     const size = pager.getByRole('combobox', { name: '每页条数' });
     assert.equal(await size.inputValue(), '20');
     await pager.getByRole('button', { name: '下一页' }).click();
     await page.locator('[data-row-id="monitor-fixture-21"]:visible, [data-monitor-card="monitor-fixture-21"]:visible').waitFor();
+    await settle(page);
+    assert(Math.abs(await frameHeight() - firstHeight) <= 1, '末页告警框架不应缩小');
     await size.selectOption('10');
     await page.locator('[data-pagination="system-monitoring"][data-page="1"][data-page-size="10"]').waitFor();
     await pageGeometry(page);
+    const filteredHeight = await frameHeight();
     await page.locator('#system-monitor-filter').selectOption('resolved');
     await page.getByRole('heading', { name: '暂无符合条件的告警' }).waitFor();
     await pageGeometry(page);
+    assert(Math.abs(await frameHeight() - filteredHeight) <= 1, '空结果告警框架不应缩小');
     assert.deepEqual(errors, []);
     assert.deepEqual(offline.external, []);
     await context.close();
   }
+});
+
+test('监控概览显示完整状态、检查依据和通知缺口，筛选及处理入口可用', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const f = await prepare(browser, 1440);
+  t.after(() => f.context.close());
+  const { page } = f;
+  await page.goto(origin + '/#/monitor');
+  await page.locator('[data-monitor-metric="1"] .summary-number').filter({ hasText: '6' }).waitFor();
+  assert.equal(await page.locator('[data-monitor-metric="2"] .summary-number').innerText(), '10');
+  assert.equal(await page.locator('[data-monitor-check]').count(), 10);
+  assert.match(await page.locator('[data-row-id="monitor-fixture-2"]').innerText(), /无投递记录/);
+  await page.locator('#system-monitor-check-filter').selectOption('all');
+  assert.equal(await page.locator('[data-monitor-check]').count(), 16);
+  await page.getByRole('button', { name: '查看备份校验与处理', exact: true }).click();
+  const drawer = page.locator('#drawer[open]');
+  await drawer.getByText('尚未接入专用工作进程回执，无法判断任务运行结果。', { exact: true }).waitFor();
+  await drawer.getByText('备份工作进程校验回执', { exact: true }).waitFor();
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '查看接通情况' }).click();
+  await drawer.getByText('安全管理员、代充管理员', { exact: true }).waitFor();
+  await drawer.getByRole('button', { name: '打开监控与通知' }).click();
+  await page.waitForURL(origin + route);
+  assert.equal(await drawer.count(), 0);
+  await page.getByRole('link', { name: '监控中心', exact: true }).click();
+  await page.locator('#system-monitor-check-filter').waitFor();
+  assert.equal(await page.locator('#system-monitor-check-filter').inputValue(), 'all');
+  await page.getByRole('button', { name: '查看汇率采集与处理', exact: true }).click();
+  await drawer.getByRole('button', { name: '查看汇率采集', exact: true }).click();
+  await page.waitForURL(origin + '/#/settings/exchange-rates');
+  assert.equal(await drawer.count(), 0);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.offline.external, []);
+  assert.deepEqual(f.errors, []);
+});
+
+test('缺少监控资料时显示读取失败，不渲染虚构的零值概览', { timeout: 20_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const f = await prepare(browser, 1440);
+  t.after(() => f.context.close());
+  f.setChecks(null);
+  await f.page.goto(origin + '/#/monitor');
+  await f.page.getByRole('alert').filter({ hasText: '监控状态响应不完整' }).waitFor();
+  assert.equal(await f.page.locator('[data-monitor-metric]').count(), 0);
+  f.setChecks(checkFixtures());
+  await f.page.getByRole('button', { name: '刷新', exact: true }).click();
+  await f.page.locator('[data-monitor-metric="1"] .summary-number').filter({ hasText: '6' }).waitFor();
+  assert.deepEqual(f.errors, []);
+});
+
+test('监控定时读取不打断抽屉，切页后停止，读取失败保留已知状态', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const f = await prepare(browser, 1440);
+  t.after(() => f.context.close());
+  const { page } = f;
+  await page.clock.install();
+  await page.goto(origin + '/#/monitor');
+  await page.locator('[data-monitor-check="backup"]').waitFor();
+  const initial = f.reads.length;
+  f.setChecks(checkFixtures().map(row => row.code === 'disk_space'
+    ? { ...row, status: 'bad', detail: '合成磁盘可用比例低于阈值。' } : row));
+  await page.clock.fastForward(60_100);
+  await page.locator('[data-monitor-check="disk_space"]').waitFor();
+  assert.equal(f.reads.length, initial + 1);
+  await page.getByRole('button', { name: '查看备份校验与处理', exact: true }).click();
+  await page.clock.fastForward(120_000);
+  assert.equal(f.reads.length, initial + 1);
+  await page.locator('#drawer').getByRole('button', { name: '关闭', exact: true }).click();
+  f.setFailRead(true);
+  await page.clock.fastForward(60_100);
+  await page.getByRole('alert').filter({ hasText: '已保留上次读取' }).waitFor();
+  await page.locator('[data-monitor-check="disk_space"]').waitFor();
+  f.setFailRead(false);
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: '已保留上次读取' }).waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '监控与通知', exact: true }).click();
+  await page.getByRole('button', { name: '保存渠道' }).waitFor();
+  const afterLeave = f.reads.length;
+  await page.clock.fastForward(120_000);
+  assert.equal(f.reads.length, afterLeave);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.offline.external, []);
+  assert.deepEqual(f.errors, []);
 });
 
 test('监控设置保留普通草稿、清除离页密钥并分开投递和人工确认', { timeout: 45_000 }, async t => {
@@ -244,7 +375,7 @@ test('接管前从系统设置打开原代充表单，沿用保存、测试及�
     });
 
     await page.goto(origin + '/#/online-recharge/chatgpt');
-    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    if (theme === 'dark') await toggleDesignTheme(page);
     await page.getByRole('button', { name: '系统配置', exact: true }).click();
     await assertNoRechargeTelegram(page.frameLocator('iframe[data-view="config"]:not([hidden])'));
     if (width <= 900) await page.locator('#nav-toggle').click();

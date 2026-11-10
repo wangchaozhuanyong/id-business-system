@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import {
   monitorRules, monitorChannels, monitorConfigDomain, monitorStateDomain, legacyRules, initialMonitoringConfig,
-  taskMonitorRules, scopePattern, chatIdPattern, botTokenPattern, boundedCount, monitoringError, telegramText, sendTelegram
+  taskMonitorRules, scopePattern, chatIdPattern, botTokenPattern, boundedCount, monitoringError, telegramText, sendTelegram,
+  monitorReasons, monitorCheckDetail
 } from './monitoring-policy.mjs';
 
 const limit = 1000;
@@ -129,7 +130,8 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       ? Object.fromEntries(['success', 'failure', 'review', 'open'].map(key => [key, input.summary[key]])) : undefined;
     return { code, scope, status, at, external, confirmed: external && confirmed,
       accepted: external && input.accepted === true, externalId: external ? input.externalId : undefined,
-      count, summary, rule, key: code + ':' + scope };
+      count, summary, reason: typeof input.reason === 'string' && Object.hasOwn(monitorReasons, input.reason)
+        ? input.reason : undefined, rule, key: code + ':' + scope };
   }
 
   function observe(inputs, audit) {
@@ -141,11 +143,11 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     const changed = updateState(data => {
       let dirty = false;
       for (const item of current) {
-        const { key, code, scope, status, count, at, external, confirmed, accepted, externalId, rule, summary } = item;
+        const { key, code, scope, status, count, at, external, confirmed, accepted, externalId, rule, summary, reason } = item;
         const last = nextSamples.get(key);
         if (last && at <= last.at && !confirmed) continue;
         const streak = last?.status === status && at - last.at <= 3 * minute ? last.streak + 1 : 1;
-        if (!rule.oneShot && (!last || at > last.at)) nextSamples.set(key, { code, status, streak, at });
+        if (!rule.oneShot && (!last || at > last.at)) nextSamples.set(key, { code, status, streak, at, count, reason });
         if (legacyRules.includes(code) && settings.legacy.phase !== 'managed') continue;
         if (rule.oneShot && !settings.rules[code] && ['digest', ...legacyRules].includes(code)) continue;
         const active = data.incidents.find(row => row.code === code && row.scope === scope &&
@@ -385,6 +387,32 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     return { acknowledged: true };
   }
 
+  function notificationOverview(data, settings) {
+    const channels = Object.keys(monitorChannels);
+    const required = new Set(Object.entries(monitorRules).flatMap(([code, rule]) => {
+      if (!settings.rules[code] || code === 'public_site') return [];
+      return rule.channel === 'legacy' ? settings.legacy.phase === 'managed' ? settings.legacy.recipients : []
+        : [rule.channel === 'recharge' ? 'rechargeAdmin' : rule.channel];
+    }));
+    const missing = [...required].filter(target => !verified(data, settings, target));
+    const configured = channels.filter(target => settings.channels[target]).length;
+    const verifiedCount = channels.filter(target => verified(data, settings, target)).length;
+    return { status: !settings.enabled ? 'disabled' : !required.size ? 'inactive' :
+      missing.length ? verifiedCount ? 'partial' : 'unready' : 'ready',
+      configured, verified: verifiedCount, total: channels.length,
+      missingChannels: missing.map(target => monitorChannels[target]), legacyPhase: settings.legacy.phase };
+  }
+
+  function incidentDelivery(data, row) {
+    if (row.external) return row.externalAccepted ? 'accepted' : 'external_unknown';
+    const receipts = data.deliveries.filter(item => item.incidentId === row.id && item.kind === 'opened');
+    if (!receipts.length) return row.queueFull ? 'queue_full' : 'no_record';
+    if (receipts.every(item => item.status === 'accepted')) return 'accepted';
+    if (receipts.some(item => item.status === 'accepted')) return 'partial';
+    return ['unknown', 'failed', 'sending', 'queued', 'cancelled'].find(state =>
+      receipts.some(item => item.status === state)) || 'unknown';
+  }
+
   function view({ tab = 'incidents', status = '', page = 1, pageSize = 20 } = {}) {
     const { data } = state();
     if (tab === 'deliveries') return pageOf(data.deliveries.filter(row => !status || row.status === status).map(row => ({
@@ -396,19 +424,24 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       const readings = [...samples.values()].filter(sample => sample.code === code);
       const observed = readings.sort((a, b) => b.at - a.at)[0];
       const open = data.incidents.some(row => row.code === code && !row.resolvedAt);
-      return { label: rule.label, category: rule.category, at: observed?.at ?? null,
-        status: !observed || clock() - observed.at > 5 * minute || observed.status === 'unknown' ? 'unknown' :
-          open ? 'bad' : observed.status === 'bad' ? 'watch' : observed.status };
+      const stale = observed && clock() - observed.at > 5 * minute;
+      const status = !observed || stale || observed.status === 'unknown' ? 'unknown' :
+        open ? 'bad' : observed.status === 'bad' ? 'watch' : observed.status;
+      return { code, label: rule.label, category: rule.category, at: observed?.at ?? null, status,
+        ...monitorCheckDetail(code, status, observed, { stale, open }) };
     });
-    return { checks, ...pageOf(data.incidents.filter(row => !status ||
-      (status === 'resolved' ? Boolean(row.resolvedAt) : status === 'acknowledged' ? Boolean(row.ackAt) :
-        !row.resolvedAt && !row.ackAt)).map(row => ({
+    const rank = row => row.resolvedAt ? 2 : row.ackAt ? 1 : 0;
+    return { checks, generatedAt: clock(), notifications: notificationOverview(data, config().data),
+      ...pageOf(data.incidents.filter(row => !status ||
+      (status === 'resolved' ? Boolean(row.resolvedAt) : status === 'acknowledged' ? !row.resolvedAt && Boolean(row.ackAt) :
+        !row.resolvedAt && !row.ackAt)).sort((a, b) => rank(a) - rank(b) ||
+          monitorRules[a.code].priority.localeCompare(monitorRules[b.code].priority) || b.at - a.at).map(row => ({
       id: row.id, label: monitorRules[row.code].label, priority: monitorRules[row.code].priority,
       category: monitorRules[row.code].category, kind: monitorRules[row.code].oneShot ? 'event' : 'incident',
       taskTail: taskMonitorRules.has(row.code) ? row.scope.slice(-6) : '',
       taskId: taskMonitorRules.has(row.code) ? row.scope : undefined,
       count: row.count, summary: row.summary, at: row.at, resolvedAt: row.resolvedAt, ackAt: row.ackAt, ackBy: row.ackBy,
-      queueFull: row.queueFull, external: row.external,
+      queueFull: row.queueFull, external: row.external, deliveryStatus: incidentDelivery(data, row),
       accepted: row.externalAccepted || data.deliveries.some(item => item.incidentId === row.id &&
         item.kind === 'opened' && item.status === 'accepted')
     })), page, pageSize) };

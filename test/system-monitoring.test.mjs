@@ -378,6 +378,94 @@ test('backup and Sheets monitoring reserve their own mount and skip business dat
   assert.equal(receiptReads, 0);
   assert.equal(checks.find(row => row.label === '备份校验失败或回执超期').status, 'disabled');
   assert.equal(checks.find(row => row.label === 'Google 表格同步连续失败').status, 'disabled');
+  assert.match(checks.find(row => row.code === 'backup').detail, /尚未接入/);
+  assert.match(checks.find(row => row.code === 'public_site').detail, /站外探针尚未接通/);
+  assert.match(checks.find(row => row.code === 'api_errors').detail, /样本不足/);
+});
+
+test('check evidence exposes fixed reasons and freshness without carrying arbitrary source text', t => {
+  const f = fixture(t);
+  f.monitor.observe([{ code: 'disk_space', status: 'ok', count: 62, reason: 'private-upstream-error' }]);
+  const read = () => f.monitor.view().checks.find(row => row.code === 'disk_space');
+  assert.equal(read().title, '业务磁盘');
+  assert.equal(read().measurement, '磁盘可用比例：62%');
+  assert.equal(read().at, now);
+  assert.equal(JSON.stringify(f.monitor.view()).includes('private-upstream-error'), false);
+  f.tick(6 * minute);
+  assert.equal(read().status, 'unknown');
+  assert.match(read().detail, /超过 5 分钟/);
+  assert.equal(read().measurement, '');
+});
+
+test('notification overview separates disabled, missing recipients and ready channels without exposing destinations', async t => {
+  const f = fixture(t);
+  assert.equal(f.monitor.view().notifications.status, 'disabled');
+  assert.equal(f.monitor.view().notifications.configured, 0);
+  await enable(f);
+  const partial = f.monitor.view().notifications;
+  assert.equal(partial.status, 'partial');
+  assert.deepEqual(partial.missingChannels, ['代充管理员']);
+  f.monitor.save(f.monitor.configView().version, { enabled: true, channels: { rechargeAdmin: '999005' }, rules: {} }, supervisor);
+  f.monitor.queueTest(f.monitor.configView().version, 'rechargeAdmin', supervisor);
+  f.tick(); await f.monitor.dispatch();
+  assert.equal(f.monitor.view().notifications.status, 'ready');
+  assert.equal(f.monitor.view().notifications.verified, 3);
+  const response = JSON.stringify(f.monitor.view());
+  for (const secret of [token, ops, security, '999005']) assert.equal(response.includes(secret), false);
+});
+
+test('incidents distinguish absent, pending, ambiguous and accepted delivery evidence', async t => {
+  const absent = fixture(t);
+  absent.monitor.observe([{ code: 'exchange_rates', status: 'bad' }]);
+  assert.equal(absent.monitor.view().items[0].deliveryStatus, 'no_record');
+  const delivered = fixture(t);
+  await enable(delivered);
+  delivered.monitor.observe([{ code: 'exchange_rates', status: 'bad' }]);
+  assert.equal(delivered.monitor.view().items[0].deliveryStatus, 'queued');
+  delivered.tick(); await delivered.monitor.dispatch();
+  assert.equal(delivered.monitor.view().items[0].deliveryStatus, 'accepted');
+  const ambiguous = fixture(t, { send: (input, count) => count <= 2
+    ? { status: 'accepted', messageId: count } : { status: 'unknown' } });
+  await enable(ambiguous);
+  ambiguous.monitor.observe([{ code: 'exchange_rates', status: 'bad' }]);
+  ambiguous.tick(); await ambiguous.monitor.dispatch();
+  assert.equal(ambiguous.monitor.view().items[0].deliveryStatus, 'unknown');
+});
+
+test('unresolved incidents sort ahead of restored records and acknowledged filters remain exclusive', t => {
+  const { monitor, tick } = fixture(t);
+  monitor.observe([{ code: 'exchange_rates', status: 'bad' }]);
+  const old = monitor.view().items[0];
+  monitor.acknowledge(old.id, admin);
+  tick(); monitor.observe([{ code: 'exchange_rates', status: 'ok' }]);
+  tick(); monitor.observe([{ code: 'exchange_rates', status: 'ok' }]);
+  tick(); monitor.observe([{ code: 'security_confirmed', scope: 'evidence-1', status: 'bad' }]);
+  assert.equal(monitor.view({ pageSize: 1 }).items[0].label, '已核实安全事件');
+  assert.equal(monitor.view({ page: 2, pageSize: 1 }).items[0].id, old.id);
+  assert.equal(monitor.view({ status: 'acknowledged' }).total, 0);
+  assert.equal(monitor.view({ status: 'resolved' }).total, 1);
+});
+
+test('a truncated recharge batch cannot establish a healthy failure rate', () => {
+  const rows = Array.from({ length: 200 }, (_, index) => ({ jobKey: 'job-' + index,
+    time: '2026/11/10 09:59:00', status: 'success' }));
+  const sample = () => projectRechargeMonitoring(rows, now).samples.find(row => row.code === 'recharge_burst');
+  assert.equal(sample().status, 'unknown');
+  assert.equal(sample().reason, 'tasks_incomplete');
+  for (let index = 0; index < 5; index++) rows[index].status = 'failed';
+  assert.equal(sample().status, 'bad');
+});
+
+test('invalid task receipts preserve the independently observed runtime status', async t => {
+  const f = fixture(t);
+  const sources = createMonitoringSources({ monitor: f.monitor, clock: f.clock, databasePath: '/fixture/data.sqlite',
+    runtimeProbe: async () => ({ ready: true }), rechargeClient: { get: async () => ({ tasks: null }) },
+    readDisk: async () => ({ blocks: 100, bavail: 50 }) });
+  t.after(() => sources.close());
+  await sources.tick();
+  const checks = f.monitor.view().checks;
+  assert.equal(checks.find(row => row.code === 'recharge_runtime').status, 'ok');
+  assert.match(checks.find(row => row.code === 'recharge_review').detail, /无法读取有效/);
 });
 
 test('Telegram transport distinguishes acceptance, explicit rate limits, and an incomplete response', async () => {

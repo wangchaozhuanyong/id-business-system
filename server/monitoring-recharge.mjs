@@ -56,7 +56,9 @@ export function projectRechargeMonitoring(tasks, now, since) {
   const rows = tasks.map(nativeTask).filter(row => row && row.createdAt <= now);
   const recent = rows.filter(row => row.createdAt >= now - 15 * minute);
   const failures = recent.filter(row => row.status === 'failed' && !row.empty).length;
-  const samples = [{ code: 'recharge_burst', status: failures >= 5 ? 'bad' : rows.length === tasks.length ? 'ok' : 'unknown', count: failures }];
+  const complete = tasks.length < 200 && rows.length === tasks.length;
+  const samples = [{ code: 'recharge_burst', status: failures >= 5 ? 'bad' : complete ? 'ok' : 'unknown', count: failures,
+    reason: failures < 5 && !complete ? 'tasks_incomplete' : undefined }];
   for (const row of rows) {
     if (row.review || row.status === 'success')
       samples.push({ code: 'recharge_review', scope: row.job, status: row.review ? 'bad' : 'ok' });
@@ -69,5 +71,5 @@ export function projectRechargeMonitoring(tasks, now, since) {
           scope: row.job, status: 'bad', at: row.createdAt });
     }
   }
-  return { samples, rows, complete: tasks.length < 200 && rows.length === tasks.length };
+  return { samples, rows, complete };
 }

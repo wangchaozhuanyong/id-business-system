@@ -78,7 +78,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await drawer.waitFor({ state: 'hidden' });
   assert.deepEqual(typeWrites[0], { action: 'assign', version: 1, cardId: poolId, typeId: cardTypeB.id });
   await field('product').selectOption('Claude Max');
-  assert.equal(await mode.isVisible(), false);
+  assert.equal(await mode.isVisible(), true);
   assert.equal(await field('cardTypeId').isVisible(), true);
   await field('payment').selectOption('苹果内购');
   assert.equal(await field('cardTypeId').isVisible(), false);
@@ -118,8 +118,17 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await field('paidAmount').fill('20');
   await field('saleAmount').fill('100');
   await field('cardTypeId').selectOption(cardTypeA.id);
-  await page.locator('#main [name="commerce-paidConfirmed"]').check();
-  await page.locator('#main button[form="commerce-order-form"][type="submit"]').click();
+  const submit = page.locator('#main button[form="commerce-order-form"][type="submit"]');
+  const dialog = page.locator('#confirm-dialog[open]');
+  assert.equal(await page.locator('#main [name="commerce-paidConfirmed"], #main [name="commerce-receiptConfirmed"]').count(), 0);
+  await submit.click();
+  await dialog.getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 100\.00 /).waitFor();
+  assert.equal(orderWrites.length, 0);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await field('paidAmount').inputValue(), '20');
+  assert.equal(await field('saleAmount').inputValue(), '100');
+  assert.equal(orderWrites.length, 0);
+  await submit.click();
   await accept();
   await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
   assert.equal(new URL(page.url()).hash, '#/workspace/order/gpt');
@@ -128,6 +137,8 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   assert.equal(saved.cardId, '');
   assert.equal(saved.cardTypeId, cardTypeA.id);
   assert.equal(saved.paidConfirmed, true);
+  assert.equal(saved.receiptConfirmed, true);
+  assert.equal(saved.costConfirmed, false);
   assert.equal(saved.includeIssueFee, false);
   assert.equal(saved.issueFeeSnapshot.pending, true);
   assert.deepEqual(errors, []);
