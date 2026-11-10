@@ -42,6 +42,7 @@ import {
 import { bitBrowserWindowDomain, BitBrowserWindowError, readWindowRecord, writeWindowRecord } from './bitbrowser-login-windows.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkInventoryHistory } from './inventory-history.mjs';
+import { prepareMailboxPlatformMarks } from './mailbox-registration-platform.mjs';
 import { planHistoricalIntake, requireHistoricalIntake, stageHistoricalIntake } from './apple-relay/historical-intake.mjs';
 import {
   ClaudeHistoryIntakeError, claudeHistoryPreview, planClaudeHistoryIntake, stageClaudeHistoryIntake
@@ -1555,6 +1556,8 @@ export function createLocalBusinessStore(databasePath) {
           if (entryError) throw new LocalDataError(400, entryError);
           const personalEntryError = preparePersonalInventory(priorInventory, inventory, write.action, actor, new Date(), priorUsage);
           if (personalEntryError) throw new LocalDataError(409, personalEntryError);
+          const platformError = prepareMailboxPlatformMarks(priorInventory, inventory, write.action, actor);
+          if (platformError) throw new LocalDataError(409, platformError);
           const attributionError = attributeInventory(priorInventory, inventory, actor, write.action);
           if (attributionError) throw new LocalDataError(409, attributionError);
           defaultInventoryRegistrationTimes(priorInventory, inventory);

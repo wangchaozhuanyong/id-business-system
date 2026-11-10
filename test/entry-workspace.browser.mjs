@@ -58,14 +58,72 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   const geometry = async (width, route, dark) => {
     const result = await page.evaluate(() => {
       const root = document.querySelector('.commerce-entry-columns');
-      const form = root.querySelector(':scope > section.panel').getBoundingClientRect();
-      const history = root.querySelector('.entry-records').getBoundingClientRect();
+      const formPanel = root.querySelector(':scope > section.panel');
+      const form = formPanel.getBoundingClientRect();
+      const records = root.querySelector('.entry-records');
+      const history = records.getBoundingClientRect();
+      const sideBySide = history.left >= form.right;
       const findings = [];
+      const editor = formPanel.querySelector('form');
+      const firstGroup = editor.querySelector('[data-commerce-section="01"] > .section-heading');
+      if (firstGroup) {
+        const start = formPanel.querySelector(':scope > .tabs')?.getBoundingClientRect().bottom ?? form.top;
+        const heading = firstGroup.getBoundingClientRect();
+        const topInset = heading.top + editor.scrollTop - start;
+        const fieldGap = firstGroup.nextElementSibling.getBoundingClientRect().top - heading.bottom;
+        if (topInset < 11 || topInset > 14 || Math.abs(heading.left - form.left - 17) > 1)
+          findings.push('首组标题未贴合紧凑内边距');
+        if (Math.abs(fieldGap - 8) > 1) findings.push('标题与首行字段间距不正确');
+      }
+      const bankTitle = editor.querySelector('.form-section h3');
+      if (!firstGroup && bankTitle && Math.abs(bankTitle.getBoundingClientRect().left - form.left - 17) > 1)
+        findings.push('银行卡标题应与表单正文左对齐');
+      for (const group of editor.querySelectorAll('.order-financial-group')) {
+        const bounds = group.getBoundingClientRect();
+        const row = group.querySelector('.order-financial-heading');
+        const heading = row.getBoundingClientRect();
+        if (Math.abs(heading.top - bounds.top - 13) > 1 || Math.abs(heading.left - bounds.left - 13) > 1)
+          findings.push('金额卡片标题未沿用紧凑内边距');
+        if (row.querySelector('h3').getBoundingClientRect().top - bounds.top > 27)
+          findings.push('换行的操作把金额或周期标题推离上边框');
+      }
+      if (sideBySide) {
+        const save = root.querySelector(':scope > section.panel .form-footer .primary')?.getBoundingClientRect();
+        const pager = root.querySelector('.entry-records nav[data-pagination]')?.getBoundingClientRect();
+        if (Math.abs(form.bottom - history.bottom) > 1) findings.push('录入区与记录区底部未对齐');
+        if (!save || save.bottom > form.bottom - 7 || save.top < form.top) findings.push('保存按钮超出录入区');
+        if (!pager || Math.abs(history.bottom - pager.bottom) > 2) findings.push('分页未贴合记录区底部');
+      }
       const heads = root.querySelectorAll('.entry-record-list th');
       const cells = root.querySelector('.entry-record-list tbody tr')?.querySelectorAll('td');
       if (cells?.length === heads.length) heads.forEach((head, i) => {
         if (Math.abs(head.getBoundingClientRect().left - cells[i].getBoundingClientRect().left) > 1) findings.push('表头与数据错列');
       });
+      if (records.dataset.kind === 'order') {
+        const viewport = records.querySelector('.table-viewport');
+        const action = viewport.querySelector('th.table-actions');
+        const detail = viewport.querySelector('td.table-actions button');
+        const label = document.createRange();
+        label.selectNodeContents(action);
+        const { paddingLeft, paddingRight } = getComputedStyle(action);
+        const contentWidth = Math.max(label.getBoundingClientRect().width, detail?.offsetWidth ?? 0);
+        const naturalWidth = contentWidth + parseFloat(paddingLeft) + parseFloat(paddingRight);
+        if (action.getBoundingClientRect().width > naturalWidth + 2) findings.push('详情列超出内容所需宽度');
+        if (sideBySide) {
+          if (form.width <= history.width) findings.push('并排时未优先分配表单宽度');
+          if (detail) {
+            const initial = detail.getBoundingClientRect();
+            const viewportLeft = viewport.getBoundingClientRect().left;
+            if (initial.left < viewportLeft || initial.right > viewportLeft + viewport.clientWidth + 1)
+              findings.push('详情按钮超出可视表格');
+            const scrollLeft = viewport.scrollLeft;
+            viewport.scrollLeft = viewport.scrollWidth;
+            if (Math.abs(detail.getBoundingClientRect().left - initial.left) > 1)
+              findings.push('横向滚动时详情按钮移出固定位置');
+            viewport.scrollLeft = scrollLeft;
+          }
+        }
+      }
       for (const control of root.querySelectorAll('input:not([type=hidden]),select,textarea,button,summary')) {
         if (!control.checkVisibility()) continue;
         const rect = control.getBoundingClientRect();
@@ -82,7 +140,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
         if (!text.checkVisibility()) continue;
         if (text.scrollWidth > text.clientWidth + 1) findings.push(`文字横向裁切：${text.className}`);
       }
-      return { findings, overflow: document.documentElement.scrollWidth > innerWidth, sideBySide: history.left >= form.right, formWidth: form.width, recordWidth: history.width };
+      return { findings, overflow: document.documentElement.scrollWidth > innerWidth, sideBySide, formWidth: form.width, recordWidth: history.width };
     });
     assert.deepEqual(result.findings, [], `${width} ${route} ${dark}`);
     assert.equal(result.overflow, false, `${width} ${route}`);
@@ -168,6 +226,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     await page.evaluate(() => { window.entryFormBeforeRefresh = document.querySelector('#commerce-contact-form'); });
     await pager.getByLabel('每页条数').selectOption('10');
     const frame = await history.locator('.table-viewport').boundingBox();
+    const panel = await history.boundingBox();
     await pager.getByRole('button', { name: '下一页', exact: true }).click();
     assert.equal(await history.locator('tbody tr[data-row-id]').count(), 2);
     assert.equal(await pager.getAttribute('data-page'), '2');
@@ -192,11 +251,13 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     assert.equal(await history.getByLabel('开始日期', { exact: true }).inputValue(), '2026-11-08');
     assert.equal(await pager.getAttribute('data-total'), '4');
     assert.equal(await page.locator('#commerce-contact-name').inputValue(), '分页时保留的客户');
+    const filteredFrame = await history.locator('.table-viewport').boundingBox();
     await history.getByLabel('开始日期', { exact: true }).fill('2027-01-01');
     await history.getByLabel('结束日期', { exact: true }).fill('2027-01-02');
     await history.getByRole('button', { name: '查询', exact: true }).click();
     await history.getByText('所选时间暂无录入记录', { exact: true }).waitFor();
-    assert.equal((await history.locator('.table-viewport').boundingBox()).height, frame.height);
+    assert.equal((await history.boundingBox()).height, panel.height, '日期工具栏展开时保持整个记录区高度');
+    assert.equal((await history.locator('.table-viewport').boundingBox()).height, filteredFrame.height);
     await history.getByRole('button', { name: '全部', exact: true }).click();
     await pager.getByLabel('每页条数').selectOption('20');
     assert.equal(await history.locator('tbody tr[data-row-id]').count(), 12);
@@ -223,7 +284,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   });
 
   await t.test('长资料、布局与所有录入入口的深浅主题', async () => {
-    for (const width of [1920, 1440, 1280, 1024, 900, 768, 390, 320]) {
+    for (const width of [2300, 1920, 1440, 1280, 1024, 900, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 });
       for (const dark of [false, true]) {
         if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark) await page.locator('#theme-toggle').click();

@@ -244,9 +244,14 @@
       const key = `${listView(route).pageSize}:${Math.round(frame.getBoundingClientRect().width)}`;
       view.frames ||= new Map();
       const style = getComputedStyle(frame);
-      const naturalHeight = frame.firstElementChild.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const viewport = frame.querySelector('.table-viewport');
+      const naturalHeight = viewport
+        ? viewport.querySelector('table').getBoundingClientRect().height + viewport.offsetHeight - viewport.clientHeight
+        : frame.firstElementChild.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
       const height = Math.max(view.frames.get(key) || 0, naturalHeight);
-      view.frames.set(key, height); frame.style.minHeight = `${height}px`;
+      view.frames.set(key, height);
+      if (viewport) viewport.style.setProperty('--pagination-content-min-height', `${height}px`);
+      else frame.style.minHeight = `${height}px`;
     }
   }
   function updateWorkspaceRegion(route) {
