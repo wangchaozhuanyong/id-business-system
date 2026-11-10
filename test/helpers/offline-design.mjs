@@ -145,6 +145,20 @@ export async function settle(page) {
 export async function separatorSnapshot(page, scope = '#main') {
   return page.locator(scope).evaluate((root) => {
     const visible = node => node.checkVisibility() && node.getBoundingClientRect().width > 0;
+    // Measure painted portions inside scrollports, not off-screen rows beneath their pagination.
+    const paintedRect = node => {
+      const rect = node.getBoundingClientRect().toJSON();
+      for (let parent = node.parentElement; parent && parent !== root; parent = parent.parentElement) {
+        const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+        if (/^(auto|scroll|hidden|clip)$/.test(style.overflowY)) {
+          rect.top = Math.max(rect.top, box.top); rect.bottom = Math.min(rect.bottom, box.bottom);
+        }
+        if (/^(auto|scroll|hidden|clip)$/.test(style.overflowX)) {
+          rect.left = Math.max(rect.left, box.left); rect.right = Math.min(rect.right, box.right);
+        }
+      }
+      return rect.right > rect.left && rect.bottom > rect.top ? rect : null;
+    };
     const controls = [...root.querySelectorAll('.button,input:not([type=hidden]),select,textarea,summary')]
       .filter(node => visible(node) && !node.closest('table,.table-viewport,.title-description,[popover]'));
     const findings = [];
@@ -157,8 +171,8 @@ export async function separatorSnapshot(page, scope = '#main') {
         const line = side === 'Top' ? box.top : box.bottom;
         for (const control of controls) {
           if (control.contains(region)) continue;
-          const rect = control.getBoundingClientRect();
-          if (rect.right <= box.left || rect.left >= box.right) continue;
+          const rect = paintedRect(control);
+          if (!rect || rect.right <= box.left || rect.left >= box.right) continue;
           const distance = Math.max(rect.top - line, line - rect.bottom);
           if (distance >= 24) continue;
           measurements++;
@@ -177,6 +191,13 @@ export async function spacingSnapshot(page, scope = '#main') {
     const findings = [],
       cards = [];
     const visible = (el) => el.checkVisibility() && el.getBoundingClientRect().width > 0;
+    const inVerticalScrollport = (node, panel) => {
+      for (let parent = node.parentElement; parent && parent !== panel; parent = parent.parentElement) {
+        if (parent.scrollHeight > parent.clientHeight + 1 && /^(auto|scroll)$/.test(getComputedStyle(parent).overflowY))
+          return true;
+      }
+      return false;
+    };
     for (const panel of root.querySelectorAll('.panel')) {
       if (!visible(panel)) continue;
       const rect = panel.getBoundingClientRect(),
@@ -206,7 +227,9 @@ export async function spacingSnapshot(page, scope = '#main') {
         const left = box.left - rect.left,
           right = rect.right - box.right,
           bottom = rect.bottom - box.bottom;
-        if (left < 10 || right < 10 || bottom < 7)
+        // Scrollable content can lie below the outer panel. Its horizontal
+        // padding still counts; reachability is checked by the owning page.
+        if (left < 10 || right < 10 || (bottom < 7 && !inVerticalScrollport(parent, panel)))
           findings.push({
             text: node.textContent.trim().slice(0, 55),
             parent: parent.tagName + '.' + parent.className,
@@ -229,7 +252,7 @@ export async function spacingSnapshot(page, scope = '#main') {
           left = box.left - rect.left,
           right = rect.right - box.right,
           bottom = rect.bottom - box.bottom;
-        if (left < 10 || right < 10 || bottom < 7)
+        if (left < 10 || right < 10 || (bottom < 7 && !inVerticalScrollport(control, panel)))
           findings.push({
             control: control.id || control.textContent.slice(0, 45),
             panel: panel.className,

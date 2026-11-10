@@ -72,7 +72,7 @@ test('邮箱提取用途设置支持增删、草稿、失败重试、旧版本�
     await page.keyboard.press('Escape');
     assert.equal(await help.evaluate(node => node.open), false);
     assert(Math.abs((await form.boundingBox()).y - formBeforeHelp.y) <= 1, '用途说明开关不能挤动表单');
-    assert.deepEqual(await items(), ['注册 Claude', '注册 GPT', '业务备用', '其他']);
+    assert.deepEqual(await items(), ['注册 Claude', '注册 GPT', '业务备用', '其他', '注册 Gemini', '注册 Grok']);
     if ([1440, 390].includes(width)) {
       await page.screenshot({ path: evidence + `/purpose-settings-${width}-${theme}.png`, fullPage: true });
     }

@@ -124,7 +124,7 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       }
       const showCodes = new URL(route.request().url()).searchParams.get('view') === 'codes';
       return route.fulfill({ json: showCodes ? { canApprove, items: [{
-        ...(!canApprove && { code }), last4: 'ONLY', status: 'unused', plan: 'plus', applicantId: 'employee'
+        id: 'fixture-code-item', requestId: 'request-a', ...(!canApprove && { code }), last4: 'ONLY', status: 'unused', plan: 'plus', applicantId: 'employee'
       }] } : { canApprove, requests, stock: { plus: requests[0]?.status === 'issued' ? 0 : 2, pro100: 0, pro200: 1, pro500: 0 } } });
     });
     await context.route('**/api/local/order-sync', (route) => {
@@ -160,17 +160,19 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       assert.equal(await submit.isDisabled(), true);
       await page.locator('#recharge-request-count').fill('2');
       await submit.click();
-      await page.getByRole('cell', { name: '待审核', exact: true }).waitFor();
+      await page.locator('#recharge-request-history').getByText('待审核', { exact: true }).waitFor();
       assert.equal(await page.getByRole('button', { name: '批准', exact: true }).count(), 0);
     } else {
       await page.getByRole('button', { name: '批准', exact: true }).click();
       await page.locator('#confirm-dialog').getByRole('button', { name: '批准并发码' }).click();
-      await page.getByRole('cell', { name: '已发码', exact: true }).waitFor();
+      await page.locator('#recharge-request-history').getByText('已发码', { exact: true }).waitFor();
       assert.match(await remaining.textContent(), /剩余可提取 0 个/);
       assert.equal(await submit.isDisabled(), true);
     }
     await page.goto(origin + '/#/workspace/my-recharge-codes');
-    await page.getByRole('cell', { name: '当前员工昵称', exact: true }).waitFor();
+    await page.locator('#recharge-codes-region [data-action="order-code-item-detail"]').click();
+    await page.locator('#drawer').getByText('当前员工昵称', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     assert.equal(await page.getByRole('cell', { name: code, exact: true }).count(), role === 'employee' ? 1 : 0);
     await page.goto(origin + '/#/orders/gpt');
     const workspace = page.getByRole('navigation', { name: 'GPT 订单视图' });

@@ -1349,7 +1349,7 @@
       const result = await window.IDLocalData.relay('alias-register', payload);
       A.modules.inventory.applyCommittedInventory(result.inventory);
       initialize();
-      if (A.state.route === 'workspace/mail-submit') {
+      if (['workspace/mail-submit', 'workspace/mail-extract'].includes(A.state.route)) {
         const emails = new Set(payload.rows.map(row => row.email.toLowerCase()));
         const ids = result.inventory.data.mailboxes.filter(row => row.type === 'relay' &&
           row.parentMailboxId === payload.parentId && emails.has(row.email.toLowerCase())).map(row => row.id);

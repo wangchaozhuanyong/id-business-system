@@ -339,6 +339,20 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   content: none;
 }
 
+/* 外围统一为素面卡片；覆盖原版动态摘要的行内装饰边，不改业务脚本。 */
+[data-recharge-view='admin'] #orbitcard_strategy_summary > div {
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius);
+}
+
+[data-recharge-view='admin'] .panel p {
+  overflow-wrap: anywhere;
+}
+
+[data-recharge-view] .recharge-card::before {
+  content: none;
+}
+
 [data-recharge-view='admin']:not([data-standalone]) .stat-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 174px), 1fr));
   gap: 12px;
@@ -867,10 +881,6 @@ body[data-recharge-view='subscription']::before {
   box-shadow: none;
 }
 
-[data-recharge-query] .recharge-card::before {
-  content: none;
-}
-
 [data-recharge-query] .card-head {
   display: none;
 }
@@ -943,10 +953,6 @@ body[data-recharge-workspace]::before {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-}
-
-[data-recharge-workspace] .recharge-card::before {
-  content: none;
 }
 
 [data-recharge-workspace] .workspace-recharge-heading {

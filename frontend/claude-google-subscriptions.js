@@ -28,7 +28,9 @@
     timeStyle: 'short'
   });
   const fieldNames = ['claude-google-copy1', 'claude-google-copy2'];
-  let snapshot, listError, clearSensitiveDrawer, expiryTimer;
+  let snapshot, listError, clearSensitiveDrawer, expiryTimer, frameObserver;
+  // Retain only measured geometry between visits; credentials are still discarded on leave.
+  const frameHeights = new Map();
   const actorId = () => D?.actor?.()?.id || A.state.actor?.id || '';
   const active = () => A.state.route === route && Boolean(D?.claudeGoogleSubscriptions) &&
     (!D.authRequired || ['admin', 'super'].includes(D.actor()?.role));
@@ -117,7 +119,7 @@
     const short = field === 'email' ? 36 : 28;
     if (value.length <= short) return esc(value || '—');
     return `<button class="table-value-button" type="button" data-action="claude-google-value"
-      data-id="${row.id}" data-field="${field}" aria-label="查看${valueLabels[field]}完整内容"><span>${esc(value)}</span>${A.icon('info')}</button>`;
+      data-id="${row.id}" data-field="${field}" aria-label="查看${valueLabels[field]}完整内容"><span class="table-value-ellipsis">${esc(value)}</span>${A.icon('info')}</button>`;
   }
 
   const columns = [
@@ -140,15 +142,34 @@
   ];
 
   function renderList() {
-    if (!snapshot && listError)
-      return `<div class="panel-body" role="status">${A.empty(listError.message, '可重试读取或调整筛选条件。')}</div>`;
-    if (!snapshot) return '';
-    A.state.page = snapshot.page;
-    A.state.pageSize = snapshot.pageSize;
-    return A.table(columns, snapshot.items, '', tableId, {
-      title: '暂无符合条件的 Claude 谷歌订阅',
-      description: '可调整搜索或查询码状态。'
-    }) + A.pagination(snapshot.total);
+    const emptyState = snapshot ? {
+      title: '暂无符合条件的 Claude 谷歌订阅', description: '可调整搜索或查询码状态。'
+    } : listError ? {
+      title: listError.message, description: '可点击刷新重试或调整筛选条件。'
+    } : { title: '正在读取订阅资料', description: '' };
+    return A.table(columns, snapshot?.items || [], '', tableId, emptyState) +
+      (snapshot ? window.IDPagination.render({ id: tableId, page: snapshot.page,
+        pageSize: snapshot.pageSize, pageSizes: [8, 16], total: snapshot.total }) : '');
+  }
+
+  function stabilizeListFrame() {
+    const list = $('#claude-google-list');
+    const viewport = list?.querySelector('.table-viewport');
+    if (!active() || !viewport) return;
+    const size = snapshot?.pageSize || filters().pageSize;
+    const key = `${size}:${Math.round(viewport.getBoundingClientRect().width)}`;
+    let frame = frameHeights.get(key);
+    if (snapshot) {
+      const tableHeight = viewport.querySelector('table').getBoundingClientRect().height;
+      const scrollbar = viewport.offsetHeight - viewport.clientHeight;
+      const table = Math.max(frame?.table || 0, tableHeight + scrollbar);
+      const pager = Math.max(frame?.pager || 0, list.querySelector('.pagination').getBoundingClientRect().height);
+      frame = { table, pager };
+      frameHeights.set(key, frame);
+    }
+    viewport.style.minHeight = frame ? `${frame.table}px` : '';
+    // A revisited page keeps the measured footer space without retaining totals or rows.
+    list.style.minHeight = frame ? `${frame.table + frame.pager}px` : '';
   }
 
   function render() {
@@ -172,8 +193,9 @@
         </form>
         <div class="design-async-region">
           <div id="claude-google-read-status" role="status" hidden></div>
-          ${snapshot && listError ? `<div class="panel-body" role="status"><p class="inline-notice warning">${esc(listError.message)}，已保留上次读取的资料。</p></div>` : ''}
-          ${renderList()}
+          <div id="claude-google-read-error" class="panel-body" role="status" ${snapshot && listError ? '' : 'hidden'}>${snapshot && listError
+            ? `<p class="inline-notice warning">${esc(listError.message)}，已保留上次读取的资料。</p>` : ''}</div>
+          <div id="claude-google-list">${renderList()}</div>
         </div>
       </section>`;
   }
@@ -184,15 +206,16 @@
   }
 
   function renderAfterRead(panel) {
-    const search = $('#claude-google-query', panel);
-    const keepFocus = document.activeElement === search;
-    const selection = keepFocus && [search.selectionStart, search.selectionEnd];
-    A.render();
-    if (keepFocus) {
-      const input = $('#claude-google-query');
-      input?.focus({ preventScroll: true });
-      input?.setSelectionRange(...selection);
-    }
+    const list = $('#claude-google-list', panel);
+    const scrollLeft = list.querySelector('.table-viewport')?.scrollLeft || 0;
+    list.innerHTML = renderList();
+    const error = $('#claude-google-read-error', panel);
+    error.hidden = !(snapshot && listError);
+    error.innerHTML = snapshot && listError
+      ? `<p class="inline-notice warning">${esc(listError.message)}，已保留上次读取的资料。</p>` : '';
+    stabilizeListFrame();
+    list.querySelector('.table-viewport').scrollLeft = scrollLeft;
+    scheduleExpiry();
   }
 
   async function load() {
@@ -202,6 +225,13 @@
     const identity = actorId();
     const parameters = params();
     const key = JSON.stringify(parameters);
+    const list = $('#claude-google-list', panel);
+    const focused = document.activeElement;
+    const focusSelector = list.contains(focused) && focused.closest('.pagination') && (
+      focused.matches('[data-pagination-size]') ? '[data-pagination-size]' :
+      focused.dataset.paginationNav ? `[data-pagination-nav="${focused.dataset.paginationNav}"]` :
+      focused.closest('.pagination-jump') ? '.pagination-jump summary' : '[aria-current="page"]');
+    list.inert = true;
     const read = A.beginRegionRead(status.parentElement, status, {
       loadingText: snapshot ? '正在更新订阅资料…' : '正在读取订阅资料…',
       refreshButton: panel.querySelector('[data-action="claude-google-refresh"]')
@@ -240,6 +270,13 @@
       renderAfterRead(panel);
       return false;
     } finally {
+      if (current()) {
+        list.inert = false;
+        if (focusSelector && [document.body, focused].includes(document.activeElement)) {
+          const next = list.querySelector(focusSelector);
+          (next && !next.disabled ? next : list.querySelector('[data-pagination-size]'))?.focus({ preventScroll: true });
+        }
+      }
       read.finish();
     }
   }
@@ -255,6 +292,7 @@
     const status = panel && $('#claude-google-read-status', panel);
     if (!status) return;
     const region = status.parentElement;
+    frameObserver?.disconnect();
     A.finishRegionRead(region);
     region.replaceChildren(status);
   }
@@ -426,12 +464,24 @@
     }, { pending: '正在保存复制设置…', failure: '保存复制设置失败，请重试' });
   }
 
+  document.addEventListener('id-pagination-change', event => {
+    if (!active() || event.detail.id !== tableId || !event.target.closest('#claude-google-list')) return;
+    Object.assign(filters(), { page: event.detail.page, pageSize: event.detail.pageSize });
+    const size = event.target.querySelector('[data-pagination-size]');
+    if (size && snapshot) size.value = snapshot.pageSize;
+    void load();
+  });
+
   window.IDDesignModules.push({
     id: tableId,
     matches: candidate => candidate === route,
     render,
     afterRender() {
       if (!active()) return;
+      frameObserver?.disconnect();
+      stabilizeListFrame();
+      frameObserver = new ResizeObserver(stabilizeListFrame);
+      frameObserver.observe($('#claude-google-list'));
       scheduleExpiry();
       const key = JSON.stringify(params());
       if (snapshot?.key !== key && listError?.key !== key) void load();
@@ -442,6 +492,8 @@
     },
     clearPageState() {
       discardSensitive();
+      frameObserver?.disconnect();
+      frameHeights.clear();
       A.state.drafts.delete(filterKey);
       A.state.drafts.delete(settingsKey);
       const form = $('#claude-google-copy-settings-form');

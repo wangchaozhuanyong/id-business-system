@@ -178,7 +178,6 @@ const navigation = [
       ['续费管理', 'workspace/renewals'],
       ['客户录入', 'customers/new'],
       ['充值码提取', 'workspace/recharge-codes'],
-      ['我的充值码', 'workspace/my-recharge-codes'],
       ['订单补全', 'workspace/order-completion'],
       ['兑换开通', 'workspace/recharge']
     ]
@@ -187,10 +186,8 @@ const navigation = [
     '管理快捷',
     'bolt',
     [
-      ['账号提交', 'workspace/account-submit'],
-      ['邮箱提交', 'workspace/mail-submit'],
-      ['邮箱提取', 'workspace/mail-extract'],
       ['账号提取', 'workspace/account-extract'],
+      ['邮箱提取', 'workspace/mail-extract'],
       ['提取与归还', 'workspace/extractions'],
       ['比特登录', 'recharge/start']
     ]
@@ -679,11 +676,13 @@ function finishRegionRead(region) {
 function beginRegionRead(region, status, { loadingText = '', refreshButton } = {}) {
   finishRegionRead(region);
   const dialog = region.closest('dialog');
+  const label = document.createElement('span');
+  label.className = 'design-progress-label';
   const current = () => activeRegionReads.get(region) === read && region.isConnected &&
     (!dialog || dialog.open);
   const setLoadingText = (text) => {
     loadingText = text;
-    if (current() && !status.hidden) status.textContent = text;
+    if (current() && !status.hidden) label.textContent = text;
   };
   const finish = () => {
     clearTimeout(timer);
@@ -692,19 +691,22 @@ function beginRegionRead(region, status, { loadingText = '', refreshButton } = {
     region.setAttribute('aria-busy', 'false');
     status.textContent = '';
     status.hidden = true;
+    delete status.dataset.regionLoading;
     if (refreshButton) refreshButton.disabled = wasDisabled;
   };
   const wasDisabled = refreshButton?.disabled;
   const read = { region, current, setLoadingText, finish };
   activeRegionReads.set(region, read);
+  region.classList.add('design-async-region');
   region.setAttribute('aria-busy', 'true');
   status.hidden = true;
-  status.textContent = '';
+  status.replaceChildren(label);
+  status.dataset.regionLoading = '';
   status.className = 'design-region-progress';
   if (refreshButton) refreshButton.disabled = true;
   const timer = setTimeout(() => {
     if (!current()) return;
-    status.textContent = loadingText;
+    label.textContent = loadingText;
     status.hidden = false;
   }, 120);
   return read;
@@ -1585,6 +1587,15 @@ function navigate() {
     return;
   }
   preserveMainDraft();
+  const entryRouteAliases = {
+    'workspace/account-submit': 'workspace/account-extract',
+    'workspace/mail-submit': 'workspace/mail-extract',
+    'workspace/my-recharge-codes': 'workspace/recharge-codes'
+  };
+  if (entryRouteAliases[next]) {
+    next = entryRouteAliases[next];
+    history.replaceState(null, '', '#/' + next);
+  }
   if (next === 'settings/customer-tags') {
     next = 'customers/list';
     history.replaceState(null, '', '#/' + next);

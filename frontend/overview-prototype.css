@@ -10,7 +10,7 @@
 .overview-range { display: flex; gap: 4px; }
 .overview-range .button { padding-inline: 12px; }
 .overview-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
-.overview-metric { display: flex; flex-direction: column; min-height: 168px; padding: 20px; margin: 0; min-width: 0; border-top: 3px solid var(--tone); background: linear-gradient(135deg, var(--surface) 65%, var(--tone-soft)); }
+.overview-metric { display: flex; flex-direction: column; min-height: 168px; padding: 20px; margin: 0; min-width: 0; }
 .overview-metric-icon { margin-left: auto; display: grid; place-items: center; width: 36px; height: 36px; color: var(--tone); background: var(--tone-soft); border-radius: 10px; flex: none; }
 .overview-metric-icon .icon { width: 19px; height: 19px; }
 .overview-metric-label { justify-content: flex-start; gap: 8px; }

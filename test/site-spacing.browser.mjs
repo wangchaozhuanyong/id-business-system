@@ -14,7 +14,7 @@ const { chromium } = await import(
     : 'playwright'
 );
 const browser = await chromium.launch({ headless: true }),
-  output = root + '/.runtime/site-spacing-20261107',
+  output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/site-spacing-20261107',
   results = [];
 await mkdir(output, { recursive: true });
 const drawerActions = [

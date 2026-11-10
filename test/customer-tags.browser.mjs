@@ -2,19 +2,35 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { startPreview } from '../server/preview.mjs';
+import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 test('客户页来源与标签抽屉支持持久化、历史选项和嵌套返回', { timeout: 60_000 }, async (t) => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   assert(playwright, '请通过 ID_RECHARGE_QA_PLAYWRIGHT 指定已有 Playwright 模块入口');
   const { chromium } = await import(pathToFileURL(playwright).href);
-  const { server, url } = await startPreview(0, { databasePath: ':memory:' });
-  t.after(() => {
+  const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
+  const { server, url } = offline ? { url: origin + '/' } : await startPreview(0, { databasePath: ':memory:' });
+  if (server) t.after(() => {
     server.closeAllConnections();
     return new Promise((resolve) => server.close(resolve));
   });
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const snapshots = { commerce: { version: 0, data: null }, settings: { version: 0, data: null } };
+  if (offline) {
+    await interceptDesign(page.context(), { localFixtures: snapshots });
+    await page.route('**/api/local/{settings,commerce}', route => {
+      const domain = new URL(route.request().url()).pathname.split('/').at(-1);
+      if (route.request().method() !== 'GET') {
+        const request = route.request().postDataJSON();
+        assert.equal(request.version, snapshots[domain].version);
+        snapshots[domain] = { version: request.version + 1, data: request.data };
+      }
+      return route.fulfill({ json: snapshots[domain] });
+    });
+  }
+  const readCommerce = async () => offline ? snapshots.commerce : (await page.request.get(url + 'api/local/commerce')).json();
   page.setDefaultTimeout(4000);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -59,7 +75,8 @@ test('客户页来源与标签抽屉支持持久化、历史选项和嵌套返�
     .locator('[data-commerce-section="01"] .field > label')
     .evaluateAll((labels) => labels.map((node) => node.getBoundingClientRect().y));
   assert.equal(controls.length, 3);
-  assert(Math.max(...controls) - Math.min(...controls) < 1, '基本资料标签应对齐');
+  assert(Math.abs(controls[0] - controls[1]) < 1, '姓名与来源标签应同排对齐');
+  assert(controls[2] > controls[0], '客户标签进入第二行，不挤压两个主字段');
   const following = form.getByRole('heading', { name: '联系方式' });
   const beforeOpen = await following.boundingBox();
   await summary.focus();
@@ -77,9 +94,10 @@ test('客户页来源与标签抽屉支持持久化、历史选项和嵌套返�
   await page.locator('[data-action="confirm-accept"]').click();
   await page.getByText('多标签测试客户', { exact: true }).first().waitFor();
 
-  const response = await page.request.get(url + 'api/local/commerce');
-  assert.deepEqual((await response.json()).data.customers[0].tags, ['企业客户', '复购客户']);
+  assert.deepEqual((await readCommerce()).data.customers[0].tags, ['企业客户', '复购客户']);
 
+  const toastClose = page.getByRole('button', { name: '关闭提示', exact: true });
+  if (await toastClose.isVisible()) await toastClose.click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('#theme-toggle').click();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
@@ -142,7 +160,7 @@ test('客户页来源与标签抽屉支持持久化、历史选项和嵌套返�
   await page.getByRole('button', { name: '来源设置', exact: true }).click();
   await sourceSettings.waitFor();
   assert.equal(await sourceSettings.getByRole('button', { name: '移除来源 门店咨询' }).count(), 0);
-  const persisted = await (await page.request.get(url + 'api/local/commerce')).json();
+  const persisted = await readCommerce();
   assert.equal(persisted.data.customers[0].source, '门店咨询');
   assert.deepEqual(persisted.data.customers[0].tags, ['企业客户', '复购客户']);
   await page.goto(url + '#/settings/customer-tags');
