@@ -27,7 +27,10 @@ OWNER_LABEL = 'com.id-business.native-canary.owner'
 SHA_LABEL = 'com.id-business.native-canary.revision'
 RETURN_PATHS = {'/api/admin/cdks/returns/check', '/api/admin/cdks/returns/commit', '/api/admin/cdks/returns/receipt'}
 STOCK_PATH = '/api/admin/cdks/returns/stock'
-ALLOWED_GETS = RETURN_PATHS | {STOCK_PATH, '/api/public/runtime', '/api/admin/session', '/api/admin/cards', '/api/admin/recharge-routing'}
+ROUTING_PATH = '/api/admin/recharge-routing'
+PROXY_IMPORT_PATH = '/api/admin/proxies'
+PROXY_COUNTRY_PATH = re.compile(ROUTING_PATH + r'/proxies/[1-9][0-9]{0,15}/country')
+ALLOWED_GETS = RETURN_PATHS | {STOCK_PATH, '/api/public/runtime', '/api/admin/session', '/api/admin/cards', ROUTING_PATH}
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
 
@@ -63,10 +66,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def http_json(origin, path, headers=None, method='GET', body=None):
-    if path not in ALLOWED_GETS or not re.fullmatch(r'http://127\.0\.0\.1:[1-9][0-9]{0,4}', origin):
+    if not re.fullmatch(r'http://127\.0\.0\.1:[1-9][0-9]{0,4}', origin):
         raise CanaryError('read_endpoint_rejected')
-    if method not in ('GET', 'PUT', 'POST') or (method == 'PUT' and path != '/api/admin/recharge-routing') or (method == 'POST' and path not in RETURN_PATHS):
-        raise CanaryError('write_endpoint_rejected')
+    allowed = (
+        method == 'GET' and path in ALLOWED_GETS
+        or method == 'PUT' and (path == ROUTING_PATH or PROXY_COUNTRY_PATH.fullmatch(path))
+        or method == 'POST' and (path in RETURN_PATHS or path == PROXY_IMPORT_PATH)
+    )
+    if not allowed:
+        raise CanaryError('read_endpoint_rejected' if method == 'GET' else 'write_endpoint_rejected')
     request = urllib.request.Request(origin + path, headers=headers or {}, method=method,
                                      data=compact(body).encode() if body is not None else None)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPHandler(), NoRedirect())
@@ -407,7 +415,7 @@ class Canary:
         if status != 200 or cards.get('success') is not True or cards.get('cards') != []:
             raise CanaryError('super_empty_cards_failed')
         self.checks.append('super_empty_cards')
-        route_path = '/api/admin/recharge-routing'
+        route_path = ROUTING_PATH
         def routing_request(path, actor, method='GET', body=None):
             return http_json(adapter_url, path,
                 {'x-id-recharge-assertion': assertion(self.bridge, path, actor, method),
@@ -428,7 +436,7 @@ class Canary:
             config.get('auditCount') != 1 or config.get('billingAddressCountry') != 'US' or
             config.get('proxyLabels') != [] or proxy_countries[:2] != ['PH', 'EG'] or 'MX' not in proxy_countries):
             raise CanaryError('routing_defaults_invalid')
-        proxy_path = '/api/admin/proxies'
+        proxy_path = PROXY_IMPORT_PATH
         fixture = {'proxies': ['http://proxy.example.test:8080']}
         status, _ = routing_request(proxy_path, privileged, 'POST', fixture)
         if status != 400:
