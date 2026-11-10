@@ -24,8 +24,9 @@ export function checkNewOrder(order) {
   }
   if (!['续费', '成品交付'].includes(order.businessType)) return '请选择续费或成品交付';
   if (order.costBasis === 'actual') return '新订单按费用规则核算，实际总成本请通过有依据的订单更正登记';
-  if ((order.email || order.product !== 'GPT' || order.businessType !== '续费') &&
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email || '')) return '请填写有效订单邮箱';
+  const email = order.email ?? '';
+  if (typeof email !== 'string' || ((email || order.businessType !== '续费') &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return '请填写有效订单邮箱';
   if (order.payment === '银行卡' && !isClaudeProBankMaterials(order)) {
     const gpt = order.product === 'GPT';
     if ((order.cardId || (!gpt && order.paidConfirmed)) &&
@@ -137,13 +138,17 @@ export function checkClaudeProMaterialHistory(order, prior, action) {
 
 export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOrders) {
   const fields = ['proRenewalSourceId', 'proRenewalSourceVersion'];
+  const hasNewSource = fields.some((field) => nonempty(order[field]));
+  const email = typeof order.email === 'string' ? order.email.trim().toLowerCase() : '';
+  if (!email && ['Claude Pro', 'Claude Max'].includes(order.product) &&
+      (hasNewSource || nonempty(order.claudeRenewalId)) && (!prior || nonempty(prior.email)))
+    return '请填写邮箱后关联原 Claude 续费订单';
   if (prior) {
     if (fields.some((field) => (order[field] ?? '') !== (prior[field] ?? '')) ||
         (prior.proRenewalSourceId && (order.claudeRenewalId ?? '') !== (prior.claudeRenewalId ?? '')))
       return '已登记的 Claude Pro 续费来源不可更换';
     return;
   }
-  const hasNewSource = fields.some((field) => nonempty(order[field]));
   const proBank = isClaudeProBankMaterials(order);
   if (!hasNewSource && (!proBank || !nonempty(order.claudeRenewalId))) return;
   if (!proBank || order.businessType !== '续费' ||
@@ -154,7 +159,7 @@ export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOr
   if (!source || !isDeepStrictEqual(source, nextOrders.get(source.id)) ||
       source.cancelled || source.product !== order.product ||
       source.version !== order.proRenewalSourceVersion || source.customerId !== order.customerId ||
-      source.email?.trim().toLowerCase() !== order.email?.trim().toLowerCase())
+      source.email?.trim().toLowerCase() !== email)
     return '原 Claude Pro 订单已变化，请重新核对客户和邮箱后续费';
   for (const row of [...previousOrders.values(), ...nextOrders.values()]) {
     if (row.id !== order.id && (row.proRenewalSourceId === source.id || row.claudeRenewalId === source.id))

@@ -157,7 +157,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
 
   for (const [email, rows] of accounts) {
     for (const account of rows) {
-      if (account.source === '客户提供' || account.accountSource === '客户自有') continue;
+      if (account.claudeHistory || account.source === '客户提供' || account.accountSource === '客户自有') continue;
       const type = mailboxTypes.get(account.emailType);
       if (account.emailType && !type) continue;
       const sources = (mail.get(email) || []).filter((row) => !type || row.type === type);

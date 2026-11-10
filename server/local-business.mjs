@@ -39,6 +39,10 @@ import {
 import { bitBrowserWindowDomain, BitBrowserWindowError, readWindowRecord, writeWindowRecord } from './bitbrowser-login-windows.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkInventoryHistory } from './inventory-history.mjs';
+import { planHistoricalIntake, requireHistoricalIntake, stageHistoricalIntake } from './apple-relay/historical-intake.mjs';
+import {
+  ClaudeHistoryIntakeError, claudeHistoryPreview, planClaudeHistoryIntake, stageClaudeHistoryIntake
+} from './claude-history-intake.mjs';
 import { validMailExtractionSettings } from './inventory-extraction-settings.mjs';
 import { checkInventoryEntryFields } from './inventory-entry-fields.mjs';
 import { personalOrderError, personalProduct, preparePersonalInventory } from './personal-subscriptions.mjs';
@@ -84,6 +88,7 @@ const domainLabels = {
 };
 const allowedDomains = new Set(Object.keys(domainLabels));
 const verifiedAppleRelayPrimaries = Symbol('verifiedAppleRelayPrimaries');
+const stagedRelayIntake = Symbol('stagedRelayIntake');
 const inventoryLists = [
   'mailboxes', 'accounts', 'batches', 'returnRecords', 'importRecords',
   'registrationRecords', 'tableSettings', 'undo'
@@ -104,7 +109,8 @@ const inventoryActions = {
   inventory_reconcile_usage: '核对库存使用关联',
   inventory_relay_parent_save: '保存苹果主邮箱',
   inventory_relay_alias_save: '登记苹果隐藏邮箱',
-  inventory_relay_alias_import: '批量登记苹果隐藏邮箱'
+  inventory_relay_alias_import: '批量登记苹果隐藏邮箱',
+  inventory_relay_history_import: '历史入库苹果隐藏邮箱'
 };
 const settingsActions = {
   customer_tags_save: '保存客户标签设置',
@@ -889,14 +895,39 @@ export function createLocalBusinessStore(databasePath) {
         return this.inventorySnapshot();
       });
     },
+    planAppleRelayIntake(input) {
+      return planHistoricalIntake(input, readDocument('inventory'), readDocument('commerce'));
+    },
+    previewClaudeHistory(input) {
+      return claudeHistoryPreview(planClaudeHistoryIntake(input, readDocument('inventory'), readDocument('commerce')));
+    },
+    saveClaudeHistory(input, actor) {
+      return writeTransaction(() => {
+        const current = readDocument('inventory');
+        const time = new Date();
+        const plan = planClaudeHistoryIntake(input, current, readDocument('commerce'), time.getTime());
+        const inventory = current.data ?? Object.fromEntries(inventoryLists.map(key => [key, []]));
+        const result = stageClaudeHistoryIntake(plan, input.inventoryVersion, inventory, actor, time);
+        if (result.imported) {
+          const version = current.version + 1;
+          put.run('inventory', version, encrypt(key, 'inventory', version, JSON.stringify(inventory)));
+          log.run(time.toISOString(), 'inventory', 'inventory_claude_history_import',
+            auditSummary('Claude 历史入库 ' + result.imported + ' 条', actor, result.batchId), version);
+        }
+        return { ...result, inventory: this.inventorySnapshot() };
+      });
+    },
     saveAppleRelayPrimaries(rows, actor, aliases = [], registration) {
       const { version, data } = readDocument('inventory');
+      const history = registration?.history;
+      const commerce = history && readDocument('commerce');
+      if (history) requireHistoricalIntake(history, { inventoryVersion: version, commerceVersion: commerce.version });
       const inventory = data ?? Object.fromEntries(inventoryLists.map((key) => [key, []]));
       const relay = inventory.appleRelay ??= { parents: [], imports: [], events: [] };
       const { parents } = relay;
       const time = new Date().toISOString();
       const batchId = registration?.batch ? `relay-import-${randomUUID()}` : '';
-      const aliasAction = registration && !registration.batch
+      const aliasAction = history ? 'inventory_relay_history_import' : registration && !registration.batch
         ? 'inventory_relay_alias_save' : 'inventory_relay_alias_import';
       if (registration && !parents.some((row) => row.id === registration.parentId &&
           (row.version || 1) === registration.parentVersion && row.status === 'ACTIVE' && !row.deleted)) {
@@ -928,6 +959,7 @@ export function createLocalBusinessStore(databasePath) {
             inventory.mailboxes.some((other) => other.id !== row.id && other.type === 'relay' &&
               (String(other.email || '').trim().toLowerCase() === row.email || other.remoteAliasId === row.remoteAliasId)))
           throw new LocalDataError(409, '隐藏邮箱登记资料已变化');
+        if (history && before?.remoteAliasId === row.remoteAliasId) continue;
         const saved = before
           ? { ...before, remoteAliasId: row.remoteAliasId }
           : {
@@ -937,10 +969,10 @@ export function createLocalBusinessStore(databasePath) {
               createdAt: typeof sourceCreatedAt === 'string' ? sourceCreatedAt : '', importedAt: time
             };
         if (registration && !before) Object.assign(saved, {
-          source: 'Apple 主邮箱登记', importId: batchId,
+          source: history ? '历史入库' : 'Apple 主邮箱登记', importId: batchId,
           createdAt: time, createdById: actor.id, createdBy: actor.name,
           inventoryHistory: [{
-            id: `relay-asset-event-${randomUUID()}`, action: '登记隐藏邮箱', detail: row.parentMailboxId,
+            id: `relay-asset-event-${randomUUID()}`, action: history ? '历史入库' : '登记隐藏邮箱', detail: row.parentMailboxId,
             actorId: actor.id, actor: actor.name, time
           }]
         });
@@ -969,13 +1001,21 @@ export function createLocalBusinessStore(databasePath) {
           }))
         });
       }
-      return this.saveBatch(
-        [{ domain: 'inventory', version, data: inventory, action: registration ? aliasAction : 'inventory_relay_parent_save' }],
-        { actor, [verifiedAppleRelayPrimaries]: [
+      const staged = history && stageHistoricalIntake(history, inventory, commerce.data, actor, time);
+      const writes = [{ domain: 'inventory', version, data: inventory, action: registration ? aliasAction : 'inventory_relay_parent_save' }];
+      if (staged?.orders.length) writes.push({
+        domain: 'commerce', version: commerce.version, data: commerce.data, action: '新增独立订单'
+      });
+      const saved = this.saveBatch(writes, { actor, [verifiedAppleRelayPrimaries]: [
           ...rows.map(({ id }) => ({ id, action: 'inventory_relay_parent_save' })),
           ...aliases.map(({ id }) => ({ id, action: aliasAction }))
-        ] }
-      )[0];
+        ], ...(staged && { [stagedRelayIntake]: { ...staged, commerceVersion: commerce.version },
+          [verifiedOrderCards]: new Map() }) });
+      if (!staged) return saved[0];
+      return {
+        inventory: saved[0], processed: history.pending.length, reused: history.rows.length - history.pending.length,
+        accountsCreated: staged.accountsCreated, ordersCreated: staged.orders.length
+      };
     },
     saveInventoryUsageCorrection(body, actor) {
       if (actor && !['admin', 'super'].includes(actor.role))
@@ -1370,13 +1410,15 @@ export function createLocalBusinessStore(databasePath) {
     },
     saveBatch(entries, {
       actor, verifyAutomaticSnapshot, readOrderOwners, [verifiedRelayClaimIds]: verifiedIds,
-      [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards
+      [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake
     } = {}) {
       // Initial cards are transient input: preserve the caller's retry snapshot on rollback.
       const writes = checkWrites(entries).map(write => write.domain === 'commerce' &&
         write.data.tenants.some(row => Object.hasOwn(row, 'initialCards'))
         ? { ...write, data: structuredClone(write.data) } : write);
       return writeTransaction(() => {
+        if (relayIntake && (get.get('commerce')?.version ?? 0) !== relayIntake.commerceVersion)
+          throw new LocalDataError(409, '订单或客户资料已变化，请重新预检');
         for (const { domain, version } of writes) {
           if ((get.get(domain)?.version ?? 0) !== version) {
             throw new LocalDataError(
@@ -1633,7 +1675,11 @@ export function createLocalBusinessStore(databasePath) {
           if (error) throw new LocalDataError(409, error);
         }
         if (checksStock) {
-          const error = checkStockDeliveries(priorCommerce, commerce, priorInventory, inventory, actor ?? localToolboxActor);
+          // Previously delivered accounts can be new to this system. Validate their transition in memory.
+          const deliveryInventory = relayIntake?.deliveryAccounts.length ? {
+            ...priorInventory, accounts: [...(priorInventory?.accounts || []), ...relayIntake.deliveryAccounts]
+          } : priorInventory;
+          const error = checkStockDeliveries(priorCommerce, commerce, deliveryInventory, inventory, actor ?? localToolboxActor);
           if (error) throw new LocalDataError(409, error);
         }
         if (checksStock || incoming.has('appleBalance')) {
@@ -1662,7 +1708,9 @@ export function createLocalBusinessStore(databasePath) {
               !oldRegistrationIds.has(row.id) && (matches.get(row.assetId)?.status !== 'used' ||
                 matches.get(row.assetId)?.evidence.registrationId !== row.id)))
             throw new LocalDataError(409, '邮箱使用结果待核对，账号和领用资料尚未保存');
-          if (inventoryWrite?.action !== 'inventory_reconcile_usage') {
+          if (relayIntake) {
+            for (const id of matches.keys()) if (!relayIntake.aliasIds.has(id)) matches.delete(id);
+          } else if (inventoryWrite?.action !== 'inventory_reconcile_usage') {
             for (const [id, match] of matches) {
               const prior = priorUsage.get(id);
               if (prior?.status === 'used' && !returnedBatches.has(match.claim?.batch.id) &&
@@ -1672,6 +1720,9 @@ export function createLocalBusinessStore(databasePath) {
             }
           }
           const usageChanged = applyInventoryUsage(matches, actor, new Date(now));
+          if (relayIntake && next.mailboxes.some(row => relayIntake.aliasIds.has(row.id) &&
+              (row.inventoryState || (row.used ? 'used' : 'available')) !== 'used'))
+            throw new LocalDataError(409, '存在无法确认注册使用的隐藏邮箱，请核对原资料后重新预检');
           const lifecycleChanged = incoming.has('commerce') && applyAccountOrderLifecycle(priorCommerce, commerce, next, actor, new Date(now));
           if (usageChanged || lifecycleChanged) {
             const error = checkInventoryHistory(priorInventory, next, { trustedAccountLifecycle: true });
@@ -1949,6 +2000,20 @@ export async function handleLocalBusiness(
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面保存补全资料');
       return json(response, 200, store.saveOrderCompletion(actor, await readJson(request), readOrderOwners));
     }
+    if (domain === 'claude-history-intake') {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (!actor?.id || !['admin', 'super'].includes(actor.role))
+        throw new LocalDataError(403, '只有管理员可以进行 Claude 历史入库');
+      if (request.method !== 'POST') throw new LocalDataError(405, '不支持此历史入库操作');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      const body = await readJson(request);
+      if (!body || typeof body !== 'object' || Array.isArray(body))
+        throw new LocalDataError(400, '请核对历史入库资料');
+      const { mode, ...input } = body;
+      if (mode === 'preview') return json(response, 200, store.previewClaudeHistory(input));
+      if (mode === 'confirm') return json(response, 200, store.saveClaudeHistory(input, actor));
+      throw new LocalDataError(400, '请选择预检或确认入库');
+    }
     if (domain === 'tenant-owner-transfer') {
       if (!actor?.id || !['admin', 'super'].includes(actor.role))
         throw new LocalDataError(403, '只有管理员可以转交租户归属');
@@ -2078,6 +2143,7 @@ export async function handleLocalBusiness(
       error instanceof LocalDataError ||
       error instanceof TenantOwnerTransferError ||
       error instanceof OrderCompletionError ||
+      error instanceof ClaudeHistoryIntakeError ||
       error instanceof AccountLifecycleError ||
       error instanceof RelayClaimError ||
       error instanceof BitBrowserAddressError ||

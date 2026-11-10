@@ -70,6 +70,11 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
     const corrections = new Map(list(previous?.[key]).filter(hasId).map((row) => [row.id, row]));
     for (const row of list(next[key])) {
       const original = corrections.get(row?.id);
+      if (!isDeepStrictEqual(original?.claudeHistory, row?.claudeHistory))
+        return 'Claude 历史入库资料必须通过专用入口登记';
+      if (row?.claudeHistory && useState(row) === 'claimed' && useState(original) !== 'claimed' &&
+          (original.health !== 'normal' || original.status !== '正常'))
+        return 'Claude 历史账号当前不可提取';
       for (const field of ['accountLifecycle', 'accountLifecycleEvents']) {
         if (!trustedAccountLifecycle && !isDeepStrictEqual(original?.[field], row?.[field]))
           return '账号使用与回收记录必须通过专用操作登记';

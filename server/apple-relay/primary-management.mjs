@@ -80,10 +80,10 @@ export function createAppleRelayPrimaryManagement({
   }
 
   return {
-    registerAliases(input, actor) {
+    registerAliases(input, actor, history) {
       return registerAppleRelayAliases(input, actor, {
         perform, provider, remoteIdFor, remoteAliasIdFor, savePrimaries
-      });
+      }, history);
     },
 
     save(input, actor) {

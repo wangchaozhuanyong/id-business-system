@@ -3,6 +3,7 @@ import { open } from 'node:fs/promises';
 import { createRelayCodeReset } from './code-reset.mjs';
 import { createRelayMailReassignment } from './mail-reassignment.mjs';
 import { createAppleRelayPrimaryManagement } from './primary-management.mjs';
+import { historicalIntakePreview, requireHistoricalIntake } from './historical-intake.mjs';
 import { RelayError, createVendureMailboxProvider } from './vendure-provider.mjs';
 
 const prefix = '/api/local/apple-relay/';
@@ -29,6 +30,8 @@ const allowedMethods = new Map([
   ['primary-save', 'POST'],
   ['primary-import', 'POST'],
   ['alias-register', 'POST'],
+  ['alias-intake-preview', 'POST'],
+  ['alias-intake-confirm', 'POST'],
   ['test', 'POST'],
   ['sync', 'POST'],
   ['mails', 'POST'],
@@ -306,7 +309,7 @@ async function readBody(request, maximumBytes = 4096) {
   return body;
 }
 
-export function createAppleRelayService({ config, readInventory, savePrimaries, fetchImpl, recordAction, publicOrigin }) {
+export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, publicOrigin }) {
   const provider = config ? createVendureMailboxProvider(config, fetchImpl) : null;
   const primaryBindings = loadBindings(config?.primaryBindings);
   const aliasBindings = loadBindings(config?.aliasBindings);
@@ -1032,6 +1035,19 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
           if (!primaryManagement) throw new RelayError(503, '原收件服务未连接，暂无法登记隐藏邮箱');
           const input = await readBody(request, 512 * 1024);
           const result = await primaryManagement.registerAliases(input, actor);
+          return writeJson(response, 200, result);
+        }
+        if (action === 'alias-intake-preview' || action === 'alias-intake-confirm') {
+          requireAdministrator(actor, '只有管理员可以历史入库');
+          if (!primaryManagement || !planIntake) throw new RelayError(503, '原收件服务未连接，暂无法历史入库');
+          const input = await readBody(request, 192 * 1024);
+          const plan = planIntake(input);
+          if (action === 'alias-intake-preview') return writeJson(response, 200, historicalIntakePreview(plan));
+          requireHistoricalIntake(plan, input);
+          if (!plan.pending.length) return writeJson(response, 200, { reused: plan.rows.length });
+          const { parentId, parentVersion, days, pending } = plan;
+          const result = await primaryManagement.registerAliases({ parentId, parentVersion, days, batch: true,
+            rows: pending.map(({ email, note }) => ({ email, note })) }, actor, plan);
           return writeJson(response, 200, result);
         }
         if (action === 'extraction-eligibility' || action === 'extraction-codes') {

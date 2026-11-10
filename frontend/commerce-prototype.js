@@ -1045,7 +1045,7 @@
   function completenessReasons(order) {
     const reasons = [];
     if (!order.customerId) reasons.push('客户待补充');
-    if (!orderIdentity(order) && (order.product !== 'GPT' || order.businessType === '成品交付')) reasons.push('账号待补充');
+    if (!orderIdentity(order) && !optionalOrderEmail(order.product, order.businessType)) reasons.push('账号待补充');
     if (!amountValid(order.saleAmount || '')) reasons.push('售卖金额待补充');
     if (!amountValid(order.paidAmount || '') || !order.paidCurrency) reasons.push('代付金额或币种待核对');
     if (!order.start || !order.expiry) reasons.push('订阅周期待补充');
@@ -1121,6 +1121,7 @@
       const summary = order.accountId && A.modules.inventory?.accountSummary?.(order.accountId);
       return summary?.label || labelOf(openingChoices, order.entitlementStatus);
     }
+    if (isClaude(order) && !claudeAccountTracked(order)) return '—';
     return { active: '使用中', frozen: '冻结', abandoned: '弃用' }[
       operating.get(String(order.email).toLowerCase())?.status || 'active'
     ];
@@ -1137,6 +1138,12 @@
   }
   function isClaude(order) {
     return String(order?.product || '').startsWith('Claude');
+  }
+  function optionalOrderEmail(product, businessType, renewalId) {
+    return !renewalId && businessType === '续费' && ['GPT', 'Claude Pro', 'Claude Max'].includes(product);
+  }
+  function claudeAccountTracked(order) {
+    return isClaude(order) && Boolean(subscriptionEmail(order));
   }
   function isProBankOrder(order) {
     return order?.product === 'Claude Pro' && order.payment === '银行卡';
@@ -1409,7 +1416,7 @@
     const current = new Map();
     for (const order of orders.filter(
       (row) =>
-        row.product?.startsWith('Claude') &&
+        claudeAccountTracked(row) &&
         !row.cancelled &&
         row.customerId &&
         !row.subscriptionEnded && !endedInventoryOrder(row)
@@ -1501,6 +1508,7 @@
     const evaluatedAt = orderEvaluationTime();
     const deadline = evaluatedAt + renewalWarningHours * 3_600_000;
     const rows = orders.flatMap((order) => {
+      if (isClaude(order) && !claudeAccountTracked(order)) return [];
       const start = parseDate(order.start), expiry = parseDate(order.expiry);
       if (!Object.hasOwn(productPlans, order.product) || !Number.isFinite(start) || !(expiry > start) ||
           !hasOpeningEvidence(order, start, expiry, evaluatedAt)) return [];
@@ -3160,6 +3168,7 @@
     const product = v('product'),
       customerId = v('customerId'),
       stock = v('businessType') === '成品交付';
+    const emailOptional = optionalOrderEmail(product, v('businessType'), v('claudeRenewalId'));
     return (
       `<div class="commerce-span-all order-choice-grid">` +
       (products.length === 1 ? `<input type="hidden" id="commerce-product" name="commerce-product" value="${E(product)}" />` : field('产品类型', 'product', select('product', products, product), true)) +
@@ -3188,7 +3197,7 @@
         searchableSelect('emailHistory', '客户历史邮箱', customerEmailChoices(customerId, product), v('email'), '', input(
           'email',
           v('email'),
-          `placeholder="${stock ? '搜索并选择本产品的可用账号' : '选择客户匹配历史邮箱，也可直接填写新邮箱'}" aria-required="${stock || product !== 'GPT'}" autocomplete="off" ${existing?.accountId || auto ? 'readonly' : ''}`
+          `placeholder="${stock ? '搜索并选择本产品的可用账号' : emailOptional ? '选填，可选择历史邮箱或手动填写' : '填写订单邮箱'}" aria-required="${!emailOptional}" autocomplete="off" ${existing?.accountId || auto ? 'readonly' : ''}`
         )),
         true,
         stock
@@ -3197,7 +3206,7 @@
             : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
           : auto ? '' : '优先匹配所选客户在当前产品最近使用的邮箱，也可直接填写新邮箱。',
         ''
-      ).replace('<span class="required">*', `<span class="required"${!stock && product === 'GPT' ? ' hidden' : ''}>*`)) +
+      ).replace('<span class="required">*', `<span class="required"${emailOptional ? ' hidden' : ''}>*`)) +
       orderOwnerField(v, existing) +
       '</div>' +
       `<details class="commerce-span-all"><summary>联系方式（自动回填，可展开修改）</summary><div class="commerce-field-grid">${field('客户微信', 'wechat', input('wechat', contact('wechat')))}${field('客户电话', 'customerPhone', input('customerPhone', contact('customerPhone')))}${field('QQ', 'qq', input('qq', contact('qq')))}${field('WhatsApp', 'whatsapp', input('whatsapp', contact('whatsapp')))}${field('Telegram', 'telegram', input('telegram', contact('telegram')))}</div></details>`
@@ -3857,9 +3866,9 @@
   function orderEditor(orderId = '', renewalId = '', main = false, workbenchSource = null, pageProduct = '') {
     const existing = orders.find((row) => row.id === orderId);
     const candidate = workbenchSource?.order || orders.find((row) => row.id === renewalId);
-    const previous = workbenchSource?.order || (isClaude(candidate) ? candidate : null);
+    const previous = workbenchSource?.order || (claudeAccountTracked(candidate) ? candidate : null);
     if (renewalId && !previous) {
-      A.notify('快捷续费仅支持 Claude；其他产品请直接提交独立新订单。');
+      A.notify('快捷续费需要已记录邮箱的 Claude 订单，请直接提交独立新订单。');
       return '';
     }
     const key = workbenchSource ? `commerce-order:workbench:${previous.id}` :
@@ -4458,7 +4467,8 @@
   function orderDetail(id, activeTab = 'details', asPage = false) {
     const order = orders.find((row) => row.id === id);
     const personal = personalProduct(order?.product);
-    if (!personal && !isClaude(order) && activeTab === 'renewals') activeTab = 'details';
+    const tracksAccount = personal || claudeAccountTracked(order);
+    if (!tracksAccount && activeTab === 'renewals') activeTab = 'details';
     if (!order)
       return asPage ? A.header('订单详情') + A.empty('订单不存在', '请返回订单列表选择资料。') : '';
     const content =
@@ -4475,7 +4485,7 @@
       ['details', '资料'],
       ['costs', '成本与汇率'],
       ['refunds', '退款记录'],
-      ...(personal || isClaude(order) ? [['renewals', '同账号订单']] : []),
+      ...(tracksAccount ? [['renewals', '同账号订单']] : []),
       ['history', '操作记录']
     ]
       .map(
@@ -4738,7 +4748,7 @@
     const rows = orders
       .filter(row => personalProduct(order.product) ? row.customerId === order.customerId &&
         (sameSubscriptionAccount(row, order, false) || order.previousSubscriptionOrderId === row.id ||
-          row.previousSubscriptionOrderId === order.id) : isClaude(row) && row.email.toLowerCase() === order.email.toLowerCase())
+          row.previousSubscriptionOrderId === order.id) : isClaude(row) && sameSubscriptionAccount(row, order))
       .sort((a, b) => String(a.start).localeCompare(String(b.start)));
     return A.table(
       [
@@ -5388,7 +5398,7 @@
     const auto = automaticOrder(existing);
     if (!existing) error('ownerId', order.ownerId && (order.ownerId === currentOperator().id ||
       orderOwners.some(row => row.id === order.ownerId)) ? '' : '请选择可用的订单归属人');
-    const optionalEmail = order.product === 'GPT' && order.businessType === '续费';
+    const optionalEmail = optionalOrderEmail(order.product, order.businessType, order.claudeRenewalId);
     const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email);
     const validHandle = /^@[a-zA-Z0-9_]{1,15}$/.test(order.xHandle || '');
     const xLogin = order.product === 'Grok' && order.loginMethod === 'x';
@@ -5577,7 +5587,7 @@
       error('verifierPhone', order.verifierPhone ? '' : '所选认证人缺少认证电话');
     }
     const current =
-      isClaude(order) &&
+      claudeAccountTracked(order) &&
       currentSubscriptions().find(
         (row) =>
           row.email.toLowerCase() === order.email.toLowerCase() &&
@@ -5836,7 +5846,7 @@
             const renewalFrom = saved.previousOrderId || (renewalSource && !existing && saved.businessType === '续费' &&
                 sameSubscriptionAccount(saved, renewalSource.order) ? renewalSource.order.id : '');
             if (renewalFrom && !existing) log('关联续费订单', renewalFrom, saved.orderNo, saved.id);
-            if (isClaude(saved) && !operating.has(saved.email.toLowerCase()))
+            if (claudeAccountTracked(saved) && !operating.has(saved.email.toLowerCase()))
               operating.set(saved.email.toLowerCase(), { status: 'active', at: now(), reason: '' });
             log(
               existing ? '更正订单' : '新增独立订单',
@@ -6358,7 +6368,7 @@
     const order = orders.find((row) => row.id === id);
     if (!order) return;
     const ledger = A.modules.appleBalance?.getOrderLedger?.(id);
-    const claude = isClaude(order)
+    const claude = claudeAccountTracked(order)
       ? `<div class="guide-item"><div class="section-title-row"><h3>Claude 续费</h3>${A.titleInfo('Claude 续费', '预填相同账号资料并生成独立新订单；未过期可续接当前到期，银行卡重新选择。', 'commerce-more-renew')}</div><div class="toolbar">${A.button('新增 Claude 续费订单', 'commerce-order-renew', '', 'return', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}</div></div>`
       : '';
     const apple = localData
@@ -7099,8 +7109,8 @@
     }
     if (action === 'commerce-order-renew') {
       const order = orders.find((row) => row.id === id);
-      if (!isClaude(order)) {
-        A.notify('快捷续费仅适用于 Claude，其他产品请提交独立新订单。');
+      if (!claudeAccountTracked(order)) {
+        A.notify('快捷续费需要已记录邮箱的 Claude 订单，请提交独立新订单。');
         return true;
       }
       orderEditor('', id);
@@ -7432,7 +7442,8 @@
     const email = form.querySelector('#commerce-email');
     if (!email) return;
     const stock = form.elements['commerce-businessType'].value === '成品交付';
-    const required = stock || form.elements['commerce-product'].value !== 'GPT';
+    const required = !optionalOrderEmail(form.elements['commerce-product'].value, form.elements['commerce-businessType'].value,
+      form.elements['commerce-claudeRenewalId']?.value);
     email.setAttribute('aria-required', String(required));
     const label = form.querySelector('[data-commerce-field="email"] label');
     label?.querySelector('.required')?.toggleAttribute('hidden', !required);
@@ -7458,7 +7469,7 @@
       }
     } else {
       email.removeAttribute('list');
-      email.placeholder = '选择客户匹配历史邮箱，也可直接填写新邮箱';
+      email.placeholder = required ? '填写订单邮箱' : '选填，可选择历史邮箱或手动填写';
       if (!existing?.accountId) form.elements['commerce-accountId'].value = '';
     }
     updateCustomerEmailHistory(form);

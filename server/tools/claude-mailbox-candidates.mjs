@@ -3,7 +3,7 @@ export function withClaudeMailboxCandidates(metadata, inventory) {
   const items = metadata.items.map(row => ({ ...row }));
   const byEmail = new Map(items.map(row => [row.email.trim().toLowerCase(), row]));
   for (const account of inventory?.accounts || []) {
-    if (account.type !== 'claude' || typeof account.email !== 'string') continue;
+    if (account.type !== 'claude' || account.claudeHistory || typeof account.email !== 'string') continue;
     const email = account.email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
     const existing = byEmail.get(email);

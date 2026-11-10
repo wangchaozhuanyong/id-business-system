@@ -199,7 +199,8 @@ function meetsClaudeAging(account, inventory) {
   const configured = inventory.tableSettings?.find((entry) => entry?.[0] === 'claude')?.[1];
   const hours = configured?.hours ?? DEFAULT_CLAUDE_AGING_HOURS;
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_CLAUDE_AGING_HOURS) return false;
-  const input = String(String(account.registered || '').trim() || account.createdAt || account.importedAt || '')
+  const fallback = account.claudeHistory ? '' : account.createdAt || account.importedAt || '';
+  const input = String(String(account.registered || '').trim() || fallback)
     .trim()
     .replace(' ', 'T');
   const local = /^\d{4}-\d{2}-\d{2}$/.test(input) ? `${input}T00:00` : input;

@@ -405,11 +405,73 @@ function fixture() {
   };
 }
 
+test('历史入库在版本冲突后复用已绑定的收件地址，并原子保存库存和订单', async (t) => {
+  const state = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  state.inventory = {
+    ...Object.fromEntries(['mailboxes', 'accounts', 'batches', 'returnRecords', 'importRecords',
+      'registrationRecords', 'tableSettings', 'undo'].map((key) => [key, []])),
+    appleRelay: { parents: state.inventory.appleRelay.parents, imports: [], events: [] }
+  };
+  store.saveBatch([
+    { domain: 'inventory', version: 0, data: state.inventory },
+    { domain: 'commerce', version: 0, data: {
+      customers: [{ id: 'history-customer', name: '合成客户', wechat: 'history-wechat', active: true }],
+      tenants: [], orders: [], operating: [], rentBatches: [], logs: []
+    } }
+  ]);
+  state.planIntake = input => store.planAppleRelayIntake(input);
+  let conflict = true;
+  state.savePrimaries = (rows, actor, aliases, registration) => {
+    if (conflict) {
+      conflict = false;
+      const current = store.load('commerce');
+      current.data.customers[0].notes = '其它窗口已更新';
+      store.saveBatch([{ domain: 'commerce', ...current }]);
+    }
+    const result = store.saveAppleRelayPrimaries(rows, { ...actor, name: '历史测试员' }, aliases, registration);
+    state.inventory = result.inventory.data;
+    return result;
+  };
+  const request = await listen(t, state);
+  const payload = { parentId: 'one', parentVersion: 1, days: 30, rows: [
+    { email: 'history-sold@example.test', registered: '2025/1/5', wechat: 'history-wechat', plan: 'Plus',
+      start: '2025/2/1 10:30', expiry: '2025/3/1 10:30', payment: '银行卡', note: '合成来源' },
+    { email: 'history-registered@example.test', registered: '2025/1/6' }
+  ] };
+  const withVersions = async () => {
+    const preview = await request('alias-intake-preview', payload);
+    assert.equal(preview.status, 200);
+    const { inventoryVersion, commerceVersion } = preview.body;
+    return { ...payload, inventoryVersion, commerceVersion };
+  };
+  assert.equal((await request('alias-intake-preview', payload, undefined, 'employee', 'employee')).status, 403);
+  assert.equal((await request('alias-intake-confirm', await withVersions())).status, 409);
+  assert.deepEqual(store.load('inventory').data.mailboxes, []);
+  assert.deepEqual(store.load('commerce').data.orders, []);
+  const saved = await request('alias-intake-confirm', await withVersions());
+  assert.equal(saved.status, 200, saved.body.message);
+  assert.equal(saved.body.ordersCreated, 1);
+  assert.equal(saved.body.accountsCreated, 2);
+  const inventory = store.load('inventory').data;
+  const [order] = store.load('commerce').data.orders;
+  assert(inventory.mailboxes.every(row => row.parentMailboxId === 'one' && row.inventoryState === 'used'));
+  assert.equal(inventory.accounts.find(row => row.id === order.accountId).inventoryState, 'used');
+  assert.equal(order.customerId, 'history-customer');
+  assert.equal(order.start, '2025-02-01T10:30');
+  assert.equal(order.paidConfirmed, false);
+  assert.equal(store.load('commerce').data.customers[0].notes, '其它窗口已更新');
+  assert.equal(state.upstream.calls.filter(({ query }) => query.includes('batchCreateIcloudVirtualEmails')).length, 1);
+  assert.deepEqual((await request('alias-intake-confirm', await withVersions())).body, { reused: 2 });
+});
+
 async function listen(t, state) {
   const service = createAppleRelayService({
     config: state.config,
     readInventory: () => state.inventory,
     savePrimaries: state.savePrimaries,
+    planIntake: state.planIntake,
     fetchImpl: state.upstream?.fetch,
     recordAction: (entry) => {
       state.events.push(entry);
