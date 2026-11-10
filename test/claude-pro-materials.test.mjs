@@ -310,6 +310,52 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
   } finally { store.close(); }
 });
 
+test('Gemini and Grok save confirmed manual cards and audit verified card-source corrections', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const pool = { id: 'recharge:81', active: true, last4: '1919', number: '4000000000001919', usageCount: 0 };
+    const options = { readOrderCards: async () => [pool] };
+    const rows = [
+      ['Gemini', 'Google AI Pro', 'google_ai', 'google'],
+      ['Grok', 'SuperGrok', 'supergrok', 'email']
+    ].map(([product, plan, subscriptionSeries, loginMethod]) => manual('personal-' + product, {
+      product, plan, subscriptionSeries, loginMethod, businessType: '首次开通', proCardSerial: '',
+      billingChannel: 'web', billingCountry: '马来西亚', billingReceipt: 'fixture-receipt-' + product,
+      billingCycle: 'month', entitlementStatus: 'active', autoRenew: 'unknown',
+      paidConfirmed: true, receiptConfirmed: true
+    }));
+    const create = orders => save(store, 0, makeDocument(orders), '新增独立订单', options);
+    const invalid = await create([{ ...rows[0], proCardNumber: '4242' }]);
+    assert.equal(invalid.status, 400);
+    assert.match(invalid.data.error, /有效银行卡号/);
+    const saved = await create(rows);
+    assert.equal(saved.status, 200, saved.data.error);
+    const orders = saved.data.data.orders;
+    for (const order of orders) {
+      assert.equal(order.proCardNumber, sampleNumber);
+      assert.equal(order.paymentId, '4242');
+      assert.equal(order.cardId, '');
+      assert.equal(order.financialEvidence.length, 1);
+    }
+    const edited = orders.map(order => edit(order, { proMaterialMode: 'pool_card', cardId: pool.id }));
+    const change = next => save(store, 1, { ...saved.data.data, orders: next }, '更正订单', options);
+    const missingHistory = await change([{ ...edited[0], corrections: [] }, orders[1]]);
+    assert.equal(missingHistory.status, 409);
+    assert.match(missingHistory.data.error, /原记录/);
+    const differentReceipt = await change([{ ...edited[0], billingReceipt: 'different-receipt' }, orders[1]]);
+    assert.equal(differentReceipt.status, 400);
+    assert.match(differentReceipt.data.error, /原账单/);
+    const changed = await change(edited);
+    assert.equal(changed.status, 200, changed.data.error);
+    for (const [index, order] of changed.data.data.orders.entries()) {
+      assert.equal(order.cardId, pool.id);
+      assert.equal(order.proCardNumber, pool.number);
+      assert.equal(order.corrections.at(-1).previous.proCardNumber, sampleNumber);
+      assert.deepEqual(order.financialEvidence, orders[index].financialEvidence);
+    }
+  } finally { store.close(); }
+});
+
 test('GPT manual payment can omit a card without applying the pool first-use fee', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {

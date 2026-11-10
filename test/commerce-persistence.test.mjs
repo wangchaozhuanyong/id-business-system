@@ -414,7 +414,6 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
       billingCountry: '美国',
       billingReceipt: 'fixture-transaction',
       billingCycle: 'month',
-      entitlementStatus: 'pending',
       autoRenew: 'unknown',
       loginMethod: 'google',
       appleGoogleVerified: 'on',
@@ -438,6 +437,7 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     await turn();
     const [order] = first.listOrders();
     assert.equal(order.paymentId, asset.email);
+    assert.equal(order.entitlementStatus, 'active');
     assert.equal(ledger.get(asset.id).balance, '231.0000');
     assert.equal(ledger.getOrderLedger(order.id).amount, '20.0000');
 
@@ -482,6 +482,7 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
       ...fields,
       id: order.id,
       version: reopened.getOrder(order.id).version,
+      entitlementStatus: reopened.getOrder(order.id).entitlementStatus,
       paidAmount: '22',
       correctionReason: '已核对实扣金额'
     });
