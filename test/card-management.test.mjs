@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
-import { cardFundingEstimate, cardTypeDocument, createCardManagementHandler } from '../server/card-management.mjs';
+import { cardFundingEstimate, cardTypeDocument, cardTypeSnapshot, createCardManagementHandler } from '../server/card-management.mjs';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 
 const origin = 'https://unit.example.test';
@@ -64,6 +64,53 @@ test('共用类型按真实卡 ID 保存，跨站和过期版本被拒，已引�
   assert.deepEqual(saved.items.find(item => item.id === id), { id, name: '合成分类', active: false });
   assert.equal(store.featureDocument(cardTypeDocument).version, 3);
   assert.doesNotMatch(JSON.stringify([saved, store.audit()]), /4242424242424242|"987"/);
+});
+
+test('导入批次只给存在且未分类的卡设置类型，重复保存保留已有分类', async () => {
+  const type = { id: 'type-new', name: '合成导入类型', active: true };
+  const previous = { id: 'type-existing', name: '原分类', active: true };
+  let current = { version: 4, data: {
+    items: [type, previous, { id: 'type-disabled', name: '已停用分类', active: false }],
+    assignments: { 'recharge:8': previous.id, 'recharge:9': type.id }
+  } };
+  const audit = [];
+  const store = {
+    featureDocument: () => current,
+    saveFeatureDocument(domain, version, data, event) {
+      assert.equal(domain, cardTypeDocument);
+      assert.equal(version, current.version);
+      audit.push(event);
+      return current = { version: version + 1, data };
+    }
+  };
+  let reads = 0;
+  const handler = createCardManagementHandler({ store, publicOrigin: origin, client: {
+    async get(path) {
+      assert.equal(path, '/api/admin/cards');
+      reads++;
+      return { cards: [{ id: 7 }, { id: 8 }, { id: 9 }] };
+    }
+  } });
+  const actor = { ...admin, role: 'super' };
+  const post = (body, options) => request(handler, 'card-types', { body, actor, ...options });
+  const command = { action: 'assign-imported', version: 4, typeId: type.id,
+    cardIds: ['recharge:7', 'recharge:8', 'recharge:9', 'recharge:10', 'recharge:7'] };
+  assert.equal((await post(command, { actor: admin })).status, 403);
+  assert.equal((await post({ ...command, typeId: 'type-disabled' })).status, 400);
+  assert.equal((await post({ ...command, cardIds: ['tenant:other'] })).status, 400);
+  assert.equal(reads, 0);
+  const result = await post(command);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data.importTypes, { assigned: 1, alreadyAssigned: 1, conflict: 1, missing: 1 });
+  assert.deepEqual(current.data.assignments, {
+    'recharge:7': type.id, 'recharge:8': previous.id, 'recharge:9': type.id
+  });
+  assert.deepEqual(cardTypeSnapshot(current.data, { cardId: 'recharge:7' }), { id: type.id, name: type.name });
+  assert.equal((await post(command)).status, 409);
+  const repeated = await post({ ...command, version: 5 });
+  assert.deepEqual(repeated.data.importTypes, { assigned: 0, alreadyAssigned: 2, conflict: 1, missing: 1 });
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].targetId, type.id);
 });
 
 test('复制从当前关联取卡号，结果按固定顺序，已删除或无法核对的卡不泄漏', async () => {

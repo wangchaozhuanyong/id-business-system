@@ -16,11 +16,14 @@ test('批次显示归还资格，同邮箱产品需明确选择；核对使用�
     const mutations = []; page.on('request', r => { if (!['GET', 'HEAD'].includes(r.method())) mutations.push(new URL(r.url()).pathname); });
     await page.goto(origin + '/#/' + fixture.route);
     if (fixture.name === 'all-used') {
+      await page.getByRole('button', { name: '全部记录', exact: true }).click();
+      await page.getByRole('tab', { name: '提取历史', exact: true }).click();
       const action = page.locator('[data-action="inventory-batch-return"]').first();
       await action.waitFor(); assert(await action.isDisabled()); assert.match(await action.innerText(), /无可归还项/);
       assert((await page.locator('th').allTextContents()).includes('可归还'));
       await page.locator('[data-action="inventory-batch"]').first().click();
-      await page.getByText('归还资格', { exact: true }).waitFor();
+      await page.getByRole('heading', { name: '提取批次明细', exact: true }).waitFor();
+      await page.getByText('归还资格', { exact: true }).waitFor({ state: 'attached' });
       assert.equal(await page.getByText('本次领用已实际使用', { exact: true }).count(), 10);
     } else {
       await page.locator('[data-action="inventory-center-tab"][data-tab="quick"]').click();
@@ -49,6 +52,10 @@ test('批次显示归还资格，同邮箱产品需明确选择；核对使用�
       await page.getByRole('button', { name: '查找并核对', exact: true }).click();
       await drawer.waitFor(); assert.equal(reads, 1);
       assert.equal(await drawer.locator('input[data-return-claim]:checked').count(), 0, '最新已使用项不可归还');
+      if (width === 390) {
+        const collapsed = drawer.locator('button.mobile-record-toggle[aria-expanded="false"]');
+        for (let remaining = await collapsed.count(); remaining > 0; remaining--) await collapsed.first().click();
+      }
       assert.match(await drawer.innerText(), /本次领用已实际使用/);
       assert.match(await drawer.innerText(), /重复/); assert.match(await drawer.innerText(), /格式/); assert.match(await drawer.innerText(), /未找到/);
     }

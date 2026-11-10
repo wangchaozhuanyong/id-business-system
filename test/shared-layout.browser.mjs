@@ -293,6 +293,98 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     await oldFrame.dispose();
   });
 
+  await t.test('recharge work areas reach the footer and keep long logs inside the reader', async () => {
+    const desktop = { width: 1680, height: 1060 };
+    let entries = [];
+    const logRoute = '**/integrations/codexdaichong/api/admin/runtime-logs?*';
+    const mockLogs = route => route.fulfill({
+      json: {
+        success: true,
+        entries: new URL(route.request().url()).searchParams.has('tail') ? entries : [],
+        nextAfter: entries.length
+      }
+    });
+    await page.route(logRoute, mockLogs);
+    const select = view => page.locator(`button[data-view="${view}"]`).click();
+    const measure = async selector => {
+      const area = frame().locator(selector);
+      await area.waitFor();
+      await settled();
+      return area.evaluate(node => {
+        const hostFrame = window.frameElement;
+        const host = hostFrame.ownerDocument.defaultView;
+        const main = hostFrame.closest('main');
+        const footer = main.nextElementSibling;
+        const end = host.innerHeight - footer.offsetHeight - parseFloat(host.getComputedStyle(main).paddingBottom);
+        const rect = node.getBoundingClientRect();
+        return {
+          gap: end - hostFrame.getBoundingClientRect().bottom - host.scrollY,
+          width: rect.width, height: rect.height, frameWidth: innerWidth,
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          pageHeight: host.document.documentElement.scrollHeight
+        };
+      });
+    };
+    const fit = (bounds, minimum) => {
+      assert(Math.abs(bounds.gap) <= 2, JSON.stringify(bounds));
+      assert(bounds.height >= minimum && bounds.width >= bounds.frameWidth - 100 && !bounds.overflow, JSON.stringify(bounds));
+    };
+    try {
+      await page.setViewportSize(desktop);
+      await theme(false);
+      await go('online-recharge/chatgpt');
+      await select('query');
+      fit(await measure('[data-recharge-query] .recharge-card'), 600);
+      await frame().getByRole('tab', { name: '批量查询', exact: true }).click();
+      const batch = await measure('#batchQueryInput');
+      assert(Math.abs(batch.gap) <= 2 && batch.height >= 400 && !batch.overflow, JSON.stringify(batch));
+      await frame().getByRole('tab', { name: '单个查询', exact: true }).click();
+
+      for (const [view, selector, minimum] of [
+        ['dashboard', '#dashboard.active', 700],
+        ['checkout_debug', '#checkout_debug.active .runtime-log-pre-wrap', 270],
+        ['cancel_renewal', '#cancel_renewal.active #cancel_renewal_session', 550],
+        ['runtime_logs', '#runtime_logs.active .runtime-log-pre-wrap', 650]
+      ]) {
+        await select(view);
+        fit(await measure(selector), minimum);
+      }
+
+      const log = '#runtime_logs.active .runtime-log-pre-wrap';
+      const before = await measure(log);
+      entries = Array.from({ length: 120 }, (_, index) => ({ text: `离线日志第 ${index + 1} 行` }));
+      await frame().locator('#runtime_log_refresh_btn').click();
+      await frame().getByText(/离线日志第 120 行/).waitFor();
+      const atEnd = () => frame().locator(log).evaluate(node =>
+        node.scrollTop > 0 && Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop) <= 1);
+      assert(await atEnd(), '新日志滚动到日志区底部');
+      assert.deepEqual(await measure(log), before, '日志增长不撑高外页');
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await theme(true);
+      fit(await measure(log), 300);
+      assert(await atEnd(), '缩窗使日志换行后仍跟随最新一条');
+      await noOverflow();
+      await frame().locator('#runtime_log_autoscroll').uncheck();
+      await frame().locator(log).evaluate(node => { node.scrollTop = 0; });
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/admin/runtime-logs?tail=1')),
+        frame().locator('#runtime_log_refresh_btn').click()
+      ]);
+      await settled();
+      assert.equal(await frame().locator(log).evaluate(node => node.scrollTop), 0);
+
+      await page.setViewportSize({ width: 1440, height: 460 });
+      const short = await measure(log);
+      assert(short.height >= 200 && short.pageHeight > 460 && !short.overflow, JSON.stringify(short));
+      await frame().locator('#runtime_log_refresh_btn').scrollIntoViewIfNeeded();
+      assert(await frame().locator('#runtime_log_refresh_btn').isVisible());
+    } finally {
+      await page.unroute(logRoute, mockLogs);
+      await theme(false);
+    }
+  });
+
   await t.test('recharge log tables scroll within their containers with readable single-line headings', async () => {
     await page.setViewportSize({ width: 390, height: 900 });
     await go('settings/login-logs');

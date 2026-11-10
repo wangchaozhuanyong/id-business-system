@@ -42,7 +42,7 @@ if (migration) {
   const returns = role.endsWith('-code-returns');
   try { await (returns ? migrateRechargeCodeReturns(db) : migrateRechargeRouting(db)); }
   finally { await db.end(); }
-  console.log(JSON.stringify({ migration: returns ? 'unused-code-returns-v1' : 'per-plan-routing-v1', tables: returns ? 1 : 2, completed: true }));
+  console.log(JSON.stringify({ migration: returns ? 'unused-code-returns-v1' : 'per-plan-routing-v2', tables: returns ? 1 : 3, completed: true }));
   process.exit(0);
 }
 if (role === 'preflight-native') {

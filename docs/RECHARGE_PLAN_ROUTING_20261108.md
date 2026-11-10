@@ -43,6 +43,14 @@ Vendure 仍只提交原兑换码/资料并读取安全进度；采集、订单�
 
 `routing-migration.sql` 只新增 `id_recharge_route_config` 和 `id_recharge_proxy_checks` 两张模块表；原表、数据和迁移不更改。初始配置 INSERT IGNORE，不覆盖已有值。迁移入口为容器 `migrate-native-routing`，只在正式入口暂停、空闲核验和新鲜加密备份后执行；隔离金丝雀使用 `migrate-canary-routing`，不连接生产库。不自动执行生产回滚或删除新表。
 
+### 2026-11-11 代理国家标注
+
+代理导入仍走 `POST /api/admin/proxies`，请求包含 `proxies` 和必填的 `countryCode`。一批代理与标注在同一事务保存。重复线路已有相同标注时跳过，原线路未标注时补标，已标为其他国家时拒绝整批。列表补标及修改使用 `PUT /api/admin/recharge-routing/proxies/:id/country`，同时提交 `expectedCountryCode` 以保护并发编辑。
+
+`proxy-country-labels-migration.sql` 在原版 `proxy_assets` 初始化后增加 `id_recharge_proxy_country_labels`。表内保存代理编号、国家码和标注审计，出口检测继续写入 `id_recharge_proxy_checks`。沿用上述迁移入口，成功回执为 `per-plan-routing-v2`。
+
+浏览器充值先实时核验标注与套餐匹配的启用代理，再核验待标注的启用代理。标注为其他国家的代理不参与该套餐选路。实测一致才放行，原有空池直连规则继续适用。
+
 ## 验证要求与边界
 
 无本地数据库的测试覆盖：真实 trace 解析、套餐配置、空池与国家不匹配、同一 sticky 线路复核、配置/代理变更竞态、秘密脱敏、启动参数及选路失败不占资源、源码完整性、原版换卡及 API/UI 回退、调试截图终态恢复。

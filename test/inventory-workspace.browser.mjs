@@ -55,7 +55,11 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       const rect = node => node.getBoundingClientRect().toJSON();
       const text = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect().toJSON(); };
       const [left, right] = container.children;
+      const main = container.closest('main');
+      const end = innerHeight - main.nextElementSibling.offsetHeight - parseFloat(getComputedStyle(main).paddingBottom);
       return { container: rect(container), left: rect(left), right: rect(right),
+        gap: end - rect(container).bottom - scrollY,
+        historyGaps: [left, right].map(panel => rect(panel).bottom - rect(panel.querySelector('.inventory-workspace-history')).bottom),
         leftHeading: rect(left.querySelector('.panel-heading > .section-title-row')),
         rightHeading: rect(right.querySelector('.panel-heading > .section-title-row')),
         leftTitle: text(left.querySelector('h2')), rightTitle: text(right.querySelector('h2')),
@@ -71,6 +75,8 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     if (geometry.container.width >= 960) {
       assert(Math.abs(geometry.left.top - geometry.right.top) < 1);
       assert(Math.abs(geometry.left.bottom - geometry.right.bottom) < 1);
+      assert(geometry.gap <= 2, '宽屏工作台应延伸到页脚上方');
+      assert(geometry.historyGaps.every(gap => gap >= 0 && gap <= 2), '两侧记录区应使用面板剩余空间');
       assert(Math.abs(geometry.leftTitle.top - geometry.rightTitle.top) < 1, '实际标题文字对齐');
       assert(geometry.right.left >= geometry.left.right + 19);
     } else assert(geometry.right.top >= geometry.left.bottom + 19);
@@ -135,6 +141,21 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     assert.equal(await notes.inputValue(), kind + ' 的提取草稿');
     assert.equal(await page.locator('#inventory-purpose-other').inputValue(), '完整用途 <script>synthetic</script>');
   }
+  await go('workspace/extractions');
+  await page.locator('[data-action="inventory-center-tab"][data-tab="history"]').click();
+  const batchTable = page.locator('#main .table-viewport:has(table[data-table="提取批次"])');
+  await batchTable.locator('tr[data-row-id]').first().waitFor();
+  await settle(page);
+  const populatedHeight = (await batchTable.boundingBox()).height;
+  await page.locator('#inventory-center-query').fill('无匹配批次的离线关键词');
+  await batchTable.getByText('没有符合条件的批次', { exact: true }).waitFor();
+  await settle(page);
+  assert.equal(await batchTable.getAttribute('data-pagination-layout'), 'fill');
+  assert.equal((await batchTable.boundingBox()).height, populatedHeight, '筛选空结果保持列表外框');
+  await page.locator('[data-action="inventory-center-tab"][data-tab="returns"]').click();
+  const returns = page.locator('#main .table-viewport:has(table[data-table="归还记录"])');
+  await returns.waitFor();
+  assert.equal(await returns.getAttribute('data-pagination-layout'), 'fill');
   // Failure keeps the form, successful extraction uses the existing batch/detail workflow.
   await go('workspace/account-extract');
   const stock = page.locator('.inventory-availability > span').filter({ hasText: /^GPT 账号/ }).locator('strong');

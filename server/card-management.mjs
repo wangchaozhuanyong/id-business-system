@@ -99,7 +99,7 @@ export function cardFundingEstimate(order, fixedFee, quotes, now) {
   }
 }
 
-async function poolCard(client, id) {
+async function poolCards(client) {
   let result;
   try {
     result = await client.get('/api/admin/cards');
@@ -107,7 +107,11 @@ async function poolCard(client, id) {
   } catch {
     throw error(503, '充值卡池暂时无法读取，请重试');
   }
-  const matches = result.cards.filter(row => 'recharge:' + row.id === id);
+  return result.cards;
+}
+
+async function poolCard(client, id) {
+  const matches = (await poolCards(client)).filter(row => 'recharge:' + row.id === id);
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -120,12 +124,12 @@ function send(response, status, data) {
   response.end(JSON.stringify(data));
 }
 
-async function readCommand(request) {
+async function readCommand(request, maximumBytes = 4096) {
   const chunks = [];
   let length = 0;
   for await (const chunk of request) {
     length += chunk.length;
-    if (length > 4096) throw error(400, '请求过长');
+    if (length > maximumBytes) throw error(400, '请求过长');
     chunks.push(chunk);
   }
   try {
@@ -410,7 +414,7 @@ async function writeType(store, client, command, actor) {
   if (command.version !== current.version) throw error(409, '银行卡类型已更新，请刷新后重试');
   const data = structuredClone(classify(current.data));
   const item = command.action === 'add' ? undefined : data.items.find(row => row.id === command.id && row.active);
-  let target = command.id, label;
+  let target = command.id, label, importTypes;
   switch (command.action) {
     case 'add':
     case 'rename': {
@@ -449,10 +453,38 @@ async function writeType(store, client, command, actor) {
       label = '设置银行卡类型';
       break;
     }
+    case 'assign-imported': {
+      if (actor.role !== 'super') throw error(403, '没有导入充值银行卡的权限');
+      const { cardIds, typeId } = command;
+      if (!Array.isArray(cardIds) || !cardIds.length || cardIds.length > 500 ||
+          cardIds.some(id => typeof id !== 'string' || !/^recharge:[1-9]\d{0,19}$/.test(id)))
+        throw error(400, '导入卡片编号无效');
+      if (!data.items.some(row => row.id === typeId && row.active))
+        throw error(400, '请选择有效的银行卡类型');
+      const existing = new Set((await poolCards(client)).map(row => 'recharge:' + row.id));
+      importTypes = { assigned: 0, alreadyAssigned: 0, conflict: 0, missing: 0 };
+      for (const id of new Set(cardIds)) {
+        if (!existing.has(id)) importTypes.missing++;
+        else if (data.assignments[id] === typeId) importTypes.alreadyAssigned++;
+        else if (data.assignments[id]) importTypes.conflict++;
+        else {
+          data.assignments[id] = typeId;
+          importTypes.assigned++;
+        }
+      }
+      if (!importTypes.assigned) {
+        if (store.featureDocument(cardTypeDocument).version !== current.version)
+          throw error(409, '银行卡类型已更新，请刷新后重试');
+        return { version: current.version, ...data, importTypes };
+      }
+      target = typeId;
+      label = '设置本批充值银行卡类型';
+      break;
+    }
     default: throw error(400, '不支持此银行卡类型操作');
   }
   const saved = store.saveFeatureDocument(cardTypeDocument, current.version, data, { action: label, actor, targetId: target });
-  return { version: saved.version, ...saved.data };
+  return { version: saved.version, ...saved.data, ...(importTypes && { importTypes }) };
 }
 
 export function createCardManagementHandler({ store, client, publicOrigin, clock = Date.now }) {
@@ -481,7 +513,7 @@ export function createCardManagementHandler({ store, client, publicOrigin, clock
       if (request.method !== 'POST' || route === '/api/local/subscription-card-estimates') throw error(405, '不支持此操作');
       if (request.headers.origin !== origin || !/^application\/json(?:;|$)/i.test(request.headers['content-type'] || ''))
         throw error(403, '请求来源未通过校验');
-      const command = await readCommand(request);
+      const command = await readCommand(request, route === '/api/local/card-types' ? 20 * 1024 : undefined);
       let result;
       if (route === '/api/local/card-types') result = await writeType(store, client, command, actor);
       else if (route === detailsRoute || route === revealRoute || route === copyRoute) {

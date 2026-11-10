@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { CODEXDAICHONG_REVISION } from './prepare.mjs';
 import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
-import { RECHARGE_STAGE_LABELS } from './progress-presentation.mjs';
+import { RECHARGE_STAGE_LABELS, RECHARGE_STEP_LABELS } from './progress-presentation.mjs';
 import { routingAdminPanel } from './routing-admin-ui.mjs';
 import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
 
@@ -282,11 +282,28 @@ function adaptAdminScript(source, routingScript) {
         });
         document.addEventListener('change', event => {
             if (event.target?.id === 'proxy_add_input') previewProxyPoolInput(event.target);
+            if (event.target?.id === 'proxy_add_country') event.target.removeAttribute('aria-invalid');
         });
+        function clearProxyPoolEditor() {
+            document.getElementById('proxy_add_input').value = '';
+            const country = document.getElementById('proxy_add_country');
+            country.value = '';
+            country.removeAttribute('aria-invalid');
+            document.getElementById('proxy_add_hint').textContent = '';
+        }
         async function saveProxyPool() {
             const input = document.getElementById('proxy_add_input');
+            const country = document.getElementById('proxy_add_country');
             const hint = document.getElementById('proxy_add_hint');
             if (!input || input.dataset.saving === 'true') return;
+            const countryCode = country?.value;
+            if (!countryCode || country.disabled) {
+                const message = country?.disabled ? '请先刷新代理列表，读取国家选项。' : '请选择代理国家。';
+                if (hint) { hint.setAttribute('role', 'alert'); hint.textContent = message; }
+                country?.setAttribute('aria-invalid', 'true');
+                country?.focus();
+                return;
+            }
             let batch;
             try { batch = normalizeProxyPoolEditor(input); }
             catch (error) {
@@ -298,18 +315,26 @@ function adaptAdminScript(source, routingScript) {
             const button = document.querySelector('button[onclick="saveProxyPool()"]');
             input.dataset.saving = 'true';
             if (button) button.disabled = true;
-            if (hint) hint.textContent = '正在保存 ' + batch.proxies.length + ' 条代理…';
+            if (hint) { hint.setAttribute('role', 'status'); hint.textContent = '正在保存 ' + batch.proxies.length + ' 条代理…'; }
             try {
                 const res = await authFetch('/api/admin/proxies', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ proxies: batch.proxies })
+                    body: JSON.stringify({ proxies: batch.proxies, countryCode })
                 });
                 const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || data.message || '保存失败');
-                if (input.value === submitted) input.value = '';
+                if (!res.ok || !data.success) {
+                    if (hint) {
+                        hint.setAttribute('role', 'alert');
+                        hint.textContent = (data.message || '保存失败。') + ' 输入已保留。';
+                    }
+                    return;
+                }
+                if (input.value === submitted && country.value === countryCode) clearProxyPoolEditor();
                 if (hint) hint.textContent = data.message || '代理已保存';
                 showMessage(data.message || '代理已保存', 'success');
-                await loadProxyPool();
+                await loadProxyPool().catch(() => {
+                    if (hint) hint.textContent = '代理已保存，列表刷新失败，请点击刷新。';
+                });
             } catch {
                 if (hint) { hint.setAttribute('role', 'alert'); hint.textContent = '保存未完成，输入已保留，请刷新代理列表核对后重试。'; }
                 showMessage('保存代理未完成，请核对列表后重试', 'error');
@@ -320,6 +345,12 @@ function adaptAdminScript(source, routingScript) {
         }
   `);
   source = replaceSection(source, 'const TOKEN_KEY', 'const BUSINESS_PAGES', '');
+  source = replaceOne(source,
+    '<td id="proxy_ip_${item.id}">${ipCell}</td>',
+    '<td id="proxy_country_${item.id}" class="proxy-country-cell"></td>\n' +
+      '                        <td id="proxy_ip_${item.id}" class="proxy-exit-cell">${ipCell}</td>');
+  source = replaceOne(source, 'colspan="7">暂无代理，请在上方粘贴 URL 后点击「保存到代理池」',
+    'colspan="8">暂无代理，请选择国家并录入代理');
   source = replaceSection(source, 'function getAdminToken()', 'function formatDurationText(', '');
   source = replaceSection(
     source,
@@ -459,14 +490,78 @@ function adaptAdminScript(source, routingScript) {
   );
   source = replaceOne(
     source,
+    '                cardPoolList = Array.isArray(data.cards) ? data.cards : (Array.isArray(data) ? data : []);\n                renderCardPoolTable();',
+    `                const rows = Array.isArray(data.cards) ? data.cards : (Array.isArray(data) ? data : null);
+                if (!res.ok || !rows) throw new Error('卡池读取失败');
+                cardPoolList = rows;
+                renderCardPoolTable();
+                return rows;`
+  );
+  source = replaceOne(
+    source,
+    "            const btn = document.getElementById('card_pool_import_btn');\n            const text = (textarea.value || '').trim();",
+    `            const btn = document.getElementById('card_pool_import_btn');
+            const typeId = document.getElementById('card_pool_import_type').value;
+            if (btn.disabled || !typeId) return;
+            const submitted = textarea.value;
+            const text = submitted.trim();`
+  );
+  source = replaceOne(
+    source,
+    "            lucide.createIcons();\n\n            try {\n                const res = await authFetch('/api/admin/cards/import', {",
+    `            lucide.createIcons();
+            btn.dataset.saving = 'true';
+            paintRechargeCardTypes();
+
+            try {
+                const res = await authFetch('/api/admin/cards/import', {`
+  );
+  source = replaceSection(
+    source,
+    '                if (res.ok) {\n                    const imported = data.imported || 0;',
+    '        // ============ End Card Pool Management ============',
+    `                if (!res.ok) throw new Error('卡池导入回执待核对');
+                const numbers = rechargeCardTypes.acceptedNumbers(cards, data);
+                if (textarea.value === submitted) textarea.value = '';
+                const result = await finishRechargeCardImport(numbers, typeId);
+                resultEl.textContent = '导入 ' + data.imported + ' 张，跳过重复 ' + data.skipped +
+                    ' 张，失败 ' + (data.failed + parseErrors.length) + ' 张' + result;
+                resultEl.style.color = 'var(--text-dim)';
+            } catch {
+                resultEl.textContent = '导入回执待核对，请先刷新卡池查看。';
+                resultEl.style.color = 'var(--error)';
+            } finally {
+                delete btn.dataset.saving;
+                btn.innerHTML = '<i data-lucide="check-check"></i> 解析并导入';
+                paintRechargeCardTypes();
+                lucide.createIcons();
+            }
+        }
+`
+  );
+  source = replaceOne(
+    source,
     '<tr><td colspan="10" style="text-align:center; color: var(--text-dim); padding: 40px 0;">暂无卡片，请使用批量导入添加</td></tr>',
     '<tr><td colspan="11" style="text-align:center; color: var(--text-dim); padding: 40px 0;">暂无卡片，请使用批量导入添加</td></tr>'
   );
   source = replaceOne(
     source,
+    "const cardNumber = escapeHtml(card.card_number || card.last4 || '****');",
+    "const cardKey = rechargeCardTypes.cardKey(card.id);\n" +
+      "                const cardNumber = escapeHtml(card.card_number || card.last4 || '****');"
+  );
+  source = replaceOne(
+    source,
     '<td><code>${cardNumber}</code></td>',
     '<td><code>${cardNumber}</code></td>\n' +
-      '                    <td data-recharge-card-type="${rechargeCardTypes.cardKey(card.id)}"></td>'
+      '                    <td data-recharge-card-type="${cardKey}"></td>'
+  );
+  const deleteCardButton = '<button class="btn-delete" onclick="deleteCardPoolItem(${card.id})" title="删除">\n' +
+    '                            <i data-lucide="trash-2"></i>\n                        </button>';
+  source = replaceOne(
+    source,
+    deleteCardButton,
+    '<div class="table-action-group">${renderRechargeCardTypeEdit(cardKey)}' + deleteCardButton + '</div>'
   );
   source = replaceOne(
     source,
@@ -506,9 +601,23 @@ function adaptAdminScript(source, routingScript) {
   // Add the local settings call after namespacing upstream URLs. It goes to the host, not the engine.
   return replaceOne(localUrls(source + '\n' + routingScript), '        let cardPoolList = [];', `
         let cardPoolList = [];
+        function hasHostedCardTypeEditor() {
+            return window.frameElement?.matches('.recharge-integration__frame[data-view="cards"][data-view-group="admin"]');
+        }
+        function renderRechargeCardTypeEdit(cardKey) {
+            if (!cardKey || !hasHostedCardTypeEditor()) return '';
+            return '<button type="button" class="btn btn-secondary" aria-haspopup="dialog" data-edit-recharge-card-type="' +
+                cardKey + '">修改</button>';
+        }
+        document.getElementById('card_pool_list_body')?.addEventListener('click', (event) => {
+            const trigger = event.target.closest('[data-edit-recharge-card-type]');
+            if (!trigger || window.idRechargeVisible === false) return;
+            window.parent.postMessage({ source: 'id-codexdaichong', type: 'edit-card-type',
+                cardKey: trigger.dataset.editRechargeCardType }, location.origin);
+        });
         const rechargeCardTypes = (${createRechargeCardTypeOverlay.toString()})({
             async fetchSettings() {
-                const response = await authFetch('/api/local/card-types', {
+                const response = await fetch('/api/local/card-types', {
                     cache: 'no-store', signal: AbortSignal.timeout(5000)
                 });
                 if (!response.ok) throw new Error('无法读取银行卡类型');
@@ -516,6 +625,7 @@ function adaptAdminScript(source, routingScript) {
             },
             onChange: paintRechargeCardTypes
         });
+        let pendingRechargeCardType;
         window.idRechargeCardTypesChanged = () => {
             if (!document.hidden && window.idRechargeVisible !== false &&
                 document.getElementById('cards')?.classList.contains('active'))
@@ -526,9 +636,94 @@ function adaptAdminScript(source, routingScript) {
             const retry = document.getElementById('card_pool_type_retry');
             if (status) status.textContent = rechargeCardTypes.status;
             if (retry) retry.hidden = !rechargeCardTypes.failed;
-            for (const cell of document.querySelectorAll('#card_pool_list_body [data-recharge-card-type]'))
-                cell.textContent = rechargeCardTypes.label(cell.dataset.rechargeCardType);
+            const typeSelect = document.getElementById('card_pool_import_type');
+            const importButton = document.getElementById('card_pool_import_btn');
+            const busy = importButton.dataset.saving === 'true' || Boolean(pendingRechargeCardType);
+            const unavailable = rechargeCardTypes.version === null || !rechargeCardTypes.options.length;
+            fillRechargeCardTypeSelect(typeSelect, typeSelect.value,
+                rechargeCardTypes.version !== null && !rechargeCardTypes.options.length
+                    ? '暂无可用银行卡类型' : '请选择银行卡类型');
+            typeSelect.disabled = unavailable || busy;
+            importButton.disabled = typeSelect.disabled || !typeSelect.value;
+            const hosted = hasHostedCardTypeEditor();
+            for (const cell of document.querySelectorAll('#card_pool_list_body [data-recharge-card-type]')) {
+                const cardId = cell.dataset.rechargeCardType;
+                if (!cardId) { cell.textContent = '未设置'; continue; }
+                if (hosted) { cell.textContent = rechargeCardTypes.label(cardId); continue; }
+                let select = cell.querySelector('select');
+                if (!select) {
+                    select = document.createElement('select');
+                    select.className = 'asset-input';
+                    select.setAttribute('aria-label', '设置银行卡类型');
+                    cell.replaceChildren(select);
+                }
+                const selected = pendingRechargeCardType?.cardId === cardId
+                    ? pendingRechargeCardType.typeId : rechargeCardTypes.typeId(cardId);
+                fillRechargeCardTypeSelect(select, selected, rechargeCardTypes.label(cardId));
+                select.disabled = unavailable || busy;
+            }
         }
+        function fillRechargeCardTypeSelect(select, selected, placeholder) {
+            const options = rechargeCardTypes.options.map(item => new Option(item.name, item.id));
+            if (!options.some(option => option.value === selected)) {
+                const empty = new Option(placeholder, '');
+                empty.disabled = true;
+                options.unshift(empty);
+                selected = '';
+            }
+            select.replaceChildren(...options);
+            select.value = selected;
+        }
+        async function writeRechargeCardType(command) {
+            const version = rechargeCardTypes.version;
+            if (version === null || !rechargeCardTypes.options.some(item => item.id === command.typeId))
+                throw new Error('请选择可用的银行卡类型');
+            const response = await fetch('/api/local/card-types', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...command, version })
+            });
+            if (!response.ok) throw new Error(response.status === 409
+                ? '银行卡类型已更新，请刷新后重试' : '银行卡类型保存未确认，请刷新后核对');
+            return response.json();
+        }
+        async function finishRechargeCardImport(numbers, typeId) {
+            const cards = await loadCardPoolList();
+            if (!numbers.size) return '';
+            const pending = '；银行卡类型待核对，可在列表补设';
+            if (!cards) return pending;
+            const { cardIds, missing } = rechargeCardTypes.matchCardIds(numbers, cards);
+            if (!cardIds.length) return pending;
+            try {
+                await rechargeCardTypes.refresh();
+                const { importTypes } = await writeRechargeCardType({ action: 'assign-imported', cardIds, typeId });
+                await rechargeCardTypes.refresh();
+                return '；已确认银行卡类型 ' + (importTypes.assigned + importTypes.alreadyAssigned) + ' 张' +
+                    (importTypes.conflict ? '，已有其他类型 ' + importTypes.conflict + ' 张' : '') +
+                    (missing + importTypes.missing ? '，待核对 ' + (missing + importTypes.missing) + ' 张' : '');
+            } catch {
+                void rechargeCardTypes.refresh();
+                return pending;
+            }
+        }
+        document.getElementById('card_pool_import_type').addEventListener('change', paintRechargeCardTypes);
+        document.getElementById('card_pool_list_body').addEventListener('change', async (event) => {
+            const select = event.target;
+            const cardId = select.closest('[data-recharge-card-type]')?.dataset.rechargeCardType;
+            if (select.tagName !== 'SELECT' || !cardId || select.disabled || pendingRechargeCardType) return;
+            const typeId = select.value;
+            pendingRechargeCardType = { cardId, typeId };
+            paintRechargeCardTypes();
+            try {
+                await writeRechargeCardType({ action: 'assign', cardId, typeId });
+                showMessage('银行卡类型已保存', 'success');
+            } catch (error) {
+                showMessage(error.message, 'error');
+            } finally {
+                await rechargeCardTypes.refresh();
+                pendingRechargeCardType = undefined;
+                paintRechargeCardTypes();
+            }
+        });
         document.getElementById('card_pool_type_retry')?.addEventListener('click', () => {
             void rechargeCardTypes.refresh();
         });
@@ -652,6 +847,7 @@ function adaptRechargeProgress(source, workspace) {
   ];
   source = replaceSection(source, '        let socket = null;', 'function resetRedeemFlow(options = {}) {', `
         const openingStages = ${JSON.stringify(RECHARGE_STAGE_LABELS)};
+        ${workspace ? 'const openingSteps = ' + JSON.stringify(RECHARGE_STEP_LABELS) + ';' : ''}
         const openingResults = {
             success: { title: '开通成功', tone: 'success', flow: 'success', label: '请前往 ChatGPT 查看目标账号的订阅状态。', button: START_SUCCESS_TEXT },
             failed: { title: '本次开通未完成', tone: 'error', flow: 'failed', label: '执行失败，请联系客服处理。', button: START_FAILED_TEXT },
@@ -684,8 +880,8 @@ function adaptRechargeProgress(source, workspace) {
             return typeof jobKey === 'string' && /^[\\w-]{1,128}$/.test(jobKey);
         }
 
-        async function readRechargeTask(jobKey) {
-            const response = await fetch('/api/task-status/' + encodeURIComponent(jobKey), {
+        async function readRechargeTask(jobKey, withSteps = false) {
+            const response = await fetch('/api/task-status/' + encodeURIComponent(jobKey) + (withSteps ? '?view=steps' : ''), {
                 cache: 'no-store', signal: AbortSignal.timeout(10000)
             });
             if (!response.ok) throw new Error('任务进度暂不可用');
@@ -719,7 +915,7 @@ function adaptRechargeProgress(source, workspace) {
             clearTaskStatusPolling();
             ${workspace ? 'window.idRechargeWorkspaceLog?.refreshing(true);' : ''}
             try {
-                const data = await readRechargeTask(jobKey);
+                const data = await readRechargeTask(jobKey${workspace ? ', true' : ''});
                 if (activeJobKey === jobKey && taskStatusRequest === request) {
                     ${workspace ? 'window.idRechargeWorkspaceLog?.connected();' : ''}
                     applyTaskState(data);
@@ -755,6 +951,7 @@ function adaptRechargeProgress(source, workspace) {
         function applyTaskState(data) {
             const status = taskOutcome(data, data.status);
             if (taskCompleted || (status !== 'running' && !Object.hasOwn(openingResults, status))) return;
+            ${workspace ? 'const detailedStep = window.idRechargeWorkspaceLog?.syncSteps(data.steps, openingSteps);' : ''}
             const progress = Number.isFinite(data.progress) ? data.progress : taskProgressValue;
             if (Object.hasOwn(data, 'captcha')) updateCaptchaVerification(data.captcha);
             showProgress();
@@ -762,9 +959,10 @@ function adaptRechargeProgress(source, workspace) {
             if (status === 'running') {
                 const needsVerification = activeCaptcha?.stage === 'awaiting_captcha' || activeCaptcha?.status === 'pending';
                 const verificationSubmitted = activeCaptcha?.stage === 'captcha_submitted' || activeCaptcha?.status === 'submitted';
-                const label = needsVerification ? '等待完成验证' : verificationSubmitted ? '正在确认验证结果' : stageLabel(data.stage);
+                const label = needsVerification ? '等待完成验证' : verificationSubmitted ? '正在确认验证结果' :
+                    ${workspace ? 'detailedStep || ' : ''}stageLabel(data.stage);
                 setProgress(progress, label);
-                ${workspace ? 'window.idRechargeWorkspaceLog?.record(label);' : ''}
+                ${workspace ? 'if (!detailedStep || needsVerification || verificationSubmitted) window.idRechargeWorkspaceLog?.record(label);' : ''}
                 setProgressHint(needsVerification && !captchaVerificationBtn.disabled
                     ? '请在验证页面完成操作后返回。' : '请稍候，同一兑换码无需重复提交。');
                 updateFlowUI(2, 'running');
@@ -781,7 +979,7 @@ function adaptRechargeProgress(source, workspace) {
             setProgress(succeeded ? 100 : progress, result.label, result.tone);
             const renewalUnconfirmed = succeeded && data.renewalUnconfirmed === true;
             setProgressHint(renewalUnconfirmed ? '自动续订取消状态未确认，请到目标账号账单页核对。' : '');
-            ${workspace ? `window.idRechargeWorkspaceLog?.record(result.title + '。' + result.label, result.tone);
+            ${workspace ? `window.idRechargeWorkspaceLog?.record(result.title + '。' + result.label, result.tone, data.terminalAt);
             if (renewalUnconfirmed) window.idRechargeWorkspaceLog?.record('自动续订取消状态未确认，请到目标账号账单页核对。', 'review');
             window.idRechargeWorkspaceLog?.state('finished');` : ''}
             updateFlowUI(2, result.flow);
@@ -913,7 +1111,7 @@ function adaptWorkspaceRecharge(source) {
     <section class="workspace-log" aria-labelledby="workspace-log-title">
       <div class="workspace-log-toolbar">
         <h3 id="workspace-log-title">运行日志</h3>
-        <p id="workspace-log-help">显示本页收到的任务状态，按北京时间记录。任务运行时自动更新；向上滚动可暂停跟随。</p>
+        <p id="workspace-log-help">显示本页收到的任务状态和本次实际记录的步骤，按北京时间展示。任务运行时自动更新；向上滚动可暂停跟随。</p>
         <div class="workspace-log-actions">
           <label class="workspace-log-follow"><input id="workspaceLogFollow" type="checkbox" checked>自动滚动</label>
           <button type="button" id="workspaceLogRefresh" class="btn-secondary" disabled>刷新</button>
@@ -1202,6 +1400,20 @@ function adaptHtml(source, kind) {
     );
     source = replaceOne(
       source,
+      '<textarea id="card_pool_import_text" class="import-textarea"',
+      '<div class="embedded-field card-pool-import-type">' +
+        '<label for="card_pool_import_type">银行卡类型<span class="required" aria-hidden="true"> *</span></label>' +
+        '<select id="card_pool_import_type" class="asset-input" required disabled aria-describedby="card_pool_import_type_hint">' +
+        '<option value="">请选择银行卡类型</option></select>' +
+        '<p id="card_pool_import_type_hint" class="embedded-field-hint">同一批使用所选类型。已有其他类型的重复卡片可在列表修改。</p>' +
+        '</div>\n                    <textarea id="card_pool_import_text" class="import-textarea"'
+    );
+    source = replaceOne(source, 'id="card_pool_import_btn" class="btn btn-success"',
+      'id="card_pool_import_btn" class="btn btn-success" disabled');
+    source = replaceOne(source, '<p id="card_pool_import_result" style=',
+      '<p id="card_pool_import_result" role="status" style=');
+    source = replaceOne(
+      source,
       '<div class="table-container">\n                    <table class="admin-action-table card-pool-table">',
       '<div class="card-pool-type-feedback">' +
         '<span id="card_pool_type_status" role="status"></span>' +
@@ -1209,7 +1421,18 @@ function adaptHtml(source, kind) {
         '</div>\n                <div class="table-container">\n                    <table class="admin-action-table card-pool-table">'
     );
     source = source.replace('每次任务从「启用」的代理中随机抽取。',
-      '自动充值按套餐要求实测并选择同国家的启用代理；无匹配线路时停止。代理池完全为空时才检查服务器直连出口。');
+      '优先检测标注国家与套餐一致的启用代理，再检测待标注旧代理。实测出口匹配才会创建任务。');
+    source = replaceOne(source, '<textarea id="proxy_add_input"',
+      '<div class="form-group embedded-field proxy-country-field">' +
+        '<label for="proxy_add_country">代理国家 <span class="proxy-country-required" aria-hidden="true">*</span></label>' +
+        '<select id="proxy_add_country" class="asset-input" required disabled aria-describedby="proxy_add_hint">' +
+        '<option value="">正在读取国家选项…</option></select></div>\n                <textarea id="proxy_add_input"');
+    source = replaceOne(source, `onclick="document.getElementById('proxy_add_input').value=''"`, 'onclick="clearProxyPoolEditor()"');
+    source = replaceOne(source, '<th width="140px">出口 IP</th>',
+      '<th scope="col" class="proxy-country-cell">标注国家</th>\n' +
+        '                                <th scope="col" class="proxy-exit-cell">实测出口</th>');
+    source = replaceOne(source, '<tbody id="proxy_pool_body">\n                            <tr><td colspan="7">',
+      '<tbody id="proxy_pool_body">\n                            <tr><td colspan="8">');
     source = source.replace('>支付地区设置</h2>', '>其他流程默认地区</h2>')
       .replace('选择支付地区后，系统将使用对应的币种进行 Stripe 支付。账单地址请在上方「免税地址」页面管理。',
         '此设置保留给其他原有流程。自动充值和支付页面调试统一使用上方套餐线路配置；账单地址仍沿用美国地址库。');
@@ -1326,7 +1549,7 @@ async function buildCodexdaichongAssets() {
     ['/admin', admin, 'admin'],
     ['/subscription', subscription, 'subscription']
   ]) {
-    const proxyHelp = '一行一条；支持完整代理链接、主机:端口:账号:密码、账号:密码@主机:端口。未带协议默认 SOCKS5；粘贴后自动整理格式，点击保存才入库。';
+    const proxyHelp = '先选择代理国家，同一批共用所选国家，每行录入一条。支持完整代理链接、主机:端口:账号:密码、账号:密码@主机:端口。未带协议默认 SOCKS5。';
     const html = kind === 'admin' ? replaceOne(source,
       '粘贴一条或多条代理 URL（一行一条），点保存后立即写入代理池并在下方列表显示。', proxyHelp)
       .replace('socks5://user:pass@host:port\n', 'socks5://host:port:user:pass\nhost:port:user:pass\n') : source;

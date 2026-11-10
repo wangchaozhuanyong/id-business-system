@@ -258,13 +258,14 @@
           `<button type="submit" class="button primary" form="commerce-card-type-form">${item ? '保存修改' : '新增类型'}</button>`, key);
     } catch (error) { A.notify(error.message || '银行卡类型读取失败，请重试'); }
   }
-  async function openBankCardTypeAssignment(cardId, onClose, refreshVersion = false) {
+  async function openBankCardTypeAssignment(cardId, { onClose, refreshVersion = false, isCurrent } = {}) {
     if (!localData || !canManageOrders() || !/^(?:recharge:|tenant:).+/.test(cardId)) return;
     saveDrafts();
     const route = S.route, actorId = currentOperator().id, context = S.drawerContext;
     try {
       const snapshot = await readBankCardTypes(true);
-      if (route !== S.route || actorId !== currentOperator().id || context !== S.drawerContext) return;
+      if (route !== S.route || actorId !== currentOperator().id || context !== S.drawerContext ||
+          (isCurrent && !isCurrent())) return;
       const key = `commerce-card-type-assignment:${cardId}`;
       const draft = S.drafts.get(key) || {};
       const selected = draft['commerce-assignment-type'] ?? snapshot.assignments[cardId] ?? '';
@@ -273,7 +274,7 @@
         `<form id="commerce-card-type-assignment-form" data-commerce-draft="${E(key)}" novalidate>${
           input('assignment-card', cardId, 'type="hidden"')}${input('assignment-version',
           refreshVersion ? snapshot.version : draft['commerce-assignment-version'] ?? snapshot.version, 'type="hidden"')}${field('银行卡类型',
-          'assignment-type', select('assignment-type', bankCardTypeChoices(selected), selected))}</form>`,
+          'assignment-type', select('assignment-type', bankCardTypeChoices(selected), selected))}<p class="inline-notice warning" data-card-type-error role="alert" hidden></p></form>`,
         A.button('取消', 'drawer-close') + A.button('读取最新', 'commerce-card-type-assignment-reload', '', '', `data-id="${E(cardId)}"`) +
           '<button type="submit" class="button primary" form="commerce-card-type-assignment-form">保存类型</button>', key);
     } catch (error) { A.notify(error.message || '银行卡类型读取失败，请重试'); }
@@ -303,6 +304,7 @@
       if (actorId !== currentOperator().id) return;
       updateBankCardTypes(snapshot);
       bankCardTypesLoaded = true;
+      if (assignment && command.cardId.startsWith('recharge:')) A.modules.operations?.refreshRechargeCardTypes?.();
       if (form.isConnected && submitted === JSON.stringify(A.readForm(form))) {
         S.drafts.delete(form.dataset.commerceDraft);
         form.removeAttribute('data-commerce-draft');
@@ -7704,7 +7706,7 @@
     }
     if (action === 'commerce-subscription-card-type') {
       const row = subscriptionCardRows().find(item => item.order.id === node.dataset.id);
-      if (row) void openBankCardTypeAssignment(row.cardId, () => A.render());
+      if (row) void openBankCardTypeAssignment(row.cardId, { onClose: () => A.render() });
       return true;
     }
     if (action === 'commerce-card-type-edit') {
@@ -7720,7 +7722,7 @@
     if (action === 'commerce-card-type-assign') { void openBankCardTypeAssignment(node.dataset.id); return true; }
     if (action === 'commerce-card-type-reload') { void openBankCardTypeEditor(node.dataset.id, true); return true; }
     if (action === 'commerce-card-type-assignment-reload') {
-      void openBankCardTypeAssignment(node.dataset.id, bankCardTypeReturn?.onClose, true);
+      void openBankCardTypeAssignment(node.dataset.id, { onClose: bankCardTypeReturn?.onClose, refreshVersion: true });
       return true;
     }
     if (action === 'commerce-tenant-more') {
@@ -8963,6 +8965,7 @@
   }
   let requestedAccountLifecycle = false, accountLifecycleReading = false;
   A.modules.commerce = {
+    openBankCardTypeAssignment,
     appleFundingData() {
       return { orders, settings: currencySettings, ready: !localData || localPhase === 'ready',
         customer: order => customerForOrder(order, order.customerId), now: parseDate(now()), renewalWarningHours };

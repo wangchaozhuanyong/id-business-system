@@ -78,8 +78,11 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
     if (actor.clientIp) headers['x-real-ip'] = actor.clientIp;
     if (admin) headers.authorization = 'Bearer ' + await getNativeAdminToken(actor);
     if (external && req.headers['x-api-key']) headers['x-api-key'] = req.headers['x-api-key'];
+    // Keep the existing admin import entry on the managed, transactional write path.
+    const nativePath = req.method === 'POST' && path === '/api/admin/proxies'
+      ? '/api/admin/recharge-routing/proxies' : req.url;
     const upstream = httpRequest({ hostname: native.hostname, port: native.port, method: req.method,
-      path: req.url, headers }, (response) => {
+      path: nativePath, headers }, (response) => {
       const permittedRedirect = path.startsWith('/api/task-captcha/') && response.statusCode === 302;
       const location = permittedRedirect && URL.parse(response.headers.location || '');
       if (response.statusCode >= 300 && response.statusCode < 400 &&

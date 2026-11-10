@@ -1,6 +1,6 @@
 .recharge-integration {
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 .recharge-integration__toolbar {

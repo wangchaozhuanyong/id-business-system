@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext, Script } from 'node:vm';
 import { prepareCodexdaichong } from '../modules/recharge/codexdaichong/prepare.mjs';
 import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
+import { createNativeRechargeRouting, DEFAULT_PLAN_ROUTES } from '../modules/recharge/codexdaichong/native-routing.mjs';
 
 let fixture, server, assets;
 before(async () => {
@@ -21,6 +22,16 @@ function section(source, start, end) {
 }
 test('failed selection returns before card availability, CDK locking or task creation', async () => {
   const calls = [];
+  const routing = createNativeRechargeRouting({
+    store: { async runQuery(sql) {
+      if (sql.startsWith('SELECT version')) return [{ version: 1, plans_json: DEFAULT_PLAN_ROUTES, audit_json: [] }];
+      if (sql.includes('FROM id_recharge_proxy_checks')) return [];
+      assert.match(sql, /LEFT JOIN id_recharge_proxy_country_labels/);
+      return [{ id: 1, proxy_url: 'socks5://proxy.example.test:1080', is_active: 1, label_country_code: 'MX' }];
+    } },
+    substituteSession: value => value,
+    async probe() { calls.push('probe'); }
+  });
   const phase = section(server, '        const gptApiConfig = await store.getGptApiConfig();\n        const useGptApi',
     '        const lockSuccess = await store.markCdkUsed(cdk);');
   let result;
@@ -28,12 +39,12 @@ test('failed selection returns before card availability, CDK locking or task cre
   await runInNewContext('(async () => {' + phase + '\n})()', {
     res, planType: 'plus',
     store: { getGptApiConfig: async () => ({ enabled: false }), hasAvailableCard: async () => calls.push('card') },
-    getRechargeRouting: async () => ({ resolve: async () => { throw Object.assign(new Error('private internal'),
-      { publicMessage: '当前套餐的充值线路暂不可用，请联系客服处理。' }); } })
+    getRechargeRouting: async () => routing
   });
   assert.equal(result.code, 409); assert.equal(result.body.execution_started, false);
   assert.match(result.body.message, /联系客服/);
-  assert.ok(!JSON.stringify(result).includes('private internal')); assert.deepEqual(calls, []);
+  assert.doesNotMatch(JSON.stringify(result), /proxy\.example|MX/);
+  assert.deepEqual(calls, []);
 });
 test('debug worker passes the selected route and preserves all upstream api_only variants', async t => {
   for (const apiOnly of [undefined, false, true]) await t.test(String(apiOnly), async () => {

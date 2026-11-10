@@ -8,6 +8,32 @@ export const RECHARGE_STAGE_LABELS = Object.freeze({
   subscription_check: '正在确认订阅状态'
 });
 
+export const RECHARGE_STEP_LABELS = Object.freeze({
+  started: '开始执行充值任务',
+  network_check: '正在检查线路连接',
+  network_ready: '线路连接已确认',
+  account_prepare: '正在准备开通资料',
+  checkout_wait: '正在等待结账页面',
+  checkout_open: '结账页面已打开',
+  payment_form: '正在等待支付表单',
+  payment_details: '正在填写支付资料',
+  payment_submitted: '已发起付款，等待结果确认',
+  payment_check: '正在核对付款结果',
+  subscription_check: '正在确认订阅状态'
+});
+
+const workerSteps = [
+  [/^正在检查代理连通性/, 'network_check'],
+  [/^✅ \[系统\] 代理连接成功! 代理公网 IP:/, 'network_ready'],
+  [/^\[1\] 准备自助充值流程/, 'account_prepare'],
+  [/^💳 \[步骤\] 等待跳转到 Checkout 配置套餐页/, 'checkout_wait'],
+  [/^✅ \[步骤\] Checkout 页面已打开(?:[:：，]|$)/, 'checkout_open'],
+  [/^\[Stripe\] Step 0: 等待 Checkout 支付页就绪/, 'payment_form'],
+  [/^\[Stripe\] Step [1-9]: /, 'payment_details'],
+  [/^\[Stripe\] ✅ 已点击提交按钮 \([^\r\n]+\)$/, 'payment_submitted'],
+  [/^\[Stripe\] Step 10: 等待支付结果/, 'payment_check']
+];
+
 const originalStages = new Map([
   ['正在填写支付资料', 'payment_details'],
   ['正在填写银行卡信息', 'payment_details'],
@@ -44,6 +70,29 @@ export function originalRechargeNeedsReview(message) {
   return /转人工|人工确认|人工核|待核实|结果.*(?:未知|不明)|(?:付款|支付|扣款)结果(?:未确认|无法确认|等待超时)|Data too long for column ['"]error_message['"]|processing.*timeout/i.test(
     String(message ?? '')
   );
+}
+
+/** Project only fixed display steps from a matching task's dated runtime records. */
+export function rechargeTaskStepHistory(body, { jobKey, status }) {
+  if (body?.success !== true || body.task?.jobKey !== jobKey || !Array.isArray(body.runtimeEntries)) return null;
+  const steps = [];
+  let terminalAt;
+  for (const entry of body.runtimeEntries) {
+    if (entry?.jobKey !== jobKey || typeof entry.text !== 'string' ||
+        !Number.isSafeInteger(entry.ts) || entry.ts <= 0 || entry.ts > 8.64e15) continue;
+    const text = entry.text.trim();
+    let stage;
+    if (entry.source === 'task') {
+      const terminal = /^任务结束 status=(success|failed|manual|maintenance) progress=\d+(?: |$)/.exec(text);
+      if (terminal && terminal[1] === status) terminalAt = entry.ts;
+      if (/^尝试 [1-9]\d* 启动自动化 proxy=(?:yes|no)$/.test(text)) stage = 'started';
+    } else if (/^spawn\/a[1-9]\d*\/stdout$/.test(entry.source)) {
+      stage = workerSteps.find(([pattern]) => pattern.test(text))?.[1];
+      if (!stage && originalRechargeStage(text) === 'subscription_check') stage = 'subscription_check';
+    }
+    if (stage && steps.at(-1)?.stage !== stage) steps.push({ stage, at: entry.ts });
+  }
+  return { steps: steps.slice(-80), ...(terminalAt === undefined ? {} : { terminalAt }) };
 }
 
 function captchaView(value, jobKey, secret) {

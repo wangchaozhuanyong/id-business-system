@@ -1356,50 +1356,49 @@
     return numbers;
   }
   function batchTable(rows, numbers = extractionBatchNumbers()) {
-    return rows.length
-      ? table(
-          [
-            {
-              id: 'id',
-              label: '提取批次',
-              render: (batch) =>
-                textAction(numbers.get(batch.id) ?? batch.id, 'inventory-batch',
-                  `data-id="${esc(batch.id)}" title="${esc(batch.id)}"`)
-            },
-            {
-              id: 'kind',
-              label: '资料类别',
-              render: (batch) => (batch.kind === 'mail' ? '邮箱' : '账号')
-            },
-            { id: 'purpose', label: '用途' },
-            { id: 'actorName', label: '提取人' },
-            { id: 'time', label: '提取时间' },
-            { id: 'total', label: '提取数量', render: (batch) => batch.items.length },
-            {
-              id: 'pending',
-              label: '待处理',
-              render: (batch) =>
-                tag(
-                  String(batchCounts(batch).pending),
-                  batchCounts(batch).pending ? 'warning' : 'success'
-                )
-            },
-            { id: 'used', label: '已使用', render: (batch) => batchCounts(batch).used },
-            { id: 'returned', label: '已归还', render: (batch) => batchCounts(batch).returned },
-            { id: 'returnable', label: '可归还', render: batch => tag(String(batchCounts(batch).returnable), batchCounts(batch).returnable ? 'success' : '') },
-            {
-              id: 'actions',
-              label: '操作',
-              action: true,
-              render: (batch) =>
-                `<div class="action-links">${textAction('明细', 'inventory-batch', `data-id="${batch.id}"`)}${textAction(batchCounts(batch).returnable ? `归还（${batchCounts(batch).returnable}）` : '无可归还项', 'inventory-batch-return', `data-id="${batch.id}" ${batchCounts(batch).returnable ? '' : 'disabled title="查看明细了解已使用、已归还或业务占用原因"'}`)}</div>`
-            }
-          ],
-          rows,
-          '',
-          '提取批次'
-        )
-      : empty('没有符合条件的批次', '可以先提取资料，之后在这里持续处理。');
+    return table(
+      [
+        {
+          id: 'id',
+          label: '提取批次',
+          render: (batch) =>
+            textAction(numbers.get(batch.id) ?? batch.id, 'inventory-batch',
+              `data-id="${esc(batch.id)}" title="${esc(batch.id)}"`)
+        },
+        {
+          id: 'kind',
+          label: '资料类别',
+          render: (batch) => (batch.kind === 'mail' ? '邮箱' : '账号')
+        },
+        { id: 'purpose', label: '用途' },
+        { id: 'actorName', label: '提取人' },
+        { id: 'time', label: '提取时间' },
+        { id: 'total', label: '提取数量', render: (batch) => batch.items.length },
+        {
+          id: 'pending',
+          label: '待处理',
+          render: (batch) =>
+            tag(
+              String(batchCounts(batch).pending),
+              batchCounts(batch).pending ? 'warning' : 'success'
+            )
+        },
+        { id: 'used', label: '已使用', render: (batch) => batchCounts(batch).used },
+        { id: 'returned', label: '已归还', render: (batch) => batchCounts(batch).returned },
+        { id: 'returnable', label: '可归还', render: batch => tag(String(batchCounts(batch).returnable), batchCounts(batch).returnable ? 'success' : '') },
+        {
+          id: 'actions',
+          label: '操作',
+          action: true,
+          render: (batch) =>
+            `<div class="action-links">${textAction('明细', 'inventory-batch', `data-id="${batch.id}"`)}${textAction(batchCounts(batch).returnable ? `归还（${batchCounts(batch).returnable}）` : '无可归还项', 'inventory-batch-return', `data-id="${batch.id}" ${batchCounts(batch).returnable ? '' : 'disabled title="查看明细了解已使用、已归还或业务占用原因"'}`)}</div>`
+        }
+      ],
+      rows,
+      '',
+      '提取批次',
+      { title: '没有符合条件的批次', description: '可以先提取资料，之后在这里持续处理。' }
+    );
   }
   function centerPage() {
     const v = view();
@@ -1424,29 +1423,28 @@
       )}${field('资料类型', 'inventory-quick-type', select('inventory-quick-type', [['', '全部类型'], ['google', '谷歌邮箱'], ['relay', '苹果隐藏邮箱'], ...stockTypes], d['inventory-quick-type'] || ''))}</div><div class="form-footer"><span class="footnote">先读取最新库存逐项核对；同一地址匹配多条时须明确选择，不会直接归还。</span><button class="button primary" type="submit">查找并核对</button></div></form></div>`;
     } else if (v.centerTab === 'returns') {
       const rows = returnRecords.filter((entry) => admin() || entry.actorId === currentActor().id);
-      body = rows.length
-        ? table(
-            [
-              { id: 'id', label: '归还编号' },
-              { id: 'batchId', label: '原提取批次', render: (entry) => esc(numbers.get(entry.batchId) ?? entry.batchId) },
-              { id: 'email', label: '邮箱 / 账号', render: row => esc(displayIdentity(row)) },
-              { id: 'reason', label: '归还理由', long: true },
-              { id: 'time', label: '归还时间' },
-              { id: 'actor', label: '操作人' },
-              { id: 'notes', label: '备注', long: true },
-              {
-                id: 'actions',
-                label: '操作',
-                action: true,
-                render: (entry) =>
-                  textAction('原批次', 'inventory-batch', `data-id="${entry.batchId}"`)
-              }
-            ],
-            rows,
-            '',
-            '归还记录'
-          )
-        : empty('暂无归还记录', '完成归还后会保留原批次、理由、时间和操作人。');
+      body = table(
+        [
+          { id: 'id', label: '归还编号' },
+          { id: 'batchId', label: '原提取批次', render: (entry) => esc(numbers.get(entry.batchId) ?? entry.batchId) },
+          { id: 'email', label: '邮箱 / 账号', render: row => esc(displayIdentity(row)) },
+          { id: 'reason', label: '归还理由', long: true },
+          { id: 'time', label: '归还时间' },
+          { id: 'actor', label: '操作人' },
+          { id: 'notes', label: '备注', long: true },
+          {
+            id: 'actions',
+            label: '操作',
+            action: true,
+            render: (entry) =>
+              textAction('原批次', 'inventory-batch', `data-id="${entry.batchId}"`)
+          }
+        ],
+        pageRows(rows),
+        '',
+        '归还记录',
+        { title: '暂无归还记录', description: '完成归还后会保留原批次、理由、时间和操作人。' }
+      ) + pagination(rows.length);
     } else {
       const rows = visible.filter(
         (batch) =>
