@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { chromium } from 'playwright';
+import { pathToFileURL } from 'node:url';
+const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
+const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
 import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 import { planHistoricalIntake, historicalIntakePreview, requireHistoricalIntake, stageHistoricalIntake } from '../server/apple-relay/historical-intake.mjs';
 import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
@@ -170,7 +172,8 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   assert.equal(local.commerce.data.orders.length, 1);
   await page.goto(origin + '/#/accounts/gpt');
   const registeredRow = page.getByRole('row').filter({ hasText: 'registered@example.test' });
-  await registeredRow.getByText('待核对交付资料', { exact: true }).waitFor();
+  await registeredRow.locator('[data-column="status"]').getByText('正常', { exact: true }).waitFor();
+  await registeredRow.locator('[data-column="source"]').getByText('自己注册', { exact: true }).waitFor();
   for (const field of ['password', 'totp'])
     assert.equal(await registeredRow.locator(`[data-column="${field}"]`).textContent(), '未录入');
 
@@ -226,7 +229,7 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.locator('#commerce-businessType').selectOption('成品交付');
   await page.locator('#commerce-emailHistory option[value="available@example.test"]').waitFor({ state: 'attached' });
-  assert.equal(await page.locator('#commerce-emailHistory option[value="registered@example.test"]').count(), 0);
+  assert.equal(await page.locator('#commerce-emailHistory option[value="registered@example.test"]').count(), 1);
   assert.equal(await page.locator('#commerce-emailHistory option[value="sold@example.test"]').count(), 0);
   assert.deepEqual(errors, []);
   assert.deepEqual(requests.external, []);

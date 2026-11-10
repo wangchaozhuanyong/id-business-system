@@ -117,9 +117,14 @@ test('only local-data mode mounts the persistence client, and browser writes mus
 
 test('Apple orders and balance movements commit together and retain the original inventory identity', () => {
   const store = createLocalBusinessStore(':memory:');
-  const apple = { id: 'apple-id', type: 'apple' };
+  const apple = { id: 'apple-id', type: 'apple', status: '正常', appStoreRegion: 'US', appleOpeningBalance: '250.0000' };
   const order = {
     id: 'order-1',
+    product: 'Gemini', plan: 'Google AI Pro', businessType: '首次开通', customerId: 'fixture-customer',
+    email: 'subscription@example.test', subscriptionSeries: 'google_ai', loginMethod: 'google',
+    billingChannel: 'app_store', billingCycle: 'month', billingCountry: '美国', billingReceipt: 'fixture-transaction',
+    entitlementStatus: 'pending', autoRenew: 'unknown', appleGoogleVerified: true,
+    costBasis: 'standard', saleCurrency: 'CNY',
     payment: '苹果内购',
     paidConfirmed: true,
     paidCurrency: 'USD',
@@ -130,7 +135,7 @@ test('Apple orders and balance movements commit together and retain the original
   const orderWrite = {
     domain: 'commerce',
     version: 0,
-    data: { ...commerce, orders: [order] }
+    data: { ...commerce, customers: [{ id: order.customerId, name: '合成客户' }], orders: [order] }
   };
   const debit = {
     id: 'charge',
@@ -152,24 +157,16 @@ test('Apple orders and balance movements commit together and retain the original
         returned: '0.0000'
       }
     ],
-    movements: [
-      {
-        id: 'funding',
-        kind: 'manual',
-        appleIdId: apple.id,
-        amount: '250.0000',
-        before: '0.0000',
-        after: '250.0000',
-        versionAfter: 2
-      },
-      debit
-    ],
+    movements: [debit],
     refunds: []
   };
   try {
     store.saveBatch([
       { domain: 'inventory', version: 0, data: { ...inventory, mailboxes: [apple] } }
     ]);
+    store.saveBatch([{ domain: 'settings', version: 0, data: { costSettings: {}, mailboxTypes: [],
+      applePaidPrices: { Gemini: { 'Google AI Pro': { US: '20' } } } } }]);
+    ledger.movements.unshift(...store.load('appleBalance').data.movements);
     assert.throws(() => store.saveBatch([orderWrite]), /同时保存余额扣款/);
     assert.throws(
       () =>
@@ -177,27 +174,27 @@ test('Apple orders and balance movements commit together and retain the original
           orderWrite,
           {
             domain: 'appleBalance',
-            version: 0,
+            version: 1,
             data: { ...ledger, wallets: [{ ...ledger.wallets[0], balance: '250.0000' }] }
           }
         ]),
       /余额必须由流水核对/
     );
     assert.equal(store.load('commerce').version, 0);
-    assert.equal(store.load('appleBalance').version, 0);
-    store.saveBatch([orderWrite, { domain: 'appleBalance', version: 0, data: ledger }]);
+    assert.equal(store.load('appleBalance').version, 1);
+    store.saveBatch([orderWrite, { domain: 'appleBalance', version: 1, data: ledger }]);
     assert.equal(store.load('appleBalance').data.wallets[0].balance, '230.0000');
     assert.throws(
       () =>
         store.saveBatch([
           { domain: 'inventory', version: 1, data: { ...inventory, mailboxes: [] } }
         ]),
-      /已有余额流水/
+      /付款占用或绑定|已有余额流水/
     );
     const invalidHistory = structuredClone(ledger);
     invalidHistory.movements[0].reason = '被覆盖';
     assert.throws(
-      () => store.saveBatch([{ domain: 'appleBalance', version: 1, data: invalidHistory }]),
+      () => store.saveBatch([{ domain: 'appleBalance', version: 2, data: invalidHistory }]),
       /原有苹果 ID 余额流水不能改写/
     );
   } finally {

@@ -48,7 +48,7 @@
       { id: 'days', label: '订阅剩余天数', render: row => lineValues(row, series => esc(displayDays(series.remainingDays))) },
       { id: 'status', label: '订阅状态', render: row => row.conflict ? stateTag('pending') :
         lineValues(row, series => stateTag(series.status)) },
-      { id: 'ownerName', label: '归属人', render: row => esc(row.ownerName || '待核对') },
+      { id: 'ownerName', label: '归属人', render: row => esc(row.ownerName || (row.ownerEligible ? '未设置' : '—')) },
       { id: 'operatorName', label: '操作人', render: row => esc(row.operatorName || '历史未记录') },
       ...(product() === 'Claude' ? [{ id: 'code', label: '查询码状态／剩余', render: row =>
         row.queryCode?.status === 'not_applicable' ? '不适用' :
@@ -57,7 +57,7 @@
         const attrs = `data-id="${esc(row.id)}"`;
         return '<div class="action-links">' + textAction('复制', 'subscriptions-copy', attrs) +
           textAction('详情', 'subscriptions-detail', attrs) +
-          textAction('更多操作', 'subscriptions-more', attrs, '', 'chevron') + '</div>';
+          (row.ownerEligible || row.product === 'Claude' ? textAction('更多操作', 'subscriptions-more', attrs, '', 'chevron') : '') + '</div>';
       } }
     ];
   }
@@ -220,7 +220,7 @@
     A.openDrawer('订阅账号详情', '每次订单独立保留，历史入库不会生成虚构订单。',
       `<div class="property-list"><div class="property-row"><span>账号</span><strong>${esc(row.account)}</strong></div>
        <div class="property-row"><span>注册邮箱</span><strong>${esc(row.registrationEmail || '未登记')}</strong></div>
-       <div class="property-row"><span>归属人</span><strong>${esc(row.ownerName || '待核对')}</strong></div>
+       <div class="property-row"><span>归属人</span><strong>${esc(row.ownerName || (row.ownerEligible ? '未设置' : '—'))}</strong></div>
        <div class="property-row"><span>操作人</span><strong>${esc(row.operatorName)}</strong></div></div>
        ${row.conflict ? '<p class="inline-notice warning">账号、客户或邮箱关联存在冲突，请先核对原资料。</p>' : ''}
        <div class="table-viewport" tabindex="0"><table><thead><tr><th>订单／来源</th><th>套餐</th><th>订阅时间</th><th>到期时间</th><th>状态</th><th>操作</th></tr></thead><tbody>${history}</tbody></table></div>`,
@@ -228,6 +228,7 @@
   }
 
   async function ownerDrawer(row, revision = snapshot?.revision) {
+    if (!row.ownerEligible) return;
     const key = 'subscription-owner:' + row.id;
     const context = ownerContext = { row, revision, route: A.state.route, actor: D.actor?.()?.id || '' };
     const current = () => ownerContext === context && A.state.route === context.route &&
@@ -319,12 +320,7 @@
           A.state.drafts.set(key, A.readDraft(form));
         }
         A.notify(unchanged ? '已保存' : '本次已保存，后续输入已保留', { kind: 'success' });
-        if (form.id === 'subscription-owner-form') {
-          const refreshed = await A.modules.inventory?.refreshLocalInventory?.({ keepContent: true });
-          if (refreshed && unchanged && !active()) A.render();
-          else if (!refreshed) A.notify('归属已保存，账号列表刷新失败，请重试', { kind: 'warning' });
-          if (active()) void load();
-        } else if (form.id !== 'subscription-settings-form') void load();
+        if (form.id !== 'subscription-settings-form' && active()) void load();
       }, { pending: '正在保存…' });
     } catch (issue) {
       if (form.isConnected && notice) { notice.hidden = false; notice.textContent = issue.message || '保存失败，请重试'; }
@@ -336,17 +332,6 @@
     Object.assign(filters(), { page: event.detail.page, pageSize: event.detail.pageSize });
     void load();
   });
-
-  A.modules.subscriptionManagement = {
-    async openAccountOwner(accountId) {
-      if (!D?.subscriptionAccount || (D.authRequired && !['admin', 'super'].includes(D.actor()?.role))) return;
-      const route = A.state.route, actor = D.actor?.()?.id || '';
-      try {
-        const result = await D.subscriptionAccount(accountId);
-        if (A.state.route === route && (D.actor?.()?.id || '') === actor) void ownerDrawer(result, result.revision);
-      } catch (issue) { if (A.state.route === route) A.notify(issue.message || '读取账号归属失败，请重试', { kind: 'error' }); }
-    }
-  };
 
   window.IDDesignModules.push({
     id: 'subscription-management', matches: route => /^subscriptions\/(gpt|claude|gemini|grok)$/.test(route), render,
@@ -383,7 +368,8 @@
       else if (action === 'subscriptions-order') { A.closeDrawer(); A.go('orders/detail/' + encodeURIComponent(node.dataset.orderId)); }
       else if (action === 'subscriptions-more') {
         const row = currentRow(node.dataset.id);
-        if (row) A.openActionMenu(node, button('设置归属人', 'subscriptions-owner', '', '', `data-id="${esc(row.id)}"`) +
+        if (row) A.openActionMenu(node,
+          (row.ownerEligible ? button('设置归属人', 'subscriptions-owner', '', '', `data-id="${esc(row.id)}"`) : '') +
           (row.product === 'Claude' ? button('复制邮箱和查询码', 'subscriptions-copy-short', '', '', `data-id="${esc(row.id)}"`) : ''));
       } else return false;
       return true;

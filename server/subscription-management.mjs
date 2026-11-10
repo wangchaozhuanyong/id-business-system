@@ -46,22 +46,23 @@ function orderFingerprint(order) {
     order.start || '', order.expiry || '', order.accountId || '', order.customerId || '']));
 }
 
-export function ownerForSubscriptionOrder(order, profiles) {
+export function ownerForSubscriptionOrder(order, profiles, commerce, inventory, now = Date.now()) {
   const product = family(order?.product);
   const key = subscriptionAccountId(product, order);
   const owner = profiles?.owners?.[key];
   const matchesAccount = owner?.accountId ? order?.accountId === owner.accountId :
     !order?.accountId && owner?.customerId && owner.customerId === order?.customerId;
-  return matchesAccount && owner?.ownerId && (!owner.customerId || owner.customerId === order.customerId) ? owner : null;
-}
-
-export function ownerForSubscriptionAccount(account, profiles) {
-  const product = ({ gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok' })[account?.type];
-  const owner = profiles?.owners?.[subscriptionAccountId(product, account)];
-  const customer = account?.accountLifecycle?.customerId;
-  return owner?.accountId === account?.id && owner?.ownerId &&
-    !(owner.customerId && ['recovered', 'retired'].includes(account?.accountLifecycle?.disposition)) &&
-    (!owner.customerId || !customer || owner.customerId === customer) ? owner : null;
+  if (!matchesAccount || !owner?.ownerId || (owner.customerId && owner.customerId !== order.customerId)) return null;
+  const account = array(inventory?.accounts).find(item => item.id === owner.accountId);
+  if (account && ['recovered', 'retired'].includes(account.accountLifecycle?.disposition)) return null;
+  const released = releasedAccountOrders(account || {});
+  const confirmedOrder = array(commerce?.orders).some(candidate =>
+    !candidate.cancelled && !candidate.subscriptionEnded && !released.has(candidate.id) &&
+    subscriptionAccountId(family(candidate.product), candidate) === key &&
+    candidate.customerId === order.customerId && (!candidate.accountId || candidate.accountId === order.accountId) &&
+    openingConfirmed(candidate, profiles, now));
+  const confirmedHistory = product === 'Claude' && account?.claudeHistory?.phase === 'opened';
+  return confirmedOrder || confirmedHistory ? owner : null;
 }
 
 function openingConfirmed(order, profiles, now) {
@@ -257,13 +258,15 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     }
     const protectedLifecycle = currentLifecycle && ['recovered', 'retired'].includes(currentLifecycle.disposition);
     const owner = profiles.owners?.[id];
-    const ownerValid = owner && (!owner.accountId || owner.accountId === account?.id) &&
+    const ownerEligible = !conflict && !protectedLifecycle && records.some(record => record.confirmed && !record.ended &&
+      !record.cancelled && (!record.customerId || record.customerId === primary.customerId));
+    const ownerValid = ownerEligible && owner && (!owner.accountId || owner.accountId === account?.id) &&
       (!owner.customerId || !primary.customerId || owner.customerId === primary.customerId);
     const row = {
       id, product: primary.product, account: primary.display, registrationEmail: primary.email || text(account?.email),
       status, ownerId: ownerValid ? text(owner.ownerId) : '', ownerName: ownerValid ? text(owner.ownerName) : '',
       operatorName: primary.operatorName, accountId: account?.id || '', customerId: primary.customerId,
-      conflict: Boolean(conflict),
+      conflict: Boolean(conflict), ownerEligible,
       series: selected.map(record => ({ key: record.series, ...publicRecord(record, now) })),
       history: records.map(record => publicRecord(record, now)),
       _account: account, _records: records
@@ -294,10 +297,9 @@ function accountRow(snapshots, accountId) {
   if (!account || !id) throw failure(404, '未找到可管理归属的账号');
   if (accounts.filter(item => item.type === account.type && identity(item, product) === identity(account, product)).length !== 1)
     throw failure(409, '同一账号存在多条库存资料，请先核对');
-  const owner = ownerForSubscriptionAccount(account, snapshots.subscriptions.data);
   return { id, product, account: account.loginMethod === 'x' && account.xHandle ? account.xHandle : text(account.email),
     registrationEmail: text(account.email), accountId: account.id, customerId: text(account.accountLifecycle?.customerId),
-    ownerId: text(owner?.ownerId), ownerName: text(owner?.ownerName), conflict: false };
+    ownerId: '', ownerName: '', conflict: false };
 }
 
 function copyRow(row, snapshots, mode, suffix) {
@@ -392,7 +394,8 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
             const account = accountRow(snapshots, order.accountId);
             if (account.id !== id) throw failure(409, '账号资料已变化，请重新核对');
           }
-          const owner = ownerForSubscriptionOrder(order, priorProfile);
+          const owner = existing?.ownerEligible &&
+            ownerForSubscriptionOrder(order, priorProfile, snapshots.commerce.data, snapshots.inventory.data, now);
           audit('view', [id]);
           return { ownerId: text(owner?.ownerId), ownerName: text(owner?.ownerName) };
         }
@@ -442,8 +445,9 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const account = accountRow(snapshots, body.accountId);
           if (account.id !== body.id || (row?.accountId && row.accountId !== account.accountId))
             throw failure(409, '账号资料已变化，请重新核对');
-          if (!row) row = account;
         }
+        if (action === 'owner' && !row?.ownerEligible)
+          throw failure(409, '确认订阅成功后才能设置归属人');
         if (!row) throw failure(404, '未找到订阅账号');
         if (action === 'copy') {
           if (!['short', 'full'].includes(body.mode) || (body.mode === 'short' && row.product !== 'Claude'))

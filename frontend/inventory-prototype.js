@@ -271,6 +271,7 @@
     try {
       saved = await localData.save('inventory', localInventoryVersion, after, { action });
       applyCommittedInventory(saved);
+      if (saved.appleBalance) api.modules.appleBalance?.applyCommittedBalance?.(saved.appleBalance);
     } catch (error) {
       const versionConflict = (error?.status === 409 || error?.statusCode === 409) &&
         error.message === '库存资料已在其他页面更新，请刷新后重试';
@@ -683,22 +684,35 @@
     return personalAccount(asset.type) && (accountSummaries.get(asset.id)?.label === '已保留待核对' ||
       api.modules.commerce?.hasPendingPersonalDelivery?.(asset.id));
   }
+  const historicallyOpened = asset => asset.type === 'claude' && asset.claudeHistory?.phase === 'opened';
+  const displayInventoryState = asset => historicallyOpened(asset) ? 'used' : asset.inventoryState;
+  const claudeAgingHours = () => settingsFor('claude').hours ?? 72;
+  function claudeReadiness(asset) {
+    if (asset.health === 'dead') return tag('死号', 'warning');
+    if (historicallyOpened(asset)) return tag('历史已开通', 'success');
+    if (asset.health !== 'normal' || asset.status !== '正常' || usageReview.has(asset.id)) return tag('资料待核对', 'warning');
+    if (asset.inventoryState === 'used') return tag('已使用', 'success');
+    if (asset.inventoryState === 'claimed') return tag('已提取', 'warning');
+    const hours = age(asset);
+    if (hours === null) return tag('注册时间待核对', 'warning');
+    return hours >= claudeAgingHours() ? tag('可使用', 'success') : tag('养号中', 'warning');
+  }
   function available(asset, forDelivery = false) {
     normalize(asset);
-    if (personalCustomerOwned(asset) || (!forDelivery && personalDeliveryPending(asset))) return false;
+    if (historicallyOpened(asset) || personalCustomerOwned(asset) ||
+        (!forDelivery && personalDeliveryPending(asset))) return false;
     if (asset.type === 'relay' && (localData || !api.modules.appleRelay?.isAvailable(asset)))
       return false;
-    const threshold = settingsFor(asset.type).hours;
     return (
       asset.inventoryState === 'available' &&
       !usageReview.has(asset.id) &&
       asset.health === 'normal' &&
       asset.status === '正常' &&
-      (asset.type !== 'claude' || (age(asset) !== null && age(asset) >= threshold))
+      (asset.type !== 'claude' || (age(asset) !== null && age(asset) >= claudeAgingHours()))
     );
   }
   function availableForDelivery(asset) {
-    if (personalCustomerOwned(asset)) return false;
+    if (historicallyOpened(asset) || personalCustomerOwned(asset)) return false;
     if (available(asset, true)) return true;
     const claim = pendingClaim(asset);
     return asset.inventoryState === 'claimed' && claim?.batch.kind === 'account' &&
@@ -706,9 +720,10 @@
       claim.batch.actorId === currentActor().id &&
       (!claim.batch.purpose || ['客户交付', '业务备用'].includes(claim.batch.purpose)) &&
       asset.health === 'normal' && asset.status === '正常' &&
-      (asset.type !== 'claude' || (age(asset) ?? -1) >= settingsFor(asset.type).hours) &&
+      (asset.type !== 'claude' || (age(asset) ?? -1) >= claudeAgingHours()) &&
       !returnBlock(asset, claim.batch, claim.item, true) && !claim.item.orderId;
   }
+  const usesRegistrationCity = type => type === 'claude';
   function usesAccountLocation(type) {
     return type === 'gpt' || type === 'claude';
   }
@@ -1002,7 +1017,7 @@
     )) {
       let values = api.readDraft(form);
       const type = values['inventory-settings-type'];
-      if (form.id === 'inventory-settings-form' && usesAccountLocation(type)) {
+      if (form.id === 'inventory-settings-form' && usesRegistrationCity(type)) {
         const group = form.querySelector?.('#inventory-settings-city-groups');
         if (group) {
           const countries = settingsCountries(values, settingsFor(type));
@@ -1037,12 +1052,12 @@
       .filter((asset) => asset.type === type);
     const counts = {
       available: assets.filter(
-        (asset) => asset.inventoryState === 'available' && asset.health === 'normal'
+        (asset) => displayInventoryState(asset) === 'available' && asset.health === 'normal'
       ).length,
       claimed: assets.filter(
-        (asset) => asset.inventoryState === 'claimed' && asset.health === 'normal'
+        (asset) => displayInventoryState(asset) === 'claimed' && asset.health === 'normal'
       ).length,
-      used: assets.filter((asset) => asset.inventoryState === 'used').length,
+      used: assets.filter((asset) => displayInventoryState(asset) === 'used').length,
       dead: assets.filter((asset) => asset.health === 'dead').length,
       unlocking: assets.filter((asset) => asset.health === 'unlocking').length
     };
@@ -1060,7 +1075,7 @@
         (asset) =>
           (['dead', 'unlocking'].includes(v.tab)
             ? asset.health === v.tab
-            : (v.tab === 'used' || asset.health === 'normal') && asset.inventoryState === v.tab) &&
+            : (v.tab === 'used' || asset.health === 'normal') && displayInventoryState(asset) === v.tab) &&
           (!v.query ||
             `${displayIdentity(asset)} ${asset.email || ''} ${asset.notes || ''} ${asset.purpose || ''} ${kind === 'mail' ? mailboxPlatformLabel(asset) : ''} ${microsoft ? asset.auxiliary || '' : ''}`
               .toLowerCase()
@@ -1095,8 +1110,6 @@
         },
         ...(mailboxType(type) ? [{ id: 'registrationPlatform', label: '注册平台',
           render: asset => esc(mailboxPlatformLabel(asset)) }] : []),
-        ...(kind === 'account' ? [{ id: 'businessOwner', label: '归属人',
-          render: asset => esc(accountSummaries.get(asset.id)?.businessOwner?.name || '待核对') }] : []),
         ...(type === 'claude' && assets.some(asset => asset.claudeHistory) ? [
           { id: 'claudeHistoryState', label: '历史登记状态', render: asset => esc(claudeHistoryStates[asset.claudeHistory?.phase] || '—') }
         ] : []),
@@ -1132,7 +1145,7 @@
             ]
           : []),
         { id: 'country', label: usesAccountLocation(type) ? '注册国家' : '国家地区' },
-        ...(usesAccountLocation(type) ? [{ id: 'city', label: type === 'claude' ? '注册城市' : '注册地区／城市' }] : []),
+        ...(usesRegistrationCity(type) ? [{ id: 'city', label: '注册城市' }] : []),
         {
           id: 'status',
           label: '账号状态',
@@ -1145,11 +1158,11 @@
             ? tag(usageReview.get(asset.id).status === 'used' ? '检测到已使用' : '待核对', 'warning')
             :
             tag(
-              accountSummaries.get(asset.id)?.label ||
+              (historicallyOpened(asset) ? '历史已开通' : accountSummaries.get(asset.id)?.label) ||
               { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[
-                asset.inventoryState
+                displayInventoryState(asset)
               ],
-              asset.inventoryState === 'used'
+              displayInventoryState(asset) === 'used'
                 ? 'success'
                 : asset.inventoryState === 'claimed'
                   ? 'warning'
@@ -1182,18 +1195,7 @@
               {
                 id: 'ready',
                 label: '是否可用',
-                render: (asset) => asset.claudeHistory && asset.health === 'dead' ? tag('死号', 'warning')
-                  : asset.claudeHistory && asset.status === '冻结' ? tag('资料待核对', 'warning')
-                  : tag(
-                    age(asset) === null
-                      ? '注册时间未提供'
-                      : age(asset) >= settingsFor(type).hours
-                        ? '可使用'
-                        : '养号中',
-                    age(asset) !== null && age(asset) >= settingsFor(type).hours
-                      ? 'success'
-                      : 'warning'
-                  )
+                render: claudeReadiness
               },
               { id: 'kyc', label: 'KYC 状态', render: (asset) => esc(accountKyc(asset)) }
             ]
@@ -1214,7 +1216,7 @@
               { id: 'usedAt', label: '提取时间', render: (asset) => esc(asset.claimedAt || asset.usedAt || '未记录') },
               ...(v.tab === 'used' ? [{
                 id: 'actualUsedAt', label: '实际使用时间',
-                render: (asset) => esc(asset.actualUsedAt || pendingClaim(asset)?.item.usedAt || '未记录')
+                render: (asset) => esc(asset.actualUsedAt || (historicallyOpened(asset) && String(asset.claudeHistory.start || '').replace('T', ' ')) || pendingClaim(asset)?.item.usedAt || '未记录')
               }, {
                 id: 'usedHealth', label: '健康状态',
                 render: (asset) => esc({ dead: '死号', unlocking: '解封中' }[asset.health] || '正常')
@@ -1283,6 +1285,7 @@
     ];
     return (
       header(title, microsoft ? '维护 Outlook、Hotmail 等个人微软邮箱的登录、验证和辅助邮箱资料，并追溯状态与导入记录。'
+        : type === 'claude' ? '历史登记状态保留原记录。是否可用按注册时间、养号门槛及账号状态判定。'
         : '资料只保存一份，提取、实际使用、归还与异常记录分别追溯。', actions) +
       summary([
         ['全部资料', assets.length, '条'],
@@ -1876,9 +1879,17 @@
         : countrySelect,
       usesAccountLocation(type) || ['google', 'apple'].includes(type)
     );
-    if (usesAccountLocation(type))
+    if (fundingApple && window.IDAppleFunding) {
+      fields += field('App Store 账单地区', 'inventory-appStoreRegion',
+        select('inventory-appStoreRegion', [['', '请选择账单地区'], ...Object.entries(window.IDAppleFunding.appleRegions)],
+          val('appStoreRegion')), !original, '按 Apple 账户实际账单地区核对。');
+      if (!original)
+        fields += field('期初余额（USD）', 'inventory-appleOpeningBalance',
+          input('inventory-appleOpeningBalance', d['inventory-appleOpeningBalance'] ?? '0.00', 'inputmode="decimal"'), true);
+    }
+    if (usesRegistrationCity(type))
       fields += field(
-        type === 'claude' ? '注册城市' : '注册地区／城市',
+        '注册城市',
         'inventory-city',
         select('inventory-city', accountCityChoices(type, country, original, val('city')), val('city')),
         true,
@@ -2078,9 +2089,10 @@
     return withPrevious;
   }
   function accountLocationError(type, country, city, original) {
-    if (original && (original.country || '') === country && (original.city || '') === city) return '';
+    if (original && (original.country || '') === country && (!usesRegistrationCity(type) || (original.city || '') === city)) return '';
     if (!country) return '缺少注册国家';
     if (!settingsFor(type).countries.includes(country)) return '注册国家未在本账号的国家地区设置启用';
+    if (!usesRegistrationCity(type)) return '';
     if (!city) return '缺少地区／城市';
     return cityOptions(type, country).includes(city) ? '' : '地区／城市不在所选国家的设置中';
   }
@@ -2240,7 +2252,7 @@
   }
   function accountLifecycleActions(asset) {
     const summary = accountSummaries.get(asset.id);
-    if (!localData || !admin() || !summary?.systemOwned || asset.inventoryState !== 'used') return '';
+    if (!localData || !admin() || !summary?.systemOwned || asset.inventoryState !== 'used' || historicallyOpened(asset)) return '';
     return `<div class="toolbar">${button('恢复可用库存', 'inventory-account-lifecycle', '', 'return', `data-id="${esc(asset.id)}" data-operation="release"`)}${summary.disposition !== 'retired' ? button('停止复用', 'inventory-account-lifecycle', '', '', `data-id="${esc(asset.id)}" data-operation="retire"`) : ''}</div>`;
   }
   function accountLifecycleDetails(asset) {
@@ -2369,9 +2381,8 @@
           ['X 绑定状态', choiceLabel(xLinkOptions, asset.xLinkState)]] : [])
       ] : isAccount(asset) ? [['邮箱类型', accountEmailType(asset)]] : []),
       [isAccount(asset) ? '注册国家' : '国家地区', asset.country || '未填写'],
-      ...(usesAccountLocation(asset.type) ? [[asset.type === 'claude' ? '注册城市' : '注册地区／城市', asset.city || '未填写']] : []),
+      ...(usesRegistrationCity(asset.type) ? [['注册城市', asset.city || '未填写']] : []),
       ['来源渠道', asset.source || '未填写'],
-      ...(stockType(asset.type) ? [['归属人', accountSummaries.get(asset.id)?.businessOwner?.name || '待核对']] : []),
       ['账号状态', { normal: asset.status, dead: '死号', unlocking: '解封中' }[asset.health]],
       ...(asset.claudeHistory ? [['历史登记状态', claudeHistoryStates[asset.claudeHistory.phase]]] : []),
       [
@@ -2467,9 +2478,7 @@
   function assetMore(id, node) {
     const asset = assetById(id);
     if (!asset) return;
-    const ownershipAction = stockType(asset.type) && localData && admin()
-      ? button('设置归属人', 'inventory-account-owner', '', '', `data-id="${esc(id)}"`) : '';
-    api.openActionMenu(node, mailboxPlatformButton(asset) + ownershipAction + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
+    api.openActionMenu(node, mailboxPlatformButton(asset) + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
   function submissionPanel(accountEntry = false) {
     const choices = accountEntry ? accountSubmissionTypes : mailboxSubmissionTypes();
@@ -2679,8 +2688,8 @@
   }
   function importEditor(type = '') {
     const routeType = api.state.route.split('/')[1];
-    if (accountSubmissionRoute() || (api.state.route.startsWith('accounts/') && personalAccount(routeType))) {
-      openAccountImport(personalAccount(routeType) ? routeType : type || 'gpt');
+    if (accountSubmissionRoute() || (api.state.route.startsWith('accounts/') && (routeType === 'gpt' || personalAccount(routeType)))) {
+      openAccountImport(accountSubmissionRoute() ? type || 'gpt' : routeType);
       return;
     }
     if (type === 'relay' || api.state.route === 'mailboxes/relay') {
@@ -2736,7 +2745,7 @@
     ['emailType', '邮箱类型', ['emailType'], ['gpt', 'claude']],
     ['phone', '绑定电话', ['电话', '手机号', '绑定手机号', 'phone'], ['apple', 'microsoft']],
     ['country', '国家地区', ['国家', '注册国家', 'country']],
-    ['city', '注册城市', ['城市', '地区', '地区／城市', '地区/城市', '注册地区', '注册地区／城市', 'city', 'region'], ['gpt', 'claude']],
+    ['city', '注册城市', ['城市', '地区', '地区／城市', '地区/城市', '注册地区', '注册地区／城市', 'city', 'region'], ['claude']],
     ['status', '账号状态', ['状态', 'status']],
     ['source', '来源渠道', ['来源', 'source']],
     ['registered', '注册时间', ['registered', 'registeredAt']],
@@ -2781,7 +2790,7 @@
   }
   function accountCsvTemplate(type) {
     const country = usesAccountLocation(type)
-      ? settingsFor(type).countries.find((value) => cityOptions(type, value).length) || ''
+      ? settingsFor(type).countries.find(value => !usesRegistrationCity(type) || cityOptions(type, value).length) || ''
       : settingsFor(type).countries[0] || '';
     const values = {
       email: `submit.${type}@example.test`,
@@ -2791,7 +2800,7 @@
       xLinkState: '未核验',
       phone: '演示电话',
       country,
-      city: usesAccountLocation(type) ? cityOptions(type, country)[0] || '' : '',
+      city: usesRegistrationCity(type) ? cityOptions(type, country)[0] || '' : '',
       status: '正常',
       source: '自己注册',
       registered: '2026-10-29T09:20',
@@ -2878,7 +2887,7 @@
         'inventory-import-content',
         area('inventory-import-content', d['inventory-import-content'] || '', example, 7),
         true,
-        `${usesAccountLocation(type) ? '国家和地区／城市必填，使用本账号设置中的选项。' : ''}支持带表头 CSV 和旧版七列。注册时间可留空，按录入时间保存。余额、使用状态、KYC 和养号结果不接受导入。`
+        `${usesRegistrationCity(type) ? '注册国家和城市必填，使用本账号设置中的选项。' : type === 'gpt' ? '注册国家必填。' : ''}支持带表头 CSV 和旧版七列。注册时间可留空，按录入时间保存。余额、使用状态、KYC 和养号结果不接受导入。`
       ) +
       (type === 'apple'
         ? wide(
@@ -2941,7 +2950,8 @@
     return Boolean(
       context &&
       api.state.route === context.route &&
-      (accountSubmissionRoute() || (personalAccount(context.type) && api.state.route === 'accounts/' + context.type)) &&
+      (accountSubmissionRoute() || ((context.type === 'gpt' || personalAccount(context.type)) &&
+        api.state.route === 'accounts/' + context.type)) &&
       form.dataset.inventoryDraft === context.key &&
       d['inventory-import-scope'] === 'account-submit' &&
       d['inventory-import-locked-type'] === context.type &&
@@ -2975,7 +2985,7 @@
       for (let index = 0; index < keys.length; index++) {
         const definition = csvField(rows[0][index]);
         if (!definition) headerErrors.push(`不支持的表头：${rows[0][index] || '空表头'}`);
-        else if (definition[3] && !definition[3].includes(context.type))
+        else if (definition[3] && !definition[3].includes(context.type) && !(context.type === 'gpt' && definition[0] === 'city'))
           headerErrors.push(`本类资料不支持字段：${definition[1]}`);
         else if (seenKeys.has(definition[0])) headerErrors.push(`重复表头：${definition[1]}`);
         seenKeys.add(keys[index]);
@@ -2997,7 +3007,7 @@
       const line = index + (hasHeader ? 2 : 1),
         values = {};
       keys.forEach((key, column) => {
-        if (!key) return;
+        if (!key || (key === 'city' && context.type === 'gpt')) return;
         const value = String(columns[column] ?? '');
         values[key] = (microsoft || personal) && ['password', 'appPassword'].includes(key) ? value : value.trim();
       });
@@ -3219,7 +3229,7 @@
     const route = api.state.route;
     const microsoftDraft = form.dataset.inventoryDraft === 'inventory-edit:new:microsoft';
     const personal = personalAccount(type);
-    const inputSnapshot = accountEntry || microsoft || personal || (type === 'google' && !id)
+    const inputSnapshot = accountEntry || microsoft || personal || type === 'apple' || (type === 'google' && !id)
       ? formFingerprint(data) : '';
     const sourceEntry = personal && !id && ['mailboxes/google', 'mailboxes/relay'].includes(api.state.route) &&
       Boolean(data['inventory-sourceMailboxId']) && form.dataset.inventoryDraft ===
@@ -3355,7 +3365,7 @@
     if (usesAccountLocation(type)) {
       const country = data['inventory-country-edit'] || '';
       const issue = accountLocationError(type, country, data['inventory-city'] || '', original);
-      const locationField = settingsFor(type).countries.includes(country)
+      const locationField = usesRegistrationCity(type) && settingsFor(type).countries.includes(country)
         ? 'inventory-city'
         : 'inventory-country-edit';
       api.setError('inventory-country-edit', locationField === 'inventory-country-edit' ? issue : '');
@@ -3364,6 +3374,14 @@
         document.getElementById(locationField)?.focus();
         return;
       }
+    }
+    if (type === 'apple' && Object.hasOwn(data, 'inventory-appStoreRegion')) {
+      const rules = window.IDAppleFunding;
+      const regionError = (!id || data['inventory-appStoreRegion']) && !rules?.appleRegion(data['inventory-appStoreRegion']);
+      const balanceError = !id && rules?.appleAmountUnits(data['inventory-appleOpeningBalance']) === null;
+      api.setError('inventory-appStoreRegion', regionError ? '请选择已核实的账单地区' : '');
+      if (!id) api.setError('inventory-appleOpeningBalance', balanceError ? '请输入非负美元金额，最多四位小数' : '');
+      if (regionError || balanceError) return;
     }
     if (data['inventory-registered'] && !validRegisteredDate(data['inventory-registered'])) {
       api.setError('inventory-registered', '注册时间无效或晚于当前时间，请按北京时间填写');
@@ -3458,6 +3476,10 @@
           api.notify('确认期间账号输入或入口已变化，本次未保存，请重新核对');
           return;
         }
+        if (type === 'apple' && (form.isConnected === false || formFingerprint(api.readForm(form)) !== inputSnapshot)) {
+          api.notify('确认期间苹果 ID 或余额输入已变化，请重新核对');
+          return;
+        }
         if (original && String(original.version) !== data['inventory-version']) {
           api.notify('确认期间资料已有后续变化，本次未保存，请重新核对');
           return;
@@ -3478,6 +3500,10 @@
           country: data['inventory-country-edit'],
           status: data['inventory-status-edit']
         };
+        if (type === 'apple' && Object.hasOwn(data, 'inventory-appStoreRegion')) {
+          update.appStoreRegion = data['inventory-appStoreRegion'];
+          if (!original && localData) update.appleOpeningBalance = data['inventory-appleOpeningBalance'];
+        }
         for (const key of [
           'password',
           'phone',
@@ -3499,7 +3525,8 @@
           'queryCode',
           'queryExpiry'
         ])
-          if (data[`inventory-${key}`] !== undefined) update[key] = data[`inventory-${key}`];
+          if ((key !== 'city' || usesRegistrationCity(type)) && data[`inventory-${key}`] !== undefined)
+            update[key] = data[`inventory-${key}`];
         if (microsoft) {
           update.auxiliary = (update.auxiliary || '').trim().toLowerCase();
           update.totp = (update.totp || '').trim();
@@ -4022,7 +4049,7 @@
               password,
               phone,
               country,
-              city,
+              city: usesRegistrationCity(finalType) ? city : '',
               registered,
               type: finalType,
               fields: { device, ...(finalType === 'claude' ? parseRegistrationProxySafe(proxyUrl) : {}) },
@@ -4118,7 +4145,7 @@
                           : row.fields?.[key] || '—'
                     )
                 }))
-            : account ? [{ id: 'country', label: '注册国家' }, { id: 'city', label: '地区／城市' }] : []),
+            : account ? [{ id: 'country', label: '注册国家' }, ...(usesRegistrationCity(type) ? [{ id: 'city', label: '注册城市' }] : [])] : []),
           {
             id: 'registered',
             label: '注册时间',
@@ -4197,7 +4224,7 @@
             password: row.password,
             phone: row.phone,
             country: row.country,
-            city: row.city,
+            ...(row.type !== 'gpt' && { city: row.city }),
             status: row.fields?.status || '正常',
             source: row.fields?.source || d['inventory-import-source'],
             registered: row.registered || (localData ? '' : createdAt),
@@ -4324,7 +4351,6 @@
     else if (action === 'inventory-edit') assetEditor(id);
     else if (action === 'inventory-detail') assetDetail(id);
     else if (action === 'inventory-more') assetMore(id, node);
-    else if (action === 'inventory-account-owner') void api.modules.subscriptionManagement?.openAccountOwner(id);
     else if (action === 'inventory-account-lifecycle') void openAccountLifecycle(id, node.dataset.operation);
     else if (action === 'inventory-lifecycle-review') void openAccountLifecycle(id, node.dataset.operation, true);
     else if (action === 'inventory-lifecycle-order') api.go(`orders/detail/${encodeURIComponent(id)}`);
@@ -4512,14 +4538,14 @@
         key = `inventory-${locationOnly ? 'location-' : ''}settings:${type}`,
         saved = api.state.drafts.get(key) || {};
       let cities = '';
-      if (usesAccountLocation(type)) {
+      if (usesRegistrationCity(type)) {
         const countries = settingsCountries(saved, config);
         cities = `<div id="inventory-settings-city-groups" class="option-settings-groups" data-countries="${esc(JSON.stringify(countries))}">${accountCityEditors(type, countries, saved)}</div>`;
       }
       showDrawer(
         locationOnly ? `${typeLabel(type)}国家地区设置` : '本表设置',
         '这些选项只作用于本资料表。',
-        `<form id="inventory-settings-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-settings-type" value="${type}" /><div class="option-settings-groups">${api.optionListEditor({ id: 'inventory-settings-countries', label: '国家地区', itemLabel: '国家名称', values: config.countries, minItems: 1, draft: saved })}${locationOnly ? '<input type="hidden" name="inventory-location-only" value="1" />' : api.optionListEditor({ id: 'inventory-settings-sources', label: '来源渠道', itemLabel: '来源名称', values: config.sources, minItems: 1, draft: saved })}${!locationOnly && type === 'claude' ? field('养号阈值', 'inventory-settings-hours', input('inventory-settings-hours', saved['inventory-settings-hours'] ?? config.hours, 'type="number" min="1" max="8760"'), false, '请输入 1–8760 小时。') : ''}${cities}</div></form>`,
+        `<form id="inventory-settings-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-settings-type" value="${type}" /><div class="option-settings-groups">${api.optionListEditor({ id: 'inventory-settings-countries', label: '国家地区', itemLabel: '国家名称', values: config.countries, minItems: 1, draft: saved })}${locationOnly ? '<input type="hidden" name="inventory-location-only" value="1" />' : api.optionListEditor({ id: 'inventory-settings-sources', label: '来源渠道', itemLabel: '来源名称', values: config.sources, minItems: 1, draft: saved })}${!locationOnly && type === 'claude' ? field('养号阈值', 'inventory-settings-hours', input('inventory-settings-hours', saved['inventory-settings-hours'] ?? config.hours, 'type="number" min="1" max="8760"'), false, '从注册时间起计算。默认 72 小时，达到门槛且账号正常时才可提取。') : ''}${cities}</div></form>`,
         button('取消', 'inventory-close') +
           '<button class="button primary" form="inventory-settings-form" type="submit">确认设置</button>',
         key
@@ -4633,7 +4659,7 @@
       try {
         countries = settingsCountries(data, current);
         sources = locationOnly ? current.sources : [...new Set(api.readOptionList(data['inventory-settings-sources']))];
-        if (usesAccountLocation(type)) {
+        if (usesRegistrationCity(type)) {
           cities = countries.map((country) => {
             const raw = data[accountCityEditorId(country)];
             const values = raw === undefined ? cityOptions(type, country) : api.readOptionList(raw);
@@ -4854,7 +4880,7 @@
         const values = form && api.readForm(form);
         const id = values?.['inventory-asset-id'];
         const type = values?.['inventory-asset-type'];
-        if (usesAccountLocation(type))
+        if (usesRegistrationCity(type))
           city.innerHTML = options(accountCityChoices(type, node.value, id ? assetById(id) : null), '');
         api.setError('inventory-city', '');
       }

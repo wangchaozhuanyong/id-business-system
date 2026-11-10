@@ -9,6 +9,7 @@ import {
 } from './order-completion.mjs';
 import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransferView, TenantOwnerTransferError } from './tenant-owner-transfer.mjs';
 import { prepareTenantRenewalWrite, tenantRenewalHandledAction, tenantRenewalSettingsAction } from './tenant-renewal-reminders.mjs';
+import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots, historicalFeeAction } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
@@ -57,14 +58,15 @@ import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
+import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding } from './apple-funding.mjs';
 import { cardTypeDocument, cardTypeSnapshot } from './card-management.mjs';
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
-import { ownerForSubscriptionAccount, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
+import { ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
-  assignOrderOwner, assignTenantOwner, checkAppleOrder, checkClaudeProMaterialHistory,
+  assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee, historicalGptCardBackfillError,
   isClaudeProBankMaterials, matchesBackfilledPayment, nextOrderNo, normalizeClaudeProMaterials, redactClaudeProOrderMaterials,
-  validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices
+  validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices, validApplePaidPrices
 } from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
@@ -126,6 +128,7 @@ const settingsActions = {
   statistics_currency_save: '更改统计币种',
   order_prices_save: '保存订单套餐售价',
   order_currencies_save: '保存订单币种设置',
+  apple_paid_prices_save: '保存苹果内购代付价',
   gpt_paid_prices_save: '保存 GPT 代付价格',
   claude_paid_prices_save: '保存 Claude 代付价格',
   personal_paid_prices_save: '保存 Gemini／Grok 代付价格'
@@ -136,6 +139,8 @@ const appleBalanceActions = {
   apple_refund_correct: '更正 Apple 待回款',
   apple_refund_receive: '确认 Apple 回款到账',
   apple_adjust: '登记苹果 ID 余额变动',
+  apple_opening: '登记苹果 ID 期初余额',
+  apple_topup: '登记苹果 ID 充值到账',
   apple_adjust_undo: '补偿撤回苹果 ID 余额变动'
 };
 const actionsByDomain = {
@@ -304,7 +309,7 @@ export function pageAuditRows(rows, search) {
   return { items: matches.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize, snapshot };
 }
 
-export function attributeCommerce(data, previous, actor, owners, subscriptions) {
+export function attributeCommerce(data, previous, actor, owners, subscriptions, inventory) {
   checkTenantTransferHistory(data.tenants, previous?.tenants);
   const attributeNew = (rows = [], before = []) => {
     const known = new Set(Array.isArray(before) ? before.map((row) => row?.id) : []);
@@ -321,7 +326,7 @@ export function attributeCommerce(data, previous, actor, owners, subscriptions) 
       const prior = before.get(row.id);
       const tenantChanged = key === 'tenants' && (!prior || !isDeepStrictEqual(row, prior));
       if (key === 'orders' || key === 'tenants') {
-        const accountOwner = key === 'orders' && !prior && ownerForSubscriptionOrder(row, subscriptions);
+        const accountOwner = key === 'orders' && !prior && ownerForSubscriptionOrder(row, subscriptions, previous || {}, inventory);
         if (accountOwner) {
           if (row.ownerId && row.ownerId !== accountOwner.ownerId)
             throw new LocalDataError(409, '账号归属已变化，请重新读取并核对订单归属');
@@ -351,14 +356,6 @@ export function attributeCommerce(data, previous, actor, owners, subscriptions) 
     }
   }
   attributeNew(data.logs, previous?.logs);
-}
-
-function accountSummariesWithOwners(inventory, commerce, subscriptions) {
-  const accounts = new Map((inventory?.accounts || []).map(account => [account.id, account]));
-  return accountLifecycleSummaries(inventory, commerce).map(summary => {
-    const owner = ownerForSubscriptionAccount(accounts.get(summary.assetId), subscriptions);
-    return owner ? { ...summary, businessOwner: { id: owner.ownerId, name: owner.ownerName } } : summary;
-  });
 }
 
 class LocalDataError extends Error {
@@ -645,6 +642,8 @@ function checkWrite(entry) {
     throw new LocalDataError(400, '套餐售价设置格式不正确');
   if (domain === 'settings' && 'stockOrderPrices' in data && !validOrderPrices(data.stockOrderPrices))
     throw new LocalDataError(400, '成品号售价设置格式不正确');
+  if (domain === 'settings' && 'applePaidPrices' in data && !validApplePaidPrices(data.applePaidPrices))
+    throw new LocalDataError(400, '苹果内购代付价格式不正确');
   if (domain === 'settings' && 'gptPaidPrices' in data && !validGptPaidPrices(data.gptPaidPrices))
     throw new LocalDataError(400, 'GPT 代付价格格式不正确');
   if (domain === 'settings' && 'claudePaidPrices' in data && !validClaudePaidPrices(data.claudePaidPrices))
@@ -930,7 +929,7 @@ export function createLocalBusinessStore(databasePath) {
           auditSummary('读取含微软邮箱的库存资料', actor), snapshot.version);
       }
       return { ...snapshot, ...(review.length && { usageReview: review }), commerceVersion: commerce.version,
-        accountSummaries: accountSummariesWithOwners(snapshot.data, commerce.data, readDocument(subscriptionDomain).data) };
+        accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data) };
     },
     saveAccountLifecycle(body, actor) {
       return writeTransaction(() => {
@@ -1099,7 +1098,7 @@ export function createLocalBusinessStore(databasePath) {
         const usageReview = usageReviewRows(inspectInventoryUsage(snapshot.data, commerce, now.getTime()));
         return { version, data: snapshot.data, usageReview,
           commerceVersion: readDocument('commerce').version,
-          accountSummaries: accountSummariesWithOwners(snapshot.data, commerce, readDocument(subscriptionDomain).data) };
+          accountSummaries: accountLifecycleSummaries(snapshot.data, commerce) };
       });
     },
     appendWebsiteVisit(event, time) {
@@ -1496,8 +1495,10 @@ export function createLocalBusinessStore(databasePath) {
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake
     } = {}) {
       // Initial cards are transient input: preserve the caller's retry snapshot on rollback.
-      const writes = checkWrites(entries).map(write => write.domain === 'commerce' &&
-        write.data.tenants.some(row => Object.hasOwn(row, 'initialCards'))
+      const writes = checkWrites(entries).map(write => (write.domain === 'commerce' &&
+        write.data.tenants.some(row => Object.hasOwn(row, 'initialCards'))) ||
+        (write.domain === 'inventory' && write.data.mailboxes.some(row => Object.hasOwn(row, 'appleOpeningBalance'))) ||
+        (write.domain === 'appleBalance' && write.action === 'apple_topup')
         ? { ...write, data: structuredClone(write.data) } : write);
       return writeTransaction(() => {
         if (relayIntake && (get.get('commerce')?.version ?? 0) !== relayIntake.commerceVersion)
@@ -1515,7 +1516,7 @@ export function createLocalBusinessStore(databasePath) {
         if (settings) {
           const savedSettings = current('settings');
           settings.data = retainOrderSettings(settings.data, savedSettings);
-          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'stockOrderPrices', 'gptPaidPrices', 'claudePaidPrices']) {
+          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'stockOrderPrices', 'gptPaidPrices', 'claudePaidPrices', 'applePaidPrices']) {
             if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };
             }
@@ -1613,7 +1614,7 @@ export function createLocalBusinessStore(databasePath) {
             let owners = [];
             try { owners = readOrderOwners?.() || []; }
             catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
-            attributeCommerce(commerce, priorCommerce, actor, owners, current(subscriptionDomain));
+            attributeCommerce(commerce, priorCommerce, actor, owners, current(subscriptionDomain), inventory);
           } else checkTenantTransferHistory(commerce.tenants, priorCommerce?.tenants);
           if (action === historicalFeeAction && (writes.length !== 1 || !actor?.id ||
               !['admin', 'super'].includes(actor.role)))
@@ -1729,10 +1730,6 @@ export function createLocalBusinessStore(databasePath) {
                   row.ownerPhone = '';
                 }
               }
-              if (row.product && (!prior || ['新增独立订单', '更正订单'].includes(action))) {
-                const error = checkAppleOrder(row, prior, oldOrders, current('appleBalance'), inventory, commerce.orders);
-                if (error) throw new LocalDataError(409, error);
-              }
               if (!automatic && row.payment === '银行卡' && row.paidConfirmed === true &&
                   (!prior?.paidConfirmed || row.paidAmount !== prior.paidAmount || row.paidCurrency !== prior.paidCurrency) &&
                   (!positiveOrderAmount(row.paidAmount) || !validCurrencyCode(row.paidCurrency)))
@@ -1812,13 +1809,38 @@ export function createLocalBusinessStore(databasePath) {
         }
         if (checksStock || incoming.has('appleBalance')) {
           const previous = current('appleBalance');
-          const ledger = incoming.get('appleBalance') ??
-            previous ?? {
-              wallets: [],
-              allocations: [],
-              movements: [],
-              refunds: []
-            };
+          const balanceWrite = writes.find(write => write.domain === 'appleBalance');
+          let ledger = balanceWrite?.data ?? previous ?? emptyAppleLedger();
+          if (balanceWrite) {
+            const priorIds = new Set((previous?.movements || []).map(item => item.id));
+            const additions = ledger.movements.filter(item => !priorIds.has(item.id));
+            if (additions.some(item => item.kind === 'opening') ||
+                (balanceWrite.action === 'apple_topup' &&
+                  (additions.length !== 1 || additions[0].kind !== 'topup')) ||
+                additions.some(item => item.kind === 'topup' && balanceWrite.action !== 'apple_topup'))
+              throw new LocalDataError(409, '请通过对应入口登记苹果 ID 期初余额或充值');
+            for (const item of additions.filter(row => row.kind === 'topup')) {
+              item.actor = (actor || localToolboxActor).name;
+              item.actorId = (actor || localToolboxActor).id;
+              item.at = toV2DateTimeInput(new Date()).replace('T', ' ');
+              item.label = '充值到账';
+            }
+          }
+          if (inventoryWrite) {
+            const opened = stageAppleOpenings(priorInventory, inventory, ledger, actor || localToolboxActor, new Date(), priorCommerce?.orders);
+            if (opened.error) throw new LocalDataError(400, opened.error);
+            if (opened.changed) {
+              if (balanceWrite) throw new LocalDataError(409, '期初余额由新增苹果 ID 操作一并登记');
+              ledger = opened.ledger;
+              writes.push({ domain: 'appleBalance', version: readDocument('appleBalance').version,
+                data: ledger, action: 'apple_opening' });
+            }
+          }
+          if (incoming.has('commerce')) {
+            const error = stageAppleOrderFunding(priorCommerce?.orders, commerce.orders, previous,
+              inventory, current('settings'), writes.find(write => write.domain === 'commerce').action, commerce.customers);
+            if (error) throw new LocalDataError(409, error);
+          }
           const error = checkAppleLedger(
             previous,
             ledger,
@@ -1884,7 +1906,7 @@ export function createLocalBusinessStore(databasePath) {
             ? usageReviewRows(inspectInventoryUsage(inventory, commerce, Date.parse(now)))
             : [];
           result.push({ domain, version: next, data, ...(review.length && { usageReview: review }),
-            ...(domain === 'inventory' && { accountSummaries: accountSummariesWithOwners(data, commerce, current(subscriptionDomain)),
+            ...(domain === 'inventory' && { accountSummaries: accountLifecycleSummaries(data, commerce),
               commerceVersion: writes.find(write => write.domain === 'commerce')?.version + 1 || readDocument('commerce').version }) });
         }
         if (initialTenantCards.additions.length) {
@@ -2270,13 +2292,16 @@ export async function handleLocalBusiness(
     if (domain === bitBrowserAddressDomain) {
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
-    const [entry, inventory] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
+    const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
+    const inventory = related.find(item => item.domain === 'inventory');
+    const appleBalance = related.find(item => item.domain === 'appleBalance');
     return json(response, 200, {
       version: entry.version, data: entry.domain === 'commerce'
         ? redactClaudeProOrderMaterials(entry.data, actor) : entry.data,
       ...(entry.accountSummaries && { accountSummaries: entry.accountSummaries, commerceVersion: entry.commerceVersion }),
       ...(entry.usageReview && { usageReview: entry.usageReview }),
-      ...(inventory?.domain === 'inventory' && { inventory })
+      ...(inventory && { inventory }),
+      ...(appleBalance && { appleBalance })
     });
   } catch (error) {
     if (response.destroyed) return;

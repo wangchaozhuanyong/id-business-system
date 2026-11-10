@@ -4378,3 +4378,59 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .summary-item:nth-child(3n + 3) .summary-label::before { background: var(--violet); }
 .drawer:has(.commerce-field-grid, .form-grid) { width: min(800px, 100%); }
 .tag:is(.success, .warning, .danger, .blue)::before { content: ''; width: 5px; height: 5px; flex: none; background: currentColor; border-radius: 50%; }
+
+.drawer[data-layout='apple-ledger'] {
+  width: min(1120px, 100%);
+}
+
+.apple-funding-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.apple-funding-table th,
+.apple-funding-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.apple-cell-label {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .apple-funding-table,
+  .apple-funding-table tbody {
+    display: block;
+  }
+
+  .apple-funding-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .apple-funding-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 16px;
+    padding: 12px var(--panel-padding-inline, 16px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .apple-funding-table td {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .apple-cell-label {
+    display: block;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+}

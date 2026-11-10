@@ -106,6 +106,7 @@ export function stageClaudeHistoryIntake(plan, inventoryVersion, inventory, acto
   const results = [];
   const accounts = plan.additions.map(row => {
     const id = 'claude-' + randomUUID();
+    const used = row.history.phase === 'opened';
     results.push({
       id: 'row-' + row.line, assetId: id, line: row.line, email: row.email, type: 'claude',
       registered: row.details.registered, createdAt: recordedAt, result: row.state
@@ -113,8 +114,8 @@ export function stageClaudeHistoryIntake(plan, inventoryVersion, inventory, acto
     return {
       id, type: 'claude', email: row.email, emailType: /@(?:gmail|googlemail)\.com$/.test(row.email) ? 'google' : '',
       ...row.details, claudeHistory: row.history, source: '历史入库',
-      // Release requires a separate review in the ordinary account editor.
-      status: '冻结', health: row.health, inventoryState: 'available', used: false, usageLinks: [],
+      status: '冻结', health: row.health, inventoryState: used ? 'used' : 'available', used,
+      ...(used && { actualUsedAt: row.history.start.replace('T', ' ') }), usageLinks: [],
       importId: batchId, importedAt: recordedAt, createdAt: recordedAt, createdById: actor.id, createdBy: actor.name,
       lastOperatedAt: recordedAt, lastOperatedById: actor.id, lastOperatedBy: actor.name, version: 1,
       inventoryHistory: [{ id: randomUUID(), action: 'Claude 历史入库', detail: row.state, ...attribution }]

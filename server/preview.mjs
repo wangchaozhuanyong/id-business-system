@@ -141,6 +141,8 @@ export async function startPreview(
       ])
     )
   );
+  assets.set('/apple-funding.mjs', { type: 'text/javascript; charset=utf-8',
+    body: await readFile(new URL('../frontend/apple-funding.mjs', import.meta.url)) });
   const localBitAssets = [
     ['/assets/bitbrowser/authorization.mjs', '../modules/recharge/bitbrowser/authorization.mjs'],
     ['/assets/bitbrowser/catalog.mjs', '../modules/recharge/bitbrowser/catalog.mjs'],

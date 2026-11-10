@@ -38,6 +38,10 @@ test('历史账号保留原周期和未知日期，谷歌邮箱无自动关联',
   const [active, pending, archive] = inventory.data.accounts;
   assert.equal(active.registered, '');
   assert.deepEqual(active.claudeHistory, { phase: 'opened', plan: 'Max 20x', start: '2026-10-31T22:00', expiry: '2026-11-30T22:00' });
+  assert.equal(active.inventoryState, 'used');
+  assert.equal(active.used, true);
+  assert.equal(active.actualUsedAt, '2026-10-31 22:00');
+  assert.equal(pending.inventoryState, 'available');
   assert.equal(pending.registered, '2026-10-29');
   assert.equal(pending.claudeHistory.plan, '');
   assert.equal(archive.health, 'dead');
@@ -46,6 +50,12 @@ test('历史账号保留原周期和未知日期，谷歌邮箱无自动关联',
   assert.equal(accountLifecycleSummary(archive, commerce.data, at.getTime()).label, '已归档');
   assert.equal(archive.inventoryHistory[0].actorId, actor.id);
   assert.ok(inventory.data.accounts.every(row => row.status === '冻结' && row.usageLinks.length === 0));
+  const legacy = structuredClone(inventory.data);
+  Object.assign(legacy.accounts[0], { inventoryState: 'available', used: false, status: '正常' });
+  assert.equal(accountLifecycleSummary(legacy.accounts[0], commerce.data, at.getTime()).label, '历史已开通');
+  const claimed = structuredClone(legacy);
+  claimed.accounts[0].inventoryState = 'claimed';
+  assert.match(checkInventoryHistory(legacy, claimed), /历史账号当前不可提取/);
   assert.equal(inventory.data.importRecords[0].id, result.batchId);
   assert.equal(inventory.data.importRecords[0].actorId, actor.id);
   assert.equal(inspectInventoryUsage(inventory.data, commerce.data, at.getTime()).size, 0);

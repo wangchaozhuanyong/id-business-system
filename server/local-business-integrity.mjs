@@ -7,6 +7,7 @@ import {
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { claimAllowsDelivery, pendingInventoryClaim } from './inventory-usage.mjs';
 import { releasedAccountOrders } from './account-lifecycle.mjs';
+import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { personalDelivery, personalProduct, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
 
 function units(value) {
@@ -305,6 +306,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
       ) {
         return '成品交付必须与原可用库存账号的使用记录一起保存';
       }
+      if (isHistoricallyOpenedClaude(prior)) return '已开通的 Claude 历史账号不能再次交付';
       if (type === 'claude' && !meetsClaudeAging(prior, previousInventory)) {
         return 'Claude 库存账号未达到养号阈值，不能交付';
       }
@@ -344,6 +346,10 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
         return 'Apple 回款流水必须与一笔已到账记录对应';
       }
       received.add(refund.id);
+    } else if (['opening', 'topup'].includes(movement.kind)) {
+      if (amount <= 0n || movement.orderId || !String(movement.reason || '').trim() ||
+          (movement.kind === 'opening' && balances.has(movement.appleIdId)))
+        return '苹果 ID 期初余额或充值流水不正确';
     } else if (!['manual', 'manual-undo'].includes(movement.kind) || movement.orderId) {
       return '苹果 ID 余额变动类型不正确';
     }
@@ -352,7 +358,7 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
     if (movement.kind === 'manual-undo') {
       const original = history.get(movement.originalEntryId);
       if (
-        original?.kind !== 'manual' ||
+        !['manual', 'topup'].includes(original?.kind) ||
         original.appleIdId !== movement.appleIdId ||
         original.undoneBy !== movement.id ||
         original.versionAfter !== prior.version ||

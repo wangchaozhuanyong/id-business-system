@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { validApplePaidPrices as validateApplePrices } from './apple-funding.mjs';
 import { personalPlans, personalProduct, samePersonalSubscription } from './personal-subscriptions.mjs';
 
 export const rechargePlanLabels = Object.freeze({
@@ -12,6 +13,7 @@ const bands = {
 const plans = {
   GPT: Object.values(rechargePlanLabels), 'Claude Pro': ['Pro'], 'Claude Max': ['Max 5x', 'Max 20x'], ...personalPlans
 };
+export const validApplePaidPrices = prices => validateApplePrices(prices, plans);
 export function checkNewOrder(order) {
   if (!order.product) return;
   if (!Object.hasOwn(plans, order.product) || !plans[order.product].includes(order.plan))

@@ -248,7 +248,7 @@ for (const type of ['gpt', 'claude', 'apple'])
 test('三类单条表单保留各自字段，苹果资料入口不提供余额录入', () => {
   const r = runtime();
   for (const [type, fields] of [
-    ['gpt', ['inventory-emailType', 'inventory-city', 'inventory-totp', 'inventory-device', 'inventory-notes2']],
+    ['gpt', ['inventory-emailType', 'inventory-country-edit', 'inventory-totp', 'inventory-device', 'inventory-notes2']],
     ['claude', ['inventory-city', 'inventory-proxy-url', 'inventory-proxy-host']],
     [
       'apple',
@@ -259,6 +259,7 @@ test('三类单条表单保留各自字段，苹果资料入口不提供余额�
     assert.equal(r.form.raw['inventory-asset-type'], type);
     assert.equal(r.form.raw['inventory-entry-scope'], 'account-submit');
     for (const field of fields) assert.match(r.opened.body, new RegExp(`id="${field}"`));
+    if (type === 'gpt') assert.doesNotMatch(r.opened.body, /id="inventory-city"/);
     assert.doesNotMatch(r.opened.body, /name="[^"\s]*(?:balance|余额)[^"\s]*"/);
   }
 });
@@ -297,7 +298,7 @@ test('完整表头GPT导入保留邮箱类型、2FA、时间、设备和备注�
   assert.equal(row.totp, 'DEMO-TOTP');
   assert.equal(row.emailType, 'google');
   assert.equal(row.device, '测试设备');
-  assert.equal(row.city, '纽约');
+  assert.equal(row.city, undefined);
   assert.equal(row.notes2, '第二条');
   assert.equal(row.registered, '2026-10-01T10:30');
   assert.equal(row.createdAt, '2026-11-03 10:30');

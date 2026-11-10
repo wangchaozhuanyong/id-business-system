@@ -12,7 +12,7 @@ test('个人订单与库存及 Apple 余额在加密业务库一起提交，冲�
   const appleIdId = 'apple-stock';
   const mailbox = { id: 'mail-stock', type: 'google', email, country: '马来西亚', device: '合成设备',
     status: '正常', health: 'normal', inventoryState: 'available', usageLinks: [] };
-  const apple = { id: appleIdId, type: 'apple', email: 'wallet@example.test', status: '正常' };
+  const apple = { id: appleIdId, type: 'apple', email: 'wallet@example.test', status: '正常', appStoreRegion: 'MY' };
   const inventory = { mailboxes: [mailbox, apple], accounts: [], batches: [], returnRecords: [],
     importRecords: [], registrationRecords: [], tableSettings: [], undo: [] };
   save(write('inventory', 0, inventory, 'inventory_create'));
@@ -31,6 +31,7 @@ test('个人订单与库存及 Apple 余额在加密业务库一起提交，冲�
   const initialLedger = { wallets: [{ id: appleIdId, currency: 'USD', balance: '30', version: 2 }],
     allocations: [], movements: [fund], refunds: [] };
   save(write('appleBalance', 0, initialLedger, 'apple_adjust'));
+  save(write('settings', 0, { mailboxTypes: [], costSettings: {}, applePaidPrices: { Gemini: { 'Google AI Pro': { MY: '12' } } } }, 'apple_paid_prices_save'));
   const order = { id: 'gemini-order', orderNo: 'fixture-order', product: 'Gemini', plan: 'Google AI Pro',
     subscriptionSeries: 'google_ai', businessType: '成品交付', customerId: 'fixture-customer', email,
     loginMethod: 'google', accountId: account.id, accountSource: '库存', payment: '苹果内购', appleIdId,
