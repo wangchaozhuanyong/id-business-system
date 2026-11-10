@@ -4,6 +4,7 @@ const entryKeys = ['type', 'email', 'password', 'phone', 'country', 'city', 'sou
   'emailType', 'totp', 'auxiliary', 'appPassword', 'security1', 'security2', 'security3', 'birthday',
   'proxyUrl', 'proxyProtocol', 'proxyHost', 'proxyPort', 'proxyUser', 'proxyPassword', 'notes', 'notes2'];
 const text = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+const optionalText = (value, max) => value == null || (typeof value === 'string' && value.length <= max);
 const sameEntryFields = (old, row) => (old.status || '正常') === (row.status || '正常') &&
   entryKeys.every(key => (old[key] ?? '') === (row[key] ?? '')) &&
   isDeepStrictEqual(old.microsoftSecurity, row.microsoftSecurity);
@@ -35,7 +36,7 @@ function checkMicrosoftFields(row, recoveryMailboxes) {
       !Array.isArray(verificationMethods) || verificationMethods.length > microsoftMethods.size ||
       new Set(verificationMethods).size !== verificationMethods.length ||
       verificationMethods.some(method => !microsoftMethods.has(method)) ||
-      typeof verificationDevice !== 'string' || verificationDevice.length > 200)
+      !optionalText(verificationDevice, 200))
     return '请核对微软邮箱的登录方式、两步验证和验证方式';
   if (loginMode === 'password' && !text(row.password, 4096)) return '密码登录必须填写登录密码';
   if (loginMode === 'passwordless' && (row.password || !verificationMethods.length))
@@ -91,8 +92,10 @@ export function checkInventoryEntryFields(previous, next, action) {
     } else {
       if (!entryAction || (old && (old.version || 1) === (row.version || 1) && sameEntryFields(old, row))) continue;
     }
-    if (row.type === 'google' && (!text(row.country, 100) || !text(row.device, 200)))
-      return '谷歌邮箱的国家地区和登录设备必填';
+    if (row.type === 'google') {
+      if (!text(row.country, 100)) return '谷歌邮箱的国家地区必填';
+      if (!optionalText(row.device, 200)) return '谷歌邮箱的登录设备须为不超过 200 个字符的文字';
+    }
     if (row.type === 'claude' && (!text(row.device, 200) || !text(row.proxyUrl, 2048)))
       return 'Claude 账号的登录设备和注册代理链接必填';
     if (row.type === 'claude') {

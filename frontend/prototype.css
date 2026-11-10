@@ -3571,6 +3571,46 @@ details.toolbox-phrase-more[open] > summary {
 .order-price-reference-list [aria-current='true'] {
   font-weight: 600;
 }
+.order-price-groups,
+.order-price-currency {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+.order-price-currency {
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.order-price-currency > h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.order-price-currency .footnote {
+  margin: 0;
+}
+.order-price-currency .paid-price-budget {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .order-price-currency {
+    padding: 12px;
+  }
+  .order-price-currency :is(th, td) {
+    padding-inline: 8px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
 .order-financial-actions {
   display: flex;
   justify-content: flex-end;
@@ -3581,6 +3621,18 @@ details.toolbox-phrase-more[open] > summary {
 }
 .order-financial-group .field {
   margin: 0;
+}
+.order-amount-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--control-gap);
+}
+.order-amount-picker > input {
+  min-width: 0;
+}
+.order-amount-picker > .button {
+  aspect-ratio: 1;
+  padding-inline: 0;
 }
 @container (max-width: 1039px) {
   .order-financial-groups {

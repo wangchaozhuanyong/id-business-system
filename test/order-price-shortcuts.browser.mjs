@@ -4,7 +4,7 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
-test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { timeout: 90_000 }, async t => {
+test('订单金额预设、手填、更正原因和既有价格与订阅快捷操作', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
@@ -20,7 +20,8 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
   };
   const prior = { ...fixture.commerce.data.orders.find(row => row.product === 'GPT'),
     id: 'manual-shortcuts', email: 'manual-shortcuts@example.test', source: '管理员手工', taskId: '', version: 1, cancelled: false,
-    start: '2026-11-01 10:00', expiry: '2026-12-01 10:00' };
+    start: '2026-11-01 10:00', expiry: '2026-12-01 10:00', paidCurrency: 'PHP', paidAmount: '975.1000',
+    saleCurrency: 'CNY', saleAmount: '1200', paidConfirmed: false, receiptConfirmed: false, correctionReason: '上次更正的原因' };
   fixture.commerce.data.orders.push(prior, { ...prior, id: 'locked-shortcuts', email: 'locked-shortcuts@example.test', source: '线上代充', taskId: 'locked-task' });
   const { external } = await interceptDesign(context, { localFixtures: fixture, actor });
   let failSettings = false, holdSettings = false, releaseSettings;
@@ -51,6 +52,14 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
   const form = page.locator('#main #commerce-order-form');
   const panel = page.locator('#drawer[open] #commerce-order-price-reference-panel');
   const referenceButton = (kind, scope = form) => scope.locator(`[data-action="commerce-order-price-reference"][data-kind="${kind}"]`);
+  const amountLabel = kind => kind === 'paid' ? '选择代付金额' : '选择售卖金额';
+  const amountButton = (kind, scope = form) => scope.getByRole('button', { name: amountLabel(kind), exact: true });
+  async function openAmount(kind, scope = form) {
+    await amountButton(kind, scope).click();
+    const menu = page.getByRole('menu', { name: amountLabel(kind), exact: true });
+    await menu.waitFor();
+    return menu;
+  }
   async function openReference(kind, scope = form) {
     await referenceButton(kind, scope).click();
     await panel.waitFor();
@@ -60,14 +69,43 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
     await page.getByRole('button', { name: '返回订单', exact: true }).click();
     await panel.waitFor({ state: 'hidden' });
   }
+  const priceGroups = () => panel.locator('[data-price-group]').evaluateAll(groups => groups.map(group => [
+    group.dataset.priceGroup,
+    [...group.querySelectorAll('tbody tr')].map(row => [...row.cells].map(cell => cell.textContent))
+  ]));
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.waitForFunction(() => document.querySelector('#commerce-saleAmount')?.value === '1320');
+  const paidAmount = form.locator('#commerce-paidAmount'), saleAmount = form.locator('#commerce-saleAmount');
+  await paidAmount.fill('975.1234');
+  let menu = await openAmount('paid');
+  assert.equal(await menu.getByRole('menuitem', { name: /^使用预设/ }).count(), 1);
+  await menu.getByRole('menuitem', { name: '使用预设 983 PHP', exact: true }).press('Enter');
+  assert.equal(await paidAmount.inputValue(), '983');
+  assert(!(await form.getByRole('checkbox', { name: '代付已确认' }).isChecked()));
+  await form.locator('#commerce-paidCurrency').selectOption('CLP');
+  menu = await openAmount('paid');
+  assert(await menu.getByRole('menuitem', { name: '当前币种暂无预设金额', exact: true }).isDisabled());
+  await menu.getByRole('menuitem', { name: '手动填写', exact: true }).click();
+  assert(await paidAmount.evaluate(node => node === document.activeElement));
+  await paidAmount.fill('10.0123');
+  assert.equal(await paidAmount.inputValue(), '10.0123');
+  await form.locator('#commerce-paidCurrency').selectOption('PHP');
+  await form.locator('#commerce-saleCurrency').selectOption('USD');
+  await saleAmount.fill('188.1234');
+  menu = await openAmount('sale');
+  await menu.getByRole('menuitem', { name: '使用预设 190 USD', exact: true }).click();
+  assert.equal(await saleAmount.inputValue(), '190');
+  assert(!(await form.getByRole('checkbox', { name: '实收已确认' }).isChecked()));
+  await form.locator('#commerce-saleCurrency').selectOption('CNY');
   await form.locator('#commerce-paidAmount').fill('975.1234');
   await form.locator('#commerce-saleAmount').fill('1400');
   await form.locator('#commerce-notes').fill('查看价格时保留录单草稿');
   const draft = await form.evaluate(node => Object.fromEntries(new FormData(node)));
   await openReference('paid');
-  assert.equal(await panel.locator('tbody tr').count(), 3);
+  assert.deepEqual(await priceGroups(), [
+    ['PHP', [['Plus', '983']]],
+    ['EGP', [['Plus', '1999.1234'], ['Pro 100', '5900']]]
+  ]);
   assert.match(await panel.innerText(), /菲律宾.*PHP/s);
   assert.match(await panel.innerText(), /埃及.*EGP.*1999\.1234/s);
   assert.doesNotMatch(await panel.innerText(), /人民币|CNY|折合|汇率|预算/);
@@ -76,6 +114,7 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
   assert.deepEqual(await form.evaluate(node => Object.fromEntries(new FormData(node))), draft);
   assert(await referenceButton('paid').evaluate(node => node === document.activeElement));
   await openReference('sale');
+  assert.deepEqual(await priceGroups(), [['CNY', [['Plus', '1320']]], ['USD', [['Plus', '190']]]]);
   assert.match(await panel.innerText(), /续费售价.*1320/s);
   assert.doesNotMatch(await panel.innerText(), /1680/);
   await page.keyboard.press('Escape');
@@ -86,6 +125,9 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
   assert.match(await panel.innerText(), /成品号售价.*1680/s);
   assert.doesNotMatch(await panel.innerText(), /1320/);
   await closeReference();
+  menu = await openAmount('sale');
+  assert(await menu.getByRole('menuitem', { name: '使用预设 1680 CNY', exact: true }).isVisible());
+  await page.keyboard.press('Escape');
   fixture.settings.data.stockOrderPrices.GPT.Plus.CNY = '1780';
   await openReference('sale');
   assert.match(await panel.innerText(), /1780/, '重开读取已保存的新价格');
@@ -127,6 +169,11 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
   await page.goto(origin + '/#/workspace/order/claude');
   releaseSettings();
   await page.waitForFunction(() => document.querySelector('#commerce-product')?.value === 'Claude Pro');
+  await form.and(page.locator('[data-price-reference-status="ready"]')).waitFor();
+  await form.locator('#commerce-paidCurrency').selectOption('MYR');
+  menu = await openAmount('paid');
+  await menu.getByRole('menuitem', { name: '使用预设 88 MYR', exact: true }).click();
+  assert.equal(await paidAmount.inputValue(), '88');
   await openReference('paid');
   assert.match(await panel.innerText(), /88/);
   assert.doesNotMatch(await panel.innerText(), /983|1999/);
@@ -140,6 +187,27 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
   await page.locator('#commerce-search').fill('manual-shortcuts@example.test');
   await page.locator('[data-action="commerce-order-edit"][data-id="manual-shortcuts"]').click();
   const editor = page.locator('#drawer[open] #commerce-order-form');
+  const editorPaid = editor.locator('#commerce-paidAmount'), editorSale = editor.locator('#commerce-saleAmount');
+  const reason = editor.locator('#commerce-correctionReason');
+  await editor.and(page.locator('[data-price-reference-status="ready"]')).waitFor();
+  assert.equal(await editorPaid.inputValue(), '975.1000', '打开旧单先显示历史原金额');
+  assert.equal(await editorSale.inputValue(), '1200');
+  assert.equal(await reason.inputValue(), '修改错误', '新更正不沿用上一次的原因');
+  await editor.locator('#commerce-paidCurrency').selectOption('EGP');
+  assert.equal(await editorPaid.inputValue(), '975.1000');
+  menu = await openAmount('paid', editor);
+  await menu.getByRole('menuitem', { name: '使用预设 1999.1234 EGP', exact: true }).click();
+  assert.equal(await editorPaid.inputValue(), '1999.1234');
+  menu = await openAmount('sale', editor);
+  await menu.getByRole('menuitem', { name: '使用预设 1320 CNY', exact: true }).click();
+  assert.equal(await editorSale.inputValue(), '1320');
+  menu = await openAmount('sale', editor);
+  await page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'hidden' });
+  assert(await editor.isVisible(), '关闭金额下拉时保留订单抽屉');
+  assert(await amountButton('sale', editor).evaluate(node => node === document.activeElement));
+  await editorSale.fill('1311.0123');
+  await reason.fill('核对客户实际收款后修正');
   await editor.locator('#commerce-notes').fill('编辑旧单的未保存内容');
   const oldDraft = await editor.evaluate(node => Object.fromEntries(new FormData(node)));
   await openReference('sale', editor);
@@ -154,6 +222,9 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
   assert.equal(await editor.locator('[data-action="commerce-order-start-shortcut"]').count(), 0,
     '自动入单的只读订阅时间不能通过快捷操作修改');
   assert.equal(await editor.locator('#commerce-start').getAttribute('readonly'), '');
+  assert.equal(await editorPaid.getAttribute('readonly'), '');
+  assert.equal(await amountButton('paid', editor).count(), 0);
+  assert(await amountButton('sale', editor).isVisible());
   await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
 
   const output = fileURLToPath(new URL('../.runtime/order-price-shortcuts-20261110/', import.meta.url));
@@ -179,6 +250,17 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
           }) };
       }));
       assert(geometry.every(row => row.rightAligned && row.separated && row.contained), JSON.stringify({ width, dark, product, geometry }));
+      const amountGeometry = await form.locator('.order-amount-picker').evaluateAll(nodes => nodes.every(node => {
+        const field = node.closest('.field').getBoundingClientRect();
+        const label = node.closest('.field').querySelector('label').getBoundingClientRect();
+        const input = node.querySelector('input').getBoundingClientRect();
+        const button = node.querySelector('button').getBoundingClientRect();
+        const minimum = innerWidth <= 900 ? 44 : 36;
+        return label.right <= input.left && input.width >= 60 && input.right < button.left &&
+          input.top === button.top && input.height === button.height && button.right <= field.right + 1 &&
+          button.width >= minimum && button.height >= minimum;
+      }));
+      assert(amountGeometry, `${width} ${dark ? '深色' : '浅色'} ${product} 金额与下拉同排且可操作`);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${width} ${product} 横向溢出`);
       if (product === 'gpt' && ((width === 1920 && !dark) || (width === 390 && dark))) {
         await form.locator('.order-financial-groups').screenshot({ path: output + `order-actions-${width}-${dark ? 'dark' : 'light'}.png` });
@@ -188,7 +270,7 @@ test('录单价格只读抽屉和按点击时间倒推的订阅快捷操作', { 
       }
     }
   }
-  assert.deepEqual(writes, [], '查看价格和设置时间都不提交业务数据或配置');
+  assert.deepEqual(writes, [], '查看、选择金额和设置时间均在订单草稿中操作');
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
 });

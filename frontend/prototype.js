@@ -77,7 +77,7 @@ function closeActionMenu(restoreFocus = false) {
   current.anchor.removeAttribute('aria-controls');
   if (restoreFocus && current.anchor.isConnected) current.anchor.focus({ preventScroll: true });
 }
-function openActionMenu(anchor, actions) {
+function openActionMenu(anchor, actions, { label = '更多操作', onSelect } = {}) {
   anchor = actionMenuInvokers.get(anchor) || anchor;
   const toggle = activeActionMenu?.anchor === anchor;
   closeActionMenu();
@@ -87,7 +87,7 @@ function openActionMenu(anchor, actions) {
   menu.className = 'row-action-menu';
   menu.setAttribute('popover', 'auto');
   menu.setAttribute('role', 'menu');
-  menu.setAttribute('aria-label', '更多操作');
+  menu.setAttribute('aria-label', label);
   menu.innerHTML = actions;
   // 复用原操作按钮及禁用条件，去掉中转面板的分组和说明。
   menu.replaceChildren(...$$('button[data-action]', menu));
@@ -113,7 +113,13 @@ function openActionMenu(anchor, actions) {
     if (event.newState === 'closed' && activeActionMenu?.menu === menu) closeActionMenu();
   });
   menu.addEventListener('click', event => {
-    if (event.target.closest('button:not(:disabled)')) closeActionMenu();
+    const choice = event.target.closest('button:not(:disabled)');
+    if (!choice) return;
+    closeActionMenu();
+    if (onSelect) {
+      event.stopPropagation();
+      onSelect(choice);
+    }
   });
   menu.addEventListener('keydown', event => {
     if (event.key === 'Escape' || event.key === 'Tab') {
@@ -500,13 +506,13 @@ function getSelection(scope) {
   if (!state.selections.has(scope)) state.selections.set(scope, new Set());
   return state.selections.get(scope);
 }
-function setError(name, message) {
-  const node = $(`#${name}-error`);
+function setError(name, message, root = document) {
+  const node = $(`#${name}-error`, root);
   if (node) {
     node.textContent = message;
     node.hidden = !message;
   }
-  const control = document.getElementById(name);
+  const control = $(`#${name}`, root);
   if (control) {
     control.setAttribute('aria-invalid', String(Boolean(message)));
     control.setAttribute('aria-describedby', `${name}-error`);

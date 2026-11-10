@@ -11,6 +11,9 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
   fixture.inventory.data.mailboxes = [];
   const parent = fixture.inventory.data.appleRelay.parents[0]; parent.hasCredential = true;
   fixture.inventory.data.appleRelay.parents = [parent];
+  const batchId = 'relay-import-12345678-0000-4000-8000-0dfa65632365';
+  const batchCode = 'dfa65632365';
+  const registrationTime = '2026-11-08 12:00';
   const requests = await interceptDesign(context, { localFixtures: fixture, actor: { id: 'admin', name: '合成管理员', role: 'admin' } });
   await context.route(origin + '/api/local/apple-relay/status', route => route.fulfill({ json: { configured: true, parentIds: [parent.id], aliasIds: [] } }));
   const writes = [], errors = []; let fail = true;
@@ -18,7 +21,15 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
     const command = route.request().postDataJSON(); writes.push(command);
     if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: '合成登记失败，请重试' } }); }
     const rows = command.rows.map((row, i) => ({ id: `relay-${writes.length}-${i}`, type: 'relay', email: row.email, notes: row.note, parentMailboxId: parent.id,
-      relayStatus: 'ACTIVE', health: 'normal', status: '正常', inventoryState: 'available', usageLinks: [], inventoryHistory: [], version: 1, createdAt: '2026-11-08 12:00' }));
+      relayStatus: 'ACTIVE', health: 'normal', status: '正常', inventoryState: 'available', usageLinks: [], inventoryHistory: [], version: 1,
+      createdAt: registrationTime, createdById: 'admin', importId: command.batch ? batchId : '' }));
+    if (command.batch) {
+      fixture.inventory.data.appleRelay.imports.push({
+        id: batchId, type: 'relay', types: ['relay'], parentId: parent.id, time: registrationTime,
+        actor: '合成管理员', total: rows.length, success: rows.length, failed: 0, status: '已登记',
+        results: rows.map((row, index) => ({ id: row.id, line: index + 1, email: row.email, assetId: row.id, note: row.notes }))
+      });
+    }
     fixture.inventory.data.mailboxes.push(...rows); fixture.inventory.version++;
     return route.fulfill({ json: { inventory: fixture.inventory, registered: rows.length } });
   });
@@ -57,10 +68,44 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
   assert.equal(writes[2].batch, true);
   assert.equal(writes[2].rows.length, 1);
   assert.equal(await page.locator('#main [data-action="relay-primary-manage"]').count(), 0, '快捷入口不增加主邮箱管理功能');
+  const close = () => drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  await page.getByRole('button', { name: '全部导入', exact: true }).click();
+  const importRow = drawer.locator(`tr[data-row-id="${batchId}"]`);
+  assert.equal(await importRow.locator('td[data-column="id"]').innerText(), batchCode);
+  await importRow.getByRole('button', { name: '详情', exact: true }).click();
+  await drawer.getByText(batchCode, { exact: true }).waitFor();
+  await drawer.getByText('batch@example.test', { exact: true }).waitFor();
+  await close();
+
+  await page.evaluate(() => window.IDDesignAPI.go('mailboxes/relay'));
+  const table = page.locator('table[data-table="relay-aliases"]');
+  const aliasRow = table.locator('tbody tr').filter({ hasText: 'batch@example.test' });
+  const source = aliasRow.locator('td[data-column="importId"]');
+  assert.equal(await source.innerText(), batchCode);
+  assert.equal(await table.locator('tbody tr').filter({ hasText: 'single@example.test' })
+    .locator('td[data-column="importId"]').innerText(), '单条登记');
+  const search = page.locator('#relay-search');
+  for (const number of [batchCode, batchId]) {
+    await search.fill(number);
+    assert.equal(await table.locator('tbody tr[data-row-id]').count(), 1);
+    assert.equal(await aliasRow.count(), 1);
+  }
+  await source.getByRole('button', { name: '查看来源导入批次完整内容' }).click();
+  assert.equal(await drawer.locator('#table-cell-full-value').inputValue(), batchId);
+  await close();
+  await aliasRow.getByRole('button', { name: '详情', exact: true }).click();
+  await drawer.getByText(batchCode, { exact: true }).waitFor();
+  await close();
   for (const width of [1440, 390, 320]) for (const theme of ['light', 'dark']) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme); await settle(page);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    assert(await source.locator('.table-value-ellipsis').evaluate(node => node.scrollWidth <= node.clientWidth + 1));
   }
+  await page.getByRole('tab', { name: '导入记录', exact: true }).click();
+  const imports = page.locator('table[data-table="relay-imports"]');
+  assert.equal(await imports.locator('td[data-column="id"]').innerText(), batchCode);
+  await imports.getByRole('button', { name: '详情', exact: true }).click();
+  await drawer.getByText(batchCode, { exact: true }).waitFor();
   assert.deepEqual(errors, []); assert.deepEqual(requests.external, []); assert.deepEqual(requests.unavailable, []);
 });

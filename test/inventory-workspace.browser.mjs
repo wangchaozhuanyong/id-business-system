@@ -86,7 +86,7 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     assert.equal(await page.locator('#sidebar a[href="#/workspace/' + kind + '-submit"]').count(), 0);
     assert.equal(await page.locator('#sidebar a[href="#/workspace/' + kind + '-extract"][aria-current="page"]').count(), 1);
     assert.equal(await page.locator('h1').count(), 1);
-    assert.equal(await page.locator('.inventory-submission-panel [data-action="inventory-add-type"]').count(), kind === 'account' ? 5 : 2);
+    assert.equal(await page.locator('.inventory-submission-panel [data-action="inventory-add-type"]').count(), kind === 'account' ? 5 : 3);
     assert.equal(await page.locator('.inventory-submission-panel .inventory-workspace-records > li').count(), 5);
     assert.equal(await page.locator('.inventory-extraction-panel .inventory-workspace-records > li').count(), 5);
     for (const width of [1920, 1680, 1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
@@ -105,7 +105,7 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     await page.locator('.title-description:popover-open').waitFor();
     assert.deepEqual(await notes.boundingBox(), position, '说明不推动表单');
     await page.keyboard.press('Escape');
-    for (const type of kind === 'account' ? ['gpt', 'claude', 'gemini', 'grok', 'apple'] : ['google', 'relay']) {
+    for (const type of kind === 'account' ? ['gpt', 'claude', 'gemini', 'grok', 'apple'] : ['google', 'relay', 'microsoft']) {
       await page.locator(`[data-action="inventory-add-type"][data-type="${type}"]`).click();
       await page.locator('#drawer[open]').waitFor();
       const email = page.locator(type === 'relay' ? '#relay-email' : '#inventory-email');

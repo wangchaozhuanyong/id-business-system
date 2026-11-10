@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderCurrencySettings } from './order-currency-settings.mjs';
+import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import {
   applyOrderCompletion, OrderCompletionError, readOrderCompletion, rechargePriceSnapshot, requireCompletionActor
@@ -59,7 +59,7 @@ import {
   assignOrderOwner, assignTenantOwner, checkAppleOrder, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee,
   isClaudeProBankMaterials, nextOrderNo, normalizeClaudeProMaterials, redactClaudeProOrderMaterials,
-  validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices
+  validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices
 } from './order-policy.mjs';
 import {
   pendingRelayClaimIds,
@@ -122,7 +122,8 @@ const settingsActions = {
   order_prices_save: '保存订单套餐售价',
   order_currencies_save: '保存订单币种设置',
   gpt_paid_prices_save: '保存 GPT 代付价格',
-  claude_paid_prices_save: '保存 Claude 代付价格'
+  claude_paid_prices_save: '保存 Claude 代付价格',
+  personal_paid_prices_save: '保存 Gemini／Grok 代付价格'
 };
 const appleBalanceActions = {
   apple_order_charge: '登记苹果内购扣款或冲正',
@@ -623,6 +624,8 @@ function checkWrite(entry) {
     throw new LocalDataError(400, 'GPT 代付价格格式不正确');
   if (domain === 'settings' && 'claudePaidPrices' in data && !validClaudePaidPrices(data.claudePaidPrices))
     throw new LocalDataError(400, 'Claude 代付价格格式不正确');
+  if (domain === 'settings' && 'personalPaidPrices' in data && !validPersonalPaidPrices(data.personalPaidPrices))
+    throw new LocalDataError(400, 'Gemini／Grok 代付价格格式不正确');
   if (domain === 'settings' && (('orderCurrencies' in data && !validOrderCurrencies(data.orderCurrencies)) ||
       ('orderCurrenciesByProduct' in data && !validOrderCurrencyGroups(data.orderCurrenciesByProduct))))
     throw new LocalDataError(400, '订单币种设置格式不正确');
@@ -1433,7 +1436,7 @@ export function createLocalBusinessStore(databasePath) {
         const settings = writes.find(({ domain }) => domain === 'settings');
         if (settings) {
           const savedSettings = current('settings');
-          settings.data = retainOrderCurrencySettings(settings.data, savedSettings);
+          settings.data = retainOrderSettings(settings.data, savedSettings);
           for (const key of ['customerTags', 'customerSources', 'orderPrices', 'stockOrderPrices', 'gptPaidPrices', 'claudePaidPrices']) {
             if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };

@@ -226,9 +226,15 @@ export function validGptPaidPrices(prices) {
   return validOrderPrices({ GPT: prices }) && paidPriceCurrenciesValid(prices);
 }
 
+const validGroupedPaidPrices = (prices, acceptsProduct) =>
+  validOrderPrices(prices) && Object.keys(prices).every(acceptsProduct) && Object.values(prices).every(paidPriceCurrenciesValid);
+
 export function validClaudePaidPrices(prices) {
-  return validOrderPrices(prices) && Object.keys(prices).every(product => ['Claude Pro', 'Claude Max'].includes(product)) &&
-    Object.values(prices).every(paidPriceCurrenciesValid);
+  return validGroupedPaidPrices(prices, product => product === 'Claude Pro' || product === 'Claude Max');
+}
+
+export function validPersonalPaidPrices(prices) {
+  return validGroupedPaidPrices(prices, personalProduct);
 }
 
 export function nextOrderNo(orders) {
