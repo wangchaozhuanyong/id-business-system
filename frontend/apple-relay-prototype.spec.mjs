@@ -95,6 +95,7 @@ function runtime(store, { relayConfigured = true } = {}) {
     esc,
     icon: () => '',
     titleInfo: () => '',
+    operatorIdProperty: (label, id) => `<div>${esc(label)} ${esc(id || '历史未记录')}</div>`,
     tag: esc,
     header: (_title, _help, actions = '') => actions,
     summary: () => '',

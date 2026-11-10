@@ -28,6 +28,35 @@
   const returnRecords = [];
   const importRecords = [];
   const registrationRecords = [];
+  const registrationPlatforms = [
+    ['gpt', 'ChatGPT'], ['claude', 'Claude'], ['gemini', 'Gemini'], ['grok', 'Grok'], ['apple', 'Apple ID']
+  ];
+  const actualUsePurposes = ['注册 GPT', ...registrationPlatforms.slice(1).map(([, label]) => `注册 ${label}`), '客户交付', '其他'];
+  const mailboxType = type => ['google', 'relay', 'microsoft'].includes(type);
+  function registrationProduct(value) {
+    const key = String(value || '').trim().toLowerCase();
+    return ({ chatgpt: 'gpt', codex: 'gpt', 'apple id': 'apple' })[key] || key;
+  }
+  function mailboxPlatforms(asset) {
+    const found = new Set();
+    const add = value => {
+      const key = registrationProduct(value);
+      if (registrationPlatforms.some(([id]) => id === key)) found.add(key);
+    };
+    for (const record of registrationRecords)
+      if (record.assetId === asset.id && record.state === '成功') add(record.product);
+    for (const link of asset.usageLinks || []) {
+      if (!['registration', 'manual-use'].includes(link.kind)) continue;
+      add(link.product);
+      if (link.kind === 'registration' && link.accountId)
+        add(accounts.find(account => account.id === link.accountId)?.type);
+    }
+    return registrationPlatforms.filter(([id]) => found.has(id));
+  }
+  function mailboxPlatformLabel(asset) {
+    return mailboxPlatforms(asset).map(([, label]) => label).join('、') ||
+      (asset.inventoryState === 'used' ? '平台未登记' : '未登记');
+  }
   const views = new Map();
   const undo = new Map();
   const reservations = new Map();
@@ -1033,7 +1062,7 @@
             ? asset.health === v.tab
             : (v.tab === 'used' || asset.health === 'normal') && asset.inventoryState === v.tab) &&
           (!v.query ||
-            `${displayIdentity(asset)} ${asset.email || ''} ${asset.notes || ''} ${asset.purpose || ''} ${microsoft ? asset.auxiliary || '' : ''}`
+            `${displayIdentity(asset)} ${asset.email || ''} ${asset.notes || ''} ${asset.purpose || ''} ${kind === 'mail' ? mailboxPlatformLabel(asset) : ''} ${microsoft ? asset.auxiliary || '' : ''}`
               .toLowerCase()
               .includes(v.query.toLowerCase())) &&
           (!v.country || asset.country === v.country) &&
@@ -1064,6 +1093,8 @@
           render: (asset) =>
             textAction(displayIdentity(asset), 'inventory-detail', `data-id="${esc(asset.id)}" data-table-value-preview`, 'table-value-ellipsis')
         },
+        ...(mailboxType(type) ? [{ id: 'registrationPlatform', label: '注册平台',
+          render: asset => esc(mailboxPlatformLabel(asset)) }] : []),
         ...(kind === 'account' ? [{ id: 'businessOwner', label: '归属人',
           render: asset => esc(accountSummaries.get(asset.id)?.businessOwner?.name || '待核对') }] : []),
         ...(type === 'claude' && assets.some(asset => asset.claudeHistory) ? [
@@ -1695,7 +1726,7 @@
     showDrawer(
       '登记实际使用',
       '确认后资料永久退出通用可提取库存。同一邮箱不可再提取注册其他产品。',
-      `<form id="inventory-use-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-use-ids" value="${esc(eligible.map(({ item }) => item.id).join(','))}" /><div class="form-grid">${field('实际用途', 'inventory-use-purpose', select('inventory-use-purpose', ['注册 GPT', '注册 Claude', '客户交付', '其他'], saved['inventory-use-purpose']), true)}${wide('使用结果', 'inventory-use-result', area('inventory-use-result', saved['inventory-use-result'] || '', '记录平台、关联账号或订单说明'), true)}</div></form>`,
+      `<form id="inventory-use-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-use-ids" value="${esc(eligible.map(({ item }) => item.id).join(','))}" /><div class="form-grid">${field('实际用途', 'inventory-use-purpose', select('inventory-use-purpose', actualUsePurposes, saved['inventory-use-purpose']), true)}${wide('使用结果', 'inventory-use-result', area('inventory-use-result', saved['inventory-use-result'] || '', '记录平台、关联账号或订单说明'), true)}</div></form>`,
       button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-use-form" type="submit">核对使用结果</button>',
       key
@@ -2084,6 +2115,47 @@
   function usageAssetById(id) {
     return assetById(id) || (admin() && mailboxes.find((row) => row.type === 'relay' && row.id === id));
   }
+  function mailboxPlatformButton(asset) {
+    return mailboxType(asset?.type) && asset.inventoryState === 'used' && (!localData || admin())
+      ? button('标记注册平台', 'inventory-mailbox-platform', '', 'edit', `data-id="${esc(asset.id)}"`)
+      : '';
+  }
+  function openMailboxPlatform(id) {
+    const asset = usageAssetById(id);
+    if (!mailboxPlatformButton(asset)) return;
+    const known = new Set(mailboxPlatforms(asset).map(([key]) => key));
+    const choices = registrationPlatforms.filter(([key]) => !known.has(key));
+    if (!choices.length) { api.notify('该邮箱的可选平台均已登记'); return; }
+    const key = `inventory-mailbox-platform:${id}`;
+    const saved = draft(key);
+    showDrawer('标记注册平台', '补录已核实的平台注册用途；保留原使用时间、领用批次和已有标记。',
+      `<form id="inventory-mailbox-platform-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-platform-asset" value="${esc(id)}" /><input type="hidden" name="inventory-platform-version" value="${esc(saved['inventory-platform-version'] ?? asset.version)}" /><div class="form-grid">${wide('邮箱账号', 'inventory-platform-email', input('inventory-platform-email', asset.email, 'readonly'))}${field('已登记平台', 'inventory-platform-known', input('inventory-platform-known', mailboxPlatformLabel(asset), 'readonly'))}${field('注册平台', 'inventory-platform-product', select('inventory-platform-product', [['', '请选择已注册平台'], ...choices], saved['inventory-platform-product'] || ''), true)}</div></form>`,
+      button('取消', 'inventory-close') +
+        (saved['inventory-platform-version'] && Number(saved['inventory-platform-version']) !== asset.version
+          ? button('重新核对当前记录', 'inventory-platform-review', '', '', `data-id="${esc(id)}"`) : '') +
+        '<button class="button primary" form="inventory-mailbox-platform-form" type="submit">保存标记</button>', key);
+  }
+  function submitMailboxPlatform(form) {
+    const data = api.readForm(form);
+    const id = data['inventory-platform-asset'];
+    const product = data['inventory-platform-product'];
+    const choice = registrationPlatforms.find(([key]) => key === product);
+    if (!choice) { api.setError('inventory-platform-product', '请选择已核实的注册平台'); return; }
+    const version = Number(data['inventory-platform-version']);
+    const eligible = () => {
+      const asset = usageAssetById(id);
+      return asset && mailboxPlatformButton(asset) && asset.version === version &&
+        !mailboxPlatforms(asset).some(([key]) => key === product) ? asset : null;
+    };
+    if (!eligible()) { api.notify('邮箱或平台标记已变化，请重新核对；输入已保留'); return; }
+    confirmInventoryChange('确认登记注册结果', `确认此邮箱已注册 ${choice[1]}，保存后保留原有使用记录。`, () => {
+      const asset = eligible();
+      if (!asset) { api.notify('确认期间邮箱已变化，请重新核对'); return; }
+      asset.usageLinks.push({ kind: 'registration', product, label: `人工登记 · 已注册 ${choice[1]}`, time: inventoryNow() });
+      log(asset, '标记注册平台', choice[1]);
+      return () => { finishDrawer(form.dataset.inventoryDraft); api.render(); api.notify('注册平台已保存'); };
+    });
+  }
   function personalRegistrationButtons(asset) {
     if ((!admin() && localData) || !asset || !['google', 'relay'].includes(asset.type)) return '';
     return ['gemini', 'grok'].filter(type => personalSourceMailboxes(type).some(row => row.id === asset.id))
@@ -2306,12 +2378,13 @@
         '使用状态',
         accountSummaries.get(asset.id)?.label || { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[asset.inventoryState]
       ],
+      ...(mailboxType(asset.type) ? [['注册平台', mailboxPlatformLabel(asset)]] : []),
       ['注册时间', registrationTime(asset) || '未提供'],
       ['录入人', asset.createdBy || '历史未记录'],
-      ['录入人编号', asset.createdById || '历史未记录'],
+      ['录入人编号', asset.createdById, 'operatorId'],
       ['录入时间', asset.createdAt || '历史未记录'],
       ['最近操作人', asset.lastOperatedBy || '历史未记录'],
-      ['最近操作人编号', asset.lastOperatedById || '历史未记录'],
+      ['最近操作人编号', asset.lastOperatedById, 'operatorId'],
       ['最近操作时间', asset.lastOperatedAt || '历史未记录'],
       ['登录设备', asset.device || '未填写'],
       ['备注 1', asset.notes || '未填写'],
@@ -2379,11 +2452,16 @@
           )
           .join('')}</ul>`
       : empty('暂无操作记录', '新增、修改、提取和归还都会记录。');
+    const properties = rows.map(([name, value, kind]) =>
+      kind === 'operatorId'
+        ? api.operatorIdProperty(name, value)
+        : `<div class="property-row"><span>${esc(name)}</span><strong>${name === '绑定电话／验证码' ? phoneValue(value) : esc(value)}</strong></div>`
+    ).join('');
     showDrawer(
       '资料详情',
       '资料、提取、实际使用、归还和任务来源保持关联。',
-      `<div class="property-list">${rows.map(([name, value]) => `<div class="property-row"><span>${esc(name)}</span><strong>${name === '绑定电话／验证码' ? phoneValue(value) : esc(value)}</strong></div>`).join('')}</div>${source ? button('查看来源邮箱', 'inventory-detail', '', 'mail', `data-id="${esc(source.id)}"`) : ''}${recoveryMailbox ? button('查看辅助邮箱资料', 'inventory-detail', '', 'mail', `data-id="${esc(recoveryMailbox.id)}"`) : ''}${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
-      button('关闭', 'inventory-close') + personalRegistrationButtons(asset)
+      `<div class="property-list">${properties}</div>${source ? button('查看来源邮箱', 'inventory-detail', '', 'mail', `data-id="${esc(source.id)}"`) : ''}${recoveryMailbox ? button('查看辅助邮箱资料', 'inventory-detail', '', 'mail', `data-id="${esc(recoveryMailbox.id)}"`) : ''}${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
+      button('关闭', 'inventory-close') + mailboxPlatformButton(asset) + personalRegistrationButtons(asset)
     );
   }
   function assetMore(id, node) {
@@ -2391,7 +2469,7 @@
     if (!asset) return;
     const ownershipAction = stockType(asset.type) && localData && admin()
       ? button('设置归属人', 'inventory-account-owner', '', '', `data-id="${esc(id)}"`) : '';
-    api.openActionMenu(node, ownershipAction + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
+    api.openActionMenu(node, mailboxPlatformButton(asset) + ownershipAction + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
   function submissionPanel(accountEntry = false) {
     const choices = accountEntry ? accountSubmissionTypes : mailboxSubmissionTypes();
@@ -3762,6 +3840,10 @@
   function submitUse(form) {
     const d = api.readForm(form),
       claims = d['inventory-use-ids'].split(',').map(claimById).filter(Boolean);
+    if (!actualUsePurposes.includes(d['inventory-use-purpose'])) {
+      api.setError('inventory-use-purpose', '请选择有效的实际用途');
+      return;
+    }
     if (!d['inventory-use-result'].trim()) {
       api.setError('inventory-use-result', '请记录实际使用结果');
       return;
@@ -3781,6 +3863,8 @@
         for (const { item } of claims)
           consume(assetById(item.assetId), item, {
             kind: 'manual-use',
+            ...(mailboxType(assetById(item.assetId)?.type) && /^注册 /.test(d['inventory-use-purpose'])
+              ? { product: registrationProduct(d['inventory-use-purpose'].slice(3)) } : {}),
             label: `${d['inventory-use-purpose']} · ${d['inventory-use-result']}`
           });
         return () => {
@@ -4201,6 +4285,15 @@
           [],
           false
         );
+    } else if (action === 'inventory-mailbox-platform') {
+      openMailboxPlatform(id);
+    } else if (action === 'inventory-platform-review') {
+      saveDrafts();
+      const key = `inventory-mailbox-platform:${id}`;
+      const saved = draft(key);
+      delete saved['inventory-platform-version'];
+      api.state.drafts.set(key, saved);
+      openMailboxPlatform(id);
     } else if (action === 'inventory-usage-correction') {
       openUsageCorrection(id, Number(node.dataset.index));
     } else if (action === 'inventory-usage-review') {
@@ -4481,6 +4574,7 @@
     else if (form.id === 'inventory-usage-correction-form') submitUsageCorrection(form);
     else if (form.id === 'inventory-return-form') submitReturn(form);
     else if (form.id === 'inventory-use-form') submitUse(form);
+    else if (form.id === 'inventory-mailbox-platform-form') submitMailboxPlatform(form);
     else if (form.id === 'inventory-asset-form') saveAsset(form);
     else if (form.id === claudeHistoryKey + '-form') submitClaudeHistory(form);
     else if (form.id === 'inventory-import-form') submitImport(form);
@@ -4655,6 +4749,7 @@
             consume(asset, found.item, {
               kind: 'registration',
               registrationId: record.id,
+              product: data['inventory-registration-product'],
               label: `已登记 ${record.product} 外部注册成功；账号资料需独立录入`
             });
           } else if (record.state === '待核对') {
@@ -4682,6 +4777,11 @@
     return true;
   }
   function onChange(node) {
+    if (node.id === 'inventory-platform-product') {
+      api.setError(node.id, '');
+      saveDrafts();
+      return true;
+    }
     if (node.id === 'inventory-sourceMailboxId') {
       const mailbox = assetById(node.value);
       const email = document.getElementById('inventory-email');
@@ -4888,6 +4988,8 @@
         return () => {};
       });
     },
+    mailboxPlatformLabel,
+    mailboxPlatformButton,
     registrationRecordsFor(assetId) {
       return registrationRecords
         .filter((record) => record.assetId === assetId)

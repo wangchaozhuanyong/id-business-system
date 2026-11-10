@@ -46,13 +46,15 @@ test('dense lists retain pagination and drawer controls within their visible bou
           if (!x.getClientRects().length) return false;
           const r = x.getBoundingClientRect(); return r.left < outer.left || r.right > outer.right;
         }).map(x => x.getAttribute('aria-label') || x.textContent.trim());
+        const viewport = document.querySelector('#main .table-viewport');
         return { outerWidth: outer.width, controlsWidth: bounds.width, controlsOutside: bounds.left < outer.left || bounds.right > outer.right,
           outside, page: Number(n.dataset.page),
           activeClipped: !!strip?.width && (active.left < strip.left - 1 || active.right > strip.right + 1),
           pages: Math.max(1, Math.ceil(Number(n.dataset.total) / Number(n.dataset.pageSize))),
           numericButtons: n.querySelectorAll('.pagination-pages button').length,
           pageOverflow: document.documentElement.scrollWidth > innerWidth,
-          tableHeight: document.querySelector('#main .table-viewport')?.getBoundingClientRect().height };
+          tableHeight: viewport?.getBoundingClientRect().height,
+          tableScrollsVertically: viewport && viewport.scrollHeight > viewport.clientHeight + 1 };
       });
       try {
         await page.goto(origin + '/#/customers/list');
@@ -87,7 +89,12 @@ test('dense lists retain pagination and drawer controls within their visible bou
           const last = await inspect();
           assert.equal(last.page, lastPage);
           assert(!last.controlsOutside && !last.outside.length && !last.pageOverflow && !last.activeClipped, `${route}: ${JSON.stringify(last)}`);
-          assert(Math.abs(last.tableHeight - first.tableHeight) <= 1, `${route}: 末页表格突然缩小`);
+          if (width > 900) {
+            assert(Math.abs(last.tableHeight - first.tableHeight) <= 1, `${route}: 末页表格突然缩小`);
+          } else {
+            assert(!first.tableScrollsVertically && !last.tableScrollsVertically, `${route}: 窄屏表格应随页面纵向滚动`);
+            assert(last.tableHeight >= Math.min(first.tableHeight, 900) - 1, `${route}: 窄屏末页未保留列表阅读区`);
+          }
           if (route === 'customers/list') {
             await page.locator('#main .pagination button[aria-label="上一页"]').press('Enter');
             await settle();

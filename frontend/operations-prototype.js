@@ -747,6 +747,7 @@
       if (preserveLockedRecharge(view)) return;
       revealRechargeFrame(view, frame, request, event.data.height, event.data.description);
     } else if (event.data.type === 'view-context' && !frame.hidden) {
+      resizeRechargeFrame(frame, event.data.height);
       frame.dataset.description = event.data.description || '';
       updateRechargeDescription(event.data.description);
     } else if (event.data.type === 'navigation-lock' && event.data.locked && request) {
@@ -770,9 +771,8 @@
   }
   function resizeRechargeFrame(frame, height) {
     if (!Number.isFinite(height) || height <= 0) return;
-    const nextHeight = frame.dataset.viewGroup === 'bit'
-      ? `${Math.min(1600, Math.max(360, Math.ceil(height)))}px`
-      : `${Math.max(290, Math.ceil(height))}px`;
+    const minimum = frame.dataset.viewGroup === 'bit' ? 360 : 290;
+    const nextHeight = `${Math.max(minimum, Math.ceil(height))}px`;
     if (frame.style.height !== nextHeight) frame.style.height = nextHeight;
     frame.dataset.measuredHeight = String(height);
     positionRechargeOverlays();

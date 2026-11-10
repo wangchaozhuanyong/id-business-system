@@ -36,7 +36,14 @@ test('recharge transitions keep content and geometry through delayed, superseded
       // The offline host has no auth service; retain the 401 entry action without a local server.
       if (offline) await page.addInitScript(() => { window.IDLocalAuth = { getState: () => ({ status: 'signed-in' }), lock() {} }; });
       const fixtureActor = { id: '11111111-1111-4111-8111-111111111111', name: '离线验收管理员', role: 'super' };
-      const offlineFixture = offline ? await interceptDesign(page.context(), { actor: fixtureActor, localFixtures: { 'auth/session': { configured: true, actor: fixtureActor }, 'bitbrowser-addresses': { items: [], total: 0, totals: { unused: 0, used: 0, disabled: 0 }, page: 1, pageSize: 20 } } }) : null;
+      const offlineFixture = offline ? await interceptDesign(page.context(), { actor: fixtureActor, localFixtures: {
+        'auth/session': { configured: true, actor: fixtureActor },
+        'bitbrowser-addresses': { items: [], total: 0, totals: { unused: 0, used: 0, disabled: 0 }, page: 1, pageSize: 20 },
+        'bitbrowser-proxies': { version: 1, items: Array.from({ length: 51 }, (_, index) => ({
+          id: `sample-ip-${index}`, name: `离线 IP 样例 ${index + 1}`, endpoint: 'proxy.example.test',
+          countryCode: 'US', kind: 'static_residential', protocol: 'http', mode: 'fixed'
+        })) }
+      } }) : null;
       if (!offline) await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
         ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
       const frameSelector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
@@ -239,6 +246,20 @@ test('recharge transitions keep content and geometry through delayed, superseded
         }
         assert.deepEqual(errors, []);
         if (output) await page.screenshot({ path: join(output, `transition-${width}-${dark ? 'dark' : 'light'}.png`) });
+        if (offline && !dark) {
+          await page.setViewportSize({ width, height: 900 });
+          const bit = page.frameLocator(bitSelector);
+          await bit.getByRole('tab', { name: /IP 资料库/ }).click();
+          await bit.locator('nav[data-total="51"] [data-pagination-size]').selectOption('50');
+          await page.waitForFunction(selector => {
+            const frame = document.querySelector(selector);
+            const doc = frame?.contentDocument;
+            return doc?.querySelectorAll('#bit-ip-rows tr').length === 50 &&
+              Math.abs(doc.body.offsetHeight - frame.clientHeight) <= 2;
+          }, bitSelector);
+          const rowsScroll = await bit.locator('.bit-local__ip-table').evaluate(node => node.scrollHeight > node.clientHeight + 1);
+          assert.equal(rowsScroll, width > 900, '桌面表格内部滚动，手机在页面上滚动');
+        }
         results.push({ width, theme: dark ? 'dark' : 'light', delayed, rapid, bitFirst, bitReturned, retainedOnFailure: true });
       } catch (error) {
         if (output) {

@@ -49,6 +49,7 @@ function runtime(localData) {
     icon: () => '',
     tag: esc,
     titleInfo: () => '',
+    operatorIdProperty: (label, id) => `<div>${esc(label)} ${esc(id || '历史未记录')}</div>`,
     header: () => '',
     summary: () => '',
     button: () => '',

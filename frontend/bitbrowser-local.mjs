@@ -797,6 +797,8 @@ document.addEventListener('close', () => void refreshLiveChoices(), true);
 get('bit-toggle-connection').addEventListener('click', () => queueMicrotask(refreshLiveChoices));
 window.addEventListener('focus', () => void refreshLiveChoices());
 
+window.IDPagination?.watchTableLayout?.(document.body, { hostFrame: window.frameElement });
+
 if (window.parent !== window) {
   document.body.classList.add('bit-local--embedded');
   const syncWorkspaceSpacing = () => {

@@ -170,10 +170,8 @@
       frame = { table, pager };
       frameHeights.set(key, frame);
     }
-    const tableHeight = frame ? `min(${frame.table}px, var(--pagination-rows-limit))` : '';
-    viewport.style.minHeight = tableHeight;
-    // A revisited page keeps the measured footer space without retaining totals or rows.
-    list.style.minHeight = frame ? `calc(${tableHeight} + ${frame.pager}px)` : '';
+    viewport.style.setProperty('--pagination-content-min-height', frame ? `${frame.table}px` : '');
+    list.style.setProperty('--pagination-frame-height', frame ? `${frame.table + frame.pager}px` : '');
   }
 
   function render() {
@@ -199,7 +197,7 @@
           <div id="claude-google-read-status" role="status" hidden></div>
           <div id="claude-google-read-error" class="panel-body" role="status" ${snapshot && listError ? '' : 'hidden'}>${snapshot && listError
             ? `<p class="inline-notice warning">${esc(listError.message)}，已保留上次读取的资料。</p>` : ''}</div>
-          <div id="claude-google-list">${renderList()}</div>
+          <div id="claude-google-list" data-pagination-table>${renderList()}</div>
         </div>
       </section>`;
   }

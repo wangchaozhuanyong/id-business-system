@@ -88,12 +88,12 @@
     if (snapshot?.product === product()) {
       const table = Math.max(frame?.table || 0, viewport.querySelector('table').getBoundingClientRect().height +
         viewport.offsetHeight - viewport.clientHeight);
-      const pager = Math.max(frame?.pager || 0, list.querySelector('.pagination')?.getBoundingClientRect().height || 0);
+      const pager = Math.max(frame?.pager || 0, list.querySelector('.pagination').getBoundingClientRect().height);
       frame = { table, pager };
       frameHeights.set(key, frame);
     }
-    viewport.style.minHeight = frame ? `${frame.table}px` : '';
-    list.style.minHeight = frame ? `${frame.table + frame.pager}px` : '';
+    viewport.style.setProperty('--pagination-content-min-height', frame ? `${frame.table}px` : '');
+    list.style.setProperty('--pagination-frame-height', frame ? `${frame.table + frame.pager}px` : '');
   }
 
   function scheduleExpiry() {
@@ -130,7 +130,7 @@
             <button class="button" type="submit">搜索</button></div>
           <div class="toolbar-right">${button('刷新', 'subscriptions-refresh')}</div>
         </form><div class="design-async-region"><div id="subscription-read-status" role="status" hidden></div>
-          <div id="subscription-read-error" role="status" hidden></div><div id="subscription-list">${listMarkup()}</div>
+          <div id="subscription-read-error" role="status" hidden></div><div id="subscription-list" data-pagination-table>${listMarkup()}</div>
         </div></section>`;
   }
 

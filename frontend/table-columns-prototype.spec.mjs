@@ -93,6 +93,7 @@ function runtime() {
     collections: { mailboxes, accounts },
     modules: {},
     esc: escape,
+    operatorIdProperty: (label, id) => `<div>${escape(label)} ${escape(id || '历史未记录')}</div>`,
     icon: () => '',
     button: (label, action, _kind, _icon, attributes = '') =>
       `<button data-action="${action}" ${attributes}>${escape(label)}</button>`,

@@ -1,15 +1,30 @@
 :root {
-  --pagination-rows-limit: min(55dvh, 34rem);
+  --pagination-rows-limit: 100dvh;
+}
+
+.table-viewport {
+  min-block-size: var(--pagination-content-min-height, 0px);
+}
+
+[data-pagination-layout='fill'] {
+  block-size: var(--pagination-rows-limit);
+  min-block-size: 0;
+}
+
+[data-pagination-layout='limit'] {
+  max-block-size: var(--pagination-rows-limit);
+  min-block-size: min(var(--pagination-content-min-height, 0px), var(--pagination-rows-limit));
 }
 
 :is(.table-viewport:has(~ .id-pagination, ~ [data-pagination-footer]),
-    [data-pagination-rows], [data-pagination-table] > .table-viewport) {
-  max-block-size: var(--pagination-rows-limit);
+    [data-pagination-rows], [data-pagination-table] > .table-viewport,
+    [data-pagination-layout='fill'], [data-pagination-layout='limit']) {
   overflow: auto;
 }
 
 :where(.table-viewport:has(~ .id-pagination, ~ [data-pagination-footer]),
-    [data-pagination-rows], [data-pagination-table] > .table-viewport) > table > thead {
+    [data-pagination-rows], [data-pagination-table] > .table-viewport,
+    [data-pagination-layout='fill'], [data-pagination-layout='limit']) > table > thead {
   position: sticky;
   inset-block-start: 0;
   z-index: 3;
@@ -178,13 +193,11 @@
   }
 }
 
-@media (max-width: 480px) {
-  :root {
-    --pagination-rows-limit: min(40dvh, 34rem);
-  }
-}
-
 @media (max-width: 900px) {
+  [data-pagination-table] {
+    min-block-size: var(--pagination-frame-height, 0px);
+  }
+
   .id-pagination :is(button, select, input, summary) {
     min-height: 44px;
   }

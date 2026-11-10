@@ -41,6 +41,7 @@
   --text: var(--text-main);
   --secondary: var(--text-secondary);
   display: block;
+  border-top: 0;
 }
 
 [data-recharge-view='admin'] .recharge-pagination-note {

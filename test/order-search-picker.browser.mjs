@@ -155,7 +155,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
       const controls = field('cardTypeId').querySelector('.field-control');
       return {
         width: box(node).width, customer: box(field('customerId')), email: box(field('email')), card: box(field('cardId')),
-        payment: box(field('payment')), tail: box(field('paymentId')),
+        payment: box(field('payment')), type: box(field('cardTypeId')), tail: box(field('paymentId')),
         labelsFit: ['customerId', 'cardId'].every(key => {
           const label = field(key).querySelector('.commerce-picker-label');
           return label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1;
@@ -166,12 +166,18 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         clientWidth: node.closest('.drawer-body').clientWidth
       };
     });
-    assert(geometry.customer.width >= geometry.width - 1 && geometry.email.width >= geometry.width - 1 &&
-      geometry.card.width >= geometry.width - 1, JSON.stringify(geometry));
+    assert(geometry.customer.width >= geometry.width - 1 && geometry.email.width >= geometry.width - 1, JSON.stringify(geometry));
     assert(geometry.email.top >= geometry.customer.bottom);
     assert(geometry.labelsFit && geometry.actionsFit && geometry.scrollWidth <= geometry.clientWidth + 1);
-    if (width >= 753) assert.equal(geometry.payment.top, geometry.tail.top);
-    else assert(geometry.tail.top >= geometry.payment.bottom);
+    if (width >= 753) {
+      assert.equal(geometry.payment.top, geometry.type.top);
+      assert.equal(geometry.card.top, geometry.tail.top);
+      assert(geometry.card.top >= geometry.type.bottom);
+    } else {
+      assert(geometry.type.top >= geometry.payment.bottom);
+      assert(geometry.card.top >= geometry.type.bottom);
+      assert(geometry.tail.top >= geometry.card.bottom);
+    }
     const readout = form.locator('[data-commerce-field="email"] .order-value-readout');
     await readout.waitFor();
     assert.equal(await readout.textContent(), longEmail);

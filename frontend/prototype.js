@@ -848,6 +848,24 @@ function titleInfo(title, description, id, trustedHtml = false) {
     ? `<details class="title-help"><summary aria-label="查看${escapeHtml(title)}说明" aria-controls="${id}">${icon('info')}</summary><div class="title-description" id="${id}" role="note">${trustedHtml ? description : escapeHtml(description)}</div></details>`
     : '';
 }
+let operatorIdNoteSequence = 0;
+function operatorIdProperty(label, id) {
+  const full = typeof id === 'string' && id.trim() ? id : '';
+  let value = `<strong>${escapeHtml(full || '历史未记录')}</strong>`;
+  if (full.length > 12) {
+    const short = escapeHtml(full.slice(0, 4) + '…' + full.slice(-4));
+    const escaped = escapeHtml(full);
+    const copy = textAction('复制完整编号', 'copy-value', `data-value="${escaped}"`);
+    const help = titleInfo(
+      '完整' + label,
+      `<div><code>${escaped}</code></div>${copy}`,
+      'operator-id-note-' + ++operatorIdNoteSequence,
+      true
+    );
+    value = `<div class="title-with-help"><strong>${short}</strong>${help}</div>`;
+  }
+  return `<div class="property-row"><span>${escapeHtml(label)}</span>${value}</div>`;
+}
 function header(title, description, actions = '', label = '') {
   return `<div class="page-header"><div class="page-heading"><h1 id="page-title-heading">${escapeHtml(title)}</h1>${titleInfo(title, [description, label].filter(Boolean).join(' · '), 'page-description')}</div><div class="page-header-actions">${actions}</div></div>`;
 }
@@ -1018,7 +1036,6 @@ function stabilizeDesignTables() {
     );
     designTableFrames.set(key, rows);
     viewport.classList.add('stable-table');
-    viewport.dataset.frameRows = String(rows);
     viewport.style.setProperty('--table-page-rows', String(rows));
   }
 }
@@ -1470,6 +1487,7 @@ function preserveMainDraft() {
 }
 let pendingPageScroll = null;
 let layoutRenderVersion = 0;
+const entryFormSelector = '.commerce-entry-columns .form-panel > form';
 const retainedPageRegions = new Map();
 let mountedPage;
 function activePageRegion() {
@@ -1497,6 +1515,7 @@ function restorePendingPageScroll() {
 // a resize may complete a previously clamped restoration without taking over
 // subsequent manual scrolling.
 new ResizeObserver(restorePendingPageScroll).observe($('#main'));
+const updateTableLayout = window.IDPagination?.watchTableLayout?.($('#main'));
 for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
   window.addEventListener(eventName, () => {
     pendingPageScroll = null;
@@ -1508,6 +1527,9 @@ function render() {
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
   const tabScroll = sameRoute ? captureTabScroll(activePageRegion()) : new Map();
+  const entryFormScroll = sameRoute
+    ? $(entryFormSelector, activePageRegion())?.scrollTop
+    : state.viewDrafts.get(state.route)?.entryFormScroll;
   const tableScroll = new Map();
   if (sameRoute) {
     for (const table of $$('.table-viewport > table[data-table]', activePageRegion())) {
@@ -1590,6 +1612,9 @@ function render() {
     extension?.afterRender?.({ routeChanged: !sameRoute });
   window.IDChangeSync?.resume();
   applyDesignPreviewState();
+  updateTableLayout?.();
+  const entryForm = $(entryFormSelector, region);
+  if (entryForm && entryFormScroll) entryForm.scrollTop = entryFormScroll;
   restoreTabScroll(region, tabScroll);
   if (tableScroll.size) {
     for (const table of $$('.table-viewport > table[data-table]', region)) {
@@ -1662,7 +1687,8 @@ function navigate(event) {
         status: state.status,
         mailTab: state.mailTab,
         claudeTab: state.claudeTab,
-        scrollY: window.scrollY
+        scrollY: window.scrollY,
+        entryFormScroll: $(entryFormSelector, activePageRegion())?.scrollTop
       });
     state.route = next;
     state.previewMode = 'normal';
@@ -3295,6 +3321,7 @@ window.IDDesignAPI = {
   pagination,
   pageRows,
   titleInfo,
+  operatorIdProperty,
   state,
   collections: { mailboxes, accounts, subscriptions },
   getSelection,

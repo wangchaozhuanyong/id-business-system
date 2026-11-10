@@ -76,6 +76,13 @@ test('shared pagination remains compact for 10,000 records and restores each lis
   assert.match(await pager.locator('.pagination-count').textContent(), /10,000 条 · 第 1–20 条/);
   await checkSingleRow(true);
   await checkVisibleBounds();
+  const originalHeight = (await viewport.boundingBox()).height;
+  await page.setViewportSize({ width: 1440, height: 1080 });
+  await page.waitForFunction(height => document.querySelector('#main .table-viewport').clientHeight >= height + 178, originalHeight);
+  assert(Math.abs((await viewport.boundingBox()).height - originalHeight - 180) <= 2);
+  assert((await pager.boundingBox()).y + (await pager.boundingBox()).height <= 1080);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForFunction(height => Math.abs(document.querySelector('#main .table-viewport').clientHeight - height) <= 1, originalHeight);
   const beforeScroll = await viewport.evaluate((element) => ({
     header: element.querySelector('thead').getBoundingClientRect().top,
     page: scrollY, scrollable: element.scrollHeight > element.clientHeight
@@ -115,17 +122,23 @@ test('shared pagination remains compact for 10,000 records and restores each lis
   await rows.first().waitFor();
   assert.equal(await size.inputValue(), '50');
   assert.equal(await pager.getAttribute('data-page'), '7');
+  const search = page.locator('#main .search-field input').first();
+  const populatedHeight = (await viewport.boundingBox()).height;
+  await search.fill('不存在的分页样本');
+  assert.equal(await rows.count(), 0);
+  assert.equal((await viewport.boundingBox()).height, populatedHeight);
+  await search.clear();
 
   await page.setViewportSize({ width: 320, height: 850 });
   assert.equal(await pager.locator('.pagination-pages').isVisible(), false);
   assert((await next.boundingBox()).height >= 44);
   await checkSingleRow(false);
   await checkVisibleBounds();
+  assert(await viewport.evaluate(element => element.scrollHeight <= element.clientHeight + 1));
   await size.selectOption('10');
   await jump(1000);
   assert.equal(await next.isDisabled(), true);
   assert.match(await pager.locator('.pagination-count').textContent(), /9,991–10,000/);
-  const search = page.locator('#main .search-field input').first();
   await search.fill('分页样本 00005');
   assert.equal(await pager.getAttribute('data-page'), '1');
   assert.equal(await rows.count(), 1);

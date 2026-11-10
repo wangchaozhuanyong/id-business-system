@@ -186,6 +186,49 @@ test(
     );
 
     await t.test(
+      'embedded CDK and addresses use the host viewport and one footer seam',
+      async (t) => {
+        const { page } = await openFixture(browser, t, 'cdks', {
+          viewport: { width: 1440, height: 900 },
+          hasTouch: true,
+          embedded: true
+        });
+        const frameGeometry = async (key, total) => {
+          const result = await page.waitForFunction(({ key, total }) => {
+            const frame = document.querySelector('.recharge-integration__content iframe:not([hidden])');
+            const doc = frame?.contentDocument;
+            const pager = doc?.querySelector(`nav[data-pagination="recharge-${key}"]`);
+            if (!pager?.getClientRects().length || Number(pager.dataset.total) !== total) return false;
+            const panel = frame.closest('.recharge-integration').getBoundingClientRect();
+            const main = document.getElementById('main');
+            const availableBottom = innerHeight - main.nextElementSibling.offsetHeight - parseFloat(getComputedStyle(main).paddingBottom);
+            if (Math.abs(availableBottom - panel.bottom) > 2 || frame.clientHeight + 1 < doc.body.offsetHeight) return false;
+            const footer = pager.closest('.table-footer'), viewport = footer.previousElementSibling;
+            const style = node => doc.defaultView.getComputedStyle(node);
+            return {
+              tableHeight: viewport.clientHeight,
+              tableBorder: style(viewport).borderBottomWidth,
+              footerBorder: style(footer).borderTopWidth,
+              pagerBorder: style(pager).borderTopWidth
+            };
+          }, { key, total });
+          return result.jsonValue();
+        };
+        const original = await frameGeometry('cdk', cdks.length);
+        await page.setViewportSize({ width: 1440, height: 1080 });
+        const taller = await frameGeometry('cdk', cdks.length);
+        assert(Math.abs(taller.tableHeight - original.tableHeight - 180) <= 2);
+        await page.getByRole('navigation', { name: 'ChatGPT 充值功能' }).getByRole('button', { name: '免税地址' }).click();
+        const addresses = await frameGeometry('address', 22);
+        for (const geometry of [taller, addresses]) {
+          assert.equal(geometry.tableBorder, '1px');
+          assert.equal(geometry.footerBorder, '0px');
+          assert.equal(geometry.pagerBorder, '0px');
+        }
+      }
+    );
+
+    await t.test(
       'touch layout exposes next and jump without a horizontally scrolling page strip',
       async (t) => {
         const { page } = await openFixture(browser, t, 'cdks', {

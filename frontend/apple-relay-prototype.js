@@ -275,9 +275,12 @@
           失败且未使用: '登记注册失败，未使用'
         }[latest.state] || '注册结果待核对'
       );
-    return row.usageLinks?.some((link) => link.kind === 'registration')
+    return row.usageLinks?.some((link) => link.kind === 'registration' || (link.kind === 'manual-use' && link.product))
       ? '已登记注册'
       : '未登记注册结果';
+  }
+  function platformLabel(row) {
+    return A.modules.inventory?.mailboxPlatformLabel?.(row) || '平台未登记';
   }
   function unknown(value) {
     return value || '历史未记录';
@@ -288,10 +291,10 @@
   function trace(row) {
     return (
       prop('录入人', unknown(row.createdBy)) +
-      prop('录入人编号', unknown(row.createdById)) +
+      A.operatorIdProperty('录入人编号', row.createdById) +
       prop('录入时间', timeText(row.createdAt, '历史未记录')) +
       prop('最近操作人', unknown(row.lastOperatedBy || row.updatedBy)) +
-      prop('最近操作人编号', unknown(row.lastOperatedById || row.updatedById)) +
+      A.operatorIdProperty('最近操作人编号', row.lastOperatedById || row.updatedById) +
       prop('最近操作时间', timeText(row.lastOperatedAt || row.updatedAt, '历史未记录'))
     );
   }
@@ -617,7 +620,7 @@
     const matching = allAliases.filter(
       (r) =>
         (!view.parentId || r.parentMailboxId === view.parentId) &&
-        (!query || `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''} ${r.importId || ''} ${displayImportId(r.importId)}`
+        (!query || `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''} ${r.importId || ''} ${displayImportId(r.importId)} ${platformLabel(r)}`
           .toLowerCase().includes(query))
     );
     const matchesUse = (row) =>
@@ -665,6 +668,7 @@
           { id: 'aliasId', label: '隐藏邮箱编号', class: 'mono', render: (r) => E(displayId('alias', r)) },
           { id: 'parentMailboxId', label: '主邮箱编号', class: 'mono', render: (r) => E(displayId('parent', r.parentMailboxId)) },
           { id: 'email', label: '隐藏邮箱地址' },
+          { id: 'registrationPlatform', label: '注册平台', render: (r) => E(platformLabel(r)) },
           {
             id: 'parent',
             label: '所属 Apple 主邮箱',
@@ -1787,8 +1791,9 @@
     A.openDrawer(
       'Apple 隐藏邮箱详情',
       '隐藏邮箱从所属 Apple 主邮箱收信；库存使用和平台注册记录分别保留。',
-      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
+      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('注册平台', platformLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
       A.button('关闭', 'drawer-close') +
+        (A.modules.inventory?.mailboxPlatformButton?.(a) || '') +
         A.button('查看邮件', 'relay-mails', '', 'mail', `data-id="${E(a.id)}"`) +
         (local && a.inventoryState === 'claimed'
           ? A.button(
@@ -1907,7 +1912,7 @@
             )
             .join('')
         : '';
-    A.openActionMenu(node, actions + healthActions);
+    A.openActionMenu(node, actions + (kind === 'alias' ? A.modules.inventory?.mailboxPlatformButton?.(row) || '' : '') + healthActions);
   }
   function bindExistingAlias(id, button) {
     initialize();

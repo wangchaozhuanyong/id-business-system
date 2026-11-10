@@ -104,6 +104,7 @@ function runtime() {
     modules: {},
     legacy: { parseCsv },
     esc: escape,
+    operatorIdProperty: (label, id) => `<div>${escape(label)} ${escape(id || '历史未记录')}</div>`,
     icon: () => '',
     options: (choices, selected) =>
       choices

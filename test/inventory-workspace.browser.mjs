@@ -56,12 +56,18 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       const text = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect().toJSON(); };
       const [left, right] = container.children;
       return { container: rect(container), left: rect(left), right: rect(right),
+        leftHeading: rect(left.querySelector('.panel-heading > .section-title-row')),
+        rightHeading: rect(right.querySelector('.panel-heading > .section-title-row')),
         leftTitle: text(left.querySelector('h2')), rightTitle: text(right.querySelector('h2')),
         fields: [...right.querySelectorAll('.field')].map(field => ({
           label: rect(field.querySelector('label')), control: rect(field.querySelector('input,select,textarea'))
         })), overflow: document.documentElement.scrollWidth > innerWidth + 1 };
     });
     assert(!geometry.overflow);
+    for (const [panel, heading] of [[geometry.left, geometry.leftHeading], [geometry.right, geometry.rightHeading]]) {
+      assert(Math.abs(heading.top - panel.top - 13) <= 1, '工作台标题使用紧凑的上内距');
+      assert(Math.abs(heading.left - panel.left - 17) <= 1, '工作台标题沿正文对齐线');
+    }
     if (geometry.container.width >= 960) {
       assert(Math.abs(geometry.left.top - geometry.right.top) < 1);
       assert(Math.abs(geometry.left.bottom - geometry.right.bottom) < 1);
@@ -117,6 +123,8 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     await page.locator('[data-action="inventory-entry-imports"]').click();
     const pager = page.locator('#drawer [data-pagination="inventory-entry-imports:' + kind + '"]');
     assert.equal(await pager.getAttribute('data-total'), '23');
+    assert.equal(await pager.getAttribute('data-page-size'), '20');
+    await pager.getByLabel('每页条数').selectOption('10');
     await pager.locator('[data-pagination-nav="next"]').click();
     await pager.locator('[data-pagination-nav="next"]').click();
     assert.equal(await page.locator('#drawer table tbody tr').count(), 3);

@@ -62,19 +62,16 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             aligned(await box('#commerce-paidAmount'), await box('#commerce-expiry'), '金额和到期控件第二行不齐');
             aligned(await box('label[for="commerce-paidAmount"]'), await box('label[for="commerce-expiry"]'), '第二行文字不齐');
           }
-          const formWidth = await page.locator('.commerce-entry-columns > .form-panel').evaluate(node => {
+          const formWidth = await page.locator('.commerce-entry-columns > .form-panel > form').evaluate(node => {
             const style = getComputedStyle(node);
             return node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
           });
+          if (width >= 1440) assert(formWidth >= 640, '宽屏录单为双列表单保留足够正文宽度');
           if (formWidth >= 640) {
             const search = await box('#commerce-cardId-picker');
-            if (product === 'gpt') {
-              aligned(await box('#commerce-payment'), await box('#commerce-paymentId'), '卡尾号不应单独占一行');
-              aligned(search, await box('#commerce-cardTypeId'), '银行卡选择与类型应在第二行并排');
-              aligned(await box('label[for="commerce-cardId-picker"]'), await box('label[for="commerce-cardTypeId"]'), '银行卡选择与类型标签不齐');
-            } else {
-              aligned(await box('#commerce-tenantId-picker'), search, '租户与银行卡选择应同排');
-            }
+            aligned(await box('#commerce-payment'), await box('#commerce-cardTypeId'), '支付方式与银行卡类型应同排');
+            aligned(search, await box('#commerce-paymentId'), '选择银行卡与尾号应在后续行并排');
+            aligned(await box('label[for="commerce-cardId-picker"]'), await box('label[for="commerce-paymentId"]'), '选择银行卡与尾号标签不齐');
           }
           await page.locator('#commerce-payment').selectOption('苹果内购');
           assert(await page.locator('#commerce-appleIdId-picker').isVisible());
@@ -97,8 +94,8 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       const entryTabs = page.locator('.panel > .tabs[aria-label="录入类型"]');
       {
         const tabs = await entryTabs.boundingBox();
-        const form = await box('#commerce-contact-form');
-        assert(form.y - tabs.y - tabs.height >= 16, '表单页签与首行资料应保留间距');
+        const first = await box('#commerce-contact-name');
+        assert(first.y - tabs.y - tabs.height >= 16, '表单页签与首行资料应保留间距');
       }
       const before = await box('#commerce-contact-name');
       await page.locator('summary[aria-label="查看联系方式说明"]').click();
@@ -195,12 +192,17 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   await t.test('long-page return restores reading position; empty rates do not reserve a sidebar', async () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await go('workspace/order/gpt');
-    await page.evaluate(() => scrollTo(0, 220));
-    const before = await page.evaluate(() => scrollY);
+    const entry = page.locator('#commerce-order-form');
+    const before = await entry.evaluate(form => {
+      form.scrollTop = 220;
+      return form.scrollTop;
+    });
     assert(before > 0);
+    await page.evaluate(() => window.IDDesignAPI.render());
+    assert.equal(await entry.evaluate(form => form.scrollTop), before);
     await go('customers/new');
     await go('workspace/order/gpt');
-    assert.equal(await page.evaluate(() => scrollY), before);
+    assert.equal(await entry.evaluate(form => form.scrollTop), before);
     await go('settings/costs');
     assert.equal(await page.locator('.side-panel').count(), 0);
     assert.match(await page.locator('#main').innerText(), /暂无汇率报价/);

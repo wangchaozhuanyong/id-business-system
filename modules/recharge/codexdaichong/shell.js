@@ -13,6 +13,7 @@
   }
   root.dataset.rechargeNavigationLocked = 'false';
   let reportType = '';
+  let updateTableLayout;
   let telegramStatus;
   window.idRechargeVisible = standalone;
   function setVisible(visible) {
@@ -164,6 +165,7 @@
 
   function report(type) {
     if (type === 'ready') restoreDrafts();
+    if (type === 'ready' || type === 'view-context') updateTableLayout?.();
     if (type !== 'resize' && type !== 'view-context') {
       reportType = type;
       if (telegramSettings) {
@@ -593,6 +595,10 @@
         for (const title of document.querySelectorAll('.page-header > h1'))
           window.IDTitleHelp.attach(title, title.nextElementSibling);
       } else styleAdminLayout();
+      updateTableLayout = window.IDPagination?.watchTableLayout?.(
+        document.querySelector('.main-content'),
+        { hostFrame: window.frameElement, rows: '.table-container' }
+      );
     } else {
       const tab = new URLSearchParams(location.search).get('tab');
       const workspaceTitle = document.querySelector('.workspace-recharge-standalone-title');
