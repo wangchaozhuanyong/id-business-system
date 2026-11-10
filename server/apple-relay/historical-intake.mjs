@@ -119,7 +119,7 @@ export function historicalIntakePreview(plan) {
     rows: plan.rows.map(({ line, email, alias, account, sale, previousOrder, error }) => error ? { line, error } : ({
       line, email,
       mailbox: !alias ? '新增已使用邮箱' : state(alias) === 'used' ? '复用' : '登记为已使用',
-      account: account ? '复用' : sale ? '新增已使用账号' : '新增冻结账号',
+      account: account ? '复用' : sale ? '新增已使用账号' : '新增正常账号',
       order: previousOrder ? '复用原订单' : sale ? '新增待补全订单' : '—'
     }))
   };
@@ -147,7 +147,7 @@ export function stageHistoricalIntake(plan, inventory, commerce, actor, time) {
     if (!account) {
       account = {
         id: `gpt-history-${randomUUID()}`, type: 'gpt', email: row.email, emailType: 'relay',
-        registered: row.registered, source: '历史入库', status: sold ? '正常' : '冻结', health: 'normal',
+        registered: row.registered, source: '自己注册', status: '正常', health: 'normal',
         inventoryState: 'available', used: false, notes: row.note, version: 1, inventoryHistory: [], usageLinks: []
       };
       inventory.accounts.unshift(account);

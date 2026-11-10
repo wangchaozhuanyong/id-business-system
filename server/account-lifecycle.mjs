@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { personalProduct, personalStock, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
 
@@ -48,6 +49,7 @@ export function accountLifecycleSummary(account, commerce, now = Date.now()) {
   const latest = current[0];
   const customerId = closed ? '' : lifecycle?.customerId || latest?.customerId || '';
   const label = account.claudeHistory && account.health === 'dead' ? '已归档'
+    : isHistoricallyOpenedClaude(account) ? '历史已开通'
     : lifecycle?.disposition === 'retired' ? '不再复用'
     : held ? '已保留待核对'
     : state(account) === 'claimed' ? '已提取待使用'
@@ -102,6 +104,7 @@ export function changeAccountLifecycle(inventory, commerce, command, actor, now 
     return { changed: false, account };
   }
   if (Number(command.assetVersion) !== Number(account.version)) throw new AccountLifecycleError('账号版本已变化，请重新打开核对');
+  if (isHistoricallyOpenedClaude(account)) throw new AccountLifecycleError('Claude 历史已开通账号须保留使用记录');
   if (state(account) !== 'used') throw new AccountLifecycleError('只可处理已使用账号；已提取资料请使用原归还流程');
   if (command.action === 'retire' && account.accountLifecycle?.disposition === 'retired')
     throw new AccountLifecycleError('账号已停止复用');

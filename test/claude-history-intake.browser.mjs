@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { chromium } from 'playwright';
+import { pathToFileURL } from 'node:url';
+const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
+const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
 import { accountLifecycleSummaries } from '../server/account-lifecycle.mjs';
 import { claudeHistoryPreview, planClaudeHistoryIntake, stageClaudeHistoryIntake } from '../server/claude-history-intake.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
@@ -83,8 +85,16 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
 
   await page.locator('#subscription-list').getByText('ready-history@example.test', { exact: true }).first().waitFor();
   await page.locator('#subscription-list').getByText('2026-11-30 22:00', { exact: true }).waitFor();
+  // A pre-fix persisted record can still have an available flag.
+  Object.assign(local.inventory.data.accounts[0], { inventoryState: 'available', used: false, status: '正常' });
   await page.goto(origin + '/#/accounts/claude');
+  const used = page.getByRole('tab', { name: /^已使用/ });
+  assert.match(await used.innerText(), /1/);
+  await used.click();
   await page.getByText('ready-history@example.test', { exact: true }).first().waitFor();
+  await page.getByRole('tab', { name: /^可用库存/ }).click();
+  await page.locator('#main [data-page-region="accounts/claude"]')
+    .getByText('ready-history@example.test', { exact: true }).waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#main').getByText('历史套餐', { exact: true }).count(), 0);
   const accountOpen = page.getByRole('button', { name: '历史账号入库', exact: true });
   await accountOpen.click();

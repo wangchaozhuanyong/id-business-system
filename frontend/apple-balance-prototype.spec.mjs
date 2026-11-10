@@ -60,6 +60,10 @@ function runtime(localData) {
 const order = (changes = {}) => ({
   id: 'order-1',
   orderNo: 'ORDER-001',
+  product: 'Gemini', plan: 'Google AI Pro', businessType: '首次开通', customerId: 'customer-1',
+  subscriptionSeries: 'google_ai', loginMethod: 'google', billingChannel: 'app_store', billingCycle: 'month',
+  billingCountry: '美国', billingReceipt: 'fixture-receipt', appleGoogleVerified: true,
+  entitlementStatus: 'pending', autoRenew: 'unknown', costBasis: 'standard',
   email: 'customer@example.test',
   payment: '苹果内购',
   appleIdId: 'apple-funding-demo-1',
@@ -205,7 +209,7 @@ function localLedger(t) {
       domain: 'inventory',
       version: 0,
       data: {
-        mailboxes: ['apple-funding-demo-1', 'apple-b'].map((id) => ({ id, type: 'apple' })),
+        mailboxes: ['apple-funding-demo-1', 'apple-b'].map((id) => ({ id, type: 'apple', status: '正常', appStoreRegion: 'US' })),
         accounts: [],
         batches: [],
         returnRecords: [],
@@ -216,6 +220,9 @@ function localLedger(t) {
       }
     }
   ]);
+  store.saveBatch([{ domain: 'settings', version: 0, data: {
+    mailboxTypes: [], costSettings: {}, applePaidPrices: { Gemini: { 'Google AI Pro': { US: '20' } } }
+  }}]);
   const start = () =>
     runtime({
       load: async (domain) => store.load(domain),
@@ -225,7 +232,7 @@ function localLedger(t) {
   const saveOrder = (order, prepared) => {
     const { version, data } = store.load('commerce');
     const commerce = data || {
-      customers: [],
+      customers: [{ id: 'customer-1', name: '合成客户' }],
       tenants: [],
       orders: [],
       operating: [],
@@ -596,8 +603,8 @@ test('Apple专表从库存主档显示人员出处，默认列与真实列设置
     lastOperatedAt: '2026-11-04 18:05'
   });
   const result = context.render();
-  assert.equal(result.columns.length, 21);
-  assert.equal(new Set(result.columns.map((column) => column.id)).size, 21);
+  assert.equal(result.columns.length, 24);
+  assert.equal(new Set(result.columns.map((column) => column.id)).size, 24);
   for (const [id, label, value] of [
     ['createdBy', '录入人', '原始录入员'],
     ['lastOperatedBy', '最近操作人', '最近编辑员'],

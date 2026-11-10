@@ -25,7 +25,7 @@ test('历史注册和历史交付复用正常校验，在保存前离开可领�
   const { inventory, commerce } = fixture();
   const plan = planHistoricalIntake(payload(), inventory, commerce, clock.getTime());
   assert.deepEqual(historicalIntakePreview(plan).rows.map(row => [row.account, row.order]), [
-    ['新增已使用账号', '新增待补全订单'], ['新增冻结账号', '—']
+    ['新增已使用账号', '新增待补全订单'], ['新增正常账号', '—']
   ]);
   requireHistoricalIntake(plan, { inventoryVersion: 12, commerceVersion: 8 });
   const next = structuredClone(inventory.data);
@@ -58,7 +58,7 @@ test('历史注册和历史交付复用正常校验，在保存前离开可领�
   const account = next.accounts.find(row => row.id === order.accountId);
   assert.equal(account.inventoryState, 'used');
   assert.equal(account.accountLifecycle.customerId, order.customerId);
-  assert.equal(next.accounts.find(row => row.email === registered.email).status, '冻结');
+  assert.ok(next.accounts.every(row => row.status === '正常' && row.source === '自己注册'));
 
   const retry = planHistoricalIntake(payload(), { version: 13, data: next }, { version: 9, data: nextCommerce }, clock.getTime());
   assert.equal(retry.pending.length, 0);

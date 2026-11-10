@@ -22,7 +22,7 @@
     if (!scopes.length) return;
     const expanded = new Set(scopes);
     if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance'].includes(scope))) expanded.add('overview');
-    if (scopes.includes('inventory')) { expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
+    if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
     queries.invalidate([...expanded]);
     for (const listener of changeListeners) {
@@ -133,7 +133,7 @@
     pendingWrites++;
     try {
       const result = await operation();
-      queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool'] : []), 'overview', 'audit']);
+      queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool', 'appleBalance'] : []), 'overview', 'audit']);
       return result;
     } finally {
       pendingWrites--;
@@ -214,7 +214,6 @@
       request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
     claudeGoogleSubscriptions: (params) => request('claude-google-subscriptions/list', params, 'POST'),
     subscriptions: (params) => request('subscriptions/list', params, 'POST'),
-    subscriptionAccount: (accountId) => request('subscriptions/account', { accountId }, 'POST'),
     subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
     subscriptionCopy: (command) => request('subscriptions/copy', command, 'POST'),
     subscriptionConfirm: (command) => write(['subscription-management'], () => request('subscriptions/confirm', command, 'POST')),

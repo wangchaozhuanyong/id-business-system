@@ -29,7 +29,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
           start: '2026-11-01 10:00', expiry: '2026-12-01 10:00', status, remainingDays: 21,
           operatorName: actor.name, confirmed };
         const row = { id: 'synthetic-account', product: request.product, account: request.product === 'Grok' ? '@synthetic' : 'synthetic@example.test',
-          registrationEmail: request.product === 'Grok' ? '' : 'synthetic@example.test', status, conflict: false,
+          registrationEmail: request.product === 'Grok' ? '' : 'synthetic@example.test', status, conflict: false, ownerEligible: confirmed,
           ownerId: owner, ownerName: owner ? '合成归属人' : '', operatorName: actor.name, accountId: 'asset',
           series: [{ key: request.product, ...record }], history: [record], queryCode: { status: 'missing', remainingDays: null } };
         if (request.product === 'Grok') row.series.push({ ...record, key: 'x_premium', plan: 'X Premium',
@@ -106,7 +106,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
   }
 });
 
-test('未订阅的库存账号可先设置归属，录单选择该账号时带入归属人', { timeout: 30_000 }, async t => {
+test('账号管理保留注册国家和操作人，未开通库存不会给新订单预填归属', { timeout: 30_000 }, async t => {
   const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
@@ -115,59 +115,35 @@ test('未订阅的库存账号可先设置归属，录单选择该账号时带�
   t.after(() => context.close());
   const fixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
   const asset = fixtures.inventory.data.accounts.find(row => row.type === 'gpt');
-  const owner = { id: 'synthetic-owner', name: '账号归属人', role: 'employee' };
   fixtures['auth/session'] = { configured: true, actor };
-  fixtures['auth/order-owners'] = { items: [actor, owner] };
+  fixtures['auth/order-owners'] = { items: [actor] };
   await interceptDesign(context, { localFixtures: fixtures, actor, skipRechargeAssets: true });
-  let saved = false;
-  await context.route('**/api/local/subscriptions/account', route => route.fulfill({ json: {
-    id: 'account-key', accountId: asset.id, account: asset.email, ownerId: '', ownerName: '', revision: 'account-revision'
-  } }));
-  await context.route('**/api/local/subscriptions/owner', route => {
-    const body = route.request().postDataJSON();
-    assert.equal(body.accountId, asset.id);
-    assert.equal(body.ownerId, owner.id);
-    saved = true;
-    fixtures.inventory.accountSummaries = [{ assetId: asset.id, systemOwned: true, label: '首次可用',
-      customerId: '', customer: '未分配', currentCustomers: [], currentOrderIds: [], disposition: 'new',
-      orders: [], events: [], businessOwner: { id: owner.id, name: owner.name } }];
-    return route.fulfill({ json: { saved: true } });
-  });
-  await context.route('**/api/local/subscriptions/lookup', route => {
-    const { order } = route.request().postDataJSON();
-    return route.fulfill({ json: saved && order.accountId === asset.id
-      ? { ownerId: owner.id, ownerName: owner.name } : { ownerId: '', ownerName: '' } });
-  });
   const page = await context.newPage(), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(8000);
   await page.goto(origin + '/#/accounts/gpt');
   const row = page.locator(`tr[data-row-id="${asset.id}"]`);
   await row.waitFor();
+  const table = page.locator('#main table');
+  assert.equal(await table.getByRole('columnheader', { name: '归属人', exact: true }).count(), 0);
+  assert.equal(await table.getByRole('columnheader', { name: /城市/ }).count(), 0);
+  await table.getByRole('columnheader', { name: '注册国家', exact: true }).waitFor();
+  await table.getByRole('columnheader', { name: '最近操作人', exact: true }).waitFor();
   await row.locator('[data-action="inventory-more"]').click();
-  await page.getByRole('menuitem', { name: '设置归属人' }).click();
-  await page.locator('#subscription-owner:not([disabled])').waitFor();
-  await page.locator('#subscription-owner').selectOption(owner.id);
-  const receipt = page.waitForResponse(response => response.url().endsWith('/api/local/subscriptions/owner'));
-  await page.locator('#subscription-owner-form [type="submit"]').click();
-  await receipt;
-  assert.equal(saved, true);
-  await row.getByText(owner.name, { exact: true }).waitFor().catch(async error => {
-    const state = await page.evaluate(id => ({ drawer: document.querySelector('#drawer')?.open,
-      route: window.IDDesignAPI.state.route, summary: window.IDDesignAPI.modules.inventory.accountSummary(id),
-      notice: document.querySelector('[role="status"]')?.textContent }), asset.id);
-    throw new Error(`${error.message}; saved=${saved}; state=${JSON.stringify(state)}; errors=${JSON.stringify(errors)}`);
-  });
+  assert.equal(await page.getByRole('menuitem', { name: '设置归属人' }).count(), 0);
+  await page.keyboard.press('Escape');
+  await row.locator('[data-action="inventory-edit"]').click();
+  await page.locator('#inventory-country-edit').waitFor();
+  assert.equal(await page.locator('#inventory-city').count(), 0);
+  await page.locator('#drawer').getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '批量导入', exact: true }).click();
+  const csv = page.locator('#inventory-import-content');
+  await csv.waitFor();
+  assert.doesNotMatch(await csv.getAttribute('placeholder'), /城市/);
+  await page.locator('#drawer').getByRole('button', { name: '取消', exact: true }).click();
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.locator('#commerce-order-form').waitFor();
-  await page.locator('#commerce-businessType').selectOption('成品交付');
-  await page.locator('#commerce-emailHistory-picker').click();
-  await page.locator('#commerce-emailHistory-popover').getByRole('searchbox', { name: '搜索可用账号' }).fill(asset.email);
-  await page.locator('#commerce-emailHistory-popover').getByRole('option').filter({ hasText: asset.email }).click();
-  await page.waitForFunction(({ accountId, ownerId }) =>
-    document.querySelector('#commerce-accountId')?.value === accountId &&
-    document.querySelector('#commerce-ownerId')?.value === ownerId, { accountId: asset.id, ownerId: owner.id });
-  assert.equal(await page.locator('#commerce-ownerId').inputValue(), owner.id);
+  assert.equal(await page.locator('#commerce-ownerId').inputValue(), actor.id);
   assert.deepEqual(errors, []);
 });
 

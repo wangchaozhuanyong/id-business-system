@@ -369,6 +369,7 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     const asset = {
       id: 'apple-a',
       type: 'apple',
+      appStoreRegion: 'US',
       email: 'apple@example.test',
       status: '正常',
       health: 'normal'
@@ -387,7 +388,8 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
           tableSettings: [],
           undo: []
         }
-      }
+      },
+      { domain: 'settings', version: 0, data: { mailboxTypes: [], costSettings: {}, applePaidPrices: { Gemini: { 'Google AI Pro': { US: '20' } } } } }
     ]);
     const first = browser(store, asset);
     const ledger = first.api.modules.appleBalance;
@@ -403,7 +405,19 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     await stale.api.modules.appleBalance.ensureReady();
     const fields = {
       ...orderFields(first.getCustomers()[0].id),
+      product: 'Gemini',
+      plan: 'Google AI Pro',
+      businessType: '首次开通',
       payment: '苹果内购',
+      appleStoreRegion: 'US',
+      billingChannel: 'app_store',
+      billingCountry: '美国',
+      billingReceipt: 'fixture-transaction',
+      billingCycle: 'month',
+      entitlementStatus: 'pending',
+      autoRenew: 'unknown',
+      loginMethod: 'google',
+      appleGoogleVerified: 'on',
       appleIdId: asset.id
     };
     stale.state.route = 'workspace/order';

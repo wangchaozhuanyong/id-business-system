@@ -258,6 +258,7 @@ const navigation = [
   ['数据管理', 'database', [
     ['订单统计', 'orders/statistics'],
     ['银行卡管理', 'data-management/bank-cards'],
+    ['苹果 ID 管理', 'data-management/apple-ids'],
     ['客户流失', 'workspace/customer-loss'],
     ['员工数据统计', 'data-management/employee-statistics']
   ]],

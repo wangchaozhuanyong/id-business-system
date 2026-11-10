@@ -171,7 +171,7 @@ test('手工核实与账号归属独立留痕，旧版本重试有幂等回执',
   list = await request(handler, 'list', { product: 'GPT' });
   assert.equal(list.body.items[0].ownerName, owner.name);
   assert.equal(list.body.items[0].operatorName, admin.name);
-  assert.equal(ownerForSubscriptionOrder({ ...order, id: 'renewal' }, data.subscriptions.data).ownerId, owner.id);
+  assert.equal(ownerForSubscriptionOrder({ ...order, id: 'renewal' }, data.subscriptions.data, data.commerce.data, data.inventory.data, now).ownerId, owner.id);
   assert.equal(ownerForSubscriptionOrder({ ...order, accountId: 'other-account' }, data.subscriptions.data), null);
   const copy = await request(handler, 'copy', { id, mode: 'full', revision: list.body.revision });
   assert.equal(copy.status, 200);
@@ -183,7 +183,7 @@ test('手工核实与账号归属独立留痕，旧版本重试有幂等回执',
   assert.equal(projectSubscriptions(data, now)[0].status, 'pending');
 });
 
-test('未订阅库存账号可预先设置归属，后续新订单沿用归属但录入人不变', async () => {
+test('未订阅库存不能设置归属，旧档归属不进入新订单', async () => {
   const data = fixtures();
   data.inventory.data.accounts.push({ id: 'unused-gpt', type: 'gpt', email });
   const store = fakeStore(data), handler = createSubscriptionHandler({ store, publicOrigin: origin, clock: () => now,
@@ -191,23 +191,22 @@ test('未订阅库存账号可预先设置归属，后续新订单沿用归属�
   const account = await request(handler, 'account', { accountId: 'unused-gpt' });
   assert.equal(account.status, 200);
   assert.equal(account.body.ownerName, '');
-  assert.equal((await request(handler, 'owner', { id: account.body.id, accountId: 'unused-gpt', ownerId: owner.id,
-    revision: account.body.revision, commandId: 'owner-before-opening' })).status, 200);
-  const stale = makeOrder('stale-order', 'GPT', { accountId: 'unused-gpt', ownerId: admin.id, owner: admin.name });
-  assert.throws(() => attributeCommerce({ orders: [stale], customers: [], tenants: [], operating: [], rentBatches: [], logs: [] },
-    { orders: [], customers: [], tenants: [], operating: [], rentBatches: [], logs: [] }, admin, [owner], data.subscriptions.data),
-  /账号归属已变化/);
-  const next = makeOrder('new-order', 'GPT', { accountId: 'unused-gpt', ownerId: owner.id, owner: owner.name });
+  const rejected = await request(handler, 'owner', { id: account.body.id, accountId: 'unused-gpt', ownerId: owner.id,
+    revision: account.body.revision, commandId: 'owner-before-opening' });
+  assert.equal(rejected.status, 409);
+  assert.match(rejected.body.error, /确认订阅成功/);
+  data.subscriptions.data = { owners: { [account.body.id]: {
+    accountId: 'unused-gpt', ownerId: owner.id, ownerName: owner.name
+  } } };
+  const next = makeOrder('new-order', 'GPT', { accountId: 'unused-gpt', ownerId: admin.id, owner: admin.name });
   const document = { orders: [next], customers: [], tenants: [], operating: [], rentBatches: [], logs: [] };
-  const previous = { orders: [], customers: [], tenants: [], operating: [], rentBatches: [], logs: [] };
-  attributeCommerce(document, previous, admin, [owner], data.subscriptions.data);
-  assert.equal(next.ownerId, owner.id);
-  assert.equal(next.owner, owner.name);
+  const previous = { ...document, orders: [] };
+  attributeCommerce(document, previous, admin, [owner], data.subscriptions.data, data.inventory.data);
+  assert.equal(next.ownerId, admin.id);
   assert.equal(next.createdById, admin.id);
-  assert.equal(next.createdBy, admin.name);
   const lookup = await request(handler, 'lookup', { order: { product: 'GPT', accountId: 'unused-gpt', email,
     customerId: 'customer-a' } });
-  assert.equal(lookup.body.ownerId, owner.id);
+  assert.equal(lookup.body.ownerId, '');
 });
 
 test('Claude 非谷歌邮箱复制保留两种格式，查询码到期与订阅到期独立', async () => {
@@ -316,17 +315,18 @@ test('真实 SQLite 中归属版本竞争、库存续费和加密备份恢复', 
     let list = await request(handler, 'list', { product: 'GPT' });
     assert.equal(list.body.pageSize, 20);
     const id = list.body.items[0].id;
+    const confirmation = await request(handler, 'confirm', { id, orderId: firstOrder.id, revision: list.body.revision,
+      confirmed: true, reason: 'synthetic-confirmation-for-encryption', commandId: 'confirm-1' });
+    assert.equal(confirmation.status, 200);
+    list = await request(handler, 'list', { product: 'GPT' });
+    assert.equal(list.body.items[0].ownerEligible, true);
     const commands = ['owner-a', 'owner-b'].map(commandId => ({ id, accountId: account.id, ownerId: owner.id,
       revision: list.body.revision, commandId }));
     const competing = await Promise.all(commands.map(command => request(handler, 'owner', command)));
     assert.deepEqual(competing.map(response => response.status).sort(), [200, 409]);
     winningCommand = commands[competing.findIndex(response => response.status === 200)];
-    assert.equal(store.featureDocument('subscription-management').version, 1);
+    assert.equal(store.featureDocument('subscription-management').version, 2);
 
-    list = await request(handler, 'list', { product: 'GPT' });
-    const confirmation = await request(handler, 'confirm', { id, orderId: firstOrder.id, revision: list.body.revision,
-      confirmed: true, reason: 'synthetic-confirmation-for-encryption', commandId: 'confirm-1' });
-    assert.equal(confirmation.status, 200);
     profile = store.featureDocument('subscription-management');
     const beforeAudit = store.audit().length;
     assert.throws(() => store.withSubscriptions(admin, (_snapshots, _audit, save) => {
