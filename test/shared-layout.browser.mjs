@@ -46,7 +46,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   await page.goto(origin + '/#/workspace/order/gpt');
 
   await t.test('GPT and Claude order columns align and narrow labels remain usable', async () => {
-    for (const width of [1440, 1024, 768, 390, 320]) {
+    for (const width of [2040, 1440, 1024, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       for (const dark of [false, true]) {
         await theme(dark);
@@ -62,7 +62,11 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             aligned(await box('#commerce-paidAmount'), await box('#commerce-expiry'), '金额和到期控件第二行不齐');
             aligned(await box('label[for="commerce-paidAmount"]'), await box('label[for="commerce-expiry"]'), '第二行文字不齐');
           }
-          if (width === 1440) {
+          const formWidth = await page.locator('.commerce-entry-columns > .form-panel').evaluate(node => {
+            const style = getComputedStyle(node);
+            return node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+          });
+          if (formWidth >= 640) {
             const search = await box('#commerce-cardId-picker');
             if (product === 'gpt') {
               aligned(await box('#commerce-payment'), await box('#commerce-paymentId'), '卡尾号不应单独占一行');

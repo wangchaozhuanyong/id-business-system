@@ -58,7 +58,7 @@ function runtime() {
     openDrawer: (title, description, body) => drawers.push({ title, description, body })
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules },
+    window: { IDDesignAPI: api, IDDesignModules: modules, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document: { querySelector: () => null, querySelectorAll: () => [] },
     structuredClone: globalThis.structuredClone,
     Date,
@@ -259,7 +259,7 @@ test('Claude 专属显示认证电话、备注、录入时间；客户租户列�
 
 test('租户关联订单显示业务类型与当前运营状态，能看到冻结账号且不编造人员电话', () => {
   const context = runtime();
-  context.module.onClick('commerce-contact-detail', {
+  context.module.onClick('commerce-contact-orders', {
     dataset: { id: 'tenant-demo-1', kind: 'tenant' }
   });
   const table = context.tables.find((entry) => entry.id === 'commerce-contact-orders');

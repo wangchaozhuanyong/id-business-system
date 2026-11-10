@@ -220,7 +220,7 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
 
       await page.goto(origin + '/#/customers/list');
       await search.fill(customer.name);
-      await page.locator(`[data-action="commerce-contact-detail"][data-id="${customer.id}"]`).click();
+      await page.locator(`[data-action="commerce-contact-services"][data-id="${customer.id}"]`).click();
       await page.locator('#drawer table[data-table="commerce-contact-services"]').getByText(synced.orderNo).waitFor();
       await page.goto(origin + '/#/workspace/order/gpt');
       await page.locator('#commerce-customerId-picker').click();

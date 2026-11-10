@@ -89,7 +89,7 @@ function runtime(localData) {
     getElementById: () => null
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
+    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document,
     structuredClone: globalThis.structuredClone,
     Date,
@@ -176,6 +176,10 @@ function runtime(localData) {
       tables.length = 0;
       module.onClick('commerce-contact-detail', { dataset: { id, kind } });
       return drawers.at(-1);
+    },
+    records(id) {
+      tables.length = 0;
+      module.onClick('commerce-contact-services', { dataset: { id, kind: 'customer' } });
     },
     customers: () => api.modules.commerce.getCustomers(),
     tenants: () => api.modules.commerce.getTenants()
@@ -386,7 +390,7 @@ test('历史业务按明确客户编号汇总次数、首末开通及来源单�
     { ...base, id: 'pending-opening', source: '线上代充', taskId: 'job-pending', orderNo: 'NO-OPENING',
       paidConfirmed: true, rechargeCompletedAt: '', start: '2026-10-16T10:00', expiry: '2026-11-16T10:00' }
   );
-  r.detail('customer-demo-1');
+  r.records('customer-demo-1');
   const table = r.tables.find((t) => t.id === 'commerce-contact-services');
   const service = table.rows.find((entry) => entry.name === 'GPT · Plus');
   assert.equal(service.count, 4);
@@ -398,7 +402,7 @@ test('历史业务按明确客户编号汇总次数、首末开通及来源单�
   assert(!service.orderNos.includes('NO-OPENING'));
   r.contact();
   r.confirm();
-  r.detail(r.customers()[0].id);
+  r.records(r.customers()[0].id);
   assert.equal(r.tables.find((t) => t.id === 'commerce-contact-services').rows.length, 0);
 });
 
@@ -522,7 +526,7 @@ test('历史首末时间按北京时间数值排序，兼容空格格式且不�
     { ...base, id: 'afternoon', orderNo: 'AFTERNOON', start: '2026-11-02 15:00' },
     { ...base, id: 'future', orderNo: 'FUTURE', start: '2026-11-04T09:00' }
   );
-  r.detail('customer-demo-1');
+  r.records('customer-demo-1');
   const service = r.tables.find((t) => t.id === 'commerce-contact-services').rows[0];
   assert.equal(service.count, 2);
   assert.equal(service.firstOpenedAt, '2026-11-02T09:00');

@@ -69,6 +69,7 @@ test('客户页来源与标签抽屉支持持久化、历史选项和嵌套返�
 
   await page.locator('#drawer').waitFor({ state: 'hidden' });
   const form = page.locator('#commerce-contact-form');
+  await page.setViewportSize({ width: 2040, height: 900 });
   assert.equal(await form.getByLabel('客户姓名').inputValue(), '多标签测试客户');
   assert.equal(await form.getByLabel('来源渠道').inputValue(), '门店咨询');
   const controls = await form
