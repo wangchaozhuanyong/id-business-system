@@ -10,6 +10,7 @@
   const detailPager = 'employee-statistics-detail';
   const scopes = ['commerce', 'inventory', 'recharge-codes', 'operators'];
   const categoryLabels = { order: '订单', customer: '客户', code: '充值码', mail: '邮箱', account: '账号' };
+  const pendingKinds = ['all', 'code', 'mail', 'account'];
   const workMetrics = [
     ['orders', '提交订单', 'order'], ['cancelledOrders', '其中已撤单', 'order'],
     ['syncedOrders', '自动同步订单', 'order'], ['issuedCodes', '领取充值码', 'code'],
@@ -42,6 +43,8 @@
     ['admin', 'super'].includes(D.actor()?.role);
   const exceptions = row => (row.counts.overdue || 0) + (row.counts.review || 0) + (row.counts.returningCodes || 0);
   const displayTime = value => value && Number.isFinite(Date.parse(value)) ? timeFormat.format(Date.parse(value)) : '待核对';
+  const businessToday = () => report?.data.today || dayFormat.format(new Date());
+  const previousDay = (today, days) => dayFormat.format(Date.parse(today + 'T12:00:00+08:00') - days * 86_400_000);
 
   function filters() {
     if (!A.state.drafts.has(draftKey))
@@ -116,27 +119,38 @@
     const key = viewKey();
     const snapshot = report?.key === key ? report.data : null;
     const error = failure?.key === key;
-    const today = report?.data.today || dayFormat.format(new Date());
+    const today = businessToday();
+    const selectedDate = filter.date || today;
+    const dateShortcuts = ['今天', '昨天', '前天'].map((label, days) => {
+      const selected = selectedDate === previousDay(today, days);
+      return button(label, 'employee-statistics-date-preset', selected ? 'primary' : '', '',
+        `data-days-ago="${days}" aria-pressed="${selected}"`);
+    }).join('');
     const employees = (report?.data.items || []).map(({ id, name }) => [id, name]);
     if (filter.employee && !employees.some(([id]) => id === filter.employee))
       employees.push([filter.employee, '当前选择的员工']);
     const options = [['all', '全部业务'], ...Object.entries(categoryLabels).filter(([kind]) =>
-      filter.tab === 'work' || !['order', 'customer'].includes(kind))];
+      filter.tab === 'work' || pendingKinds.includes(kind))];
+    const kindButtons = filter.tab === 'pending' ? options.map(([kind, label]) =>
+      button(label, 'employee-statistics-kind', filter.pending === kind ? 'primary' : '', '',
+        `data-kind="${kind}" aria-pressed="${filter.pending === kind}"`)).join('') : '';
     const tabs = [['work', '工作量'], ['pending', '待处理资产']].map(([key, name]) =>
       `<button type="button" class="tab ${filter.tab === key ? 'active' : ''}"
         data-action="employee-statistics-tab" data-tab="${key}" aria-pressed="${filter.tab === key}">${name}</button>`).join('');
     return heading + `<section class="panel" id="employee-statistics">
       <div class="tabs" role="group" aria-label="员工统计视图">${tabs}</div>
-      <div class="toolbar" role="group" aria-label="员工统计筛选">
-        <div class="toolbar-left">
-          ${filter.tab === 'work' ? A.input('employee-statistics-date', filter.date || today,
-            `type="date" max="${esc(today)}" aria-label="统计日期"`) + button('今天', 'employee-statistics-today') : ''}
+      <div class="toolbar toolbar--inline list-filters" role="group" aria-label="员工统计筛选">
+        ${filter.tab === 'work' ? `<label class="toolbar-date" for="employee-statistics-date">统计日期
+          ${A.input('employee-statistics-date', selectedDate, `type="date" max="${esc(today)}" aria-label="统计日期"`)}
+        </label><div class="toolbar-date-shortcuts" role="group" aria-label="快捷日期">${dateShortcuts}</div>` : ''}
+        <div class="toolbar-select-filters">
           ${A.select('employee-statistics-person', [['', '全部员工'], ...employees], filter.employee).replace('<select', '<select aria-label="员工"')}
-          ${A.select('employee-statistics-kind', options, filter[filter.tab]).replace('<select', '<select aria-label="业务类型"')}
-          ${filter.tab === 'pending' ? `<label class="checkbox-label">
-            <input type="checkbox" id="employee-statistics-exceptions" ${filter.exceptions ? 'checked' : ''} />
-            <span>只看异常</span></label>` : ''}
+          ${filter.tab === 'work' ? A.select('employee-statistics-kind', options, filter.work).replace('<select', '<select aria-label="业务类型"') : ''}
         </div>
+        ${filter.tab === 'pending' ? `<div class="toolbar-select-filters" role="group" aria-label="业务类型">${kindButtons}</div>
+        <label class="checkbox-label">
+          <input type="checkbox" id="employee-statistics-exceptions" ${filter.exceptions ? 'checked' : ''} />
+          <span>只看异常</span></label>` : ''}
         <div class="toolbar-right" data-page-actions></div>
       </div>
       <div class="design-async-region" data-statistics-region>
@@ -246,9 +260,20 @@
       if (action === 'employee-statistics-refresh') void load();
       else if (action === 'employee-statistics-detail') openDetail(node);
       else if (action === 'employee-statistics-detail-retry') void loadDetail(detail?.page, detail?.pageSize);
-      else if (action === 'employee-statistics-tab' || action === 'employee-statistics-today') {
+      else if (action === 'employee-statistics-kind') {
+        const filter = filters();
+        if (filter.tab !== 'pending' || !pendingKinds.includes(node.dataset.kind)) return false;
+        filter.pending = node.dataset.kind;
+        A.state.page = 1;
+        A.render();
+      }
+      else if (action === 'employee-statistics-tab' || action === 'employee-statistics-date-preset') {
         if (action === 'employee-statistics-tab') filters().tab = node.dataset.tab;
-        else filters().date = '';
+        else {
+          const days = Number(node.dataset.daysAgo);
+          if (![0, 1, 2].includes(days)) return false;
+          filters().date = days ? previousDay(businessToday(), days) : '';
+        }
         A.state.page = 1;
         A.render();
       } else return false;

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
 
 test('redemption workspace aligns navigation, steps, account summary and actions without submitting a recharge', { timeout: 120_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -67,9 +67,10 @@ test('redemption workspace aligns navigation, steps, account summary and actions
       assert.equal(initial.codeLabel.top, initial.code.top);
       assert.equal(initial.accountLabel.top, initial.account.top);
       if (width > 600) {
-        assert.equal(initial.code.top, initial.verify.top);
+        if (width > 1500 || width <= 900) assert.equal(initial.code.top, initial.verify.top);
+        else assert(initial.verify.top >= initial.code.bottom + 8, '中等宽度按钮换行后保留间距');
         assert(Math.abs(initial.verify.right - initial.account.right) <= 1);
-        assert(Math.abs(initial.submit.right - initial.account.right + 12) <= 1, 'Submit stays inside the aligned summary bar');
+        assert(Math.abs(initial.submit.right - initial.account.right) <= 1, 'Submit aligns with the account control');
         assert(Math.abs(initial.submit.top + initial.submit.bottom - initial.summary.top - initial.summary.bottom) <= 2, 'Submit and summary stay vertically centered');
       }
       assert(initial.verify.height >= (width <= 900 ? 44 : 36));
@@ -170,7 +171,7 @@ test('redemption workspace aligns navigation, steps, account summary and actions
     await page.goto(origin + '/#/workspace/recharge');
     const frame = page.frameLocator('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
     await frame.locator('[data-recharge-workspace] #step1').waitFor();
-    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    if (theme === 'dark') await toggleDesignTheme(page);
     await settle(page);
     assert.equal(await frame.locator('.workspace-recharge-standalone-title').count(), 0, 'Embedded view uses the host title');
     const geometry = await frame.locator('body').evaluate(body => {

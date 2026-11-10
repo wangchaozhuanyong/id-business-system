@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 // Geometry assertions cover the user-visible regressions; no business writes are allowed.
 test('shared layouts preserve alignment, readable controls and stable navigation', { timeout: 120_000 }, async (t) => {
@@ -36,7 +36,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   };
   const theme = async dark => {
     if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark)
-      await page.locator('#theme-toggle').click();
+      await toggleDesignTheme(page);
     await settled();
   };
   const box = selector => page.locator(selector).boundingBox();
@@ -226,7 +226,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         await theme(dark);
         const controls = await toolbar.evaluate(node => {
           const middle = element => element.top + element.height / 2;
-          return [...node.querySelectorAll('button, input, select, .relay-status-group > span')].map(control => {
+          return [...node.querySelectorAll('button, input, select, .relay-status-group > span')].filter(control => control.checkVisibility()).map(control => {
             const range = document.createRange();
             range.selectNodeContents(control);
             const bounds = control.getBoundingClientRect();
@@ -308,6 +308,44 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       assert(table.headings.every(th => th.height < 60 && th.wrapping === 'nowrap'));
     }
     await noOverflow();
+  });
+  await t.test('summary strips distribute all metrics evenly without a fixed four-column limit', async () => {
+    await go('mailboxes/google');
+    await page.evaluate(() => {
+      const fixture = document.createElement('section');
+      fixture.id = 'summary-layout-fixture';
+      document.getElementById('main').append(fixture);
+    });
+    try {
+      for (const width of [1440, 1024, 901, 900, 768, 720, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const dark of [false, true]) {
+          await theme(dark);
+          for (const count of [1, 3, 4, 5]) {
+            const boxes = await page.evaluate(count => {
+              const fixture = document.getElementById('summary-layout-fixture');
+              fixture.innerHTML = window.IDDesignAPI.summary(Array.from({ length: count }, (_, i) =>
+                ['统计项目' + (i + 1), 12345 + i, '个']));
+              return [...fixture.querySelectorAll('.summary-item')].map(node => node.getBoundingClientRect().toJSON());
+            }, count);
+            assert.equal(boxes.length, count);
+            assert(boxes.every(item => item.left >= 0 && item.right <= width), '统计不能溢出视口');
+            if (width > 900) {
+              for (const item of boxes) {
+                aligned(item, boxes[0], '桌面统计不因项数变化而提前换行');
+                assert(Math.abs(item.width - boxes[0].width) <= 1, '统计按实际项数等宽排列');
+              }
+            } else if (count % 2 && count > 1) {
+              assert(Math.abs(boxes.at(-1).right - boxes[1].right) <= 1, '窄屏奇数项末行完整铺开');
+              assert(boxes.at(-1).top >= boxes.at(-2).bottom, '统计行之间不得重叠');
+            }
+            await noOverflow();
+          }
+        }
+      }
+    } finally {
+      await page.evaluate(() => document.getElementById('summary-layout-fixture')?.remove());
+    }
   });
   assert.deepEqual(errors, []);
 });

@@ -128,6 +128,13 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert.equal(saved.owner, staff.name);
     assert.equal(saved.createdById, actor.id);
     assert.equal(saved.updatedById, actor.id);
+    await page.locator(`#commerce-entry-records tr[data-row-id="${saved.id}"]`).waitFor();
+    assert.equal(new URL(page.url()).hash, '#/customers/new/tenant');
+    assert.equal(await name.inputValue(), '');
+    assert.equal(await phone.inputValue(), '');
+    assert.equal(await owner.inputValue(), actor.id);
+    assert.equal(await form.locator('#commerce-initial-card-0-number').count(), 0);
+    await page.getByRole('button', { name: '返回租户数据', exact: true }).click();
     const row = page.locator(`tr[data-row-id="${saved.id}"]`);
     assert.match(await row.innerText(), /业务员工甲/);
     assert.match(await row.innerText(), /代录管理员/);

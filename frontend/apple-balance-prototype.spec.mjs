@@ -358,6 +358,8 @@ function inventoryRuntime() {
   const notices = [];
   const api = {
     readDraft: (form) => api.readForm(form),
+    icon: () => '',
+    tag: value => escape(value),
     esc: escape,
     icon: () => '',
     tag: (label) => `<span>${escape(label)}</span>`,
@@ -592,6 +594,11 @@ ${coreSource.slice(coreSource.indexOf('function showColumns('), coreSource.index
   };
 }
 
+function renderedCellText(html, key) {
+  const content = html.match(new RegExp(`<td[^>]*data-column="${key}"[^>]*>([\\s\\S]*?)</td>`))?.[1];
+  return content?.replace(/<[^>]+>/g, '');
+}
+
 test('Apple专表从库存主档显示人员出处，默认列与真实列设置均包含新增三列', () => {
   const context = appleListRuntime(),
     asset = context.inventory.getAppleIds()[0];
@@ -610,7 +617,7 @@ test('Apple专表从库存主档显示人员出处，默认列与真实列设置
     ['lastOperatedBy', '最近操作人', '最近编辑员'],
     ['lastOperatedAt', '最近操作时间', '2026-11-04 18:05']
   ]) {
-    assert.match(result.html, new RegExp(`data-column="${id}">${value}</td>`));
+    assert.equal(renderedCellText(result.html, id), value);
     assert.ok(result.columns.some((column) => column.id === id && column.label === label));
   }
   assert.match(result.html, /data-action="column-settings" data-table-id="苹果ID余额"/);
@@ -625,7 +632,7 @@ test('Apple专表从库存主档显示人员出处，默认列与真实列设置
   context.api.state.columns.set('苹果ID余额', new Set(['lastOperatedBy']));
   assert.doesNotMatch(context.render().html, /data-column="lastOperatedBy"/);
   context.api.state.columns.delete('苹果ID余额');
-  assert.match(context.render().html, /data-column="lastOperatedBy">最近编辑员/);
+  assert.equal(renderedCellText(context.render().html, 'lastOperatedBy'), '最近编辑员');
 });
 
 test('Apple历史人员缺失显示未记录，不拿当前操作者或期初余额登记人补造', () => {
@@ -636,7 +643,7 @@ test('Apple历史人员缺失显示未记录，不拿当前操作者或期初余
     row = result.rows.find((item) => item.id === asset.id);
   for (const id of ['createdBy', 'lastOperatedBy', 'lastOperatedAt']) {
     assert.equal(result.columns.find((column) => column.id === id).render(row), '历史未记录');
-    assert.match(result.html, new RegExp(`data-column="${id}">历史未记录</td>`));
+    assert.equal(renderedCellText(result.html, id), '历史未记录');
   }
   assert.doesNotMatch(result.html, /演示测试员|演示初始化/);
 });
@@ -659,10 +666,10 @@ test('实际库存状态事件更新Apple专表最近人员与北京时间，原
   const result = context.render();
   assert.equal(asset.inventoryHistory.at(-1).actorId, 'state-operator');
   assert.equal(asset.inventoryHistory.at(-1).time, '2026-11-04 19:45');
-  assert.match(result.html, /data-column="createdBy">原始录入员/);
-  assert.match(result.html, /data-column="createdAt">2026-10-01 09:00/);
-  assert.match(result.html, /data-column="lastOperatedBy">状态操作员/);
-  assert.match(result.html, /data-column="lastOperatedAt">2026-11-04 19:45/);
+  assert.equal(renderedCellText(result.html, 'createdBy'), '原始录入员');
+  assert.equal(renderedCellText(result.html, 'createdAt'), '2026-10-01 09:00');
+  assert.equal(renderedCellText(result.html, 'lastOperatedBy'), '状态操作员');
+  assert.equal(renderedCellText(result.html, 'lastOperatedAt'), '2026-11-04 19:45');
   assert.doesNotMatch(result.html, /旧操作员/);
   assert.equal(context.ledger.get(asset.id).balance, balance);
 });

@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 // All requests stay inside the disposable demo host; no business writes or external calls.
 test('recharge transitions keep content and geometry through delayed, superseded and failed loads', { timeout: 90_000 }, async t => {
@@ -84,7 +84,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await frame().locator('#querySection').waitFor();
         await idle();
         assert.equal(statusChecks, 1, '首次打开应检查服务');
-        if (dark) await page.locator('#theme-toggle').click();
+        if (dark) await toggleDesignTheme(page);
         await settle();
         const before = await page.locator(frameSelector).boundingBox();
         const started = Promise.withResolvers();

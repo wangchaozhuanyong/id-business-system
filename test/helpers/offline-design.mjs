@@ -269,3 +269,12 @@ export async function spacingSnapshot(page, scope = '#main') {
   const separators = await separatorSnapshot(page, scope);
   return { ...result, separators, findings: [...result.findings, ...separators.findings] };
 }
+
+// Follow the same compact mobile tools menu used by people.
+export async function toggleDesignTheme(page) {
+  await settle(page);
+  const mobile = !(await page.locator('#theme-toggle').isVisible());
+  if (mobile) await page.locator('#mobile-tools-toggle').click();
+  await page.locator('#theme-toggle').click();
+  if (mobile) await page.locator('#mobile-tools-toggle').click();
+}

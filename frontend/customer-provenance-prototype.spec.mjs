@@ -203,7 +203,7 @@ test('客户和租户展示明确录入、修改字段，旧记录不冒充当�
   for (const key of ['qq', 'tags', 'services']) assert(c.columns.some((col) => col.id === key));
 });
 
-test('录入页切换客户与租户，草稿隔离且保存后进入各自列表', () => {
+test('客户与租户录入草稿独立，保存后留在当前页签并更新最近记录', () => {
   const r = runtime();
   r.api.state.route = 'customers/new';
   r.api.state.drafts.set('commerce-contact:customer:new', { 'commerce-name': '客户草稿' });
@@ -221,14 +221,19 @@ test('录入页切换客户与租户，草稿隔离且保存后进入各自列�
   r.contact({ name: '工作台租户' }, 'tenant');
   r.confirm();
   assert.equal(r.tenants()[0].name, '工作台租户');
-  assert.equal(r.api.state.route, 'customers/tenants');
+  assert.equal(r.api.state.route, 'customers/new/tenant');
+  r.module.render();
+  assert.equal(r.tables.at(-1).rows[0].name, '工作台租户');
 
   r.module.onClick('commerce-contact-entry-tab', { dataset: { tab: 'customer' } });
   assert.match(r.module.render(), /value="客户草稿"/);
   r.contact({ name: '工作台客户', phone: '60123456789' });
   r.confirm();
   assert.equal(r.customers()[0].name, '工作台客户');
-  assert.equal(r.api.state.route, 'customers/list');
+  assert.equal(r.api.state.route, 'customers/new');
+  assert.equal(r.api.state.drafts.has('commerce-contact:customer:new'), false);
+  r.module.render();
+  assert.equal(r.tables.at(-1).rows[0].name, '工作台客户');
 });
 
 test('新增客户保存QQ和标签，录入身份由会话生成而非表单填写', () => {

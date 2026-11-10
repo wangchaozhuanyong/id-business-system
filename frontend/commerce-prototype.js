@@ -24,7 +24,6 @@
         : `${prefix}-${Date.now()}-${++sequence}`;
   let sequence = 0;
   let quickReturn = null;
-  let customerSettingsReturn = null;
   let finance, cardIssueContext;
   let historicalFeeReview;
   let orderPrices = {};
@@ -2194,18 +2193,19 @@
     const customerId = explicit || (!order.customerId && candidates.size === 1 ? candidates.values().next().value : '');
     const start = parseDate(order.start), expiry = parseDate(order.expiry), plan = retentionPlan(order);
     const automatic = automaticOrder(order);
-    const paid = paymentStatus(order);
-    const evidence = hasOpeningEvidence(order, start, expiry, at);
-    const hasSignal = evidence || automatic || paid === '付款待核对' || paid === '已付款';
     const periodValid = Number.isFinite(start) && expiry > start;
     const cancelled = order.cancelled || ['cancelled', '已撤单'].includes(order.status);
     const draft = order.draft || ['draft', 'failed', '草稿', '失败'].includes(order.status);
-    const inventory = hasSignal && !cancelled && !draft ? retentionInventoryEnd(order) : {};
+    // Manual GPT/Claude orders register the subscription period independently of accounting confirmation.
+    const recorded = !automatic && !personalProduct(order.product);
+    const evidence = recorded ? periodValid : hasOpeningEvidence(order, start, expiry, at);
+    const hasSignal = !cancelled && !draft && (recorded || evidence || automatic ||
+      ['付款待核对', '已付款'].includes(paymentStatus(order)));
+    const inventory = hasSignal ? retentionInventoryEnd(order) : {};
     const end = Math.min(expiry, inventory.end ?? Infinity);
     let stateIssue = '';
     if (hasSignal) {
-      if (cancelled || draft) stateIssue = '订单状态与开通证据待核对';
-      else if (!periodValid) stateIssue = '订阅周期缺失或无效';
+      if (!periodValid) stateIssue = '订阅周期缺失或无效';
       else if (!evidence) stateIssue = automatic ? '代充开通证据待核对' : '开通凭据待核对';
       else if (inventory.issue) stateIssue = inventory.issue;
       else if (order.subscriptionEnded) stateIssue = '实际终止时间待核对';
@@ -2381,7 +2381,7 @@
       { id: 'orderNo', label: '订单编号' }, { id: 'plans', label: '产品与套餐' },
       { id: 'email', label: '订阅账号' }, { id: 'reason', label: '待核对原因', long: true }
     ] : [
-      { id: 'count', label: '确认订阅' }, { id: 'plans', label: '套餐分布' },
+      { id: 'count', label: '订阅次数' }, { id: 'plans', label: '套餐分布' },
       { id: 'end', label: scheduled ? '预计生效' : '最后结束' },
       ...(!scheduled ? [{ id: 'days', label: '停用天数' }] : []),
       { id: 'latest', label: '最近开通' },
@@ -2392,9 +2392,9 @@
     }];
     const hasFilters = query || view.plan || !tab && (view.age || view.count);
     const guidance = hasFilters ? { title: '暂无符合条件的记录', description: '可调整搜索或筛选条件。' } :
-      { title: review ? '暂无待核对订单' : scheduled ? '暂无待生效客户' : '暂无已确认流失客户',
-        description: review ? '订阅归属或开通资料需要核对时，会显示在这里。' :
-          '根据本系统已确认的订阅记录统计。' };
+      { title: review ? '暂无待核对订单' : scheduled ? '暂无待生效客户' : '暂无已流失客户',
+        description: review ? '客户归属、订阅周期或实际开通结果缺失时，会显示在这里。' :
+          '已开通过、订阅已结束且没有续费的客户会显示在这里。' };
     const page = A.pageRows(rows);
     const cards = `<div class="customer-retention-mobile panel-body" data-pagination-rows tabindex="0" role="region" aria-label="客户记录">${page.length
       ? `<div class="guide-list">${page.map(row => `<article class="guide-item" data-retention-card="${E(row.id)}">
@@ -2405,9 +2405,9 @@
         <div class="retention-card-action">${A.button(label, action, '', '', `data-id="${E(row.id)}"`)}</div>
       </article>`).join('')}</div>`
       : A.empty(guidance.title, guidance.description)}</div>`;
-    return A.header('客户流失', '按本系统已确认的订阅记录归集。同一客户仍有任何有效订阅时，不判为流失。待生效和待核对单独展示。') +
+    return A.header('客户流失', '统计已开通过、订阅已结束且没有续费的客户。同一客户仍有任何有效订阅时不计流失。人工订单按已登记的订阅周期判断，不要求先完成付款或成本核对。') +
       `<section class="retention-overview design-async-region" aria-label="客户流失概览">${A.summary([
-        ['已确认流失', projection.lost.length, '位客户', true],
+        ['已流失客户', projection.lost.length, '位客户', true],
         ['近 7 天停止服务', projection.lost.filter(profile => profile.days < 7).length, '位客户'],
         ['待核对订单', projection.review.length, '笔'],
         ['待生效', projection.scheduled.length, '位客户']
@@ -2458,9 +2458,9 @@
     const contacts = customerChannels.filter(([key]) => profile.customer[key])
       .map(([key, label]) => property(label, profile.customer[key])).join('');
     const historyViewKey = `customer-retention:history:${id}`;
-    A.openDrawer('客户订阅历史', '按本系统可查资料统计。相同订单或代充任务只记一次，开通证据待核对的记录单独标记。',
+    A.openDrawer('客户订阅历史', '按已登记的订阅周期统计，相同订单或代充任务只记一次。财务待补全不影响人工订阅次数；归属、周期或实际开通结果缺失时单独标记。',
       `<section class="form-section retention-profile"><h3>${E(profile.customer.name)}</h3>${A.summary([
-        ['确认订阅', profile.confirmed.length, '次', true], ['有效服务', profile.activeCount, '项'],
+        ['订阅次数', profile.confirmed.length, '次', true], ['有效服务', profile.activeCount, '项'],
         ['可识别账号', accounts.size, '个'], ['待核对记录', records.filter(row => row.reason).length, '笔']
       ])}<div class="property-list">
         ${property('最早可查开通', retentionDate(profile.first?.start))}
@@ -3057,7 +3057,7 @@
         tenant
           ? '查看租户关联账号、续费提醒和逐项付租记录；归属人与资料录入人分别记录。'
           : '客户标签独立维护；历史业务按客户编号关联订单汇总，录入人与最近修改人自动记录。',
-        (tenant ? renewalSettings : customerSettingsButtons()) + A.button(
+        (tenant ? renewalSettings : '') + A.button(
           `新增${noun}`,
           'commerce-contact-add',
           'primary',
@@ -3067,11 +3067,6 @@
       ) +
       `<section class="panel">${listTabs}${toolbar(`搜索${noun}、联系方式、标签、历史业务或录入人`, columnSettingsButton(`commerce-${tenant ? 'tenants' : 'customers'}`), 'data-page-actions')}${tableList(columns, displayRows, `commerce-${tenant ? 'tenants' : 'customers'}`)}</section>`
     );
-  }
-  function customerSettingsButtons() {
-    if (A.modules.operations?.canManageCustomerOptions?.() === false) return '';
-    return A.button('来源设置', 'commerce-customer-settings', '', 'settings', 'data-kind="sources"') +
-      A.button('标签设置', 'commerce-customer-settings', '', 'settings', 'data-kind="tags"');
   }
   function customerSourceChoices(selected = '') {
     const configured = A.modules.operations?.getCustomerSources?.() ||
@@ -3088,7 +3083,7 @@
     return `<details class="customer-tag-picker" data-customer-tag-picker data-dismiss-outside${open ? ' open' : ''}>
       <summary id="commerce-tags" aria-label="客户标签"><span data-customer-tag-summary>${E(selected.join('、') || '请选择标签（可多选）')}</span>${A.icon('chevron')}</summary>
       <div class="customer-tag-options" role="group" aria-label="客户标签选项">
-        ${choices || '<p>暂无可选标签，请点击本页的“标签设置”添加。</p>'}
+        ${choices || '<p>暂无可选标签，可由管理员在“系统设置 → 下拉设置 → 标签设置”中添加。</p>'}
       </div>
       <input type="hidden" name="commerce-tags" value="${E(JSON.stringify(selected))}" />
     </details>`;
@@ -3178,7 +3173,7 @@
       : [
           section('01', '基本资料', name + source + contactField('客户标签', 'tags',
             customerTagPicker(A.readOptionList(draft['commerce-tags'] ?? row?.tags ?? []), row?.tags || [])
-          ), '', false, 'commerce-section', customerSettingsButtons()),
+          ), '', false, 'commerce-section'),
           section('02', '联系方式', phone + channels + notes,
             '联系方式选填，可先登记直接在网站下单的客户。', false, 'commerce-customer-section')
         ].join('');
@@ -4867,7 +4862,8 @@
   function entryWorkspace(form, kind, product = '') {
     const title = kind === 'order' ? '最近订单' : kind === 'tenant' ? '最近租户' : '最近客户';
     const description = `按北京时间筛选提交时间，默认按最新录入排序。显示当前权限内${kind === 'order' ? currencyFamily(product) + ' 的' : ''}记录，支持分页。联系方式列只显示所选范围内已填写的渠道；长内容点击查看完整值。刷新和翻页不会清空左侧输入。`;
-    return `<div class="commerce-entry-layout"><div class="commerce-entry-columns">${form}
+    const mobileView = A.state.drafts.get(`mobile-entry:${A.state.route}`)?.view === 'records' ? 'records' : 'form';
+    return `<div class="commerce-entry-layout" data-mobile-view="${mobileView}"><div class="entry-mobile-tabs" role="tablist" aria-label="录入与最近记录"><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="form" aria-selected="${mobileView === 'form'}">填写资料</button><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="records" aria-selected="${mobileView === 'records'}">${title}</button></div><div class="commerce-entry-columns">${form}
       <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
         <div class="panel-heading"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
           <div class="entry-record-actions">${entryRecordFilters(kind, product)}
@@ -4949,7 +4945,8 @@
   function renderOrderPage() {
     const renewal = S.route.startsWith(renewalOrderPrefix);
     const source = renewal ? workbenchOrderSource(S.route) : null;
-    const product = source?.order.product || personalEntries[S.route] || (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
+    const original = renewal ? orders.find(row => encodeURIComponent(row.id) === S.route.slice(renewalOrderPrefix.length)) : null;
+    const product = source?.order.product || original?.product || personalEntries[S.route] || (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
     return (
       A.header(
         isClaude({ product }) ? 'Claude 提交订单' : product + ' 提交订单',
@@ -5830,7 +5827,7 @@
             ['MYR', '马币 MYR']
           ],
           costSettings.currency
-        )}</select>${routeButton('费用规则', 'settings/costs', '', 'settings')}`
+        )}</select>${routeButton('下拉设置', 'settings/costs', '', 'settings')}`
       ) +
       A.summary([
         ['已核算订单', complete.length, '条', true],
@@ -5974,20 +5971,6 @@
         : `已有同名客户使用此${label}，请在客户数据的“已停用”中核对并恢复。`
     );
     document.getElementById(fieldId)?.focus();
-  }
-  function showNewContactInList(tenant) {
-    const list = tenant ? tenantRoute : 'customers/list';
-    if (tenant) tenantView().tab = 'active';
-    else moduleState.customerMode = 'active';
-    if (S.route === list) {
-      S.query = '';
-      S.page = 1;
-      A.render();
-    } else {
-      const view = S.viewDrafts?.get(list);
-      S.viewDrafts?.set(list, { ...view, query: '', page: 1 });
-      A.go(list);
-    }
   }
   function saveContact(form) {
     const raw = A.readForm(form),
@@ -6171,12 +6154,14 @@
               S.drafts.set(back.key, draft);
               if (back.main) A.render();
               else orderEditor(back.orderId, back.renewalId, false);
-            } else if (
-              !existing &&
-              (tenant ? route === 'customers/new/tenant' : ['customers/new', 'customers/list'].includes(route))
-            ) {
-              showNewContactInList(tenant);
-            } else A.render();
+            } else {
+              if (!existing && !tenant && route === 'customers/list') {
+                moduleState.customerMode = 'active';
+                S.query = '';
+                S.page = 1;
+              }
+              A.render();
+            }
             A.notify(localData ? '资料已保存到服务器数据库' : '演示资料已保存');
           }
         );
@@ -6668,14 +6653,9 @@
           () => {
             committed = true;
             cleanClose(key);
-            A.go(
-              renewalEntry ? renewalRoute : orderListRoute(saved.product)
-            );
-            A.notify(
-              completenessReasons(orders.find((row) => row.id === id) || saved).length
-                ? '已保存独立订单，仍有资料待补全'
-                : '独立订单已保存'
-            );
+            A.render();
+            const incomplete = completenessReasons(orders.find((row) => row.id === id) || saved).length;
+            A.notify(`${existing ? '订单修改成功' : '订单提交成功'}${incomplete ? '，仍有资料待补全' : ''}`);
           },
           [
             preparedBalance,
@@ -7803,22 +7783,6 @@
       }
       return true;
     }
-    if (action === 'commerce-customer-settings') {
-      const operations = A.modules.operations;
-      if (!operations?.openCustomerOptionSettings || operations.canManageCustomerOptions() === false) {
-        A.notify('当前无法修改客户选项');
-        return true;
-      }
-      saveDrafts();
-      const form = node.closest('#commerce-contact-form');
-      customerSettingsReturn = form?.closest('#drawer') ? {
-        route: S.route,
-        id: form.elements['commerce-id'].value,
-        quick: form.elements['commerce-quick'].value === 'yes'
-      } : null;
-      operations.openCustomerOptionSettings(node.dataset.kind);
-      return true;
-    }
     if (action === 'commerce-local-retry') {
       void A.withActionFeedback(node, () => loadLocalCommerce(true),
         { pending: '正在读取业务资料…', success: '业务资料已重新读取', failure: '业务资料读取失败，请重试' });
@@ -8279,10 +8243,13 @@
     microsoft: 'microsoftCostCny', '微软邮箱': 'microsoftCostCny'
   };
   const orderValueObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(entries => {
-    for (const { target } of entries) {
-      if (target.isConnected) updateOrderValueReadout(target);
-      else orderValueObserver.unobserve(target);
-    }
+    // Adding a readout can resize the form. Defer it until after observer delivery.
+    window.requestAnimationFrame(() => {
+      for (const { target } of entries) {
+        if (target.isConnected) updateOrderValueReadout(target);
+        else orderValueObserver.unobserve(target);
+      }
+    });
   }) : null;
   let orderValueMeasure;
   function updateOrderValueReadout(control) {
@@ -8889,8 +8856,8 @@
         A.header(
           tenant ? '租户录入' : '客户录入',
           tenant
-            ? '保存后进入租户数据。录入人和修改人自动记录。'
-            : '保存后进入客户数据。录入人和修改人自动记录，关联订单和历史开通业务可从列表直接打开。'
+            ? '保存成功后可继续录入。录入人和修改人自动记录。'
+            : '保存成功后可继续录入。录入人和修改人自动记录，关联订单和历史开通业务可从列表直接打开。'
         ) + contactForm(tenant, '', false, true)
       );
     }
@@ -9144,14 +9111,6 @@
     if (closedOrder) clearRevealedCard(closedOrder);
     const cardInput = drawer.querySelector('#commerce-tenant-card-number');
     if (cardInput) cardInput.value = '';
-    if (customerSettingsReturn) {
-      const back = customerSettingsReturn;
-      customerSettingsReturn = null;
-      if (back.route === S.route) {
-        contactForm(false, back.id, back.quick);
-        return;
-      }
-    }
     if (!quickReturn || quickReturn.tenant) return;
     const back = quickReturn;
     quickReturn = null;

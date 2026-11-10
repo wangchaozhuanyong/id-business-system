@@ -234,21 +234,30 @@
     const current = () => ownerContext === context && A.state.route === context.route &&
       (D.actor?.()?.id || '') === context.actor;
     A.openDrawer('账号归属人', '归属人与订单录入人分别记录，历史订单保持原值。',
-      `<form id="subscription-owner-form" data-subscription-draft="${esc(key)}"><input type="hidden" name="commandId" value="${esc(A.state.drafts.get(key)?.commandId || crypto.randomUUID())}"><div class="form-grid">${A.field('归属人',
-        'subscription-owner', '<select id="subscription-owner" name="ownerId" required disabled><option value="">正在读取员工…</option></select>', true)}</div>
-        <p id="subscription-owner-error" class="inline-notice warning" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
-        <button class="button primary" type="submit" disabled>保存归属</button></div></form>`, '', key);
+      `<dl class="compact-form-context">
+        <div class="field"><dt class="field-label">当前账号</dt><dd class="field-label compact-form-value" id="subscription-owner-account">${esc(row.account || '未登记')}</dd></div>
+        <div class="field"><dt class="field-label">当前归属</dt><dd class="field-label compact-form-value" id="subscription-current-owner">${esc(row.ownerName || (row.ownerId ? '姓名待读取' : '未设置'))}</dd></div>
+       </dl><form id="subscription-owner-form" data-subscription-draft="${esc(key)}"><input type="hidden" name="commandId" value="${esc(A.state.drafts.get(key)?.commandId || crypto.randomUUID())}">${A.field('归属人',
+        'subscription-owner', '<select id="subscription-owner" name="ownerId" required disabled><option value="">正在读取员工…</option></select>', true)}
+        <p id="subscription-owner-error" class="inline-notice warning" role="alert" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
+        <button class="button primary" type="submit" disabled>保存归属</button></div></form>`, '', key, { kind: 'compact-form' });
     const form = $('#subscription-owner-form'), select = $('#subscription-owner', form);
     try {
       const response = await D.orderOwners();
       if (!form.isConnected || !current()) return;
       const people = Array.isArray(response.items) ? response.items : [];
       const draft = A.state.drafts.get(key);
-      select.innerHTML = A.options([['', '请选择员工'], ...people.map(person => [person.id, person.name])], draft?.ownerId || row.ownerId);
-      select.disabled = false;
+      $('#subscription-current-owner').textContent = row.ownerName || people.find(person => person.id === row.ownerId)?.name || (row.ownerId ? '未找到对应员工' : '未设置');
+      select.innerHTML = A.options([['', people.length ? '请选择员工' : '暂无可选员工'], ...people.map(person => [person.id, person.name])], draft?.ownerId || row.ownerId);
+      select.disabled = !people.length;
       form.querySelector('[type="submit"]').disabled = !people.length;
     } catch {
-      if (form.isConnected) { $('#subscription-owner-error', form).hidden = false; $('#subscription-owner-error', form).textContent = '员工列表读取失败，请关闭后重试。'; }
+      if (form.isConnected && current()) {
+        if (!row.ownerName && row.ownerId) $('#subscription-current-owner').textContent = '暂时无法读取';
+        select.innerHTML = '<option value="">员工列表读取失败</option>';
+        $('#subscription-owner-error', form).hidden = false;
+        $('#subscription-owner-error', form).textContent = '员工列表读取失败，请关闭后重试。';
+      }
     }
   }
 

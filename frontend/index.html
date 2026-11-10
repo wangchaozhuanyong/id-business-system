@@ -9,7 +9,7 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <title>ID 业务管理 · 新版交互设计</title>
-    <link rel="stylesheet" href="./prototype.css?v=20261110-account-apple-funding" />
+    <link rel="stylesheet" href="./prototype.css?v=20261110-mobile-workflow" />
     <link rel="stylesheet" href="./pagination.css?v=20261110-entry-card-mail" />
     <link rel="stylesheet" href="./recharge-integration.css?v=20261110-tabs" />
     <link rel="stylesheet" href="./bitbrowser-addresses.css?v=20261110-orders-address" />
@@ -22,18 +22,18 @@
     <script src="./pagination.js?v=20261110-entry-card-mail" defer></script>
     <script src="./design-charts.js?v=20261110-visual-r1" defer></script>
     <script src="./interaction-preferences.js?v=20261110-visual-r1" defer></script>
-    <script src="./prototype.js?v=20261110-account-apple-funding" defer></script>
+    <script src="./prototype.js?v=20261110-mobile-workflow" defer></script>
     <script src="./inventory-prototype.js?v=20261110-account-apple-funding" defer></script>
-    <script src="./apple-relay-prototype.js?v=20261110-entry-card-mail" defer></script>
+    <script src="./apple-relay-prototype.js?v=20261110-mobile-workflow" defer></script>
     <script type="module" src="./apple-funding.mjs?v=20261110-account-apple-funding"></script>
     <script src="./apple-balance-prototype.js?v=20261110-account-apple-funding" defer></script>
-    <script src="./commerce-prototype.js?v=20261110-account-apple-funding" defer></script>
+    <script src="./commerce-prototype.js?v=20261110-mobile-workflow" defer></script>
     <script src="./claude-google-subscriptions.js?v=20261110-entry-card-mail" defer></script>
-    <script src="./subscription-management.js?v=20261110-account-apple-funding" defer></script>
-    <script src="./employee-statistics.js?v=20261110-pagination" defer></script>
+    <script src="./subscription-management.js?v=20261110-mobile-workflow" defer></script>
+    <script src="./employee-statistics.js?v=20261110-mobile-workflow" defer></script>
     <script src="./order-completion.js?v=20261110-tabs" defer></script>
     <script src="./order-operations.js?v=20261110-entry-card-mail" defer></script>
-    <script src="./operations-prototype.js?v=20261110-entry-card-mail" defer></script>
+    <script src="./operations-prototype.js?v=20261110-mobile-workflow" defer></script>
     <script src="./bitbrowser-addresses.js?v=20261110-orders-address" defer></script>
     <script src="./overview-prototype.js?v=20261110-visual-r1" defer></script>
     <script src="./finance-collection.js?v=20261109-pagination" defer></script>
@@ -65,6 +65,7 @@
             <button type="button" class="button quiet" data-action="tools-open" data-tab="话术文案" aria-haspopup="dialog" aria-controls="drawer">话术文案</button>
           </nav>
           <div class="topbar-actions">
+            <button type="button" class="button quiet mobile-tools-toggle" id="mobile-tools-toggle" popovertarget="mobile-tools-panel" aria-label="工具与界面设置">工具</button>
             <details class="interaction-preferences" id="interaction-preferences">
               <summary aria-label="界面音效设置" aria-controls="sound-settings" aria-expanded="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4 6 8H3v8h3l5 4z"/><path class="sound-off-mark" d="M16 9l5 6m0-6-5 6"/><path class="sound-on-mark" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></svg><span data-sound-label>音效关</span></summary>
               <div id="sound-settings" class="interaction-preferences-panel" popover="manual">
@@ -99,6 +100,8 @@
     </div>
     <dialog id="drawer" class="drawer" aria-labelledby="drawer-title"></dialog>
     <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title"></dialog>
+    <div id="mobile-tools-panel" class="mobile-tools-panel" popover="auto" aria-label="工具与界面设置"></div>
+    <div id="mobile-entry-actions" class="mobile-entry-actions" hidden></div>
     <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   </body>
 </html>

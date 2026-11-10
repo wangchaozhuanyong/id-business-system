@@ -37,7 +37,7 @@ function fixtures() {
     order('QA-CLAUDE-MAX', 'main', '2026-10-08T10:00', '2026-11-05T10:00', {
       product: 'Claude Max', plan: 'Max 5x', refunds: [{ amount: '5' }]
     }),
-    ...Array.from({ length: 11 }, (_, i) => active('QA-DRAFT-' + i, 'main', { paidConfirmed: false, paidAmount: '' })),
+    ...Array.from({ length: 11 }, (_, i) => active('QA-DRAFT-' + i, 'main', { draft: true, paidConfirmed: false, paidAmount: '' })),
     expired('QA-OLD-ACTIVE', 'active'),
     active('QA-ACTIVE-CLAUDE', 'active', { product: 'Claude Pro', plan: 'Pro' }),
     active('QA-UNKNOWN-PLAN', 'active', { plan: '旧资料缺标签' }),
@@ -82,7 +82,7 @@ const loadedMetrics = ['13位客户', '2位客户', '8笔', '1位客户'];
 
 async function openFixture(browser, data, actor = admin) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, serviceWorkers: 'block' });
-  const requests = await interceptDesign(context, { localFixtures: data, actor });
+  const requests = await interceptDesign(context, { localFixtures: data, actor, skipRechargeAssets: true });
   const page = await context.newPage();
   page.setDefaultTimeout(6500);
   await page.clock.setFixedTime(at);
@@ -263,6 +263,99 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
 
   assert.deepEqual(errors, []);
   assert.deepEqual(writes, []);
+  assert.deepEqual(requests.external, []);
+  assert.deepEqual(requests.unavailable, []);
+});
+
+test('人工订阅按已登记周期统计流失，不以财务确认或续费邮箱作为开通门槛', { timeout: 90_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const customers = Array.from({ length: 43 }, (_, i) => ({ id: `manual-${i}`, name: `合成到期客户 ${i + 1}`, active: true }));
+  const products = [['GPT', 'Plus'], ['Claude Pro', 'Pro'], ['Claude Max', 'Max 5x']];
+  const orders = customers.map((customer, i) => order(`QA-MANUAL-${i}-ROW`, customer.id, '2026-10-08T10:00', '2026-11-08T10:00', {
+    product: products[i % 3][0], plan: products[i % 3][1], email: '', source: '管理员手工',
+    paidConfirmed: false, receiptConfirmed: false, costConfirmed: false
+  }));
+  const data = {
+    commerce: { version: 1, data: { customers, orders, tenants: [], operating: [], rentBatches: [], logs: [] } },
+    inventory: { version: 1, data: { accounts: [], mailboxes: [] }, accountSummaries: [] }
+  };
+  const { context, page, writes, errors, requests } = await openFixture(browser, data);
+  t.after(() => context.close());
+  await page.goto(lossUrl);
+  await waitForList(page);
+  const output = process.env.ID_LAYOUT_QA_OUTPUT;
+  if (output) {
+    await mkdir(output, { recursive: true });
+    await page.screenshot({ path: join(output, 'manual-expired-43.png') });
+  }
+  assert.deepEqual(await summary(page), ['43位客户', '43位客户', '0笔', '0位客户']);
+  assert.equal(await mainPager(page).getAttribute('data-total'), '43');
+  await mainPager(page).getByRole('button', { name: '下一页' }).click();
+  await mainPager(page).getByRole('button', { name: '下一页' }).click();
+  assert.equal(await list(page).locator('tbody tr[data-row-id]').count(), 3);
+  await search(page).fill('QA-MANUAL-0-ROW');
+  await list(page).getByRole('button', { name: '订阅历史', exact: true }).click();
+  assert.deepEqual(await drawer(page).locator('.summary-number').allTextContents(), ['1次', '0项', '0个', '0笔']);
+  await drawer(page).getByRole('button', { name: '查看订单 QA-MANUAL-0-ROW', exact: true }).click();
+  await drawer(page).getByRole('heading', { name: '订单详情', exact: true }).waitFor();
+  assert.match(await drawer(page).innerText(), /付款状态\s+付款待核对/);
+  await page.keyboard.press('Escape');
+  await search(page).fill('');
+
+  // Follow-up reads use the same customers with active, future, invalid and cancelled renewals.
+  // No write request is sent; only the isolated read fixture changes.
+  data.commerce.version++;
+  orders[8].paidAmount = '';
+  data.commerce.data.orders.push(
+    order('QA-RENEWED-OTHER-ACCOUNT', 'manual-0', '2026-11-08T10:00', '2026-12-08T10:00', {
+      product: 'Claude Max', plan: 'Max 5x', paidConfirmed: false, email: 'different@example.test'
+    }),
+    order('QA-RENEWED-NO-AMOUNT', 'manual-1', '2026-11-08T10:00', '2026-12-08T10:00', {
+      paidAmount: '', paidConfirmed: false, email: ''
+    }),
+    order('QA-RENEWED-FUTURE', 'manual-2', '2026-11-11T10:00', '2026-12-11T10:00', { paidConfirmed: false }),
+    { ...orders[3] },
+    ...['cancelled', 'failed', 'draft'].map((status, i) =>
+      order('QA-NOT-OPENED-' + status, `manual-${i + 4}`, '2026-11-01T10:00', '2026-12-01T10:00', { status })),
+    order('QA-MISSING-EXPIRY', 'manual-7', '2026-11-08T10:00', '', { paidConfirmed: false, paidAmount: '' })
+  );
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.getByRole('tab', { name: '已流失 39', exact: true }).waitFor();
+  assert.deepEqual(await summary(page), ['39位客户', '39位客户', '1笔', '1位客户']);
+  for (const id of ['QA-MANUAL-0-ROW', 'QA-MANUAL-1-ROW', 'QA-MANUAL-2-ROW', 'QA-MANUAL-7-ROW']) {
+    await search(page).fill(id);
+    assert.equal(await mainPager(page).getAttribute('data-total'), '0', id + '不应误判流失');
+  }
+  for (const id of ['QA-MANUAL-3-ROW', 'QA-MANUAL-4-ROW', 'QA-MANUAL-5-ROW', 'QA-MANUAL-6-ROW', 'QA-MANUAL-8-ROW']) {
+    await search(page).fill(id);
+    assert.equal(await mainPager(page).getAttribute('data-total'), '1', id + '应按到期订阅统计');
+    assert.match(await list(page).innerText(), /1 次/);
+  }
+  await search(page).fill('');
+  await tab(page, /^待核对/);
+  assert.equal(await mainPager(page).getAttribute('data-total'), '1');
+  assert.match(await list(page).innerText(), /QA-MISSING-EXPIRY.*订阅周期缺失或无效/s);
+  assert.doesNotMatch(await list(page).innerText(), /开通凭据待核对/);
+  await tab(page, /^待生效/);
+  assert.match(await list(page).innerText(), /合成到期客户 3/);
+  await page.goto(origin + '/#/overview');
+  await page.locator('.overview-customer-summary a[href="#/workspace/customer-loss"] strong').getByText('39', { exact: true }).waitFor();
+  assert.equal(await page.locator('.overview-customer-summary strong').first().innerText(), '2');
+  await page.clock.setFixedTime(new Date('2026-12-08T02:00:00Z'));
+  await page.goto(lossUrl);
+  await waitForList(page);
+  assert.deepEqual(await summary(page), ['41位客户', '2位客户', '1笔', '0位客户']);
+  await page.clock.setFixedTime(new Date('2026-12-12T02:00:00Z'));
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.getByRole('tab', { name: '已流失 42', exact: true }).waitFor();
+  assert.deepEqual(await summary(page), ['42位客户', '3位客户', '1笔', '0位客户']);
+  assert.equal(data.commerce.data.orders[0].paidConfirmed, false);
+  assert.equal(data.commerce.data.orders[0].receiptConfirmed, false);
+  assert.equal(data.commerce.data.orders[0].costConfirmed, false);
+  assert.deepEqual(writes, []);
+  assert.deepEqual(errors, []);
   assert.deepEqual(requests.external, []);
   assert.deepEqual(requests.unavailable, []);
 });

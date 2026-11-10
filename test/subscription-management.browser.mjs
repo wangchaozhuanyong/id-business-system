@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const actor = { id: 'synthetic-admin', name: '合成操作人', role: 'admin' };
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
@@ -64,13 +64,40 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await page.goto(origin + '/#/data-management/claude-google-subscriptions');
       await page.waitForURL('**/#/subscriptions/claude');
       await page.locator('#subscription-list tbody tr[data-row-id]').waitFor();
-      if (theme === 'dark') await page.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(page);
       for (const name of ['gpt', 'claude', 'gemini', 'grok']) {
         await page.evaluate(route => { location.hash = '#/subscriptions/' + route; }, name);
         await page.locator(`#main[data-layout-route="subscriptions/${name}"]`).waitFor();
         await page.locator('#subscription-list tbody tr[data-row-id]').waitFor();
+        const metrics = await page.locator('#subscription-overview .summary-item').evaluateAll(items =>
+          items.map(item => {
+            const rect = item.getBoundingClientRect();
+            const text = selector => {
+              const range = document.createRange();
+              range.selectNodeContents(item.querySelector(selector));
+              return range.getBoundingClientRect().top;
+            };
+            return { x: rect.x, y: rect.y, right: rect.right, width: rect.width, height: rect.height,
+              labelTop: text('.summary-label'), numberTop: text('.summary-number') };
+          }));
+        assert.equal(metrics.length, 5, '每类订阅都保留全部五项统计');
+        if (width > 900) {
+          for (const item of metrics) {
+            assert(Math.abs(item.y - metrics[0].y) <= 1, '宽屏五项统计必须同一行');
+            assert(Math.abs(item.width - metrics[0].width) <= 1, '各项统计等宽');
+            assert(Math.abs(item.labelTop - metrics[0].labelTop) <= 1, '统计标题真实文字对齐');
+            assert(Math.abs(item.numberTop - metrics[0].numberTop) <= 1, '统计数字真实文字对齐');
+          }
+        } else {
+          assert(metrics[2].y >= metrics[0].y + metrics[0].height, '窄屏统计自然分行');
+          assert(Math.abs(metrics[4].right - metrics[1].right) <= 1, '窄屏最后一项占满整行');
+        }
         assert.match(await page.locator('#page-title').innerText(), new RegExp(name === 'gpt' ? 'GPT' : name === 'claude' ? 'Claude' : name === 'gemini' ? 'Gemini' : 'Grok'));
-        assert.match(await page.locator('#subscription-list').innerText(), /订阅剩余天数/);
+        const subscriptionRow = page.locator('#subscription-list tbody tr[data-row-id]');
+        const days = subscriptionRow.locator('td[data-column="days"]');
+        if (!(await days.isVisible())) await subscriptionRow.getByRole('button', { name: '更多资料', exact: true }).click();
+        assert.equal(await days.getAttribute('data-label'), '订阅剩余天数');
+        assert.match(await days.innerText(), /21/);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
         if (name === 'grok') {
           assert.match(await page.locator('#subscription-overview .summary-item').filter({ hasText: '全部账号' }).innerText(), /1\s*个/);

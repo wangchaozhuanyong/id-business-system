@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import {
+  toggleDesignTheme,
   root,
   origin,
   interceptDesign,
@@ -43,7 +44,7 @@ try {
       page.on('pageerror', (e) => errors.push(e.message));
       page.setDefaultTimeout(5000);
       await page.goto(origin + '/#/overview');
-      if (theme === 'dark') await page.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(page);
       const routes = await page.evaluate(() =>
         window.IDDesignAPI.navigation.flatMap((group) => group[2].map((item) => item[1]))
       );
@@ -147,7 +148,7 @@ try {
       await interceptDesign(context, { localFixtures: fixture });
       const page = await context.newPage();
       await page.goto(origin + '/#/mailboxes/relay');
-      if (theme === 'dark') await page.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(page);
       await page.locator('[data-action="relay-tab"][data-tab="query"]').click();
       await page.locator('#relay-query').waitFor();
       await settle(page);
@@ -170,7 +171,7 @@ try {
       );
       const failurePage = await failed.newPage();
       await failurePage.goto(origin + '/#/mailboxes/relay');
-      if (theme === 'dark') await failurePage.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(failurePage);
       await failurePage.getByRole('button', { name: '重试', exact: true }).waitFor();
       await capture(failurePage, width, theme, 'mailboxes/relay', 'API read failure');
       await failed.close();

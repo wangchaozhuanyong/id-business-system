@@ -121,7 +121,8 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await page.locator('#main [name="commerce-paidConfirmed"]').check();
   await page.locator('#main button[form="commerce-order-form"][type="submit"]').click();
   await accept();
-  await page.waitForURL(`${origin}/#/orders/gpt`);
+  await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+  assert.equal(new URL(page.url()).hash, '#/workspace/order/gpt');
   const saved = orderWrites.at(-1)?.data.orders.find(row => row.email === 'no-card-fixture@example.test');
   assert.ok(saved);
   assert.equal(saved.cardId, '');

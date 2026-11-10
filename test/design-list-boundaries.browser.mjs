@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 
 test('dense lists retain pagination and drawer controls within their visible boundaries', { timeout: 120_000 }, async t => {
@@ -58,7 +58,7 @@ test('dense lists retain pagination and drawer controls within their visible bou
       });
       try {
         await page.goto(origin + '/#/customers/list');
-        if (dark) await page.locator('#theme-toggle').click();
+        if (dark) await toggleDesignTheme(page);
         for (const route of routes) {
           await page.evaluate(route => { location.hash = '#/' + route; }, route);
           await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
@@ -93,7 +93,7 @@ test('dense lists retain pagination and drawer controls within their visible bou
             assert(Math.abs(last.tableHeight - first.tableHeight) <= 1, `${route}: 末页表格突然缩小`);
           } else {
             assert(!first.tableScrollsVertically && !last.tableScrollsVertically, `${route}: 窄屏表格应随页面纵向滚动`);
-            assert(last.tableHeight >= Math.min(first.tableHeight, 900) - 1, `${route}: 窄屏末页未保留列表阅读区`);
+            assert(last.tableHeight <= first.tableHeight + 1, `${route}: 手机末页不应保留空白卡片高度`);
           }
           if (route === 'customers/list') {
             await page.locator('#main .pagination button[aria-label="上一页"]').press('Enter');

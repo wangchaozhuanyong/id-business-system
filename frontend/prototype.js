@@ -275,7 +275,7 @@ const navigation = [
     [
       ['员工与权限', 'settings/accounts'],
       ['邮箱分类', 'settings/mail-types'],
-      ['费用规则', 'settings/costs'],
+      ['下拉设置', 'settings/costs'],
       ['代付国家', 'settings/payment-countries'],
       ['汇率采集', 'settings/exchange-rates'],
       ['登录日志', 'settings/login-logs'],
@@ -751,6 +751,7 @@ function openDrawer(title, description, body, footer = '', context = '', layout 
   normalizeDrawerActions(drawer);
   drawer.showModal();
   restoreTabScroll(drawer, tabScroll);
+  requestAnimationFrame(() => { if (drawer.open) updateMobileDatePreviews(drawer); });
 }
 function tabScrollKey(tabs, index) {
   return tabs.getAttribute('aria-label') || tabs.id ||
@@ -966,7 +967,7 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
       (window.IDLocalData ? '可调整搜索或筛选条件。' : '调整搜索和筛选条件，或新增一条演示资料。')
   );
   const check = scope
-    ? `<th class="check-cell"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /></th>`
+    ? `<th class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /><span class="mobile-record-only">选择本页</span></label></th>`
     : '';
   const headers = visible.map((column) => {
     const label = escapeHtml(column.label);
@@ -975,7 +976,25 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
     const content = help ? `<div class="title-with-help"><span>${label}</span>${help}</div>` : label;
     return `<th class="${column.action ? 'table-actions' : ''}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;
   }).join('');
-  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${headers}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
+  const dataColumns = visible.filter(column => !column.action);
+  const identity = ['email', 'account', 'name', 'orderNo', 'title', 'id']
+    .map(key => dataColumns.find(column => column.id === key)).find(Boolean) || dataColumns[0];
+  const preferred = tableId === '苹果ID余额' ? ['balance', 'status', 'country']
+    : ['status', 'use', 'subscriptionStatus', 'plan', 'balance', 'saleAmount', 'amount', 'owner', 'ownerName', 'currentCustomer', 'customer', 'expiry'];
+  const summaryColumns = new Set([identity?.id, ...preferred.filter(key => dataColumns.some(column => column.id === key)).slice(0, 3)]);
+  if (summaryColumns.size === 1) for (const column of dataColumns) {
+    if (!/password|totp|secret|token|session|security|proxy/i.test(column.id)) summaryColumns.add(column.id);
+    if (summaryColumns.size >= 4) break;
+  }
+  const expandable = dataColumns.some(column => !summaryColumns.has(column.id));
+  const toggleColumn = visible.find(column => column.action) || identity;
+  const renderRow = row => `<tr data-row-id="${escapeHtml(row.id)}">${scope ? `<td class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${escapeHtml(row.id)}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></label></td>` : ''}${visible.map(column => {
+    const presentation = column.action ? 'actions' : column === identity ? 'identity' : summaryColumns.has(column.id) ? 'summary' : 'secondary';
+    const toggle = expandable && column === toggleColumn
+      ? '<button type="button" class="text-button mobile-record-only mobile-record-toggle" data-action="table-mobile-toggle" aria-expanded="false">更多资料</button>' : '';
+    return `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${escapeHtml(column.id)}" data-mobile-field="${presentation}" data-label="${escapeHtml(column.label)}">${column.action ? renderTableCell(column, row, tableId) : `<div class="mobile-record-value">${renderTableCell(column, row, tableId)}</div>`}${toggle}</td>`;
+  }).join('')}</tr>`;
+  return `<div class="table-viewport mobile-records ${scope ? 'mobile-records--selectable' : ''} ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}资料列表"><table data-table="${escapeHtml(tableId)}"><thead><tr>${check}${headers}</tr></thead><tbody>${rows.length ? rows.map(renderRow).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
 }
 function fixedTableColumn(column) {
   return column.action || ['email', 'orderNo', 'name'].includes(column.id);
@@ -1040,6 +1059,93 @@ function stabilizeDesignTables() {
     viewport.style.setProperty('--table-page-rows', String(rows));
   }
 }
+// Keep one set of controls and records across desktop and mobile. Menus forward
+// to the original button so module context, permissions and confirmations survive.
+const mobileToolbarSources = new WeakMap();
+const mobileToolSlots = [];
+let mobileEntryFooter = null;
+function restoreMobileEntryFooter() {
+  if (!mobileEntryFooter) return;
+  const { footer, marker } = mobileEntryFooter;
+  if (marker.isConnected) marker.replaceWith(footer);
+  else footer.remove();
+  mobileEntryFooter = null;
+  $('#mobile-entry-actions').hidden = true;
+}
+function mountMobileListActions(region) {
+  const sourceButtons = group => Array.from(group.children).filter(node => node.matches('button:not(.primary):not(.mobile-secondary-action):not(.mobile-list-actions):not([type="submit"]):not([hidden])'));
+  const prepare = (group, sources) => {
+    const trigger = document.createElement('button');
+    trigger.type = 'button'; trigger.className = 'button mobile-list-actions';
+    trigger.dataset.action = 'mobile-list-actions'; trigger.textContent = '更多操作';
+    trigger.setAttribute('aria-haspopup', 'menu'); trigger.setAttribute('aria-expanded', 'false');
+    for (const source of sources) source.classList.add('mobile-secondary-action');
+    group.append(trigger);
+    mobileToolbarSources.set(trigger, sources);
+  };
+  for (const panel of $$('.panel', region)) {
+    const groups = $$(':scope > .content-toolbar > .toolbar-right, :scope > .toolbar > .toolbar-right', panel);
+    const primary = groups.find(group => $(':scope > .primary', group));
+    if (!primary || groups.length < 2 || $('.mobile-list-actions', primary)) continue;
+    const sources = groups.flatMap(sourceButtons);
+    if (sources.length < 2) continue;
+    prepare(primary, sources);
+    for (const group of groups) if (Array.from(group.children).every(node => node.matches('button'))) group.classList.add('mobile-merged-actions');
+  }
+  for (const group of $$('.toolbar-right', region)) {
+    if (group.closest('form,.form-panel,.entry-records') || group.classList.contains('mobile-merged-actions') || $('.mobile-list-actions', group)) continue;
+    const sources = sourceButtons(group);
+    if (sources.length >= 2) prepare(group, sources);
+  }
+}
+function syncMobileLayout() {
+  const mobile = matchMedia('(max-width: 900px)').matches;
+  const tools = $('#mobile-tools-panel');
+  if (!mobileToolSlots.length) for (const node of $$('.topbar-tools, #interaction-preferences, #theme-toggle, .prototype-label')) {
+    const marker = document.createComment('desktop tool position');
+    node.before(marker); mobileToolSlots.push({ node, marker });
+  }
+  for (const { node, marker } of mobileToolSlots) {
+    if (mobile && node.parentElement !== tools) tools.append(node);
+    if (!mobile && node.parentElement === tools) marker.after(node);
+  }
+  if (!mobile && tools.matches(':popover-open')) tools.hidePopover();
+  const region = activePageRegion();
+  const entry = $('.commerce-entry-layout', region);
+  const showFooter = mobile && entry && entry.dataset.mobileView !== 'records';
+  if (!showFooter) restoreMobileEntryFooter();
+  else if (!mobileEntryFooter) {
+    const footer = $('.commerce-entry-columns > .form-panel > .form-footer', entry);
+    if (footer) {
+      const marker = document.createComment('entry footer position');
+      footer.before(marker); mobileEntryFooter = { footer, marker };
+      $('#mobile-entry-actions').replaceChildren(footer);
+      $('#mobile-entry-actions').hidden = false;
+    }
+  }
+  updateMobileDatePreviews(region);
+}
+function updateMobileDatePreviews(root) {
+  for (const input of $$('input[type="datetime-local"]', root)) {
+    let output = input.parentElement.querySelector('.mobile-date-preview');
+    if (!output) { output = document.createElement('output'); output.className = 'mobile-date-preview'; output.htmlFor = input.id; input.after(output); }
+    output.textContent = input.value.replace('T', ' ');
+  }
+}
+function positionMobileKeyboard() {
+  const viewport = window.visualViewport;
+  const inset = viewport ? Math.max(0, innerHeight - viewport.height - viewport.offsetTop) : 0;
+  document.documentElement.style.setProperty('--mobile-keyboard-inset', `${inset}px`);
+}
+window.visualViewport?.addEventListener('resize', positionMobileKeyboard);
+window.visualViewport?.addEventListener('scroll', positionMobileKeyboard);
+window.addEventListener('resize', syncMobileLayout);
+document.addEventListener('input', event => {
+  if (event.target.matches('input[type="datetime-local"]')) {
+    const output = event.target.parentElement.querySelector('.mobile-date-preview');
+    if (output) output.textContent = event.target.value.replace('T', ' ');
+  }
+});
 function renderSidebar() {
   const previousScroll = $('.sidebar-navigation')?.scrollTop || 0;
   const allowedNavigation = navigation
@@ -1524,6 +1630,7 @@ for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
   }, { passive: true });
 function render() {
   closeActionMenu();
+  restoreMobileEntryFooter();
   const renderVersion = ++layoutRenderVersion;
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
@@ -1613,6 +1720,8 @@ function render() {
     extension?.afterRender?.({ routeChanged: !sameRoute });
   window.IDChangeSync?.resume();
   applyDesignPreviewState();
+  mountMobileListActions(region);
+  syncMobileLayout();
   updateTableLayout?.();
   const entryForm = $(entryFormSelector, region);
   if (entryForm && entryFormScroll) entryForm.scrollTop = entryFormScroll;
@@ -1655,8 +1764,10 @@ function navigate(event) {
     next = entryRouteAliases[next];
     history.replaceState(null, '', '#/' + next);
   }
-  if (next === 'settings/customer-tags') {
-    next = 'customers/list';
+  const legacyCustomerTags = next === 'settings/customer-tags';
+  if (legacyCustomerTags) {
+    state.drafts.set('operations:dropdown-settings', { tab: 'tags' });
+    next = 'settings/costs';
     history.replaceState(null, '', '#/' + next);
   }
   if (next === 'mailboxes/apple') {
@@ -1675,7 +1786,7 @@ function navigate(event) {
     return;
   }
   // A hash navigation can emit both popstate and hashchange.
-  if (event && state.route === next && mountedPage?.region.isConnected &&
+  if (event && !legacyCustomerTags && state.route === next && mountedPage?.region.isConnected &&
       mountedPage.region.dataset.pageRegion === next) return;
   preserveMainDraft();
   if (state.route !== next) {
@@ -2571,6 +2682,34 @@ document.addEventListener('click', async (event) => {
   if (!node || node.disabled) return;
   const action = node.dataset.action,
     id = node.dataset.id;
+  if (action === 'table-mobile-toggle') {
+    const row = node.closest('tr');
+    const expanded = row.dataset.mobileExpanded !== 'true';
+    row.dataset.mobileExpanded = String(expanded);
+    node.setAttribute('aria-expanded', String(expanded));
+    node.textContent = expanded ? '收起资料' : '更多资料';
+    return;
+  }
+  if (action === 'mobile-list-actions') {
+    const sources = mobileToolbarSources.get(node) || [];
+    openActionMenu(node, sources.map((source, index) => `<button type="button" data-action="mobile-list-action" data-index="${index}" ${source.matches(':disabled') ? 'disabled' : ''}>${source.innerHTML}</button>`).join(''));
+    return;
+  }
+  if (action === 'mobile-list-action') {
+    const source = mobileToolbarSources.get(actionMenuInvokers.get(node))?.[Number(node.dataset.index)];
+    if (source?.isConnected && !source.matches(':disabled') && !source.closest('[inert], [hidden]')) source.click();
+    return;
+  }
+  if (action === 'mobile-entry-view') {
+    const entry = node.closest('.commerce-entry-layout');
+    entry.dataset.mobileView = node.dataset.view;
+    state.drafts.set(`mobile-entry:${state.route}`, { view: node.dataset.view });
+    for (const tab of $$('[data-action="mobile-entry-view"]', entry)) tab.setAttribute('aria-selected', String(tab === node));
+    syncMobileLayout();
+    entry.scrollIntoView({ block: 'start' });
+    return;
+  }
+  if (node.closest('#mobile-tools-panel') && action === 'tools-open') $('#mobile-tools-panel').hidePopover();
   if (action.startsWith('option-')) {
     changeOptionList(action, node);
     return;
