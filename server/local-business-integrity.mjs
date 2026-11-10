@@ -51,6 +51,7 @@ export function checkBankReturns(previous, commerce) {
     }
     if (!order.bankReturns.length) continue;
     const paid = units(order.paidAmount);
+    const previousReturns = previous?.orders?.find(row => row.id === order.id)?.bankReturns || [];
     let total = 0n;
     for (const record of order.bankReturns) {
       const amount = units(record.amount);
@@ -58,7 +59,7 @@ export function checkBankReturns(previous, commerce) {
         amount === null ||
         amount <= 0n ||
         record.currency !== order.paidCurrency ||
-        record.cardId !== order.cardId
+        (record.cardId !== order.cardId && !previousReturns.some(before => isDeepStrictEqual(before, record)))
       ) {
         return '银行卡回款必须按原付款银行卡和代付币种登记';
       }

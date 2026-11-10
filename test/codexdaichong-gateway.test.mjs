@@ -10,6 +10,43 @@ const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
 const admin = { ...member, id: 'u-2', admin: true, sensitive: true };
 
+test('删除关联卡前先留存订单资料；留存失败不会转发删除，未授权请求不触发留存', async t => {
+  const origin = 'https://cards.example.test', events = [];
+  const engine = await listen(t, (req, res) => {
+    events.push('delete');
+    assert.equal(req.method, 'DELETE');
+    assert.match(req.url, /^\/api\/admin\/cards\/7\/?$/);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true }));
+  });
+  let blocked = true, principal = admin;
+  const gateway = createCodexdaichongGateway({
+    upstreamUrl: engine, publicOrigin: origin, secret: randomBytes(48).toString('base64url'),
+    getUnifiedPrincipal: () => principal,
+    beforeCardDelete: async (id, actor) => {
+      assert.equal(id, 'recharge:7');
+      assert.equal(actor.id, admin.id);
+      if (blocked) throw new Error('合成留存失败');
+      events.push('archive');
+    }
+  });
+  const host = await listen(t, gateway.handle);
+  const remove = (requestOrigin = origin, trailingSlash = '') => fetch(host + prefix + '/api/admin/cards/7' + trailingSlash,
+    { method: 'DELETE', headers: { Origin: requestOrigin } });
+  assert.equal((await remove()).status, 409);
+  assert.deepEqual(events, []);
+  blocked = false;
+  assert.equal((await remove('https://other.example.test')).status, 403);
+  principal = member;
+  assert.equal((await remove()).status, 403);
+  assert.deepEqual(events, []);
+  principal = admin;
+  assert.equal((await remove()).status, 200);
+  assert.deepEqual(events, ['archive', 'delete']);
+  assert.equal((await remove(origin, '/')).status, 200);
+  assert.deepEqual(events.slice(2), ['archive', 'delete']);
+});
+
 test('browser progress uses only confirmed native receipts and never resends a submission', async (t) => {
   const secret = randomBytes(48).toString('base64url');
   const origin = 'https://recharge.example.test';

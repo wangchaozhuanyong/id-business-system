@@ -124,8 +124,15 @@ const requiresCardAllocation = product => product === 'GPT' || personalBankProdu
 const unavailableOrders = ['draft', 'failed', '草稿', '失败'];
 const isAutomatic = (order) => order.source === '线上代充';
 export const orderAccountingAt = (order) => isAutomatic(order) && order.rechargeCompletedAt || order.start;
-const stableCardId = (order) => typeof order.cardId === 'string' && order.cardId.trim() === order.cardId &&
-  order.cardId.length > 0 && !/^\d{4,19}$/.test(order.cardId) ? order.cardId : '';
+const stableCardId = (order) => {
+  // A materials correction does not move the already-recorded opening fee to another card.
+  const original = order.corrections?.find(change => change.kind !== 'historical-card-backfill' &&
+    change.previous?.paidConfirmed && change.previous.payment === '银行卡' &&
+    change.previous.paidAmount === order.paidAmount && change.previous.paidCurrency === order.paidCurrency &&
+    (change.previous.cardId || '') !== (order.cardId || ''))?.previous;
+  const id = original ? original.cardId : order.cardId;
+  return typeof id === 'string' && id.trim() === id && id.length > 0 && !/^\d{4,19}$/.test(id) ? id : '';
+};
 const compareKey = (a, b) => a === b ? 0 : a < b ? -1 : 1;
 const openingOrder = (a, b) => a.at - b.at ||
   compareKey(a.order.orderNo || a.order.id, b.order.orderNo || b.order.id) || compareKey(a.order.id, b.order.id);

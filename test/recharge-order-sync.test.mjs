@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 import { buildRechargeOrder, createRechargeOrderSync, rechargeOrderEvidence } from '../server/recharge-order-sync.mjs';
-import { checkAppleOrder, deriveCardIssueFee, nextOrderNo } from '../server/order-policy.mjs';
+import { checkAppleOrder, deriveCardIssueFee, nextOrderNo, redactClaudeProOrderMaterials } from '../server/order-policy.mjs';
 
 const createdAt = '2026-10-31T15:30:00.000Z';
 const completedAt = '2026-10-31T15:45:00.000Z';
@@ -36,7 +36,9 @@ test('browser reconciliation uses the terminal timestamp but does not promote an
   assert.equal(order.saleAmount, '300');
   assert.equal(order.receiptConfirmed, false);
   assert.equal(order.paidConfirmed, false);
-  assert.doesNotMatch(JSON.stringify(order), /4000000000002345|example-code/);
+  assert.equal(order.proCardNumber, '4000000000002345');
+  assert.doesNotMatch(JSON.stringify(order), /example-code/);
+  assert.doesNotMatch(JSON.stringify(redactClaudeProOrderMaterials(order, { role: 'employee' })), /4000000000002345/);
 });
 
 test('only a matching terminal provider receipt supplies the actual amount', () => {

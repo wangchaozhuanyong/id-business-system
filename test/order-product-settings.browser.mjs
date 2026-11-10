@@ -257,10 +257,9 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   await page.goto(origin + '/#/workspace/order/claude');
   await sale.selectOption('EUR');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '49.9900');
-  await orderForm.locator('[name="commerce-receiptConfirmed"]').check();
+  assert.equal(await orderForm.locator('[name="commerce-receiptConfirmed"]').count(), 0);
   await orderForm.locator('#commerce-businessType').selectOption('成品交付');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '129.5000');
-  assert(!await orderForm.locator('[name="commerce-receiptConfirmed"]').isChecked());
   assert.match(await orderForm.locator('#commerce-sale-price-reference').textContent(), /成品号售价/);
   await orderForm.locator('#commerce-product').selectOption('Claude Max');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '199.9999');
@@ -488,10 +487,9 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   assert.equal(await page.getByText('折合人民币预算', { exact: true }).count(), 0);
   await checkReference('paid', [['菲律宾', '983 PHP'], ['智利', '10000 CLP']]);
   await checkReference('sale', [['人民币', '111.1111 CNY'], ['菲律宾比索', '998.1234 PHP']]);
-  await orderForm.locator('[name="commerce-paidConfirmed"]').check();
+  assert.equal(await orderForm.locator('[name="commerce-paidConfirmed"]').count(), 0);
   await plan.selectOption('Pro 100');
   assert.equal(await paidAmount.inputValue(), '1200');
-  assert(!(await orderForm.locator('[name="commerce-paidConfirmed"]').isChecked()));
   await paid.selectOption('CLP');
   assert.equal(await paidAmount.inputValue(), '');
   await checkReference('paid', [['智利', '未配置（CLP）'], ['菲律宾', '1200 PHP']]);

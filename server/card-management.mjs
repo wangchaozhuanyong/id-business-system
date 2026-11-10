@@ -6,6 +6,7 @@ import { accountLifecycleSummary, releasedAccountOrders, systemAccount } from '.
 import { validMoney } from './order-policy.mjs';
 
 export const cardTypeDocument = 'card-types';
+export const orderCardArchiveDocument = 'order-card-archive';
 const detailsRoute = '/api/local/subscription-card-details';
 const revealRoute = '/api/local/subscription-card-reveal';
 const copyRoute = '/api/local/subscription-card-copy';
@@ -24,6 +25,22 @@ const recognizedCard = id => typeof id === 'string' &&
 const error = (status, message) => Object.assign(new Error(message), { status });
 const validPan = number => typeof number === 'string' && /^\d{12,19}$/.test(number);
 
+export async function preserveReferencedOrderCard(store, client, cardId, actor) {
+  const orders = store.load('commerce').data?.orders || [];
+  const referenced = orders.some(order => [order, ...(order.corrections || []).map(change => change.previous)]
+    .some(row => row?.payment === '银行卡' && (row.cardId === cardId ||
+      row.financialEvidence?.some(entry => entry.kind === 'payment' && entry.cardId === cardId))));
+  if (!referenced) return;
+  const before = store.featureDocument(orderCardArchiveDocument);
+  if (validPan(before.data?.cards?.[cardId]?.number)) return;
+  const row = await poolCard(client, cardId);
+  if (!row || !validPan(row.card_number) || !/^\d{4}$/.test(row.last4) || !row.card_number.endsWith(row.last4))
+    throw error(409, '此卡关联历史订单，完整卡号尚未留存，请先核对订单资料');
+  store.saveFeatureDocument(orderCardArchiveDocument, before.version, {
+    cards: { ...before.data?.cards, [cardId]: { number: row.card_number, last4: row.last4 } }
+  }, { action: '保留历史订单银行卡资料', actor, targetId: cardId });
+}
+
 export function cardTypeSnapshot(data, { cardId, cardTypeId, prior }) {
   const { items, assignments } = classify(data);
   const sameCard = (prior?.cardId || '') === (cardId || '');
@@ -41,6 +58,7 @@ export function cardTypeSnapshot(data, { cardId, cardTypeId, prior }) {
 
 function orderCardIds(order) {
   if (order?.payment !== '银行卡') return [];
+  if (order.proMaterialMode === 'manual_card') return ['manual:' + order.id];
   if (recognizedCard(order.cardId)) return [order.cardId];
   const ids = evidenceCardIds(order);
   return ids.length === 1 ? ids : [];
@@ -132,7 +150,8 @@ function currentEstimateContext(store) {
 }
 
 const emailKey = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
-const productFamily = product => product === 'GPT' ? 'gpt' : ['Claude Pro', 'Claude Max'].includes(product) ? 'claude' : '';
+const productFamily = product => product === 'GPT' ? 'gpt' : ['Claude Pro', 'Claude Max'].includes(product) ? 'claude'
+  : ['Gemini', 'Grok'].includes(product) ? product.toLowerCase() : '';
 const validOrderId = value => typeof value === 'string' && value.trim() && value.length <= 160;
 const positiveMoney = value => validMoney(value) && /[1-9]/.test(value);
 
@@ -209,9 +228,11 @@ function validSuccessor(order, candidate, orderAccount, candidateAccount) {
 function orderCardReference(order) {
   const evidence = evidenceCardIds(order);
   const id = orderCardIds(order)[0] || '';
-  const manual = order.product === 'Claude Pro' && order.proMaterialMode === 'manual_card';
-  const conflict = evidence.length > 1 || (id && evidence.some(ref => ref !== id)) ||
-    (manual && Boolean(id || order.cardId)) || (!id && Boolean(order.cardId));
+  const manual = order.proMaterialMode === 'manual_card';
+  const recordedBeforeCorrection = ref => (order.corrections || []).some(change =>
+    change.previous?.payment === '银行卡' && change.previous.cardId === ref && change.reason);
+  const conflict = evidence.some(ref => ref !== id && !recordedBeforeCorrection(ref)) ||
+    (manual && Boolean(order.cardId)) || (!id && Boolean(order.cardId));
   return { id, manual, conflict };
 }
 
@@ -224,7 +245,7 @@ function orbitBalance(card, now) {
 }
 
 async function cardDetails(context, order, account) {
-  const { commerce, client, types, tenantCards, fixedFee, quotes, now } = context;
+  const { commerce, client, types, tenantCards, archive, fixedFee, quotes, now } = context;
   const bank = order.payment === '银行卡';
   const { id, manual, conflict } = bank ? orderCardReference(order) : { id: '' };
   const tail = /^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId : '';
@@ -238,7 +259,16 @@ async function cardDetails(context, order, account) {
     canReveal: false, estimate, balance: null, paid
   };
   let number, verifiedTail;
+  const savedNumber = order.proCardNumber || archive?.cards?.[id]?.number;
   if (conflict) card.status = '卡片关联待核对';
+  else if (validPan(savedNumber)) {
+    // The saved order is the source of historical card materials, not the mutable pool.
+    card.source = manual ? '手填银行卡' : id.startsWith('tenant:') ? '认证人银行卡（订单留存）'
+      : id.startsWith('recharge:') ? '充值卡池（订单留存）'
+        : id.startsWith('orbitcard:') || order.source === '线上代充' ? '线上代充用卡（订单留存）' : '订单登记银行卡';
+    card.status = manual ? '已登记' : '订单留存';
+    number = savedNumber;
+  }
   else if (manual) {
     card.source = '手填银行卡';
     card.status = '已登记';
@@ -332,6 +362,7 @@ async function readRenewalCard(store, client, command, actor, now, action) {
   const cache = new Map();
   const context = {
     commerce: commerce.data, tenantCards, now, ...currentEstimateContext(store),
+    archive: store.featureDocument(orderCardArchiveDocument).data,
     types: classify(store.featureDocument(cardTypeDocument).data),
     client: { get(path) {
       if (!cache.has(path)) cache.set(path, Promise.resolve().then(() => client.get(path)));

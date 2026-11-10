@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const products = [
   ['gpt', 'GPT', 'Plus', 'gpt', ''],
@@ -62,7 +62,7 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
         page.setDefaultTimeout(6000);
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(origin + '/#/workspace/order/gpt');
-        if (theme === 'dark') await page.locator('#theme-toggle').click();
+        if (theme === 'dark') await toggleDesignTheme(page);
         const go = async route => {
           await page.evaluate(route => window.IDDesignAPI.go(route), route);
           await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
@@ -121,7 +121,7 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           if (entry === 'claude') {
             await form.locator('#commerce-product').selectOption(product);
             await form.locator('#commerce-payment').selectOption('银行卡');
-            if (mode) await form.locator('#commerce-proMaterialMode').selectOption(mode);
+            await form.locator('#commerce-proMaterialMode').selectOption(mode);
           }
           await form.locator('#commerce-plan').selectOption(plan);
           if (key === 'max') await choose(form, 'tenantId', tenant.id);

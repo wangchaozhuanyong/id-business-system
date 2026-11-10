@@ -37,6 +37,22 @@ const allocate = (orders, at = clock) => buildCardIssueAllocations(orders, { clo
 const compute = (order, allocations, currency = 'CNY') =>
   calculateOrder(order, { clock, currency, cardIssueAllocations: allocations });
 
+test('更正银行卡资料不改变原开卡费分摊、同卡其他订单或历史成本', () => {
+  const orders = trio(), before = allocate(orders);
+  const corrected = structuredClone(orders);
+  const original = structuredClone(corrected[0]);
+  corrected[0].corrections = [{ reason: '核对银行卡号', previous: original }];
+  corrected[0].cardId = '';
+  corrected[0].proMaterialMode = 'manual_card';
+  corrected[0].proCardNumber = '4242424242424242';
+  const after = allocate(corrected);
+  assert.deepEqual(after, before);
+  assert.deepEqual(corrected.map(row => compute(row, after)), orders.map(row => compute(row, before)));
+  corrected[0].cardId = 'recharge:99';
+  corrected[0].proMaterialMode = 'pool_card';
+  assert.deepEqual(allocate(corrected), before);
+});
+
 test('同卡一单到三单按原币均摊，稳定分配尾差，各单按自身汇率和费用规则换算', () => {
   const [a, b, c] = trio();
   const before = structuredClone([a, b, c]);

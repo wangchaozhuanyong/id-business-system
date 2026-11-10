@@ -80,13 +80,14 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
   });
 }
 
-export async function readPoolCards(client) {
+export async function readPoolCards(client, { includeNumbers = false } = {}) {
   const { cards } = await client.get('/api/admin/cards');
   if (!Array.isArray(cards)) throw new Error('代充卡池格式不正确');
   return cards.filter((row) => Number.isSafeInteger(Number(row.id)) && Number(row.id) > 0 &&
     /^\d{4}$/.test(row.last4)).map((row) => ({
     id: 'recharge:' + row.id,
     last4: row.last4,
+    ...(includeNumbers && { number: row.card_number }),
     active: Number(row.is_active) === 1,
     usageCount: Number.isSafeInteger(row.usage_count) && row.usage_count >= 0 ? row.usage_count : null,
     lastUsedAt: row.last_used_at || null,

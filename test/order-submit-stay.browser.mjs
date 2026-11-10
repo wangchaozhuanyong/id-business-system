@@ -49,6 +49,7 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
       try {
         if (slug === 'claude') await page.locator('#commerce-product').selectOption(product);
         if (product === 'Claude Pro') await page.locator('#commerce-proMaterialMode').selectOption('none');
+        if (product === 'Claude Max') await page.locator('#commerce-proMaterialMode').selectOption('');
         await page.locator('#commerce-email').fill('stay-' + slug + '@example.test');
         await page.locator('#commerce-notes').fill('本次提交的草稿');
         const url = page.url();
@@ -96,14 +97,16 @@ test('续费提交保留当前页，已完成提醒只能主动返回续费管�
   await page.locator('#commerce-order-form').waitFor();
   await page.locator('#commerce-paidAmount').fill('20');
   await page.locator('#commerce-saleAmount').fill('100');
-  await page.locator('#main [name="commerce-paidConfirmed"]').check();
+  assert.equal(await page.locator('#main [name="commerce-paidConfirmed"]').count(), 0);
   await page.locator('#main button[form="commerce-order-form"][type="submit"]').click();
+  await page.locator('#confirm-dialog[open]').getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 100\.00 /).waitFor();
   await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   await page.locator('#main').getByText('续费提醒已变化', { exact: true }).waitFor();
   assert.equal(page.url(), url);
   assert.equal(writes.length, 2);
   const renewed = writes[1].data.orders[0];
   assert.equal(renewed.paidConfirmed, true);
+  assert.equal(renewed.receiptConfirmed, true);
   assert(writes[1].data.logs.some(row => row.type === '关联续费订单' &&
     row.entityId === 'stay-renewal' && row.relatedOrderId === renewed.id));
   await page.getByRole('button', { name: '返回续费管理', exact: true }).click();

@@ -118,8 +118,9 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     assert.equal(await form.locator('#commerce-cardId').inputValue(), '');
     await form.locator('#commerce-paidAmount').fill('20');
     await form.locator('#commerce-saleAmount').fill('180');
-    await form.getByLabel('代付已确认').check();
+    assert.equal(await form.locator('[name="commerce-paidConfirmed"], [name="commerce-receiptConfirmed"]').count(), 0);
     await page.getByRole('button', { name: '核对并保存' }).click();
+    await confirm.getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 180\.00 /).waitFor();
     await confirm.getByRole('button', { name: '确认保存' }).click();
     await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
     assert(new URL(page.url()).hash.startsWith('#/workspace/order/renew/'));
@@ -129,6 +130,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     const snapshot = await read();
     const newOrder = snapshot.data.orders.find((item) => item.id !== 'QA-EXPIRED' && item.customerId === 'qa-renew' && item.paidConfirmed);
     assert.equal(newOrder.expiry, '2026-12-06T15:59');
+    assert.equal(newOrder.receiptConfirmed, true);
     assert.equal(newOrder.cardId, '');
     assert.equal(newOrder.issueFeeSnapshot.pending, true);
     assert.equal(snapshot.data.orders.find((item) => item.id === 'QA-EXPIRED').expiry, '2026-11-05T14:35');

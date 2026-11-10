@@ -20,7 +20,7 @@ export function checkNewOrder(order) {
     return '请选择当前可售套餐';
   if (personalProduct(order.product)) {
     if (order.costBasis === 'actual') return '新订单按费用规则核算';
-    if (order.payment === '银行卡' && (order.cardId || order.paidConfirmed) &&
+    if (order.payment === '银行卡' && !isOrderBankMaterials(order) && (order.cardId || order.paidConfirmed) &&
       !/^recharge:.+/.test(order.cardId || '')) return '请选择本次使用的银行卡';
     return;
   }
@@ -29,7 +29,7 @@ export function checkNewOrder(order) {
   const email = order.email ?? '';
   if (typeof email !== 'string' || ((email || order.businessType !== '续费') &&
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return '请填写有效订单邮箱';
-  if (order.payment === '银行卡' && !isClaudeProBankMaterials(order)) {
+  if (order.payment === '银行卡' && !isOrderBankMaterials(order)) {
     const gpt = order.product === 'GPT';
     if ((order.cardId || (!gpt && order.paidConfirmed)) &&
         !(typeof order.cardId === 'string' && order.cardId.startsWith(gpt ? 'recharge:' : 'tenant:')))
@@ -46,7 +46,7 @@ export function historicalGptCardBackfillError(prior, next, {
   const fail = '原付款卡补录条件未满足，请单独核对订单和付款凭据';
   if (!prior || !next || action !== '更正订单' || changedOrderCount !== 1 ||
       next.cardBackfillConfirmed !== true || prior.product !== 'GPT' || prior.payment !== '银行卡' ||
-      prior.paidConfirmed !== true || prior.cardId || prior.cancelled || prior.source === '线上代充' ||
+      prior.paidConfirmed !== true || prior.cardId || prior.proMaterialMode === 'manual_card' || prior.cancelled || prior.source === '线上代充' ||
       prior.taskId || prior.taskEvidenceId || prior.rechargeCompletedAt ||
       (prior.refunds || []).length || (prior.bankReturns || []).length) return fail;
   if (!/^recharge:.+/.test(next.cardId || '') || !card?.active || card.id !== next.cardId ||
@@ -103,19 +103,44 @@ export function isClaudeProBankMaterials(order) {
   return isClaudeProBank(order) && proMaterialModes.has(order.proMaterialMode);
 }
 
+// Keep the existing encrypted document fields compatible with historical Pro orders.
+// These fields now describe the bank-card materials of every order product.
+export function isOrderBankMaterials(order) {
+  return order?.payment === '银行卡' && Object.hasOwn(plans, order.product) &&
+    (isClaudeProBankMaterials(order) || ['manual_card', 'pool_card'].includes(order.proMaterialMode));
+}
+
+export function sameRecordedBankPayment(before, after) {
+  return before?.payment === '银行卡' && after?.payment === '银行卡' &&
+    before.paidConfirmed === true && after.paidConfirmed === true &&
+    before.paidAmount === after.paidAmount && before.paidCurrency === after.paidCurrency;
+}
+
+export function retainOrderCardNumber(order, prior, card) {
+  if (order.payment !== '银行卡') { delete order.proCardNumber; return; }
+  if (order.proMaterialMode === 'manual_card') return;
+  const number = card?.number;
+  if (typeof number === 'string' && /^\d{12,19}$/.test(number) && number.endsWith(order.paymentId))
+    order.proCardNumber = number;
+  else if (order.cardId && prior?.payment === order.payment && prior.cardId === order.cardId && prior.proCardNumber)
+    order.proCardNumber = prior.proCardNumber;
+  else delete order.proCardNumber;
+}
+
 export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacyCreate = false } = {}) {
-  if (!isClaudeProBank(order)) {
+  if (order?.payment !== '银行卡' || !Object.hasOwn(plans, order.product)) {
     if (proMaterialFields.some((field) => nonempty(order[field])))
-      return '只有 Claude Pro 银行卡订单可以填写这组资料';
+      return '只有银行卡订单可以填写这组资料';
     return;
   }
   const { proMaterialMode: mode } = order;
-  if (!nonempty(mode) && (allowLegacyCreate || (isClaudeProBank(prior) && !nonempty(prior.proMaterialMode)))) {
-    if (proMaterialFields.slice(1).some((field) => nonempty(order[field])))
+  if (!nonempty(mode) && (!isClaudeProBank(order) || allowLegacyCreate || (isClaudeProBank(prior) && !nonempty(prior.proMaterialMode)))) {
+    if (nonempty(order.proCardSerial))
       return '请先选择银行卡资料或人员与补充资料';
+    retainOrderCardNumber(order, prior);
     return;
   }
-  if (!isClaudeProBankMaterials(order)) return '请选择 Claude Pro 银行卡资料方式';
+  if (!isOrderBankMaterials(order)) return '请选择有效的银行卡资料方式';
   if (nonempty(order.appleIdId)) return '银行卡资料不能关联苹果 ID';
   const prefix = mode === 'pool_card' ? 'recharge:' : mode === 'tenant_card' ? 'tenant:' : '';
   if (prefix) {
@@ -131,16 +156,17 @@ export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacy
     const number = typeof order.proCardNumber === 'string'
       ? order.proCardNumber.trim().replace(/[ -]/g, '') : '';
     if (!/^\d{12,19}$/.test(number)) return '请输入 12 至 19 位有效银行卡号';
+    if (nonempty(order.proCardSerial) && typeof order.proCardSerial !== 'string') return '请填写有效的卡序列号';
     const serial = typeof order.proCardSerial === 'string' ? order.proCardSerial.trim() : '';
-    if (!serial || serial.length > 120 || /[\p{Cc}\p{Cf}]/u.test(serial)) return '请填写有效的卡序列号';
+    if (serial.length > 120 || /[\p{Cc}\p{Cf}]/u.test(serial)) return '卡序列号最多 120 个字，不能包含控制字符';
     order.proCardNumber = number;
     order.proCardSerial = serial;
     order.paymentId = number.slice(-4);
     return;
   }
-  if (nonempty(order.proCardNumber) || nonempty(order.proCardSerial))
+  if ((!prefix && nonempty(order.proCardNumber)) || nonempty(order.proCardSerial))
     return '银行卡资料和人员与补充资料只能选择一种';
-  delete order.proCardNumber;
+  retainOrderCardNumber(order, prior);
   delete order.proCardSerial;
   if (!prefix) order.paymentId = '';
   if (mode === 'pool_card' || mode === 'none') {
@@ -173,13 +199,13 @@ const sameProMaterials = (left, right) => proSnapshotFields.every((field) =>
   (left?.[field] ?? '') === (right?.[field] ?? ''));
 
 export function checkClaudeProMaterialHistory(order, prior, action) {
-  if (!prior || (!isClaudeProBankMaterials(prior) && !isClaudeProBankMaterials(order))) return;
+  if (!prior || (prior.payment !== '银行卡' && order.payment !== '银行卡')) return;
   const before = prior.corrections || [];
   const after = order.corrections || [];
   if (!Array.isArray(after) || before.some((entry, index) => !isDeepStrictEqual(entry, after[index])))
-    return '原 Claude Pro 资料更正记录必须保留';
+    return '原银行卡资料更正记录必须保留';
   if (sameProMaterials(prior, order)) return;
-  if (order.version !== prior.version + 1) return 'Claude Pro 订单版本已变化，请重新核对';
+  if (order.version !== prior.version + 1) return '订单版本已变化，请重新核对';
   if (action === '补偿撤回更正') {
     const correction = before.at(-1);
     if (correction?.versionAfter === prior.version && sameProMaterials(order, correction.previous))
@@ -191,7 +217,7 @@ export function checkClaudeProMaterialHistory(order, prior, action) {
         sameProMaterials(prior, correction.previous))
       return;
   }
-  return '请通过订单更正操作登记 Claude Pro 资料变化并保留原记录';
+  return '请通过订单更正操作登记银行卡资料变化并保留原记录';
 }
 
 export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOrders) {
@@ -359,4 +385,30 @@ export function deriveCardIssueFee(order, prior, orders, card) {
     ...(applies ? { amountUsd: order.costSettings?.cardIssueUsd || '0', at: new Date().toISOString() }
       : { pending: !previouslyUsed })
   };
+}
+
+export function normalizePaymentEvidence(row, prior, automatic) {
+  if (!row.product) return;
+  const evidence = Array.isArray(row.financialEvidence) ? row.financialEvidence : [];
+  const historical = Array.isArray(prior?.financialEvidence) ? prior.financialEvidence : [];
+  const normalized = historical.filter((item) => item?.kind === 'payment');
+  const previous = prior?.paidConfirmed ? prior : null;
+  for (const payment of automatic ? [] : [previous, row]) {
+    // Editing card materials is not a second payment. The original evidence stays immutable.
+    if (payment === row && sameRecordedBankPayment(prior, row)) continue;
+    if (!payment?.paidConfirmed || (!validMoney(payment.paidAmount) || !/[1-9]/.test(payment.paidAmount)) ||
+        !validCurrencyCode(payment.paidCurrency)) continue;
+    const cardId = payment.cardId || '';
+    const candidate = { amount: payment.paidAmount, currency: payment.paidCurrency, payment: payment.payment, cardId };
+    if (!normalized.some((item) => item.amount === payment.paidAmount && item.currency === payment.paidCurrency &&
+        item.payment === payment.payment && (item.cardId === cardId || matchesBackfilledPayment(prior, candidate, item) ||
+          payment.corrections?.some(change => sameRecordedBankPayment(change.previous, payment) &&
+            (change.previous.cardId || '') === item.cardId)))) {
+      normalized.push({ kind: 'payment', amount: payment.paidAmount, currency: payment.paidCurrency,
+        payment: payment.payment, cardId, at: new Date().toISOString() });
+    }
+  }
+  const receipts = evidence.filter((item) => item?.kind !== 'payment');
+  if (!isDeepStrictEqual(evidence.filter((item) => item?.kind === 'payment'), normalized))
+    row.financialEvidence = [...normalized, ...receipts];
 }
