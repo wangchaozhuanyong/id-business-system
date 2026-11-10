@@ -117,7 +117,7 @@ export function buildRechargeOrder(evidence, settings, at) {
     costSettings: { ...fallbackRules, ...settings?.costSettings, currency: 'CNY' }, rates: {},
     saleCurrency: 'CNY', saleAmount: settings?.orderPrices?.GPT?.[plan]?.CNY || '',
     emailCostAmount: '0', emailCostCurrency: 'CNY', start, expiry, rechargeCompletedAt: completedAt,
-    createdAt: beijing(at).replace('T', ' '), createdBy: '自动充值', createdById: employeeId,
+    createdAt: beijing(at).replace('T', ' '), createdBy: '自动充值', createdById: employeeId, rechargeOwnerId: employeeId,
     updatedBy: '', updatedById: '', customerId: '', notes: '', version: 1,
     refunds: [], bankReturns: [], corrections: [], financialEvidence: paidAmount && paidCurrency ? [{
       kind: 'payment', amount: paidAmount, currency: paidCurrency, payment: '银行卡', cardId,

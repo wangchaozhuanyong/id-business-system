@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 const plans = new Set(['plus', 'pro100', 'pro200', 'pro500']);
-const valid = item => item && /^KC-[A-F0-9]{28}$/.test(item.code || '') && plans.has(item.plan);
+export const generatedCdkPattern = /^KC-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{15}$/;
+const valid = item => typeof item?.code === 'string' && plans.has(item.plan) &&
+  (generatedCdkPattern.test(item.code) || /^KC-[A-F0-9]{28}$/.test(item.code));
 const validOperation = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{16,80}$/.test(id);
 const blocked = (reason, state = 'blocked') => ({ state, eligible: false, reason });
 export async function migrateRechargeCodeReturns(connection) {
@@ -15,7 +17,8 @@ export function createNativeCodeReturns({ store }) {
     // The existing markCdkUsed conditional update competes for this same InnoDB row lock.
     const [code] = await query(`SELECT cdk_code, plan_type, type, is_active, used_at, shipped_at,
       fail_count, cooldown_until FROM cdk_codes WHERE cdk_code = ? FOR UPDATE`, [item.code]);
-    if (!code || code.plan_type !== item.plan || code.type !== '自助') return blocked('充值码不存在或套餐不一致');
+    if (!code || code.cdk_code !== item.code || code.plan_type !== item.plan || code.type !== '自助')
+      return blocked('充值码不存在或套餐不一致');
     const receipts = await query(`SELECT operation_id, cdk_code, plan_type, returned_at
       FROM id_recharge_code_returns WHERE cdk_code = ? OR operation_id = ?`, [item.code, operationId || '']);
     if (receipts.length) {
@@ -38,6 +41,18 @@ export function createNativeCodeReturns({ store }) {
   }
   async function check(item) {
     return store.withTransaction(connection => inspect(connection, item));
+  }
+  async function stock() {
+    const rows = await store.runQuery(`SELECT c.cdk_code AS code, c.plan_type AS plan
+      FROM cdk_codes c
+      WHERE c.is_active = 1 AND c.type = '自助' AND c.used_at IS NULL AND c.shipped_at IS NULL
+        AND COALESCE(c.fail_count, 0) = 0 AND c.cooldown_until IS NULL
+        AND NOT EXISTS (SELECT 1 FROM id_recharge_code_returns r WHERE r.cdk_code = c.cdk_code)
+        AND NOT EXISTS (SELECT 1 FROM task_logs t WHERE t.cdk_code = c.cdk_code)
+        AND NOT EXISTS (SELECT 1 FROM activation_manual_holds h WHERE h.cdk_code = c.cdk_code AND h.resolved_at IS NULL)
+      ORDER BY c.id`, []);
+    return rows.filter(({ code, plan }) => typeof code === 'string' && generatedCdkPattern.test(code) && plans.has(plan))
+      .map(({ code, plan }) => ({ code, plan }));
   }
   async function receipt(item) {
     const rows = await store.runQuery(`SELECT operation_id, cdk_code, plan_type, returned_at
@@ -63,6 +78,13 @@ export function createNativeCodeReturns({ store }) {
   }
   async function handle(req, res) {
     const path = (req.originalUrl || req.url).split('?')[0];
+    if (req.method === 'GET' && path === '/api/admin/cdks/returns/stock') {
+      try {
+        return res.json({ success: true, items: await stock() });
+      } catch {
+        return res.status(503).json({ success: false, message: '暂时无法核对充值码库存' });
+      }
+    }
     if (req.method !== 'POST' || !['/api/admin/cdks/returns/check', '/api/admin/cdks/returns/commit',
       '/api/admin/cdks/returns/receipt'].includes(path)) return res.status(404).json({ success: false, message: '接口不存在' });
     try {

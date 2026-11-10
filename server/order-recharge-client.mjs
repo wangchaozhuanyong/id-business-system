@@ -3,7 +3,7 @@ import { signRechargeAssertion } from '../modules/recharge/assertion.mjs';
 const service = Object.freeze({
   id: 'order-reconciliation', email: 'order-reconciliation@localhost', admin: true, sensitive: true
 });
-const readPaths = /^\/api\/admin\/(?:cards|cdks|billing|sessions|orbitcard\/usage|task-logs(?:\/[a-zA-Z0-9_-]+)?)$/;
+const readPaths = /^\/api\/admin\/(?:cards|cdks(?:\/returns\/stock)?|billing|sessions|orbitcard\/usage|task-logs(?:\/[a-zA-Z0-9_-]+)?)$/;
 const maximumResponseBytes = 4 * 1024 * 1024;
 
 async function readBoundedJson(response) {
@@ -35,7 +35,7 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       method === 'POST' && path === '/api/admin/telegram');
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
-          method === 'POST' && (path === '/api/admin/cdks/import' || /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path)) ||
+          method === 'POST' && /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path) ||
           monitoringPath))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
@@ -65,19 +65,18 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       if (!Array.isArray(result)) throw new Error('代充码列表格式不正确');
       return result;
     },
+    async listCodeStock() {
+      const result = await request('GET', '/api/admin/cdks/returns/stock');
+      if (!Array.isArray(result.items)) throw new Error('代充库存格式不正确');
+      return result.items;
+    },
     async checkReturns(items) {
       const result = await request('POST', '/api/admin/cdks/returns/check', { items });
       if (!Array.isArray(result.items)) throw new Error('归还核对资料无效');
       return result.items;
     },
     async commitReturn(item) { return (await request('POST', '/api/admin/cdks/returns/commit', item)).receipt; },
-    async returnReceipt(item) { return (await request('POST', '/api/admin/cdks/returns/receipt', item)).receipt; },
-    async importCodes({ codes, plan, actor }) {
-      const principal = actor?.id && actor?.email
-        ? { id: actor.id, email: actor.email, admin: true, sensitive: true }
-        : service;
-      await request('POST', '/api/admin/cdks/import', { cdks: codes, plan_type: plan }, principal);
-    }
+    async returnReceipt(item) { return (await request('POST', '/api/admin/cdks/returns/receipt', item)).receipt; }
   });
 }
 

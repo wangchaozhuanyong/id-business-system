@@ -4,6 +4,9 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderCurrencySettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import {
+  applyOrderCompletion, OrderCompletionError, readOrderCompletion, rechargePriceSnapshot, requireCompletionActor
+} from './order-completion.mjs';
 import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransferView, TenantOwnerTransferError } from './tenant-owner-transfer.mjs';
 import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
@@ -197,7 +200,7 @@ const verifiedOrderCards = Symbol('verifiedOrderCards');
 const rechargeEvidenceFields = [
   'source', 'taskId', 'email', 'product', 'plan', 'businessType', 'payment', 'paymentId',
   'cardId', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed', 'rechargeCompletedAt',
-  'accountSource', 'accountId'
+  'accountSource', 'accountId', 'rechargeOwnerId', 'rechargePriceSnapshot', 'rechargeOwnerAssignment'
 ];
 const defaultOrderCosts = Object.freeze({
   currency: 'CNY', version: 1, claudeBankFeeMyr: '100', claudeAccountCostMyr: '50',
@@ -1519,11 +1522,19 @@ export function createLocalBusinessStore(databasePath) {
               const automatic = prior?.source === '线上代充';
               if ((!automatic && row.source === '线上代充') || (row.taskId ?? '') !== (prior?.taskId ?? '') ||
                   (automatic && rechargeEvidenceFields.some((field) =>
-                    (prior[field] ?? '') !== (row[field] ?? ''))))
+                    !isDeepStrictEqual(prior[field] ?? '', row[field] ?? ''))))
                 throw new LocalDataError(409, '线上代充来源只能由服务端登记');
               if (prior) {
                 for (const field of ['orderNo', 'createdAt', 'costSettings', 'cardUsedAt', 'issueFeeSnapshot'])
                   retainOrderField(row, prior, field);
+                if (automatic) {
+                  if (row.customerId === prior.customerId) retainOrderField(row, prior, 'customerSource');
+                  else {
+                    const source = commerce.customers.find((customer) => customer.id === row.customerId)?.source;
+                    if (source) row.customerSource = source;
+                    else delete row.customerSource;
+                  }
+                }
                 if (prior.product && row.product !== prior.product)
                   throw new LocalDataError(409, '原订单产品不可更换');
               }
@@ -1725,6 +1736,36 @@ export function createLocalBusinessStore(databasePath) {
         return data;
       });
     },
+    orderCompletionView(actor, params, readOrderOwners) {
+      return readOrderCompletion(readDocument('commerce').data, readDocument('settings').data, actor, params, readOrderOwners);
+    },
+    saveOrderCompletion(actor, command, readOrderOwners) {
+      return writeTransaction(() => {
+        const current = readDocument('commerce');
+        const data = current.data;
+        const at = new Date().toISOString();
+        const { order, customer, createdCustomer } = applyOrderCompletion(
+          data, readDocument('settings').data, actor, command, readOrderOwners, at
+        );
+        const version = current.version + 1;
+        data.orders = data.orders.map((row) => row.id === order.id ? order : row);
+        if (customer) {
+          const customers = data.customers || [];
+          data.customers = createdCustomer ? [customer, ...customers]
+            : customers.map((row) => row.id === customer.id ? customer : row);
+        }
+        const label = command.action === 'assign' ? '确认代充订单归属' : '补全代充订单资料';
+        data.logs = [{
+          id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail: order.orderNo,
+          at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id
+        }, ...(data.logs || [])];
+        put.run('commerce', version, encrypt(key, 'commerce', version, JSON.stringify(data)));
+        log.run(at, 'commerce', 'order_completion_' + command.action, auditSummary(label, actor, order.id), version);
+        if (customer) log.run(at, 'commerce', createdCustomer ? 'order_completion_customer_create' : 'order_completion_customer_fill',
+          auditSummary(createdCustomer ? '补全订单时新增客户' : '补齐客户资料', actor, customer.id), version);
+        return { orderId: order.id, version };
+      });
+    },
     applyRechargeOrder({ since, row, order, firstUse }) {
       return writeTransaction(() => {
         const status = readDocument('order-sync');
@@ -1738,6 +1779,8 @@ export function createLocalBusinessStore(databasePath) {
           result.orderNo = old.orderNo;
           if (order && order.email.toLowerCase() === old.email.toLowerCase() && order.plan === old.plan) {
             const next = { ...old };
+            if (!old.ownerId && !old.rechargeOwnerId && !old.createdById && order.rechargeOwnerId)
+              next.rechargeOwnerId = order.rechargeOwnerId;
             if (!old.paidConfirmed && !old.paidAmount && !old.paidCurrency && order.paidConfirmed) {
               for (const field of ['paidAmount', 'paidCurrency', 'paidConfirmed']) next[field] = order[field];
               next.financialEvidence = [...(old.financialEvidence || []), ...order.financialEvidence];
@@ -1762,8 +1805,8 @@ export function createLocalBusinessStore(databasePath) {
         } else if (order) {
           const id = 'commerce-order-' + randomUUID();
           const orderNo = nextOrderNo(data.orders);
-          const settings = readDocument('settings').data;
-          changed = { ...order, id, orderNo, saleAmount: settings?.orderPrices?.GPT?.[order.plan]?.CNY || '' };
+          const price = rechargePriceSnapshot(readDocument('settings'), order.plan, new Date().toISOString());
+          changed = { ...order, id, orderNo, saleAmount: price.saleAmount, rechargePriceSnapshot: price };
           data.orders.unshift(changed);
           result.orderNo = orderNo;
         }
@@ -1879,6 +1922,15 @@ export async function handleLocalBusiness(
       (request.headers.origin && request.headers.origin !== origin)
     ) {
       throw new LocalDataError(403, '仅允许从本机页面访问');
+    }
+    if (domain === 'order-completion') {
+      response.setHeader('Cache-Control', 'private, no-store');
+      requireCompletionActor(actor);
+      if (request.method === 'GET')
+        return json(response, 200, store.orderCompletionView(actor, new URL(request.url, origin).searchParams, readOrderOwners));
+      if (request.method !== 'POST') throw new LocalDataError(405, '不支持此补全操作');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面保存补全资料');
+      return json(response, 200, store.saveOrderCompletion(actor, await readJson(request), readOrderOwners));
     }
     if (domain === 'tenant-owner-transfer') {
       if (!actor?.id || !['admin', 'super'].includes(actor.role))
@@ -2008,6 +2060,7 @@ export async function handleLocalBusiness(
     if (
       error instanceof LocalDataError ||
       error instanceof TenantOwnerTransferError ||
+      error instanceof OrderCompletionError ||
       error instanceof AccountLifecycleError ||
       error instanceof RelayClaimError ||
       error instanceof BitBrowserAddressError ||

@@ -26,7 +26,8 @@ REVISION = '4e9bb201cf481d4bcc85da34970fc26c63ab818a'
 OWNER_LABEL = 'com.id-business.native-canary.owner'
 SHA_LABEL = 'com.id-business.native-canary.revision'
 RETURN_PATHS = {'/api/admin/cdks/returns/check', '/api/admin/cdks/returns/commit', '/api/admin/cdks/returns/receipt'}
-ALLOWED_GETS = RETURN_PATHS | {'/api/public/runtime', '/api/admin/session', '/api/admin/cards', '/api/admin/recharge-routing'}
+STOCK_PATH = '/api/admin/cdks/returns/stock'
+ALLOWED_GETS = RETURN_PATHS | {STOCK_PATH, '/api/public/runtime', '/api/admin/session', '/api/admin/cards', '/api/admin/recharge-routing'}
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
 
@@ -315,6 +316,19 @@ class Canary:
         if self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns') != count:
             raise CanaryError('code_return_migration_not_idempotent')
         self.checks.append('code_return_history_delivery_hold_collision_and_additive_migration')
+
+        eligible, shipped = 'KC-23456789ABCDEFG', 'KC-23456789ABCDEFH'
+        stock_fixture = ('INSERT INTO cdk_codes(cdk_code,is_active,type,plan_type,shipped_at) VALUES '
+                         "('%s',1,'自助','plus',NULL),('%s',1,'自助','plus',CURRENT_TIMESTAMP)") % (eligible, shipped)
+        self.return_queries.add(stock_fixture)
+        self.mysql_query(mysql, stock_fixture)
+        denied, _ = http_json(adapter_url, STOCK_PATH, {
+            'x-id-recharge-assertion': assertion(self.bridge, STOCK_PATH, privileged)})
+        status, value = http_json(adapter_url, STOCK_PATH, {
+            'x-id-recharge-assertion': assertion(self.bridge, STOCK_PATH, service)})
+        if denied != 403 or status != 200 or value != {'success': True, 'items': [{'code': eligible, 'plan': 'plus'}]}:
+            raise CanaryError('stock_service_boundary_or_eligibility_failed')
+        self.checks.append('stock_private_read_and_original_short_code_eligibility')
 
     def run(self):
         if not (ROOT / 'releases' / self.sha / 'source/deploy/recharge-core/run-recharge.py').is_file():

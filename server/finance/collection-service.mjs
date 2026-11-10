@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { automaticProvider, createAutomaticOrderSnapshot, requiredQuoteCurrencies } from '../../modules/finance/accounting.mjs';
+import { automaticProvider, createAutomaticOrderSnapshot, orderAccountingAt, requiredQuoteCurrencies } from '../../modules/finance/accounting.mjs';
 import { fetchFinanceQuote } from './quote-service.mjs';
 import { collectionDomain, collectionError, defaults, validateSettings, quoteId, cleanupPlan, collectionMetrics, hour, day } from './collection-policy.mjs';
 
 const iso = time => new Date(time).toISOString();
 const systemActor = { id: 'finance-collector', name: '汇率采集任务', role: 'admin' };
-const orderTime = order => Date.parse(/(?:Z|[+-]\d\d:\d\d)$/.test(order.start || '')
-  ? order.start : String(order.start || '').replace(' ', 'T') + '+08:00');
+const orderTime = (order) => {
+  const at = orderAccountingAt(order) || '';
+  return Date.parse(/(?:Z|[+-]\d\d:\d\d)$/.test(at) ? at : at.replace(' ', 'T') + '+08:00');
+};
 
 export function createFinanceCollection({ store, provider = 'disabled', fetchQuote = globalThis.fetch,
   clock = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {

@@ -86,7 +86,9 @@ function normalizeSnapshot(input, orderAt, clock) {
 }
 
 export function createManualSnapshot(input, orderAt, clock = Date.now()) {
-  return { kind: 'manual', ...normalizeSnapshot(input, orderAt, clock) };
+  if (input.basis !== undefined && !['settlement', 'reference'].includes(input.basis))
+    throw new Error('请选择有效的汇率依据');
+  return { kind: 'manual', ...(input.basis && { basis: input.basis }), ...normalizeSnapshot(input, orderAt, clock) };
 }
 
 function normalizeAutomaticSnapshot(input, orderAt, clock) {
@@ -110,18 +112,120 @@ function readSnapshot(order, clock) {
   const checked = snapshot.kind === 'automatic'
     ? normalizeAutomaticSnapshot(snapshot, snapshot.basisAt, clock)
     : createManualSnapshot(snapshot, snapshot.basisAt, clock);
-  const current = instant(order.start);
+  const current = instant(orderAccountingAt(order));
   if (!(current >= instant(checked.at) && current < instant(checked.expiresAt) && current <= clock))
     throw new Error('更正后的订阅时间不在原汇率有效期内');
   return checked;
 }
 
+const bankProducts = ['GPT', 'Claude Pro', 'Claude Max'];
+const unavailableOrders = ['draft', 'failed', '草稿', '失败'];
+const isAutomatic = (order) => order.source === '线上代充';
+export const orderAccountingAt = (order) => isAutomatic(order) && order.rechargeCompletedAt || order.start;
+const stableCardId = (order) => typeof order.cardId === 'string' && order.cardId.trim() === order.cardId &&
+  order.cardId.length > 0 && !/^\d{4,19}$/.test(order.cardId) ? order.cardId : '';
+const compareKey = (a, b) => a === b ? 0 : a < b ? -1 : 1;
+const openingOrder = (a, b) => a.at - b.at ||
+  compareKey(a.order.orderNo || a.order.id, b.order.orderNo || b.order.id) || compareKey(a.order.id, b.order.id);
+
+function confirmedCardOpening(order, clock) {
+  const cardId = stableCardId(order);
+  const auto = isAutomatic(order);
+  const evidence = Array.isArray(order.financialEvidence) ? order.financialEvidence : [];
+  const confirmed = auto || order.paidConfirmed === true || Boolean(cardId && evidence.some((row) =>
+    row?.kind === 'payment' && row.payment === '银行卡' && row.cardId === cardId));
+  const start = instant(order.start), expiry = instant(order.expiry);
+  const at = auto ? instant(order.rechargeCompletedAt) : start;
+  if (!confirmed) return { order, cardId, at, state: 'unconfirmed' };
+  if (!Number.isFinite(at) || (Number.isFinite(start) && at < start) ||
+      (order.expiry && !(at < expiry)))
+    return { order, cardId, at, state: 'unknown' };
+  return { order, cardId, at, state: at > clock ? 'future' : 'opened' };
+}
+
+// Use the complete order set, including successful orders later refunded or
+// cancelled. Display filters and FX gaps do not alter a card's denominator.
+export function buildCardIssueAllocations(orders, { clock = Date.now() } = {}) {
+  const result = new Map(), groups = new Map(), tasks = new Map();
+  const pending = (reason) => ({ status: 'pending', reason });
+  const candidates = [...new Map(orders.filter((row) => row?.id && row.payment === '银行卡' &&
+    bankProducts.includes(row.product) && !row.draft && !unavailableOrders.includes(row.status))
+    .map((row) => [row.id, row])).values()].map((row) => confirmedCardOpening(row, clock));
+  const sameTask = new Set(), ambiguousCards = new Set();
+  for (const item of candidates) {
+    if (!isAutomatic(item.order) || !item.order.taskId) continue;
+    const group = tasks.get(item.order.taskId) || [];
+    group.push(item);
+    tasks.set(item.order.taskId, group);
+  }
+  for (const group of tasks.values()) {
+    if (group.length < 2) continue;
+    const cards = new Set(group.map((item) => item.cardId).filter(Boolean));
+    const conflict = cards.size > 1;
+    if (conflict) for (const id of cards) ambiguousCards.add(id);
+    group.sort((a, b) => Number(b.state === 'opened' && Boolean(b.cardId)) -
+      Number(a.state === 'opened' && Boolean(a.cardId)) || openingOrder(a, b));
+    for (const item of conflict ? group : group.slice(1)) {
+      sameTask.add(item.order.id);
+      result.set(item.order.id, { status: 'duplicate', reason: conflict ? '同一代充任务关联多张卡，待核对' : '重复代充任务，待核对' });
+    }
+  }
+  for (const item of candidates) {
+    if (sameTask.has(item.order.id)) continue;
+    if (!item.cardId) {
+      if (item.order.product === 'GPT') result.set(item.order.id, pending('缺少原付款银行卡的稳定编号'));
+      continue;
+    }
+    if (item.state === 'future' || item.state === 'unconfirmed') {
+      if (item.order.product === 'GPT') result.set(item.order.id, pending('本单成功开通待核对'));
+      continue;
+    }
+    const group = groups.get(item.cardId) || [];
+    group.push(item);
+    groups.set(item.cardId, group);
+  }
+
+  for (const [cardId, group] of groups) {
+    const charges = group.filter(({ order }) => order.issueFeeSnapshot?.applied === true);
+    if (!charges.length && !group.some(({ order }) => order.product === 'GPT') && !ambiguousCards.has(cardId)) continue;
+    let total;
+    let reason;
+    if (ambiguousCards.has(cardId) || group.some((item) => item.state !== 'opened')) {
+      reason = '同卡开通记录存在待核对项';
+    } else if (charges.length !== 1) {
+      reason = charges.length ? '同卡有多份开卡费凭据' : '同卡开卡费凭据缺失';
+    } else {
+      const fee = charges[0].order.issueFeeSnapshot;
+      try {
+        if (fee.pending || fee.cardId !== cardId) throw new Error();
+        total = unsigned(fee.amountUsd);
+      } catch {
+        reason = '原卡开卡费凭据待核对';
+      }
+    }
+    if (reason) {
+      for (const { order } of group) result.set(order.id, pending(reason));
+      continue;
+    }
+    const count = BigInt(group.length), base = total / count, extra = total % count;
+    group.sort(openingOrder).forEach(({ order }, index) => {
+      result.set(order.id, {
+        status: 'ready', amountUsd: formatted(base + (BigInt(index) < extra ? 1n : 0n)),
+        totalUsd: formatted(total), count: group.length, asOf: new Date(clock).toISOString()
+      });
+    });
+  }
+  return result;
+}
+
 // All converted values share an exact denominator. Apple actual-cost returns are
 // prorated against the documented recoverable part of the total, not against fees.
-export function calculateOrder(order, { appleLedger, currency = 'CNY', clock = Date.now() } = {}) {
+export function calculateOrder(order, { appleLedger, cardIssueAllocations, currency = 'CNY', clock = Date.now() } = {}) {
   const missing = new Set();
   try {
     if (!targets.includes(currency)) throw new Error('统计币种无效');
+    const allocation = cardIssueAllocations?.get(order.id);
+    if (allocation?.status === 'duplicate') throw new Error(allocation.reason);
     const snapshot = readSnapshot(order, clock);
     const rate = (code) => {
       if (!validCurrencyCode(code)) throw new Error('订单币种无效');
@@ -166,7 +270,8 @@ export function calculateOrder(order, { appleLedger, currency = 'CNY', clock = D
     const original = [];
     let recovery;
     const item = (label, units, code, multiplier = one) =>
-      original.push({ label, amount: value(units, code) * multiplier * denominator });
+      original.push({ label, amount: value(units, code) * multiplier * denominator,
+        originalAmount: formatted(rounded(units * multiplier, one)), originalCurrency: code });
     if (actual) {
       const cost = unsigned(order.actualCostAmount);
       item('实际总成本（退回前）', cost, order.actualCostCurrency);
@@ -181,14 +286,23 @@ export function calculateOrder(order, { appleLedger, currency = 'CNY', clock = D
       const factor = apple && claude ? unsigned(rules.appleDiscount) : one;
       if (factor === 0n || factor > one) throw new Error('Apple 折扣必须大于 0 且不超过 1');
       item(apple && claude ? '苹果内购折扣后成本' : '代付金额', paid, order.paidCurrency, factor);
+      if (!apple && cardIssueAllocations && (allocation || order.product === 'GPT')) {
+        if (allocation?.status !== 'ready')
+          throw new Error(allocation?.reason || '本单开卡成本待核对');
+        item('开卡成本分摊', unsigned(allocation.amountUsd), 'USD');
+      }
       if (!apple && claude) {
         item('代付服务费', unsigned(rules.claudeBankFeeMyr), 'MYR');
         item('KYC 认证成本', unsigned(rules.claudeAccountCostMyr), 'MYR');
       } else if (!apple) {
-        if (!order.issueFeeSnapshot) throw new Error('订单缺少开卡费快照');
-        if (order.issueFeeSnapshot.pending) throw new Error('首次开卡费待核对');
-        if (order.issueFeeSnapshot.applied)
-          item('本卡首次开卡费', unsigned(order.issueFeeSnapshot.amountUsd), 'USD');
+        // The original per-order format remains readable for historic audits
+        // without a complete card cohort.
+        if (!cardIssueAllocations) {
+          if (!order.issueFeeSnapshot) throw new Error('订单缺少开卡费快照');
+          if (order.issueFeeSnapshot.pending) throw new Error('首次开卡费待核对');
+          if (order.issueFeeSnapshot.applied)
+            item('本卡首次开卡费', unsigned(order.issueFeeSnapshot.amountUsd), 'USD');
+        }
         const feePercent = unsigned(rules.cardPercent);
         if (feePercent > one) throw new Error('银行卡手续费比例不能大于 1');
         item('支付比例手续费', paid, order.paidCurrency, feePercent);
@@ -210,7 +324,9 @@ export function calculateOrder(order, { appleLedger, currency = 'CNY', clock = D
       revenue: toMoney(netRevenue), originalCost: toMoney(grossCost),
       recoveredCost: toMoney(recovery), netCost: toMoney(netCost),
       profit: toMoney(netRevenue - netCost),
-      items: original.map((row) => ({ label: row.label, amount: toMoney(row.amount) }))
+      basis: actual && snapshot.basis === 'settlement' ? 'actual' : 'reference',
+      ...(allocation?.status === 'ready' && { cardIssue: allocation }),
+      items: original.map((row) => ({ ...row, amount: toMoney(row.amount) }))
     };
   } catch (error) {
     return { status: 'pending', currency, reason: error.message };
@@ -224,7 +340,7 @@ export function requiredQuoteCurrencies(order) {
   } else {
     if (typeof order.emailCostAmount === 'string' && /[1-9]/.test(order.emailCostAmount))
       required.add(order.emailCostCurrency || 'CNY');
-    if (order.payment === '银行卡' && order.product === 'GPT') required.add('USD');
+    if (order.payment === '银行卡' && (order.product === 'GPT' || /^(?:recharge|orbitcard):/.test(order.cardId || ''))) required.add('USD');
   }
   return [...new Set([...currencies, ...required])].filter(code => code !== 'CNY' && validCurrencyCode(code) && required.has(code));
 }
@@ -235,7 +351,7 @@ function checkFeeSnapshot(order) {
 }
 
 export function createOrderSnapshot(input, order, clock = Date.now()) {
-  const snapshot = createManualSnapshot(input, order.start, clock);
+  const snapshot = createManualSnapshot(input, orderAccountingAt(order), clock);
   checkFeeSnapshot(order);
   const missing = requiredQuoteCurrencies(order).filter((code) => !Object.hasOwn(snapshot.rates, code));
   if (missing.length) throw new Error(`请补充 ${missing.join('、')} 汇率再冻结订单快照`);
@@ -247,5 +363,5 @@ export function createAutomaticOrderSnapshot(quote, order, clock = Date.now(), {
   if (!(clock < instant(quote.expiresAt)) && !(historical && quote.quoteId)) throw new Error('当前自动报价已过期');
   const missing = requiredQuoteCurrencies(order).filter(code => !quote.rates || !Object.hasOwn(quote.rates, code));
   if (missing.length) throw new Error(`自动报价缺少 ${missing.join('、')} 汇率`);
-  return normalizeAutomaticSnapshot(quote, order.start, clock);
+  return normalizeAutomaticSnapshot(quote, orderAccountingAt(order), clock);
 }

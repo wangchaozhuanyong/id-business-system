@@ -32,7 +32,7 @@ test('customer route restrictions reject private cards, credentials, diagnostics
     assert.equal(JSON.stringify(result).includes('synthetic-private'), false);
     return result;
   }
-  for (const path of ['/api/admin/cards', '/API/ADMIN/CARDS/', '/api/admin/sessions', '/api/admin/cdks',
+  for (const path of ['/api/admin/cards', '/API/ADMIN/CARDS/', '/api/admin/sessions', '/api/admin/cdks', '/api/admin/cdks/returns/stock',
     '/api/admin/task-logs/original-job', '/api/admin/proxies', '/api/admin/addresses',
     '/api/admin/checkout/generate', '/api/admin/orbitcard/usage',
     '/api/admin/screenshots?path=checkout_debug%2Ffixture.png', '/api/admin/video?path=fixture.webm'])
@@ -43,6 +43,7 @@ test('customer route restrictions reject private cards, credentials, diagnostics
   const administrator = { ...customer, admin: true };
   for (const path of ['/api/admin/cards', '/api/admin/sessions', '/api/admin/cdks', '/api/admin/orbitcard/usage'])
     assert.equal((await request(path, administrator)).status, 403);
+  assert.equal((await request('/api/admin/cdks/returns/stock', { ...administrator, sensitive: true })).status, 403);
   assert.equal((await request('/api/admin/cards', customer, { cookie: 'synthetic=private' })).status, 401);
   assert.equal((await request('/api/admin/cards', customer, { origin: 'https://example.test' })).status, 401);
   let upgradeReply;

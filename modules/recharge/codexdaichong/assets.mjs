@@ -788,6 +788,12 @@ function adaptRechargeProgress(source, workspace) {
 }
 
 function adaptWorkspaceRecharge(source) {
+  const progressStart = source.indexOf('<div id="taskProgress"');
+  const progressEnd = source.indexOf('<div id="statusMessage"', progressStart);
+  if (progressStart < 0 || progressEnd < 0) throw new Error('上游界面缺少充值进度区');
+  // Move the native progress and verification nodes together so the same task drives both.
+  const taskProgress = source.slice(progressStart, progressEnd);
+  source = replaceOne(source, taskProgress, '');
   source = replaceSection(
     source,
     '<header class="site-hero">',
@@ -802,7 +808,6 @@ function adaptWorkspaceRecharge(source) {
           <button type="button" class="tab-btn" data-tab="guide" aria-pressed="false" aria-controls="workspaceGuide">使用说明</button>
         </nav>
         <div class="workspace-recharge-heading-actions">
-          <span id="flowStatusBadge" class="flow-badge pending">待开始</span>
           <a class="btn-secondary" href="/subscription" target="_blank" rel="noopener">${workspaceIcon('receipt')}发票助手</a>
         </div>
       </header>
@@ -816,6 +821,7 @@ function adaptWorkspaceRecharge(source) {
     '<div id="step1">',
     '<div id="querySection"',
     `
+  <div class="workspace-recharge-form">
     <section id="step1" class="workspace-recharge-step" aria-labelledby="workspace-code-title">
       <h2 id="workspace-code-title"><span>01</span> 验证兑换码</h2>
       <p class="field-hint">实际充值套餐以兑换码绑定结果为准。</p>
@@ -861,6 +867,18 @@ function adaptWorkspaceRecharge(source) {
       </div>
     </fieldset>
   </div>
+  <aside class="workspace-recharge-progress" aria-labelledby="workspace-progress-title">
+    <div class="workspace-progress-heading">
+      <h2 id="workspace-progress-title">充值进度</h2>
+      <span id="flowStatusBadge" class="flow-badge pending" role="status">待开始</span>
+    </div>
+    <div class="workspace-progress-idle">
+      <p>提交后，这里会显示当前处理阶段和结果。</p>
+      <p>提交结果待核对，请用原兑换码查询。</p>
+    </div>
+    ${taskProgress}
+  </aside>
+</div>
   `
   );
   source = replaceOne(source, '<div id="querySection" style="display: none;">', `

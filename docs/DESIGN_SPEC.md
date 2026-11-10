@@ -95,7 +95,7 @@ ChatGPT 充值、兑换开通、比特登录三个嵌入运行时显式登记保
 | 客户资料 | 录入资料、客户数据、租户数据                                                              | 客户与租户分开，订单中可快捷新增并回填               |
 | 订单管理 | GPT 订单、Claude Pro 订单、Claude Max 订单、Gemini 订单、Grok 订单、Claude 专属 | Gemini、Grok 占位；其余按新需求规划                  |
 | 线上代充 | ChatGPT 充值、Claude 充值 | ChatGPT 接入 codexdaichong，Claude 沿用原有占位 |
-| 数据管理 | 数据统计、银行卡管理、Claude 谷歌订阅管理、客户流失、员工数据统计 | 查看订单统计、用卡、订阅资料、[客户流失](CUSTOMER_RETENTION_PLAN.md)及员工工作量与待处理资产 |
+| 数据管理 | 订单统计、银行卡管理、Claude 谷歌订阅管理、客户流失、员工数据统计 | 查看订单统计、用卡、订阅资料、[客户流失](CUSTOMER_RETENTION_PLAN.md)及员工工作量与待处理资产 |
 | 数据中心 | 数据中心                                                                                  | 占位                                                 |
 | 监控中心 | 监控中心                                                                                  | 服务状态、告警、人工确认和恢复                       |
 | 系统设置 | 员工与权限、邮箱分类、费用规则、[监控与通知](SYSTEM_MONITORING.md)、操作记录                 | 系统配置、Telegram 接收人及投递历史                  |

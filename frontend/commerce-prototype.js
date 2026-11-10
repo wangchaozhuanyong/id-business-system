@@ -25,7 +25,7 @@
   let sequence = 0;
   let quickReturn = null;
   let customerSettingsReturn = null;
-  let finance;
+  let finance, cardIssueContext;
   let orderPrices = {};
   let priceLoad;
   let orderCards = [];
@@ -520,6 +520,7 @@
     return safeClone({ customers, tenants, orders, operating: [...operating], rentBatches, logs, renewalWarningHours });
   }
   function applyCommerceSnapshot(data) {
+    cardIssueContext = undefined;
     customers.splice(0, customers.length, ...(data?.customers || []));
     tenants.splice(0, tenants.length, ...(data?.tenants || []));
     orders.splice(0, orders.length, ...(data?.orders || []));
@@ -1030,19 +1031,21 @@
     return reasons;
   }
   function localAccounting(order, currency = costSettings.currency) {
-    return finance?.calculateOrder(order, {
-      currency,
-      appleLedger: order.payment === '苹果内购'
-        ? A.modules.appleBalance?.getOrderLedger?.(order.id)
-        : undefined
-    }) || { status: 'pending', reason: '汇率核算模块尚未接入' };
+    if (!finance) return { status: 'pending', reason: '汇率核算模块尚未接入' };
+    const clock = Date.now(), minute = Math.floor(clock / 60_000);
+    if (cardIssueContext?.minute !== minute)
+      cardIssueContext = { minute, allocations: finance.buildCardIssueAllocations(orders, { clock }) };
+    return finance.calculateOrder(order, {
+      currency, clock, cardIssueAllocations: cardIssueContext.allocations,
+      appleLedger: order.payment === '苹果内购' ? A.modules.appleBalance?.getOrderLedger?.(order.id) : undefined
+    });
   }
   function pendingReasons(order, accounting) {
     const reasons = completenessReasons(order);
     if (!order.receiptConfirmed) reasons.push('实收待确认');
     if (!order.paidConfirmed) reasons.push('代付结果待确认');
     if (!order.costConfirmed) reasons.push('成本口径待确认');
-    if (order.issueFeeSnapshot?.pending) reasons.push('首次开卡费待核对');
+    if (!localData && order.issueFeeSnapshot?.pending) reasons.push('首次开卡费待核对');
     if (localData) {
       const result = accounting || localAccounting(order);
       if (result.status !== 'ready') reasons.push(result.reason);
@@ -3722,7 +3725,7 @@
         select('emailCostCurrency', currencyChoices(currencies, v('emailCostCurrency'), v('product')), v('emailCostCurrency') || 'CNY')
       ) +
       (v('product') === 'GPT' && v('payment') === '银行卡'
-        ? '<p class="footnote commerce-span-all">首次确认用卡时按费用规则记录开卡费。</p>' : '') +
+        ? '<p class="footnote commerce-span-all">开卡费按卡记录，并按该卡已确认开通的订单分摊。</p>' : '') +
       '</div></details>'
     );
   }
@@ -4152,7 +4155,7 @@
         ],
         moduleState.orderTab,
         'commerce-order-tab'
-      )}${toolbar(product === 'Claude Pro' ? '搜索订单编号、邮箱、客户、卡号或序列号' : '搜索订单编号、邮箱或客户', columnSettingsButton(`commerce-orders-${product}`) + routeButton('数据统计', 'orders/statistics'), 'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${tableList(orderColumns(product), filtered, `commerce-orders-${product}`)}${quoteAttribution(filtered)}</section>`
+      )}${toolbar(product === 'Claude Pro' ? '搜索订单编号、邮箱、客户、卡号或序列号' : '搜索订单编号、邮箱或客户', columnSettingsButton(`commerce-orders-${product}`) + routeButton('订单统计', 'orders/statistics'), 'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${tableList(orderColumns(product), filtered, `commerce-orders-${product}`)}${quoteAttribution(filtered)}</section>`
     );
   }
 
@@ -4192,7 +4195,7 @@
             ? timeline(order.id)
             : activeTab === 'renewals'
               ? renewalChain(order)
-              : `<div class="property-list">${property('订单编号', order.orderNo)}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property('邮箱账号', order.email)}${property('客户', customerLabel(order.customerId))}${property('微信', order.wechat)}${property('客户电话', order.customerPhone)}${property('QQ', order.qq)}${property('WhatsApp', order.whatsapp)}${property('Telegram', order.telegram)}${property('支付方式', order.payment)}${order.payment === '银行卡' ? property('银行卡类型', order.cardTypeName) : ''}${property('卡尾号 / ID', order.paymentId)}${proOrderProperties(order)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('租户', tenantLabel(order.tenantId))}${property('归属人', orderOwnerName(order))}${property('认证人', order.verifier)}${property('认证电话', order.verifierPhone)}${property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录，更正复选框不会删除' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', order.cancelled ? '已撤单' : '正常')}${property('待核对', pendingReasons(order).join('、') || '资料已核对')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
+              : `<div class="property-list">${property('订单编号', order.orderNo)}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property('邮箱账号', order.email)}${property('客户', customerLabel(order.customerId))}${automaticOrder(order) ? property('客户来源', order.customerSource || customers.find(row => row.id === order.customerId)?.source) : ''}${property('微信', order.wechat)}${property('客户电话', order.customerPhone)}${property('QQ', order.qq)}${property('WhatsApp', order.whatsapp)}${property('Telegram', order.telegram)}${property('支付方式', order.payment)}${order.payment === '银行卡' ? property('银行卡类型', order.cardTypeName) : ''}${property('卡尾号 / ID', order.paymentId)}${proOrderProperties(order)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('租户', tenantLabel(order.tenantId))}${property('归属人', orderOwnerName(order))}${property('认证人', order.verifier)}${property('认证电话', order.verifierPhone)}${property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录，更正复选框不会删除' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', order.cancelled ? '已撤单' : '正常')}${property('待核对', pendingReasons(order).join('、') || '资料已核对')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
     const detailBody = `<div class="tabs" role="tablist"${asPage ? ' data-page-actions="tabs"' : ''}>${[
       ['details', '资料'],
       ['costs', '成本与汇率'],
@@ -4236,7 +4239,7 @@
   }
 
   function quoteTime(iso) {
-    const ms = Date.parse(iso);
+    const ms = parseDate(iso);
     return Number.isFinite(ms)
       ? new Date(ms + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ')
       : '待核对';
@@ -4246,26 +4249,34 @@
         !rows.some((row) => row.fxSnapshot?.provider === finance.automaticProvider.id)) return '';
     return `<p class="footnote panel-body"><a href="${E(finance.automaticProvider.attributionUrl)}" target="_blank" rel="noopener noreferrer">Rates By Exchange Rate API</a></p>`;
   }
+  const accountingLabel = (basis) => basis === 'actual' ? '实账核算' : '参考核算';
+  const quoteBasisLabel = (snapshot) => snapshot?.kind === 'automatic' || snapshot?.basis === 'reference'
+    ? '历史市场参考报价' : snapshot?.basis === 'settlement' ? '实际结算凭据' : '历史登记报价';
+
   function localCostDetail(order) {
     const result = localAccounting(order);
     const pending = pendingReasons(order, result);
     const amount = (value) => `${display(value)} ${currencyLabel(result.currency)}`;
     const snapshot = order.fxSnapshot;
+    const issue = result.cardIssue;
+    const allocation = issue ? property('开卡成本分摊依据',
+      `同卡已确认开通 ${issue.count} 单 · 原卡费用 ${issue.totalUsd} USD · 本单份额 ${issue.amountUsd} USD · 截至 ${quoteTime(issue.asOf)}`) : '';
     const output = result.status === 'ready'
-      ? result.items.map((row) => property(row.label, amount(row.amount))).join('') +
+      ? result.items.map((row) => property(row.label, row.originalCurrency === result.currency ? amount(row.amount) :
+          `${row.originalAmount} ${row.originalCurrency} · 折合 ${amount(row.amount)}`)).join('') + allocation +
         property('退款后净收款', amount(result.revenue)) +
         property('原成本合计', amount(result.originalCost)) +
         property('实际收回成本', amount(result.recoveredCost)) +
         property('回款后净成本', amount(result.netCost))
       : '';
-    return `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('核算依据', order.costBasis === 'actual' ? '实际总成本' : '标准费用规则')}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${output}${property('本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', pending.join('、') || '已确认')}</div>${
+    return `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', pending.length || order.cancelled ? '待核算' : accountingLabel(result.basis))}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${output}${property('本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', pending.join('、') || '已确认')}</div>${
       panelTitle('订单汇率快照', '每 1 单位外币对应的人民币金额。仅使用本订单记录的汇率。', finance && !snapshot && !order.cancelled
         ? A.button('登记汇率快照', 'commerce-order-fx', 'primary', '', `data-id="${E(order.id)}"`) +
           (finance.requestAutomaticSnapshot && S.actor?.role !== 'employee'
             ? A.button('获取并冻结自动报价', 'commerce-order-auto-fx', '', '', `data-id="${E(order.id)}"`)
             : '')
         : '')
-    }${snapshot ? `<div class="property-list">${property(snapshot.kind === 'automatic' ? '自动报价来源' : '手工登记来源', snapshot.source)}${snapshot.fetchedAt ? property('采集时间（北京时间）', quoteTime(snapshot.fetchedAt)) : ''}${property('报价时点（北京时间）', quoteTime(snapshot.at))}${property('有效截止（北京时间）', quoteTime(snapshot.expiresAt))}${property('核算时点（北京时间）', quoteTime(snapshot.basisAt))}${Object.entries(snapshot.rates).map(([code, rate]) => property(currencyLabel(code), rate)).join('')}</div>`
+    }${snapshot ? `<div class="property-list">${property(snapshot.kind === 'automatic' ? '自动报价来源' : '手工登记来源', snapshot.source)}${property('汇率依据', quoteBasisLabel(snapshot))}${snapshot.fetchedAt ? property('采集时间（北京时间）', quoteTime(snapshot.fetchedAt)) : ''}${property('报价时点（北京时间）', quoteTime(snapshot.at))}${property('有效截止（北京时间）', quoteTime(snapshot.expiresAt))}${property('核算时点（北京时间）', quoteTime(snapshot.basisAt))}${Object.entries(snapshot.rates).map(([code, rate]) => property(currencyLabel(code), rate)).join('')}</div>`
       : A.empty('尚无订单汇率快照', finance?.requestAutomaticSnapshot
         ? '可获取覆盖本次订阅时点的有效报价，或根据原订单的凭据手工登记。'
         : '核对原订单的真实报价凭据后登记。当前使用手工来源。')}${quoteAttribution([order])}`;
@@ -4304,8 +4315,8 @@
     }).join('');
     A.openDrawer(
       '登记订单汇率快照',
-      `${order.orderNo} · 订阅时点 ${order.start || '待补充'}（北京时间）。保存后冻结。`,
-      `<form id="commerce-fx-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-version" value="${E(v('version') || order.version)}" /><div class="commerce-field-grid">${field('报价来源与凭据', 'fx-source', input('fx-source', v('fx-source'), 'maxlength="160"'), true, '填写可核对的真实来源与报价凭据编号。', 'commerce-span-all')}${field('报价时点', 'fx-at', input('fx-at', v('fx-at'), 'type="datetime-local"'), true)}${field('有效截止', 'fx-expiresAt', input('fx-expiresAt', v('fx-expiresAt'), 'type="datetime-local"'), true, '报价在该时刻起失效；时间均为北京时间。')}</div><section class="form-section"><h3>每 1 单位外币折合人民币</h3><p class="footnote">人民币基准固定为 1，马币用于统计切换。汇率最多八位小数。</p><div class="commerce-field-grid">${rateInputs}</div></section></form>`,
+      `${order.orderNo} · 开通时点 ${quoteTime(finance.orderAccountingAt(order))}（北京时间）。保存后冻结。`,
+      `<form id="commerce-fx-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-version" value="${E(v('version') || order.version)}" /><div class="commerce-field-grid">${field('汇率依据', 'fx-basis', select('fx-basis', [['reference', '历史参考报价'], ['settlement', '实际结算凭据']], v('fx-basis') || 'reference'), true)}${field('报价来源与凭据', 'fx-source', input('fx-source', v('fx-source'), 'maxlength="160"'), true, '填写可核对的真实来源与报价凭据编号。', 'commerce-span-all')}${field('报价时点', 'fx-at', input('fx-at', v('fx-at'), 'type="datetime-local"'), true)}${field('有效截止', 'fx-expiresAt', input('fx-expiresAt', v('fx-expiresAt'), 'type="datetime-local"'), true, '报价在该时刻起失效；时间均为北京时间。')}</div><section class="form-section"><h3>每 1 单位外币折合人民币</h3><p class="footnote">人民币基准固定为 1，马币用于统计切换。汇率最多八位小数。</p><div class="commerce-field-grid">${rateInputs}</div></section></form>`,
       A.button('取消', 'drawer-close') + '<button type="submit" form="commerce-fx-form" class="button primary">核对快照</button>',
       key
     );
@@ -4324,6 +4335,7 @@
     try {
       snapshot = finance.createOrderSnapshot({
         source: value(raw, 'fx-source'),
+        basis: value(raw, 'fx-basis') || 'reference',
         at: value(raw, 'fx-at'),
         expiresAt: value(raw, 'fx-expiresAt'),
         rates: Object.fromEntries([...new Set([...currencies, ...finance.requiredQuoteCurrencies(order)])].filter(code => code !== 'CNY').map(code => [code, value(raw, `fx-${code}`)]))
@@ -4698,17 +4710,19 @@
         revenue: gain === null ? null : localData
           ? accounting.revenue
           : shownCurrency(cny(refundable(row), row.saleCurrency, row.rates), costSettings.currency, row.rates),
+        basis: accounting?.basis || 'reference',
         reasons: pendingReasons(row, accounting)
       }];
     }));
     const complete = active.filter((row) => amounts.get(row.id).profit !== null);
     const pending = active.filter((row) => amounts.get(row.id).profit === null);
     const reported = (rows, field) => rows.length ? display(sum(rows, (row) => amounts.get(row.id)[field])) : '—';
+    const byBasis = (rows, basis) => rows.filter((row) => amounts.get(row.id).basis === basis);
     const selected = moduleState.statsTab === 'pending' ? pending : complete;
     return (
       A.header(
-        '订单数据统计',
-        '按已确认订单快照统计，可钻取原单；缺失资料不按零成本计核算收益。',
+        '订单统计',
+        '按开通时的汇率与订单费用规则核算。实账与参考结果分别列示，证据缺失的订单进入待核算。',
         `<select id="commerce-stat-currency" aria-label="统计币种">${A.options(
           [
             ['CNY', '人民币 CNY'],
@@ -4720,7 +4734,7 @@
       A.summary([
         ['已核算订单', complete.length, '条', true],
         [`确认净收款（${currencyLabel(costSettings.currency)}）`, reported(complete, 'revenue'), costSettings.currency],
-        [`确认核算收益（${currencyLabel(costSettings.currency)}）`, reported(complete, 'profit'), costSettings.currency],
+        [`核算利润合计（${currencyLabel(costSettings.currency)}）`, reported(complete, 'profit'), costSettings.currency],
         ['待核算', pending.length, '条']
       ]) +
       quoteAttribution(active) +
@@ -4760,12 +4774,13 @@
                 'commerce-stat-rates'
               )}`
           : moduleState.statsTab === 'overview'
-            ? `${panelTitle('按产品汇总', '每个汇总可进入来源订单核对。统计切换只改变显示，不改原币金额和历史成本。')}${A.table(
+            ? `${panelTitle('按产品汇总', '利润合计包含实账和参考核算。参考核算使用订单费用规则或历史报价，开卡成本按同卡已确认开通订单分摊。')}${A.table(
                 [
                   { id: 'product', label: '产品' },
                   { id: 'count', label: '已核算订单' },
                   { id: 'revenue', label: `净收款（${currencyLabel(costSettings.currency)}）` },
-                  { id: 'profit', label: `核算收益（${currencyLabel(costSettings.currency)}）` },
+                  { id: 'actual', label: `实账利润（${currencyLabel(costSettings.currency)}）` },
+                  { id: 'reference', label: `参考利润（${currencyLabel(costSettings.currency)}）` },
                   { id: 'pending', label: '待核算' },
                   {
                     id: 'actions',
@@ -4790,7 +4805,8 @@
                     product,
                     count: String(rows.length),
                     revenue: reported(rows, 'revenue'),
-                    profit: reported(rows, 'profit'),
+                    actual: reported(byBasis(rows, 'actual'), 'profit'),
+                    reference: reported(byBasis(rows, 'reference'), 'profit'),
                     pending: String(pending.filter((row) => row.product === product).length)
                   };
                 }),
@@ -4805,7 +4821,7 @@
                   {
                     id: 'reason',
                     label: moduleState.statsTab === 'pending' ? '待核算原因' : '核算状态',
-                    render: (row) => E(amounts.get(row.id).reasons.join('、') || '已确认')
+                    render: (row) => E(amounts.get(row.id).reasons.join('、') || accountingLabel(amounts.get(row.id).basis))
                   },
                   {
                     id: 'amount',
@@ -7483,6 +7499,7 @@
     getFxRates: () => (localData ? {} : safeClone(fxRates)),
     installFinance(module) {
       finance = module;
+      cardIssueContext = undefined;
       if (localData && localPhase === 'ready' && matches(S.route)) A.render();
     },
     getCustomers: () => safeClone(customers),

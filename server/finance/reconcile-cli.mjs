@@ -15,14 +15,16 @@ async function readInput() {
 
 try {
   const { values } = parseArgs({
-    options: { demo: { type: 'boolean' }, strict: { type: 'boolean' }, 'as-of': { type: 'string' } }
+    options: { demo: { type: 'boolean' }, strict: { type: 'boolean' }, 'as-of': { type: 'string' }, 'full-card-history': { type: 'boolean' } }
   });
   const clock = values['as-of'] !== undefined ? Date.parse(values['as-of']) :
     values.demo ? demoClock : Date.now();
   if (values['as-of'] !== undefined &&
       (!Number.isFinite(clock) || new Date(clock).toISOString() !== values['as-of']))
     throw new Error('--as-of 必须是标准 UTC ISO 时点，如 2026-11-05T06:00:00.000Z');
-  const report = reconcileOrders(values.demo ? demoOrders() : await readInput(), { clock });
+  const report = reconcileOrders(values.demo ? demoOrders() : await readInput(), {
+    clock, fullCardHistory: values['full-card-history']
+  });
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
   if (values.strict && (report.counts.pending || report.batchIssues.length)) process.exitCode = 2;
 } catch (error) {

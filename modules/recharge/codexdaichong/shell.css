@@ -947,7 +947,7 @@ body[data-recharge-workspace]::before {
   --workspace-inset: clamp(16px, 2vw, 24px);
   --workspace-label: 104px;
   width: 100%;
-  max-width: 1008px;
+  max-width: 1200px;
   margin-inline: auto;
   padding: clamp(12px, 2vw, 24px);
   animation: none;
@@ -1024,12 +1024,18 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
 [data-recharge-workspace] #redeemSection {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(248px, 26%);
   align-items: start;
   gap: 16px;
 }
 
-[data-recharge-workspace] .workspace-recharge-step {
+[data-recharge-workspace] .workspace-recharge-form {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+[data-recharge-workspace] :is(.workspace-recharge-step, .workspace-recharge-progress) {
   display: grid;
   gap: 16px;
   min-width: 0;
@@ -1038,6 +1044,59 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+[data-recharge-workspace] .workspace-progress-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+[data-recharge-workspace] .workspace-progress-heading h2 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+[data-recharge-workspace] .workspace-progress-idle {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+[data-recharge-workspace] .workspace-progress-idle p {
+  margin: 0;
+}
+
+[data-recharge-workspace] .workspace-progress-idle p + p,
+[data-recharge-workspace] .workspace-recharge-progress:has(#flowStatusBadge.manual) .workspace-progress-idle p:first-child,
+[data-recharge-workspace] .workspace-recharge-progress:has(#taskProgress[data-state]) :is(.workspace-progress-idle, #flowStatusBadge) {
+  display: none;
+}
+
+[data-recharge-workspace] .workspace-recharge-progress:has(#flowStatusBadge.manual) .workspace-progress-idle p + p {
+  display: block;
+  color: var(--warning-text);
+}
+
+[data-recharge-workspace] .workspace-recharge-progress .task-progress {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  animation: none;
+}
+
+[data-recharge-workspace] .workspace-recharge-progress .task-progress[data-state='submitting'] :is(#taskProgressPercent, .task-progress-track) {
+  display: none;
+}
+
+[data-recharge-workspace] .workspace-recharge-progress .captcha-verification {
+  flex-wrap: wrap;
+  margin: 0;
 }
 
 [data-recharge-workspace] .workspace-recharge-step :is(input, textarea) {
@@ -1519,6 +1578,10 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
     padding: 12px;
   }
 
+  [data-recharge-workspace] #redeemSection {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   [data-recharge-workspace] .workspace-recharge-field > label {
     padding-block: 12px;
   }
@@ -1554,7 +1617,6 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
   [data-recharge-workspace] .workspace-recharge-heading-actions {
     width: 100%;
-    justify-content: space-between;
   }
 
   body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
