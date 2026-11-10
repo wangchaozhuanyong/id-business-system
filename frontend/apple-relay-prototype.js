@@ -422,6 +422,11 @@
       ? bound(id)
       : remote.status?.configured && remote.status.aliasIds?.includes(id);
   const buyerCodeCells = new WeakMap();
+  const buyerCodeReuseMs = 5 * 60_000;
+  function buyerCodeSnapshot(row) {
+    return JSON.stringify([row.id, row.version, row.email, row.parentMailboxId,
+      parent(row.parentMailboxId)?.version, row.queryExpiry]);
+  }
   function buyerCodeCell(row) {
     const connected = !local || codeTargetBound('alias', row.id);
     const text = !local ? row.queryCode || '暂无查询码'
@@ -432,18 +437,30 @@
   function currentBuyerCodeCell(cell, operatorId, snapshot) {
     const row = alias(cell.dataset.relayBuyerCode);
     return cell.isConnected && A.state.route === 'mailboxes/relay' && view.tab === 'aliases' &&
-      actor().id === operatorId && row &&
-      JSON.stringify([row.id, row.version, row.email, row.parentMailboxId,
-        parent(row.parentMailboxId)?.version, row.queryExpiry]) === snapshot;
+      actor().id === operatorId && row && buyerCodeSnapshot(row) === snapshot;
+  }
+  function showBuyerCode(cell, state) {
+    buyerCodeCells.set(cell, state);
+    cell.querySelector('output').textContent = state.value;
+    cell.querySelector('[data-action="relay-buyer-code-copy"]').disabled = false;
+    cell.querySelector('[data-action="relay-buyer-code-retry"]')?.setAttribute('hidden', '');
+    cell.setAttribute('aria-busy', 'false');
+  }
+  function reuseBuyerCode(cell, row) {
+    const operatorId = actor().id, snapshot = buyerCodeSnapshot(row);
+    const cached = window.IDLocalData.queries?.peek('apple-relay', [operatorId, 'buyer-code', snapshot]);
+    if (cached?.stale !== false || !(cached.data?.reuseUntil > Date.now())) return false;
+    showBuyerCode(cell, { operatorId, snapshot, value: cached.data.queryCode });
+    return true;
   }
   async function loadBuyerCode(cell, { refresh = false, result } = {}) {
     const id = cell.dataset.relayBuyerCode, row = alias(id);
     if (!local || !row || !codeTargetBound('alias', id) || !cell.isConnected) return;
     const previous = buyerCodeCells.get(cell);
     if (previous?.pending && !refresh) return previous.pending;
+    if (!refresh && reuseBuyerCode(cell, row)) return;
     const operatorId = actor().id;
-    const snapshot = JSON.stringify([row.id, row.version, row.email, row.parentMailboxId,
-      parent(row.parentMailboxId)?.version, row.queryExpiry]);
+    const snapshot = buyerCodeSnapshot(row);
     const state = { value: '', pending: null, operatorId, snapshot };
     buyerCodeCells.set(cell, state);
     const current = () => buyerCodeCells.get(cell) === state &&
@@ -460,20 +477,23 @@
       if (typeof value?.queryCode !== 'string' || !value.queryCode ||
           String(value.email).toLowerCase() !== row.email.toLowerCase())
         throw new Error('查询码资料不匹配，请重试');
-      return value;
+      const loadedAt = Date.now();
+      const codeExpiry = timestamp(value.codeExpiresAt);
+      const reuseUntil = codeExpiry > loadedAt
+        ? Math.min(loadedAt + buyerCodeReuseMs, codeExpiry) : loadedAt + buyerCodeReuseMs;
+      return { queryCode: value.queryCode, reuseUntil };
     };
     state.pending = (async () => {
       try {
         const queries = window.IDLocalData.queries;
         const value = queries
           ? await queries.read('apple-relay', [operatorId, 'buyer-code', snapshot], loader, {
-              refresh, isFresh: () => actor().id === operatorId
+              refresh: true, isFresh: () => actor().id === operatorId
             })
           : await loader();
         if (!current()) return;
         state.value = value.queryCode;
-        output.textContent = value.queryCode;
-        copy.disabled = false;
+        showBuyerCode(cell, state);
       } catch (error) {
         if (!current()) return;
         output.textContent = error.status === 404 ? '暂无查询码' : '读取失败';
@@ -487,8 +507,13 @@
   }
   function hydrateBuyerCodes({ id, result, refresh = false } = {}) {
     if (!local || A.state.route !== 'mailboxes/relay' || view.tab !== 'aliases') return;
-    const cells = [...document.querySelectorAll('#main [data-relay-buyer-code]')]
-      .filter(cell => (!id || cell.dataset.relayBuyerCode === id) && !cell.closest('[hidden]'));
+    const cells = [];
+    for (const cell of document.querySelectorAll('#main [data-relay-buyer-code]')) {
+      const rowId = cell.dataset.relayBuyerCode;
+      if ((id && rowId !== id) || cell.closest('[hidden]') || !codeTargetBound('alias', rowId)) continue;
+      const row = alias(rowId);
+      if (row && (refresh || !reuseBuyerCode(cell, row))) cells.push(cell);
+    }
     let next = 0;
     const worker = async () => {
       while (next < cells.length) await loadBuyerCode(cells[next++], { refresh, result });
@@ -1068,7 +1093,7 @@
       field('有效天数', 'days', input('days', d['relay-days'] || 30, 'type="number" min="1" max="3650"'), true) +
       `<div class="commerce-span-all">${field('历史资料', 'intake-content',
         `<textarea id="relay-intake-content" name="relay-intake-content" rows="7">${E(d['relay-intake-content'] ?? heading + '\n')}</textarea>`,
-        true, '可粘贴表格或 CSV，最多 100 条。仅登记注册时，保留邮箱和已核实的注册时间。已售还需填写已建档客户微信、原套餐、开通时间、到期时间及付款方式。')}</div>` +
+        true, '可粘贴表格或 CSV，最多 100 条。仅登记注册时，保留邮箱和已核实的注册时间。已售还需填写已建档客户微信、原套餐、开通时间、到期时间及付款方式。账号密码和 2FA 密钥在 GPT 账号列表中单独补录。')}</div>` +
       '<div class="commerce-span-all" id="relay-intake-preview" aria-live="polite"></div>',
       A.button('取消', 'drawer-close') + A.button('预检资料', 'relay-intake-preview') +
       '<button type="submit" form="relay-intake-form" class="button primary">确认入库</button>');
@@ -2077,7 +2102,7 @@
             if (finishLiveDraft(form, snapshot)) showCodeResult(result, kind, id, true);
             else A.notify('查询码已重置，后续填写的内容已保留');
           } catch (error) {
-            if (error.status === 502 && stillOpen()) {
+            if (error.status === 502) {
               window.IDLocalData.queries?.invalidate('apple-relay');
               hydrateBuyerCodes({ id, refresh: true });
             }
@@ -2890,10 +2915,6 @@
     matches: (route) => route === 'mailboxes/relay',
     render,
     afterRender: hydrateBuyerCodes,
-    deactivate() {
-      if (A.state.route !== 'mailboxes/relay' || view.tab !== 'aliases')
-        window.IDLocalData?.queries?.invalidate('apple-relay');
-    },
     onClick,
     onSubmit,
     onInput,

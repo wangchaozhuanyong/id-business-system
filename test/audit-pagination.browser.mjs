@@ -35,17 +35,18 @@ test('audit and system login have separate paged views and recover from a failed
     const pager = main.locator('[data-pagination="operations-audit"]');
     await main.getByText('合成账号 42', { exact: true }).waitFor();
     assert.equal(await pager.getAttribute('data-page'), '1');
+    assert.equal(reads[0].pageSize, '20');
     await pager.getByRole('button', { name: '下一页', exact: true }).click();
     await main.getByText('日志读取失败。已保留上次结果和页码。请重试。').waitFor();
     assert.equal(await pager.getAttribute('data-page'), '1');
     assert(await main.getByText('合成账号 42', { exact: true }).isVisible());
     await main.getByRole('button', { name: '重试读取', exact: true }).click();
-    await main.getByText('合成账号 32', { exact: true }).waitFor();
+    await main.getByText('合成账号 22', { exact: true }).waitFor();
     assert.equal(await pager.getAttribute('data-page'), '2');
     assert.deepEqual(reads[1], reads[2]);
     await main.getByRole('button', { name: '查看详情', exact: true }).first().click();
     const dialog = page.locator('#drawer');
-    assert(await dialog.getByText('合成账号 32', { exact: true }).isVisible());
+    assert(await dialog.getByText('合成账号 22', { exact: true }).isVisible());
     await dialog.getByRole('button', { name: '关闭抽屉', exact: true }).click();
 
     const search = main.getByRole('textbox', { name: '搜索当前列表' });

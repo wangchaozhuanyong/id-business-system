@@ -58,7 +58,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   const geometry = async (width, route, dark) => {
     const result = await page.evaluate(() => {
       const root = document.querySelector('.commerce-entry-columns');
-      const form = root.querySelector(':scope > .form-panel').getBoundingClientRect();
+      const form = root.querySelector(':scope > section.panel').getBoundingClientRect();
       const history = root.querySelector('.entry-records').getBoundingClientRect();
       const findings = [];
       const heads = root.querySelectorAll('.entry-record-list th');
@@ -94,7 +94,8 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
 
   await t.test('单行表格、动态渠道列、套餐支付备注与业务隔离', async () => {
     const history = page.locator('#commerce-entry-records');
-    assert.equal(await history.locator('tbody tr[data-row-id]').count(), 10);
+    assert.equal(await history.locator('[data-pagination]').getAttribute('data-page-size'), '20');
+    assert.equal(await history.locator('tbody tr[data-row-id]').count(), 12);
     assert((await history.locator('td[data-column="plan"]').allTextContents()).every(text => text === 'GPT · Plus'));
     assert.deepEqual((await history.locator('thead th').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label') || node.textContent.trim()))).slice(0, 4), ['客户', '联系方式', '订阅套餐', '支付方式']);
     assert.equal(await history.getByRole('columnheader', { name: 'QQ', exact: true }).count(), 0);
@@ -134,13 +135,15 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       const pager = history.locator('[data-pagination="commerce-entry-records"]');
       const claude = route.endsWith('/claude');
       await page.locator('#commerce-email').fill('pagination-draft@example.test');
+      await pager.getByLabel('每页条数').selectOption('10');
       const payments = await history.locator('td[data-column="payment"]').allTextContents();
       if (route.endsWith('/gpt')) {
         await page.locator('#commerce-payment').selectOption('苹果内购');
         assert.deepEqual(await history.locator('td[data-column="payment"]').allTextContents(), payments, '左侧草稿不改变已保存订单的支付方式');
       }
       const frame = await history.locator('.table-viewport').boundingBox();
-      await pager.getByRole('button', { name: claude ? '3' : '2', exact: true }).click();
+      await pager.getByRole('button', { name: '下一页', exact: true }).click();
+      if (claude) await pager.getByRole('button', { name: '下一页', exact: true }).click();
       assert.equal(await history.locator('tbody tr[data-row-id]').count(), claude ? 4 : 2);
       assert.equal((await history.locator('.table-viewport').boundingBox()).height, frame.height);
       await history.getByRole('button', { name: '今日', exact: true }).click();
@@ -163,6 +166,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     const pager = history.locator('[data-pagination="commerce-entry-records"]');
     await page.locator('#commerce-contact-name').fill('分页时保留的客户');
     await page.evaluate(() => { window.entryFormBeforeRefresh = document.querySelector('#commerce-contact-form'); });
+    await pager.getByLabel('每页条数').selectOption('10');
     const frame = await history.locator('.table-viewport').boundingBox();
     await pager.getByRole('button', { name: '下一页', exact: true }).click();
     assert.equal(await history.locator('tbody tr[data-row-id]').count(), 2);
@@ -254,6 +258,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     const pager = history.locator('[data-pagination="commerce-entry-records"]');
     const original = structuredClone(fixture.commerce.data);
     try {
+      await pager.getByLabel('每页条数').selectOption('20');
       for (const total of [1001, 10001]) {
         fixture.commerce.data.customers = Array.from({ length: total }, (_, i) => ({
           ...original.customers[0], id: `dense-${i}`, name: `隔离分页客户 ${i}`, notes: '',
@@ -261,14 +266,16 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
         }));
         await history.getByRole('button', { name: '刷新最近录入记录' }).click();
         await page.waitForFunction(total => document.querySelector('#commerce-entry-records [data-pagination]').dataset.total === String(total), total);
-        await pager.getByRole('button', { name: String(Math.ceil(total / 10)), exact: true }).click();
+        await pager.locator('.pagination-jump summary:visible').click();
+        await pager.getByLabel('跳至页码', { exact: true }).fill(String(Math.ceil(total / 20)));
+        await pager.getByRole('button', { name: '跳转', exact: true }).click();
         assert.equal(await history.locator('tbody tr[data-row-id]').count(), 1);
         assert.equal(await history.locator('tbody tr[data-row-id]').getAttribute('data-row-id'), `dense-${total - 1}`);
         assert.equal(await pager.getByRole('button', { name: '下一页', exact: true }).isDisabled(), true);
         await pager.getByLabel('每页条数').selectOption('50');
         assert.equal(await pager.getAttribute('data-page'), '1');
         assert.equal(await history.locator('tbody tr[data-row-id]').count(), 50);
-        await pager.getByLabel('每页条数').selectOption('10');
+        await pager.getByLabel('每页条数').selectOption('20');
       }
       fixture.commerce.data.customers = [
         ['2026-11-09T15:59:59.999Z', '昨天最后一刻'], ['2026-11-09T16:00:00Z', '今天第一刻'],
@@ -297,8 +304,8 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
           const drawer = page.locator('#drawer[open]');
           const nav = drawer.locator('[data-pagination="commerce-contact-records"]');
           assert.equal(await nav.getAttribute('data-total'), '23');
-          if (width === 1440) await nav.getByRole('button', { name: '3', exact: true }).click();
-          assert.equal(await nav.getAttribute('data-page'), '3', '重开抽屉保持自己的分页');
+          if (width === 1440) await nav.getByRole('button', { name: '下一页', exact: true }).click();
+          assert.equal(await nav.getAttribute('data-page'), '2', '重开抽屉保持自己的分页');
           assert.equal(await drawer.locator('tbody tr[data-row-id]').count(), 3);
           assert(await drawer.evaluate(node => node.scrollWidth <= node.clientWidth));
           if (output) await page.screenshot({ path: join(output, `history-${label === '关联订单' ? 'orders' : 'services'}-${width}.png`), animations: 'disabled' });

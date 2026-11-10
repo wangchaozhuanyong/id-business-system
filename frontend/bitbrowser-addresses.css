@@ -52,14 +52,6 @@
   min-width: 8rem;
 }
 
-.bit-address-tabs {
-  min-height: 44px;
-}
-
-.bit-address-tabs .tab {
-  padding-block: 10px;
-}
-
 .bit-address-columns:not([hidden]) {
   display: flex;
   flex-wrap: wrap;

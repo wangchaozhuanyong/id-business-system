@@ -183,11 +183,11 @@
     const metric = visibleMetrics().find(([key]) => key === node.dataset.metric);
     if (!row || !metric) return;
     const params = { ...parameters(), date: snapshot.date, employee: row.id, metric: metric[0] };
-    detail = { params, page: 1, pageSize: 10 };
+    detail = { params, page: 1, pageSize: window.IDPagination.defaultPageSize };
     A.openDrawer(row.name + ' · ' + metric[1], '记录编号可用于回查原业务。待处理资产以读取时的状态为准。',
       '<section class="panel design-async-region" id="employee-statistics-detail"><div role="status" data-detail-progress hidden></div><div data-detail-result></div></section>',
       button('关闭', 'drawer-close'), detailPager);
-    void loadDetail(1, 10);
+    void loadDetail(detail.page, detail.pageSize);
   }
 
   async function loadDetail(page, pageSize) {

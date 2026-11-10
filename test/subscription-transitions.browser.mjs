@@ -19,7 +19,7 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
   const measurements = [];
   t.after(() => writeFile(output + '/subscription-frames.json', JSON.stringify(measurements, null, 2)));
 
-  for (const width of [1440, 390]) for (const theme of ['light', 'dark']) for (const total of [0, 23]) {
+  for (const width of [1440, 390]) for (const theme of ['light', 'dark']) for (const total of [0, 43]) {
     await t.test(`${width}px ${theme} ${total ? '有记录' : '空列表'}`, async () => {
       const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
       const requests = await interceptDesign(context, { actor, localFixtures: { 'auth/session': { configured: true, actor } } });
@@ -135,7 +135,7 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         await page.locator('#claude-google-read-error').getByText(/已保留上次读取的资料/).waitFor();
         assert.equal(await search.inputValue(), '未提交的搜索内容');
         assert(await page.locator('#claude-google-filter-form').evaluate((node, previous) => node === previous, form));
-        assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), total ? 8 : 0);
+        assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), total ? 20 : 0);
         await page.locator('[data-action="claude-google-refresh"]').click(); await ready();
         assert(await page.locator('#claude-google-read-error').isHidden());
         await form.dispose();
@@ -147,10 +147,10 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
             await page.keyboard.press('Enter'); await ready();
             assert(await page.evaluate(() => Boolean(document.activeElement.closest('#claude-google-list .pagination'))), '异步翻页完成后保留键盘操作位置');
           }
-          assert.equal(calls.at(-1).page, 3); assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 7);
+          assert.equal(calls.at(-1).page, 3); assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 3);
           assert.equal(await panelHeight(), firstHeight, '末页不缩小表格框架');
-          await page.locator('#claude-google-list [data-pagination-size]').selectOption('16'); await ready();
-          assert.equal(calls.at(-1).pageSize, 16); assert.equal(calls.at(-1).page, 1);
+          await page.locator('#claude-google-list [data-pagination-size]').selectOption('10'); await ready();
+          assert.equal(calls.at(-1).pageSize, 10); assert.equal(calls.at(-1).page, 1);
           const fullHeight = await panelHeight();
           await search.fill('空结果'); await search.press('Enter'); await ready();
           assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 0);
@@ -178,7 +178,7 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
           firstFailure.released.resolve(); await ready();
           await page.locator('#claude-google-list').getByRole('heading', { name: '读取订阅资料失败，请刷新重试', exact: true }).waitFor();
           await page.locator('[data-action="claude-google-refresh"]').click(); await ready();
-          assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 8);
+          assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 20);
         }
         await page.screenshot({ path: output + `/subscriptions-${width}-${theme}-${total}.png` });
         assert.deepEqual(errors, []); assert.deepEqual(requests.unavailable, []); assert.deepEqual(requests.external, []);

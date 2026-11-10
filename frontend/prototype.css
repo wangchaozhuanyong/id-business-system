@@ -1,4 +1,5 @@
-@import './design-tokens.css?v=20261110-visual-r1';
+@import './design-tokens.css?v=20261110-tabs';
+@import './tabs.css?v=20261110-tabs';
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -392,9 +393,10 @@ h1 {
   min-width: 0;
   padding: 0;
   border-bottom: 0;
+  align-self: stretch;
 }
 .content-toolbar > .page-actions {
-  padding: 8px 0;
+  padding: var(--toolbar-padding-block) 0;
 }
 .list-controls {
   display: flex;
@@ -409,7 +411,6 @@ h1 {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
-  min-height: 60px;
   align-self: stretch;
   padding: 0;
   border: 0;
@@ -635,45 +636,8 @@ h1 {
   font-size: 12px;
   color: var(--secondary);
 }
-.tabs {
-  display: flex;
-  align-items: stretch;
-  padding: 0 var(--panel-padding-inline);
-  border-bottom: 1px solid var(--line);
-  gap: 25px;
-  min-height: 53px;
-  overflow-x: auto;
-}
-.tab {
-  flex: 0 0 auto;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--secondary);
-  padding: 16px 1px 13px;
-  white-space: nowrap;
-}
-.tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
-  font-weight: 600;
-}
-.tab:focus-visible {
-  outline-offset: -4px;
-}
 .tool-secret-masked {
   -webkit-text-security: disc;
-}
-.tab-count {
-  padding: 1px 5px;
-  background: var(--surface-soft);
-  border-radius: 4px;
-  margin-left: 5px;
-  font-size: 11px;
-}
-.tab.active .tab-count {
-  color: var(--primary);
-  background: var(--primary-soft);
 }
 .toolbar {
   display: flex;
@@ -801,8 +765,8 @@ input[type='radio'] {
   scrollbar-color: var(--line) transparent;
 }
 .table-viewport.stable-table {
-  --table-page-rows: 10;
-  min-height: calc(43px + var(--table-page-rows) * 51px);
+  --table-page-rows: 20;
+  min-height: min(calc(43px + var(--table-page-rows) * 51px), var(--pagination-rows-limit));
 }
 .table-viewport[data-frame-rows] {
   height: calc(43px + var(--table-page-rows) * 51px);
@@ -1134,10 +1098,6 @@ th.table-actions {
 }
 [data-commerce-pool-usage]:empty {
   display: none;
-}
-.form-panel > .tabs {
-  padding-inline: 0;
-  margin-bottom: 16px;
 }
 .form-section + .form-section {
   border-top: 1px solid var(--line);
@@ -1854,9 +1814,10 @@ dialog::backdrop {
   flex: 1 1 auto;
   min-width: 0;
   border-bottom: 0;
+  align-self: stretch;
 }
 .drawer > .tool-header-row .tool-query-actions {
-  padding-block: 8px;
+  padding-block: var(--toolbar-padding-block);
 }
 .tool-header-row .online-tool-sections.tabs,
 .tool-header-row .tool-query-actions {
@@ -1926,12 +1887,7 @@ dialog::backdrop {
 }
 .online-tool-sections.tabs {
   padding: 0;
-  min-height: 42px;
   margin-bottom: 14px;
-  gap: 28px;
-}
-.online-tool-sections .tab {
-  padding-block: 10px 12px;
 }
 .drawer[data-layout='online-tool'] .drawer-body {
   padding-top: 24px;
@@ -2295,9 +2251,6 @@ dialog::backdrop {
   .drawer[data-layout='online-tool'] .drawer-title-row h2 {
     font-size: 16px;
   }
-  .online-tool-sections.tabs {
-    gap: 20px;
-  }
   .tool-mode-switch .tab {
     min-height: 44px;
   }
@@ -2614,9 +2567,6 @@ dialog::backdrop {
   justify-content: center;
 }
 @media (max-width: 1150px) {
-  :root {
-    --panel-padding-inline: 20px;
-  }
   main {
     padding: var(--panel-padding-block) var(--panel-padding-inline);
   }
@@ -2641,8 +2591,6 @@ dialog::backdrop {
 @media (max-width: 900px) {
   :root {
     --header-height: 112px;
-    --panel-padding-inline: 16px;
-    --panel-padding-block: 18px;
   }
   .topbar-context .breadcrumbs {
     display: none;
@@ -2841,10 +2789,6 @@ dialog::backdrop {
   }
   .relay-alias-controls > .toolbar-right {
     justify-content: flex-end;
-  }
-  .tabs {
-    padding: 0 var(--panel-padding-inline);
-    gap: 22px;
   }
   .panel-heading {
     padding: var(--panel-padding-block) var(--panel-padding-inline);
@@ -3880,7 +3824,7 @@ p.panel-body {
 .page-actions-fallback {
   justify-content: flex-end;
 }
-details:not(.title-help) > summary {
+details:not(.title-help, .pagination-jump) > summary {
   cursor: pointer;
   min-height: 36px;
   padding: 8px 12px;
@@ -3890,16 +3834,16 @@ details:not(.title-help) > summary {
   color: var(--secondary);
   font-size: 12px;
 }
-details:not(.title-help)[open] > summary {
+details:not(.title-help, .pagination-jump)[open] > summary {
   margin-bottom: 12px;
   color: var(--primary);
 }
-details:not(.title-help) > summary:focus-visible {
+details:not(.title-help, .pagination-jump) > summary:focus-visible {
   outline: 3px solid var(--primary);
   outline-offset: 2px;
 }
 @media (max-width: 900px) {
-  details:not(.title-help) > summary {
+  details:not(.title-help, .pagination-jump) > summary {
     min-height: 44px;
   }
 }

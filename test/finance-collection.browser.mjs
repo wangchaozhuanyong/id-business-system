@@ -69,7 +69,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
         interruption.started.resolve();
         await interruption.release.promise;
       }
-      if (delayLastRunPage && params.get('tab') === 'runs' && params.get('page') === '3') {
+      if (delayLastRunPage && params.get('tab') === 'runs' && params.get('page') === '2') {
         delayLastRunPage = false;
         lastRunPageStarted.resolve();
         await lastRunPageReleased.promise;
@@ -113,10 +113,10 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
 
   await tab('采集记录');
   await page.locator('table[data-table="fx-runs"] tbody tr[data-row-id="fxr-fixture-0"]').waitFor();
-  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '10');
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '20');
   const firstFrame = await page.locator('table[data-table="fx-runs"]').locator('..').boundingBox();
   delayLastRunPage = true;
-  await jumpPage(3);
+  await jumpPage(2);
   await lastRunPageStarted.promise;
   assert.equal(await financePager.getAttribute('data-page'), '1');
   assert.equal(await page.locator('tr[data-row-id="fxr-fixture-0"]').isVisible(), true);
@@ -133,18 +133,19 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await financePager.locator('[data-pagination-size]').selectOption('50');
   await tab('采集记录');
   await page.locator('tr[data-row-id="fxr-fixture-24"]').waitFor();
-  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '10');
-  assert.equal(await financePager.getAttribute('data-page'), '3');
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '20');
+  assert.equal(await financePager.getAttribute('data-page'), '2');
   rejectReads = true;
-  await financePager.locator('[data-pagination-size]').selectOption('20');
+  await financePager.locator('[data-pagination-size]').selectOption('50');
   await page.getByRole('alert').getByText('合成读取失败，请重试').waitFor();
-  assert.equal(await financePager.getAttribute('data-page'), '3');
-  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '10');
+  assert.equal(await financePager.getAttribute('data-page'), '2');
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '20');
   assert.equal(await page.locator('tr[data-row-id="fxr-fixture-24"]').isVisible(), true);
   rejectReads = false;
   await page.getByRole('button', { name: '刷新记录', exact: true }).click();
   await page.locator('tr[data-row-id="fxr-fixture-19"]').waitFor();
-  assert.equal(await financePager.locator('[data-pagination-target]').inputValue(), '1');
+  assert.equal(await financePager.getAttribute('data-page'), '1');
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '50');
   await financePager.locator('[data-pagination-size]').selectOption('10');
   await page.locator('tr[data-row-id="fxr-fixture-19"]').waitFor({ state: 'detached' });
   await page.locator('#fx-query').fill('没有匹配资料');
@@ -255,6 +256,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
     if (width <= 390) {
       await tab('采集记录');
       await page.locator('tr[data-row-id="fxr-fixture-0"]').waitFor();
+      assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '10');
       await jumpPage(3);
       await page.locator('tr[data-row-id="fxr-fixture-24"]').waitFor();
       await tab('运行状态'); await tab('采集记录');

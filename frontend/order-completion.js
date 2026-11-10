@@ -52,10 +52,10 @@
     const contents = snapshot ? A.table(columns, shown, '', '订单补全', { title: emptyTitle, description: '' }) +
       A.pagination(rows.length) : '';
     return title + '<section class="panel design-async-region" id="completion-list">' +
-      '<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="group" aria-label="订单补全分类">' +
-      tabMarkup + '</div></div><div class="toolbar-right"><div class="search-field">' + A.icon('search') +
+      '<div class="list-controls"><div class="tabs" role="group" aria-label="订单补全分类">' +
+      tabMarkup + '</div><div class="toolbar"><div class="toolbar-left"><div class="search-field">' + A.icon('search') +
       input('list-search', S.query, 'type="search" aria-label="搜索订单" placeholder="搜索订单编号、邮箱或客户"') +
-      '</div></div></div><div role="status" id="completion-list-progress" hidden></div>' +
+      '</div></div><div class="toolbar-right" data-page-actions></div></div></div><div role="status" id="completion-list-progress" hidden></div>' +
       (loadError ? '<div class="panel-body"><p class="inline-notice warning" role="status">' +
         (snapshot ? '刷新失败，已保留上次订单。' : '暂时无法读取订单，请刷新重试。') + '</p></div>' : '') +
       contents + '</section>';

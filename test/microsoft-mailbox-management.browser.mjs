@@ -239,7 +239,7 @@ test('邮箱工作台录入和导入微软邮箱，共用库存及录入草稿',
 test('微软邮箱桌面与手机的列表和抽屉布局', { timeout: 50000 }, async (t) => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const rows = Array.from({ length: 16 }, (_, index) => ({
+  const rows = Array.from({ length: 26 }, (_, index) => ({
     id: `ms-layout-${index}`, type: 'microsoft', email: `layout-${index}@example.test`,
     password: loginFixture, source: '自己注册', status: '正常', microsoftSecurity: security
   }));

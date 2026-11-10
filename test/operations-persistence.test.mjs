@@ -107,7 +107,7 @@ function browser(localData, route = 'settings/mail-types') {
     render: () => {}
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: API, IDDesignModules: modules, IDLocalData: localData },
+    window: { IDDesignAPI: API, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 20 } },
     document: {
       querySelector: () => null, querySelectorAll: () => [],
       addEventListener: (name, listener) => listeners.set(name, listener)

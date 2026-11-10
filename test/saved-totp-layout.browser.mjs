@@ -17,12 +17,21 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
   for (const width of [1440, 768, 390, 320]) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
     const requests = await interceptDesign(context, { localFixtures: {}, actor: { id: 'fixture', name: '离线验收', role: 'admin' } });
-    const accounts = Array.from({ length: 11 }, (_, index) => ({ id: 'fixture-' + index, name: index === 10 ? '离线验收长账号名称'.repeat(8) : '合成账号 ' + (index + 1), issuer: '公开测试资料 · 离线验收' }));
+    const accounts = Array.from({ length: 21 }, (_, index) => ({ id: 'fixture-' + index, name: index === 20 ? '离线验收长账号名称'.repeat(8) : '合成账号 ' + (index + 1), issuer: '公开测试资料 · 离线验收' }));
+    let metadataVersion = 1;
     await context.route(origin + '/api/local/saved-totp', route => {
       assert.equal(route.request().method(), 'GET', 'Layout QA must not save or delete accounts');
-      return route.fulfill({ json: { version: 1, items: accounts } });
+      return route.fulfill({ json: { version: metadataVersion, items: accounts } });
     });
-    await context.route(origin + '/api/local/saved-totp/code', route => route.fulfill({ json: { code: '12345678', serverNow: Date.now(), expiresAt: Date.now() + 30_000 } }));
+    const codeReads = [];
+    await context.route(origin + '/api/local/saved-totp/code', route => {
+      const { ids, version } = route.request().postDataJSON();
+      const serverNow = Date.now();
+      codeReads.push({ ids, version });
+      if (version !== metadataVersion)
+        return route.fulfill({ status: 409, json: { error: '账号列表已更新，请刷新列表' } });
+      return route.fulfill({ json: { version, serverNow, items: ids.map(id => ({ id, code: '12345678', expiresAt: serverNow + 60_000 })) } });
+    });
     const attempts = [];
     await context.route(origin + '/assets/tools/totp.mjs?*', async route => {
       attempts.push(route.request().url());
@@ -37,7 +46,8 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
     await page.getByRole('button', { name: '在线工具', exact: true }).click();
     await page.evaluate(() => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name: '计算 2FA 验证码' } }));
     const drawer = page.locator('#drawer'), saved = drawer.locator('#ops-saved-totp');
-    await saved.locator('[data-saved-totp-code] .ops-code').nth(9).waitFor();
+    await saved.locator('[data-saved-totp-code] .ops-code').nth(19).waitFor();
+    assert.deepEqual(codeReads, [{ version: 1, ids: accounts.slice(0,20).map(row => row.id) }]);
     await page.evaluate(value => navigator.clipboard.writeText(value), key);
     await drawer.locator('[data-action="ops-tool-paste"]').click();
     await drawer.getByText('验证码组件暂时加载失败，输入已保留，请点击重试。', { exact: true }).waitFor();
@@ -66,7 +76,7 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
       return { row: node.getBoundingClientRect().toJSON(), code: rect('.ops-code'), countdown: rect('.totp-countdown'), copy: rect('[data-action="ops-totp-copy"]') };
     }));
     const rows = await measure();
-    assert.equal(rows.length, 10);
+    assert.equal(rows.length, 20);
     for (const row of rows) {
       assert(row.row.height <= 80, `${width} table row too tall: ${row.row.height}`);
       assert(row.code.right + 3 <= row.countdown.left, `${width} code overlaps countdown`);
@@ -84,12 +94,26 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
     await saved.getByRole('button', { name: '取消', exact: true }).click();
     await saved.getByRole('button', { name: '下一页', exact: true }).click();
     await saved.locator('[data-saved-totp-code] .ops-code').waitFor();
+    assert.deepEqual(codeReads.at(-1), { version: 1, ids: [accounts[20].id] });
     assert.equal(await saved.locator('.saved-totp-table tbody tr').count(), 1);
     assert((await measure()).every(row => row.row.height <= 80));
     await saved.locator('#ops-saved-totp-search').fill('不存在的合成账号');
     await saved.getByText('没有匹配的账号', { exact: true }).waitFor();
     await saved.locator('#ops-saved-totp-search').fill('');
-    await saved.locator('[data-saved-totp-code] .ops-code').nth(9).waitFor();
+    await saved.locator('[data-saved-totp-code] .ops-code').nth(19).waitFor();
+    assert.equal(codeReads.length, 3, '首次、翻页、清除搜索各读取一批，空列表不取码');
+    if (width === 1440 && theme === 'light') {
+      metadataVersion++;
+      await saved.getByRole('button', { name: '下一页', exact: true }).click();
+      const retry = saved.getByRole('button', { name: '刷新账号列表', exact: true });
+      await retry.waitFor();
+      assert(await saved.locator('[data-action="ops-totp-copy"]').isDisabled());
+      await retry.click();
+      await saved.locator('[data-saved-totp-code] .ops-code').waitFor();
+      assert.deepEqual(codeReads.slice(-2), [
+        { version: 1, ids: [accounts[20].id] }, { version: 2, ids: [accounts[20].id] }
+      ]);
+    }
     await drawer.locator('#ops-totp-secret').fill(' ');
     await drawer.locator('#ops-totp-secret').fill('');
     await drawer.locator('#ops-totp-secret').scrollIntoViewIfNeeded();

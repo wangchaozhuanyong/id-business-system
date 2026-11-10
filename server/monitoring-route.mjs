@@ -32,12 +32,12 @@ function parse(body) {
 
 function viewQuery(request, origin) {
   const params = new URL(request.url, origin).searchParams;
-  const { tab = 'incidents', status = '', page = '1' } = Object.fromEntries(params);
-  if ([...params.keys()].some(key => !['tab', 'status', 'page'].includes(key) || params.getAll(key).length > 1) ||
+  const { tab = 'incidents', status = '', page = '1', pageSize = '20' } = Object.fromEntries(params);
+  if ([...params.keys()].some(key => !['tab', 'status', 'page', 'pageSize'].includes(key) || params.getAll(key).length > 1) ||
       !['incidents', 'config', 'deliveries', 'legacy'].includes(tab) ||
       !(tab === 'deliveries' ? deliveryStates : incidentStates).includes(status) ||
-      !/^[1-9]\d{0,5}$/.test(page)) throw monitoringError(400, '监控筛选条件无效');
-  return { tab, status, page: Number(page) };
+      !/^[1-9]\d{0,5}$/.test(page) || !['10', '20', '50'].includes(pageSize)) throw monitoringError(400, '监控筛选条件无效');
+  return { tab, status, page: Number(page), pageSize: Number(pageSize) };
 }
 
 export function createMonitoringHandler({ monitor, publicOrigin }) {

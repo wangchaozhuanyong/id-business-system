@@ -142,6 +142,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
     page = detail.page;
     pageSize = detail.pageSize;
     renderList();
+    get('bit-ip-rows').closest('.table-viewport').scrollTop = 0;
     capture();
   });
   get('bit-refresh-proxies').addEventListener('click', refresh);

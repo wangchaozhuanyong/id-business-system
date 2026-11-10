@@ -20,7 +20,10 @@ try {
     await context.route(origin + '/api/local/tools/mailbox-pool', route => {
       const request = route.request();
       if (request.method() === 'GET') return route.fulfill({ json: { version: 1, defaultValidDays: 30, items: fixture } });
-      if (request.method() === 'POST') return route.fulfill({ json: { code: 'MBX-SYNTHETIC-LAYOUT-ONLY' } });
+      if (request.method() === 'POST') {
+        const { ids, version } = request.postDataJSON(), code = 'MBX-SYNTHETIC-LAYOUT-ONLY';
+        return route.fulfill({ json: ids ? { version, items: ids.map(id => ({ id, code })) } : { code } });
+      }
       writes.push(request.method());
       return route.abort();
     });

@@ -6,6 +6,7 @@ import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 import { planHistoricalIntake, historicalIntakePreview, requireHistoricalIntake, stageHistoricalIntake } from '../server/apple-relay/historical-intake.mjs';
 import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
 import { accountLifecycleSummaries, applyAccountOrderLifecycle } from '../server/account-lifecycle.mjs';
+import { checkInventoryEntryFields } from '../server/inventory-entry-fields.mjs';
 
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'super' };
 const customer = { id: 'fixture-customer', name: '合成旧客户', wechat: 'fixture-wechat', active: true };
@@ -86,6 +87,7 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const local = await fixture();
   const parent = local.inventory.data.appleRelay.parents[0];
+  const enteredCredentials = { password: 'offline-password-fixture', totp: 'OFFLINE-2FA-FIXTURE' };
   local.inventory.data.appleRelay.parents = [parent];
   local.inventory.data.mailboxes = [];
   local.inventory.data.accounts = [{ id: 'normal-account', email: 'available@example.test', type: 'gpt',
@@ -167,7 +169,54 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   }
   assert.equal(local.commerce.data.orders.length, 1);
   await page.goto(origin + '/#/accounts/gpt');
-  await page.getByRole('row').filter({ hasText: 'registered@example.test' }).getByText('待核对交付资料', { exact: true }).waitFor();
+  const registeredRow = page.getByRole('row').filter({ hasText: 'registered@example.test' });
+  await registeredRow.getByText('待核对交付资料', { exact: true }).waitFor();
+  for (const field of ['password', 'totp'])
+    assert.equal(await registeredRow.locator(`[data-column="${field}"]`).textContent(), '未录入');
+
+  let edits = 0;
+  await context.route(origin + '/api/local/inventory', route => {
+    if (route.request().method() !== 'PUT') return route.fallback();
+    const input = route.request().postDataJSON();
+    assert.equal(input.version, local.inventory.version);
+    assert.equal(input.action, 'inventory_edit');
+    assert.equal(checkInventoryEntryFields(local.inventory.data, input.data, input.action), undefined);
+    const edited = input.data.accounts.find(row => row.email === 'registered@example.test');
+    assert.equal(edited.password, enteredCredentials.password);
+    assert.equal(edited.totp, enteredCredentials.totp);
+    edits++;
+    local.inventory = { ...local.inventory, version: input.version + 1, data: input.data };
+    return route.fulfill({ json: local.inventory });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await registeredRow.getByRole('button', { name: '编辑', exact: true }).click();
+  await page.locator('#inventory-password').fill(enteredCredentials.password);
+  await page.locator('#inventory-totp').fill(enteredCredentials.totp);
+  await page.locator('button[form="inventory-asset-form"][type="submit"]').click();
+  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
+  assert.equal(edits, 1);
+
+  const releaseRead = Promise.withResolvers();
+  t.after(releaseRead.resolve);
+  let inventoryReads = 0;
+  await page.route(origin + '/api/local/inventory', async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    inventoryReads++;
+    await releaseRead.promise;
+    return route.fulfill({ json: local.inventory });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByText('正在读取本机库存', { exact: true }).waitFor();
+  assert.equal(await registeredRow.count(), 0, '库存回执前不把空白显示成账号数据');
+  releaseRead.resolve();
+  await registeredRow.waitFor();
+  const displayed = await registeredRow.evaluate(row => ({
+    password: row.querySelector('[data-column="password"]').textContent,
+    totp: row.querySelector('[data-column="totp"]').textContent
+  }));
+  assert.deepEqual(displayed, enteredCredentials, '同一批读取结果同时回显已保存的两项资料');
+  assert.equal(inventoryReads, 1);
   await page.getByRole('tab', { name: /^已使用/ }).click();
   await page.getByRole('row').filter({ hasText: 'sold@example.test' }).getByText('合成旧客户', { exact: true }).waitFor();
   await page.goto(origin + '/#/orders/gpt');

@@ -88,10 +88,23 @@ export function applyTotpWrite(snapshot, command, now) {
   return { id: item.id, items: items.map((row, i) => i === index ? item : row) };
 }
 
-export async function generateSavedCode(snapshot, id) {
+export async function generateSavedCode(snapshot, id, now = Date.now()) {
   const account = (snapshot.data || []).find((row) => row.id === id);
   if (!account) throw new SavedTotpError(404, '找不到已保存的账号');
-  const now = Date.now();
   const code = await calculateTotp(account.secret, now);
   return { ...code, serverNow: now };
+}
+
+export async function generateSavedCodePage(snapshot, { ids, version }, serverNow = Date.now()) {
+  if (snapshot.version !== version)
+    throw new SavedTotpError(409, '账号列表已更新，请刷新列表');
+  const items = await Promise.all(ids.map(async (id) => {
+    try {
+      const { code, expiresAt } = await generateSavedCode(snapshot, id, serverNow);
+      return { id, code, expiresAt };
+    } catch (error) {
+      return { id, error: error instanceof SavedTotpError ? error.message : '验证码无法生成，请核对密钥' };
+    }
+  }));
+  return { version, serverNow, items };
 }

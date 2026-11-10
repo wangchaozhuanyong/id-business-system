@@ -21,7 +21,11 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
     const request = route.request();
     if (request.method() === 'GET') return route.fulfill({ json: snapshot });
     const command = request.postDataJSON();
-    if (request.method() === 'POST') return route.fulfill({ json: { code: `MBX-SYNTHETIC-${command.id}` } });
+    if (request.method() === 'POST') {
+      const { id, ids, version } = command;
+      const code = id => `MBX-SYNTHETIC-${id}`;
+      return route.fulfill({ json: ids ? { version, items: ids.map(id => ({ id, code: code(id) })) } : { code: code(id) } });
+    }
     writes.push(command);
     if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: '合成保存失败，请重试' } }); }
     snapshot = { ...snapshot, version: snapshot.version + 1, items: snapshot.items.map(row => row.id === command.id

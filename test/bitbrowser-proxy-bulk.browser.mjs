@@ -44,7 +44,7 @@ test('bulk IP detection spans filters/pages, remains sequential, stops safely an
       if (path === '/') file = '../frontend/bitbrowser-local.html';
       else if (path === '/assets/bitbrowser/proxies.mjs') file = '../frontend/bitbrowser-proxies.mjs';
       else if (path.startsWith('/assets/bitbrowser/')) file = '../modules/recharge/bitbrowser/' + path.slice('/assets/bitbrowser/'.length);
-      else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
+      else if (['/prototype.css', '/design-tokens.css', '/tabs.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
       if (!file) { external.push(path); return route.abort(); }
       let body = await readFile(new URL(file, import.meta.url), 'utf8');
       if (path === '/') body = body.replace('<script type="module" src="/assets/bitbrowser/local.mjs"></script>', `<script type="module">
@@ -71,6 +71,8 @@ test('bulk IP detection spans filters/pages, remains sequential, stops safely an
     assert.match(await page.locator('#bit-ip-rows tr').filter({ hasText: '示例 2' }).innerText(), /检测未通过/);
     assert.match(await page.locator('#bit-ip-rows tr').filter({ hasText: '示例 6' }).innerText(), /未完成检测/);
     const ipPager = page.locator('nav[data-pagination="bit-ip"]');
+    assert.equal(await ipPager.getAttribute('data-page-size'), '20');
+    await ipPager.getByLabel('每页条数').selectOption('10');
     await ipPager.getByRole('button', { name: '下一页' }).click();
     assert.equal(await ipPager.locator('[data-pagination-target]').inputValue(), '2');
     assert.match(await page.locator('#bit-ip-rows tr').innerText(), /可用/);

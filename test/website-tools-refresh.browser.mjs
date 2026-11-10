@@ -11,8 +11,8 @@ import { interceptDesign, origin as offlineOrigin } from './helpers/offline-desi
 
 const analyticsPath = '/api/local/tools/website-analytics';
 const visitsPath = '/api/local/tools/website-visits/search';
-const firstVisitFilters = { days: 7, sort: 'newest', page: 1, pageSize: 10, ip: '203.0.113.7' };
-const nextVisitFilters = { days: 30, sort: 'oldest', page: 1, pageSize: 10, ip: '203.0.113.8' };
+const firstVisitFilters = { days: 7, sort: 'newest', page: 1, pageSize: 20, ip: '203.0.113.7' };
+const nextVisitFilters = { days: 30, sort: 'oldest', page: 1, pageSize: 20, ip: '203.0.113.8' };
 const loading = /正在|加载|读取|查询/;
 
 function interceptedTools(page, origin) {
@@ -58,7 +58,7 @@ function analyticsResult(pageViews) {
   };
 }
 
-function visitResult(path, { page = 1, pageSize = 10, total = 34 } = {}) {
+function visitResult(path, { page = 1, pageSize = 20, total = 34 } = {}) {
   return {
     page,
     pageSize,
@@ -193,7 +193,7 @@ test(
     }
 
     const firstAnalytics = await openMonitor();
-    await tools.reply(await tools.next(visitsPath), { items: [], page: 1, pageSize: 10, total: 0 });
+    await tools.reply(await tools.next(visitsPath), { items: [], page: 1, pageSize: 20, total: 0 });
     await analyticsStatus.waitFor();
     assert.match(await analyticsStatus.textContent(), loading);
     await tools.reply(firstAnalytics, analyticsResult(111));

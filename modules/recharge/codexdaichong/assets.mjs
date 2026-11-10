@@ -66,9 +66,9 @@ function adaptAdminPagination(source) {
     `        const paginationState = Object.fromEntries([
             'phone_pool', 'card_pool', 'cdk', 'product', 'log', 'session', 'proxy_pool',
             'address', 'manual_hold', 'admin_login', 'ip_ban'
-        ].map(key => [key, { page: 1, pageSize: 10 }]));`);
+        ].map(key => [key, { page: 1, pageSize: window.IDPagination.defaultPageSize }]));`);
   source = replaceSection(source, '        function changePage(', '        function getItemKey(', `
-        const adminPageSizes = [10, 20, 50];
+        const adminPageSizes = window.IDPagination.pageSizes;
         const paginationMarkup = new WeakMap();
         const adminLoadedRows = { admin_login: [], ip_ban: [] };
         function changePage(stateKey, nextPage) {
@@ -112,6 +112,16 @@ function adaptAdminPagination(source) {
             });
             // Three-second refreshes must not clear an in-progress jump or steal focus.
             if (paginationMarkup.get(container) === markup && container.firstElementChild) return;
+            const previous = container.querySelector('[data-pagination]');
+            const viewport = container.previousElementSibling;
+            if (viewport?.matches('.table-container')) {
+                viewport.dataset.paginationRows = '';
+                viewport.tabIndex = 0;
+                if (!viewport.hasAttribute('role')) viewport.setAttribute('role', 'region');
+                if (!viewport.hasAttribute('aria-label')) viewport.setAttribute('aria-label', '数据表，可滚动');
+                if (previous && (Number(previous.dataset.page) !== page || Number(previous.dataset.pageSize) !== pageSize))
+                    viewport.scrollTop = 0;
+            }
             container.classList.add('recharge-table-pagination');
             container.innerHTML = markup;
             paginationMarkup.set(container, markup);
@@ -215,7 +225,7 @@ function adaptRemoteAdminPagination(source) {
     `                if (requestId === sessionPageRequestId && (showToast || options.page != null)) {
                     showMessage(error.message || '加载 Session 失败', 'error');`);
   source = replaceOne(source, '        const orbitcardUsageState = {\n            page: 1,\n            pageSize: 20,',
-    '        const orbitcardUsageState = {\n            page: 1,\n            pageSize: 10,');
+    '        const orbitcardUsageState = {\n            page: 1,\n            pageSize: window.IDPagination.defaultPageSize,');
   source = replaceOne(source, 'page = orbitcardUsageState.page) {', 'page = orbitcardUsageState.page, options = {}) {');
   source = replaceOne(source, `            orbitcardUsageState.page = Math.max(1, Number(page) || 1);
             try {
@@ -824,15 +834,16 @@ function adaptWorkspaceRecharge(source) {
     <div class="workspace-recharge-standalone-title"><h1>ChatGPT 兑换开通</h1><p>资料核对、自动处理、进度可查、套餐锁定。验码后自动匹配套餐，请核对账号再提交。</p></div>
     <main class="recharge-card">
       <header class="workspace-recharge-heading">
-        <nav class="tab-nav" aria-label="兑换开通功能">
-          <button type="button" class="tab-btn active" data-tab="redeem" aria-pressed="true" aria-controls="redeemSection">自助充值</button>
-          <button type="button" class="tab-btn" data-tab="query" aria-pressed="false" aria-controls="querySection">兑换码查询</button>
-          <button type="button" class="tab-btn" data-tab="guide" aria-pressed="false" aria-controls="workspaceGuide">使用说明</button>
+        <nav class="tab-nav tabs" aria-label="兑换开通功能">
+          <button type="button" class="tab-btn tab active" data-tab="redeem" aria-pressed="true" aria-controls="redeemSection">自助充值</button>
+          <button type="button" class="tab-btn tab" data-tab="query" aria-pressed="false" aria-controls="querySection">兑换码查询</button>
+          <button type="button" class="tab-btn tab" data-tab="guide" aria-pressed="false" aria-controls="workspaceGuide">使用说明</button>
         </nav>
         <div class="workspace-recharge-heading-actions">
           <a class="btn-secondary" href="/subscription" target="_blank" rel="noopener">${workspaceIcon('receipt')}发票助手</a>
         </div>
       </header>
+      <div class="workspace-recharge-body">
       <div id="workspaceOperation">
         <div id="flowStepper" hidden></div>
         <p id="paymentRegionHint" hidden></p>
@@ -934,7 +945,7 @@ function adaptWorkspaceRecharge(source) {
     source,
     '        </main>\n\n        <details class="faq-panel">',
     '    </div>\n\n    <script>',
-    `</div>${workspaceGuide}</main>`
+    `</div>${workspaceGuide}</div></main>`
   );
   return adaptWorkspaceRechargeScript(source);
 }
@@ -1179,6 +1190,8 @@ function adaptHtml(source, kind) {
         : '<body data-recharge-view="' + kind + '"'
     );
   if (kind === 'admin') {
+    source = source.replaceAll('class="admin-switcher-tabs"', 'class="admin-switcher-tabs tabs"')
+      .replace(/class="admin-switcher-tab(?=[" ])/g, 'class="tab admin-switcher-tab');
     const telegramPanel = '<div class="panel" style="margin-top: 24px;">\n                <h2 class="panel-title">Telegram 通知</h2>';
     source = replaceOne(source, telegramPanel, telegramPanel.replace('class="panel"', 'class="panel" data-recharge-telegram-form'));
     source = replaceOne(
@@ -1287,7 +1300,8 @@ async function buildCodexdaichongAssets() {
     routingScript,
     paginationScript,
     paginationStyles,
-    designTokens
+    designTokens,
+    tabStyles
   ] = await Promise.all([
     original('index.html'),
     original('admin.html'),
@@ -1302,7 +1316,8 @@ async function buildCodexdaichongAssets() {
     readFile(new URL('routing-admin.js', import.meta.url), 'utf8'),
     readFile(new URL('../../../frontend/pagination.js', import.meta.url), 'utf8'),
     readFile(new URL('../../../frontend/pagination.css', import.meta.url), 'utf8'),
-    readFile(new URL('../../../frontend/design-tokens.css', import.meta.url), 'utf8')
+    readFile(new URL('../../../frontend/design-tokens.css', import.meta.url), 'utf8'),
+    readFile(new URL('../../../frontend/tabs.css', import.meta.url), 'utf8')
   ]);
   const assets = new Map();
   for (const [path, source, kind] of [
@@ -1340,7 +1355,7 @@ async function buildCodexdaichongAssets() {
     ['favicon.svg', favicon, 'svg'],
     ['lucide.js', lucide, 'js'],
     ['shell.js', shell, 'js'],
-    ['shell.css', designTokens + '\n' + paginationStyles + '\n' + styles, 'css']
+    ['shell.css', designTokens + '\n' + paginationStyles + '\n' + tabStyles + '\n' + styles, 'css']
   ])
     assets.set('/' + name, { body, type: media[kind] });
   return assets;

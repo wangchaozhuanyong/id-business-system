@@ -156,7 +156,8 @@ test('only known writes invalidate related snapshots; query POSTs and explicit r
     await api.queries.read(scope, 'fixture', async () => ({ rows: [] }));
   await api.websiteVisits({ page: 1 });
   await api.queryManagedMailbox('MBX-synthetic', 10);
-  await api.savedTotpCode('synthetic');
+  await api.managedMailboxCodePage(['synthetic'], 0);
+  await api.savedTotpCodePage(['synthetic'], 0);
   await api.tenantCardAction({ action: 'reveal', tenantId: 'fixture' });
   await api.orderSync({ mode: 'preview' });
   assert.equal(api.queries.peek('overview', 'fixture').stale, false);

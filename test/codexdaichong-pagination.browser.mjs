@@ -20,7 +20,7 @@ const logs = fixtureRows(24, (id) => ({
   progress: 35,
   status: 'running'
 }));
-const holds = fixtureRows(13, (id) => ({
+const holds = fixtureRows(23, (id) => ({
   id,
   accountEmail: `hold-${id}@example.test`,
   reason: `合成原因 ${id}`
@@ -55,7 +55,7 @@ async function openFixture(browser, t, view, { embedded = false, ...options } = 
     if (key === 'proxies')
       return send({
         success: true,
-        proxies: fixtureRows(12, (id) => ({
+        proxies: fixtureRows(22, (id) => ({
           id,
           protocol: 'http',
           proxy_url_masked: `proxy-${id}.example.test`
@@ -64,17 +64,17 @@ async function openFixture(browser, t, view, { embedded = false, ...options } = 
     if (key === 'addresses')
       return send({
         success: true,
-        addresses: fixtureRows(12, (id) => ({ id, line1: `合成地址 ${id}`, country: 'US' }))
+        addresses: fixtureRows(22, (id) => ({ id, line1: `合成地址 ${id}`, country: 'US' }))
       });
     if (key === 'login-logs')
       return send({
         success: true,
-        logs: fixtureRows(12, (id) => ({ admin_email: `login-${id}@example.test` }))
+        logs: fixtureRows(22, (id) => ({ admin_email: `login-${id}@example.test` }))
       });
     if (key === 'ip-bans')
       return send({
         success: true,
-        bans: fixtureRows(12, (id) => ({ id, cidr: `192.0.2.${id}/32`, reason: `合成封禁 ${id}` }))
+        bans: fixtureRows(22, (id) => ({ id, cidr: `192.0.2.${id}/32`, reason: `合成封禁 ${id}` }))
       });
     if (key === 'sessions') {
       const all = fixtureRows(query.search ? 16 : 62, (id) => ({
@@ -145,24 +145,39 @@ test(
           viewport: { width: 1440, height: 900 }
         });
         const nav = pager(page, 'cdk');
-        await current(page, 'cdk', 1, 10);
+        await current(page, 'cdk', 1, 20);
+        const viewport = page.locator('.table-container:has(#cdk_body)');
+        const geometry = await viewport.evaluate((element) => {
+          const footer = element.nextElementSibling.querySelector('.id-pagination');
+          const measure = () => ({
+            footerOffset: footer.getBoundingClientRect().top - element.getBoundingClientRect().top,
+            footerHeight: footer.offsetHeight,
+            documentScroll: scrollY
+          });
+          const before = measure();
+          element.scrollTop = element.scrollHeight;
+          return { before, after: measure(), scrollTop: element.scrollTop };
+        });
+        assert(geometry.scrollTop > 0, '充值后台的数据行应在表格内滚动');
+        assert.deepEqual(geometry.after, geometry.before);
         const nums = nav.locator('.pagination-pages button');
         assert((await nums.count()) <= 7);
         assert.equal(await nums.first().textContent(), '1');
-        assert.equal(await nums.last().textContent(), '13');
+        assert.equal(await nums.last().textContent(), '7');
         await nav.getByRole('button', { name: '下一页' }).click();
-        await current(page, 'cdk', 2, 10);
+        await current(page, 'cdk', 2, 20);
+        assert.equal(await viewport.evaluate((element) => element.scrollTop), 0);
         const rows = page.locator('#cdk_body tr');
-        assert.equal(await rows.count(), 10);
-        assert.match(await rows.first().textContent(), /KC-FIXTURE-011/);
+        assert.equal(await rows.count(), 20);
+        assert.match(await rows.first().textContent(), /KC-FIXTURE-021/);
         await page.getByRole('button', { name: '本页全选/取消' }).click();
-        assert.equal(await page.locator('#cdk_body input:checked').count(), 10);
+        assert.equal(await page.locator('#cdk_body input:checked').count(), 20);
         await nav.getByRole('button', { name: '上一页' }).click();
         assert.equal(await page.locator('#cdk_body input:checked').count(), 0);
         await nav.getByLabel('每页条数').selectOption('50');
         await current(page, 'cdk', 1, 50);
         assert.equal(await rows.count(), 50);
-        assert.equal(await page.locator('#cdk_body input:checked').count(), 10);
+        assert.equal(await page.locator('#cdk_body input:checked').count(), 20);
         await page.locator('#cdk_search').fill('KC-FIXTURE-119');
         await current(page, 'cdk', 1, 50);
         assert.equal(await rows.count(), 1);
@@ -181,13 +196,13 @@ test(
         });
         const frame = page.frameLocator('.recharge-integration__content iframe:not([hidden])');
         const nav = pager(frame, 'cdk');
-        await current(frame, 'cdk', 1, 10);
+        await current(frame, 'cdk', 1, 20);
         assert.equal(await nav.locator('.pagination-pages').isVisible(), false);
         assert(await nav.getByRole('button', { name: '下一页' }).isVisible());
         await nav.locator('.pagination-jump summary').tap();
-        await nav.getByLabel('跳至页码').fill('13');
+        await nav.getByLabel('跳至页码').fill('7');
         await nav.getByRole('button', { name: '跳转' }).tap();
-        await current(frame, 'cdk', 13, 10);
+        await current(frame, 'cdk', 7, 20);
         assert.equal(await frame.locator('#cdk_body tr').count(), 5);
         assert.equal(await nav.getByRole('button', { name: '下一页' }).isDisabled(), true);
         assert(await nav.evaluate((node) => node.scrollWidth <= node.clientWidth));
@@ -199,31 +214,31 @@ test(
       async (t) => {
         const { page, reads, failure } = await openFixture(browser, t, 'sessions');
         const nav = pager(page, 'session');
-        await current(page, 'session', 1, 10);
+        await current(page, 'session', 1, 20);
         const queries = () =>
           reads.filter(({ key }) => key === 'sessions').map(({ query }) => query);
-        assert.deepEqual(queries().at(-1), { limit: '10', offset: '0' });
+        assert.deepEqual(queries().at(-1), { limit: '20', offset: '0' });
         await nav.getByRole('button', { name: '下一页' }).click();
-        await current(page, 'session', 2, 10);
-        assert.deepEqual(queries().at(-1), { limit: '10', offset: '10' });
-        assert.match(await page.locator('#session_body tr').first().textContent(), /Session码 11/);
+        await current(page, 'session', 2, 20);
+        assert.deepEqual(queries().at(-1), { limit: '20', offset: '20' });
+        assert.match(await page.locator('#session_body tr').first().textContent(), /Session码 21/);
         failure.add('sessions');
         const rejected = page.waitForResponse(
           (response) => response.url().includes('/api/admin/sessions?') && response.status() === 503
         );
         await nav.getByLabel('每页条数').selectOption('50');
         await rejected;
-        await current(page, 'session', 2, 10);
-        assert.equal(await nav.getByLabel('每页条数').inputValue(), '10');
-        assert.match(await page.locator('#session_body tr').first().textContent(), /Session码 11/);
+        await current(page, 'session', 2, 20);
+        assert.equal(await nav.getByLabel('每页条数').inputValue(), '20');
+        assert.match(await page.locator('#session_body tr').first().textContent(), /Session码 21/);
         failure.delete('sessions');
-        await nav.getByLabel('每页条数').selectOption('20');
-        await current(page, 'session', 1, 20);
-        assert.deepEqual(queries().at(-1), { limit: '20', offset: '0' });
+        await nav.getByLabel('每页条数').selectOption('50');
+        await current(page, 'session', 1, 50);
+        assert.deepEqual(queries().at(-1), { limit: '50', offset: '0' });
         await page.locator('#session_search').fill('离线查询');
         await page.locator('#session_search').press('Enter');
         await page.locator('nav[data-pagination="recharge-session"][data-total="16"]').waitFor();
-        assert.deepEqual(queries().at(-1), { limit: '20', offset: '0', search: '离线查询' });
+        assert.deepEqual(queries().at(-1), { limit: '50', offset: '0', search: '离线查询' });
         assert.equal(await page.locator('#session_body tr.session-record').count(), 16);
       }
     );
@@ -233,17 +248,16 @@ test(
       async (t) => {
         const { page, reads } = await openFixture(browser, t, 'cards');
         const local = pager(page, 'card_pool');
-        await current(page, 'card_pool', 1, 10);
+        await current(page, 'card_pool', 1, 20);
         const cardReads = () => reads.filter(({ key }) => key === 'cards').length;
         const before = cardReads();
-        await local.getByLabel('每页条数').selectOption('20');
         await local.getByRole('button', { name: '下一页' }).click();
         await current(page, 'card_pool', 2, 20);
         assert.equal(await page.locator('#card_pool_list_body tr').count(), 7);
         assert.equal(cardReads(), before);
         await page.getByRole('tab', { name: 'Orbitcard 用卡记录' }).click();
         const orbitcard = pager(page, 'orbitcard');
-        await current(page, 'orbitcard', 1, 10);
+        await current(page, 'orbitcard', 1, 20);
         await orbitcard.getByLabel('每页条数').selectOption('50');
         await current(page, 'orbitcard', 1, 50);
         await orbitcard.getByRole('button', { name: '下一页' }).click();
@@ -262,20 +276,20 @@ test(
       async (t) => {
         const { page, reads } = await openFixture(browser, t, 'proxies');
         for (const [view, key, tbody, resource, text] of [
-          ['proxies', 'proxy_pool', '#proxy_pool_body', 'proxies', 'proxy-11.example.test'],
-          ['tax_addresses', 'address', '#address_list_body', 'addresses', '合成地址 11'],
+          ['proxies', 'proxy_pool', '#proxy_pool_body', 'proxies', 'proxy-21.example.test'],
+          ['tax_addresses', 'address', '#address_list_body', 'addresses', '合成地址 21'],
           [
             'admin_login_logs',
             'admin_login',
             '#admin_login_logs_body',
             'login-logs',
-            'login-11@example.test'
+            'login-21@example.test'
           ],
-          ['admin_login_logs', 'ip_ban', '#ip_ban_body', 'ip-bans', '192.0.2.11/32']
+          ['admin_login_logs', 'ip_ban', '#ip_ban_body', 'ip-bans', '192.0.2.21/32']
         ]) {
           if (view !== 'proxies' && key !== 'ip_ban')
             await page.evaluate((id) => window.idRechargeSelect(id), view);
-          await current(page, key, 1, 10);
+          await current(page, key, 1, 20);
           const count = () => reads.filter((read) => read.key === resource).length;
           const before = count();
           await pager(page, key).getByRole('button', { name: '下一页' }).click();
@@ -285,7 +299,7 @@ test(
         }
         assert.deepEqual(reads.find((read) => read.key === 'addresses').query, { region: 'US' });
         assert.deepEqual(reads.find((read) => read.key === 'login-logs').query, { limit: '100' });
-        assert.equal(await page.locator('#ip_ban_body button[data-unban-id="11"]').count(), 1);
+        assert.equal(await page.locator('#ip_ban_body button[data-unban-id="21"]').count(), 1);
       }
     );
 
@@ -293,13 +307,13 @@ test(
       'task and manual hold snapshots use local paging while runtime log keeps its cursor stream',
       async (t) => {
         const { page } = await openFixture(browser, t, 'logs');
-        await current(page, 'log', 1, 10);
+        await current(page, 'log', 1, 20);
         assert(await page.locator('#log_pagination .recharge-pagination-note').isVisible());
         await pager(page, 'log').getByRole('button', { name: '下一页' }).click();
-        await current(page, 'log', 2, 10);
-        assert.match(await page.locator('#log_body tr').first().textContent(), /合成任务 11/);
+        await current(page, 'log', 2, 20);
+        assert.match(await page.locator('#log_body tr').first().textContent(), /合成任务 21/);
         await page.getByRole('tab', { name: '待人工确认' }).click();
-        await current(page, 'manual_hold', 1, 10);
+        await current(page, 'manual_hold', 1, 20);
         await pager(page, 'manual_hold').getByRole('button', { name: '下一页' }).click();
         assert.equal(await page.locator('#activation_manual_hold_body tr').count(), 3);
         const runtime = await openFixture(browser, t, 'runtime_logs');

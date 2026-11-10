@@ -38,7 +38,7 @@ test('address pagination retains the active response and corrects an out-of-rang
     requests.push(request);
     if (unavailable) return route.fulfill({ status: 503, json: { error: '地址读取暂时失败' } });
     const result = listBitBrowserAddresses(records, parameters);
-    if (delaySizeChange && request.pageSize === 20) {
+    if (delaySizeChange && request.pageSize === 10) {
       delaySizeChange = false;
       sizeChangeStarted.resolve();
       await sizeChangeReleased.promise;
@@ -66,44 +66,44 @@ test('address pagination retains the active response and corrects an out-of-rang
   };
 
   await row(120).waitFor();
-  assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '10');
-  assert.equal(await rows.count(), 10);
-  await jump(13);
+  assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '20');
+  assert.equal(await rows.count(), 20);
+  await jump(7);
   await row(0).waitFor();
   assert.equal(await rows.count(), 1);
   assert.equal(await pager.getByRole('button', { name: '下一页' }).isDisabled(), true);
   delaySizeChange = true;
-  await pager.locator('[data-pagination-size]').selectOption('20');
+  await pager.locator('[data-pagination-size]').selectOption('10');
   await sizeChangeStarted.promise;
-  assert.equal(await pager.getAttribute('data-page'), '13');
-  assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '10');
+  assert.equal(await pager.getAttribute('data-page'), '7');
+  assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '20');
   assert.equal(await row(0).isVisible(), true);
   sizeChangeReleased.resolve();
   await row(120).waitFor();
-  assert.equal(await rows.count(), 20);
+  assert.equal(await rows.count(), 10);
   assert.deepEqual(requests.slice(0, 3), [
-    { page: 1, pageSize: 10 }, { page: 13, pageSize: 10 }, { page: 1, pageSize: 20 }
+    { page: 1, pageSize: 20 }, { page: 7, pageSize: 20 }, { page: 1, pageSize: 10 }
   ]);
 
   delayPageTwo = true;
   await jump(2);
   await delayed.promise;
   await jump(3);
-  await row(80).waitFor();
+  await row(100).waitFor();
   release.resolve();
   await released.promise;
   await settle(page);
   assert.equal(await pager.getAttribute('data-page'), '3');
-  assert.equal(await row(80).isVisible(), true);
-  assert.equal(await row(100).count(), 0);
+  assert.equal(await row(100).isVisible(), true);
+  assert.equal(await row(110).count(), 0);
 
   const refresh = panel.getByRole('button', { name: '刷新', exact: true });
-  records = records.slice(0, 21);
+  records = records.slice(0, 11);
   await refresh.click();
   await row(0).waitFor();
   assert.equal(await rows.count(), 1);
   assert.equal(await pager.getAttribute('data-page'), '2');
-  assert.deepEqual(requests.slice(-2), [{ page: 3, pageSize: 20 }, { page: 2, pageSize: 20 }]);
+  assert.deepEqual(requests.slice(-2), [{ page: 3, pageSize: 10 }, { page: 2, pageSize: 10 }]);
   unavailable = true;
   await refresh.click();
   await panel.getByText(/地址读取暂时失败/).waitFor();
@@ -115,7 +115,7 @@ test('address pagination retains the active response and corrects an out-of-rang
   await pager.locator('[data-pagination-size]').selectOption('50');
   await failedSize;
   await settle(page);
-  assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '20');
+  assert.equal(await pager.locator('[data-pagination-size]').inputValue(), '10');
   assert.equal(await row(0).isVisible(), true);
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);

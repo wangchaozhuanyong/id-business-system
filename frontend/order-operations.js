@@ -175,7 +175,7 @@
   function codesList(view) {
     if (!view.loaded && !view.data) return A.empty('正在读取充值码', '');
     const rows = filteredCodes(view.data), page = listPage(codesRoute, rows);
-    return `<div class="recharge-list-frame" data-code-frame="codes"><div class="recharge-code-table">${A.table(codeColumns(), page.rows, 'recharge-code-items', 'my-recharge-codes', {
+    return `<div class="recharge-list-frame" data-code-frame="codes"><div class="recharge-code-table" data-pagination-table>${A.table(codeColumns(), page.rows, 'recharge-code-items', 'my-recharge-codes', {
       title: view.error && !view.data ? '充值码读取失败' : '当前分类暂无充值码', description: ''
     })}</div></div>${page.pager}`;
   }

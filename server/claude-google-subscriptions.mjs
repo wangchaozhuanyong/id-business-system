@@ -144,7 +144,7 @@ export function projectClaudeGoogleSubscriptions({ commerce, inventory, mailboxe
       id: order.id, email: order.email.trim(), password, totp, ...code,
       operatorId, operatorName,
       ownerId: string(order.ownerId) || operatorId, ownerName: string(order.owner) || (order.ownerId ? '' : operatorName),
-      credentialStatus: binding.conflict || binding.credentialConflict ? 'conflict' : password ? 'available' : 'missing'
+      credentialStatus: binding.conflict || binding.credentialConflict ? 'conflict' : binding.mailbox ? 'available' : 'missing'
     });
   }
   return eligible;

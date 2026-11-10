@@ -93,7 +93,7 @@ try {
         const tabs = await page
           .locator('#main .panel > .tabs button, #main .panel > .content-toolbar > .tabs button')
           .evaluateAll((nodes) =>
-            nodes.map((n) => ({
+            nodes.filter(n => n.checkVisibility()).map((n) => ({
               text: n.textContent,
               selector:
                 'button' +
@@ -105,7 +105,7 @@ try {
           );
         for (const tab of tabs) {
           if (tab.selector === 'button') continue;
-          await page.locator('#main ' + tab.selector).click();
+          await page.locator('#main ' + tab.selector + ':visible').click();
           await settle(page);
           await capture(page, width, theme, route, tab.text);
         }

@@ -109,11 +109,12 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   const requestFormRetained = () => page.evaluate(() => window.requestFormNode === document.querySelector('#recharge-code-request'));
   await settle(page);
   const firstFrames = await page.locator('[data-code-frame]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
+  assert.equal(await rightPager.getAttribute('data-page-size'), '20');
+  assert.equal(await leftPager.getAttribute('data-page-size'), '20');
   await rightPager.locator('[data-pagination-nav="next"]').click();
-  await rightPager.locator('[data-pagination-nav="next"]').click();
-  assert.equal(await rightPager.getAttribute('data-page'), '3'); assert.equal(await leftPager.getAttribute('data-page'), '1');
-  await leftPager.locator('[data-pagination-nav="next"]').click(); await leftPager.locator('[data-pagination-nav="next"]').click();
-  assert.equal(await leftPager.getAttribute('data-page'), '3'); assert.equal(await rightPager.getAttribute('data-page'), '3');
+  assert.equal(await rightPager.getAttribute('data-page'), '2'); assert.equal(await leftPager.getAttribute('data-page'), '1');
+  await leftPager.locator('[data-pagination-nav="next"]').click();
+  assert.equal(await leftPager.getAttribute('data-page'), '2'); assert.equal(await rightPager.getAttribute('data-page'), '2');
   const lastFrames = await page.locator('[data-code-frame]').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
   assert(lastFrames.every((height, i) => height >= firstFrames[i] - 1), '末页不缩小已显示的列表框架');
   assert(await requestFormRetained());
@@ -123,11 +124,11 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   }
   await page.setViewportSize({ width: 1680, height: 1050 });
   await page.locator('#code-list-query').fill('KC-');
-  assert.equal(await rightPager.getAttribute('data-page'), '1'); assert.equal(await leftPager.getAttribute('data-page'), '3');
+  assert.equal(await rightPager.getAttribute('data-page'), '1'); assert.equal(await leftPager.getAttribute('data-page'), '2');
   await go('overview'); await go('workspace/recharge-codes');
   assert.equal(await page.locator('#recharge-request-count').inputValue(), '7');
   assert.equal(await page.locator('#code-list-query').inputValue(), 'KC-');
-  assert.equal(await leftPager.getAttribute('data-page'), '3');
+  assert.equal(await leftPager.getAttribute('data-page'), '2');
   await page.evaluate(() => { window.requestFormNode = document.querySelector('#recharge-code-request'); });
   let release; gates.codes = new Promise(resolve => { release = resolve; }); fail.codes = true;
   const original = await right.locator('tbody').innerText(), height = (await right.boundingBox()).height;

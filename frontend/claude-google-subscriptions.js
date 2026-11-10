@@ -4,6 +4,7 @@
   const A = window.IDDesignAPI;
   const D = window.IDLocalData;
   const { $, esc, button, textAction } = A;
+  const { defaultPageSize, pageSizes } = window.IDPagination;
   const route = 'data-management/claude-google-subscriptions';
   const tableId = 'claude-google-subscriptions';
   const filterKey = tableId + ':filters';
@@ -19,7 +20,7 @@
     auth_failed: '授权失败',
     conflict: '资料冲突'
   };
-  const credentialStates = { available: '已关联', missing: '未找到库存资料', conflict: '库存资料冲突' };
+  const credentialStates = { missing: '未找到库存资料', conflict: '库存资料冲突' };
   const valueLabels = { email: '邮箱账号', password: '邮箱密码', totp: '邮箱 2FA', queryCode: '买家查询码' };
   const omittedLabels = new Set(['邮箱密码', '邮箱 2FA', '邮箱2FA', '邮箱买家查询码', '买家查询码', '查询码', '2FA']);
   const dateFormat = new Intl.DateTimeFormat('sv-SE', {
@@ -37,7 +38,7 @@
 
   function filters() {
     if (!A.state.drafts.has(filterKey))
-      A.state.drafts.set(filterKey, { input: '', query: '', status: '', page: 1, pageSize: 8 });
+      A.state.drafts.set(filterKey, { input: '', query: '', status: '', page: 1, pageSize: defaultPageSize });
     return A.state.drafts.get(filterKey);
   }
 
@@ -122,14 +123,16 @@
       data-id="${row.id}" data-field="${field}" aria-label="查看${valueLabels[field]}完整内容"><span class="table-value-ellipsis">${esc(value)}</span>${A.icon('info')}</button>`;
   }
 
+  function credentialValue(row, field) {
+    if (latest(row)?.[field]) return longValue(row, field);
+    if (row.credentialStatus === 'available') return '未录入';
+    return A.tag(credentialStates[row.credentialStatus] || '待核对', 'warning');
+  }
+
   const columns = [
     { id: 'email', label: '邮箱账号', class: 'email-cell', render: row => longValue(row, 'email') },
-    { id: 'password', label: '邮箱密码', class: 'mono', render: row => {
-      const password = latest(row)?.password;
-      return password ? longValue(row, 'password') : row.credentialStatus === 'available' ? '—' :
-        A.tag(credentialStates[row.credentialStatus] || '待核对', 'warning');
-    } },
-    { id: 'totp', label: '邮箱 2FA', class: 'mono', render: row => longValue(row, 'totp') },
+    { id: 'password', label: '邮箱密码', class: 'mono', render: row => credentialValue(row, 'password') },
+    { id: 'totp', label: '邮箱 2FA', class: 'mono', render: row => credentialValue(row, 'totp') },
     { id: 'queryCode', label: '买家查询码', class: 'mono', render: queryCode },
     { id: 'remainingDays', label: '剩余天数', render: remainingDays },
     { id: 'operatorName', label: '操作人', render: operator },
@@ -149,7 +152,7 @@
     } : { title: '正在读取订阅资料', description: '' };
     return A.table(columns, snapshot?.items || [], '', tableId, emptyState) +
       (snapshot ? window.IDPagination.render({ id: tableId, page: snapshot.page,
-        pageSize: snapshot.pageSize, pageSizes: [8, 16], total: snapshot.total }) : '');
+        pageSize: snapshot.pageSize, total: snapshot.total }) : '');
   }
 
   function stabilizeListFrame() {
@@ -167,9 +170,10 @@
       frame = { table, pager };
       frameHeights.set(key, frame);
     }
-    viewport.style.minHeight = frame ? `${frame.table}px` : '';
+    const tableHeight = frame ? `min(${frame.table}px, var(--pagination-rows-limit))` : '';
+    viewport.style.minHeight = tableHeight;
     // A revisited page keeps the measured footer space without retaining totals or rows.
-    list.style.minHeight = frame ? `${frame.table + frame.pager}px` : '';
+    list.style.minHeight = frame ? `calc(${tableHeight} + ${frame.pager}px)` : '';
   }
 
   function render() {
@@ -207,14 +211,20 @@
 
   function renderAfterRead(panel) {
     const list = $('#claude-google-list', panel);
-    const scrollLeft = list.querySelector('.table-viewport')?.scrollLeft || 0;
+    const previousViewport = list.querySelector('.table-viewport');
+    const previousPager = list.querySelector('[data-pagination]');
+    const samePage = previousPager?.dataset.page === String(snapshot?.page) &&
+      previousPager?.dataset.pageSize === String(snapshot?.pageSize) &&
+      previousViewport?.querySelector('[data-row-id]')?.dataset.rowId === snapshot?.items[0]?.id;
+    const left = previousViewport?.scrollLeft || 0;
+    const top = samePage ? previousViewport?.scrollTop || 0 : 0;
     list.innerHTML = renderList();
     const error = $('#claude-google-read-error', panel);
     error.hidden = !(snapshot && listError);
     error.innerHTML = snapshot && listError
       ? `<p class="inline-notice warning">${esc(listError.message)}，已保留上次读取的资料。</p>` : '';
     stabilizeListFrame();
-    list.querySelector('.table-viewport').scrollLeft = scrollLeft;
+    list.querySelector('.table-viewport').scrollTo({ left, top, behavior: 'instant' });
     scheduleExpiry();
   }
 
@@ -241,7 +251,7 @@
       const result = await D.claudeGoogleSubscriptions(parameters);
       if (!current()) return;
       if (!Array.isArray(result?.items) || !Number.isSafeInteger(result.total) || result.total < 0 ||
-          !Number.isSafeInteger(result.page) || result.page < 1 || ![8, 16].includes(result.pageSize) ||
+          !Number.isSafeInteger(result.page) || result.page < 1 || !pageSizes.includes(result.pageSize) ||
           typeof result.revision !== 'string' || !result.revision)
         throw new Error('invalid subscription view');
       const rows = new Map(result.items.map(row => [esc(row.id), row]));

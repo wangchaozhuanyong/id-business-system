@@ -24,11 +24,12 @@ const rows = Array.from({ length: 51 }, (_, index) => {
   const operatorId = 'synthetic-operator-' + (index % 2);
   const operatorName = index % 2 ? '合成录入员工乙' : '合成录入员工甲';
   const samePerson = index === 6;
+  const emptyCredentials = [1, 4].includes(index) || index % 6 === 5;
   return {
     id: 'synthetic-order-' + index,
     email: index === longValueIndex ? longEmail : 'google-subscription-' + index + '@example.test',
-    password: index === longValueIndex ? longPassword : index % 6 === 5 ? '' : 'SYNTHETIC-PASSWORD-' + index,
-    totp: index === longValueIndex ? longTotp : index % 6 === 5 ? '' : 'SYNTHETIC-2FA-' + index,
+    password: index === longValueIndex ? longPassword : emptyCredentials ? '' : 'SYNTHETIC-PASSWORD-' + index,
+    totp: index === longValueIndex ? longTotp : emptyCredentials ? '' : 'SYNTHETIC-2FA-' + index,
     queryCode: index === longValueIndex ? longQueryCode
       : ['missing', 'conflict'].includes(codeStatus) ? '' : 'SYNTHETIC-QUERY-' + index,
     codeStatus,
@@ -40,7 +41,7 @@ const rows = Array.from({ length: 51 }, (_, index) => {
     operatorName,
     ownerId: samePerson ? operatorId : 'synthetic-owner-' + (index % 3),
     ownerName: samePerson ? operatorName : index % 3 ? '合成归属员工乙' : '合成归属员工甲',
-    credentialStatus: index % 6 === 5 ? 'conflict' : 'available'
+    credentialStatus: index === 1 ? 'missing' : index % 6 === 5 ? 'conflict' : 'available'
   };
 });
 
@@ -168,6 +169,11 @@ test('Claude 谷歌订阅管理读取记录、分页筛选及安全复制', { ti
         assert.equal((await samePersonCell.innerText()).trim(), rows[6].operatorName, '同一个人只显示操作人姓名');
         await row(0).getByText(rows[0].password, { exact: true }).waitFor();
         await row(0).getByText(rows[0].totp, { exact: true }).waitFor();
+        for (const field of ['password', 'totp']) {
+          assert.equal(await row(1).locator(`[data-column="${field}"]`).innerText(), '未找到库存资料');
+          assert.equal(await row(4).locator(`[data-column="${field}"]`).innerText(), '未录入');
+          assert.equal(await row(5).locator(`[data-column="${field}"]`).innerText(), '库存资料冲突');
+        }
         const remaining = (index) => row(index).locator('td[data-column="remainingDays"]');
         await remaining(0).getByText('3 天', { exact: true }).waitFor();
         assert.equal((await remaining(1).innerText()).trim(), '—');

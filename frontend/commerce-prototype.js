@@ -2303,7 +2303,7 @@
         description: review ? '订阅归属或开通资料需要核对时，会显示在这里。' :
           '根据本系统已确认的订阅记录统计。' };
     const page = A.pageRows(rows);
-    const cards = `<div class="customer-retention-mobile panel-body" aria-label="客户记录">${page.length
+    const cards = `<div class="customer-retention-mobile panel-body" data-pagination-rows tabindex="0" role="region" aria-label="客户记录">${page.length
       ? `<div class="guide-list">${page.map(row => `<article class="guide-item" data-retention-card="${E(row.id)}">
         <h3>${E(row.name)}</h3>
         <p>${E(review ? row.plans : `${row.count} · ${row.plans}`)}</p>
@@ -2827,7 +2827,7 @@
         'commerce-contact-entry-tab',
         'aria-label="录入类型"'
       );
-      return entryWorkspace(`<section class="panel form-panel">${entryTabs}${body}<div class="form-footer">${footer}</div></section>`, tenant ? 'tenant' : 'customer');
+      return entryWorkspace(`<section class="panel">${entryTabs}<div class="form-panel">${body}<div class="form-footer">${footer}</div></div></section>`, tenant ? 'tenant' : 'customer');
     }
     A.openDrawer(
       `${row ? '编辑' : '新增'}${tenant ? '租户' : '客户'}`,

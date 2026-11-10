@@ -99,6 +99,9 @@ function openActionMenu(anchor, actions, { label = '更多操作', onSelect } = 
   const position = () => {
     if (!anchor.isConnected || !anchor.checkVisibility()) return closeActionMenu();
     const trigger = anchor.getBoundingClientRect();
+    const viewport = anchor.closest('.table-viewport, [data-pagination-rows]')?.getBoundingClientRect();
+    if (viewport && (trigger.bottom <= viewport.top || trigger.top >= viewport.bottom ||
+        trigger.right <= viewport.left || trigger.left >= viewport.right)) return closeActionMenu();
     const bounds = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(12, Math.min(trigger.right - bounds.width, innerWidth - bounds.width - 12))}px`;
     const below = trigger.bottom + 6;
@@ -990,6 +993,10 @@ function permittedRoute(route) {
   );
 }
 const designTableFrames = new Map();
+function tableScrollKey(table) {
+  const rows = table.tBodies[0]?.rows;
+  return JSON.stringify([table.dataset.table, rows?.[0]?.dataset.rowId, rows?.[rows.length - 1]?.dataset.rowId]);
+}
 function stabilizeDesignTables() {
   for (const pager of $$('[data-pagination="main-list"]', activePageRegion())) {
     let viewport = pager.previousElementSibling;
@@ -1495,6 +1502,14 @@ function render() {
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
   const tabScroll = sameRoute ? captureTabScroll(activePageRegion()) : new Map();
+  const tableScroll = new Map();
+  if (sameRoute) {
+    for (const table of $$('.table-viewport > table[data-table]', activePageRegion())) {
+      const viewport = table.parentElement;
+      if (viewport.scrollTop || viewport.scrollLeft)
+        tableScroll.set(tableScrollKey(table), { top: viewport.scrollTop, left: viewport.scrollLeft });
+    }
+  }
   if (!sameRoute)
     pendingPageScroll = { route: state.route, top: state.viewDrafts.get(state.route)?.scrollY || 0 };
   const scrollTarget = pendingPageScroll?.route === state.route
@@ -1570,6 +1585,12 @@ function render() {
   window.IDChangeSync?.resume();
   applyDesignPreviewState();
   restoreTabScroll(region, tabScroll);
+  if (tableScroll.size) {
+    for (const table of $$('.table-viewport > table[data-table]', region)) {
+      const scroll = tableScroll.get(tableScrollKey(table));
+      if (scroll) table.parentElement.scrollTo({ ...scroll, behavior: 'instant' });
+    }
+  }
   requestAnimationFrame(() => {
     if (renderVersion !== layoutRenderVersion) return;
     restorePageScroll(scrollTarget);
@@ -1581,7 +1602,7 @@ function render() {
     )
   );
 }
-function navigate() {
+function navigate(event) {
   let next = location.hash.replace(/^#\/?/, '') || 'mailboxes/google';
   const currentHash = '#/' + state.route;
   if (
@@ -1592,7 +1613,6 @@ function navigate() {
     if (location.hash !== currentHash) history.replaceState(null, '', currentHash);
     return;
   }
-  preserveMainDraft();
   const entryRouteAliases = {
     'workspace/account-submit': 'workspace/account-extract',
     'workspace/mail-submit': 'workspace/mail-extract',
@@ -1621,6 +1641,10 @@ function navigate() {
     location.hash = '/mailboxes/google';
     return;
   }
+  // A hash navigation can emit both popstate and hashchange.
+  if (event && state.route === next && mountedPage?.region.isConnected &&
+      mountedPage.region.dataset.pageRegion === next) return;
+  preserveMainDraft();
   if (state.route !== next) {
     if (state.route)
       state.viewDrafts.set(state.route, {

@@ -165,7 +165,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await page.getByText('每次可生成 1 至 100 条地址', { exact: true }).waitFor();
   await countField.fill('3');
   await generate.click();
-  await page.getByText('已生成 3 条账单地址，付款前请核对资料。', { exact: true }).waitFor();
+  await page.locator('#toast[data-kind="success"]').getByText('已成功生成 3 条地址', { exact: true }).waitFor();
   assert.equal(await page.locator('#bit-address-list tbody tr').count(), 3);
   assert.equal(await page.getByRole('button', { name: '导入地址', exact: true }).count(), 1);
   assert.equal(await bitFrame.locator('#bit-window-name').inputValue(), '演示窗口名称');

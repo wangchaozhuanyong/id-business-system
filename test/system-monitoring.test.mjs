@@ -269,7 +269,13 @@ test('monitor APIs enforce roles, same-origin writes, and explicit verified evid
   assert.equal((await http(handler, { url: config, actor: null })).status, 401);
   assert.equal((await http(handler, { url: config, actor: admin })).status, 403);
   assert.equal((await http(handler, { actor: { ...admin, role: 'employee' } })).status, 403);
-  assert.equal((await http(handler, { actor: admin })).status, 200);
+  const initial = await http(handler, { actor: admin });
+  assert.equal(initial.status, 200);
+  assert.equal(JSON.parse(initial.body).pageSize, 20);
+  assert.equal(JSON.parse((await http(handler, { url: monitorPath + '?tab=incidents&page=2&pageSize=10', actor: admin })).body).pageSize, 10);
+  assert.equal(JSON.parse((await http(handler, { url: monitorPath + '?tab=deliveries&pageSize=50' })).body).pageSize, 50);
+  assert.equal((await http(handler, { url: monitorPath + '?pageSize=100' })).status, 400);
+  assert.equal((await http(handler, { url: monitorPath + '?pageSize=10&pageSize=20' })).status, 400);
   const body = { action: 'verified', code: 'payment_duplicate', reference: '12345678-1234-1234-1234-123456789abc' };
   const headers = { origin, 'content-type': 'application/json' };
   assert.equal((await http(handler, { method: 'POST', body, headers: { ...headers, origin: 'https://unrelated.test' } })).status, 403);

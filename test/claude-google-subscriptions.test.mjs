@@ -219,4 +219,17 @@ test('客户自有账号已登记 Google 收信时，可查同邮箱的买家查
   assert.equal(row.queryCode, code);
   assert.equal(row.remainingDays, 3);
   assert.equal(row.password, '');
+  assert.equal(row.credentialStatus, 'missing');
+});
+
+test('已关联的库存没有密码时仍保留关联状态及已录入的 2FA', () => {
+  const [row] = projectClaudeGoogleSubscriptions({
+    commerce: { data: { orders: [{ id: 'owned', product: 'Claude Pro', email,
+      paidConfirmed: true, start: '2026-11-05T00:00:00Z' }] } },
+    inventory: { data: { mailboxes: [{ id: 'fixture-mailbox', type: 'google', email, totp: gmailTotp }] } },
+    mailboxes: { data: { items: [] } }
+  }, Date.parse('2026-11-09T00:00:00Z'));
+  assert.equal(row.credentialStatus, 'available');
+  assert.equal(row.password, '');
+  assert.equal(row.totp, gmailTotp);
 });

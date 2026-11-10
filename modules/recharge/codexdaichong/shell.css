@@ -469,7 +469,6 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
     .btn-primary,
     .btn-secondary,
     .filter-trigger,
-    .admin-switcher-tab,
     .query-mode-btn,
     .recharge-demo-note button
   ) {
@@ -519,15 +518,9 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   cursor: not-allowed;
 }
 
-[data-recharge-view='admin'] .admin-switcher-tabs {
-  flex-wrap: wrap;
-  gap: 8px;
-  width: auto;
-}
-
-[data-recharge-view='admin'] .admin-switcher-tab {
-  flex: 0 0 auto;
-  white-space: normal;
+[data-recharge-view='admin'] .admin-switcher-tabs.tabs {
+  padding-inline: 0;
+  margin-bottom: 16px;
 }
 
 [data-recharge-view='admin'] .table-container {
@@ -939,7 +932,7 @@ body[data-recharge-workspace]::before {
   max-width: none;
   min-height: var(--workspace-available-height, 640px);
   margin-inline: auto;
-  padding: clamp(12px, 2vw, 24px);
+  padding: 0;
   animation: none;
 }
 
@@ -949,6 +942,7 @@ body[data-recharge-workspace]::before {
   justify-content: flex-end;
   flex: none;
   gap: 12px;
+  padding-block: var(--toolbar-padding-block);
 }
 
 [data-recharge-workspace] .recharge-card {
@@ -966,12 +960,12 @@ body[data-recharge-workspace]::before {
   align-items: center;
   justify-content: space-between;
   gap: 8px 16px;
-  padding: 0;
+  padding: 0 var(--panel-padding-inline);
   border-bottom: 1px solid var(--border);
 }
 
 [data-recharge-workspace] .workspace-recharge-standalone-title {
-  margin-block-end: 20px;
+  padding: var(--panel-padding-block) var(--panel-padding-inline);
 }
 
 [data-recharge-workspace] .workspace-recharge-standalone-title h1 {
@@ -983,35 +977,25 @@ body[data-recharge-workspace]::before {
 body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   display: flex;
   min-width: 0;
-  gap: clamp(0px, 1vw, 16px);
+  align-self: stretch;
   margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
 }
 
-[data-recharge-workspace] .tab-nav .tab-btn {
-  flex: 0 0 auto;
-  min-width: min(7.5rem, 25vw);
-  min-height: 48px;
-  padding-inline: 14px;
-  border-radius: 0;
-  white-space: nowrap;
-}
-
-[data-recharge-workspace] .tab-nav .tab-btn.active {
-  box-shadow: inset 0 -3px var(--primary);
-}
-
-[data-recharge-workspace] .tab-nav .tab-btn:focus-visible {
-  outline-offset: -4px;
+[data-recharge-workspace] .workspace-recharge-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  padding: 16px 0 var(--panel-padding-block);
 }
 
 [data-recharge-workspace] #workspaceOperation {
   display: flex;
   flex-direction: column;
   flex: 1;
-  padding: 16px 0 0;
 }
 
 [data-recharge-workspace] #workspaceOperation[hidden] {
@@ -1289,7 +1273,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 }
 
 [data-recharge-workspace] .workspace-guide {
-  margin-top: 16px;
+  margin-top: 0;
 }
 
 [data-recharge-workspace] #flowStatusBadge.pending {
@@ -1757,8 +1741,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
   [data-recharge-workspace] .workspace-recharge-heading {
     flex-wrap: wrap;
-    gap: 8px;
-    padding-bottom: 8px;
+    gap: 0;
   }
 
   [data-recharge-workspace] .workspace-recharge-heading-actions {
@@ -1772,9 +1755,8 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
   [data-recharge-workspace] .tab-nav .tab-btn {
     flex: 1;
-    min-height: 44px;
     min-width: 0;
-    padding-inline: 4px;
+    padding-inline: 1px;
   }
 
   [data-recharge-workspace] .workspace-recharge-field,
