@@ -15,6 +15,7 @@ const icons = {
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   chevron: '<path d="m9 5 7 7-7 7"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
+  chart: '<path d="M4 3v17h17M8 15v-4M13 15V6M18 15V9"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   work: '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V4h8v3M3 12h18M10 12v3h4v-3"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/>',
@@ -440,6 +441,7 @@ function notify(message, { kind = 'info', duration } = {}) {
   positionFeedback();
   toastRemaining = duration ?? (kind === 'loading' ? 0 : kind === 'error' || kind === 'warning' ? 8000 : 3800);
   resumeFeedbackTimer();
+  if (kind === 'success' || kind === 'error') window.IDInteractionSound?.play(kind);
   return toastRevision;
 }
 actionToast.addEventListener('pointerenter', () => {
@@ -1018,7 +1020,7 @@ function renderSidebar() {
       .map(([group, iconName, children]) => {
         const direct = children.length === 1;
         const active = currentGroup?.[0] === group;
-        return `<div class="nav-group">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${state.expanded.has(group)}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(state.expanded.has(group) ? 'down' : 'chevron', 'chevron')}</button>${state.expanded.has(group) ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
+        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${state.expanded.has(group)}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(state.expanded.has(group) ? 'down' : 'chevron', 'chevron')}</button>${state.expanded.has(group) ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
       })
       .join(
         ''

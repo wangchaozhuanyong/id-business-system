@@ -1241,7 +1241,8 @@ async function buildCodexdaichongAssets() {
     styles,
     routingScript,
     paginationScript,
-    paginationStyles
+    paginationStyles,
+    designTokens
   ] = await Promise.all([
     original('index.html'),
     original('admin.html'),
@@ -1255,7 +1256,8 @@ async function buildCodexdaichongAssets() {
     readFile(new URL('shell.css', import.meta.url)),
     readFile(new URL('routing-admin.js', import.meta.url), 'utf8'),
     readFile(new URL('../../../frontend/pagination.js', import.meta.url), 'utf8'),
-    readFile(new URL('../../../frontend/pagination.css', import.meta.url), 'utf8')
+    readFile(new URL('../../../frontend/pagination.css', import.meta.url), 'utf8'),
+    readFile(new URL('../../../frontend/design-tokens.css', import.meta.url), 'utf8')
   ]);
   const assets = new Map();
   for (const [path, source, kind] of [
@@ -1293,7 +1295,7 @@ async function buildCodexdaichongAssets() {
     ['favicon.svg', favicon, 'svg'],
     ['lucide.js', lucide, 'js'],
     ['shell.js', shell, 'js'],
-    ['shell.css', paginationStyles + '\n' + styles, 'css']
+    ['shell.css', designTokens + '\n' + paginationStyles + '\n' + styles, 'css']
   ])
     assets.set('/' + name, { body, type: media[kind] });
   return assets;

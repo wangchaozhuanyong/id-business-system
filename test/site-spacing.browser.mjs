@@ -34,7 +34,7 @@ const capture = async (page, width, theme, route, state) => {
   results.push({ width, theme, route, state, ...(await spacingSnapshot(page)) });
 };
 try {
-  for (const width of [1440, 1024, 901, 900, 768, 390, 320])
+  for (const width of [1920, 1440, 1024, 901, 900, 768, 390, 320])
     for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: { width, height: 900 } }),
         requests = await interceptDesign(context);

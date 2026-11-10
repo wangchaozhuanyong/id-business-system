@@ -41,6 +41,11 @@ import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/run
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['prototype.css', 'text/css; charset=utf-8'],
+  ['design-tokens.css', 'text/css; charset=utf-8'],
+  ['design-charts.css', 'text/css; charset=utf-8'],
+  ['design-charts.js', 'text/javascript; charset=utf-8'],
+  ['interaction-preferences.css', 'text/css; charset=utf-8'],
+  ['interaction-preferences.js', 'text/javascript; charset=utf-8'],
   ['pagination.css', 'text/css; charset=utf-8'],
   ['title-help.css', 'text/css; charset=utf-8'],
   ['overview-prototype.css', 'text/css; charset=utf-8'],

@@ -4925,6 +4925,18 @@
     const reported = (rows, field) => rows.length ? display(sum(rows, (row) => amounts.get(row.id)[field])) : '—';
     const byBasis = (rows, basis) => rows.filter((row) => amounts.get(row.id).basis === basis);
     const selected = moduleState.statsTab === 'pending' ? pending : complete;
+    const productRows = Object.keys(productPlans).map((product) => {
+      const rows = complete.filter((row) => row.product === product);
+      return {
+        id: product,
+        product,
+        count: String(rows.length),
+        revenue: reported(rows, 'revenue'),
+        actual: reported(byBasis(rows, 'actual'), 'profit'),
+        reference: reported(byBasis(rows, 'reference'), 'profit'),
+        pending: String(pending.filter((row) => row.product === product).length)
+      };
+    });
     return (
       A.header(
         '订单统计',
@@ -4980,7 +4992,7 @@
                 'commerce-stat-rates'
               )}`
           : moduleState.statsTab === 'overview'
-            ? `${panelTitle('按产品汇总', '利润合计包含实账和参考核算。参考核算使用订单费用规则或历史报价，开卡成本按同卡已确认开通订单分摊。')}${A.table(
+            ? `<div class="statistics-visual">${window.IDCharts.bars({ title: '各产品订单核算进度', unit: '笔', rows: productRows.map(row => ({ ...row, label: row.product })), series: [{ key: 'count', label: '已核算', tone: 'teal' }, { key: 'pending', label: '待核算', tone: 'amber' }] })}</div>${panelTitle('按产品汇总', '利润合计包含实账和参考核算。参考核算使用订单费用规则或历史报价，开卡成本按同卡已确认开通订单分摊。')}${A.table(
                 [
                   { id: 'product', label: '产品' },
                   { id: 'count', label: '已核算订单' },
@@ -5004,18 +5016,7 @@
                       )
                   }
                 ],
-                Object.keys(productPlans).map((product) => {
-                  const rows = complete.filter((row) => row.product === product);
-                  return {
-                    id: product,
-                    product,
-                    count: String(rows.length),
-                    revenue: reported(rows, 'revenue'),
-                    actual: reported(byBasis(rows, 'actual'), 'profit'),
-                    reference: reported(byBasis(rows, 'reference'), 'profit'),
-                    pending: String(pending.filter((row) => row.product === product).length)
-                  };
-                }),
+                productRows,
                 '',
                 'commerce-product-statistics'
               )}`
