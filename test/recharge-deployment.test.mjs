@@ -7,6 +7,36 @@ import test from 'node:test';
 import { verifyNativeNetworkProof } from '../modules/recharge/codexdaichong/native-network.mjs';
 
 const launcher = fileURLToPath(new URL('../deploy/recharge-core/run-recharge.py', import.meta.url));
+test('the canary admits only its loopback proxy import and country edit requests', () => {
+  const canary = fileURLToPath(new URL('../deploy/recharge-core/canary.py', import.meta.url));
+  const code = `import runpy
+m=runpy.run_path(${JSON.stringify(canary)})
+calls=[]
+class Response:
+ status=200
+ def __enter__(self): return self
+ def __exit__(self,*args): pass
+ def read(self,_): return b'{}'
+class Opener:
+ def open(self,request,timeout):
+  calls.append((request.get_method(),request.selector))
+  return Response()
+m['urllib'].request.build_opener=lambda *args: Opener()
+loopback='http://127.0.0.1:45501'
+import_path='/api/admin/proxies'
+edit_path='/api/admin/recharge-routing/proxies/1/country'
+for method,path in [('POST',import_path),('PUT',edit_path)]:
+ assert m['http_json'](loopback,path,method=method,body={})==(200,{})
+for origin,method,path in [(loopback,'GET',import_path),(loopback,'POST',edit_path),
+                           (loopback,'PUT',edit_path.replace('/1/','/0/')),
+                           (loopback,'DELETE',edit_path),('https://example.test','POST',import_path)]:
+ try: m['http_json'](origin,path,method=method); raise AssertionError('unexpected route')
+ except m['CanaryError']: pass
+assert calls==[('POST',import_path),('PUT',edit_path)]
+print('passed')`;
+  assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
+});
+
 test('return canary SQL requires an exact fixture statement and verified container ownership', () => {
   const canary = fileURLToPath(new URL('../deploy/recharge-core/canary.py', import.meta.url));
   const code = `import runpy
