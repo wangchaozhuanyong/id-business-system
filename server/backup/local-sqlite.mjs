@@ -256,7 +256,7 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
       } else if (domain === 'website-visits') {
         const snapshot = store.loadWebsiteVisitBackup();
         result = { version: snapshot.version, data: snapshot };
-      } else if (['recharge-codes', 'tenant-cards', 'order-sync', 'card-types', 'finance-rates'].includes(domain)) {
+      } else if (['recharge-codes', 'tenant-cards', 'order-sync', 'card-types', 'finance-rates', 'subscription-management'].includes(domain)) {
         result = store.featureDocument(domain);
       } else if (domain.startsWith(`${bitBrowserAddressDomain}:`)) {
         result = store.loadBitBrowserAddressBackup(domain);

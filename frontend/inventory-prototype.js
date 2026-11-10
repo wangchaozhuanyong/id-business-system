@@ -962,7 +962,7 @@
     const title = typeLabel(type);
     const actions = canManage ?
       (microsoft ? '' : usageReviewButton()) + button('本表设置', 'inventory-settings', '', 'settings') +
-      (type === 'claude' && localData && admin() ? button('历史入库', 'inventory-claude-history', '', 'upload') : '') +
+      (type === 'claude' && localData && admin() ? button('历史账号入库', 'inventory-claude-history', '', 'upload') : '') +
       button('批量导入', 'inventory-import', '', 'upload') +
       button(kind === 'account' ? '新增账号' : '新增邮箱', 'inventory-add', 'primary', 'plus') : '';
     let body;
@@ -1006,10 +1006,10 @@
           render: (asset) =>
             textAction(displayIdentity(asset), 'inventory-detail', `data-id="${esc(asset.id)}" data-table-value-preview`, 'table-value-ellipsis')
         },
+        ...(kind === 'account' ? [{ id: 'businessOwner', label: '归属人',
+          render: asset => esc(accountSummaries.get(asset.id)?.businessOwner?.name || '待核对') }] : []),
         ...(type === 'claude' && assets.some(asset => asset.claudeHistory) ? [
-          { id: 'claudeHistoryState', label: '历史登记状态', render: asset => esc(claudeHistoryStates[asset.claudeHistory?.phase] || '—') },
-          { id: 'claudeHistoryPlan', label: '历史套餐', render: asset => esc(asset.claudeHistory?.plan || '—') },
-          { id: 'claudeHistoryExpiry', label: '历史到期时间', render: asset => esc(asset.claudeHistory?.expiry?.replace('T', ' ') || '—') }
+          { id: 'claudeHistoryState', label: '历史登记状态', render: asset => esc(claudeHistoryStates[asset.claudeHistory?.phase] || '—') }
         ] : []),
         {
           id: 'password',
@@ -1021,12 +1021,7 @@
         },
         ...(personalAccount(type) ? [
           { id: 'loginMethod', label: '登录方式', render: asset => esc(choiceLabel(grokLoginOptions, asset.loginMethod)) },
-          { id: 'customer', label: '当前客户', render: asset => esc(accountSummaries.get(asset.id)?.customer || '未分配') },
-          { id: 'subscription', label: '套餐与到期', render: asset => {
-            const summary = accountSummaries.get(asset.id);
-            const order = summary?.orders?.find(row => summary.currentOrderIds?.includes(row.id));
-            return esc(order ? [order.plan, order.expiry].filter(Boolean).join(' · ') : '—');
-          } }
+          { id: 'customer', label: '当前客户', render: asset => esc(accountSummaries.get(asset.id)?.customer || '未分配') }
         ] : []),
         ...(microsoft ? [
           { id: 'loginMode', label: '登录方式', render: (asset) => esc(choiceLabel(microsoftLoginModes, asset.microsoftSecurity?.loginMode)) },
@@ -2129,11 +2124,7 @@
         ['历史认证租户', kyc?.tenant || '未记录'], ['认证来源订单', kyc?.orderNo || '未记录']] : [])];
     const columns = [
       { id: 'orderNo', label: '订单编号' }, { id: 'customer', label: '历史客户' },
-      ...(personalAccount(asset.type) ? [{ id: 'plan', label: '套餐' },
-        { id: 'entitlementStatus', label: '权益核对', render: row => esc(row.cancelled ? '已撤单' :
-          { active: '已确认开通', pending: '待核对', failed: '开通失败' }[row.entitlementStatus] || '—') }] : []),
-      { id: 'businessType', label: '业务类型' }, { id: 'start', label: '订阅时间' },
-      { id: 'expiry', label: '到期时间' }, { id: 'payment', label: '付款方式' },
+      { id: 'businessType', label: '业务类型' }, { id: 'payment', label: '付款方式' },
       { id: 'paymentId', label: '付款账号／尾号' },
       { id: 'paidAmount', label: '原代付金额', render: row => esc([row.paidAmount, row.paidCurrency].filter(Boolean).join(' ') || '待补充') },
       { id: 'paidConfirmed', label: '付款确认', render: row => esc(row.paidConfirmed ? '已确认' : '待核对') },
@@ -2250,15 +2241,9 @@
       [isAccount(asset) ? '注册国家' : '国家地区', asset.country || '未填写'],
       ...(usesAccountLocation(asset.type) ? [[asset.type === 'claude' ? '注册城市' : '注册地区／城市', asset.city || '未填写']] : []),
       ['来源渠道', asset.source || '未填写'],
+      ...(stockType(asset.type) ? [['归属人', accountSummaries.get(asset.id)?.businessOwner?.name || '待核对']] : []),
       ['账号状态', { normal: asset.status, dead: '死号', unlocking: '解封中' }[asset.health]],
-      ...(asset.claudeHistory ? [
-        ['历史登记状态', claudeHistoryStates[asset.claudeHistory.phase]],
-        ...(asset.claudeHistory.plan ? [
-          ['历史套餐', asset.claudeHistory.plan],
-          ['历史开通时间', asset.claudeHistory.start.replace('T', ' ')],
-          ['历史到期时间', asset.claudeHistory.expiry.replace('T', ' ')]
-        ] : [])
-      ] : []),
+      ...(asset.claudeHistory ? [['历史登记状态', claudeHistoryStates[asset.claudeHistory.phase]]] : []),
       [
         '使用状态',
         accountSummaries.get(asset.id)?.label || { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[asset.inventoryState]
@@ -2346,7 +2331,9 @@
   function assetMore(id, node) {
     const asset = assetById(id);
     if (!asset) return;
-    api.openActionMenu(node, `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
+    const ownershipAction = stockType(asset.type) && localData && admin()
+      ? button('设置归属人', 'inventory-account-owner', '', '', `data-id="${esc(id)}"`) : '';
+    api.openActionMenu(node, ownershipAction + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
   function submissionPanel(accountEntry = false) {
     const choices = accountEntry ? accountSubmissionTypes : mailboxSubmissionTypes();
@@ -2433,22 +2420,27 @@
     try { return value ? parseRegistrationProxy(value) : {}; } catch { return {}; }
   }
   function openClaudeHistoryIntake() {
-    if (!localData || !admin() || api.state.route !== 'accounts/claude') return;
+    if (!localData || !admin() || !['accounts/claude', 'subscriptions/claude'].includes(api.state.route)) return;
     saveDrafts();
     preparedClaudeHistory = null;
-    const header = claudeHistoryFields.map(([label]) => label).join('\t');
-    const content = draft(claudeHistoryKey)[claudeHistoryContentId] ?? header + '\n';
-    showDrawer('Claude 历史入库', '登记自有 Claude 账号的开通、养号或死号历史。',
-      `<form id="${claudeHistoryKey}-form" data-inventory-draft="${claudeHistoryKey}" novalidate><div class="form-grid">${
+    const subscription = api.state.route === 'subscriptions/claude';
+    const fields = subscription ? claudeHistoryFields : claudeHistoryFields.filter(([, key]) => !['plan', 'start', 'expiry'].includes(key));
+    const draftKey = claudeHistoryKey + (subscription ? ':subscription' : ':account');
+    const header = fields.map(([label]) => label).join('\t');
+    const content = draft(draftKey)[claudeHistoryContentId] ?? header + '\n';
+    showDrawer(subscription ? 'Claude 订阅历史入库' : 'Claude 历史账号入库', subscription
+      ? '登记已开通的 Claude 历史订阅，不生成订单。' : '登记养号中或死号的历史账号。',
+      `<form id="${claudeHistoryKey}-form" data-history-kind="${subscription ? 'subscription' : 'account'}" data-inventory-draft="${draftKey}" novalidate><div class="form-grid">${
         wide('历史资料', claudeHistoryContentId, area(claudeHistoryContentId, content, '', 8), true,
-          '按表头粘贴表格或 CSV，最多 100 条。日期写为 YYYY-MM-DD 或 YYYY-MM-DD HH:mm。已开通填写套餐及开通、到期时间，缺失的其他资料留空。来源备注可填写原表位置。')
+          subscription ? '按表头粘贴表格或 CSV，仅登记已开通账号，填写套餐及开通、到期时间。' : '按表头粘贴表格或 CSV，登记状态填写养号中或死号。订阅历史请到订阅管理登记。')
       }</div><div id="${claudeHistoryKey}-review" class="section-gap" aria-live="polite"></div></form>`,
       button('取消', 'inventory-close') + button('预检资料', 'inventory-claude-history-preview') +
       `<button class="button primary" form="${claudeHistoryKey}-form" type="submit" disabled>确认入库</button>`,
-      claudeHistoryKey);
+      draftKey);
   }
   function claudeHistoryFormCurrent(form, content) {
-    return form.closest('#drawer[open]') && api.state.route === 'accounts/claude' &&
+    return form.closest('#drawer[open]') && api.state.route ===
+      (form.dataset.historyKind === 'subscription' ? 'subscriptions/claude' : 'accounts/claude') &&
       form.elements.namedItem(claudeHistoryContentId)?.value === content;
   }
   function claudeHistorySubmitButton() {
@@ -2470,13 +2462,19 @@
     } catch {
       return api.setError(claudeHistoryContentId, '请检查 CSV 引号和列格式');
     }
+    const fields = form.dataset.historyKind === 'subscription' ? claudeHistoryFields :
+      claudeHistoryFields.filter(([, key]) => !['plan', 'start', 'expiry'].includes(key));
     const labels = lines.shift();
-    if (labels?.length !== claudeHistoryFields.length ||
-        claudeHistoryFields.some(([label], index) => labels[index].trim() !== label) ||
-        !lines.length || lines.length > 100 || lines.some(line => line.length > claudeHistoryFields.length))
+    if (labels?.length !== fields.length ||
+        fields.some(([label], index) => labels[index].trim() !== label) ||
+        !lines.length || lines.length > 100 || lines.some(line => line.length > fields.length))
       return api.setError(claudeHistoryContentId, '请保留完整表头并填写 1 至 100 条账号资料');
 
-    const rows = lines.map(line => Object.fromEntries(claudeHistoryFields.map(([, field], index) => [field, line[index] || ''])));
+    const rows = lines.map(line => Object.fromEntries(fields.map(([, field], index) => [field, line[index] || ''])));
+    if (rows.some(row => form.dataset.historyKind === 'subscription'
+      ? row.state.trim() !== '已开通' : !['养号中', '死号'].includes(row.state.trim())))
+      return api.setError(claudeHistoryContentId, form.dataset.historyKind === 'subscription'
+        ? '订阅历史只登记已开通账号' : '账号历史只登记养号中或死号');
     api.setError(claudeHistoryContentId, '');
     form.dataset.checking = 'true';
     review.textContent = '正在预检历史资料…';
@@ -2486,8 +2484,10 @@
       preparedClaudeHistory = { form, content, inputRows: rows, ...result };
       review.innerHTML = table([
         { id: 'line', label: '序号' }, { id: 'email', label: '邮箱' }, { id: 'state', label: '登记状态' },
-        { id: 'plan', label: '套餐' }, { id: 'registered', label: '注册时间' }, { id: 'start', label: '开通时间' },
-        { id: 'expiry', label: '到期时间' }, { id: 'result', label: '核对结果' }, { id: 'error', label: '待修正' }
+        { id: 'registered', label: '注册时间' },
+        ...(form.dataset.historyKind === 'subscription' ? [
+          { id: 'plan', label: '套餐' }, { id: 'start', label: '开通时间' }, { id: 'expiry', label: '到期时间' }
+        ] : []), { id: 'result', label: '核对结果' }, { id: 'error', label: '待修正' }
       ], result.rows, '', 'claude-history-preview');
       const invalid = result.rows.some(row => row.error);
       submit.disabled = invalid || !result.pending;
@@ -2523,10 +2523,10 @@
           if (currentActor().id !== actor.id) return;
           applyCommittedInventory(result.inventory);
           if (claudeHistoryFormCurrent(form, prepared.content)) {
-            finishDrawer(claudeHistoryKey);
+            finishDrawer(form.dataset.inventoryDraft);
             api.render();
-          } else if (api.state.drafts.get(claudeHistoryKey)?.[claudeHistoryContentId] === prepared.content) {
-            api.state.drafts.delete(claudeHistoryKey);
+          } else if (api.state.drafts.get(form.dataset.inventoryDraft)?.[claudeHistoryContentId] === prepared.content) {
+            api.state.drafts.delete(form.dataset.inventoryDraft);
           }
           api.notify('Claude 历史入库 ' + result.imported + ' 条，已有 ' + result.reused + ' 条');
         } catch (error) {
@@ -4167,6 +4167,7 @@
     else if (action === 'inventory-edit') assetEditor(id);
     else if (action === 'inventory-detail') assetDetail(id);
     else if (action === 'inventory-more') assetMore(id, node);
+    else if (action === 'inventory-account-owner') void api.modules.subscriptionManagement?.openAccountOwner(id);
     else if (action === 'inventory-account-lifecycle') void openAccountLifecycle(id, node.dataset.operation);
     else if (action === 'inventory-lifecycle-review') void openAccountLifecycle(id, node.dataset.operation, true);
     else if (action === 'inventory-lifecycle-order') api.go(`orders/detail/${encodeURIComponent(id)}`);

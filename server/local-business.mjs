@@ -57,6 +57,7 @@ import { attributeInventory, defaultInventoryRegistrationTimes } from './invento
 import { checkAccountLocations } from './inventory-account-location.mjs';
 import { cardTypeDocument, cardTypeSnapshot } from './card-management.mjs';
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
+import { ownerForSubscriptionAccount, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkAppleOrder, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee,
@@ -186,7 +187,7 @@ const sessionEventLabels = {
 };
 const orderFeatureDomains = new Set([
   'recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument,
-  'system-monitoring-config', 'system-monitoring-state'
+  'system-monitoring-config', 'system-monitoring-state', subscriptionDomain
 ]);
 const orderFeatureAuditLabels = {
   monitor_settings: '保存监控与通知设置',
@@ -245,6 +246,7 @@ const auditDomainLabels = {
   'tenant-cards': '租户银行卡',
   'order-sync': '代充订单同步',
   'finance-rates': '汇率采集',
+  'subscription-management': '订阅管理',
   'system-monitoring-config': '监控与通知',
   'system-monitoring-state': '监控中心'
 };
@@ -297,7 +299,7 @@ export function pageAuditRows(rows, search) {
   return { items: matches.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize, snapshot };
 }
 
-export function attributeCommerce(data, previous, actor, owners) {
+export function attributeCommerce(data, previous, actor, owners, subscriptions) {
   checkTenantTransferHistory(data.tenants, previous?.tenants);
   const attributeNew = (rows = [], before = []) => {
     const known = new Set(Array.isArray(before) ? before.map((row) => row?.id) : []);
@@ -314,6 +316,13 @@ export function attributeCommerce(data, previous, actor, owners) {
       const prior = before.get(row.id);
       const tenantChanged = key === 'tenants' && (!prior || !isDeepStrictEqual(row, prior));
       if (key === 'orders' || key === 'tenants') {
+        const accountOwner = key === 'orders' && !prior && ownerForSubscriptionOrder(row, subscriptions);
+        if (accountOwner) {
+          if (row.ownerId && row.ownerId !== accountOwner.ownerId)
+            throw new LocalDataError(409, '账号归属已变化，请重新读取并核对订单归属');
+          row.ownerId = accountOwner.ownerId;
+          row.owner = accountOwner.ownerName;
+        }
         const assign = key === 'tenants' ? assignTenantOwner : assignOrderOwner;
         const error = assign(row, prior, actor, owners);
         if (error) throw new LocalDataError(error.status, error.message);
@@ -337,6 +346,14 @@ export function attributeCommerce(data, previous, actor, owners) {
     }
   }
   attributeNew(data.logs, previous?.logs);
+}
+
+function accountSummariesWithOwners(inventory, commerce, subscriptions) {
+  const accounts = new Map((inventory?.accounts || []).map(account => [account.id, account]));
+  return accountLifecycleSummaries(inventory, commerce).map(summary => {
+    const owner = ownerForSubscriptionAccount(accounts.get(summary.assetId), subscriptions);
+    return owner ? { ...summary, businessOwner: { id: owner.ownerId, name: owner.ownerName } } : summary;
+  });
 }
 
 class LocalDataError extends Error {
@@ -832,6 +849,33 @@ export function createLocalBusinessStore(databasePath) {
       checkDomain(domain);
       return readDocument(domain);
     },
+    withSubscriptions(actor, operation) {
+      if (!actor?.id || !['admin', 'super'].includes(actor.role))
+        throw new LocalDataError(403, '只有管理员可以查看或管理订阅资料');
+      return writeTransaction(() => {
+        const snapshots = {
+          commerce: readDocument('commerce'), inventory: readDocument('inventory'),
+          mailboxes: readDocument(managedMailboxDomain), subscriptions: readDocument(subscriptionDomain)
+        };
+        const audit = (action, ids) => {
+          const label = { view: '查看订阅资料', copy: '复制订阅资料' }[action];
+          if (!label) throw new TypeError('未知订阅资料操作');
+          for (const id of ids)
+            log.run(new Date().toISOString(), subscriptionDomain, `subscription_${action}`,
+              auditSummary(label, actor, id), snapshots.subscriptions.version);
+        };
+        let saved = false;
+        const save = (data, action, id) => {
+          const label = { subscription_owner: '设置账号归属', subscription_confirm: '确认订阅已开通' }[action];
+          if (saved || !label) throw new TypeError('未知订阅资料保存');
+          saved = true;
+          const version = snapshots.subscriptions.version + 1;
+          put.run(subscriptionDomain, version, encrypt(key, subscriptionDomain, version, JSON.stringify(data)));
+          log.run(new Date().toISOString(), subscriptionDomain, action, auditSummary(label, actor, id), version);
+        };
+        return operation(snapshots, audit, save);
+      });
+    },
     withClaudeGoogleSubscriptions(actor, operation) {
       if (!actor?.id || !['admin', 'super'].includes(actor.role))
         throw new LocalDataError(403, '只有管理员可以查看或复制订阅资料');
@@ -880,7 +924,7 @@ export function createLocalBusinessStore(databasePath) {
           auditSummary('读取含微软邮箱的库存资料', actor), snapshot.version);
       }
       return { ...snapshot, ...(review.length && { usageReview: review }), commerceVersion: commerce.version,
-        accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data) };
+        accountSummaries: accountSummariesWithOwners(snapshot.data, commerce.data, readDocument(subscriptionDomain).data) };
     },
     saveAccountLifecycle(body, actor) {
       return writeTransaction(() => {
@@ -1048,7 +1092,8 @@ export function createLocalBusinessStore(databasePath) {
           auditSummary('更正库存使用关联', operator, assetId), version);
         const usageReview = usageReviewRows(inspectInventoryUsage(snapshot.data, commerce, now.getTime()));
         return { version, data: snapshot.data, usageReview,
-          commerceVersion: readDocument('commerce').version, accountSummaries: accountLifecycleSummaries(snapshot.data, commerce) };
+          commerceVersion: readDocument('commerce').version,
+          accountSummaries: accountSummariesWithOwners(snapshot.data, commerce, readDocument(subscriptionDomain).data) };
       });
     },
     appendWebsiteVisit(event, time) {
@@ -1550,15 +1595,15 @@ export function createLocalBusinessStore(databasePath) {
           checkCustomerTagAssignments(
             priorCommerce, commerce, (incoming.get('settings') ?? current('settings'))?.customerTags
           );
+          const renewalError = checkInventoryRenewals(priorCommerce, commerce, inventory);
+          if (renewalError) throw new LocalDataError(409, renewalError);
           if (actor) {
             let owners = [];
             try { owners = readOrderOwners?.() || []; }
             catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
-            attributeCommerce(commerce, priorCommerce, actor, owners);
+            attributeCommerce(commerce, priorCommerce, actor, owners, current(subscriptionDomain));
           } else checkTenantTransferHistory(commerce.tenants, priorCommerce?.tenants);
           const { action } = writes.find((write) => write.domain === 'commerce');
-          const renewalError = checkInventoryRenewals(priorCommerce, commerce, inventory);
-          if (renewalError) throw new LocalDataError(409, renewalError);
           const oldOrders = priorCommerce?.orders || [];
           const priorById = new Map(oldOrders.map((row) => [row.id, row]));
           const nextById = new Map(commerce.orders.map((row) => [row.id, row]));
@@ -1788,7 +1833,7 @@ export function createLocalBusinessStore(databasePath) {
             ? usageReviewRows(inspectInventoryUsage(inventory, commerce, Date.parse(now)))
             : [];
           result.push({ domain, version: next, data, ...(review.length && { usageReview: review }),
-            ...(domain === 'inventory' && { accountSummaries: accountLifecycleSummaries(data, commerce),
+            ...(domain === 'inventory' && { accountSummaries: accountSummariesWithOwners(data, commerce, current(subscriptionDomain)),
               commerceVersion: writes.find(write => write.domain === 'commerce')?.version + 1 || readDocument('commerce').version }) });
         }
         if (initialTenantCards.additions.length) {
@@ -1955,7 +2000,7 @@ export function createLocalBusinessStore(databasePath) {
       for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
-        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates', cardTypeDocument]) versions[scope] = version(scope);
+        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates', cardTypeDocument, subscriptionDomain]) versions[scope] = version(scope);
         versions['tools/mailbox-pool'] = version(managedMailboxDomain);
         versions['tools/website-visits'] = version(websiteVisitsDomain);
         versions['apple-relay'] = String(relayRevision.get().version);

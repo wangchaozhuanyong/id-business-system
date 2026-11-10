@@ -2505,6 +2505,7 @@
   }
   let orderOwners = [];
   const orderOwnerLoads = new WeakMap();
+  const subscriptionOwnerLookups = new WeakMap();
   function orderOwnerChoices(selected) {
     const rows = new Map([currentOperator(), ...orderOwners].filter(row => row.id).map(row => [row.id, row]));
     const choices = [...rows.values()].map(row => [row.id,
@@ -2525,6 +2526,89 @@
       A.button('刷新', 'commerce-order-owner-refresh')).replace(`name="commerce-${id}"`, 'name="commerce-ownerId"'),
       true, tenant ? '可选择启用的系统员工；录入人仍记录当前登录账号。' : '可代员工录单，录入人仍记录当前登录账号。');
   }
+  function applyLinkedAccountOwner(form) {
+    if (!form || form.elements['commerce-id']?.value) return;
+    const select = form.elements['commerce-ownerId'];
+    if (!select || select.tagName !== 'SELECT') return;
+    const inventory = A.modules.inventory;
+    const accountId = form.elements['commerce-accountId']?.value;
+    const product = form.elements['commerce-product']?.value;
+    const customerId = form.elements['commerce-customerId']?.value;
+    const summary = accountId ? inventory?.accountSummary?.(accountId) :
+      inventory?.accountSummaryForEmail?.(form.elements['commerce-email']?.value, product);
+    const owner = summary?.businessOwner;
+    if (!owner || (!accountId && (!customerId || summary.customerId !== customerId))) return;
+    form.dataset.accountOwnerId = owner.id;
+    if (![...select.options].some(option => option.value === owner.id))
+      select.add(new Option(`${owner.name} · 账号归属`, owner.id));
+    select.value = owner.id;
+    const search = select.closest('.commerce-search-picker')?.querySelector('[data-commerce-picker]');
+    if (search) filterPicker(search);
+  }
+  function lookupLinkedAccountOwner(form, delay = 0) {
+    if (!form || form.elements['commerce-id']?.value || !localData?.authRequired || !localData.subscriptionOwnerLookup) return;
+    const select = form.elements['commerce-ownerId'];
+    if (!select || select.tagName !== 'SELECT') return;
+    const product = form.elements['commerce-product']?.value || '';
+    let email = form.elements['commerce-email']?.value.trim() || '';
+    let xHandle = form.elements['commerce-xHandle']?.value.trim() || '';
+    let loginMethod = form.elements['commerce-loginMethod']?.value || '';
+    if (product === 'Grok' && email.startsWith('@')) { xHandle = email; email = ''; loginMethod = 'x'; }
+    const order = { product, email, xHandle, loginMethod,
+      platformAccountId: form.elements['commerce-platformAccountId']?.value || '',
+      accountId: form.elements['commerce-accountId']?.value || '',
+      customerId: form.elements['commerce-customerId']?.value || '' };
+    const prior = subscriptionOwnerLookups.get(form);
+    clearTimeout(prior?.timer);
+    delete form.dataset.accountOwnerId;
+    delete form.dataset.accountOwnerError;
+    delete form.dataset.accountOwnerPending;
+    if ((!email && !xHandle) || (!order.customerId && !order.accountId)) {
+      subscriptionOwnerLookups.delete(form);
+      return;
+    }
+    const signature = JSON.stringify(order);
+    if (prior?.signature === signature && prior.done && !prior.error) {
+      if (prior.ownerId) form.dataset.accountOwnerId = prior.ownerId;
+      if (prior.error) form.dataset.accountOwnerError = 'yes';
+      return;
+    }
+    const state = { signature, selected: select.value, timer: null, done: false };
+    subscriptionOwnerLookups.set(form, state);
+    form.dataset.accountOwnerPending = 'yes';
+    state.timer = setTimeout(async () => {
+      try {
+        const result = await localData.subscriptionOwnerLookup(order);
+        if (!form.isConnected || subscriptionOwnerLookups.get(form) !== state) return;
+        if (typeof result.ownerId !== 'string' || typeof result.ownerName !== 'string')
+          throw new Error('账号归属响应无效');
+        state.ownerId = result.ownerId;
+        if (result.ownerId) {
+          form.dataset.accountOwnerId = result.ownerId;
+          if (select.value === state.selected) {
+            if (![...select.options].some(option => option.value === result.ownerId))
+              select.add(new Option(`${result.ownerName} · 账号归属`, result.ownerId));
+            select.value = result.ownerId;
+            const search = select.closest('.commerce-search-picker')?.querySelector('[data-commerce-picker]');
+            if (search) filterPicker(search);
+            saveDrafts();
+          } else if (select.value !== result.ownerId)
+            A.setError('commerce-ownerId', '该账号已有归属人，请重新核对');
+        }
+      } catch {
+        if (form.isConnected && subscriptionOwnerLookups.get(form) === state) {
+          state.error = true;
+          form.dataset.accountOwnerError = 'yes';
+          A.setError('commerce-ownerId', '账号归属读取失败，请重新选择账号后重试');
+        }
+      } finally {
+        if (form.isConnected && subscriptionOwnerLookups.get(form) === state) {
+          state.done = true;
+          delete form.dataset.accountOwnerPending;
+        }
+      }
+    }, delay);
+  }
   async function loadOrderOwners(form, retry = false) {
     const select = form?.querySelector('select#commerce-ownerId, select#commerce-contact-ownerId');
     if (!select || !localData?.authRequired || !localData.orderOwners ||
@@ -2541,7 +2625,9 @@
       orderOwners = items;
       const selected = select.value;
       select.innerHTML = A.options(orderOwnerChoices(selected), selected);
-      const valid = selected === currentOperator().id || items.some(row => row.id === selected);
+      if (select.id === 'commerce-ownerId') applyLinkedAccountOwner(form);
+      const current = select.value;
+      const valid = current === currentOperator().id || items.some(row => row.id === current);
       if (!valid) select.selectedOptions[0].disabled = true;
       filterPicker(select.closest('.commerce-search-picker').querySelector('[data-commerce-picker]'));
       A.setError(select.id, valid ? '' : '所选归属人已停用或不存在，请重新选择');
@@ -5660,8 +5746,11 @@
       if (message) first ||= `commerce-${name}`;
     };
     const auto = automaticOrder(existing);
-    if (!existing) error('ownerId', order.ownerId && (order.ownerId === currentOperator().id ||
-      orderOwners.some(row => row.id === order.ownerId)) ? '' : '请选择可用的订单归属人');
+    if (!existing) error('ownerId', form.dataset.accountOwnerPending ? '正在核对账号归属，请稍候' :
+      form.dataset.accountOwnerError ? '账号归属读取失败，请重新选择账号后重试' :
+      form.dataset.accountOwnerId && form.dataset.accountOwnerId !== order.ownerId ? '请选择账号已登记的归属人' :
+      order.ownerId && (order.ownerId === currentOperator().id || orderOwners.some(row => row.id === order.ownerId))
+        ? '' : '请选择可用的订单归属人');
     const optionalEmail = optionalOrderEmail(order.product, order.businessType, order.claudeRenewalId);
     const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email);
     const validHandle = /^@[a-zA-Z0-9_]{1,15}$/.test(order.xHandle || '');
@@ -8062,6 +8151,10 @@
       }
       if (node.id === 'commerce-start') updateOrderPeriod(form);
       updateOrderVisibility(form);
+      applyLinkedAccountOwner(form);
+      if (['commerce-product', 'commerce-businessType', 'commerce-customerId', 'commerce-accountId',
+        'commerce-personalHistoryId', 'commerce-email', 'commerce-loginMethod', 'commerce-xHandle'].includes(node.id))
+        lookupLinkedAccountOwner(form);
       if (['commerce-product', 'commerce-plan', 'commerce-businessType', 'commerce-payment', 'commerce-paidCurrency', 'commerce-saleCurrency'].includes(node.id))
         refreshOrderAmountReferences(form);
       for (const search of form.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
@@ -8095,7 +8188,11 @@
     }
     if (node.closest('form[data-commerce-draft]')) {
       if (node.id === 'commerce-proCardNumber') resetProPaymentChecks(node.form);
-      if (node.id === 'commerce-email') updateStockSearch(node.closest('#commerce-order-form'));
+      if (node.id === 'commerce-email') {
+        updateStockSearch(node.closest('#commerce-order-form'));
+        applyLinkedAccountOwner(node.closest('#commerce-order-form'));
+      }
+      if (['commerce-email', 'commerce-xHandle'].includes(node.id)) lookupLinkedAccountOwner(node.closest('#commerce-order-form'), 300);
       if (node.id === 'commerce-saleAmount') node.form.elements['commerce-saleManual'].value = 'yes';
       if (node.id === 'commerce-paidAmount') node.form.elements['commerce-paidManual'].value = 'yes';
       if (node.hasAttribute?.('data-paid-price')) node.form.dataset.paidPriceDirty = 'yes';
@@ -8459,6 +8556,8 @@
       for (const form of document.querySelectorAll('#commerce-order-form')) {
         if (personalProduct(form.elements['commerce-product'].value)) updateOrderVisibility(form);
         else updateCustomerEmailHistory(form);
+        applyLinkedAccountOwner(form);
+        lookupLinkedAccountOwner(form);
       }
       for (const search of document.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
       for (const control of document.querySelectorAll('.commerce-entry-layout input:not([type="hidden"]):not([type="checkbox"]), .commerce-entry-layout select:not([hidden])')) {
