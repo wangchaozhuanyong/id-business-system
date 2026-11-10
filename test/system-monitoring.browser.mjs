@@ -25,11 +25,12 @@ const fixtures = Array.from({ length: 12 }, (_, index) => ({
 }));
 const output = process.env.ID_MONITORING_QA_OUTPUT;
 
-async function prepare(browser, width, role = 'super') {
+async function prepare(browser, width, role = 'super', phase = 'native') {
   const context = await browser.newContext({ viewport: { width, height: 940 }, locale: 'zh-CN' });
   const offline = await interceptDesign(context, { localFixtures: {},
     actor: { id: 'fixture-monitor-' + role, name: '合成管理员', role } });
   const records = structuredClone(fixtures), settings = config(), writes = [];
+  settings.legacy.phase = phase;
   let failSave = false, failRead = false;
   await context.route('**/api/local/system-monitoring*', async request => {
     const req = request.request(), url = new URL(req.url());
@@ -54,7 +55,7 @@ async function prepare(browser, width, role = 'super') {
     if (failRead) return request.fulfill({ status: 503, json: { error: '合成读取失败' } });
     const tab = url.searchParams.get('tab'), page = Number(url.searchParams.get('page') || 1);
     if (tab === 'config') return request.fulfill({ json: settings });
-    if (tab === 'legacy') return request.fulfill({ json: { phase: 'managed' } });
+    if (tab === 'legacy') return request.fulfill({ json: { phase } });
     if (tab === 'deliveries') return request.fulfill({ json: { page: 1, total: 1, pageSize: 10,
       items: [{ id: 'receipt-fixture', label: '渠道测试', status: 'accepted', target: '运维接收人', at, attempts: 1, messageId: 421 }] } });
     const matched = url.searchParams.get('status') === 'resolved' ? [] : records;
@@ -65,7 +66,8 @@ async function prepare(browser, width, role = 'super') {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(7000);
-  return { page, context, offline, errors, writes, setFailSave(value) { failSave = value; }, setFailRead(value) { failRead = value; } };
+  return { page, context, offline, errors, writes, setLegacyStatus(value) { phase = value; },
+    setFailSave(value) { failSave = value; }, setFailRead(value) { failRead = value; } };
 }
 
 async function pageGeometry(page) {
@@ -180,17 +182,21 @@ test('监控设置保留普通草稿、清除离页密钥并分开投递和人�
   assert.deepEqual(offline.external, []);
 });
 
-test('接管后的原代充配置只提供统一设置入口，普通管理员仍可查看监控', { timeout: 30_000 }, async t => {
+async function assertNoRechargeTelegram(frame) {
+  await frame.getByRole('button', { name: '保存全局配置', exact: true }).waitFor();
+  assert.equal(await frame.locator('#telegram_bot_token').count(), 0);
+  assert.equal(await frame.getByRole('heading', { name: 'Telegram 通知', exact: true }).count(), 0);
+  assert.equal(await frame.getByRole('link', { name: '打开监控与通知' }).count(), 0);
+}
+
+test('接管后代充配置没有 Telegram 区块，普通管理员仍可查看监控', { timeout: 30_000 }, async t => {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
-  const { page, context, offline } = await prepare(browser, 1440);
+  const { page, context, offline } = await prepare(browser, 1440, 'super', 'managed');
   await page.goto(origin + '/#/online-recharge/chatgpt');
   await page.getByRole('button', { name: '系统配置', exact: true }).click();
   const frame = page.frameLocator('iframe[data-view="config"]:not([hidden])');
-  const link = frame.getByRole('link', { name: '打开监控与通知' });
-  await link.waitFor();
-  assert.equal(await link.getAttribute('href'), route);
-  assert.equal(await frame.locator('#telegram_bot_token').count(), 0);
+  await assertNoRechargeTelegram(frame);
   assert.deepEqual(offline.external, []);
   await context.close();
 
@@ -202,4 +208,98 @@ test('接管后的原代充配置只提供统一设置入口，普通管理员�
   await limited.page.getByRole('heading', { name: '代充付款待核实' }).waitFor();
   assert.equal(await limited.page.getByRole('button', { name: '登记已核实事件' }).count(), 0);
   assert.deepEqual(limited.errors, []);
+});
+
+test('接管前从系统设置打开原代充表单，沿用保存、测试及草稿', { timeout: 45_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
+    const { page, context, offline, errors, writes, setLegacyStatus } = await prepare(browser, width);
+    t.after(() => context.close());
+    const api = '/integrations/codexdaichong/api/admin/';
+    const original = {
+      bot_token: 'fixture-mask', admin_chat_id: '123456789', group_chat_id: '-1001234567890',
+      notify_admin: true, notify_group: false, on_success: false, on_failure: true, on_card_pool_empty: true
+    };
+    let native = { ...original };
+    const nativeWrites = [];
+    await context.route('**' + api + 'data', request => request.fulfill({
+      json: { success: true, stats: { total: 0, success: 0, failed: 0 }, config: {}, logs: [], telegram: native }
+    }));
+    await context.route(/\/integrations\/codexdaichong\/api\/admin\/telegram(?:\/test)?$/, async request => {
+      const req = request.request();
+      assert.equal(req.method(), 'POST');
+      const testMessage = new URL(req.url()).pathname.endsWith('/test');
+      const data = req.postDataJSON();
+      nativeWrites.push({ testMessage, data });
+      if (!testMessage) native = { ...data, bot_token: native.bot_token };
+      return request.fulfill({ json: { success: true, message: testMessage ? '离线测试回执' : '离线保存回执' } });
+    });
+
+    await page.goto(origin + '/#/online-recharge/chatgpt');
+    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    await page.getByRole('button', { name: '系统配置', exact: true }).click();
+    await assertNoRechargeTelegram(page.frameLocator('iframe[data-view="config"]:not([hidden])'));
+    if (width <= 900) await page.locator('#nav-toggle').click();
+    const sidebar = page.locator('#sidebar');
+    const link = sidebar.getByRole('link', { name: '监控与通知', exact: true });
+    if (!await link.count()) await sidebar.getByRole('button', { name: '系统设置', exact: true }).click();
+    await link.click();
+    await page.waitForURL(origin + route);
+    const open = page.getByRole('button', { name: '原代充 Telegram 设置' });
+    const drawer = page.locator('#drawer');
+    const frame = drawer.frameLocator('iframe');
+    const token = frame.getByLabel('Bot Token');
+    const chat = frame.getByLabel('管理员 Chat ID');
+    const failure = frame.getByRole('checkbox', { name: '开通失败时通知' });
+    const save = frame.getByRole('button', { name: '保存 Telegram 配置' });
+    const send = frame.getByRole('button', { name: '发送测试消息' });
+    const close = async () => {
+      await drawer.getByRole('button', { name: '关闭抽屉' }).click();
+      await drawer.locator('iframe').waitFor({ state: 'detached' });
+    };
+    await open.click();
+    await save.waitFor();
+    assert.equal(await token.inputValue(), '');
+    assert.match(await token.getAttribute('placeholder'), /已保存/);
+    assert.equal(await chat.inputValue(), original.admin_chat_id);
+    assert.equal(await frame.getByLabel('群组 Chat ID').inputValue(), original.group_chat_id);
+    assert.equal(await failure.isChecked(), true);
+    assert.equal(await frame.locator('.page-view:visible').count(), 0);
+    assert.equal(await save.evaluate(node => {
+      const doc = node.ownerDocument, { right, left } = node.getBoundingClientRect();
+      return doc.documentElement.scrollWidth <= doc.defaultView.innerWidth + 1 &&
+        left >= 0 && right <= doc.defaultView.innerWidth + 1 && doc.documentElement.dataset.idTheme ===
+        doc.defaultView.parent.document.documentElement.dataset.theme;
+    }), true);
+    assert.deepEqual(nativeWrites, []);
+
+    await chat.fill('123456790');
+    await token.fill('synthetic-secret');
+    await failure.uncheck();
+    await close();
+    await open.click();
+    await save.waitFor();
+    assert.equal(await chat.inputValue(), '123456790');
+    assert.equal(await failure.isChecked(), false);
+    assert.equal(await token.inputValue(), '');
+    await save.click();
+    await frame.getByText('离线保存回执').waitFor();
+    await send.click();
+    await frame.getByText('离线测试回执').waitFor();
+    assert.deepEqual(nativeWrites, [
+      { testMessage: false, data: { ...original, bot_token: '', admin_chat_id: '123456790', on_failure: false } },
+      { testMessage: true, data: {} }
+    ]);
+    assert.deepEqual(writes, []);
+    await close();
+
+    setLegacyStatus('switching');
+    await open.click();
+    await frame.getByText('代充通知已进入统一接管，请在监控与通知核对。').waitFor();
+    assert.equal(await save.isVisible(), false);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(offline.external, []);
+    await context.close();
+  }
 });
