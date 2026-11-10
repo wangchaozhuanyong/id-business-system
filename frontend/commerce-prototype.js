@@ -8946,14 +8946,6 @@
   window.IDDesignModules.push({
     id: 'commerce',
     matches,
-    onDataChanges(scopes) {
-      if (scopes.includes('card-types')) bankCardTypesLoaded = false;
-      if (S.route === subscriptionCardsRoute && ['card-types', 'finance-rates', 'settings'].some(scope => scopes.includes(scope)))
-        return loadSubscriptionCardEstimates(true);
-      const panel = $('#commerce-renewal-card-panel');
-      if (renewalCardDrawerCurrent(panel) && ['commerce', 'inventory', 'card-types', 'finance-rates', 'settings', 'order-cards']
-        .some(scope => scopes.includes(scope))) return loadRenewalCardDetails(panel);
-    },
     clearPageState() {
       clearRenewalCardSecrets();
       retentionRefreshFailed = false;
@@ -9039,6 +9031,7 @@
       }
     },
     async onDataChanges(scopes) {
+      if (scopes.includes('card-types')) bankCardTypesLoaded = false;
       if (S.route === customerLossRoute && (scopes.includes('commerce') || scopes.includes('inventory'))) {
         if (scopes.includes('commerce') && !scopes.includes('inventory') && orders.some(retentionStockOrder))
           await A.modules.inventory?.refreshLocalInventory?.({ keepContent: true });
@@ -9053,6 +9046,13 @@
           if (form) await loadPrices(form);
         }
       }
+      let updated = true;
+      if (S.route === subscriptionCardsRoute && ['card-types', 'finance-rates', 'settings'].some(scope => scopes.includes(scope)))
+        updated = (await loadSubscriptionCardEstimates(true)) !== false;
+      const panel = $('#commerce-renewal-card-panel');
+      if (renewalCardDrawerCurrent(panel) && ['commerce', 'inventory', 'card-types', 'finance-rates', 'settings', 'order-cards']
+        .some(scope => scopes.includes(scope)) && (await loadRenewalCardDetails(panel)) === false) updated = false;
+      if (!updated) return false;
     }
   });
   // Quote updates change only the displayed estimate, including while an amount is being edited.
