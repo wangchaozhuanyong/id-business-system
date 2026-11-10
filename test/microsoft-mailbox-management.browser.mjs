@@ -151,7 +151,8 @@ test('微软库存录入、失败重试、回读、编辑、关联、状态及�
   await close();
   for (const path of ['workspace/mail-extract', 'workspace/mail-submit', 'workspace/account-submit']) {
     await page.evaluate(path => { location.hash = '#/' + path; }, path);
-    await page.locator(`#main[data-layout-route="${path}"]`).waitFor();
+    const target = path.replace(/-submit$/, '-extract');
+    await page.locator(`#main[data-layout-route="${target}"]`).waitFor();
     assert.doesNotMatch(await main.innerText(), /微软邮箱/);
   }
   assert.deepEqual(f.errors, []);

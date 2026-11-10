@@ -24,6 +24,7 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
   });
   const page = await context.newPage(); page.setDefaultTimeout(5000); page.on('pageerror', e => errors.push(e.message));
   await page.goto(origin + '/#/workspace/mail-submit');
+  await page.locator('#inventory-extract-notes').fill('登记时保留右侧提取草稿');
   await page.locator('[data-action="inventory-add-type"][data-type="relay"]').click();
   const drawer = page.locator('#drawer[open]');
   assert.equal(await drawer.locator('#relay-parentId').inputValue(), parent.id, '只有一个可用主邮箱时自动选中');
@@ -39,6 +40,7 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
   await save(); await page.getByText('合成登记失败，请重试', { exact: true }).waitFor();
   assert.equal(await drawer.locator('#relay-note').inputValue(), '快捷单条合成资料');
   await save(); await page.locator('table[data-table="快捷隐藏邮箱录入结果"]').waitFor();
+  assert.equal(await page.locator('#inventory-extract-notes').inputValue(), '登记时保留右侧提取草稿');
   assert.equal(writes[1].parentId, parent.id); assert.equal(writes[1].batch, false);
   assert.equal(await page.locator('table[data-table="快捷隐藏邮箱录入结果"] tbody tr').count(), 1);
   await page.locator('[data-action="inventory-import"][data-type="relay"]').click();

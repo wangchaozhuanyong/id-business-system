@@ -218,7 +218,7 @@
       input('card-type-touched', v('card-type-touched'), 'type="hidden"')}${canManageOrders() ?
       A.button('管理类型', 'commerce-card-types', 'compact', '', 'aria-label="管理银行卡类型"') +
       A.button('设置所选卡类型', 'commerce-card-type-assign', 'compact', '', 'data-commerce-card-type-assign hidden') : ''}</div>`,
-      false, '可留空。订单所选类型独立保存，修改卡片分类请使用设置所选卡类型。', 'commerce-span-all', v('payment') !== '银行卡');
+      false, '可留空。订单所选类型独立保存，修改卡片分类请使用设置所选卡类型。', '', v('payment') !== '银行卡');
   }
   function cardTypeDrawerReturn(onClose) {
     if (bankCardTypeReturn) return;
@@ -564,6 +564,7 @@
     localVersion = response.version;
     applyCommerceSnapshot(response.data);
     localPhase = 'ready';
+    updateEntryRecords();
   }
   let commerceLoad, orderSyncRead;
   function loadLocalCommerce(retry = false, refresh = false) {
@@ -2809,7 +2810,7 @@
         'commerce-contact-entry-tab',
         'aria-label="录入类型"'
       );
-      return `<section class="panel form-panel">${entryTabs}${body}<div class="form-footer">${footer}</div></section>`;
+      return entryWorkspace(`<section class="panel form-panel">${entryTabs}${body}<div class="form-footer">${footer}</div></section>`, tenant ? 'tenant' : 'customer');
     }
     A.openDrawer(
       `${row ? '编辑' : '新增'}${tenant ? '租户' : '客户'}`,
@@ -3749,8 +3750,8 @@
         false, '', '', !apple || v('businessType') === '续费') +
       field('余额上限（USD）', 'appleMatchMax', input('appleMatchMax', match[1], 'inputmode="decimal" placeholder="留空不限"'),
         false, '', '', !apple || v('businessType') === '续费')) +
-      `</div>` +
       orderCardTypeField(v, existing) +
+      `</div>` +
       `<div class="order-financial-groups commerce-span-all">
         <div class="order-financial-group">
           ${orderAmountHeading('代付', true, v)}
@@ -3991,7 +3992,7 @@
     const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${previous?.product === 'Claude Pro' ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${personalProduct(product) ? '' : section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT' || !showProPeople(activeProMode))}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', v('correctionReason')), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div><div class="form-section"><div class="section-title-row"><h2>费用核对</h2>${A.titleInfo('费用核对', localData ? '保存时记录原币金额与费用规则版本。在订单详情的「成本与汇率」登记有效快照后核算。' : '成本、币种与演示汇率在保存时冻结为订单快照；苹果余额只按已确认实际支出记账。', 'commerce-cost-explanation')}</div><div id="commerce-cost-preview">${costPreview(base)}</div></div></form>`;
     const footer = `<span class="footnote">${personalProduct(product) ? '可分别确认实际代付、实收和开通。' : localData ? '订单保存到数据库。' : '订单独立保存；确认代付才记苹果余额支出。'}</span>${A.button(personalProduct(product) ? '保存待核对' : '保留待补全', 'commerce-order-pending')}<button form="commerce-order-form" type="submit" class="button primary">核对并保存</button>`;
     if (main)
-      return `<section class="panel form-panel">${html}<div class="form-footer">${footer}</div></section>`;
+      return entryWorkspace(`<section class="panel form-panel">${html}<div class="form-footer">${footer}</div></section>`, 'order', product);
     A.openDrawer(
       previous ? 'Claude 续费新订单' : '修改订单资料',
       previous
@@ -4149,6 +4150,73 @@
     const id = route.slice(renewalOrderPrefix.length);
     return renewalProjection().reminders.find((row) =>
       encodeURIComponent(row.order.id) === id && row.state !== 'processed');
+  }
+  function entryRecordRows(kind, product) {
+    const rows = kind === 'order' ? orders.filter(row => currencyFamily(row.product) === currencyFamily(product))
+      : kind === 'tenant' ? tenants : customers;
+    return [...rows].sort((a, b) =>
+      (parseDate(b.createdAt) || 0) - (parseDate(a.createdAt) || 0) || String(b.id).localeCompare(String(a.id))
+    ).slice(0, 10);
+  }
+  function entryRecordList(kind, product) {
+    const rows = entryRecordRows(kind, product);
+    if (!rows.length) return '<p class="entry-record-empty">暂无录入记录</p>';
+    const today = now().slice(0, 10);
+    const yesterday = beijingClock.format(parseDate(today + ' 12:00') - 86_400_000).slice(0, 10);
+    const groups = new Map();
+    for (const row of rows) {
+      const timestamp = parseDate(row.createdAt);
+      const date = Number.isFinite(timestamp) ? beijingClock.format(timestamp) : '';
+      const day = date.slice(0, 10);
+      const group = day === today ? '今日' : day === yesterday ? '昨日' : day || '时间未记录';
+      if (!groups.has(group)) groups.set(group, []);
+      const customer = kind === 'order' ? customers.find(customer => customer.id === row.customerId) : row;
+      const name = customer?.name || (kind === 'order' ? '待补充客户' : '未命名资料');
+      const contacts = customerChannels.flatMap(([key, label]) => {
+        const saved = kind === 'order' ? row[key === 'phone' ? 'customerPhone' : key] || customer?.[key] : row[key];
+        return saved ? [`<div><dt>${E(label === '客户微信' ? '微信' : label)}</dt><dd>${E(saved)}</dd></div>`] : [];
+      }).join('');
+      const plan = kind === 'order' ? `<div class="entry-record-plan">${E([row.product, row.plan].filter(Boolean).join(' · '))}</div>` : '';
+      const action = kind === 'order' ? 'commerce-order-detail' : 'commerce-contact-detail';
+      const time = date ? `<time datetime="${new Date(timestamp).toISOString()}" title="提交时间：${E(date)}">${E(date.slice(11))}</time>` : '<span>时间未记录</span>';
+      groups.get(group).push(`<li class="entry-record" data-entry-record-id="${E(row.id)}">
+        <div class="entry-record-heading"><strong>${E(name)}</strong>${time}</div>${plan}
+        ${contacts ? `<dl class="entry-record-contacts">${contacts}</dl>` : ''}
+        <div class="entry-record-actions">${A.textAction('查看记录', action, `data-id="${E(row.id)}" data-kind="${kind}" aria-label="查看${E(name)}的录入记录"`)}</div>
+      </li>`);
+    }
+    return [...groups].map(([label, records]) => `<section class="entry-record-day"><h3>${E(label)}<span>${records.length} 条</span></h3><ul>${records.join('')}</ul></section>`).join('');
+  }
+  function entryWorkspace(form, kind, product = '') {
+    const title = kind === 'order' ? '最近订单' : kind === 'tenant' ? '最近租户' : '最近客户';
+    const description = `按北京时间分组，显示当前可查看范围内${kind === 'order' ? currencyFamily(product) + ' 的' : ''}最近 10 条录入记录。联系方式只显示已填写内容，完整资料可点击查看。`;
+    return `<div class="commerce-entry-layout"><div class="commerce-entry-columns">${form}
+      <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
+        <div class="panel-heading"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
+          ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div>
+        <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list" tabindex="0" aria-label="最近录入列表">${entryRecordList(kind, product)}</div></div>
+        <p class="entry-record-error" data-entry-error role="status" hidden></p>
+      </aside></div></div>`;
+  }
+  function updateEntryRecords() {
+    const panel = $('#commerce-entry-records');
+    if (!panel) return;
+    const list = panel.querySelector('.entry-record-list');
+    const content = entryRecordList(panel.dataset.kind, panel.dataset.product);
+    if (list.innerHTML !== content) list.innerHTML = content;
+  }
+  async function refreshEntryRecords(button) {
+    const panel = button.closest('#commerce-entry-records');
+    if (!panel || !localData) return;
+    const error = panel.querySelector('[data-entry-error]');
+    error.hidden = true;
+    const read = A.beginRegionRead(panel.querySelector('.entry-record-region'), panel.querySelector('[data-entry-progress]'), { refreshButton: button });
+    const ok = await loadLocalCommerce(true, true);
+    if (read.current() && !ok) {
+      error.textContent = '刷新失败，已保留上次记录。请重试。';
+      error.hidden = false;
+    }
+    read.finish();
   }
   function renderOrderPage() {
     const renewal = S.route.startsWith(renewalOrderPrefix);
@@ -6621,6 +6689,10 @@
   }
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
+    if (action === 'commerce-entry-refresh') {
+      void refreshEntryRecords(node);
+      return true;
+    }
     if (action === 'commerce-order-prices-retry') {
       const form = node.closest('#commerce-order-form');
       if (form?.dataset.priceReferenceStatus === 'error') {
@@ -7436,6 +7508,8 @@
         : A.addCalendarMonth(start);
   }
   function onChange(node) {
+    if (node.closest('.commerce-entry-layout') && node.matches('input:not([type="hidden"]), select'))
+      updateOrderValueReadout(node);
     const orderFilter = node.id?.match(/^commerce-order-filter-(plan|payment|expiry)$/)?.[1];
     if (orderFilter) {
       const product = S.route.endsWith('/gemini') ? 'Gemini' : 'Grok';
@@ -7685,6 +7759,8 @@
     return false;
   }
   function onInput(node) {
+    if (node.closest('.commerce-entry-layout') && node.matches('input:not([type="hidden"])'))
+      updateOrderValueReadout(node);
     if (node.dataset?.commercePicker) {
       filterPicker(node);
       return true;
@@ -8064,6 +8140,10 @@
         else updateCustomerEmailHistory(form);
       }
       for (const search of document.querySelectorAll('[data-commerce-picker]')) filterPicker(search);
+      for (const control of document.querySelectorAll('.commerce-entry-layout input:not([type="hidden"]):not([type="checkbox"]), .commerce-entry-layout select:not([hidden])')) {
+        orderValueObserver?.observe(control);
+        updateOrderValueReadout(control);
+      }
       loadLocalCommerce(false, routeChanged && Boolean(orderSyncRead));
       if (localData && !requestedAccountLifecycle && !A.modules.inventory?.accountLifecycleReady?.()) {
         requestedAccountLifecycle = true;

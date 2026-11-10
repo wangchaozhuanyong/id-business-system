@@ -65,8 +65,9 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           if (width === 1440) {
             const search = await box('#commerce-cardId-picker');
             if (product === 'gpt') {
-              aligned(await box('#commerce-payment'), search, '银行卡选择应与支付方式同排');
               aligned(await box('#commerce-payment'), await box('#commerce-paymentId'), '卡尾号不应单独占一行');
+              aligned(search, await box('#commerce-cardTypeId'), '银行卡选择与类型应在第二行并排');
+              aligned(await box('label[for="commerce-cardId-picker"]'), await box('label[for="commerce-cardTypeId"]'), '银行卡选择与类型标签不齐');
             } else {
               aligned(await box('#commerce-tenantId-picker'), search, '租户与银行卡选择应同排');
             }

@@ -299,7 +299,7 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
   if (screenshots) await mkdir(evidence, { recursive: true });
   for (const product of ['gpt', 'claude']) {
     await page.goto(origin + '/#/workspace/order/' + product);
-    for (const width of [1440, 1024, 390, 320]) for (const dark of [false, true]) {
+    for (const width of [1920, 1440, 1024, 390, 320]) for (const dark of [false, true]) {
       await page.setViewportSize({ width, height: 1000 });
       await page.waitForFunction(() => innerWidth > 900 || document.querySelector('#sidebar').getBoundingClientRect().right <= 0);
       await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
@@ -311,7 +311,9 @@ test('GPT 与 Claude 各自维护币种及套餐售价，系统设置集中维�
             a.height >= (innerWidth <= 900 ? 44 : 28) && Math.abs(a.top + a.height / 2 - title.top - title.height / 2) <= 1) };
       }));
       assert(geometry.every(row => row.actionsFit && row.left >= 0 && row.right <= width), JSON.stringify({ product, width, dark, geometry }));
-      if (width === 1440) assert(geometry.every(row => Math.abs(row.titleY - geometry[0].titleY) <= 1), '并排标题文字居中模型一致');
+      for (const row of geometry)
+        for (const peer of geometry.filter(peer => Math.abs(peer.top - row.top) <= 1))
+          assert(Math.abs(row.titleY - peer.titleY) <= 1, '同排费用模块的实际标题文字居中模型一致');
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       if (screenshots && product === 'claude' && !dark && [1440, 390].includes(width)) {
         await page.locator('.order-financial-groups').screenshot({ path: fileURLToPath(new URL(`claude-${width}-light.png`, evidence)) });

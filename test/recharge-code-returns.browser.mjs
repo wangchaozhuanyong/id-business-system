@@ -21,7 +21,7 @@ test('充值码归还复用真实服务规则，状态变化重新确认，失�
   const output = new URL('../.runtime/follow-through-release-20261108/', import.meta.url); await mkdir(output, { recursive: true });
   await page.goto(origin + '/#/workspace/recharge-codes');
   await page.getByRole('button', { name: '归还（2）', exact: true }).waitFor();
-  await page.locator('[data-action="order-code-batch-detail"]').click();
+  await page.locator('[data-action="order-code-batch-return"]').click();
   const drawer = page.locator('#drawer[open]'), form = drawer.locator('#code-return-form');
   await form.waitFor();
   assert.equal(await form.locator('tbody tr').count(), 7);
@@ -30,7 +30,7 @@ test('充值码归还复用真实服务规则，状态变化重新确认，失�
   const first = form.locator(`input[name="return-code-${f.items[0]}"]`), second = form.locator(`input[name="return-code-${f.items[1]}"]`);
   await second.uncheck();
   await page.evaluate(() => window.IDDesignAPI.closeDrawer());
-  await page.locator('[data-action="order-code-batch-detail"]').click(); await form.waitFor();
+  await page.locator('[data-action="order-code-batch-return"]').click(); await form.waitFor();
   assert.equal(await form.locator('#code-return-note').inputValue(), '合成未用归还备注'); assert(!(await second.isChecked()));
   f.native.get(f.codes[0]).status = 'used';
   await page.locator('button[form="code-return-form"][type="submit"]').click();
@@ -56,7 +56,9 @@ test('充值码归还复用真实服务规则，状态变化重新确认，失�
   assert.equal(await page.getByText(f.codes[0], { exact: true }).count(), 0);
   assert.equal(await page.locator('[data-action="order-code-copy"]').count(), 0);
   await page.locator('[data-action="order-code-tab"][data-id="returns"]').click();
+  await page.locator('[data-action="order-code-item-detail"]').click();
   await page.getByText('合成未用归还备注', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
   for (const width of [1440, 768, 390, 320]) for (const theme of ['light', 'dark']) {
     await page.setViewportSize({ width, height: 1000 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme); await settle(page);

@@ -159,14 +159,12 @@ textarea:focus-visible {
   padding: 6px 10px 6px 16px;
   color: var(--secondary);
   border-radius: 6px;
-  border-left: 1px solid var(--line);
   gap: 9px;
 }
 .nav-child.active {
   color: var(--primary);
   background: var(--primary-soft);
   font-weight: 650;
-  border-left-color: var(--primary);
 }
 .nav-child.active:before {
   content: '';
@@ -3151,6 +3149,27 @@ details.toolbox-phrase-more[open] > summary {
   border-radius: 0;
   pointer-events: none;
 }
+.design-region-progress[data-region-loading] {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  display: block;
+  height: 3px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--primary);
+  pointer-events: none;
+}
+.design-progress-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .design-loading-rows {
   display: grid;
   gap: 18px;
@@ -3214,6 +3233,80 @@ details.toolbox-phrase-more[open] > summary {
   .submission-grid .toolbar .button {
     flex: 1;
   }
+}
+/* Submission and extraction use the same two-module workspace for both asset kinds. */
+.inventory-workspace { container-type: inline-size; min-width: 0; }
+.inventory-workspace-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+.inventory-workspace-columns > .panel { min-width: 0; margin: 0; }
+@container (min-width: 960px) {
+  .inventory-workspace-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.inventory-workspace .panel-heading { flex-wrap: wrap; gap: 12px; }
+.inventory-workspace .panel-heading :is(h2, h3) { margin: 0; font-size: 15px; line-height: 24px; }
+.inventory-workspace .section-title-row { min-width: 0; }
+.inventory-workspace-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--radius-control);
+  color: var(--tone);
+  background: var(--tone-soft);
+}
+.inventory-submission-panel .submission-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.inventory-submission-panel .submission-grid > .guide-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+.inventory-submission-title { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.inventory-submission-title :is(h3, .action-links) { overflow-wrap: anywhere; }
+.inventory-submission-panel .submission-grid .toolbar { width: auto; }
+.inventory-submission-panel .submission-grid .toolbar .button { flex: none; }
+.inventory-extraction-panel .inventory-extraction-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.inventory-extraction-panel .form-footer { justify-content: flex-end; }
+.inventory-availability { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.inventory-availability > span {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-control);
+  color: var(--secondary);
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+.inventory-availability strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.inventory-workspace-records { list-style: none; padding: 0; margin: 0; }
+.inventory-workspace-history {
+  max-height: 380px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+.inventory-workspace-records > li { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.inventory-workspace-records > li:first-child { padding-top: 0; }
+.inventory-workspace-records > li:last-child { padding-bottom: 0; border-bottom: 0; }
+.inventory-record-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; }
+.inventory-record-heading strong { min-width: 0; overflow-wrap: anywhere; line-height: 24px; }
+.inventory-record-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--secondary); font-size: 12px; margin-top: 8px; }
+.inventory-record-meta > * { min-width: 0; overflow-wrap: anywhere; }
+.inventory-record-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
+@container (max-width: 519px) {
+  .inventory-extraction-panel .inventory-extraction-fields { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 399px) {
+  .inventory-submission-panel .submission-grid > .guide-item { grid-template-columns: minmax(0, 1fr); }
+  .inventory-submission-title { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+  .inventory-submission-panel .submission-grid .toolbar { width: 100%; }
+  .inventory-submission-panel .submission-grid .toolbar .button { flex: 1; }
 }
 .form-grid,
 .commerce-field-grid {
@@ -3403,7 +3496,7 @@ details.toolbox-phrase-more[open] > summary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .order-payment-options > :is([data-commerce-field='appleIdId'], [data-commerce-field='cardId'],
-  [data-commerce-field='proPoolCardId'], [data-commerce-field='proCardNumber'], [data-commerce-field='proCardSerial']) {
+  [data-commerce-field='proPoolCardId']) {
   grid-column: 1 / -1;
 }
 .order-choice-grid > .field,
@@ -3820,6 +3913,231 @@ details:not(.title-help) > summary:focus-visible {
   .commerce-span-2 {
     grid-column: 1 / -1;
   }
+}
+
+/* Recharge applications and delivered codes load and paginate independently. */
+.recharge-workspace { container-type: inline-size; min-width: 0; }
+.recharge-workspace-columns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.recharge-workspace-columns > .panel { min-width: 0; margin: 0; container-type: inline-size; }
+@container (min-width: 1100px) {
+  .recharge-workspace-columns { grid-template-columns: minmax(360px, 1fr) minmax(0, 2fr); }
+}
+.recharge-workspace .panel-heading { flex-wrap: wrap; gap: 12px; }
+.recharge-workspace .panel-heading :is(h2, h3) { margin: 0; font-size: 15px; line-height: 24px; }
+.recharge-workspace .section-title-row { min-width: 0; }
+.recharge-workspace .panel-heading > .button { margin-left: auto; }
+.recharge-workspace .recharge-request-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.recharge-request-fields > .field { grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+.recharge-stock-notice { margin-top: 16px; padding: 12px; border-radius: var(--radius-control); background: var(--surface-soft); color: var(--secondary); line-height: 1.6; }
+.recharge-request-panel .form-footer { justify-content: flex-end; }
+.recharge-request-list { margin: 0; padding: 0 var(--panel-padding-inline); list-style: none; max-height: 480px; overflow: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.recharge-request-list > li { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.recharge-request-list > li:last-child { border-bottom: 0; }
+#recharge-request-history .recharge-list-frame { padding-bottom: 12px; }
+.recharge-record-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.recharge-request-list .recharge-record-actions { margin-top: 12px; }
+.recharge-code-toolbar { flex-wrap: wrap; gap: 12px; }
+.recharge-code-toolbar .toolbar-left { flex: 1 1 300px; min-width: 0; flex-wrap: wrap; }
+.recharge-code-toolbar .search-field { flex: 1 1 180px; min-width: min(180px, 100%); }
+.recharge-code-toolbar select { flex: 0 1 110px; min-width: 0; }
+.recharge-code-tabs { flex-wrap: nowrap; overflow-x: auto; }
+.recharge-new-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px var(--panel-padding-inline); background: var(--primary-soft); color: var(--primary); }
+.recharge-new-batch > span { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
+.recharge-code-table table { table-layout: fixed; }
+.recharge-code-table :is(th, td) { white-space: normal; overflow-wrap: anywhere; }
+.recharge-code-table .table-actions { position: static; box-shadow: none; min-width: 0; }
+.recharge-code-table .recharge-code-text { display: block; white-space: normal; overflow-wrap: anywhere; word-break: break-all; font-variant-numeric: tabular-nums; line-height: 1.6; }
+.recharge-code-table table[data-table='my-recharge-codes'] th:first-child { width: 36px; }
+.recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(2) { width: 28%; }
+.recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(3) { width: 72px; }
+.recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(4) { width: 106px; }
+.recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(5) { width: 122px; }
+.recharge-code-table table[data-table='my-recharge-codes'] th:last-child { width: 144px; }
+.recharge-code-details strong { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+@container (max-width: 739px) {
+  .recharge-code-table :is(table, thead, tbody, tr, th, td) { display: block; width: auto; }
+  .recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(n) { width: auto; }
+  .recharge-code-table thead th:not(.check-cell) { display: none; }
+  .recharge-code-table thead .check-cell { height: auto; padding: 12px 16px; text-align: left; }
+  .recharge-code-table thead .check-cell::after { content: '选择当前页'; margin-left: 8px; }
+  .recharge-code-table tbody { display: grid; gap: 12px; padding: 16px; }
+  .recharge-code-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-control); }
+  .recharge-code-table td { height: auto; min-width: 0; padding: 0; border: 0; text-align: left; }
+  .recharge-code-table td:is(.check-cell, .recharge-code-value, .table-actions, [data-column='issuedAt'], [colspan]) { grid-column: 1 / -1; }
+  .recharge-code-table td.check-cell { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+  .recharge-code-table td.check-cell::after { content: '选择此码'; color: var(--secondary); font-size: 12px; }
+  .recharge-code-table td[data-column]::before { display: block; color: var(--secondary); font-size: 12px; margin-bottom: 4px; }
+  .recharge-code-table td[data-column='plan']::before { content: '套餐'; }
+  .recharge-code-table td[data-column='status']::before { content: '状态'; }
+  .recharge-code-table td[data-column='issuedAt']::before { content: '发放时间'; }
+  .recharge-code-table td.table-actions { padding-top: 12px; border-top: 1px solid var(--line); }
+  .recharge-code-table .empty-state { padding: 8px; }
+}
+@container (max-width: 319px) {
+  .recharge-workspace .recharge-request-fields { grid-template-columns: minmax(0, 1fr); }
+  .recharge-code-toolbar select { flex-basis: 100%; }
+}
+
+/* Entry workspaces share a compact form and a separate, read-only history rail. */
+.commerce-entry-layout {
+  container-type: inline-size;
+  min-width: 0;
+}
+.commerce-entry-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+}
+.commerce-entry-columns > * {
+  min-width: 0;
+}
+@container (min-width: 1040px) {
+  .commerce-entry-columns {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+  .entry-records {
+    position: sticky;
+    top: 84px;
+  }
+}
+.commerce-entry-layout :is(.commerce-field-grid, .order-choice-grid, .order-wide-fields, .order-payment-options) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.commerce-entry-layout :is(.order-choice-grid, .order-wide-fields) {
+  display: contents;
+}
+.commerce-entry-layout .order-payment-options > :is([data-commerce-field='cardId'], [data-commerce-field='proPoolCardId']) {
+  grid-column: auto;
+}
+.commerce-entry-layout #commerce-order-form [data-commerce-field='cardTypeId'] .field-row > select {
+  flex-basis: min(100%, 140px);
+}
+.commerce-entry-layout #commerce-order-form .commerce-search-picker:not(.commerce-email-history) > .commerce-picker-trigger {
+  flex-basis: min(100%, 160px);
+}
+.commerce-entry-layout .order-value-readout {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+@container (max-width: 639px) {
+  .commerce-entry-layout :is(.commerce-field-grid, .order-choice-grid, .order-wide-fields, .order-payment-options) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .commerce-entry-layout .commerce-span-2 {
+    grid-column: 1 / -1;
+  }
+}
+.entry-records .panel-heading {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.entry-record-list {
+  max-height: min(640px, 65dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.entry-records .section-title-row {
+  min-width: 0;
+}
+.entry-record-list {
+  padding: 0 var(--panel-padding-inline) var(--panel-padding-block);
+}
+.entry-record-day > h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 0 10px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--secondary);
+}
+.entry-record-day > h3 > span {
+  font-weight: 400;
+  white-space: nowrap;
+}
+.entry-record-day > ul {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.entry-record {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+.entry-record-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.entry-record-heading > strong {
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.entry-record-heading > :is(time, span) {
+  font-size: 12px;
+  color: var(--secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.entry-record-plan {
+  margin-top: 8px;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.entry-record-contacts {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.entry-record-contacts > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+.entry-record-contacts dt {
+  color: var(--secondary);
+}
+.entry-record-contacts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.entry-record-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.entry-record-empty {
+  margin: 0;
+  padding: 28px 0 12px;
+  color: var(--secondary);
+  text-align: center;
+}
+.entry-record-error {
+  margin: 0;
+  padding: 12px var(--panel-padding-inline);
+  border-top: 1px solid var(--line);
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .mail-plain-body {

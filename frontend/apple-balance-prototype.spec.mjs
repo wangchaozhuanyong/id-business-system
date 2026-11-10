@@ -352,6 +352,8 @@ function inventoryRuntime() {
   const api = {
     readDraft: (form) => api.readForm(form),
     esc: escape,
+    icon: () => '',
+    tag: (label) => `<span>${escape(label)}</span>`,
     button: (label, action, _kind, _icon, attributes = '') =>
       `<button data-action="${action}" ${attributes}>${label}</button>`,
     textAction: (label, action, attributes = '') =>

@@ -187,7 +187,8 @@
     const route = api.state.route;
     const drawerContent = document.querySelector('#drawer[open]')?.firstElementChild;
     const draftForm = document.querySelector('#drawer[open] form[data-inventory-draft]') ||
-      document.querySelector('#main form[data-inventory-draft]');
+      ((action === 'inventory_extract' || !/^workspace\/(mail|account)-(submit|extract)$/.test(route))
+        ? document.querySelector('#main form[data-inventory-draft]') : null);
     const draftKey = draftForm?.dataset.inventoryDraft;
     const submittedValues = draftForm ? api.readDraft(draftForm) : null;
     const submittedDraft = submittedValues ? JSON.stringify(submittedValues) : '';
@@ -425,7 +426,7 @@
     return ['accounts/apple-balances', 'mailboxes/apple'].includes(api.state.route);
   }
   function accountSubmissionRoute() {
-    return api.state.route === 'workspace/account-submit';
+    return ['workspace/account-submit', 'workspace/account-extract'].includes(api.state.route);
   }
   function accountEntryType(type) {
     return accountSubmissionTypes.some(([id]) => id === type);
@@ -1178,8 +1179,17 @@
     );
   }
 
-  function extractionPage() {
-    const account = api.state.route === 'workspace/account-extract';
+  function workspaceHeading(title, description, id, glyph, tone, actions = '') {
+    return `<div class="panel-heading"><div class="section-title-row"><span class="inventory-workspace-icon" data-tone="${tone}" aria-hidden="true">${icon(glyph)}</span><h2 id="${id}">${esc(title)}</h2>${api.titleInfo?.(title, description, id + '-help') || ''}</div>${actions}</div>`;
+  }
+  function recentExtractionList(rows) {
+    const numbers = extractionBatchNumbers();
+    return rows.length ? `<ul class="inventory-workspace-records">${rows.map(batch => {
+      const counts = batchCounts(batch);
+      return `<li><div class="inventory-record-heading"><strong>${esc(numbers.get(batch.id) ?? batch.id)}</strong>${tag(counts.pending ? `待处理 ${counts.pending}` : '已处理', counts.pending ? 'warning' : 'success')}</div><div class="inventory-record-meta"><span>${esc(batch.purpose)}</span><span>${batch.items.length} 条</span><span>${esc(batch.actorName || '未记录')}</span><time>${esc(batch.time || '时间未记录')}</time></div><div class="inventory-record-actions">${textAction('明细', 'inventory-batch', `data-id="${esc(batch.id)}"`)}${textAction(counts.returnable ? `归还（${counts.returnable}）` : '无可归还项', 'inventory-batch-return', `data-id="${esc(batch.id)}" ${counts.returnable ? '' : 'disabled title="查看明细了解已使用、已归还或业务占用原因"'}`)}</div></li>`;
+    }).join('')}</ul>` : empty('暂无提取批次', '完成提取后在这里查看最近批次。');
+  }
+  function extractionPage(account = accountSubmissionRoute()) {
     const kind = account ? 'account' : 'mail';
     const purposes = account ? ['客户交付', '比特充值', '业务备用', '其他'] : mailExtractionPurposes();
     const key = `inventory-extract:${kind}`;
@@ -1200,19 +1210,17 @@
       .filter((batch) => batch.kind === kind && ownerAllowed(batch))
       .slice(0, 5);
     const availableCounts = list
-      .map(([type, label]) =>
-        type === 'relay' && localData
-          ? `${label}：提交时核对`
-          : `${label} ${collection(kind).filter((asset) => asset.type === type && available(asset)).length}`
-      )
-      .join(' · ');
+      .map(([type, label]) => `<span>${esc(label)} <strong>${type === 'relay' && localData
+        ? '提交时核对'
+        : collection(kind).filter((asset) => asset.type === type && available(asset)).length}</strong></span>`)
+      .join('');
     return (
       header(
         account ? '账号提取' : '邮箱提取',
-        '提取后先进入待使用；确认实际使用后不再进入通用可提取库存。跨天处理请进入提取与归还。',
+        '左侧录入或批量导入资料，右侧从可用库存提取。提取后进入待使用，后续处理可进入提取与归还。',
         button('提取与归还', 'inventory-center', '', 'return')
       ) +
-      `<section class="panel form-panel"><form id="inventory-extract-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-kind" value="${kind}" /><div class="form-grid">${field(account ? '账号类型' : '邮箱类型', 'inventory-extract-type', select('inventory-extract-type', list, d['inventory-extract-type']), true)}${field('提取数量', 'inventory-quantity', input('inventory-quantity', d['inventory-quantity'], 'type="number" min="1" max="100"'), true)}${field('提取用途', 'inventory-purpose', purposeControl, true)}${selectedPurpose === '其他' ? field('用途说明', 'inventory-purpose-other', input('inventory-purpose-other', d['inventory-purpose-other'] || '', 'placeholder="填写具体用途"'), true) : ''}${wide('备注', 'inventory-extract-notes', area('inventory-extract-notes', d['inventory-extract-notes'] || '', '记录本批资料用途和操作说明'))}</div><div class="form-footer" data-page-actions="before-submit"><span class="footnote">当前可用：${availableCounts}</span><button class="button primary" type="submit">确认提取</button></div></form></section><section class="panel result-panel"><div class="panel-heading"><h2>最近提取批次</h2>${button('全部记录', 'inventory-center')}</div>${batchTable(recent)}</section>`
+      `<div class="inventory-workspace"><div class="inventory-workspace-columns">${submissionPanel(account)}<section class="panel inventory-extraction-panel" aria-labelledby="inventory-extraction-heading">${workspaceHeading('提取资料', '从可用库存按数量提取。确认实际使用后不再进入通用可提取库存；数量不足时不会减少数量提交。', 'inventory-extraction-heading', 'download', 'violet')}<div class="form-panel"><form id="inventory-extract-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-kind" value="${kind}" /><div class="form-grid inventory-extraction-fields">${field(account ? '账号类型' : '邮箱类型', 'inventory-extract-type', select('inventory-extract-type', list, d['inventory-extract-type']), true)}${field('提取数量', 'inventory-quantity', input('inventory-quantity', d['inventory-quantity'], 'type="number" min="1" max="100"'), true)}${wide('提取用途', 'inventory-purpose', purposeControl, true)}${selectedPurpose === '其他' ? wide('用途说明', 'inventory-purpose-other', input('inventory-purpose-other', d['inventory-purpose-other'] || '', 'placeholder="填写具体用途"'), true) : ''}${wide('备注', 'inventory-extract-notes', area('inventory-extract-notes', d['inventory-extract-notes'] || '', '记录本批资料用途和操作说明'))}</div><div class="inventory-availability" aria-label="当前可用库存">${availableCounts}</div><div class="form-footer" data-page-actions="before-submit"><button class="button primary" type="submit">确认提取</button></div></form></div><div class="panel-heading"><h3>最近提取批次</h3>${button('全部记录', 'inventory-center')}</div><div class="panel-body inventory-workspace-history" tabindex="0" aria-label="最近提取批次列表">${recentExtractionList(recent)}</div></section></div></div>`
     );
   }
   function extractionBatchNumbers() {
@@ -2300,7 +2308,7 @@
     if (!asset) return;
     api.openActionMenu(node, `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
-  function submissionPage(accountEntry = false) {
+  function submissionPanel(accountEntry = false) {
     const choices = accountEntry ? accountSubmissionTypes : mailboxSubmissionTypes();
     const relayResults = accountEntry ? [] : (api.state.drafts.get('inventory-relay-entry-results')?.ids || []).map(assetById).filter(asset => asset?.type === 'relay');
     const results = relayResults.length ? `<section class="panel result-panel"><div class="panel-heading"><h2>本次隐藏邮箱录入结果</h2>${button('继续录入', 'inventory-add-type', '', 'plus', 'data-type="relay"')}</div>${table([
@@ -2310,25 +2318,21 @@
       { id: 'result', label: '结果', render: () => tag('已登记', 'success') },
       { id: 'actions', label: '操作', action: true, render: row => textAction('复制邮箱地址', 'inventory-relay-entry-copy', `data-id="${esc(row.id)}"`) }
     ], relayResults, '', '快捷隐藏邮箱录入结果')}</section>` : '';
-    return (
-      header(
-        accountEntry ? '账号提交' : '邮箱提交',
-        accountEntry
-          ? '按产品录入账号或批量导入。保存时核对来源邮箱的使用关联，苹果 ID 余额另行记账。'
-          : '单条录入或批量预检后入库。域名只用于类型建议，Apple ID 也可能使用其他邮箱地址。'
-      ) +
-      `<section class="panel form-panel"><div class="submission-grid">${choices
+    const scope = accountEntry ? 'account' : 'mail';
+    const recent = scopedImportRecords('', scope).slice(0, 5);
+    return `<section class="panel inventory-submission-panel" aria-labelledby="inventory-submission-heading">${workspaceHeading('提交资料', accountEntry
+      ? '选择账号类型后单条录入或批量导入。抽屉关闭后保留草稿；苹果 ID 仅录入资料，余额另行记账。'
+      : '选择邮箱类型后单条录入或批量预检。隐藏邮箱须关联所属主邮箱；不同类型的草稿独立保留。', 'inventory-submission-heading', 'upload', 'teal')}<div class="panel-body"><div class="submission-grid">${choices
         .map(
           ([type, label]) =>
-            `<div class="guide-item"><h3>${esc(label)}</h3><div class="toolbar">${button(type === 'relay' ? '登记隐藏邮箱' : '单条录入', 'inventory-add-type', 'primary', 'plus', `data-type="${type}"`)}${button('批量导入', 'inventory-import', '', 'upload', `data-type="${type}"`)}${accountEntry && usesAccountLocation(type) ? locationSettingsButton(type) : ''}</div>${accountEntry ? textAction('查看账号管理', 'inventory-go', `data-route="accounts/${type === 'apple' ? 'apple-balances' : type}"`) : ''}</div>`
+            `<div class="guide-item"><div class="inventory-submission-title"><h3>${esc(label)}</h3><div class="action-links">${accountEntry && usesAccountLocation(type) ? textAction('设置', 'inventory-location-settings', `data-type="${type}"`) : ''}${accountEntry ? textAction('账号管理', 'inventory-go', `data-route="accounts/${type === 'apple' ? 'apple-balances' : type}"`) : ''}</div></div><div class="toolbar">${button(type === 'relay' ? '登记隐藏邮箱' : '单条录入', 'inventory-add-type', '', 'plus', `data-type="${type}"`)}${button('批量导入', 'inventory-import', '', 'upload', `data-type="${type}"`)}</div></div>`
         )
         .join(
           ''
-        )}</div></section>${results}<section class="panel result-panel"><div class="panel-heading"><h2>近期导入</h2></div>${importList('', accountEntry ? 'account' : 'mail')}</section>`
-    );
+        )}</div></div>${results}<div class="panel-heading"><h3>近期导入</h3>${button('全部导入', 'inventory-entry-imports')}</div><div class="panel-body inventory-workspace-history" tabindex="0" aria-label="近期导入列表">${recent.length ? `<ul class="inventory-workspace-records">${recent.map(row => `<li><div class="inventory-record-heading"><strong>${esc(typeLabel(row.type))}</strong>${tag(row.status || '已导入', row.failed ? 'warning' : 'success')}</div><div class="inventory-record-meta"><span>成功 ${esc(row.success ?? '未记录')} 条</span>${row.failed ? `<span>错误 ${esc(row.failed)} 行</span>` : ''}<span>${esc(row.actor || '未记录')}</span><time>${esc(row.time || '时间未记录')}</time></div><div class="inventory-record-actions">${textAction('详情', 'inventory-import-detail', `data-id="${esc(row.id)}"`)}</div></li>`).join('')}</ul>` : empty('暂无导入记录', '完成批量导入后在这里查看结果。')}</div></section>`;
   }
-  function importList(type = '', scope = '') {
-    const rows = [...importRecords, ...(api.modules.appleRelay?.listImports?.() || [])].filter(
+  function scopedImportRecords(type = '', scope = '') {
+    return [...importRecords, ...(api.modules.appleRelay?.listImports?.() || [])].filter(
       (record) =>
         (!type || record.type === type || record.types?.includes(type)) &&
         (!scope ||
@@ -2337,7 +2341,9 @@
               ? accountEntryType(id)
               : mailboxSubmissionTypes().some(([typeId]) => typeId === id)
           ))
-    );
+    ).sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')));
+  }
+  function importList(type = '', scope = '', rows = scopedImportRecords(type, scope)) {
     return rows.length
       ? table(
           [
@@ -2362,6 +2368,26 @@
         )
       : empty('暂无导入记录', '完成预检与确认导入后保留批次。');
   }
+  function openEntryImports() {
+    saveDrafts();
+    const scope = accountSubmissionRoute() ? 'account' : 'mail';
+    const key = `inventory-entry-imports:${scope}`;
+    const rows = scopedImportRecords('', scope);
+    const saved = draft(key, { page: 1, pageSize: window.IDPagination.defaultPageSize });
+    saved.page = Math.min(saved.page, Math.max(1, Math.ceil(rows.length / saved.pageSize)));
+    api.state.drafts.set(key, saved);
+    showDrawer(accountSubmissionRoute() ? '账号导入记录' : '邮箱导入记录', '按导入时间倒序排列，可查看每个批次的完整明细。',
+      importList('', scope, rows.slice((saved.page - 1) * saved.pageSize, saved.page * saved.pageSize)) +
+        window.IDPagination.render({ id: key, ...saved, total: rows.length }),
+      button('关闭', 'inventory-close'));
+  }
+  document.addEventListener?.('id-pagination-change', event => {
+    const key = `inventory-entry-imports:${accountSubmissionRoute() ? 'account' : 'mail'}`;
+    if (event.detail.id !== key || !event.target.closest('#drawer[open]') ||
+        !/^workspace\/(account|mail)-(extract|submit)$/.test(api.state.route)) return;
+    api.state.drafts.set(key, { page: event.detail.page, pageSize: event.detail.pageSize });
+    openEntryImports();
+  });
   function parseRegistrationProxySafe(value) {
     try { return value ? parseRegistrationProxy(value) : {}; } catch { return {}; }
   }
@@ -4106,6 +4132,8 @@
       document.getElementById('inventory-import-results').innerHTML = '';
       api.setError('inventory-import-content', '');
       saveDrafts();
+    } else if (action === 'inventory-entry-imports') {
+      openEntryImports();
     } else if (action === 'inventory-import-detail') {
       const record = importRecords.find((entry) => entry.id === id);
       if (!record && api.modules.appleRelay) {
@@ -4846,9 +4874,7 @@
         );
       }
       if (route.startsWith('mailboxes/') || route.startsWith('accounts/')) return inventoryPage();
-      if (route === 'workspace/mail-submit') return submissionPage();
-      if (route === 'workspace/account-submit') return submissionPage(true);
-      if (route.endsWith('mail-extract') || route.endsWith('account-extract'))
+      if (/^workspace\/(mail|account)-(submit|extract)$/.test(route))
         return extractionPage();
       if (route.startsWith('workspace/extractions/'))
         return batchPage(batches.find((batch) => batch.id === route.split('/')[2]));

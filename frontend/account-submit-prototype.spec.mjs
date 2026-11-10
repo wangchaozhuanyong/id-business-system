@@ -96,7 +96,7 @@ function runtime() {
   };
   const api = {
     state: {
-      route: 'workspace/account-submit',
+      route: 'workspace/account-extract',
       drafts: new Map(),
       actor: { id: 'test-actor', name: '演示测试员', role: 'admin' }
     },
@@ -221,6 +221,7 @@ const gptCsv =
 test('账号提交页面包含五个已启用类型，复用账号库存且不提供邮箱入库', () => {
   const r = runtime();
   assert.equal(r.inventory.matches('workspace/account-submit'), true);
+  assert.equal(r.inventory.matches('workspace/account-extract'), true);
   const html = r.inventory.render();
   for (const type of ['gpt', 'claude', 'apple', 'gemini', 'grok'])
     assert.match(html, new RegExp(`data-type="${type}"`));
