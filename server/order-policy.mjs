@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { personalPlans, personalProduct, samePersonalSubscription } from './personal-subscriptions.mjs';
 
 export const rechargePlanLabels = Object.freeze({
   plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500'
@@ -9,12 +10,18 @@ const bands = {
   Pro: ['20', '99'], 'Max 5x': ['100', '249'], 'Max 20x': ['250', '']
 };
 const plans = {
-  GPT: Object.values(rechargePlanLabels), 'Claude Pro': ['Pro'], 'Claude Max': ['Max 5x', 'Max 20x']
+  GPT: Object.values(rechargePlanLabels), 'Claude Pro': ['Pro'], 'Claude Max': ['Max 5x', 'Max 20x'], ...personalPlans
 };
 export function checkNewOrder(order) {
   if (!order.product) return;
   if (!Object.hasOwn(plans, order.product) || !plans[order.product].includes(order.plan))
     return '请选择当前可售套餐';
+  if (personalProduct(order.product)) {
+    if (order.costBasis === 'actual') return '新订单按费用规则核算';
+    if (order.payment === '银行卡' && (order.cardId || order.paidConfirmed) &&
+      !/^recharge:.+/.test(order.cardId || '')) return '请选择本次使用的银行卡';
+    return;
+  }
   if (!['续费', '成品交付'].includes(order.businessType)) return '请选择续费或成品交付';
   if (order.costBasis === 'actual') return '新订单按费用规则核算，实际总成本请通过有依据的订单更正登记';
   if ((order.email || order.product !== 'GPT' || order.businessType !== '续费') &&
@@ -215,7 +222,7 @@ export function validGptPaidPrices(prices) {
 }
 
 export function validClaudePaidPrices(prices) {
-  return validOrderPrices(prices) && !Object.hasOwn(prices, 'GPT') &&
+  return validOrderPrices(prices) && Object.keys(prices).every(product => ['Claude Pro', 'Claude Max'].includes(product)) &&
     Object.values(prices).every(paidPriceCurrenciesValid);
 }
 
@@ -232,6 +239,8 @@ const sameSubscription = (a, b) => a.product === b.product && a.email && b.email
   a.email.trim().toLowerCase() === b.email.trim().toLowerCase();
 
 export function checkAppleOrder(order, prior, priorOrders, ledger, inventory, allOrders) {
+  const personal = personalProduct(order.product);
+  if (personal && !order.paidConfirmed) return;
   if (order.payment !== '苹果内购' || !order.appleIdId) return;
   if (prior?.appleIdId === order.appleIdId && prior?.payment === order.payment &&
       prior?.email === order.email && prior?.product === order.product && prior?.plan === order.plan &&
@@ -244,17 +253,21 @@ export function checkAppleOrder(order, prior, priorOrders, ledger, inventory, al
       wallet?.currency !== 'USD' || balance === null || cost === null || balance < cost)
     return '苹果 ID 必须正常且有足够美元余额';
   if (order.businessType === '续费') {
-    const previous = priorOrders.filter((row) => row.id !== order.id && sameSubscription(order, row) &&
+    const previous = priorOrders.filter((row) => row.id !== order.id &&
+      (personal ? row.customerId === order.customerId && samePersonalSubscription(order, row)
+        : sameSubscription(order, row)) &&
       row.payment === '苹果内购' && row.appleIdId && row.paidConfirmed && !row.cancelled)
       .sort((a, b) => String(b.start).localeCompare(String(a.start)));
-    if (!previous.length || previous[0].appleIdId !== order.appleIdId)
+    if (previous.length && previous[0].appleIdId === order.appleIdId) return;
+    if (previous.length || !personal || order.appleOriginalVerified !== true ||
+        typeof order.appleOriginalReceipt !== 'string' || !order.appleOriginalReceipt.trim())
       return '苹果内购续费必须选择原订阅的苹果 ID';
-    return;
   }
   if ((ledger?.movements || []).some((row) => row.appleIdId === order.appleIdId &&
         (row.orderId || ['charge', 'order-debit'].includes(row.kind))) ||
       allOrders.some((row) => row.id !== order.id && row.appleIdId === order.appleIdId && row.paidConfirmed))
     return '首次分配只能使用未用于订阅的苹果 ID';
+  if (personal) return;
   const band = bands[order.plan];
   if (!band) return '当前套餐没有苹果 ID 匹配规则';
   const min = moneyUnits(order.appleMatchMin || band[0]);
@@ -267,7 +280,7 @@ export function checkAppleOrder(order, prior, priorOrders, ledger, inventory, al
 export function deriveCardIssueFee(order, prior, orders, card) {
   if (prior?.issueFeeSnapshot?.applied && prior.cardId === order.cardId)
     return prior.issueFeeSnapshot;
-  if (order.product !== 'GPT' || order.payment !== '银行卡' || !order.paidConfirmed) return;
+  if ((order.product !== 'GPT' && !personalProduct(order.product)) || order.payment !== '银行卡' || !order.paidConfirmed) return;
   const previouslyUsed = orders.some((row) => row.id !== order.id &&
     (row.cardId === order.cardId && (row.paidConfirmed || row.issueFeeSnapshot?.applied) ||
       (row.financialEvidence || []).some((entry) => entry.kind === 'payment' && entry.cardId === order.cardId)));

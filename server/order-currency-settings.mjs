@@ -9,10 +9,10 @@ export function validOrderCurrencies(rows) {
 
 export function validOrderCurrencyGroups(groups) {
   return groups && typeof groups === 'object' && !Array.isArray(groups) &&
-    Object.entries(groups).every(([key, rows]) => ['GPT', 'Claude'].includes(key) && validOrderCurrencies(rows));
+    Object.entries(groups).every(([key, rows]) => ['GPT', 'Claude', 'Gemini', 'Grok'].includes(key) && validOrderCurrencies(rows));
 }
 
-// Settings are shared with other modules; partial writes must retain both product families.
+// Settings are shared with other modules; partial writes retain settings for all product families.
 export function retainOrderCurrencySettings(data, previous) {
   const next = { ...data };
   if (!Object.hasOwn(next, 'orderCurrencies') && previous?.orderCurrencies)

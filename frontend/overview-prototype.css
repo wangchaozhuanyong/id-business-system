@@ -111,3 +111,14 @@
   .overview-customer-summary { gap: 8px; }
   .overview-shortcuts > div { gap: 4px 18px; }
 }
+
+.overview-product-period { margin: 0 0 14px; color: var(--secondary); font-size: 12px; }
+.overview-product-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 215px), 1fr)); gap: 12px; }
+.overview-product { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); }
+.overview-product h3 { margin: 0; font-size: 14px; }
+.overview-product h3 a { display: inline-flex; gap: 4px; align-items: center; min-height: 32px; }
+.overview-product dl { display: grid; gap: 8px; margin: 10px 0 0; }
+.overview-product dl > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.overview-product dt { color: var(--secondary); font-size: 12px; }
+.overview-product dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) { .overview-product h3 a { min-height: 44px; } }

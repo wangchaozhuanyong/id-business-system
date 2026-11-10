@@ -172,6 +172,8 @@ const navigation = [
     [
       ['GPT 提交订单', 'workspace/order/gpt'],
       ['Claude 提交订单', 'workspace/order/claude'],
+      ['Gemini 提交订单', 'workspace/order/gemini'],
+      ['Grok 提交订单', 'workspace/order/grok'],
       ['续费管理', 'workspace/renewals'],
       ['客户录入', 'customers/new'],
       ['充值码提取', 'workspace/recharge-codes'],
@@ -208,8 +210,8 @@ const navigation = [
       ['GPT 账号', 'accounts/gpt'],
       ['Claude 账号', 'accounts/claude'],
       ['苹果 ID 余额', 'accounts/apple-balances'],
-      ['Gemini 账号', 'accounts/gemini', true],
-      ['Grok 账号', 'accounts/grok', true]
+      ['Gemini 账号', 'accounts/gemini'],
+      ['Grok 账号', 'accounts/grok']
     ]
   ],
   [
@@ -228,8 +230,8 @@ const navigation = [
       ['Claude Pro 订单', 'orders/pro'],
       ['Claude Max 订单', 'orders/max'],
       ['Claude 专属', 'orders/exclusive'],
-      ['Gemini 订单', 'orders/gemini', true],
-      ['Grok 订单', 'orders/grok', true]
+      ['Gemini 订单', 'orders/gemini'],
+      ['Grok 订单', 'orders/grok']
     ]
   ],
   [

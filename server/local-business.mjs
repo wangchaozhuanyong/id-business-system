@@ -41,6 +41,7 @@ import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowse
 import { checkInventoryHistory } from './inventory-history.mjs';
 import { validMailExtractionSettings } from './inventory-extraction-settings.mjs';
 import { checkInventoryEntryFields } from './inventory-entry-fields.mjs';
+import { personalOrderError, personalProduct, preparePersonalInventory } from './personal-subscriptions.mjs';
 import { stageInitialTenantCards } from './tenant-initial-cards.mjs';
 import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
@@ -346,7 +347,7 @@ const needsOrderCardCheck = (row, prior) => row.payment === '银行卡' && !hasB
   (row.cardId !== prior?.cardId || row.tenantId !== prior?.tenantId || row.product !== prior?.product ||
     row.payment !== prior?.payment || (row.paidConfirmed && !prior?.paidConfirmed));
 const usesRechargeCard = (row) =>
-  (row.product === 'GPT' || (row.product === 'Claude Pro' && row.proMaterialMode === 'pool_card')) &&
+  (row.product === 'GPT' || personalProduct(row.product) || (row.product === 'Claude Pro' && row.proMaterialMode === 'pool_card')) &&
   typeof row.cardId === 'string' && row.cardId.startsWith('recharge:');
 
 function orderCostSnapshot(settings) {
@@ -1427,6 +1428,8 @@ export function createLocalBusinessStore(databasePath) {
           }
           const entryError = checkInventoryEntryFields(priorInventory, inventory, write.action);
           if (entryError) throw new LocalDataError(400, entryError);
+          const personalEntryError = preparePersonalInventory(priorInventory, inventory, write.action, actor, new Date(), priorUsage);
+          if (personalEntryError) throw new LocalDataError(409, personalEntryError);
           const attributionError = attributeInventory(priorInventory, inventory, actor, write.action);
           if (attributionError) throw new LocalDataError(409, attributionError);
           defaultInventoryRegistrationTimes(priorInventory, inventory);
@@ -1489,6 +1492,15 @@ export function createLocalBusinessStore(databasePath) {
           for (const row of commerce.orders) {
             const prior = priorById.get(row.id);
             if (prior && isDeepStrictEqual(row, prior)) continue;
+            if (personalProduct(row.product) || personalProduct(prior?.product)) {
+              if (prior && prior.product !== row.product) throw new LocalDataError(409, '原订单产品不可更换');
+              const issue = personalOrderError(row, prior, commerce.orders, commerce.customers);
+              if (issue) throw new LocalDataError(400, issue);
+              if (!prior) {
+                const entryIssue = checkNewOrder(row);
+                if (entryIssue) throw new LocalDataError(400, entryIssue);
+              }
+            }
             const lastCorrection = prior?.corrections?.at(-1);
             const restorePrior = action === '补偿撤回更正' && lastCorrection?.versionAfter === prior?.version
               ? lastCorrection?.previous : undefined;
@@ -1588,7 +1600,7 @@ export function createLocalBusinessStore(databasePath) {
                   const card = cards.get(row.cardId);
                   if (!card?.active) throw new LocalDataError(409, '请选择当前可用的代充卡池银行卡');
                   row.paymentId = card.last4;
-                  if (row.product === 'GPT') {
+                  if (row.product === 'GPT' || personalProduct(row.product)) {
                     const fee = deriveCardIssueFee(row, prior, [...oldOrders, ...settledThisWrite], card);
                     if (fee) row.issueFeeSnapshot = fee;
                     else delete row.issueFeeSnapshot;
@@ -1645,6 +1657,11 @@ export function createLocalBusinessStore(databasePath) {
         if (inventory && (inventoryWrite || incoming.has('commerce'))) {
           const next = inventoryWrite ? inventory : structuredClone(inventory);
           const matches = inspectInventoryUsage(next, commerce, Date.parse(now));
+          const oldRegistrationIds = new Set((priorInventory?.registrationRecords || []).map(row => row.id));
+          if ((next.registrationRecords || []).some(row => ['Gemini', 'Grok'].includes(row.product) &&
+              !oldRegistrationIds.has(row.id) && (matches.get(row.assetId)?.status !== 'used' ||
+                matches.get(row.assetId)?.evidence.registrationId !== row.id)))
+            throw new LocalDataError(409, '邮箱使用结果待核对，账号和领用资料尚未保存');
           if (inventoryWrite?.action !== 'inventory_reconcile_usage') {
             for (const [id, match] of matches) {
               const prior = priorUsage.get(id);
