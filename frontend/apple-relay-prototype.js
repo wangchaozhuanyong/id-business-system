@@ -1645,7 +1645,7 @@
               'check',
               `data-id="${E(a.id)}"`
             )
-          : '')
+          : '') + (A.modules.inventory?.personalRegistrationButtons?.(a) || '')
     );
   }
   function requestAliasHealth(id, health) {

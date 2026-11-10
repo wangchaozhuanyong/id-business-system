@@ -218,13 +218,13 @@ function runtime() {
 const gptCsv =
   '邮箱,密码,邮箱类型,2FA密钥,国家地区,地区,注册时间,登录设备,备注1,备注2\nnew.gpt@example.test,Demo-Only,谷歌邮箱,DEMO-TOTP,美国,纽约,2026-10-01T10:30,测试设备,第一条,第二条';
 
-test('账号提交页面包含三个已启用类型，复用账号库存且不提供邮箱入库', () => {
+test('账号提交页面包含五个已启用类型，复用账号库存且不提供邮箱入库', () => {
   const r = runtime();
   assert.equal(r.inventory.matches('workspace/account-submit'), true);
   const html = r.inventory.render();
-  for (const type of ['gpt', 'claude', 'apple'])
+  for (const type of ['gpt', 'claude', 'apple', 'gemini', 'grok'])
     assert.match(html, new RegExp(`data-type="${type}"`));
-  assert.doesNotMatch(html, /data-type="(?:google|relay|gemini|grok)"/);
+  assert.doesNotMatch(html, /data-type="(?:google|relay|microsoft)"/);
   assert.doesNotMatch(html, /IMPORT-DEMO-001/);
 });
 

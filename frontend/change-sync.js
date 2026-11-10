@@ -23,7 +23,7 @@
     refreshing = true;
     let failed = false;
     const has = scope => scopes.includes(scope);
-    const inventoryPage = /^(mailboxes\/(google|microsoft)|accounts\/(gpt|claude))$/.test(route);
+    const inventoryPage = /^(mailboxes\/(google|microsoft)|accounts\/(gpt|claude|gemini|grok))$/.test(route);
     const refreshInventory = has('inventory') || (has('commerce') && inventoryPage);
     const run = async operation => {
       try { if (await operation() === false) failed = true; } catch { failed = true; }

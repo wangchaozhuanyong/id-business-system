@@ -110,7 +110,7 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
       const used =
         status === 'used' || links.length > 0 || (hasId(before) && consumed.has(before.id));
       const referenced = status === 'claimed' || (hasId(before) && references.has(before.id));
-      const reusable = ['gpt', 'claude'].includes(before.type) &&
+      const reusable = ['gpt', 'claude', 'gemini', 'grok'].includes(before.type) &&
         before.accountLifecycle?.disposition === 'recovered' && ['available', 'claimed'].includes(useState(after));
       if ((used || referenced) && !after) return '已有使用或领用记录的库存资料必须保留';
       if (status === 'claimed' && hasId(before) && before.claimId)
@@ -123,7 +123,7 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
           (before.type && before.type !== after.type))
       )
         return '已实际使用的库存资料不能退回或替换';
-      if (used && ['gpt', 'claude'].includes(before.type) && before.source !== '客户提供' &&
+      if (used && ['gpt', 'claude', 'gemini', 'grok'].includes(before.type) && before.source !== '客户提供' &&
         !['客户自有', 'customer'].includes(before.accountSource) &&
         (after.source === '客户提供' || ['客户自有', 'customer'].includes(after.accountSource)))
         return '已有库存使用历史的账号不能改为客户自有来源';

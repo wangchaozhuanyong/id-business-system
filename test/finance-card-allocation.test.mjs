@@ -118,6 +118,21 @@ test('共享用卡计入真实开通笔数，实际总成本沿用已核对的�
   assert.equal(compute(a, allocation).basis, 'reference');
 });
 
+test('Gemini 和 Grok 只以实际开通进入同卡分摊，失败单的开卡费证据保留', () => {
+  const [gemini, grok, gpt] = trio();
+  Object.assign(gemini, { product: 'Gemini', entitlementStatus: 'pending' });
+  Object.assign(grok, { product: 'Grok', entitlementStatus: 'active' });
+  assert.match(allocate([gemini, grok, gpt]).get(gpt.id).reason, /同卡开通记录存在待核对/);
+  gemini.entitlementStatus = 'active';
+  assert.equal(allocate([gemini, grok, gpt]).get(grok.id).count, 3);
+  gemini.entitlementStatus = 'failed';
+  const allocation = allocate([gemini, grok, gpt]);
+  assert.equal(allocation.has(gemini.id), false);
+  assert.equal(allocation.get(grok.id).count, 2);
+  assert.equal(allocation.get(gpt.id).amountUsd, '0.2500');
+  assert.equal(compute(grok, allocation).items.find(item => item.label === '开卡成本分摊').originalAmount, '0.2500');
+});
+
 test('自动订单按已确认开通回执的准确时间冻结汇率，并保留原已冻结记录', () => {
   const [a] = trio();
   const auto = { ...a, source: '线上代充', taskId: 'terminal', rechargeCompletedAt: '2026-11-03T04:00:35.000Z' };
