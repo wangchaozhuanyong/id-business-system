@@ -8,6 +8,7 @@ import {
   applyOrderCompletion, OrderCompletionError, readOrderCompletion, rechargePriceSnapshot, requireCompletionActor
 } from './order-completion.mjs';
 import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransferView, TenantOwnerTransferError } from './tenant-owner-transfer.mjs';
+import { prepareTenantRenewalWrite, tenantRenewalHandledAction, tenantRenewalSettingsAction } from './tenant-renewal-reminders.mjs';
 import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots } from './finance/snapshot-integrity.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
@@ -145,6 +146,8 @@ const actionsByDomain = {
     '恢复资料',
     '新增独立订单',
     '更新续费提醒设置',
+    tenantRenewalSettingsAction,
+    tenantRenewalHandledAction,
     '拒续费',
     '恢复续费提醒',
     snapshotAction,
@@ -1592,6 +1595,9 @@ export function createLocalBusinessStore(databasePath) {
           if ('renewalWarningHours' in commerce) delete commerce.renewalWarningDays;
           else if (!('renewalWarningDays' in commerce) && priorCommerce?.renewalWarningDays !== undefined)
             commerce.renewalWarningDays = priorCommerce.renewalWarningDays;
+          const { action } = writes.find((write) => write.domain === 'commerce');
+          try { prepareTenantRenewalWrite(priorCommerce, commerce, action, actor); }
+          catch (error) { throw new LocalDataError(error.status || 400, error.message); }
           checkCustomerTagAssignments(
             priorCommerce, commerce, (incoming.get('settings') ?? current('settings'))?.customerTags
           );
@@ -1603,7 +1609,6 @@ export function createLocalBusinessStore(databasePath) {
             catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
             attributeCommerce(commerce, priorCommerce, actor, owners, current(subscriptionDomain));
           } else checkTenantTransferHistory(commerce.tenants, priorCommerce?.tenants);
-          const { action } = writes.find((write) => write.domain === 'commerce');
           const oldOrders = priorCommerce?.orders || [];
           const priorById = new Map(oldOrders.map((row) => [row.id, row]));
           const nextById = new Map(commerce.orders.map((row) => [row.id, row]));

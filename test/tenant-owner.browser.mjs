@@ -149,6 +149,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     await page.locator('#commerce-ownerId option[value="staff"]').waitFor({ state: 'attached' });
     await page.locator('#commerce-ownerId').selectOption(staff.id, { force: true });
     await page.locator('#commerce-email').fill('preserve-order@example.test');
+    await page.locator('#commerce-proMaterialMode').selectOption('people');
     await page.locator('[data-action="commerce-quick-tenant"]').click();
     await owner.locator('option[value="staff"]').waitFor({ state: 'attached' });
     assert.equal(await owner.inputValue(), actor.id, '快捷新增也默认实际录入人，不沿用订单所选员工');
