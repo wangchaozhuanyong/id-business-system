@@ -4,9 +4,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
 
-const subscription = 'data-management/claude-google-subscriptions';
+const subscription = 'subscriptions/claude';
 const recharge = 'online-recharge/chatgpt';
-const panelSelector = '#claude-google-subscriptions';
+const panelSelector = '#subscriptions-panel';
 const frameSelector = '#main > [data-page-region]:not([hidden]) iframe:not([hidden])';
 const actor = { id: 'transition-admin', name: '隔离验收管理员', role: 'super' };
 const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/subscription-transition-fix-20261110';
@@ -29,20 +29,22 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         const gate = { status, late, started: Promise.withResolvers(), released: Promise.withResolvers(), done: Promise.withResolvers() };
         pending = gate; gates.push(gate); return gate;
       };
-      await context.route('**/api/local/claude-google-subscriptions/list', async route => {
+      await context.route('**/api/local/subscriptions/list', async route => {
         const parameters = route.request().postDataJSON();
         calls.push(parameters);
         const id = ++sequence, gate = pending;
         pending = undefined;
         const rows = Array.from({ length: parameters.query === '空结果' ? 0 : total }, (_, i) => ({
-          id: `transition-row-${i}`, email: `transition-${i}@example.test`,
-          password: `SYNTHETIC-TRANSITION-PASSWORD-${i}${gate?.late ? '-LATE-CANCELLED' : ''}`,
-          totp: `SYNTHETIC-2FA-${i}`, queryCode: '', credentialStatus: 'available',
-          codeStatus: 'missing', operatorName: '隔离样例'
+          id: `transition-row-${i}`, product: 'Claude', account: `transition-${i}@example.test`,
+          registrationEmail: `transition-${i}@example.test`, ownerName: '', conflict: false,
+          series: [{ plan: gate?.late ? 'LATE-CANCELLED' : 'Pro', start: '2026-11-01 10:00',
+            expiry: '2026-12-01 10:00', status: 'active', remainingDays: 21 }], history: [],
+          queryCode: { status: 'missing', remainingDays: null }, operatorName: '隔离样例'
         }));
         const page = Math.min(parameters.page, Math.max(1, Math.ceil(rows.length / parameters.pageSize)));
         const data = { items: rows.slice((page - 1) * parameters.pageSize, page * parameters.pageSize),
-          total: rows.length, page, pageSize: parameters.pageSize, revision: `transition-${id}`, now: new Date().toISOString() };
+          total: rows.length, page, pageSize: parameters.pageSize,
+          counts: { active: rows.length, expired: 0, pending: 0, ended: 0 }, revision: `transition-${id}`, now: new Date().toISOString() };
         if (gate) { gate.started.resolve(); await gate.released.promise; }
         await route.fulfill({ status: gate?.status || 200, json: gate?.status >= 400 ? { error: '隔离读取失败' } : data }).catch(() => {});
         gate?.done.resolve();
@@ -70,7 +72,7 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         const probe = window.subscriptionTransitionProbe = { running: true, frames: [] };
         const tick = () => {
           const main = document.getElementById('main'), region = main.querySelector(':scope > [data-page-region]:not([hidden])');
-          const panel = region?.querySelector('#claude-google-subscriptions'), frame = region?.querySelector('iframe:not([hidden])');
+          const panel = region?.querySelector('#subscriptions-panel'), frame = region?.querySelector('iframe:not([hidden])');
           const progress = panel?.querySelector('[data-region-loading]:not([hidden])');
           probe.frames.push({ route: main.dataset.layoutRoute, height: panel?.getBoundingClientRect().height,
             frameHeight: frame?.getBoundingClientRect().height, frameView: frame?.dataset.view,
@@ -104,8 +106,8 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         const cardHeight = await page.locator(frameSelector).evaluate(node => node.getBoundingClientRect().height);
         for (let i = 0; i < 2; i++) {
           const gate = hold(); await startProbe(); await navigate(subscription); await gate.started.promise;
-          await page.locator('#claude-google-read-status:not([hidden])').waitFor();
-          assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 0, '重新读取前不显示旧资料');
+          await page.locator('#subscription-read-status:not([hidden])').waitFor();
+          assert.equal(await page.locator('#subscription-list tr[data-row-id]').count(), 0, '重新读取前不显示旧资料');
           assert(!await page.locator(panelSelector).evaluate(node => /SYNTHETIC-|transition-\d+@/.test(node.textContent)));
           await settle(page); gate.released.resolve(); await ready();
           const forward = (await record('cards-to-subscriptions')).filter(frame => frame.route === subscription);
@@ -124,20 +126,20 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         late.released.resolve(); await late.done.promise; await settle(page);
         assert(!await page.locator(panelSelector).evaluate(node => node.textContent.includes('LATE-CANCELLED')));
 
-        const form = await page.locator('#claude-google-filter-form').elementHandle();
-        const search = page.locator('#claude-google-query');
+        const form = await page.locator('#subscription-filter').elementHandle();
+        const search = page.locator('#subscription-query');
         const failure = hold(503); const beforeRefresh = await panelHeight();
-        await page.locator('[data-action="claude-google-refresh"]').click(); await failure.started.promise;
-        await page.locator('#claude-google-read-status:not([hidden])').waitFor();
+        await page.locator('[data-action="subscriptions-refresh"]').click(); await failure.started.promise;
+        await page.locator('#subscription-read-status:not([hidden])').waitFor();
         await search.fill('未提交的搜索内容');
         assert.equal(await panelHeight(), beforeRefresh, '加载文字不得撑高页面');
         failure.released.resolve(); await ready();
-        await page.locator('#claude-google-read-error').getByText(/已保留上次读取的资料/).waitFor();
+        await page.locator('#subscription-read-error').getByText(/已保留上次读取的资料/).waitFor();
         assert.equal(await search.inputValue(), '未提交的搜索内容');
-        assert(await page.locator('#claude-google-filter-form').evaluate((node, previous) => node === previous, form));
-        assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), total ? 20 : 0);
-        await page.locator('[data-action="claude-google-refresh"]').click(); await ready();
-        assert(await page.locator('#claude-google-read-error').isHidden());
+        assert(await page.locator('#subscription-filter').evaluate((node, previous) => node === previous, form));
+        assert.equal(await page.locator('#subscription-list tr[data-row-id]').count(), total ? 20 : 0);
+        await page.locator('[data-action="subscriptions-refresh"]').click(); await ready();
+        assert(await page.locator('#subscription-read-error').isHidden());
         await form.dispose();
 
         if (total) {
@@ -145,27 +147,27 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
           for (let i = 0; i < 2; i++) {
             await page.getByRole('button', { name: '下一页', exact: true }).focus();
             await page.keyboard.press('Enter'); await ready();
-            assert(await page.evaluate(() => Boolean(document.activeElement.closest('#claude-google-list .pagination'))), '异步翻页完成后保留键盘操作位置');
+            assert(await page.evaluate(() => Boolean(document.activeElement.closest('#subscription-list .pagination'))), '异步翻页完成后保留键盘操作位置');
           }
-          assert.equal(calls.at(-1).page, 3); assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 3);
+          assert.equal(calls.at(-1).page, 3); assert.equal(await page.locator('#subscription-list tr[data-row-id]').count(), 3);
           assert.equal(await panelHeight(), firstHeight, '末页不缩小表格框架');
-          await page.locator('#claude-google-list [data-pagination-size]').selectOption('10'); await ready();
+          await page.locator('#subscription-list [data-pagination-size]').selectOption('10'); await ready();
           assert.equal(calls.at(-1).pageSize, 10); assert.equal(calls.at(-1).page, 1);
           const fullHeight = await panelHeight();
           await search.fill('空结果'); await search.press('Enter'); await ready();
-          assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 0);
+          assert.equal(await page.locator('#subscription-list tr[data-row-id]').count(), 0);
           assert.equal(await panelHeight(), fullHeight, '空结果不缩小表格框架');
           await search.fill(''); await search.press('Enter'); await ready();
         }
 
         // The same shared loading primitive also serves a drawer form.
         settingsGate = { started: Promise.withResolvers(), released: Promise.withResolvers() }; gates.push(settingsGate);
-        await page.locator('[data-action="claude-google-copy-settings"]').click(); await settingsGate.started.promise;
-        const input = page.locator('#claude-google-copy1'), bounds = await input.boundingBox();
-        await page.locator('#claude-google-settings-status:not([hidden])').waitFor();
+        await page.locator('[data-action="subscriptions-settings"]').click(); await settingsGate.started.promise;
+        const input = page.locator('#subscription-copy1'), bounds = await input.boundingBox();
+        await page.locator('#subscription-settings-status:not([hidden])').waitFor();
         assert.deepEqual(await input.boundingBox(), bounds, '抽屉加载反馈不移动输入');
         await input.fill('读取期间的新输入'); settingsGate.released.resolve();
-        await page.locator('#claude-google-copy-settings-form [type="submit"]:enabled').waitFor();
+        await page.locator('#subscription-settings-form [type="submit"]:enabled').waitFor();
         assert.equal(await input.inputValue(), '读取期间的新输入');
         await page.keyboard.press('Escape');
         await page.locator('#drawer').waitFor({ state: 'hidden' });
@@ -174,11 +176,11 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
           await page.evaluate(() => { window.IDDesignAPI.clearPageRegions(); window.IDDesignAPI.render(); });
           await firstFailure.started.promise;
           assert(!await page.locator(panelSelector).evaluate(node => node.textContent.includes('SYNTHETIC-')), '身份清理后不保留旧资料');
-          assert.equal(await page.locator('#claude-google-list .pagination').count(), 0, '首次未读取时不显示虚假的零条总数');
+          assert.equal(await page.locator('#subscription-list .pagination').count(), 0, '首次未读取时不显示虚假的零条总数');
           firstFailure.released.resolve(); await ready();
-          await page.locator('#claude-google-list').getByRole('heading', { name: '读取订阅资料失败，请刷新重试', exact: true }).waitFor();
-          await page.locator('[data-action="claude-google-refresh"]').click(); await ready();
-          assert.equal(await page.locator('#claude-google-list tr[data-row-id]').count(), 20);
+          await page.locator('#subscription-list').getByRole('heading', { name: '读取订阅资料失败，请刷新重试', exact: true }).waitFor();
+          await page.locator('[data-action="subscriptions-refresh"]').click(); await ready();
+          assert.equal(await page.locator('#subscription-list tr[data-row-id]').count(), 10, '保留用户选中的每页条数');
         }
         await page.screenshot({ path: output + `/subscriptions-${width}-${theme}-${total}.png` });
         assert.deepEqual(errors, []); assert.deepEqual(requests.unavailable, []); assert.deepEqual(requests.external, []);

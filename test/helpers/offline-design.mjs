@@ -5,10 +5,10 @@ import { loadCodexdaichongAssets } from '../../modules/recharge/codexdaichong/as
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
-export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false } = {}) {
+export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, skipRechargeAssets = false } = {}) {
   const unavailable = [],
     external = [];
-  rechargeAssets ??= await loadCodexdaichongAssets();
+  if (!skipRechargeAssets) rechargeAssets ??= await loadCodexdaichongAssets();
   const handle = async (route) => {
     const url = new URL(route.request().url());
     if (url.origin !== origin) {
@@ -53,7 +53,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       );
     }
     if (url.pathname.startsWith(prefix + '/')) {
-      const asset = rechargeAssets.get(url.pathname.slice(prefix.length));
+      const asset = rechargeAssets?.get(url.pathname.slice(prefix.length));
       if (asset)
         return route.fulfill({
           body: asset.body,
@@ -66,6 +66,8 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       if (resource === 'apple-relay/status')
         return json({ configured: true, parentIds: [], aliasIds: [] });
       if (resource === 'audit') return json([]);
+      if (resource === 'subscriptions/lookup' && !localFixtures?.[resource])
+        return json({ ownerId: '', ownerName: '' });
       return json(localFixtures?.[resource] ?? { version: 0, data: null, items: [] });
     }
     let file = path.join(

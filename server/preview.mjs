@@ -27,6 +27,7 @@ import { createOrderRechargeClient, readPoolCards } from './order-recharge-clien
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
 import { cardManagementRoutes, createCardManagementHandler } from './card-management.mjs';
 import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
+import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
@@ -64,6 +65,7 @@ const files = new Map([
     'apple-balance-prototype',
     'commerce-prototype',
     'claude-google-subscriptions',
+    'subscription-management',
     'employee-statistics',
     'order-operations',
     'order-completion',
@@ -184,7 +186,7 @@ export async function startPreview(
   let setupIndex = null;
   let handleAutomaticSnapshot = null;
   let financeCollection = null, handleFinanceCollection = null;
-  let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleRechargeCodes, orderSync;
+  let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
   let handleEmployeeStatistics;
   let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
@@ -249,6 +251,8 @@ export async function startPreview(
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
+      handleSubscriptions = createSubscriptionHandler({ store, publicOrigin: secureOrigin,
+        readOwners: () => auth?.orderOwners() || [] });
       handleEmployeeStatistics = createEmployeeStatisticsHandler({
         store, client: orderRechargeClient, publicOrigin: secureOrigin, readEmployees: () => auth.orderOwners()
       });
@@ -492,6 +496,11 @@ export async function startPreview(
       response.setHeader('Cache-Control', 'private, no-store');
       if (!actor || !canManage) return forbidden();
       return void handleClaudeGoogleSubscriptions(request, response, route, actor);
+    }
+    if (store && subscriptionRoutes.has(route)) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (!actor || !canManage) return forbidden();
+      return void handleSubscriptions(request, response, route, actor);
     }
     if (store && route === employeeStatisticsRoute)
       return void handleEmployeeStatistics(request, response, actor);

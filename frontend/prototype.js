@@ -241,6 +241,12 @@ const navigation = [
       ['Grok 订单', 'orders/grok']
     ]
   ],
+  ['订阅管理', 'orders', [
+    ['GPT 订阅管理', 'subscriptions/gpt'],
+    ['Claude 订阅管理', 'subscriptions/claude'],
+    ['Gemini 订阅管理', 'subscriptions/gemini'],
+    ['Grok 订阅管理', 'subscriptions/grok']
+  ]],
   [
     '线上代充',
     'card',
@@ -252,7 +258,6 @@ const navigation = [
   ['数据管理', 'database', [
     ['订单统计', 'orders/statistics'],
     ['银行卡管理', 'data-management/bank-cards'],
-    ['Claude 谷歌订阅管理', 'data-management/claude-google-subscriptions'],
     ['客户流失', 'workspace/customer-loss'],
     ['员工数据统计', 'data-management/employee-statistics']
   ]],
@@ -1617,7 +1622,8 @@ function navigate(event) {
   const entryRouteAliases = {
     'workspace/account-submit': 'workspace/account-extract',
     'workspace/mail-submit': 'workspace/mail-extract',
-    'workspace/my-recharge-codes': 'workspace/recharge-codes'
+    'workspace/my-recharge-codes': 'workspace/recharge-codes',
+    'data-management/claude-google-subscriptions': 'subscriptions/claude'
   };
   if (entryRouteAliases[next]) {
     next = entryRouteAliases[next];

@@ -213,6 +213,12 @@
     copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
       request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
     claudeGoogleSubscriptions: (params) => request('claude-google-subscriptions/list', params, 'POST'),
+    subscriptions: (params) => request('subscriptions/list', params, 'POST'),
+    subscriptionAccount: (accountId) => request('subscriptions/account', { accountId }, 'POST'),
+    subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
+    subscriptionCopy: (command) => request('subscriptions/copy', command, 'POST'),
+    subscriptionConfirm: (command) => write(['subscription-management'], () => request('subscriptions/confirm', command, 'POST')),
+    subscriptionOwner: (command) => write(['subscription-management'], () => request('subscriptions/owner', command, 'POST')),
     claudeHistoryIntake: (command) => command.mode === 'preview'
       ? request('claude-history-intake', command, 'POST')
       : write(['inventory'], () => request('claude-history-intake', command, 'POST')),
