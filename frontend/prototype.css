@@ -4015,6 +4015,14 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .commerce-entry-layout #commerce-order-form .commerce-search-picker:not(.commerce-email-history) > .commerce-picker-trigger {
   flex-basis: min(100%, 160px);
 }
+.commerce-entry-layout #commerce-order-form [data-commerce-field='ownerId'] {
+  grid-column: 1 / -1;
+}
+.commerce-entry-layout #commerce-order-form [data-commerce-field='ownerId'] .commerce-picker-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .commerce-entry-layout .order-value-readout {
   margin: 6px 0 0;
   overflow-wrap: anywhere;
@@ -4037,7 +4045,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .entry-records .section-title-row {
   min-width: 0;
 }
-.entry-record-filters,
+.entry-record-actions,
 .entry-date-range,
 .entry-periods {
   display: flex;
@@ -4045,11 +4053,13 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
 }
-.entry-record-filters {
-  padding: var(--toolbar-padding-block) var(--panel-padding-inline);
+.entry-record-actions {
+  min-width: 0;
+  margin-inline-start: auto;
+  justify-content: flex-end;
 }
 .entry-date-range {
-  flex-basis: 100%;
+  padding: var(--toolbar-padding-block) var(--panel-padding-inline);
 }
 .entry-date-range[hidden] { display: none; }
 .entry-date-range > label {

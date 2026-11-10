@@ -44,7 +44,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     });
     const page = await context.newPage();
     page.setDefaultTimeout(6000);
-    const state = { rows: [], version: 6, invalidations: 0, failRead: false, failWrite: false, holdRead: null, reads: 0, writes: [] };
+    const state = { rows: [], version: 6, invalidations: 0, failRead: false, failWrite: false, holdRead: null, holdWrite: null, reads: 0, writes: [] };
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await context.route('**/api/local/bitbrowser-addresses*', async route => {
@@ -76,6 +76,12 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
       assert.equal(req.method(), 'PUT');
       const body = req.postDataJSON();
       state.writes.push(body);
+      if (state.holdWrite) {
+        const hold = state.holdWrite;
+        state.holdWrite = null;
+        hold.started();
+        await hold.done;
+      }
       if (state.failWrite) return route.fulfill({ status: 503, json: { error: '合成保存失败' } });
       const now = '2026-11-10T08:19:00Z';
       const change = Object.hasOwn(body, 'count') ? generateBitBrowserAddresses(state.rows, body.count, now)
@@ -94,7 +100,18 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     const frame = page.frameLocator('.recharge-integration__frame--bit-local');
     await frame.locator('#bit-window-name').fill('不可清空的登录草稿');
     const total = count => panel.locator('[data-pagination][data-total="' + count + '"]').waitFor();
-    const settled = () => page.waitForFunction(() => !document.querySelector('#bit-address-generate-button').disabled);
+    const settled = () => page.waitForFunction(() => !document.querySelector('#bit-address-generate-open').disabled);
+    const openGenerator = async () => {
+      await panel.locator('#bit-address-generate-open').click();
+      const drawer = page.getByRole('dialog', { name: '生成地址', exact: true });
+      await drawer.waitFor();
+      return drawer;
+    };
+    const generate = async () => {
+      const drawer = await openGenerator();
+      await drawer.locator('#bit-address-generate-button').click();
+      return drawer;
+    };
     const assertClean = async () => {
       assert.deepEqual(errors, []);
       assert.deepEqual(network.external, []);
@@ -102,14 +119,49 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
       assert.equal(await frame.locator('#bit-window-name').inputValue(), '不可清空的登录草稿');
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     };
-    return { page, panel, pager, state, total, settled, assertClean };
+    return { page, panel, pager, state, total, settled, openGenerator, generate, assertClean };
   }
 
   for (const width of [1440, 390]) await t.test(width + 'px 生成、导入、复制标记与删除均只写一次，通知打断后自动显示结果', async t => {
-    const { page, panel, state, total, settled, assertClean } = await setup(t, width);
+    const { page, panel, state, total, settled, openGenerator, assertClean } = await setup(t, width);
     if (width === 1440) await page.locator('#theme-toggle').click();
+    assert.equal(await panel.locator('#bit-address-generate-count').count(), 0);
+    const drawer = await openGenerator();
+    const count = drawer.getByLabel('生成数量');
+    const submit = drawer.locator('#bit-address-generate-button');
+    assert.equal(await count.inputValue(), '10');
+    await count.fill('101');
+    await submit.click();
+    await drawer.getByText('每次可生成 1 至 100 条地址', { exact: true }).waitFor();
+    assert.equal(state.writes.length, 0);
+    await count.fill('8');
+    await drawer.getByRole('button', { name: '取消', exact: true }).click();
+    await drawer.waitFor({ state: 'hidden' });
+    await openGenerator();
+    assert.equal(await count.inputValue(), '8', '关闭重开保留生成数量');
+    await count.fill('10');
+
     state.invalidations = 1;
-    await panel.locator('#bit-address-generate-button').click();
+    let writeStarted, releaseWrite;
+    const started = new Promise(resolve => { writeStarted = resolve; });
+    const done = new Promise(resolve => { releaseWrite = resolve; });
+    state.holdWrite = { started: writeStarted, done };
+    try {
+      await submit.click();
+      await started;
+      assert.equal(await submit.innerText(), '生成中…');
+      assert.equal(await submit.isDisabled(), true);
+      assert.equal(await drawer.getByRole('button', { name: '取消', exact: true }).isDisabled(), true);
+      await page.keyboard.press('Escape');
+      assert(await drawer.isVisible(), '保存期间 Escape 不关闭抽屉');
+      if (width === 1440) {
+        await page.mouse.click(10, 100);
+        assert(await drawer.isVisible(), '保存期间点击背景不关闭抽屉');
+      }
+    } finally {
+      releaseWrite();
+    }
+    await drawer.waitFor({ state: 'hidden' });
     await total(10);
     await settled();
     await page.locator('#toast').getByText('已成功生成 10 条地址', { exact: true }).waitFor();
@@ -150,9 +202,9 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
   });
 
   await t.test('持续变更或读失败明确显示已保存，保留旧列表并允许手动读取，不重发写操作', async t => {
-    const { page, panel, state, total, settled, assertClean } = await setup(t);
+    const { panel, state, total, settled, generate, assertClean } = await setup(t);
     state.invalidations = 3;
-    await panel.locator('#bit-address-generate-button').click();
+    await generate();
     await panel.getByText(/已成功生成 10 条地址.*地址列表持续更新.*请点击刷新重试/).waitFor();
     await settled();
     assert.equal(state.reads, 4, '自动读取最多三次，避免持续通知造成无限请求');
@@ -163,7 +215,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     assert.equal(state.writes.length, 1);
 
     state.failRead = true;
-    await panel.locator('#bit-address-generate-button').click();
+    await generate();
     await panel.getByText(/已成功生成 10 条地址.*合成读取失败.*请点击刷新重试/).waitFor();
     await settled();
     assert.equal(state.rows.length, 20);
@@ -175,21 +227,28 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     assert.equal(state.writes.length, 2);
 
     state.failWrite = true;
-    await panel.locator('#bit-address-generate-button').click();
-    await panel.getByText('合成保存失败', { exact: true }).waitFor();
+    const drawer = await generate();
+    await drawer.getByRole('alert').filter({ hasText: '合成保存失败' }).waitFor();
     await settled();
+    assert.equal(await drawer.getByLabel('生成数量').inputValue(), '10');
+    assert.equal(await drawer.locator('#bit-address-generate-button').isEnabled(), true);
     assert.equal(state.rows.length, 20);
     assert.equal(await panel.locator('#bit-address-feedback').textContent(), '合成保存失败');
+    state.failWrite = false;
+    await drawer.locator('#bit-address-generate-button').click();
+    await drawer.waitFor({ state: 'hidden' });
+    await total(30);
+    assert.equal(state.writes.length, 4, '重试只提交一次');
     await assertClean();
   });
 
   await t.test('会话缓存被清理后不重新发起受保护读取，也不恢复迟到资料', async t => {
-    const { page, panel, state, total, settled, assertClean } = await setup(t);
+    const { page, state, total, settled, generate, assertClean } = await setup(t);
     let resolveStarted, release;
     const started = new Promise(resolve => { resolveStarted = resolve; });
     const done = new Promise(resolve => { release = resolve; });
     state.holdRead = { started: resolveStarted, done };
-    await panel.locator('#bit-address-generate-button').click();
+    await generate();
     await started;
     await page.evaluate(() => window.IDLocalData.queries.clear());
     release();
@@ -204,12 +263,12 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
   });
 
   await t.test('等待刷新时切换页签或暂离保留页面，不覆盖当前查看状态与草稿', async t => {
-    const { page, panel, state, total, settled, assertClean } = await setup(t);
+    const { page, panel, state, total, settled, generate, assertClean } = await setup(t);
     let resolveStarted, release;
     const started = new Promise(resolve => { resolveStarted = resolve; });
     const done = new Promise(resolve => { release = resolve; });
     state.holdRead = { started: resolveStarted, done };
-    await panel.locator('#bit-address-generate-button').click();
+    await generate();
     await started;
     await panel.locator('#bit-address-tab-used').click();
     await total(0);
@@ -227,7 +286,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     const doneAgain = new Promise(resolve => { release = resolve; });
     state.holdRead = { started: resolveStarted, done: doneAgain };
     state.invalidations = 1;
-    await panel.locator('#bit-address-generate-button').click();
+    await generate();
     await startedAgain;
     await page.evaluate(() => { location.hash = '#/customers/new'; });
     await page.locator('#commerce-contact-form').waitFor();

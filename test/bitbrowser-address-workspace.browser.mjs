@@ -230,12 +230,28 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
     const tab = inner.querySelector('.bit-local__workspace-bar [aria-selected="true"]');
     const left = read(inner.querySelector('.bit-workspace-heading'), tab, iframe.getBoundingClientRect().top,
       inner.querySelector('#bit-login-panel:not([hidden]) .bit-local__section, #bit-library-panel:not([hidden])'));
-    const right = read(document.querySelector('#bit-addresses-panel .bit-workspace-heading'),
-      document.querySelector('#bit-address-heading'), 0, document.querySelector('.bit-address-source-toolbar'));
-    return { left, right, hostOverflow: document.documentElement.scrollWidth - innerWidth,
-      frameOverflow: inner.documentElement.scrollWidth - iframe.clientWidth };
+    const heading = document.querySelector('#bit-addresses-panel .bit-workspace-heading');
+    const title = heading.querySelector('h2');
+    const right = read(heading, title, 0, document.querySelector('.bit-address-tabs'));
+    const bounds = heading.getBoundingClientRect();
+    const [titleBox, generate, file, importButton] = [
+      title, ...['#bit-address-generate-open', '#bit-address-file', '#bit-address-import-button']
+        .map(selector => heading.querySelector(selector))
+    ].map(node => node.getBoundingClientRect());
+    const middle = box => (box.top + box.bottom) / 2;
+    const centers = [titleBox, generate, file, importButton].map(middle);
+    return {
+      left, right,
+      oneRow: Math.max(...centers) - Math.min(...centers) <= 1,
+      titleAndGenerate: Math.abs(middle(titleBox) - middle(generate)) <= 1,
+      importBelow: file.top >= generate.bottom && importButton.top >= generate.bottom,
+      controlsInside: [generate, file, importButton].every(box =>
+        box.left >= bounds.left && box.right <= bounds.right && bounds.bottom - box.bottom >= 8),
+      hostOverflow: document.documentElement.scrollWidth - innerWidth,
+      frameOverflow: inner.documentElement.scrollWidth - iframe.clientWidth
+    };
   });
-  for (const width of [2040, 1440, 1180, 1024, 900, 390, 320]) {
+  for (const width of [2040, 1440, 1180, 1024, 901, 900, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 1100 });
     for (const theme of ['light', 'dark']) {
       if (await page.evaluate(() => document.documentElement.dataset.theme) !== theme) await page.locator('#theme-toggle').click();
@@ -244,10 +260,16 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
         await settle(page);
         const result = await measure();
         const { left, right } = result;
-        assert.equal(left.height, right.height, '顶部栏高度一致');
         assert.equal(left.fontSize, right.fontSize, '字号一致');
         assert.equal(left.lineHeight, right.lineHeight, '行高一致');
-        assert(Math.abs((left.textTop - left.top) - (right.textTop - right.top)) <= 1, '真实文字顶边一致');
+        assert(result.controlsInside, '生成、导入控件完整并与分隔线留有间距');
+        assert.equal(result.oneRow, width >= 768, `${width}px ${theme} ${view} 的地址操作栏布局`);
+        if (result.oneRow) {
+          assert.equal(left.height, right.height, '同排时顶部栏高度一致');
+          assert(Math.abs((left.textTop - left.top) - (right.textTop - right.top)) <= 1, '真实文字顶边一致');
+        } else {
+          assert(result.titleAndGenerate && result.importBelow, '手机首行标题和生成，次行导入');
+        }
         if (view === 'login') assert(Math.abs(left.textInset - right.textInset) <= 1, '首个标题左右内距一致');
         assert(Math.abs((left.contentTop - left.bottom) - (right.contentTop - right.bottom)) <= 1, '内容区起始留白一致');
         if (width >= 1180) {
@@ -305,18 +327,22 @@ test('地址生成收到保存回执后提示成功并自动消失，写入失�
     await page.clock.install();
     await page.goto(origin + '/#/recharge/start');
     if (width === 390) await page.locator('#theme-toggle').click();
-    const generate = page.locator('#bit-address-generate-button'), toast = page.locator('#toast');
+    const openGenerator = page.locator('#bit-address-generate-open');
+    const drawer = page.getByRole('dialog', { name: '生成地址', exact: true });
+    const generate = drawer.locator('#bit-address-generate-button'), toast = page.locator('#toast');
     const notice = page.locator('#bit-address-feedback');
     await page.locator('#bit-address-list').getByText(sample.line1, { exact: true }).waitFor();
-    await page.locator('#bit-address-generate-count').fill('3');
+    await openGenerator.click();
+    await drawer.getByLabel('生成数量').fill('3');
     await generate.click();
     await writeStarted.promise;
     assert(await generate.isDisabled());
     assert(await toast.isHidden(), '保存尚未确认时不能提示成功');
-    await page.locator('#bit-address-generate').dispatchEvent('submit');
+    await drawer.locator('#bit-address-generate').dispatchEvent('submit');
     assert.equal(writes, 1, '保存中不能重复生成');
     releaseWrite.resolve();
     await refreshStarted.promise;
+    await drawer.waitFor({ state: 'hidden' });
     await toast.getByText('已成功生成 3 条地址', { exact: true }).waitFor();
     assert.equal(await toast.getAttribute('data-kind'), 'success');
     assert.equal(await toast.getAttribute('role'), 'status');
@@ -326,7 +352,7 @@ test('地址生成收到保存回执后提示成功并自动消失，写入失�
     await page.clock.fastForward(2000);
     assert(await toast.isVisible(), '成功提示应留出阅读时间');
     releaseRefresh.resolve();
-    await page.waitForFunction(() => !document.querySelector('#bit-address-generate-button').disabled);
+    await page.waitForFunction(() => !document.querySelector('#bit-address-generate-open').disabled);
     assert(await notice.isHidden(), '列表刷新后不应留下重复成功提示');
     if (process.env.ID_LAYOUT_QA_OUTPUT) {
       await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
@@ -336,15 +362,18 @@ test('地址生成收到保存回执后提示成功并自动消失，写入失�
     assert(await toast.isHidden(), '成功提示应自动消失');
 
     failWrite = true;
+    await openGenerator.click();
     await generate.click();
-    await notice.getByText('地址保存失败，请重试', { exact: true }).waitFor();
+    const error = drawer.getByRole('alert').filter({ hasText: '地址保存失败，请重试' });
+    await error.waitFor();
     await page.clock.fastForward(5000);
     assert(await toast.isHidden(), '写入失败不得弹出成功提示');
-    assert(await notice.isVisible(), '失败原因应保留以便重试');
-    assert.equal(await page.locator('#bit-address-generate-count').inputValue(), '3');
+    assert(await error.isVisible(), '失败原因应保留在抽屉内以便重试');
+    assert.equal(await drawer.getByLabel('生成数量').inputValue(), '3');
     failWrite = false;
     failRead = true;
     await generate.click();
+    await drawer.waitFor({ state: 'hidden' });
     await toast.getByText('已成功生成 3 条地址', { exact: true }).waitFor();
     await notice.getByText(/已成功生成 3 条地址.*列表读取失败/).waitFor();
     await page.clock.fastForward(4500);

@@ -805,6 +805,7 @@ function closeDrawer() {
   toolEntry?.focus({ preventScroll: true });
 }
 function dismissDrawer() {
+  if ($('#drawer [data-protect-drawer-dismiss][aria-busy="true"]')) return;
   if ($('#drawer').dataset.layout === 'online-tool') {
     const tool = $('#drawer').dataset.tool;
     showTools('在线工具');
