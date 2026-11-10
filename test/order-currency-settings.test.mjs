@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderCurrencySettings } from '../server/order-currency-settings.mjs';
 import { validClaudePaidPrices, validGptPaidPrices, validOrderPrices } from '../server/order-policy.mjs';
-import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { calculateOrder, createOrderSnapshot, requiredQuoteCurrencies } from '../modules/finance/accounting.mjs';
 
 const gpt = [{ code: 'CNY', name: '人民币' }, { code: 'PHP', name: '菲律宾比索' }];
@@ -43,6 +44,41 @@ test('新增币种沿用精确金额和冻结汇率，缺少所需汇率时保�
   assert.equal(calculateOrder(order, { clock }).profit, '69.9992');
   quote.rates.EUR = '9';
   assert.equal(calculateOrder(order, { clock }).profit, '69.9992');
+});
+
+test('设置接口独立接收续费和成品号售价，非法成品价格在持久化前被拒绝', async () => {
+  const origin = 'https://price-settings.example.test';
+  const writes = [];
+  const store = { saveBatch(entries) {
+    writes.push(...entries);
+    return entries.map(entry => ({ ...entry, version: entry.version + 1 }));
+  } };
+  const orderPrices = { 'Claude Pro': { Pro: { CNY: '100' } } };
+  const stockOrderPrices = { 'Claude Pro': { Pro: { CNY: '180.1234', EGP: '' } } };
+  async function save(prices) {
+    const request = Readable.from([Buffer.from(JSON.stringify({ version: 0, action: 'order_prices_save',
+      data: { mailboxTypes: [], costSettings: {}, orderPrices, stockOrderPrices: prices } }))]);
+    Object.assign(request, { method: 'PUT', url: '/api/local/settings',
+      headers: { origin, 'content-type': 'application/json' } });
+    let status, body;
+    await handleLocalBusiness(request, {
+      writeHead(value) { status = value; }, end(value) { body = JSON.parse(value); }
+    }, request.url, store, { id: 'fixture-admin', role: 'admin' }, { publicOrigin: origin });
+    return { status, body };
+  }
+  for (const prices of [null, [], { unknown: {} }, { 'Claude Pro': { Pro: { CNY: '-1' } } },
+    { 'Claude Pro': { Pro: { CNY: '1.00001' } } }]) {
+    const result = await save(prices);
+    assert.equal(result.status, 400);
+    assert.match(result.body.error, /成品号售价/);
+  }
+  assert.equal(writes.length, 0);
+  const result = await save(stockOrderPrices);
+  assert.equal(result.status, 200);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].action, 'order_prices_save');
+  assert.deepEqual(result.body.data.orderPrices, orderPrices);
+  assert.deepEqual(result.body.data.stockOrderPrices, stockOrderPrices);
 });
 
 test('GPT 与 Claude 的代付价格限各自套餐和国家币种，其他设置保存时保留', () => {

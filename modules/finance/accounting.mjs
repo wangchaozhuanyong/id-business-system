@@ -1,5 +1,5 @@
 // Browser and server share this module. Monetary inputs and outputs are decimal strings.
-export const currencies = Object.freeze(['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR']);
+export const currencies = Object.freeze(['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR', 'EGP']);
 export const validCurrencyCode = code => typeof code === 'string' && /^[A-Z]{3}$/.test(code);
 export const snapshotAction = '登记订单汇率快照';
 export const automaticProvider = Object.freeze({

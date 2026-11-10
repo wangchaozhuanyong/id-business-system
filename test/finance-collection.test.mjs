@@ -13,7 +13,7 @@ const actor = { id: 'fixture-admin', name: '合成管理员', role: 'admin' };
 function providerResponse(now, overrides = {}) {
   return Response.json({ result: 'success', base_code: 'CNY', time_eol_unix: 0,
     time_last_update_unix: (now - hour) / 1000, time_next_update_unix: (now + 23 * hour) / 1000,
-    rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500 }, ...overrides });
+    rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500, EGP: 6.25 }, ...overrides });
 }
 const order = () => ({ id: 'fixture-order', start: '2026-11-07T16:30', product: 'GPT', payment: '银行卡',
   paidAmount: '1000', paidCurrency: 'PHP', saleAmount: '250', saleCurrency: 'CNY', refunds: [], bankReturns: [],
@@ -70,7 +70,8 @@ test('来源默认关闭，管理员配置后生效；暂停自动采集仍可�
   await assert.rejects(f.collection.collect('automatic'), /暂停/);
   await f.collection.collect('manual', actor);
   assert.equal(f.calls(), 1);
-  assert.equal(f.collection.view().validCount, 5);
+  assert.equal(f.collection.view().validCount, 6);
+  assert.equal(f.collection.view({ currency: 'EGP' }).rows[0].rate, '0.16000000');
   assert.equal(f.collection.view().nextExpiryAt, new Date(initial + 23 * hour).toISOString());
 });
 
@@ -149,7 +150,7 @@ test('持久任务所有权阻止第二实例并发，采集中修改配置不�
   assert.equal(f.calls(), 1);
   assert.equal(f.collection.read().data.settings.enabled, false);
   assert.deepEqual(f.collection.read().data.settings.currencies, ['MYR']);
-  assert.equal(f.collection.read().data.runs[0].currencies.length, 5);
+  assert.equal(f.collection.read().data.runs[0].currencies.length, 6);
   second.close();
 });
 
@@ -237,7 +238,11 @@ test('管理接口拒绝员工、跨站、非法参数和未经预览确认的�
   assert.equal((await call({ actor: null })).status, 401);
   assert.equal((await call({ actor: { ...actor, role: 'employee' } })).status, 403);
   assert.equal((await call({ headers: { origin: 'https://other.invalid' } })).status, 403);
-  for (const query of ['?page=-1', '?from=2026-02-31', '?tab=untrusted', '?page=1&page=2']) assert.equal((await call({ query })).status, 400);
+  for (const query of ['?page=-1', '?from=2026-02-31', '?tab=untrusted', '?page=1&page=2', '?currency=CNY'])
+    assert.equal((await call({ query })).status, 400);
+  const egypt = await call({ query: '?currency=EGP' });
+  assert.equal(egypt.status, 200);
+  assert.deepEqual(egypt.result.rows.map(row => row.currency), ['EGP']);
   const defaults = await call();
   assert.equal(defaults.status, 200);
   assert.equal(defaults.result.pageSize, 8);

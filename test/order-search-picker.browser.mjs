@@ -17,7 +17,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
     { ...customer, id: 'qa-disabled', name: '停用客户', active: false }
   ];
   const editedOrder = fixture.commerce.data.orders.find(order => order.product === 'GPT');
-  const longEmail = 'subscription-renewal-contact-20261110@customer-operations.example.test';
+  const longEmail = 'subscription-renewal-contact-20261110@customer-subscription-renewal-operations.example.test';
   const cardId = 'recharge:77', cardTypeId = 'qa-card-type';
   const cardTypeName = '跨境业务续费及订阅管理使用的测试银行卡类型名称';
   editedOrder.customerId = 'qa-alpha';

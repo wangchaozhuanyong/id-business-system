@@ -26,7 +26,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
       providerCalls++;
       return Response.json({ result: 'success', base_code: 'CNY', time_eol_unix: 0,
         time_last_update_unix: (now - 3_600_000) / 1000, time_next_update_unix: (now + 23 * 3_600_000) / 1000,
-        rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500 } });
+        rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500, EGP: 6.25 } });
     }
   });
   t.after(() => collection.close());
@@ -104,7 +104,8 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.goto(origin + '/#/settings/exchange-rates');
   await page.locator('table[data-table="fx-rates"] tbody tr').filter({ hasText: '美元' }).waitFor();
-  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 5);
+  await page.locator('table[data-table="fx-rates"] tbody tr').filter({ hasText: '埃及镑 EGP' }).waitFor();
+  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 6);
   const boot = await page.evaluate(() => window.fxBoot);
   const stable = reads;
   await page.evaluate(version => window.emitFxVersion(version), document.version);
@@ -152,8 +153,10 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.locator('tr[data-row-id="fxr-fixture-0"]').waitFor();
 
   await tab('采集设置'); await page.locator('#fx-settings-form').waitFor();
+  await page.waitForFunction(() => document.querySelector('#fx-progress')?.hidden);
   await page.locator('#fx-schedule').selectOption('interval');
   await page.locator('#fx-interval').fill('90');
+  assert.equal(await page.locator('#fx-interval').inputValue(), '90');
   await page.locator('#fx-currencies').click();
   await page.locator('#fx-currency-search').fill('美 USD');
   assert.equal(await page.locator('.fx-currency-options label:visible').count(), 1);
@@ -275,7 +278,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.getByRole('alert').getByText('合成读取失败，请重试').waitFor();
   const failedReads = reads;
   await settle(); assert.equal(reads, failedReads, '失败后不自动重复请求');
-  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 5);
+  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 6);
   rejectReads = false;
   await page.getByRole('button', { name: '刷新记录', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#fx-progress:not([hidden])'));

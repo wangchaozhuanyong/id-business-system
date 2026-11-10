@@ -933,8 +933,11 @@ body[data-recharge-workspace]::before {
 [data-recharge-workspace] .page-shell {
   --workspace-inset: clamp(16px, 2vw, 24px);
   --workspace-label: 104px;
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  max-width: 1200px;
+  max-width: none;
+  min-height: var(--workspace-available-height, 640px);
   margin-inline: auto;
   padding: clamp(12px, 2vw, 24px);
   animation: none;
@@ -949,6 +952,9 @@ body[data-recharge-workspace]::before {
 }
 
 [data-recharge-workspace] .recharge-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -1002,18 +1008,27 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 }
 
 [data-recharge-workspace] #workspaceOperation {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   padding: 16px 0 0;
+}
+
+[data-recharge-workspace] #workspaceOperation[hidden] {
+  display: none;
 }
 
 [data-recharge-workspace] #redeemSection {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(248px, 26%);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+  flex: 1;
   gap: 16px;
 }
 
 [data-recharge-workspace] .workspace-recharge-form {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
   min-width: 0;
 }
@@ -1029,12 +1044,134 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   background: var(--surface);
 }
 
+[data-recharge-workspace] .workspace-recharge-progress {
+  display: flex;
+  flex-direction: column;
+}
+
+[data-recharge-workspace] .workspace-log {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
+[data-recharge-workspace] :is(.workspace-log-toolbar, .workspace-log-actions, .workspace-log-footer) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+[data-recharge-workspace] :is(.workspace-log-toolbar, .workspace-log-footer) {
+  justify-content: space-between;
+}
+
+[data-recharge-workspace] .workspace-log-toolbar h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+[data-recharge-workspace] .workspace-log-follow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+[data-recharge-workspace] .workspace-log-follow input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+[data-recharge-workspace] .workspace-log-viewport {
+  flex: 1;
+  min-height: 320px;
+  height: 0;
+  contain: size;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+[data-recharge-workspace] .workspace-log-viewport:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+[data-recharge-workspace] .workspace-log-empty {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+[data-recharge-workspace] .workspace-log-entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+[data-recharge-workspace] .workspace-log-entries li {
+  padding-block: 6px;
+}
+
+[data-recharge-workspace] .workspace-log-entries time {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-recharge-workspace] .workspace-log-entries [data-tone='success'] {
+  color: var(--success);
+}
+
+[data-recharge-workspace] .workspace-log-entries [data-tone='review'] {
+  color: var(--warning-text);
+}
+
+[data-recharge-workspace] .workspace-log-entries [data-tone='error'] {
+  color: var(--error-text);
+}
+
+[data-recharge-workspace] .workspace-log-footer {
+  min-height: var(--control-height);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+[data-recharge-workspace] .workspace-log button {
+  width: auto;
+  min-height: var(--control-height);
+  margin: 0;
+  padding: 6px 12px;
+}
+
+[data-recharge-workspace] .workspace-log [hidden] {
+  display: none;
+}
+
 [data-recharge-workspace] .workspace-progress-heading {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px;
+  min-height: 36px;
 }
 
 [data-recharge-workspace] .workspace-progress-heading h2 {
@@ -1119,6 +1256,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
 [data-recharge-workspace] #step2 {
   grid-template-columns: var(--workspace-label) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   column-gap: 16px;
 }
 
@@ -1131,8 +1269,9 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 }
 
 [data-recharge-workspace] #tokenInput {
-  min-height: 104px;
-  height: 104px;
+  flex: 1;
+  min-height: 220px;
+  height: 0;
   resize: vertical;
 }
 
@@ -1236,8 +1375,14 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 }
 
 [data-recharge-workspace] .workspace-recharge-account {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   gap: 6px;
+}
+
+[data-recharge-workspace] .workspace-recharge-field--account {
+  align-items: stretch;
 }
 
 [data-recharge-workspace] .workspace-guide-link,
@@ -1552,6 +1697,24 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   margin: 0;
 }
 
+@media (min-width: 901px) and (max-width: 1500px) {
+  [data-recharge-workspace] .workspace-code-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-recharge-workspace] .workspace-code-actions {
+    justify-content: flex-end;
+  }
+
+  [data-recharge-workspace] .workspace-recharge-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-recharge-workspace] #step2 > .workspace-recharge-footer {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 900px) {
   :root {
     --control-height: 44px;
@@ -1580,7 +1743,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
 @media (max-width: 600px) {
   [data-recharge-workspace] .page-shell {
-    --workspace-label: 78px;
+    --workspace-label: 68px;
   }
 
   [data-recharge-workspace] .workspace-recharge-standalone-title h1 {
