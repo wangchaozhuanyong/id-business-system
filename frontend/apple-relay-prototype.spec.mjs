@@ -778,8 +778,11 @@ test('主邮箱与隐藏邮箱表单字段均有独立列，凭据仅显示配�
   const row = r.assets.find((item) => item.email === 'visible.fields@example.test');
   assert.equal(row.codeResetIntervalDays, 30);
   assert(row.importId);
+  const importCode = r.api.modules.appleRelay.displayImportId(row.importId);
+  assert(importCode.length <= 11);
+  assert.equal(table.columns.find((column) => column.id === 'importId').render(row), importCode);
   r.api.modules.appleRelay.openAliasDetail(row.id);
-  assert(r.opened.body.includes(row.importId));
+  assert(r.opened.body.includes(`<span>来源导入批次</span><strong>${importCode}</strong>`));
   assert(r.opened.body.includes('有效天数'));
 });
 

@@ -105,6 +105,7 @@
   const linkChoices = [['unknown', '未核验'], ['linked', '已绑定'], ['unlinked', '未绑定']];
   const labelOf = (choices, id) => choices.find(([value]) => value === id)?.[1] || '—';
   const currencyFamily = product => personalProduct(product) || product === 'GPT' ? product : 'Claude';
+  const orderSettingsFamilies = ['GPT', 'Claude', ...Object.keys(personalPlans)];
   function orderCurrencyRows(product) {
     return currencySettings.orderCurrenciesByProduct?.[currencyFamily(product)] || currencySettings.orderCurrencies ||
       currencies.map(code => ({ code, name: currencyNames[code] }));
@@ -117,10 +118,15 @@
     });
   const gptCardPayment = (product, payment) => product === 'GPT' && payment === '银行卡';
   function paidCurrencyChoices(product, payment, selected) {
-    if (!gptCardPayment(product, payment))
-      return currencyChoices(payment === '苹果内购' ? ['USD'] : orderCurrencyCodes(product), selected, product);
-    return currencyChoices([...new Set([...Object.keys(paymentCountries), ...orderCurrencyCodes(product)])], selected, product)
-      .map(([code, label]) => [code, paymentCountries[code] ? `${paymentCountries[code]} · ${currencyLabel(code)}` : `其他 · ${label}`]);
+    if (payment === '苹果内购') return currencyChoices(['USD'], selected, product);
+    const codes = orderCurrencyCodes(product), countries = Object.keys(paymentCountries);
+    if (gptCardPayment(product, payment))
+      return currencyChoices([...countries, ...codes], selected, product)
+        .map(([code, label]) => [code, paymentCountries[code] ? paymentCountryLabel(code) : `其他 · ${label}`]);
+    const prices = payment === '银行卡' ? Object.values(orderPaidPrices(product)) : [];
+    const configured = countries.filter(code => prices.some(amounts => amounts[code]));
+    return currencyChoices([...codes, ...configured], selected, product)
+      .map(([code, label]) => [code, configured.includes(code) ? paymentCountryLabel(code, label) : label]);
   }
   function refreshCurrencyFields(form, preserve = true) {
     if (!form?.isConnected) return;
@@ -337,7 +343,7 @@
       const draft = S.drafts.get(key) || {};
       A.openDrawer(`${family} 币种设置`, family === 'GPT'
         ? '维护 GPT 售卖币种及其他银行卡代付币种。固定的代付国家继续可选，苹果内购代付为美元。'
-        : family + ' 的代付和售卖币种。苹果内购代付为美元。',
+        : `维护 ${family} 的售卖与手工代付币种。已配置代付价的国家也可选，苹果内购代付为美元。`,
         `<form id="commerce-currencies-form" data-commerce-draft="${key}" novalidate>${input('currency-product', family, 'type="hidden"')}${input('currency-version', draft['commerce-currency-version'] ?? snapshot.version, 'type="hidden"')}${A.optionListEditor({ id: 'commerce-currency-options', label: '可选币种', itemLabel: '币种', values: orderCurrencyRows(product).map(row => `${row.name} ${row.code}`), minItems: 1, draft })}<p class="footnote">填写币种名称和三位代码，例如：欧元 EUR。没有有效汇率的新增币种保持待核算。</p></form>`,
         A.button('关闭', 'drawer-close') + A.button('读取最新', 'commerce-currency-reload', '', '', `data-product="${E(product)}"`) +
         '<button type="submit" form="commerce-currencies-form" class="button primary">保存币种设置</button>', key);
@@ -347,7 +353,7 @@
     if (!paymentSettingsActive() || form.getAttribute('aria-busy') === 'true') return;
     if (A.optionListPending(form)) { A.setError('commerce-currency-options', '请先添加或保存正在编辑的币种'); return; }
     const raw = A.readForm(form), family = value(raw, 'currency-product');
-    if (!['GPT', 'Claude'].includes(family)) return;
+    if (!orderSettingsFamilies.includes(family)) return;
     const rows = A.readOptionList(raw['commerce-currency-options']).map(text => {
       const match = /^(.{1,40}?)\s+([a-zA-Z]{3})$/.exec(text);
       return match ? { name: match[1].trim(), code: match[2].toUpperCase() } : null;
@@ -3222,12 +3228,16 @@
   function orderPrice(product, plan, currency, businessType) {
     return orderSalePrices(product, businessType)[plan]?.[currency] || '';
   }
+  const paidPriceSetting = product => product === 'GPT' ? ['gptPaidPrices', 'gpt_paid_prices_save']
+    : personalProduct(product) ? ['personalPaidPrices', 'personal_paid_prices_save']
+      : ['claudePaidPrices', 'claude_paid_prices_save'];
   function orderPaidPrices(product, settings = currencySettings) {
-    return (product === 'GPT' ? settings?.gptPaidPrices : settings?.claudePaidPrices?.[product]) || {};
+    const [key] = paidPriceSetting(product);
+    const prices = settings?.[key];
+    return (product === 'GPT' ? prices : prices?.[product]) || {};
   }
   function orderAmountReference(v, paid, status) {
     if (paid && v('payment') === '苹果内购') return '苹果内购按实际美元金额填写。';
-    if (paid && personalProduct(v('product'))) return '按本笔平台账单填写实际代付金额和币种。';
     if (status === 'loading') return '<span role="status">正在读取金额设置…</span>';
     if (status === 'error') return '<span role="status">金额设置暂时无法读取。</span> ' +
       A.textAction('重试', 'commerce-order-prices-retry');
@@ -3250,7 +3260,60 @@
   function orderAmountHeading(label, paid, v) {
     const content = orderAmountReference(v, paid, localData ? 'loading' : 'ready');
     const id = paid ? 'commerce-paid-price-reference' : 'commerce-sale-price-reference';
-    return `<div class="order-financial-heading"><div class="title-with-help"><h3>${label}</h3>${A.titleInfo(label + '金额', content, id, true)}</div><div class="order-financial-actions">${A.button(paid ? '代付金额' : '售卖价格', 'commerce-order-price-reference', '', '', `data-kind="${paid ? 'paid' : 'sale'}"`)}</div></div>`;
+    return `<div class="order-financial-heading"><div class="title-with-help"><h3>${label}</h3>${A.titleInfo(label + '金额', content, id, true)}</div><div class="order-financial-actions">${A.button(paid ? '查看代付价' : '查看售价', 'commerce-order-price-reference', '', '', `data-kind="${paid ? 'paid' : 'sale'}"`)}</div></div>`;
+  }
+  function orderAmountInput(v, name, readOnly = false) {
+    if (readOnly) return input(name, v(name), 'readonly placeholder="待核对"');
+    const paid = name === 'paidAmount';
+    const label = paid ? '选择代付金额' : '选择售卖金额';
+    return `<div class="order-amount-picker">
+      ${input(name, v(name), `inputmode="decimal" placeholder="${paid ? '实际代付金额' : '实际收到金额'}"`)}
+      ${A.button('', 'commerce-order-amount-options', '', 'down',
+        `data-field="${name}" aria-label="${label}" title="${label}" aria-haspopup="menu" aria-expanded="false"`)}
+    </div>`;
+  }
+  function orderPresetAmount(form, name) {
+    const fields = form.elements;
+    const paid = name === 'paidAmount';
+    const code = fields[paid ? 'commerce-paidCurrency' : 'commerce-saleCurrency'].value;
+    const product = fields['commerce-product'].value, plan = fields['commerce-plan'].value;
+    const ready = !localData || form.dataset.priceReferenceStatus === 'ready';
+    if (!ready || !code || (paid && fields['commerce-payment'].value !== '银行卡')) return { code, amount: '' };
+    const amount = paid ? orderPaidPrices(product)[plan]?.[code] :
+      orderPrice(product, plan, code, fields['commerce-businessType'].value);
+    return { code, amount: typeof amount === 'string' && amountValid(amount) ? amount : '' };
+  }
+  function openOrderAmountOptions(trigger) {
+    const form = trigger.closest('#commerce-order-form');
+    const name = trigger.dataset.field;
+    const control = form?.elements[`commerce-${name}`];
+    if (!control || control.readOnly) return;
+    const preset = orderPresetAmount(form, name);
+    const status = form.dataset.priceReferenceStatus;
+    const unavailable = status === 'error' ? '暂时无法读取预设金额'
+      : localData && status !== 'ready' ? '正在读取预设金额…' : '当前币种暂无预设金额';
+    const options = A.button(preset.amount ? `使用预设 ${preset.amount} ${preset.code}` : unavailable,
+      'commerce-order-amount-preset', '', '', preset.amount ? '' : 'disabled') +
+      A.button('手动填写', 'commerce-order-amount-manual');
+    A.openActionMenu(trigger, options, {
+      label: trigger.getAttribute('aria-label'),
+      onSelect(choice) {
+        if (!control.isConnected || control.readOnly) return;
+        control.focus({ preventScroll: true });
+        if (choice.dataset.action === 'commerce-order-amount-manual') {
+          control.select();
+          return;
+        }
+        const current = orderPresetAmount(form, name);
+        if (current.amount !== preset.amount || current.code !== preset.code) {
+          A.notify('预设金额或币种已变化，请重新选择');
+          return;
+        }
+        control.value = preset.amount;
+        A.setError(control.id, '', form);
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
   }
   function refreshOrderAmountReferences(form, status = form.dataset.priceReferenceStatus || (localData ? 'loading' : 'ready')) {
     form.dataset.priceReferenceStatus = status;
@@ -3308,24 +3371,37 @@
     }
     return snapshot;
   }
+  function paymentCountryLabel(code, name = currencyLabel(code)) {
+    return paymentCountries[code] ? `${paymentCountries[code]} · ${name}` : name;
+  }
+  function priceCurrencyGroup(code, label, content, hidden = false) {
+    return `<section class="order-price-currency" data-price-group="${E(code)}" aria-label="${E(label)}"${hidden ? ' hidden' : ''}>
+      <h3>${E(label)}</h3>${content}</section>`;
+  }
   function orderPriceReferenceBody(view) {
     const paid = view.kind === 'paid';
     const label = paid ? '银行卡代付金额' : view.businessType === '成品交付' ? '成品号售价'
       : personalProduct(view.product) ? '开通／续费售价' : '续费售价';
     const prices = paid ? orderPaidPrices(view.product) : orderSalePrices(view.product, view.businessType);
-    const rows = Object.entries(prices).flatMap(([plan, amounts]) => Object.entries(amounts)
-      .filter(([, amount]) => amount !== '' && amount != null)
-      .map(([code, amount]) => {
-        const name = orderCurrencyRows(view.product).find(row => row.code === code)?.name || currencyNames[code];
-        const currency = name ? `${name} ${code}` : code;
-        return { id: `${plan}:${code}`, plan, amount,
-          currency: paid && paymentCountries[code] ? `${paymentCountries[code]} · ${currency}` : currency };
-      }));
-    return `<section class="form-section"><div class="section-title-row"><h3>${label}</h3></div>${rows.length ? A.table([
+    const rowsByCurrency = new Map();
+    for (const [plan, amounts] of Object.entries(prices)) {
+      for (const [code, amount] of Object.entries(amounts)) {
+        if (amount === '' || amount == null) continue;
+        if (!rowsByCurrency.has(code)) rowsByCurrency.set(code, []);
+        rowsByCurrency.get(code).push({ id: `${plan}:${code}`, plan, amount });
+      }
+    }
+    const columns = [
       { id: 'plan', label: '套餐' },
-      { id: 'currency', label: paid ? '国家／地区 · 币种' : '币种' },
       { id: 'amount', label: paid ? '原币代付金额' : '售卖价格' }
-    ], rows, '', '订单金额参考') : A.empty(`尚未配置${label}`, '请先在系统设置的「代付国家」中维护对应价格。')}</section>`;
+    ];
+    const currencyOrder = paid ? Object.keys(paymentCountries) : orderCurrencyCodes(view.product);
+    const codes = [...new Set([...currencyOrder, ...rowsByCurrency.keys()])].filter(code => rowsByCurrency.has(code));
+    const groups = currencyChoices(codes, '', view.product).map(([code, name]) =>
+      priceCurrencyGroup(code, paid ? paymentCountryLabel(code, name) : name,
+        A.table(columns, rowsByCurrency.get(code), '', `订单金额参考 ${code}`))).join('');
+    return `<section class="form-section order-price-groups"><div class="section-title-row"><h3>${label}</h3></div>${groups ||
+      A.empty(`尚未配置${label}`, '请先在系统设置的「代付国家」中维护对应价格。')}</section>`;
   }
   async function loadOrderPriceReference(panel, view) {
     const actorId = currentOperator().id, route = S.route;
@@ -3369,7 +3445,7 @@
   }
   const paidPricesDraft = (product, code) => product === 'GPT' ? 'commerce-gpt-paid-prices:' + code
     : `commerce-paid-prices:${product}:${code}`;
-  const countryChoices = () => Object.entries(paymentCountries).map(([code, name]) => [code, `${name} · ${currencyLabel(code)}`]);
+  const countryChoices = () => Object.keys(paymentCountries).map(code => [code, paymentCountryLabel(code)]);
 
   function renderPaymentSettings() {
     if (!paymentSettingsActive()) return A.header('代付国家', '') + A.empty('当前账号无权管理订单设置', '');
@@ -3381,7 +3457,7 @@
     if (tab !== 'paid') {
       const action = tab === 'sale' ? 'commerce-price-settings' : 'commerce-currency-settings';
       const label = tab === 'sale' ? '套餐售价' : '币种';
-      body = `<div class="panel-body"><div class="toolbar-right">${['GPT', 'Claude', 'Gemini', 'Grok'].map(family =>
+      body = `<div class="panel-body"><div class="toolbar-right">${orderSettingsFamilies.map(family =>
         A.button(`${family} ${label}设置`, action, '', 'settings', `data-product="${family}"`)
       ).join('')}</div></div>`;
     } else if (paymentSettingsVersion === null) {
@@ -3391,32 +3467,31 @@
     } else {
       const key = paidPricesDraft(product, currency), draft = S.drafts.get(key) || {};
       const prices = orderPaidPrices(product);
-      const columns = [
-        { id: 'plan', label: '套餐' },
-        { id: 'amount', label: '原币代付金额', render: ({ plan, index }) =>
-          input('paid-price-' + index,
-            draft['commerce-paid-price-' + index] ?? prices[plan]?.[currency] ?? '',
-            `data-paid-price inputmode="decimal" maxlength="21" aria-label="${E(plan)} 原币代付金额" placeholder="未配置"`) +
-          `<p class="field-error" id="commerce-paid-price-${index}-error" hidden></p>` },
-        { id: 'budget', label: '折合人民币预算', render: ({ index }) =>
-          `<output data-paid-budget for="commerce-paid-price-${index}">—</output>` }
-      ];
-      body = `<div class="panel-body">
+      const fields = productPlans[product].map((plan, index) => {
+        const id = `paid-price-${index}`;
+        const amount = input(id, draft[`commerce-${id}`] ?? prices[plan]?.[currency] ?? '',
+          `data-paid-price inputmode="decimal" maxlength="21" aria-label="${E(plan)} 原币代付金额" placeholder="未配置"`);
+        const budget = `<p class="footnote paid-price-budget"><span>人民币预算</span>
+          <output data-paid-budget for="commerce-${id}">—</output></p>`;
+        return field(plan, id, amount + budget);
+      }).join('');
+      const rates = `<div class="toolbar-left"><p class="footnote" id="commerce-paid-quote" role="status"></p>
+        ${localData ? A.button('刷新汇率', 'commerce-paid-rates-retry') : ''}</div>`;
+      body = `<div class="panel-body order-price-groups">
         <div class="commerce-field-grid">
-          ${field('产品', 'paid-product', select('paid-product', Object.keys(productPlans).filter(product => !personalProduct(product)), product))}
           ${field('国家／地区', 'paid-country', select('paid-country', countryChoices(), currency))}
+          ${field('产品', 'paid-product', select('paid-product', Object.keys(productPlans), product))}
         </div>
         ${paymentSettingsError ? `<p class="footnote" role="status">${E(paymentSettingsError)}</p>` : ''}
-        <div class="toolbar-left"><p class="footnote" id="commerce-paid-quote" role="status"></p>${localData ? A.button('刷新汇率', 'commerce-paid-rates-retry') : ''}</div>
         <form id="commerce-paid-prices-form" data-commerce-draft="${key}"${S.drafts.has(key) ? ' data-paid-price-dirty="yes"' : ''} novalidate>
           ${input('paid-price-product', product, 'type="hidden"')}
           ${input('paid-price-currency', currency, 'type="hidden"')}
           ${input('paid-price-version', draft['commerce-paid-price-version'] ?? paymentSettingsVersion, 'type="hidden"')}
-          ${A.table(columns, productPlans[product].map((plan, index) => ({ id: plan, plan, index })), '', `${product} 代付价格`)}
+          ${priceCurrencyGroup(currency, paymentCountryLabel(currency), rates + `<div class="commerce-field-grid paid-price-fields">${fields}</div>`)}
           <div class="form-footer">${A.button('读取最新', 'commerce-paid-settings-reload')}<button type="submit" class="button primary">保存代付价格</button></div>
         </form></div>`;
     }
-    return A.header('代付国家', '维护 GPT 和 Claude 的银行卡代付价格、套餐售价及订单币种。折合人民币仅用于预算。') +
+    return A.header('代付国家', '维护各产品的银行卡代付价格、套餐售价及订单币种。折合人民币仅用于预算。') +
       `<section class="panel">${navigation}${body}</section>`;
   }
 
@@ -3493,7 +3568,7 @@
     if (!paymentSettingsActive() || form.getAttribute('aria-busy') === 'true') return;
     const raw = readCommerceDraft(form), submitted = JSON.stringify(raw), actor = currentOperator().id;
     const code = raw['commerce-paid-price-currency'], product = raw['commerce-paid-price-product'];
-    if (!Object.hasOwn(paymentCountries, code) || !Object.hasOwn(productPlans, product) || personalProduct(product)) return;
+    if (!Object.hasOwn(paymentCountries, code) || !Object.hasOwn(productPlans, product)) return;
     const plans = productPlans[product];
     const amounts = [...form.querySelectorAll('[data-paid-price]')].map(control => {
       const amount = control.value.trim();
@@ -3519,9 +3594,8 @@
       const next = safeClone(orderPaidPrices(product, snapshot.data ?? null));
       plans.forEach((plan, index) => { (next[plan] ||= {})[code] = amounts[index]; });
       const data = { ...(snapshot.data || { costSettings: safeClone(costSettings), mailboxTypes: A.modules.operations?.getMailboxTypes?.() || [] }) };
-      if (product === 'GPT') data.gptPaidPrices = next;
-      else data.claudePaidPrices = { ...data.claudePaidPrices, [product]: next };
-      const action = product === 'GPT' ? 'gpt_paid_prices_save' : 'claude_paid_prices_save';
+      const [priceKey, action] = paidPriceSetting(product);
+      data[priceKey] = product === 'GPT' ? next : { ...data[priceKey], [product]: next };
       const result = localData ? await localData.save('settings', snapshot.version, data, { action })
         : { version: snapshot.version + 1, data };
       const savedPrices = orderPaidPrices(product, result.data ?? null);
@@ -3545,10 +3619,12 @@
     finally { form.removeAttribute('aria-busy'); feedback?.finish(); }
   }
   const salePriceTypes = [['orderPrices', '续费售价'], ['stockOrderPrices', '成品号售价']];
-  function selectSalePriceType(form, type) {
+  function selectSalePriceGroup(form, type, currency = form.elements['commerce-price-currency'].value) {
     if (!salePriceTypes.some(([key]) => key === type)) return;
     form.elements['commerce-price-type'].value = type;
+    form.elements['commerce-price-currency'].value = currency;
     for (const panel of form.querySelectorAll('[data-price-panel]')) panel.hidden = panel.dataset.pricePanel !== type;
+    for (const group of form.querySelectorAll('[data-price-group]')) group.hidden = group.dataset.priceGroup !== currency;
     for (const tab of form.parentElement.querySelectorAll('[data-action="commerce-price-type"]')) {
       const selected = tab.dataset.tab === type;
       tab.classList.toggle('active', selected);
@@ -3574,24 +3650,32 @@
     const key = `commerce-prices:${currencyFamily(product).toLowerCase()}`;
     const draft = S.drafts.get(key) || {};
     const activeType = draft['commerce-price-type'] === 'stockOrderPrices' ? 'stockOrderPrices' : 'orderPrices';
+    const currencyOptions = currencyChoices(orderCurrencyCodes(product), '', product);
+    const savedCurrency = draft['commerce-price-currency'];
+    const activeCurrency = currencyOptions.some(([code]) => code === savedCurrency) ? savedCurrency : currencyOptions[0]?.[0];
+    const renewalLabel = personalProduct(product) ? '开通／续费' : '续费';
     const types = salePriceTypes.map(([type, label]) => [type,
-      type === 'orderPrices' && personalProduct(product) ? '开通／续费售价' : label]);
+      type === 'orderPrices' ? `${renewalLabel}售价` : label]);
     const panels = types.map(([type, label]) => {
       const stock = type === 'stockOrderPrices';
-      const rows = choices.flatMap((kind) => productPlans[kind].map((plan, index) => {
-        const priceFields = orderCurrencyCodes(product).map((currency) => {
+      const groups = currencyOptions.map(([currency, name]) => {
+        const rows = choices.flatMap(kind => productPlans[kind].map((plan, index) => {
           const fieldId = `${stock ? 'stock-' : ''}price-${kind === 'Claude Max' ? 'max' : 'base'}-${index}-${currency}`;
           const current = draft[`commerce-${fieldId}`] ?? orderPrice(kind, plan, currency, stock ? '成品交付' : '续费');
-          return field(`${plan} ${currencyChoices([currency], '', product)[0][1]}`, fieldId, input(fieldId, current,
-            `data-price-type="${type}" data-price-product="${E(kind)}" data-price-plan="${E(plan)}" data-price-currency="${currency}" inputmode="decimal"`));
-        });
-        return priceFields.join('');
-      })).join('');
-      return `<div class="commerce-field-grid" role="tabpanel" aria-label="${label}" data-price-panel="${type}"${type === activeType ? '' : ' hidden'}>${rows}</div>`;
+          return field(plan, fieldId, input(fieldId, current,
+            `data-price-type="${type}" data-price-product="${E(kind)}" data-price-plan="${E(plan)}" data-price-currency="${E(currency)}" inputmode="decimal"`));
+        })).join('');
+        return priceCurrencyGroup(currency, name, `<div class="commerce-field-grid">${rows}</div>`, currency !== activeCurrency);
+      }).join('');
+      return `<div role="tabpanel" aria-label="${label}" data-price-panel="${type}"${type === activeType ? '' : ' hidden'}>${groups}</div>`;
     }).join('');
-    A.openDrawer(`${currencyFamily(product)} 套餐售价设置`, '分别维护续费与成品号售价。录单按业务类型、套餐和币种带入，实际到账后再确认实收。',
+    A.openDrawer(`${currencyFamily(product)} 套餐售价设置`, `按币种分别维护${renewalLabel}与成品号售价。切换币种或售价类型会保留输入。录单按业务类型、套餐和币种带入，实际到账后再确认实收。`,
       tabs(types, activeType, 'commerce-price-type', 'aria-label="售价类型"') +
-      `<form id="commerce-prices-form" class="form-section" data-commerce-draft="${key}" novalidate>${input('price-version', draft['commerce-price-version'] ?? snapshot.version, 'type="hidden"')}${input('price-type', activeType, 'type="hidden"')}${panels}</form>`,
+      `<form id="commerce-prices-form" class="form-section order-price-groups" data-commerce-draft="${key}" novalidate>
+        ${input('price-version', draft['commerce-price-version'] ?? snapshot.version, 'type="hidden"')}
+        ${input('price-type', activeType, 'type="hidden"')}
+        <div class="commerce-field-grid">${field('币种', 'price-currency', select('price-currency', currencyOptions, activeCurrency))}</div>
+        ${panels}</form>`,
       A.button('关闭', 'drawer-close') + '<button type="submit" form="commerce-prices-form" class="button primary">保存套餐售价</button>', key);
   }
   async function savePrices(form, confirmed = '') {
@@ -3599,14 +3683,14 @@
     const values = [...form.querySelectorAll('[data-price-currency]')];
     const invalid = values.find((node) => !amountValid(node.value.trim(), true));
     if (invalid) {
-      selectSalePriceType(form, invalid.dataset.priceType);
+      selectSalePriceGroup(form, invalid.dataset.priceType, invalid.dataset.priceCurrency);
       A.setError(invalid.id, '请输入非负金额，最多四位小数');
       invalid.focus();
       return;
     }
     const draft = JSON.stringify(readCommerceDraft(form));
     if (!confirmed) {
-      A.confirmAction('确认更新套餐售价', '新订单会按业务类型、套餐和币种带入对应售价。', () => {
+      A.confirmAction('确认更新套餐售价', '本次保存包含当前产品各币种的套餐售价。新订单会按业务类型、套餐和币种带入对应售价。', () => {
         if (form.isConnected && JSON.stringify(readCommerceDraft(form)) === draft) void savePrices(form, draft);
         else A.notify('售价输入已变化，请重新核对后保存');
       });
@@ -3850,13 +3934,12 @@
               `readonly placeholder="待核对" data-currency-code="${E(v('paidCurrency'))}"`)
               : select('paidCurrency', paidCurrencyChoices(product, v('payment'), apple ? 'USD' : v('paidCurrency')),
                 apple ? 'USD' : v('paidCurrency')), true)}
-          ${field('代付金额', 'paidAmount', input('paidAmount', v('paidAmount'),
-            auto ? 'readonly placeholder="待核对"' : 'inputmode="decimal" placeholder="实际代付金额"'), true)}
+          ${field('代付金额', 'paidAmount', orderAmountInput(v, 'paidAmount', auto), true)}
         </div>
         <div class="order-financial-group">
           ${orderAmountHeading('售卖', false, v)}
           ${field('售卖币种', 'saleCurrency', select('saleCurrency', currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency')), true)}
-          ${field('售卖金额', 'saleAmount', input('saleAmount', v('saleAmount'), 'inputmode="decimal" placeholder="实际收到金额"'), true)}
+          ${field('售卖金额', 'saleAmount', orderAmountInput(v, 'saleAmount'), true)}
         </div>
         <div class="order-financial-group">
           <div class="order-financial-heading"><h3>订阅周期</h3>${auto ? '' : `<div class="order-financial-actions">${[[15, '15分钟前'], [60, '1小时前'], [120, '2小时前']].map(([minutes, label]) => A.button(label, 'commerce-order-start-shortcut', '', '', `data-minutes="${minutes}"`)).join('')}</div>`}</div>
@@ -4080,7 +4163,7 @@
       field('认证状态', 'kyc', select('kyc', ['未认证', 'KYC 认证'], v('kyc'))) +
       field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"'));
     const saleCurrencyChosen = existing || draft['commerce-saleCurrencyChosen'] === 'yes';
-    const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${previous?.product === 'Claude Pro' ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${personalProduct(product) ? '' : section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT' || !showProPeople(activeProMode))}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', v('correctionReason')), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div></form>`;
+    const html = `<form id="commerce-order-form" data-commerce-draft="${key}" novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${previous?.product === 'Claude Pro' ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', orderIdentityFields(v, contact, existing, products), '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing) + orderCostFields(v, existing))}${personalProduct(product) ? '' : section('03', 'Claude 人员与补充资料', personnel, '认证电话由所选租户带出，订阅电话按实际开通填写。', product === 'GPT' || !showProPeople(activeProMode))}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', draft['commerce-correctionReason'] ?? '修改错误'), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div></form>`;
     const footer = `<span class="footnote">${personalProduct(product) ? '可分别确认实际代付、实收和开通。' : localData ? '订单保存到数据库。' : '订单独立保存；确认代付才记苹果余额支出。'}</span>${A.button(personalProduct(product) ? '保存待核对' : '保留待补全', 'commerce-order-pending')}<button form="commerce-order-form" type="submit" class="button primary">核对并保存</button>`;
     if (main)
       return entryWorkspace(`<section class="panel form-panel">${html}<div class="form-footer">${footer}</div></section>`, 'order', product);
@@ -6865,6 +6948,10 @@
   }
   function onClick(action, node) {
     if (!action.startsWith('commerce-')) return false;
+    if (action === 'commerce-order-amount-options') {
+      openOrderAmountOptions(node);
+      return true;
+    }
     if (action === 'commerce-order-price-reference') {
       openOrderPriceReference(node.closest('#commerce-order-form'), node.dataset.kind);
       return true;
@@ -7054,7 +7141,7 @@
     if (action === 'commerce-price-type') {
       const form = $('#drawer[open] #commerce-prices-form');
       if (form) {
-        selectSalePriceType(form, node.dataset.tab);
+        selectSalePriceGroup(form, node.dataset.tab);
         saveDrafts();
       }
       return true;
@@ -7745,6 +7832,11 @@
         $(`#commerce-loss-${filter}`)?.focus({ preventScroll: true });
         return true;
       }
+    }
+    if (node.id === 'commerce-price-currency' && node.form?.id === 'commerce-prices-form') {
+      selectSalePriceGroup(node.form, node.form.elements['commerce-price-type'].value);
+      saveDrafts();
+      return true;
     }
     const paidSetting = node.id === 'commerce-paid-country' ? 'currency' : node.id === 'commerce-paid-product' ? 'product' : '';
     if (paidSetting && paymentSettingsActive() && Object.hasOwn(paidSetting === 'currency' ? paymentCountries : productPlans, node.value)) {

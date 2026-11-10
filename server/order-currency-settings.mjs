@@ -13,11 +13,12 @@ export function validOrderCurrencyGroups(groups) {
 }
 
 // Settings are shared with other modules; partial writes retain settings for all product families.
-export function retainOrderCurrencySettings(data, previous) {
+export function retainOrderSettings(data, previous) {
   const next = { ...data };
   if (!Object.hasOwn(next, 'orderCurrencies') && previous?.orderCurrencies)
     next.orderCurrencies = previous.orderCurrencies;
-  if (Object.hasOwn(next, 'orderCurrenciesByProduct') || previous?.orderCurrenciesByProduct)
-    next.orderCurrenciesByProduct = { ...previous?.orderCurrenciesByProduct, ...next.orderCurrenciesByProduct };
+  for (const key of ['orderCurrenciesByProduct', 'personalPaidPrices']) {
+    if (Object.hasOwn(next, key) || previous?.[key]) next[key] = { ...previous?.[key], ...next[key] };
+  }
   return next;
 }

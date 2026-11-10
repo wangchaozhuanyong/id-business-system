@@ -2,10 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { checkInventoryEntryFields as check } from '../server/inventory-entry-fields.mjs';
 const inventory = row => ({ mailboxes: [row], accounts: [] });
-test('谷歌与 Claude 新增、编辑和导入均强制同一必填规则', () => {
+test('谷歌邮箱的登录设备可留空，国家地区与 Claude 账号各自校验', () => {
   for (const action of ['inventory_create', 'inventory_edit', 'inventory_import']) {
-    assert.match(check(null, inventory({ type: 'google' }), action), /国家地区和登录设备/);
-    assert.equal(check(null, inventory({ type: 'google', country: '马来西亚', device: '设备 1' }), action), undefined);
+    assert.match(check(null, inventory({ type: 'google' }), action), /国家地区必填/);
+    const google = { type: 'google', country: '马来西亚' };
+    assert.equal(check(null, inventory(google), action), undefined);
+    for (const device of ['', null, '设备 1'])
+      assert.equal(check(null, inventory({ ...google, device }), action), undefined);
+    for (const device of [[], '长'.repeat(201)])
+      assert.match(check(null, inventory({ ...google, device }), action), /登录设备.*200/);
+    assert.match(check(null, inventory({ type: 'claude', proxyUrl: 'socks5://127.0.0.1:1080' }), action), /登录设备/);
     assert.match(check(null, inventory({ type: 'claude', device: '设备' }), action), /注册代理链接/);
     assert.equal(check(null, inventory({ type: 'claude', device: '设备', proxyUrl: 'socks5://127.0.0.1:1080' }), action), undefined);
   }
@@ -40,9 +46,13 @@ const microsoft = (changes = {}) => ({
   microsoftSecurity: { loginMode: 'password', recoveryAccess: 'unknown', twoStep: 'unknown',
     verificationMethods: [], verificationDevice: '', ...changes.microsoftSecurity }
 });
-test('微软邮箱密码与无密码模式均可保存，手机号可留空', () => {
+test('微软邮箱密码与无密码模式均可保存，手机号与验证设备可留空', () => {
   for (const action of ['inventory_create', 'inventory_edit', 'inventory_import']) {
-    assert.equal(check(null, inventory(microsoft()), action), undefined);
+    const blank = microsoft();
+    assert.equal(check(null, inventory(blank), action), undefined);
+    delete blank.microsoftSecurity.verificationDevice;
+    assert.equal(check(null, inventory(blank), action), undefined);
+    assert.match(check(null, inventory(microsoft({ microsoftSecurity: { verificationDevice: '长'.repeat(201) } })), action), /核对微软邮箱/);
     assert.match(check(null, inventory(microsoft({ password: '' })), action), /必须填写登录密码/);
     const security = { loginMode: 'passwordless', verificationMethods: ['authenticator', 'passkey'] };
     assert.equal(check(null, inventory(microsoft({ password: '', microsoftSecurity: security })), action), undefined);

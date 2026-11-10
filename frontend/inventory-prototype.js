@@ -330,6 +330,10 @@
   function admin() {
     return ['admin', 'super'].includes(currentActor().role);
   }
+  function microsoftEntryAllowed(route = api.state.route) {
+    return (!localData || admin()) &&
+      [microsoftMailboxRoute, 'workspace/mail-extract', 'workspace/mail-submit'].includes(route);
+  }
   function types() {
     return api.modules.operations?.getMailboxTypes?.() || baseTypes;
   }
@@ -348,7 +352,9 @@
     );
   }
   function mailboxSubmissionTypes() {
-    return enabledTypes().filter(([id]) => id !== 'apple' && (id !== 'relay' || !localData || (admin() && localData.relay)));
+    const choices = enabledTypes().filter(([id]) => id !== 'apple' && (id !== 'relay' || !localData || (admin() && localData.relay)));
+    if (microsoftEntryAllowed()) choices.push(['microsoft', typeLabel('microsoft')]);
+    return choices;
   }
   function phoneCodeUrl(value) {
     try {
@@ -1655,7 +1661,7 @@
       return;
     }
     const microsoft = type === 'microsoft';
-    if (microsoft && api.state.route !== microsoftMailboxRoute) return;
+    if (microsoft && (!microsoftEntryAllowed() || (id && api.state.route !== microsoftMailboxRoute))) return;
     const personal = personalAccount(type);
     if (localData && personal && !admin()) return;
     const source = sourceId && personalSourceMailboxes(type).find(row => row.id === sourceId);
@@ -1828,7 +1834,8 @@
         false,
         '系统生成，编辑资料不会改变。'
       ) +
-      field('登录设备', 'inventory-device', input('inventory-device', val('device')), ['google', 'claude'].includes(type));
+      field('登录设备', 'inventory-device',
+        input('inventory-device', val('device'), type === 'google' ? 'maxlength="200"' : ''), type === 'claude');
     if (type === 'google' || type === 'gpt' || microsoft || personal)
       fields += wide(
         '2FA 密钥',
@@ -2371,7 +2378,8 @@
     return rows.length
       ? table(
           [
-            { id: 'id', label: '导入批次' },
+            { id: 'id', label: '导入批次', render: (row) =>
+              esc(row.type === 'relay' ? api.modules.appleRelay?.displayImportId?.(row.id) ?? row.id : row.id) },
             { id: 'type', label: '资料类型', render: (row) => typeLabel(row.type) },
             { id: 'time', label: '导入时间' },
             { id: 'actor', label: '操作人' },
@@ -2536,7 +2544,8 @@
       return;
     }
     accountImportContext = null;
-    const microsoft = api.state.route === microsoftMailboxRoute;
+    const microsoft = type === 'microsoft' || api.state.route === microsoftMailboxRoute;
+    if (microsoft && !microsoftEntryAllowed()) return;
     const fundingApple = fundingAppleRoute();
     const account = !fundingApple && api.state.route.startsWith('accounts/');
     const choices = microsoft
@@ -3062,6 +3071,8 @@
       data['inventory-entry-scope'] === 'account-submit' ||
       String(form.dataset.inventoryDraft || '').startsWith('inventory-edit:account-submit:');
     const microsoft = type === 'microsoft';
+    const route = api.state.route;
+    const microsoftDraft = form.dataset.inventoryDraft === 'inventory-edit:new:microsoft';
     const personal = personalAccount(type);
     const inputSnapshot = accountEntry || microsoft || personal ? formFingerprint(data) : '';
     const sourceEntry = personal && !id && ['mailboxes/google', 'mailboxes/relay'].includes(api.state.route) &&
@@ -3071,7 +3082,8 @@
       api.notify('请从对应产品账号管理录入资料');
       return;
     }
-    if (microsoft !== (api.state.route === microsoftMailboxRoute)) {
+    if (microsoft ? !microsoftEntryAllowed(route) || (id ? route !== microsoftMailboxRoute : !microsoftDraft)
+      : route === microsoftMailboxRoute || microsoftDraft) {
       api.notify('请从对应的邮箱管理页面重新录入');
       return;
     }
@@ -3093,8 +3105,7 @@
     const required = type === 'grok' ? [] : ['inventory-email'];
     if (['google', 'apple'].includes(type)) required.push('inventory-password');
     if (['google', 'apple'].includes(type)) required.push('inventory-country-edit');
-    if (['google', 'claude'].includes(type)) required.push('inventory-device');
-    if (type === 'claude') required.push('inventory-proxy-url');
+    if (type === 'claude') required.push('inventory-device', 'inventory-proxy-url');
     for (const name of required) {
       const error = !String(data[name] || '').trim() ? '请填写此项资料' : '';
       api.setError(name, error);
@@ -3275,7 +3286,7 @@
       original ? '确认修改资料' : '确认新增资料',
       `${displayIdentity(identity)} · ${typeLabel(type)}，${sourceMailbox ? '保存账号并登记所选邮箱实际使用' : localData ? '保存到服务器数据库' : '当前为离线演示，内容仅保留在本页内存'}。`,
       () => {
-        if (microsoft && (api.state.route !== microsoftMailboxRoute || !form.isConnected ||
+        if (microsoft && (api.state.route !== route || !microsoftEntryAllowed(route) || !form.isConnected ||
             formFingerprint(api.readForm(form)) !== inputSnapshot ||
             (original && assetById(id) !== original))) {
           api.notify('确认期间微软邮箱资料已变化，请重新核对');
@@ -3710,10 +3721,11 @@
   function submitImport(form, commit = false, restored = null) {
     const d = { ...(restored || api.readForm(form)) },
       type = d['inventory-import-type'];
-    const microsoft = api.state.route === microsoftMailboxRoute;
+    const route = api.state.route;
+    const microsoft = form.dataset.inventoryDraft === 'inventory-import:microsoft';
     const protectPreview = microsoft || personalAccount(type);
     if (microsoft !== (type === 'microsoft') ||
-        microsoft !== (form.dataset.inventoryDraft === 'inventory-import:microsoft')) {
+        (microsoft ? !microsoftEntryAllowed(route) : route === microsoftMailboxRoute)) {
       api.notify('导入类型或入口已变化，请重新打开批量导入');
       return;
     }
@@ -3833,7 +3845,8 @@
             error = '需确认未绑定电话';
           if (!error && columns.length > 9) error = '存在多余列，请按模板填写';
           if (!error && ['apple', 'google'].includes(finalType) && !country) error = '缺少国家';
-          if (!error && ['google', 'claude'].includes(finalType) && !device) error = '缺少登录设备';
+          if (!error && finalType === 'google' && device.length > 200) error = '登录设备最多 200 个字符';
+          if (!error && finalType === 'claude' && !device) error = '缺少登录设备';
           if (!error && finalType === 'claude' && !proxyUrl) error = '缺少注册代理链接';
           if (!error && phone && /^[a-z][a-z0-9+.-]*:/i.test(phone) && !phoneCodeUrl(phone)) error = '验证码链接仅支持有效的 HTTP(S) 地址';
           if (!error && finalType === 'claude') {
@@ -3988,7 +4001,7 @@
       '确认批量导入',
       `确认导入 ${results.length} 条资料。已填写的注册时间按原值保存，空白取录入时间。`,
       () => {
-        if (protectPreview && (!form.isConnected || (microsoft && api.state.route !== microsoftMailboxRoute) ||
+        if (protectPreview && (!form.isConnected || (microsoft && (api.state.route !== route || !microsoftEntryAllowed(route))) ||
             formFingerprint(api.readForm(form)) !== snapshot ||
             protectedImportPreviews.get(form)?.id !== previewSource)) {
           api.notify('确认期间导入资料或来源已变化，请重新预检');
@@ -4130,7 +4143,7 @@
       for (const control of form?.querySelectorAll('input[data-return-claim]:not(:disabled)') || [])
         control.checked = action === 'inventory-return-all';
       updateReturnSelection(form);
-    } else if (action === 'inventory-copy-microsoft-template' && api.state.route === microsoftMailboxRoute)
+    } else if (action === 'inventory-copy-microsoft-template' && microsoftEntryAllowed())
       void api.copyText(accountCsvTemplate('microsoft'));
     else if (action === 'inventory-import-confirm')
       submitImport(document.getElementById('inventory-import-form'), true);

@@ -134,6 +134,13 @@
       ? (kind === 'parent' ? 'm' : 'y') + BigInt(number).toString().padStart(6, '0')
       : '待接入';
   }
+  function displayImportId(value) {
+    const id = String(value || '');
+    return id.length > 11 ? id.replaceAll('-', '').slice(-11) : id;
+  }
+  function sourceBatchLabel(row) {
+    return row.importId ? displayImportId(row.importId) : row.createdById ? '单条登记' : '历史未记录';
+  }
   function initialize() {
     if (local) {
       const metadata = A.modules.inventory.getAppleRelayState();
@@ -581,12 +588,12 @@
   }
   function renderAliases() {
     const allAliases = aliases();
+    const query = view.q.toLowerCase();
     const matching = allAliases.filter(
       (r) =>
         (!view.parentId || r.parentMailboxId === view.parentId) &&
-        `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''}`
-          .toLowerCase()
-          .includes(view.q.toLowerCase())
+        (!query || `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''} ${r.importId || ''} ${displayImportId(r.importId)}`
+          .toLowerCase().includes(query))
     );
     const matchesUse = (row) =>
       !view.inventory || (row.inventoryState || 'available') === view.inventory;
@@ -664,7 +671,7 @@
           {
             id: 'importId',
             label: '来源导入批次',
-            render: (r) => E(r.importId || (r.createdById ? '单条登记' : '历史未记录')),
+            render: (r) => E(sourceBatchLabel(r)),
             long: true
           },
           ...traceColumns(),
@@ -810,7 +817,7 @@
       }</div></div>` +
       list(
         [
-          { id: 'id', label: '导入批次' },
+          { id: 'id', label: '导入批次', render: (r) => E(displayImportId(r.id)), long: true },
           { id: 'parentId', label: '主邮箱编号', render: (r) => E(displayId('parent', r.parentId)) },
           { id: 'time', label: '导入时间', render: (r) => E(timeText(r.time)) },
           { id: 'actor', label: '导入人' },
@@ -1755,7 +1762,7 @@
     A.openDrawer(
       'Apple 隐藏邮箱详情',
       '隐藏邮箱从所属 Apple 主邮箱收信；库存使用和平台注册记录分别保留。',
-      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', a.importId || (a.createdById ? '单条登记' : '历史未记录'))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
+      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
       A.button('关闭', 'drawer-close') +
         A.button('查看邮件', 'relay-mails', '', 'mail', `data-id="${E(a.id)}"`) +
         (local && a.inventoryState === 'claimed'
@@ -2440,7 +2447,7 @@
     A.openDrawer(
       '隐藏邮箱导入详情',
       '每个地址都保留相同主邮箱和导入批次；此处不会创建第二份别名资料。',
-      `<div class="property-list">${prop('批次', batch.id)}${prop('所属主邮箱', parentEmail(batch.parentId))}${prop('导入人', batch.actor)}${prop('导入时间', timeText(batch.time))}</div>${A.table(
+      `<div class="property-list">${prop('批次', displayImportId(batch.id))}${prop('所属主邮箱', parentEmail(batch.parentId))}${prop('导入人', batch.actor)}${prop('导入时间', timeText(batch.time))}</div>${A.table(
         [
           { id: 'line', label: '行号' },
           { id: 'email', label: '隐藏邮箱' },
@@ -2854,6 +2861,7 @@
   A.modules.appleRelay = {
     refreshConnection: readConnection,
     displayId,
+    displayImportId,
     render,
     openQuery() {
       A.closeDrawer();

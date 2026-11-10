@@ -153,8 +153,85 @@ test('微软库存录入、失败重试、回读、编辑、关联、状态及�
     await page.evaluate(path => { location.hash = '#/' + path; }, path);
     const target = path.replace(/-submit$/, '-extract');
     await page.locator(`#main[data-layout-route="${target}"]`).waitFor();
-    assert.doesNotMatch(await main.innerText(), /微软邮箱/);
+    const submission = main.locator('.inventory-submission-panel');
+    for (const action of ['inventory-add-type', 'inventory-import']) {
+      assert.equal(await submission.locator(`[data-action="${action}"][data-type="microsoft"]`).count(),
+        target === 'workspace/mail-extract' ? 1 : 0);
+    }
+    assert.equal(await main.locator('#inventory-extract-type option[value="microsoft"]').count(), 0);
   }
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.requests.external, []);
+});
+
+test('邮箱工作台录入和导入微软邮箱，共用库存及录入草稿', { timeout: 30000 }, async (t) => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const f = await fixture(browser, 390);
+  const { page, main, drawer, confirm } = f;
+  const workspace = 'workspace/mail-extract';
+  const go = async path => {
+    await page.evaluate(path => window.IDDesignAPI.go(path), path);
+    await page.locator(`#main[data-layout-route="${path}"]`).waitFor();
+  };
+  const close = () => drawer.getByRole('button', { name: '关闭抽屉' }).click();
+  const save = async () => {
+    const response = page.waitForResponse(r =>
+      r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/inventory');
+    await confirm.locator('[data-action="confirm-accept"]').click();
+    assert.equal((await response).status(), 200);
+    await drawer.waitFor({ state: 'hidden' });
+  };
+  const address = 'workbench-ms@example.test';
+  const importedAddress = 'workbench-import-ms@example.test';
+  const card = main.locator('.inventory-submission-panel .guide-item').filter({
+    has: page.getByRole('heading', { name: '微软邮箱', exact: true })
+  });
+  const add = () => card.getByRole('button', { name: '单条录入', exact: true }).click();
+
+  await go(workspace);
+  const notes = main.locator('#inventory-extract-notes');
+  await notes.fill('提取草稿独立保留');
+  await add();
+  await drawer.getByRole('heading', { name: '新增微软邮箱', exact: true }).waitFor();
+  assert.equal(await drawer.locator('#inventory-asset-type').inputValue(), 'microsoft');
+  await drawer.locator('#inventory-email').fill(address);
+  await drawer.locator('#inventory-password').fill(loginFixture);
+  await close();
+  await go('mailboxes/microsoft');
+  await main.getByRole('button', { name: '新增邮箱' }).click();
+  assert.equal(await drawer.locator('#inventory-email').inputValue(), address);
+  await close();
+  await go(workspace);
+  await add();
+  await drawer.getByRole('button', { name: '核对并保存' }).click();
+  await save();
+  const created = f.snapshot().mailboxes.find(row => row.email === address);
+  assert.equal(created.type, 'microsoft');
+  assert.equal(created.microsoftSecurity.verificationDevice, '');
+
+  await card.getByRole('button', { name: '批量导入', exact: true }).click();
+  assert.equal(await drawer.locator('#inventory-import-type-display').inputValue(), '微软邮箱');
+  assert.equal(await drawer.getByRole('button', { name: '复制示例 CSV' }).isVisible(), true);
+  await drawer.locator('#inventory-import-content').fill(`邮箱,登录密码\n${importedAddress},${loginFixture}`);
+  await drawer.getByRole('button', { name: '检查并预览' }).click();
+  await drawer.getByRole('button', { name: '确认导入', exact: true }).click();
+  await save();
+  assert.equal(f.snapshot().importRecords[0].type, 'microsoft');
+  assert.equal(f.snapshot().importRecords[0].success, 1);
+  const recent = main.getByRole('region', { name: '提交资料' }).locator('.inventory-workspace-records li');
+  assert.match(await recent.innerText(), /微软邮箱/);
+  await recent.getByRole('button', { name: '详情', exact: true }).click();
+  await drawer.getByText(importedAddress, { exact: true }).waitFor();
+  await close();
+
+  assert.equal(await notes.inputValue(), '提取草稿独立保留');
+  assert.equal(await main.locator('#inventory-extract-type option[value="microsoft"]').count(), 0);
+  await go('mailboxes/microsoft');
+  for (const email of [address, importedAddress]) {
+    await main.getByRole('button', { name: email, exact: true }).waitFor();
+  }
+  assert.deepEqual(f.actions, ['inventory_create', 'inventory_import']);
   assert.deepEqual(f.errors, []);
   assert.deepEqual(f.requests.external, []);
 });
