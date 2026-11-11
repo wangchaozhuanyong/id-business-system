@@ -10,6 +10,7 @@ import {
 } from '../server/card-management.mjs';
 import { createOrderAuxiliaryHandler } from '../server/order-auxiliary.mjs';
 import { normalizeClaudeProMaterials } from '../server/order-policy.mjs';
+import { orderCustomerCreateAction } from '../frontend/order-opening.mjs';
 import { historicalFeeAction } from '../server/finance/snapshot-integrity.mjs';
 
 const origin = 'https://orders.example.test';
@@ -70,6 +71,17 @@ async function request(store, method, data, { actor = admin, path = route, readO
   };
   await handleLocalBusiness(request, response, path, store, actor, { publicOrigin: origin, readOrderCards });
   return { status, data: parsed, headers };
+}
+
+async function tenantCardView(store, id) {
+  const path = '/api/local/tenant-cards';
+  const handler = createOrderAuxiliaryHandler({ store, publicOrigin: origin });
+  let status, body;
+  await handler({ method: 'GET', headers: { origin }, url: path + '?tenantId=' + encodeURIComponent(id) }, {
+    writeHead(code) { status = code; }, end(data) { body = JSON.parse(data); }
+  }, path, admin);
+  assert.equal(status, 200);
+  return body;
 }
 
 function save(store, version, data, action = '新增独立订单', options) {
@@ -305,7 +317,11 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     assert.equal(poolSaved.proCardNumber, '4000000000001919');
     assert.equal(tenantSaved.proCardNumber, sampleNumber);
     assert.equal(poolSaved.proCardSerial, '00017-POOL');
-    assert.equal(tenantSaved.proCardSerial, '00042-TENANT');
+    assert.equal(tenantSaved.proCardSerial, undefined);
+    const historical = { ...tenantSaved, proCardSerial: '00042-HISTORICAL' };
+    const revision = { ...historical, proCardSerial: 'IGNORED' };
+    assert.equal(normalizeClaudeProMaterials(revision, historical), undefined);
+    assert.equal(revision.proCardSerial, historical.proCardSerial);
     const reads = poolReads;
     const change = async (orders, action = '更正订单') =>
       save(store, 1, { ...created.data.data, orders }, action, options);
@@ -327,7 +343,7 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     }, '更正订单', options);
     assert.equal(corrected.status, 200, corrected.data.error);
     const full = await request(store, 'GET');
-    for (const [index, before, serial] of [[0, beforePool, '00018-POOL'], [1, beforeTenant, '00043-TENANT']]) {
+    for (const [index, before, serial] of [[0, beforePool, '00018-POOL'], [1, beforeTenant, undefined]]) {
       const row = full.data.data.orders[index];
       assert.equal(row.proCardSerial, serial);
       assert.equal(row.corrections.at(-1).previous.proCardSerial, before.proCardSerial);
@@ -339,25 +355,98 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
   } finally { store.close(); }
 });
 
-test('Claude Pro and Max independently verify an optional certifier while retaining the selected payment card', async () => {
+test('Claude resolves a typed tenant card and saves a new card with its order in one write', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const other = { ...tenant, id: 'tenant-direct-other', name: '另一合成租户', phone: '+60123456781' };
+    const knownId = 'tenant:direct-existing';
+    const sameTailId = 'tenant:direct-same-tail';
+    const newNumber = '5555555555554444';
+    store.saveFeatureDocument('tenant-cards', 0, { items: [
+      { id: knownId, tenantId: tenant.id, number: sampleNumber, active: true },
+      { id: sameTailId, tenantId: other.id, number: '4000000000004242', active: true }
+    ] });
+    const typed = base('known-direct', { proMaterialMode: 'tenant_card', paidConfirmed: true,
+      tenantCardNumber: '4242-4242 4242 4242' });
+    const tenants = [tenant, other];
+    const wrongOwner = await save(store, 0, makeDocument([{ ...typed, tenantId: other.id }], tenants));
+    assert.equal(wrongOwner.status, 409);
+    assert.equal(wrongOwner.data.matches[0].cardId, knownId);
+    assert.doesNotMatch(JSON.stringify(wrongOwner.data), new RegExp(sampleNumber));
+    const wrongCard = await save(store, 0, makeDocument([{ ...typed, cardId: sameTailId }], tenants));
+    assert.equal(wrongCard.status, 409);
+
+    const known = await save(store, 0, makeDocument([typed], tenants));
+    assert.equal(known.status, 200, known.data.error);
+    const original = known.data.data.orders[0];
+    assert.deepEqual([original.tenantId, original.cardId, original.paymentId], [tenant.id, knownId, '4242']);
+    assert.equal(Object.hasOwn(original, 'tenantCardNumber'), false);
+    const append = row => save(store, known.data.version, { ...known.data.data, orders: [original, row] });
+    const reused = await append({ ...typed, id: 'reused-direct', email: 'reused-direct@example.test' });
+    assert.equal(reused.status, 409);
+    assert.match(reused.data.error, /已经使用过/);
+
+    const newOrder = base('new-direct', { proMaterialMode: 'tenant_card', paidConfirmed: true,
+      email: 'new-direct@example.test', tenantCardNumber: newNumber });
+    assert.equal((await append(newOrder)).status, 400);
+    const before = store.featureDocument('tenant-cards');
+    assert.equal((await append({ ...newOrder, tenantId: other.id, plan: '无效套餐' })).status, 400);
+    assert.equal(store.load('commerce').version, known.data.version);
+    assert.deepEqual(store.featureDocument('tenant-cards'), before);
+    assert.throws(() => store.saveFeatureDocument('tenant-cards', before.version, before.data, { commerceVersion: 0 }),
+      { status: 409 });
+
+    const newCustomer = { id: 'direct-card-customer', name: '随单合成客户',
+      wechat: 'qa_direct_card_customer', version: 1, active: true };
+    const createWithCard = (index, extra = {}) => save(store, known.data.version, {
+      ...known.data.data, customers: [customer, newCustomer], orders: [original, {
+        ...newOrder, id: 'new-direct-' + index, tenantId: other.id, proCardSerial: 'IGNORED',
+        customerId: newCustomer.id, source: '管理员手工', receiptConfirmed: true, ...extra
+      }]
+    }, orderCustomerCreateAction);
+    assert.equal((await createWithCard('invalid', { saleAmount: '无效金额' })).status, 400);
+    assert.equal(store.load('commerce').data.customers.length, 1);
+    assert.deepEqual(store.featureDocument('tenant-cards'), before);
+    const results = await Promise.all([1, 2].map(index => createWithCard(index)));
+    assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
+    const saved = results.find(result => result.status === 200).data.data.orders.at(-1);
+    assert.deepEqual([saved.tenantId, saved.paymentId, saved.proCardSerial], [other.id, '4444', undefined]);
+    assert.equal(saved.customerId, newCustomer.id);
+    assert.equal(store.load('commerce').data.customers.filter(row => row.id === newCustomer.id).length, 1);
+    assert.equal(Object.hasOwn(saved, 'tenantCardNumber'), false);
+    const after = store.featureDocument('tenant-cards');
+    assert.equal(after.version, before.version + 1);
+    assert.equal(after.data.items.filter(row => row.number === newNumber).length, 1);
+    const registered = after.data.items.find(row => row.id === saved.cardId);
+    assert.deepEqual([registered.tenantId, registered.firstUse.orderId], [other.id, saved.id]);
+    const view = await tenantCardView(store, other.id);
+    assert.deepEqual(view.items.map(row => [row.id, row.used]), [[sameTailId, false], [registered.id, true]]);
+    assert.doesNotMatch(JSON.stringify(view), new RegExp(newNumber));
+  } finally { store.close(); }
+});
+
+test('Claude uses distinct certifiers and keeps one-time tenant cards attached to their original orders', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {
     const cardOwner = { ...tenant, id: 'card-owner', name: '合成用卡人', phone: '+1 202 555 0103' };
+    const maxVerifier = { ...tenant, id: 'max-verifier', name: '另一合成认证人', phone: '+60123456784' };
     const noPhone = { ...tenant, id: 'no-phone', phone: '' };
     const inactive = { ...tenant, id: 'inactive', phone: '+1 202 555 0104', active: false };
-    const people = [tenant, cardOwner, noPhone, inactive];
+    const people = [tenant, cardOwner, maxVerifier, noPhone, inactive];
     const cardId = 'tenant:claude-separate-owner';
+    const renewalCard = 'tenant:unused-for-renewal';
     store.saveFeatureDocument('tenant-cards', 0, {
-      items: [{ id: cardId, tenantId: cardOwner.id, active: true, number: sampleNumber }]
+      items: [{ id: cardId, tenantId: cardOwner.id, active: true, number: sampleNumber },
+        { id: renewalCard, tenantId: cardOwner.id, active: true, number: '4000000000000002' }]
     });
     const first = manual('pro-first', {
       businessType: '首次开通', claudeVerifierId: tenant.id, kyc: 'KYC 认证',
-      verifier: '不能信任的姓名', verifierPhone: '999999', paidConfirmed: true
+      verifier: '不能信任的姓名', verifierPhone: '999999', paidConfirmed: true, proCardNumber: '4000000000000003'
     });
     const max = base('max-first', {
       product: 'Claude Max', plan: 'Max 20x', businessType: '首次开通',
       proMaterialMode: 'tenant_card', cardId, tenantId: cardOwner.id,
-      claudeVerifierId: tenant.id, kyc: 'KYC 认证', paidConfirmed: true
+      email: 'distinct-max-account@example.test', claudeVerifierId: maxVerifier.id, kyc: 'KYC 认证', paidConfirmed: true
     });
     for (const row of [
       { ...first, plan: 'Max 5x' },
@@ -383,11 +472,16 @@ test('Claude Pro and Max independently verify an optional certifier while retain
     assert.equal(saved.status, 200, saved.data.error);
     const [pro, original] = saved.data.data.orders;
     assert.equal(pro.verifier, tenant.name);
-    assert.equal(original.verifier, tenant.name);
-    assert.equal(original.verifierPhone, tenant.phone);
+    assert.equal(original.verifier, maxVerifier.name);
+    assert.equal(original.verifierPhone, maxVerifier.phone);
     assert.equal(original.tenantId, cardOwner.id);
     assert.equal(original.proCardNumber, sampleNumber);
-    assert.ok([pro, original].every(order => !Object.hasOwn(order, 'claudeVerifierId')));
+    assert.deepEqual([pro.claudeVerifierId, original.claudeVerifierId], [tenant.id, maxVerifier.id]);
+    const firstUse = store.featureDocument('tenant-cards').data.items[0].firstUse;
+    assert.deepEqual([firstUse.orderId, firstUse.orderNo], [original.id, original.orderNo]);
+    const view = await tenantCardView(store, cardOwner.id);
+    assert.deepEqual(view.items.map(card => [card.id, card.used]), [[cardId, true], [renewalCard, false]]);
+    assert.doesNotMatch(JSON.stringify(view), new RegExp(sampleNumber));
     const invalidEdit = await save(store, 1, {
       ...saved.data.data, orders: [edit(pro, { businessType: '续费' }), original]
     }, '更正订单');
@@ -395,21 +489,100 @@ test('Claude Pro and Max independently verify an optional certifier while retain
     const renewal = {
       ...max, id: 'max-renew', businessType: '续费', claudeVerifierId: undefined,
       claudeRenewalId: original.id, proRenewalSourceId: original.id, proRenewalSourceVersion: original.version,
-      expiry: '2027-01-08T10:00', verifier: tenant.name, verifierPhone: tenant.phone
+      expiry: '2027-01-08T10:00', verifier: maxVerifier.name, verifierPhone: maxVerifier.phone
     };
     const rows = [pro, original];
     const append = (version, orders, next) =>
       save(store, version, { ...saved.data.data, orders: [...orders, next] });
     assert.equal((await append(1, rows, { ...renewal, proRenewalSourceVersion: 99 })).status, 409);
-    const extended = await append(1, rows, renewal);
+    const reused = await append(1, rows, renewal);
+    assert.equal(reused.status, 409);
+    assert.match(reused.data.error, /已经使用过/);
+    const bypass = await append(1, rows, manual('same-number-manual', { email: 'another@example.test' }));
+    assert.equal(bypass.status, 409);
+    assert.match(bypass.data.error, /已经使用过/);
+    assert.equal(store.load('commerce').version, 1);
+    const submissions = await Promise.all([1, 2].map(() => append(1, rows, { ...renewal, cardId: renewalCard })));
+    assert.deepEqual(submissions.map(result => result.status).sort(), [200, 409]);
+    const extended = submissions.find(result => result.status === 200);
     assert.equal(extended.status, 200, extended.data.error);
     const [proAfter, maxAfter, newOrder] = extended.data.data.orders;
     assert.deepEqual([proAfter, maxAfter], rows);
     assert.equal(newOrder.tenantId, cardOwner.id);
     assert.equal(newOrder.kyc, undefined);
     assert.equal(newOrder.verifier, undefined);
+    assert.equal(newOrder.cardId, renewalCard);
     assert.equal((await append(2, extended.data.data.orders, { ...renewal, id: 'duplicate' })).status, 409);
     assert.equal(store.load('commerce').data.orders.length, 3);
+  } finally { store.close(); }
+});
+
+test('KYC locks one tenant and one Claude account until the verified account is marked dead', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const second = { ...tenant, id: 'other-verifier', name: '其他认证人', phone: '+60123456785' };
+    const tenants = [tenant, second];
+    const verified = (id, email, verifier = tenant) => manual(id, { email, businessType: '首次开通',
+      claudeVerifierId: verifier.id, kyc: 'KYC 认证', paidConfirmed: true, expiry: '2026-11-09T10:00' });
+    const oldEmail = 'kyc-existing@example.test', nextEmail = 'kyc-next@example.test';
+    const first = await save(store, 0, makeDocument([verified('first', oldEmail)], tenants));
+    assert.equal(first.status, 200, first.data.error);
+    const append = row => {
+      const snapshot = store.load('commerce');
+      return save(store, snapshot.version, { ...snapshot.data, orders: [...snapshot.data.orders, row] });
+    };
+    const otherAccount = await append(verified('next', nextEmail));
+    assert.equal(otherAccount.status, 409);
+    assert.match(otherAccount.data.error, /租户已有未标记死号的 KYC 账号/);
+    const sameAccount = await append(verified('same', oldEmail.toUpperCase(), second));
+    assert.equal(sameAccount.status, 409);
+    assert.match(sameAccount.data.error, /账号已登记过 KYC/);
+    store.saveBatch([{ domain: 'inventory', version: 0, action: 'inventory_create',
+      data: { accounts: [{ id: 'kyc-stock', type: 'claude', email: oldEmail,
+        health: 'normal', inventoryState: 'available', status: '正常', version: 1, usageLinks: [],
+        device: '合成设备', proxyUrl: 'socks5://proxy.example.test:1080' }],
+      mailboxes: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
+      tableSettings: [], undo: [] } }]);
+    const health = state => {
+      const snapshot = store.load('inventory');
+      const asset = snapshot.data.accounts[0];
+      Object.assign(asset, { health: state, version: asset.version + 1 });
+      return store.saveBatch([{ domain: 'inventory', version: snapshot.version, data: snapshot.data,
+        action: 'inventory_health_change' }], { actor: admin });
+    };
+    health('unlocking');
+    assert.equal((await append(verified('next', nextEmail))).status, 409);
+    assert.equal((await tenantCardView(store, tenant.id)).kyc.status, 'locked');
+    health('dead');
+    assert.equal((await tenantCardView(store, tenant.id)).kyc.status, 'available');
+    const submissions = await Promise.all([
+      append(verified('next', nextEmail)), append(verified('another', 'kyc-another@example.test'))
+    ]);
+    assert.deepEqual(submissions.map(result => result.status).sort(), [200, 409]);
+    const released = submissions.find(result => result.status === 200);
+    assert.equal(released.status, 200, released.data.error);
+    assert.equal(released.data.data.orders[0].claudeVerifierId, tenant.id);
+    assert.equal((await tenantCardView(store, tenant.id)).kyc.status, 'locked');
+    assert.equal((await append(verified('third', 'third@example.test'))).status, 409);
+    assert.throws(() => health('normal'), /已在其他账号登记 KYC/);
+    assert.equal(store.load('inventory').data.accounts[0].health, 'dead');
+  } finally { store.close(); }
+});
+
+test('历史 KYC 使用认证人快照核对，租户改名后保留原认证关联', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const legacy = manual('historical-kyc', { businessType: '首次开通', verifier: tenant.name,
+      verifierPhone: '+60 123456789', kyc: 'KYC 认证', paidConfirmed: true });
+    store.saveBatch([{ domain: 'commerce', version: 0, data: makeDocument([legacy], [tenant]) }]);
+    assert.equal((await tenantCardView(store, tenant.id)).kyc.status, 'locked');
+    const snapshot = store.load('commerce');
+    const profile = snapshot.data.tenants[0];
+    Object.assign(profile, { name: '更正后的租户姓名', phone: '+60123456786' });
+    const saved = await save(store, snapshot.version, snapshot.data, '更新租户资料');
+    assert.equal(saved.status, 200, saved.data.error);
+    assert.equal(saved.data.data.orders[0].claudeVerifierId, tenant.id);
+    assert.equal((await tenantCardView(store, tenant.id)).kyc.status, 'locked');
   } finally { store.close(); }
 });
 

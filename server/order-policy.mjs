@@ -118,7 +118,7 @@ export function matchesBackfilledPayment(order, payment, evidence) {
     item.previous.paidAmount === payment.amount && item.previous.paidCurrency === payment.currency);
 }
 const proMaterialFields = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
-const certificationFields = ['verifier', 'verifierPhone', 'kyc'];
+const certificationFields = ['verifier', 'verifierPhone', 'kyc', 'claudeVerifierId'];
 const proPeopleFields = ['tenantId', 'phone', ...certificationFields];
 const cardMaterialModes = ['manual_card', 'pool_card', 'tenant_card'];
 const proMaterialModes = new Set([...cardMaterialModes, 'people', 'none']);
@@ -160,7 +160,10 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
   const claude = isClaudeOrder(order);
   const allowSerial = cardMaterialModes.includes(mode) || order.product === 'GPT' || personalProduct(order.product) ||
     (claude && !nonempty(mode) && nonempty(order.cardId));
-  if (allowSerial && (mode === 'manual_card' || nonempty(order.proCardSerial))) {
+  if (mode === 'tenant_card') {
+    if (prior?.proMaterialMode === mode && Object.hasOwn(prior, 'proCardSerial')) order.proCardSerial = prior.proCardSerial;
+    else delete order.proCardSerial;
+  } else if (allowSerial && (mode === 'manual_card' || nonempty(order.proCardSerial))) {
     if (nonempty(order.proCardSerial) && typeof order.proCardSerial !== 'string') return '请填写有效的卡序列号';
     const serial = typeof order.proCardSerial === 'string' ? order.proCardSerial.trim() : '';
     if (serial.length > 120 || /[\p{Cc}\p{Cf}]/u.test(serial)) return '卡序列号最多 120 个字，不能包含控制字符';
@@ -187,7 +190,7 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
     ? nonempty(order.tenantId) && order.tenantId !== prior?.tenantId
     : proPeopleFields.some(field => nonempty(order[field]));
   if (mode === 'manual_card') {
-    if (mismatchedPeople) return '手工银行卡不能关联未选用的用卡人';
+    if (mismatchedPeople) return '手工银行卡方式不能关联其他租户';
     const number = typeof order.proCardNumber === 'string'
       ? order.proCardNumber.trim().replace(/[ -]/g, '') : '';
     if (!/^\d{12,19}$/.test(number)) return '请输入 12 至 19 位有效银行卡号';
@@ -201,16 +204,16 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
   if (!allowSerial) delete order.proCardSerial;
   if (!prefix) order.paymentId = '';
   if ((mode === 'pool_card' || mode === 'none') && mismatchedPeople)
-    return '所选资料方式不能关联未选用的用卡人';
+    return '所选资料方式不能关联其他租户';
   if (mode === 'none' && order.product === 'Claude Max' && order.paidConfirmed && !prior?.paidConfirmed)
     return '请选择本次银行卡或手动填写卡号';
-  if (mode === 'tenant_card' && !nonempty(order.tenantId)) return '请选择用卡人及其名下银行卡';
+  if (mode === 'tenant_card' && !nonempty(order.tenantId)) return '请选择银行卡所属租户';
   if (mode === 'people' && !order.tenantId && !order.phone) return '请选择租户或填写订阅电话';
 }
 
 export function normalizeClaudeCertification(order, prior, tenants, { allowLegacyCreate = false } = {}) {
-  const selected = Object.hasOwn(order, 'claudeVerifierId');
   const verifierId = order.claudeVerifierId;
+  const selected = Object.hasOwn(order, 'claudeVerifierId') && verifierId !== prior?.claudeVerifierId;
   delete order.claudeVerifierId;
   if (!isClaudeOrder(order)) return selected ? '只有 Claude 订单可以登记认证人' : undefined;
   if (prior && order.plan !== prior.plan && !plans[order.product].includes(order.plan))
@@ -220,7 +223,7 @@ export function normalizeClaudeCertification(order, prior, tenants, { allowLegac
 
   if (nonempty(order.tenantId) && order.tenantId !== prior?.tenantId &&
       !tenants.some(tenant => tenant.id === order.tenantId && tenant.active !== false))
-    return '请选择可用的用卡人';
+    return '请选择可用的租户';
   if (nonempty(order.phone) && order.phone !== prior?.phone) {
     const phone = typeof order.phone === 'string' ? order.phone.trim() : '';
     const digits = phone.replace(/\D/g, '').length;
@@ -244,8 +247,9 @@ export function normalizeClaudeCertification(order, prior, tenants, { allowLegac
     if (typeof verifierId !== 'string' || (verifierId && !verifier)) return '请选择可用的认证人';
     order.verifier = verifier?.name || '';
     order.verifierPhone = verifier?.phone || '';
+    if (verifier) order.claudeVerifierId = verifier.id;
   } else if (prior || !allowLegacyCreate) {
-    for (const field of ['verifier', 'verifierPhone']) {
+    for (const field of ['verifier', 'verifierPhone', 'claudeVerifierId']) {
       if (prior && Object.hasOwn(prior, field)) order[field] = prior[field];
       else delete order[field];
     }

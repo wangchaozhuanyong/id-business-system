@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin as offlineOrigin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const active = '#main > [data-page-region]:not([hidden])';
 const frameSelector = active + ' .recharge-integration__content iframe:not([hidden])';
@@ -102,7 +102,7 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
       try {
         await page.goto(origin + '/#/' + online);
         await ready(online);
-        if (dark) await page.locator('#theme-toggle').click();
+        if (dark) await toggleDesignTheme(page);
         await remember('query');
         await page.locator(`${active} button[data-view="dashboard"]`).click();
         await frame().locator('#dashboard.active').waitFor();
@@ -162,6 +162,7 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
         await navigate(bit);
         await frame().locator('html').evaluate(root => { root.dataset.rechargeNavigationLocked = 'true'; });
         if (width <= 900) await page.locator('#nav-toggle').click();
+        await page.locator('#sidebar').getByRole('button', { name: '快速操作', exact: true }).click();
         await page.locator(`#sidebar a[href="#/${workspace}"]`).click();
         await page.getByText('充值任务正在执行，请等待任务处理完成后再切换或刷新。', { exact: true }).waitFor();
         assert.equal(new URL(page.url()).hash, '#/' + bit, '比特登录执行锁未阻止导航');

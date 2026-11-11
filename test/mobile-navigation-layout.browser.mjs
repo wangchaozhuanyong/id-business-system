@@ -47,6 +47,16 @@ test('mobile navigation remains reachable without losing the long-page reading p
         assert(await page.locator('#nav-toggle').evaluate((button) => button === document.activeElement));
         assert.equal(await page.evaluate(() => scrollY), before, '取消侧栏不应改变阅读位置');
         await page.locator('#nav-toggle').click();
+        const sidebar = page.locator('#sidebar');
+        const expanded = () => sidebar.locator('.nav-heading[aria-expanded="true"]')
+          .evaluateAll(buttons => buttons.map(button => button.dataset.group));
+        assert.deepEqual(await expanded(), ['快速操作']);
+        await sidebar.getByRole('button', { name: '账号管理', exact: true }).click();
+        assert.deepEqual(await expanded(), ['账号管理']);
+        assert.equal(await sidebar.locator('.nav-children').count(), 1);
+        await sidebar.getByRole('button', { name: '快速操作', exact: true }).click();
+        assert.deepEqual(await expanded(), ['快速操作']);
+        assert.equal(await page.evaluate(() => scrollY), before, '切换展开分组不应改变阅读位置');
         await page.locator('#sidebar a[href="#/customers/new"]').click();
         await page.locator('#commerce-contact-name').waitFor();
         await settle();

@@ -147,8 +147,8 @@ function openActionMenu(anchor, actions, { label = '更多操作', onSelect } = 
 function options(values, selected) {
   return values
     .map((value) => {
-      const [id, label] = Array.isArray(value) ? value : [value, value];
-      return `<option value="${escapeHtml(id)}" ${String(id) === String(selected) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+      const [id, label, state] = Array.isArray(value) ? value : [value, value];
+      return `<option value="${escapeHtml(id)}" ${String(id) === String(selected) ? 'selected' : ''}${state?.disabled === true ? ' disabled' : ''}>${escapeHtml(label)}</option>`;
     })
     .join('');
 }
@@ -304,7 +304,7 @@ const state = {
   status: '',
   pageSize: window.IDPagination.defaultPageSize,
   collapsed: false,
-  expanded: new Set(['快速操作', '邮箱管理']),
+  expandedGroup: '快速操作',
   selections: new Map(),
   columns: new Map(JSON.parse(decodeURIComponent(columnPreferencesMeta?.content || '[]'))
     .map(([tableId, hidden]) => [tableId, new Set(hidden)])),
@@ -1176,7 +1176,7 @@ document.addEventListener('input', event => {
     if (output) output.textContent = event.target.value.replace('T', ' ');
   }
 });
-function renderSidebar() {
+function renderSidebar(openCurrent = false) {
   const previousScroll = $('.sidebar-navigation')?.scrollTop || 0;
   const allowedNavigation = navigation
     .map(([label, iconName, children]) => [
@@ -1188,6 +1188,7 @@ function renderSidebar() {
   const currentGroup = allowedNavigation.find((group) =>
     group[2].some((item) => matchesNav(state.route, item[1]))
   );
+  if (openCurrent && currentGroup && currentGroup[2].length > 1) state.expandedGroup = currentGroup[0];
   const renewalCount = permittedRoute('workspace/renewals')
     ? window.IDDesignAPI.modules.commerce?.renewalReminderCount?.() || 0 : 0;
   $('#sidebar').innerHTML =
@@ -1195,7 +1196,8 @@ function renderSidebar() {
       .map(([group, iconName, children]) => {
         const direct = children.length === 1;
         const active = currentGroup?.[0] === group;
-        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${state.expanded.has(group)}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(state.expanded.has(group) ? 'down' : 'chevron', 'chevron')}</button>${state.expanded.has(group) ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
+        const expanded = state.expandedGroup === group;
+        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${expanded}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(expanded ? 'down' : 'chevron', 'chevron')}</button>${expanded ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
       })
       .join(
         ''
@@ -1731,7 +1733,7 @@ function render() {
   mountedPage = { region, module: extension, retained: retain };
   main.dataset.layoutRoute = state.route;
   mountPageContext(region);
-  renderSidebar();
+  renderSidebar(!sameRoute);
   stabilizeDesignTables();
   if (state.route === 'workspace/order') {
     const raw = state.drafts.get('order-page')?.raw;
@@ -1842,8 +1844,6 @@ function navigate(event) {
       state.viewDrafts.get(next) || {}
     );
     state.selections.clear();
-    const group = navigation.find((entry) => entry[2].some((item) => matchesNav(next, item[1])));
-    if (group) state.expanded.add(group[0]);
   }
   document.body.classList.remove('nav-open');
   $('#sidebar-shade').hidden = true;
@@ -2798,9 +2798,11 @@ document.addEventListener('click', async (event) => {
   }
   if (action === 'nav-group') {
     const group = node.dataset.group;
-    if (state.expanded.has(group)) state.expanded.delete(group);
-    else state.expanded.add(group);
+    state.expandedGroup = state.expandedGroup === group ? null : group;
     renderSidebar();
+    const heading = $(`#sidebar [data-group="${CSS.escape(group)}"]`);
+    heading?.focus({ preventScroll: true });
+    heading?.scrollIntoView({ block: 'nearest' });
     return;
   }
   if (action === 'mail-tab') {

@@ -59,6 +59,14 @@ for (const type of ['gpt', 'claude']) {
     const asset = inventory.data.accounts[0];
     Object.assign(asset, { inventoryState: 'used', used: true, version: asset.version + 1 });
     asset.usageLinks.push({ kind: 'order-sale', orderId: nextOrder.id, label: '再次交付', time: '2026-11-07 12:00' });
+    if (type === 'claude') {
+      const changedProof = structuredClone(commerce.data);
+      changedProof.orders.at(-1).verifier = '不同认证人';
+      assert.throws(() => store.saveBatch([
+        write('commerce', commerce.version, changedProof, '新增独立订单'),
+        write('inventory', inventory.version, structuredClone(inventory.data), 'inventory_order_sale')
+      ], { actor }), /不能重复认证/);
+    }
     store.saveBatch([
       write('commerce', commerce.version, commerce.data, '新增独立订单'),
       write('inventory', inventory.version, inventory.data, 'inventory_order_sale')
@@ -78,7 +86,9 @@ for (const type of ['gpt', 'claude']) {
     assert.equal(saved.data.accounts[0].inventoryState, 'used');
     assert.equal(saved.accountSummaries[0].customerId, 'customer-b');
     assert.equal(saved.data.accounts[0].usageLinks.at(-1).kind, 'order-renewal');
-    assert.deepEqual(store.load('commerce').data.orders[0], original);
+    const savedOrders = store.load('commerce').data.orders;
+    assert.deepEqual(savedOrders[0], original);
+    if (type === 'claude') assert.deepEqual(savedOrders.map(row => row.kyc), [original.kyc, undefined, undefined]);
   });
 }
 

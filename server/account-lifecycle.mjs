@@ -13,6 +13,8 @@ const productType = order => stockTypeForProduct(order.product);
 const managedAccount = account => ['gpt', 'claude'].includes(account?.type) || personalStock(account?.type);
 export const systemAccount = account => managedAccount(account) &&
   account.source !== '客户提供' && !['客户自有', 'customer'].includes(account.accountSource);
+export const accountMarkedDead = account => account?.health === 'dead' ||
+  (!account?.health && (account?.status === '死号' || account?.claudeHistory?.phase === 'dead'));
 const state = account => account.inventoryState || (account.used ? 'used' : 'available');
 const kycLabel = value => value === true || ['KYC 认证', 'KYC认证'].includes(value) ? 'KYC 认证'
   : value === false || value === '未认证' ? '未认证' : '未记录';
