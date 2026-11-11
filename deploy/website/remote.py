@@ -25,6 +25,7 @@ SITE_HOST = "54-249-61-238.sslip.io"
 WEBSITE = ("app", "drive-backup", "sheets-sync")
 PROTECTED = ("recharge", "recharge-native", "vendure", "formal-mysql", "media", "caddy")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
+VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
 
 
 class ReleaseError(RuntimeError):
@@ -89,6 +90,20 @@ def write_new(path, value, mode):
         os.fsync(file.fileno())
 
 
+def update_canary_asset_refs(content, previous_index, target_index):
+    previous = dict(VERSIONED_ASSET.findall(previous_index))
+    target = dict(VERSIONED_ASSET.findall(target_index))
+    for name in previous.keys() & target.keys():
+        if previous[name] == target[name]:
+            continue
+        for asset, query in ((name, "?"), (name.replace(".", r"\."), r"\?")):
+            old = f"{asset}{query}v={previous[name]}"
+            new = f"{asset}{query}v={target[name]}"
+            pattern = rf"(?<![\w.-]){re.escape(old)}(?![\w.-])"
+            content = re.sub(pattern, lambda _: new, content)
+    return content
+
+
 def stage(plan, release):
     sha = plan["sha"]
     before = plan["before"]
@@ -118,13 +133,17 @@ def stage(plan, release):
     os.chmod(release / "assets.json", 0o644)
     ops = release / "operations"
     ops.mkdir(mode=0o755)
+    live = ROOT / "releases" / base
     for name in LAUNCHERS:
-        previous = ROOT / "releases" / base / "operations" / name
+        previous = live / "operations" / name
         require(digest(previous) == before["launchers"][name], "live_launcher_changed")
         content = previous.read_text()
         if name == "run-app":
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
             content = content.replace("sha=" + base, "sha=" + sha)
+        elif name == "check-app.mjs":
+            content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
+                                               (source / "frontend/index.html").read_text())
         write_new(ops / name, content, 0o755 if name == "run-app" else 0o644)
     return source, ops
 

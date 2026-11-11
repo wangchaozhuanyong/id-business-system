@@ -54,6 +54,17 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertEqual(result, {"indicators": ["assertion"], "frames": [["check-app.mjs", "24", "5"]],
                                   "assets": ["prototype.css?v=20261111-confirmed-orders"]})
 
+    def test_canary_uses_exact_target_versions_and_keeps_other_assertions(self):
+        old = '<link href="./prototype.css?v=old"><script src="./subscription-management.js?v=old"></script>'
+        new = '<link href="./prototype.css?v=new"><script src="./subscription-management.js?v=new"></script>'
+        check = ("assert(index.includes('prototype.css?v=old'));\n"
+                 r"assert.match(index, /subscription-management\.js\?v=old/);" "\n"
+                 "assert(index.includes('overview-prototype.css?v=old'));\n"
+                 "assert.equal(response.status, 200);")
+        expected = check.replace("'prototype.css?v=old'", "'prototype.css?v=new'") \
+            .replace(r"subscription-management\.js\?v=old", r"subscription-management\.js\?v=new")
+        self.assertEqual(remote.update_canary_asset_refs(check, old, new), expected)
+
 
 if __name__ == "__main__":
     unittest.main()
