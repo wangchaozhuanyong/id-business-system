@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import release
 import remote
+import backup_monitoring
 
 BASE = "a" * 40
 TARGET = "b" * 40
@@ -46,6 +47,34 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertTrue(remote.mount_matches({"Mounts": [mount]}, source, "/app"))
         self.assertFalse(remote.mount_matches({"Mounts": [mount | {"RW": True}]}, source, "/app"))
         self.assertFalse(remote.mount_matches({"Mounts": [mount]}, source.parent, "/app"))
+
+    def test_only_the_live_launcher_gets_the_readonly_monitor_mount(self):
+        live = '  state=(--mount "type=bind,src=$formal/data,dst=/state")'
+        canary = '  state=(--tmpfs "/state:rw,size=32m")'
+        launcher = live + "\n" + canary
+        result = remote.mount_backup_monitoring(launcher)
+        self.assertIn(remote.MONITORING_MOUNT, result)
+        self.assertIn(remote.MONITORING_ENV, result)
+        self.assertTrue(result.endswith(canary))
+        self.assertEqual(remote.mount_backup_monitoring(result), result)
+        with self.assertRaisesRegex(remote.ReleaseError, "unexpected_backup_monitoring_launcher"):
+            remote.mount_backup_monitoring(canary)
+
+    def test_mysql_projection_requires_the_verified_pair_and_exposes_only_times(self):
+        captured = "20261111T073000Z"
+        receipt = {
+            "capturedAt": captured,
+            "verifiedAt": "2026-11-11T07:30:04+00:00",
+            "key": f"mysql/daily/independent-recharge/{captured}/{TARGET}/manifest.json",
+            "cipherSha256": "a" * 64,
+            "blobVersionId": "fixture-blob-version",
+            "manifestVersionId": "fixture-manifest-version",
+        }
+        report = backup_monitoring.mysql_fields(receipt)
+        self.assertEqual(set(report), {"capturedAt", "verifiedAt"})
+        self.assertEqual(report["verifiedAt"] - report["capturedAt"], 4000)
+        self.assertIsNone(backup_monitoring.mysql_fields(receipt | {"manifestVersionId": "null"}))
+        self.assertIsNone(backup_monitoring.mysql_fields(receipt | {"verifiedAt": "2026-11-11T07:29:59+00:00"}))
 
     def test_canary_diagnostic_outputs_only_recognized_indicators_and_locations(self):
         result = remote.canary_diagnostics("AssertionError [ERR_ASSERTION]: synthetic secret input\n"

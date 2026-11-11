@@ -39,7 +39,9 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
 
   function config() {
     const row = store.featureDocument(monitorConfigDomain);
-    return { version: row.version, data: row.data || initialMonitoringConfig() };
+    const defaults = initialMonitoringConfig();
+    const data = row.data ? { ...row.data, rules: { ...defaults.rules, ...row.data.rules } } : defaults;
+    return { version: row.version, data };
   }
 
   function state() {

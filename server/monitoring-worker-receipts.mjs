@@ -5,22 +5,44 @@ import { isAbsolute, join, resolve } from 'node:path';
 
 const workers = new Set(['backup', 'sheets']);
 const receiptPath = (directory, name) => join(directory, 'monitoring-' + name + '.json');
+const timestamp = value => Number.isSafeInteger(value) && value > 0;
+
+async function readReceiptFile(path, { uid, mode, gid }) {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const file = await handle.stat();
+    if (!file.isFile() || file.nlink !== 1 || file.size > 1024 || file.uid !== uid ||
+        (gid !== undefined && file.gid !== gid) || (file.mode & 0o777) !== mode) return null;
+    const raw = Buffer.alloc(1025);
+    const { bytesRead } = await handle.read(raw, 0, raw.length, 0);
+    if (bytesRead === file.size) return JSON.parse(raw.subarray(0, bytesRead).toString('utf8'));
+  } catch {} finally { await handle?.close().catch(() => {}); }
+  return null;
+}
+
+function validWorkerReceipt(value) {
+  return value && timestamp(value.at) && Number.isSafeInteger(value.failures) && value.failures >= 0 &&
+    typeof value.integrityFailure === 'boolean' &&
+    (value.verifiedAt === null || (timestamp(value.verifiedAt) && value.verifiedAt <= value.at));
+}
 
 export async function readWorkerReceipt(directory, name) {
   if (!directory || !workers.has(name)) return null;
-  let handle;
-  try {
-    handle = await open(receiptPath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const file = await handle.stat();
-    if (!file.isFile() || file.nlink !== 1 || file.size > 1024 || file.uid !== process.getuid() ||
-        (file.mode & 0o777) !== 0o600) return null;
-    const value = JSON.parse(await handle.readFile('utf8'));
-    if (Number.isSafeInteger(value.at) && value.at > 0 && Number.isSafeInteger(value.failures) && value.failures >= 0 &&
-        typeof value.integrityFailure === 'boolean' &&
-        (value.verifiedAt === null || (Number.isSafeInteger(value.verifiedAt) && value.verifiedAt > 0 &&
-          value.verifiedAt <= value.at))) return value;
-  } catch {} finally { await handle?.close().catch(() => {}); }
-  return null;
+  const value = await readReceiptFile(receiptPath(directory, name), { uid: process.getuid(), mode: 0o600 });
+  return validWorkerReceipt(value) ? value : null;
+}
+
+export async function readBackupMonitorReceipt(directory) {
+  const report = await readReceiptFile(join(directory, 'backup-status.json'),
+    { uid: 0, gid: process.getgid(), mode: 0o640 });
+  if (!report || !timestamp(report.at) || typeof report.mysqlTimerActive !== 'boolean' ||
+      typeof report.mysqlAttemptFailed !== 'boolean' ||
+      (report.drive !== null && !validWorkerReceipt(report.drive))) return null;
+  const mysql = report.mysql;
+  if (mysql !== null && (!timestamp(mysql?.capturedAt) || !timestamp(mysql.verifiedAt) ||
+      mysql.capturedAt > mysql.verifiedAt)) return null;
+  return report;
 }
 
 export function createWorkerReceipt(directory, name, dataDirectory, clock = Date.now) {

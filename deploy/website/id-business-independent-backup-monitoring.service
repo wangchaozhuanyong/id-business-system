@@ -1,0 +1,13 @@
+[Unit]
+Description=Read ID backup receipts for website monitoring
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /opt/id-business-independent/formal/ops/backup-monitoring/backup_monitoring.py
+TimeoutStartSec=20s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/id-business-independent/formal/backup-monitoring/receipts

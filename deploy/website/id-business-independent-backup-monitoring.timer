@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh website database backup monitoring once a minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00 UTC
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
