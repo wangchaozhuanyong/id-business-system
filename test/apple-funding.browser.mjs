@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, settle, separatorSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
   ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
@@ -39,8 +41,12 @@ for (let n = 0; n < 22; n++) {
 }
 const browser = await chromium.launch({ headless: true });
 const withinWidth = locator => locator.evaluate(el => el.scrollWidth <= el.clientWidth + 1);
+const output = process.env.ID_LAYOUT_QA_OUTPUT;
+if (output) await mkdir(output, { recursive: true });
+const widths = process.argv.length > 2 ? process.argv.slice(2).map(Number) : [1920, 1440, 1024, 901, 900, 768, 760, 390, 320];
+assert.ok(widths.every(width => Number.isInteger(width) && width >= 320));
 try {
-  for (const width of [1440, 390]) {
+  for (const width of widths) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const requests = await interceptDesign(context, { localFixtures: fixture,
       actor: { id: 'browser-admin', name: '离线操作员', role: 'admin' }, skipRechargeAssets: true });
@@ -48,13 +54,56 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     page.setDefaultTimeout(8000);
     await page.goto(origin + '/#/data-management/apple-ids');
-    if (width < 500) await page.locator('#theme-toggle').click();
+    if (theme === 'dark') await toggleDesignTheme(page);
     const main = page.locator('#main');
     await main.getByText(email, { exact: true }).waitFor();
     await main.getByText('20 USD', { exact: true }).waitFor();
     const table = main.getByRole('table', { name: '苹果 ID 管理' });
+    const panel = main.locator('.apple-management-list');
+    const search = main.getByRole('textbox', { name: '搜索苹果 ID 使用记录' });
+    await settle(page);
+    assert.deepEqual((await separatorSnapshot(page)).findings, []);
+    const frame = await panel.boundingBox();
     assert.ok(await withinWidth(table));
     assert.ok(await withinWidth(main));
+    assert.equal(await table.getByRole('columnheader').first().innerText(), '苹果 ID 账号');
+    assert.equal(await main.locator('.page-actions-fallback').count(), 0);
+    const actions = panel.locator('[data-page-actions]');
+    assert.equal(await actions.locator('[data-action="apple-management-refresh"]').count(), 1);
+    const openColumns = async () => {
+      if (width <= 900) {
+        await actions.getByRole('button', { name: '更多操作' }).click();
+        await page.getByRole('menuitem', { name: '列设置', exact: true }).click();
+      } else await actions.getByRole('button', { name: '列设置', exact: true }).click();
+    };
+    const refresh = actions.getByRole('button', { name: '刷新', exact: true });
+    if (width >= 1440) {
+      const searchBox = await search.boundingBox(), refreshBox = await refresh.boundingBox();
+      assert.ok(Math.abs(searchBox.y - refreshBox.y) <= 1, '搜索与刷新应同排');
+    }
+    const rowHeights = await table.locator('tbody tr').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height));
+    if (width > 760) assert.ok(Math.max(...rowHeights) - Math.min(...rowHeights) <= 1, '长账号保持单行行高');
+    if (width <= 760) {
+      const card = table.locator('tbody tr').first();
+      const bounds = await card.boundingBox();
+      const action = await card.getByRole('button', { name: '更多操作' }).boundingBox();
+      assert.ok(action.x >= bounds.x && action.x + action.width <= bounds.x + bounds.width, '手机操作位于卡片内');
+      const padding = await card.evaluate(node => parseFloat(getComputedStyle(node).paddingRight));
+      assert.ok(Math.abs(action.x + action.width - (bounds.x + bounds.width - padding)) <= 1, '手机操作靠右对齐');
+      assert.equal(await card.locator('[data-column="expected"]').evaluate(node => getComputedStyle(node).textAlign), 'left');
+    }
+    if (output) await page.screenshot({ path: join(output, `apple-management-${width}-${theme}.png`) });
+    await table.getByRole('button', { name: '查看苹果 ID 账号完整内容', exact: true }).first().click();
+    assert.equal(await page.locator('#table-cell-full-value').inputValue(), apple);
+    await page.locator('#drawer[open]').getByRole('button', { name: '关闭', exact: true }).last().click();
+    await openColumns();
+    assert.equal(await page.locator('#column-apple').isDisabled(), true);
+    await page.locator('#column-contact').uncheck();
+    await page.locator('#drawer[open]').getByRole('button', { name: '完成', exact: true }).click();
+    assert.equal(await table.getByRole('columnheader', { name: '联系方式', exact: true }).count(), 0);
+    await openColumns();
+    await page.locator('#column-contact').check();
+    await page.locator('#drawer[open]').getByRole('button', { name: '完成', exact: true }).click();
     const boundRow = table.getByRole('row').filter({ hasText: email });
     await boundRow.getByRole('button', { name: '更多操作' }).click();
     await page.getByText('余额变动', { exact: true }).filter({ visible: true }).last().click();
@@ -81,10 +130,23 @@ try {
     await main.getByRole('button', { name: '下一页', exact: true }).click();
     assert.equal(await main.locator('[data-pagination="apple-management"]').getAttribute('data-page'), '2');
     assert.ok(await withinWidth(main));
-    const search = main.getByRole('textbox', { name: '搜索苹果 ID 使用记录' });
+    await settle(page);
+    if (width > 900) assert.ok(Math.abs((await panel.boundingBox()).height - frame.height) <= 1, '末页框架高度稳定');
+    await search.fill('unused-0@example.test');
+    await table.getByText('unused-0@example.test', { exact: true }).waitFor();
+    assert.equal(await table.locator('tbody tr[data-row-id]').count(), 1);
+    if (output) await page.screenshot({ path: join(output, `apple-management-single-${width}-${theme}.png`) });
     await search.fill('匹配不到的合成关键词');
     await main.getByText('暂无符合条件的记录', { exact: true }).waitFor();
     assert.ok(await withinWidth(main));
+    await settle(page);
+    if (width > 900) assert.ok(Math.abs((await panel.boundingBox()).height - frame.height) <= 1, '空结果框架高度稳定');
+    if (output) await page.screenshot({ path: join(output, `apple-management-empty-${width}-${theme}.png`) });
+    await page.evaluate(() => location.hash = '#/overview');
+    await page.locator('#main[data-layout-route="overview"]').waitFor();
+    await page.evaluate(() => location.hash = '#/data-management/apple-ids');
+    await search.waitFor();
+    assert.equal(await search.inputValue(), '匹配不到的合成关键词');
     await page.evaluate(() => location.hash = '#/accounts/apple-balances');
     await main.locator('[data-action="apple-add"]').click();
     await drawer.locator('#inventory-appStoreRegion').waitFor();
@@ -97,7 +159,7 @@ try {
     assert.deepEqual(errors, []);
     assert.deepEqual(requests.external, []);
     await context.close();
-    console.log(`苹果 ID 离线验收通过（${width}px）`);
+    console.log(`苹果 ID 离线验收通过（${width}px ${theme}）`);
   }
 } finally {
   await browser.close();
