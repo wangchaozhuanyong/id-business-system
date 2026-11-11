@@ -239,6 +239,18 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     const [updated] = local.commerce.data.orders;
     assert.deepEqual([updated.id, updated.actualCostAmount, updated.customerId, updated.paidAmount, updated.receiptConfirmed],
       [order.id, '1350', '', '', false]);
+    await detail.getByRole('button', { name: '补齐资料', exact: true }).click();
+    const fullReceipt = completion.getByRole('checkbox', { name: /已按原售价全额收款/ });
+    assert.equal(await fullReceipt.isChecked(), false);
+    await fullReceipt.check();
+    await completion.getByRole('button', { name: '保存到原单', exact: true }).click();
+    await completion.waitFor({ state: 'hidden' });
+    await detail.getByRole('tab', { name: '成本与汇率', exact: true }).click();
+    await detail.locator('.property-row').filter({ hasText: '客户实收（退款前）' })
+      .getByText('1500.00 人民币 CNY', { exact: true }).waitFor();
+    const [received] = local.commerce.data.orders;
+    assert.deepEqual([received.id, received.actualCostAmount, received.customerId, received.paidAmount, received.receiptConfirmed],
+      [order.id, '1350', '', '', true]);
     await detail.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     await page.goto(origin + '/#/subscriptions/claude');
     await page.getByRole('tab', { name: '客户订阅', exact: true }).click();

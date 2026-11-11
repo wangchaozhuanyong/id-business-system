@@ -38,12 +38,15 @@ export function manualOrderDetailsMissing(order, customers, now = Date.now()) {
   if (!manualBusinessOrder(order)) return null;
   const historicalSale = ['Claude Pro', 'Claude Max'].includes(order.product) &&
     order.source === '历史入库' && order.businessType === '成品交付' && order.accountId;
+  const hasSalePrice = typeof order.saleAmount === 'string' && /^\d{1,16}(?:\.\d{1,4})?$/.test(order.saleAmount) &&
+    /[1-9]/.test(order.saleAmount) && typeof order.saleCurrency === 'string' && /^[A-Z]{3}$/.test(order.saleCurrency);
   return {
     customer: !customers.some(row => row.id === order.customerId),
     account: orderNeedsAccount(order),
     period: !(subscriptionTime(order.expiry) > subscriptionTime(order.start)),
     end: order.subscriptionEnded === true && !Number.isFinite(orderTerminationTime(order, now)),
-    ...(historicalSale && !order.actualCostAmount && { cost: true })
+    ...(historicalSale && !order.actualCostAmount && { cost: true }),
+    ...(historicalSale && order.receiptConfirmed !== true && hasSalePrice && { receipt: true })
   };
 }
 

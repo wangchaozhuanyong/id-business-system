@@ -2105,8 +2105,11 @@ export function createLocalBusinessStore(databasePath) {
             : customers.map((row) => row.id === customer.id ? customer : row);
         }
         const label = manual ? manualOrderDetailsAction : command.action === 'assign' ? '确认代充订单归属' : '补全代充订单资料';
-        const detail = costReason
-          ? `${order.orderNo} · 实际总成本 ${order.actualCostAmount} ${order.actualCostCurrency} · ${costReason}` : order.orderNo;
+        const detail = [order.orderNo,
+          ...(costReason ? [`实际总成本 ${order.actualCostAmount} ${order.actualCostCurrency}`, costReason] : []),
+          ...(manual && order.receiptConfirmed && prior.receiptConfirmed !== true
+            ? [`按原售价确认全额实收 ${order.saleAmount} ${order.saleCurrency}`] : [])
+        ].join(' · ');
         data.logs = [{
           id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail,
           at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id

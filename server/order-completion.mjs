@@ -199,7 +199,7 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
   if (!manager(actor)) throw new OrderCompletionError(403, '只有管理员可以补齐手工订单资料');
   exactKeys(command, ['action', 'orderId', 'version', 'details']);
   const fields = ['customerId', 'email', 'xHandle', 'start', 'expiry', 'subscriptionEndedAt'];
-  exactKeys(command.details, [...fields, 'actualCost']);
+  exactKeys(command.details, [...fields, 'actualCost', 'confirmFullReceipt']);
   const now = Date.parse(at);
   const prior = data?.orders?.find(row => row.id === command.orderId);
   const missing = manualOrderDetailsMissing(prior, data?.customers || [], now);
@@ -207,11 +207,12 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
   const invalid = message => { throw new OrderCompletionError(409, message); };
   if (command.action !== 'fill-manual-details') throw new OrderCompletionError(400, '订单补全操作无效');
   if (command.version !== (prior.version ?? 0)) invalid('订单已变化，请刷新后补齐资料');
-  const { actualCost, ...rawDetails } = command.details;
+  const { actualCost, confirmFullReceipt, ...rawDetails } = command.details;
   const details = Object.fromEntries(Object.entries(rawDetails).map(([key, value]) => [key, text(value, 254)]));
   const order = { ...prior, ...details };
   const edits = fields.filter(key => order[key] !== prior[key]);
-  if ((!edits.length && actualCost === undefined) || Object.values(details).some(value => !value))
+  const completingFinance = actualCost !== undefined || confirmFullReceipt !== undefined;
+  if ((!edits.length && !completingFinance) || Object.values(details).some(value => !value))
     invalid('请填写可核实的原订单资料');
   let costReason;
   if (actualCost !== undefined) {
@@ -224,6 +225,19 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
     if (!validMoney(amount) || !validCurrencyCode(currency) || !costReason || /[\p{Cc}\p{Cf}]/u.test(costReason))
       invalid('请填写有效的实际总成本、币种和核对依据');
     Object.assign(order, { costBasis: 'actual', actualCostAmount: amount, actualCostCurrency: currency });
+  }
+  if (confirmFullReceipt !== undefined) {
+    if (confirmFullReceipt !== true || !missing.receipt)
+      invalid('请核对原单售价及实收记录');
+    const evidence = Array.isArray(prior.financialEvidence) ? prior.financialEvidence : [];
+    const receipts = evidence.filter(entry => entry?.kind === 'receipt');
+    if (receipts.some(entry => moneyUnits(entry.amount) !== moneyUnits(prior.saleAmount) ||
+        entry.currency !== prior.saleCurrency))
+      invalid('原单已有不同的实收金额或币种');
+    order.receiptConfirmed = true;
+    if (!receipts.length) order.financialEvidence = [...evidence, {
+      kind: 'receipt', amount: prior.saleAmount, currency: prior.saleCurrency, at
+    }];
   }
   if (edits.includes('customerId') && (!missing.customer ||
       !data.customers.some(row => row.id === order.customerId && row.active !== false)))
