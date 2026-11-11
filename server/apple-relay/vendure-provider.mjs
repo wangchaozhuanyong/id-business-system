@@ -125,6 +125,52 @@ export function createVendureMailboxProvider(config, fetchImpl = fetch) {
         'icloudVirtualEmails'
       );
     },
+    relayTargets(primaryIds, aliasIds, codeKind) {
+      return request(
+        adminUrl,
+        `query IdBusinessRelayTargets($primaryIds: [ID!]!, $aliasIds: [ID!]!, $includeCodes: Boolean!) {
+          icloudRelayTargets(primaryIds: $primaryIds, aliasIds: $aliasIds, includeCodes: $includeCodes) {
+            primaries { id email status lastSyncedAt codeExpiresAt ${codeKind === 'parent' ? 'masterQueryCode' : ''} }
+            aliases { id primaryAccountId aliasEmail status codeExpiresAt lastQueriedAt mailCount lastMailReceivedAt ${codeKind === 'alias' ? 'buyerQueryCode' : ''} }
+          }
+        }`,
+        { primaryIds, aliasIds, includeCodes: Boolean(codeKind) },
+        'icloudRelayTargets'
+      );
+    },
+    relayCodeTarget(queryCode, expected = {}) {
+      return request(
+        adminUrl,
+        `query IdBusinessRelayCodeTarget($queryCode: String!, $expectedPrimaryId: ID, $expectedAliasId: ID) {
+          icloudRelayCodeTarget(queryCode: $queryCode, expectedPrimaryId: $expectedPrimaryId, expectedAliasId: $expectedAliasId) {
+            primary { id email status codeExpiresAt }
+            alias { id primaryAccountId aliasEmail status codeExpiresAt }
+            retryAfterSeconds
+          }
+        }`,
+        { queryCode, ...expected },
+        'icloudRelayCodeTarget'
+      );
+    },
+    relayMailPage(variables) {
+      return request(
+        adminUrl,
+        `query IdBusinessRelayMailPage($primaryAccountId: ID!, $virtualEmailId: ID, $unassignedOnly: Boolean!, $limit: Int!, $mailId: ID) {
+          icloudRelayMailPage(primaryAccountId: $primaryAccountId, virtualEmailId: $virtualEmailId,
+            unassignedOnly: $unassignedOnly, limit: $limit, mailId: $mailId) {
+            primary { id email status lastSyncedAt }
+            aliases { id primaryAccountId aliasEmail status }
+            items {
+              id primaryAccountId virtualEmailId messageId fromAddress fromName subject
+              extractedCode receivedAt isRead ${variables.mailId ? 'bodyText' : ''}
+            }
+            truncated
+          }
+        }`,
+        variables,
+        'icloudRelayMailPage'
+      );
+    },
     createAlias(input) {
       return request(
         adminUrl,
@@ -197,22 +243,6 @@ export function createVendureMailboxProvider(config, fetchImpl = fetch) {
         'result'
       );
     },
-    receivedMails(variables) {
-      return request(
-        adminUrl,
-        `query IdBusinessReceivedMails(
-          $primaryAccountId: ID!, $virtualEmailId: ID, $unassignedOnly: Boolean, $limit: Int
-        ) {
-          icloudReceivedMails(primaryAccountId: $primaryAccountId, virtualEmailId: $virtualEmailId,
-            unassignedOnly: $unassignedOnly, limit: $limit) {
-            id primaryAccountId virtualEmailId messageId fromAddress fromName subject bodyText
-            extractedCode receivedAt isRead
-          }
-        }`,
-        variables,
-        'icloudReceivedMails'
-      );
-    },
     mailAssignmentCandidates(primaryAccountId) {
       return request(
         adminUrl,
@@ -235,19 +265,6 @@ export function createVendureMailboxProvider(config, fetchImpl = fetch) {
         }`,
         { mailId, virtualEmailId },
         'result'
-      );
-    },
-    verifyQueryCode(queryCode) {
-      if (!shopUrl) throw new RelayError(503, 'Vendure 邮箱查询码入口尚未配置');
-      return request(
-        shopUrl,
-        `query IdBusinessPublicMailboxQuery($queryCode: String!) {
-          icloudQueryMails(queryCode: $queryCode) {
-            success targetType aliasEmail primaryEmail codeExpiresAt
-          }
-        }`,
-        { queryCode },
-        'icloudQueryMails'
       );
     }
   };

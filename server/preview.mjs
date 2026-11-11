@@ -342,7 +342,9 @@ export async function startPreview(
           store.saveAppleRelayPrimaries(rows, actor, aliases, registration),
         fetchImpl: relayFetch,
         recordAction: ({ action, actor, parentId, aliasId }) =>
-          store.recordAuthEvent({ action: 'relay_' + action, actor, targetId: aliasId || parentId })
+          store.recordAuthEvent({ action: 'relay_' + action, actor, targetId: aliasId || parentId }),
+        recordActions: events => store.recordAuthEvents(events.map(({ action, actor, parentId, aliasId }) =>
+          ({ action: 'relay_' + action, actor, targetId: aliasId || parentId })))
       });
       for (const [name, type] of [
         ['local-data.js', 'text/javascript; charset=utf-8'],

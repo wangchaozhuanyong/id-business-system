@@ -36,6 +36,7 @@ const allowedMethods = new Map([
   ['test', 'POST'],
   ['sync', 'POST'],
   ['mails', 'POST'],
+  ['mail-detail', 'POST'],
   ['history-preview', 'POST'],
   ['extraction-eligibility', 'POST'],
   ['extraction-codes', 'POST'],
@@ -263,7 +264,7 @@ function verificationCode(mail) {
   return candidates.size === 1 ? [...candidates][0] : '';
 }
 
-function displayMail(row, parentId, aliasId) {
+function displayMail(row, parentId, aliasId, includeBody) {
   const received = Date.parse(row.receivedAt);
   if (!boundedId(String(row.id ?? '')) || !Number.isFinite(received)) return null;
   return {
@@ -273,7 +274,7 @@ function displayMail(row, parentId, aliasId) {
     from: [row.fromName, row.fromAddress].filter(Boolean).join(' · '),
     subject: String(row.subject ?? ''),
     code: verificationCode(row),
-    body: String(row.bodyText ?? ''),
+    ...(includeBody && { body: String(row.bodyText ?? '') }),
     receivedAt: beijingMinute(received),
     read: row.isRead === true
   };
@@ -317,7 +318,7 @@ async function readBody(request, maximumBytes = 4096) {
   return body;
 }
 
-export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, publicOrigin }) {
+export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, recordActions, publicOrigin }) {
   const provider = config ? createVendureMailboxProvider(config, fetchImpl) : null;
   const primaryBindings = loadBindings(config?.primaryBindings);
   const aliasBindings = loadBindings(config?.aliasBindings);
@@ -342,12 +343,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     provider, current, remoteIdFor, remoteAliasIdFor, importAliasIds, savePrimaries
   });
 
-  async function matched(includeAliases) {
-    const [local, primaries, aliases] = await Promise.all([
-      current(),
-      provider.primaryAccounts().then(checkedRows),
-      includeAliases ? provider.virtualEmails().then(checkedRows) : []
-    ]);
+  function matchRows(local, primaries, aliases) {
     const matchedParents = matchPrimaries(local, primaries, remoteIdFor);
     return {
       primaries,
@@ -355,6 +351,31 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
       matchedParents,
       matchedAliases: matchAliases(local, aliases, remoteAliasIdFor, matchedParents)
     };
+  }
+
+  async function matched(includeAliases) {
+    const [local, primaries, aliases] = await Promise.all([
+      current(),
+      provider.primaryAccounts().then(checkedRows),
+      includeAliases ? provider.virtualEmails().then(checkedRows) : []
+    ]);
+    return matchRows(local, primaries, aliases);
+  }
+
+  async function scopedTargets(local, kind, ids, includeCode = false) {
+    const primaryIds = new Set();
+    const aliasIds = new Set();
+    for (const id of ids) {
+      const alias = kind === 'alias' ? local.aliases.get(id) : null;
+      if (kind === 'alias' && (!activeAlias(alias) || !remoteAliasIdFor(alias))) continue;
+      const parent = local.parents.get(alias ? alias.parentMailboxId : id);
+      if (!activeParent(parent) || !remoteIdFor(parent)) continue;
+      primaryIds.add(remoteIdFor(parent));
+      if (alias) aliasIds.add(remoteAliasIdFor(alias));
+    }
+    if (!primaryIds.size) return matchRows(local, [], []);
+    const result = await provider.relayTargets([...primaryIds], [...aliasIds], includeCode ? kind : undefined);
+    return matchRows(local, checkedRows(result.primaries), checkedRows(result.aliases));
   }
 
   async function record(action, actor, parentId = '', aliasId = '') {
@@ -593,9 +614,9 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
 
   async function lookupCodeTarget(kind, id) {
     if (!['parent', 'alias'].includes(kind)) throw new RelayError(400, '请选择邮箱类型');
-    const isAlias = kind === 'alias';
-    const state = await matched(isAlias);
-    return isAlias ? requireAlias(state, id) : requireParent(state, id);
+    if (!boundedId(id)) throw new RelayError(400, '请选择邮箱');
+    const state = await scopedTargets(await current(), kind, [id], true);
+    return kind === 'alias' ? requireAlias(state, id) : requireParent(state, id);
   }
 
   const codeReset = createRelayCodeReset({
@@ -681,15 +702,20 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
       record('mail_reassign', actor, parent.local.id, alias.local.id)
   });
 
-  function codeResult(target, kind) {
+  function codeResult(target, kind, includeCode = true) {
     const queryCode =
       kind === 'parent' ? target.remote.masterQueryCode : target.remote.buyerQueryCode;
-    if (typeof queryCode !== 'string' || !queryCode)
+    if (includeCode && (typeof queryCode !== 'string' || !queryCode))
       throw new RelayError(404, '该邮箱尚无可查看的查询码');
     return {
-      queryCode,
+      ...(includeCode && { queryCode }),
       codeExpiresAt: target.remote.codeExpiresAt ?? null,
-      email: target.local.email
+      email: target.local.email,
+      ...(kind === 'alias' && {
+        mailCount: target.remote.mailCount,
+        lastMailReceivedAt: target.remote.lastMailReceivedAt,
+        lastQueriedAt: target.remote.lastQueriedAt
+      })
     };
   }
 
@@ -704,14 +730,14 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
 
   async function readCodePage(input, actor) {
     requireAdministrator(actor, '当前账号无权读取邮箱查询码');
-    const { kind, ids } = input;
-    if (Object.keys(input).length !== 2 || !['parent', 'alias'].includes(kind) ||
+    const { kind, ids, includeCode = true } = input;
+    if (Object.keys(input).some(key => !['kind', 'ids', 'includeCode'].includes(key)) ||
+        typeof includeCode !== 'boolean' || !['parent', 'alias'].includes(kind) ||
         !Array.isArray(ids) || ids.length < 1 || ids.length > 50 ||
         !ids.every(boundedId) || new Set(ids).size !== ids.length)
       throw new RelayError(400, '请提交同一类型的 1 至 50 个不同邮箱编号');
 
-    // Resolve the whole visible page against one upstream catalog, never once per row.
-    const state = await matched(kind === 'alias');
+    const state = await scopedTargets(await current(), kind, ids, includeCode);
     const select = (state, id) => kind === 'alias' ? requireAlias(state, id) : requireParent(state, id);
     const identity = target => JSON.stringify([target.remoteId, target.local.id,
       target.local.version, target.local.email, target.local.parentMailboxId,
@@ -723,20 +749,24 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     const selected = ids.map(id => {
       try {
         const target = select(state, id);
-        return { id, target, identity: identity(target), result: codeResult(target, kind) };
+        return { id, target, identity: identity(target), result: codeResult(target, kind, includeCode) };
       } catch (error) {
         return { id, failure: failure(id, error) };
       }
     });
-    await Promise.all(selected.filter(item => item.target).map(({ target }) =>
-      kind === 'parent' ? record('read_code', actor, target.local.id)
-        : record('read_code', actor, target.owner.local.id, target.local.id)));
+    if (includeCode) {
+      const audits = selected.filter(item => item.target).map(({ target }) => ({
+        action: 'read_code', actor,
+        parentId: (target.owner ?? target).local.id,
+        aliasId: kind === 'alias' ? target.local.id : ''
+      }));
+      if (audits.length && recordActions) await recordActions(audits);
+      else await Promise.all(audits.map(event => recordAction?.(event)));
+    }
 
     // An asynchronous audit must not let a removed/rebound mailbox return an old code.
     const local = await current();
-    const matchedParents = matchPrimaries(local, state.primaries, remoteIdFor);
-    const latest = { matchedParents,
-      matchedAliases: matchAliases(local, state.aliases, remoteAliasIdFor, matchedParents) };
+    const latest = matchRows(local, state.primaries, state.aliases);
     return { items: selected.map(item => {
       if (item.failure) return item.failure;
       try {
@@ -768,145 +798,191 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     return syncing.get(parent.remoteId);
   }
 
-  async function recentMails(state, selected, { unassignedOnly = false, refresh = true, limit }) {
-    const { parent, alias } = selected;
-    if (refresh) await sync(parent);
-    const rows = checkedRows(
-      await provider.receivedMails({
-        primaryAccountId: parent.remoteId,
-        virtualEmailId: alias?.remoteId,
-        unassignedOnly,
-        limit
-      })
-    );
-    const localNow = await current();
-    const currentParent = localNow.parents.get(parent.local.id);
-    if (!activeParent(currentParent) || currentParent.email !== parent.local.email) {
-      throw new RelayError(409, '主邮箱资料已变更，请重新查询');
-    }
-    const aliasesByRemoteId = new Map();
-    for (const candidate of state.matchedAliases.values()) {
-      const currentAlias = localNow.aliases.get(candidate.local.id);
-      if (
-        candidate.owner.local.id === parent.local.id &&
-        activeAlias(currentAlias) &&
-        currentAlias.parentMailboxId === parent.local.id &&
-        currentAlias.email === candidate.local.email
-      ) {
-        aliasesByRemoteId.set(candidate.remoteId, candidate.local.id);
-      }
-    }
-    if (alias && !aliasesByRemoteId.has(alias.remoteId)) {
-      throw new RelayError(409, '隐藏邮箱资料已变更，请重新查询');
-    }
+  function localMailTarget(local, parentId, aliasId) {
+    const row = aliasId ? local.aliases.get(aliasId) : null;
+    if (aliasId && (!activeAlias(row) || !remoteAliasIdFor(row)))
+      throw new RelayError(409, '隐藏邮箱未绑定、已停用或归属未核对');
+    if (row && parentId && row.parentMailboxId !== parentId)
+      throw new RelayError(400, '隐藏邮箱与所选主邮箱不匹配');
+    const owner = local.parents.get(row ? row.parentMailboxId : parentId);
+    if (!activeParent(owner) || !remoteIdFor(owner))
+      throw new RelayError(409, '主邮箱未绑定、已停用或归属未核对');
+    const parent = { local: owner, remoteId: remoteIdFor(owner) };
+    return row ? { parent, alias: { local: row, remoteId: remoteAliasIdFor(row) } } : { parent };
+  }
+
+  function sameMailTarget(target, fresh) {
+    return fresh.parent.local.id === target.parent.local.id &&
+      fresh.parent.remoteId === target.parent.remoteId &&
+      normalizeEmail(fresh.parent.local.email) === normalizeEmail(target.parent.local.email) &&
+      fresh.alias?.local.id === target.alias?.local.id &&
+      fresh.alias?.remoteId === target.alias?.remoteId &&
+      normalizeEmail(fresh.alias?.local.email) === normalizeEmail(target.alias?.local.email);
+  }
+
+  function selectMailTarget(state, target) {
+    const alias = target.alias ? requireAlias(state, target.alias.local.id) : null;
+    const parent = requireParent(state, target.parent.local.id);
+    const fresh = alias ? { parent: alias.owner, alias } : { parent };
+    if (!sameMailTarget(target, fresh)) throw new RelayError(409, '邮箱资料已变更，请重新查询');
+    return fresh;
+  }
+
+  async function readScopedMails(target, { unassignedOnly = false, limit, mailId }) {
+    const { parent, alias } = target;
+    const page = await provider.relayMailPage({
+      primaryAccountId: parent.remoteId,
+      virtualEmailId: alias?.remoteId,
+      unassignedOnly,
+      limit,
+      ...(mailId && { mailId })
+    });
+    const state = matchRows(await current(), page.primary ? checkedRows([page.primary]) : [], checkedRows(page.aliases));
+    const fresh = selectMailTarget(state, target);
+    const aliases = new Map([...state.matchedAliases.values()]
+      .filter(candidate => candidate.owner.local.id === parent.local.id)
+      .map(candidate => [candidate.remoteId, candidate.local.id]));
     const items = new Map();
-    for (const row of rows) {
-      if (String(row.primaryAccountId) !== parent.remoteId) continue;
+    for (const row of checkedRows(page.items)) {
+      if (String(row.primaryAccountId) !== parent.remoteId || (mailId && String(row.id) !== mailId)) continue;
       const unassigned = row.virtualEmailId === null;
       const remoteAliasId = String(row.virtualEmailId ?? '');
-      if (
-        (alias && remoteAliasId !== alias.remoteId) ||
-        (unassignedOnly && !unassigned) ||
-        (!unassigned && !aliasesByRemoteId.has(remoteAliasId))
-      )
-        continue;
-      const mail = displayMail(row, parent.local.id, aliasesByRemoteId.get(remoteAliasId) ?? '');
+      if ((alias && remoteAliasId !== alias.remoteId) ||
+          (unassignedOnly && !unassigned) ||
+          (!unassigned && !aliases.has(remoteAliasId))) continue;
+      const mail = displayMail(row, parent.local.id, aliases.get(remoteAliasId) ?? '', Boolean(mailId));
       const messageKey = String(row.messageId ?? mail?.id ?? '');
       if (mail && !items.has(messageKey)) items.set(messageKey, mail);
     }
-    const ordered = [...items.values()].sort((left, right) =>
-      right.receivedAt.localeCompare(left.receivedAt)
-    );
-    return { items: ordered.slice(0, limit), truncated: rows.length >= limit };
+    const rows = [...items.values()].sort((left, right) => right.receivedAt.localeCompare(left.receivedAt));
+    return {
+      items: rows.slice(0, limit),
+      truncated: page.truncated === true || rows.length > limit,
+      lastSyncedAt: Number.isFinite(Date.parse(fresh.parent.remote.lastSyncedAt))
+        ? fresh.parent.remote.lastSyncedAt : null
+    };
   }
 
-  async function listMails(
-    { parentId = '', aliasId = '', unassignedOnly = false, refresh = true },
-    actor
-  ) {
-    if (
-      (parentId !== '' && !boundedId(parentId)) ||
-      (aliasId !== '' && !boundedId(aliasId)) ||
-      typeof unassignedOnly !== 'boolean' ||
-      typeof refresh !== 'boolean' ||
-      (aliasId && unassignedOnly)
-    ) {
+  async function listMails({ parentId = '', aliasId = '', unassignedOnly = false, refresh = true }, actor) {
+    if ((parentId !== '' && !boundedId(parentId)) ||
+        (aliasId !== '' && !boundedId(aliasId)) ||
+        typeof unassignedOnly !== 'boolean' || typeof refresh !== 'boolean' ||
+        (aliasId && unassignedOnly)) {
       throw new RelayError(400, '收件筛选条件无效');
     }
-    const state = await matched(true);
-    const alias = aliasId ? requireAlias(state, aliasId) : null;
-    if (parentId && alias && alias.owner.local.id !== parentId) {
-      throw new RelayError(400, '隐藏邮箱与所选主邮箱不匹配');
+    const local = await current();
+    const targets = parentId || aliasId
+      ? [localMailTarget(local, parentId, aliasId)]
+      : [...local.parents.values()].filter(row => activeParent(row) && remoteIdFor(row))
+          .map(row => localMailTarget(local, row.id, ''));
+    if (!targets.length) throw new RelayError(409, '请先绑定并核对至少一个主邮箱');
+
+    const results = [];
+    let next = 0;
+    async function readNext() {
+      while (next < targets.length) {
+        const index = next++;
+        const target = targets[index];
+        const { parent, alias } = target;
+        const status = { parentId: parent.local.id, lastSyncedAt: null, read: false, syncFailed: false };
+        if (refresh) {
+          try {
+            const state = await scopedTargets(await current(), alias ? 'alias' : 'parent',
+              [alias?.local.id ?? parent.local.id]);
+            await sync(selectMailTarget(state, target).parent);
+            await record('sync', actor, parent.local.id, alias?.local.id);
+          } catch {
+            status.syncFailed = true;
+          }
+        }
+        try {
+          const page = await readScopedMails(target, { unassignedOnly, limit: 200 });
+          results[index] = { ...page, status: { ...status, lastSyncedAt: page.lastSyncedAt, read: true } };
+        } catch (error) {
+          const keepPrevious = error instanceof RelayError && (error.status >= 500 || error.status === 429);
+          let retain = false;
+          if (keepPrevious) {
+            try {
+              retain = sameMailTarget(target, localMailTarget(await current(), parent.local.id, alias?.local.id));
+            } catch { /* A removed or disabled local binding cannot retain its previous result. */ }
+          }
+          if (targets.length === 1) {
+            if (keepPrevious && !retain) throw new RelayError(409, '邮箱资料已变更，请重新查询');
+            throw error;
+          }
+          results[index] = { items: [], truncated: false, status: { ...status, keepPrevious: retain } };
+        }
+      }
     }
-    const owners = parentId
-      ? [requireParent(state, parentId)]
-      : alias
-        ? [alias.owner]
-        : [...state.matchedParents.values()];
-    if (owners.length === 0) throw new RelayError(409, '请先绑定并核对至少一个主邮箱');
-    const items = [];
-    let truncated = false;
-    for (const parent of owners) {
-      const result = await recentMails(
-        state,
-        { parent, alias },
-        { unassignedOnly, refresh, limit: mailLimit }
-      );
-      items.push(...result.items);
-      items.sort((left, right) => right.receivedAt.localeCompare(left.receivedAt));
-      truncated ||= result.truncated || items.length > mailLimit;
-      if (items.length > mailLimit) items.length = mailLimit;
-      if (refresh) await record('sync', actor, parent.local.id, alias?.local.id);
-    }
-    return { items, truncated };
+    await Promise.all([readNext(), readNext()]);
+    const items = results.flatMap(result => result.items)
+      .sort((left, right) => right.receivedAt.localeCompare(left.receivedAt));
+    return {
+      items: items.slice(0, mailLimit),
+      truncated: results.some(result => result.truncated) || items.length > mailLimit,
+      mailboxes: results.map(result => result.status)
+    };
   }
 
-  function findTarget(state, value, byEmail) {
-    if (byEmail) {
-      const targetEmail = normalizeEmail(value);
-      const aliases = [...state.matchedAliases.values()].filter(
-        (entry) => normalizeEmail(entry.local.email) === targetEmail
-      );
-      const parents = [...state.matchedParents.values()].filter(
-        (entry) => normalizeEmail(entry.local.email) === targetEmail
-      );
-      if (aliases.length + parents.length !== 1) return null;
-      return aliases.length
-        ? { parent: aliases[0].owner, alias: aliases[0] }
-        : { parent: parents[0] };
-    }
-    const code = normalizeCode(value);
-    const aliases = state.aliases.filter((entry) => normalizeCode(entry.buyerQueryCode) === code);
-    const parents = state.primaries.filter(
-      (entry) => normalizeCode(entry.masterQueryCode) === code
-    );
-    if (aliases.length + parents.length !== 1) return null;
-    if (aliases.length) {
-      const alias = [...state.matchedAliases.values()].find(
-        (entry) => entry.remoteId === String(aliases[0].id)
-      );
-      if (alias && validExpiry(alias.remote.codeExpiresAt)) return { parent: alias.owner, alias };
-      return null;
-    }
-    const parent = [...state.matchedParents.values()].find(
-      (entry) => entry.remoteId === String(parents[0].id)
-    );
-    return parent && validExpiry(parent.remote.codeExpiresAt) ? { parent } : null;
+  async function readMailDetail({ parentId, mailId, aliasId = '' }, actor) {
+    requireAdministrator(actor, '当前账号无权查看邮件正文');
+    if (!boundedId(parentId) || !boundedId(mailId) || (aliasId !== '' && !boundedId(aliasId)))
+      throw new RelayError(400, '请选择有效的收件记录');
+    const target = localMailTarget(await current(), parentId, aliasId);
+    const result = await readScopedMails(target, { limit: 1, mailId });
+    if (!result.items.length) throw new RelayError(404, '邮件不存在或归属已变化');
+    return result.items[0];
   }
 
-  async function verifyQueryTarget({ parent, alias }, value) {
-    const verified = await provider.verifyQueryCode(normalizeCode(value));
-    const expectedEmail = maskedEmail((alias ?? parent).local.email);
-    const verifiedEmail = alias ? verified.aliasEmail : verified.primaryEmail;
-    if (
-      verified.success !== true ||
-      verified.targetType !== (alias ? 'VIRTUAL' : 'PRIMARY') ||
-      normalizeEmail(verifiedEmail) !== normalizeEmail(expectedEmail) ||
-      !validExpiry(verified.codeExpiresAt)
-    ) {
-      throw new RelayError(404, '查询码已失效，请核对后重试');
+  async function lookupEmailTarget(email) {
+    const local = await current();
+    const normalized = normalizeEmail(email);
+    const parents = [...local.parents.values()].filter(row =>
+      activeParent(row) && normalizeEmail(row.email) === normalized);
+    const aliases = [...local.aliases.values()].filter(row =>
+      activeAlias(row) && normalizeEmail(row.email) === normalized);
+    if (parents.length + aliases.length !== 1) throw new RelayError(404, '未找到已绑定的邮箱');
+    const target = localMailTarget(local, parents[0]?.id, aliases[0]?.id);
+    const state = await scopedTargets(local, target.alias ? 'alias' : 'parent',
+      [target.alias?.local.id ?? target.parent.local.id]);
+    return selectMailTarget(state, target);
+  }
+
+  async function lookupQueryCode(value, expected) {
+    const verified = await provider.relayCodeTarget(normalizeCode(value), expected && {
+      expectedPrimaryId: expected.parent.remoteId,
+      expectedAliasId: expected.alias?.remoteId
+    });
+    if (Number.isSafeInteger(verified.retryAfterSeconds) && verified.retryAfterSeconds > 0) {
+      const error = new RelayError(429, '查询次数过多，请稍后再试');
+      error.retryAfterSeconds = verified.retryAfterSeconds;
+      throw error;
     }
-    return verified.codeExpiresAt ?? null;
+    if (!verified.primary) throw new RelayError(404, invalidPublicCode);
+    const state = matchRows(await current(), checkedRows([verified.primary]),
+      verified.alias ? checkedRows([verified.alias]) : []);
+    const parents = [...state.matchedParents.values()];
+    const aliases = [...state.matchedAliases.values()];
+    if (parents.length !== 1 || (verified.alias && aliases.length !== 1))
+      throw new RelayError(404, invalidPublicCode);
+    const alias = aliases[0];
+    const target = alias ? { parent: alias.owner, alias } : { parent: parents[0] };
+    const expiresAt = (alias ?? target.parent).remote.codeExpiresAt ?? null;
+    if (!validExpiry(expiresAt) || (expected && !sameMailTarget(expected, target)))
+      throw new RelayError(404, invalidPublicCode);
+    return { ...target, expiresAt };
+  }
+
+  async function queryScopedMails(value, byEmail) {
+    const target = byEmail ? await lookupEmailTarget(value) : await lookupQueryCode(value);
+    await sync(target.parent);
+    const result = await readScopedMails(target, { limit: !byEmail && target.alias ? 5 : 200 });
+    if (byEmail) return { ...result, target, expiresAt: null };
+    const latest = await lookupQueryCode(value, target);
+    if (!validExpiry(target.expiresAt)) throw new RelayError(404, invalidPublicCode);
+    const expiresAt = target.expiresAt && latest.expiresAt && Date.parse(target.expiresAt) < Date.parse(latest.expiresAt)
+      ? target.expiresAt : latest.expiresAt ?? target.expiresAt;
+    return { ...result, target, expiresAt };
   }
 
   async function queryMails(input, actor) {
@@ -914,26 +990,16 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     if (!value || value.length > 254) throw new RelayError(400, '请输入邮箱地址或查询码');
     const byEmail = emailPattern.test(value);
     if (!byEmail && value.length > 100) throw new RelayError(400, '查询码长度无效');
-    if (!byEmail && !provider.supportsCodeQuery) {
+    if (!byEmail && !provider.supportsCodeQuery)
       throw new RelayError(503, 'Vendure 邮箱查询码入口尚未配置');
-    }
-    const state = await matched(true);
-    const target = findTarget(state, value, byEmail);
-    if (!target) throw new RelayError(404, '未找到已绑定的邮箱，或查询码已失效');
-    const { parent, alias } = target;
-    const expiresAt = byEmail ? null : await verifyQueryTarget(target, value);
-    const result = await recentMails(state, target, {
-      limit: byEmail ? mailLimit : alias ? 5 : 200
-    });
-    if (!validExpiry(expiresAt)) throw new RelayError(404, '查询码已失效，请核对后重试');
+    const { target: { parent, alias }, ...result } = await queryScopedMails(value, byEmail);
     await record('query', actor, parent.local.id, alias?.local.id);
     return {
       ...result,
       targetType: alias ? 'alias' : 'parent',
       parentId: parent.local.id,
       aliasId: alias?.local.id ?? '',
-      email: (alias ?? parent).local.email,
-      expiresAt
+      email: (alias ?? parent).local.email
     };
   }
 
@@ -962,31 +1028,8 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     if (!code || code.length > 100 || code.includes('@') || Object.keys(input).length !== 1) {
       throw new RelayError(400, '请输入有效的邮箱查询码');
     }
-    const state = await matched(true);
-    const target = findTarget(state, code, false);
-    if (!target) throw new RelayError(404, invalidPublicCode);
-
-    const verifiedExpiry = await verifyQueryTarget(target, code);
-    const { parent, alias } = target;
-    const result = await recentMails(state, target, { limit: alias ? 5 : 200 });
-    // Synchronization can take long enough for a code reset or binding change to occur.
-    const refreshed = findTarget(await matched(true), code, false);
-    if (
-      refreshed?.parent.local.id !== parent.local.id ||
-      refreshed?.parent.remoteId !== parent.remoteId ||
-      refreshed?.parent.local.email !== parent.local.email ||
-      refreshed?.alias?.local.id !== alias?.local.id ||
-      refreshed?.alias?.remoteId !== alias?.remoteId ||
-      refreshed?.alias?.local.email !== alias?.local.email ||
-      !validExpiry(verifiedExpiry)
-    ) {
-      throw new RelayError(404, invalidPublicCode);
-    }
-    const currentExpiry = (refreshed.alias ?? refreshed.parent).remote.codeExpiresAt ?? null;
-    const codeExpiresAt =
-      verifiedExpiry && currentExpiry && Date.parse(verifiedExpiry) < Date.parse(currentExpiry)
-        ? verifiedExpiry
-        : (currentExpiry ?? verifiedExpiry);
+    const { target: { parent, alias }, items, expiresAt: codeExpiresAt, truncated } =
+      await queryScopedMails(code, false);
 
     await record('public_query', publicQueryActor);
     return {
@@ -995,12 +1038,12 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
       primaryEmail: alias ? null : maskedEmail(parent.local.email),
       aliasEmail: alias ? maskedEmail(alias.local.email) : null,
       codeExpiresAt,
-      items: result.items.map(({ subject, receivedAt, code }) => ({
+      items: items.map(({ subject, receivedAt, code }) => ({
         subject: subject.slice(0, 500),
         receivedAt,
         extractedCode: code
       })),
-      truncated: result.truncated
+      truncated
     };
   }
 
@@ -1032,6 +1075,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
           status = 404;
           message = invalidPublicCode;
         }
+        if (error.retryAfterSeconds) response.setHeader('Retry-After', String(error.retryAfterSeconds));
         writeJson(response, status, { success: false, error: message, message });
       } finally {
         if (reserved) activePublicQueries -= 1;
@@ -1132,6 +1176,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         if (!provider) throw new RelayError(503, 'Vendure 邮箱服务尚未配置');
         const input = await readBody(request, action === 'code-read' ? 10 * 1024 : 4096);
         if (action === 'mails') return writeJson(response, 200, await listMails(input, actor));
+        if (action === 'mail-detail') return writeJson(response, 200, await readMailDetail(input, actor));
         if (action === 'history-preview') {
           return writeJson(response, 200, await previewHistory(input, actor));
         }
@@ -1148,7 +1193,8 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         if (action === 'mail-reassign-confirm')
           return writeJson(response, 200, await mailReassignment.confirm(input, actor));
 
-        const parent = requireParent(await matched(false), input.parentId);
+        if (!boundedId(input.parentId)) throw new RelayError(400, '请选择主邮箱');
+        const parent = requireParent(await scopedTargets(await current(), 'parent', [input.parentId]), input.parentId);
         if (action === 'test') {
           const result = await provider.testConnection(parent.remoteId);
           const success = result.success === true;
@@ -1162,6 +1208,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         await record('sync', actor, parent.local.id);
         return writeJson(response, 200, { success: true, syncedCount, message: '主邮箱同步完成' });
       } catch (error) {
+        if (error.retryAfterSeconds) response.setHeader('Retry-After', String(error.retryAfterSeconds));
         const status = error instanceof RelayError ? error.status : 500;
         const message = error instanceof RelayError ? error.message : '邮箱操作暂时失败，请重试';
         writeJson(response, status, { message, error: message });

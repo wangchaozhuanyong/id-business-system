@@ -53,6 +53,9 @@
     mailKey: '',
     mailRequest: 0,
     mailLoading: false,
+    mailReady: false,
+    mailboxes: [],
+    mailTruncated: false,
     mailError: '',
     queryRequest: 0,
     querying: false
@@ -100,6 +103,12 @@
   function timeText(value, fallback = '—') {
     const time = timestamp(value);
     return Number.isFinite(time) ? beijingTime.format(new Date(time)) : fallback;
+  }
+  function remainingDaysText(expiresAt) {
+    if (expiresAt === null) return '长期有效';
+    const time = timestamp(expiresAt);
+    if (!Number.isFinite(time)) return '—';
+    return `${Math.max(0, Math.ceil((time - Date.now()) / 86400000))} 天`;
   }
   function expiry(days) {
     const date = new Date(timestamp(now()) + Number(days) * 86400000);
@@ -418,7 +427,8 @@
       return false;
     } finally {
       remote.statusLoading = false;
-      renderRelayPage();
+      if (remote.status?.configured && inMailView() && !remote.mailKey) void openInbox();
+      else renderRelayPage();
     }
   }
   function connectionNotice(title, text) {
@@ -433,10 +443,60 @@
       ? bound(id)
       : remote.status?.configured && remote.status.aliasIds?.includes(id);
   const buyerCodeCells = new WeakMap();
+  const aliasMetadata = new WeakMap();
+  const remainingDaysColumn = 'codeResetIntervalDays'; // Preserve saved column visibility.
   const buyerCodeReuseMs = 5 * 60_000;
   function buyerCodeSnapshot(row) {
     return JSON.stringify([row.id, row.version, row.email, row.parentMailboxId,
       parent(row.parentMailboxId)?.version, row.queryExpiry]);
+  }
+  function aliasCodeExpiry(row) {
+    const known = knownAliasMetadata(row);
+    return known?.expiresAt === undefined ? row.queryExpiry ?? '' : known.expiresAt;
+  }
+  function knownAliasMetadata(row) {
+    const known = aliasMetadata.get(row);
+    return known && known.snapshot === buyerCodeSnapshot(row) ? known : undefined;
+  }
+  function aliasMailCount(row) {
+    if (!local) return String(mails.filter(mail => mail.aliasId === row.id).length);
+    const count = knownAliasMetadata(row)?.mailCount;
+    return Number.isSafeInteger(count) && count >= 0 ? String(count) : '—';
+  }
+  function aliasLastReceived(row) {
+    return local ? timeText(knownAliasMetadata(row)?.lastMailReceivedAt) : lastMailTime(row.id);
+  }
+  function aliasLastQueried(row) {
+    const value = knownAliasMetadata(row)?.lastQueriedAt;
+    return timeText(value === undefined ? row.lastQueriedAt : value);
+  }
+  function codeExpiryText(expiresAt) {
+    return expiresAt === null ? '无固定到期时间' : timeText(expiresAt);
+  }
+  function buyerMetadata(value) {
+    return {
+      expiresAt: value.codeExpiresAt,
+      mailCount: value.mailCount,
+      lastMailReceivedAt: value.lastMailReceivedAt,
+      lastQueriedAt: value.lastQueriedAt
+    };
+  }
+  function showAliasMetadata(row, data, tableRow) {
+    const known = { ...knownAliasMetadata(row), snapshot: buyerCodeSnapshot(row) };
+    for (const [key, value] of Object.entries(data))
+      if (value !== undefined) known[key] = value;
+    aliasMetadata.set(row, known);
+    const expiry = aliasCodeExpiry(row);
+    for (const [column, value] of [
+      ['queryExpiry', codeExpiryText(expiry)],
+      [remainingDaysColumn, remainingDaysText(expiry)],
+      ['mailCount', aliasMailCount(row)],
+      ['lastMailReceivedAt', aliasLastReceived(row)],
+      ['lastQueriedAt', aliasLastQueried(row)]
+    ]) {
+      const cell = tableRow?.querySelector(`[data-column="${column}"] .mobile-record-value`);
+      if (cell) cell.textContent = value;
+    }
   }
   function buyerCodeCell(row) {
     const connected = !local || codeTargetBound('alias', row.id);
@@ -450,18 +510,20 @@
     return cell.isConnected && A.state.route === 'mailboxes/relay' && view.tab === 'aliases' &&
       actor().id === operatorId && row && buyerCodeSnapshot(row) === snapshot;
   }
-  function showBuyerCode(cell, state) {
+  function showBuyerCode(cell, state, row) {
     buyerCodeCells.set(cell, state);
     cell.querySelector('output').textContent = state.value;
     cell.querySelector('[data-action="relay-buyer-code-copy"]').disabled = false;
     cell.querySelector('[data-action="relay-buyer-code-retry"]')?.setAttribute('hidden', '');
     cell.setAttribute('aria-busy', 'false');
+    showAliasMetadata(row, state.metadata, cell.closest('tr'));
   }
   function reuseBuyerCode(cell, row) {
     const operatorId = actor().id, snapshot = buyerCodeSnapshot(row);
     const cached = window.IDLocalData.queries?.peek('apple-relay', [operatorId, 'buyer-code', snapshot]);
     if (cached?.stale !== false || !(cached.data?.reuseUntil > Date.now())) return false;
-    showBuyerCode(cell, { operatorId, snapshot, value: cached.data.queryCode });
+    showBuyerCode(cell, { operatorId, snapshot, value: cached.data.queryCode,
+      metadata: cached.data.metadata }, row);
     return true;
   }
   async function loadBuyerCode(cell, { refresh = false, result, read } = {}) {
@@ -493,7 +555,7 @@
       const codeExpiry = timestamp(value.codeExpiresAt);
       const reuseUntil = codeExpiry > loadedAt
         ? Math.min(loadedAt + buyerCodeReuseMs, codeExpiry) : loadedAt + buyerCodeReuseMs;
-      return { queryCode: value.queryCode, reuseUntil };
+      return { queryCode: value.queryCode, metadata: buyerMetadata(value), reuseUntil };
     };
     state.pending = (async () => {
       try {
@@ -505,10 +567,12 @@
           : await loader();
         if (!current()) return;
         state.value = value.queryCode;
-        showBuyerCode(cell, state);
+        state.metadata = value.metadata;
+        showBuyerCode(cell, state, alias(id));
       } catch (error) {
         if (!current()) return;
         output.textContent = error.status === 404 ? '暂无查询码' : '读取失败';
+        if (error.status === 404) showAliasMetadata(alias(id), { expiresAt: '' }, cell.closest('tr'));
         if (retry) retry.hidden = false;
       } finally {
         if (current()) cell.setAttribute('aria-busy', 'false');
@@ -517,10 +581,52 @@
     })();
     return state.pending;
   }
+  async function readBuyerCodeBatch(ids, includeCode = true) {
+    const response = await window.IDLocalData.relay('code-read', {
+      kind: 'alias', ids, ...(!includeCode && { includeCode: false })
+    });
+    if (!Array.isArray(response?.items) || response.items.length !== ids.length)
+      throw new Error('邮箱资料返回格式无效，请重试');
+    const items = new Map(response.items.map(item => [item?.id, item]));
+    if (items.size !== ids.length || ids.some(id => !items.has(id)))
+      throw new Error('邮箱资料不匹配，请重试');
+    return items;
+  }
+  async function hydrateAliasMetadata() {
+    const rows = [];
+    for (const cell of document.querySelectorAll('#main [data-table="relay-aliases"] [data-row-id]')) {
+      if (!cell.querySelector('[data-column="mailCount"], [data-column="lastMailReceivedAt"], [data-column="lastQueriedAt"], [data-column="queryExpiry"], [data-column="codeResetIntervalDays"]')) continue;
+      const row = alias(cell.dataset.rowId);
+      if (row && codeTargetBound('alias', row.id)) rows.push({ cell, row, snapshot: buyerCodeSnapshot(row) });
+    }
+    if (!rows.length) return;
+    const operatorId = actor().id;
+    const key = [operatorId, 'alias-metadata', rows.map(({ snapshot }) => snapshot)];
+    const queries = window.IDLocalData.queries;
+    try {
+      const load = async () => ({
+        items: await readBuyerCodeBatch(rows.map(({ row }) => row.id), false),
+        reuseUntil: Date.now() + buyerCodeReuseMs
+      });
+      const cached = queries?.peek('apple-relay', key);
+      const data = cached?.stale === false && cached.data?.reuseUntil > Date.now()
+        ? cached.data : await (queries ? queries.read('apple-relay', key, load, { refresh: true }) : load());
+      if (actor().id !== operatorId || A.state.route !== 'mailboxes/relay' || view.tab !== 'aliases') return;
+      for (const { cell, row, snapshot } of rows) {
+        const current = alias(row.id);
+        const item = data.items.get(row.id);
+        if (cell.isConnected && current && buyerCodeSnapshot(current) === snapshot && !item.error &&
+            String(item.email).toLowerCase() === current.email.toLowerCase())
+          showAliasMetadata(current, buyerMetadata(item), cell);
+      }
+    } catch { /* Unknown statistics remain unfilled until a successful read. */ }
+  }
   function hydrateBuyerCodes({ id, result, refresh = false } = {}) {
     if (!local || A.state.route !== 'mailboxes/relay' || view.tab !== 'aliases') return;
+    const visibleCells = document.querySelectorAll('#main [data-relay-buyer-code]');
+    if (!visibleCells.length && !id) void hydrateAliasMetadata();
     const cells = [];
-    for (const cell of document.querySelectorAll('#main [data-relay-buyer-code]')) {
+    for (const cell of visibleCells) {
       const rowId = cell.dataset.relayBuyerCode;
       if ((id && rowId !== id) || cell.closest('[hidden]') || !codeTargetBound('alias', rowId)) continue;
       const row = alias(rowId);
@@ -532,16 +638,7 @@
       requested.push(rowId);
       // Per-row cache reads still deduplicate and reject stale responses. Only their
       // actual cache misses enter this page request in the same microtask turn.
-      batch ||= Promise.resolve().then(() =>
-        window.IDLocalData.relay('code-read', { kind: 'alias', ids: requested })
-      ).then(response => {
-        if (!Array.isArray(response?.items) || response.items.length !== requested.length)
-          throw new Error('查询码返回格式无效，请重试');
-        const items = new Map(response.items.map(item => [item?.id, item]));
-        if (items.size !== requested.length || requested.some(id => !items.has(id)))
-          throw new Error('查询码资料不匹配，请重试');
-        return items;
-      });
+      batch ||= Promise.resolve().then(() => readBuyerCodeBatch(requested));
       return batch.then(items => {
         const item = items.get(rowId);
         if (item.error) throw Object.assign(new Error(item.error), { status: item.status });
@@ -705,16 +802,16 @@
           { id: 'registrationPlatform', label: '注册平台', render: (r) => E(platformLabel(r)) },
           { id: 'registrationAccount', label: '关联账号', render: registrationAccountCell },
           { id: 'queryCode', label: '买家查询码', class: 'relay-buyer-code-column', render: buyerCodeCell },
-          { id: 'queryExpiry', label: '查询码到期', render: (r) => E(timeText(r.queryExpiry)) },
-          { id: 'lastQueriedAt', label: '最近查询时间', render: (r) => E(timeText(r.lastQueriedAt)) },
-          { id: 'codeResetIntervalDays', label: '有效天数' },
+          { id: 'queryExpiry', label: '查询码到期', render: (r) => E(codeExpiryText(aliasCodeExpiry(r))) },
+          { id: 'lastQueriedAt', label: '最近查询时间', render: (r) => E(aliasLastQueried(r)) },
+          { id: remainingDaysColumn, label: '剩余有效天数', render: (r) => E(remainingDaysText(aliasCodeExpiry(r))) },
           {
             id: 'mailCount',
             label: '邮件数量',
-            render: (r) => String(mails.filter((m) => m.aliasId === r.id).length)
+            render: (r) => E(aliasMailCount(r))
           },
           { id: 'notes', label: '备注', long: true },
-          { id: 'lastMailReceivedAt', label: '最近收件时间', render: (r) => E(lastMailTime(r.id)) },
+          { id: 'lastMailReceivedAt', label: '最近收件时间', render: (r) => E(aliasLastReceived(r)) },
           {
             id: 'importId',
             label: '来源导入批次',
@@ -762,6 +859,14 @@
           view.q
         )
     );
+    const pending = remote.mailLoading === 'sync' ? '正在同步邮件…' : '正在读取收件记录…';
+    const syncTimes = remote.mailboxes.map(item => timestamp(item.lastSyncedAt))
+      .filter(Number.isFinite).sort((first, second) => first - second);
+    const timeLabel = syncTimes.length
+      ? `最近同步 ${beijingTime.format(new Date(syncTimes.at(-1)))}` : '尚无已确认的同步时间';
+    const emptyState = local && !remote.mailReady
+      ? { title: remote.mailError ? '暂时无法读取收件记录' : pending, description: remote.mailError }
+      : undefined;
     return (
       toolbar(
         A.button(
@@ -789,8 +894,10 @@
           view.assignment
         )}</select>`
       ) +
-      (local && (remote.mailLoading || remote.mailError)
-        ? `<div class="inline-notice ${remote.mailError ? 'warning' : ''}" role="status">${E(remote.mailError || '正在读取收件记录…')}</div>`
+      (local && remote.mailReady
+        ? `<div class="inline-notice ${remote.mailError ? 'warning' : ''}" role="status">${E([timeLabel,
+          remote.mailLoading ? pending : '', remote.mailError,
+          remote.mailTruncated ? '仅显示最近一批邮件，可按邮箱缩小范围。' : ''].filter(Boolean).join(' · '))}</div>`
         : '') +
       list(
         [
@@ -814,7 +921,8 @@
           }
         ],
         rows,
-        'relay-mails'
+        'relay-mails',
+        emptyState
       )
     );
   }
@@ -1804,6 +1912,7 @@
     initialize();
     const a = alias(id);
     if (!a) return;
+    const codeExpiry = aliasCodeExpiry(a);
     const inventory = A.modules.inventory;
     const usage = inventory?.usageDetails?.(a) || '';
     const account = inventory?.mailboxRegistrationAccount?.(a);
@@ -1824,7 +1933,7 @@
     A.openDrawer(
       'Apple 隐藏邮箱详情',
       '隐藏邮箱从所属 Apple 主邮箱收信；库存使用和平台注册记录分别保留。',
-      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱启用状态', status(a))}${prop('邮箱资料状态', healthLabel(a))}${prop('邮箱资料状态变更时间', timeText(a.healthChangedAt))}${prop('邮箱使用状态', usedLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${registration}${history}`,
+      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱启用状态', status(a))}${prop('邮箱资料状态', healthLabel(a))}${prop('邮箱资料状态变更时间', timeText(a.healthChangedAt))}${prop('邮箱使用状态', usedLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', codeExpiryText(codeExpiry))}${prop('剩余有效天数', remainingDaysText(codeExpiry))}${prop('最近查询时间', aliasLastQueried(a))}${prop('邮件数量', aliasMailCount(a))}${prop('最近收件时间', aliasLastReceived(a))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${registration}${history}`,
       A.button('关闭', 'drawer-close') +
         (A.modules.inventory?.mailboxPlatformButton?.(a) || '') +
         A.button('查看邮件', 'relay-mails', '', 'mail', `data-id="${E(a.id)}"`) +
@@ -2032,7 +2141,12 @@
     }
   }
   function showCodeResult(result, kind, id, reset = false) {
-    if (reset && kind === 'alias') hydrateBuyerCodes({ id, result, refresh: true });
+    const row = kind === 'alias' && alias(id);
+    if (row && String(result.email).toLowerCase() === row.email.toLowerCase()) {
+      const tableRow = document.querySelector(`#main [data-table="relay-aliases"] [data-row-id="${CSS.escape(id)}"]`);
+      showAliasMetadata(row, buyerMetadata(result), tableRow);
+      if (reset) hydrateBuyerCodes({ id, result, refresh: true });
+    }
     const expiry = result.codeExpiresAt
       ? timeText(result.codeExpiresAt)
       : '无固定到期时间';
@@ -2193,6 +2307,9 @@
     renderRelayPage();
     A.notify(message || (success ? '操作成功' : '操作未完成'));
   }
+  function inMailView() {
+    return A.state.route === 'mailboxes/relay' && view.tab === 'mails';
+  }
   async function readRemoteMails(refresh) {
     if (!remote.status?.configured) return;
     const { parentId, aliasId, assignment } = view;
@@ -2200,11 +2317,14 @@
     if (key !== remote.mailKey) {
       mails.length = 0;
       remote.mailKey = key;
-    }
+      remote.mailReady = false;
+      remote.mailboxes = [];
+      remote.mailTruncated = false;
+    } else if (remote.mailLoading) return;
     const request = ++remote.mailRequest;
-    remote.mailLoading = true;
+    remote.mailLoading = refresh ? 'sync' : 'read';
     remote.mailError = '';
-    renderRelayPage();
+    if (inMailView()) renderRelayPage();
     try {
       const result = await window.IDLocalData.relay('mails', {
         ...(parentId && { parentId }),
@@ -2212,21 +2332,43 @@
         ...(assignment === 'unassigned' && { unassignedOnly: true }),
         refresh
       });
-      if (request === remote.mailRequest) {
-        mails.splice(0, mails.length, ...result.items);
-        if (result.truncated)
-          remote.mailError = '仅显示最近一批邮件，可按主邮箱或隐藏邮箱缩小范围。';
-        return true;
-      }
+      if (request !== remote.mailRequest) return;
+      if (!Array.isArray(result.items)) throw new Error('收件记录返回格式无效');
+      const mailboxes = result.mailboxes;
+      const previous = new Map(remote.mailboxes.map(item => [item.parentId, item]));
+      const retained = new Set(mailboxes?.filter(item => item.keepPrevious).map(item => item.parentId));
+      const oldRows = mails.filter(row => retained.has(row.parentId));
+      mails.splice(0, mails.length, ...[...result.items, ...oldRows]
+        .sort((first, second) => second.receivedAt.localeCompare(first.receivedAt)));
+      remote.mailboxes = (mailboxes || []).map(item => {
+        const old = item.keepPrevious && previous.get(item.parentId);
+        return old ? { ...item, lastSyncedAt: old.lastSyncedAt } : item;
+      });
+      remote.mailReady = !mailboxes || mailboxes.some(item => item.read) ||
+        [...retained].some(id => previous.get(id)?.read || oldRows.some(row => row.parentId === id));
+      remote.mailTruncated = Boolean(result.truncated);
+      const failures = remote.mailboxes.filter(item => !item.read || item.syncFailed);
+      if (failures.length)
+        remote.mailError = failures.map(item => `${parentEmail(item.parentId)} ${item.read ? '同步未完成，显示已入库记录' :
+          item.keepPrevious && previous.get(item.parentId) ? '读取失败，保留上次结果' : '读取失败'}`).join('。');
+      if (refresh && remote.mailboxes.some(item => item.read && !item.syncFailed))
+        window.IDLocalData.queries?.invalidate('apple-relay');
+      return failures.length === 0;
     } catch (error) {
-      if (request === remote.mailRequest)
-        remote.mailError =
-          (error.message || '读取邮件失败') + (mails.length ? '。当前显示上次成功结果。' : '');
-      return request === remote.mailRequest ? false : undefined;
+      if (request !== remote.mailRequest) return;
+      if ([400, 401, 403, 404, 409].includes(error.status)) {
+        mails.length = 0;
+        remote.mailReady = false;
+        remote.mailboxes = [];
+        remote.mailTruncated = false;
+      }
+      remote.mailError = (error.message || '读取邮件失败') +
+        (remote.mailReady ? '。当前显示上次成功结果。' : '');
+      return false;
     } finally {
       if (request === remote.mailRequest) {
         remote.mailLoading = false;
-        renderRelayPage();
+        if (inMailView()) renderRelayPage();
       }
     }
   }
@@ -2243,6 +2385,14 @@
       results.find((r) => !r.ok)?.message || '已先模拟同步主邮箱，再读取现有邮件；不代表真实收信'
     );
   }
+  async function openInbox() {
+    if (!local) return refreshMails();
+    if (!remote.status?.configured) return renderRelayPage();
+    const request = remote.mailRequest + 1;
+    const read = await readRemoteMails(false);
+    if (read !== undefined && request === remote.mailRequest && inMailView())
+      void readRemoteMails(true);
+  }
   function openMails(id) {
     initialize();
     const a = alias(id);
@@ -2251,11 +2401,15 @@
     view.tab = 'mails';
     view.parentId = a.parentMailboxId;
     view.aliasId = a.id;
+    view.assignment = '';
     view.q = '';
+    A.state.page = 1;
     A.go('mailboxes/relay');
-    if (local) refreshMails();
-    else syncParent(a.parentMailboxId);
-    A.render();
+    if (local) void openInbox();
+    else {
+      syncParent(a.parentMailboxId);
+      A.render();
+    }
   }
   async function queryRemoteMail(query) {
     if (!query) {
@@ -2269,6 +2423,7 @@
     try {
       const result = await window.IDLocalData.relay('query', { query });
       if (request === remote.queryRequest) {
+        window.IDLocalData.queries?.invalidate('apple-relay');
         view.result = {
           ok: true,
           message: `${result.email} · ${result.items.length} 封邮件`,
@@ -2276,8 +2431,10 @@
         };
       }
     } catch (error) {
-      if (request === remote.queryRequest)
-        view.result = { ok: false, message: error.message || '查询失败', rows: view.result?.rows };
+      if (request === remote.queryRequest) {
+        const rows = [400, 401, 403, 404, 409].includes(error.status) ? undefined : view.result?.rows;
+        view.result = { ok: false, message: error.message || '查询失败', rows };
+      }
     } finally {
       if (request === remote.queryRequest) {
         remote.querying = false;
@@ -2332,18 +2489,38 @@
     }
     A.render();
   }
-  function mailDetail(id) {
+  async function mailDetail(id) {
     const row = (local && view.tab === 'query' ? view.result?.rows || [] : mails).find(
       (m) => m.id === id
     );
     if (!row) return;
-    row.read = true;
     A.openDrawer(
       '邮件正文',
       local ? '' : '离线虚构邮件；外部邮件接入仍需真实服务与安全渲染验收。',
-      `<div class="property-list">${prop('主邮箱', parentEmail(row.parentId))}${prop('隐藏邮箱', alias(row.aliasId)?.email || '未分配')}${prop('发件人', row.from)}${prop('主题', row.subject)}${prop('验证码', row.code)}${prop('收件时间', timeText(row.receivedAt))}</div><div class="inline-notice">${E(row.body)}</div>`,
+      `<div class="property-list">${prop('主邮箱', parentEmail(row.parentId))}${prop('隐藏邮箱', alias(row.aliasId)?.email || '未分配')}${prop('发件人', row.from)}${prop('主题', row.subject)}${prop('验证码', row.code)}${prop('收件时间', timeText(row.receivedAt))}</div>${local
+        ? '<div id="relay-mail-body" class="inline-notice" role="status">正在读取邮件正文…</div>'
+        : `<div class="inline-notice">${E(row.body)}</div>`}`,
       A.button('关闭', 'drawer-close')
     );
+    if (!local) {
+      row.read = true;
+      return;
+    }
+    const content = document.getElementById('relay-mail-body');
+    const operatorId = actor().id;
+    const current = () => content?.isConnected && document.getElementById('drawer')?.open && actor().id === operatorId;
+    try {
+      const result = await window.IDLocalData.relay('mail-detail', {
+        parentId: row.parentId, mailId: row.id, aliasId: row.aliasId
+      });
+      if (!current()) return;
+      content.textContent = result.body || '此邮件没有纯文本正文。';
+      row.read = true;
+    } catch (error) {
+      if (!current()) return;
+      content.classList.add('warning');
+      content.innerHTML = `<span>${E(error.message || '邮件正文读取失败')}</span>${A.button('重试', 'relay-mail-detail', '', '', `data-id="${E(row.id)}"`)}`;
+    }
   }
   function reassign(id) {
     const row = mails.find((m) => m.id === id);
@@ -2689,8 +2866,8 @@
       view.tab = node.dataset.tab;
       view.q = '';
       A.state.page = 1;
-      A.render();
-      if (view.tab === 'mails') refreshMails();
+      if (view.tab === 'mails') void openInbox();
+      else A.render();
     } else if (action === 'relay-inventory-status') {
       const { filter, value } = node.dataset;
       const allowed =
@@ -2723,7 +2900,7 @@
     else if (action === 'relay-mails') openMails(id);
     else if (action === 'relay-mail-refresh') void A.withActionFeedback(node, () => refreshMails(),
       { pending: '正在读取收件记录…', success: '收件记录已刷新', failure: '收件记录读取失败，请重试' });
-    else if (action === 'relay-mail-detail') mailDetail(id);
+    else if (action === 'relay-mail-detail') void mailDetail(id);
     else if (action === 'relay-mail-reassign') reassign(id);
     else if (action === 'relay-import-detail') openImportDetail(id);
     else if (action === 'relay-parent-test') {
@@ -2876,18 +3053,18 @@
       view.parentId = node.value;
       view.aliasId = '';
       A.state.page = 1;
-      A.render();
       if (view.tab === 'mails') refreshMails(!local);
+      else A.render();
     } else if (node.id === 'relay-filter-alias') {
       view.aliasId = node.value;
       A.state.page = 1;
-      A.render();
       if (view.tab === 'mails') refreshMails(!local);
+      else A.render();
     } else if (node.id === 'relay-filter-assignment') {
       view.assignment = node.value;
       A.state.page = 1;
-      A.render();
       if (view.tab === 'mails') refreshMails(!local);
+      else A.render();
     } else preserveDraft();
     return true;
   }

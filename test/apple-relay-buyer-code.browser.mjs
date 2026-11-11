@@ -8,7 +8,7 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, timezoneId: 'UTC' });
   await context.addInitScript(() => Object.defineProperty(navigator, 'clipboard', {
     value: { writeText: async value => { window.copiedBuyerCode = value; } }
   }));
@@ -16,17 +16,24 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   const seed = fixture.inventory.data.mailboxes.find(row => row.type === 'relay');
   const aliases = Array.from({ length: 21 }, (_, index) => ({ ...seed,
     id: `qa-code-${index}`, email: `code-${index}@example.test`, notes: '',
-    health: 'normal', queryCode: 'STALE-INVENTORY-CODE'
+    health: 'normal', queryCode: 'STALE-INVENTORY-CODE', codeResetIntervalDays: 30,
+    queryExpiry: index === 20 ? '' : '2026-11-15 00:45'
   }));
+  aliases[1].queryExpiry = '2026-11-12 11:59';
   fixture.inventory.data.mailboxes = aliases;
   const parent = fixture.inventory.data.appleRelay.parents[0];
   parent.note = '';
   const codes = new Map(aliases.map((row, index) => [row.id, `BUYER-${index}-${'Ab9'.repeat(16)}`]));
-  const startedAt = Date.now();
+  const startedAt = Date.parse('2026-11-11T04:00:00Z');
   const expiringId = aliases[2].id;
-  const upcomingExpiry = new Date(startedAt + 60_000).toISOString();
+  const expirations = new Map([
+    [aliases[0].id, '2026-11-14T16:45:00Z'],
+    [aliases[1].id, null],
+    [expiringId, new Date(startedAt + 60_000).toISOString()]
+  ]);
   await interceptDesign(context, { localFixtures: fixture, skipRechargeAssets: true });
   const reads = [], pageReads = [], unexpected = [], errors = [];
+  const metadataReads = [];
   let active = 0, maximum = 0, failOnce = true, resetId = '', held = false, release = () => {}, holdStarted;
   const holdReady = new Promise(resolve => { holdStarted = resolve; });
   t.after(() => release());
@@ -36,8 +43,14 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
       configured: true, parentIds: [parent.id], aliasIds: aliases.slice(0, 20).map(row => row.id)
     } });
     if (path.endsWith('/apple-relay/code-read')) {
-      const { id, ids, kind } = request.postDataJSON();
+      const { id, ids, kind, includeCode } = request.postDataJSON();
       assert.equal(kind, 'alias');
+      if (includeCode === false) {
+        metadataReads.push(ids);
+        return route.fulfill({ json: { items: ids.map(id => ({
+          id, email: aliases.find(row => row.id === id).email, mailCount: 9
+        })) } });
+      }
       const requested = ids || [id];
       pageReads.push(requested);
       reads.push(...requested);
@@ -51,8 +64,9 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
           failOnce = false;
           return { id, status: 503, error: '合成读取失败' };
         }
-        return { id, email: aliases.find(row => row.id === id).email,
-          queryCode: codes.get(id), codeExpiresAt: id === expiringId ? upcomingExpiry : '2099-01-01T00:00:00Z' };
+        return { id, email: aliases.find(row => row.id === id).email, mailCount: id === aliases[0].id ? 8 : 0,
+          lastMailReceivedAt: id === aliases[0].id ? '2026-11-11T03:20:00Z' : null,
+          queryCode: codes.get(id), codeExpiresAt: expirations.has(id) ? expirations.get(id) : '2099-01-01T00:00:00Z' };
       });
       return route.fulfill({ status: ids ? 200 : items[0].status || 200,
         json: ids ? { items } : items[0] });
@@ -64,8 +78,9 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
     }
     if (path.endsWith('/apple-relay/code-reset-confirm')) {
       codes.set(resetId, 'RESET-BUYER-CODE-SYNTHETIC');
+      expirations.set(resetId, new Date(startedAt + 30 * 86400000).toISOString());
       return route.fulfill({ json: { email: aliases.find(row => row.id === resetId).email,
-        queryCode: codes.get(resetId), codeExpiresAt: '2099-01-01T00:00:00Z' } });
+        queryCode: codes.get(resetId), codeExpiresAt: expirations.get(resetId) } });
     }
     if (!['GET', 'HEAD'].includes(request.method())) {
       unexpected.push(path);
@@ -80,6 +95,8 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await page.goto(origin + '/#/mailboxes/relay');
   const cell = id => page.locator(`[data-relay-buyer-code="${id}"]`);
   const output = id => cell(id).locator('output');
+  const field = (id, column) => page.locator(`tr[data-row-id="${id}"] [data-column="${column}"] .mobile-record-value`);
+  const remaining = id => field(id, 'codeResetIntervalDays');
   async function revealCode(id) {
     if (await cell(id).isVisible()) return;
     const card = page.locator('tr[data-row-id]').filter({ has: cell(id) });
@@ -95,11 +112,20 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   assert.equal(pageReads.length, 1, '20 行查询码必须只发送一次按页请求，不能分轮逐条读取');
   assert.equal(maximum, 1);
   assert.equal(await output(aliases[0].id).textContent(), codes.get(aliases[0].id));
+  assert.equal(await field(aliases[0].id, 'mailCount').textContent(), '8');
+  assert.equal(await field(aliases[0].id, 'lastMailReceivedAt').textContent(), '2026-11-11 11:20');
+  assert.equal(await page.getByRole('columnheader', { name: '剩余有效天数', exact: true }).count(), 1);
+  assert.equal(await remaining(aliases[0].id).textContent(), '4 天');
+  assert.equal(await remaining(expiringId).textContent(), '1 天');
   assert.equal(await output(aliases[1].id).textContent(), '读取失败');
+  assert.equal(await field(aliases[1].id, 'mailCount').textContent(), '—');
+  assert.equal(await remaining(aliases[1].id).textContent(), '1 天', '历史时间按北京时间计算');
   assert(await cell(aliases[1].id).getByRole('button', { name: '复制买家查询码', exact: true }).isDisabled());
   await cell(aliases[1].id).getByRole('button', { name: '重试', exact: true }).click();
   await ready();
   assert.equal(await output(aliases[1].id).textContent(), codes.get(aliases[1].id));
+  assert.equal(await field(aliases[1].id, 'mailCount').textContent(), '0');
+  assert.equal(await remaining(aliases[1].id).textContent(), '长期有效');
   await cell(aliases[0].id).getByRole('button', { name: '复制买家查询码', exact: true }).click();
   assert.equal(await page.evaluate(() => window.copiedBuyerCode), codes.get(aliases[0].id));
   const beforeReturn = reads.length;
@@ -124,6 +150,11 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await page.locator('#relay-code-result').waitFor();
   await ready();
   assert.equal(await output(aliases[0].id).textContent(), codes.get(aliases[0].id), '重置后立即更新列表');
+  assert.equal(await field(aliases[0].id, 'queryExpiry').textContent(), '2026-12-11 12:00');
+  assert.equal(await remaining(aliases[0].id).textContent(), '30 天');
+  await page.evaluate(() => window.IDDesignAPI.closeDrawer());
+  await page.locator(`[data-action="relay-alias-detail"][data-id="${aliases[0].id}"]`).click();
+  assert.equal(await page.locator('#drawer .property-row').filter({ hasText: '剩余有效天数' }).locator('strong').textContent(), '30 天');
   await page.evaluate(() => window.IDDesignAPI.closeDrawer());
   for (const width of [1440, 1024, 901, 900, 768, 390, 320]) for (const dark of [false, true]) {
     await page.setViewportSize({ width, height: 900 });
@@ -140,7 +171,10 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
       const value = node.querySelector('output').getBoundingClientRect();
       const viewport = node.closest('.table-viewport').getBoundingClientRect();
       return value.left >= viewport.left && value.right <= viewport.right;
-    }), '横向滚动到查询码列后，完整内容能在表格视口内显示');
+    }), `${width}px ${dark ? '深色' : '浅色'}：横向滚动到查询码列后，完整内容能在表格视口内显示`);
+    const days = remaining(aliases[1].id);
+    assert(await days.isVisible());
+    assert.equal(await days.textContent(), '长期有效');
     if (width <= 900) assert((await copy.boundingBox()).height >= 44);
     if (process.env.ID_LAYOUT_QA_OUTPUT && !dark && width !== 320) {
       await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
@@ -153,6 +187,7 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await page.locator('#main .pagination').getByRole('button', { name: '下一页' }).click();
   await ready();
   assert.equal(await output(aliases[20].id).textContent(), '未接入收件服务');
+  assert.equal(await remaining(aliases[20].id).textContent(), '—');
   await revealCode(aliases[20].id);
   assert(await cell(aliases[20].id).getByRole('button', { name: '复制买家查询码', exact: true }).isDisabled());
   assert(!reads.includes(aliases[20].id));
@@ -178,6 +213,7 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await ready();
   assert.deepEqual(reads.slice(beforeExpiry), [expiringId], '只重新读取已跨过有效期的查询码');
   assert.equal(await output(expiringId).textContent(), codes.get(expiringId));
+  assert.equal(await remaining(expiringId).textContent(), '0 天');
   const beforeTimeout = reads.length;
   await page.clock.fastForward(301_000);
   await page.evaluate(() => window.IDDesignAPI.render());
@@ -202,6 +238,16 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   });
   await ready();
   assert.equal(reads.length - beforeClear, 20, '会话清理后需要重新授权读取');
+  const beforeHide = reads.length;
+  await page.evaluate(() => {
+    window.IDDesignAPI.state.columns.set('relay-aliases', new Set(['queryCode']));
+    window.IDDesignAPI.render();
+  });
+  await field(aliases[0].id, 'mailCount').filter({ hasText: /^9$/ }).waitFor({ state: 'attached' });
+  assert.equal(await cell(aliases[0].id).count(), 0);
+  assert.equal(metadataReads.length, 1);
+  assert.equal(metadataReads[0].length, 20);
+  assert.equal(reads.length, beforeHide);
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
 });
