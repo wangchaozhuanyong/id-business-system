@@ -297,11 +297,23 @@ export function calculateOrderCost(order, options) {
   return calculateOrderAmounts(order, options, false);
 }
 
+function usesRecordedClaudeSaleCost(order, appleLedger) {
+  return order?.costBasis === 'actual' && ['Claude Pro', 'Claude Max'].includes(order.product) &&
+    order.source === '历史入库' && order.businessType === '成品交付' && Boolean(order.accountId) &&
+    !order.cancelled && !order.draft && !unavailableOrders.includes(order.status) &&
+    !['pending', 'failed'].includes(order.entitlementStatus) &&
+    (order.bankReturns == null || (Array.isArray(order.bankReturns) && order.bankReturns.length === 0)) &&
+    (order.payment === '银行卡' || (order.payment === '苹果内购' &&
+      !order.paidConfirmed && !order.appleIdId && !appleLedger));
+}
+
 // All converted values share an exact denominator. Apple actual-cost returns are
 // prorated against the documented recoverable part of the total, not against fees.
 function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, currency = 'CNY', clock = Date.now() } = {},
   includeRevenue) {
   const missing = new Set();
+  const recordedSaleCost = usesRecordedClaudeSaleCost(order, appleLedger);
+  const paymentRequirement = recordedSaleCost ? { requiresPaymentConfirmation: false } : {};
   let cardIssueReason;
   try {
     if (!targets.includes(currency)) throw new Error('统计币种无效');
@@ -311,25 +323,28 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, curre
       (!cardIssueAllocations && canUseUnlinkedCardReference(order, clock));
     if (order.payment === '银行卡' && order.costBasis === 'standard' && allocation?.status === 'pending')
       cardIssueReason = allocation.reason;
-    const snapshot = readSnapshot(order, clock);
+    const sameCurrency = recordedSaleCost && order.actualCostCurrency === currency &&
+      (!includeRevenue || order.saleCurrency === currency);
+    const snapshot = sameCurrency ? null : readSnapshot(order, clock);
     const rate = (code) => {
       if (!validCurrencyCode(code)) throw new Error('订单币种无效');
-      if (!Object.hasOwn(snapshot.rates, code)) {
+      if (sameCurrency && code === currency) return rateOne;
+      if (!snapshot || !Object.hasOwn(snapshot.rates, code)) {
         missing.add(code);
         return 0n;
       }
       return unsigned(snapshot.rates[code], 8);
     };
     const value = (units, code) => units === 0n ? 0n : units * rate(code);
-    const paid = unsigned(order.paidAmount);
+    const paid = recordedSaleCost ? 0n : unsigned(order.paidAmount);
     const received = includeRevenue ? netReceiptUnits(order) : 0n;
     const rules = order.costSettings;
-    if (!Number.isSafeInteger(rules?.version) || rules.version < 1)
+    if (!recordedSaleCost && (!Number.isSafeInteger(rules?.version) || rules.version < 1))
       throw new Error('订单缺少费用规则快照');
     const apple = order.payment === '苹果内购';
     const claude = ['Claude Pro', 'Claude Max'].includes(order.product);
     if (!apple && order.payment !== '银行卡') throw new Error('订单支付方式无效');
-    if (apple && order.paidCurrency !== 'USD') throw new Error('Apple 代付币种必须是美元');
+    if (apple && !recordedSaleCost && order.paidCurrency !== 'USD') throw new Error('Apple 代付币种必须是美元');
     const actual = order.costBasis === 'actual';
     if (!actual && order.costBasis !== 'standard') throw new Error('成本依据未确认');
 
@@ -415,13 +430,14 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, curre
       ...(recovery > 0n && { recoveryItem: {
         key: 'recovery', amount: toMoney(recovery), originalAmount: formatted(recoveryUnits), originalCurrency: recoveryCurrency
       } }),
-      basis: actual && snapshot.basis === 'settlement' ? 'actual' : 'reference',
+      basis: actual && (sameCurrency || snapshot.basis === 'settlement') ? 'actual' : 'reference',
+      ...paymentRequirement,
       ...(allocation?.status === 'ready' && { cardIssue: allocation }),
       ...(cardIssueUnallocated && { cardIssueUnallocated }),
       items: original.map((row) => ({ ...row, amount: toMoney(row.amount) }))
     };
   } catch (error) {
-    return { status: 'pending', currency, reason: error.message,
+    return { status: 'pending', currency, reason: error.message, ...paymentRequirement,
       ...(cardIssueReason && cardIssueReason !== error.message && { additionalReasons: [cardIssueReason] }) };
   }
 }
