@@ -44,13 +44,15 @@ async function setup(browser, slug = 'gpt', width = 1440, seed) {
 test('五类订单提交后留在录入页，刷新最近记录并可连续录单', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  for (const [slug, product] of [['gpt', 'GPT'], ['claude', 'Claude Pro'], ['claude', 'Claude Max'], ['gemini', 'Gemini'], ['grok', 'Grok']]) {
+  const products = [
+    ['gpt', 'GPT'], ['claude', 'Claude Pro', 'Pro'], ['claude', 'Claude Max', 'Max 5x'],
+    ['gemini', 'Gemini'], ['grok', 'Grok']
+  ];
+  for (const [slug, product, plan] of products) {
     await t.test(product, async () => {
       const { context, page, writes, errors, traffic, submit, success } = await setup(browser, slug, product === 'Grok' ? 390 : 1440);
       try {
-        if (slug === 'claude') await page.locator('#commerce-product').selectOption(product);
-        if (product === 'Claude Pro') await page.locator('#commerce-proMaterialMode').selectOption('none');
-        if (product === 'Claude Max') await page.locator('#commerce-proMaterialMode').selectOption('');
+        if (plan) await page.locator('#commerce-plan').selectOption(plan);
         await page.locator('#commerce-email').fill('stay-' + slug + '@example.test');
         await page.locator('#commerce-notes').fill('本次提交的草稿');
         const url = page.url();

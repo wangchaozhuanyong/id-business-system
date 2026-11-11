@@ -7,7 +7,7 @@ import { interceptDesign, origin, root, settle, toggleDesignTheme } from './help
 const products = [
   ['gpt', 'GPT', 'Plus', 'gpt', ''],
   ['pro', 'Claude Pro', 'Pro', 'claude', 'pool_card'],
-  ['max', 'Claude Max', 'Max 5x', 'claude', ''],
+  ['max', 'Claude Max', 'Max 5x', 'claude', 'tenant_card'],
   ['gemini', 'Gemini', 'Google AI Pro', 'gemini', ''],
   ['grok', 'Grok', 'SuperGrok', 'grok', '']
 ];
@@ -118,12 +118,11 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           await go('workspace/order/' + entry);
           const form = page.locator('#main #commerce-order-form');
           await form.locator('#commerce-cardTypeId').waitFor();
+          await form.locator('#commerce-plan').selectOption(plan);
           if (entry === 'claude') {
-            await form.locator('#commerce-product').selectOption(product);
             await form.locator('#commerce-payment').selectOption('银行卡');
             await form.locator('#commerce-proMaterialMode').selectOption(mode);
           }
-          await form.locator('#commerce-plan').selectOption(plan);
           if (key === 'max') await choose(form, 'tenantId', tenant.id);
           const card = mode === 'pool_card' ? 'proPoolCardId' : 'cardId';
           await choose(form, card, key === 'max' ? 'tenant:layout' : 'recharge:1');
@@ -134,7 +133,7 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           assert.equal(await form.locator('#commerce-paymentId').isVisible(), false);
           await form.locator('#commerce-payment').selectOption('银行卡');
 
-          await go('orders/' + key);
+          await go('orders/' + (entry === 'claude' ? 'claude' : key));
           await page.locator(`[data-action="commerce-order-edit"][data-id="layout-${key}"]`).click();
           const edit = page.locator('#drawer[open] #commerce-order-form');
           await edit.locator('#commerce-cardTypeId').waitFor();

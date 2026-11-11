@@ -49,6 +49,8 @@ function runtime() {
     empty: () => '',
     titleInfo: () => '',
     pagination: () => '',
+    select: () => '<select></select>',
+    canVisit: () => true,
     pageRows: (rows) => rows,
     getSelection: () => new Set(),
     table: (columns, rows, scope, id) => {
@@ -164,28 +166,25 @@ test('GPT 列表完整显示联系、交易、周期和备注字段，并绑定�
   }
 });
 
-test('Claude Pro 与 Max 订单各自补齐人员和租户列，空值明确显示未记录', () => {
+test('Claude 同表保留 Pro、Max 的独立订单及认证资料列', () => {
   const context = runtime();
-  for (const [route, product] of [
-    ['orders/pro', 'Claude Pro'],
-    ['orders/max', 'Claude Max']
-  ]) {
-    const table = context.render(route, `commerce-orders-${product}`);
-    requireColumns(table, [...orderColumns, ...claudeColumns]);
-    assert(!table.columns.some((column) => column.id === 'cardId'));
-    for (const id of claudeColumns) {
-      const column = table.columns.find((entry) => entry.id === id);
-      assert.equal(column.render({}), id === 'owner' ? '历史未记录' : '未记录');
-      if (id === 'owner') assert.equal(column.render({ createdBy: '录入员工', owner: '旧归属' }), '录入员工');
-      else if (id === 'tenantId') assert.equal(column.render({ tenantId: 'tenant-demo-1' }), '陈租户');
-      else assert.equal(column.render({ [id]: '已填写资料' }), '已填写资料');
-    }
+  const table = context.render('orders/claude', 'commerce-orders-Claude');
+  requireColumns(table, [...orderColumns, ...claudeColumns]);
+  assert.deepEqual([...new Set(table.rows.map(row => row.plan))].sort(), ['Max 20x', 'Max 5x', 'Pro']);
+  assert.equal(new Set(table.rows.map(row => row.id)).size, table.rows.length);
+  assert(!table.columns.some(column => column.id === 'cardId'));
+  for (const id of claudeColumns) {
+    const column = table.columns.find(entry => entry.id === id);
+    assert.equal(column.render({}), id === 'owner' ? '历史未记录' : '未记录');
+    if (id === 'owner') assert.equal(column.render({ createdBy: '录入员工', owner: '旧归属' }), '录入员工');
+    else if (id === 'tenantId') assert.equal(column.render({ tenantId: 'tenant-demo-1' }), '陈租户');
+    else assert.equal(column.render({ [id]: '已填写资料' }), '已填写资料');
   }
 });
 
 test('各产品共用银行卡资料列，旧单和 Apple 内购各自显示原口径', () => {
   const context = runtime();
-  const pro = context.render('orders/pro', 'commerce-orders-Claude Pro');
+  const pro = context.render('orders/claude', 'commerce-orders-Claude');
   const columns = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
   requireColumns(pro, columns);
   const manual = {
@@ -198,37 +197,12 @@ test('各产品共用银行卡资料列，旧单和 Apple 内购各自显示原�
   assert.equal(render('proCardSerial', manual), '00042-QA');
   assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '银行卡' }), '原订单资料');
   assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '苹果内购' }), '不适用');
-  const max = context.render('orders/max', 'commerce-orders-Claude Max');
-  requireColumns(max, columns);
+  assert.equal(render('proMaterialMode', { product: 'Claude Max', payment: '银行卡', proMaterialMode: 'tenant_card' }), '用卡人银行卡');
   requireColumns(context.render('orders/gpt', 'commerce-orders-GPT'), ['proMaterialMode', 'proCardNumber']);
 });
 
-test('Claude 专属显示认证电话、备注、录入时间；客户租户列表字段与列设置齐全', () => {
+test('客户与租户列表字段及列设置齐全', () => {
   const context = runtime();
-  const current = context.render('orders/exclusive', 'commerce-current-subscriptions');
-  requireColumns(current, [
-    'email',
-    'plan',
-    'contact',
-    'payment',
-    'paymentId',
-    'start',
-    'expiry',
-    'expiryStatus',
-    'phone',
-    'kyc',
-    'verifier',
-    'verifierPhone',
-    'tenant',
-    'owner',
-      'createdAt',
-    'notes',
-    'actions'
-  ]);
-  assert.equal(
-    current.columns.find((column) => column.id === 'verifierPhone').render({}),
-    '未记录'
-  );
   requireColumns(context.render('customers/list', 'commerce-customers'), [
     'name',
     'phone',

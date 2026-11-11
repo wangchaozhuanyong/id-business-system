@@ -65,7 +65,7 @@ import { ownerForSubscriptionOrder, subscriptionDomain } from './subscription-ma
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee, historicalGptCardBackfillError,
-  isClaudeProBankMaterials, isOrderBankMaterials, nextOrderNo, normalizeClaudeProMaterials,
+  isOrderBankMaterials, nextOrderNo, normalizeClaudeCertification, normalizeClaudeProMaterials,
   redactClaudeProOrderMaterials, retainOrderCardNumber, normalizePaymentEvidence,
   validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices, validApplePaidPrices
 } from './order-policy.mjs';
@@ -1632,8 +1632,9 @@ export function createLocalBusinessStore(databasePath) {
             const restorePrior = action === '补偿撤回更正' && lastCorrection?.versionAfter === prior?.version
               ? lastCorrection?.previous : undefined;
             // HTTP writes always supply the verified card map. Internal imports may contain historical Pro rows.
-            const materialError = normalizeClaudeProMaterials(row, restorePrior || prior, commerce.tenants,
-              { allowLegacyCreate: !cards && !prior });
+            const compatibility = { allowLegacyCreate: !cards && !prior };
+            const materialError = normalizeClaudeProMaterials(row, restorePrior || prior, compatibility) ||
+              normalizeClaudeCertification(row, restorePrior || prior, commerce.tenants, compatibility);
             if (materialError) throw new LocalDataError(400, materialError);
             if (hasBankPayment(prior) && row.payment !== prior.payment)
               throw new LocalDataError(409, '已确认银行卡付款的原订单不可更换支付方式');
@@ -1643,7 +1644,7 @@ export function createLocalBusinessStore(databasePath) {
               retainOrderField(row, prior, 'cardTypeName');
             } else normalizeOrderCardType(row, prior, restorePrior, action, cardTypes);
             const historyError = checkClaudeProMaterialHistory(row, prior, action) ||
-              checkClaudeProRenewalSource(row, prior, priorById, nextById);
+              checkClaudeProRenewalSource(row, prior, priorById, nextById, compatibility);
             if (historyError) throw new LocalDataError(409, historyError);
           }
           if (cards) {
@@ -1698,15 +1699,6 @@ export function createLocalBusinessStore(databasePath) {
                 for (const movement of incoming.get('appleBalance')?.movements || [])
                   if (movement.orderId === row.id) movement.orderNo = row.orderNo;
               }
-              if (!isClaudeProBankMaterials(row) && row.product?.startsWith('Claude') && (!prior || row.tenantId !== prior.tenantId)) {
-                const tenant = commerce.tenants.find((item) => item.id === row.tenantId && item.active !== false);
-                if (row.tenantId && !tenant) throw new LocalDataError(409, '请选择可用的认证人');
-                row.verifier = tenant?.name || '';
-                row.verifierPhone = tenant?.phone || '';
-                if (!prior) {
-                  row.ownerPhone = '';
-                }
-              }
               if (!automatic && row.payment === '银行卡' && row.paidConfirmed === true &&
                   (!prior?.paidConfirmed || row.paidAmount !== prior.paidAmount || row.paidCurrency !== prior.paidCurrency) &&
                   (!positiveOrderAmount(row.paidAmount) || !validCurrencyCode(row.paidCurrency)))
@@ -1757,7 +1749,7 @@ export function createLocalBusinessStore(databasePath) {
                   const card = tenantCards.find((item) => item.id === row.cardId && item.tenantId === row.tenantId && item.active);
                   if (!card || (row.proMaterialMode === 'tenant_card' &&
                       !commerce.tenants.some((item) => item.id === row.tenantId && item.active !== false)))
-                    throw new LocalDataError(409, '请选择当前认证人名下的银行卡');
+                    throw new LocalDataError(409, '请选择当前用卡人名下的银行卡');
                   row.paymentId = card.number.slice(-4);
                   retainOrderCardNumber(row, prior, card);
                 } else if (row.product === 'GPT' && !row.cardId) {

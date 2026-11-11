@@ -36,9 +36,9 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  for (const [product, path] of [['Claude Pro', 'pro'], ['Claude Max', 'max']]) {
+  for (const [product, plan] of [['Claude Pro', 'Pro'], ['Claude Max', 'Max 5x']]) {
     await page.goto(origin + '/#/workspace/order/claude');
-    await page.locator('#commerce-product').selectOption(product);
+    await page.locator('#commerce-plan').selectOption(plan);
     const email = page.locator('#commerce-email');
     assert.equal(await email.getAttribute('aria-required'), 'false');
     await page.locator('#commerce-businessType').selectOption('成品交付');
@@ -54,7 +54,9 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     await page.locator('#commerce-paidAmount').fill('');
     await page.getByRole('button', { name: '保留待补全', exact: true }).click();
     await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
-    await page.waitForURL(origin + '/#/orders/' + path);
+    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+    assert.equal(page.url(), origin + '/#/workspace/order/claude');
+    await page.goto(origin + '/#/orders/claude');
     const order = saved.at(-1);
     assert.equal(order.product, product);
     assert.equal(order.email, '');
