@@ -36,6 +36,9 @@ REDEEM_PRESENTATION_FILES = (
 REDEEM_PRESENTATION_ASSETS = {"/workspace", "/shell.js", "/shell.css"}
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
+CANARY_LOG = "app-canary.log"
+CANARY_RETRY_LOG = "app-canary.retry.log"
+CANARY_MAILBOX_UNAVAILABLE = r"(?m)^RelayError: Vendure 邮箱服务暂时不可用，请重试\r?$"
 MONITORING = FORMAL / "backup-monitoring"
 MONITORING_RECEIPTS = MONITORING / "receipts"
 MONITORING_UNIT = "id-business-independent-backup-monitoring"
@@ -227,16 +230,34 @@ def stage(plan, release):
     return source, ops
 
 
+def read_canary_log(path):
+    with path.open("rb") as file:
+        size = path.stat().st_size
+        file.seek(max(size - 64 * 1024, 0))
+        return size, file.read().decode(errors="replace")
+
+
 def canary(sha, ops):
-    args = ["systemd-run", "--collect", "--wait", "--pipe", "--unit=id-website-release-canary-" + sha[:12],
-            "--property=RuntimeMaxSec=225"]
-    for name in ("independent-recharge-bridge", "independent-online-tools", "independent-vendure-integrations"):
-        args.append(f"--property=LoadCredentialEncrypted={name}:{FORMAL / 'private' / (name + '.cred')}")
-    with (ops / "app-canary.log").open("xb") as log:
-        os.chmod(log.name, 0o600)
-        result = subprocess.run([*args, str(ops / "run-app"), "canary"], stdout=log,
-                                stderr=subprocess.STDOUT, timeout=240)
-    require(result.returncode == 0, "isolated_app_canary_failed")
+    deadline = time.monotonic() + 240
+    names = ("independent-recharge-bridge", "independent-online-tools", "independent-vendure-integrations")
+    credentials = [f"--property=LoadCredentialEncrypted={name}:{FORMAL / 'private' / (name + '.cred')}"
+                   for name in names]
+    for log_name, unit_suffix in ((CANARY_LOG, ""), (CANARY_RETRY_LOG, "-retry")):
+        remaining = int(deadline - time.monotonic())
+        require(remaining >= 16, "isolated_app_canary_retry_timeout")
+        unit = "id-website-release-canary-" + sha[:12] + unit_suffix
+        args = ["systemd-run", "--collect", "--wait", "--pipe", "--unit=" + unit,
+                f"--property=RuntimeMaxSec={min(225, remaining - 15)}", *credentials]
+        log_path = ops / log_name
+        with log_path.open("xb") as log:
+            os.chmod(log.name, 0o600)
+            result = subprocess.run([*args, str(ops / "run-app"), "canary"], stdout=log,
+                                    stderr=subprocess.STDOUT, timeout=remaining)
+        if result.returncode == 0:
+            return bool(unit_suffix)
+        if unit_suffix or not re.search(CANARY_MAILBOX_UNAVAILABLE, read_canary_log(log_path)[1]):
+            raise ReleaseError("isolated_app_canary_failed")
+        time.sleep(3)
 
 
 def canary_diagnostics(text):
@@ -247,6 +268,7 @@ def canary_diagnostics(text):
         "module_missing": r"ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND",
         "missing_file": r"ENOENT|No such file or directory",
         "permission_denied": r"EACCES|Permission denied",
+        "vendure_mailbox_unavailable": CANARY_MAILBOX_UNAVAILABLE,
         "systemd_start_failed": r"Failed to start transient|Failed to start.*service",
         "timeout": r"TimeoutError|timed out",
     }
@@ -260,13 +282,11 @@ def canary_diagnostics(text):
 
 def inspect_canary(sha):
     require(re.fullmatch(r"[a-f0-9]{40}", sha), "invalid_canary_revision")
-    log = ROOT / "releases" / sha / "operations/app-canary.log"
-    with log.open("rb") as file:
-        size = log.stat().st_size
-        file.seek(max(size - 64 * 1024, 0))
-        diagnostics = canary_diagnostics(file.read().decode(errors="replace"))
+    ops = ROOT / "releases" / sha / "operations"
+    retried = (ops / CANARY_RETRY_LOG).is_file()
+    size, log = read_canary_log(ops / (CANARY_RETRY_LOG if retried else CANARY_LOG))
     return {"attemptSha": sha, "liveWebsiteSha": identity(inspect("app"))["revision"],
-            "bytes": size, **diagnostics}
+            "bytes": size, "retried": retried, **canary_diagnostics(log)}
 
 
 def mount_matches(container, source, destination=None):
@@ -485,7 +505,7 @@ def release_website(plan):
     check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
     source, ops = stage(plan, release)
-    canary(sha, ops)
+    canary_retried = canary(sha, ops)
     if include_adapter:
         adapter_canary(plan, source, ops)
     check_baseline(snapshot(include_adapter), before)
@@ -506,7 +526,8 @@ def release_website(plan):
               "sidecars": {name: live[name] for name in WEBSITE[1:]},
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
               "qualityRun": plan["qualityRun"], "preflightCommand": plan["preflightCommand"],
-              "appCanaryPassed": True, "protectedComponentsUnchanged": not include_adapter,
+              "appCanaryPassed": True, "appCanaryRetried": canary_retried,
+              "protectedComponentsUnchanged": not include_adapter,
               "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}

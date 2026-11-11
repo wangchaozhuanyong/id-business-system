@@ -2,6 +2,7 @@ import hashlib
 import json
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 import release
@@ -181,6 +182,53 @@ class WebsiteReleaseTests(unittest.TestCase):
                                            "prototype.css?v=20261111-confirmed-orders")
         self.assertEqual(result, {"indicators": ["assertion"], "frames": [["check-app.mjs", "24", "5"]],
                                   "assets": ["prototype.css?v=20261111-confirmed-orders"]})
+
+    @patch("remote.time.sleep")
+    @patch("remote.subprocess.run")
+    def test_canary_retries_mailbox_unavailable_once_and_requires_success(self, run, sleep):
+        unavailable = "RelayError: Vendure 邮箱服务暂时不可用，请重试\n"
+        for second_exit in (0, 1):
+            with self.subTest(second_exit=second_exit), TemporaryDirectory(dir=Path(__file__).parent) as directory:
+                ops = Path(directory)
+                run.reset_mock()
+                sleep.reset_mock()
+
+                def canary_attempt(command, *, stdout, **kwargs):
+                    self.assertEqual(command[-2:], [str(ops / "run-app"), "canary"])
+                    if stdout.name.endswith(remote.CANARY_LOG):
+                        stdout.write(unavailable.encode())
+                        return Mock(returncode=1)
+                    return Mock(returncode=second_exit)
+
+                run.side_effect = canary_attempt
+                if second_exit:
+                    with self.assertRaisesRegex(remote.ReleaseError, "isolated_app_canary_failed"):
+                        remote.canary(TARGET, ops)
+                else:
+                    self.assertTrue(remote.canary(TARGET, ops))
+                self.assertEqual(run.call_count, 2)
+                self.assertNotEqual(run.call_args_list[0].args[0][4], run.call_args_list[1].args[0][4])
+                self.assertLessEqual(run.call_args_list[1].kwargs["timeout"], run.call_args_list[0].kwargs["timeout"])
+                self.assertTrue((ops / remote.CANARY_RETRY_LOG).is_file())
+                sleep.assert_called_once_with(3)
+        self.assertEqual(remote.canary_diagnostics(unavailable)["indicators"], ["vendure_mailbox_unavailable"])
+
+    @patch("remote.subprocess.run")
+    def test_canary_does_not_retry_mailbox_authorization_or_page_assertion(self, run):
+        for error in ("RelayError: Vendure 邮箱授权无效或权限不足", "AssertionError: page assertion"):
+            with self.subTest(error=error), TemporaryDirectory(dir=Path(__file__).parent) as directory:
+                ops = Path(directory)
+                run.reset_mock()
+
+                def canary_failure(command, *, stdout, **kwargs):
+                    stdout.write(error.encode())
+                    return Mock(returncode=1)
+
+                run.side_effect = canary_failure
+                with self.assertRaisesRegex(remote.ReleaseError, "isolated_app_canary_failed"):
+                    remote.canary(TARGET, ops)
+                run.assert_called_once()
+                self.assertFalse((ops / remote.CANARY_RETRY_LOG).exists())
 
     def test_canary_uses_exact_target_versions_and_keeps_other_assertions(self):
         old = '<link href="./prototype.css?v=old"><script src="./subscription-management.js?v=old"></script>'
