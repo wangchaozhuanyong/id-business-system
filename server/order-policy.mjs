@@ -134,8 +134,15 @@ export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacy
     return;
   }
   const { proMaterialMode: mode } = order;
+  const allowSerial = mode === 'manual_card' || order.product === 'GPT' || personalProduct(order.product);
+  if (allowSerial && (mode === 'manual_card' || nonempty(order.proCardSerial))) {
+    if (nonempty(order.proCardSerial) && typeof order.proCardSerial !== 'string') return '请填写有效的卡序列号';
+    const serial = typeof order.proCardSerial === 'string' ? order.proCardSerial.trim() : '';
+    if (serial.length > 120 || /[\p{Cc}\p{Cf}]/u.test(serial)) return '卡序列号最多 120 个字，不能包含控制字符';
+    order.proCardSerial = serial;
+  }
   if (!nonempty(mode) && (!isClaudeProBank(order) || allowLegacyCreate || (isClaudeProBank(prior) && !nonempty(prior.proMaterialMode)))) {
-    if (nonempty(order.proCardSerial))
+    if (!allowSerial && nonempty(order.proCardSerial))
       return '请先选择银行卡资料或人员与补充资料';
     retainOrderCardNumber(order, prior);
     return;
@@ -156,18 +163,14 @@ export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacy
     const number = typeof order.proCardNumber === 'string'
       ? order.proCardNumber.trim().replace(/[ -]/g, '') : '';
     if (!/^\d{12,19}$/.test(number)) return '请输入 12 至 19 位有效银行卡号';
-    if (nonempty(order.proCardSerial) && typeof order.proCardSerial !== 'string') return '请填写有效的卡序列号';
-    const serial = typeof order.proCardSerial === 'string' ? order.proCardSerial.trim() : '';
-    if (serial.length > 120 || /[\p{Cc}\p{Cf}]/u.test(serial)) return '卡序列号最多 120 个字，不能包含控制字符';
     order.proCardNumber = number;
-    order.proCardSerial = serial;
     order.paymentId = number.slice(-4);
     return;
   }
-  if ((!prefix && nonempty(order.proCardNumber)) || nonempty(order.proCardSerial))
+  if ((!prefix && nonempty(order.proCardNumber)) || (!allowSerial && nonempty(order.proCardSerial)))
     return '银行卡资料和人员与补充资料只能选择一种';
   retainOrderCardNumber(order, prior);
-  delete order.proCardSerial;
+  if (!allowSerial) delete order.proCardSerial;
   if (!prefix) order.paymentId = '';
   if (mode === 'pool_card' || mode === 'none') {
     if (proPeopleFields.some((field) => nonempty(order[field])))

@@ -44,7 +44,7 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
   assert.equal(await form.locator('#commerce-email').getAttribute('readonly'), '');
   await form.locator('#commerce-notes').fill('合成业务补充');
   await form.locator('#commerce-correctionReason').fill('补充业务备注');
-  await page.locator('#drawer[open] button[form="commerce-order-form"][type="submit"]').click();
+  await page.locator('#drawer[open] [data-action="commerce-order-pending"]').click();
   const response = page.waitForResponse((entry) => entry.request().method() === 'PUT' &&
     new URL(entry.url()).pathname === '/api/local/commerce');
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
@@ -54,7 +54,22 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
   for (const field of ['source', 'taskId', 'createdBy', 'createdById', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paymentId'])
     assert.equal(saved[field], prior[field], field);
   assert.equal(saved.notes, '合成业务补充');
+  assert.equal(saved.paidConfirmed || saved.receiptConfirmed, false);
   assert.deepEqual(saved.issueFeeSnapshot, prior.issueFeeSnapshot);
+
+  await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
+  await page.locator(`[data-action="commerce-order-edit"][data-id="${prior.id}"]`).click();
+  await form.locator('#commerce-saleAmount').fill('120');
+  await page.locator('#drawer[open] button[form="commerce-order-form"][type="submit"]').click();
+  await page.locator('#confirm-dialog[open]').getByText(/客户实收 120\.00 .*代付以任务回执为准/).waitFor();
+  const receipt = page.waitForResponse(entry => entry.request().method() === 'PUT' &&
+    new URL(entry.url()).pathname === '/api/local/commerce');
+  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await receipt;
+  const confirmed = writes.at(-1).data.orders.find(row => row.id === prior.id);
+  assert.equal(confirmed.paidConfirmed, false);
+  assert.equal(confirmed.receiptConfirmed, true);
+  assert.deepEqual(confirmed.financialEvidence.map(entry => entry.kind), ['receipt']);
   assert.deepEqual(errors, []);
 });
 

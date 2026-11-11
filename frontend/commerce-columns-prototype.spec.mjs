@@ -153,6 +153,8 @@ test('GPT 列表完整显示联系、交易、周期和备注字段，并绑定�
   assert.equal(owner.render({ ownerId: 'staff', owner: '业务员工', createdBy: '代录管理员' }), '业务员工');
   assert.equal(owner.render({ createdBy: '原录入人' }), '原录入人');
   assert.equal(owner.render({}), '历史未记录');
+  const profit = table.columns.find(column => column.id === 'profit');
+  assert.equal(profit.render({ ...table.rows[0], paidConfirmed: false }), '—');
   assert.match(expiry.render(table.rows[0]), /天后到期/);
   assert.match(expiry.render({ expiry: '2026-10-01T10:30' }), /已过期/);
   for (const id of ['createdAt', 'notes']) {

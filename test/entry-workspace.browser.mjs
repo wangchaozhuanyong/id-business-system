@@ -36,7 +36,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   fixture['auth/display-names'] = { items: [actor] };
   fixture['card-types'] = { version: 1, items: [{ id: 'entry-type', name: '订阅业务卡', active: true }], assignments: {} };
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
-  const mock = await interceptDesign(context, { actor, localFixtures: fixture });
+  const mock = await interceptDesign(context, { actor, localFixtures: fixture, skipRechargeAssets: true });
   let failRead = false, delayRead = false;
   await context.route('**/api/local/commerce', async route => {
     assert.equal(route.request().method(), 'GET', '此诊断不应提交业务资料');
@@ -425,11 +425,9 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
           }
           await page.locator('#commerce-product').selectOption('Claude Max');
         }
-        if (/\/(gpt|claude)$/.test(route)) await page.locator('#commerce-payment').selectOption('苹果内购');
-        else {
+        if (/\/(gemini|grok)$/.test(route))
           await page.locator('#commerce-plan').selectOption(route.endsWith('/gemini') ? 'Google AI Ultra 20x' : 'SuperGrok Heavy');
-          await page.locator('#commerce-billingChannel').selectOption('app_store');
-        }
+        await page.locator('#commerce-payment').selectOption('苹果内购');
         await settle(page);
         assert(await page.locator('#commerce-appleIdId-picker').isVisible());
         await geometry(width, route, true);

@@ -120,7 +120,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await field('cardTypeId').selectOption(cardTypeA.id);
   const submit = page.locator('#main button[form="commerce-order-form"][type="submit"]');
   const dialog = page.locator('#confirm-dialog[open]');
-  assert.equal(await page.locator('#main [name="commerce-paidConfirmed"], #main [name="commerce-receiptConfirmed"]').count(), 0);
+  assert.equal(await page.locator('#main [data-commerce-field="confirmations"]').count(), 0);
   await submit.click();
   await dialog.getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 100\.00 /).waitFor();
   assert.equal(orderWrites.length, 0);
@@ -138,7 +138,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   assert.equal(saved.cardTypeId, cardTypeA.id);
   assert.equal(saved.paidConfirmed, true);
   assert.equal(saved.receiptConfirmed, true);
-  assert.equal(saved.costConfirmed, false);
+  assert.equal(saved.costConfirmed, true);
   assert.equal(saved.includeIssueFee, false);
   assert.equal(saved.issueFeeSnapshot.pending, true);
   assert.deepEqual(errors, []);

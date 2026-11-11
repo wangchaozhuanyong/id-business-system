@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { automaticProvider, createAutomaticOrderSnapshot } from '../modules/finance/accounting.mjs';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -107,11 +108,75 @@ test('续费提交保留当前页，已完成提醒只能主动返回续费管�
   const renewed = writes[1].data.orders[0];
   assert.equal(renewed.paidConfirmed, true);
   assert.equal(renewed.receiptConfirmed, true);
+  assert.equal(renewed.costConfirmed, true);
   assert(writes[1].data.logs.some(row => row.type === '关联续费订单' &&
     row.entityId === 'stay-renewal' && row.relatedOrderId === renewed.id));
   await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
   assert.equal(new URL(page.url()).hash, '#/workspace/renewals');
   assert.deepEqual(errors, []); assert.deepEqual(traffic.external, []);
+});
+
+test('旧单一次确认收付款，用覆盖原时点的报价补出列表收益', { timeout: 25_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const id = 'historic-settlement';
+  const { context, page, fixture, writes, errors, traffic } = await setup(browser, 'gpt', 1440, fixture => {
+    fixture.commerce.data.orders.push({
+      id, orderNo: 'QA-HISTORIC-SETTLEMENT', product: 'GPT', plan: 'Plus', businessType: '续费',
+      source: '管理员手工', email: 'settled@example.test', customerId: fixture.commerce.data.customers[0].id,
+      payment: '银行卡', cardId: '', paymentId: '5813', paidAmount: '20', paidCurrency: 'USD',
+      saleAmount: '100', saleCurrency: 'CNY', paidConfirmed: false, receiptConfirmed: false, costConfirmed: false,
+      costBasis: 'actual', actualCostAmount: '80', actualCostCurrency: 'CNY',
+      costSettings: { ...fixture.settings.data.costSettings, version: 1, currency: 'CNY' },
+      start: '2026-11-04T10:30', expiry: '2026-12-04T10:30', version: 1, refunds: [], bankReturns: [], corrections: []
+    });
+  });
+  t.after(() => context.close());
+  const quotes = [];
+  await context.route('**/api/local/finance/auto-snapshot', route => {
+    const command = route.request().postDataJSON();
+    quotes.push(command);
+    const order = fixture.commerce.data.orders.find(row => row.id === command.orderId);
+    assert.equal(order?.version, command.version);
+    assert.equal(order?.paidConfirmed && order?.receiptConfirmed, true);
+    order.fxSnapshot = createAutomaticOrderSnapshot({
+      provider: automaticProvider.id, source: automaticProvider.source, quoteId: 'fxq-' + 'a'.repeat(64),
+      at: '2026-11-04T00:00:00Z', expiresAt: '2026-11-04T23:59:00Z', fetchedAt: '2026-11-04T01:00:00Z',
+      rates: { CNY: '1', USD: '7.2', MYR: '1.6' }
+    }, order, Date.parse('2026-11-10T08:00:00Z'), { historical: true });
+    order.version++;
+    fixture.commerce.version++;
+    return route.fulfill({ json: fixture.commerce });
+  });
+  await page.evaluate(async () => {
+    const accounting = await import('/assets/finance/accounting.mjs');
+    window.IDDesignAPI.modules.commerce.installFinance({
+      ...accounting,
+      requestAutomaticSnapshot: (orderId, version) => fetch('/api/local/finance/auto-snapshot', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId, version })
+      }).then(response => response.json())
+    });
+  });
+  await page.goto(origin + '/#/orders/gpt');
+  const row = page.locator(`#main tr[data-row-id="${id}"]`);
+  const profit = row.locator('[data-column="profit"]');
+  assert.equal(await profit.textContent(), '—');
+  await row.getByRole('button', { name: '编辑', exact: true }).click();
+  assert.equal(await page.locator('#drawer [data-commerce-field="confirmations"]').count(), 0);
+  await page.locator('#drawer button[form="commerce-order-form"][type="submit"]').click();
+  const dialog = page.locator('#confirm-dialog[open]');
+  await dialog.getByText(/实际代付 20\.00 .*客户实收 100\.00 .*实际总成本 80\.00 /).waitFor();
+  assert.equal(writes.length, 0);
+  await dialog.locator('[data-action="confirm-accept"]').click();
+  await profit.getByText('20.00', { exact: true }).waitFor();
+  assert.equal(await row.locator('[data-column="paymentStatus"]').textContent(), '已付款');
+  assert.deepEqual(quotes, [{ orderId: id, version: 2 }]);
+  const saved = writes[0].data.orders.find(row => row.id === id);
+  assert.equal(saved.paidConfirmed && saved.receiptConfirmed && saved.costConfirmed, true);
+  assert.equal(saved.paymentId, '5813');
+  assert.deepEqual(saved.financialEvidence.map(entry => entry.kind).sort(), ['payment', 'receipt']);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
 });
 
 test('提交失败可重试，迟到成功不会清除后续输入或抢回页面', { timeout: 30_000 }, async t => {

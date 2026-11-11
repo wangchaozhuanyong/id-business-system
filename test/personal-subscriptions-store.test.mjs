@@ -35,8 +35,7 @@ test('个人订单与库存及 Apple 余额在加密业务库一起提交，冲�
   const order = { id: 'gemini-order', orderNo: 'fixture-order', product: 'Gemini', plan: 'Google AI Pro',
     subscriptionSeries: 'google_ai', businessType: '成品交付', customerId: 'fixture-customer', email,
     loginMethod: 'google', accountId: account.id, accountSource: '库存', payment: '苹果内购', appleIdId,
-    billingChannel: 'app_store', billingCycle: 'month', billingCountry: '马来西亚', billingReceipt: 'fixture-receipt',
-    entitlementStatus: 'pending', autoRenew: 'unknown', paidCurrency: 'USD', paidAmount: '12',
+    entitlementStatus: 'pending', paidCurrency: 'USD', paidAmount: '12',
     paidConfirmed: false, costBasis: 'standard', saleCurrency: 'CNY', saleAmount: '', receiptConfirmed: false,
     start: '', expiry: '', refunds: [], bankReturns: [], version: 1 };
   const commerce = { customers: [{ id: order.customerId, name: '合成客户' }], orders: [order],

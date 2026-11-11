@@ -17,6 +17,8 @@ const wallet = { id: 'personal-apple', email: 'wallet@example.test', type: 'appl
   appStoreRegion: 'MY', health: 'normal', inventoryState: 'available', usageLinks: [], inventoryHistory: [] };
 const priorTime = day => new Date(Date.now() + (8 + 24 * day) * 3600000).toISOString().slice(0, 16);
 const adminUrl = resource => origin + '/api/local/' + resource;
+const removedFields = ['platformAccountId', 'billingChannel', 'billingCountry', 'billingReceipt',
+  'billingCycle', 'autoRenew', 'nextChargeAt'].map(field => '#commerce-' + field).join(', ');
 
 async function offline(browser, { width = 1440, operator = actor } = {}) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
@@ -31,7 +33,7 @@ async function offline(browser, { width = 1440, operator = actor } = {}) {
         before: '0.0000', after: '30.0000', versionAfter: 2 }], allocations: [], refunds: [] } },
     'order-cards': { items: [{ id: 'recharge:fixture-card', label: '合成银行卡', last4: '0042', active: true, usageCount: 0 }] }
   };
-  const requests = await interceptDesign(context, { localFixtures: fixture, actor: operator });
+  const requests = await interceptDesign(context, { localFixtures: fixture, actor: operator, skipRechargeAssets: true });
   const accepted = [];
   let failNext = '';
   const view = domain => ({
@@ -136,18 +138,21 @@ test('Gemini 从谷歌邮箱登记并交付，Apple 扣款与库存同批保存�
   assert.equal(fixture.inventory.data.registrationRecords[0].accountId, stock.id);
 
   await go(page, 'workspace/order/gemini');
+  assert.deepEqual(await page.locator('#commerce-businessType option').evaluateAll(options => options.map(option => option.value)),
+    ['续费', '成品交付']);
+  assert.equal(await page.locator(removedFields).count(), 0);
   await page.locator('#commerce-businessType').selectOption('成品交付');
   await pick(page, 'customerId', customer.id);
-  await pick(page, 'accountId', stock.id);
+  await pick(page, 'emailHistory', stock.id);
   assert.equal(await page.locator('#commerce-email').inputValue(), mailbox.email);
   assert.equal(await page.locator('#commerce-tenantId, #commerce-kyc, #commerce-verifierPhone').count(), 0);
   await page.locator('#commerce-plan').selectOption('Google AI Pro');
-  await page.locator('#commerce-billingChannel').selectOption('app_store');
+  await page.locator('#commerce-proCardSerial').fill('00017');
+  await page.locator('#commerce-payment').selectOption('苹果内购');
+  assert.equal(await page.locator('#commerce-proCardSerial').isVisible(), false);
   await page.locator('#commerce-appleStoreRegion').selectOption('MY');
   await page.waitForFunction(id => document.querySelector('#commerce-appleIdId')?.value === id, wallet.id);
   await page.locator('#commerce-appleGoogleVerified').check();
-  await page.locator('#commerce-billingCountry').fill('马来西亚');
-  await page.locator('#commerce-billingReceipt').fill('gemini-fixture-original');
   await page.locator('#commerce-paidAmount').fill('15.00');
   await page.locator('#commerce-saleAmount').fill('120');
   await fillSubscriptionPeriod(page);
@@ -159,23 +164,25 @@ test('Gemini 从谷歌邮箱登记并交付，Apple 扣款与库存同批保存�
   assert.equal(prior.paidConfirmed, true);
   assert.equal(prior.receiptConfirmed, true);
   assert.equal(prior.entitlementStatus, 'active');
+  assert.equal(prior.billingReceipt, undefined);
+  assert.equal(prior.proCardSerial, undefined);
   assert.deepEqual(accepted.at(-1).sort(), ['appleBalance', 'commerce', 'inventory']);
   assert.equal(fixture.inventory.data.accounts[0].inventoryState, 'used');
   assert.equal(fixture.appleBalance.data.wallets[0].balance, '15.0000');
   await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
   await go(page, 'orders/gemini');
   await page.locator('#main [data-action="commerce-order-detail"][data-id="' + prior.id + '"]').click();
-  const details = page.locator('main:visible, #drawer[open]').filter({ hasText: 'gemini-fixture-original' }).first();
-  await details.getByRole('button', { name: '查看交付账号' }).waitFor();
-  await details.getByRole('button', { name: '查看余额变动' }).waitFor();
+  await page.getByRole('button', { name: '查看交付账号' }).waitFor();
+  await page.getByRole('button', { name: '查看余额变动' }).waitFor();
 
   await go(page, 'workspace/order/gemini');
   await page.locator('#commerce-businessType').selectOption('续费');
   await pick(page, 'customerId', customer.id);
-  await pick(page, 'personalHistoryId', prior.id);
+  assert.equal(await page.locator('#commerce-email').inputValue(), mailbox.email);
+  assert.equal(await page.locator('[data-commerce-field="email"] #commerce-emailHistory-picker').isVisible(), true);
+  await pick(page, 'emailHistory', prior.id);
   assert.equal(await page.locator('#commerce-accountId').inputValue(), stock.id);
   assert.equal(await page.locator('#commerce-appleIdId').inputValue(), wallet.id);
-  await page.locator('#commerce-billingReceipt').fill('gemini-fixture-renewal');
   await page.locator('#commerce-paidAmount').fill('20.00');
   await page.locator('#commerce-saleAmount').fill('120');
   await fillSubscriptionPeriod(page);
@@ -189,7 +196,7 @@ test('Gemini 从谷歌邮箱登记并交付，Apple 扣款与库存同批保存�
   assert.equal((await confirm(page, 'commerce')).status(), 200);
   const pending = fixture.commerce.data.orders.find(row => row.id !== prior.id);
   assert.equal(pending.previousOrderId, prior.id);
-  assert.equal(pending.billingReceipt, 'gemini-fixture-renewal');
+  assert.equal(pending.billingReceipt, undefined);
   assert.equal(pending.paidConfirmed, false);
   assert.equal(pending.receiptConfirmed, false);
   assert.equal(pending.entitlementStatus, 'pending');
@@ -202,23 +209,24 @@ test('Gemini 从谷歌邮箱登记并交付，Apple 扣款与库存同批保存�
   assert.deepEqual(requests.external, []);
 });
 
-test('Grok 手机录单保留 X 标识、网页 Apple Pay、草稿和失败重试', { timeout: 60_000 }, async t => {
+test('Grok 手机录单保留 X 标识、卡序列号、草稿和失败重试', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const { page, fixture, errors, requests, failOnce, accepted } = await offline(browser, { width: 390 });
   await go(page, 'workspace/order/grok');
   await toggleDesignTheme(page);
+  assert.equal(await page.locator(removedFields).count(), 0);
+  assert.equal(await page.locator('[data-commerce-field="email"] #commerce-emailHistory-picker').isVisible(), true);
   await pick(page, 'customerId', customer.id);
   await page.locator('#commerce-email').fill('@fixture_grok');
   await page.locator('#commerce-plan').selectOption('The X Subscription Premium');
-  await page.locator('#commerce-billingChannel').selectOption('web_apple_pay');
+  assert.equal(await page.locator('#commerce-payment option[value="苹果内购"]').count(), 0);
   await pick(page, 'cardId', 'recharge:fixture-card');
   assert.equal(await page.locator('#commerce-payment').inputValue(), '银行卡');
   assert.equal(await page.locator('#commerce-appleIdId-picker').isVisible(), false);
   assert.equal(await page.locator('#commerce-loginMethod').inputValue(), 'x');
   assert.equal(await page.locator('#commerce-email').inputValue(), '@fixture_grok');
-  await page.locator('#commerce-billingCountry').fill('马来西亚');
-  await page.locator('#commerce-billingReceipt').fill('grok-web-001');
+  await page.locator('#commerce-proCardSerial').fill('00042-G');
   await page.locator('#commerce-paidAmount').fill('9.99');
   await page.locator('#commerce-saleAmount').fill('120');
   await fillSubscriptionPeriod(page);
@@ -226,7 +234,7 @@ test('Grok 手机录单保留 X 标识、网页 Apple Pay、草稿和失败重�
   await go(page, 'workspace/order/gemini');
   await go(page, 'workspace/order/grok');
   assert.equal(await page.locator('#commerce-email').inputValue(), '@fixture_grok');
-  assert.equal(await page.locator('#commerce-billingReceipt').inputValue(), 'grok-web-001');
+  assert.equal(await page.locator('#commerce-proCardSerial').inputValue(), '00042-G');
   assert.equal(await page.locator('#commerce-cardId').inputValue(), 'recharge:fixture-card');
   await settle(page);
   assert.deepEqual((await separatorSnapshot(page)).findings, []);
@@ -242,13 +250,14 @@ test('Grok 手机录单保留 X 标识、网页 Apple Pay、草稿和失败重�
   }));
   assert.equal((await confirm(page, 'commerce')).status(), 409);
   assert.equal(fixture.commerce.data.orders.length, 0);
-  assert.equal(await page.locator('#commerce-billingReceipt').inputValue(), 'grok-web-001');
+  assert.equal(await page.locator('#commerce-proCardSerial').inputValue(), '00042-G');
   await save.click();
   assert.equal((await confirm(page, 'commerce')).status(), 200);
   const [order] = fixture.commerce.data.orders;
   assert.equal(order.email, '');
   assert.equal(order.xHandle, '@fixture_grok');
-  assert.equal(order.billingChannel, 'web_apple_pay');
+  assert.equal(order.billingChannel, undefined);
+  assert.equal(order.proCardSerial, '00042-G');
   assert.equal(order.cardId, 'recharge:fixture-card');
   assert.equal(order.appleIdId, '');
   assert.equal(order.paidConfirmed, true);
@@ -261,6 +270,42 @@ test('Grok 手机录单保留 X 标识、网页 Apple Pay、草稿和失败重�
   await page.locator('#commerce-order-filter-payment').selectOption('已付款');
   await page.locator('#commerce-search').fill('@FIXTURE_GROK');
   await page.locator('#main [data-action="commerce-order-detail"][data-id="' + order.id + '"]').first().waitFor();
+  await page.locator('#main [data-action="commerce-order-detail"][data-id="' + order.id + '"]').first().click();
+  await page.getByText('00042-G', { exact: true }).waitFor();
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.external, []);
+});
+
+test('旧 Gemini 首次开通单可更正并保留原账单资料', { timeout: 20_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { page, fixture, errors, requests } = await offline(browser);
+  const bill = { billingChannel: 'web_apple_pay', billingCountry: '马来西亚', billingReceipt: 'legacy-fixture',
+    billingCycle: 'month', autoRenew: 'on', nextChargeAt: priorTime(3), platformAccountId: 'legacy-platform' };
+  const legacy = { id: 'legacy-gemini', orderNo: 'FIXTURE-1', product: 'Gemini', plan: 'Google AI Plus',
+    businessType: '首次开通', customerId: customer.id, email: 'legacy@example.test', loginMethod: 'google',
+    subscriptionSeries: 'google_ai', entitlementStatus: 'active', payment: '银行卡',
+    cardId: 'recharge:fixture-card', paymentId: '0042', paidConfirmed: true, receiptConfirmed: true,
+    paidAmount: '9.99', paidCurrency: 'MYR', saleAmount: '120', saleCurrency: 'CNY',
+    start: priorTime(-3), expiry: priorTime(3), version: 1, source: '管理员手工',
+    refunds: [], bankReturns: [], corrections: [], ...bill };
+  fixture.commerce.data.orders.push(legacy);
+  await go(page, 'orders/gemini');
+  await page.locator('[data-action="commerce-order-edit"][data-id="' + legacy.id + '"]').click();
+  const form = page.locator('#drawer[open] #commerce-order-form');
+  assert.equal(await form.locator('#commerce-businessType').inputValue(), '首次开通');
+  assert.equal(await form.locator('#commerce-businessType').isEditable(), false);
+  assert.equal(await form.locator(removedFields).count(), 0);
+  await form.locator('#commerce-notes').fill('补记说明');
+  await page.locator('#drawer button[form="commerce-order-form"][type="submit"]').click();
+  const response = await confirm(page, 'commerce');
+  assert.equal(response.status(), 200, (await response.json()).error);
+  const saved = fixture.commerce.data.orders.find(row => row.id === legacy.id);
+  assert.equal(saved.notes, '补记说明');
+  assert.deepEqual(Object.fromEntries(Object.keys(bill).map(field => [field, saved[field]])), bill);
+  await page.locator('#drawer').waitFor({ state: 'hidden' });
+  await page.locator('#main [data-action="commerce-order-detail"][data-id="' + legacy.id + '"]').click();
+  await page.getByText('legacy-fixture', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
   assert.deepEqual(requests.external, []);
 });

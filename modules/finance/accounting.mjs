@@ -118,6 +118,34 @@ function readSnapshot(order, clock) {
   return checked;
 }
 
+function sumOrderAmounts(rows, currency, field) {
+  return rows.reduce((sum, row) => {
+    if (row.currency !== currency) throw new Error(`${field}币种与原订单不符`);
+    return sum + unsigned(row.amount);
+  }, 0n);
+}
+
+function netReceiptUnits(order) {
+  const sold = unsigned(order.saleAmount);
+  const refunded = sumOrderAmounts(order.refunds || [], order.saleCurrency, '客户退款');
+  if (refunded > sold) throw new Error('客户退款超过原实收');
+  return sold - refunded;
+}
+
+export function calculateConfirmedNetReceipt(order, { currency = 'CNY', clock = Date.now() } = {}) {
+  if (!order || order.receiptConfirmed !== true || order.cancelled || order.draft ||
+      ['draft', '草稿'].includes(order.status) || !targets.includes(currency) ||
+      !validCurrencyCode(order.saleCurrency) || !Array.isArray(order.refunds)) return null;
+  try {
+    const net = netReceiptUnits(order);
+    if (!net || order.saleCurrency === currency) return formatted(net);
+    const { rates } = readSnapshot(order, clock);
+    return formatted(rounded(net * unsigned(rates[order.saleCurrency], 8), unsigned(rates[currency], 8)));
+  } catch {
+    return null;
+  }
+}
+
 const personalBankProducts = ['Gemini', 'Grok'];
 const bankProducts = ['GPT', 'Claude Pro', 'Claude Max', ...personalBankProducts];
 const requiresCardAllocation = product => product === 'GPT' || personalBankProducts.includes(product);
@@ -242,10 +270,13 @@ export function buildCardIssueAllocations(orders, { clock = Date.now() } = {}) {
 // prorated against the documented recoverable part of the total, not against fees.
 export function calculateOrder(order, { appleLedger, cardIssueAllocations, currency = 'CNY', clock = Date.now() } = {}) {
   const missing = new Set();
+  let cardIssueReason;
   try {
     if (!targets.includes(currency)) throw new Error('统计币种无效');
     const allocation = cardIssueAllocations?.get(order.id);
     if (allocation?.status === 'duplicate') throw new Error(allocation.reason);
+    if (order.payment === '银行卡' && order.costBasis === 'standard' && allocation?.status === 'pending')
+      cardIssueReason = allocation.reason;
     const snapshot = readSnapshot(order, clock);
     const rate = (code) => {
       if (!validCurrencyCode(code)) throw new Error('订单币种无效');
@@ -256,14 +287,8 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
       return unsigned(snapshot.rates[code], 8);
     };
     const value = (units, code) => units === 0n ? 0n : units * rate(code);
-    const total = (rows, code, field) => rows.reduce((sum, row) => {
-      if (row.currency !== code) throw new Error(`${field}币种与原订单不符`);
-      return sum + unsigned(row.amount);
-    }, 0n);
     const paid = unsigned(order.paidAmount);
-    const sold = unsigned(order.saleAmount);
-    const refunded = total(order.refunds || [], order.saleCurrency, '客户退款');
-    if (refunded > sold) throw new Error('客户退款超过原实收');
+    const received = netReceiptUnits(order);
     const rules = order.costSettings;
     if (!Number.isSafeInteger(rules?.version) || rules.version < 1)
       throw new Error('订单缺少费用规则快照');
@@ -282,7 +307,7 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
         throw new Error('Apple 实际扣款及回款台账待核对');
       returned = unsigned(appleLedger?.returned ?? '0');
     } else {
-      returned = total(order.bankReturns || [], order.paidCurrency, '银行卡回款');
+      returned = sumOrderAmounts(order.bankReturns || [], order.paidCurrency, '银行卡回款');
     }
     if (returned > paid) throw new Error('实际回款超过原代付');
 
@@ -332,7 +357,7 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
       if (apple) recovery = value(returned, 'USD') * factor;
     }
     recovery ??= value(returned, order.paidCurrency) * one * denominator;
-    const netRevenue = value(sold - refunded, order.saleCurrency) * one * denominator;
+    const netRevenue = value(received, order.saleCurrency) * one * denominator;
     const grossCost = original.reduce((sum, row) => sum + row.amount, 0n);
     const targetRate = rate(currency);
     if (missing.size) throw new Error(`订单快照缺少 ${[...missing].join('、')} 汇率`);
@@ -349,7 +374,8 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
       items: original.map((row) => ({ ...row, amount: toMoney(row.amount) }))
     };
   } catch (error) {
-    return { status: 'pending', currency, reason: error.message };
+    return { status: 'pending', currency, reason: error.message,
+      ...(cardIssueReason && cardIssueReason !== error.message && { additionalReasons: [cardIssueReason] }) };
   }
 }
 

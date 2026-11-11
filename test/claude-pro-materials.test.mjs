@@ -319,10 +319,8 @@ test('Gemini and Grok save confirmed manual cards and audit verified card-source
       ['Gemini', 'Google AI Pro', 'google_ai', 'google'],
       ['Grok', 'SuperGrok', 'supergrok', 'email']
     ].map(([product, plan, subscriptionSeries, loginMethod]) => manual('personal-' + product, {
-      product, plan, subscriptionSeries, loginMethod, businessType: '首次开通', proCardSerial: '',
-      billingChannel: 'web', billingCountry: '马来西亚', billingReceipt: 'fixture-receipt-' + product,
-      billingCycle: 'month', entitlementStatus: 'active', autoRenew: 'unknown',
-      paidConfirmed: true, receiptConfirmed: true
+      product, plan, subscriptionSeries, loginMethod, businessType: '续费', proCardSerial: '00042',
+      entitlementStatus: 'active', paidConfirmed: true, receiptConfirmed: true
     }));
     const create = orders => save(store, 0, makeDocument(orders), '新增独立订单', options);
     const invalid = await create([{ ...rows[0], proCardNumber: '4242' }]);
@@ -333,6 +331,7 @@ test('Gemini and Grok save confirmed manual cards and audit verified card-source
     const orders = saved.data.data.orders;
     for (const order of orders) {
       assert.equal(order.proCardNumber, sampleNumber);
+      assert.equal(order.proCardSerial, '00042');
       assert.equal(order.paymentId, '4242');
       assert.equal(order.cardId, '');
       assert.equal(order.financialEvidence.length, 1);
@@ -350,6 +349,7 @@ test('Gemini and Grok save confirmed manual cards and audit verified card-source
     for (const [index, order] of changed.data.data.orders.entries()) {
       assert.equal(order.cardId, pool.id);
       assert.equal(order.proCardNumber, pool.number);
+      assert.equal(order.proCardSerial, '00042');
       assert.equal(order.corrections.at(-1).previous.proCardNumber, sampleNumber);
       assert.deepEqual(order.financialEvidence, orders[index].financialEvidence);
     }
@@ -368,6 +368,24 @@ test('GPT manual payment can omit a card without applying the pool first-use fee
     assert.deepEqual(manualGpt.issueFeeSnapshot, { cardId: '', applied: false, pending: true });
     const editPayment = edit(manualGpt, { cardId: 'recharge:1' });
     assert.equal((await save(store, 1, { ...saved.data.data, orders: [editPayment] }, '更正订单')).status, 503);
+  } finally { store.close(); }
+});
+
+test('confirming a historical GPT payment preserves its recorded card tail', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const order = base('historic-tail', { product: 'GPT', plan: 'Plus', paymentId: '5813' });
+    const [seeded] = store.saveBatch([{ domain: 'commerce', version: 0, action: '新增独立订单',
+      data: makeDocument([order]) }], { actor: admin });
+    const [prior] = seeded.data.orders;
+    const saved = await save(store, seeded.version, { ...seeded.data, orders: [edit(prior, {
+      paidConfirmed: true, receiptConfirmed: true, costConfirmed: true, paymentId: ''
+    })] }, '更正订单');
+    assert.equal(saved.status, 200, saved.data.error);
+    const [confirmed] = saved.data.data.orders;
+    assert.equal(confirmed.paymentId, '5813');
+    assert.equal(confirmed.financialEvidence.filter(item => item.kind === 'payment').length, 1);
+    assert.equal(confirmed.issueFeeSnapshot.pending, true);
   } finally { store.close(); }
 });
 
