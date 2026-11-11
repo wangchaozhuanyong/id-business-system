@@ -61,17 +61,25 @@ test('HTTP 保存使用服务端实时人员目录，管理员代录不冒充员
   const staff = (await call('auth/employees',{method:'POST',session:supervisor.session,body:staffData})).data.employee;
   const administrator = await call('auth/login',{method:'POST',body:adminData});
   const employee = await call('auth/login',{method:'POST',body:staffData});
-  const command = { version:0, action:'新增独立订单', data:{customers:[],tenants:[],orders:[{
+  const command = { version:0, action:'新增独立订单', data:{customers:[{ id:'customer', name:'合成客户', active:true }],tenants:[],orders:[{
     id:'http-order',version:1,product:'GPT',plan:'Plus',businessType:'续费',email:'synthetic@example.test',
-    payment:'银行卡',paidConfirmed:false,ownerId:staff.id,owner:'伪造名称',createdById:staff.id,createdBy:staff.name
+    source:'管理员手工',customerId:'customer',start:'2026-11-11T10:00',expiry:'2026-12-11T10:00',
+    payment:'银行卡',paidAmount:'20',paidCurrency:'USD',saleAmount:'120',saleCurrency:'CNY',
+    paidConfirmed:true,receiptConfirmed:true,costBasis:'standard',
+    ownerId:staff.id,owner:'伪造名称',createdById:staff.id,createdBy:staff.name
   }],operating:[],rentBatches:[],logs:[]} };
   assert.equal((await call('commerce',{method:'PUT',session:employee.session,body:command})).status,403);
+  const pending = structuredClone(command);
+  pending.data.orders[0].receiptConfirmed = false;
+  assert.equal((await call('commerce',{method:'PUT',session:administrator.session,body:pending})).status,400);
+  assert.equal((await call('commerce',{session:administrator.session})).data.version,0);
   const saved = await call('commerce',{method:'PUT',session:administrator.session,body:command});
   assert.equal(saved.status,200);
   assert.equal(saved.data.data.orders[0].ownerId,staff.id);
   assert.equal(saved.data.data.orders[0].owner,staff.name);
   assert.equal(saved.data.data.orders[0].createdById,administrator.data.actor.id);
   assert.equal(saved.data.data.orders[0].createdBy,adminData.name);
+  assert.equal(saved.data.data.orders[0].entitlementStatus,'active');
   await call('auth/employees/'+staff.id,{method:'PATCH',session:supervisor.session,body:{active:false,version:staff.version}});
   const next = structuredClone(saved.data);
   next.data.orders.push({...next.data.orders[0],id:'disabled-owner-order'});

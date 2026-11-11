@@ -77,6 +77,30 @@ test('Claude 已开通历史独立进入订阅，不生成订单；付款与成�
   assert.equal(data.commerce.data.orders.length, 1);
 });
 
+test('已确认手工旧单直接有效，新的待开通续费不覆盖仍有效的原单', () => {
+  const original = makeOrder('confirmed-manual', 'GPT', { source: '管理员手工', receiptConfirmed: true });
+  const pending = makeOrder('pending-renewal', 'GPT', { source: '管理员手工', entitlementStatus: 'pending',
+    start: '2026-11-08 10:00', expiry: '2026-12-08 10:00' });
+  const [row] = projectSubscriptions(fixtures([original, pending]), now);
+  assert.equal(row.status, 'active');
+  assert.equal(row.series[0].orderNo, original.orderNo);
+  assert.deepEqual(row.history.map(item => [item.orderNo, item.status]), [
+    [pending.orderNo, 'pending'], [original.orderNo, 'active']
+  ]);
+});
+
+test('成功代充缺客户和订阅周期时显示已开通，后续仅凭实际日期显示有效', () => {
+  const automatic = makeOrder('successful-task', 'GPT', { source: '线上代充', taskId: 'synthetic-job',
+    entitlementStatus: 'active', paidConfirmed: false, customerId: '', start: '', expiry: '' });
+  const [row] = projectSubscriptions(fixtures([automatic]), now);
+  assert.equal(row.status, 'opened');
+  assert.equal(row.history[0].confirmed, true);
+  assert.equal(row.conflict, false);
+  assert.equal(row.ownerEligible, false);
+  const [withPeriod] = projectSubscriptions(fixtures([{ ...automatic, start: '2026-11-01 10:00', expiry: '2026-12-01 10:00' }]), now);
+  assert.equal(withPeriod.status, 'active');
+});
+
 test('Grok 的 X 账号允许没有邮箱，同一账号不同系列可按各自状态筛选', async () => {
   const common = { email: '', xHandle: '@sample', loginMethod: 'x', entitlementStatus: 'active' };
   const data = fixtures([

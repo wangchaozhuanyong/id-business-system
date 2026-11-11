@@ -1060,6 +1060,9 @@ th.table-actions {
 .account-lifecycle-history table :is(th, td) {
   white-space: nowrap;
 }
+.commerce-email-history {
+  container: commerce-email-history / inline-size;
+}
 .commerce-search-picker.commerce-email-history > input {
   flex: 1 1 0;
   width: 0;
@@ -1118,7 +1121,7 @@ th.table-actions {
   padding: 8px 10px;
   color: var(--muted);
 }
-@media (max-width: 900px) {
+@container commerce-email-history (width < 220px) {
   .commerce-email-history > .commerce-picker-trigger {
     width: 44px;
     justify-content: center;
@@ -1126,6 +1129,8 @@ th.table-actions {
   .commerce-email-history .commerce-picker-label {
     display: none;
   }
+}
+@media (max-width: 900px) {
   .commerce-picker-option {
     min-height: 44px;
   }

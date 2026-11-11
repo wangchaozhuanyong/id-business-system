@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const subscription = 'subscriptions/claude';
 const recharge = 'online-recharge/chatgpt';
@@ -94,7 +94,7 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         JSON.stringify({ key, value, observed: [...new Set(frames.map(frame => frame[key]))] }));
       try {
         await page.goto(origin + '/#/' + subscription); await ready();
-        if (theme === 'dark') await page.locator('#theme-toggle').click();
+        if (theme === 'dark') await toggleDesignTheme(page);
         await settle(page);
         const original = await panelHeight();
         const oldPanel = await page.locator(panelSelector).elementHandle();

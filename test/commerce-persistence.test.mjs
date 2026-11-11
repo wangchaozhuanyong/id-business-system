@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
+import * as orderOpening from '../frontend/order-opening.mjs';
 
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 
@@ -104,7 +105,7 @@ function browser(store, appleAsset = null) {
     }
   };
   const context = {
-    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
+    window: { IDOrderOpening: orderOpening, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
     document: {
       querySelector: (selector) => selector === '#commerce-order-form' && state.route === 'workspace/order/gpt'
         ? bankOrderEntry : null,

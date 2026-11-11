@@ -107,7 +107,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         await page.keyboard.press('Escape');
         if (product === 'claude') {
           await page.locator('#commerce-tenantId-picker').click();
-          await page.getByRole('searchbox', { name: '搜索租户' }).fill('没有匹配的合成租户');
+          await page.getByRole('searchbox', { name: '搜索用卡人' }).fill('没有匹配的合成用卡人');
           await page.locator('#commerce-tenantId-popover').getByRole('status').waitFor();
           await page.keyboard.press('Escape');
         }

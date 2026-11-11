@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
+import * as orderOpening from './order-opening.mjs';
 
 const source = await readFile(new URL('./commerce-prototype.js', import.meta.url), 'utf8');
 
@@ -21,7 +22,7 @@ test('银行卡价格与类型的变动触发重新读取，失败时通知同�
     cardTypes: async () => { reads.types++; return { version: reads.types, items: [], assignments: {} }; }
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: data },
+    window: { IDOrderOpening: orderOpening, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: data },
     document: { querySelector: () => null },
     structuredClone: globalThis.structuredClone,
     Date, Map, Set, WeakMap, Promise, Intl

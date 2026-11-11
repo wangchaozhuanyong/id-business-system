@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import * as orderOpening from './order-opening.mjs';
 import { URL } from 'node:url';
 import test from 'node:test';
 
@@ -60,7 +61,7 @@ function runtime() {
     openDrawer: (title, description, body) => drawers.push({ title, description, body })
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules, IDPagination: { defaultPageSize: 10, render: () => '' } },
+    window: { IDOrderOpening: orderOpening, IDDesignAPI: api, IDDesignModules: modules, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document: { querySelector: () => null, querySelectorAll: () => [] },
     structuredClone: globalThis.structuredClone,
     Date,
@@ -158,7 +159,8 @@ test('GPT 列表完整显示联系、交易、周期和备注字段，并绑定�
   const profit = table.columns.find(column => column.id === 'profit');
   assert.equal(profit.render({ ...table.rows[0], paidConfirmed: false }), '—');
   assert.match(expiry.render(table.rows[0]), /天后到期/);
-  assert.match(expiry.render({ expiry: '2026-10-01T10:30' }), /已过期/);
+  assert.match(expiry.render({ entitlementStatus: 'active', start: '2026-09-01T10:30', expiry: '2026-10-01T10:30' }), /已过期/);
+  assert.match(expiry.render({ start: '2026-09-01T10:30', expiry: '2026-10-01T10:30' }), /待确认/);
   for (const id of ['createdAt', 'notes']) {
     const column = table.columns.find((entry) => entry.id === id);
     assert.equal(column.render({ [id]: '已填写资料' }), '已填写资料');

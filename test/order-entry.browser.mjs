@@ -16,7 +16,7 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
     source: '线上代充', product: 'GPT', plan: 'Plus', businessType: '续费', accountSource: '客户自有',
     email: 'fixture@example.test', accountId: '', payment: '银行卡', paymentId: '', cardId: '',
     paidAmount: '', paidCurrency: '', start: '', expiry: '', paidConfirmed: false,
-    customerId: '', saleAmount: '', saleCurrency: 'CNY', notes: '', receiptConfirmed: false,
+    customerId: '', saleAmount: '100', saleCurrency: 'CNY', notes: '', receiptConfirmed: false, entitlementStatus: 'active',
     costBasis: 'standard', issueFeeSnapshot: { cardId: '', applied: false, pending: true },
     createdBy: '自动充值', createdById: 'employee-test', version: 1, refunds: [], bankReturns: [], corrections: []
   };
@@ -44,7 +44,8 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
   assert.equal(await form.locator('#commerce-email').getAttribute('readonly'), '');
   await form.locator('#commerce-notes').fill('合成业务补充');
   await form.locator('#commerce-correctionReason').fill('补充业务备注');
-  await page.locator('#drawer[open] [data-action="commerce-order-pending"]').click();
+  assert.equal(await form.locator('#commerce-saleAmount').inputValue(), '', '定价参考不会预填为实际收款');
+  await page.locator('#drawer[open] button[form="commerce-order-form"][type="submit"]').click();
   const response = page.waitForResponse((entry) => entry.request().method() === 'PUT' &&
     new URL(entry.url()).pathname === '/api/local/commerce');
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
@@ -55,6 +56,8 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
     assert.equal(saved[field], prior[field], field);
   assert.equal(saved.notes, '合成业务补充');
   assert.equal(saved.paidConfirmed || saved.receiptConfirmed, false);
+  assert.equal(saved.saleAmount, prior.saleAmount);
+  assert.equal(saved.entitlementStatus, 'active');
   assert.deepEqual(saved.issueFeeSnapshot, prior.issueFeeSnapshot);
 
   await page.locator('#drawer[open]').waitFor({ state: 'hidden' });

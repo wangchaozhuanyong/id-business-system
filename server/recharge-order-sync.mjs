@@ -110,10 +110,10 @@ export function rechargeOrderEvidence(task, {
 
 export function buildRechargeOrder(evidence, settings, at) {
   const { jobKey, email, plan, start, expiry, completedAt, paidAmount, paidCurrency, paymentId, cardId, employeeId } = evidence;
-  if (!email || !plan) return null;
   return {
     product: 'GPT', businessType: '续费', accountSource: '客户自有', accountId: '',
     taskId: jobKey, source: '线上代充', email, plan, payment: '银行卡', paymentId, cardId,
+    entitlementStatus: 'active',
     ...(evidence.proCardNumber && { proCardNumber: evidence.proCardNumber }),
     paidAmount, paidCurrency, paidConfirmed: Boolean(paidAmount && paidCurrency),
     receiptConfirmed: false, costConfirmed: false, costBasis: 'standard',
@@ -132,10 +132,23 @@ export function buildRechargeOrder(evidence, settings, at) {
 
 const publicSummary = ({ jobKey, needs, orderNo }) => ({ jobKey, needs, orderNo: orderNo || '' });
 
-export function createRechargeOrderSync({ store, client, publicOrigin, quoteService, clock = Date.now }) {
+export function createRechargeOrderSync({ store, client, publicOrigin, quoteService, background = false, clock = Date.now }) {
   const startAt = clock();
   let running;
   let lastError = '';
+  async function readBills(date) {
+    const bills = [];
+    let more = false;
+    for (let page = 1; page <= maxBillPages; page++) {
+      const result = await client.get('/api/admin/billing?status=success&start_date=' + date + '&page=' + page);
+      if (!Array.isArray(result.records)) throw new Error('代充账单格式不正确');
+      bills.push(...result.records);
+      if (page * 20 >= result.total || !result.records.length) break;
+      more ||= page === maxBillPages;
+    }
+    return { bills, more };
+  }
+
   async function scan(apply, selected) {
     let checkpoint = store.featureDocument(domain);
     if (apply && !checkpoint.data) checkpoint = store.saveFeatureDocument(domain, checkpoint.version, { since: startAt, rows: [] });
@@ -170,16 +183,13 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       .sort((a, b) => (prior.get(a)?.checkedAt || 0) - (prior.get(b)?.checkedAt || 0));
     if (!candidates.length) return { rows: [], more };
     const date = beijing(saved.since).slice(0, 10);
-    const [codes, { cards }] = await Promise.all([client.listCodes(), client.get('/api/admin/cards')]);
-    if (!Array.isArray(cards)) throw new Error('代充卡池格式不正确');
-    const bills = [];
-    for (let page = 1; page <= maxBillPages; page++) {
-      const result = await client.get('/api/admin/billing?status=success&start_date=' + date + '&page=' + page);
-      if (!Array.isArray(result.records)) throw new Error('代充账单格式不正确');
-      bills.push(...result.records);
-      if (page * 20 >= result.total || !result.records.length) break;
-      more ||= page === maxBillPages;
-    }
+    const [codeResult, cardResult, billingResult] = await Promise.allSettled([
+      client.listCodes(), client.get('/api/admin/cards'), readBills(date)
+    ]);
+    const codes = codeResult.status === 'fulfilled' && Array.isArray(codeResult.value) ? codeResult.value : [];
+    const cards = cardResult.status === 'fulfilled' && Array.isArray(cardResult.value?.cards) ? cardResult.value.cards : [];
+    const bills = billingResult.status === 'fulfilled' ? billingResult.value.bills : [];
+    more ||= billingResult.status === 'fulfilled' && billingResult.value.more;
     const ownerData = store.featureDocument('recharge-codes').data;
     const settings = store.load('settings').data;
     const rows = [];
@@ -209,8 +219,9 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           continue;
         }
         const order = buildRechargeOrder(evidence, settings, checkedAt);
-        if (apply && order && quoteService?.enabled && order.start && order.paidCurrency) {
+        if (apply && quoteService?.enabled && order.start && order.paidCurrency) {
           try { order.fxSnapshot = await quoteService.snapshotFor(order); } catch {}
+          if (!order.fxSnapshot) evidence.needs.push('订单汇率尚未取得');
         }
         result = { jobKey, needs: evidence.needs, checkedAt };
         if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order, firstUse: evidence.firstUse });
@@ -242,7 +253,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
     if (request.headers['sec-fetch-site'] === 'cross-site') return send(403, { error: '请求来源未通过校验' });
     if (request.method === 'GET') {
       const data = store.featureDocument(domain).data;
-      return send(200, { running: Boolean(running), since: new Date(data?.since ?? startAt).toISOString(), lastError,
+      return send(200, { background, running: Boolean(running), since: new Date(data?.since ?? startAt).toISOString(), lastError,
         rows: (data?.rows || []).filter((row) => !row.excluded).slice(-100).reverse().map(publicSummary) });
     }
     if (request.method !== 'POST' || request.headers.origin !== (publicOrigin || `http://${request.headers.host}`))

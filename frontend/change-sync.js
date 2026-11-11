@@ -23,6 +23,7 @@
     refreshing = true;
     let failed = false;
     const has = scope => scopes.includes(scope);
+    const refreshCommerce = has('commerce') || has('subscription-management');
     const inventoryPage = /^(mailboxes\/(google|microsoft)|accounts\/(gpt|claude|gemini|grok))$/.test(route);
     const refreshInventory = has('inventory') || (has('commerce') && inventoryPage);
     const run = async operation => {
@@ -31,12 +32,12 @@
     try {
       if (has('settings')) await run(() => A.modules.operations?.loadSettings(true));
       if (has('appleBalance')) await run(() => A.modules.appleBalance?.refreshLocalBalance());
-      if (route === 'overview' && ['inventory', 'commerce', 'settings', 'appleBalance'].some(has)) {
+      if (route === 'overview' && (refreshCommerce || ['inventory', 'settings', 'appleBalance'].some(has))) {
         await run(() => A.modules.overview?.refresh({ refresh: true }));
       } else {
         await Promise.all([
           refreshInventory ? run(() => A.modules.inventory?.refreshLocalInventory({ keepContent: true })) : null,
-          has('commerce') ? run(() => A.modules.commerce?.refreshOverview()) : null
+          refreshCommerce ? run(() => A.modules.commerce?.refreshOverview()) : null
         ]);
         if (refreshInventory && A.state.route === route && inventoryPage && !blocked()) A.render();
       }

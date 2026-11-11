@@ -42,7 +42,8 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     const order = (id, customerId, expiry, extra = {}) => ({
       id, orderNo: id, customerId, expiry, email: id + '@example.test',
       product: 'GPT', plan: 'Plus', businessType: '续费', start: '2026-10-07T16:00',
-      paidConfirmed: true, payment: '银行卡', paidAmount: '20', paidCurrency: 'USD',
+      paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
+      payment: '银行卡', paidAmount: '20', paidCurrency: 'USD',
       paymentId: '', cardId: '', saleAmount: '180', saleCurrency: 'CNY', version: 1,
       ...extra
     });
@@ -107,14 +108,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await period('2026-10-13T14:35', '2026-11-13T14:35');
     await period('2028-01-31T14:35', '2028-02-29T14:35');
     await period('2026-11-06T15:59', '2026-12-06T15:59');
-    await page.getByRole('button', { name: '保留待补全' }).click();
-    await confirm.getByRole('button', { name: '确认保存' }).click();
-    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
-    assert(new URL(page.url()).hash.startsWith('#/workspace/order/renew/'));
-    await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
-    await form.waitFor({ state: 'hidden' });
-    await row('QA-EXPIRED').getByRole('button', { name: '续费', exact: true }).click();
-    await period('2026-11-06T15:59', '2026-12-06T15:59');
+    assert.equal(await page.getByRole('button', { name: '保留待补全' }).count(), 0);
     assert.equal(await form.locator('#commerce-cardId').inputValue(), '');
     await form.locator('#commerce-paidAmount').fill('20');
     await form.locator('#commerce-saleAmount').fill('180');

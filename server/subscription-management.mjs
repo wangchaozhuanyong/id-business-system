@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
+import {
+  orderOpeningConfirmed, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
+} from '../frontend/order-opening.mjs';
 import { releasedAccountOrders } from './account-lifecycle.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 import { isManagedCode, mailboxPoolItems } from './tools/mailbox-pool.mjs';
@@ -9,7 +11,7 @@ export const subscriptionDomain = 'subscription-management';
 const base = '/api/local/subscriptions';
 export const subscriptionRoutes = new Set(['list', 'account', 'lookup', 'copy', 'confirm', 'owner'].map(action => `${base}/${action}`));
 const products = new Set(['GPT', 'Claude', 'Gemini', 'Grok']);
-const statuses = new Set(['active', 'expired', 'pending', 'ended']);
+const statuses = new Set(Object.keys(subscriptionStateLabels));
 const sorts = new Set(['expiry_asc', 'expiry_desc', 'account_asc']);
 const defaultPageSize = 20;
 const day = 86_400_000;
@@ -21,13 +23,6 @@ const stockType = product => ({ GPT: 'gpt', Claude: 'claude', Gemini: 'gemini', 
 const manager = actor => Boolean(actor?.id && ['admin', 'super'].includes(actor.role));
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const digest = value => createHash('sha256').update(value).digest('base64url');
-
-function instant(value) {
-  let input = text(value).replace(' ', 'T');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) input += 'T00:00';
-  return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(input)
-    ? Date.parse(input) : parseV2DateTimeInput(input)?.getTime() ?? NaN;
-}
 
 function identity(row, product) {
   if (product === 'Gemini' || product === 'Grok') return targetKey(row);
@@ -44,6 +39,16 @@ function orderFingerprint(order) {
   const product = family(order.product);
   return digest(JSON.stringify([order.id, product, identity(order, product), order.plan || '',
     order.start || '', order.expiry || '', order.accountId || '', order.customerId || '']));
+}
+
+function legacyOpeningConfirmed(order, profiles) {
+  const saved = profiles?.confirmations?.[order?.id]?.fingerprint;
+  return Boolean(saved && saved === orderFingerprint(order));
+}
+
+export function legacyOpeningOrderIds(orders, profiles) {
+  if (!profiles?.confirmations) return [];
+  return array(orders).filter(order => legacyOpeningConfirmed(order, profiles)).map(order => order.id);
 }
 
 export function ownerForSubscriptionOrder(order, profiles, commerce, inventory, now = Date.now()) {
@@ -66,29 +71,12 @@ export function ownerForSubscriptionOrder(order, profiles, commerce, inventory, 
 }
 
 function openingConfirmed(order, profiles, now) {
-  if (personalProduct(order.product)) return order.entitlementStatus === 'active';
-  if (profiles?.confirmations?.[order.id]?.fingerprint === orderFingerprint(order)) return true;
-  if (order.source === '线上代充' && order.taskId) {
-    const completed = instant(order.rechargeCompletedAt);
-    const start = instant(order.start), expiry = instant(order.expiry);
-    return Number.isFinite(completed) && completed <= now &&
-      (!Number.isFinite(start) || completed >= start) && (!Number.isFinite(expiry) || completed < expiry);
-  }
-  return false;
+  return orderOpeningConfirmed(order, now, legacyOpeningConfirmed(order, profiles));
 }
 
 function paid(order) {
   return order.paidConfirmed === true || array(order.financialEvidence).some(item =>
     item?.kind === 'payment' && typeof item.amount === 'string' && /[1-9]/.test(item.amount));
-}
-
-function statusFor(record, now) {
-  if (!record.confirmed) return 'pending';
-  if (record.ended) return 'ended';
-  if (record.cancelled) return 'pending';
-  const start = instant(record.start), expiry = instant(record.expiry);
-  if (!Number.isFinite(start) || !Number.isFinite(expiry) || expiry <= start || start > now) return 'pending';
-  return expiry <= now ? 'expired' : 'active';
 }
 
 function remaining(expiry, now) {
@@ -144,6 +132,8 @@ function buildRecords(snapshots, now) {
     const id = accountIdentity ? subscriptionAccountId(product, order) : digest(`${product}\0unresolved-order:${order.id}`);
     const confirmed = openingConfirmed(order, profiles, now);
     if (!confirmed && !paid(order)) continue;
+    const automatic = order.source === '线上代充' && Boolean(order.taskId);
+    const missingAssociation = (!accountIdentity || !text(order.customerId)) && !(automatic && confirmed);
     const match = resolveAccount(order, product, accounts);
     const released = match.account && releasedAccountOrders(match.account).has(order.id);
     const ended = order.subscriptionEnded === true || Boolean(released);
@@ -153,12 +143,13 @@ function buildRecords(snapshots, now) {
         text(order.email) || text(order.xHandle), email: text(order.email), series: seriesFor(order),
       plan: text(order.plan), start: text(order.start), expiry: text(order.expiry),
       created: text(order.createdAt), customerId: text(order.customerId), account: match.account,
-      accountConflict: Boolean(!accountIdentity || !text(order.customerId) || match.conflict || ids.get(order.id) !== 1),
-      confirmed, ended, cancelled: order.cancelled === true,
+      accountConflict: Boolean(missingAssociation || match.conflict || ids.get(order.id) !== 1),
+      confirmed, ended, cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
+      failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status),
       operatorId: order.source === '线上代充' ? '' : text(order.createdById),
       operatorName: order.source === '线上代充' ? '系统自动' : text(order.createdBy) || '历史未记录'
     };
-    record.status = statusFor(record, now);
+    record.status = subscriptionPeriodState(record, now);
     records.push(record);
   }
   for (const account of accounts) {
@@ -175,7 +166,7 @@ function buildRecords(snapshots, now) {
       ended: ['recovered', 'retired'].includes(account.accountLifecycle?.disposition),
       operatorId: '', operatorName: '历史未记录'
     };
-    record.status = statusFor(record, now);
+    record.status = subscriptionPeriodState(record, now);
     records.push(record);
   }
   return records;
@@ -183,6 +174,16 @@ function buildRecords(snapshots, now) {
 
 function orderTime(record) {
   return instant(record.start) || instant(record.created) || 0;
+}
+
+function currentSeriesRecord(records) {
+  const [latest, ...earlier] = records;
+  if (!['pending', 'failed', 'scheduled', 'opened'].includes(latest.status)) return latest;
+  for (const record of earlier) {
+    if (record.ended) break;
+    if (record.status === 'active') return record;
+  }
+  return latest;
 }
 
 function publicRecord(record, now) {
@@ -195,6 +196,7 @@ function publicRecord(record, now) {
 }
 
 function mailboxFor(row, inventory) {
+  if (row.product === 'GPT' && !row.customerId) return {};
   const account = row._account;
   const orderIds = new Set(row._records.filter(record => record.source === 'order' && !record.ended)
     .map(record => record.sourceId));
@@ -241,9 +243,12 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     const accountIds = new Set(records.map(record => record.account?.id).filter(Boolean));
     let conflict = records.some(record => record.accountConflict) || customers.size > 1 || accountIds.size > 1;
     const series = new Map();
-    for (const record of records) if (!series.has(record.series)) series.set(record.series, record);
-    const selected = [...series.values()];
-    const precedence = ['active', 'pending', 'expired', 'ended'];
+    for (const record of records) {
+      if (!series.has(record.series)) series.set(record.series, []);
+      series.get(record.series).push(record);
+    }
+    const selected = [...series.values()].map(currentSeriesRecord);
+    const precedence = ['active', 'opened', 'scheduled', 'pending', 'failed', 'expired', 'ended'];
     let status = conflict ? 'pending' : precedence.find(value => selected.some(record => record.status === value));
     const primary = selected.find(record => record.status === status) || selected[0];
     const account = primary.account || (primary.customerId
@@ -259,7 +264,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     const protectedLifecycle = currentLifecycle && ['recovered', 'retired'].includes(currentLifecycle.disposition);
     const owner = profiles.owners?.[id];
     const ownerEligible = !conflict && !protectedLifecycle && records.some(record => record.confirmed && !record.ended &&
-      !record.cancelled && (!record.customerId || record.customerId === primary.customerId));
+      !record.cancelled && (record.source === 'history' || (record.customerId && record.customerId === primary.customerId)));
     const ownerValid = ownerEligible && owner && (!owner.accountId || owner.accountId === account?.id) &&
       (!owner.customerId || !primary.customerId || owner.customerId === primary.customerId);
     const row = {
@@ -305,7 +310,7 @@ function accountRow(snapshots, accountId) {
 function copyRow(row, snapshots, mode, suffix) {
   if (row.conflict || row.credentialStatus === 'conflict') throw failure(409, '账号或邮箱关联存在冲突，请先核对');
   const { mailbox } = row.status === 'ended' ? {} : mailboxFor(row, snapshots.inventory.data || {});
-  const account = row.status === 'ended' ? undefined : row._account;
+  const account = row.status === 'ended' || (row.product === 'GPT' && !row.customerId) ? undefined : row._account;
   const fields = [['邮箱账号', row.registrationEmail]];
   if (mode === 'full') {
     fields.push(['邮箱密码', text(mailbox?.password)], ['邮箱 2FA', text(mailbox?.totp)]);
@@ -412,7 +417,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           // A conflicting identity remains pending until the association is resolved.
           const hasStatus = (row, status) => row.conflict ? status === 'pending' :
             row.series.some(series => series.status === status);
-          const counts = Object.fromEntries(['active', 'expired', 'pending', 'ended'].map(status =>
+          const counts = Object.fromEntries([...statuses].map(status =>
             [status, productRows.filter(row => hasStatus(row, status)).length]));
           const query = text(body.query).toLowerCase();
           const matching = productRows.filter(row => (!body.status || hasStatus(row, body.status)) &&

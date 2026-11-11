@@ -24,7 +24,7 @@
 
   function render() {
     const title = A.header('订单补全',
-      '代充成功并同步后，按充值码领用人分配。补全结果保存到原订单。',
+      '代充成功会自动入单。此处补充客户、来源和归属人，资料保存到原单。',
       D ? button('刷新', 'completion-refresh', '', 'refresh') : '');
     if (!D) return title + '<section class="panel">' + A.empty('暂无可补全订单', '连接业务数据后显示已同步的代充订单。') + '</section>';
     const current = S.drafts.get(route)?.tab || 'pending';
@@ -41,7 +41,7 @@
       ...(snapshot?.canAssign ? [{ id: 'owner', label: '归属人', render: (row) => esc(row.owner || '—') }] : []),
       { id: 'customer', label: current === 'pending' ? '缺少资料' : '客户', render: (row) =>
         esc(current === 'pending' ? row.missing.join('、') : row.customer?.name || '—') },
-      { id: 'finance', label: '金额核对', render: (row) => row.financeIssues.length ? A.tag('待核对', 'warning') : A.tag('已核对') },
+      { id: 'finance', label: '金额资料', render: (row) => row.financeIssues.length ? A.tag('有缺项', 'warning') : A.tag('已齐全') },
       { id: 'actions', label: '操作', action: true, render: (row) => A.textAction(
         row.state === 'unassigned' ? '确认归属' : row.state === 'pending' && !row.customerLinkMissing ? '补全资料' : '查看',
         'completion-open', 'data-id="' + esc(row.id) + '"') }
@@ -174,7 +174,7 @@
   function show(row) {
     const meta = getMeta(row);
     editor = { row, meta };
-    const help = '按原单核对充值结果，在客户资料区补齐信息。';
+    const help = '查看原单的充值结果，在客户资料区补充信息。';
     if (row.state === 'complete' || (row.state === 'pending' && row.customerLinkMissing)) {
       const customer = row.customer;
       A.openDrawer('订单补全详情', help, evidence(row) + section('客户资料',

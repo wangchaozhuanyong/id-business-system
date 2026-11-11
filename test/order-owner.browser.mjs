@@ -83,17 +83,24 @@ test('管理员代录订单可指定员工，草稿、列表与实际录入人�
       }
     }
     await page.setViewportSize({width:1440,height:900});
+    const customer = fixture.commerce.data.customers.find(row => row.active !== false);
+    await page.locator('#commerce-customerId').evaluate((node, id) => {
+      node.value = id; node.dispatchEvent(new Event('change', { bubbles: true }));
+    }, customer.id);
+    await page.locator('#commerce-email').fill('owner@example.test');
+    await page.locator('#commerce-paidAmount').fill('20');
+    await page.locator('#commerce-saleAmount').fill('120');
     enabled = false;
     await page.locator('[data-action="commerce-order-owner-refresh"]').click();
     await page.locator('#commerce-ownerId-error').waitFor();
-    await page.locator('[data-action="commerce-order-pending"]').click();
+    await page.locator('button[form="commerce-order-form"][type="submit"]').click();
     assert.equal(writes.length, 0, '失效归属不能被静默改成自己后保存');
     assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
     enabled = true;
     await page.locator('[data-action="commerce-order-owner-refresh"]').click();
     await page.locator('#commerce-ownerId option[value="staff"]:not([disabled])').waitFor({state:'attached'});
     const response = page.waitForResponse(r=>r.request().method()==='PUT'&&new URL(r.url()).pathname==='/api/local/commerce');
-    await page.locator('[data-action="commerce-order-pending"]').click();
+    await page.locator('button[form="commerce-order-form"][type="submit"]').click();
     await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
     await response;
     assert.equal(writes.length, 1);

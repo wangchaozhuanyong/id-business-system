@@ -11,7 +11,8 @@ const lossUrl = origin + '/#/workspace/customer-loss';
 const order = (id, customerId, start, expiry, extra = {}) => ({
   id, orderNo: id, customerId, start, expiry, email: id.toLowerCase() + '@example.test',
   product: 'GPT', plan: 'Plus', businessType: '续费', payment: '银行卡', paidAmount: '20',
-  paidCurrency: 'USD', paidConfirmed: true, refunds: [], corrections: [], bankReturns: [],
+  source: '管理员手工', paidCurrency: 'USD', paidConfirmed: true, receiptConfirmed: true,
+  refunds: [], corrections: [], bankReturns: [],
   ...extra
 });
 function fixtures() {
@@ -267,7 +268,7 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
   assert.deepEqual(requests.unavailable, []);
 });
 
-test('人工订阅按已登记周期统计流失，不以财务确认或续费邮箱作为开通门槛', { timeout: 90_000 }, async t => {
+test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺项可后补', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -275,7 +276,7 @@ test('人工订阅按已登记周期统计流失，不以财务确认或续费�
   const products = [['GPT', 'Plus'], ['Claude Pro', 'Pro'], ['Claude Max', 'Max 5x']];
   const orders = customers.map((customer, i) => order(`QA-MANUAL-${i}-ROW`, customer.id, '2026-10-08T10:00', '2026-11-08T10:00', {
     product: products[i % 3][0], plan: products[i % 3][1], email: '', source: '管理员手工',
-    paidConfirmed: false, receiptConfirmed: false, costConfirmed: false
+    entitlementStatus: 'active', paidConfirmed: false, receiptConfirmed: false, costConfirmed: false
   }));
   const data = {
     commerce: { version: 1, data: { customers, orders, tenants: [], operating: [], rentBatches: [], logs: [] } },
@@ -310,12 +311,12 @@ test('人工订阅按已登记周期统计流失，不以财务确认或续费�
   orders[8].paidAmount = '';
   data.commerce.data.orders.push(
     order('QA-RENEWED-OTHER-ACCOUNT', 'manual-0', '2026-11-08T10:00', '2026-12-08T10:00', {
-      product: 'Claude Max', plan: 'Max 5x', paidConfirmed: false, email: 'different@example.test'
+      product: 'Claude Max', plan: 'Max 5x', entitlementStatus: 'active', paidConfirmed: false, email: 'different@example.test'
     }),
     order('QA-RENEWED-NO-AMOUNT', 'manual-1', '2026-11-08T10:00', '2026-12-08T10:00', {
-      paidAmount: '', paidConfirmed: false, email: ''
+      entitlementStatus: 'active', paidAmount: '', paidConfirmed: false, email: ''
     }),
-    order('QA-RENEWED-FUTURE', 'manual-2', '2026-11-11T10:00', '2026-12-11T10:00', { paidConfirmed: false }),
+    order('QA-RENEWED-FUTURE', 'manual-2', '2026-11-11T10:00', '2026-12-11T10:00', { entitlementStatus: 'active', paidConfirmed: false }),
     { ...orders[3] },
     ...['cancelled', 'failed', 'draft'].map((status, i) =>
       order('QA-NOT-OPENED-' + status, `manual-${i + 4}`, '2026-11-01T10:00', '2026-12-01T10:00', { status })),

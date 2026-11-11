@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { prepareTenantRenewalWrite, tenantRenewalHandledAction } from '../server/tenant-renewal-reminders.mjs';
-import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 test('租户续费提醒、联系人、独立设置、保存失败和新周期', { timeout: 75_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -18,7 +18,8 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   let at = new Date('2026-11-10T12:00:00Z');
   const order = (id, extra = {}) => ({
     id, orderNo: 'QA-' + id, product: 'Claude Pro', plan: 'Pro', businessType: '续费',
-    email: 'shared@example.test', customerId: 'first', tenantId: 'a', paidConfirmed: true,
+    email: 'shared@example.test', customerId: 'first', tenantId: 'a', source: '管理员手工',
+    paidConfirmed: true, receiptConfirmed: true,
     start: '2026-11-01T20:00', expiry: '2026-11-13T20:00', version: 1, ...extra
   });
   let snapshot = { version: 1, data: {
@@ -175,7 +176,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   await pending.getByText(shared, { exact: true }).waitFor();
   await pending.getByText('2026-11-20 20:00', { exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 850 });
-  await page.locator('#theme-toggle').click();
+  await toggleDesignTheme(page);
   await settle(page);
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await details.getByRole('button', { name: '详情', exact: true }).click();

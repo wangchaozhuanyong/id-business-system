@@ -54,6 +54,7 @@ const files = new Map([
   ['finance-collection.css', 'text/css; charset=utf-8'],
   ['recharge-integration.css', 'text/css; charset=utf-8'],
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
+  ['order-opening.mjs', 'text/javascript; charset=utf-8'],
   ...[
     'prototype',
     'pagination',
@@ -99,7 +100,7 @@ export async function startPreview(
     mailboxPublicOrigin,
     microsoftMailboxConfig,
     microsoftMailboxFetch,
-    rechargeOrderSync = false,
+    rechargeOrderSync = Boolean(publicOrigin && rechargeConfig),
     monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
     monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR
   } = {}
@@ -341,7 +342,8 @@ export async function startPreview(
         fetchQuote: financeFetch, collection: financeCollection
       });
       handleAutomaticSnapshot = createAutomaticSnapshotHandler({ store, quoteService, publicOrigin: secureOrigin });
-      orderSync = createRechargeOrderSync({ store, client: orderRechargeClient, quoteService, publicOrigin: secureOrigin });
+      orderSync = createRechargeOrderSync({ store, client: orderRechargeClient, quoteService, publicOrigin: secureOrigin,
+        background: Boolean(rechargeOrderSync && rechargeConfig) });
       await installFinanceAssets(assets, { automaticQuotes: true });
     } catch (error) {
       financeCollection?.close();
@@ -627,11 +629,13 @@ export async function startPreview(
   if (store) server.once('close', () => store.close());
   if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
-    const timer = setInterval(() => void orderSync.run({ apply: true }).then(
+    const syncOrders = () => void orderSync.run({ apply: true }).then(
       () => monitoringSources?.recordOrderSync(true),
       error => { if (error.status !== 409) monitoringSources?.recordOrderSync(false); }
-    ), 60_000);
+    );
+    const timer = setInterval(syncOrders, 60_000);
     timer.unref();
+    server.once('listening', syncOrders);
     server.once('close', () => clearInterval(timer));
   }
   if (codexdaichong || rechargeConfig) {
@@ -668,6 +672,7 @@ export async function startPreview(
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   try {
     const { values } = parseArgs({
+      allowNegative: true,
       options: {
         'local-data': { type: 'boolean' },
         'public-origin': { type: 'string' },
