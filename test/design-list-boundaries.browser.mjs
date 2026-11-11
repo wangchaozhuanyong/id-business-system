@@ -13,6 +13,13 @@ test('dense lists retain pagination and drawer controls within their visible bou
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url), 'utf8'));
   const customers = fixture.commerce.data.customers;
   for (let i = customers.length; i < 257; i++) customers.push({ ...customers[0], id: `visual-dense-${i}`, name: `隔离长名单客户 ${i}`, phone: '', wechat: `visual-${i}` });
+  for (const [type, assets] of [['microsoft', fixture.inventory.data.mailboxes],
+    ['gemini', fixture.inventory.data.accounts], ['grok', fixture.inventory.data.accounts]]) {
+    for (let i = 0; i < 25; i++) assets.push({
+      id: `layout-${type}-${i}`, email: `layout-${type}-${i}@example.test`, type, country: '马来西亚',
+      inventoryState: 'available', health: 'normal', status: '正常', registered: '2026-11-01T08:00'
+    });
+  }
   const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
   const host = offline ? { url: offlineOrigin + '/' } : await startCodexdaichongDemoSite(0);
   if (!offline) t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
@@ -22,7 +29,8 @@ test('dense lists retain pagination and drawer controls within their visible bou
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
   if (output) await mkdir(output, { recursive: true });
   const results = [];
-  const routes = ['customers/list', 'customers/tenants', 'mailboxes/google', 'accounts/gpt', 'accounts/claude', 'accounts/apple-balances', 'orders/gpt', 'orders/claude'];
+  const inventoryRoutes = ['mailboxes/google', 'mailboxes/microsoft', 'accounts/gpt', 'accounts/claude', 'accounts/gemini', 'accounts/grok'];
+  const routes = ['customers/list', 'customers/tenants', ...inventoryRoutes, 'accounts/apple-balances', 'orders/gpt', 'orders/claude'];
   for (const width of [1440, 768, 390, 320]) for (const dark of [false, true]) {
     await t.test(`${width}px ${dark ? 'dark' : 'light'}`, async () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
@@ -47,6 +55,15 @@ test('dense lists retain pagination and drawer controls within their visible bou
           const r = x.getBoundingClientRect(); return r.left < outer.left || r.right > outer.right;
         }).map(x => x.getAttribute('aria-label') || x.textContent.trim());
         const viewport = document.querySelector('#main .table-viewport');
+        const filters = document.querySelector('#main #inventory-list-query')?.closest('.toolbar');
+        const inventoryGaps = filters && viewport ? (() => {
+          const boxes = [...filters.querySelectorAll('input, select, button')]
+            .filter(control => control.checkVisibility()).map(control => control.getBoundingClientRect());
+          return {
+            top: Math.min(...boxes.map(box => box.top)) - filters.previousElementSibling.getBoundingClientRect().bottom,
+            bottom: viewport.getBoundingClientRect().top - Math.max(...boxes.map(box => box.bottom))
+          };
+        })() : null;
         return { outerWidth: outer.width, controlsWidth: bounds.width, controlsOutside: bounds.left < outer.left || bounds.right > outer.right,
           outside, page: Number(n.dataset.page),
           activeClipped: !!strip?.width && (active.left < strip.left - 1 || active.right > strip.right + 1),
@@ -54,7 +71,8 @@ test('dense lists retain pagination and drawer controls within their visible bou
           numericButtons: n.querySelectorAll('.pagination-pages button').length,
           pageOverflow: document.documentElement.scrollWidth > innerWidth,
           tableHeight: viewport?.getBoundingClientRect().height,
-          tableScrollsVertically: viewport && viewport.scrollHeight > viewport.clientHeight + 1 };
+          tableScrollsVertically: viewport && viewport.scrollHeight > viewport.clientHeight + 1,
+          inventoryGaps };
       });
       try {
         await page.goto(origin + '/#/customers/list');
@@ -135,6 +153,11 @@ test('dense lists retain pagination and drawer controls within their visible bou
             }
             await search.fill('');
             await page.locator('#main tr[data-row-id]').first().waitFor();
+          }
+          if (inventoryRoutes.includes(route)) for (const [state, layout] of Object.entries({ first, last, empty })) {
+            const gaps = layout?.inventoryGaps;
+            assert(gaps && Math.abs(gaps.top - 12) <= 1 && Math.abs(gaps.bottom - 12) <= 1,
+              `${route}/${state} 库存工具栏实际留白应为上下各 12px，实测 ${JSON.stringify(gaps)}`);
           }
           results.push({ route, width, theme: dark ? 'dark' : 'light', first, last, empty });
         }

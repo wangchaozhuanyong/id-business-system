@@ -184,10 +184,10 @@ const navigation = [
       ['Claude提交', 'workspace/order/claude'],
       ['Gemini提交', 'workspace/order/gemini'],
       ['Grok提交', 'workspace/order/grok'],
+      ['订单补全', 'workspace/order-completion'],
       ['续费管理', 'workspace/renewals'],
       ['客户录入', 'customers/new'],
       ['充值码提取', 'workspace/recharge-codes'],
-      ['订单补全', 'workspace/order-completion'],
       ['兑换开通', 'workspace/recharge']
     ]
   ],
@@ -905,8 +905,6 @@ function compactListToolbars(region) {
     row.append(tabs, controls);
     if (header !== tabs) header.remove();
   }
-  if (/^(mailboxes\/(google|relay)|accounts\/(gpt|claude))$/.test(state.route))
-    for (const controls of $$('.panel > .toolbar', region)) controls.classList.add('list-filters');
   const pool = $('#ops-mailbox-pool', region), heading = pool && $('.panel-heading', pool);
   const filters = pool && $('#ops-mailbox-pool-search-form', pool);
   if (heading && filters && !heading.closest('.list-controls')) {
@@ -1336,7 +1334,7 @@ function renderMailbox() {
       )
       .join(
         ''
-      )}</div><div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="list-search" aria-label="搜索资料" placeholder="搜索邮箱、备注或辅助邮箱" value="${escapeHtml(state.query)}" /></div><select id="country-filter" aria-label="筛选国家">${options([['', '全部国家'], '马来西亚', '美国', '日本', '新加坡'], state.country)}</select><select id="status-filter" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结'], state.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button('批量导入', 'mail-import', '', 'upload')}</div></div>${getSelection('inventory').size ? `<div class="selection-bar">已选择 ${getSelection('inventory').size} 条${textAction('复制所选', 'mail-copy-selected')}${state.mailTab === 'used' ? textAction('归还所选', 'mail-return-selected') : ''}</div>` : ''}${table(columns, pageRows(filtered), 'inventory', tableId)}${pagination(filtered.length)}</section>`
+      )}</div><div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="list-search" aria-label="搜索资料" placeholder="搜索邮箱、备注或辅助邮箱" value="${escapeHtml(state.query)}" /></div><select id="country-filter" aria-label="筛选国家">${options([['', '全部国家'], '马来西亚', '美国', '日本', '新加坡'], state.country)}</select><select id="status-filter" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结'], state.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button('批量导入', 'mail-import', '', 'upload')}</div></div>${getSelection('inventory').size ? `<div class="selection-bar">已选择 ${getSelection('inventory').size} 条${textAction('复制所选', 'mail-copy-selected')}${state.mailTab === 'used' ? textAction('归还所选', 'mail-return-selected') : ''}</div>` : ''}${table(columns, pageRows(filtered), 'inventory', tableId)}${pagination(filtered.length)}</section>`
   );
 }
 function extractionRows() {
