@@ -147,7 +147,7 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
   const email = 'sold-history@example.test';
   const account = { id: 'historical-account', type: 'claude', email, emailType: 'google',
     inventoryState: 'used', status: '正常', health: 'normal',
-    claudeHistory: { phase: 'opened', plan: 'Max 20x', start: '2026-10-31T22:00', expiry: '2026-11-30T22:00' } };
+    claudeHistory: { phase: 'opened', plan: 'Max 20x', start: '2026-10-31', expiry: '2026-11-30T22:00' } };
   const tenant = { id: 'supplier', name: '合成出租方', active: true };
   for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
     const local = {
@@ -221,6 +221,7 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await drawer.waitFor({ state: 'hidden' });
     const [order] = local.commerce.data.orders;
     assert.deepEqual([order.tenantId, order.customerId, order.actualCostAmount], [tenant.id, '', '']);
+    assert.equal(order.start, '2026-10-31');
     const orderRow = page.locator(`[data-table="commerce-orders-Claude"] tbody tr[data-row-id="${order.id}"]`);
     await orderRow.waitFor();
     const number = orderRow.getByText(order.orderNo, { exact: true });
@@ -260,6 +261,8 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await detail.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     assert.equal(await orderRow.locator('[data-column="profit"]').textContent(), '150.00');
     await page.goto(origin + '/#/orders/statistics');
+    await page.getByLabel('开通起日', { exact: true }).fill('2026-10-31');
+    await page.getByLabel('开通止日', { exact: true }).fill('2026-10-31');
     const total = page.locator('#main [data-stat-metric="actual-profit"] .summary-number');
     assert.match(await total.textContent(), /^150\.00/);
     await page.getByLabel('统计币种', { exact: true }).selectOption('MYR');
