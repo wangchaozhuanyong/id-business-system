@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { applyOrderCompletion, readOrderCompletion, rechargePriceSnapshot } from '../server/order-completion.mjs';
-import { interceptDesign, origin, settle, spacingSnapshot } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
@@ -21,6 +21,7 @@ function auto(id, owner) {
     id, orderNo: 'SYN-' + id, version: 1, source: '线上代充', taskId: 'job-' + id, product: 'GPT', plan: 'Plus',
     email: id + '@example.test', businessType: '续费', accountSource: '客户自有',
     start: '2026-11-10T14:40', expiry: '2026-12-10T14:40', rechargeCompletedAt: now, createdAt: now,
+    entitlementStatus: 'active',
     rechargeOwnerId: owner, createdById: owner, createdBy: '自动充值', customerId: '', notes: '',
     saleAmount: price.saleAmount, saleCurrency: price.saleCurrency, rechargePriceSnapshot: price,
     paidAmount: '101', paidCurrency: 'PHP', paidConfirmed: true, receiptConfirmed: false, payment: '银行卡',
@@ -65,7 +66,7 @@ async function open(t, browser, model, actor, width, theme) {
   page.on('pageerror', (error) => errors.push(error.message));
   page.setDefaultTimeout(5000);
   await page.goto(origin + '/#/' + route);
-  if (theme === 'dark') await page.locator('#theme-toggle').click();
+  if (theme === 'dark') await toggleDesignTheme(page);
   await page.locator('table[data-table="订单补全"]').waitFor();
   return { page, errors, traffic, writes, drawer: page.locator('#drawer[open]') };
 }
@@ -147,6 +148,7 @@ test('员工桌面和窄屏可选客户、恢复草稿、核对冲突并写回�
     assert.equal(data.commerce.data.orders.length, 3);
     const saved = data.commerce.data.orders[0];
     assert.equal(saved.orderNo, 'SYN-own');
+    assert.equal(saved.entitlementStatus, 'active');
     assert.equal(saved.paidAmount, '101');
     assert.equal(saved.saleAmount, '140.00');
     assert.equal(saved.customerId, 'known');
@@ -181,7 +183,9 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   await checkLayout(employee.page, employee.drawer);
   await employee.drawer.getByRole('button', { name: '保存补全', exact: true }).click();
   await employee.page.getByRole('button', { name: '已补全', exact: true }).click();
-  await employee.page.getByRole('cell', { name: 'SYN-unassigned', exact: true }).waitFor();
+  const completed = employee.page.locator('tr[data-row-id="unassigned"]');
+  await completed.getByRole('button', { name: '更多资料', exact: true }).click();
+  await completed.getByText('SYN-unassigned', { exact: true }).waitFor();
   await employee.drawer.waitFor({ state: 'hidden' });
   const saved = data.commerce.data.orders.find((row) => row.id === 'unassigned');
   const customer = data.commerce.data.customers.find((row) => row.id === saved.customerId);

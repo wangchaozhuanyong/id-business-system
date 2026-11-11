@@ -359,20 +359,22 @@
       { id: 'orderNo', label: 'GPT 订单编号', render: (row) => row.orderNo
         ? A.textAction(row.orderNo, 'order-sync-open-order', `data-id="${e(row.jobKey)}" data-order-no="${e(row.orderNo)}"`)
         : '—' },
-      { id: 'needs', label: '待核对项', render: (row) => e((row.needs || []).join('、') || '—') }
+      { id: 'needs', label: '待补资料', render: (row) => e((row.needs || []).join('、') || '—') }
     ];
     const jobKey = A.state.drafts.get('order-sync-lookup') || '';
     return '<div class="toolbar"><form class="toolbar-left" id="order-sync-lookup">' +
       '<div class="search-field">' + A.icon('search') +
       A.input('order-sync-job', jobKey, 'placeholder="指定代充任务编号" aria-label="指定代充任务编号" required maxlength="120"') +
-      `</div><button class="button" type="submit"${saving ? ' disabled' : ''}>核对指定任务</button></form>` +
+      `</div><button class="button" type="submit"${saving ? ' disabled' : ''}>查找任务</button></form>` +
       '<div class="toolbar-right">' + A.button('预览', 'order-sync-preview', '', '', saving ? 'disabled' : '') +
       A.button('同步入单', 'order-sync-apply', 'primary', '', saving || !view.canApply ? 'disabled' : '') +
       '</div></div>' + (A.modules.commerce?.syncedOrderReadNotice() || '') +
       (view.error ? '<p class="panel-body inline-notice warning" role="status">' + e(view.error) + '</p>' : '') +
       (view.data?.lastError ? '<p class="panel-body footnote" role="status">' + e(view.data.lastError) + '</p>' : '') +
-      (data?.more ? '<p class="panel-body footnote">还有记录可核对，请分批处理或按任务编号查询。</p>' : '') +
-      table(columns, (data?.rows || []).map((row) => ({ ...row, id: row.jobKey })), 'recharge-order-sync', '暂无待同步记录');
+      (view.data?.background !== undefined ? '<p class="panel-body footnote" role="status">' +
+        (view.data.background ? '成功任务会自动入单。' : '自动入单当前未启用。') + '</p>' : '') +
+      (data?.more ? '<p class="panel-body footnote">还有记录，可按任务编号查询。</p>' : '') +
+      table(columns, (data?.rows || []).map((row) => ({ ...row, id: row.jobKey })), 'recharge-order-sync', '暂无同步记录');
   }
 
   function renderSync(view) {

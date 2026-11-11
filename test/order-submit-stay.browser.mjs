@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { automaticProvider, createAutomaticOrderSnapshot } from '../modules/finance/accounting.mjs';
+import { automaticProvider, calculateConfirmedNetReceipt, createAutomaticOrderSnapshot } from '../modules/finance/accounting.mjs';
+import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -34,7 +35,16 @@ async function setup(browser, slug = 'gpt', width = 1440, seed) {
     select.value = id; select.dispatchEvent(new Event('change', { bubbles: true }));
   }, fixture.commerce.data.customers[0].id);
   const submit = async () => {
-    await page.locator('[data-action="commerce-order-pending"]').click();
+    const form = page.locator('#main #commerce-order-form');
+    const customer = form.locator('#commerce-customerId');
+    if (!await customer.inputValue()) await customer.evaluate((select, id) => {
+      select.value = id; select.dispatchEvent(new Event('change', { bubbles: true }));
+    }, fixture.commerce.data.customers[0].id);
+    for (const [id, value] of [['paidAmount', '20'], ['saleAmount', '100']]) {
+      const input = form.locator('#commerce-' + id);
+      if (!await input.inputValue()) await input.fill(value);
+    }
+    await page.locator('button[form="commerce-order-form"][type="submit"]').click();
     await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   };
   const success = () => page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
@@ -50,16 +60,37 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
   ];
   for (const [slug, product, plan] of products) {
     await t.test(product, async () => {
-      const { context, page, writes, errors, traffic, submit, success } = await setup(browser, slug, product === 'Grok' ? 390 : 1440);
+      const { context, page, fixture, writes, errors, traffic, submit, success } = await setup(browser, slug, product === 'Grok' ? 390 : 1440);
       try {
         if (plan) await page.locator('#commerce-plan').selectOption(plan);
+        if (product !== 'GPT') {
+          await page.locator('#commerce-proMaterialMode').selectOption('manual_card');
+          await page.locator('#commerce-proCardNumber').fill('4000000000004242');
+        }
         await page.locator('#commerce-email').fill('stay-' + slug + '@example.test');
         await page.locator('#commerce-notes').fill('本次提交的草稿');
+        const now = Date.now(), day = 86_400_000;
+        const beijing = at => new Date(at + 28_800_000).toISOString().slice(0, 16);
+        await page.locator('#commerce-start').fill(beijing(now - 2 * day));
+        await page.locator('#commerce-expiry').fill(beijing(now + day));
+        await page.locator('#commerce-saleCurrency').selectOption('CNY');
+        await page.locator('#commerce-saleAmount').fill('100');
+        assert.equal(await page.locator('[data-action="commerce-order-pending"], #commerce-appleGoogleVerified').count(), 0);
         const url = page.url();
         await submit(); await success();
         assert.equal(page.url(), url, '成功后不能自动跳到管理页面');
         assert.equal(writes.length, 1);
-        assert.equal(writes[0].data.orders[0].product, product);
+        const saved = writes[0].data.orders[0];
+        assert.equal(saved.product, product);
+        assert.equal(saved.entitlementStatus, 'active');
+        assert.equal(saved.paidConfirmed && saved.receiptConfirmed, true);
+        assert.equal(calculateConfirmedNetReceipt(saved), '100.0000');
+        const [subscription] = projectSubscriptions({ ...fixture, mailboxes: { data: null } }, now);
+        assert.equal(subscription.status, 'active');
+        assert.equal(subscription.series[0].confirmed, true);
+        const orderStatus = await page.evaluate(id => window.IDDesignAPI.modules.commerce.getOrderStatuses(id).subscription, saved.id);
+        assert.equal(orderStatus, '有效');
+        assert.equal(await page.evaluate(() => window.IDDesignAPI.modules.commerce.renewalReminderCount()), 1);
         assert.equal(await page.locator('#main #commerce-email').inputValue(), '', '只清理本次已保存草稿');
         assert.equal(await page.locator('#main #commerce-notes').inputValue(), '');
         const recent = page.locator('#commerce-entry-records');
@@ -84,19 +115,17 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
 test('续费提交保留当前页，已完成提醒只能主动返回续费管理', { timeout: 20_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const { context, page, writes, submit, success, errors, traffic } = await setup(browser, 'renew/stay-renewal', 1440, fixture => {
+  const { context, page, writes, errors, traffic } = await setup(browser, 'renew/stay-renewal', 1440, fixture => {
     fixture.commerce.data.orders.push({
       id: 'stay-renewal', orderNo: 'QA-RENEW-STAY', product: 'GPT', plan: 'Plus',
       businessType: '新购', email: 'renewal@example.test', customerId: fixture.commerce.data.customers[0].id,
       ownerId: actor.id, owner: actor.name, start: '2026-09-01T10:00', expiry: '2026-10-01T10:00',
       payment: '银行卡', paidAmount: '20', paidCurrency: 'USD', saleAmount: '100', saleCurrency: 'CNY',
-      paidConfirmed: true, version: 1, refunds: [], corrections: [], bankReturns: []
+      paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active', version: 1, refunds: [], corrections: [], bankReturns: []
     });
   });
   t.after(() => context.close());
   const url = page.url();
-  await submit(); await success();
-  assert.equal(page.url(), url);
   await page.locator('#commerce-order-form').waitFor();
   await page.locator('#commerce-paidAmount').fill('20');
   await page.locator('#commerce-saleAmount').fill('100');
@@ -106,12 +135,12 @@ test('续费提交保留当前页，已完成提醒只能主动返回续费管�
   await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   await page.locator('#main').getByText('续费提醒已变化', { exact: true }).waitFor();
   assert.equal(page.url(), url);
-  assert.equal(writes.length, 2);
-  const renewed = writes[1].data.orders[0];
+  assert.equal(writes.length, 1);
+  const renewed = writes[0].data.orders[0];
   assert.equal(renewed.paidConfirmed, true);
   assert.equal(renewed.receiptConfirmed, true);
   assert.equal(renewed.costConfirmed, true);
-  assert(writes[1].data.logs.some(row => row.type === '关联续费订单' &&
+  assert(writes[0].data.logs.some(row => row.type === '关联续费订单' &&
     row.entityId === 'stay-renewal' && row.relatedOrderId === renewed.id));
   await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
   assert.equal(new URL(page.url()).hash, '#/workspace/renewals');

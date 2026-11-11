@@ -178,7 +178,7 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
   if ((mode === 'pool_card' || mode === 'none') && mismatchedPeople)
     return '所选资料方式不能关联未选用的用卡人';
   if (mode === 'none' && order.product === 'Claude Max' && order.paidConfirmed && !prior?.paidConfirmed)
-    return '确认付款前请选择本次银行卡，或先保留待补全';
+    return '请选择本次银行卡或手动填写卡号';
   if (mode === 'tenant_card' && !nonempty(order.tenantId)) return '请选择用卡人及其名下银行卡';
   if (mode === 'people' && !order.tenantId && !order.phone) return '请选择租户或填写订阅电话';
 }

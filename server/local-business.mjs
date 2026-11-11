@@ -61,7 +61,8 @@ import { checkAccountLocations } from './inventory-account-location.mjs';
 import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding } from './apple-funding.mjs';
 import { cardTypeDocument, cardTypeSnapshot, orderCardArchiveDocument } from './card-management.mjs';
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
-import { ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
+import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
+import { subscriptionTime } from '../frontend/order-opening.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee, historicalGptCardBackfillError,
@@ -221,7 +222,7 @@ const orderFeatureAuditLabels = {
 const verifiedOrderCards = Symbol('verifiedOrderCards');
 const rechargeEvidenceFields = [
   'source', 'taskId', 'email', 'product', 'plan', 'businessType', 'payment', 'paymentId',
-  'cardId', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed', 'rechargeCompletedAt',
+  'cardId', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed', 'rechargeCompletedAt', 'entitlementStatus',
   'accountSource', 'accountId', 'rechargeOwnerId', 'rechargePriceSnapshot', 'rechargeOwnerAssignment'
 ];
 const defaultOrderCosts = Object.freeze({
@@ -700,6 +701,12 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
   }
   requireVerifiedRelayClaimIds(ids, verifiedIds);
   return store.saveBatch(writes, { ...options, [verifiedRelayClaimIds]: verifiedIds });
+}
+
+function commerceForActor(store, snapshot, actor) {
+  const profiles = store.featureDocument(subscriptionDomain).data;
+  return { ...redactClaudeProOrderMaterials(snapshot, actor),
+    legacyOpeningOrderIds: legacyOpeningOrderIds(snapshot.data?.orders, profiles) };
 }
 
 export function createLocalBusinessStore(databasePath) {
@@ -1584,7 +1591,10 @@ export function createLocalBusinessStore(databasePath) {
           else if (!('renewalWarningDays' in commerce) && priorCommerce?.renewalWarningDays !== undefined)
             commerce.renewalWarningDays = priorCommerce.renewalWarningDays;
           const { action } = writes.find((write) => write.domain === 'commerce');
-          try { prepareTenantRenewalWrite(priorCommerce, commerce, action, actor); }
+          const subscriptions = current(subscriptionDomain);
+          const legacyOpening = action === tenantRenewalHandledAction
+            ? new Set(legacyOpeningOrderIds(priorCommerce?.orders, subscriptions)) : undefined;
+          try { prepareTenantRenewalWrite(priorCommerce, commerce, action, actor, new Date(), legacyOpening); }
           catch (error) { throw new LocalDataError(error.status || 400, error.message); }
           checkCustomerTagAssignments(
             priorCommerce, commerce, (incoming.get('settings') ?? current('settings'))?.customerTags
@@ -1595,7 +1605,7 @@ export function createLocalBusinessStore(databasePath) {
             let owners = [];
             try { owners = readOrderOwners?.() || []; }
             catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
-            attributeCommerce(commerce, priorCommerce, actor, owners, current(subscriptionDomain), inventory);
+            attributeCommerce(commerce, priorCommerce, actor, owners, subscriptions, inventory);
           } else checkTenantTransferHistory(commerce.tenants, priorCommerce?.tenants);
           if (action === historicalFeeAction && (writes.length !== 1 || !actor?.id ||
               !['admin', 'super'].includes(actor.role)))
@@ -1619,6 +1629,19 @@ export function createLocalBusinessStore(databasePath) {
           for (const row of commerce.orders) {
             const prior = priorById.get(row.id);
             if (prior && isDeepStrictEqual(row, prior)) continue;
+            if (cards && !prior && action === '新增独立订单' && row.source === '管理员手工') {
+              if (row.draft || row.cancelled || ['draft', 'failed', '草稿', '失败'].includes(row.status) ||
+                  row.paidConfirmed !== true || row.receiptConfirmed !== true || !positiveOrderAmount(row.paidAmount) ||
+                  !validMoney(row.saleAmount) || !validCurrencyCode(row.paidCurrency) || !validCurrencyCode(row.saleCurrency))
+                throw new LocalDataError(400, '请填写本单实际代付、客户实收及币种后确认提交');
+              if (!(subscriptionTime(row.expiry) > subscriptionTime(row.start)))
+                throw new LocalDataError(400, '请填写有效的订阅起止时间');
+              if (!commerce.customers.some(customer => customer.id === row.customerId && customer.active !== false))
+                throw new LocalDataError(400, '请选择订单客户');
+              row.entitlementStatus = 'active';
+            } else if (cards && !personalProduct(row.product) && row.source !== '线上代充' && prior?.source !== '线上代充') {
+              retainOrderField(row, prior, 'entitlementStatus');
+            }
             if (personalProduct(row.product) || personalProduct(prior?.product)) {
               if (prior && prior.product !== row.product) throw new LocalDataError(409, '原订单产品不可更换');
               const issue = personalOrderError(row, prior, commerce.orders, commerce.customers);
@@ -1922,7 +1945,7 @@ export function createLocalBusinessStore(databasePath) {
         const current = readDocument('order-sync');
         const known = new Set(current.data.rows.map(({ jobKey }) => jobKey));
         const rows = [...current.data.rows, ...jobKeys.filter((id) => !known.has(id)).map((jobKey) => ({
-          jobKey, needs: ['等待核对成功回执']
+          jobKey, needs: ['等待获取成功回执']
         }))];
         if (rows.length === current.data.rows.length && scanOffset === current.data.scanOffset) return current.data;
         const data = { ...current.data, rows, scanOffset };
@@ -1972,8 +1995,16 @@ export function createLocalBusinessStore(databasePath) {
         let changed;
         if (old) {
           result.orderNo = old.orderNo;
-          if (order && order.email.toLowerCase() === old.email.toLowerCase() && order.plan === old.plan) {
-            const next = { ...old };
+          if (order && (!order.email || !old.email || order.email.toLowerCase() === old.email.toLowerCase()) &&
+              (!order.plan || !old.plan || order.plan === old.plan)) {
+            const next = { ...old, entitlementStatus: 'active' };
+            if (!old.email && order.email) next.email = order.email;
+            if (!old.plan && order.plan) {
+              next.plan = order.plan;
+              const price = rechargePriceSnapshot(readDocument('settings'), order.plan, new Date().toISOString());
+              next.rechargePriceSnapshot = price;
+              if (!old.saleAmount && !old.receiptConfirmed) next.saleAmount = price.saleAmount;
+            }
             if (!old.ownerId && !old.rechargeOwnerId && !old.createdById && order.rechargeOwnerId)
               next.rechargeOwnerId = order.rechargeOwnerId;
             if (!old.paidConfirmed && !old.paidAmount && !old.paidCurrency && order.paidConfirmed) {
@@ -2003,7 +2034,7 @@ export function createLocalBusinessStore(databasePath) {
           const id = 'commerce-order-' + randomUUID();
           const orderNo = nextOrderNo(data.orders);
           const price = rechargePriceSnapshot(readDocument('settings'), order.plan, new Date().toISOString());
-          changed = { ...order, id, orderNo, saleAmount: price.saleAmount, rechargePriceSnapshot: price };
+          changed = { ...order, id, orderNo, entitlementStatus: 'active', saleAmount: price.saleAmount, rechargePriceSnapshot: price };
           data.orders.unshift(changed);
           result.orderNo = orderNo;
         }
@@ -2032,8 +2063,19 @@ export function createLocalBusinessStore(databasePath) {
             auditSummary(old ? '补齐代充订单回执' : '同步代充成功订单', actor, changed.id), next);
         }
         const currentOrder = changed || old;
-        if (currentOrder?.issueFeeSnapshot && !currentOrder.issueFeeSnapshot.pending)
-          result.needs = result.needs.filter((issue) => issue !== '首次开卡费待核对');
+        if (currentOrder) {
+          const filled = {
+            '邮箱证据待核对': currentOrder.email,
+            '套餐证据待核对': currentOrder.plan,
+            '开通时间待核对': currentOrder.rechargeCompletedAt,
+            '实扣金额待核对': currentOrder.paidConfirmed,
+            '卡尾待核对': currentOrder.paymentId,
+            '银行卡归属待核对': currentOrder.cardId,
+            '首次开卡费待核对': currentOrder.issueFeeSnapshot && !currentOrder.issueFeeSnapshot.pending,
+            '订单汇率尚未取得': currentOrder.fxSnapshot
+          };
+          result.needs = result.needs.filter(issue => !filled[issue]);
+        }
         const version = status.version + 1;
         const records = { ...status.data, since: status.data?.since ?? since,
           rows: [...previous.filter((item) => item.jobKey !== row.jobKey), result] };
@@ -2243,7 +2285,7 @@ export async function handleLocalBusiness(
         response.setHeader('Cache-Control', 'private, no-store');
         return json(response, 200, store.inventorySnapshot(actor));
       }
-      if (domain === 'commerce') return json(response, 200, redactClaudeProOrderMaterials(store.load(domain), actor));
+      if (domain === 'commerce') return json(response, 200, commerceForActor(store, store.load(domain), actor));
       return json(response, 200, domain === 'audit' ? store.audit() : store.load(domain));
     }
     if (request.method !== 'PUT') throw new LocalDataError(405, '本机接口不支持此操作');
@@ -2254,7 +2296,7 @@ export async function handleLocalBusiness(
     if (domain === 'batch') {
       const entries = await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
       return json(response, 200, entries.map((entry) =>
-        entry.domain === 'commerce' ? redactClaudeProOrderMaterials(entry, actor) : entry));
+        entry.domain === 'commerce' ? commerceForActor(store, entry, actor) : entry));
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       throw new LocalDataError(400, '保存资料格式不正确');
@@ -2274,14 +2316,14 @@ export async function handleLocalBusiness(
     const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
     const inventory = related.find(item => item.domain === 'inventory');
     const appleBalance = related.find(item => item.domain === 'appleBalance');
-    return json(response, 200, {
-      version: entry.version, data: entry.domain === 'commerce'
-        ? redactClaudeProOrderMaterials(entry.data, actor) : entry.data,
+    const result = {
+      version: entry.version, data: entry.data,
       ...(entry.accountSummaries && { accountSummaries: entry.accountSummaries, commerceVersion: entry.commerceVersion }),
       ...(entry.usageReview && { usageReview: entry.usageReview }),
       ...(inventory && { inventory }),
       ...(appleBalance && { appleBalance })
-    });
+    };
+    return json(response, 200, entry.domain === 'commerce' ? commerceForActor(store, result, actor) : result);
   } catch (error) {
     if (response.destroyed) return;
     if (

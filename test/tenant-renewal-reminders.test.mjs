@@ -11,7 +11,8 @@ const actor = { id: 'operator', name: '处理管理员', role: 'admin' };
 const cycleEnd = Date.parse('2026-11-13T12:00:00Z');
 const order = (id, extra = {}) => ({
   id, tenantId: 'tenant', product: 'Claude Pro', email: 'same@example.test',
-  start: '2026-11-01T09:00', expiry: '2026-11-13T20:00', paidConfirmed: true, ...extra
+  start: '2026-11-01T09:00', expiry: '2026-11-13T20:00', source: '管理员手工',
+  paidConfirmed: true, receiptConfirmed: true, ...extra
 });
 const seed = () => ({
   customers: [], tenants: [{ id: 'tenant' }, { id: 'other' }],
@@ -96,6 +97,7 @@ test('复用客户与订单保存接口和版本号', async () => {
   let snapshot = { version: 1, data: seed() };
   const store = {
     load: () => snapshot,
+    featureDocument: () => ({ data: null }),
     saveBatch(entries, options) {
       const [entry] = entries;
       assert.equal(entries.length, 1);

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { validMoney } from './order-policy.mjs';
+import { orderOpeningConfirmed, subscriptionTime as orderTime } from '../frontend/order-opening.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 
 export const tenantRenewalHandledAction = '处理租户续费提醒';
@@ -12,12 +11,6 @@ const isReminderLog = row => [tenantRenewalHandledAction, tenantRenewalSettingsA
 const warningHours = data => data?.renewalWarningHours ?? (data?.renewalWarningDays ?? 3) * 24;
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 
-function orderTime(value) {
-  const text = String(value ?? '').trim().replace(' ', 'T');
-  return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)
-    ? Date.parse(text) : parseV2DateTimeInput(text)?.getTime() ?? NaN;
-}
-
 function accountKey(order) {
   if (personalProduct(order.product)) {
     const target = targetKey(order);
@@ -28,18 +21,7 @@ function accountKey(order) {
   return email && ['Claude', 'GPT'].includes(family) && JSON.stringify([family, email]);
 }
 
-function isOpened(order, start, expiry, at) {
-  if (personalProduct(order.product)) return order.entitlementStatus === 'active';
-  if (order.source === '线上代充' && order.taskId) {
-    const completed = orderTime(order.rechargeCompletedAt);
-    return completed <= at && completed >= start && completed < expiry;
-  }
-  return Boolean(order.paidConfirmed) || order.financialEvidence?.some(row => row.kind === 'payment') ||
-    order.corrections?.some(({ previous }) => previous?.paidConfirmed &&
-      validMoney(previous.paidAmount) && /[1-9]/.test(previous.paidAmount));
-}
-
-function checkHandledCycle(entry, previous, at, hours, history) {
+function checkHandledCycle(entry, previous, at, hours, history, confirmedOrderIds) {
   const cycle = entry.tenantRenewal;
   const { orderIds, expiry } = cycle || {};
   if (!Array.isArray(orderIds) || !orderIds.length ||
@@ -54,7 +36,7 @@ function checkHandledCycle(entry, previous, at, hours, history) {
     const start = orderTime(order?.start);
     if (!order || order.tenantId !== entry.entityId || order.cancelled || order.subscriptionEnded ||
         !(start <= at && start < expiry) || orderTime(order.expiry) !== expiry ||
-        !isOpened(order, start, expiry, at))
+        !orderOpeningConfirmed(order, at, confirmedOrderIds.has(order.id)))
       fail(409, '关联订单或到期时间已变化，请重新核对');
     identities.add(accountKey(order));
   }
@@ -67,7 +49,7 @@ function checkHandledCycle(entry, previous, at, hours, history) {
   return { orderIds, expiry };
 }
 
-export function prepareTenantRenewalWrite(previous, data, action, actor, now = new Date()) {
+export function prepareTenantRenewalWrite(previous, data, action, actor, now = new Date(), confirmedOrderIds = new Set()) {
   const priorHours = previous?.tenantRenewalWarningHours;
   const setting = action === tenantRenewalSettingsAction;
   const handling = action === tenantRenewalHandledAction;
@@ -95,7 +77,7 @@ export function prepareTenantRenewalWrite(previous, data, action, actor, now = n
     fail(409, '请单独保存租户续费提醒，相关业务资料须保留原值');
   if (setting && hours === undefined) fail(400, '请填写租户续费提醒时间');
   const tenantRenewal = handling
-    ? checkHandledCycle(entry, previous, now.getTime(), hours ?? defaultHours, history) : undefined;
+    ? checkHandledCycle(entry, previous, now.getTime(), hours ?? defaultHours, history, confirmedOrderIds) : undefined;
   data.logs[0] = {
     id: entry.id,
     type: action,

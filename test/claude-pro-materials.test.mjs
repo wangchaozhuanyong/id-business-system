@@ -510,9 +510,9 @@ test('historical GPT fee correction preserves the original rule and rejects late
       { path: '/api/local/settings' });
     assert.equal(firstSettings.status, 200);
     const created = await save(store, 0, makeDocument([base('gpt-fee-history', {
-      product: 'GPT', plan: 'Plus', source: '管理员手工', receiptConfirmed: true
+      product: 'GPT', plan: 'Plus', source: '管理员手工', paidConfirmed: true, receiptConfirmed: true
     })]));
-    assert.equal(created.status, 200);
+    assert.equal(created.status, 200, created.data.error);
     const prior = created.data.data.orders[0];
     const correctedRules = { ...rules, version: 3, cardPercent: '0.008' };
     const secondSettings = await request(store, 'PUT', { version: 1, data: { ...settings, costSettings: correctedRules },

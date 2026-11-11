@@ -131,7 +131,7 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
   await page.goto(origin + '/#/workspace/order/gpt');
   assert.equal(await email.inputValue(), 'draft-new@example.test', '返回保留手填草稿');
 
-  for (const width of [1440, 390, 320]) for (const dark of [false, true]) {
+  for (const width of [1440, 1024, 768, 390, 320]) for (const dark of [false, true]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
     await openHistory();

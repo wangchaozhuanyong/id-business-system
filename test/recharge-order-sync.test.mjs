@@ -132,6 +132,61 @@ test('accounting transport reads stock and rejects checkout and CDK creation rou
   assert.deepEqual(attempts, [['/api/admin/cdks', 'GET'], ['/api/admin/cdks/returns/stock', 'GET']]);
 });
 
+test('后台按终态入单，账单与卡池不可用时保留成功并等待原任务回执补资料', async () => {
+  const start = Date.parse('2026-10-31T15:00:00.000Z');
+  let time = now, restored = false;
+  const records = new Map(), writes = [];
+  const store = {
+    featureDocument: () => ({ version: 1, data: { since: start, rows: [...records.values()] } }),
+    rememberRechargeSessions(ids) {
+      for (const jobKey of ids) if (!records.has(jobKey)) records.set(jobKey, { jobKey });
+      return { since: start, rows: [...records.values()] };
+    },
+    load: () => ({ data: {} }),
+    applyRechargeOrder(input) {
+      writes.push(input);
+      const row = { ...input.row, orderNo: 'OD-LOCAL-0001' };
+      records.set(row.jobKey, row);
+      return row;
+    }
+  };
+  const client = {
+    async listCodes() { if (!restored) throw new Error('模拟码池不可用'); return []; },
+    async get(path) {
+      if (path.startsWith('/api/admin/sessions')) return { total: 3, items: [
+        { job_key: 'task-a', status: 'success' }, { job_key: 'task-b', status: 'failed' },
+        { job_key: 'task-c', status: 'running' }
+      ] };
+      if (path === '/api/admin/task-logs/task-a') return {
+        task: restored ? { ...session, gptApiOrderId: 'provider-a', gptApiRaw: JSON.stringify({
+          orderId: 'provider-a', status: 'succeeded', targetEmail: 'account@example.test', planCode: 'plus',
+          completedAt, payment: { amount: '123', currency: 'PHP' }
+        }) } : session
+      };
+      if (!restored) throw new Error('模拟辅助资料不可用');
+      return { records: [], total: 0, cards: [] };
+    }
+  };
+  const sync = createRechargeOrderSync({ store, client, background: true, clock: () => time });
+  await sync.run({ apply: true });
+  assert.deepEqual([...records.keys()], ['task-a']);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].order.entitlementStatus, 'active');
+  assert.equal(writes[0].order.paidConfirmed, false);
+  assert.equal(writes[0].order.receiptConfirmed, false);
+  assert.equal(writes[0].order.email, '');
+  restored = true;
+  await sync.run({ apply: true });
+  assert.equal(writes.length, 1);
+  time += 15 * 60_000;
+  const retry = await sync.run({ apply: true });
+  assert.equal(retry.rows[0].orderNo, 'OD-LOCAL-0001');
+  assert.equal(writes[1].order.taskId, writes[0].order.taskId);
+  assert.equal(writes[1].order.entitlementStatus, 'active');
+  assert.equal(writes[1].order.email, 'account@example.test');
+  assert.equal(writes[1].order.paidAmount, '123');
+});
+
 test('Apple renewals enforce original binding and first-use card fees use actual history', () => {
   const inventory = { mailboxes: [
     { type: 'apple', id: 'apple-1', status: '正常' }, { type: 'apple', id: 'apple-2', status: '正常' }

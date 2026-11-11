@@ -9,19 +9,21 @@ test('自动入单按来源任务去重，迟到回执只补缺项并保留人�
   const at = Date.parse('2026-11-07T02:00:00.000Z');
   const row = { jobKey: 'receipt-fixture', checkedAt: at, needs: ['实扣金额待核对'] };
   const evidence = {
-    jobKey: row.jobKey, email: 'order@example.test', plan: 'Plus', employeeId: 'employee-fixture',
+    jobKey: row.jobKey, email: '', plan: '', employeeId: 'employee-fixture',
     start: '', expiry: '', completedAt: '', paidAmount: '', paidCurrency: '',
     paymentId: '4321', cardId: ''
   };
   const first = store.applyRechargeOrder({ since: at, row, order: buildRechargeOrder(evidence, {}, at) });
   const original = store.load('commerce');
+  assert.equal(original.data.orders[0].entitlementStatus, 'active');
   original.data.customers.push({ id: 'verified-customer', name: '已核对客户', active: true });
   original.data.orders[0].customerId = 'verified-customer';
   original.data.orders[0].notes = '人工补充的备注';
   original.data.orders[0].version++;
   store.saveBatch([{ domain: 'commerce', version: original.version, data: original.data, action: '更正订单' }]);
   const verified = {
-    ...evidence, start: '2026-11-07T10:00', expiry: '2026-12-07T10:00',
+    ...evidence, email: 'order@example.test', plan: 'Plus',
+    start: '2026-11-07T10:00', expiry: '2026-12-07T10:00',
     completedAt: '2026-11-07T02:00:00.000Z', paidAmount: '99.00', paidCurrency: 'PHP'
   };
   const repeat = store.applyRechargeOrder({ since: at, row, order: buildRechargeOrder(verified, {}, at) });
@@ -31,6 +33,9 @@ test('自动入单按来源任务去重，迟到回执只补缺项并保留人�
   assert.equal(orders[0].id, original.data.orders[0].id);
   assert.equal(orders[0].createdById, 'employee-fixture');
   assert.equal(orders[0].paidAmount, '99.00');
+  assert.equal(orders[0].entitlementStatus, 'active');
+  assert.equal(orders[0].email, 'order@example.test');
+  assert.equal(orders[0].plan, 'Plus');
   assert.equal(orders[0].expiry, '2026-12-07T10:00');
   assert.equal(orders[0].notes, '人工补充的备注');
   assert.equal(orders[0].customerId, 'verified-customer');

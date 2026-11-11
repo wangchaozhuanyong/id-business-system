@@ -90,11 +90,10 @@ test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 9
     await form.locator('#commerce-' + name + '-picker').click();
     await form.locator('#commerce-' + name + '-popover [data-value="' + id + '"]').click();
   };
-  const submit = async (pending = false, root = form) => {
+  const submit = async (root = form) => {
     const scope = root === form ? page.locator('#main') : page.locator('#drawer[open]');
-    const action = pending ? '[data-action="commerce-order-pending"]' : 'button[form="commerce-order-form"][type="submit"]';
-    await root.and(page.locator(':not([data-account-owner-pending])')).waitFor();
-    await scope.locator(action).click();
+    assert.equal(await scope.locator('[data-action="commerce-order-pending"]').count(), 0);
+    await scope.locator('button[form="commerce-order-form"][type="submit"]').click();
     const confirm = page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true });
     await confirm.click().catch(async error => {
       const fields = await root.locator('.field-error:visible').allTextContents();
@@ -160,11 +159,17 @@ test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 9
 
   await field('plan').selectOption('Max 5x');
   await field('email').fill('qa-max-independent@example.test');
-  await submit(true);
+  await choose(form, 'customerId', customer.id);
+  await field('proMaterialMode').selectOption('manual_card');
+  await field('proCardNumber').fill(sampleCard);
+  await field('paidAmount').fill('100');
+  await field('saleAmount').fill('600');
+  await submit();
   const standalone = writes.at(-1).data.orders.find(row => row.email === 'qa-max-independent@example.test');
   assert.equal(standalone.product, 'Claude Max');
   assert.equal(standalone.plan, 'Max 5x');
-  assert.equal(standalone.paidConfirmed, false);
+  assert.equal(standalone.paidConfirmed && standalone.receiptConfirmed, true);
+  assert.equal(standalone.entitlementStatus, 'active');
   assert.equal(Boolean(standalone.claudeRenewalId || standalone.verifier || standalone.claudeVerifierId), false);
 
   await page.goto(origin + ordersPath);
@@ -187,7 +192,7 @@ test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 9
   await renewal.locator('#commerce-proCardNumber').fill(sampleCard);
   await renewal.locator('#commerce-paidAmount').fill('200');
   await renewal.locator('#commerce-saleAmount').fill('900');
-  await submit(false, renewal);
+  await submit(renewal);
   const after = writes.at(-1).data.orders;
   const renewed = after.find(order => order.claudeRenewalId === max.id);
   assert.equal(renewed.proRenewalSourceVersion, max.version);

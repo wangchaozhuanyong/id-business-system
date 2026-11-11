@@ -4,7 +4,8 @@
   const A = window.IDDesignAPI, D = window.IDLocalData;
   const { $, esc, button, textAction } = A;
   const labels = { gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok' };
-  const states = { active: '有效', expired: '已过期', pending: '待核对', ended: '已终止' };
+  const states = window.IDOrderOpening.subscriptionStateLabels;
+  const parseTime = window.IDOrderOpening.subscriptionTime;
   const codeStates = { active: '有效', missing: '未登记', expired: '已过期', disabled: '已停用',
     auth_failed: '授权失败', conflict: '资料冲突', not_applicable: '不适用' };
   const scopes = ['inventory', 'commerce', 'tools/mailbox-pool', 'subscription-management'];
@@ -28,13 +29,8 @@
   };
   const currentRow = id => snapshot?.items.find(row => row.id === id);
   const timeFormatter = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' });
-  const parseTime = value => {
-    let input = String(value || '').trim().replace(' ', 'T');
-    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) input += 'T00:00';
-    return Date.parse(/(?:Z|[+-]\d\d:?\d\d)$/i.test(input) ? input : input + '+08:00');
-  };
-  const displayDate = value => Number.isFinite(parseTime(value)) ? timeFormatter.format(parseTime(value)) : '待核对';
-  const displayDays = value => Number.isInteger(value) ? `${value} 天` : '待核对';
+  const displayDate = value => Number.isFinite(parseTime(value)) ? timeFormatter.format(parseTime(value)) : '未登记';
+  const displayDays = value => Number.isInteger(value) ? `${value} 天` : '—';
   const lineValues = (row, render) => row.series.map(series => `<div>${render(series)}</div>`).join('');
   const stateTag = status => A.tag(states[status] || '待核对', status === 'active' ? 'green' : status === 'pending' ? 'warning' : '');
 
@@ -76,7 +72,7 @@
     return A.summary([
       ['全部账号', c ? data.accountCount ?? Object.values(c).reduce((a, b) => a + b, 0) : '—', '个', true],
       ['有效', c?.active ?? '—', '个'], ['已过期', c?.expired ?? '—', '个'],
-      ['待核对', c?.pending ?? '—', '个'], ['已终止', c?.ended ?? '—', '个']
+      ['待确认', c?.pending ?? '—', '个'], ['已终止', c?.ended ?? '—', '个']
     ]);
   }
 
@@ -86,8 +82,10 @@
     const key = `${product()}:${filters().pageSize}:${Math.round(viewport.getBoundingClientRect().width)}`;
     let frame = frameHeights.get(key);
     if (snapshot?.product === product()) {
-      const table = Math.max(frame?.table || 0, viewport.querySelector('table').getBoundingClientRect().height +
-        viewport.offsetHeight - viewport.clientHeight);
+      const style = getComputedStyle(viewport);
+      const contentHeight = viewport.querySelector('table').getBoundingClientRect().height +
+        parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + viewport.offsetHeight - viewport.clientHeight;
+      const table = Math.max(frame?.table || 0, contentHeight);
       const pager = Math.max(frame?.pager || 0, list.querySelector('.pagination').getBoundingClientRect().height);
       frame = { table, pager };
       frameHeights.set(key, frame);
@@ -102,6 +100,10 @@
     const now = snapshot.serverTime + performance.now() - snapshot.receivedAt;
     let next = Infinity;
     for (const row of snapshot.items) {
+      for (const series of row.series) {
+        const startsIn = parseTime(series.start) - now;
+        if (series.status === 'scheduled' && startsIn > 0) next = Math.min(next, startsIn);
+      }
       for (const value of [...row.series.map(series => series.expiry), row.queryCode?.expiresAt]) {
         const remaining = parseTime(value) - now;
         if (remaining > 0) next = Math.min(next, remaining - (Math.ceil(remaining / 86_400_000) - 1) * 86_400_000);

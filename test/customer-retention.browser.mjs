@@ -11,7 +11,8 @@ const lossUrl = origin + '/#/workspace/customer-loss';
 const order = (id, customerId, start, expiry, extra = {}) => ({
   id, orderNo: id, customerId, start, expiry, email: id.toLowerCase() + '@example.test',
   product: 'GPT', plan: 'Plus', businessType: '续费', payment: '银行卡', paidAmount: '20',
-  paidCurrency: 'USD', paidConfirmed: true, refunds: [], corrections: [], bankReturns: [],
+  source: '管理员手工', paidCurrency: 'USD', paidConfirmed: true, receiptConfirmed: true,
+  refunds: [], corrections: [], bankReturns: [],
   ...extra
 });
 function fixtures() {
@@ -78,6 +79,8 @@ const tab = (page, name) => page.getByRole('tab', { name }).click();
 const drawer = page => page.locator('#drawer');
 const search = page => page.getByRole('textbox', { name: '搜索当前列表' });
 const waitForList = page => page.getByRole('region', { name: '客户流失概览' }).waitFor();
+const overviewMetric = (page, label) => page.locator('.overview-customer-summary > div')
+  .filter({ has: page.getByText(label, { exact: true }) });
 const loadedMetrics = ['13位客户', '2位客户', '8笔', '1位客户'];
 
 async function openFixture(browser, data, actor = admin) {
@@ -107,9 +110,8 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
 
   await t.test('导航、订阅次数、停用天数与首页共用统计', async () => {
     await page.goto(origin + '/#/overview');
-    const lostMetric = page.locator('.overview-customer-summary a[href="#/workspace/customer-loss"] strong');
-    await lostMetric.getByText('13', { exact: true }).waitFor();
-    assert.equal(await page.locator('.overview-customer-summary strong').first().innerText(), '2');
+    await overviewMetric(page, '已确认流失').getByText('13位', { exact: true }).waitFor();
+    assert.equal(await overviewMetric(page, '有效服务').locator('dd').textContent(), '2位');
     await page.locator('#sidebar').getByRole('button', { name: '数据管理', exact: true }).click();
     await page.locator('#sidebar').getByRole('link', { name: '客户流失', exact: true }).click();
     await waitForList(page);
@@ -186,9 +188,8 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
     await page.getByText(/部分资料读取失败/).waitFor({ state: 'hidden' });
     assert.deepEqual(await summary(page), ['14位客户', '2位客户', '7笔', '1位客户']);
     await page.goto(origin + '/#/overview');
-    await page.locator('.overview-customer-summary a[href="#/workspace/customer-loss"] strong')
-      .getByText('14', { exact: true }).waitFor();
-    await page.getByRole('link', { name: '查看流失客户', exact: true }).click();
+    await overviewMetric(page, '已确认流失').getByText('14位', { exact: true }).waitFor();
+    await page.getByRole('link', { name: '查看客户流失', exact: true }).click();
     await tab(page, /^已流失/);
   });
 
@@ -267,7 +268,7 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
   assert.deepEqual(requests.unavailable, []);
 });
 
-test('人工订阅按已登记周期统计流失，不以财务确认或续费邮箱作为开通门槛', { timeout: 90_000 }, async t => {
+test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺项可后补', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -275,7 +276,7 @@ test('人工订阅按已登记周期统计流失，不以财务确认或续费�
   const products = [['GPT', 'Plus'], ['Claude Pro', 'Pro'], ['Claude Max', 'Max 5x']];
   const orders = customers.map((customer, i) => order(`QA-MANUAL-${i}-ROW`, customer.id, '2026-10-08T10:00', '2026-11-08T10:00', {
     product: products[i % 3][0], plan: products[i % 3][1], email: '', source: '管理员手工',
-    paidConfirmed: false, receiptConfirmed: false, costConfirmed: false
+    entitlementStatus: 'active', paidConfirmed: false, receiptConfirmed: false, costConfirmed: false
   }));
   const data = {
     commerce: { version: 1, data: { customers, orders, tenants: [], operating: [], rentBatches: [], logs: [] } },
@@ -310,12 +311,12 @@ test('人工订阅按已登记周期统计流失，不以财务确认或续费�
   orders[8].paidAmount = '';
   data.commerce.data.orders.push(
     order('QA-RENEWED-OTHER-ACCOUNT', 'manual-0', '2026-11-08T10:00', '2026-12-08T10:00', {
-      product: 'Claude Max', plan: 'Max 5x', paidConfirmed: false, email: 'different@example.test'
+      product: 'Claude Max', plan: 'Max 5x', entitlementStatus: 'active', paidConfirmed: false, email: 'different@example.test'
     }),
     order('QA-RENEWED-NO-AMOUNT', 'manual-1', '2026-11-08T10:00', '2026-12-08T10:00', {
-      paidAmount: '', paidConfirmed: false, email: ''
+      entitlementStatus: 'active', paidAmount: '', paidConfirmed: false, email: ''
     }),
-    order('QA-RENEWED-FUTURE', 'manual-2', '2026-11-11T10:00', '2026-12-11T10:00', { paidConfirmed: false }),
+    order('QA-RENEWED-FUTURE', 'manual-2', '2026-11-11T10:00', '2026-12-11T10:00', { entitlementStatus: 'active', paidConfirmed: false }),
     { ...orders[3] },
     ...['cancelled', 'failed', 'draft'].map((status, i) =>
       order('QA-NOT-OPENED-' + status, `manual-${i + 4}`, '2026-11-01T10:00', '2026-12-01T10:00', { status })),
@@ -341,8 +342,8 @@ test('人工订阅按已登记周期统计流失，不以财务确认或续费�
   await tab(page, /^待生效/);
   assert.match(await list(page).innerText(), /合成到期客户 3/);
   await page.goto(origin + '/#/overview');
-  await page.locator('.overview-customer-summary a[href="#/workspace/customer-loss"] strong').getByText('39', { exact: true }).waitFor();
-  assert.equal(await page.locator('.overview-customer-summary strong').first().innerText(), '2');
+  await overviewMetric(page, '已确认流失').getByText('39位', { exact: true }).waitFor();
+  assert.equal(await overviewMetric(page, '有效服务').locator('dd').textContent(), '2位');
   await page.clock.setFixedTime(new Date('2026-12-08T02:00:00Z'));
   await page.goto(lossUrl);
   await waitForList(page);

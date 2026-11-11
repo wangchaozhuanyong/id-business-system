@@ -41,8 +41,7 @@ async function setup(t) {
     const before = writes.length;
     const url = page.url();
     const existing = await scope.locator('#commerce-id').inputValue();
-    await scope.locator(completed ? 'button[form="commerce-order-form"][type="submit"]' :
-      '[data-action="commerce-order-pending"]').click();
+    await scope.locator('button[form="commerce-order-form"][type="submit"]').click();
     const dialog = page.locator('#confirm-dialog[open]');
     if (completed) await dialog.getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 100\.00 /).waitFor();
     await dialog.locator('[data-action="confirm-accept"]').click();
@@ -75,7 +74,7 @@ test('所有录单入口可手填和编辑卡号，卡序列号选填，切页�
     await serial.fill(serialValue);
     if (product === 'GPT') {
       await card.fill('1234');
-      await main.locator('[data-action="commerce-order-pending"]').click();
+      await main.locator('button[form="commerce-order-form"][type="submit"]').click();
       assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
       assert.equal(writes.length, 0);
       assert.ok((await form.locator('[data-commerce-field="proCardNumber"]').textContent()).includes('12 至 19 位'));
