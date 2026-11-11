@@ -6,7 +6,7 @@ import { createFinanceCollection } from '../server/finance/collection-service.mj
 import { collectionDomain, defaults, validateSettings, quoteId, cleanupPlan, hour, day } from '../server/finance/collection-policy.mjs';
 import { createFinanceCollectionHandler } from '../server/finance/collection-route.mjs';
 import { createFinanceQuoteService } from '../server/finance/quote-service.mjs';
-import { automaticProvider, calculateOrder } from '../modules/finance/accounting.mjs';
+import { automaticProvider, calculateOrder, fallbackQuoteProvider } from '../modules/finance/accounting.mjs';
 
 const initial = Date.parse('2026-11-07T09:00:00Z');
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'admin' };
@@ -132,10 +132,43 @@ test('来源限流持久冷却至少20分钟，重试为零时不会在冷却结
   await assert.rejects(f.collection.collect(), /冷却/);
   const restarted = createFinanceCollection(f.options);
   await assert.rejects(restarted.collect(), /冷却/);
-  assert.equal(f.calls(), 1);
+  assert.equal(f.calls(), 2);
   restarted.start();
   assert.equal(f.timers.at(-1).delay, day);
   restarted.close();
+});
+
+test('备用来源批次可冻结和回读，主源恢复后同日报价按最近确认使用', async () => {
+  let limitPrimary = false;
+  const f = fixture({ fetcher: (now, url) => {
+    if (new URL(url).host === 'cdn.jsdelivr.net')
+      return limitPrimary ? new Response(null, { status: 429 }) : providerResponse(now);
+    return Response.json(Object.entries({ MYR: 0.625, USD: 0.125, PHP: 10, CLP: 125, IDR: 2500, EGP: 6.25 })
+      .map(([quote, rate]) => ({ date: new Date(now).toISOString().slice(0, 10), base: 'CNY', quote, rate })));
+  } });
+  const original = await f.collection.snapshotFor(order());
+  assert.equal(original.source, automaticProvider.source);
+  f.advance(hour);
+  limitPrimary = true;
+  const { run } = await f.collection.collect();
+  assert.equal(run.status, 'updated');
+  assert.equal(Date.parse(f.collection.read().data.state.cooldownUntil), initial + hour + 20 * 60_000);
+  await assert.rejects(f.collection.collect(), /冷却/);
+  const backup = await f.collection.snapshotFor(order());
+  assert.equal(backup.source, fallbackQuoteProvider.source);
+  assert.equal(backup.quoteId, run.quoteId);
+  assert.equal(backup.rates.PHP, '0.10000000');
+  assert.equal(f.collection.view({ currency: 'PHP' }).rows[0].source, fallbackQuoteProvider.source);
+  assert.equal(calculateOrder({ ...order(), fxSnapshot: backup }).status, 'ready');
+  assert.equal(f.collection.verifySnapshot({ ...backup, source: automaticProvider.source }, order()), false);
+  f.advance(hour);
+  limitPrimary = false;
+  assert.equal((await f.collection.collect()).run.status, 'unchanged');
+  const restarted = createFinanceCollection(f.options);
+  assert.deepEqual(await restarted.snapshotFor(order()), original);
+  assert.equal(restarted.verifySnapshot(backup, order()), true);
+  assert.equal(restarted.view({ currency: 'PHP' }).rows[0].source, automaticProvider.source);
+  assert.equal(f.calls(), 4);
 });
 
 test('持久任务所有权阻止第二实例并发，采集中修改配置不被旧响应覆盖', async () => {

@@ -236,7 +236,7 @@ test('configured local mode gates business routes and saves the actual session a
         financeRequests++;
         return Response.json({
           date: new Date(seconds * 1000).toISOString().slice(0, 10),
-          cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500 }
+          cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500, egp: 6.25 }
         });
       }
     });

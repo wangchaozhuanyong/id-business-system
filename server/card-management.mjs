@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { isAutomaticQuote, renewalFundingUsd, validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { compareQuoteRecency, isAutomaticQuote, renewalFundingUsd, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { accountLifecycleSummary, releasedAccountOrders, systemAccount } from './account-lifecycle.mjs';
 import { validMoney } from './order-policy.mjs';
@@ -96,7 +96,7 @@ function currentQuote(quotes, currency, now) {
     const at = Date.parse(quote.at);
     if (isAutomaticQuote(quote) && at <= now && now < Date.parse(quote.expiresAt) &&
         Date.parse(quote.fetchedAt) <= now && quote.rates?.[currency] && quote.rates?.USD &&
-        (!latest || at > Date.parse(latest.at))) latest = quote;
+        (!latest || compareQuoteRecency(quote, latest) < 0)) latest = quote;
   }
   return latest;
 }

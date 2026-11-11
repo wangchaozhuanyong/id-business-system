@@ -6,12 +6,20 @@ export const automaticProvider = Object.freeze({
   id: 'currency-api',
   source: 'Fawaz Currency API'
 });
+export const fallbackQuoteProvider = Object.freeze({
+  id: 'frankfurter-v2',
+  source: 'Frankfurter v2'
+});
 // Existing frozen quotes keep their original provider, source, dates and values.
 export const normalizeAutomaticProvider = provider =>
   provider === 'exchange-rate-api-open' ? automaticProvider.id : provider;
 export const isAutomaticQuote = quote =>
   (quote?.provider === automaticProvider.id && quote.source === automaticProvider.source) ||
+  (quote?.provider === fallbackQuoteProvider.id && quote.source === fallbackQuoteProvider.source) ||
   (quote?.provider === 'exchange-rate-api-open' && quote.source === 'ExchangeRate-API');
+export const compareQuoteRecency = (a, b) =>
+  Date.parse(b.at) - Date.parse(a.at) ||
+  Date.parse(b.lastSeenAt || b.fetchedAt) - Date.parse(a.lastSeenAt || a.fetchedAt);
 const targets = ['CNY', 'MYR'];
 const one = 10n ** 4n;
 const rateOne = 10n ** 8n;
