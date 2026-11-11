@@ -168,6 +168,7 @@
       }
       const error = new Error(result?.error || result?.message || '本机数据接口未响应，请重试');
       error.status = response.status;
+      if (Array.isArray(result?.matches)) error.matches = result.matches;
       throw error;
     }
     observeResult(resource.startsWith('finance/collection') ? 'finance-rates' : resource, result);
@@ -248,7 +249,7 @@
     tenantOwnerTransfer: (tenantId) => request('tenant-owner-transfer?tenantId=' + encodeURIComponent(tenantId)),
     transferTenantOwner: (command) => write(['commerce'], () => request('tenant-owner-transfer', command, 'POST')),
     tenantCards: (tenantId) => request('tenant-cards?tenantId=' + encodeURIComponent(tenantId)),
-    tenantCardAction: (command) => ['copy', 'reveal'].includes(command.action)
+    tenantCardAction: (command) => ['copy', 'reveal', 'lookup'].includes(command.action)
       ? request('tenant-cards', command, 'POST')
       : write(['commerce', 'order-cards', 'tenant-cards'], () => request('tenant-cards', command, 'POST')),
     rechargeCodeRequests: () => request('recharge-codes'),

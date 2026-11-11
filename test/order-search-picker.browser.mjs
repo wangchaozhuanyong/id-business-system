@@ -102,11 +102,11 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         await page.locator('#commerce-payment').selectOption('银行卡');
         await page.locator('#commerce-proMaterialMode').selectOption(product === 'claude' ? 'tenant_card' : '');
         await page.locator('#commerce-cardId-picker').click();
-        await page.getByRole('searchbox', { name: '搜索银行卡' }).waitFor();
+        await page.getByRole('searchbox', { name: product === 'claude' ? '搜索租户银行卡' : '搜索银行卡' }).waitFor();
         await page.keyboard.press('Escape');
         if (product === 'claude') {
           await page.locator('#commerce-tenantId-picker').click();
-          await page.getByRole('searchbox', { name: '搜索用卡人' }).fill('没有匹配的合成用卡人');
+          await page.getByRole('searchbox', { name: '搜索租户', exact: true }).fill('没有匹配的合成租户');
           await page.locator('#commerce-tenantId-popover').getByRole('status').waitFor();
           await page.keyboard.press('Escape');
         }
@@ -178,10 +178,17 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
     }
     assert(geometry.labelsFit && geometry.actionsFit && geometry.scrollWidth <= geometry.clientWidth + 1);
     if (width >= 753) {
+      assert.equal(geometry.email.top, geometry.owner.top);
+      assert.equal(geometry.email.left, geometry.payment.left);
+      assert.equal(geometry.owner.left, geometry.type.left);
+      assert.equal(geometry.email.width, geometry.payment.width);
+      assert.equal(geometry.owner.width, geometry.type.width);
       assert.equal(geometry.payment.top, geometry.type.top);
       assert.equal(geometry.card.top, geometry.tail.top);
       assert(geometry.card.top >= geometry.type.bottom);
     } else {
+      assert(geometry.email.width >= geometry.width - 1);
+      assert(geometry.owner.top >= geometry.email.bottom - 1);
       assert(geometry.type.top >= geometry.payment.bottom);
       assert(geometry.card.top >= geometry.type.bottom);
       assert(geometry.tail.top >= geometry.card.bottom);

@@ -158,7 +158,7 @@ test('GPT 列表完整显示联系、交易、周期和备注字段，并绑定�
   assert.equal(owner.render({}), '历史未记录');
   const profit = table.columns.find(column => column.id === 'profit');
   assert.equal(profit.render({ ...table.rows[0], paidConfirmed: false }), '—');
-  assert.match(expiry.render(table.rows[0]), /天后到期/);
+  assert.match(expiry.render(table.rows[0]), /剩余 .*天/);
   assert.match(expiry.render({ entitlementStatus: 'active', start: '2026-09-01T10:30', expiry: '2026-10-01T10:30' }), /已过期/);
   assert.match(expiry.render({ start: '2026-09-01T10:30', expiry: '2026-10-01T10:30' }), /待确认/);
   for (const id of ['createdAt', 'notes']) {
@@ -199,7 +199,7 @@ test('各产品共用银行卡资料列，旧单和 Apple 内购各自显示原�
   assert.equal(render('proCardSerial', manual), '00042-QA');
   assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '银行卡' }), '原订单资料');
   assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '苹果内购' }), '不适用');
-  assert.equal(render('proMaterialMode', { product: 'Claude Max', payment: '银行卡', proMaterialMode: 'tenant_card' }), '用卡人银行卡');
+  assert.equal(render('proMaterialMode', { product: 'Claude Max', payment: '银行卡', proMaterialMode: 'tenant_card' }), '租户银行卡');
   requireColumns(context.render('orders/gpt', 'commerce-orders-GPT'), ['proMaterialMode', 'proCardNumber']);
 });
 

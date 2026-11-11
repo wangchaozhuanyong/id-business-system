@@ -45,6 +45,34 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   const frame = () => page.frameLocator('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
   await page.goto(origin + '/#/workspace/order/gpt');
 
+  await t.test('the sidebar expands at most one group on selection and navigation', async () => {
+    const sidebar = page.locator('#sidebar');
+    const expandedGroups = () => sidebar.locator('.nav-heading[aria-expanded="true"]')
+      .evaluateAll(buttons => buttons.map(button => button.dataset.group));
+    await go('accounts/claude');
+    assert.deepEqual(await expandedGroups(), ['账号管理']);
+    assert.equal(await sidebar.locator('.nav-children').count(), 1);
+    assert.equal(await sidebar.locator('a[href="#/accounts/claude"]').getAttribute('aria-current'), 'page');
+
+    const mailboxes = sidebar.getByRole('button', { name: '邮箱管理', exact: true });
+    await mailboxes.press('Enter');
+    assert.deepEqual(await expandedGroups(), ['邮箱管理']);
+    assert.equal(await sidebar.locator('a[href="#/accounts/claude"]').count(), 0);
+    assert(await mailboxes.evaluate(button => document.activeElement === button));
+    await page.evaluate(() => window.IDDesignAPI.render());
+    assert.deepEqual(await expandedGroups(), ['邮箱管理']);
+    await mailboxes.press('Space');
+    assert.deepEqual(await expandedGroups(), []);
+
+    await mailboxes.click();
+    await sidebar.getByRole('link', { name: '谷歌邮箱', exact: true }).click();
+    await page.waitForURL(origin + '/#/mailboxes/google');
+    assert.deepEqual(await expandedGroups(), ['邮箱管理']);
+    await page.goBack();
+    await page.locator('#main[data-layout-route="accounts/claude"]').waitFor();
+    assert.deepEqual(await expandedGroups(), ['账号管理']);
+  });
+
   await t.test('GPT and Claude order columns align and narrow labels remain usable', async () => {
     for (const width of [2040, 1440, 1024, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
@@ -73,7 +101,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             aligned(await box('#commerce-cardTypeId'), await box(`#commerce-${next}-picker`), '银行卡类型与下一步控件应同排');
             aligned(await box('label[for="commerce-cardTypeId"]'), await box(`label[for="commerce-${next}-picker"]`), '第二行标签不齐');
             if (product === 'claude')
-              aligned(await box('#commerce-cardId-picker'), await box('#commerce-paymentId'), '用卡人的银行卡与尾号应同排');
+              aligned(await box('#commerce-cardId-picker'), await box('#commerce-tenantCardNumber'), '租户银行卡选择与卡号输入应同排');
             else aligned(await box('#commerce-paymentId'), await box('#commerce-proCardSerial'), '卡尾号与序列号应同排');
           }
           await page.locator('#commerce-payment').selectOption('苹果内购');
@@ -157,7 +185,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         const before = await field.locator('.field-control').boundingBox();
         await page.keyboard.press('Enter');
         await help.locator('.title-description:popover-open').waitFor();
-        assert.match(await note.innerText(), /选择租户后可搜索/);
+        assert.match(await note.innerText(), /先选租户再搜索/);
         const bounds = await note.boundingBox();
         assert(bounds.x >= 0 && bounds.x + bounds.width <= width, '字段说明浮层不越过视口');
         assert.deepEqual(await field.locator('.field-control').boundingBox(), before, '说明展开不推动控件或错误');

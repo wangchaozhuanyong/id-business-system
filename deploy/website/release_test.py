@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +9,7 @@ from unittest.mock import Mock, patch
 import release
 import remote
 import backup_monitoring
+import vendure_admission
 
 BASE = "a" * 40
 TARGET = "b" * 40
@@ -159,6 +161,64 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertEqual(remote.mount_backup_monitoring(result), result)
         with self.assertRaisesRegex(remote.ReleaseError, "unexpected_backup_monitoring_launcher"):
             remote.mount_backup_monitoring(canary)
+
+    def test_only_the_live_app_gets_the_private_admission_socket(self):
+        live = '  state=(--mount "type=bind,src=$formal/data,dst=/state")'
+        canary = '  state=(--tmpfs "/state:rw,size=32m")'
+        result = remote.mount_storefront_admission(remote.mount_backup_monitoring(live + "\n" + canary))
+        self.assertIn('state+=(-e "ID_VENDURE_ADMISSION_DIRECTORY=/state/vendure-admission")', result)
+        self.assertTrue(result.endswith(canary))
+        self.assertEqual(remote.mount_storefront_admission(remote.mount_backup_monitoring(result)), result)
+        with self.assertRaisesRegex(remote.ReleaseError, "unexpected_storefront_admission_launcher"):
+            remote.mount_storefront_admission(result + "\n" + remote.ADMISSION_ENV)
+
+    def test_gateway_launcher_changes_only_its_source_and_mounts_the_admission_socket_readonly(self):
+        before, target = "a" * 40, "b" * 40
+        old = f"sha={before}\n" + vendure_admission.LAUNCHER_ANCHOR + "\n  node\n"
+        new = vendure_admission.stage_launcher(old, before, target)
+        self.assertIn(f"sha={target}\n", new)
+        self.assertIn(vendure_admission.LAUNCHER_ANCHOR, new)
+        self.assertIn('dst=/run/id-vendure-admission,readonly', new)
+        self.assertIn('ID_VENDURE_ADMISSION_SOCKET=/run/id-vendure-admission/lookup.sock', new)
+        self.assertTrue(new.endswith("\n  node\n"))
+        with self.assertRaisesRegex(remote.ReleaseError, "gateway_launcher_changed"):
+            vendure_admission.stage_launcher(new, target, before)
+
+    def test_gateway_drain_fences_writers_and_preserves_tasks(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            file = Path(directory) / vendure_admission.SQLITE_FILENAME
+            writer = sqlite3.connect(file, timeout=0)
+            try:
+                writer.execute("CREATE TABLE vendure_recharge_isolated_state(id INTEGER, revision INTEGER, payload TEXT)")
+                table = "vendure_recharge_isolated_state"
+                writer.execute(f"INSERT INTO {table} VALUES(1, 3, ?)", ('{"tasks":[{"status":"succeeded"}]}',))
+                writer.commit()
+                with vendure_admission.lock_idle_queue(file) as retained:
+                    self.assertEqual(retained, 1)
+                    with self.assertRaisesRegex(sqlite3.OperationalError, "database is locked"):
+                        writer.execute(f"UPDATE {table} SET payload = ''")
+                writer.execute(f"UPDATE {table} SET payload = ?", ('{"tasks":[{"status":"running"}]}',))
+                writer.commit()
+                with self.assertRaisesRegex(remote.ReleaseError, "gateway_queue_not_idle"):
+                    with vendure_admission.lock_idle_queue(file):
+                        self.fail("active tasks must block the gateway cutover")
+                self.assertEqual(json.loads(writer.execute(f"SELECT payload FROM {table}").fetchone()[0]),
+                                 {"tasks": [{"status": "running"}]})
+            finally:
+                writer.close()
+
+    @patch.object(vendure_admission, "inspect")
+    @patch.object(vendure_admission, "read_idle_queue", side_effect=[(20, 0), (21, 0)])
+    @patch.object(vendure_admission, "run")
+    @patch.object(vendure_admission, "worker_binding", return_value=(b"original", "launcher-hash"))
+    def test_worker_is_started_with_its_original_runtime_and_poll_observed(self, binding, run, queue, inspect):
+        inspect.return_value = {"State": {"Running": True}, "Config": {"User": "993:992"}, "Image": "image",
+                                "Mounts": [{"Destination": "/app", "Source": "/old/source", "RW": False}]}
+        vendure_admission.resume_worker(binding.return_value, ("image", "993:992", "/old/source"), 0)
+        run.assert_called_once_with(["systemctl", "start", vendure_admission.WORKER_UNIT], timeout=35)
+        self.assertEqual(queue.call_count, 2)
 
     def test_mysql_projection_requires_the_verified_pair_and_exposes_only_times(self):
         captured = "20261111T073000Z"

@@ -24,10 +24,13 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         id: 'synthetic-unlinked-order', orderNo: 'TEST-UNLINKED', email: '', entitlementStatus: 'active' };
       fixtures.commerce.data.orders.push(old);
       const intercepted = await interceptDesign(context, { localFixtures: fixtures, actor, skipRechargeAssets: true });
-      let confirmed = false, owner = '', version = 1;
+      let confirmed = false, owner = '', version = 1, listReads = 0;
       const commands = [];
       await context.route('**/api/local/subscriptions/list', route => {
-        const request = route.request().postDataJSON(), status = confirmed ? 'active' : 'pending';
+        listReads++;
+        const request = route.request().postDataJSON();
+        const status = request.scope === 'dead' ? 'dead' : request.scope === 'expired' ? 'expired' :
+          (request.product === 'Claude' && !confirmed) ? 'pending' : 'active';
         if (request.product === 'GPT' && request.scope === 'unlinked') {
           const record = { source: 'order', sourceId: old.id, orderNo: old.orderNo, plan: old.plan,
             start: old.start, expiry: old.expiry, status: 'active', remainingDays: 21, confirmed: true, missingAssociation: true };
@@ -37,14 +40,14 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
             revision: 'unlinked-revision', now: '2026-11-10T02:00:00Z' } });
         }
         const record = { source: 'order', sourceId: 'synthetic-order', orderNo: 'TEST-ORDER', plan: plans[request.product],
-          start: '2026-11-01 10:00', expiry: '2026-12-01 10:00', status, remainingDays: 21,
-          operatorName: actor.name, confirmed };
+          start: '2026-11-01 10:00', expiry: '2026-12-01 12:30', status, remainingDays: 21,
+          operatorName: actor.name, confirmed: status !== 'pending' };
         const row = { id: 'synthetic-account', product: request.product, account: request.product === 'Grok' ? '@synthetic' : 'synthetic@example.test',
           registrationEmail: request.product === 'Grok' ? '' : 'synthetic@example.test', status, conflict: false, ownerEligible: confirmed,
           ownerId: owner, ownerName: owner ? '合成归属人' : '', operatorName: actor.name, accountId: 'asset',
           series: [{ key: request.product, ...record }], history: [record], queryCode: { status: 'missing', remainingDays: null } };
-        if (request.product === 'Grok') row.series.push({ ...record, key: 'x_premium', plan: 'X Premium',
-          status: 'expired', remainingDays: 0 });
+        if (request.product === 'Grok' && request.scope === 'expired') row.series = [{ ...record,
+          key: 'x_premium', plan: 'X Premium', expiry: '2026-11-10 09:00', remainingDays: 0 }];
         const items = (!request.status || row.series.some(series => series.status === request.status)) &&
           (!request.query || row.account.includes(request.query)) ? [row] : [];
         return route.fulfill({ json: { items, total: items.length, accountCount: 1, page: 1, pageSize: request.pageSize,
@@ -72,6 +75,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       const page = await context.newPage(), errors = [];
       page.on('pageerror', error => errors.push(error.message));
       page.setDefaultTimeout(8000);
+      await page.clock.install({ time: new Date('2026-11-10T02:00:00Z') });
       await page.goto(origin + '/#/data-management/claude-google-subscriptions');
       await page.waitForURL('**/#/subscriptions/claude');
       await page.locator('#subscription-list tbody tr[data-row-id]').waitFor();
@@ -107,16 +111,25 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         const subscriptionRow = page.locator('#subscription-list tbody tr[data-row-id]');
         const days = subscriptionRow.locator('td[data-column="days"]');
         if (!(await days.isVisible())) await subscriptionRow.getByRole('button', { name: '更多资料', exact: true }).click();
-        assert.equal(await days.getAttribute('data-label'), '订阅剩余天数');
-        assert.match(await days.innerText(), /21/);
+        assert.equal(await days.getAttribute('data-label'), '到期倒计时');
+        assert.equal(await days.innerText(), name === 'claude' ? '—' : '21 天 2 小时');
+        if (name === 'gpt' && width === 1440 && theme === 'light') {
+          const reads = listReads;
+          await page.clock.fastForward(31 * 60_000);
+          await days.getByText('21 天 1 小时', { exact: true }).waitFor();
+          assert.equal(listReads, reads, '跨小时只更新倒计时文字');
+        }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
         if (name === 'grok') {
           assert.match(await page.locator('#subscription-overview .summary-item').filter({ hasText: '全部账号' }).innerText(), /1\s*个/);
           assert.match(await page.locator('#subscription-overview .summary-item').filter({ hasText: '已过期' }).innerText(), /1\s*个/);
           const loaded = page.waitForResponse(response => response.url().endsWith('/api/local/subscriptions/list') &&
-            response.request().postDataJSON().status === 'expired');
-          await page.locator('#subscription-status').selectOption('expired'); await loaded;
+            response.request().postDataJSON().scope === 'expired');
+          await page.getByRole('tab', { name: '已过期', exact: true }).click(); await loaded;
           await page.locator('#subscription-list').getByText('X Premium', { exact: true }).waitFor();
+          await page.locator('#subscription-list').getByText('已到期', { exact: true }).waitFor();
+          await page.getByRole('tab', { name: '死号', exact: true }).click();
+          await page.locator('#subscription-list').getByText('死号', { exact: true }).waitFor();
         }
       }
       await page.evaluate(() => { location.hash = '#/subscriptions/claude'; });
@@ -135,7 +148,11 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await page.locator('#subscription-owner:not([disabled])').waitFor();
       await page.locator('#subscription-owner').selectOption('synthetic-owner');
       await page.locator('#subscription-owner-form [type="submit"]').click();
-      await page.locator('#subscription-list').getByText('合成归属人', { exact: true }).waitFor();
+      const ownerName = page.locator('#subscription-list').getByText('合成归属人', { exact: true });
+      await ownerName.waitFor({ state: 'attached' });
+      if (!(await ownerName.isVisible()))
+        await page.locator('#subscription-list').getByRole('button', { name: '更多资料', exact: true }).click();
+      await ownerName.waitFor();
       assert.ok(commands.some(command => command.confirmed && command.reason === '合成核对依据'));
       assert.ok(commands.some(command => command.ownerId === 'synthetic-owner'));
       await page.evaluate(() => { location.hash = '#/subscriptions/gpt'; });
@@ -151,6 +168,42 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       assert.deepEqual(intercepted.external, []);
     });
   }
+});
+
+test('到期读取失败时保留上次列表，重试后账号进入已过期', { timeout: 20_000 }, async t => {
+  const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
+  const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  await interceptDesign(context, { localFixtures: {}, actor, skipRechargeAssets: true });
+  let reads = 0;
+  const start = '2026-11-01T02:00:00Z', expiry = '2026-11-10T02:00:30Z';
+  await context.route('**/api/local/subscriptions/list', route => {
+    const query = route.request().postDataJSON();
+    if (++reads === 2) return route.fulfill({ status: 503, json: { error: '模拟读取失败' } });
+    const status = reads === 1 ? 'active' : 'expired';
+    const series = { key: 'gpt', plan: 'Plus', start, expiry, status };
+    const items = status === 'active' || query.scope === 'expired' ? [{ id: 'qa-expiring', product: 'GPT',
+      account: 'qa-expiring@example.test', status, series: [series], history: [], queryCode: {} }] : [];
+    return route.fulfill({ json: { items, total: items.length, counts: {}, page: 1, pageSize: 20,
+      revision: 'qa-expiry-revision', now: reads === 1 ? '2026-11-10T02:00:00Z' : expiry } });
+  });
+  const page = await context.newPage();
+  await page.clock.install({ time: new Date('2026-11-10T02:00:00Z') });
+  await page.goto(origin + '/#/subscriptions/gpt');
+  const list = page.locator('#subscription-list');
+  await list.getByText('不足 1 小时', { exact: true }).waitFor();
+  await page.clock.fastForward(31_000);
+  await page.getByText(/已保留上次读取的资料/).waitFor();
+  await list.getByText('qa-expiring@example.test', { exact: true }).waitFor();
+  await page.clock.fastForward(60_000);
+  assert.equal(reads, 2, '到期失败后不反复发起读取');
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await list.getByText('暂无符合条件的订阅账号', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: '已过期', exact: true }).click();
+  await list.getByText('已到期', { exact: true }).waitFor();
+  await list.getByText('qa-expiring@example.test', { exact: true }).waitFor();
 });
 
 test('账号管理保留注册国家和操作人，未开通库存不会给新订单预填归属', { timeout: 30_000 }, async t => {

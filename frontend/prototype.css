@@ -1217,6 +1217,11 @@ th.table-actions {
   background: var(--primary-soft);
   color: var(--primary);
 }
+.commerce-picker-option:disabled {
+  background: var(--surface);
+  color: var(--muted);
+  cursor: not-allowed;
+}
 .commerce-picker-empty {
   margin: 0;
   padding: 8px 10px;
@@ -3667,12 +3672,30 @@ details.toolbox-phrase-more[open] > summary {
   grid-column: 1 / -1;
 }
 #commerce-order-form {
+  container-type: inline-size;
   --order-label-width: 108px;
   --order-label-gap: 12px;
 }
 #commerce-order-form .field {
-  grid-template-columns: var(--order-label-width) minmax(0, 1fr);
-  column-gap: var(--order-label-gap);
+  /* Keep each control on its column line while the help follows the label. */
+  grid-template-columns: fit-content(var(--order-label-text-width, var(--order-label-width)))
+    minmax(0, 1fr) minmax(0, calc(100% - var(--order-label-width) - var(--order-label-gap)));
+  column-gap: 0;
+}
+#commerce-order-form .field:has(> .field-title-help) {
+  --order-label-text-width: calc(var(--order-label-width) - 36px);
+}
+#commerce-order-form .field > label {
+  grid-area: 1 / 1;
+  padding-inline-end: 0;
+  text-align: start;
+}
+#commerce-order-form .field > .field-title-help {
+  grid-area: 1 / 2;
+  justify-self: start;
+}
+#commerce-order-form .field > .field-control {
+  grid-area: 1 / 3;
 }
 #commerce-order-form .commerce-search-picker,
 #commerce-order-form [data-commerce-field='cardTypeId'] .field-row {
@@ -3710,25 +3733,15 @@ details.toolbox-phrase-more[open] > summary {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
-.order-choice-grid,
-.order-wide-fields,
-.order-account-fields,
-.order-payment-options {
+#commerce-order-form :is(.commerce-field-grid, .order-choice-grid, .order-wide-fields, .order-account-fields, .order-payment-options) {
   display: grid;
-  gap: 14px 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: var(--toolbar-padding-block) var(--section-gap);
   min-width: 0;
 }
-.order-choice-grid {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
-}
-.order-wide-fields {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr));
-}
-.order-account-fields {
-  grid-template-columns: minmax(0, 1fr);
-}
-.order-payment-options {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.order-wide-fields > [data-commerce-field='customerId'] {
+  grid-column: 1 / -1;
 }
 .order-payment-options > :is([data-commerce-field='appleIdId'], [data-commerce-field='proMaterialMode'],
   [data-commerce-field='tenantId']) {
@@ -3745,13 +3758,14 @@ details.toolbox-phrase-more[open] > summary {
   margin: 0;
   min-width: 0;
 }
+[data-table='commerce-tenant-cards'] tr[aria-current='true'],
+[data-table='commerce-tenant-cards'] tr[aria-current='true'] > td {
+  background: var(--primary-soft);
+}
 @container (max-width: 519px) {
   #commerce-order-form {
     --order-label-width: 86px;
     --order-label-gap: 10px;
-  }
-  .order-payment-options {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 .order-financial-group {
@@ -3775,10 +3789,10 @@ details.toolbox-phrase-more[open] > summary {
   line-height: 1.5;
 }
 .order-financial-heading {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--control-gap);
   min-width: 0;
 }
 .order-price-reference-list {
@@ -3847,8 +3861,9 @@ details.toolbox-phrase-more[open] > summary {
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
+  margin-inline-start: auto;
 }
-.order-financial-group .field {
+.order-financial-group > .field {
   margin: 0;
 }
 .order-amount-picker {
@@ -4379,11 +4394,6 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   padding: var(--toolbar-padding-block);
   row-gap: var(--control-gap);
 }
-.commerce-entry-layout .order-financial-heading {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-}
 @container commerce-entry (min-width: 1040px) {
   .commerce-entry-columns {
     grid-template-columns: minmax(400px, 0.85fr) minmax(0, 1.25fr);
@@ -4441,18 +4451,9 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
     right: 0;
   }
 }
-.commerce-entry-layout :is(.commerce-field-grid, .order-choice-grid, .order-wide-fields, .order-payment-options) {
+.commerce-entry-layout .commerce-field-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--toolbar-padding-block) var(--section-gap);
-}
-.commerce-entry-layout .order-account-fields {
-  gap: var(--toolbar-padding-block) var(--section-gap);
-}
-.commerce-entry-layout :is(.order-choice-grid, .order-wide-fields) {
-  display: contents;
-}
-.commerce-entry-layout #commerce-order-form .order-wide-fields > [data-commerce-field='customerId']:has(.order-customer-row) {
-  grid-column: 1 / -1;
 }
 .order-customer-row {
   display: flex;
@@ -4463,6 +4464,9 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .order-customer-row > .commerce-search-picker {
   flex: 1 1 min(100%, 148px);
   padding-block-start: 5px;
+}
+#commerce-order-form [data-commerce-field='customerId']:has(.order-customer-row) > label {
+  margin-block-start: 5px;
 }
 #commerce-order-form .order-customer-row .commerce-picker-label {
   overflow: hidden;
@@ -4546,9 +4550,6 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   text-overflow: ellipsis;
 }
 @container (min-width: 640px) {
-  .order-account-fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   #commerce-order-form .order-account-fields [data-commerce-field='ownerId'] .commerce-search-picker {
     flex-wrap: nowrap;
   }
@@ -4560,8 +4561,9 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   font-size: 12px;
   line-height: 1.5;
 }
-@container (max-width: 639px) {
-  .commerce-entry-layout :is(.commerce-field-grid, .order-choice-grid, .order-wide-fields, .order-payment-options) {
+@container (width < 640px) {
+  .commerce-entry-layout .commerce-field-grid,
+  #commerce-order-form :is(.commerce-field-grid, .order-choice-grid, .order-wide-fields, .order-account-fields, .order-payment-options) {
     grid-template-columns: minmax(0, 1fr);
   }
   .commerce-entry-layout .commerce-span-2 {
@@ -5128,6 +5130,9 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-records .empty-state p { white-space: normal; }
 
   #commerce-order-form { --order-label-width: 104px; }
+  #commerce-order-form .field:has(> .field-title-help) {
+    --order-label-text-width: calc(var(--order-label-width) - 44px);
+  }
   .field,
   .form-grid .field,
   .commerce-field-grid .field { grid-template-columns: 104px minmax(0, 1fr); gap: 10px; }

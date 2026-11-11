@@ -25,6 +25,7 @@ import { readToolConfig } from './tools/read-tool-config.mjs';
 import { createLocalCodexdaichongGateway } from '../modules/recharge/codexdaichong/local-gateway.mjs';
 import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
 import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-bridge.mjs';
+import { listenStorefrontAdmission } from '../modules/recharge/vendure/admission.mjs';
 import { productionDataPaths } from './production-data.mjs';
 import { createOrderRechargeClient, readPoolCards } from './order-recharge-client.mjs';
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
@@ -33,7 +34,7 @@ import {
 } from './card-management.mjs';
 import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
-import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
+import { createRechargeCodeHandler, lookupStorefrontRechargeAdmission, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
 import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
@@ -143,6 +144,7 @@ export async function startPreview(
     mailboxPublicOrigin,
     microsoftMailboxConfig,
     microsoftMailboxFetch,
+    storefrontAdmissionDirectory = process.env.ID_VENDURE_ADMISSION_DIRECTORY,
     rechargeOrderSync = Boolean(publicOrigin && rechargeConfig),
     monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
     monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR,
@@ -162,6 +164,8 @@ export async function startPreview(
     throw new Error('首次设置管理员需要本机数据库和账号文件');
   if (rechargeConfig && (!databasePath || !authPath || codexdaichong))
     throw new Error('本机线上代充需要本机业务模式和统一会话');
+  if (storefrontAdmissionDirectory && (!databasePath || !rechargeConfig))
+    throw new Error('商城准入查询需要业务发码记录和原版代充连接');
   const rechargeAssets = publicUrl && rechargeConfig
     ? await loadCodexdaichongAssets({ requireBundle: true })
     : undefined;
@@ -721,8 +725,23 @@ export async function startPreview(
       gatewayFor(request.headers.host).upgrade(request, socket, head);
     });
   }
+  let storefrontAdmission;
+  if (storefrontAdmissionDirectory) {
+    try {
+      storefrontAdmission = await listenStorefrontAdmission(storefrontAdmissionDirectory, (code, ip) =>
+        lookupStorefrontRechargeAdmission({
+          load: () => store.featureDocument('recharge-codes'), transport: orderRechargeClient
+        }, code, ip));
+      server.once('close', () => storefrontAdmission.close());
+    } catch (error) {
+      financeCollection?.close();
+      store?.close();
+      throw error;
+    }
+  }
   await new Promise((resolve, reject) => {
     const startFailed = (error) => {
+      storefrontAdmission?.close();
       financeCollection?.close();
       store?.close();
       reject(error);

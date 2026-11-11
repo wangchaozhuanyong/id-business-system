@@ -88,6 +88,7 @@ test(
     };
     const beforeNavigation = statusChecks;
 
+    await page.locator('#sidebar').getByRole('button', { name: '邮箱管理', exact: true }).click();
     await sidebar.click();
     await toast.waitFor();
     await page.waitForURL(host.url + workspace);

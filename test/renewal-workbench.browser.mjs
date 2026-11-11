@@ -49,13 +49,14 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     });
     await write(0, {
       customers: [
-        { id: 'qa-renew', name: '续费客户甲', phone: '01012345678', active: true, version: 1 },
+        { id: 'qa-renew', name: '续费客户甲', phone: '01012345678', telegram: '@qa_customer', active: true, version: 1 },
         { id: 'qa-refuse', name: '拒续客户乙', phone: '01012345679', active: true, version: 1 },
         { id: 'qa-rejoin', name: '换号客户丙', wechat: 'qa-rejoin-chat', active: true, version: 1 }
       ],
       orders: [
-        order('QA-EXPIRED', 'qa-renew', '2026-11-05T14:35'),
-        order('QA-REFUSE', 'qa-refuse', '2026-11-07T17:00'),
+        order('QA-EXPIRED', 'qa-renew', '2026-11-05T14:35', { telegram: '@qa_order_old' }),
+        order('QA-REFUSE', 'qa-refuse', '2026-11-07T17:00', { telegram: '@qa_order_only' }),
+        order('QA-SOON', 'qa-refuse', '2026-11-06T16:30'),
         order('QA-LOST', 'qa-rejoin', '2026-11-01T16:00')
       ],
       tenants: [], operating: [], rentBatches: [], logs: [], renewalWarningDays: 1
@@ -75,6 +76,10 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await tab(/^即将到期/);
     await page.getByText('提前 1 天提醒', { exact: true }).waitFor();
     assert.equal(await row('QA-REFUSE').count(), 0);
+    const headers = await list.getByRole('columnheader').allTextContents();
+    assert.equal(headers[headers.indexOf('到期时间') + 1], '到期时长');
+    assert.equal(headers[headers.indexOf('WhatsApp') + 1], 'Telegram');
+    await row('QA-SOON').getByText('剩余不足 1 小时', { exact: true }).waitFor();
     await page.getByRole('button', { name: '提醒设置' }).click();
     const days = drawer.getByLabel('提前天数');
     const hours = drawer.getByLabel('提前小时数');
@@ -82,6 +87,12 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     assert.equal(await hours.inputValue(), '0');
     await hours.fill('1');
     await drawer.getByRole('button', { name: '保存设置' }).click();
+    await row('QA-REFUSE').getByText('剩余 1 天 1 小时', { exact: true }).waitFor();
+    const search = page.locator('#commerce-search');
+    await search.fill('@qa_order_only');
+    await row('QA-SOON').waitFor({ state: 'hidden' });
+    await row('QA-REFUSE').getByText('@qa_order_only', { exact: true }).waitFor();
+    await search.fill('');
     await row('QA-REFUSE').getByRole('button', { name: '拒续费' }).click();
     await confirm.getByRole('button', { name: '确认', exact: true }).click();
     await row('QA-REFUSE').waitFor({ state: 'hidden' });
@@ -94,6 +105,8 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await tab(/^即将到期/);
     await row('QA-REFUSE').getByRole('button', { name: '拒续费' }).waitFor();
     await tab(/^已到期/);
+    await row('QA-EXPIRED').getByText('@qa_customer', { exact: true }).waitFor();
+    await row('QA-EXPIRED').getByText('已过期 1 天 1 小时', { exact: true }).waitFor();
     await row('QA-EXPIRED').getByRole('button', { name: '续费', exact: true }).click();
     const form = page.locator('#commerce-order-form');
     await form.waitFor();
@@ -146,7 +159,8 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await page.reload();
     await loss.waitFor();
     assert.equal(await loss.getByText('换号客户丙', { exact: true }).count(), 0);
-    await page.getByRole('link', { name: /^续费管理/ }).click();
+    await sidebar.getByRole('button', { name: '快速操作', exact: true }).click();
+    await sidebar.getByRole('link', { name: /^续费管理/ }).click();
     await page.getByText('提前 1 天 1 小时提醒', { exact: true }).waitFor();
     await completed();
     await tab(/^即将到期/);
@@ -163,6 +177,14 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await page.setViewportSize({ width: 390, height: 850 });
     await toggleDesignTheme(page);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.getByLabel('产品', { exact: true }).selectOption('');
+    await row('QA-REFUSE').getByText('2026-11-07 17:00', { exact: true }).waitFor();
+    await row('QA-REFUSE').getByText('剩余 1 天 1 小时', { exact: true }).waitFor();
+    await row('QA-REFUSE').getByRole('button', { name: '更多资料' }).click();
+    await row('QA-REFUSE').getByText('@qa_order_only', { exact: true }).waitFor();
+    await page.clock.setFixedTime(new Date('2026-11-06T08:30:00Z'));
+    await tab(/^已到期/);
+    await row('QA-SOON').getByText('已过期不足 1 小时', { exact: true }).waitFor();
     assert.deepEqual(offline.external, []);
   } finally {
     await browser?.close();

@@ -106,7 +106,7 @@ test('已开通但缺客户的新续费保留历史，资料补齐后才更新�
   assert.equal(projectSubscriptions(data, now)[0].conflict, true);
 });
 
-test('Claude 自有历史保留终止周期，明确交付后转到客户订阅', async () => {
+test('Claude 自有历史的死号独立显示，明确交付后转到客户订阅', async () => {
   const data = fixtures();
   for (const index of [1, 2, 3, 4]) {
     data.inventory.data.accounts.push({ id: 'owned-' + index, type: 'claude', email: `owned-${index}@example.test`,
@@ -118,21 +118,23 @@ test('Claude 自有历史保留终止周期，明确交付后转到客户订阅'
   let result = await read('owned');
   assert.equal(result.body.accountCount, 4);
   assert.equal(result.body.counts.active, 3);
-  assert.equal(result.body.counts.ended, 1);
-  const ended = result.body.items.find(row => row.status === 'ended');
-  assert.equal(ended.series[0].expiry, '2026-11-22');
-  assert.equal(ended.series[0].remainingDays, 0);
+  assert.equal(result.body.counts.dead, 1);
+  assert.equal(result.body.total, 3);
+  const [dead] = (await read('dead')).body.items;
+  assert.equal(dead.status, 'dead');
+  assert.equal(dead.series[0].expiry, '2026-11-22');
+  assert.equal(dead.series[0].remainingDays, 0);
   assert.equal((await read('customer')).body.total, 0);
   assert.equal(data.commerce.data.orders.length, 0);
 
   const delivery = makeOrder('delivery', 'Claude Max', { plan: 'Max 20x', email: 'owned-1@example.test',
     businessType: '成品交付', entitlementStatus: 'active' });
   data.commerce.data.orders.push(delivery);
-  assert.equal((await read('owned')).body.total, 4, '同邮箱尚未证实是库存交付');
+  assert.equal((await read('owned')).body.total, 3, '同邮箱尚未证实是库存交付');
   delivery.accountId = 'owned-1';
   data.inventory.data.accounts[0].accountLifecycle = { customerId: delivery.customerId, disposition: 'in_use' };
   result = await read('customer');
-  assert.deepEqual(result.body.scopeCounts, { customer: 1, owned: 3, unlinked: 0 });
+  assert.deepEqual(result.body.scopeCounts, { customer: 1, owned: 2, unlinked: 0, expired: 0, dead: 1 });
   assert.equal(result.body.items[0].status, 'active');
   assert.equal(result.body.items[0].series[0].orderNo, delivery.id);
   assert.deepEqual(result.body.items[0].history.map(item => item.source), ['order', 'history']);
@@ -170,6 +172,41 @@ test('Grok 的 X 账号允许没有邮箱，同一账号不同系列可按各自
     assert.equal(result.body.counts.active, 1);
     assert.equal(result.body.counts.expired, 1);
   }
+  for (const [scope, plan] of [['customer', 'SuperGrok'], ['expired', 'X Premium']]) {
+    const list = await request(handler, 'list', { product: 'Grok', scope });
+    assert.deepEqual(list.body.items[0].series.map(series => series.plan), [plan]);
+    assert.equal(list.body.items[0].history.length, 2);
+  }
+});
+
+test('订阅到期进入已过期，账号管理标记死号后只在死号列表保留且不复制凭据', async () => {
+  const order = makeOrder('real-subscription', 'GPT', { entitlementStatus: 'active', expiry: '2026-11-10 11:00' });
+  const data = fixtures([order, makeOrder('paid-only', 'GPT', { email: 'paid-only@example.test' })]);
+  data.inventory.data.accounts.push(
+    { id: 'matching', type: 'gpt', email: email.toUpperCase(), health: 'normal' },
+    { id: 'never-opened', type: 'gpt', email: 'paid-only@example.test', health: 'dead' }
+  );
+  data.inventory.data.mailboxes.push({ id: 'mail', type: 'google', email, password: 'synthetic-mail-secret' });
+  let clock = now;
+  const handler = createSubscriptionHandler({ store: fakeStore(data), publicOrigin: origin, clock: () => clock });
+  const read = scope => request(handler, 'list', { product: 'GPT', scope });
+  assert.equal((await read('expired')).body.total, 0);
+  assert.equal((await read('customer')).body.total, 2);
+  clock += 3_600_000;
+  assert.deepEqual((await read('expired')).body.items.map(row => row.status), ['expired']);
+  assert.equal((await read('customer')).body.total, 1);
+  data.inventory.data.accounts[0].health = 'dead';
+  const list = (await read('dead')).body;
+  assert.equal(list.total, 1);
+  const [dead] = list.items;
+  assert.equal(dead.status, 'dead');
+  assert.equal(dead.ownerEligible, false);
+  assert.equal(dead.history[0].orderNo, order.orderNo);
+  assert.equal((await read('expired')).body.total, 0);
+  assert.equal((await read('customer')).body.total, 1);
+  const copy = await request(handler, 'copy', { id: dead.id, revision: list.revision, mode: 'full' });
+  assert.equal(copy.status, 200);
+  assert.doesNotMatch(copy.body.text, /synthetic-mail-secret/);
 });
 
 test('客户或账号关联冲突时保留待核对，并禁止复制凭据', async () => {
@@ -372,7 +409,7 @@ test('缺邮箱按原单列出但不计账号，缺客户不抹去已开通状�
   assert.equal(customers.body.total, 1);
   assert.equal(customers.body.accountCount, 1);
   assert.equal(customers.body.counts.active, 1);
-  assert.deepEqual(customers.body.scopeCounts, { customer: 1, owned: 0, unlinked: 2 });
+  assert.deepEqual(customers.body.scopeCounts, { customer: 1, owned: 0, unlinked: 2, expired: 0, dead: 0 });
   const unlinked = await request(handler, 'list', { product: 'GPT', scope: 'unlinked', query: 'missing-one' });
   assert.equal(unlinked.body.accountCount, 0);
   assert.equal(unlinked.body.total, 1);

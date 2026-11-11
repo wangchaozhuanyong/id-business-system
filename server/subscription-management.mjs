@@ -4,7 +4,7 @@ import {
   orderOpeningConfirmed, orderNeedsAccount, validOrderEmail, validOrderXHandle,
   subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
 } from '../frontend/order-opening.mjs';
-import { releasedAccountOrders } from './account-lifecycle.mjs';
+import { accountMarkedDead, releasedAccountOrders } from './account-lifecycle.mjs';
 import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 import { isManagedCode, mailboxPoolItems } from './tools/mailbox-pool.mjs';
@@ -15,7 +15,8 @@ export const subscriptionRoutes = new Set(['list', 'account', 'lookup', 'copy', 
 const products = new Set(['GPT', 'Claude', 'Gemini', 'Grok']);
 const statuses = new Set(Object.keys(subscriptionStateLabels));
 const sorts = new Set(['expiry_asc', 'expiry_desc', 'account_asc']);
-const subscriptionScopes = ['customer', 'owned', 'unlinked'];
+const subscriptionScopes = ['customer', 'owned', 'unlinked', 'expired', 'dead'];
+const archiveScopes = new Set(['expired', 'dead']);
 const defaultPageSize = 20;
 const day = 86_400_000;
 const array = value => Array.isArray(value) ? value : [];
@@ -92,6 +93,14 @@ function accountMatches(order, account, product) {
     (!order.platformAccountId || !account.platformAccountId || order.platformAccountId === account.platformAccountId);
 }
 
+// A unique same-platform login can prove health without granting access to inventory credentials.
+function healthAccount(order, product, accounts, linked) {
+  if (linked || !identity(order, product)) return linked;
+  const matches = accounts.filter(account => (!order.accountId || account.id === order.accountId) &&
+    accountMatches(order, account, product));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 function resolveAccount(order, product, accounts) {
   if (order.accountId) {
     const matches = accounts.filter(account => account.id === order.accountId);
@@ -141,10 +150,10 @@ function buildRecords(snapshots, now) {
     const missingAssociation = !accountIdentity || !text(order.customerId) ||
       Boolean(customerIds && !customerIds.has(order.customerId));
     const match = resolveAccount(order, product, accounts);
+    const health = healthAccount(order, product, accounts, match.account);
     const released = match.account && releasedAccountOrders(match.account).has(order.id);
     const historicalSale = isClaudeHistoricalSale(order, match.account);
-    const ended = order.subscriptionEnded === true || Boolean(released) ||
-      (historicalSale && (match.account.health === 'dead' || match.account.claudeHistory.phase === 'dead'));
+    const ended = order.subscriptionEnded === true || Boolean(released);
     const record = {
       id, product, sourceId: order.id, source: 'order', orderNo: text(order.orderNo) || text(order.id),
       target: identity(order, product), display: order.loginMethod === 'x' && order.xHandle ? order.xHandle :
@@ -153,6 +162,7 @@ function buildRecords(snapshots, now) {
       created: text(order.createdAt), customerId: text(order.customerId), account: match.account,
       delivered: order.businessType === '成品交付' && Boolean(match.account?.id && match.account.id === order.accountId),
       historicalSale,
+      healthId: health?.id, dead: confirmed && accountMarkedDead(health),
       missingAssociation, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
       confirmed, ended, cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
       failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status),
@@ -176,8 +186,8 @@ function buildRecords(snapshots, now) {
       target: identity(account, 'Claude'), display: text(account.email), email: text(account.email),
       series: 'claude', plan: text(history.plan), start: text(history.start), expiry: text(history.expiry),
       created: '', customerId: '', account, accountConflict: false, confirmed: true,
-      ended: history.phase === 'dead' || account.health === 'dead' ||
-        ['recovered', 'retired'].includes(account.accountLifecycle?.disposition),
+      healthId: account.id, dead: accountMarkedDead(account),
+      ended: ['recovered', 'retired'].includes(account.accountLifecycle?.disposition),
       operatorId: '', operatorName: '历史未记录'
     };
     record.status = subscriptionPeriodState(record, now);
@@ -259,6 +269,8 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     const customers = new Set(activeRecords.map(record => record.customerId).filter(Boolean));
     const accountIds = new Set(records.map(record => record.account?.id).filter(Boolean));
     const historyAccounts = new Set(records.filter(record => record.source === 'history').map(record => record.sourceId));
+    const healthIds = new Set(records.map(record => record.healthId).filter(Boolean));
+    const dead = healthIds.size === 1 && records.some(record => record.dead);
     const delivered = records.some(record => record.delivered && record.confirmed && !record.cancelled &&
       (!record.missingAssociation || record.historicalSale) && historyAccounts.has(record.account?.id));
     const scope = !records[0].target ? 'unlinked' : historyAccounts.size && !delivered ? 'owned' : 'customer';
@@ -289,7 +301,8 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     const protectedLifecycle = currentLifecycle && ['recovered', 'retired'].includes(currentLifecycle.disposition);
     const owner = profiles.owners?.[id];
     const missingAssociation = scope === 'unlinked' || Boolean(primary.missingAssociation);
-    const ownerEligible = !conflict && !missingAssociation && !protectedLifecycle && currentRecords.some(record => record.confirmed && !record.ended &&
+    if (dead) status = 'dead';
+    const ownerEligible = !dead && !conflict && !missingAssociation && !protectedLifecycle && currentRecords.some(record => record.confirmed && !record.ended &&
       !record.cancelled && (record.source === 'history' || (record.customerId && record.customerId === primary.customerId)));
     const ownerValid = ownerEligible && owner && (!owner.accountId || owner.accountId === account?.id) &&
       (!owner.customerId || !primary.customerId || owner.customerId === primary.customerId);
@@ -299,15 +312,17 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
       ownerName: ownerValid ? text(owner.ownerName) : scope === 'unlinked' ? primary.orderOwner : '',
       operatorName: primary.operatorName, accountId: account?.id || '', customerId: primary.customerId,
       conflict: Boolean(conflict), missingAssociation, ownerEligible,
-      series: selected.map(record => ({ key: record.series, ...publicRecord(record, now) })),
+      series: selected.map(record => ({ key: record.series, ...publicRecord(record, now),
+        ...(dead && { status: 'dead', remainingDays: 0 }) })),
       history: records.map(record => publicRecord(record, now)),
       _account: account, _records: records
     };
-    const binding = status === 'ended' || missingAssociation ? {} : mailboxFor(row, snapshots.inventory.data || {});
+    const closed = status === 'ended' || status === 'dead';
+    const binding = closed || missingAssociation ? {} : mailboxFor(row, snapshots.inventory.data || {});
     row.credentialStatus = row.conflict || missingAssociation || protectedLifecycle || binding.conflict
       ? 'conflict' : binding.mailbox ? 'available' : 'missing';
-    if (row.credentialStatus === 'conflict') row.queryCode = { status: 'conflict', remainingDays: null };
-    else if (status === 'ended') row.queryCode = { status: 'not_applicable', remainingDays: null };
+    if (closed) row.queryCode = { status: 'not_applicable', remainingDays: null };
+    else if (row.credentialStatus === 'conflict') row.queryCode = { status: 'conflict', remainingDays: null };
     else if (row.product === 'Claude') row.queryCode = queryCodeFor(row, snapshots, now);
     else row.queryCode = { status: 'missing', remainingDays: null };
     result.push(row);
@@ -319,6 +334,24 @@ function safeRow(row) {
   const { _account, _records, queryCode, ...rest } = row;
   return { ...rest, queryCode: { status: queryCode.status, remainingDays: queryCode.remainingDays,
     expiresAt: queryCode.expiresAt || null } };
+}
+
+function hasStatus(row, status) {
+  if (row.status === 'dead') return status === 'dead';
+  return row.conflict ? status === 'pending' : row.series.some(series => series.status === status);
+}
+
+function matchesScope(row, scope) {
+  if (archiveScopes.has(scope)) return row.scope !== 'unlinked' && hasStatus(row, scope);
+  return row.scope === scope && (scope === 'unlinked' ||
+    (row.status !== 'dead' && (row.conflict || row.series.some(series => series.status !== 'expired'))));
+}
+
+function listSeries(row, scope) {
+  if (scope === 'expired') return row.series.filter(series => series.status === 'expired');
+  if ((scope === 'customer' || scope === 'owned') && !row.conflict)
+    return row.series.filter(series => series.status !== 'expired');
+  return row.series;
 }
 
 function accountRow(snapshots, accountId) {
@@ -337,8 +370,9 @@ function accountRow(snapshots, accountId) {
 
 function copyRow(row, snapshots, mode, suffix) {
   if (row.conflict || row.credentialStatus === 'conflict') throw failure(409, '账号或邮箱关联存在冲突，请先核对');
-  const { mailbox } = row.status === 'ended' ? {} : mailboxFor(row, snapshots.inventory.data || {});
-  const account = row.status === 'ended' || (row.product === 'GPT' && !row.customerId) ? undefined : row._account;
+  const closed = row.status === 'ended' || row.status === 'dead';
+  const { mailbox } = closed ? {} : mailboxFor(row, snapshots.inventory.data || {});
+  const account = closed || (row.product === 'GPT' && !row.customerId) ? undefined : row._account;
   const fields = [['邮箱账号', row.registrationEmail]];
   if (mode === 'full') {
     fields.push(['邮箱密码', text(mailbox?.password)], ['邮箱 2FA', text(mailbox?.totp)]);
@@ -444,23 +478,19 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
             throw failure(400, '查询筛选或分页格式不正确');
           const allProductRows = rows.filter(row => row.product === body.product);
           const scopeCounts = Object.fromEntries(subscriptionScopes.map(value =>
-            [value, allProductRows.filter(row => row.scope === value).length]));
-          const productRows = scope ? allProductRows.filter(row => row.scope === scope) : allProductRows;
-          // One Grok account can have several series in different states.
-          // A conflicting identity remains pending until the association is resolved.
-          const hasStatus = (row, status) => row.conflict ? status === 'pending' :
-            row.series.some(series => series.status === status);
-          const accounts = productRows.filter(row => row.scope !== 'unlinked');
+            [value, allProductRows.filter(row => matchesScope(row, value)).length]));
+          const productRows = scope ? allProductRows.filter(row => matchesScope(row, scope)) : allProductRows;
+          const accounts = (scope === 'customer' || scope === 'owned'
+            ? allProductRows.filter(row => row.scope === scope) : productRows).filter(row => row.scope !== 'unlinked');
           const counts = Object.fromEntries([...statuses].map(status =>
             [status, accounts.filter(row => hasStatus(row, status)).length]));
           const query = text(body.query).toLowerCase();
           const matching = productRows.filter(row => (!body.status || hasStatus(row, body.status)) &&
             (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName,
-              ...row.history.map(record => record.orderNo)].some(value =>
-              text(value).toLowerCase().includes(query))));
+              ...row.history.map(record => record.orderNo)].some(value => text(value).toLowerCase().includes(query))));
           const sort = body.sort || 'expiry_asc';
           const due = row => {
-            const values = row.series.map(series => instant(series.expiry)).filter(Number.isFinite);
+            const values = listSeries(row, scope).map(series => instant(series.expiry)).filter(Number.isFinite);
             return values.length ? Math.min(...values) : null;
           };
           matching.sort((a, b) => {
@@ -475,7 +505,9 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const page = Math.min(body.page ?? 1, Math.max(1, Math.ceil(matching.length / pageSize)));
           const items = matching.slice((page - 1) * pageSize, page * pageSize);
           audit('view', items.map(row => row.id));
-          return { items: items.map(safeRow), total: matching.length, accountCount: accounts.length, scopeCounts, counts, page, pageSize, revision,
+          return { items: items.map(row => ({ ...safeRow(row), series: listSeries(row, scope),
+            ...(scope === 'expired' && { status: 'expired' }) })), total: matching.length,
+            accountCount: accounts.length, scopeCounts, counts, page, pageSize, revision,
             now: new Date(now).toISOString() };
         }
         if (typeof body.id !== 'string' || typeof body.revision !== 'string' || body.revision !== revision)
@@ -519,7 +551,8 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
         if (action === 'confirm') {
           const record = row._records.find(item => item.source === 'order' && item.sourceId === body.orderId);
           const order = array(snapshots.commerce.data?.orders).find(item => item.id === body.orderId);
-          if (!record || !order || personalProduct(order.product) || record.confirmed || order.cancelled || !paid(order) || body.confirmed !== true)
+          if (row.status === 'dead' || !record || !order || personalProduct(order.product) || record.confirmed || order.cancelled ||
+              !paid(order) || body.confirmed !== true)
             throw failure(400, '请先核对实际开通及付款记录');
           if (!text(body.reason) || text(body.reason).length > 300) throw failure(400, '请填写核对依据');
           const previous = profile.confirmations[order.id] || null;

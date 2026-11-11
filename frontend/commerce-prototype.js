@@ -684,6 +684,8 @@
     const submittedKey = submittedForm?.dataset.commerceDraft;
     const submittedValues = submittedForm ? readCommerceDraft(submittedForm) : null;
     const submittedDraft = submittedValues ? JSON.stringify(submittedValues) : '';
+    const cardInputs = Array.from(submittedForm?.querySelectorAll('[data-tenant-card-input]') || [],
+      input => [input, typedTenantCardNumber(input)]);
     saveDrafts();
     let next;
     const before = commerceSnapshot();
@@ -724,7 +726,8 @@
       acceptLocalCommerce(result);
       afterCommit?.();
       const unchanged = !submittedForm || (submittedForm.isConnected &&
-        JSON.stringify(readCommerceDraft(submittedForm)) === submittedDraft);
+        JSON.stringify(readCommerceDraft(submittedForm)) === submittedDraft &&
+        cardInputs.every(([input, value]) => typedTenantCardNumber(input) === value));
       if (S.route === route && S.drawerContext === drawerContext && unchanged)
         A.completeAction ? A.completeAction(completed, '记录已保存') : completed();
       else {
@@ -756,6 +759,14 @@
       .then(
         acceptSave,
         async (error) => {
+          if (error?.matches?.length && S.route === route && S.drawerContext === drawerContext && submittedForm?.isConnected) {
+            A.notify(error.message);
+            const field = cardInputs.find(([input]) => input.value)?.[0];
+            tenantCardStatus(field, error.message, error.matches);
+            if (submittedForm.id === 'commerce-contact-form' && error.matches.length === 1)
+              void locateTenantCard(error.matches[0]);
+            return;
+          }
           if (error?.status === 409) {
             let refreshedCustomer = false;
             try {
@@ -914,10 +925,11 @@
     const popup = picker.querySelector('.commerce-picker-popover');
     if (!popup.matches(':popover-open')) return;
     const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const options = [...select.options].filter(option => !option.disabled &&
+    const showUnavailable = select.id === 'commerce-cardId' && select.form && orderCardSource(select.form)?.pool === false;
+    const options = [...select.options].filter(option => (!option.disabled || showUnavailable) &&
       (option.value ? terms.every(term => option.text.toLowerCase().includes(term)) : terms.length === 0));
     picker.querySelector('.commerce-picker-options').innerHTML = options.map(option =>
-      `<button type="button" class="commerce-picker-option" role="option" aria-selected="${option.selected}" tabindex="-1" data-action="commerce-picker-select" data-value="${E(option.value)}">${E(option.text)}</button>`).join('');
+      `<button type="button" class="commerce-picker-option" role="option" aria-selected="${option.selected}" tabindex="-1" data-action="commerce-picker-select" data-value="${E(option.value)}"${option.disabled ? ' disabled aria-disabled="true"' : ''}>${E(option.text)}</button>`).join('');
     picker.querySelector('.commerce-picker-empty').hidden = options.some(option => option.value);
   }
   function positionPicker(popup) {
@@ -1087,8 +1099,14 @@
   function cardChoices(product, tenantId, selected, savedTail = '') {
     const gpt = cardPoolProduct(product);
     const items = gpt ? cards() : (tenantCards.get(tenantId)?.items || []);
-    const options = items.filter((row) => (gpt ? row.status !== '停用' && row.active !== false : row.active) || row.id === selected)
-      .map((row) => [row.id, [row.label || row.name, `尾号 ${cardTail(row)}`, bankCardTypeName(bankCardTypes.assignments[row.id]), gpt && Number.isInteger(row.usageCount) ? `已用 ${row.usageCount} 次` : ''].filter(Boolean).join(' · ')]);
+    const options = items.filter(row => !gpt || row.id === selected || (row.status !== '停用' && row.active !== false))
+      .map(row => {
+        const status = gpt ? (Number.isInteger(row.usageCount) ? `已用 ${row.usageCount} 次` : '') :
+          row.used ? '使用中' : row.frozen ? '已冻结' : !row.active ? '已停用' : '未使用';
+        return [row.id, [row.label || row.name, `尾号 ${cardTail(row)}`,
+          bankCardTypeName(bankCardTypes.assignments[row.id]), status].filter(Boolean).join(' · '),
+        { disabled: !gpt && row.id !== selected && (row.used || !row.active) }];
+      });
     if (selected && !options.some(([id]) => id === selected)) options.unshift([selected, savedTail ? `已选银行卡 · 尾号 ${savedTail}` : '已选银行卡']);
     return [['', gpt ? '选择银行卡' : '选择租户银行卡'], ...options];
   }
@@ -1130,8 +1148,16 @@
       if (form.isConnected && current?.field === source.field && current.pool === source.pool &&
           (source.pool || form.elements['commerce-tenantId'].value === tenantId)) {
         const prior = orders.find(row => row.id === form.elements['commerce-id']?.value);
-        const frozen = snapshot.items?.some(row => row.id === select.value && row.frozen);
-        if (frozen && (!prior || (!prior.paidConfirmed && !hasPaymentHistory(prior)))) select.value = '';
+        const selected = snapshot.items?.find(row => row.id === select.value);
+        const frozen = selected?.frozen && (!prior || (!prior.paidConfirmed && !hasPaymentHistory(prior)));
+        const unavailable = !source.pool && selected && (selected.used || !selected.active) && prior?.cardId !== selected.id;
+        if (frozen || unavailable) {
+          select.value = '';
+          const number = form.elements['commerce-tenantCardNumber'];
+          if (number?.dataset.fromSelection) clearRevealedCard(form);
+          else if (number?.value) queueTenantCardLookup(number);
+          refreshOrderCardType(form);
+        }
         select.innerHTML = A.options(cardChoices(source.pool ? 'GPT' : 'Claude', tenantId, select.value,
           form.elements['commerce-paymentId'].value), select.value);
         const search = select.closest('.commerce-search-picker')?.querySelector('input[type="search"]');
@@ -1281,7 +1307,7 @@
     return isClaude(order) && Boolean(subscriptionEmail(order));
   }
   const proMaterialLabels = {
-    manual_card: '手动填写银行卡', pool_card: '自动充值银行卡', tenant_card: '用卡人银行卡',
+    manual_card: '手动填写银行卡', pool_card: '自动充值银行卡', tenant_card: '租户银行卡',
     people: '原人员与补充资料', none: '暂不登记银行卡资料'
   };
   const cardMaterialModes = ['manual_card', 'pool_card', 'tenant_card'];
@@ -1305,6 +1331,7 @@
   }
   function orderCardSerialAvailable(order) {
     const mode = proMaterialMode(order);
+    if (mode === 'tenant_card') return false;
     return order.payment === '银行卡' && (cardPoolProduct(order.product) || cardMaterialModes.includes(mode) ||
       (isClaude(order) && !mode && Boolean(order.cardId)));
   }
@@ -1325,6 +1352,7 @@
       else delete order.proCardNumber;
     }
     if (!orderCardSerialAvailable(order)) delete order.proCardSerial;
+    if (mode !== 'tenant_card' || !order.tenantCardNumber) delete order.tenantCardNumber;
   }
   function availableStock(product, currentOrderId = '') {
     const available = A.modules.inventory?.listDeliverableAccounts?.(product) ||
@@ -1765,11 +1793,12 @@
       { id: 'name', label: '客户' },
       { id: 'wechat', label: '微信' },
       { id: 'whatsapp', label: 'WhatsApp' },
+      { id: 'telegram', label: 'Telegram' },
       { id: 'customerPhone', label: '联系电话' }
     ];
   }
   function renderRenewals() {
-    const { reminders } = renewalProjection();
+    const { reminders, evaluatedAt } = renewalProjection();
     const states = [['upcoming', '即将到期'], ['expired', '已到期'], ['processed', '已处理']];
     const tabsWithCounts = states.map(([key, title]) =>
       [key, `${title} ${reminders.filter((row) => row.state === key).length}`]);
@@ -1785,7 +1814,8 @@
       { id: 'plan', label: '套餐' },
       { id: 'email', label: '账号', render: row => E(orderIdentity(row.order)) },
       { id: 'orderNo', label: '订单编号' },
-      { id: 'due', label: '到期时间', render: (row) => E(dateInput(row.order.expiry).replace('T', ' ')) },
+      { id: 'due', label: '到期时间', mobileSummary: true, render: row => E(beijingClock.format(row.expiry)) },
+      { id: 'duration', label: '到期时长', mobileSummary: true, render: row => E(formatExpiryDuration(row.expiry, evaluatedAt)) },
       ...(moduleState.renewalTab === 'processed' ? [
         { id: 'result', label: '处理结果', render: (row) => A.tag(row.refused ? '已拒续' : '已续费') },
         { id: 'processedBy', label: '操作人', render: (row) => E(row.refused ? row.decision.actor : traceName(row.completed, 'createdBy')) },
@@ -2116,9 +2146,7 @@
   }
   function subscriptionCardDuration(row) {
     if (row.state === 'pending' || row.state === 'replaced') return '—';
-    const elapsed = row.expiry <= row.evaluatedAt;
-    const hours = Math.floor(Math.abs(row.expiry - row.evaluatedAt) / 3_600_000);
-    return `${elapsed ? '已过期 ' : '剩余 '}${formatRenewalWarning(hours) || '不足 1 小时'}`;
+    return formatExpiryDuration(row.expiry, row.evaluatedAt);
   }
   function renderSubscriptionCards() {
     const all = subscriptionCardRows().filter(row => bankCardStatus(row.order)?.state !== 'frozen');
@@ -2694,6 +2722,13 @@
     const hours = totalHours % 24;
     return [days && `${days} 天`, hours && `${hours} 小时`].filter(Boolean).join(' ');
   }
+  function formatExpiryDuration(expiry, evaluatedAt) {
+    const difference = expiry - evaluatedAt;
+    const hours = Math.floor(Math.abs(difference) / 3_600_000);
+    const duration = formatRenewalWarning(hours);
+    const status = difference <= 0 ? '已过期' : '剩余';
+    return duration ? `${status} ${duration}` : `${status}不足 1 小时`;
+  }
   function openRenewalSettings(tenant = false) {
     const key = tenant ? 'commerce-tenant-renewal-settings' : 'commerce-renewal-settings';
     const warningHours = tenant ? tenantRenewalWarningHours ?? defaultWarningHours : renewalWarningHours;
@@ -3192,6 +3227,10 @@
               render: (row) =>
                 String(currentSubscriptions().filter((order) => order.tenantId === row.id).length)
             },
+            ...(localData && canManageOrders() ? [{
+              id: 'tenantCards', label: '银行卡', mobileSummary: true,
+              render: row => A.textAction('银行卡记录', 'commerce-tenant-cards', `data-id="${E(row.id)}"`)
+            }] : []),
             {
               id: 'renewals',
               label: '待续费',
@@ -3375,7 +3414,7 @@
         const cardLabel = field(`银行卡 ${index + 1} 名称`, labelId,
           input(labelId, draft[`commerce-${labelId}`] || '', 'maxlength="80"'));
         const cardNumber = field('银行卡号', numberId,
-          input(numberId, draft[`commerce-${numberId}`] || '', 'inputmode="numeric" maxlength="32" autocomplete="off"'), true);
+          tenantCardInput(numberId, { value: draft[`commerce-${numberId}`] || '', draft: true }), true);
         const remove = A.button('删除', 'commerce-initial-card-remove', 'danger', '',
           `data-index="${index}" aria-label="删除第 ${index + 1} 张银行卡"`);
         return `<div class="guide-item commerce-field-grid tenant-initial-card-row">${cardLabel}${cardNumber}${remove}</div>`;
@@ -3504,8 +3543,8 @@
               : A.empty('暂无付租记录', '可从 Claude 订单选择账号生成待付租批次。'))
           : ''
       }${tenant ? tenantTransferHistory(row.ownerTransfers || []) : ''}${panelTitle('操作记录')}${timeline(row.id)}`,
-      (tenant && localData ? A.button('银行卡管理', 'commerce-tenant-cards', '', '', `data-id="${E(row.id)}"`) +
-        (canManageOrders() ? A.button('转交归属', 'commerce-tenant-owner-transfer', '', '', `data-id="${E(row.id)}"`) : '') : '') +
+      (tenant && localData && canManageOrders() ? A.button('银行卡记录', 'commerce-tenant-cards', '', '', `data-id="${E(row.id)}"`) +
+        A.button('转交归属', 'commerce-tenant-owner-transfer', '', '', `data-id="${E(row.id)}"`) : '') +
         (!tenant && canManageOrders() ? A.button('订阅历史', 'commerce-loss-history', '', '', `data-id="${E(row.id)}"`) : '') +
         A.button('关闭', 'drawer-close')
     );
@@ -4503,15 +4542,110 @@
     const full = !pool && localData ? `<div class="field-row" data-commerce-card-revealed hidden><input type="text" readonly autocomplete="off" aria-label="完整银行卡号" data-commerce-card-number /><div>${A.button('复制', 'commerce-tenant-card-copy', '', '', 'aria-label="复制完整卡号"')}</div></div>` : '';
     const metadata = poolUsage(selected);
     const usage = pool && id === 'cardId' && localData ? `<p class="footnote" data-commerce-pool-usage${metadata ? '' : ' hidden'}>${E(metadata)}</p>` : '';
-    const label = id === 'proPoolCardId' ? 'GPT 订阅卡池' : '银行卡';
+    const label = id === 'proPoolCardId' ? 'GPT 订阅卡池' : pool ? '银行卡' : '租户银行卡';
     return field('选择银行卡', id, searchableSelect(id, label, choices, selected, actions + assignment) + full + usage,
-      !optional, !pool ? '选择租户后可搜索该租户的银行卡。' : '', '', hidden);
+      !optional, !pool ? '先选租户再搜索名下银行卡。也可直接输入完整卡号。' : '', '', hidden);
+  }
+  const tenantCardLookups = new WeakMap();
+  const normalizeTenantNumber = value => String(value || '').replace(/[\s-]/g, '');
+  const validTenantNumber = value => /^\d{12,19}$/.test(normalizeTenantNumber(value));
+  const typedTenantCardNumber = input => input?.dataset.fromSelection ? '' : input?.value || '';
+  function tenantCardInput(id, { value = '', draft = false } = {}) {
+    return input(id, value, `inputmode="numeric" maxlength="32" autocomplete="off" data-tenant-card-input${draft ? '' : ' data-no-draft'}`) +
+      '<div class="footnote" data-tenant-card-status role="status" hidden></div>';
+  }
+  function tenantCardStatus(input, message = '', matches = []) {
+    const region = input?.parentElement.querySelector('[data-tenant-card-status]');
+    if (!region) return;
+    region.hidden = !message;
+    region.innerHTML = E(message) + matches.map(match => A.textAction(
+      match.cardId ? `查看${match.tenantName || '租户'}银行卡 · 尾号 ${match.last4}` : `查看原单 ${match.orderNo}`,
+      'commerce-tenant-card-locate',
+      `data-tenant="${E(match.tenantId || '')}" data-card="${E(match.cardId || '')}" data-order="${E(match.orderId || '')}"`)).join(' ');
+  }
+  async function locateTenantCard(match) {
+    if (match.cardId && match.tenantId) return openTenantCards(match.tenantId, match.cardId);
+    if (!match.orderId) return;
+    const { route, drawerContext } = S;
+    if (!orders.some(row => row.id === match.orderId)) await loadLocalCommerce(true, true);
+    if (S.route !== route || S.drawerContext !== drawerContext) return;
+    if (orders.some(row => row.id === match.orderId)) orderDetail(match.orderId);
+    else A.notify('暂时无法查看原订单，请刷新后重试');
+  }
+  function setOrderTenantCard(form, match) {
+    const tenant = form.elements['commerce-tenantId'];
+    const card = form.elements['commerce-cardId'];
+    if (![...tenant.options].some(option => option.value === match.tenantId))
+      tenant.add(new Option(match.tenantName || '已匹配租户', match.tenantId));
+    if (tenant.value !== match.tenantId) form.dataset.tenantCardAutoTenant = match.tenantId;
+    tenant.value = match.tenantId;
+    const cached = tenantCards.get(match.tenantId) || {};
+    const items = (cached.items || []).filter(row => row.id !== match.cardId);
+    items.push({ ...match, id: match.cardId });
+    tenantCards.set(match.tenantId, { ...cached, items });
+    const prior = orders.find(row => row.id === form.elements['commerce-id']?.value);
+    const selected = (match.active && !match.used) || prior?.cardId === match.cardId ? match.cardId : '';
+    card.innerHTML = A.options(cardChoices('Claude', match.tenantId, selected), selected);
+    form.elements['commerce-paymentId'].value = selected ? match.last4 : '';
+    for (const id of ['tenantId', 'cardId']) filterPicker(form.querySelector(`[data-commerce-picker="${id}"]`));
+    refreshOrderCardType(form);
+    A.setError('commerce-tenantId', '', form);
+    return Boolean(selected);
+  }
+  async function lookupTenantCardInput(input) {
+    const number = normalizeTenantNumber(input.value);
+    const form = input.form, order = input.id === 'commerce-tenantCardNumber';
+    if (!localData?.tenantCardAction || !validTenantNumber(number)) return true;
+    const previous = tenantCardLookups.get(input);
+    if (previous?.timer) clearTimeout(previous.timer);
+    const ticket = {};
+    tenantCardLookups.set(input, ticket);
+    const current = () => input.isConnected && tenantCardLookups.get(input) === ticket &&
+      normalizeTenantNumber(input.value) === number && (!order || orderCardSource(form)?.pool === false);
+    try {
+      const response = await localData.tenantCardAction({ action: 'lookup', number });
+      if (!current()) return false;
+      const matches = response.matches || [];
+      if (!matches.length) {
+        tenantCardStatus(input, order ? '未登记。选择租户后，银行卡随订单保存。' : '');
+        return true;
+      }
+      if (order && matches.length === 1 && matches[0].cardId) {
+        const matched = setOrderTenantCard(form, matches[0]);
+        const status = matched ? '已匹配租户银行卡。' : matches[0].used ? '此卡已使用，请选其他银行卡。' : '此卡当前不可用。';
+        tenantCardStatus(input, status, matches);
+        if (matched) void loadOrderCards(form, true);
+        return matched;
+      }
+      tenantCardStatus(input, matches.length > 1 ? '此卡号有多条记录，请先核对。' : '已有此银行卡号。', matches);
+      return false;
+    } catch {
+      if (!current()) return false;
+      tenantCardStatus(input, '暂时无法查询卡号，请重试。');
+      return false;
+    }
+  }
+  function queueTenantCardLookup(input) {
+    const previous = tenantCardLookups.get(input);
+    if (previous?.timer) clearTimeout(previous.timer);
+    tenantCardLookups.delete(input);
+    tenantCardStatus(input);
+    if (!input.isConnected || !localData || !validTenantNumber(input.value)) return;
+    const timer = setTimeout(() => { if (input.isConnected) void lookupTenantCardInput(input); }, 250);
+    tenantCardLookups.set(input, { timer });
   }
   function clearRevealedCard(form) {
     const row = form.querySelector('[data-commerce-card-revealed]');
-    if (!row) return;
-    row.hidden = true;
-    row.querySelector('[data-commerce-card-number]').value = '';
+    if (row) {
+      row.hidden = true;
+      row.querySelector('[data-commerce-card-number]').value = '';
+    }
+    const number = form.elements['commerce-tenantCardNumber'];
+    if (number) {
+      number.value = '';
+      delete number.dataset.fromSelection;
+      queueTenantCardLookup(number);
+    }
   }
   async function useTenantCard(form, action) {
     if (!canManageOrders()) return;
@@ -4523,10 +4657,18 @@
       return false;
     }
     try {
-      const response = await localData.tenantCardAction({ action, tenantId, id });
+      const original = orders.find(row => row.id === form.elements['commerce-id']?.value && row.cardId === id && row.tenantId === tenantId);
+      const response = action === 'reveal' && validTenantNumber(original?.proCardNumber)
+        ? { number: original.proCardNumber } : await localData.tenantCardAction({ action, tenantId, id });
       if (!form.isConnected || form.elements['commerce-tenantId'].value !== tenantId ||
           form.elements['commerce-cardId'].value !== id || orderCardSource(form)?.pool !== false) return;
       if (action === 'copy') await A.copyText(response.number, '银行卡号已复制');
+      else if (form.elements['commerce-proMaterialMode'].value === 'tenant_card') {
+        const input = form.elements['commerce-tenantCardNumber'];
+        input.value = response.number;
+        input.dataset.fromSelection = 'true';
+        tenantCardStatus(input);
+      }
       else {
         const row = form.querySelector('[data-commerce-card-revealed]');
         row.querySelector('[data-commerce-card-number]').value = response.number;
@@ -4539,7 +4681,7 @@
       return false;
     }
   }
-  async function openTenantCards(tenantId) {
+  async function openTenantCards(tenantId, cardId = '') {
     if (!canManageOrders()) return;
     const route = S.route;
     const context = S.drawerContext;
@@ -4549,18 +4691,33 @@
       tenantCards.set(tenantId, snapshot);
       const row = tenants.find((tenant) => tenant.id === tenantId);
       const items = snapshot.items || [];
+      const kyc = snapshot.kyc;
+      const kycLabel = { available: '可认证', locked: '已锁定 · 仍有关联 KYC 账号', review: '待核对历史认证人', inactive: '租户已停用' }[kyc?.status] || '—';
+      const kycInfo = `<div class="property-list">${property('KYC 状态', kycLabel)}${
+        kyc?.accounts?.length ? property('占用认证资格的账号', kyc.accounts.join('、')) : ''}</div>`;
       const list = items.length ? A.table([
         { id: 'label', label: '银行卡名称', render: (card) => E(card.label || '银行卡') },
-        { id: 'last4', label: '卡尾号' },
-        { id: 'active', label: '状态', render: (card) => card.active ? '启用' : '停用' },
-        { id: 'actions', label: '操作', action: true, render: (card) => card.active
+        { id: 'last4', label: '卡尾号', mobileSummary: true },
+        { id: 'status', label: '状态', render: card => card.used ? '已使用' : card.frozen ? '已冻结' : card.active ? '可使用' : '停用' },
+        { id: 'firstUse', label: '首次使用', mobileSummary: true, render: card => E(card.firstUse
+          ? [card.firstUse.orderNo, dateInput(card.firstUse.at).replace('T', ' ')].filter(Boolean).join(' · ') : '—') },
+        { id: 'actions', label: '操作', action: true, render: (card) => card.active && !card.used
           ? A.textAction('停用', 'commerce-tenant-card-deactivate', `data-id="${E(card.id)}" data-tenant="${E(tenantId)}"`)
           : '—' }
       ], items, '', 'commerce-tenant-cards') : A.empty('暂无银行卡', '登记后可在 Claude 提交订单选择。');
-      A.openDrawer('租户银行卡', `${row?.name || '租户'} · 已登记 ${items.length} 张，最多 99 张。`,
-        `<form id="commerce-tenant-cards-form" novalidate><input type="hidden" name="tenant-id" value="${E(tenantId)}" /><div class="commerce-field-grid">${field('银行卡名称', 'tenant-card-label', input('tenant-card-label', '', 'maxlength="80" placeholder="如银行卡 1"'))}${field('银行卡号', 'tenant-card-number', input('tenant-card-number', '', 'inputmode="numeric" maxlength="32" autocomplete="off" data-no-draft'), true)}</div></form>${list}`,
+      A.openDrawer('租户银行卡', `${snapshot.tenantName || row?.name || '租户'} · 每个卡号只能使用一次，最多登记 99 张。原 KYC 账号标记为死号后可再次认证。`,
+        `${kycInfo}<form id="commerce-tenant-cards-form" novalidate><input type="hidden" name="tenant-id" value="${E(tenantId)}" /><div class="commerce-field-grid">${field('银行卡名称', 'tenant-card-label', input('tenant-card-label', '', 'maxlength="80" placeholder="如银行卡 1"'))}${field('银行卡号', 'tenant-card-number', tenantCardInput('tenant-card-number'), true)}</div></form>${list}`,
         A.button('返回租户资料', 'commerce-contact-detail', '', 'return', `data-kind="tenant" data-id="${E(tenantId)}"`) +
-          `<button type="submit" form="commerce-tenant-cards-form" class="button primary" ${items.length >= 99 ? 'disabled' : ''}>添加银行卡</button>`, 'commerce-tenant-cards');
+          `<button type="submit" form="commerce-tenant-cards-form" class="button primary" ${items.length >= 99 || row?.active === false ? 'disabled' : ''}>添加银行卡</button>`, 'commerce-tenant-cards');
+      if (cardId) {
+        const target = $(`#drawer [data-table="commerce-tenant-cards"] [data-row-id="${CSS.escape(cardId)}"]`);
+        if (target) {
+          target.setAttribute('aria-current', 'true');
+          target.tabIndex = -1;
+          target.focus({ preventScroll: true });
+          target.scrollIntoView({ block: 'nearest' });
+        }
+      }
     } catch (error) {
       A.notify(error.message || '无法读取租户银行卡，请重试');
     }
@@ -4572,7 +4729,7 @@
     const body = { action: id ? 'deactivate' : 'add', tenantId, version };
     if (id) body.id = id;
     else {
-      body.number = form.elements['commerce-tenant-card-number'].value.replace(/[ -]/g, '');
+      body.number = normalizeTenantNumber(form.elements['commerce-tenant-card-number'].value);
       body.label = form.elements['commerce-tenant-card-label'].value.trim();
       if (!/^\d{12,19}$/.test(body.number)) {
         A.setError('commerce-tenant-card-number', '请输入有效的银行卡号');
@@ -4586,6 +4743,10 @@
       if (context === S.drawerContext) await openTenantCards(tenantId);
     } catch (error) {
       A.notify(error.message || '银行卡未保存，请重新核对');
+      if (context === S.drawerContext && form?.isConnected && error.matches?.length) {
+        tenantCardStatus(form.elements['commerce-tenant-card-number'], error.message, error.matches);
+        if (error.matches.length === 1) void locateTenantCard(error.matches[0]);
+      }
     } finally {
       form?.removeAttribute('aria-busy');
     }
@@ -4597,8 +4758,8 @@
           input('previousAutoRenew', existing.previousAutoRenew || 'unknown', 'type="hidden"') : '');
   }
   function orderTenantField(v, hidden) {
-    return field('用卡人', 'tenantId', searchableSelect('tenantId', '用卡人',
-      [['', '选择用卡人'], ...tenants.filter(row => row.active || row.id === v('tenantId')).map(row => [row.id, `${row.name} · ${row.phone}`])],
+    return field('租户', 'tenantId', searchableSelect('tenantId', '租户',
+      [['', '选择租户'], ...tenants.filter(row => row.active || row.id === v('tenantId')).map(row => [row.id, `${row.name} · ${row.phone}`])],
       v('tenantId'), A.button('新增', 'commerce-quick-tenant', '', 'plus')), v('proMaterialMode') === 'tenant_card', '', '', hidden);
   }
   function claudeCertificationFields(v, existing) {
@@ -4655,10 +4816,12 @@
       (isClaude({ product }) ? orderTenantField(v, apple || !usesOrderTenant(proMode)) : '') +
       (cardPoolProduct(product) ? orderCardPicker(v, apple || Boolean(proMode), { pool: true, optional: !personal }) : '') +
       (!cardPoolProduct(product) ? orderCardPicker(v, apple || proMode !== 'pool_card', { id: 'proPoolCardId', pool: true }) +
-        orderCardPicker(v, apple || (Boolean(proMode) && proMode !== 'tenant_card')) : '') +
+        orderCardPicker(v, apple || (Boolean(proMode) && proMode !== 'tenant_card'), { optional: true }) : '') +
+      (isClaude({ product }) ? field('银行卡号', 'tenantCardNumber', tenantCardInput('tenantCardNumber'), false,
+        '选卡或填写 12 至 19 位完整卡号，二选一。未登记的卡随订单加入所选租户。', '', apple || proMode !== 'tenant_card') : '') +
       field('卡尾号', 'paymentId', input('paymentId', v('paymentId'),
         `readonly data-saved-card="${E(savedCard)}" data-saved-tail="${E(savedTail)}"`),
-        false, '', '', apple || ['manual_card', 'people', 'none'].includes(proMode)) +
+        false, '', '', apple || ['manual_card', 'people', 'none', 'tenant_card'].includes(proMode)) +
       field('卡序列号', 'proCardSerial', input('proCardSerial', v('proCardSerial'), 'maxlength="120" autocomplete="off"'),
         false, '选填的业务登记编号，可保留前导零。', '', !orderCardSerialAvailable({ product,
           payment: v('payment'), proMaterialMode: proMode, cardId: v('cardId') })) +
@@ -5039,6 +5202,10 @@
       if (mode === 'manual_card') {
         order.proCardNumber = String(order.proCardNumber || '').replace(/[\s-]/g, '');
         order.paymentId = order.proCardNumber.slice(-4);
+      }
+      if (mode === 'tenant_card' && order.tenantCardNumber) {
+        order.tenantCardNumber = normalizeTenantNumber(typedTenantCardNumber(form.elements['commerce-tenantCardNumber']));
+        if (validTenantNumber(order.tenantCardNumber)) order.paymentId = order.tenantCardNumber.slice(-4);
       }
     }
     if (isClaude(order) && (!usesOrderTenant(mode) || order.payment !== '银行卡'))
@@ -5458,11 +5625,8 @@
     const state = subscriptionStatus(order);
     if (state === '已开通') return A.tag('到期时间未登记', 'warning');
     if (state !== '有效' && state !== '已过期') return A.tag(state, state === '待确认' ? 'warning' : '');
-    const remaining = Math.ceil((subscriptionTime(order.expiry) - orderEvaluationTime()) / 86400000);
-    return A.tag(
-      remaining >= 0 ? `${remaining} 天后到期` : `已过期 ${-remaining} 天`,
-      remaining < 3 ? 'warning' : 'success'
-    );
+    const expiry = subscriptionTime(order.expiry), at = orderEvaluationTime();
+    return A.tag(formatExpiryDuration(expiry, at), expiry - at <= 2 * 86_400_000 ? 'warning' : 'success');
   }
   function orderListFilters(product) {
     return S.drafts.get('commerce-order-filters:' + product) || {};
@@ -6962,7 +7126,7 @@
       const count = Number(raw['commerce-initial-card-count'] || 0), seen = new Set();
       if (!Number.isInteger(count) || count < 0 || count > 99) return A.notify('每位租户最多登记 99 张银行卡');
       for (let i = 0; i < count; i++) {
-        const number = String(raw[`commerce-initial-card-${i}-number`] || '').replace(/[ -]/g, '');
+        const number = normalizeTenantNumber(raw[`commerce-initial-card-${i}-number`]);
         const label = String(raw[`commerce-initial-card-${i}-label`] || '').trim();
         const error = !/^\d{12,19}$/.test(number) ? '请输入有效银行卡号' : seen.has(number) ? '银行卡号重复' : label.length > 80 ? '名称最多 80 个字' : '';
         A.setError(`commerce-initial-card-${i}-number`, error);
@@ -7106,8 +7270,15 @@
                 for (const [orderField, customerField] of orderContactFields)
                   draft[`commerce-${orderField}`] = saved[customerField];
               S.drafts.set(back.key, draft);
-              if (back.main) A.render();
-              else orderEditor(back.orderId, back.renewalId, false);
+              if (back.main) {
+                const typed = typedTenantCardNumber($('#main #commerce-tenantCardNumber'));
+                A.render();
+                const restored = $('#main #commerce-tenantCardNumber');
+                if (typed && restored) {
+                  restored.value = typed;
+                  queueTenantCardLookup(restored);
+                }
+              } else orderEditor(back.orderId, back.renewalId, false);
             } else {
               if (!existing && !tenant && route === 'customers/list') {
                 moduleState.customerMode = 'active';
@@ -7225,6 +7396,11 @@
         digits.length >= 5 && digits.length <= 20) ? '' : '请填写有效的订阅电话');
     } else if (!mode && isClaude(order) && order.payment === '银行卡' && !existing) {
       error('proMaterialMode', '请选择填写方式');
+    } else if (mode === 'tenant_card' && order.tenantCardNumber && !order.cardId) {
+      error('tenantCardNumber', !localData ? '请在业务系统中登记租户银行卡' :
+        validTenantNumber(order.tenantCardNumber) ? '' : '请输入 12 至 19 位完整银行卡号');
+      error('tenantId', order.tenantId ? '' : '请选择这张银行卡所属租户');
+      A.setError('commerce-cardId', '');
     } else if (order.payment === '银行卡' && mode !== 'none') {
       const usePool = cardPoolProduct(order.product) || mode === 'pool_card';
       const selected = (usePool ? cards() : (tenantCards.get(order.tenantId)?.items || []))
@@ -7232,9 +7408,13 @@
       const historic = existing?.payment === order.payment && existing.cardId === order.cardId &&
         existing.paymentId === order.paymentId && existing.tenantId === order.tenantId;
       const optional = order.product === 'GPT';
-      if (mode === 'tenant_card') error('tenantId', order.tenantId ? '' : '请选择用卡人');
+      if (mode === 'tenant_card') {
+        error('tenantCardNumber', order.tenantCardNumber || order.cardId ? '' : '请选择银行卡或输入完整卡号');
+        if (order.cardId) error('tenantId', order.tenantId ? '' : '请选择银行卡所属租户');
+      }
       error(mode === 'pool_card' ? 'proPoolCardId' : 'cardId', selected?.frozen && !existing?.paidConfirmed
-        ? '所选银行卡已冻结，请更换可用银行卡' : auto || historic ? '' : !selected && (!optional || order.cardId)
+        ? '所选银行卡已冻结，请更换可用银行卡' : selected?.used && !usePool && !historic
+          ? '所选租户银行卡已经使用过' : auto || historic ? '' : !selected && (!optional || order.cardId)
         ? '请选择本次使用的银行卡' : selected && cardTail(selected) !== order.paymentId
           ? '尾号与所选银行卡不符，请重新选择' : '');
     } else if (mode === 'none' && order.product === 'Claude Max' && order.paidConfirmed && !existing?.paidConfirmed) {
@@ -7248,7 +7428,7 @@
           : '请选择用于本次订阅的苹果 ID')
       );
     }
-    if (order.payment === '银行卡' && order.paidConfirmed && !order.cardId && mode !== 'manual_card' &&
+    if (order.payment === '银行卡' && order.paidConfirmed && !order.cardId && !order.tenantCardNumber && mode !== 'manual_card' &&
         renewalCardHints.get(form)?.availability === 'frozen')
       error('proMaterialMode', '原银行卡已冻结，请登记可用的新银行卡');
     if (order.payment === '银行卡' && order.cardTypeId && order.cardTypeId !== existing?.cardTypeId && bankCardTypesLoaded)
@@ -7359,7 +7539,7 @@
     }
     return order;
   }
-  function saveOrder(form, appleBalanceReady = false) {
+  function saveOrder(form, appleBalanceReady = false, tenantCardChecked = false) {
     if (!canManageOrders()) return;
     const customerLookup = updateOrderCustomerLookup(form);
     if (customerLookup?.kind === 'composing') {
@@ -7368,6 +7548,14 @@
     }
     const raw = A.readForm(form);
     const existing = orders.find((row) => row.id === value(raw, 'id'));
+    const tenantNumber = form.elements['commerce-tenantCardNumber'];
+    if (localData && !tenantCardChecked && value(raw, 'proMaterialMode') === 'tenant_card' &&
+        !value(raw, 'cardId') && validTenantNumber(tenantNumber?.value)) {
+      void lookupTenantCardInput(tenantNumber).then(ready => {
+        if (ready && form.isConnected) saveOrder(form, appleBalanceReady, true);
+      });
+      return;
+    }
     if (localData && !appleBalanceReady && (value(raw, 'payment') === '苹果内购' || existing?.payment === '苹果内购')) {
       const submitted = JSON.stringify(raw);
       void Promise.resolve(A.modules.appleBalance?.ensureReady?.())
@@ -7494,7 +7682,12 @@
     let committed = false;
     const submittedRoute = S.route;
     const submittedContext = S.drawerContext;
-    const submitted = JSON.stringify(A.readForm(form));
+    const confirmationValues = () => {
+      const fields = A.readForm(form);
+      if (tenantNumber) fields['commerce-tenantCardNumber'] = typedTenantCardNumber(tenantNumber);
+      return JSON.stringify(fields);
+    };
+    const submitted = confirmationValues();
     const customerText = newCustomer ? `将新增客户 ${newCustomer.name}（微信 ${newCustomer.wechat}）。` : '';
     A.confirmAction(
       existing ? '确认更正独立订单' : '确认登记新订单',
@@ -7502,7 +7695,7 @@
       () => {
         if (committed || !canManageOrders() || form.isConnected === false || S.route !== submittedRoute ||
             S.drawerContext !== submittedContext) return;
-        if (JSON.stringify(A.readForm(form)) !== submitted) {
+        if (confirmationValues() !== submitted) {
           if (customerLookup) A.notify('录单资料已变化，请重新核对。');
           return;
         }
@@ -8836,6 +9029,10 @@
       void openTenantCards(node.dataset.id);
       return true;
     }
+    if (action === 'commerce-tenant-card-locate') {
+      void locateTenantCard({ tenantId: node.dataset.tenant, cardId: node.dataset.card, orderId: node.dataset.order });
+      return true;
+    }
     if (action === 'commerce-tenant-card-reveal' || action === 'commerce-tenant-card-copy') {
       const form = node.closest('#commerce-order-form');
       if (form) {
@@ -8968,12 +9165,17 @@
       }
       for (const name of Object.keys(raw)) if (name.startsWith('commerce-initial-card-')) delete raw[name];
       raw['commerce-initial-card-count'] = String(cards.length);
-      cards.forEach((card, i) => { raw[`commerce-initial-card-${i}-number`] = card.number; raw[`commerce-initial-card-${i}-label`] = card.label; });
+      cards.forEach((card, i) => {
+        raw[`commerce-initial-card-${i}-label`] = card.label;
+        raw[`commerce-initial-card-${i}-number`] = card.number;
+      });
       const key = form.dataset.commerceDraft, standalone = !form.closest('dialog');
       form.removeAttribute('data-commerce-draft');
       S.drafts.set(key, raw);
       if (standalone) A.render();
       else contactForm(true, '', value(raw, 'quick') === 'yes');
+      const updated = document.getElementById('commerce-contact-form');
+      for (const input of updated?.querySelectorAll('[data-tenant-card-input]') || []) queueTenantCardLookup(input);
       return true;
     }
     if (action === 'commerce-contact-add') {
@@ -9584,8 +9786,9 @@
     toggle('cardTypeId', order.payment === '银行卡');
     toggle('proMaterialMode', bank);
     toggle('proCardNumber', mode === 'manual_card');
+    toggle('tenantCardNumber', mode === 'tenant_card');
     toggle('proCardSerial', orderCardSerialAvailable(order));
-    toggle('paymentId', Boolean(orderCardSource(form)));
+    toggle('paymentId', mode !== 'tenant_card' && Boolean(orderCardSource(form)));
     toggle('tenantId', isClaude(order) && bank && usesOrderTenant(mode));
     toggle('appleIdId', order.payment === '苹果内购');
     toggle('appleStoreRegion', order.payment === '苹果内购');
@@ -9870,10 +10073,17 @@
         controls['commerce-verifierPhone'].value = (node.value === 'keep' ? historical?.verifierPhone : verifier?.phone) || '';
       }
       if (node.id === 'commerce-tenantId') {
+        delete form.dataset.tenantCardAutoTenant;
+        const number = form.elements['commerce-tenantCardNumber'];
+        const typed = typedTenantCardNumber(number);
         const card = form.elements['commerce-cardId'];
         if (card?.tagName === 'SELECT') card.innerHTML = A.options(cardChoices('Claude', node.value, ''), '');
         form.elements['commerce-paymentId'].value = '';
         clearRevealedCard(form);
+        if (typed && number) {
+          number.value = typed;
+          queueTenantCardLookup(number);
+        }
         void loadOrderCards(form, true);
       }
       if (node.id === 'commerce-start') updateOrderPeriod(form);
@@ -9902,6 +10112,29 @@
     return false;
   }
   function onInput(node) {
+    if (node.hasAttribute?.('data-tenant-card-input')) {
+      if (node.id === 'commerce-tenantCardNumber') {
+        delete node.dataset.fromSelection;
+        const form = node.form;
+        const tenant = form.elements['commerce-tenantId'];
+        if (tenant?.value === form.dataset.tenantCardAutoTenant) {
+          tenant.value = '';
+          delete form.dataset.tenantCardAutoTenant;
+          filterPicker(form.querySelector('[data-commerce-picker="tenantId"]'));
+        }
+        const card = form.elements['commerce-cardId'];
+        card.value = '';
+        card.innerHTML = A.options(cardChoices('Claude', tenant?.value, ''), '');
+        form.elements['commerce-paymentId'].value = '';
+        filterPicker(form.querySelector('[data-commerce-picker="cardId"]'));
+        refreshOrderCardType(form);
+        A.setError('commerce-cardId', '', form);
+      }
+      A.setError(node.id, '', node.form);
+      queueTenantCardLookup(node);
+      if (!node.hasAttribute('data-no-draft')) saveDrafts();
+      return true;
+    }
     if (node.name === 'commerce-refundAt' && node.form?.id === 'commerce-refund-form') {
       const end = node.form.elements['commerce-endAt'];
       if (end && (!end.value || end.value === node.form.dataset.refundAt)) end.value = node.value;
@@ -10283,7 +10516,7 @@
     if (event.target === search && !['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
     if (event.key === 'Enter' && event.target !== search) return;
     event.preventDefault();
-    const options = [...popup.querySelectorAll('[role="option"]')];
+    const options = [...popup.querySelectorAll('[role="option"]:not(:disabled)')];
     if (event.key === 'Enter') {
       const option = event.target === search ? options.find(option => option.dataset.value) : event.target;
       option?.click();
@@ -10480,6 +10713,8 @@
       const form = $('#drawer[open] #commerce-order-form') || $('#main #commerce-order-form');
       if (form && scopes.includes('order-card-freeze')) {
         await Promise.all([updateRenewalCardHint(form, true), loadOrderCards(form, true)]);
+      } else if (form && scopes.includes('tenant-cards') && orderCardSource(form)?.pool === false) {
+        await loadOrderCards(form, true);
       }
       if (!updated) return false;
     }
