@@ -8,6 +8,7 @@ export const moyaoRechargeChannel = 'moyao-ai';
 export const storefrontAdmissionSocketName = 'lookup.sock';
 export const rechargeManualReviewReason = 'manual_review_required';
 const route = '/lookup';
+const historicalCodePattern = /^KC-[A-F0-9]{28}$/;
 const supportedPlans = new Map([
   ['plus', 'plus'], ['pro100', 'pro_5x'], ['pro_5x', 'pro_5x'], ['pro200', 'pro_20x'], ['pro_20x', 'pro_20x']
 ]);
@@ -18,7 +19,7 @@ export function storefrontRechargePlan(plan) {
 
 export function storefrontRechargeCode(value) {
   const code = typeof value === 'string' ? value.trim().toUpperCase() : '';
-  return generatedCdkPattern.test(code) ? code : '';
+  return generatedCdkPattern.test(code) || historicalCodePattern.test(code) ? code : '';
 }
 
 function validResult(result) {

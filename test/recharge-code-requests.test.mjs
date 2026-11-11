@@ -232,6 +232,26 @@ test('a MOYAO batch becomes eligible on approval; ordinary and held codes requir
   assert.equal(audit.filter(row => row.action === 'recharge_code_storefront_admitted').length, 1);
 });
 
+test('an old-format issued code can be admitted individually but never becomes current stock', async () => {
+  const code = 'KC-' + 'DEAD'.repeat(7);
+  const id = '33333333-3333-4333-8333-333333333333';
+  const { store, transport, start } = setup([{
+    id, applicantId: employee.id, status: 'issued', plan: 'plus', count: 1, codes: [code]
+  }]);
+  transport.verifyStorefrontCode = async value => {
+    assert.equal(value, code);
+    return { plan: 'plus', status: 'available' };
+  };
+  const handle = start();
+  const lookup = () => lookupStorefrontRechargeAdmission({ load: store.load, transport }, code.toLowerCase(), '203.0.113.10');
+  assert.equal(await lookup(), null);
+  assert.equal((await call(handle, admin, {
+    action: 'admit-storefront-code', id, code: code.toLowerCase(), deliveryReference: 'MOYAO-archived-issuance'
+  })).request.storefrontAdmissionCount, 1);
+  assert.deepEqual(await lookup(), { plan: 'plus', status: 'available' });
+  assert.equal((await call(handle, admin)).stock.plus, 0);
+});
+
 test('an unknown inventory is separate from zero and blocks both new applications and approvals', async () => {
   const { addCodes, store, transport, start } = setup();
   addCodes(shortCodes, 'pro100');
