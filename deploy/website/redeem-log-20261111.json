@@ -1,0 +1,26 @@
+{
+  "beforeAssetsSha256": "be2476ea9ecff85fe4e94a9055d13aceef50aaa0d0fcbc541a6c6217f3ba159e",
+  "assetsSha256": "456bf0922d8ed9d00079b350d019c5ea296e3537f7284edb9bb9281ccff42d0a",
+  "files": {
+    "modules/recharge/codexdaichong/assets.mjs": {
+      "before": "47f759ba6b04c96a4215c5409aa09ff3b7e36363843e2e0c2a202ce3fa4aea8f",
+      "after": "3fa47cc688254b426a9f1ad65072bf429f06976275472659034583e57e87b8a5"
+    },
+    "modules/recharge/codexdaichong/gateway.mjs": {
+      "before": "6aac3e104931fee8f5364dcf253bd94f7526174eb1e993cdb0ff35dae3cbeffe",
+      "after": "942cc4e0a8ef26d168a7514e64f912c14809574650a8cc0e39e383f57669247b"
+    },
+    "modules/recharge/codexdaichong/progress-presentation.mjs": {
+      "before": "5a710f0716483b34fcffe19a8b1da5072501b815ce6632569df298d72c67ff6f",
+      "after": "f85da494fa5e33c69eb379d9c521cf55845975bd02ff2884b2d018dadf88418a"
+    },
+    "modules/recharge/codexdaichong/shell.js": {
+      "before": "d57d653987be9f75d95e37abcc9ce86df9de202d3d1e4d3e61a485e5ca71559c",
+      "after": "e8396da9839b56ce7585871ac9bd341315daded9db403a7af5adcc442332855d"
+    },
+    "modules/recharge/codexdaichong/shell.css": {
+      "before": "b4a7e9d987580071620df14324b21e1f5a07160302aab646b8425f750b121c6a",
+      "after": "5964dcb69388f19550803722edc1053ab48723ec474368bbc4c63f84a55b3739"
+    }
+  }
+}

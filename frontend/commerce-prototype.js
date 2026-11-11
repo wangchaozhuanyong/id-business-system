@@ -558,6 +558,9 @@
     customerMode: 'active',
     orderTab: 'all',
     statsTab: 'overview',
+    statsFilters: {},
+    statsExpanded: '',
+    statsSource: null,
     detailTab: 'details',
     renewalTab: 'upcoming',
     productFilter: '',
@@ -1003,28 +1006,25 @@
       rates = order.rates || fxRates;
     if (!amountValid(order.paidAmount || ''))
       return { total: null, items: [], label: '代付金额未确认' };
-    let base = cny(order.paidAmount, order.paidCurrency, rates);
-    const items = [{ label: order.payment === '苹果内购' ? '订阅面额' : '代付金额', amount: base }];
+    const costItem = (key, label, originalAmount, originalCurrency, amount = cny(originalAmount, originalCurrency, rates)) =>
+      ({ key, label, originalAmount, originalCurrency, amount });
+    const items = [costItem('subscription', order.payment === '苹果内购' ? '订阅面额' : '代付金额',
+      order.paidAmount, order.paidCurrency)];
     if (order.product.startsWith('Claude')) {
       if (order.payment === '苹果内购') {
-        base = M.multiply(base, rules.appleDiscount);
-        items[0] = { label: `苹果内购折扣后成本（${rules.appleDiscount}）`, amount: base };
+        items[0] = costItem('subscription', `苹果内购折扣后成本（${rules.appleDiscount}）`,
+          M.multiply(order.paidAmount, rules.appleDiscount), order.paidCurrency, M.multiply(items[0].amount, rules.appleDiscount));
       } else {
-        items.push({ label: '代付服务费', amount: cny(rules.claudeBankFeeMyr, 'MYR', rates) });
-        items.push({
-          label: 'KYC 认证成本',
-          amount: cny(rules.claudeAccountCostMyr, 'MYR', rates)
-        });
+        items.push(costItem('service', '代付服务费', rules.claudeBankFeeMyr, 'MYR'),
+          costItem('kyc', 'KYC 认证成本', rules.claudeAccountCostMyr, 'MYR'));
       }
     } else if (order.payment === '银行卡') {
       const issue = order.issueFeeSnapshot || issueFeeSnapshot(order, rules);
       if (issue.applied)
-        items.push({
-          label: `本卡首次开卡费（${issue.cardId}）`,
-          amount: cny(issue.amountUsd, 'USD', rates)
-        });
-      items.push({ label: '支付比例手续费', amount: M.multiply(base, rules.cardPercent) });
-      items.push({ label: '每笔固定手续费', amount: cny(rules.cardPerPaymentUsd, 'USD', rates) });
+        items.push(costItem('card-issue', `本卡首次开卡费（${issue.cardId}）`, issue.amountUsd, 'USD'));
+      items.push(costItem('payment-percent', '支付比例手续费', M.multiply(order.paidAmount, rules.cardPercent), order.paidCurrency,
+        M.multiply(items[0].amount, rules.cardPercent)),
+        costItem('payment-fixed', '每笔固定手续费', rules.cardPerPaymentUsd, 'USD'));
     }
     const returned =
       order.payment === '苹果内购'
@@ -1032,18 +1032,17 @@
         : '0';
     let appleReturnCost = '0';
     if (M.compare(returned, '0') > 0) {
+      const recoverable = isClaude(order) ? M.multiply(returned, rules.appleDiscount) : returned;
       appleReturnCost = cny(returned, order.paidCurrency, rates);
       if (isClaude(order)) appleReturnCost = M.multiply(appleReturnCost, rules.appleDiscount);
-      items.push({ label: 'Apple 余额已退回成本', amount: M.subtract('0', appleReturnCost) });
+      items.push(costItem('recovery', 'Apple 余额已退回成本', M.subtract('0', recoverable), order.paidCurrency,
+        M.subtract('0', appleReturnCost)));
     }
     if (
       amountValid(order.emailCostAmount || '0') &&
       M.compare(order.emailCostAmount || '0', '0') > 0
     )
-      items.push({
-        label: '补充邮箱成本',
-        amount: cny(order.emailCostAmount, order.emailCostCurrency || 'CNY', rates)
-      });
+      items.push(costItem('email', '补充邮箱成本', order.emailCostAmount, order.emailCostCurrency || 'CNY'));
     const standard = sum(items, (row) => row.amount);
     const actual =
       order.costBasis === 'actual' && amountValid(order.actualCostAmount || '')
@@ -1192,12 +1191,13 @@
 
     return reasons;
   }
-  function localAccounting(order, currency = costSettings.currency, clock = Date.now()) {
+  function localAccounting(order, currency = costSettings.currency, clock = Date.now(), { costOnly = false } = {}) {
     if (!finance) return { status: 'pending', reason: '汇率核算模块尚未接入' };
     const minute = Math.floor(clock / 60_000);
     if (cardIssueContext?.minute !== minute)
       cardIssueContext = { minute, allocations: finance.buildCardIssueAllocations(orders, { clock }) };
-    return finance.calculateOrder(order, {
+    const calculate = costOnly ? finance.calculateOrderCost : finance.calculateOrder;
+    return calculate(order, {
       currency, clock, cardIssueAllocations: cardIssueContext.allocations,
       appleLedger: order.payment === '苹果内购' ? A.modules.appleBalance?.getOrderLedger?.(order.id) : undefined
     });
@@ -5797,27 +5797,62 @@
       JSON.stringify(previous[key]) === JSON.stringify(next[key]));
   }
 
+  function localCostLine(order, result, row, amount) {
+    const rule = order.costSettings, rate = order.fxSnapshot?.rates;
+    const currency = row.originalCurrency;
+    const original = `${row.originalAmount} ${currency}`;
+    const converted = currency === result.currency ? amount(row.amount) : `${original} · 折合 ${amount(row.amount)}`;
+    let equation = statisticsFeeTypes.find(([key]) => key === row.key)?.[2];
+    let conversionBase = original;
+    if (row.key === 'payment-percent') {
+      const percent = display(M.multiply(rule.cardPercent, '100'));
+      const fee = `${order.paidAmount} ${order.paidCurrency} × ${percent}%`;
+      conversionBase = `（${fee}）`;
+      equation = `${fee} = ${original}。`;
+    } else if (row.key === 'card-issue' && result.cardIssue) {
+      const { count, totalUsd } = result.cardIssue;
+      equation = `${totalUsd} USD ÷ 同卡成功开通 ${count} 单，分摊尾差后本单为 ${original}。`;
+    } else if (row.key === 'subscription' && order.payment === '苹果内购' && isClaude(order)) {
+      const discounted = `${order.paidAmount} ${order.paidCurrency} × ${rule.appleDiscount}`;
+      conversionBase = `（${discounted}）`;
+      equation = `${discounted} = ${original}。`;
+    } else if (row.key === 'recovery' && order.payment === '苹果内购') {
+      conversionBase = '到账回款按原单可收回比例计算的金额';
+    }
+    const conversion = currency !== result.currency && rate?.[currency] && rate?.[result.currency]
+      ? ` ${conversionBase} ×（${rate[currency]} ÷ ${rate[result.currency]}）折合 ${amount(row.amount)}。` : '';
+    return `<div class="property-row commerce-stat-cost-line"><div class="title-with-help"><span>${E(row.label)}</span>${A.titleInfo(
+      row.label, (equation || '') + conversion, 'order-cost-line-' + row.key
+    )}</div><strong>${E(converted)}</strong></div>`;
+  }
+
   function localCostDetail(order) {
-    const result = localAccounting(order);
+    const currency = S.route === 'orders/statistics' ? statisticsCurrency() : costSettings.currency;
+    const clock = Date.now();
+    const receipt = finance?.calculateConfirmedNetReceipt(order, { currency, clock }) ?? null;
+    const result = localAccounting(order, currency, clock, { costOnly: receipt === null });
     const pending = financialPendingReasons(order, result);
+    if (receipt === null && order.receiptConfirmed) pending.push('确认净收款金额或汇率待核对');
     const amount = (value) => `${display(value)} ${currencyLabel(result.currency)}`;
     const snapshot = order.fxSnapshot;
     const issue = result.cardIssue;
-    const allocation = issue ? property('开卡成本分摊依据',
+    const allocation = issue && order.costBasis !== 'actual' ? property('开卡成本分摊依据',
       `同卡已确认开通 ${issue.count} 单 · 原卡费用 ${issue.totalUsd} USD · 本单份额 ${issue.amountUsd} USD · 截至 ${quoteTime(issue.asOf)}`)
       : result.cardIssueUnallocated ? property('开卡费用', '原付款卡未记录，开卡费未分摊') : '';
     const output = result.status === 'ready'
-      ? result.items.map((row) => property(row.label, row.originalCurrency === result.currency ? amount(row.amount) :
-          `${row.originalAmount} ${row.originalCurrency} · 折合 ${amount(row.amount)}`)).join('') + allocation +
-        property('退款后净收款', order.receiptConfirmed ? amount(result.revenue) : '实收未登记') +
+      ? result.items.map(row => localCostLine(order, result, row, amount)).join('') + allocation +
         property('原成本合计', amount(result.originalCost)) +
-        property('实际收回成本', amount(result.recoveredCost)) +
+        (result.recoveryItem ? localCostLine(order, result, { ...result.recoveryItem, label: '实际收回成本' }, amount)
+          : property('实际收回成本', amount(result.recoveredCost))) +
         property('回款后净成本', amount(result.netCost))
       : order.costBasis === 'actual' && order.actualCostAmount
         ? property('实际总成本', `${display(order.actualCostAmount)} ${currencyLabel(order.actualCostCurrency)}`) : '';
     const feeCorrection = (order.corrections || []).find(item => item?.kind === historicalFeeKind);
     const originalFeeRules = feeCorrection?.previous?.costSettings;
-    return `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', pending.length || order.cancelled ? '待核算' : accountingLabel(result.basis))}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${output}${property('本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', pending.join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
+    const category = result.cardIssueUnallocated ? '成本未核全' : result.status === 'ready' && order.paidConfirmed
+      ? accountingLabel(result.basis) : '待核算';
+    return panelTitle('本单成本', '净成本 = 费用合计 − 渠道已到账回款。利润 = 客户确认净收款 − 净成本。' + statisticsQuoteHelp) +
+      `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result.cardIssueUnallocated ? '已知参考收益' : '本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', [...pending, ...(result.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
       panelTitle('订单汇率快照', '每 1 单位外币对应的人民币金额。仅使用本订单记录的汇率。', finance && !snapshot && !order.cancelled
         ? A.button('登记汇率快照', 'commerce-order-fx', 'primary', '', `data-id="${E(order.id)}"`) +
           (finance.requestAutomaticSnapshot && S.actor?.role !== 'employee'
@@ -5990,6 +6025,7 @@
     return description + tableList([
       { id: 'orderNo', label: '订单编号' },
       { id: 'source', label: '报价来源', render: (row) => E(row.fxSnapshot.source) },
+      { id: 'basis', label: '汇率依据', render: (row) => E(quoteBasisLabel(row.fxSnapshot)) },
       { id: 'at', label: '报价时点', render: (row) => E(quoteTime(row.fxSnapshot.at)) },
       { id: 'expiresAt', label: '有效截止', render: (row) => E(quoteTime(row.fxSnapshot.expiresAt)) },
       { id: 'actions', label: '操作', action: true, render: (row) =>
@@ -6216,162 +6252,316 @@
     );
   }
 
+  const statisticsBasis = { actual: '实账', reference: '参考', partial: '成本未核全' };
+  const statisticsFeeTypes = [
+    ['subscription', '订阅代付', '银行卡取本单确认的代付金额。Claude 苹果内购取订阅面额 × 本单冻结的苹果内购折扣。'],
+    ['kyc', 'KYC 认证成本', 'Claude 银行卡订单按本单冻结的 KYC 成本（MYR）逐笔折算。实付金额需要独立凭据。'],
+    ['service', '代付服务费', 'Claude 银行卡订单按本单冻结的代付服务费（MYR）逐笔折算。'],
+    ['card-issue', '开卡费分摊', '原卡的一次开卡费 ÷ 截至核算时点同卡成功开通笔数。筛选只改变展示范围。原单已单独登记的开卡费用按原单核算。'],
+    ['payment-percent', '比例手续费', '银行卡订阅代付金额 × 本单冻结的付款费率，适用于 GPT 等使用通用银行卡费用规则的订单。'],
+    ['payment-fixed', '固定手续费', '每笔按本单冻结的固定手续费（USD）折算，适用于使用通用银行卡费用规则的订单。'],
+    ['email', '邮箱成本', '按本单确认的邮箱成本金额和原币折算。费用设置在有明确邮箱来源时用于录单，历史统计取原单金额。'],
+    ['fx-fee', '独立换汇手续费', '只计入有独立凭据且未计入实际总成本的换汇手续费。汇率折算本身没有单独的费用。'],
+    ['actual-total', '实际总成本未拆分', '按原单登记的退回前实际总成本换算。这笔金额已包含账单中的费用。'],
+    ['recovery', '已到账回款', '作为成本抵减。银行卡取原单实际到账；苹果内购按订单折扣或实际成本中可收回部分折算。'],
+    ['rounding', '折算尾差', '订单净成本与各项折算金额相加可能相差万分位，归到此行以便逐单对平。']
+  ];
+  const statisticsAmount = amount => amount == null ? '—' : display(amount);
+  const statisticsSum = (rows, get) => {
+    const values = rows.map(get).filter(amount => amount != null);
+    return values.length ? sum(values, amount => amount) : null;
+  };
+  const statisticsCurrency = () => moduleState.statsFilters.currency || costSettings.currency;
+  const statisticsProduct = product => isClaude({ product }) ? 'Claude' : product;
+  const statisticsPlanKey = (product, plan) => `${product}:${plan}`;
+  const statisticsPlanLabel = (product, plan) => `${statisticsProduct(product)} ${plan || '套餐待归类'}`;
+  const statisticsQuoteHelp = '折算金额 = 原币金额 ×（原币兑 CNY 汇率 ÷ 统计币兑 CNY 汇率）。逐笔使用原单冻结汇率，金额最多显示四位小数。';
+
+  function statisticsPlan(order) {
+    if (typeof order.plan !== 'string' || !order.plan.trim()) return '';
+    const plan = claudeOrderPlan(order.product, order.plan.trim());
+    return productPlans[order.product]?.includes(plan) || (order.product === 'GPT' && plan === 'Go') ? plan : '';
+  }
+
+  function statisticsChannel(order) {
+    const payment = order.payment || '支付方式待核对';
+    const region = order.payment === '苹果内购' && order.appleStoreRegion
+      ? window.IDAppleFunding?.appleRegions?.[order.appleStoreRegion] || order.appleStoreRegion
+      : order.billingCountry;
+    return [payment, order.paidCurrency, region].filter(Boolean).join(' · ');
+  }
+
+  function statisticsFact(order, currency, clock) {
+    let cost = null, gain = null, revenue, reasons;
+    if (localData) {
+      revenue = finance?.calculateConfirmedNetReceipt(order, { currency, clock }) ?? null;
+      const result = localAccounting(order, currency, clock, { costOnly: revenue === null });
+      reasons = financialPendingReasons(order, result);
+      if (revenue === null && order.receiptConfirmed) reasons.push('确认净收款金额或汇率待核对');
+      if (order.paidConfirmed && result.status === 'ready') {
+        cost = result;
+        if (!reasons.length) gain = result.profit ?? null;
+      }
+    } else {
+      const rates = order.rates || fxRates;
+      const toDisplayCurrency = amount => shownCurrency(amount, currency, rates);
+      const demo = costsFor(order);
+      const demoProfit = profit(order);
+      reasons = financialPendingReasons(order);
+      revenue = order.receiptConfirmed && amountValid(order.saleAmount || '')
+        ? toDisplayCurrency(cny(refundable(order), order.saleCurrency, rates)) : null;
+      if (order.paidConfirmed && demo.total !== null) {
+        const items = demo.actual === null ? demo.items : [
+          { key: 'actual-total', originalAmount: order.actualCostAmount, originalCurrency: order.actualCostCurrency,
+            amount: cny(order.actualCostAmount, order.actualCostCurrency, rates) },
+          ...demo.items.filter(item => item.key === 'recovery')
+        ];
+        cost = { basis: 'reference', netCost: toDisplayCurrency(demo.total),
+          items: items.map(item => ({ ...item, amount: toDisplayCurrency(item.amount) })) };
+        gain = demoProfit === null ? null : toDisplayCurrency(demoProfit);
+      }
+    }
+
+    const plan = statisticsPlan(order);
+    const basis = cost?.cardIssueUnallocated ? 'partial' : cost?.basis;
+    if (basis === 'partial') reasons.push('开卡费未分摊');
+    if (!plan) reasons.push('套餐待归类');
+    return { order, plan, group: statisticsPlanKey(order.product, plan), channel: statisticsChannel(order),
+      cost, basis, gain, revenue, reasons, pending: reasons.length > 0 || gain === null };
+  }
+
+  function statisticsTotals(rows, basis) {
+    const included = rows.filter(row => row.basis === basis);
+    const netCost = statisticsSum(included, row => row.cost.netCost);
+    return { count: included.length, netCost,
+      average: netCost === null ? null : M.divide(netCost, String(included.length)),
+      profit: statisticsSum(included, row => row.gain),
+      profitCount: included.filter(row => row.gain !== null).length };
+  }
+
+  function statisticsFilterBar(definitions, invalidDates) {
+    const f = moduleState.statsFilters;
+    const inputId = key => 'commerce-stat-' + key;
+    const field = (key, label, control) => `<div><label for="${inputId(key)}">${label}</label>${control}</div>`;
+    const select = (key, label, values, selected = f[key] || '') => field(key, label,
+      `<select id="${inputId(key)}" data-stat-filter="${key}">${A.options(values, selected)}</select>`);
+    const date = (key, label) => field(key, label,
+      `<input id="${inputId(key)}" data-stat-filter="${key}" type="date" value="${E(f[key] || '')}"${invalidDates ? ' aria-invalid="true" aria-describedby="commerce-stat-date-error"' : ''} />`);
+    const productChoices = [...new Set(Object.keys(productPlans).map(statisticsProduct))];
+    const planChoices = [...definitions].filter(([, row]) => !f.product || statisticsProduct(row.product) === f.product)
+      .map(([key, row]) => [key, statisticsPlanLabel(row.product, row.plan)]);
+    const operations = [...new Set(orders.map(row => row.businessType).filter(Boolean))];
+    return `<section class="panel commerce-stat-filters" aria-label="订单统计筛选"><div class="toolbar commerce-stat-filter-controls">
+      ${date('from', '开通起日')}${date('to', '开通止日')}
+      ${select('product', '产品', [['', '全部产品'], ...productChoices])}
+      ${select('plan', '套餐', [['', '全部套餐'], ...planChoices])}
+      ${select('payment', '支付渠道', [['', '全部渠道'], '银行卡', '苹果内购'])}
+      ${select('operation', '业务类型', [['', '全部类型'], ...operations])}
+      ${select('currency', '统计币种', [['CNY', '人民币 CNY'], ['MYR', '马币 MYR']], statisticsCurrency())}
+      ${A.button('重置筛选', 'commerce-stat-reset')}
+      </div>${invalidDates ? '<p class="field-error commerce-stat-filter-error" id="commerce-stat-date-error" role="alert">开通起日须早于或等于止日。</p>' : ''}</section>`;
+  }
+
+  function statisticsSummary(rows, currency) {
+    const actual = statisticsTotals(rows, 'actual'), reference = statisticsTotals(rows, 'reference');
+    const costHelp = '同口径完整订单的费用合计减去已到账回款。' + statisticsQuoteHelp;
+    const profitHelp = '对应订单确认净收款减去净成本。订单须同时有确认实收和完整成本。计算后再舍入至四位小数。';
+    const metrics = [
+      ['revenue', '确认净收款', statisticsSum(rows, row => row.revenue), currency, '客户确认实收减去客户退款。' + statisticsQuoteHelp],
+      ['actual-cost', '实账净成本', actual.netCost, currency, '按实际总成本及实际结算凭据核算。' + costHelp],
+      ['actual-profit', '实账利润', actual.profit, currency, profitHelp],
+      ['reference-cost', '参考净成本', reference.netCost, currency, '采用订单冻结的费用规则或历史参考汇率。' + costHelp],
+      ['reference-profit', '参考利润', reference.profit, currency, profitHelp],
+      ['pending', '待核对', String(rows.filter(row => row.pending).length), '笔', '实收、代付、费用、汇率或套餐资料还有缺项的订单数。']
+    ];
+    return `<div class="summary-strip commerce-stat-summary">${metrics.map(([id, title, amount, unit, help]) =>
+      `<div class="summary-item" data-stat-metric="${id}"><div class="summary-label"><span>${title}</span>${A.titleInfo(title, help, 'stat-metric-' + id)}</div><div class="summary-number">${id === 'pending' ? amount : statisticsAmount(amount)}${amount === null ? '' : `<small>${unit}</small>`}</div></div>`).join('')}</div>`;
+  }
+
+  function statisticsSourceButton(label, key, value, attributes = '') {
+    return A.textAction(label, 'commerce-stat-source', `data-stat-source="${key}" data-value="${E(value)}" ${attributes}`);
+  }
+
+  function renderStatisticsPlans(definitions, facts, currency) {
+    const rows = [];
+    for (const [key, definition] of definitions) {
+      const selected = facts.filter(fact => fact.group === key);
+      if (!selected.length && !definition.showEmpty) continue;
+      rows.push({ id: key, group: key, name: statisticsPlanLabel(definition.product, definition.plan), facts: selected });
+      if (moduleState.statsExpanded !== key) continue;
+      const channels = new Map();
+      for (const fact of selected) {
+        const matching = channels.get(fact.channel) || [];
+        matching.push(fact);
+        channels.set(fact.channel, matching);
+      }
+      for (const [channel, matching] of channels)
+        rows.push({ id: `${key}:${channel}`, group: key, name: channel, channel, facts: matching });
+    }
+    const basisCell = (row, basis) => {
+      const total = statisticsTotals(row.facts, basis);
+      if (!total.count) return '—';
+      return `<div class="commerce-stat-amounts"><strong>净成本 ${statisticsAmount(total.netCost)}</strong><span>单均 ${statisticsAmount(total.average)}</span><span>利润 ${statisticsAmount(total.profit)}</span><small>${total.count} 笔成本 · ${total.profitCount} 笔利润</small></div>`;
+    };
+    return panelTitle('套餐成本', '单均成本 = 同一套餐同口径的完整净成本合计 ÷ 对应订单数。开通日期按北京时间统计，筛选不改变同卡分摊笔数。') + A.table([
+      { id: 'name', label: '套餐 / 渠道', render: row =>
+        row.channel ? `<span class="commerce-stat-channel">${E(row.name)}</span>` : E(row.name) },
+      { id: 'count', label: '订单数', render: row => row.facts.length },
+      { id: 'revenue', label: `确认净收款（${currency}）`, render: row => statisticsAmount(statisticsSum(row.facts, fact => fact.revenue)) },
+      { id: 'actual', label: `实账（${currency}）`, mobileSummary: true,
+        headerHelp: '依据实际总成本和实际结算凭据。单均成本 = 完整净成本合计 ÷ 有完整实账成本的订单数。',
+        render: row => basisCell(row, 'actual') },
+      { id: 'reference', label: `参考（${currency}）`, mobileSummary: true,
+        headerHelp: '依据冻结费用规则或历史报价。单均成本 = 完整参考净成本合计 ÷ 有完整参考成本的订单数。',
+        render: row => basisCell(row, 'reference') },
+      { id: 'pending', label: '待核对', mobileSummary: true, render: row => row.facts.filter(fact => fact.pending).length },
+      { id: 'actions', label: '操作', action: true, render: row => {
+        if (!row.facts.length) return '';
+        const expanded = moduleState.statsExpanded === row.group;
+        const expand = row.channel ? '' : A.textAction(expanded ? '收起渠道' : '展开渠道', 'commerce-stat-expand',
+          `data-group="${E(row.group)}" aria-expanded="${expanded}"`);
+        return `<div class="action-links">${statisticsSourceButton('查看订单', 'plan', row.group,
+          `data-channel="${E(row.channel || '')}"`)}${expand}</div>`;
+      } }
+    ], rows, '', 'commerce-plan-statistics', { title: '暂无对应订单', description: '可以调整统计筛选条件。' });
+  }
+
+  function statisticsFeeItems(fact) {
+    if (!fact.cost) return [];
+    const { items, recoveryItem, netCost } = fact.cost;
+    const lines = items.filter(item => item.key !== 'email' || fact.order.emailCostAmount);
+    if (recoveryItem) lines.push({ ...recoveryItem, amount: M.subtract('0', recoveryItem.amount),
+      originalAmount: M.subtract('0', recoveryItem.originalAmount) });
+    const residual = M.subtract(netCost, sum(lines, line => line.amount));
+    if (M.compare(residual, '0') !== 0) lines.push({ key: 'rounding', amount: residual });
+    return lines;
+  }
+
+  function renderStatisticsFees(facts, currency) {
+    const ledger = facts.flatMap(fact => statisticsFeeItems(fact).map(line => ({ ...line, basis: fact.basis })));
+    const rows = statisticsFeeTypes.filter(([key]) => key !== 'rounding' || ledger.some(line => line.key === key))
+      .map(([id, name, help]) => ({ id, name, help, lines: ledger.filter(line => line.key === id) }));
+    const feeCell = (row, basis) => {
+      const lines = row.lines.filter(line => line.basis === basis);
+      if (!lines.length) return '—';
+      const originals = new Map();
+      for (const { originalCurrency, originalAmount } of lines) {
+        if (originalCurrency) originals.set(originalCurrency,
+          M.add(originals.get(originalCurrency) || '0', originalAmount));
+      }
+      const detail = [...originals].map(([unit, amount]) => `${statisticsAmount(amount)} ${unit}`).join(' · ');
+      return `<div class="commerce-stat-amounts">${statisticsSourceButton(
+        `${statisticsAmount(sum(lines, line => line.amount))} ${currency}`, 'fee', row.id,
+        `data-basis="${basis}" aria-label="查看${statisticsBasis[basis]}${row.name}订单"`
+      )}<small>${lines.length} 笔${detail ? ` · ${E(detail)}` : ''}</small></div>`;
+    };
+    return panelTitle('费用构成', '费用按原币列小计，并逐单折算后加总。实际账单未拆分的金额计入实际总成本未拆分。' + statisticsQuoteHelp) + A.table([
+      { id: 'name', label: '费用项目', render: row => `<div class="title-with-help"><span>${row.name}</span>${A.titleInfo(row.name, row.help, 'stat-fee-' + row.id)}</div>` },
+      { id: 'actual', label: '实账', mobileSummary: true, render: row => feeCell(row, 'actual') },
+      { id: 'reference', label: '参考', mobileSummary: true, render: row => feeCell(row, 'reference') },
+      { id: 'partial', label: '未核全订单的已知费用', mobileSummary: true, render: row => feeCell(row, 'partial') }
+    ], rows, '', 'commerce-fee-statistics') +
+      '<p class="footnote panel-body">按扣款日期统计的发卡实付待补账单。现有开卡费记录用于订单分摊。KYC 和独立换汇实付也需要费用凭据。</p>';
+  }
+
+  function renderStatisticsOrders(facts, currency) {
+    const { statsSource, statsTab } = moduleState;
+    const pending = statsTab === 'pending';
+    let selected = pending ? facts.filter(row => row.pending) : facts;
+    let sourceLabel, feeScope;
+    if (statsSource?.type === 'plan') {
+      selected = selected.filter(row => row.group === statsSource.key && (!statsSource.channel || row.channel === statsSource.channel));
+      const first = selected[0];
+      sourceLabel = first ? statisticsPlanLabel(first.order.product, first.plan) : '所选套餐';
+      if (statsSource.channel) sourceLabel += ' · ' + statsSource.channel;
+    } else if (statsSource?.type === 'fee') {
+      feeScope = statisticsFeeTypes.find(([key]) => key === statsSource.key);
+      if (feeScope) {
+        selected = selected.filter(row => row.basis === statsSource.basis)
+          .map(row => ({ ...row, feeLine: statisticsFeeItems(row).find(line => line.key === statsSource.key) }))
+          .filter(row => row.feeLine);
+        sourceLabel = `${statisticsBasis[statsSource.basis]} · ${feeScope[1]}`;
+      }
+    }
+    const query = S.query?.trim().toLowerCase();
+    if (query) selected = selected.filter(({ order }) =>
+      `${order.orderNo} ${orderIdentity(order)} ${customerLabel(order.customerId)}`.toLowerCase().includes(query));
+    const source = sourceLabel ? `<div class="panel-heading"><span>${E(sourceLabel)} · ${selected.length} 笔</span>${A.textAction('清除定位', 'commerce-stat-clear-source')}</div>` : '';
+    const records = selected.map(row => ({ ...row, id: row.order.id, orderNo: row.order.orderNo,
+      email: orderIdentity(row.order), product: statisticsPlanLabel(row.order.product, row.plan) }));
+    return toolbar('搜索订单、客户或邮箱') + source + tableList([
+      { id: 'orderNo', label: '来源订单' },
+      { id: 'email', label: '账号' },
+      { id: 'product', label: '套餐' },
+      { id: 'reason', label: pending ? '待核对原因' : '核算状态', mobileSummary: true, render: row =>
+        E(row.reasons.join('、') || accountingLabel(row.basis)) },
+      ...(feeScope ? [{ id: 'feeAmount', label: `${feeScope[1]}（${currency}）`, mobileSummary: true, render: row =>
+        statisticsAmount(row.feeLine.amount) }] : []),
+      { id: 'netCost', label: `净成本（${currency}）`, mobileSummary: true, render: row =>
+        E(statisticsAmount(row.cost?.netCost) + (row.basis === 'partial' ? ' · 已知' : '')) },
+      { id: 'revenue', label: `确认净收款（${currency}）`, render: row => statisticsAmount(row.revenue) },
+      { id: 'amount', label: `利润（${currency}）`, render: row =>
+        E(statisticsAmount(row.gain) + (row.basis === 'partial' && row.gain !== null ? ' · 参考' : '')) },
+      { id: 'actions', label: '操作', action: true, render: row =>
+        A.textAction('查看原单', 'commerce-order-detail', `data-id="${E(row.id)}" data-tab="costs"`) }
+    ], records, 'commerce-stat-detail');
+  }
+
   function renderStatistics() {
-    const active = orders.filter((row) => !row.cancelled);
-    const currency = costSettings.currency;
-    const amounts = new Map(active.map((row) => {
-      const accounting = localData ? localAccounting(row) : null;
-      const gain = profit(row, accounting);
-      const revenue = localData
-        ? finance?.calculateConfirmedNetReceipt?.(row, { currency }) ?? null
-        : row.receiptConfirmed && amountValid(row.saleAmount || '')
-          ? shownCurrency(cny(refundable(row), row.saleCurrency, row.rates), currency, row.rates) : null;
-      return [row.id, {
-        profit: gain === null || localData ? gain : shownCurrency(gain, currency, row.rates),
-        revenue,
-        basis: accounting?.basis || 'reference',
-        cardIssueUnallocated: accounting?.cardIssueUnallocated,
-        reasons: financialPendingReasons(row, accounting)
-      }];
-    }));
-    const complete = active.filter((row) => amounts.get(row.id).profit !== null);
-    const unallocated = complete.filter((row) => amounts.get(row.id).cardIssueUnallocated).length;
-    const pending = active.filter((row) => amounts.get(row.id).profit === null);
-    const received = active.filter((row) => amounts.get(row.id).revenue !== null);
-    const reported = (rows, field) => rows.length ? display(sum(rows, (row) => amounts.get(row.id)[field])) : '—';
-    const byBasis = (rows, basis) => rows.filter((row) => amounts.get(row.id).basis === basis);
-    const selected = moduleState.statsTab === 'pending' ? pending : complete;
-    const productRows = Object.keys(productPlans).map((product) => {
-      const rows = complete.filter((row) => row.product === product);
-      return {
-        id: product,
-        product,
-        count: String(rows.length),
-        revenue: reported(received.filter((row) => row.product === product), 'revenue'),
-        actual: reported(byBasis(rows, 'actual'), 'profit'),
-        reference: reported(byBasis(rows, 'reference'), 'profit'),
-        pending: String(pending.filter((row) => row.product === product).length)
-      };
+    const currency = statisticsCurrency(), f = moduleState.statsFilters, clock = orderEvaluationTime();
+    const invalidDates = Boolean(f.from && f.to && f.from > f.to);
+    const active = orders.filter(row => !row.cancelled && !row.draft && row.entitlementStatus !== 'failed' &&
+      !['draft', 'failed', '草稿', '失败'].includes(row.status));
+    const definitions = new Map();
+    const addPlan = (product, plan, showEmpty) => {
+      const key = statisticsPlanKey(product, plan);
+      if (!definitions.has(key)) definitions.set(key, { product, plan, showEmpty });
+    };
+    for (const [product, plans] of Object.entries(productPlans)) {
+      if (f.product && statisticsProduct(product) !== f.product) continue;
+      for (const plan of plans) addPlan(product, plan, !personalProduct(product) || f.product === product);
+    }
+    for (const order of active) {
+      if (!f.product || statisticsProduct(order.product) === f.product) addPlan(order.product, statisticsPlan(order), false);
+    }
+    const selected = invalidDates ? [] : active.filter(order => {
+      if (f.product && statisticsProduct(order.product) !== f.product) return false;
+      if (f.plan && statisticsPlanKey(order.product, statisticsPlan(order)) !== f.plan) return false;
+      if (f.payment && order.payment !== f.payment) return false;
+      if (f.operation && order.businessType !== f.operation) return false;
+      if (!f.from && !f.to) return true;
+      const opened = dateInput(finance?.orderAccountingAt(order) || order.start).slice(0, 10);
+      return opened && (!f.from || opened >= f.from) && (!f.to || opened <= f.to);
     });
-    return (
-      A.header(
-        '订单统计',
-        '已确认净收款按实收减客户退款汇总，跨币种只计入有订单汇率的收款。待核算利润不影响已确认净收款。',
-        `<select id="commerce-stat-currency" aria-label="统计币种">${A.options(
-          [
-            ['CNY', '人民币 CNY'],
-            ['MYR', '马币 MYR']
-          ],
-          costSettings.currency
-        )}</select>${routeButton('下拉设置', 'settings/costs', '', 'settings')}`
-      ) +
-      A.summary([
-        ['已核算订单', complete.length, '条', true],
-        [`确认净收款（${currencyLabel(currency)}）`, reported(received, 'revenue'), currency],
-        [`核算利润合计（${currencyLabel(costSettings.currency)}）`, reported(complete, 'profit'), costSettings.currency],
-        ['待核算', pending.length, '条']
-      ]) +
-      (unallocated ? `<p class="footnote panel-body">${unallocated} 笔订单按已知成本计算参考利润，开卡费未分摊。</p>` : '') +
-      quoteAttribution(active) +
-      `<section class="panel">${tabs(
-        [
-          ['overview', '统计概览'],
-          ['details', '来源订单'],
-          ['pending', '待核算'],
-          ['rates', localData ? '汇率来源' : '演示汇率记录']
-        ],
-        moduleState.statsTab,
-        'commerce-stats-tab',
-        'data-page-actions="tabs"'
-      )}${
-        moduleState.statsTab === 'rates'
-          ? localData
-            ? renderLocalFxSources(active)
-            : `${panelTitle('本次演示汇率', '以下为固定演示值，不代表实时汇率。正式订单需要有效来源和采集时间。')}${A.table(
-                [
-                  {
-                    id: 'currency',
-                    label: '币种',
-                    render: (row) => E(currencyLabel(row.currency))
-                  },
-                  { id: 'rate', label: '兑人民币' },
-                  { id: 'source', label: '来源' },
-                  { id: 'at', label: '采集时间' }
-                ],
-                Object.entries(fxRates).map(([currency, rate]) => ({
-                  id: currency,
-                  currency,
-                  rate,
-                  source: '固定演示值',
-                  at: '2026-11-03 09:00 UTC+8'
-                })),
-                '',
-                'commerce-stat-rates'
-              )}`
-          : moduleState.statsTab === 'overview'
-            ? `<div class="statistics-visual">${window.IDCharts.bars({ title: '各产品订单核算进度', unit: '笔', rows: productRows.map(row => ({ ...row, label: row.product })), series: [{ key: 'count', label: '已核算', tone: 'teal' }, { key: 'pending', label: '待核算', tone: 'amber' }] })}</div>${panelTitle('按产品汇总', '利润合计包含实账和参考核算。参考核算使用订单费用规则或历史报价，开卡成本按同卡已确认开通订单分摊。')}${A.table(
-                [
-                  { id: 'product', label: '产品' },
-                  { id: 'count', label: '已核算订单' },
-                  { id: 'revenue', label: `净收款（${currencyLabel(costSettings.currency)}）` },
-                  { id: 'actual', label: `实账利润（${currencyLabel(costSettings.currency)}）` },
-                  { id: 'reference', label: `参考利润（${currencyLabel(costSettings.currency)}）` },
-                  { id: 'pending', label: '待核算' },
-                  {
-                    id: 'actions',
-                    label: '操作',
-                    action: true,
-                    render: (row) =>
-                      routeButton(
-                        '查看来源',
-                        row.product === 'GPT' ? 'orders/gpt' : claudeOrdersRoute,
-                        'compact'
-                      )
-                  }
-                ],
-                productRows,
-                '',
-                'commerce-product-statistics'
-              )}`
-            : `${toolbar('搜索订单、客户或邮箱')}${tableList(
-                [
-                  { id: 'orderNo', label: '来源订单' },
-                  { id: 'email', label: '账号' },
-                  { id: 'product', label: '产品' },
-                  {
-                    id: 'reason',
-                    label: moduleState.statsTab === 'pending' ? '待核算原因' : '核算状态',
-                    render: (row) => {
-                      const amount = amounts.get(row.id);
-                      return E(amount.reasons.join('、') || (amount.cardIssueUnallocated
-                        ? '参考核算 · 开卡费未分摊' : accountingLabel(amount.basis)));
-                    }
-                  },
-                  {
-                    id: 'amount',
-                    label: `核算收益（${currencyLabel(costSettings.currency)}）`,
-                    render: (row) => {
-                      const amount = amounts.get(row.id).profit;
-                      return amount === null ? A.tag('待核算', 'warning') : E(display(amount));
-                    }
-                  },
-                  {
-                    id: 'actions',
-                    label: '操作',
-                    action: true,
-                    render: (row) =>
-                      A.textAction('查看原单', 'commerce-order-detail', `data-id="${row.id}"`)
-                  }
-                ],
-                selected.filter(
-                  (row) =>
-                    !S.query ||
-                    `${row.orderNo} ${row.email} ${customerLabel(row.customerId)}`.includes(S.query)
-                ),
-                'commerce-stat-detail'
-              )}`
-      }</section>`
-    );
+    const facts = selected.map(order => statisticsFact(order, currency, clock));
+    const partialCount = facts.filter(row => row.basis === 'partial').length;
+    let body;
+    if (moduleState.statsTab === 'overview') {
+      const shownPlans = f.plan ? new Map([...definitions].filter(([key]) => key === f.plan)) : definitions;
+      const chartRows = [...new Set(selected.map(order => statisticsProduct(order.product)))].map(product => {
+        const group = facts.filter(row => statisticsProduct(row.order.product) === product);
+        return { label: product, count: group.filter(row => !row.pending).length, pending: group.filter(row => row.pending).length };
+      });
+      body = renderStatisticsPlans(shownPlans, facts, currency);
+      if (chartRows.length) body += `<div class="statistics-visual">${window.IDCharts.bars({ title: '各产品订单核算进度', unit: '笔',
+        rows: chartRows, series: [{ key: 'count', label: '已核算', tone: 'teal' }, { key: 'pending', label: '待核对', tone: 'amber' }] })}</div>`;
+    } else if (moduleState.statsTab === 'fees') {
+      body = renderStatisticsFees(facts, currency);
+    } else if (moduleState.statsTab === 'rates') {
+      body = localData ? renderLocalFxSources(selected) : panelTitle('本次演示汇率', '固定示例用于演示。') + A.table(
+        [{ id: 'id', label: '币种' }, { id: 'rate', label: '兑人民币' }],
+        Object.entries(fxRates).map(([id, rate]) => ({ id, rate })), '', 'commerce-stat-rates');
+    } else {
+      body = renderStatisticsOrders(facts, currency);
+    }
+    return A.header('订单统计', '按订单开通日期（北京时间）筛选。确认净收款独立统计。' + statisticsQuoteHelp,
+      routeButton('费用设置', 'settings/costs', '', 'settings')) +
+      statisticsSummary(facts, currency) + statisticsFilterBar(definitions, invalidDates) +
+      (partialCount ? `<p class="footnote panel-body">${partialCount} 笔订单开卡费未分摊，已知费用单列。</p>` : '') +
+      quoteAttribution(selected) + `<section class="panel">${tabs([
+        ['overview', '统计概览'], ['fees', '费用拆分'], ['details', '来源订单'], ['pending', '待核算'],
+        ['rates', localData ? '汇率来源' : '演示汇率记录']
+      ], moduleState.statsTab, 'commerce-stats-tab', 'data-page-actions="tabs"')}${body}</section>`;
   }
 
   function contactKey(text, channel) {
@@ -8550,7 +8740,7 @@
       return true;
     }
     if (action === 'commerce-order-detail') {
-      orderDetail(id);
+      orderDetail(id, node.dataset.tab);
       return true;
     }
     if (action === 'commerce-order-detail-tab') {
@@ -8688,6 +8878,35 @@
     }
     if (action === 'commerce-stats-tab') {
       moduleState.statsTab = node.dataset.tab;
+      moduleState.statsSource = null;
+      S.query = '';
+      S.page = 1;
+      A.render();
+      return true;
+    }
+    if (action === 'commerce-stat-source') {
+      moduleState.statsSource = { type: node.dataset.statSource, key: node.dataset.value,
+        channel: node.dataset.channel, basis: node.dataset.basis };
+      moduleState.statsTab = 'details';
+      S.query = '';
+      S.page = 1;
+      A.render();
+      return true;
+    }
+    if (action === 'commerce-stat-expand') {
+      const group = node.dataset.group;
+      moduleState.statsExpanded = moduleState.statsExpanded === group ? '' : group;
+      A.render();
+      $(`[data-action="commerce-stat-expand"][data-group="${CSS.escape(group)}"]`)?.focus({ preventScroll: true });
+      return true;
+    }
+    if (action === 'commerce-stat-reset' || action === 'commerce-stat-clear-source') {
+      if (action === 'commerce-stat-reset') {
+        moduleState.statsFilters = {};
+        moduleState.statsExpanded = '';
+      }
+      moduleState.statsSource = null;
+      S.query = '';
       S.page = 1;
       A.render();
       return true;
@@ -9100,12 +9319,18 @@
       A.setError('commerce-contact-tags', '');
       return true;
     }
-    if (node.id === 'commerce-stat-currency') {
-      if (localData) void A.modules.operations?.updateStatisticsCurrency?.(node.value);
-      else {
-        costSettings.currency = node.value;
-        A.render();
+    const statFilter = node.dataset?.statFilter;
+    if (S.route === 'orders/statistics' && ['from', 'to', 'product', 'plan', 'payment', 'operation', 'currency'].includes(statFilter)) {
+      const filters = moduleState.statsFilters;
+      filters[statFilter] = node.value;
+      if (statFilter === 'product') filters.plan = '';
+      if (statFilter !== 'currency') {
+        moduleState.statsExpanded = '';
+        moduleState.statsSource = null;
       }
+      S.page = 1;
+      A.render();
+      document.getElementById(node.id)?.focus({ preventScroll: true });
       return true;
     }
     const form = node.closest('#commerce-order-form');

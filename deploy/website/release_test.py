@@ -1,3 +1,5 @@
+import hashlib
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -40,6 +42,58 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recharge_adapter_release_scope_mismatch"):
             release.require_website_scope(BASE, TARGET, True)
         ancestor.assert_called_with(BASE, TARGET)
+
+    @patch("release.require_redeem_presentation")
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_workspace_release_requires_the_exact_reviewed_file_set(self, git, ancestor, approval):
+        git.return_value = "\n".join(remote.REDEEM_PRESENTATION_FILES)
+        self.assertIs(release.require_website_scope(BASE, TARGET), approval.return_value)
+        approval.assert_called_once_with(BASE, TARGET)
+        for extra in ("modules/recharge/codexdaichong/native-adapter.mjs", "deploy/recharge-core/Dockerfile"):
+            git.return_value = "\n".join((*remote.REDEEM_PRESENTATION_FILES, extra))
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.subprocess.check_output")
+    @patch("release.Path.read_bytes")
+    def test_presentation_approval_rejects_an_unreviewed_source_change(self, read, content):
+        before = hashlib.sha256(b"old").hexdigest()
+        after = hashlib.sha256(b"new").hexdigest()
+        read.return_value = json.dumps({"beforeAssetsSha256": before, "assetsSha256": after,
+                                        "files": {name: {"before": before, "after": after}
+                                                  for name in remote.REDEEM_PRESENTATION_FILES}}).encode()
+        content.side_effect = lambda args, **kwargs: b"old" if args[2].startswith(BASE) else b"new"
+        self.assertEqual(release.require_redeem_presentation(BASE, TARGET),
+                         {"beforeAssetsSha256": before, "assetsSha256": after})
+        content.side_effect = lambda args, **kwargs: b"old" if args[2].startswith(BASE) else b"unexpected"
+        with self.assertRaisesRegex(RuntimeError, "recharge_presentation_source_mismatch"):
+            release.require_redeem_presentation(BASE, TARGET)
+
+    def test_stage_keeps_default_asset_digest_check_and_verifies_opt_in(self):
+        before, after = "a" * 64, "b" * 64
+        plan = {"before": {"assetsSha256": before},
+                "files": dict.fromkeys(remote.REDEEM_PRESENTATION_FILES, "c" * 64)}
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_assets_changed"):
+            remote.require_asset_digest(plan, after)
+        plan["redeemPresentation"] = {"beforeAssetsSha256": before, "assetsSha256": after}
+        remote.require_asset_digest(plan, after)
+        for changed in (plan | {"adapter": {"runtimeFiles": []}}, plan | {"files": {}},
+                        plan | {"before": {"assetsSha256": "d" * 64}}):
+            with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
+                remote.require_asset_digest(changed, after)
+
+    def test_presentation_bundle_keeps_other_pages_and_upstream_identical(self):
+        base = {name: {"body": "old"} for name in {*remote.REDEEM_PRESENTATION_ASSETS, "/redeem", "/admin"}}
+        candidate = base | {name: {"body": "new"} for name in remote.REDEEM_PRESENTATION_ASSETS}
+        bundle = lambda assets, revision=remote.PINNED_UPSTREAM: Mock(
+            read_bytes=lambda: json.dumps({"revision": revision, "assets": assets}).encode())
+        remote.verify_redeem_bundle(bundle(base), bundle(candidate))
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_redeem_bundle(bundle(base), bundle(candidate | {"/redeem": {"body": "changed"}}))
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_redeem_bundle(bundle(base), bundle(candidate, TARGET))
 
     def test_ssm_payload_is_one_quoted_program(self):
         shell = release.script_for({"operation": "preflight", "sha": TARGET})

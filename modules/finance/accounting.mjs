@@ -276,9 +276,18 @@ export function buildCardIssueAllocations(orders, { clock = Date.now() } = {}) {
   return result;
 }
 
+export function calculateOrder(order, options) {
+  return calculateOrderAmounts(order, options, true);
+}
+
+export function calculateOrderCost(order, options) {
+  return calculateOrderAmounts(order, options, false);
+}
+
 // All converted values share an exact denominator. Apple actual-cost returns are
 // prorated against the documented recoverable part of the total, not against fees.
-export function calculateOrder(order, { appleLedger, cardIssueAllocations, currency = 'CNY', clock = Date.now() } = {}) {
+function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, currency = 'CNY', clock = Date.now() } = {},
+  includeRevenue) {
   const missing = new Set();
   let cardIssueReason;
   try {
@@ -300,7 +309,7 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
     };
     const value = (units, code) => units === 0n ? 0n : units * rate(code);
     const paid = unsigned(order.paidAmount);
-    const received = netReceiptUnits(order);
+    const received = includeRevenue ? netReceiptUnits(order) : 0n;
     const rules = order.costSettings;
     if (!Number.isSafeInteger(rules?.version) || rules.version < 1)
       throw new Error('订单缺少费用规则快照');
@@ -325,32 +334,35 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
 
     const denominator = actual && apple && returned > 0n ? paid : 1n;
     const original = [];
-    let recovery, cardIssueUnallocated = false;
-    const item = (label, units, code, multiplier = one) =>
-      original.push({ label, amount: value(units, code) * multiplier * denominator,
+    let recovery, recoveryUnits = returned, recoveryCurrency = order.paidCurrency;
+    let cardIssueUnallocated = false;
+    const item = (key, label, units, code, multiplier = one) =>
+      original.push({ key, label, amount: value(units, code) * multiplier * denominator,
         originalAmount: formatted(rounded(units * multiplier, one)), originalCurrency: code });
     if (actual) {
       const cost = unsigned(order.actualCostAmount);
-      item('实际总成本（退回前）', cost, order.actualCostCurrency);
+      item('actual-total', '实际总成本（退回前）', cost, order.actualCostCurrency);
       if (apple && returned > 0n) {
         if (!order.appleRecoverableCostAmount)
           throw new Error('请核对实际总成本中可按 Apple 面额比例收回的部分');
         const recoverable = unsigned(order.appleRecoverableCostAmount);
         if (recoverable > cost) throw new Error('Apple 可收回成本不得大于实际总成本');
         recovery = value(recoverable, order.actualCostCurrency) * returned * one;
+        recoveryUnits = rounded(recoverable * returned, paid);
+        recoveryCurrency = order.actualCostCurrency;
       }
     } else {
       const factor = apple && claude ? unsigned(rules.appleDiscount) : one;
       if (factor === 0n || factor > one) throw new Error('Apple 折扣必须大于 0 且不超过 1');
-      item(apple && claude ? '苹果内购折扣后成本' : '代付金额', paid, order.paidCurrency, factor);
+      item('subscription', apple && claude ? '苹果内购折扣后成本' : '代付金额', paid, order.paidCurrency, factor);
       if (!apple && !unlinkedCard && cardIssueAllocations && (allocation || requiresCardAllocation(order.product))) {
         if (allocation?.status !== 'ready')
           throw new Error(allocation?.reason || '本单开卡成本待核对');
-        item('开卡成本分摊', unsigned(allocation.amountUsd), 'USD');
+        item('card-issue', '开卡成本分摊', unsigned(allocation.amountUsd), 'USD');
       }
       if (!apple && claude) {
-        item('代付服务费', unsigned(rules.claudeBankFeeMyr), 'MYR');
-        item('KYC 认证成本', unsigned(rules.claudeAccountCostMyr), 'MYR');
+        item('service', '代付服务费', unsigned(rules.claudeBankFeeMyr), 'MYR');
+        item('kyc', 'KYC 认证成本', unsigned(rules.claudeAccountCostMyr), 'MYR');
       } else if (!apple) {
         if (unlinkedCard || !cardIssueAllocations) {
           const fee = order.issueFeeSnapshot;
@@ -360,19 +372,22 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
             if (!fee) throw new Error('订单缺少开卡费快照');
             if (fee.pending) throw new Error('首次开卡费待核对');
             if (fee.applied)
-              item(unlinkedCard ? '原单已登记开卡费' : '本卡首次开卡费', unsigned(fee.amountUsd), 'USD');
+              item('card-issue', unlinkedCard ? '原单已登记开卡费' : '本卡首次开卡费', unsigned(fee.amountUsd), 'USD');
           }
         }
         const feePercent = unsigned(rules.cardPercent);
         if (feePercent > one) throw new Error('银行卡手续费比例不能大于 1');
-        item('支付比例手续费', paid, order.paidCurrency, feePercent);
-        item('每笔固定手续费', unsigned(rules.cardPerPaymentUsd), 'USD');
+        item('payment-percent', '支付比例手续费', paid, order.paidCurrency, feePercent);
+        item('payment-fixed', '每笔固定手续费', unsigned(rules.cardPerPaymentUsd), 'USD');
       }
-      item('补充邮箱成本', unsigned(order.emailCostAmount || '0'), order.emailCostCurrency || 'CNY');
-      if (apple) recovery = value(returned, 'USD') * factor;
+      item('email', '补充邮箱成本', unsigned(order.emailCostAmount || '0'), order.emailCostCurrency || 'CNY');
+      if (apple) {
+        recovery = value(returned, 'USD') * factor;
+        recoveryUnits = rounded(returned * factor, one);
+      }
     }
     recovery ??= value(returned, order.paidCurrency) * one * denominator;
-    const netRevenue = value(received, order.saleCurrency) * one * denominator;
+    const netRevenue = includeRevenue ? value(received, order.saleCurrency) * one * denominator : 0n;
     const grossCost = original.reduce((sum, row) => sum + row.amount, 0n);
     const targetRate = rate(currency);
     if (missing.size) throw new Error(`订单快照缺少 ${[...missing].join('、')} 汇率`);
@@ -381,9 +396,12 @@ export function calculateOrder(order, { appleLedger, cardIssueAllocations, curre
     const netCost = grossCost - recovery;
     return {
       status: 'ready', currency,
-      revenue: toMoney(netRevenue), originalCost: toMoney(grossCost),
+      originalCost: toMoney(grossCost),
       recoveredCost: toMoney(recovery), netCost: toMoney(netCost),
-      profit: toMoney(netRevenue - netCost),
+      ...(includeRevenue && { revenue: toMoney(netRevenue), profit: toMoney(netRevenue - netCost) }),
+      ...(recovery > 0n && { recoveryItem: {
+        key: 'recovery', amount: toMoney(recovery), originalAmount: formatted(recoveryUnits), originalCurrency: recoveryCurrency
+      } }),
       basis: actual && snapshot.basis === 'settlement' ? 'actual' : 'reference',
       ...(allocation?.status === 'ready' && { cardIssue: allocation }),
       ...(cardIssueUnallocated && { cardIssueUnallocated }),

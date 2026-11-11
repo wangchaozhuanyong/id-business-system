@@ -79,63 +79,114 @@
     const clock = new Intl.DateTimeFormat('zh-CN', {
       timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
-    let state = 'idle', busy = false, offline = false, lastEntry = '', updated = '';
+    let state = 'idle', busy = false, offline = false, lastEntry = '', updated = '', stepsAvailable;
+    let followFrame;
     const recordedSteps = new Set();
+    const sourceLabels = { page: '本页', receipt: '状态回执', execution: '执行事件' };
     let latestStep;
     const renderStatus = () => {
       refresh.disabled = state !== 'running' || busy;
       refresh.textContent = busy ? '刷新中…' : '刷新';
-      status.textContent = offline ? '连接中断，正在重连' : state === 'running'
-        ? '自动更新中' + (updated ? ' · ' + updated : '')
-        : state === 'finished' ? '更新已结束' + (updated ? ' · ' + updated : '')
-        : state === 'uncertain' ? '提交结果待核对' : state === 'submitting' ? '正在确认提交结果' : '等待提交';
+      if (offline) status.textContent = '连接中断，正在重连';
+      else if (state === 'running' || state === 'finished') {
+        const statusText = state === 'running' ? '自动更新中' : '更新已结束';
+        const stepsHint = stepsAvailable === false ? ' · 执行记录暂不可读' :
+          state === 'running' && stepsAvailable === true && !recordedSteps.size ? ' · 等待执行事件' : '';
+        status.textContent = statusText + (updated ? ' · ' + updated : '') + stepsHint;
+      } else status.textContent = {
+        idle: '等待验证兑换码', verifying: '正在验证兑换码', verified: '兑换码已验证，等待提交',
+        submitting: '正在确认提交结果', uncertain: '提交结果待核对'
+      }[state];
     };
-    const scrollLatest = () => { viewport.scrollTop = viewport.scrollHeight; };
+    const scrollLatest = () => {
+      if (viewport.clientHeight) viewport.scrollTop = viewport.scrollHeight;
+    };
+    const followLatest = () => {
+      if (!follow.checked) return;
+      scrollLatest();
+      if (followFrame !== undefined) return;
+      followFrame = requestAnimationFrame(() => {
+        followFrame = undefined;
+        if (follow.checked) scrollLatest();
+      });
+    };
     const setFollow = (enabled) => {
       follow.checked = enabled;
       latest.hidden = enabled;
-      if (enabled) scrollLatest();
+      if (enabled) followLatest();
     };
     follow.addEventListener('change', () => setFollow(follow.checked));
     latest.addEventListener('click', () => setFollow(true));
     viewport.addEventListener('scroll', () => {
-      if (follow.checked && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 24)
+      if (follow.checked && viewport.clientHeight && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 24)
         setFollow(false);
     }, { passive: true });
+    const resize = new ResizeObserver(followLatest);
+    resize.observe(viewport);
+    window.addEventListener('pagehide', event => { if (!event.persisted) resize.disconnect(); });
     refresh.addEventListener('click', () => window.idRechargeRefreshTask?.());
     const validTime = at => Number.isSafeInteger(at) && at > 0 && at <= 8.64e15;
-    const append = (text, tone, at) => {
+    const append = (text, tone, at, source) => {
       empty.hidden = true;
       const entry = document.createElement('li');
       entry.dataset.tone = tone;
+      entry.dataset.eventSource = source;
       const instant = validTime(at) ? at : Date.now();
       entry.dataset.at = String(instant);
       const time = document.createElement('time');
       const date = new Date(instant);
       time.dateTime = date.toISOString();
       time.textContent = clock.format(date);
-      entry.append(time, document.createTextNode('  ' + text));
+      const origin = document.createElement('span');
+      origin.className = 'workspace-log-origin';
+      origin.textContent = sourceLabels[source];
+      entry.append(time, document.createTextNode('  '), origin, document.createTextNode('  ' + text));
       const following = [...entries.children].find(child => Number(child.dataset.at) > instant);
+      const top = following?.getBoundingClientRect().top;
+      const preservePosition = !follow.checked && viewport.scrollTop > 0 && top < viewport.getBoundingClientRect().top;
       entries.insertBefore(entry, following || null);
-      if (follow.checked) scrollLatest();
+      if (preservePosition) viewport.scrollTop += following.getBoundingClientRect().top - top;
     };
-    const record = (text, tone = 'running', at) => {
-      const signature = tone + ':' + text;
+    const record = (text, tone = 'running', at, source = 'page') => {
+      const signature = source + ':' + tone + ':' + text;
       if (!text || signature === lastEntry) return;
       lastEntry = signature;
-      append(text, tone, at);
+      append(text, tone, at, source);
+      followLatest();
     };
-    window.idRechargeWorkspaceLog = {
+    const workspaceLog = {
       record,
+      receipt(text, tone, at) { record(text, tone, at, validTime(at) ? 'execution' : 'receipt'); },
+      beginSubmission() {
+        if (state === 'finished') {
+          workspaceLog.reset();
+          workspaceLog.receipt('本次提交使用已验证的兑换码。');
+        }
+        workspaceLog.state('submitting');
+        record('账号资料格式检查通过。');
+        record('正在提交，等待服务确认。');
+      },
       syncSteps(steps, labels) {
-        for (const step of Array.isArray(steps) ? steps.slice(-80) : []) {
+        let added = false;
+        for (const step of Array.isArray(steps) ? steps.slice(-160) : []) {
           if (!step || !Object.hasOwn(labels, step.stage) || !validTime(step.at)) continue;
-          const key = step.stage + ':' + step.at;
+          const attempt = Number.isSafeInteger(step.attempt) && step.attempt > 0 && step.attempt <= 999 ? step.attempt : '';
+          const query = Number.isSafeInteger(step.query) && step.query > 0 && step.query <= 999999 ? step.query : '';
+          const id = Number.isSafeInteger(step.id) && step.id > 0 ? step.id : '';
+          const key = [step.stage, step.at, attempt, query, id].join(':');
           if (recordedSteps.has(key)) continue;
           recordedSteps.add(key);
           const label = labels[step.stage];
-          append(label, 'running', step.at);
+          const detail = attempt ? '第 ' + attempt + ' 次尝试 · ' : query ? '第 ' + query + ' 次查询 · ' : '';
+          const tone = ['worker_retry', 'card_retry', 'payment_decline_detected', 'provider_query_failed'].includes(step.stage)
+            ? 'review' : 'running';
+          append(detail + label, tone, step.at, 'execution');
+          added = true;
           if (!latestStep || step.at >= latestStep.at) latestStep = { label, at: step.at };
+        }
+        if (added) {
+          followLatest();
+          renderStatus();
         }
         return latestStep?.label;
       },
@@ -144,15 +195,18 @@
         empty.hidden = false;
         recordedSteps.clear();
         latestStep = undefined;
-        state = 'idle'; busy = false; offline = false; lastEntry = ''; updated = '';
+        state = 'idle'; busy = false; offline = false; lastEntry = ''; updated = ''; stepsAvailable = undefined;
         setFollow(true);
         renderStatus();
       },
       state(value) { state = value; renderStatus(); },
       refreshing(value) { busy = value; renderStatus(); },
-      connected() {
-        if (offline) record('连接已恢复，继续更新任务状态。');
+      connected(available) {
+        if (offline) record('连接已恢复，继续更新任务状态。', 'running', undefined, 'receipt');
+        if (stepsAvailable === false && available === true)
+          record('执行记录读取已恢复。', 'running', undefined, 'receipt');
         offline = false;
+        stepsAvailable = available;
         updated = clock.format(new Date());
         renderStatus();
       },
@@ -162,6 +216,7 @@
         renderStatus();
       }
     };
+    window.idRechargeWorkspaceLog = workspaceLog;
     window.IDTitleHelp.attach(document.getElementById('workspace-log-title'), document.getElementById('workspace-log-help'));
   }
 

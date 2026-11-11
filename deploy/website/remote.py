@@ -28,6 +28,12 @@ PROTECTED = ("recharge", "recharge-native", "vendure", "formal-mysql", "media", 
 ADAPTER_UNIT = "id-business-independent-recharge.service"
 ADAPTER_DROP = DROP.parent.parent / (ADAPTER_UNIT + ".d") / "99-id-managed-adapter-release.conf"
 PINNED_UPSTREAM = "4e9bb201cf481d4bcc85da34970fc26c63ab818a"
+REDEEM_PRESENTATION_FILES = (
+    "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/gateway.mjs",
+    "modules/recharge/codexdaichong/progress-presentation.mjs", "modules/recharge/codexdaichong/shell.js",
+    "modules/recharge/codexdaichong/shell.css",
+)
+REDEEM_PRESENTATION_ASSETS = {"/workspace", "/shell.js", "/shell.css"}
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
 MONITORING = FORMAL / "backup-monitoring"
@@ -154,6 +160,27 @@ def mount_backup_monitoring(content):
     return content.replace(original, mounted)
 
 
+def require_asset_digest(plan, candidate_sha):
+    before = plan["before"]["assetsSha256"]
+    presentation = plan.get("redeemPresentation")
+    if presentation is None:
+        require(candidate_sha == before, "recharge_assets_changed")
+        return
+    require(isinstance(presentation, dict) and not plan.get("adapter") and
+            set(REDEEM_PRESENTATION_FILES) <= set(plan["files"]) and
+            presentation.get("beforeAssetsSha256") == before and presentation.get("assetsSha256") == candidate_sha and
+            candidate_sha != before and re.fullmatch(r"[a-f0-9]{64}", candidate_sha),
+            "recharge_presentation_approval_mismatch")
+
+
+def verify_redeem_bundle(previous, candidate):
+    old, new = (json.loads(path.read_bytes()) for path in (previous, candidate))
+    require(old["revision"] == new["revision"] == PINNED_UPSTREAM and
+            old["assets"].keys() == new["assets"].keys(), "recharge_presentation_bundle_scope_mismatch")
+    changes = {name for name, asset in old["assets"].items() if new["assets"][name] != asset}
+    require(changes == REDEEM_PRESENTATION_ASSETS, "recharge_presentation_bundle_scope_mismatch")
+
+
 def stage(plan, release):
     sha = plan["sha"]
     before = plan["before"]
@@ -162,7 +189,7 @@ def stage(plan, release):
     source_name = f"independent-source-{sha}.tar.gz"
     assets_name = f"independent-assets-{sha}.json"
     require(set(plan["artifacts"]) == {source_name, assets_name}, "invalid_artifact_names")
-    require(plan["artifacts"][assets_name]["sha256"] == before["assetsSha256"], "recharge_assets_changed")
+    require_asset_digest(plan, plan["artifacts"][assets_name]["sha256"])
     require(not release.exists(), "release_directory_already_exists_inspect_before_retry")
     release.mkdir(mode=0o755)
     artifacts = release / "artifacts"
@@ -178,12 +205,14 @@ def stage(plan, release):
     run(["tar", "-xzf", str(artifacts / source_name), "-C", str(source)])
     require(all(digest(source / name) == expected for name, expected in plan["files"].items()),
             "prepared_source_mismatch")
+    live = ROOT / "releases" / base
+    if plan.get("redeemPresentation"):
+        verify_redeem_bundle(live / "assets.json", artifacts / assets_name)
     (source / ".runtime").mkdir(mode=0o755)
     shutil.copyfile(artifacts / assets_name, release / "assets.json")
     os.chmod(release / "assets.json", 0o644)
     ops = release / "operations"
     ops.mkdir(mode=0o755)
-    live = ROOT / "releases" / base
     for name in LAUNCHERS:
         previous = live / "operations" / name
         require(digest(previous) == before["launchers"][name], "live_launcher_changed")
@@ -414,6 +443,7 @@ def read_website(plan, release, source, adapter=None):
     else:
         raise ReleaseError("website_or_sidecar_readback_failed")
     require(mount_matches(containers["app"], release / "assets.json"), "live_assets_mount_mismatch")
+    require_asset_digest(plan, digest(release / "assets.json"))
     require(all(any(m["Destination"] == "/state" and not m["RW"] for m in containers[name]["Mounts"])
                 for name in WEBSITE[1:]), "sidecar_state_mount_not_readonly")
     hash_files = """
@@ -477,8 +507,11 @@ def release_website(plan):
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
               "qualityRun": plan["qualityRun"], "preflightCommand": plan["preflightCommand"],
               "appCanaryPassed": True, "protectedComponentsUnchanged": not include_adapter,
+              "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
+    if plan.get("redeemPresentation"):
+        result["redeemPresentationVerified"] = True
     if adapter:
         result.update(adapter=adapter, adapterCanaryPassed=True, nativeEngineUnchanged=True,
                       otherProtectedComponentsUnchanged=True)

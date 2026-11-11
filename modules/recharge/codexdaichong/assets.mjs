@@ -794,12 +794,16 @@ function adaptRechargeProgress(source, workspace) {
     ["const START_SUCCESS_TEXT = '激活成功';", "const START_SUCCESS_TEXT = '开通成功';"],
     [
       "setProgress(3, '正在恢复任务进度...');",
-      "applyTaskState({ status: 'running' });"
+      workspace
+        ? "window.idRechargeWorkspaceLog?.receipt('兑换码关联一笔进行中的任务，正在恢复读取。');\n                        applyTaskState({ status: 'running' }, false);"
+        : "applyTaskState({ status: 'running' });"
     ],
     ["                        showStatus(data.data?.message || '检测到当前 CDK 正在开通中，正在恢复任务进度...', 'success');", ''],
     ["setProgress(3, '正在启动自动化...', 'running', { force: true });", "setProgress(0, '正在确认提交结果…', 'submitting');" +
-      (workspace ? "\n            window.idRechargeWorkspaceLog?.reset();\n            window.idRechargeWorkspaceLog?.state('submitting');\n            window.idRechargeWorkspaceLog?.record('正在提交，等待服务确认。');" : '')],
-    ["setProgress(8, '任务已启动，正在开通中...');", "applyTaskState({ ...data, status: 'running' });"],
+      (workspace ? "\n            window.idRechargeWorkspaceLog?.beginSubmission();" : '')],
+    ["setProgress(8, '任务已启动，正在开通中...');", workspace
+      ? "window.idRechargeWorkspaceLog?.receipt('服务已受理提交，开始读取执行记录。');\n                    applyTaskState({ ...data, status: 'running' }, false);"
+      : "applyTaskState({ ...data, status: 'running' });"],
     ["                    showStatus('任务已启动，正在为您开通中...', 'success');", ''],
     ['                        initWebSocket(data.data.jobKey);\n', ''],
     ['                    initWebSocket(data.jobKey);\n', ''],
@@ -913,24 +917,24 @@ function adaptRechargeProgress(source, workspace) {
             const request = { jobKey };
             taskStatusRequest = request;
             clearTaskStatusPolling();
-            ${workspace ? 'window.idRechargeWorkspaceLog?.refreshing(true);' : ''}
+            ${workspace ? 'window.idRechargeWorkspaceLog?.refreshing(true);\n            let nextReadDelay = 1500;' : ''}
             try {
                 const data = await readRechargeTask(jobKey${workspace ? ', true' : ''});
                 if (activeJobKey === jobKey && taskStatusRequest === request) {
-                    ${workspace ? 'window.idRechargeWorkspaceLog?.connected();' : ''}
+                    ${workspace ? 'window.idRechargeWorkspaceLog?.connected(data.stepsAvailable);' : ''}
                     applyTaskState(data);
                 }
             } catch {
                 if (activeJobKey === jobKey && taskStatusRequest === request && !taskCompleted) {
                     setProgressHint('正在重新连接，已保留上次进度。');
-                    ${workspace ? 'window.idRechargeWorkspaceLog?.disconnected();' : ''}
+                    ${workspace ? 'window.idRechargeWorkspaceLog?.disconnected(); nextReadDelay = 3000;' : ''}
                 }
             } finally {
                 if (taskStatusRequest === request) {
                     taskStatusRequest = null;
                     ${workspace ? 'window.idRechargeWorkspaceLog?.refreshing(false);' : ''}
                     if (activeJobKey === jobKey && !taskCompleted)
-                        taskStatusPollTimer = setTimeout(() => pollTaskStatus(jobKey), 5000);
+                        taskStatusPollTimer = setTimeout(() => pollTaskStatus(jobKey), ${workspace ? 'nextReadDelay' : '5000'});
                 }
             }
         }
@@ -948,7 +952,7 @@ function adaptRechargeProgress(source, workspace) {
         }
   `);
   source = replaceSection(source, 'function applyTaskState(data) {', "startBtn.addEventListener('click'", `
-        function applyTaskState(data) {
+        function applyTaskState(data${workspace ? ', recordReceipt = true' : ''}) {
             const status = taskOutcome(data, data.status);
             if (taskCompleted || (status !== 'running' && !Object.hasOwn(openingResults, status))) return;
             ${workspace ? 'const detailedStep = window.idRechargeWorkspaceLog?.syncSteps(data.steps, openingSteps);' : ''}
@@ -958,11 +962,13 @@ function adaptRechargeProgress(source, workspace) {
             statusMsg.style.display = 'none';
             if (status === 'running') {
                 const needsVerification = activeCaptcha?.stage === 'awaiting_captcha' || activeCaptcha?.status === 'pending';
-                const verificationSubmitted = activeCaptcha?.stage === 'captcha_submitted' || activeCaptcha?.status === 'submitted';
+                const verificationSubmitted = activeCaptcha?.stage === 'captcha_submitted' || activeCaptcha?.status === 'submitted';${workspace ? `
+                const useStep = data.stepsAvailable !== false && detailedStep &&
+                    data.stage !== 'paid' && data.stage !== 'subscription_check';` : ''}
                 const label = needsVerification ? '等待完成验证' : verificationSubmitted ? '正在确认验证结果' :
-                    ${workspace ? 'detailedStep || ' : ''}stageLabel(data.stage);
+                    ${workspace ? '(useStep ? detailedStep : stageLabel(data.stage))' : 'stageLabel(data.stage)'};
                 setProgress(progress, label);
-                ${workspace ? 'if (!detailedStep || needsVerification || verificationSubmitted) window.idRechargeWorkspaceLog?.record(label);' : ''}
+                ${workspace ? 'if (recordReceipt && (!useStep || needsVerification || verificationSubmitted)) window.idRechargeWorkspaceLog?.receipt(label);' : ''}
                 setProgressHint(needsVerification && !captchaVerificationBtn.disabled
                     ? '请在验证页面完成操作后返回。' : '请稍候，同一兑换码无需重复提交。');
                 updateFlowUI(2, 'running');
@@ -979,8 +985,8 @@ function adaptRechargeProgress(source, workspace) {
             setProgress(succeeded ? 100 : progress, result.label, result.tone);
             const renewalUnconfirmed = succeeded && data.renewalUnconfirmed === true;
             setProgressHint(renewalUnconfirmed ? '自动续订取消状态未确认，请到目标账号账单页核对。' : '');
-            ${workspace ? `window.idRechargeWorkspaceLog?.record(result.title + '。' + result.label, result.tone, data.terminalAt);
-            if (renewalUnconfirmed) window.idRechargeWorkspaceLog?.record('自动续订取消状态未确认，请到目标账号账单页核对。', 'review');
+            ${workspace ? `window.idRechargeWorkspaceLog?.receipt(result.title + '。' + result.label, result.tone, data.terminalAt);
+            if (renewalUnconfirmed) window.idRechargeWorkspaceLog?.receipt('自动续订取消状态未确认，请到目标账号账单页核对。', 'review');
             window.idRechargeWorkspaceLog?.state('finished');` : ''}
             updateFlowUI(2, result.flow);
             setButtonText(startBtn, result.button);
@@ -1110,19 +1116,19 @@ function adaptWorkspaceRecharge(source) {
     ${taskProgress}
     <section class="workspace-log" aria-labelledby="workspace-log-title">
       <div class="workspace-log-toolbar">
-        <h3 id="workspace-log-title">运行日志</h3>
-        <p id="workspace-log-help">显示本页收到的任务状态和本次实际记录的步骤，按北京时间展示。任务运行时自动更新；向上滚动可暂停跟随。</p>
+        <h3 id="workspace-log-title">实时操作记录</h3>
+        <p id="workspace-log-help">显示本页收到的任务状态和原服务实际记录的执行事件。执行事件用记录时间，页面操作和状态回执用本页时间，均为北京时间。运行时每 1.5 秒尝试更新，向上滚动可暂停跟随。</p>
         <div class="workspace-log-actions">
           <label class="workspace-log-follow"><input id="workspaceLogFollow" type="checkbox" checked>自动滚动</label>
           <button type="button" id="workspaceLogRefresh" class="btn-secondary" disabled>刷新</button>
         </div>
       </div>
       <div id="workspaceLogViewport" class="workspace-log-viewport" tabindex="0" role="region" aria-label="本次充值运行日志">
-        <p id="workspaceLogEmpty" class="workspace-log-empty">暂无运行记录，提交后自动更新。</p>
-        <ol id="workspaceLogEntries" class="workspace-log-entries" role="log" aria-label="任务状态记录" aria-live="polite" aria-relevant="additions"></ol>
+        <p id="workspaceLogEmpty" class="workspace-log-empty">验证兑换码后，这里会记录本次操作。</p>
+        <ol id="workspaceLogEntries" class="workspace-log-entries" role="log" aria-label="本次操作记录" aria-live="polite" aria-relevant="additions"></ol>
       </div>
       <div class="workspace-log-footer">
-        <span id="workspaceLogStatus" role="status">等待提交</span>
+        <span id="workspaceLogStatus" role="status">等待验证兑换码</span>
         <button type="button" id="workspaceLogLatest" class="btn-secondary" hidden>回到最新</button>
       </div>
     </section>
@@ -1239,6 +1245,9 @@ function adaptWorkspaceRechargeScript(source) {
     `
             redeemBtn.disabled = true;
             cdkInput.readOnly = true;
+            window.idRechargeWorkspaceLog?.reset();
+            window.idRechargeWorkspaceLog?.state('verifying');
+            window.idRechargeWorkspaceLog?.record('开始验证兑换码。');
             toggleLoading(redeemBtn, true);
   `
   );
@@ -1254,6 +1263,9 @@ function adaptWorkspaceRechargeScript(source) {
                     plan.textContent = matchedPlan || '套餐待确认';
                     verifiedPlan.textContent = matchedPlan ? '已锁定套餐 · ' + matchedPlan : '套餐待确认';
                     verifiedPlan.hidden = false;
+                    window.idRechargeWorkspaceLog?.receipt(matchedPlan
+                        ? '兑换码验证通过，已确认套餐。' : '兑换码验证通过，套餐待确认。');
+                    window.idRechargeWorkspaceLog?.state('verified');
   `
   );
   source = source
@@ -1272,6 +1284,20 @@ function adaptWorkspaceRechargeScript(source) {
                         statusMsg.style.display = 'none';
                     }
   `
+  );
+  replace(
+    "                    showStatus(data.message || '兑换码无效或已使用', 'error');",
+    `                    window.idRechargeWorkspaceLog?.receipt('兑换码未通过校验，请查看页面提示。', 'review');
+                    window.idRechargeWorkspaceLog?.state('idle');
+                    showStatus(data.message || '兑换码无效或已使用', 'error');`
+  );
+  replace(
+    "                showStatus('网络请求失败', 'error');\n            } finally {\n                toggleLoading(redeemBtn, false);",
+    `                window.idRechargeWorkspaceLog?.record('暂时无法读取兑换码校验结果。', 'review');
+                window.idRechargeWorkspaceLog?.state('idle');
+                showStatus('网络请求失败', 'error');
+            } finally {
+                toggleLoading(redeemBtn, false);`
   );
   replace(
     '                toggleLoading(redeemBtn, false);',
@@ -1331,7 +1357,7 @@ function adaptWorkspaceRechargeScript(source) {
                 } else {
                     if (data.manualReview) pendingReview.add(verifiedCdk);
                     hideProgress();
-                    window.idRechargeWorkspaceLog?.record(data.manualReview
+                    window.idRechargeWorkspaceLog?.receipt(data.manualReview
                         ? '开通结果待核对，请用原兑换码查询。' : '提交未受理，请检查页面提示后重试。', 'review');
                     window.idRechargeWorkspaceLog?.state('finished');
                     updateFlowUI(2, data.manualReview ? 'manual' : 'failed');

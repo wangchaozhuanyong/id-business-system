@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const path = '/integrations/codexdaichong/api/';
 const jobKey = 'isolated-progress-task';
@@ -50,7 +50,7 @@ test('充值进度使用同一任务，桌面右栏和手机顺序正确，失�
       page.setDefaultTimeout(8000);
       await page.clock.install();
       await page.goto(origin + '/#/workspace/recharge');
-      if (dark) await page.locator('#theme-toggle').click();
+      if (dark) await toggleDesignTheme(page);
       const frame = page.frameLocator('iframe[data-view="redeem"]:visible');
       const panel = frame.getByRole('complementary', { name: '充值进度' });
       await panel.getByText('待开始', { exact: true }).waitFor();
