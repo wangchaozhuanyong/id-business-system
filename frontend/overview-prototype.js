@@ -334,21 +334,33 @@
       </div></section>`;
   }
 
+  const stockIssueLabels = [
+    ['dead', '死号', 'danger'], ['unlocking', '解封中', 'warning'],
+    ['disabled', '邮箱停用', 'warning'], ['frozen', '冻结', 'warning'],
+    ['restricted', '封控中', 'warning'], ['review', '资料待核对', 'warning']
+  ];
+  function stockIssueDetail(issues) {
+    if (!issues) return '—';
+    const tags = stockIssueLabels.filter(([key]) => issues[key] > 0)
+      .map(([key, label, tone]) => A.tag(`${label} ${countText(issues[key])}`, tone)).join(' ');
+    return tags ? `<div class="overview-stock-issues">${tags}</div>` : '无';
+  }
+
   function renderInventory(section) {
     const stock = section?.data?.stocks;
     const rows = inventories.filter(([, , route]) => allowed(route)).map(([key, name, route]) => {
       const row = stock?.[key];
       const cells = key === 'microsoft'
         ? `<td colspan="3">已登记 ${countText(row?.registered)} 条</td>`
-        : `<td>${key === 'relay' ? '需核验' : countText(row?.available)}</td>
-          <td>${countText(row?.claimed)}</td><td class="${row?.abnormal ? 'overview-warning' : ''}">${countText(row?.abnormal)}</td>`;
+        : `<td>${key === 'relay' && row ? '提取时核验' : countText(row?.available)}</td>
+          <td>${countText(row?.claimed)}</td><td>${stockIssueDetail(row?.issues)}</td>`;
       return `<tr><th scope="row">${link(name, route)}</th>${cells}</tr>`;
     }).join('');
     if (!rows) return '';
     return `<section class="panel overview-section" aria-labelledby="overview-inventory"><div class="panel-body">
-      ${heading('inventory', '库存现状', '可用数量沿用可提取资格与占用规则。Claude 包含养号要求，苹果隐藏邮箱的提取资格需远端核验。')}
+      ${heading('inventory', '库存现状', '可提取数量沿用各类库存的资格和占用规则。Claude 按养号要求计算，苹果隐藏邮箱在提取时远端核验。状态明细优先显示死号和解封中，每条资料只计一种主要状态。')}
       <table class="overview-data-table overview-stock-table" aria-labelledby="overview-inventory"><thead><tr>
-        <th scope="col">类型</th><th scope="col">可用</th><th scope="col">已领用</th><th scope="col">异常</th>
+        <th scope="col">类型</th><th scope="col">可提取</th><th scope="col">已领用</th><th scope="col">状态明细</th>
       </tr></thead><tbody>${rows}</tbody></table>
       <p class="overview-section-note${section?.phase === 'error' ? ' overview-warning' : ''}">${E(sectionStatus(section))}</p>
       </div></section>`;
@@ -356,12 +368,20 @@
 
   function renderCustomers(section) {
     const data = section?.data;
-    const items = [['有效服务', data?.active], ['续费待跟进', data?.followUp], ['已确认流失', data?.lost]];
-    return `<section class="panel overview-section" aria-labelledby="overview-customers"><div class="panel-body">
-      ${heading('customers', '客户状态', '按客户编号去重。客户名下仍有有效服务时不计为流失。归属和服务周期存疑的订单另列。', link('查看客户流失', 'workspace/customer-loss'))}
-      <dl class="overview-customer-summary">${items.map(([title, value]) => `<div><dt>${title}</dt><dd>${countText(value)}${value != null ? '<small>位</small>' : ''}</dd></div>`).join('')}</dl>
-      <p class="overview-section-note">待核对订单 ${countText(data?.review)} 笔</p>
-      <p class="overview-section-note${section?.phase === 'error' ? ' overview-warning' : ''}">${E(sectionStatus(section))}</p>
+    const items = [
+      ['有效服务', data?.active, '客户列表', 'customers/list'],
+      ['续费待跟进', data?.followUp, '续费管理', 'workspace/renewals'],
+      ['已确认流失', data?.lost, '流失明细', 'workspace/customer-loss']
+    ];
+    return `<section class="panel overview-section overview-customer-section" aria-labelledby="overview-customers"><div class="panel-body">
+      ${heading('customers', '客户状态', '按客户编号去重。客户名下仍有有效服务时不计为流失。归属和服务周期存疑的订单另列。')}
+      <dl class="overview-customer-summary">${items.map(([title, value, action, route]) => `<div>
+        <dt>${title}</dt><dd><span class="overview-customer-count">${countText(value)}${value != null ? '<small>位</small>' : ''}</span>${link(action, route)}</dd>
+        </div>`).join('')}</dl>
+      <div class="overview-section-note overview-customer-meta">
+        <span>待核对订单 ${countText(data?.review)} 笔</span>
+        <span class="${section?.phase === 'error' ? 'overview-warning' : ''}">${E(sectionStatus(section))}</span>
+      </div>
       </div></section>`;
   }
 

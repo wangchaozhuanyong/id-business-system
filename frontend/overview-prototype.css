@@ -48,7 +48,7 @@
   gap: 2px 7px;
   min-width: 0;
 }
-.overview-metric-value strong, .overview-customer-summary dd {
+.overview-metric-value strong, .overview-customer-count {
   font-size: 30px;
   font-weight: 650;
   line-height: 1.15;
@@ -62,6 +62,24 @@
   font-size: 12px;
   line-height: 1.55;
   overflow-wrap: anywhere;
+}
+.overview-metric[data-overview-metric="profit"] { container: overview-profit / inline-size; }
+@container overview-profit (min-width: 274px) {
+  .overview-metric > .panel-body {
+    grid-template:
+      "title notes" max-content
+      "amount notes" minmax(0, 1fr) / minmax(0, 1.3fr) minmax(104px, 1fr);
+    align-items: start;
+    column-gap: 10px;
+  }
+  .overview-metric .section-title-row { grid-area: title; }
+  .overview-metric-value { grid-area: amount; }
+  .overview-metric .overview-metric-value strong { font-size: clamp(19px, 7cqi, 30px); }
+  .overview-metric-footer {
+    grid-area: notes;
+    align-self: center;
+    justify-self: end;
+  }
 }
 .overview-receipts { display: grid; gap: 7px; margin: 0; }
 .overview-receipts > div { display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap; }
@@ -196,8 +214,12 @@ a.overview-task:hover .overview-task-text strong { color: var(--primary); }
 .overview-data-table tbody tr:last-child th { border-bottom: 0; }
 .overview-data-table td[colspan] { color: var(--secondary); }
 .overview-product-table th:nth-child(4) { width: 23%; }
-.overview-stock-table th:first-child { width: 45%; }
+.overview-stock-table th:first-child { width: 36%; }
+.overview-stock-table thead th:last-child { width: 29%; }
 .overview-stock-table .overview-link { min-height: 26px; }
+.overview-stock-issues { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 6px; }
+.overview-stock-issues .tag { max-width: 100%; text-align: start; }
+.overview-customer-section { align-self: start; }
 .overview-customer-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -207,8 +229,10 @@ a.overview-task:hover .overview-task-text strong { color: var(--primary); }
   border-bottom: 1px solid var(--line);
 }
 .overview-customer-summary dt { font-size: 12px; line-height: 1.5; color: var(--secondary); }
-.overview-customer-summary dd { margin: 8px 0 0; }
-.overview-customer-summary small { margin-inline-start: 4px; font-size: 11px; color: var(--secondary); }
+.overview-customer-summary dd { display: grid; justify-items: start; gap: 4px; margin: 8px 0 0; }
+.overview-customer-count small { margin-inline-start: 4px; font-size: 11px; color: var(--secondary); }
+.overview-customer-summary .overview-link { min-height: 32px; font-size: 12px; }
+.overview-customer-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 @media (max-width: 1150px) {
   .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .overview-columns { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
@@ -217,16 +241,18 @@ a.overview-task:hover .overview-task-text strong { color: var(--primary); }
   .overview-heading { min-height: 44px; }
   .overview-columns { grid-template-columns: minmax(0, 1fr); }
   .overview-toolbar > .toolbar-right { justify-content: flex-start; }
-  .overview-controls .button, .overview-heading > .overview-link,
+  .overview-controls .button, .overview-heading > .overview-link, .overview-customer-summary .overview-link,
   .overview-task-links .overview-link, .overview-stock-table .overview-link { min-height: 44px; }
   .overview-daily summary { padding-block: 13px; }
 }
 @media (max-width: 560px) {
   .website-overview, .overview-columns { gap: 14px; }
   .overview-metrics { gap: 10px; }
-  .overview-metric-value strong, .overview-customer-summary dd { font-size: 25px; }
+  .overview-metric-value strong, .overview-customer-count { font-size: 25px; }
   .overview-receipts strong { font-size: 18px; }
   .overview-data-table th, .overview-data-table td { padding-inline: 5px; }
+  .overview-stock-table th { font-size: 11px; }
+  .overview-stock-issues .tag { padding-inline: 5px; }
 }
 @media (max-width: 359px) {
   .overview-metrics { grid-template-columns: minmax(0, 1fr); }
