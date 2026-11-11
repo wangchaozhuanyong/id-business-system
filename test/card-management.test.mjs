@@ -35,6 +35,10 @@ test('预计余额按同一有效报价换成美元，加当前固定费和 2 �
   assert.equal(result.quotedAt, quote.at);
   const current = { ...quote, provider: 'currency-api', source: 'Fawaz Currency API' };
   assert.equal(cardFundingEstimate(order, '0.3', [current], now).usd, result.usd);
+  const backup = { ...quote, provider: 'frankfurter-v2', source: 'Frankfurter v2',
+    fetchedAt: '2026-11-09T11:30:00.000Z', rates: { PHP: '0.1', USD: '7.2' } };
+  assert.equal(cardFundingEstimate(order, '0.3', [backup], now).usd, '141.19');
+  assert.equal(cardFundingEstimate(order, '0.3', [backup, current], now).source, current.source);
   assert.equal(cardFundingEstimate(order, '0.3', [{ ...current, source: 'unrecognized' }], now).usd, undefined);
   assert.equal(cardFundingEstimate({ ...order, paidCurrency: 'USD', paidAmount: '20.001' }, '0.325', [], now).usd, '22.33');
   assert.equal(cardFundingEstimate({ ...order, paidConfirmed: false }, '0.3', [quote], now).usd, undefined);

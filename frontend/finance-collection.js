@@ -167,7 +167,7 @@
       '<input id="fx-currency-search" type="search" placeholder="搜索币种" aria-label="搜索采集币种" autocomplete="off" />' +
       '<div class="fx-currency-options">' + Object.entries(labels).map(([code, label]) => '<label><input type="checkbox" name="fx-currencies" value="' + code + '" ' + (d.currencies.includes(code) ? 'checked' : '') + ' />' + e(label) + '</label>').join('') + '</div><span id="fx-currency-empty" hidden>没有匹配币种</span></div>';
     return '<form id="fx-settings-form" class="form-panel" novalidate><input type="hidden" name="fx-version" value="' + e(d['fx-version']) + '" /><div class="form-grid">' +
-      field('汇率来源', 'fx-provider', A.select('fx-provider', [['disabled', '暂不启用'], ['currency-api', 'Fawaz Currency API（每日报价）']], d['fx-provider']), '当前来源按天更新，采集频率不等于报价更新频率。') +
+      field('汇率来源', 'fx-provider', A.select('fx-provider', [['disabled', '暂不启用'], ['currency-api', 'Fawaz Currency API（每日报价）']], d['fx-provider']), '优先使用 Fawaz。主源无法提供有效完整报价时，自动尝试 Frankfurter v2。两个来源均免费，无需密钥。') +
       A.field('自动采集', 'fx-enabled', '<label class="checkbox-label"><input id="fx-enabled" name="fx-enabled" type="checkbox" ' + (d.enabled ? 'checked' : '') + ' /><span>启用后台采集</span></label>', false, '服务器后台执行，关闭浏览器仍继续；暂停后保留报价与订单快照。') +
       field('采集方式', 'fx-schedule', A.select('fx-schedule', [['source', '跟随来源更新时间'], ['interval', '固定时间间隔']], d['fx-schedule'])) +
       numeric('采集间隔', 'fx-interval', 60, 10080, '固定间隔时使用；最短 60 分钟。跟随来源更新时间时此项不参与调度。', '分钟') +

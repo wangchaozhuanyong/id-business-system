@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { automaticProvider, createAutomaticOrderSnapshot, orderAccountingAt, requiredQuoteCurrencies, normalizeAutomaticProvider, isAutomaticQuote } from '../../modules/finance/accounting.mjs';
-import { fetchFinanceQuote } from './quote-service.mjs';
+import {
+  automaticProvider, compareQuoteRecency, createAutomaticOrderSnapshot, isAutomaticQuote,
+  normalizeAutomaticProvider, orderAccountingAt, requiredQuoteCurrencies
+} from '../../modules/finance/accounting.mjs';
+import { fetchFinanceQuote, quoteLimitCooldown } from './quote-service.mjs';
 import { collectionDomain, collectionError, defaults, validateSettings, quoteId, cleanupPlan, collectionMetrics, hour, day } from './collection-policy.mjs';
 
 const iso = time => new Date(time).toISOString();
@@ -39,7 +42,7 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
     const at = state.active?.expiresAt || state.retryAt || state.nextRunAt;
     let due = at ? Date.parse(at) : now;
     if (state.cooldownUntil) due = Math.max(due, Date.parse(state.cooldownUntil));
-    const latest = [...quotes].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+    const latest = [...quotes].sort(compareQuoteRecency)[0];
     if (!state.active && !state.failures && latest && state.lastRequestAt && Date.parse(latest.expiresAt) > now)
       due = Math.max(due, Math.min(Date.parse(state.lastRequestAt) + hour, Date.parse(latest.expiresAt)));
     return due;
@@ -91,7 +94,7 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
         throw collectionError(429, '正在等待来源冷却，请按运行状态中的时间重试');
       if (data.state.cooldownUntil && Date.parse(data.state.cooldownUntil) > now)
         throw collectionError(429, '来源限流冷却尚未结束，请稍后重试');
-      const latest = [...data.quotes].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+      const latest = [...data.quotes].sort(compareQuoteRecency)[0];
       if (data.state.lastRequestAt && now - Date.parse(data.state.lastRequestAt) < hour &&
           latest && now < Date.parse(latest.expiresAt) && !data.state.failures)
         throw collectionError(429, '最近一小时已采集，当前报价仍有效；请稍后再采集');
@@ -112,11 +115,13 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
       if (data.state.active?.id !== id) throw collectionError(409, '采集任务所有权已变化，结果未覆盖');
       const run = data.runs.find(run => run.id === id);
       Object.assign(run, { finishedAt: iso(finished), durationMs: Math.max(0, finished - now) });
+      let limited = failure?.status === 429;
       if (failure) {
         run.status = 'failed';
         run.error = failure.status === 429 ? '来源请求受限，等待冷却后重试' : '汇率来源请求或报价校验失败';
       } else {
-        const { errors, ...values } = quote;
+        const { errors, rateLimited, ...values } = quote;
+        limited = rateLimited === true;
         const id = quoteId(values), previous = data.quotes.find(item => item.id === id);
         run.quoteId = Object.keys(values.rates).length > 1 ? id : null;
         run.errors = errors;
@@ -130,14 +135,14 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
       const okay = ['updated', 'unchanged'].includes(run.status);
       data.state.active = null;
       data.state.failures = okay ? 0 : data.state.failures + 1;
-      if (!okay) data.state.cooldownUntil = iso(Math.max(Date.parse(data.state.cooldownUntil || '') || 0,
-        finished + (failure?.status === 429 ? 20 * 60_000 : [60_000, 5 * 60_000, 15 * 60_000][Math.min(data.state.failures - 1, 2)])));
+      const delay = limited ? quoteLimitCooldown : [60_000, 5 * 60_000, 15 * 60_000][Math.min(Math.max(data.state.failures - 1, 0), 2)];
+      if (!okay || limited) data.state.cooldownUntil = iso(Math.max(Date.parse(data.state.cooldownUntil || '') || 0,
+        finished + delay));
       else data.state.cooldownUntil = null;
       if (okay) data.state.lastSuccessAt = iso(finished);
       // Configuration edited during the request keeps its newer schedule.
       if (data.settings.version === settings.version) {
         const attempts = data.state.failures;
-        const delay = failure?.status === 429 ? 20 * 60_000 : [60_000, 5 * 60_000, 15 * 60_000][Math.min(attempts - 1, 2)];
         data.state.retryAt = !okay && attempts <= settings.retryAttempts ? iso(finished + delay) : null;
         data.state.nextRunAt = nextRegular(settings, quote, finished);
         if (!okay && !data.state.retryAt) data.state.nextRunAt = iso(finished + (settings.schedule === 'source' ? day : settings.intervalMinutes * 60_000));
@@ -188,7 +193,7 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
     const at = orderTime(order), required = requiredQuoteCurrencies(order);
     return data.quotes.filter(quote => isAutomaticQuote(quote) && Date.parse(quote.at) <= at &&
       at < Date.parse(quote.expiresAt) && required.every(code => Object.hasOwn(quote.rates, code)))
-      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+      .sort(compareQuoteRecency)[0];
   }
   async function snapshotFor(order) {
     let data = read().data;
@@ -215,7 +220,7 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
   function view({ tab = 'rates', query = '', currency = '', status = '', mode = '', from = '', to = '',
     page = 1, pageSize = 8 } = {}) {
     const { version, data } = read(), now = clock();
-    const sorted = [...data.quotes].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || Date.parse(b.fetchedAt) - Date.parse(a.fetchedAt));
+    const sorted = [...data.quotes].sort(compareQuoteRecency);
     const rates = data.settings.currencies.map(code => {
       const quote = sorted.find(quote => quote.rates[code]);
       return { id: code, currency: code, rate: quote?.rates[code] || null, source: quote?.source || null,

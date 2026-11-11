@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import test from 'node:test';
 
 import {
-  automaticProvider, calculateOrder, createOrderSnapshot, snapshotAction
+  automaticProvider, calculateOrder, createOrderSnapshot, fallbackQuoteProvider, snapshotAction
 } from '../modules/finance/accounting.mjs';
 import { createAutomaticSnapshotHandler } from '../server/finance/quote-route.mjs';
 import { createFinanceQuoteService, fetchFinanceQuote } from '../server/finance/quote-service.mjs';
@@ -12,10 +12,13 @@ import { checkFinanceSnapshots } from '../server/finance/snapshot-integrity.mjs'
 
 const initial = Date.parse('2026-11-05T05:00:00Z');
 const hour = 3_600_000;
+const primaryRates = { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500, egp: 6.25 };
 const providerResponse = (at = initial, overrides = {}) => Response.json({
   date: new Date(at).toISOString().slice(0, 10),
-  cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500, egp: 6.25 }, ...overrides
+  cny: primaryRates, ...overrides
 });
+const fallbackRows = (at = initial) => Object.entries(primaryRates).filter(([code]) => code !== 'cny')
+  .map(([code, rate]) => ({ date: new Date(at).toISOString().slice(0, 10), base: 'CNY', quote: code.toUpperCase(), rate }));
 const newOrder = (id, start = '2026-11-05T12:30') => ({
   id, orderNo: id, version: 1, start, product: 'GPT', payment: '银行卡',
   paidAmount: '1000', paidCurrency: 'PHP', saleAmount: '250', saleCurrency: 'CNY',
@@ -75,7 +78,7 @@ test('七币种精确倒数、并发合并和缓存时效，刷新后不重算�
   assert.deepEqual(calculateOrder(order, { clock: now, currency: 'MYR' }), old);
 });
 
-test('缺币种、过期、未来、限流与超时均不产生快照，冷却期内不重试', async () => {
+test('主备均无法提供有效报价时不产生快照，冷却期内不重试', async () => {
   const failures = [
     () => providerResponse(initial - 48 * hour),
     () => providerResponse(initial + 24 * hour),
@@ -86,11 +89,11 @@ test('缺币种、过期、未来、限流与超时均不产生快照，冷却�
   ];
   for (const fail of failures) {
     let calls = 0;
-    const service = serviceFor(async () => { calls++; return fail(); });
+    const service = serviceFor(async () => ++calls === 1 ? fail() : new Response(null, { status: 503 }));
     const order = newOrder('pending');
     await assert.rejects(service.snapshotFor(order), /没有完整且有效/);
     await assert.rejects(service.snapshotFor(order), /没有完整且有效/);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     assert.equal(calculateOrder(order, { clock: initial }).status, 'pending');
   }
 });
@@ -171,22 +174,70 @@ test('自动取价进行期间手工快照可以先提交，自动请求回来�
 });
 
 
-test('免费来源使用固定备援地址；共享超时、限流和非法报价不绕过校验', async () => {
-  const urls = [], signals = [];
-  const quote = await fetchFinanceQuote({ clock: () => initial, fetchQuote: async (url, options) => {
-    urls.push(url); signals.push(options.signal);
-    return urls.length === 1 ? new Response(null, { status: 503 }) : providerResponse();
-  } });
-  assert.equal(urls[1], 'https://latest.currency-api.pages.dev/v1/currencies/cny.min.json');
-  assert.equal(signals[0], signals[1]);
-  assert.equal(quote.provider, 'currency-api');
-  assert.equal(quote.at, '2026-11-05T00:00:00.000Z');
-  assert.equal(quote.expiresAt, '2026-11-06T12:00:00.000Z');
-  let calls = 0;
-  await assert.rejects(fetchFinanceQuote({ clock: () => initial, fetchQuote: async () => {
-    calls++; return providerResponse(initial, { cny: { cny: 2 } });
-  } }), /基准无效/);
-  assert.equal(calls, 1);
+test('主源故障、限流、超时或报价无效时，可取独立备用源的完整批次', async () => {
+  const primaryFailures = [
+    () => new Response(null, { status: 503 }),
+    () => new Response(null, { status: 429 }),
+    () => { throw new DOMException('stub timeout', 'TimeoutError'); },
+    () => providerResponse(initial - 48 * hour),
+    () => providerResponse(initial, { cny: { cny: 2 } }),
+    () => providerResponse(initial, { cny: { cny: 1, myr: 0.6 } })
+  ];
+  for (const failure of primaryFailures) {
+    const urls = [], signals = [];
+    const quote = await fetchFinanceQuote({ partial: true, clock: () => initial, fetchQuote: async (url, options) => {
+      urls.push(new URL(url)); signals.push(options.signal);
+      assert.equal(options.redirect, 'error');
+      return urls.length === 1 ? failure() : Response.json(fallbackRows());
+    } });
+    assert.deepEqual(urls.map(url => url.host), ['cdn.jsdelivr.net', 'api.frankfurter.dev']);
+    assert.equal(urls[1].pathname, '/v2/rates');
+    assert.equal(urls[1].searchParams.get('base'), 'CNY');
+    assert.equal(urls[1].searchParams.get('quotes'), 'MYR,USD,PHP,CLP,IDR,EGP');
+    assert.notEqual(signals[0], signals[1]);
+    assert.equal(quote.provider, fallbackQuoteProvider.id);
+    assert.equal(quote.source, fallbackQuoteProvider.source);
+    assert.equal(quote.at, '2026-11-05T00:00:00.000Z');
+    assert.equal(quote.expiresAt, '2026-11-06T12:00:00.000Z');
+    assert.equal(quote.rates.MYR, '1.60000000');
+    assert.equal(quote.rates.PHP, '0.12500000');
+    assert.deepEqual(quote.errors, {});
+  }
+});
+
+test('备用报价缺失、重复、基准错误、日期混合或过期时拒绝整个批次', async () => {
+  const rows = fallbackRows();
+  for (const invalid of [
+    rows.slice(1),
+    [rows[0], ...rows.slice(0, -1)],
+    [{ ...rows[0], base: 'USD' }, ...rows.slice(1)],
+    [{ ...rows[0], date: '2026-11-04' }, ...rows.slice(1)],
+    [{ ...rows[0], rate: 0 }, ...rows.slice(1)],
+    fallbackRows(initial - 48 * hour),
+    fallbackRows(initial + 24 * hour)
+  ]) {
+    await assert.rejects(fetchFinanceQuote({ partial: true, clock: () => initial, fetchQuote: async url =>
+      new URL(url).host === 'cdn.jsdelivr.net' ? new Response(null, { status: 503 }) : Response.json(invalid)
+    }), /报价/);
+  }
+  const primary = await fetchFinanceQuote({ partial: true, clock: () => initial, fetchQuote: async url =>
+    new URL(url).host === 'cdn.jsdelivr.net'
+      ? providerResponse(initial, { cny: { cny: 1, myr: 0.5 } })
+      : Response.json(rows.slice(1))
+  });
+  assert.equal(primary.provider, automaticProvider.id);
+  assert.deepEqual(primary.rates, { CNY: '1', MYR: '2.00000000' });
+  assert.equal(Object.keys(primary.errors).length, 5);
+});
+
+test('取消采集会停止请求备用来源', async () => {
+  const controller = new AbortController(), urls = [];
+  await assert.rejects(fetchFinanceQuote({ signal: controller.signal, fetchQuote: async url => {
+    urls.push(new URL(url).host);
+    controller.abort();
+    return new Response(null, { status: 503 });
+  } }), { name: 'AbortError' });
+  assert.deepEqual(urls, ['cdn.jsdelivr.net']);
 });
 
 test('新来源仍保留 JSON 小数精度，历史 ExchangeRate-API 快照核算不被重写', async () => {
