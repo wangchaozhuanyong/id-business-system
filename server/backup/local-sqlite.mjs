@@ -5,13 +5,9 @@ import {
 import { createHash } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
-import { claudeGoogleCopyDomainPrefix } from '../claude-google-subscriptions.mjs';
 import { fileURLToPath } from 'node:url';
 
-import { bitBrowserDefaultsDomain, createLocalBusinessStore } from '../local-business.mjs';
-import { bitBrowserAddressDomain } from '../bitbrowser-addresses.mjs';
-import { bitBrowserConnectionDomain } from '../bitbrowser-connections.mjs';
-import { bitBrowserProxyDomain } from '../bitbrowser-proxies.mjs';
+import { verifyBusinessDocumentPayloads } from '../local-business.mjs';
 import { productionDataPaths } from '../production-data.mjs';
 
 const root = await realpath(fileURLToPath(new URL('../../', import.meta.url)));
@@ -233,54 +229,12 @@ async function readRecoveryKey(path) {
   }
 }
 
-function verifyRecoveredDocuments(path, { documents, auditEntries }) {
+function verifyRecoveredDocuments(path, documents, key) {
   if (!documents.length) throw new BackupError('快照没有加密业务文档，无法验证密钥匹配');
-  let store;
   try {
-    store = createLocalBusinessStore(path);
-    for (const { domain, version } of documents) {
-      let result;
-      if (domain.startsWith('toolbox:')) {
-        result = store.loadToolbox({ id: domain.slice('toolbox:'.length) });
-      } else if (domain.startsWith(claudeGoogleCopyDomainPrefix)) {
-        const snapshot = store.loadClaudeGoogleCopySettings({
-          id: domain.slice(claudeGoogleCopyDomainPrefix.length), role: 'admin'
-        });
-        result = { version: snapshot.version, data: snapshot };
-      } else if (domain.startsWith('saved-totp:')) {
-        const snapshot = store.loadSavedTotp({ id: domain.slice('saved-totp:'.length) });
-        result = { version: snapshot.version, data: snapshot.items };
-      } else if (domain === 'managed-mailbox-pool') {
-        const snapshot = store.loadManagedMailboxPool();
-        result = { version: snapshot.version, data: snapshot.items };
-      } else if (domain === 'website-visits') {
-        const snapshot = store.loadWebsiteVisitBackup();
-        result = { version: snapshot.version, data: snapshot };
-      } else if (['recharge-codes', 'tenant-cards', 'order-sync', 'card-types', 'finance-rates', 'subscription-management'].includes(domain)) {
-        result = store.featureDocument(domain);
-      } else if (domain.startsWith(`${bitBrowserAddressDomain}:`)) {
-        result = store.loadBitBrowserAddressBackup(domain);
-      } else if (domain.startsWith(`${bitBrowserConnectionDomain}:`)) {
-        const owner = domain.slice(bitBrowserConnectionDomain.length + 1);
-        const { version, profiles } = store.loadBitBrowserConnections({ id: owner });
-        if (!Array.isArray(profiles)) throw new Error();
-        result = { version, data: profiles };
-      } else if (domain.startsWith(`${bitBrowserDefaultsDomain}:`)) {
-        result = store.loadBitBrowserDefaults({ id: domain.slice(bitBrowserDefaultsDomain.length + 1) });
-      } else if (domain.startsWith(`${bitBrowserProxyDomain}:`)) {
-        const { version, items } = store.loadBitBrowserProxies({ id: domain.slice(bitBrowserProxyDomain.length + 1) });
-        result = { version, data: items };
-      } else {
-        result = store.load(domain);
-      }
-      if (result.version !== version || !result.data || typeof result.data !== 'object') throw new Error();
-    }
-    // The public audit reader intentionally caps results at 1000 rows.
-    if (store.audit().length !== Math.min(auditEntries, 1000)) throw new Error();
+    verifyBusinessDocumentPayloads(path, key);
   } catch {
     throw new BackupError('业务回读失败，请核对配套密钥和快照版本');
-  } finally {
-    store?.close();
   }
 }
 
@@ -300,8 +254,8 @@ export async function restoreSnapshot({ input, key, output }) {
     await copyFile(source.database, database, constants.COPYFILE_EXCL);
     await chmod(database, 0o600);
     const details = await verifyFile(database, source.manifest);
+    verifyRecoveredDocuments(database, details.documents, recoveryKey);
     await writeFile(database + '.key', recoveryKey, { flag: 'wx', mode: 0o600 });
-    verifyRecoveredDocuments(database, details);
     return { restored: true, documents: details.documents.length, auditEntries: details.auditEntries };
   } catch (error) {
     if (created) await removeAttempt(target);
