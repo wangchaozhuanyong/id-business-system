@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { claudeHistoryPreview, planClaudeHistoryIntake, stageClaudeHistoryIntake } from '../server/claude-history-intake.mjs';
-import { handleLocalBusiness } from '../server/local-business.mjs';
+import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { accountLifecycleSummary } from '../server/account-lifecycle.mjs';
 import { checkInventoryHistory } from '../server/inventory-history.mjs';
 import { inspectInventoryUsage } from '../server/inventory-usage.mjs';
+import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { withClaudeMailboxCandidates } from '../server/tools/claude-mailbox-candidates.mjs';
 
 const at = new Date('2026-11-10T08:00:00Z');
@@ -96,6 +97,71 @@ test('预检阻止冲突和无效行，重试不重复登记', () => {
   const extracted = structuredClone(inventory.data);
   Object.assign(extracted.accounts[0], { inventoryState: 'claimed', health: 'normal', status: '正常' });
   assert.match(checkInventoryHistory(inventory.data, extracted), /不可提取/);
+});
+
+test('Claude 历史销售从原库存生成订单，买家可补齐，死号保留原周期与终止', () => {
+  const store = createLocalBusinessStore(':memory:');
+  const tenant = { id: 'tenant-supplier', name: '合成出租方', active: true };
+  const buyer = { id: 'customer-buyer', name: '合成买家', active: true };
+  const clock = Date.parse('2026-11-11T04:00:00Z');
+  const subscriptionRows = () => store.withSubscriptions(actor, snapshots => projectSubscriptions(snapshots, clock));
+  try {
+    store.saveBatch([{ domain: 'inventory', version: 0, data: {
+      mailboxes: [opened, dead].map(({ email }, i) => ({ id: 'google-' + i, email, type: 'google', status: '正常' })),
+      accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [], tableSettings: [], undo: []
+    } }, { domain: 'commerce', version: 0, data: {
+      orders: [], tenants: [tenant], customers: [buyer], operating: [], rentBatches: [], logs: []
+    } }]);
+    store.saveClaudeHistory({ rows: [opened, dead], inventoryVersion: 1 }, actor);
+    const originalInventory = store.load('inventory');
+    const choices = store.claudeHistoricalSales();
+    const [liveAccount, endedAccount] = choices.accounts;
+    assert.deepEqual(choices.accounts.map(row => [row.email, row.ended]), [[opened.email, false], [dead.email, true]]);
+    assert.ok(subscriptionRows().every(row => row.scope === 'owned'));
+    const versions = { inventoryVersion: choices.inventoryVersion, commerceVersion: choices.commerceVersion };
+    const input = {
+      ...versions, accountId: liveAccount.id, tenantId: tenant.id,
+      payment: '银行卡', saleAmount: '1500', saleCurrency: 'CNY', actualCostAmount: '1350', actualCostCurrency: 'CNY'
+    };
+    assert.throws(() => store.saveClaudeHistoricalSale(input, { ...actor, role: 'employee' }), /只有管理员/);
+    assert.throws(() => store.saveClaudeHistoricalSale({ ...input, tenantId: buyer.id }, actor), /出租账号的租户/);
+    assert.throws(() => store.saveClaudeHistoricalSale({ ...input, customerId: tenant.id }, actor), /购买账号的客户/);
+    assert.throws(() => store.saveClaudeHistoricalSale({ ...input, paidConfirmed: true }, actor), /核对历史销售资料/);
+    const first = store.saveClaudeHistoricalSale(input, actor);
+    assert.equal(first.created, true);
+    assert.deepEqual(store.saveClaudeHistoricalSale(input, actor), { ...first, created: false });
+    assert.throws(() => store.saveClaudeHistoricalSale({ ...input, saleAmount: '2100' }, actor), /已有订单/);
+    const endedInput = { ...versions, accountId: endedAccount.id, tenantId: tenant.id,
+      payment: '苹果内购', saleAmount: '2100', saleCurrency: 'CNY', subscriptionEndedAt: '2026-11-06T19:20' };
+    assert.throws(() => store.saveClaudeHistoricalSale(endedInput, actor), /已变化/);
+    const ended = store.saveClaudeHistoricalSale({ ...endedInput, commerceVersion: first.version }, actor);
+    assert.equal(ended.orderNo, 'OD-LOCAL-0002');
+    assert.deepEqual(store.load('inventory'), originalInventory);
+    assert.deepEqual(store.claudeHistoricalSales().accounts, []);
+    const [firstOrder, endedOrder] = [first, ended].map(result =>
+      store.load('commerce').data.orders.find(order => order.id === result.orderId));
+    assert.deepEqual([firstOrder.customerId, firstOrder.tenantId, firstOrder.saleAmount, firstOrder.actualCostAmount],
+      ['', tenant.id, '1500', '1350']);
+    assert.deepEqual([firstOrder.paidConfirmed, firstOrder.receiptConfirmed, endedOrder.actualCostAmount], [false, false, '']);
+    assert.deepEqual([endedOrder.start, endedOrder.expiry, endedOrder.subscriptionEndedAt],
+      ['2026-10-27', '2026-11-26', '2026-11-06T19:20']);
+    for (const [order, status] of [[firstOrder, 'pending'], [endedOrder, 'ended']]) {
+      const row = subscriptionRows().find(row => row.account === order.email);
+      assert.deepEqual([row.scope, row.status, row.series[0].orderNo], ['customer', status, order.orderNo]);
+    }
+    store.saveOrderCompletion(actor, { action: 'fill-manual-details', orderId: firstOrder.id,
+      version: firstOrder.version, details: { customerId: buyer.id } });
+    const linked = subscriptionRows().find(row => row.account === firstOrder.email);
+    assert.deepEqual([linked.scope, linked.status, linked.customerId], ['customer', 'active', buyer.id]);
+    assert.deepEqual(store.load('inventory'), originalInventory);
+    const commerce = store.load('commerce');
+    commerce.data.tenants.push({ id: 'another-tenant', name: '其他出租方', active: true });
+    store.saveBatch([{ domain: 'commerce', version: commerce.version, data: commerce.data }]);
+    assert.equal(store.load('commerce').data.orders.length, 2);
+    assert.deepEqual(store.load('inventory'), originalInventory);
+  } finally {
+    store.close();
+  }
 });
 
 test('历史入库接口仅接受管理员同源预检和确认', async () => {

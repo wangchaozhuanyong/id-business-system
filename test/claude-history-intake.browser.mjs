@@ -5,9 +5,11 @@ import { pathToFileURL } from 'node:url';
 const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
 import { accountLifecycleSummaries } from '../server/account-lifecycle.mjs';
-import { claudeHistoryPreview, planClaudeHistoryIntake, stageClaudeHistoryIntake } from '../server/claude-history-intake.mjs';
+import {
+  claudeHistoricalSales, claudeHistoryPreview, planClaudeHistoryIntake, recordClaudeHistoricalSale, stageClaudeHistoryIntake
+} from '../server/claude-history-intake.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, separatorSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'super' };
 const at = new Date('2026-11-10T08:00:00Z');
@@ -136,4 +138,94 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   assert.deepEqual(errors, []);
   assert.deepEqual(requests.external, []);
+});
+
+test('Claude 订单补录复用原账号，保留租户并在订阅显示来源订单', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const email = 'sold-history@example.test';
+  const account = { id: 'historical-account', type: 'claude', email, emailType: 'google',
+    inventoryState: 'used', status: '正常', health: 'normal',
+    claudeHistory: { phase: 'opened', plan: 'Max 20x', start: '2026-10-31T22:00', expiry: '2026-11-30T22:00' } };
+  const tenant = { id: 'supplier', name: '合成出租方', active: true };
+  for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
+    const local = {
+      inventory: { version: 1, data: { accounts: [account], mailboxes: [{ id: 'mailbox', email, type: 'google' }] } },
+      commerce: { version: 1, data: { orders: [], customers: [], tenants: [tenant], logs: [] } }
+    };
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const requests = await interceptDesign(context, { localFixtures: local, actor, skipRechargeAssets: true });
+    await context.route(origin + '/api/local/claude-history-intake', route => {
+      const { mode, ...input } = route.request().postDataJSON();
+      if (mode === 'sales-candidates') return route.fulfill({ json: claudeHistoricalSales(local.inventory, local.commerce, at.getTime()) });
+      assert.equal(mode, 'record-sale');
+      const { order, created } = recordClaudeHistoricalSale(input, local.inventory, local.commerce, actor, at);
+      assert.equal(created, true);
+      local.commerce.data.orders.push(order);
+      local.commerce.version++;
+      return route.fulfill({ json: { orderId: order.id, orderNo: order.orderNo, created, version: local.commerce.version } });
+    });
+    await context.route(origin + '/api/local/subscriptions/list', route => {
+      const input = route.request().postDataJSON();
+      const items = projectSubscriptions({ inventory: local.inventory, commerce: local.commerce,
+        mailboxes: { data: { items: [] } } }, at.getTime()).filter(row => row.scope === input.scope)
+        .map(({ _account, _records, ...row }) => row);
+      return route.fulfill({ json: { items, total: items.length, accountCount: items.length, counts: { pending: items.length },
+        page: 1, pageSize: input.pageSize, revision: 'fixture-' + local.commerce.version, now: at.toISOString() } });
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(origin + '/#/orders/claude');
+    await page.getByText('暂无 Claude 订单', { exact: true }).waitFor();
+    if (theme === 'dark') await toggleDesignTheme(page);
+    assert.deepEqual((await separatorSnapshot(page)).findings, []);
+    const action = page.getByRole('button', { name: '补录历史销售', exact: true });
+    if (await action.isVisible()) await action.click();
+    else {
+      await page.locator('#main [data-action="mobile-list-actions"]:visible').first().click();
+      await page.getByRole('menuitem', { name: '补录历史销售', exact: true }).click();
+    }
+    const drawer = page.getByRole('dialog', { name: '补录 Claude 历史销售' });
+    const titleHelp = drawer.locator('.drawer-title-row .title-help');
+    const help = titleHelp.locator('summary');
+    assert.equal(await titleHelp.getAttribute('open'), null);
+    const bounds = await help.boundingBox();
+    const titleBounds = await drawer.locator('#drawer-title').boundingBox();
+    assert.ok(bounds.x >= titleBounds.x + titleBounds.width - 1 && Math.abs(bounds.y + bounds.height / 2 -
+      titleBounds.y - titleBounds.height / 2) < 4);
+    if (width < 600) assert.ok(bounds.width >= 44 && bounds.height >= 44);
+    const form = drawer.locator('#commerce-claude-historical-sale-form');
+    const before = await form.boundingBox();
+    await help.click();
+    assert.notEqual(await titleHelp.getAttribute('open'), null);
+    const after = await form.boundingBox();
+    assert.ok(Math.abs(before.y - after.y) < 1);
+    await help.press('Escape');
+    assert.equal(await titleHelp.getAttribute('open'), null);
+    await drawer.getByLabel(/历史账号/).selectOption(account.id);
+    await drawer.getByRole('combobox', { name: '租户*', exact: true }).selectOption(tenant.id);
+    await drawer.getByLabel(/原开通方式/).selectOption('银行卡');
+    await drawer.getByLabel(/^售价\*?$/).fill('1500');
+    await drawer.getByLabel('实际总成本', { exact: true }).fill('1350');
+    await drawer.getByRole('button', { name: '保存历史订单', exact: true }).click();
+    await drawer.waitFor({ state: 'hidden' });
+    const [order] = local.commerce.data.orders;
+    assert.deepEqual([order.tenantId, order.customerId, order.actualCostAmount], [tenant.id, '', '1350']);
+    const orderRow = page.locator(`[data-table="commerce-orders-Claude"] tbody tr[data-row-id="${order.id}"]`);
+    await orderRow.waitFor();
+    const number = orderRow.getByText(order.orderNo, { exact: true });
+    if (!(await number.isVisible())) await orderRow.getByRole('button', { name: '更多资料', exact: true }).click();
+    await number.waitFor();
+    await page.goto(origin + '/#/subscriptions/claude');
+    await page.getByRole('tab', { name: '客户订阅', exact: true }).click();
+    const row = page.locator('#subscription-list tbody tr').filter({ hasText: email });
+    await row.waitFor();
+    assert.equal(await row.getByText('待确认', { exact: true }).count(), 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(requests.external, []);
+    await context.close();
+  }
 });

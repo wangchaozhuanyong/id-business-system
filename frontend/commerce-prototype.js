@@ -5429,6 +5429,8 @@
     const rentScope = claude && canManageOrders() ? 'commerce-subscriptions' : '';
     const current = new Set(rentScope ? currentSubscriptions().map(row => row.id) : []);
     const rentBatchesLink = rentScope ? routeButton('付租批次', claudeRentalsRoute) : '';
+    const historicalSale = rentScope && localData?.claudeHistoricalSaleAccounts
+      ? A.button('补录历史销售', 'commerce-claude-historical-sale') : '';
     const selected = rentScope ? [...A.getSelection(rentScope)].filter(id => current.has(id)).length : 0;
     const rentSelection = selected ? `<div class="selection-bar">已选择 ${selected} 个账号${A.button(
       '生成付租批次', 'commerce-rent-create', '', 'orders')}${A.textAction('清除选择', 'clear-selection',
@@ -5463,7 +5465,7 @@
         moduleState.orderTab,
         'commerce-order-tab'
       )}${toolbar(claude ? '搜索订单编号、邮箱、客户、卡号或序列号' : personal ? '搜索订单编号、账号、客户或账单' : '搜索订单编号、邮箱或客户',
-        filterControls + columnSettingsButton(tableId) + (claude ? rentBatchesLink + viewSubscriptions :
+        filterControls + columnSettingsButton(tableId) + (claude ? historicalSale + rentBatchesLink + viewSubscriptions :
           routeButton('订单统计', 'orders/statistics')),
         'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${rentSelection}${list}${quoteAttribution(filtered)}</section>`
     );
@@ -5479,6 +5481,76 @@
     if (fields.some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase()))) return true;
     const digits = query.replace(/[\s-]/g, '');
     return /^\d+$/.test(digits) && String(row.proCardNumber || '').includes(digits);
+  }
+
+  async function openClaudeHistoricalSale(button) {
+    const feedback = A.beginActionFeedback(button, '正在读取历史账号…');
+    try {
+      const { accounts, inventoryVersion, commerceVersion } = await localData.claudeHistoricalSaleAccounts();
+      if (!feedback.current()) return;
+      if (!accounts.length) {
+        A.notify('暂无可以补录销售的 Claude 历史账号');
+        return;
+      }
+      const accountOptions = [['', '选择已登记的历史账号'], ...accounts.map(row => [
+        row.id, `${row.email} · ${row.plan} · ${row.start} 至 ${row.expiry}${row.ended ? ' · 已终止' : ''}`
+      ])];
+      const tenantOptions = [['', '选择出租账号的租户'], ...tenants.filter(row => row.active !== false)
+        .map(row => [row.id, row.name])];
+      const buyerOptions = [['', '待补全买家'], ...customers.filter(row => row.active !== false)
+        .map(row => [row.id, row.name])];
+      A.openDrawer('补录 Claude 历史销售', '按原销售记录入单。订单使用已登记的邮箱、账号及订阅周期。',
+        `<form id="commerce-claude-historical-sale-form" data-inventory-version="${E(inventoryVersion)}"
+          data-commerce-version="${E(commerceVersion)}"><div class="commerce-field-grid">
+          ${field('历史账号', 'accountId', select('accountId', accountOptions, '', 'required'), true, '', 'commerce-span-all')}
+          ${field('租户', 'tenantId', select('tenantId', tenantOptions, '', 'required'), true, '出租账号的供货方。')}
+          ${field('买家', 'customerId', searchableSelect('customerId', '买家', buyerOptions), false, '实际购买账号的客户。')}
+          ${field('原开通方式', 'payment', select('payment', [['', '请选择'], '银行卡', '苹果内购'], '', 'required'), true)}
+          ${field('实际终止时间', 'subscriptionEndedAt', input('subscriptionEndedAt', '', 'type="datetime-local"'),
+            false, '死号有实际终止记录时填写。')}
+          ${field('售价', 'saleAmount', input('saleAmount', '', 'inputmode="decimal" maxlength="21" required'), true)}
+          ${field('售价币种', 'saleCurrency', select('saleCurrency', currencyChoices(), 'CNY'), true)}
+          ${field('实际总成本', 'actualCostAmount', input('actualCostAmount', '', 'inputmode="decimal" maxlength="21"'))}
+          ${field('成本币种', 'actualCostCurrency', select('actualCostCurrency', currencyChoices(), 'CNY'))}
+          ${field('备注', 'notes', '<textarea name="commerce-notes" id="commerce-notes" maxlength="300" rows="2"></textarea>',
+            false, '', 'commerce-span-all')}
+        </div></form>`, A.button('取消', 'drawer-close') +
+        '<button type="submit" form="commerce-claude-historical-sale-form" class="button primary">保存历史订单</button>',
+      'commerce-claude-historical-sale');
+    } catch (error) {
+      if (feedback.current()) A.notify(error.message || '暂时无法读取历史账号');
+    } finally {
+      feedback.finish();
+    }
+  }
+
+  async function saveClaudeHistoricalSale(form) {
+    if (!canManageOrders() || saving) return;
+    const raw = A.readForm(form);
+    const command = Object.fromEntries(['accountId', 'tenantId', 'customerId', 'payment', 'saleAmount',
+      'saleCurrency', 'actualCostAmount', 'actualCostCurrency', 'subscriptionEndedAt', 'notes']
+      .map(name => [name, value(raw, name)]));
+    command.inventoryVersion = Number(form.dataset.inventoryVersion);
+    command.commerceVersion = Number(form.dataset.commerceVersion);
+    const actor = currentOperator().id;
+    const feedback = A.beginActionFeedback(form.closest('dialog').querySelector(`[form="${form.id}"]`), '正在保存历史订单…');
+    saving = true;
+    form.inert = true;
+    try {
+      const result = await localData.saveClaudeHistoricalSale(command);
+      if (actor !== currentOperator().id) return;
+      if (form.isConnected && $('#drawer').open) A.closeDrawer();
+      const loaded = await refreshAfterOrderSync();
+      if (actor !== currentOperator().id) return;
+      A.notify((result.created ? '已补录历史订单 ' : '原订单已存在 ') + result.orderNo +
+        (loaded ? '' : '，请刷新订单列表'));
+    } catch (error) {
+      if (form.isConnected) A.notify(error.message || '暂时无法保存历史订单');
+    } finally {
+      saving = false;
+      form.inert = false;
+      feedback.finish();
+    }
   }
 
   function proCardSerialLabel(order) {
@@ -5726,7 +5798,8 @@
         property('原成本合计', amount(result.originalCost)) +
         property('实际收回成本', amount(result.recoveredCost)) +
         property('回款后净成本', amount(result.netCost))
-      : '';
+      : order.costBasis === 'actual' && order.actualCostAmount
+        ? property('实际总成本', `${display(order.actualCostAmount)} ${currencyLabel(order.actualCostCurrency)}`) : '';
     const feeCorrection = (order.corrections || []).find(item => item?.kind === historicalFeeKind);
     const originalFeeRules = feeCorrection?.previous?.costSettings;
     return `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', pending.length || order.cancelled ? '待核算' : accountingLabel(result.basis))}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${output}${property('本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', pending.join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
@@ -8503,6 +8576,10 @@
       A.render();
       return true;
     }
+    if (action === 'commerce-claude-historical-sale') {
+      if (localData?.claudeHistoricalSaleAccounts && canManageOrders()) void openClaudeHistoricalSale(node);
+      return true;
+    }
     if (action === 'commerce-order-undo') {
       reversalEditor(id, 'undo');
       return true;
@@ -8603,6 +8680,7 @@
     return false;
   }
   function onSubmit(form) {
+    if (form.id === 'commerce-claude-historical-sale-form') { void saveClaudeHistoricalSale(form); return true; }
     if (form.id === 'commerce-card-freeze-form') {
       const button = $('[data-action="commerce-card-freeze-save"]:not(:disabled)', form.closest('dialog'));
       if (button) void saveBankCardFreeze(button);
