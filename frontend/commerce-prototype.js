@@ -5,7 +5,8 @@
   if (!A) throw new Error('设计基础模块尚未就绪');
   const S = A.state;
   const { manualOrderDetailsMissing, orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount,
-    validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime } = window.IDOrderOpening;
+    validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
+    matchOrderCustomer, orderCustomerCreateAction } = window.IDOrderOpening;
   const localData = window.IDLocalData;
   const M = A.money;
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -635,6 +636,7 @@
         (result) => {
           acceptLocalCommerce(result);
           if (orderSyncRead === syncRead) orderSyncRead = undefined;
+          refreshOrderCustomerLookups();
           for (const form of document.querySelectorAll('#main #commerce-order-form, #drawer[open] #commerce-order-form'))
             updateCustomerEmailHistory(form);
           return true;
@@ -755,14 +757,19 @@
         acceptSave,
         async (error) => {
           if (error?.status === 409) {
+            let refreshedCustomer = false;
             try {
               acceptLocalCommerce(await localData.load('commerce'));
               await Promise.all(participants.map((item) => item.reload?.()));
-              if (submitter && S.route === route) A.render();
+              refreshedCustomer = refreshOrderCustomerLookups();
+              if (submitter && S.route === route && !refreshedCustomer) A.render();
+              if (submittedForm?.id === 'commerce-contact-form' && submittedForm.isConnected && S.route === route)
+                updateTenantPhoneError(submittedForm);
             } catch {
               if (!submitter) localPhase = 'error';
             }
-            A.notify(`${error.message || '资料已经变化'}。本次未保存，请重新打开并核对当前数据`);
+            A.notify(`${error.message || '资料已经变化'}。${refreshedCustomer
+              ? '本次未保存，请核对客户及订单后再提交' : '本次未保存，请重新打开并核对当前数据'}`);
           } else if (error?.status >= 400 && error.status < 500) {
             A.notify('服务器保存失败，未登记本次操作，请重新核对');
           } else if (submitter) {
@@ -3297,13 +3304,14 @@
   function contactForm(tenant = false, id = '', quick = false, standalone = false) {
     const data = tenant ? tenants : customers,
       row = data.find((entry) => entry.id === id);
+    const identity = quick && !tenant ? quickReturn.identity : null;
     const key =
       quick && !tenant
-        ? `commerce-contact:customer:new:${quickReturn.key}`
+        ? `commerce-contact:customer:new:${quickReturn.key}${identity ? ':' + JSON.stringify([identity.name, identity.wechat]) : ''}`
         : `commerce-contact:${tenant ? 'tenant' : 'customer'}:${id || 'new'}`;
     const draft = S.drafts.get(key) || {},
       v = (name) => draft[`commerce-${name}`] ?? row?.[name] ?? '';
-    const identity = quick && !tenant ? quickReturn.identity : null;
+    const fixedWechat = Boolean(identity?.wechat);
     // An order and its quick-add drawer coexist; only the submitted field names may match.
     const contactField = (label, name, control, required = false, help = '', span = '') =>
       field(
@@ -3317,7 +3325,7 @@
     const contactInput = (name, attrs = '') => input(name, v(name), attrs);
     const channels = customerChannels
       .slice(1)
-      .filter(([name]) => !identity || name !== 'wechat')
+      .filter(([name]) => !fixedWechat || name !== 'wechat')
       .map(([name, label]) => contactField(label, name, contactInput(name, 'maxlength="60"')))
       .join('');
     const phone = contactField(
@@ -3349,11 +3357,11 @@
     );
     const identitySummary = identity ? `<div class="order-quick-customer-summary" role="group" aria-label="本次新增客户">
       <strong>${E(identity.name)}</strong>
-      ${identity.wechat ? `<span id="commerce-contact-wechat" tabindex="-1">微信 ${E(identity.wechat)}</span>` : ''}
-      <div class="field-error" id="commerce-contact-wechat-error" role="alert" hidden></div>
+      ${fixedWechat ? `<span id="commerce-contact-wechat" tabindex="-1">微信 ${E(identity.wechat)}</span>
+      <div class="field-error" id="commerce-contact-wechat-error" role="alert" hidden></div>` : ''}
     </div>
     <input type="hidden" name="commerce-name" value="${E(identity.name)}" />
-    <input type="hidden" name="commerce-wechat" value="${E(identity.wechat)}" />` : '';
+    ${fixedWechat ? `<input type="hidden" name="commerce-wechat" value="${E(identity.wechat)}" />` : ''}` : '';
     const initialCardCount = Math.min(99, Math.max(0, Number(draft['commerce-initial-card-count']) || 0));
     const cardFields = tenant && !row ? `<section class="form-section" aria-label="银行卡">
       <div class="section-heading section-heading--actions">
@@ -3750,21 +3758,82 @@
         input('xLinkState', v('xLinkState'), 'type="hidden"')
         : input('loginMethod', 'google', 'type="hidden"'));
   }
-  function orderCustomerField(customerId, quickDraft) {
-    const choices = [['', '选择客户'], ...customers.filter(row => row.active || row.id === customerId)
+  function orderCustomerChoices(customerId = '') {
+    return [['', '选择客户'], ...customers.filter(row => row.active !== false || row.id === customerId)
       .map(row => [row.id, [row.name, ...customerChannels.map(([key]) => row[key]).filter(Boolean)].join(' · ')])];
-    const add = A.button('新增', 'commerce-quick-customer', '', 'plus', 'aria-haspopup="dialog"');
+  }
+  function orderCustomerField(customerId, quickDraft) {
+    const add = A.button('新增', 'commerce-quick-customer', '', 'plus', `aria-haspopup="dialog"${quickDraft ? ' disabled' : ''}`);
+    const choices = orderCustomerChoices(customerId);
+    if (quickDraft && customerId && !choices.some(([id]) => id === customerId))
+      choices.push([customerId, '原客户待核对']);
     const picker = searchableSelect('customerId', '客户', choices, customerId, quickDraft ? '' : add);
     const control = quickDraft ? `<div class="order-customer-row">${picker}
-      <div class="order-quick-customer" role="group" aria-label="快捷新增客户">
+      ${A.input('order-customer-history-email', quickDraft['order-customer-history-email'] ?? '', 'type="hidden"')}
+      <div class="order-quick-customer" role="group" aria-label="匹配或新增客户">
         ${A.input('order-quick-customer-name', quickDraft['order-quick-customer-name'] ?? '',
-          'aria-label="新客户姓名" placeholder="客户姓名" maxlength="80"')}
+          'aria-label="客户姓名" aria-describedby="order-quick-customer-status" placeholder="客户姓名" maxlength="80"')}
         ${A.input('order-quick-customer-wechat', quickDraft['order-quick-customer-wechat'] ?? '',
-          'aria-label="新客户微信" placeholder="客户微信" maxlength="60"')}
-        ${add}<div class="field-error" id="order-quick-customer-name-error" role="alert" hidden></div>
+          'aria-label="客户微信" aria-describedby="order-quick-customer-status" placeholder="客户微信" maxlength="60"')}
+        ${add}<p class="footnote order-quick-customer-status" id="order-quick-customer-status" role="status" hidden></p>
       </div>
     </div>` : picker;
     return field('客户资料', 'customerId', control, true);
+  }
+  const composingCustomerFields = new WeakSet();
+  const isOrderCustomerLookupInput = node => ['order-quick-customer-name', 'order-quick-customer-wechat'].includes(node.id);
+  function readOrderCustomerLookup(form) {
+    const nameInput = form.elements?.['order-quick-customer-name'];
+    if (!nameInput) return null;
+    const wechatInput = form.elements['order-quick-customer-wechat'];
+    if (composingCustomerFields.has(nameInput) || composingCustomerFields.has(wechatInput))
+      return { kind: 'composing' };
+    const name = nameInput.value.trim(), wechat = wechatInput.value.trim();
+    return { name, wechat, ...matchOrderCustomer(customers, name, wechat) };
+  }
+  const canAddOrderCustomer = lookup => lookup.kind === 'new' || lookup.kind === 'same-name';
+  function orderCustomerLookupMessage(lookup) {
+    switch (lookup.kind) {
+      case 'empty': return lookup.wechat ? '请先填写客户姓名。' : '';
+      case 'matched': return '已匹配客户。';
+      case 'new': return lookup.wechat ? '提交订单时将新增客户。' : '未找到客户，可填写微信随单建档，或点「新增」。';
+      case 'same-name': return '同名客户的微信不同，确认是另一位客户后可点「新增」。';
+      case 'inactive': return '已有停用资料，请先到客户数据核对或恢复。';
+      case 'wechat-conflict': return '此微信已关联其他姓名，请从左侧核对客户。';
+      case 'invalid': return '请核对客户姓名和微信的格式。';
+      default: return '无法唯一匹配客户，请核对微信或从左侧选择。';
+    }
+  }
+  function updateOrderCustomerLookup(form, { editing = false, refreshChoices = false } = {}) {
+    const lookup = readOrderCustomerLookup(form);
+    if (!lookup || lookup.kind === 'composing') return lookup;
+    const select = form.elements['commerce-customerId'];
+    const previousId = select.value;
+    const fromQuery = editing || lookup.name || lookup.wechat;
+    const inactiveSelection = previousId && !customers.some(row => row.id === previousId && row.active !== false);
+    const nextId = fromQuery ? lookup.customerId || '' : inactiveSelection ? '' : previousId;
+    if (refreshChoices || inactiveSelection || (nextId && ![...select.options].some(option => option.value === nextId)))
+      select.innerHTML = A.options(orderCustomerChoices(), nextId);
+    select.value = nextId;
+    if (select.value !== previousId) onChange(select, true);
+    else if (refreshChoices) filterPicker($('[data-commerce-picker="customerId"]', form));
+
+    const message = !fromQuery && inactiveSelection ? '原客户资料已变化，请从左侧重新选择。'
+      : orderCustomerLookupMessage(lookup);
+    const status = $('#order-quick-customer-status', form);
+    if (status.textContent !== message) status.textContent = message;
+    status.hidden = !message;
+    $('[data-action="commerce-quick-customer"]', form).disabled = !canAddOrderCustomer(lookup);
+    if (editing) A.setError('commerce-customerId', '', form);
+    return lookup;
+  }
+  function refreshOrderCustomerLookups() {
+    let refreshed = false;
+    for (const form of document.querySelectorAll('#main #commerce-order-form')) {
+      if (updateOrderCustomerLookup(form, { refreshChoices: true })) refreshed = true;
+    }
+    if (refreshed) saveDrafts();
+    return refreshed;
   }
   function orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude, quickDraft) {
     const auto = automaticOrder(existing);
@@ -4841,7 +4910,8 @@
         claudeCertificationFields(v, existing)}</div>` +
       field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"'))) : '';
     const saleCurrencyChosen = existing || draft['commerce-saleCurrencyChosen'] === 'yes';
-    const identityFields = orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude, main && !existing ? draft : null);
+    const identityFields = orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude,
+      main && !existing && !previous && isOrderEntry(S.route) ? draft : null);
     const html = `<form id="commerce-order-form" data-commerce-draft="${key}"${chooseClaudePlan ? ' data-choose-claude-plan' : ''} novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${linkedClaude ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', identityFields, '订单邮箱独立记录；客户自有账号不要求存在库存，成品交付才选择可用账号。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing, defaultGptType, main) + orderCostFields(v, existing))}${supplemental}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', draft['commerce-correctionReason'] ?? '修改错误'), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div></form>`;
     const footer = '<button form="commerce-order-form" type="submit" class="button primary">核对并保存</button>';
     if (main)
@@ -4868,12 +4938,16 @@
     if (form) void loadPrices(form);
     return '';
   }
-  function orderFromForm(form, confirmPayment = false) {
+  function orderFromForm(form, confirmPayment = false, newCustomer = null) {
     const raw = A.readForm(form),
       order = {};
     for (const [key, inputValue] of Object.entries(raw))
       if (key.startsWith('commerce-') && !['commerce-saleCurrencyChosen', 'commerce-saleManual', 'commerce-emailCostManual', 'commerce-proPoolCardId', 'commerce-card-type-touched', 'commerce-personalHistoryId'].includes(key))
         order[key.slice(9)] = String(inputValue).trim();
+    if (newCustomer) {
+      order.customerId = newCustomer.id;
+      order.wechat ||= newCustomer.wechat;
+    }
     if (form.dataset?.chooseClaudePlan !== undefined)
       order.product = claudeProductForPlan(order.plan) || order.product;
     const existingOrder = orders.find((row) => row.id === order.id);
@@ -6792,6 +6866,24 @@
       return normalized.replace(/[\s().-]/g, '');
     return normalized;
   }
+  function tenantPhoneKey(phone) {
+    return contactKey(String(phone ?? ''), 'phone').replace(/^(?:\+|00)(?=\d+$)/, '');
+  }
+  function tenantPhoneDuplicateError(id, phone) {
+    if (!phone) return '';
+    const current = tenants.find(row => row.id === id);
+    if (current && String(current.phone ?? '').trim() === phone) return '';
+    const key = tenantPhoneKey(phone);
+    return key && tenants.some(row => row.id !== id && tenantPhoneKey(row.phone) === key)
+      ? '此联系电话已被其他租户使用。' : '';
+  }
+  function updateTenantPhoneError(form) {
+    if (form.elements['commerce-kind']?.value !== 'tenant') return '';
+    const phone = form.elements['commerce-phone'];
+    const message = tenantPhoneDuplicateError(form.elements['commerce-id'].value, phone.value.trim());
+    A.setError(phone.id, message, form);
+    return message;
+  }
   function customerDuplicates(id, name, contacts) {
     const matches = [];
     for (const row of customers) {
@@ -6816,6 +6908,13 @@
         : `已有同名客户使用此${label}，请在客户数据的“已停用”中核对并恢复。`
     );
     document.getElementById(fieldId)?.focus();
+  }
+  function checkOrderCustomerDrawer(form, lookup) {
+    if (canAddOrderCustomer(lookup)) return true;
+    A.setError('commerce-contact-wechat', lookup.kind === 'matched'
+      ? '已有此客户，请返回订单选择。' : orderCustomerLookupMessage(lookup) || '请核对客户姓名。', form);
+    $('#commerce-contact-wechat', form)?.focus();
+    return false;
   }
   function saveContact(form) {
     const raw = A.readForm(form),
@@ -6880,17 +6979,10 @@
       if (!valid) return;
     }
     const contacts = Object.fromEntries(customerChannels.map(([key]) => [key, value(raw, key)]));
-    const contactError = tenant && !phone;
+    const contactError = tenant ? (phone ? tenantPhoneDuplicateError(id, phone) : '请填写租户联系电话') : '';
     for (const [key] of customerChannels)
-      A.setError(
-        `commerce-contact-${key}`,
-        key === 'phone' && contactError
-          ? tenant
-            ? '请填写租户联系电话'
-            : '请至少填写一种联系方式'
-          : ''
-      );
-    A.setError('commerce-contact-name', name ? '' : '请填写姓名');
+      A.setError(`commerce-contact-${key}`, key === 'phone' ? contactError : '', form);
+    A.setError('commerce-contact-name', name ? '' : '请填写姓名', form);
     if (!name || contactError) {
       document.getElementById(name ? 'commerce-contact-phone' : 'commerce-contact-name')?.focus();
       return;
@@ -6899,22 +6991,21 @@
       A.notify('资料已发生变化，请核对原版本再保存');
       return;
     }
+    const back = value(raw, 'quick') === 'yes' ? quickReturn : null;
+    const quickLookup = back?.identity ? { wechat: contacts.wechat, ...matchOrderCustomer(customers, name, contacts.wechat) } : null;
+    if (quickLookup && !checkOrderCustomerDrawer(form, quickLookup)) return;
     const match = tenant ? null : customerDuplicates(id, name, contacts);
     if (match?.duplicate) {
       showDuplicate(match.duplicate);
       return;
     }
-    const tenantDuplicate =
-      tenant &&
-      data.some((row) => row.id !== id && row.active && row.name === name && row.phone === phone);
-    const message = tenantDuplicate
-      ? '存在同名同电话资料，请确认是否确实需要分别保存。'
+    const message = quickLookup?.kind === 'same-name'
+      ? '已有同名客户使用不同微信。请确认这是另一位客户。'
       : match?.sharedContact
         ? `其他客户已使用此${match.sharedContact}。请核对是否为不同客户，分别保存不会合并资料。`
         : localData
           ? '将保存到服务器数据库。'
           : '将保存本次演示资料。';
-    const back = value(raw, 'quick') === 'yes' ? quickReturn : null;
     const route = S.route;
     const key = form.dataset.commerceDraft;
     A.confirmAction(
@@ -6929,6 +7020,20 @@
           return;
         if (JSON.stringify(A.readForm(form)) !== JSON.stringify(raw)) {
           A.notify('确认期间资料已变化，请重新核对后保存');
+          return;
+        }
+        if (quickLookup) {
+          const latest = { wechat: contacts.wechat, ...matchOrderCustomer(customers, name, contacts.wechat) };
+          if (!checkOrderCustomerDrawer(form, latest)) return;
+          if (latest.kind !== quickLookup.kind) {
+            A.notify('客户资料已变化，请重新核对后保存');
+            return;
+          }
+        }
+        const duplicatePhone = tenant && tenantPhoneDuplicateError(id, phone);
+        if (duplicatePhone) {
+          A.setError('commerce-contact-phone', duplicatePhone, form);
+          $('#commerce-contact-phone', form)?.focus();
           return;
         }
         if (match) {
@@ -7018,8 +7123,8 @@
       '确认保存'
     );
   }
-  function validateOrder(form) {
-    const order = orderFromForm(form, true),
+  function validateOrder(form, customerLookup, newCustomer) {
+    const order = orderFromForm(form, true, newCustomer),
       existing = orders.find((row) => row.id === order.id);
     const personal = personalProduct(order.product);
     const pendingOpening = personal && order.entitlementStatus !== 'active';
@@ -7048,11 +7153,11 @@
       (personal && order.businessType === '首次开通') ? '' : '请选择业务类型');
     error('plan', (auto && !order.plan) || orderPlanChoices(order.product, order.plan, existing).includes(order.plan)
       ? '' : '请选择有效的开通套餐');
-    error(
-      'customerId',
-      (auto && !order.customerId) ||
-        customers.some((row) => row.id === order.customerId) ? '' : '请选择客户'
-    );
+    const hasCustomer = newCustomer || (auto && !order.customerId) ||
+      customers.some(row => row.id === order.customerId && (!customerLookup || row.active !== false));
+    const customerError = customerLookup?.kind === 'new' && !customerLookup.wechat
+      ? '请填写微信随单建档，或点「新增」保存客户。' : '请选择或核对客户。';
+    error('customerId', hasCustomer ? '' : customerError);
     const validPaidAmount = amountValid(order.paidAmount, optionalAmount);
     error('paidAmount', !validPaidAmount ? '请输入非负金额，最多四位小数' :
       order.paidConfirmed && M.compare(order.paidAmount, '0') <= 0 ? '请填写大于零的实际代付金额' : '');
@@ -7246,7 +7351,7 @@
     if (current && order.customerId && current.customerId !== order.customerId)
       error('customerId', 'Claude 账号在同一有效期间只属于一个客户');
     if (first) {
-      const target = first === 'commerce-claudeVerifierId' ? first + '-picker' : first;
+      const target = ['commerce-claudeVerifierId', 'commerce-customerId'].includes(first) ? first + '-picker' : first;
       const control = document.getElementById(target);
       const focus = first === 'commerce-email' && control?.hidden ? form.querySelector('#commerce-emailHistory-picker') : control;
       focus?.focus();
@@ -7256,6 +7361,11 @@
   }
   function saveOrder(form, appleBalanceReady = false) {
     if (!canManageOrders()) return;
+    const customerLookup = updateOrderCustomerLookup(form);
+    if (customerLookup?.kind === 'composing') {
+      A.notify('请先完成客户姓名或微信的输入。');
+      return;
+    }
     const raw = A.readForm(form);
     const existing = orders.find((row) => row.id === value(raw, 'id'));
     if (localData && !appleBalanceReady && (value(raw, 'payment') === '苹果内购' || existing?.payment === '苹果内购')) {
@@ -7279,7 +7389,14 @@
       return;
     }
     saveDrafts();
-    const inputOrder = validateOrder(form);
+    const enteredAt = now();
+    const newCustomer = customerLookup?.kind === 'new' && customerLookup.wechat ? {
+      id: uid('commerce-customer'), name: customerLookup.name, wechat: customerLookup.wechat,
+      active: true, version: 1,
+      createdById: operator.id, createdBy: operator.name, createdAt: enteredAt,
+      updatedById: operator.id, updatedBy: operator.name, updatedAt: enteredAt
+    } : null;
+    const inputOrder = validateOrder(form, customerLookup, newCustomer);
     if (!inputOrder) return;
     const renewalEntry = S.route.startsWith(renewalOrderPrefix) ? S.route : '';
     const renewalSource = renewalEntry ? workbenchOrderSource(renewalEntry) : null;
@@ -7378,12 +7495,27 @@
     const submittedRoute = S.route;
     const submittedContext = S.drawerContext;
     const submitted = JSON.stringify(A.readForm(form));
+    const customerText = newCustomer ? `将新增客户 ${newCustomer.name}（微信 ${newCustomer.wechat}）。` : '';
     A.confirmAction(
       existing ? '确认更正独立订单' : '确认登记新订单',
-      `${paymentText}${orderIdentity(saved)} · ${saved.plan}，归属人 ${orderOwnerName(saved)}，订阅 ${saved.start?.replace('T', ' ') || '待核对'}，到期 ${saved.expiry?.replace('T', ' ') || '待核对'}。${balanceText}${stock ? '保存后所选成品账号标记已使用。' : personal && saved.accountId && saved.businessType === '成品交付' ? '保存后保留所选账号，确认交付时登记使用。' : ''}`,
+      `${paymentText}${customerText}${orderIdentity(saved)} · ${saved.plan}，归属人 ${orderOwnerName(saved)}，订阅 ${saved.start?.replace('T', ' ') || '待核对'}，到期 ${saved.expiry?.replace('T', ' ') || '待核对'}。${balanceText}${stock ? '保存后所选成品账号标记已使用。' : personal && saved.accountId && saved.businessType === '成品交付' ? '保存后保留所选账号，确认交付时登记使用。' : ''}`,
       () => {
         if (committed || !canManageOrders() || form.isConnected === false || S.route !== submittedRoute ||
-            S.drawerContext !== submittedContext || JSON.stringify(A.readForm(form)) !== submitted) return;
+            S.drawerContext !== submittedContext) return;
+        if (JSON.stringify(A.readForm(form)) !== submitted) {
+          if (customerLookup) A.notify('录单资料已变化，请重新核对。');
+          return;
+        }
+        if (customerLookup) {
+          const latest = readOrderCustomerLookup(form);
+          if (latest.kind !== customerLookup.kind || latest.customerId !== customerLookup.customerId ||
+              (!newCustomer && !customers.some(row => row.id === saved.customerId && row.active !== false))) {
+            updateOrderCustomerLookup(form, { refreshChoices: true });
+            saveDrafts();
+            A.notify('客户资料已变化，请重新核对订单。');
+            return;
+          }
+        }
         if (renewalEntry && (S.route !== renewalEntry || !workbenchOrderSource(renewalEntry))) {
           A.notify('这笔续费提醒已变化，请返回续费管理核对。');
           return;
@@ -7450,7 +7582,7 @@
         }
         const inventory = A.modules.inventory;
         persistCommerce(
-          existing ? '更正订单' : '新增独立订单',
+          newCustomer ? orderCustomerCreateAction : existing ? '更正订单' : '新增独立订单',
           () => {
             const balanceResult = localData
               ? { ok: true }
@@ -7507,7 +7639,13 @@
                 for (const field of ['billingChannel', 'billingCountry', 'billingReceipt']) delete existing[field];
               }
               pruneProMaterialFields(existing);
-            } else orders.unshift(saved);
+            } else {
+              if (newCustomer) {
+                customers.unshift(newCustomer);
+                log('新增资料', newCustomer.id, '随订单登记客户', saved.id);
+              }
+              orders.unshift(saved);
+            }
             const renewalFrom = saved.previousOrderId || (renewalSource && !existing && saved.businessType === '续费' &&
                 sameSubscriptionAccount(saved, renewalSource.order) ? renewalSource.order.id : '');
             if (renewalFrom && !existing) log('关联续费订单', renewalFrom, saved.orderNo, saved.id);
@@ -7541,7 +7679,8 @@
           ],
           saved.paidConfirmed && saved.receiptConfirmed && (saved.start || saved.rechargeCompletedAt) &&
             (!personal || saved.entitlementStatus === 'active')
-            ? () => { void freezeAutomaticSnapshot(id); } : undefined
+            ? () => { void freezeAutomaticSnapshot(id); } : undefined,
+          newCustomer ? $('button[form="commerce-order-form"][type="submit"]') : undefined
         );
       },
       '确认保存'
@@ -8470,13 +8609,9 @@
   function quickCreate(tenant, node) {
     const form = node.closest('#commerce-order-form');
     if (!form) return;
-    const name = !tenant && form.elements['order-quick-customer-name'];
-    const identity = name ? { name: name.value.trim(), wechat: form.elements['order-quick-customer-wechat'].value.trim() } : null;
-    if (identity && !identity.name) {
-      A.setError(name.id, '请填写客户姓名', form);
-      name.focus();
-      return;
-    }
+    const lookup = tenant ? null : updateOrderCustomerLookup(form);
+    if (lookup && !canAddOrderCustomer(lookup)) return;
+    const identity = lookup ? { name: lookup.name, wechat: lookup.wechat } : null;
     saveDrafts();
     quickReturn = {
       tenant,
@@ -8678,7 +8813,12 @@
       select.value = node.dataset.value;
       const email = picker.querySelector('#commerce-email');
       const directEmail = email && !personalProduct(select.form?.elements['commerce-product']?.value);
-      if (directEmail) email.value = select.value;
+      if (directEmail) {
+        email.value = select.value;
+        const history = select.form.elements['order-customer-history-email'];
+        if (history && select.form.elements['commerce-businessType'].value !== '成品交付')
+          history.value = select.value;
+      }
       filterPicker(picker.querySelector('[data-commerce-picker]'));
       picker.querySelector('.commerce-picker-popover').hidePopover();
       (email && !email.hidden ? email : picker.querySelector('.commerce-picker-trigger')).focus({ preventScroll: true });
@@ -9277,9 +9417,13 @@
     const choices = stock ? stockChoices(form.elements['commerce-product'].value)
       : customerEmailChoices(form.elements['commerce-customerId'].value, form.elements['commerce-product'].value);
     const current = email.value.trim().toLowerCase();
-    const wasHistory = [...select.options].some(option => option.value && option.value.toLowerCase() === current);
-    if (match && !form.elements['commerce-id'].value && !stock && !email.readOnly && (!current || wasHistory))
+    const history = form.elements['order-customer-history-email'];
+    const wasHistory = history ? Boolean(history.value && history.value.trim().toLowerCase() === current)
+      : [...select.options].some(option => option.value && option.value.toLowerCase() === current);
+    if (match && !form.elements['commerce-id'].value && !stock && !email.readOnly && (!current || wasHistory)) {
       email.value = choices.slice(1).find(([value]) => !inventoryRenewalIssue(value, form.elements['commerce-customerId'].value, form.elements['commerce-product'].value))?.[0] || '';
+      if (history) history.value = email.value;
+    }
     const selected = choices.find(([value]) => value.toLowerCase() === email.value.trim().toLowerCase())?.[0] || '';
     renderOrderAccountPicker(form, choices, selected, stock, email.readOnly);
   }
@@ -9480,7 +9624,7 @@
         ? A.addCalendarMonth(dateInput(previous.expiry))
         : A.addCalendarMonth(start);
   }
-  function onChange(node) {
+  function onChange(node, fromCustomerLookup = false) {
     if (node.name === 'commerce-endSubscription' && node.form?.id === 'commerce-refund-form') {
       node.form.querySelector('[data-refund-end]').hidden = !node.checked;
       return true;
@@ -9654,6 +9798,12 @@
         applyOrderPrice(form);
       }
       if (node.id === 'commerce-customerId') {
+        if (!fromCustomerLookup && controls['order-quick-customer-name']) {
+          controls['order-quick-customer-name'].value = '';
+          controls['order-quick-customer-wechat'].value = '';
+          A.setError('commerce-customerId', '', form);
+          updateOrderCustomerLookup(form);
+        }
         const customer = customers.find((row) => row.id === node.value);
         for (const [orderField, customerField] of orderContactFields)
           form.querySelector(`#commerce-${orderField}`).value = customer?.[customerField] || '';
@@ -9785,9 +9935,25 @@
       return true;
     }
     if (node.closest('form[data-commerce-draft]')) {
-      if (node.id === 'order-quick-customer-name') A.setError(node.id, '', node.form);
+      if (isOrderCustomerLookupInput(node)) {
+        if (!composingCustomerFields.has(node)) {
+          updateOrderCustomerLookup(node.form, { editing: true });
+          saveDrafts();
+        }
+        return true;
+      }
+      if (node.id === 'commerce-contact-phone') updateTenantPhoneError(node.form);
       if (node.id === 'commerce-email') {
         const orderForm = node.closest('#commerce-order-form');
+        const controls = orderForm.elements;
+        const history = controls['order-customer-history-email'];
+        if (history && controls['commerce-businessType'].value !== '成品交付') {
+          history.value = '';
+          if (controls['commerce-personalHistoryId']?.value) {
+            controls['commerce-personalHistoryId'].value = '';
+            controls['commerce-accountId'].value = '';
+          }
+        }
         updateStockSearch(orderForm);
         updateGrokOrderIdentity(orderForm);
       }
@@ -10088,11 +10254,20 @@
     positionPicker(popup);
     search.focus({ preventScroll: true });
   }, true);
+  document.addEventListener?.('compositionstart', event => {
+    if (isOrderCustomerLookupInput(event.target)) composingCustomerFields.add(event.target);
+  });
+  document.addEventListener?.('compositionend', event => {
+    if (!composingCustomerFields.delete(event.target) || !event.target.form) return;
+    updateOrderCustomerLookup(event.target.form, { editing: true });
+    saveDrafts();
+  });
   document.addEventListener?.('keydown', (event) => {
-    if (event.isComposing) return;
-    if (event.key === 'Enter' && event.target.matches('.order-quick-customer > input')) {
+    if (event.isComposing || composingCustomerFields.has(event.target)) return;
+    if (event.key === 'Enter' && isOrderCustomerLookupInput(event.target)) {
       event.preventDefault();
-      event.target.parentElement.querySelector('[data-action="commerce-quick-customer"]')?.click();
+      updateOrderCustomerLookup(event.target.form, { editing: true });
+      saveDrafts();
       return;
     }
     const popup = event.target.closest('.commerce-picker-popover');
@@ -10212,6 +10387,7 @@
         return;
       }
       for (const form of document.querySelectorAll('#commerce-order-form')) {
+        updateOrderCustomerLookup(form);
         if (personalProduct(form.elements['commerce-product'].value)) updateOrderVisibility(form);
         else updateCustomerEmailHistory(form);
 

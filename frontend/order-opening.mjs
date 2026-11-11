@@ -21,6 +21,30 @@ export function orderTerminationTime(order, now = Date.now()) {
 export const validOrderEmail = value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 export const validOrderXHandle = value => typeof value === 'string' && /^@[a-z0-9_]{1,15}$/i.test(value.trim());
 
+const customerKey = value => typeof value === 'string' ? value.normalize('NFKC').trim().toLowerCase() : '';
+export const orderCustomerCreateAction = '新增订单并登记客户';
+
+export function matchOrderCustomer(customers, name, wechat = '') {
+  const nameKey = customerKey(name), wechatKey = customerKey(wechat);
+  if (!nameKey) return { kind: 'empty' };
+  if (name.length > 80 || wechat.length > 60 || /[\r\n]/.test(name + wechat)) return { kind: 'invalid' };
+  const named = customers.filter(row => customerKey(row.name) === nameKey);
+  const identify = rows => {
+    if (rows.every(row => row.active === false)) return { kind: 'inactive' };
+    return rows.length === 1 ? { kind: 'matched', customerId: rows[0].id } : { kind: 'ambiguous' };
+  };
+  if (!wechatKey) return named.length ? identify(named) : { kind: 'new' };
+
+  const withWechat = customers.filter(row => customerKey(row.wechat) === wechatKey);
+  const exact = withWechat.filter(row => customerKey(row.name) === nameKey);
+  if (exact.length) return identify(exact);
+  if (withWechat.length)
+    return { kind: withWechat.every(row => row.active === false) ? 'inactive' : 'wechat-conflict' };
+  if (named.length)
+    return { kind: named.every(row => customerKey(row.wechat)) ? 'same-name' : 'ambiguous' };
+  return { kind: 'new' };
+}
+
 export function orderNeedsAccount(order) {
   const oneOffClaude = ['Claude Pro', 'Claude Max'].includes(order.product) && order.businessType === '续费' &&
     !order.accountId && !order.claudeRenewalId;
@@ -79,5 +103,6 @@ export function subscriptionPeriodState({ start, expiry, confirmed, ended, cance
 
 if (typeof window !== 'undefined') window.IDOrderOpening = Object.freeze({
   orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount, manualOrderDetailsMissing,
-  validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime
+  validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
+  matchOrderCustomer, orderCustomerCreateAction
 });

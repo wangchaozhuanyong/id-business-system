@@ -379,6 +379,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   });
 
   await t.test('长资料、布局与所有录入入口的深浅主题', async () => {
+    let clippedSerial = 0, readableSerial = 0;
     for (const width of [2300, 1920, 1440, 1280, 1024, 900, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 });
       for (const dark of [false, true]) {
@@ -388,15 +389,37 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
           if (route === 'workspace/order/claude') {
             await page.locator('#commerce-proMaterialMode').selectOption('manual_card');
             await page.locator('#commerce-proCardNumber').fill('4242424242424242');
-            await page.locator('#commerce-proCardSerial').fill('SERIAL-' + '0123456789'.repeat(8));
+            const serialInput = page.locator('#commerce-proCardSerial');
+            const value = 'SERIAL-' + '0123456789'.repeat(8);
+            await serialInput.fill(value);
+            await settle(page);
             if ((await page.locator('.commerce-entry-columns > .form-panel').boundingBox()).width >= 700) {
+              const payment = await page.locator('#commerce-payment').boundingBox();
               const mode = await page.locator('#commerce-proMaterialMode').boundingBox();
+              const type = await page.locator('#commerce-cardTypeId').boundingBox();
               const number = await page.locator('#commerce-proCardNumber').boundingBox();
-              const serial = await page.locator('#commerce-proCardSerial').boundingBox();
-              assert(Math.abs(mode.y - number.y) <= 1 && number.x > mode.x, '填写方式左侧，手填卡号同排右侧');
+              const serial = await serialInput.boundingBox();
+              assert(Math.abs(payment.y - mode.y) <= 1 && mode.x > payment.x, '支付方式与填写方式同排');
+              assert(Math.abs(type.y - number.y) <= 1 && number.x > type.x && type.y >= mode.y + mode.height - 1,
+                '银行卡类型与手填卡号在下一行对齐');
               assert(serial.y >= number.y + number.height - 1, '卡序列号在后续行完整可用');
             }
-            await page.locator('[data-commerce-field="proCardSerial"] .order-value-readout').waitFor();
+            const clipped = await serialInput.evaluate(input => {
+              const style = getComputedStyle(input), measure = document.createElement('canvas').getContext('2d');
+              measure.font = style.font;
+              const available = input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+              return measure.measureText(input.value).width > available + 1;
+            });
+            const readout = page.locator('[data-commerce-field="proCardSerial"] .order-value-readout');
+            assert.equal(await serialInput.inputValue(), value);
+            if (clipped) {
+              await readout.waitFor();
+              assert.equal(await readout.textContent(), value);
+              clippedSerial++;
+            } else {
+              assert.equal(await readout.count(), 0, '序列号已完整显示时不重复回显');
+              readableSerial++;
+            }
           }
           await settle(page);
           await geometry(width, route, dark);
@@ -407,6 +430,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
         }
       }
     }
+    assert(clippedSerial > 0 && readableSerial > 0, '同时覆盖序列号裁切和完整显示');
   });
 
   await t.test('千条和万条末页、历史表分页与北京时间日界线', async () => {

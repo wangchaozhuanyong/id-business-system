@@ -257,7 +257,7 @@ test('已关联银行卡的历史 Pro 订单可补填序列号并保留原卡', 
 test('Pro can save verified pool and tenant cards while keeping paid card and historical return sources fixed', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {
-    const secondTenant = { ...tenant, id: 'tenant-other-test', name: '另一认证人' };
+    const secondTenant = { ...tenant, id: 'tenant-other-test', name: '另一认证人', phone: '+1 202 555 0102' };
     const tenants = [tenant, secondTenant];
     const tenantCardId = 'tenant:verified';
     const poolCardId = 'recharge:17';
@@ -342,9 +342,9 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
 test('Claude Pro and Max independently verify an optional certifier while retaining the selected payment card', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {
-    const cardOwner = { ...tenant, id: 'card-owner', name: '合成用卡人' };
+    const cardOwner = { ...tenant, id: 'card-owner', name: '合成用卡人', phone: '+1 202 555 0103' };
     const noPhone = { ...tenant, id: 'no-phone', phone: '' };
-    const inactive = { ...tenant, id: 'inactive', active: false };
+    const inactive = { ...tenant, id: 'inactive', phone: '+1 202 555 0104', active: false };
     const people = [tenant, cardOwner, noPhone, inactive];
     const cardId = 'tenant:claude-separate-owner';
     store.saveFeatureDocument('tenant-cards', 0, {

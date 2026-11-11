@@ -18,9 +18,13 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     const actor = { id: 'operator', name: '代录管理员', role };
     const staff = { id: 'staff', name: '业务员工甲', role: 'employee' };
     const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
-    fixture.commerce.data.tenants = [{ id: 'legacy', name: '历史租户', phone: '合成联系电话', owner: staff.name, version: 1, active: true }];
+    const legacyPhone = '+1 202 555 0101';
+    fixture.commerce.data.tenants = [
+      { id: 'legacy', name: '历史租户', phone: legacyPhone, owner: staff.name, version: 1, active: true },
+      { id: 'disabled', name: '已停用租户', phone: '001 202 555 0102', version: 1, active: false }
+    ];
     const originalOrders = structuredClone(fixture.commerce.data.orders);
-    await interceptDesign(context, { localFixtures: fixture, actor });
+    await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
     let enabled = true, fail = role === 'admin', failSave = true, reads = 0;
     await context.route('**/api/local/auth/order-owners', route => {
       reads++;
@@ -37,6 +41,8 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
         failSave = false;
         return route.fulfill({ status: 503, json: { error: '模拟保存失败，请重试' } });
       }
+      if (command.version !== fixture.commerce.version)
+        return route.fulfill({ status: 409, json: { error: '业务资料已在其他页面更新，请刷新后重试' } });
       try {
         // Run the actual save attribution without starting a server or opening a database.
         attributeCommerce(command.data, fixture.commerce.data, actor, enabled ? [staff] : []);
@@ -58,6 +64,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     const search = popup.getByRole('searchbox', { name: '搜索归属人' });
     const name = form.locator('#commerce-contact-name');
     const phone = form.locator('#commerce-contact-phone');
+    const phoneError = form.locator('#commerce-contact-phone-error');
     const refresh = form.locator('[data-action="commerce-order-owner-refresh"]');
     async function choose(id) {
       await trigger.click();
@@ -85,7 +92,6 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     await name.waitFor();
     assert.equal(await owner.inputValue(), actor.id, '普通新增默认当前录入人');
     await name.fill('合成新租户');
-    await phone.fill('合成电话 01');
     if (fail) {
       await form.locator('#commerce-contact-ownerId-error').waitFor();
       fail = false;
@@ -93,6 +99,14 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     }
     await owner.locator('option[value="staff"]').waitFor({ state: 'attached' });
     assert.equal(await name.inputValue(), '合成新租户', '刷新人员目录保留输入');
+    await phone.fill('＋１ (２０２) ５５５-０１０１');
+    await phoneError.getByText('此联系电话已被其他租户使用。').waitFor();
+    assert.equal(await phone.getAttribute('aria-invalid'), 'true');
+    await page.locator('button[form="commerce-contact-form"][type="submit"]:visible').click();
+    assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
+    assert.equal(writes.length, 0, '重复电话不进入确认或写入');
+    await phone.fill('合成电话 01');
+    await phoneError.waitFor({ state: 'hidden' });
     await choose(staff.id);
     await form.locator('[data-action="commerce-initial-card-add"]').click();
     await form.locator('#commerce-initial-card-0-number').fill('4000 0000 0000 0000');
@@ -144,6 +158,22 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert.equal(await owner.getAttribute('readonly'), '');
     assert.equal(await owner.inputValue(), staff.name);
     await form.locator('#commerce-contact-notes').fill('只修改历史备注');
+    if (role === 'admin') {
+      await phone.fill('+1 202 555-0102');
+      await phoneError.waitFor();
+      await phone.fill('001 202 555-0101');
+      await phoneError.waitFor({ state: 'hidden' });
+      await phone.fill('+1 202 555 0103');
+      fixture.commerce.data.tenants.push({
+        id: 'other-tab', name: '另一页面新增租户', phone: '001 202 555 0103', version: 1, active: true
+      });
+      fixture.commerce.version++;
+      await save(409);
+      await phoneError.getByText('此联系电话已被其他租户使用。').waitFor();
+      assert.equal(await phone.inputValue(), '+1 202 555 0103', '并发冲突保留录入内容');
+      await phone.fill(legacyPhone);
+      await phoneError.waitFor({ state: 'hidden' });
+    }
     await save(200);
     await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
     const historical = fixture.commerce.data.tenants.find(row => row.id === 'legacy');
