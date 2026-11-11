@@ -14,7 +14,7 @@ test('常规列表页签、搜索与操作共享紧凑工具区，窄屏自然�
   let authLoaded = false;
   page.setDefaultTimeout(5000); page.on('pageerror', e => errors.push(e.message));
   const output = new URL('../.runtime/follow-through-20261108/', import.meta.url); await mkdir(output, { recursive: true });
-  for (const route of ['workspace/customer-loss', 'workspace/renewals', 'workspace/extractions', 'customers/list', 'customers/tenants', 'orders/gpt', 'orders/pro', 'orders/exclusive', 'settings/accounts']) {
+  for (const route of ['workspace/customer-loss', 'workspace/renewals', 'workspace/extractions', 'customers/list', 'customers/tenants', 'orders/gpt', 'orders/claude', 'settings/accounts']) {
     await page.goto(origin + '/#/' + route);
     if (!authLoaded) { await page.addScriptTag({ url: origin + '/local-auth.js' }); await page.addStyleTag({ url: origin + '/local-auth.css' }); authLoaded = true; }
     const controls = page.locator('#main .list-controls').first(); await controls.waitFor().catch(error => { throw new Error(route + ': ' + error.message); });

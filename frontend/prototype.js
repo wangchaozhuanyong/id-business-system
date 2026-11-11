@@ -234,9 +234,7 @@ const navigation = [
     'orders',
     [
       ['GPT 订单', 'orders/gpt'],
-      ['Claude Pro 订单', 'orders/pro'],
-      ['Claude Max 订单', 'orders/max'],
-      ['Claude 专属', 'orders/exclusive'],
+      ['Claude 订单', 'orders/claude'],
       ['Gemini 订单', 'orders/gemini'],
       ['Grok 订单', 'orders/grok']
     ]
@@ -881,7 +879,7 @@ function gptOrderTabs() {
   return `<nav class="tabs" data-route-tabs aria-label="GPT 订单视图">${links}</nav>`;
 }
 function compactListToolbars(region) {
-  const simple = /^(workspace\/(customer-loss|renewals|extractions)|customers\/(list|tenants)|orders\/(gpt|pro|max|exclusive|statistics)|settings\/(accounts|login-logs|exchange-rates))$/.test(state.route);
+  const simple = /^(workspace\/(customer-loss|renewals|extractions)|customers\/(list|tenants)|orders\/(gpt|claude|statistics)|settings\/(accounts|login-logs|exchange-rates))$/.test(state.route);
   const relay = state.route === 'mailboxes/relay' && ['parents', 'imports'].includes($('.panel > .tabs .tab.active', region)?.dataset.tab);
   if (state.route === 'settings/login-logs') {
     const tabs = $(':scope > .tabs', region), panel = tabs?.nextElementSibling;
@@ -954,7 +952,7 @@ function summary(items) {
 function empty(title, description) {
   return `<div class="empty-state">${icon('database')}<h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p></div>`;
 }
-function table(columns, rows, scope = '', tableId = 'default', emptyState) {
+function table(columns, rows, scope = '', tableId = 'default', emptyState, selectable = () => true) {
   columnDefinitions[tableId] = columns;
   tableRecords.set(tableId, rows);
   const hiddenColumns = state.columns.get(tableId) || new Set();
@@ -966,8 +964,9 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
     emptyState?.description ??
       (window.IDLocalData ? '可调整搜索或筛选条件。' : '调整搜索和筛选条件，或新增一条演示资料。')
   );
+  const selectableRows = scope ? rows.filter(selectable) : [];
   const check = scope
-    ? `<th class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /><span class="mobile-record-only">选择本页</span></label></th>`
+    ? `<th class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${selectableRows.length && selectableRows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${selectableRows.length ? '' : 'disabled'} /><span class="mobile-record-only">选择本页</span></label></th>`
     : '';
   const headers = visible.map((column) => {
     const label = escapeHtml(column.label);
@@ -988,7 +987,7 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
   }
   const expandable = dataColumns.some(column => !summaryColumns.has(column.id));
   const toggleColumn = visible.find(column => column.action) || identity;
-  const renderRow = row => `<tr data-row-id="${escapeHtml(row.id)}">${scope ? `<td class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${escapeHtml(row.id)}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></label></td>` : ''}${visible.map(column => {
+  const renderRow = row => `<tr data-row-id="${escapeHtml(row.id)}">${scope ? `<td class="check-cell">${selectable(row) ? `<label class="table-selection"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${escapeHtml(row.id)}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></label>` : ''}</td>` : ''}${visible.map(column => {
     const presentation = column.action ? 'actions' : column === identity ? 'identity' : summaryColumns.has(column.id) ? 'summary' : 'secondary';
     const toggle = expandable && column === toggleColumn
       ? '<button type="button" class="text-button mobile-record-only mobile-record-toggle" data-action="table-mobile-toggle" aria-expanded="false">更多资料</button>' : '';
@@ -1032,7 +1031,7 @@ function matchesNav(route, base) {
 function permittedRoute(route) {
   if (route === 'settings/monitoring' && window.IDLocalData?.authRequired) return state.actor?.role === 'super';
   if (!window.IDLocalData?.authRequired || state.actor?.role !== 'employee') return true;
-  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes|order-completion)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
+  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes|order-completion)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|claude|gemini|grok)$)/.test(
     route
   );
 }
@@ -1503,13 +1502,9 @@ function renderOrder() {
   );
 }
 function renderOrders() {
-  const product =
-    state.route === 'orders/pro'
-      ? 'Claude Pro'
-      : state.route === 'orders/max'
-        ? 'Claude Max'
-        : 'GPT';
-  const rows = state.demoOrders.filter((row) => (row.product || 'GPT') === product);
+  const product = state.route === 'orders/claude' ? 'Claude' : 'GPT';
+  const rows = state.demoOrders.filter(row => product === 'Claude'
+    ? ['Claude Pro', 'Claude Max'].includes(row.product) : (row.product || 'GPT') === product);
   return (
     header(
       `${product} 订单`,
@@ -1556,7 +1551,7 @@ function renderPlaceholder() {
         : '本页保留新导航位置，后续按统一组件和模块顺序开发。',
       button('查看设计说明', 'design-guide', '', 'info')
     ) +
-    `<section class="panel">${empty(placeholder ? '模块占位' : '已纳入后续开发', placeholder ? '本阶段优先完成已确定的业务页面。' : '第一批重点查看：邮箱管理、邮箱提取、Claude 专属、比特充值及订单表单。')}<div class="toolbar" data-page-actions>${button('查看邮箱管理', 'goto', '', 'mail', 'data-route="mailboxes/google"')}${button('查看 Claude 专属', 'goto', '', 'orders', 'data-route="orders/exclusive"')}</div></section>`
+    `<section class="panel">${empty(placeholder ? '模块占位' : '已纳入后续开发', placeholder ? '本阶段优先完成已确定的业务页面。' : '第一批重点查看：邮箱管理、邮箱提取、Claude 订单、比特充值及订单表单。')}<div class="toolbar" data-page-actions>${button('查看邮箱管理', 'goto', '', 'mail', 'data-route="mailboxes/google"')}${button('查看 Claude 订单', 'goto', '', 'orders', 'data-route="orders/claude"')}</div></section>`
   );
 }
 function preserveMainDraft() {
@@ -1665,9 +1660,8 @@ function render() {
     content = renderMailbox();
   else if (['workspace/mail-extract', 'workspace/account-extract'].includes(state.route))
     content = renderExtraction();
-  else if (state.route === 'orders/exclusive') content = renderClaude();
   else if (state.route === 'workspace/order') content = renderOrder();
-  else if (['orders/gpt', 'orders/pro', 'orders/max'].includes(state.route))
+  else if (['orders/gpt', 'orders/claude'].includes(state.route))
     content = renderOrders();
   else if (state.route === 'workspace/mail-submit')
     content =
@@ -1758,8 +1752,15 @@ function navigate(event) {
     'workspace/account-submit': 'workspace/account-extract',
     'workspace/mail-submit': 'workspace/mail-extract',
     'workspace/my-recharge-codes': 'workspace/recharge-codes',
-    'data-management/claude-google-subscriptions': 'subscriptions/claude'
+    'data-management/claude-google-subscriptions': 'subscriptions/claude',
+    'orders/pro': 'orders/claude',
+    'orders/max': 'orders/claude',
+    'orders/exclusive': 'orders/claude'
   };
+  if (/^orders\/exclusive\/rentals(?:\/[^/]+)?$/.test(next)) {
+    next = next.replace('orders/exclusive', 'orders/claude');
+    history.replaceState(null, '', '#/' + next);
+  }
   if (entryRouteAliases[next]) {
     next = entryRouteAliases[next];
     history.replaceState(null, '', '#/' + next);
@@ -3171,11 +3172,12 @@ document.addEventListener('change', async (event) => {
     else selection.delete(node.dataset.id);
     render();
   } else if (node.dataset.selectAll) {
-    const rows = $$('tbody tr[data-row-id]', node.closest('table'));
+    const checkboxes = $$('tbody input[data-select]', node.closest('table'));
     const selection = getSelection(node.dataset.selectAll);
-    rows.forEach((row) => {
-      if (node.checked) selection.add(row.dataset.rowId);
-      else selection.delete(row.dataset.rowId);
+    checkboxes.forEach((checkbox) => {
+      if (checkbox.dataset.select !== node.dataset.selectAll || checkbox.disabled) return;
+      if (node.checked) selection.add(checkbox.dataset.id);
+      else selection.delete(checkbox.dataset.id);
     });
     render();
   } else if (node.dataset.columnToggle) {

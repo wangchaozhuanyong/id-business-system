@@ -156,8 +156,8 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     await page.locator('#commerce-ownerId option[value="staff"]').waitFor({ state: 'attached' });
     await page.locator('#commerce-ownerId').selectOption(staff.id, { force: true });
     await page.locator('#commerce-email').fill('preserve-order@example.test');
-    await page.locator('#commerce-proMaterialMode').selectOption('people');
-    await page.locator('[data-action="commerce-quick-tenant"]').click();
+    await page.locator('#commerce-businessType').selectOption('首次开通');
+    await page.locator('[data-action="commerce-quick-tenant"][data-target="claudeVerifierId"]').click();
     await owner.locator('option[value="staff"]').waitFor({ state: 'attached' });
     assert.equal(await owner.inputValue(), actor.id, '快捷新增也默认实际录入人，不沿用订单所选员工');
     assert.equal(await page.locator('#commerce-ownerId').inputValue(), staff.id);
@@ -206,7 +206,8 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert.equal(cards.length, 2);
     assert.equal(cards[1].tenantId, quick.id);
     assert.equal(quick.ownerId, actor.id);
-    assert.equal(await page.locator('#commerce-tenantId').inputValue(), quick.id, '快捷新增成功回填新租户');
+    assert.equal(await page.locator('#commerce-claudeVerifierId').inputValue(), quick.id, '快捷新增成功回填认证人');
+    assert.equal(await page.locator('#commerce-tenantId').inputValue(), '', '回填认证人不改变用卡人');
     assert.equal(await page.locator('#commerce-ownerId').inputValue(), staff.id, '租户归属不覆盖订单归属');
     assert.equal(await page.locator('#commerce-email').inputValue(), 'preserve-order@example.test');
     assert.deepEqual(fixture.commerce.data.orders, originalOrders);

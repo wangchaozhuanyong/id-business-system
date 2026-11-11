@@ -120,7 +120,7 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
     ['', 'claude-max@example.test', 'claude@example.test'], 'Claude 历史列表不包含 GPT 及其他产品');
   await popup.locator('[data-value="claude@example.test"]').click();
   assert.equal(await email.inputValue(), 'claude@example.test');
-  await page.locator('#commerce-product').selectOption('Claude Max');
+  await page.locator('#commerce-plan').selectOption('Max 5x');
   await openHistory();
   assert.deepEqual(await popup.getByRole('option').evaluateAll(nodes => nodes.map(node => node.dataset.value)),
     ['', 'claude-max@example.test', 'claude@example.test'], '切换 Claude Max 后仍只匹配 Claude 订单');

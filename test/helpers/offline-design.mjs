@@ -171,14 +171,17 @@ export async function separatorSnapshot(page, scope = '#main') {
     let measurements = 0;
     for (const region of root.querySelectorAll('.list-controls,.content-toolbar,.panel-heading,.toolbar,.form-footer,.tool-header-row,.pagination,.form-section,.tabs')) {
       if (!visible(region)) continue;
+      const painted = paintedRect(region);
+      if (!painted) continue;
       const box = region.getBoundingClientRect(), style = getComputedStyle(region);
       for (const side of ['Top', 'Bottom']) {
         if (!(parseFloat(style[`border${side}Width`]) > 0) || style[`border${side}Style`] === 'none') continue;
         const line = side === 'Top' ? box.top : box.bottom;
+        if (line < painted.top || line > painted.bottom) continue;
         for (const control of controls) {
           if (control.contains(region)) continue;
           const rect = paintedRect(control);
-          if (!rect || rect.right <= box.left || rect.left >= box.right) continue;
+          if (!rect || rect.right <= painted.left || rect.left >= painted.right) continue;
           const distance = Math.max(rect.top - line, line - rect.bottom);
           if (distance >= 24) continue;
           measurements++;

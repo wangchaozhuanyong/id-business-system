@@ -6,7 +6,7 @@ import {
 } from '../modules/inventory/inventory-claude-aging.ts';
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { claimAllowsDelivery, pendingInventoryClaim } from './inventory-usage.mjs';
-import { releasedAccountOrders } from './account-lifecycle.mjs';
+import { releasedAccountOrders, systemAccount } from './account-lifecycle.mjs';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { personalDelivery, personalProduct, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
 
@@ -238,8 +238,15 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
 
   const newSales = new Map();
   for (const order of orders.values()) {
-    if (order.businessType !== '成品交付') continue;
     const prior = priorOrders.get(order.id);
+    if (order.businessType === '首次开通' && stockTypeForProduct(order.product) === 'claude' &&
+        (!prior || prior.email !== order.email || prior.accountId !== order.accountId || prior.businessType !== order.businessType)) {
+      const email = String(order.email || '').trim().toLowerCase();
+      if (order.accountId || accounts.some(account => account?.type === 'claude' && systemAccount(account) &&
+          email && email === String(account.email || '').trim().toLowerCase()))
+        return '该账号来自系统库存，请使用成品交付或续费';
+    }
+    if (order.businessType !== '成品交付') continue;
     if (personalDelivery(prior)) continue;
     if (prior && prior.businessType !== '成品交付') return '已保存订单不能改为成品交付，请登记独立新订单';
     const personal = personalProduct(order.product);

@@ -85,6 +85,11 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
 
   await page.locator('#subscription-list').getByText('ready-history@example.test', { exact: true }).first().waitFor();
   await page.locator('#subscription-list').getByText('2026-11-30 22:00', { exact: true }).waitFor();
+  await page.goto(origin + '/#/orders/claude');
+  await page.getByText('暂无 Claude 订单', { exact: true }).waitFor();
+  assert.equal(await page.locator('[data-table="commerce-orders-Claude"] tbody tr[data-row-id]').count(), 0);
+  await page.getByRole('button', { name: '查看 Claude 订阅', exact: true }).click();
+  await page.locator('#subscription-list').getByText('ready-history@example.test', { exact: true }).first().waitFor();
   // A pre-fix persisted record can still have an available flag.
   Object.assign(local.inventory.data.accounts[0], { inventoryState: 'available', used: false, status: '正常' });
   await page.goto(origin + '/#/accounts/claude');
@@ -116,10 +121,14 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   assert.equal(await page.locator('#main').getByText('ready-history@example.test', { exact: true }).count(), 0);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await accountOpen.click();
+  const mobileActions = page.locator('#main [data-action="mobile-list-actions"]:visible').first();
+  await mobileActions.click();
+  await page.getByRole('menuitem', { name: '历史账号入库', exact: true }).click();
   await content.fill(accountInput);
   await preview.click();
-  await page.locator('#inventory-claude-history-review').getByText('已登记', { exact: true }).first().waitFor();
+  const review = page.locator('#inventory-claude-history-review');
+  await review.locator('[data-action="table-mobile-toggle"]').first().click();
+  await review.getByText('已登记', { exact: true }).first().waitFor();
   assert.equal(await submit.isDisabled(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   assert.deepEqual(errors, []);

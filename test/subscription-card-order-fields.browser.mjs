@@ -54,7 +54,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await field('cardTypeId').waitFor();
   const mode = field('proMaterialMode');
   assert.deepEqual(await mode.locator('option').evaluateAll(options => options.map(item => item.value)),
-    ['manual_card', 'pool_card', 'tenant_card', 'people', 'none']);
+    ['none', 'manual_card', 'pool_card', 'tenant_card']);
   await mode.selectOption('pool_card');
   const pool = field('proPoolCardId');
   await pool.locator(`option[value="${poolId}"]`).waitFor({ state: 'attached' });
@@ -77,7 +77,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await drawer.locator('button[form="commerce-card-type-assignment-form"]').click();
   await drawer.waitFor({ state: 'hidden' });
   assert.deepEqual(typeWrites[0], { action: 'assign', version: 1, cardId: poolId, typeId: cardTypeB.id });
-  await field('product').selectOption('Claude Max');
+  await field('plan').selectOption('Max 5x');
   assert.equal(await mode.isVisible(), true);
   assert.equal(await field('cardTypeId').isVisible(), true);
   await field('payment').selectOption('苹果内购');

@@ -63,7 +63,7 @@ test('所有录单入口可手填和编辑卡号，卡序列号选填，切页�
     await page.goto(`${origin}/#/workspace/order/${entry}`);
     let form = main.locator('#commerce-order-form');
     await form.locator('#commerce-proMaterialMode').waitFor();
-    if (product === 'Claude Max') await form.locator('#commerce-product').selectOption(product);
+    if (entry === 'claude') await form.locator('#commerce-plan').selectOption(product === 'Claude Pro' ? 'Pro' : 'Max 5x');
     await form.locator('#commerce-proMaterialMode').selectOption('manual_card');
     const card = form.locator('#commerce-proCardNumber');
     await card.fill(number);

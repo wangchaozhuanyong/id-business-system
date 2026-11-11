@@ -22,7 +22,7 @@ test('dense lists retain pagination and drawer controls within their visible bou
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
   if (output) await mkdir(output, { recursive: true });
   const results = [];
-  const routes = ['customers/list', 'customers/tenants', 'mailboxes/google', 'accounts/gpt', 'accounts/claude', 'accounts/apple-balances', 'orders/gpt', 'orders/pro', 'orders/exclusive'];
+  const routes = ['customers/list', 'customers/tenants', 'mailboxes/google', 'accounts/gpt', 'accounts/claude', 'accounts/apple-balances', 'orders/gpt', 'orders/claude'];
   for (const width of [1440, 768, 390, 320]) for (const dark of [false, true]) {
     await t.test(`${width}px ${dark ? 'dark' : 'light'}`, async () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });

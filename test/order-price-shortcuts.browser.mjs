@@ -81,7 +81,7 @@ test('订单金额预设、手填、更正原因和既有价格与订阅快捷�
   assert.equal(await menu.getByRole('menuitem', { name: /^使用预设/ }).count(), 1);
   await menu.getByRole('menuitem', { name: '使用预设 983 PHP', exact: true }).press('Enter');
   assert.equal(await paidAmount.inputValue(), '983');
-  assert(!(await form.getByRole('checkbox', { name: '代付已确认' }).isChecked()));
+  assert.equal(await form.getByRole('checkbox', { name: '代付已确认' }).count(), 0);
   await form.locator('#commerce-paidCurrency').selectOption('CLP');
   menu = await openAmount('paid');
   assert(await menu.getByRole('menuitem', { name: '当前币种暂无预设金额', exact: true }).isDisabled());
@@ -95,7 +95,7 @@ test('订单金额预设、手填、更正原因和既有价格与订阅快捷�
   menu = await openAmount('sale');
   await menu.getByRole('menuitem', { name: '使用预设 190 USD', exact: true }).click();
   assert.equal(await saleAmount.inputValue(), '190');
-  assert(!(await form.getByRole('checkbox', { name: '实收已确认' }).isChecked()));
+  assert.equal(await form.getByRole('checkbox', { name: '实收已确认' }).count(), 0);
   await form.locator('#commerce-saleCurrency').selectOption('CNY');
   await form.locator('#commerce-paidAmount').fill('975.1234');
   await form.locator('#commerce-saleAmount').fill('1400');
@@ -168,7 +168,7 @@ test('订单金额预设、手填、更正原因和既有价格与订阅快捷�
   await closeReference();
   await page.goto(origin + '/#/workspace/order/claude');
   releaseSettings();
-  await page.waitForFunction(() => document.querySelector('#commerce-product')?.value === 'Claude Pro');
+  await form.locator('#commerce-plan').selectOption('Pro');
   await form.and(page.locator('[data-price-reference-status="ready"]')).waitFor();
   await form.locator('#commerce-paidCurrency').selectOption('MYR');
   menu = await openAmount('paid');

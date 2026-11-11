@@ -47,9 +47,7 @@ test('库存、订单、运营和员工的更多操作直接下拉，不出现�
     ['accounts/gpt', 'inventory-more', 'inventory-detail', '查看记录'],
     ['accounts/claude', 'inventory-more', 'inventory-detail', '查看记录'],
     ['orders/gpt', 'commerce-order-more', 'commerce-order-edit', '更正订单资料'],
-    ['orders/pro', 'commerce-order-more', 'commerce-order-edit', '更正订单资料'],
-    ['orders/max', 'commerce-order-more', 'commerce-order-edit', '更正订单资料'],
-    ['orders/exclusive', 'commerce-subscription-more', 'commerce-subscription-state', '冻结']
+    ['orders/claude', 'commerce-order-more', 'commerce-order-edit', '更正订单资料']
   ];
   await page.goto(origin + '/#/accounts/gpt');
   for (const width of [1440, 768, 390, 320]) for (const dark of [false, true]) {
@@ -117,8 +115,7 @@ test('库存、订单、运营和员工的更多操作直接下拉，不出现�
   assert.equal(await previewMenu.locator('button:not(:disabled)').count(), 0, '原有权限禁用条件不变');
   await demo.keyboard.press('Escape');
   for (const [route, action, expected] of [
-    ['mailboxes/google', 'mail-more', 'mail-transition'],
-    ['orders/exclusive', 'claude-more', 'claude-transition']
+    ['mailboxes/google', 'mail-more', 'mail-transition']
   ]) {
     await demo.evaluate(route => window.IDDesignAPI.go(route), route);
     await demo.locator(`#main[data-layout-route="${route}"]`).waitFor();

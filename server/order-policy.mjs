@@ -13,6 +13,7 @@ const bands = {
 const plans = {
   GPT: Object.values(rechargePlanLabels), 'Claude Pro': ['Pro'], 'Claude Max': ['Max 5x', 'Max 20x'], ...personalPlans
 };
+const isClaudeOrder = order => order?.product === 'Claude Pro' || order?.product === 'Claude Max';
 export const validApplePaidPrices = prices => validateApplePrices(prices, plans);
 export function checkNewOrder(order) {
   if (!order.product) return;
@@ -24,7 +25,8 @@ export function checkNewOrder(order) {
       !/^recharge:.+/.test(order.cardId || '')) return '请选择本次使用的银行卡';
     return;
   }
-  if (!['续费', '成品交付'].includes(order.businessType)) return '请选择续费或成品交付';
+  const businessTypes = isClaudeOrder(order) ? ['首次开通', '续费', '成品交付'] : ['续费', '成品交付'];
+  if (!businessTypes.includes(order.businessType)) return '请选择有效的业务类型';
   if (order.costBasis === 'actual') return '新订单按费用规则核算，实际总成本请通过有依据的订单更正登记';
   const email = order.email ?? '';
   if (typeof email !== 'string' || ((email || order.businessType !== '续费') &&
@@ -93,21 +95,18 @@ export function matchesBackfilledPayment(order, payment, evidence) {
     item.previous.paidAmount === payment.amount && item.previous.paidCurrency === payment.currency);
 }
 const proMaterialFields = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
-const proPeopleFields = ['tenantId', 'verifier', 'verifierPhone', 'phone', 'kyc'];
+const certificationFields = ['verifier', 'verifierPhone', 'kyc'];
+const proPeopleFields = ['tenantId', 'phone', ...certificationFields];
 const proMaterialModes = new Set(['manual_card', 'people', 'pool_card', 'tenant_card', 'none']);
 const nonempty = (value) => value !== undefined && value !== null && value !== '';
 
 const isClaudeProBank = (order) => order?.product === 'Claude Pro' && order.payment === '银行卡';
 
-export function isClaudeProBankMaterials(order) {
-  return isClaudeProBank(order) && proMaterialModes.has(order.proMaterialMode);
-}
-
 // Keep the existing encrypted document fields compatible with historical Pro orders.
 // These fields now describe the bank-card materials of every order product.
 export function isOrderBankMaterials(order) {
   return order?.payment === '银行卡' && Object.hasOwn(plans, order.product) &&
-    (isClaudeProBankMaterials(order) || ['manual_card', 'pool_card'].includes(order.proMaterialMode));
+    (isClaudeOrder(order) ? proMaterialModes.has(order.proMaterialMode) : ['manual_card', 'pool_card'].includes(order.proMaterialMode));
 }
 
 export function sameRecordedBankPayment(before, after) {
@@ -127,13 +126,14 @@ export function retainOrderCardNumber(order, prior, card) {
   else delete order.proCardNumber;
 }
 
-export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacyCreate = false } = {}) {
+export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = false } = {}) {
   if (order?.payment !== '银行卡' || !Object.hasOwn(plans, order.product)) {
     if (proMaterialFields.some((field) => nonempty(order[field])))
       return '只有银行卡订单可以填写这组资料';
     return;
   }
   const { proMaterialMode: mode } = order;
+  const claude = isClaudeOrder(order);
   const allowSerial = mode === 'manual_card' || order.product === 'GPT' || personalProduct(order.product);
   if (allowSerial && (mode === 'manual_card' || nonempty(order.proCardSerial))) {
     if (nonempty(order.proCardSerial) && typeof order.proCardSerial !== 'string') return '请填写有效的卡序列号';
@@ -147,7 +147,8 @@ export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacy
     retainOrderCardNumber(order, prior);
     return;
   }
-  if (!isOrderBankMaterials(order)) return '请选择有效的银行卡资料方式';
+  if (!isOrderBankMaterials(order) || (order.product === 'Claude Max' && mode === 'people' && prior?.proMaterialMode !== mode))
+    return '请选择有效的银行卡资料方式';
   if (nonempty(order.appleIdId)) return '银行卡资料不能关联苹果 ID';
   const prefix = mode === 'pool_card' ? 'recharge:' : mode === 'tenant_card' ? 'tenant:' : '';
   if (prefix) {
@@ -157,9 +158,11 @@ export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacy
     if (nonempty(order.cardId)) return '所选资料方式不能关联银行卡池';
     order.cardId = '';
   }
+  const mismatchedPeople = claude
+    ? nonempty(order.tenantId) && order.tenantId !== prior?.tenantId
+    : proPeopleFields.some(field => nonempty(order[field]));
   if (mode === 'manual_card') {
-    if (proPeopleFields.some((field) => nonempty(order[field])))
-      return '银行卡资料和人员与补充资料只能选择一种';
+    if (mismatchedPeople) return '手工银行卡不能关联未选用的用卡人';
     const number = typeof order.proCardNumber === 'string'
       ? order.proCardNumber.trim().replace(/[ -]/g, '') : '';
     if (!/^\d{12,19}$/.test(number)) return '请输入 12 至 19 位有效银行卡号';
@@ -172,29 +175,61 @@ export function normalizeClaudeProMaterials(order, prior, tenants, { allowLegacy
   retainOrderCardNumber(order, prior);
   if (!allowSerial) delete order.proCardSerial;
   if (!prefix) order.paymentId = '';
-  if (mode === 'pool_card' || mode === 'none') {
-    if (proPeopleFields.some((field) => nonempty(order[field])))
-      return '所选资料方式不能混填认证人或补充资料';
+  if ((mode === 'pool_card' || mode === 'none') && mismatchedPeople)
+    return '所选资料方式不能关联未选用的用卡人';
+  if (mode === 'none' && order.product === 'Claude Max' && order.paidConfirmed && !prior?.paidConfirmed)
+    return '确认付款前请选择本次银行卡，或先保留待补全';
+  if (mode === 'tenant_card' && !nonempty(order.tenantId)) return '请选择用卡人及其名下银行卡';
+  if (mode === 'people' && !order.tenantId && !order.phone) return '请选择租户或填写订阅电话';
+}
+
+export function normalizeClaudeCertification(order, prior, tenants, { allowLegacyCreate = false } = {}) {
+  const selected = Object.hasOwn(order, 'claudeVerifierId');
+  const verifierId = order.claudeVerifierId;
+  delete order.claudeVerifierId;
+  if (!isClaudeOrder(order)) return selected ? '只有 Claude 订单可以登记认证人' : undefined;
+  if (prior && order.plan !== prior.plan && !plans[order.product].includes(order.plan))
+    return '请选择与原订单产品匹配的套餐';
+  if (prior && order.businessType !== prior.businessType)
+    return '已保存的业务类型不直接切换，请登记独立新订单';
+
+  if (nonempty(order.tenantId) && order.tenantId !== prior?.tenantId &&
+      !tenants.some(tenant => tenant.id === order.tenantId && tenant.active !== false))
+    return '请选择可用的用卡人';
+  if (nonempty(order.phone) && order.phone !== prior?.phone) {
+    const phone = typeof order.phone === 'string' ? order.phone.trim() : '';
+    const digits = phone.replace(/\D/g, '').length;
+    if (!/^\+?\d[\d ()-]{4,31}$/.test(phone) || digits < 5 || digits > 20)
+      return '请填写有效的订阅电话';
+    order.phone = phone;
+  }
+
+  if (order.businessType === '续费') {
+    if (nonempty(verifierId)) return '续费无需登记认证人';
+    if (!prior && allowLegacyCreate) return;
+    for (const field of certificationFields) {
+      if (prior?.businessType === '续费' && Object.hasOwn(prior, field)) order[field] = prior[field];
+      else delete order[field];
+    }
     return;
   }
-  if (mode === 'tenant_card' && !nonempty(order.tenantId)) return '请先选择认证人，再选择名下银行卡';
-  const phone = typeof order.phone === 'string' ? order.phone.trim() : '';
-  const phoneDigits = phone.replace(/\D/g, '').length;
-  if (nonempty(order.phone) &&
-      (!/^\+?\d[\d ()-]{4,31}$/.test(phone) || phoneDigits < 5 || phoneDigits > 20))
-    return '请填写有效的订阅电话';
-  if (!order.tenantId && !phone) return '请选择认证人或填写订阅电话';
-  if (order.kyc && !['未认证', 'KYC 认证'].includes(order.kyc)) return '请选择有效的认证状态';
-  const sameTenant = prior?.proMaterialMode === mode && prior.tenantId && prior.tenantId === order.tenantId;
-  const tenant = sameTenant ? null : tenants.find((row) => row.id === order.tenantId && row.active !== false);
-  if (order.tenantId && !sameTenant && !tenant) return '请选择可用的认证人';
-  if (!order.tenantId && (order.verifier || order.verifierPhone))
-    return '请先选择有效的认证人';
-  order.verifier = (sameTenant ? prior.verifier : tenant?.name) || '';
-  order.verifierPhone = (sameTenant ? prior.verifierPhone : tenant?.phone) || '';
-  if (order.kyc === 'KYC 认证' && (!order.tenantId || !order.verifierPhone))
+
+  if (selected) {
+    const verifier = tenants.find(tenant => tenant.id === verifierId && tenant.active !== false);
+    if (typeof verifierId !== 'string' || (verifierId && !verifier)) return '请选择可用的认证人';
+    order.verifier = verifier?.name || '';
+    order.verifierPhone = verifier?.phone || '';
+  } else if (prior || !allowLegacyCreate) {
+    for (const field of ['verifier', 'verifierPhone']) {
+      if (prior && Object.hasOwn(prior, field)) order[field] = prior[field];
+      else delete order[field];
+    }
+  }
+  const changedStatus = selected || prior?.kyc !== order.kyc;
+  if (changedStatus && nonempty(order.kyc) && !['未认证', 'KYC 认证'].includes(order.kyc))
+    return '请选择有效的认证状态';
+  if (changedStatus && order.kyc === 'KYC 认证' && (!order.verifier || !order.verifierPhone))
     return 'KYC 认证须选择有联系电话的认证人';
-  if (phone) order.phone = phone;
 }
 
 const proSnapshotFields = ['payment', 'cardId', ...proMaterialFields, ...proPeopleFields];
@@ -202,7 +237,10 @@ const sameProMaterials = (left, right) => proSnapshotFields.every((field) =>
   (left?.[field] ?? '') === (right?.[field] ?? ''));
 
 export function checkClaudeProMaterialHistory(order, prior, action) {
-  if (!prior || (prior.payment !== '银行卡' && order.payment !== '银行卡')) return;
+  if (!prior) return;
+  const certificationChanged = isClaudeOrder(order) && certificationFields.some(field =>
+    (order[field] ?? '') !== (prior[field] ?? ''));
+  if (!certificationChanged && prior.payment !== '银行卡' && order.payment !== '银行卡') return;
   const before = prior.corrections || [];
   const after = order.corrections || [];
   if (!Array.isArray(after) || before.some((entry, index) => !isDeepStrictEqual(entry, after[index])))
@@ -223,34 +261,36 @@ export function checkClaudeProMaterialHistory(order, prior, action) {
   return '请通过订单更正操作登记银行卡资料变化并保留原记录';
 }
 
-export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOrders) {
+export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOrders, { allowLegacyCreate = false } = {}) {
   const fields = ['proRenewalSourceId', 'proRenewalSourceVersion'];
-  const hasNewSource = fields.some((field) => nonempty(order[field]));
-  const email = typeof order.email === 'string' ? order.email.trim().toLowerCase() : '';
-  if (!email && ['Claude Pro', 'Claude Max'].includes(order.product) &&
-      (hasNewSource || nonempty(order.claudeRenewalId)) && (!prior || nonempty(prior.email)))
-    return '请填写邮箱后关联原 Claude 续费订单';
+  const hasVersionedSource = fields.some(field => nonempty(order[field]));
+  const linked = hasVersionedSource || nonempty(order.claudeRenewalId);
+  if (!isClaudeOrder(order)) return linked ? '只有 Claude 订单可以关联快捷续费来源' : undefined;
   if (prior) {
-    if (fields.some((field) => (order[field] ?? '') !== (prior[field] ?? '')) ||
-        (prior.proRenewalSourceId && (order.claudeRenewalId ?? '') !== (prior.claudeRenewalId ?? '')))
-      return '已登记的 Claude Pro 续费来源不可更换';
+    if ([...fields, 'claudeRenewalId'].some(field => (order[field] ?? '') !== (prior[field] ?? '')))
+      return '已登记的 Claude 续费来源不可更换';
     return;
   }
-  const proBank = isClaudeProBankMaterials(order);
-  if (!hasNewSource && (!proBank || !nonempty(order.claudeRenewalId))) return;
-  if (!proBank || order.businessType !== '续费' ||
+  if (!linked) return;
+  const email = typeof order.email === 'string' ? order.email.trim().toLowerCase() : '';
+  if (!email) return '请填写邮箱后关联原 Claude 续费订单';
+  if (allowLegacyCreate && !hasVersionedSource) return;
+  if (order.businessType !== '续费' ||
       (nonempty(order.claudeRenewalId) && order.claudeRenewalId !== order.proRenewalSourceId) ||
       typeof order.proRenewalSourceId !== 'string' || !Number.isSafeInteger(order.proRenewalSourceVersion))
-    return 'Claude Pro 续费来源格式无效';
+    return 'Claude 续费来源格式无效';
   const source = previousOrders.get(order.proRenewalSourceId);
+  const sourcePlan = source?.product === 'Claude Pro' && source.plan === 'pro' ? 'Pro'
+    : source?.product === 'Claude Max' && source.plan === 'max5' ? 'Max 5x'
+      : source?.product === 'Claude Max' && source.plan === 'max20' ? 'Max 20x' : source?.plan;
   if (!source || !isDeepStrictEqual(source, nextOrders.get(source.id)) ||
-      source.cancelled || source.product !== order.product ||
-      source.version !== order.proRenewalSourceVersion || source.customerId !== order.customerId ||
-      source.email?.trim().toLowerCase() !== email)
-    return '原 Claude Pro 订单已变化，请重新核对客户和邮箱后续费';
+      source.cancelled || source.subscriptionEnded || source.product !== order.product || sourcePlan !== order.plan ||
+      (source.version ?? 0) !== order.proRenewalSourceVersion || !source.customerId || source.customerId !== order.customerId ||
+      typeof source.email !== 'string' || source.email.trim().toLowerCase() !== email)
+    return '原 Claude 订单已变化，请重新核对客户和账号后续费';
   for (const row of [...previousOrders.values(), ...nextOrders.values()]) {
     if (row.id !== order.id && (row.proRenewalSourceId === source.id || row.claudeRenewalId === source.id))
-      return '该 Claude Pro 订单已有续费记录，请从最新订单续费';
+      return '该 Claude 订单已有续费记录，请从最新订单续费';
   }
 }
 

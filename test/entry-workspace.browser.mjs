@@ -416,14 +416,14 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       for (const route of ['workspace/order/claude', 'workspace/order/gpt', 'workspace/order/gemini', 'workspace/order/grok']) {
         await go(route);
         if (route.endsWith('/claude')) {
-          await page.locator('#commerce-product').selectOption('Claude Pro');
+          await page.locator('#commerce-plan').selectOption('Pro');
           await page.locator('#commerce-payment').selectOption('银行卡');
-          for (const mode of ['manual_card', 'pool_card', 'tenant_card', 'people', 'none']) {
+          for (const mode of ['manual_card', 'pool_card', 'tenant_card', 'none']) {
             await page.locator('#commerce-proMaterialMode').selectOption(mode);
             await settle(page);
             await geometry(width, route, true);
           }
-          await page.locator('#commerce-product').selectOption('Claude Max');
+          await page.locator('#commerce-plan').selectOption('Max 5x');
         }
         if (/\/(gemini|grok)$/.test(route))
           await page.locator('#commerce-plan').selectOption(route.endsWith('/gemini') ? 'Google AI Ultra 20x' : 'SuperGrok Heavy');

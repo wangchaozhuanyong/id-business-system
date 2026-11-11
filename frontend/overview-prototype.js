@@ -126,7 +126,7 @@
     ['苹果待回款', '已登记退款，尚待确认到账', 'accounts/apple-balances', 'card']
   ];
   const productOrders = [
-    ['GPT', 'orders/gpt'], ['Claude Pro', 'orders/pro'], ['Claude Max', 'orders/max'],
+    ['GPT', 'orders/gpt'], ['Claude Pro', 'orders/claude'], ['Claude Max', 'orders/claude'],
     ['Gemini', 'orders/gemini'], ['Grok', 'orders/grok']
   ];
   const inventories = [

@@ -2,27 +2,37 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 const entry = '/#/workspace/order/claude';
+const ordersPath = '/#/orders/claude';
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
-const actor = { id: 'pro-qa-admin', name: '合成管理员', role: 'admin' };
-const syntheticCard = '4242424242424242';
-const syntheticSerial = '00042-QA';
+const actor = { id: 'claude-qa-admin', name: '合成管理员', role: 'admin' };
+const sampleCard = '4242424242424242';
 
-test('Claude Pro 银行卡资料切换、草稿、独立保存与 Max／Apple 边界', { timeout: 60_000 }, async t => {
+test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 90_000 }, async t => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
-  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  const browser = await chromium.launch();
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
   const fixture = JSON.parse(await readFile(fixturePath, 'utf8'));
   const customer = fixture.commerce.data.customers.find(row => row.active !== false);
-  const tenant = { id: 'claude-fixture-tenant', name: '合成认证人', phone: '00000000', active: true, version: 1 };
-  const tenantCard = { id: 'tenant:claude-fixture', last4: '0042', active: true };
-  fixture.commerce.data.tenants.push(tenant);
+  const verifier = { id: 'qa-verifier', name: '合成认证人', phone: '+60123456780', active: true, version: 1 };
+  const payer = { id: 'qa-payer', name: '合成用卡人', phone: '+60123456781', active: true, version: 1 };
+  const tenantCard = { id: 'tenant:qa-claude-card', last4: '4242', active: true };
+  fixture.commerce.data.tenants.push(verifier, payer);
   fixture['tenant-cards'] = { version: 1, items: [tenantCard] };
-  const mock = await interceptDesign(context, { localFixtures: fixture, actor });
+  fixture.commerce.data.orders = fixture.commerce.data.orders.filter(row => row.product.startsWith('Claude'));
+  const maxExample = fixture.commerce.data.orders.find(row => row.plan === 'Max 5x' && !row.cancelled);
+  fixture.commerce.data.orders.push({ ...maxExample, id: 'qa-max-20x-existing', orderNo: 'QA-MAX-20',
+    plan: 'Max 20x', email: 'qa-max-20x-existing@example.test' });
+  fixture.commerce.data.rentBatches = [{
+    id: 'RENT-QA-001', at: '2026-11-09 09:00', notes: '合成付租批次',
+    items: [{ id: 'qa-rent', email: 'claude-rent@example.test', tenantId: payer.id,
+      period: '2026-10-01 至 2026-11-01', status: '已发放', notes: '' }]
+  }];
+  const mock = await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
   const writes = [];
   await context.route('**/api/local/auth/order-owners', route => route.fulfill({ json: { items: [actor] } }));
   await context.route('**/api/local/auth/display-names', route => route.fulfill({ json: { items: [actor] } }));
@@ -30,150 +40,192 @@ test('Claude Pro 银行卡资料切换、草稿、独立保存与 Max／Apple �
     if (route.request().method() === 'GET') return route.fallback();
     const command = route.request().postDataJSON();
     writes.push(command);
-    fixture.commerce = { version: command.version + 1, data: command.data };
+    const data = structuredClone(command.data);
+    for (const row of data.orders) delete row.claudeVerifierId;
+    fixture.commerce = { version: command.version + 1, data };
     return route.fulfill({ json: fixture.commerce });
   });
   const page = await context.newPage();
-  page.setDefaultTimeout(6500);
+  page.setDefaultTimeout(7500);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(origin + entry);
-  const field = name => page.locator(`#main #commerce-${name}`);
-  const mode = field('proMaterialMode');
-  const card = field('proCardNumber');
-  const serial = field('proCardSerial');
-  const phone = field('phone');
-  await card.waitFor();
-  assert.equal(await mode.inputValue(), 'manual_card');
-  assert.equal(await field('product').inputValue(), 'Claude Pro');
-  assert.equal(await field('payment').inputValue(), '银行卡');
-  await card.fill(syntheticCard);
-  await serial.fill(syntheticSerial);
-  await mode.selectOption('people');
-  assert.equal(await card.isVisible(), false);
-  await phone.fill('+60123456789');
-  await mode.selectOption('manual_card');
-  assert.equal(await card.inputValue(), syntheticCard);
-  assert.equal(await serial.inputValue(), syntheticSerial);
-  assert.equal(await phone.isVisible(), false);
-  await mode.selectOption('people');
-  assert.equal(await phone.inputValue(), '+60123456789');
-  await page.goto(origin + '/#/workspace/order/gpt');
-  await field('product').waitFor({ state: 'attached' });
-  assert.equal(await mode.isVisible(), true);
-  await page.goto(origin + entry);
-  await mode.waitFor();
-  assert.equal(await mode.inputValue(), 'people');
-  assert.equal(await phone.inputValue(), '+60123456789');
-  await field('product').selectOption('Claude Max');
-  assert.equal(await mode.isVisible(), true);
-  await mode.selectOption('');
-  assert.equal(await card.isVisible(), false);
-  await field('product').selectOption('Claude Pro');
-  await field('payment').selectOption('苹果内购');
-  assert.equal(await mode.isVisible(), false);
-  assert.equal(await serial.isVisible(), false);
-  await field('payment').selectOption('银行卡');
-  await mode.selectOption('manual_card');
-  for (const [width, dark] of [[1440, false], [1024, true], [768, false], [390, true]]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.evaluate(value => { document.documentElement.dataset.theme = value ? 'dark' : 'light'; }, dark);
-    const layout = await page.evaluate(() => {
-      const rect = name => document.querySelector(`#main #commerce-${name}`).getBoundingClientRect();
-      const payment = rect('payment'), type = rect('cardTypeId');
-      const number = rect('proCardNumber'), serial = rect('proCardSerial');
-      return { overflow: document.documentElement.scrollWidth > innerWidth + 1,
-        paymentRow: Math.abs(payment.top - type.top) < 3 && payment.right <= type.left,
-        cardFieldsFit: number.right <= serial.left + 1 || number.bottom <= serial.top + 1 };
-    });
-    assert.equal(layout.overflow, false, String(width));
-    assert(layout.cardFieldsFit, '卡号与序列号可以换行，控件不重叠');
-    if (width === 1440) assert(layout.paymentRow, '桌面付款方式与卡类型同排');
+  await page.clock.setFixedTime(new Date('2026-11-11T04:00:00Z'));
+  await page.goto(origin + '/#/orders/pro');
+  const table = page.locator('[data-table="commerce-orders-Claude"]');
+  const rows = table.locator('tbody tr[data-row-id]');
+  const filter = page.locator('#commerce-order-filter-plan');
+  const pagination = page.locator('#main [data-pagination="main-list"]');
+  await table.waitFor();
+  assert.equal(page.url(), origin + ordersPath);
+  const menuItems = await page.evaluate(() => window.IDDesignAPI.navigation.find(group => group[0] === '订单管理')[2]
+    .filter(([label]) => label.startsWith('Claude')).map(([label, route]) => [label, route]));
+  assert.deepEqual(menuItems, [['Claude 订单', 'orders/claude']]);
+  assert.equal(await filter.inputValue(), '');
+  for (const plan of ['Pro', 'Max 5x', 'Max 20x']) {
+    await filter.selectOption(plan);
+    const shown = await rows.locator('[data-column="plan"]').allTextContents();
+    assert(shown.length > 0, plan);
+    assert(shown.every(value => value.trim() === plan), plan);
   }
-  await field('email').fill('claude-pro-materials@example.test');
+  await filter.selectOption('');
+  await pagination.getByRole('button', { name: '下一页' }).click();
+  assert.equal(await pagination.getAttribute('data-page'), '2');
+  for (const alias of ['/orders/max', '/orders/exclusive']) {
+    await page.goto(origin + '/#' + alias);
+    await table.waitFor();
+    assert.equal(page.url(), origin + ordersPath);
+  }
+  await page.getByRole('button', { name: '付租批次', exact: true }).click();
+  await page.getByText('合成付租批次', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '逐项处理', exact: true }).click();
+  await page.getByRole('heading', { name: '租金发放批次详情', exact: true }).waitFor();
+  await page.goto(origin + '/#/orders/exclusive/rentals/RENT-QA-001');
+  await page.getByText('claude-rent@example.test', { exact: true }).waitFor();
+  assert.equal(page.url(), origin + ordersPath + '/rentals/RENT-QA-001');
+
+  await page.goto(origin + entry);
+  const form = page.locator('#main #commerce-order-form');
+  const field = name => form.locator('#commerce-' + name);
+  const choose = async (form, name, id) => {
+    await form.locator('#commerce-' + name + '-picker').click();
+    await form.locator('#commerce-' + name + '-popover [data-value="' + id + '"]').click();
+  };
+  const submit = async (pending = false, root = form) => {
+    const scope = root === form ? page.locator('#main') : page.locator('#drawer[open]');
+    const action = pending ? '[data-action="commerce-order-pending"]' : 'button[form="commerce-order-form"][type="submit"]';
+    await root.and(page.locator(':not([data-account-owner-pending])')).waitFor();
+    await scope.locator(action).click();
+    const confirm = page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true });
+    await confirm.click().catch(async error => {
+      const fields = await root.locator('.field-error:visible').allTextContents();
+      throw new Error([error.message, ...fields].join('\n'));
+    });
+    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+  };
+  await field('plan').waitFor();
+  assert.deepEqual(await field('plan').locator('option').evaluateAll(nodes => nodes.map(node => node.value)),
+    ['', 'Pro', 'Max 5x', 'Max 20x']);
+  assert.equal(await field('product').getAttribute('type'), 'hidden');
+  assert.equal(await field('claudeVerifierId-picker').isVisible(), false);
+  await field('plan').selectOption('Pro');
+  await field('businessType').selectOption('首次开通');
+  await choose(form, 'customerId', customer.id);
+  await choose(form, 'claudeVerifierId', verifier.id);
+  await field('kyc').selectOption('KYC 认证');
+  assert.equal(await field('verifierPhone').inputValue(), verifier.phone);
+  await field('proMaterialMode').selectOption('manual_card');
+  await field('proCardNumber').fill(sampleCard);
+  await field('proCardSerial').fill('00042-QA');
+  await field('email').fill('qa-pro-first@example.test');
   await field('paidAmount').fill('20');
   await field('saleAmount').fill('500');
-  await card.fill(syntheticCard);
-  await serial.fill(syntheticSerial);
-  await page.locator('[data-action="commerce-order-pending"]').click();
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
-  await page.waitForFunction(() => !document.querySelector('#confirm-dialog[open]'));
-  assert.equal(writes.length, 1);
-  const order = writes[0].data.orders.find(row => row.email === 'claude-pro-materials@example.test');
-  assert.equal(order.proMaterialMode, 'manual_card');
-  assert.equal(order.proCardNumber, syntheticCard);
-  assert.equal(order.proCardSerial, syntheticSerial);
-  assert.equal(Boolean(order.cardId || order.tenantId || order.phone), false);
-  assert.equal(order.ownerId, actor.id, '保留可信订单归属人');
-  assert.equal(order.paidConfirmed, false);
-  assert.equal(order.receiptConfirmed, false);
-  await page.goto(origin + '/#/orders/pro');
-  await page.locator('#commerce-search').fill(syntheticSerial);
-  const details = page.locator(`[data-action="commerce-order-detail"][data-id="${order.id}"]`);
-  await details.click();
-  await page.locator('#drawer[open] .property-row').filter({ hasText: '卡序列号' })
-    .getByText(syntheticSerial, { exact: true }).waitFor();
-  await page.locator('#drawer [data-action="drawer-close"]').first().click();
-  await page.locator(`[data-action="commerce-order-more"][data-id="${order.id}"]`).click();
-  await page.locator(`[data-action="commerce-order-renew"][data-id="${order.id}"]:visible`).click();
-  const renewal = page.locator('#drawer[open] #commerce-order-form');
-  await renewal.locator('#commerce-proCardNumber').waitFor();
-  assert.equal(await renewal.locator('#commerce-proCardNumber').inputValue(), '');
-  assert.equal(await renewal.locator('#commerce-proCardSerial').inputValue(), '');
-  assert.equal(await renewal.locator('[name="commerce-paidConfirmed"], [name="commerce-receiptConfirmed"]').count(), 0);
-  await page.locator('#drawer [data-action="drawer-close"]').first().click();
-  await page.locator(`[data-action="commerce-order-edit"][data-id="${order.id}"]`).click();
-  const edit = page.locator('#drawer[open] #commerce-order-form');
-  await edit.locator('#commerce-proMaterialMode').selectOption('people');
-  await edit.locator('#commerce-phone').fill('+60123456789');
-  await edit.locator('#commerce-correctionReason').fill('合成资料更正');
-  await page.locator('#drawer[open] [data-action="commerce-order-pending"]').click();
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
-  await page.waitForFunction(() => !document.querySelector('#confirm-dialog[open]'));
-  assert.equal(writes.length, 2);
-  const corrected = writes[1].data.orders.find(row => row.id === order.id);
-  assert.equal(corrected.proMaterialMode, 'people');
-  assert.equal(corrected.phone, '+60123456789');
-  assert.equal(Object.hasOwn(corrected, 'proCardNumber'), false);
-  assert.equal(Object.hasOwn(corrected, 'proCardSerial'), false);
-  assert.equal(corrected.version, order.version + 1);
-  assert.deepEqual(corrected.costSettings, order.costSettings);
 
-  const choose = async (name, id) => {
-    await field(name + '-picker').click();
-    await page.locator('#commerce-' + name + '-popover [data-value="' + id + '"]').click();
-  };
-  for (const [product, email] of [
-    ['Claude Pro', 'claude-pro-paid@example.test'],
-    ['Claude Max', 'claude-max-paid@example.test']
-  ]) {
-    await page.goto(origin + entry);
-    await field('product').selectOption(product);
-    await choose('customerId', customer.id);
-    await field('email').fill(email);
-    if (product === 'Claude Pro') {
-      await mode.selectOption('manual_card');
-      await card.fill(syntheticCard);
-      await serial.fill(syntheticSerial);
-    } else {
-      await mode.selectOption('');
-      await choose('tenantId', tenant.id);
-      await choose('cardId', tenantCard.id);
-    }
-    await field('paidAmount').fill('20');
-    await field('saleAmount').fill('500');
-    await page.locator('button[form="commerce-order-form"][type="submit"]:visible').click();
-    const confirmation = page.locator('#confirm-dialog[open]');
-    await confirmation.getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 500\.00 /).waitFor();
-    await confirmation.getByRole('button', { name: '确认保存', exact: true }).click();
-    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
-    assert.equal(page.url(), origin + entry);
-    const saved = writes.at(-1).data.orders.find(row => row.email === email);
-    assert.equal(saved.product, product);
-    assert.equal(saved.paidConfirmed, true);
-    assert.equal(saved.receiptConfirmed, true);
+  await field('businessType').selectOption('续费');
+  assert.equal(await field('claudeVerifierId-picker').isVisible(), false);
+  await field('businessType').selectOption('首次开通');
+  assert.equal(await field('verifierPhone').inputValue(), verifier.phone);
+  assert.equal(await field('proCardSerial').inputValue(), '00042-QA');
+  await page.goto(origin + '/#/workspace/order/gpt');
+  await page.goto(origin + entry);
+  await field('claudeVerifierId-picker').waitFor();
+  assert.equal(await field('plan').inputValue(), 'Pro');
+  assert.equal(await field('verifierPhone').inputValue(), verifier.phone);
+  assert.equal(await field('saleAmount').inputValue(), '500');
+  await submit();
+  const pro = writes.at(-1).data.orders.find(row => row.email === 'qa-pro-first@example.test');
+  assert.equal(pro.product, 'Claude Pro');
+  assert.equal(pro.claudeVerifierId, verifier.id);
+  assert.equal(pro.proCardSerial, '00042-QA');
+  assert.equal(pro.paidConfirmed, true);
+
+  await field('plan').selectOption('Max 20x');
+  await field('businessType').selectOption('首次开通');
+  await choose(form, 'customerId', customer.id);
+  await field('email').fill('qa-max-first@example.test');
+  await field('proMaterialMode').selectOption('tenant_card');
+  await choose(form, 'tenantId', payer.id);
+  await field('cardId').locator('option[value="' + tenantCard.id + '"]').waitFor({ state: 'attached' });
+  await choose(form, 'cardId', tenantCard.id);
+  await choose(form, 'claudeVerifierId', verifier.id);
+  await field('kyc').selectOption('KYC 认证');
+  await field('paidAmount').fill('200');
+  await field('saleAmount').fill('900');
+  await submit();
+  const max = writes.at(-1).data.orders.find(row => row.email === 'qa-max-first@example.test');
+  assert.equal(max.product, 'Claude Max');
+  assert.equal(max.plan, 'Max 20x');
+  assert.equal(max.tenantId, payer.id);
+  assert.equal(max.claudeVerifierId, verifier.id);
+  assert.equal(max.verifierPhone, verifier.phone);
+
+  await field('plan').selectOption('Max 5x');
+  await field('email').fill('qa-max-independent@example.test');
+  await submit(true);
+  const standalone = writes.at(-1).data.orders.find(row => row.email === 'qa-max-independent@example.test');
+  assert.equal(standalone.product, 'Claude Max');
+  assert.equal(standalone.plan, 'Max 5x');
+  assert.equal(standalone.paidConfirmed, false);
+  assert.equal(Boolean(standalone.claudeRenewalId || standalone.verifier || standalone.claudeVerifierId), false);
+
+  await page.goto(origin + ordersPath);
+  await table.waitFor();
+  const search = page.locator('#commerce-search');
+  await search.fill(max.email);
+  const row = id => table.locator('[data-row-id="' + id + '"]');
+  const more = id => row(id).locator('[data-action="commerce-order-more"]').click();
+  const menu = page.locator('.row-action-menu:popover-open');
+  await more(max.id);
+  await menu.getByRole('menuitem', { name: '续费', exact: true }).click();
+  const renewal = page.locator('#drawer[open] #commerce-order-form');
+  await renewal.waitFor();
+  assert.equal(await renewal.locator('#commerce-plan').inputValue(), 'Max 20x');
+  assert.equal(await renewal.locator('#commerce-email').inputValue(), max.email);
+  assert.equal(await renewal.locator('#commerce-claudeVerifierId-picker').isVisible(), false);
+  assert.equal(await renewal.locator('#commerce-cardId').inputValue(), '');
+  assert.equal(await renewal.locator('#commerce-expiry').inputValue(), '2027-01-11T12:00');
+  await renewal.locator('#commerce-proMaterialMode').selectOption('manual_card');
+  await renewal.locator('#commerce-proCardNumber').fill(sampleCard);
+  await renewal.locator('#commerce-paidAmount').fill('200');
+  await renewal.locator('#commerce-saleAmount').fill('900');
+  await submit(false, renewal);
+  const after = writes.at(-1).data.orders;
+  const renewed = after.find(order => order.claudeRenewalId === max.id);
+  assert.equal(renewed.proRenewalSourceVersion, max.version);
+  assert.equal(renewed.email, max.email);
+  assert.equal(Boolean(renewed.verifier || renewed.verifierPhone || renewed.kyc), false);
+  assert.equal(after.find(order => order.id === max.id).verifier, verifier.name);
+  await row(renewed.id).waitFor();
+  assert.equal(await rows.count(), 2);
+  assert.equal(await row(max.id).locator('input[data-select]').count(), 0);
+  assert.equal(await row(renewed.id).locator('input[data-select]').count(), 1);
+  await more(max.id);
+  assert.equal(await menu.getByRole('menuitem', { name: '续费', exact: true }).count(), 0);
+  await page.keyboard.press('Escape');
+  await more(renewed.id);
+  await menu.getByRole('menuitem', { name: '冻结', exact: true }).click();
+  await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认操作' }).click();
+  await row(renewed.id).locator('[data-column="accountStatus"]').getByText('冻结', { exact: true }).waitFor();
+  await more(renewed.id);
+  await menu.getByRole('menuitem', { name: '恢复使用', exact: true }).click();
+  await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认操作' }).click();
+  await row(renewed.id).locator('[data-column="accountStatus"]').getByText('使用中', { exact: true }).waitFor();
+  await row(renewed.id).locator('input[data-select]').check();
+  await page.getByRole('button', { name: '生成付租批次', exact: true }).click();
+  const rental = page.locator('#drawer[open] #commerce-rent-create-form');
+  assert.equal(await rental.locator('[name="commerce-ids"]').inputValue(), renewed.id);
+  await page.locator('#drawer [data-action="drawer-close"]').first().click();
+
+  for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await search.fill('');
+    await filter.selectOption('Max 20x');
+    await settle(page);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+    await search.fill('qa-no-such-order');
+    await table.getByText('暂无符合条件的记录', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '查看 Claude 订阅', exact: true }).count(), 0);
   }
   assert.deepEqual(errors, []);
   assert.deepEqual(mock.external, []);
-  await context.close();
 });

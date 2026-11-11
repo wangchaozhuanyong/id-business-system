@@ -124,6 +124,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
     assert.equal(await scope.locator(`#commerce-${kind}Amount`).inputValue(), amount);
   }
   await page.goto(origin + '/#/workspace/order/claude');
+  await orderForm.locator('#commerce-plan').selectOption('Pro');
   await page.waitForFunction(() => document.querySelector('#commerce-saleAmount')?.value === '201');
   assert.equal(await page.locator('#main :is([data-action="commerce-price-settings"], [data-action="commerce-currency-settings"])').count(), 0);
   assert.deepEqual(await codes(paid), ['CNY', 'MYR']);
@@ -255,13 +256,14 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   assert.equal(settings.data.stockOrderPrices['Claude Pro'].Pro.EUR, '129.5000');
   assert.equal(settings.data.stockOrderPrices['Claude Max']['Max 5x'].EUR, '199.9999');
   await page.goto(origin + '/#/workspace/order/claude');
+  await orderForm.locator('#commerce-plan').selectOption('Pro');
   await sale.selectOption('EUR');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '49.9900');
   assert.equal(await orderForm.locator('[name="commerce-receiptConfirmed"]').count(), 0);
   await orderForm.locator('#commerce-businessType').selectOption('成品交付');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '129.5000');
   assert.match(await orderForm.locator('#commerce-sale-price-reference').textContent(), /成品号售价/);
-  await orderForm.locator('#commerce-product').selectOption('Claude Max');
+  await orderForm.locator('#commerce-plan').selectOption('Max 5x');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '199.9999');
   await orderForm.locator('#commerce-businessType').selectOption('续费');
   assert.equal(await sale.inputValue(), 'EUR');
@@ -514,7 +516,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   assert.equal(await paidAmount.inputValue(), '1250');
 
   await page.goto(origin + '/#/workspace/order/claude');
-  await orderForm.locator('#commerce-product').selectOption('Claude Pro');
+  await orderForm.locator('#commerce-plan').selectOption('Pro');
   await paid.selectOption('CNY');
   await sale.selectOption('EUR');
   await page.setViewportSize({ width: 390, height: 1000 });
@@ -522,7 +524,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   await checkReference('sale', [['欧元', '49.9900 EUR'], ['人民币', '201 CNY']]);
   await paid.selectOption('EGP');
   await choosePreset('paid', '95.0010', 'EGP');
-  await orderForm.locator('#commerce-product').selectOption('Claude Max');
+  await orderForm.locator('#commerce-plan').selectOption('Max 5x');
   await paid.selectOption('CNY');
   await checkReference('paid', [['人民币', '未配置（CNY）'], ['埃及', '405.1234 EGP']]);
   await checkReference('sale', [['欧元', '99.1234 EUR'], ['人民币', '301 CNY']]);
@@ -567,7 +569,9 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   assert.match(await paid.locator('option:checked').textContent(), /已移出选项/);
   assert.equal(await orderForm.locator('#commerce-paidAmount').inputValue(), '30.1234');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '60.1234');
-  await orderForm.locator('#commerce-businessType').selectOption('成品交付');
+  const savedType = orderForm.locator('#commerce-businessType');
+  assert.equal(await savedType.inputValue(), '续费');
+  assert.equal(await savedType.isEditable(), false, '编辑原订单时保留业务类型');
   assert.equal(await orderForm.locator('#commerce-saleAmount').inputValue(), '60.1234', '编辑历史订单保留原售价');
   assert.deepEqual(fixture.commerce.data.orders, originalOrders);
   assert.deepEqual(businessWrites, []);
