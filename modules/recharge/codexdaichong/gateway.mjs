@@ -86,10 +86,12 @@ async function writeRechargePresentation(reply, res, path, secret, report, readS
   if (res.destroyed) return;
   const projected = rechargeBrowserPresentation(path, reply.statusCode, body, secret);
   if (readSteps && projected.success && projected.data) {
+    projected.data.stepsAvailable = false;
     try {
-      Object.assign(projected.data, await readSteps(projected.data));
+      const history = await readSteps(projected.data);
+      if (history) Object.assign(projected.data, history, { stepsAvailable: true });
     } catch {
-      // Detailed steps are supplemental. Always return the original status projection.
+      // The operator can still see the original status when the event history cannot be read.
     }
   }
   if (res.destroyed) return;

@@ -143,7 +143,7 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const traffic = await interceptDesign(context, { actor, localFixtures: {} });
   const jobKey = 'workspace-log-fixture';
-  let next = { status: 'running', stage: 'payment_details', progress: 37 };
+  let next = { status: 'running', stage: 'payment_details', progress: 37, stepsAvailable: true, steps: [] };
   let reads = 0, submissions = 0, hold = null;
   await context.route(url => url.pathname === api + 'verify-cdk', route => route.fulfill({ json: {
     success: true, data: { plan_type: 'plus', plan_label: 'Plus' }
@@ -172,9 +172,15 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
   const idle = () => frame.locator('#workspaceLogRefresh:not([disabled])').waitFor();
   await frame.locator('#cdkInput').fill('KC-FIXTURE');
   await frame.locator('#redeemBtn').click();
+  await entries.locator('li[data-event-source="page"]').filter({ hasText: /开始验证兑换码/ }).waitFor();
+  await entries.locator('li[data-event-source="receipt"]').filter({ hasText: /兑换码验证通过，已确认套餐/ }).waitFor();
+  assert.equal(submissions, 0, '验码不提交充值任务');
   await frame.locator('#tokenInput').fill(session());
   await frame.locator('#startBtn').click();
+  await entries.getByText(/账号资料格式检查通过/).waitFor();
+  await entries.getByText(/服务已受理提交/).waitFor();
   await entries.getByText(/正在填写支付资料/).waitFor();
+  await frame.locator('#workspaceLogStatus').filter({ hasText: /等待执行事件/ }).waitFor();
   await idle();
   const originalCount = await entries.locator('li').count();
   await refresh.click();
@@ -230,23 +236,33 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
   assert(await viewport.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 2));
   const openedAt = Date.parse('2026-11-10T15:14:37Z');
   const steps = [
-    { stage: 'checkout_open', at: openedAt },
-    { stage: 'payment_submitted', at: openedAt + 1000 },
+    { stage: 'checkout_open', at: openedAt, attempt: 1, id: 1 },
+    { stage: 'payment_submit_attempt', at: openedAt + 500, attempt: 1, id: 2 },
+    { stage: 'payment_submitted', at: openedAt + 1000, attempt: 1, id: 3 },
     { stage: 'PRIVATE-NATIVE-TEXT', at: openedAt + 2000 }
   ];
-  next = { status: 'running', progress: 85, steps };
+  next = { status: 'running', progress: 85, stepsAvailable: false };
   await refresh.click();
-  await entries.getByText(/结账页面已打开/).waitFor();
+  await frame.locator('#workspaceLogStatus').filter({ hasText: /执行记录暂不可读/ }).waitFor();
+  await idle();
+  next = { status: 'running', progress: 85, stepsAvailable: true, steps };
+  const beforeAutoUpdate = reads;
+  await page.clock.fastForward(1600);
+  await entries.getByText(/第 1 次尝试 · 结账页面已打开/).waitFor();
+  assert(reads > beforeAutoUpdate, '执行记录在两秒内自动读取');
+  await entries.getByText(/执行记录读取已恢复/).waitFor();
   await idle();
   const checkout = entries.locator('li').filter({ hasText: '结账页面已打开' });
+  assert.equal(await checkout.getAttribute('data-event-source'), 'execution');
   assert.equal(await checkout.locator('time').textContent(), '23:14:37');
+  await entries.getByText(/正在尝试提交付款表单/).waitFor();
   await entries.getByText(/已发起付款，等待结果确认/).waitFor();
   await refresh.click();
   await idle();
   assert.equal(await checkout.count(), 1, '重复回读同一原始事件只显示一行');
   assert.equal(await entries.evaluate(node => [...node.querySelectorAll('time')].every((time, i, times) =>
     i === 0 || time.dateTime >= times[i - 1].dateTime)), true);
-  next = { status: 'success', progress: 100, renewalUnconfirmed: true, steps, terminalAt: openedAt + 3000 };
+  next = { status: 'success', progress: 100, renewalUnconfirmed: true, stepsAvailable: true, steps, terminalAt: openedAt + 3000 };
   await page.clock.fastForward(5100);
   await entries.getByText(/开通成功/).waitFor();
   assert.equal(await entries.locator('li[data-tone="success"] time').textContent(), '23:14:40');

@@ -610,6 +610,86 @@ h1 {
 .summary-item.accent .summary-number {
   color: var(--primary);
 }
+.commerce-stat-filters {
+  margin-block-end: var(--section-gap);
+}
+.panel > .commerce-stat-filter-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(118px, 1fr)) minmax(102px, 1fr)
+    minmax(140px, 1.2fr) repeat(3, minmax(104px, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+  padding-block: var(--toolbar-padding-block);
+}
+.commerce-stat-filter-controls > div {
+  min-width: 0;
+}
+.commerce-stat-filter-controls label {
+  display: block;
+  margin-block-end: 4px;
+  color: var(--secondary);
+  font-size: 12px;
+}
+.panel > .commerce-stat-filter-controls :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+.commerce-stat-filter-error {
+  margin: 0;
+  padding: 0 var(--panel-padding-inline) var(--toolbar-padding-block);
+}
+.commerce-stat-summary .summary-item {
+  padding-inline: 14px;
+}
+.commerce-stat-summary .summary-number {
+  column-gap: 6px;
+  font-size: 23px;
+}
+.commerce-stat-amounts {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  padding-block: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.commerce-stat-amounts small {
+  color: var(--secondary);
+}
+.commerce-stat-channel {
+  padding-inline-start: 12px;
+  color: var(--secondary);
+}
+.property-row.commerce-stat-cost-line {
+  grid-template-columns: minmax(124px, 42%) minmax(0, 1fr);
+  align-items: center;
+}
+@media (max-width: 1320px) {
+  .panel > .commerce-stat-filter-controls {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (901px <= width <= 1320px) {
+  .commerce-stat-summary {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 0;
+  }
+  .commerce-stat-summary .summary-item {
+    padding-block: 12px;
+  }
+  .commerce-stat-summary .summary-item:nth-child(3n) {
+    border-inline-end: 0;
+  }
+  .commerce-stat-summary .summary-item:nth-child(n + 4) {
+    border-top: 1px solid var(--line);
+  }
+}
+@media (max-width: 620px) {
+  .panel > .commerce-stat-filter-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .panel {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -4842,6 +4922,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
     margin-bottom: 12px;
   }
   .summary-strip .summary-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; min-width: 0; }
+  .summary-strip.commerce-stat-summary .summary-item { display: block; }
   .summary-strip .summary-label { margin: 0; font-size: 11px; line-height: 1.5; }
   .summary-strip .summary-number { display: flex; align-items: baseline; gap: 4px; margin: 0; font-size: 17px; line-height: 1.5; }
   .summary-strip .summary-number small { margin: 0; font-size: 11px; }

@@ -1228,6 +1228,12 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   font-variant-numeric: tabular-nums;
 }
 
+[data-recharge-workspace] .workspace-log-origin {
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 [data-recharge-workspace] .workspace-log-entries [data-tone='success'] {
   color: var(--success);
 }
