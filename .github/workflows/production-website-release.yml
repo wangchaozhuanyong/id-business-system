@@ -1,0 +1,88 @@
+name: Independent Website Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: 最新 main 的完整提交 SHA
+        required: true
+        type: string
+
+concurrency:
+  group: independent-production-website-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  release:
+    if: github.repository == 'wangchaozhuanyong/id-business-system' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      RELEASE_SHA: ${{ inputs.expected_sha }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a checked main commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$RELEASE_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$RELEASE_SHA"
+          run=$(gh run list --workflow quality.yml --event push --branch main --commit "$RELEASE_SHA" \
+            --status success --limit 1 --json databaseId,headSha --jq '.[0] | select(.headSha != null) | .databaseId')
+          [[ "$run" =~ ^[0-9]+$ ]]
+          echo "Verified main quality run: $run"
+          echo "QUALITY_RUN_ID=$run" >> "$GITHUB_ENV"
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.22.1'
+      - name: Build the exact main artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=$(node --input-type=module -e 'import { CODEXDAICHONG_REVISION } from "./modules/recharge/codexdaichong/prepare.mjs"; console.log(CODEXDAICHONG_REVISION)')
+          [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
+          output="$GITHUB_WORKSPACE/.runtime/website-release"
+          install -d -m 0700 "$output" .upstream/codexdaichong
+          git -C .upstream/codexdaichong init --quiet
+          git -C .upstream/codexdaichong fetch --quiet --depth=1 --no-tags https://github.com/wangchaozhuanyong/codexdaichong.git "$revision"
+          test "$(git -C .upstream/codexdaichong rev-parse FETCH_HEAD)" = "$revision"
+          git -C .upstream/codexdaichong checkout --quiet --detach "$revision"
+          node modules/recharge/codexdaichong/prepare.mjs "$output/verified-recharge"
+          git archive --format=tar.gz --output "$output/independent-source-$RELEASE_SHA.tar.gz" "$RELEASE_SHA"
+          node modules/recharge/codexdaichong/assets.mjs "$output/independent-assets-$RELEASE_SHA.json"
+          export ID_CODEXDAICHONG_ASSETS_FILE="$output/independent-assets-$RELEASE_SHA.json"
+          node --input-type=module -e 'import { loadCodexdaichongAssets } from "./modules/recharge/codexdaichong/assets.mjs"; await loadCodexdaichongAssets({requireBundle: true});'
+          python3 -m unittest discover -s deploy/website -p '*_test.py'
+      - name: Assume the existing website release role
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: arn:aws:iam::098208446664:role/id-business-v2-github-release
+          aws-region: ap-northeast-1
+          allowed-account-ids: '098208446664'
+          role-session-name: id-website-${{ github.run_id }}
+          role-duration-seconds: 1800
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[
+              {"Effect":"Allow","Action":"ssm:SendCommand","Resource":["arn:aws:ssm:ap-northeast-1::document/AWS-RunShellScript","arn:aws:ec2:ap-northeast-1:098208446664:instance/i-0838cebf64f0e2a89"]},
+              {"Effect":"Allow","Action":["ssm:GetCommandInvocation","ssm:ListCommands"],"Resource":"*"},
+              {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:aws:s3:::id-business-v2-backups-098208446664-ap-northeast-1/release-artifacts/formal/${{ github.sha }}/*"}
+            ]}
+      - name: Publish through the existing SSM release lock
+        run: python3 deploy/website/release.py
