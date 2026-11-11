@@ -14,7 +14,8 @@
   let pendingWrites = 0;
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
-    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types']);
+    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
+    'order-card-freeze']);
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
@@ -208,6 +209,13 @@
     cardTypes: () => request('card-types'),
     cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
     subscriptionCardEstimates: () => request('subscription-card-estimates'),
+    subscriptionCardStatus: () => request('subscription-card-status'),
+    renewalCardStatus: (orderId, version) => request('subscription-card-status?' + new URLSearchParams({
+      orderId, ...(version !== undefined && { version })
+    })),
+    subscriptionCardAccounts: (command) => request('subscription-card-status', { action: 'accounts', ...command }, 'POST'),
+    subscriptionCardFreeze: (command) => write(['order-card-freeze', 'order-cards', 'tenant-cards'],
+      () => request('subscription-card-status', command, 'POST')),
     subscriptionCardDetails: (command) => request('subscription-card-details', command, 'POST'),
     revealSubscriptionCard: (orderId, version) => request('subscription-card-reveal', { orderId, version }, 'POST'),
     copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>

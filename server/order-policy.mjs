@@ -97,7 +97,8 @@ export function matchesBackfilledPayment(order, payment, evidence) {
 const proMaterialFields = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
 const certificationFields = ['verifier', 'verifierPhone', 'kyc'];
 const proPeopleFields = ['tenantId', 'phone', ...certificationFields];
-const proMaterialModes = new Set(['manual_card', 'people', 'pool_card', 'tenant_card', 'none']);
+const cardMaterialModes = ['manual_card', 'pool_card', 'tenant_card'];
+const proMaterialModes = new Set([...cardMaterialModes, 'people', 'none']);
 const nonempty = (value) => value !== undefined && value !== null && value !== '';
 
 const isClaudeProBank = (order) => order?.product === 'Claude Pro' && order.payment === '银行卡';
@@ -134,7 +135,8 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
   }
   const { proMaterialMode: mode } = order;
   const claude = isClaudeOrder(order);
-  const allowSerial = mode === 'manual_card' || order.product === 'GPT' || personalProduct(order.product);
+  const allowSerial = cardMaterialModes.includes(mode) || order.product === 'GPT' || personalProduct(order.product) ||
+    (claude && !nonempty(mode) && nonempty(order.cardId));
   if (allowSerial && (mode === 'manual_card' || nonempty(order.proCardSerial))) {
     if (nonempty(order.proCardSerial) && typeof order.proCardSerial !== 'string') return '请填写有效的卡序列号';
     const serial = typeof order.proCardSerial === 'string' ? order.proCardSerial.trim() : '';

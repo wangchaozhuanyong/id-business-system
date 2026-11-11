@@ -15,6 +15,7 @@ const identityPaths = /^\/api\/(?:admin\/(?:login|2fa|security|secondary|verify-
 const requestHeaders = ['accept', 'content-type', 'content-length', 'user-agent', 'range', 'x-real-ip'];
 const responseHeaders = ['content-type', 'content-disposition', 'content-length', 'content-range', 'accept-ranges', 'retry-after'];
 const pick = (headers, names) => Object.fromEntries(names.filter((name) => headers[name] !== undefined).map((name) => [name, headers[name]]));
+const cardStopPath = '/api/admin/cards/stop-use';
 
 function reply(res, status, message) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -28,6 +29,64 @@ function checkedPath(raw) {
   if (url.pathname.includes('//') || /(?:^|\/)\.{1,2}(?:\/|$)/.test(raw.split('?')[0]) ||
       [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) return null;
   return url.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+}
+
+async function cardStopCommand(req) {
+  if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '')) return null;
+  const chunks = [];
+  let size = 0;
+  try {
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 4096) return null;
+      chunks.push(chunk);
+    }
+    const { refs, number } = JSON.parse(Buffer.concat(chunks).toString());
+    if (!Array.isArray(refs) || refs.length > 100 || refs.some(id =>
+      typeof id !== 'string' || !/^(recharge|orbitcard):[1-9]\d{0,19}$/.test(id)) ||
+      (number !== undefined && (typeof number !== 'string' || !/^\d{12,19}$/.test(number))) ||
+      (!refs.length && !number)) return null;
+    return { refs: [...new Set(refs)], number };
+  } catch {
+    return null;
+  }
+}
+
+export function createNativeCardStop(pool) {
+  return async ({ refs, number }) => {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const matched = [];
+      let pending = false;
+      for (const [prefix, table, key, value, active] of [
+        ['recharge:', 'card_assets', 'id', 'is_active = 0', 'is_active <> 0'],
+        ['orbitcard:', 'orbitcard_card_usage', 'card_id', "status = 'RETIRED'", "status NOT IN ('RETIRED', 'PROVIDER_DELETED')"]
+      ]) {
+        const ids = refs.filter(id => id.startsWith(prefix)).map(id => id.slice(prefix.length));
+        const identity = key + ' IN (' + ids.map(() => '?').join(', ') + ')';
+        const criteria = [...(ids.length ? [number ? '(' + identity + " AND (card_number IS NULL OR card_number = ''))" : identity] : []),
+          ...(number ? ['card_number = ?'] : [])];
+        if (!criteria.length) continue;
+        const where = '(' + criteria.join(' OR ') + ')';
+        const params = [...ids, ...(number ? [number] : [])];
+        await connection.execute({ sql: 'UPDATE ' + table + ' SET ' + value + ' WHERE ' + where +
+          ' AND in_use = 0 AND ' + active, timeout: 3000 }, params);
+        const [rows] = await connection.execute({ sql: 'SELECT ' + key + ' AS id, (' + active +
+          ') AS canUse FROM ' + table + ' WHERE ' + where + ' FOR UPDATE', timeout: 3000 }, params);
+        matched.push(...rows.map(row => prefix + row.id));
+        if (rows.some(row => Number(row.canUse) !== 0) ||
+            (prefix === 'orbitcard:' && ids.some(id => !rows.some(row => String(row.id) === id)))) pending = true;
+      }
+      await connection.commit();
+      return { state: pending ? 'pending' : matched.length || refs.length ? 'stopped' : 'not_used', refs: matched };
+    } catch (failure) {
+      await connection.rollback().catch(() => {});
+      throw failure;
+    } finally {
+      connection.release();
+    }
+  };
 }
 
 /** Use the pinned module's own signing function; the native token never leaves the server. */
@@ -45,7 +104,7 @@ export function createNativeAdminTokenIssuer({ issueSignedToken, readPasswordVer
 }
 
 /** Separate transport only. Never patches, imports or wraps the native payment implementation. */
-export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminToken }) {
+export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminToken, stopCardUse }) {
   const native = new URL(validateRuntimeOrigin(nativeUrl));
   if (typeof secret !== 'string' || Buffer.byteLength(secret) < 32 || typeof getNativeAdminToken !== 'function')
     throw new TypeError('原版外围接入需要服务签名和原生鉴权');
@@ -66,6 +125,16 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
       return reply(res, 403, '归还接口仅供受管业务服务调用');
     if ((admin || external) && !actor.admin) return reply(res, 403, '没有充值管理权限');
     if (sensitivePaths.test(path) && !actor.sensitive) return reply(res, 403, '没有敏感资料权限');
+    if (path === cardStopPath) {
+      if (actor.id !== 'order-reconciliation') return reply(res, 403, '仅供银行卡管理服务调用');
+      if (req.method !== 'POST' || req.url !== cardStopPath) return reply(res, 405, '不支持此操作');
+      if (!stopCardUse) return reply(res, 503, '卡池停用服务尚未启用');
+      const command = await cardStopCommand(req);
+      if (!command) return reply(res, 400, '请选择可核对的银行卡');
+      const result = await stopCardUse(command);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ success: true, ...result }));
+    }
     if (path === '/api/admin/recharge-routing' && req.method === 'PUT' && !actor.sensitive)
       return reply(res, 403, '没有套餐地区配置权限');
     if (path === '/api/admin/session') {

@@ -145,6 +145,7 @@ test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 9
   await choose(form, 'tenantId', payer.id);
   await field('cardId').locator('option[value="' + tenantCard.id + '"]').waitFor({ state: 'attached' });
   await choose(form, 'cardId', tenantCard.id);
+  await field('proCardSerial').fill('00043-QA-TENANT');
   await choose(form, 'claudeVerifierId', verifier.id);
   await field('kyc').selectOption('KYC 认证');
   await field('paidAmount').fill('200');
@@ -154,11 +155,14 @@ test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 9
   assert.equal(max.product, 'Claude Max');
   assert.equal(max.plan, 'Max 20x');
   assert.equal(max.tenantId, payer.id);
+  assert.equal(max.proCardSerial, '00043-QA-TENANT');
   assert.equal(max.claudeVerifierId, verifier.id);
   assert.equal(max.verifierPhone, verifier.phone);
 
   await field('plan').selectOption('Max 5x');
   await field('email').fill('qa-max-independent@example.test');
+  await field('proMaterialMode').selectOption('none');
+  assert.equal(await field('proCardSerial').isVisible(), false);
   await choose(form, 'customerId', customer.id);
   await field('proMaterialMode').selectOption('manual_card');
   await field('proCardNumber').fill(sampleCard);
@@ -175,8 +179,19 @@ test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 9
   await page.goto(origin + ordersPath);
   await table.waitFor();
   const search = page.locator('#commerce-search');
-  await search.fill(max.email);
   const row = id => table.locator('[data-row-id="' + id + '"]');
+  await search.fill(max.proCardSerial);
+  await row(max.id).locator('[data-column="proCardSerial"]').getByText(max.proCardSerial, { exact: true }).waitFor();
+  assert.equal(await rows.count(), 1);
+  await row(max.id).locator('[data-action="commerce-order-detail"]').click();
+  const drawer = page.locator('#drawer[open]');
+  const serial = drawer.locator('.property-row').filter({ has: page.getByText('卡序列号', { exact: true }) });
+  assert.equal(await serial.locator('strong').textContent(), max.proCardSerial);
+  await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  await row(max.id).locator('[data-action="commerce-order-edit"]').click();
+  assert.equal(await drawer.locator('#commerce-proCardSerial').inputValue(), max.proCardSerial);
+  await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  await search.fill(max.email);
   const more = id => row(id).locator('[data-action="commerce-order-more"]').click();
   const menu = page.locator('.row-action-menu:popover-open');
   await more(max.id);

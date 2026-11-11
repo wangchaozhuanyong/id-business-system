@@ -36,6 +36,7 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
           method === 'POST' && /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path) ||
+          method === 'POST' && path === '/api/admin/cards/stop-use' ||
           monitoringPath))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
@@ -53,6 +54,13 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
   }
   return Object.freeze({
     get: (path) => request('GET', path),
+    ...(upstream && { async stopCardUse(refs, number) {
+      const result = await request('POST', '/api/admin/cards/stop-use', { refs, number });
+      if (!['pending', 'stopped', 'not_used'].includes(result.state) || !Array.isArray(result.refs) ||
+          result.refs.some(id => typeof id !== 'string' || !/^(recharge|orbitcard):[1-9]\d{0,19}$/.test(id)))
+        throw new Error('卡池停用未确认');
+      return { state: result.state, refs: result.refs };
+    } }),
     readLegacyNotificationSettings: () => request('GET', '/api/admin/data', undefined, service, true),
     async disableLegacyBusinessNotifications({ adminChat, groupChat, notifyAdmin, notifyGroup }) {
       await request('POST', '/api/admin/telegram', {
@@ -88,7 +96,7 @@ export async function readPoolCards(client, { includeNumbers = false } = {}) {
     id: 'recharge:' + row.id,
     last4: row.last4,
     ...(includeNumbers && { number: row.card_number }),
-    active: Number(row.is_active) === 1,
+    active: Number(row.is_active) === 1 && (!row.status || row.status === '正常'),
     usageCount: Number.isSafeInteger(row.usage_count) && row.usage_count >= 0 ? row.usage_count : null,
     lastUsedAt: row.last_used_at || null,
     status: String(row.status || '正常')

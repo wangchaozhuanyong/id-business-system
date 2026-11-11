@@ -46,7 +46,7 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     await page.locator('#commerce-businessType').selectOption('续费');
     await page.locator('#commerce-customerId-picker').click();
     await page.locator('#commerce-customerId-popover [data-value="fixture-customer"]').click();
-    if (product === 'Claude Pro') await page.locator('#commerce-proMaterialMode').selectOption('none');
+    await page.locator('#commerce-proMaterialMode').selectOption('none');
     await page.locator('#commerce-start').fill('2025-02-01T09:12');
     await page.locator('#commerce-expiry').fill('2025-03-01T09:12');
     await email.fill('');

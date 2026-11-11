@@ -215,6 +215,7 @@ test('Grok 手机录单保留 X 标识、卡序列号、草稿和失败重试', 
   await page.locator('#commerce-email').fill('@fixture_grok');
   await page.locator('#commerce-plan').selectOption('The X Subscription Premium');
   assert.equal(await page.locator('#commerce-payment option[value="苹果内购"]').count(), 0);
+  await page.locator('#commerce-proMaterialMode').selectOption('');
   await pick(page, 'cardId', 'recharge:fixture-card');
   assert.equal(await page.locator('#commerce-payment').inputValue(), '银行卡');
   assert.equal(await page.locator('#commerce-appleIdId-picker').isVisible(), false);

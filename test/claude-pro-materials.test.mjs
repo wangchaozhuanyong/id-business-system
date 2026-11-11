@@ -5,7 +5,10 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
-import { cardTypeDocument, orderCardArchiveDocument, preserveReferencedOrderCard } from '../server/card-management.mjs';
+import {
+  cardTypeDocument, checkFrozenCardPoolWrite, createCardManagementHandler, orderCardArchiveDocument, preserveReferencedOrderCard
+} from '../server/card-management.mjs';
+import { createOrderAuxiliaryHandler } from '../server/order-auxiliary.mjs';
 import { normalizeClaudeProMaterials } from '../server/order-policy.mjs';
 import { historicalFeeAction } from '../server/finance/snapshot-integrity.mjs';
 
@@ -241,10 +244,11 @@ test('Pro bank renewal recognizes successors recorded with the existing source f
   } finally { store.close(); }
 });
 
-test('legacy Pro records without material mode remain readable without inventing new card facts', () => {
+test('已关联银行卡的历史 Pro 订单可补填序列号并保留原卡', () => {
   const prior = base('legacy-order', { cardId: 'tenant:historical', paymentId: '4242', paidConfirmed: true });
-  const order = { ...prior, notes: '旧订单备注' };
+  const order = { ...prior, proCardSerial: ' 00003 ' };
   assert.equal(normalizeClaudeProMaterials(order, prior), undefined);
+  assert.equal(order.proCardSerial, '00003');
   assert.equal(order.cardId, prior.cardId);
   assert.equal(order.paymentId, prior.paymentId);
   assert.equal(Object.hasOwn(order, 'proMaterialMode'), false);
@@ -267,17 +271,19 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
       items: [{ id: tenantCardId, tenantId: tenant.id, active: true, number: sampleNumber }]
     });
     const pool = base('pool-order', {
-      proMaterialMode: 'pool_card', cardId: poolCardId, paidConfirmed: true, paymentId: '9999'
+      proMaterialMode: 'pool_card', cardId: poolCardId, paidConfirmed: true, paymentId: '9999',
+      proCardSerial: ' 00017-POOL '
     });
     const tenantOrder = base('tenant-order', {
       proMaterialMode: 'tenant_card', cardId: tenantCardId, tenantId: tenant.id, paidConfirmed: true,
-      verifier: '伪造姓名', verifierPhone: '99999'
+      verifier: '伪造姓名', verifierPhone: '99999', proCardSerial: '00042-TENANT'
     });
     const none = base('none-order', { proMaterialMode: 'none', paidConfirmed: true, paymentId: '9999' });
     const create = (orders) => save(store, 0, makeDocument(orders, tenants), '新增独立订单', options);
     assert.equal((await create([{ ...tenantOrder, tenantId: secondTenant.id }])).status, 409);
     assert.equal((await create([{ ...pool, cardId: tenantCardId }])).status, 400);
     assert.equal((await create([{ ...none, tenantId: tenant.id }])).status, 400);
+    assert.equal((await create([{ ...none, proCardSerial: '00017' }])).status, 400);
     assert.equal((await create([{ ...pool, product: 'Claude Max', plan: 'Max 5x', proMaterialMode: '' }])).status, 400);
     poolActive = false;
     assert.equal((await create([pool])).status, 409);
@@ -298,6 +304,8 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     assert.equal(noneSaved.financialEvidence[0].cardId, '');
     assert.equal(poolSaved.proCardNumber, '4000000000001919');
     assert.equal(tenantSaved.proCardNumber, sampleNumber);
+    assert.equal(poolSaved.proCardSerial, '00017-POOL');
+    assert.equal(tenantSaved.proCardSerial, '00042-TENANT');
     const reads = poolReads;
     const change = async (orders, action = '更正订单') =>
       save(store, 1, { ...created.data.data, orders }, action, options);
@@ -307,8 +315,27 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     ] };
     assert.equal((await change([bankReturn, tenantSaved, noneSaved], '银行卡回款登记')).status, 409);
     bankReturn.bankReturns[0].cardId = poolCardId;
-    assert.equal((await change([bankReturn, tenantSaved, noneSaved], '银行卡回款登记')).status, 200);
+    const returned = await change([bankReturn, tenantSaved, noneSaved], '银行卡回款登记');
+    assert.equal(returned.status, 200);
     assert.equal(poolReads, reads);
+    const [beforePool, beforeTenant, noCard] = returned.data.data.orders;
+    const corrected = await save(store, returned.data.version, {
+      ...returned.data.data, orders: [
+        edit(beforePool, { proCardSerial: '00018-POOL' }),
+        edit(beforeTenant, { proCardSerial: '00043-TENANT' }), noCard
+      ]
+    }, '更正订单', options);
+    assert.equal(corrected.status, 200, corrected.data.error);
+    const full = await request(store, 'GET');
+    for (const [index, before, serial] of [[0, beforePool, '00018-POOL'], [1, beforeTenant, '00043-TENANT']]) {
+      const row = full.data.data.orders[index];
+      assert.equal(row.proCardSerial, serial);
+      assert.equal(row.corrections.at(-1).previous.proCardSerial, before.proCardSerial);
+      assert.deepEqual(row.financialEvidence, before.financialEvidence);
+      assert.deepEqual(row.bankReturns, before.bankReturns);
+    }
+    const masked = await request(store, 'GET', undefined, { actor: employee });
+    assert.doesNotMatch(JSON.stringify(masked.data), /proCardSerial|00018-POOL|00043-TENANT/);
   } finally { store.close(); }
 });
 
@@ -444,6 +471,93 @@ test('GPT manual payment can omit a card without applying the pool first-use fee
     assert.deepEqual(manualGpt.issueFeeSnapshot, { cardId: '', applied: false, pending: true });
     const editPayment = edit(manualGpt, { cardId: 'recharge:1' });
     assert.equal((await save(store, 1, { ...saved.data.data, orders: [editPayment] }, '更正订单')).status, 503);
+  } finally { store.close(); }
+});
+
+test('one card freeze follows its confirmed GPT and Claude accounts and blocks fresh use', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  const poolId = 'recharge:17', number = sampleNumber, replacement = '4000000000014242';
+  let available = true, attempts = 0;
+  const client = {
+    get: async () => ({ cards: [{ id: 17, card_number: number, last4: '4242', is_active: available ? 1 : 0 }] }),
+    async stopCardUse(refs, value) {
+      assert.deepEqual(refs, [poolId]);
+      assert.equal(value, number);
+      if (++attempts === 1) throw new Error('模拟卡池暂时无法写入');
+      available = false;
+      return { state: 'stopped', refs };
+    }
+  };
+  const options = { readOrderCards: async () => [{ id: poolId, active: available, last4: '4242', number }] };
+  const cardHandler = createCardManagementHandler({ store, client, publicOrigin: origin });
+  const auxiliaryHandler = createOrderAuxiliaryHandler({ store, client, publicOrigin: origin });
+  async function cardApi(path, body, actor = admin, handler = cardHandler) {
+    const req = Object.assign(Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []), {
+      url: '/api/local/' + path, method: body ? 'POST' : 'GET', headers: { origin, 'content-type': 'application/json' }
+    });
+    let status, data;
+    await handler(req, { writeHead(code) { status = code; }, end(raw) { data = JSON.parse(raw); } }, req.url.split('?')[0], actor);
+    return { status, data };
+  }
+  try {
+    const gpt = (id, changes) => manual(id, { product: 'GPT', plan: 'Plus', paidConfirmed: true,
+      accountSource: '客户自有', email: 'gpt-one@example.test', ...changes });
+    const sharedClaude = base('claude-shared', { proMaterialMode: 'pool_card', cardId: poolId,
+      paidConfirmed: true, accountSource: '客户自有' });
+    const first = await save(store, 0, makeDocument([
+      gpt('gpt-one'), gpt('gpt-repeat', { email: 'GPT-ONE@example.test' }),
+      gpt('gpt-two', { email: 'gpt-two@example.test' }), sharedClaude,
+      gpt('pending-use', { email: 'pending@example.test', paidConfirmed: false }),
+      gpt('tail-collision', { email: 'unrelated@example.test', proCardNumber: replacement })
+    ]), '新增独立订单', options);
+    assert.equal(first.status, 200, first.data.error);
+    const original = structuredClone(first.data.data.orders);
+    const getStatus = () => cardApi('subscription-card-status');
+    const before = await getStatus();
+    assert.equal(before.status, 200);
+    assert.deepEqual(before.data.items.find(row => row.id === 'gpt-one').counts, { GPT: 2, Claude: 1 });
+    assert.deepEqual(before.data.items.find(row => row.id === 'tail-collision').counts, { GPT: 1 });
+    const freeze = { action: 'freeze', orderId: 'gpt-one', version: 1, reason: '合成冻结原因' };
+    assert.equal((await cardApi('subscription-card-status', freeze, employee)).status, 403);
+    const marked = await cardApi('subscription-card-status', freeze);
+    assert.equal(marked.status, 200, marked.data.error);
+    assert.equal(marked.data.card.poolState, 'pending');
+    assert.equal((await cardApi('order-cards', null, admin, auxiliaryHandler)).data.items[0].active, false);
+    const after = await getStatus();
+    assert.equal(after.data.frozen.length, 1);
+    assert.equal(after.data.items.find(row => row.id === sharedClaude.id).state, 'frozen');
+    assert.doesNotMatch(JSON.stringify(after.data), new RegExp(number + '|' + replacement));
+    const renewalHint = await cardApi('subscription-card-status?orderId=claude-shared&version=1');
+    assert.equal(renewalHint.status, 200);
+    assert.deepEqual(renewalHint.data.order.card, { last4: '4242', typeName: '未设置', availability: 'frozen' });
+    const accounts = await cardApi('subscription-card-status', { action: 'accounts', frozenId: marked.data.card.id });
+    assert.equal(accounts.data.accounts.length, 3);
+    assert.equal(accounts.data.accounts.find(row => row.account === 'gpt-one@example.test').orders.length, 2);
+    const rejected = await save(store, first.data.version, makeDocument([...original,
+      gpt('reuse-frozen-card', { proCardNumber: '4242-4242-4242-4242' })]), '新增独立订单', options);
+    assert.equal(rejected.status, 409);
+    assert.match(rejected.data.error, /已冻结/);
+    const oldDraft = await save(store, first.data.version, makeDocument(original.map(row => row.id === 'pending-use'
+      ? edit(row, { paidConfirmed: true, receiptConfirmed: true, costConfirmed: true }) : row)), '更正订单', options);
+    assert.equal(oldDraft.status, 409);
+    assert.match(oldDraft.data.error, /已冻结/);
+    const blank = await save(store, first.data.version, makeDocument([...original,
+      gpt('no-replacement', { proMaterialMode: '', proCardNumber: '' })]), '新增独立订单', options);
+    assert.equal(blank.status, 409);
+    assert.match(blank.data.error, /原银行卡已冻结/);
+    const stopped = await cardApi('subscription-card-status', { action: 'retry', frozenId: marked.data.card.id });
+    assert.equal(stopped.data.card.poolState, 'stopped');
+    assert.throws(() => checkFrozenCardPoolWrite(store, { kind: 'import', data: { cards: [{ card_number: number }] } }), /冻结银行卡/);
+    await assert.rejects(preserveReferencedOrderCard(store, client, poolId, admin), /已冻结/);
+    const changed = await save(store, first.data.version, makeDocument([...original,
+      gpt('replacement', { proCardNumber: replacement, start: '2026-12-08T10:00', expiry: '2027-01-08T10:00' })
+    ]), '新增独立订单', options);
+    assert.equal(changed.status, 200, changed.data.error);
+    assert.deepEqual(changed.data.data.orders.slice(0, original.length), original);
+    assert.equal(changed.data.data.orders.at(-1).previousOrderId, 'gpt-one');
+    const detail = await cardApi('subscription-card-details', { orderId: 'gpt-one', renewalOrderId: 'replacement' });
+    assert.equal(detail.data.order.card.availability, 'frozen');
+    assert.equal(detail.data.renewal.card.availability, 'normal');
   } finally { store.close(); }
 });
 

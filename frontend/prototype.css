@@ -2381,6 +2381,12 @@ dialog::backdrop {
   font-weight: 500;
   overflow-wrap: anywhere;
 }
+.contact-detail-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
 .option-settings-groups {
   display: grid;
   gap: 18px;
@@ -3748,6 +3754,10 @@ details.toolbox-phrase-more[open] > summary {
   color: var(--text);
   font-weight: 600;
 }
+.order-renewal-card-hint {
+  justify-content: space-between;
+  margin: 0;
+}
 :is(.form-grid, .commerce-field-grid) + .commerce-cost-strip {
   margin-top: 16px;
 }
@@ -4203,11 +4213,93 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .commerce-entry-layout :is(.order-choice-grid, .order-wide-fields) {
   display: contents;
 }
+.commerce-entry-layout #commerce-order-form .order-wide-fields > [data-commerce-field='customerId']:has(.order-customer-row) {
+  grid-column: 1 / -1;
+}
+.order-customer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--control-gap);
+}
+.order-customer-row > .commerce-search-picker {
+  flex: 1 1 min(100%, 148px);
+  padding-block-start: 5px;
+}
+#commerce-order-form .order-customer-row .commerce-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.order-quick-customer {
+  display: flex;
+  flex: 2 1 min(100%, 298px);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+.order-quick-customer > input {
+  flex: 1 1 min(100%, 88px);
+  width: 0;
+  min-width: 0;
+}
+.order-quick-customer > button {
+  flex: none;
+  margin-inline-start: auto;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+.order-quick-customer > .field-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+.order-quick-customer-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  margin-block-end: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+  overflow-wrap: anywhere;
+}
+.order-quick-customer-summary > span {
+  color: var(--secondary);
+}
+.order-quick-customer-summary > .field-error {
+  flex-basis: 100%;
+  margin: 0;
+}
 .commerce-entry-layout #commerce-order-form [data-commerce-field='cardTypeId'] .field-row > select {
   flex-basis: min(100%, 140px);
 }
 .commerce-entry-layout #commerce-order-form .commerce-search-picker:not(.commerce-email-history) > .commerce-picker-trigger {
   flex-basis: min(100%, 160px);
+}
+.commerce-entry-layout .order-payment-options > :is([data-commerce-field='proMaterialMode'], [data-commerce-field='tenantId']) {
+  grid-column: auto;
+}
+.commerce-entry-layout #commerce-order-form .order-payment-options
+  :is([data-commerce-field='cardId'], [data-commerce-field='proPoolCardId'], [data-commerce-field='tenantId']) .commerce-picker-trigger {
+  flex-basis: min(100%, 104px);
+  gap: 6px;
+  padding-inline: 8px;
+}
+.commerce-entry-layout .order-payment-options [data-commerce-field='tenantId'] [data-action='commerce-quick-tenant'] {
+  padding-inline: 8px;
+}
+.commerce-entry-layout #commerce-order-form .order-payment-options
+  :is([data-commerce-field='cardId'], [data-commerce-field='proPoolCardId'], [data-commerce-field='tenantId']) .commerce-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .commerce-entry-layout #commerce-order-form [data-commerce-field='ownerId'] {
   grid-column: 1 / -1;
@@ -4308,7 +4400,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   right: auto;
   box-shadow: none;
 }
-.entry-record-list .table-value-button { max-width: var(--entry-record-value-width, 170px); }
+.entry-record-list :is(.table-value-button, .entry-contact-summary) { max-width: var(--entry-record-value-width, 170px); }
 .entry-record-list [data-column='name'] .table-value-button { max-width: var(--entry-record-name-width, 120px); }
 .entry-record-list [data-column='plan'] .table-value-button { max-width: var(--entry-record-plan-width, 145px); }
 .entry-record-list [data-column='notes'] .table-value-button { max-width: var(--entry-record-notes-width, 140px); }
@@ -4792,6 +4884,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-records tbody tr:hover td { background: transparent; }
   .mobile-records .mobile-record-value { display: block; min-width: 0; line-height: 1.7; }
   .mobile-records :is(.table-value-button, .table-value-ellipsis) { max-width: 100%; }
+  .entry-record-list .entry-contact-summary { white-space: normal; }
   .mobile-records td[data-mobile-field='identity'] > .mobile-record-value { flex: 1; }
   .mobile-records td[data-mobile-field='identity'] :is(.text-button, .table-value-button, .table-value-ellipsis) { white-space: normal; overflow-wrap: anywhere; text-align: left; }
   .mobile-records td[data-mobile-field='actions'] { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding-top: 8px; border-top: 1px solid var(--line); }

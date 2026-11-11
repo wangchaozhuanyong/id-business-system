@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { tenantCardLimit } from './tenant-initial-cards.mjs';
 import { readPoolCards } from './order-recharge-client.mjs';
+import { cardFreezeDocument, frozenOrderCard } from './card-management.mjs';
 
 export const orderAuxiliaryRoutes = new Set(['/api/local/order-cards', '/api/local/tenant-cards']);
 const tenantDomain = 'tenant-cards';
@@ -38,12 +39,15 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
     if ((request.headers.origin && request.headers.origin !== origin) ||
         request.headers['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { error: '请求来源未通过校验' });
+    const isFrozen = (freezes, id, number) => Boolean(freezes?.items?.length &&
+      frozenOrderCard(freezes, id, store.orderCardFingerprint(number)));
     if (route === '/api/local/order-cards') {
       if (request.method !== 'GET') return send(response, 405, { error: '仅支持读取代充卡池' });
       try {
-        const pool = await readPoolCards(client);
+        const pool = await readPoolCards(client, { includeNumbers: true });
+        const freezes = store.featureDocument(cardFreezeDocument).data;
         const orders = store.load('commerce').data?.orders || [];
-        const items = pool.map((card) => {
+        const items = pool.map(({ number, ...card }) => {
           const manual = orders.filter((row) => row.source !== '线上代充' && confirmedCardUse(row, card.id));
           const manualLast = manual.flatMap((row) => [
             ...(row.cardId === card.id ? [iso(row.cardUsedAt || row.start)] : []),
@@ -52,7 +56,9 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
           ]).sort().at(-1);
           const autoLast = iso(card.lastUsedAt);
           const lastUsedAt = [autoLast, manualLast].filter(Boolean).sort().at(-1) || null;
-          return { ...card, autoUsageCount: card.usageCount, manualUsageCount: manual.length,
+          const frozen = isFrozen(freezes, card.id, number);
+          return { ...card, ...(frozen && { active: false, frozen, status: '已冻结' }),
+            autoUsageCount: card.usageCount, manualUsageCount: manual.length,
             usageCount: card.usageCount === null ? null : card.usageCount + manual.length,
             lastUsedAt, sources: [...(card.usageCount ? ['线上代充'] : []), ...(manual.length ? ['手工录单'] : [])] };
         });
@@ -62,8 +68,11 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
       }
     }
 
+    const freezes = store.featureDocument(cardFreezeDocument).data;
     const view = ({ version, data }, tenantId) => ({
-      version, items: (data?.items || []).filter((row) => row.tenantId === tenantId).map(metadata)
+      version, items: (data?.items || []).filter((row) => row.tenantId === tenantId).map(row => ({
+        ...metadata(row), ...(isFrozen(freezes, row.id, row.number) && { active: false, frozen: true })
+      }))
     });
     let command;
     if (request.method === 'GET') {
@@ -86,6 +95,7 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
     try {
       if (['reveal', 'copy'].includes(command.action)) {
         if (!card?.active || tenant.active === false) return send(response, 404, { error: '银行卡不可用' });
+        if (isFrozen(freezes, card.id, card.number)) return send(response, 409, { error: '银行卡已冻结，请更换可用银行卡' });
         store.auditFeature(tenantDomain, current.version,
           audit(command.action === 'copy' ? '复制租户银行卡号' : '查看租户银行卡号', card.id));
         return send(response, 200, { number: card.number });
@@ -97,6 +107,7 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
         const label = typeof command.label === 'string' ? command.label.trim() : '';
         if (!/^\d{12,19}$/.test(number) || label.length > 80 || /[\x00-\x1f]/.test(label))
           return send(response, 400, { error: '请填写有效银行卡号，名称最多 80 字' });
+        if (isFrozen(freezes, '', number)) return send(response, 409, { error: '该银行卡已冻结' });
         if (tenant.active === false || items.filter((row) => row.tenantId === tenantId).length >= tenantCardLimit ||
             items.some((row) => row.tenantId === tenantId && row.number === number))
           return send(response, 409, { error: '租户已停用、银行卡重复或已达 99 张上限' });

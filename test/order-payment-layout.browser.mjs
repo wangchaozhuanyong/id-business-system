@@ -81,7 +81,8 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
               range.selectNodeContents(el.querySelector(':scope > label'));
               return rect(range);
             };
-            const names = ['payment', 'cardTypeId', card, 'paymentId'];
+            const next = field('tenantId')?.checkVisibility() ? 'tenantId' : card;
+            const names = ['payment', 'cardTypeId', card, 'paymentId', 'proMaterialMode', next, 'proCardSerial'];
             const fields = names.map(name => ({ name, box: rect(field(name)), text: label(field(name)) }));
             return { fields, columns: getComputedStyle(field('payment').parentElement).gridTemplateColumns.split(' ').length,
               order: [...field('payment').parentElement.querySelectorAll(':scope > [data-commerce-field]')]
@@ -97,16 +98,24 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           assert.equal(new Set(measured.ids).size, measured.ids.length, '各产品控件 ID 唯一');
           assert.deepEqual(measured.order.slice(0, 2), ['payment', 'cardTypeId']);
           assert.equal(measured.order.indexOf('paymentId'), measured.order.indexOf(card) + 1, '尾号紧跟选卡');
-          const [payment, type, picker, tail] = measured.fields;
+          assert(measured.order.includes('proCardSerial'));
+          const [payment, type, picker, tail, mode, next, serial] = measured.fields;
+          const sameRow = (left, right) => {
+            assert(Math.abs(left.box.top - right.box.top) <= 1);
+            assert(right.box.left > left.box.left);
+            assert(Math.abs(left.text.top - right.text.top) <= 2, `${left.name} 与 ${right.name} 的标签应对齐`);
+          };
           if (measured.columns === 2) {
-            assert(Math.abs(payment.box.top - type.box.top) <= 1);
-            assert(type.box.left > payment.box.left);
-            assert(Math.abs(picker.box.top - tail.box.top) <= 1);
-            assert(tail.box.left > picker.box.left);
-            assert(Math.abs(payment.text.top - type.text.top) <= 2, '支付方式与类型文字对齐');
-            assert(Math.abs(picker.text.top - tail.text.top) <= 2, '选卡与尾号文字对齐');
+            sameRow(payment, type);
+            if (contextName !== 'edit') {
+              sameRow(mode, next);
+              assert(Math.abs(mode.box.width - next.box.width) <= 1, '填写方式与下一步各占半行');
+            }
+            if (contextName === 'edit' || key === 'max') sameRow(picker, tail);
+            else sameRow(tail, serial);
           } else {
             assert(type.box.top >= payment.box.bottom - 1);
+            assert(next.box.top >= mode.box.bottom - 1);
             assert(tail.box.top >= picker.box.bottom - 1);
           }
           assert(picker.box.top >= type.box.bottom - 1);
@@ -119,10 +128,8 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           const form = page.locator('#main #commerce-order-form');
           await form.locator('#commerce-cardTypeId').waitFor();
           await form.locator('#commerce-plan').selectOption(plan);
-          if (entry === 'claude') {
-            await form.locator('#commerce-payment').selectOption('银行卡');
-            await form.locator('#commerce-proMaterialMode').selectOption(mode);
-          }
+          if (entry === 'claude') await form.locator('#commerce-payment').selectOption('银行卡');
+          await form.locator('#commerce-proMaterialMode').selectOption(mode);
           if (key === 'max') await choose(form, 'tenantId', tenant.id);
           const card = mode === 'pool_card' ? 'proPoolCardId' : 'cardId';
           await choose(form, card, key === 'max' ? 'tenant:layout' : 'recharge:1');
@@ -131,6 +138,7 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           await form.locator('#commerce-payment').selectOption('苹果内购');
           assert.equal(await form.locator('#commerce-cardTypeId').isVisible(), false);
           assert.equal(await form.locator('#commerce-paymentId').isVisible(), false);
+          assert.equal(await form.locator('#commerce-proCardSerial').isVisible(), false);
           await form.locator('#commerce-payment').selectOption('银行卡');
 
           await go('orders/' + (entry === 'claude' ? 'claude' : key));

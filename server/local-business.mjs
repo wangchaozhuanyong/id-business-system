@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -59,7 +59,10 @@ import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usag
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
 import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding } from './apple-funding.mjs';
-import { cardTypeDocument, cardTypeSnapshot, orderCardArchiveDocument } from './card-management.mjs';
+import {
+  bankRenewalSource, cardFreezeDocument, cardTypeDocument, cardTypeSnapshot, frozenOrderCard, frozenRenewalCard,
+  orderCardArchiveDocument
+} from './card-management.mjs';
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import { subscriptionTime } from '../frontend/order-opening.mjs';
@@ -199,7 +202,7 @@ const sessionEventLabels = {
 };
 const orderFeatureDomains = new Set([
   'recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
-  'system-monitoring-config', 'system-monitoring-state', subscriptionDomain
+  cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain
 ]);
 const orderFeatureAuditLabels = {
   monitor_settings: '保存监控与通知设置',
@@ -257,6 +260,7 @@ const auditDomainLabels = {
   'recharge-codes': '充值码审核',
   'tenant-cards': '租户银行卡',
   [orderCardArchiveDocument]: '订单银行卡留存',
+  [cardFreezeDocument]: '银行卡冻结',
   'order-sync': '代充订单同步',
   'finance-rates': '汇率采集',
   'subscription-management': '订阅管理',
@@ -1690,6 +1694,7 @@ export function createLocalBusinessStore(databasePath) {
             const seen = [...oldOrders];
             const settledThisWrite = [];
             const tenantCards = current('tenant-cards')?.items || [];
+            const freezes = current(cardFreezeDocument);
             for (const row of commerce.orders) {
               const prior = priorById.get(row.id);
               if (prior && isDeepStrictEqual(row, prior)) continue;
@@ -1734,6 +1739,22 @@ export function createLocalBusinessStore(databasePath) {
                 seen.push(row);
                 for (const movement of incoming.get('appleBalance')?.movements || [])
                   if (movement.orderId === row.id) movement.orderNo = row.orderNo;
+              }
+              const recordsNewUse = row.payment === '银行卡' && !hasBankPayment(prior) &&
+                (!prior || row.paidConfirmed || needsOrderCardCheck(row, prior) || row.proCardNumber !== prior.proCardNumber);
+              const renewal = (!prior || recordsNewUse) ? bankRenewalSource(row, oldOrders) : undefined;
+              if (!prior && row.businessType === '续费' && !personalProduct(row.product)) {
+                if (renewal) row.previousOrderId = renewal.id;
+                else delete row.previousOrderId;
+              } else if (prior && !personalProduct(row.product)) retainOrderField(row, prior, 'previousOrderId');
+              if (recordsNewUse && row.cardBackfillConfirmed !== true) {
+                const selected = cards.get(row.cardId) || tenantCards.find(card => card.id === row.cardId);
+                const number = selected?.number || row.proCardNumber;
+                const fingerprint = this.orderCardFingerprint(number);
+                if (frozenOrderCard(freezes, row.cardId, fingerprint))
+                  throw new LocalDataError(409, '所选银行卡已冻结，请更换可用银行卡');
+                if (row.paidConfirmed && !fingerprint && !row.cardId && frozenRenewalCard(this, freezes, renewal))
+                  throw new LocalDataError(409, '原银行卡已冻结，请登记可用的新银行卡后再提交');
               }
               if (!automatic && row.payment === '银行卡' && row.paidConfirmed === true &&
                   (!prior?.paidConfirmed || row.paidAmount !== prior.paidAmount || row.paidCurrency !== prior.paidCurrency) &&
@@ -1932,6 +1953,10 @@ export function createLocalBusinessStore(databasePath) {
         return result;
       });
     },
+    orderCardFingerprint(number) {
+      return typeof number === 'string' && /^\d{12,19}$/.test(number)
+        ? createHmac('sha256', key).update('order-card-number\0').update(number).digest('hex') : '';
+    },
     featureDocument(domain) {
       if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
       return readDocument(domain);
@@ -1942,6 +1967,8 @@ export function createLocalBusinessStore(databasePath) {
         if (readDocument(domain).version !== version) throw new LocalDataError(409, '资料已更新，请刷新后重试');
         if (domain === 'finance-rates' && commerceVersion !== undefined && readDocument('commerce').version !== commerceVersion)
           throw new LocalDataError(409, '订单报价引用已更新，请重新预览清理范围');
+        if (domain === cardFreezeDocument && commerceVersion !== undefined && readDocument('commerce').version !== commerceVersion)
+          throw new LocalDataError(409, '订单已变化，请刷新后核对用卡');
         const next = version + 1;
         put.run(domain, next, encrypt(key, domain, next, JSON.stringify(data)));
         if (action) log.run(new Date().toISOString(), domain, action,
@@ -2107,7 +2134,8 @@ export function createLocalBusinessStore(databasePath) {
       for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
-        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates', cardTypeDocument, subscriptionDomain]) versions[scope] = version(scope);
+        for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates',
+          cardTypeDocument, cardFreezeDocument, subscriptionDomain]) versions[scope] = version(scope);
         versions['tools/mailbox-pool'] = version(managedMailboxDomain);
         versions['tools/website-visits'] = version(websiteVisitsDomain);
         versions['apple-relay'] = String(relayRevision.get().version);

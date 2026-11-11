@@ -53,7 +53,7 @@ async function setup(t) {
   return { page, fixture, writes, errors, mock, submit, removePool: () => { cards = []; } };
 }
 
-test('所有录单入口可手填和编辑卡号，卡序列号选填，切页和切换保留草稿', { timeout: 90_000 }, async t => {
+test('所有录单入口默认手填并可编辑卡号，卡序列号选填，切页和切换保留草稿', { timeout: 90_000 }, async t => {
   const { page, fixture, writes, errors, mock, submit } = await setup(t);
   const customer = fixture.commerce.data.customers.find(row => row.active !== false);
   const main = page.locator('#main');
@@ -63,7 +63,7 @@ test('所有录单入口可手填和编辑卡号，卡序列号选填，切页�
     let form = main.locator('#commerce-order-form');
     await form.locator('#commerce-proMaterialMode').waitFor();
     if (entry === 'claude') await form.locator('#commerce-plan').selectOption(product === 'Claude Pro' ? 'Pro' : 'Max 5x');
-    await form.locator('#commerce-proMaterialMode').selectOption('manual_card');
+    assert.equal(await form.locator('#commerce-proMaterialMode').inputValue(), 'manual_card');
     const card = form.locator('#commerce-proCardNumber');
     await card.fill(number);
     assert.equal(await card.isEditable(), true);
@@ -82,6 +82,9 @@ test('所有录单入口可手填和编辑卡号，卡序列号选填，切页�
       await form.locator('#commerce-proMaterialMode').selectOption('');
       assert.equal(await card.isVisible(), false);
       assert.equal(await serial.isVisible(), true);
+      await page.goto(`${origin}/#/orders/gpt`);
+      await page.goto(`${origin}/#/workspace/order/gpt`);
+      assert.equal(await form.locator('#commerce-proMaterialMode').inputValue(), '');
       await form.locator('#commerce-proMaterialMode').selectOption('manual_card');
       assert.equal(await card.inputValue(), number);
       await page.goto(`${origin}/#/orders/gpt`);
@@ -180,7 +183,7 @@ test('银行卡输入在深浅主题和宽窄屏不重叠、不溢出，标签�
   await mkdir(output, { recursive: true });
   for (const entry of ['gpt', 'claude', 'gemini', 'grok']) {
     await page.goto(`${origin}/#/workspace/order/${entry}`);
-    await page.locator('#main #commerce-proMaterialMode').selectOption('manual_card');
+    assert.equal(await page.locator('#main #commerce-proMaterialMode').inputValue(), 'manual_card');
     await page.locator('#main #commerce-proCardNumber').fill(number);
     for (const width of [1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
       await page.setViewportSize({ width, height: 1100 });
@@ -196,9 +199,15 @@ test('银行卡输入在深浅主题和宽窄屏不重叠、不溢出，标签�
           if (!label || !control) return true;
           return label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1;
         });
-        return { overlap, labelsLeft, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
+        const mode = root.querySelector('[data-commerce-field="proMaterialMode"]').getBoundingClientRect();
+        const number = root.querySelector('[data-commerce-field="proCardNumber"]').getBoundingClientRect();
+        const columns = getComputedStyle(root).gridTemplateColumns.split(' ').length;
+        const numberPlacement = columns === 2
+          ? Math.abs(mode.top - number.top) <= 1 && number.left >= mode.right && Math.abs(mode.width - number.width) <= 1
+          : number.top >= mode.bottom;
+        return { overlap, labelsLeft, numberPlacement, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
       });
-      assert.deepEqual(result, { overlap: false, labelsLeft: true, overflow: false }, `${entry}/${width}/${theme}`);
+      assert.deepEqual(result, { overlap: false, labelsLeft: true, numberPlacement: true, overflow: false }, `${entry}/${width}/${theme}`);
       if (entry === 'claude' && [1440, 390].includes(width))
         await page.locator('#main .order-payment-options').screenshot({ path: output + `claude-card-${width}-${theme}.png` });
     }

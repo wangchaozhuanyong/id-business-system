@@ -24,7 +24,8 @@ function order(id, customerId, email, start, expiry, cardId = '') {
   return {
     id, orderNo: 'QA-' + id, customerId, email, start, expiry, cardId,
     product: 'GPT', plan: 'Plus', businessType: '续费', accountSource: '客户自有',
-    paidConfirmed: true, payment: '银行卡', paidAmount: '20', paidCurrency: 'USD',
+    source: '管理员手工', paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
+    payment: '银行卡', paidAmount: '20', paidCurrency: 'USD',
     paymentId: numbers[id]?.slice(-4) || '', saleAmount: '180', saleCurrency: 'CNY',
     version: 1, corrections: [], financialEvidence: []
   };
@@ -173,6 +174,7 @@ test('续费银行卡抽屉按点击订单独立读取并保护卡号', { timeou
         await tab(/^已处理/).click();
         await product.selectOption('GPT');
         await search.fill('QA-' + original);
+        if (width <= 900) await row(original).getByRole('button', { name: '更多资料' }).click();
         await row(original).getByText('已续费', { exact: true }).waitFor();
         await openCard(original).click();
         await section('order').getByText('QA-' + original, { exact: true }).waitFor();
